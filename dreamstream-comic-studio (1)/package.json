@@ -1,0 +1,40 @@
+{
+  "name": "dreamstream-comic-studio",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"vite\"",
+    "dev:server": "tsx watch server/src/index.ts",
+    "build": "vite build",
+    "build:server": "tsc -p server/tsconfig.json",
+    "start:server": "node server/dist/server/src/index.js",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@google/genai": "^1.30.0",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "jszip": "^3.10.1",
+    "lucide-react": "^0.554.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-markdown": "^9.0.1",
+    "rehype-sanitize": "^6.0.0",
+    "remark-gfm": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.14.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "autoprefixer": "^10.4.19",
+    "concurrently": "^9.2.1",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.14",
+    "tsx": "^4.7.1",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0"
+  }
+}

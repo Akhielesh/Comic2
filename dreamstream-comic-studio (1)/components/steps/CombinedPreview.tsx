@@ -1,0 +1,506 @@
+import React, { useEffect, useMemo, useState } from 'react';
+import { Play, Coins, AlertCircle, RefreshCw, Plus, Minus } from 'lucide-react';
+import { ComicPanel, ComicState, DialogueBlock, TextLayout } from '../../types';
+import { generatePanelBreakdown } from '../../services/geminiService';
+import { Button } from '../Button';
+import { ensureDialogueBlocks, normalizePanelDialogue } from '../../services/dialogueUtils';
+import { 
+  DEFAULT_PRICING_CONFIG, 
+  normalizePricingConfig, 
+  PRICING_AS_OF, 
+  FLASH_IMAGE_BATCH, 
+  FLASH_IMAGE_STANDARD, 
+  BANANA_PRO_IMAGE_1K, 
+  BANANA_PRO_IMAGE_4K,
+  FLASH_LITE_PRICING,
+  FLASH_PRICING
+} from '../../services/pricingConfig';
+import { estimateTokensFromTextInput } from '../../services/reporting';
+import { IMAGE_MODEL, TEXT_MODEL } from '../../services/modelPolicy';
+import { getImageProvider } from '../../services/appSettings';
+import { getImageModelByProvider } from '../../services/imageModels';
+import { loadArtifactsForProject } from '../../services/db';
+import { buildProjectReport } from '../../services/reporting';
+
+interface CombinedPreviewProps {
+  state: ComicState;
+  projectId: string;
+  onConfirm: () => void;
+  onStateUpdate: (updates: Partial<ComicState>) => void;
+}
+
+const computePanelPlanVersion = (scenes: ComicState['scenes']) => {
+  return scenes.reduce((acc, scene) => acc + scene.synopsis.length + scene.setting.length + scene.characters.join('|').length, 0) + scenes.length;
+};
+
+const normalizePanel = (panel: ComicPanel): ComicPanel => {
+  const base = {
+    ...panel,
+    prompt: panel.prompt || panel.description || '',
+    description: panel.description || panel.prompt || '',
+    isPlanned: panel.isPlanned ?? true
+  };
+  return normalizePanelDialogue(base);
+};
+
+const PanelWireframe: React.FC<{ panel: ComicPanel; textLayout: TextLayout }> = ({ panel, textLayout }) => {
+  const blocks = ensureDialogueBlocks(panel.dialogue, panel.dialogueBlocks, panel.description);
+  return (
+    <div className="relative border-2 border-black rounded-lg bg-white p-3 min-h-[140px]">
+      <div className="text-[10px] font-mono text-slate-500 mb-2">Prompt</div>
+      <div className="text-xs font-comic text-slate-700">{panel.description}</div>
+      {textLayout !== 'none' && blocks.length > 0 && (
+        <div className="mt-2 space-y-1">
+          {blocks.map((block) => (
+            <div
+              key={block.id}
+              className={`text-[10px] border border-black rounded px-2 py-1 ${
+                textLayout === 'chat_bubbles'
+                  ? block.side === 'right'
+                    ? 'bg-brand-blue text-white ml-auto'
+                    : 'bg-brand-yellow text-black'
+                  : 'bg-white text-black'
+              }`}
+            >
+              <strong className="mr-1">{block.speaker || block.kind}:</strong> {block.text}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, projectId, onConfirm, onStateUpdate }) => {
+  const [panelCounts, setPanelCounts] = useState<Record<number, number>>({});
+  const [isPlanning, setIsPlanning] = useState(false);
+  const [planningSceneId, setPlanningSceneId] = useState<number | null>(null);
+  const [costSummary, setCostSummary] = useState<{ total: number; estimated: boolean }>({ total: 0, estimated: true });
+  const pricing = useMemo(() => normalizePricingConfig(state.pricingConfig || DEFAULT_PRICING_CONFIG), [state.pricingConfig]);
+  const plannedPanelCount = state.panels.length;
+  const estimatedTokens = useMemo(() => {
+    return state.panels.reduce(
+      (sum, panel) =>
+        sum +
+        estimateTokensFromTextInput(panel.description || '') +
+        estimateTokensFromTextInput(panel.dialogue || ''),
+      0
+    );
+  }, [state.panels]);
+
+  const textCostLite = ((FLASH_LITE_PRICING.inputPer1k + FLASH_LITE_PRICING.outputPer1k) * estimatedTokens) / 1000;
+  const textCostFlash = ((FLASH_PRICING.inputPer1k + FLASH_PRICING.outputPer1k) * estimatedTokens) / 1000;
+  const provider = getImageProvider();
+  const activeImageModel = getImageModelByProvider(provider);
+  const imageCostCurrent = provider === 'flux' ? 0 : FLASH_IMAGE_STANDARD * plannedPanelCount;
+  const imageCostBatch = provider === 'flux' ? 0 : FLASH_IMAGE_BATCH * plannedPanelCount;
+  const bananaProRate = state.imageResolution === '4K' ? BANANA_PRO_IMAGE_4K : BANANA_PRO_IMAGE_1K;
+  const imageCostBananaPro = bananaProRate * plannedPanelCount;
+
+  useEffect(() => {
+    const legacyPricing = !state.pricingConfig ||
+      (state.pricingConfig.models?.[TEXT_MODEL]?.inputPer1k ?? 0) === 0 ||
+      (state.pricingConfig.models?.[IMAGE_MODEL]?.imagePerOutput ?? 0) === 0;
+    if (legacyPricing) {
+      onStateUpdate({ pricingConfig: pricing });
+    }
+  }, [state.pricingConfig, pricing, onStateUpdate]);
+
+  useEffect(() => {
+    setPanelCounts(prev => {
+      const nextCounts: Record<number, number> = { ...prev };
+      state.scenes.forEach((scene) => {
+        if (typeof nextCounts[scene.id] === 'undefined') {
+          const existing = state.panels.filter(p => p.sceneId === scene.id);
+          nextCounts[scene.id] = existing.length > 0 ? existing.length : 3;
+        }
+      });
+      return nextCounts;
+    });
+  }, [state.scenes]);
+
+  useEffect(() => {
+    const version = computePanelPlanVersion(state.scenes);
+    if (!state.panelPlanVersion && state.panels.length === 0) {
+      onStateUpdate({ panelPlanVersion: version });
+    }
+  }, [state.scenes, state.panelPlanVersion, state.panels.length, onStateUpdate]);
+
+  useEffect(() => {
+    const computeCost = async () => {
+      try {
+        const artifacts = await loadArtifactsForProject(projectId);
+        const report = await buildProjectReport(
+          {
+            id: projectId,
+            name: 'preview',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            state: state
+          },
+          artifacts,
+          {},
+          pricing
+        );
+        const estimatedTextCost =
+          ((FLASH_LITE_PRICING.inputPer1k + FLASH_LITE_PRICING.outputPer1k) *
+            estimatedTokens) /
+          1000;
+        const estimatedImageCost = FLASH_IMAGE_STANDARD * plannedPanelCount;
+        const estimatedCost = estimatedTextCost + estimatedImageCost;
+        setCostSummary({
+          total: Number(((report.cost_summary as any).totalCost + estimatedCost).toFixed(6)),
+          estimated: true
+        });
+      } catch {
+        setCostSummary({ total: 0, estimated: true });
+      }
+    };
+    computeCost();
+  }, [projectId, plannedPanelCount, pricing, state, estimatedTokens]);
+
+  const generatePlanForScene = async (sceneId: number) => {
+    const scene = state.scenes.find(s => s.id === sceneId);
+    if (!scene) return;
+    setIsPlanning(true);
+    setPlanningSceneId(sceneId);
+    try {
+      const count = panelCounts[sceneId] || 3;
+      const result = await generatePanelBreakdown(scene, state.stylePrompt, state.layoutType, projectId, count, { stage: 'preview' });
+      const newPanels = result.map((panel, index) => ({
+        id: `s${scene.id}-p${index}-${Date.now()}`,
+        sceneId: scene.id,
+        description: panel.description,
+        prompt: panel.description,
+        dialogue: panel.dialogue || '',
+        dialogueBlocks: panel.dialogueBlocks,
+        imageIdHistory: [],
+        imageUrlHistory: [],
+        isPlanned: true
+      } as ComicPanel));
+
+      const merged = [
+        ...state.panels.filter(p => p.sceneId !== scene.id),
+        ...newPanels
+      ].map(normalizePanel);
+
+      onStateUpdate({ panels: merged, panelPlanVersion: computePanelPlanVersion(state.scenes) });
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsPlanning(false);
+      setPlanningSceneId(null);
+    }
+  };
+
+  const generateAllPlans = async () => {
+    setIsPlanning(true);
+    try {
+      const allPanels: ComicPanel[] = [];
+      for (const scene of state.scenes) {
+        const count = panelCounts[scene.id] || 3;
+        const result = await generatePanelBreakdown(scene, state.stylePrompt, state.layoutType, projectId, count, { stage: 'preview' });
+        result.forEach((panel, index) => {
+          allPanels.push(normalizePanel({
+            id: `s${scene.id}-p${index}-${Date.now()}`,
+            sceneId: scene.id,
+            description: panel.description,
+            prompt: panel.description,
+            dialogue: panel.dialogue || '',
+            dialogueBlocks: panel.dialogueBlocks,
+            imageIdHistory: [],
+            imageUrlHistory: [],
+            isPlanned: true
+          } as ComicPanel));
+        });
+      }
+      onStateUpdate({ panels: allPanels, panelPlanVersion: computePanelPlanVersion(state.scenes) });
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsPlanning(false);
+    }
+  };
+
+  const updatePanel = (panelId: string, updates: Partial<ComicPanel>) => {
+    const updated = state.panels.map(panel => {
+      if (panel.id !== panelId) return panel;
+      const next = normalizePanel({ ...panel, ...updates });
+      return next;
+    });
+    onStateUpdate({ panels: updated });
+  };
+
+  const addDialogueBlock = (panelId: string) => {
+    const panel = state.panels.find(p => p.id === panelId);
+    if (!panel) return;
+    const blocks = ensureDialogueBlocks(panel.dialogue, panel.dialogueBlocks, panel.description);
+    const nextBlocks: DialogueBlock[] = [
+      ...blocks,
+      { id: crypto.randomUUID(), kind: 'speech', text: '', side: 'left' }
+    ];
+    updatePanel(panelId, { dialogueBlocks: nextBlocks, dialogue: nextBlocks.map(b => b.text).join(' ') });
+  };
+
+  const removeDialogueBlock = (panelId: string, blockId: string) => {
+    const panel = state.panels.find(p => p.id === panelId);
+    if (!panel) return;
+    const blocks = ensureDialogueBlocks(panel.dialogue, panel.dialogueBlocks, panel.description).filter(b => b.id !== blockId);
+    updatePanel(panelId, { dialogueBlocks: blocks, dialogue: blocks.map(b => b.text).join(' ') });
+  };
+
+  const updateDialogueBlock = (panelId: string, blockId: string, updates: Partial<DialogueBlock>) => {
+    const panel = state.panels.find(p => p.id === panelId);
+    if (!panel) return;
+    const blocks = ensureDialogueBlocks(panel.dialogue, panel.dialogueBlocks, panel.description)
+      .map(block => block.id === blockId ? { ...block, ...updates } : block);
+    updatePanel(panelId, { dialogueBlocks: blocks, dialogue: blocks.map(b => b.text).join(' ') });
+  };
+
+  const handleTextLayoutChange = (layout: TextLayout) => {
+    onStateUpdate({ textLayout: layout });
+  };
+  const formatCurrency = (value: number) => `${pricing.currency} ${value.toFixed(4)}`;
+
+  return (
+    <div className="max-w-6xl mx-auto space-y-6 animate-fade-in">
+      <div className="bg-white rounded-xl border-4 border-black shadow-comic p-6">
+        <div className="flex flex-col md:flex-row justify-between items-start gap-4">
+          <div>
+            <h2 className="text-4xl font-display text-black">Panel Plan</h2>
+            <p className="text-slate-600 font-comic">Review every panel before we draw. Edit prompts, dialogue, and layout.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={generateAllPlans} isLoading={isPlanning} icon={<RefreshCw className="w-4 h-4" />}>Generate All Plans</Button>
+            <Button onClick={onConfirm} className="bg-brand-yellow" icon={<Play fill="currentColor" />}>Start Generation</Button>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 space-y-6">
+          {state.scenes.map((scene) => {
+            const scenePanels = state.panels.filter(panel => panel.sceneId === scene.id);
+            const count = panelCounts[scene.id] || 3;
+            return (
+              <div key={scene.id} className="bg-white rounded-xl border-4 border-black shadow-comic overflow-hidden">
+                <div className="p-4 border-b-4 border-black bg-slate-100 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                  <div>
+                    <div className="font-display text-xl">Scene {scene.id}</div>
+                    <div className="text-xs text-slate-600 font-comic">{scene.synopsis}</div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex items-center gap-2 bg-white border-2 border-black rounded px-2 py-1 text-xs font-bold">
+                      <button
+                        onClick={() => setPanelCounts(prev => ({ ...prev, [scene.id]: Math.max(1, (prev[scene.id] || 3) - 1) }))}
+                        className="px-1"
+                      >
+                        <Minus size={12} />
+                      </button>
+                      <span>{count} Panels</span>
+                      <button
+                        onClick={() => setPanelCounts(prev => ({ ...prev, [scene.id]: Math.min(4, (prev[scene.id] || 3) + 1) }))}
+                        className="px-1"
+                      >
+                        <Plus size={12} />
+                      </button>
+                    </div>
+                    <Button
+                      variant="secondary"
+                      onClick={() => generatePlanForScene(scene.id)}
+                      isLoading={isPlanning && planningSceneId === scene.id}
+                      icon={<RefreshCw className="w-4 h-4" />}
+                    >
+                      Regenerate
+                    </Button>
+                  </div>
+                </div>
+                <div className="p-4 space-y-4">
+                  {scenePanels.length === 0 && (
+                    <div className="text-sm text-slate-500 font-comic">No plan yet — click Regenerate to create panel prompts.</div>
+                  )}
+                  {scenePanels.map((panel, idx) => (
+                    <div key={panel.id} className="border-2 border-black rounded-lg p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+                      <div className="space-y-3">
+                        <div className="text-xs font-bold text-slate-500">Panel {idx + 1}</div>
+                        <textarea
+                          value={panel.description}
+                          onChange={(e) => updatePanel(panel.id, { description: e.target.value, prompt: e.target.value })}
+                          className="w-full border-2 border-black rounded p-2 text-sm font-mono min-h-[80px]"
+                          placeholder="Image prompt / visual description"
+                        />
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <div className="text-xs font-bold text-slate-500">Dialogue Blocks</div>
+                            <button
+                              onClick={() => addDialogueBlock(panel.id)}
+                              className="text-xs font-bold border-2 border-black rounded px-2 py-1"
+                            >
+                              + Add
+                            </button>
+                          </div>
+                          {ensureDialogueBlocks(panel.dialogue, panel.dialogueBlocks, panel.description).map((block) => (
+                            <div key={block.id} className="border-2 border-black rounded p-2 space-y-2">
+                              <div className="flex flex-wrap gap-2">
+                                <select
+                                  value={block.kind}
+                                  onChange={(e) => updateDialogueBlock(panel.id, block.id, { kind: e.target.value as DialogueBlock['kind'] })}
+                                  className="border-2 border-black rounded px-2 py-1 text-xs"
+                                >
+                                  <option value="speech">Speech</option>
+                                  <option value="caption">Caption</option>
+                                  <option value="narration">Narration</option>
+                                </select>
+                                <select
+                                  value={block.side || 'left'}
+                                  onChange={(e) => updateDialogueBlock(panel.id, block.id, { side: e.target.value as DialogueBlock['side'] })}
+                                  className="border-2 border-black rounded px-2 py-1 text-xs"
+                                >
+                                  <option value="left">Left</option>
+                                  <option value="right">Right</option>
+                                  <option value="center">Center</option>
+                                </select>
+                                <input
+                                  value={block.speaker || ''}
+                                  onChange={(e) => updateDialogueBlock(panel.id, block.id, { speaker: e.target.value })}
+                                  placeholder="Speaker"
+                                  className="border-2 border-black rounded px-2 py-1 text-xs flex-1"
+                                />
+                              </div>
+                              <textarea
+                                value={block.text}
+                                onChange={(e) => updateDialogueBlock(panel.id, block.id, { text: e.target.value })}
+                                className="w-full border-2 border-black rounded p-2 text-xs"
+                                placeholder="Dialogue or narration"
+                              />
+                              <button
+                                onClick={() => removeDialogueBlock(panel.id, block.id)}
+                                className="text-xs font-bold text-brand-red"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      <PanelWireframe panel={panel} textLayout={state.textLayout || 'caption'} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="space-y-6">
+          <div className="bg-white rounded-xl border-4 border-black shadow-comic p-4 space-y-4">
+            <h3 className="font-display text-xl">Text Layout</h3>
+            <div className="grid grid-cols-2 gap-2">
+              {(['caption', 'speech_bubbles', 'chat_bubbles', 'none'] as TextLayout[]).map(layout => (
+                <button
+                  key={layout}
+                  onClick={() => handleTextLayoutChange(layout)}
+                  className={`border-2 border-black rounded px-2 py-2 text-xs font-bold uppercase ${state.textLayout === layout ? 'bg-brand-yellow' : 'bg-white'}`}
+                >
+                  {layout.replace('_', ' ')}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-brand-yellow p-6 rounded-xl border-4 border-black shadow-comic relative overflow-hidden">
+            <div className="absolute top-0 right-0 p-4 opacity-10">
+              <Coins size={100} />
+            </div>
+            <h3 className="text-2xl font-display mb-6 border-b-2 border-black pb-2">Estimated API Cost</h3>
+            <div className="space-y-3 relative z-10">
+              <div className="flex items-center justify-between text-sm font-bold">
+                <span>Panels Planned</span>
+                <span className="font-mono">{plannedPanelCount}</span>
+              </div>
+              <div className="flex items-center justify-between text-sm font-bold">
+                <span>Estimated Tokens</span>
+                <span className="font-mono">{estimatedTokens}</span>
+              </div>
+              <div className="flex items-center justify-between text-sm font-bold">
+                <span>Default Image Model</span>
+                <span className="font-mono">{activeImageModel.label}</span>
+              </div>
+              <div className="flex items-center justify-between text-sm font-bold">
+                <span>Estimated Total</span>
+                <span className="font-mono">{formatCurrency(costSummary.total)}</span>
+              </div>
+              <div className="text-[10px] text-amber-900 font-mono">
+                Includes existing usage + estimated generation. Pricing as of {PRICING_AS_OF}.
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-xl border-4 border-black shadow-comic space-y-4">
+            <div>
+              <h3 className="font-display text-lg">Premium Model Comparison</h3>
+              <p className="text-[11px] text-slate-500 font-comic">Estimates based on panel count and prompt length.</p>
+            </div>
+
+            <div className="border-2 border-black rounded-lg p-3 space-y-2">
+              <div className="text-xs font-bold uppercase">Image Models</div>
+              <div className="grid grid-cols-3 text-[11px] font-bold bg-slate-100 border border-black rounded px-2 py-1">
+                <div>Model</div>
+                <div>Rate</div>
+                <div className="text-right">Est. Total</div>
+              </div>
+              <div className="grid grid-cols-3 text-[11px] font-bold px-2 py-1">
+                <div>Flux Schnell (Pixazo Free)</div>
+                <div>$0.00 / img</div>
+                <div className="text-right">{formatCurrency(textCostLite)}</div>
+              </div>
+              <div className="grid grid-cols-3 text-[11px] font-bold px-2 py-1">
+                <div>Nano Banana (Flash Image)</div>
+                <div>{formatCurrency(FLASH_IMAGE_STANDARD)} / img</div>
+                <div className="text-right">{formatCurrency(FLASH_IMAGE_STANDARD * plannedPanelCount + textCostLite)}</div>
+              </div>
+              <div className="grid grid-cols-3 text-[11px] font-bold px-2 py-1">
+                <div>Nano Banana Batch</div>
+                <div>{formatCurrency(FLASH_IMAGE_BATCH)} / img</div>
+                <div className="text-right">{formatCurrency(imageCostBatch + textCostLite)}</div>
+              </div>
+              <div className="grid grid-cols-3 text-[11px] font-bold px-2 py-1">
+                <div>Banana Pro (3 Pro Image)</div>
+                <div>{formatCurrency(bananaProRate)} / img</div>
+                <div className="text-right">{formatCurrency(imageCostBananaPro + textCostLite)}</div>
+              </div>
+              <div className="text-[10px] text-slate-500 font-mono">Banana Pro rate uses {state.imageResolution === '4K' ? '4K' : '1K/2K'} pricing.</div>
+            </div>
+
+            <div className="border-2 border-black rounded-lg p-3 space-y-2">
+              <div className="text-xs font-bold uppercase">Text Models</div>
+              <div className="grid grid-cols-3 text-[11px] font-bold bg-slate-100 border border-black rounded px-2 py-1">
+                <div>Model</div>
+                <div>Rate (in/out)</div>
+                <div className="text-right">Est. Total</div>
+              </div>
+              <div className="grid grid-cols-3 text-[11px] font-bold px-2 py-1">
+                <div>Gemini 2.5 Flash-Lite</div>
+                <div>{formatCurrency(FLASH_LITE_PRICING.inputPer1k)} / {formatCurrency(FLASH_LITE_PRICING.outputPer1k)}</div>
+                <div className="text-right">{formatCurrency(imageCostCurrent + textCostLite)}</div>
+              </div>
+              <div className="grid grid-cols-3 text-[11px] font-bold px-2 py-1">
+                <div>Gemini 2.5 Flash</div>
+                <div>{formatCurrency(FLASH_PRICING.inputPer1k)} / {formatCurrency(FLASH_PRICING.outputPer1k)}</div>
+                <div className="text-right">{formatCurrency(imageCostCurrent + textCostFlash)}</div>
+              </div>
+              <div className="text-[10px] text-slate-500 font-mono">Output tokens estimated to match input length.</div>
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-xl border-4 border-black shadow-comic flex gap-3 items-start">
+            <AlertCircle className="text-brand-blue shrink-0 mt-1"/>
+            <p className="text-xs font-comic text-slate-700 leading-relaxed">
+              This preview is fully editable. Update prompts and dialogue until the plan is perfect, then start generation.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};

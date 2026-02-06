@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DreamStream Comic Studio</title>
+    <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Comic+Neue:wght@400;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+    <!-- PDF Generation Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.554.0"
+  }
+}
+</script>
+<style>
+  body {
+    background-color: #3B82F6;
+    background-image: 
+      radial-gradient(#60A5FA 15%, transparent 16%),
+      radial-gradient(#60A5FA 15%, transparent 16%);
+    background-size: 20px 20px;
+    background-position: 0 0, 10px 10px;
+  }
+  /* Custom Scrollbar for comic feel */
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 12px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: #18181b; 
+    border-left: 2px solid #000;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #FACC15; 
+    border: 2px solid #000;
+  }
+</style>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body class="text-slate-900 antialiased selection:bg-brand-yellow selection:text-black">
+    <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>
