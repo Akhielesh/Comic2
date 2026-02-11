@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import { PORT, CORS_ORIGIN, MAX_BODY_SIZE } from './config.js';
 import { attachKeys } from './middleware/keys.js';
 import { errorHandler } from './middleware/errors.js';
@@ -11,6 +12,7 @@ import { systemRouter } from './routes/system.js';
 
 const app = express();
 
+app.use(helmet());
 app.use(cors({ origin: CORS_ORIGIN, credentials: true }));
 app.use(express.json({ limit: MAX_BODY_SIZE }));
 app.use(attachKeys);
