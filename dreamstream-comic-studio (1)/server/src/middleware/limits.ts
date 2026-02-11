@@ -2,6 +2,19 @@
 import { Request, Response, NextFunction } from 'express';
 import { supabase } from '../services/supabase.js';
 
+type ProviderKey = 'gemini' | 'pixazo';
+
+const providerKeyConfig: Record<ProviderKey, { headers: string[]; label: string }> = {
+    gemini: {
+        headers: ['X-Gemini-Key'],
+        label: 'X-Gemini-Key'
+    },
+    pixazo: {
+        headers: ['X-Pixazo-Key', 'X-Flux-Key'],
+        label: 'X-Pixazo-Key'
+    }
+};
+
 // Logic:
 // 1. Check Usage Count in DB.
 // 2. If < 30: Passthrough (User uses our Server Key).
@@ -15,22 +28,14 @@ import { supabase } from '../services/supabase.js';
 //        Existing `attachKeys` middleware already looks for `X-Gemini-Key`.
 //        So limits middleware just needs to say: "If Limit Reached AND No Key in Header -> 402".
 
-export const checkLimits = async (req: Request, res: Response, next: NextFunction) => {
+export const checkLimits = (requiredProvider: ProviderKey) => async (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) {
         res.status(401).json({ error: { message: 'User not authenticated' } });
         return;
     }
 
-    // 1. Check if user provided their own key in Headers
-    // We rely on previous 'attachKeys' or just check raw headers again for clarity
-    const geminiKey = req.header('X-Gemini-Key');
-    const fluxKey = req.header('X-Pixazo-Key') || req.header('X-Flux-Key');
-    const hasOwnKeys = !!geminiKey || !!fluxKey;
-    // Note: This is a bit loose. If they provide Gemini but want Image (Flux), they might fail later.
-    // But for the "Blocker", if they provide ANY key, we assume they are attempting BYOK mode?
-    // Actually, we should be strictly checking the key required for the *current* operation.
-    // But this middleware is generic.
-    // Let's check Usage Limit first.
+    const { headers, label } = providerKeyConfig[requiredProvider];
+    const hasRequiredProviderKey = headers.some((header) => !!req.header(header));
 
     const { data, error } = await supabase
         .from('usage_limits')
@@ -50,7 +55,7 @@ export const checkLimits = async (req: Request, res: Response, next: NextFunctio
     const max = data?.max_images_allowed || 30;
 
     if (count >= max) {
-        if (hasOwnKeys) {
+        if (hasRequiredProviderKey) {
             // User is over limit BUT provided keys. Allowed.
             // We should probably NOT increment usage count for BYOK?
             // Or we track "Total" vs "Paid"?
@@ -62,7 +67,7 @@ export const checkLimits = async (req: Request, res: Response, next: NextFunctio
             // Over limit and NO keys. Block.
             res.status(402).json({
                 error: {
-                    message: 'Free limit reached (30 images). Please add your own API Keys in Settings to continue.',
+                    message: `Free limit reached (${max} images). Please provide ${label} for this endpoint to continue.`,
                     code: 'LIMIT_REACHED'
                 }
             });
@@ -90,15 +95,23 @@ export const trackUsage = async (req: Request, _res: Response, next: NextFunctio
 };
 
 export const incrementUserUsage = async (userId: string) => {
-    // rpc call is atomic, but we can just do a raw SQL increment if we had an RPC
-    // Or fetch-update.
-    // Supabase JS doesn't have `increment` easily without RPC.
-    // Let's try:
-    // This is race-condition prone but fine for MVP limits.
-    const { data } = await supabase.from('usage_limits').select('images_generated_count').eq('user_id', userId).single();
-    if (data) {
-        await supabase.from('usage_limits').update({
-            images_generated_count: (data.images_generated_count || 0) + 1
-        }).eq('user_id', userId);
+    const { data, error } = await supabase.rpc('increment_user_usage', {
+        p_user_id: userId,
+    });
+
+    if (error || typeof data !== 'number') {
+        console.error('[USAGE] Failed to increment usage', {
+            userId,
+            error,
+            returnedData: data,
+        });
+
+        const incrementError = new Error('Failed to record image usage');
+        (incrementError as any).status = 500;
+        (incrementError as any).code = 'USAGE_ACCOUNTING_FAILED';
+        (incrementError as any).details = error?.message || 'increment_user_usage RPC returned an invalid response';
+        throw incrementError;
     }
+
+    return data;
 };

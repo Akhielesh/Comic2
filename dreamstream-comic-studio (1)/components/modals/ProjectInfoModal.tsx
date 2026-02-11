@@ -9,6 +9,7 @@ import { parseRatio } from '../../services/imageUtils';
 import { estimateTokensFromTextInput } from '../../services/reporting';
 import { assignImageTags, collectStateImageEntries } from '../../services/imageTags';
 import { MasterGalleryModal, MasterGalleryItem } from './MasterGalleryModal';
+import { downloadBlob } from '../../services/download';
 
 interface ProjectInfoModalProps {
   project: Project;
@@ -624,12 +625,7 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
       setSizeUpdatedAt(Date.now());
       setSizeSourceUpdatedAt(project.updatedAt);
       setSizeStatus('latest');
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${project.name.replace(/[^a-zA-Z0-9-_]+/g, '_') || 'comic'}_comic.pdf`;
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, `${project.name.replace(/[^a-zA-Z0-9-_]+/g, '_') || 'comic'}_comic.pdf`);
     } catch (e) {
       console.error(e);
     } finally {
@@ -666,12 +662,7 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
 </html>`;
 
       const blob = new Blob([html], { type: 'text/html' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${project.name.replace(/[^a-zA-Z0-9-_]+/g, '_') || 'comic'}.html`;
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, `${project.name.replace(/[^a-zA-Z0-9-_]+/g, '_') || 'comic'}.html`);
     } catch (e) {
       console.error(e);
     }
@@ -686,12 +677,7 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
       setSizeUpdatedAt(Date.now());
       setSizeSourceUpdatedAt(project.updatedAt);
       setSizeStatus('latest');
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, filename);
     } catch (e) {
       console.error(e);
     } finally {

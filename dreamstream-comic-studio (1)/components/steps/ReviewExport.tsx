@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Edit2, RefreshCw, X, History, Share2, FileCode, Loader2 } from 'lucide-react';
+import { Download, Edit2, RefreshCw, X, History, Share2, FileCode, Loader2, ArrowLeftRight } from 'lucide-react';
 import { ComicPanel, ComicState, DialogueBlock, TextLayout, ProjectReport } from '../../types';
 import { generateImage } from '../../services/imageService';
+import { runContinuityAudit } from '../../services/geminiService';
 import { Button } from '../Button';
 // Lazy loaded components
 const ImagePreviewModal = React.lazy(() => import('../modals/ImagePreviewModal').then(module => ({ default: module.ImagePreviewModal })));
@@ -14,6 +15,8 @@ import { buildImagePrompt } from '../../services/imagePrompt';
 import { parseRatio, resolveAspectRatio } from '../../services/imageUtils';
 import { buildProjectReport } from '../../services/reporting';
 import { loadArtifactsForProject } from '../../services/db';
+import { downloadBlob } from '../../services/download';
+import { collectPanelReferenceImageIds, resolvePanelContinuity, validateContinuityState } from '../../services/continuity';
 
 declare const jspdf: any;
 declare const html2canvas: any;
@@ -23,6 +26,7 @@ interface ReviewExportProps {
   projectName: string;
   panels: ComicPanel[];
   state: ComicState;
+  onReturnToPreview: () => void;
   onUpdatePanel: (panelId: string, imageId: string, imageUrl: string) => void;
 }
 
@@ -90,7 +94,7 @@ const escapeHtml = (value: string) =>
 const getDialogueBlocks = (panel: ComicPanel) =>
   ensureDialogueBlocks(panel.dialogue, panel.dialogueBlocks, panel.description);
 
-export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectName, panels, state, onUpdatePanel }) => {
+export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectName, panels, state, onReturnToPreview, onUpdatePanel }) => {
   const [selectedPanel, setSelectedPanel] = useState<ComicPanel | null>(panels[0] || null);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
@@ -101,6 +105,10 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
   const [costReport, setCostReport] = useState<ProjectReport | null>(null);
   const [costUpdatedAt, setCostUpdatedAt] = useState<number | null>(null);
   const [isCostLoading, setIsCostLoading] = useState(false);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditSummary, setAuditSummary] = useState<string>('');
+  const [auditScoresByPanel, setAuditScoresByPanel] = useState<Record<string, { driftScore: number; issues: string[]; suggestedFix?: string }>>({});
+  const [regenError, setRegenError] = useState<string | null>(null);
 
   const textLayout = state.textLayout || 'caption';
 
@@ -164,26 +172,46 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
     }
   }, [panels, selectedPanel]);
 
-  const handleRegenerate = async (instructions: string) => {
-    if (!selectedPanel) return;
+  const handleRegenerate = async (instructions: string, panelOverride?: ComicPanel) => {
+    const targetPanel = panelOverride || selectedPanel;
+    if (!targetPanel) return;
+    const validation = validateContinuityState(state);
+    if ((state.continuity?.lockLevel === 'strict' || !state.continuity) && !validation.isValid) {
+      setRegenError('Continuity lock is blocking regeneration. Resolve required references in Preview first.');
+      return;
+    }
+    setRegenError(null);
     setIsRegenerating(true);
     setShowRegenModal(false);
     try {
-      const panelIndex = panels.findIndex((p) => p.id === selectedPanel.id);
-      const referenceIds = panels
+      const panelIndex = panels.findIndex((p) => p.id === targetPanel.id);
+      const continuityRefIds = collectPanelReferenceImageIds(state, targetPanel);
+      const previousIds = panels
         .slice(Math.max(0, panelIndex - 2), panelIndex)
         .map((p) => p.imageId)
         .filter((id): id is string => !!id);
+      const referenceIds = Array.from(new Set([...continuityRefIds, ...previousIds]));
       const ratioConfig = resolveAspectRatio(state, state.styleAspectRatio);
-      const sceneCharacters = state.scenes.find(s => s.id === selectedPanel.sceneId)?.characters.join(', ');
+      const sceneCharacters = state.scenes.find(s => s.id === targetPanel.sceneId)?.characters.join(', ');
+      const panelContinuity = resolvePanelContinuity(state, targetPanel);
+      const requiredEntityNames = panelContinuity.requiredEntityIds
+        .map((entityId) => state.continuity?.bible.entities.find((entity) => entity.id === entityId)?.name)
+        .filter((name): name is string => !!name)
+        .join(', ');
+      const lockedLocation = panelContinuity.locationId
+        ? state.continuity?.bible.entities.find((entity) => entity.id === panelContinuity.locationId)?.name
+        : undefined;
       const prompt = buildImagePrompt({
         stage: "panel_regen",
         stylePrompt: state.stylePrompt,
         layoutType: state.layoutType === 'custom' ? state.customLayoutPrompt : state.layoutType,
-        sceneAction: selectedPanel.description,
+        sceneAction: targetPanel.description,
         characters: sceneCharacters,
         continuitySummary: state.continuitySummary || undefined,
-        instructions
+        instructions,
+        requiredEntityNames: requiredEntityNames || undefined,
+        lockedLocation,
+        continuityLock: panelContinuity.continuityNotes || 'strict lock'
       });
       const generated = await generateImage(
         prompt,
@@ -192,22 +220,22 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
         referenceIds,
         projectId,
         {
-          stage: 'generation',
+          stage: 'panel_regen',
           cropToRatio: ratioConfig.cropRatio,
           meta: {
             source: {
               type: 'panel',
-              id: selectedPanel.id,
-              label: `Scene ${selectedPanel.sceneId} Panel ${panelIndex + 1}`
+              id: targetPanel.id,
+              label: `Scene ${targetPanel.sceneId} Panel ${panelIndex + 1}`
             },
-            sceneId: selectedPanel.sceneId,
+            sceneId: targetPanel.sceneId,
             panelIndex,
             regen: true
           }
         }
       );
       if (generated?.imageUrl) {
-        onUpdatePanel(selectedPanel.id, generated.imageId, generated.imageUrl);
+        onUpdatePanel(targetPanel.id, generated.imageId, generated.imageUrl);
         setSelectedPanel(prev => prev ? {
           ...prev,
           imageId: generated.imageId,
@@ -218,8 +246,55 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
       }
     } catch (e) {
       console.error(e);
+      setRegenError((e as Error)?.message || 'Regeneration failed.');
     } finally {
       setIsRegenerating(false);
+    }
+  };
+
+  const handleRunContinuityAudit = async () => {
+    if (panels.length === 0) return;
+    setAuditLoading(true);
+    setRegenError(null);
+    try {
+      const response = await runContinuityAudit({
+        script: state.script,
+        continuityBible: state.continuity?.bible,
+        sceneBindings: state.continuity?.bible.sceneBindings,
+        panels: panels.map((panel) => ({
+          id: panel.id,
+          sceneId: panel.sceneId,
+          description: panel.description,
+          dialogue: panel.dialogue,
+          requiredEntityIds: panel.continuity?.requiredEntityIds,
+          locationId: panel.continuity?.locationId
+        }))
+      }, projectId);
+      const map: Record<string, { driftScore: number; issues: string[]; suggestedFix?: string }> = {};
+      response.panelScores.forEach((score) => {
+        if (!score.panelId) return;
+        map[score.panelId] = {
+          driftScore: score.driftScore,
+          issues: score.issues || [],
+          suggestedFix: score.suggestedFix
+        };
+      });
+      setAuditSummary(response.summary || '');
+      setAuditScoresByPanel(map);
+    } catch (error) {
+      console.error(error);
+      setRegenError((error as Error)?.message || 'Continuity audit failed.');
+    } finally {
+      setAuditLoading(false);
+    }
+  };
+
+  const handleFixFlaggedPanels = async () => {
+    const flagged = panels.filter((panel) => (auditScoresByPanel[panel.id]?.driftScore || 0) > 0.35);
+    if (flagged.length === 0) return;
+    for (const panel of flagged) {
+      const suggestion = auditScoresByPanel[panel.id]?.suggestedFix || 'Preserve strict continuity with previous panels.';
+      await handleRegenerate(suggestion, panel);
     }
   };
 
@@ -262,7 +337,9 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
         pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
       }
 
-      pdf.save('dreamstream-comic.pdf');
+      const blob = pdf.output('blob');
+      const safeName = projectName.replace(/[^a-zA-Z0-9-_]+/g, '_') || 'dreamstream-comic';
+      downloadBlob(blob, `${safeName}.pdf`);
     } finally {
       comicEl.style.height = originalHeight;
       comicEl.style.overflow = originalOverflow;
@@ -329,12 +406,7 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
       </html>
     `;
     const blob = new Blob([htmlContent], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'comic.html';
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(blob, 'comic.html');
   };
 
   const handleShare = () => {
@@ -458,12 +530,7 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
       );
 
       const blob = await zip.generateAsync({ type: 'blob' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${safeName || 'comic'}_project.zip`;
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, `${safeName || 'comic'}_project.zip`);
     } catch (e) {
       console.error("Export failed", e);
     }
@@ -522,6 +589,15 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
               >
                 <img src={panel.imageUrl} alt={`Panel ${idx + 1}`} className="w-full h-full object-cover" />
                 {renderPanelText(panel, textLayout)}
+                {auditScoresByPanel[panel.id] && (
+                  <div className={`absolute left-2 top-2 px-2 py-1 text-[10px] font-bold rounded border ${
+                    auditScoresByPanel[panel.id].driftScore > 0.35
+                      ? 'bg-red-100 text-red-700 border-red-300'
+                      : 'bg-green-100 text-green-700 border-green-300'
+                  }`}>
+                    Drift {Math.round(auditScoresByPanel[panel.id].driftScore * 100)}%
+                  </div>
+                )}
 
                 {/* Hover Overlay */}
                 <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
@@ -543,6 +619,12 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
             <div className="text-[11px] font-mono text-slate-500">
               {costUpdatedAt ? `Updated ${new Date(costUpdatedAt).toLocaleTimeString()}` : "Waiting for data..."}
             </div>
+            {auditSummary && (
+              <div className="text-[11px] text-slate-600 mt-1 max-w-xl">{auditSummary}</div>
+            )}
+            {regenError && (
+              <div className="text-[11px] text-red-600 mt-1">{regenError}</div>
+            )}
           </div>
           {costReport && (
             <div className="text-xs font-mono text-slate-600 space-y-1">
@@ -553,10 +635,21 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
         </div>
 
         {/* Action Bar */}
-        <div className="h-24 bg-white border-4 border-black rounded-xl p-4 flex items-center justify-between shadow-comic">
+        <div className="min-h-24 bg-white border-4 border-black rounded-xl p-4 flex flex-wrap items-center justify-between gap-3 shadow-comic">
           <div className="flex items-center gap-4">
             <Button variant="secondary" onClick={() => setShowRegenModal(true)} disabled={!selectedPanel} isLoading={isRegenerating} icon={<RefreshCw className="w-4 h-4" />}>Edit / Regenerate</Button>
             <Button variant="outline" onClick={() => setShowHistoryModal(true)} disabled={!selectedPanel || (selectedPanel.imageIdHistory?.length || 0) <= 1} icon={<History className="w-4 h-4" />}>History</Button>
+            <Button variant="outline" onClick={onReturnToPreview} icon={<ArrowLeftRight className="w-4 h-4" />}>Back To Preview</Button>
+            <Button variant="outline" onClick={handleRunContinuityAudit} isLoading={auditLoading}>
+              Continuity Audit
+            </Button>
+            <Button
+              variant="outline"
+              onClick={handleFixFlaggedPanels}
+              disabled={!Object.values(auditScoresByPanel).some((score) => score.driftScore > 0.35)}
+            >
+              Fix Flagged
+            </Button>
           </div>
           <div className="flex items-center gap-4">
             <button onClick={handleShare} className="flex items-center gap-2 text-sm font-bold text-slate-600 hover:text-black">

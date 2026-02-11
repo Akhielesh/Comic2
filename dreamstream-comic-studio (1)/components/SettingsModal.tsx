@@ -31,28 +31,12 @@ const FEATURE_ROUTING = [
   { id: "image_generation", label: "Image Generation" }
 ];
 
-const AssistantSettingsSection = ({ settings, onToggle }: { settings: ReturnType<typeof getSettingsState>, onToggle: () => void }) => (
-  <div className="flex items-center justify-between p-4 border-2 border-slate-200 rounded-lg bg-slate-50">
-    <div>
-      <div className="font-bold text-sm">Enable Story Assistant</div>
-      <div className="text-xs text-slate-500">Show the floating AI helper in the editor</div>
-    </div>
-    <button
-      onClick={onToggle}
-      className={`w-12 h-6 rounded-full transition-colors relative ${settings.showAssistant !== false ? 'bg-brand-blue' : 'bg-slate-300'}`}
-    >
-      <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${settings.showAssistant !== false ? 'left-7' : 'left-1'}`} />
-    </button>
-  </div>
-);
-
 export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadProjects, onUpdateSettings }) => {
   const [dbStats, setDbStats] = useState<Awaited<ReturnType<typeof getDbStats>> | null>(null);
   const [settings, setSettings] = useState(() => getSettingsState());
   const [fluxKey, setFluxKey] = useState<string | null>(null);
   const [sectionsOpen, setSectionsOpen] = useState({
     keys: true,
-    assistant: false,
     models: false,
     routing: false,
     storage: false
@@ -68,12 +52,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadP
   }, []);
 
 
-  const toggleSetting = (key: "showGeminiKey" | "showFluxKey" | "showAssistant") => {
+  const toggleSetting = (key: "showGeminiKey" | "showFluxKey") => {
     const next = { ...settings, [key]: !settings[key] };
-    // Handle specific logic for 'showAssistant' default true
-    if (key === 'showAssistant') {
-      next.showAssistant = settings.showAssistant === false ? true : false;
-    }
     setSettings(next);
     setSettingsState(next);
     if (onUpdateSettings) onUpdateSettings();
@@ -121,15 +101,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadP
                 <div className="pt-2">
                   <KeyManager />
                 </div>
-              </div>
-            )}
-          </section>
-
-          <section className="space-y-3">
-            <SectionHeader title="Assistant Settings" sectionKey="assistant" />
-            {sectionsOpen.assistant && (
-              <div className="space-y-4 animate-fade-in">
-                <AssistantSettingsSection settings={settings} onToggle={() => toggleSetting('showAssistant')} />
               </div>
             )}
           </section>

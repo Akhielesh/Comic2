@@ -3,11 +3,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Users, Wand2, Check, UploadCloud, Download, Image as ImageIcon, CheckSquare, Square, Zap, Box, MapPin, AlertCircle } from 'lucide-react';
 import { extractWorldDetails, checkConsistency } from '../../services/geminiService';
 import { generateImage } from '../../services/imageService';
-import { Scene, Character, Item, Location, ComicState } from '../../types';
+import { Scene, Character, Item, Location, ComicState, ContinuityState } from '../../types';
 import { getImageUrl, saveImage } from '../../services/db';
 import { Button } from '../Button';
 import { ImagePreviewModal } from '../modals/ImagePreviewModal';
 import { buildImagePrompt } from '../../services/imagePrompt';
+import { buildContinuityFromWorld } from '../../services/continuity';
 
 // Declare HTML2Canvas and jsPDF for downloadable cards
 declare const html2canvas: any;
@@ -28,7 +29,8 @@ interface ReferenceBuilderProps {
   initialCharacters: Character[];
   initialItems: Item[];
   initialLocations: Location[];
-  onDataUpdate: (data: { characters: Character[], items: Item[], locations: Location[] }) => void;
+  initialContinuity?: ContinuityState;
+  onDataUpdate: (data: { characters: Character[], items: Item[], locations: Location[], continuity?: ContinuityState }) => void;
   onConfirm: () => void;
 }
 
@@ -44,7 +46,7 @@ const fileToBase64 = (file: File): Promise<string> => {
 type Tab = 'characters' | 'items' | 'locations';
 
 export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
-  scenes, script, currentStyle, projectId, initialCharacters, initialItems, initialLocations, onDataUpdate, onConfirm
+  scenes, script, currentStyle, projectId, initialCharacters, initialItems, initialLocations, initialContinuity, onDataUpdate, onConfirm
 }) => {
   const [activeTab, setActiveTab] = useState<Tab>('characters');
   const [isLoading, setIsLoading] = useState(initialCharacters.length === 0 && initialItems.length === 0);
@@ -61,6 +63,9 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
   const [locations, setLocations] = useState<Location[]>(initialLocations);
   const entitiesRef = useRef({ characters: initialCharacters, items: initialItems, locations: initialLocations });
 
+  const makeContinuity = (nextCharacters: Character[], nextItems: Item[], nextLocations: Location[]) =>
+    buildContinuityFromWorld(scenes, nextCharacters, nextItems, nextLocations, initialContinuity);
+
   useEffect(() => {
     if (hasFetched.current) return;
     hasFetched.current = true;
@@ -68,7 +73,7 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
     const fetchWorld = async () => {
       try {
         const data = await extractWorldDetails(scenes, projectId);
-        onDataUpdate(data);
+        onDataUpdate({ ...data, continuity: makeContinuity(data.characters, data.items, data.locations) });
       } catch (e) {
         console.error(e);
       } finally {
@@ -117,21 +122,36 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
       setCharacters(prev => {
         const updated = prev.map(c => c.id === id ? { ...c, ...updates } : c);
         const { items: currentItems, locations: currentLocations } = entitiesRef.current;
-        onDataUpdate({ characters: updated, items: currentItems, locations: currentLocations });
+        onDataUpdate({
+          characters: updated,
+          items: currentItems,
+          locations: currentLocations,
+          continuity: makeContinuity(updated, currentItems, currentLocations)
+        });
         return updated;
       });
     } else if (type === 'items') {
       setItems(prev => {
         const updated = prev.map(i => i.id === id ? { ...i, ...updates } : i);
         const { characters: currentCharacters, locations: currentLocations } = entitiesRef.current;
-        onDataUpdate({ characters: currentCharacters, items: updated, locations: currentLocations });
+        onDataUpdate({
+          characters: currentCharacters,
+          items: updated,
+          locations: currentLocations,
+          continuity: makeContinuity(currentCharacters, updated, currentLocations)
+        });
         return updated;
       });
     } else {
       setLocations(prev => {
         const updated = prev.map(l => l.id === id ? { ...l, ...updates } : l);
         const { characters: currentCharacters, items: currentItems } = entitiesRef.current;
-        onDataUpdate({ characters: currentCharacters, items: currentItems, locations: updated });
+        onDataUpdate({
+          characters: currentCharacters,
+          items: currentItems,
+          locations: updated,
+          continuity: makeContinuity(currentCharacters, currentItems, updated)
+        });
         return updated;
       });
     }

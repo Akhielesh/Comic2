@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { Comment } from '../types';
-import { addComment, getComments, deleteComment, likeComment, unlikeComment, createNotification } from '../services/db';
+import { addComment, getComments, deleteComment, likeComment, unlikeComment, createNotification, updateComment } from '../services/db';
 import { UserAvatar } from './UserAvatar';
-import { Send, Trash2, MessageSquare, Heart } from 'lucide-react';
+import { Send, Trash2, MessageSquare, Heart, Edit2, Save, X } from 'lucide-react';
 import { Button } from './Button';
 
 interface CommentSectionProps {
@@ -17,6 +17,9 @@ export const CommentSection: React.FC<CommentSectionProps> = ({ projectId, onNav
     const [newComment, setNewComment] = useState('');
     const [loading, setLoading] = useState(true);
     const [submitting, setSubmitting] = useState(false);
+    const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+    const [editingText, setEditingText] = useState('');
+    const [savingEdit, setSavingEdit] = useState(false);
 
     useEffect(() => {
         loadComments();
@@ -44,7 +47,7 @@ export const CommentSection: React.FC<CommentSectionProps> = ({ projectId, onNav
             await unlikeComment(comment.id, user.id);
         } else {
             if (comment.user_id !== user.id) {
-                await createNotification(comment.user_id, user.id, 'like', comment.id);
+                await createNotification(comment.user_id, user.id, 'like', comment.project_id);
             }
             await likeComment(comment.id, user.id);
         }
@@ -67,6 +70,28 @@ export const CommentSection: React.FC<CommentSectionProps> = ({ projectId, onNav
         if (success) {
             setComments(prev => prev.filter(c => c.id !== id));
         }
+    };
+
+    const handleStartEdit = (comment: Comment) => {
+        setEditingCommentId(comment.id);
+        setEditingText(comment.text);
+    };
+
+    const handleCancelEdit = () => {
+        setEditingCommentId(null);
+        setEditingText('');
+    };
+
+    const handleSaveEdit = async (commentId: string) => {
+        const trimmed = editingText.trim();
+        if (!trimmed) return;
+        setSavingEdit(true);
+        const updated = await updateComment(commentId, trimmed);
+        if (updated) {
+            setComments(prev => prev.map(c => c.id === commentId ? { ...c, ...updated } : c));
+        }
+        setSavingEdit(false);
+        handleCancelEdit();
     };
 
     const formatTime = (iso: string) => {
@@ -106,9 +131,41 @@ export const CommentSection: React.FC<CommentSectionProps> = ({ projectId, onNav
                                     >
                                         {c.user?.username || 'Anonymous'}
                                     </span>
-                                    <span className="text-xs text-slate-400">{formatTime(c.created_at)}</span>
+                                    <span className="text-xs text-slate-400">
+                                        {formatTime(c.created_at)}
+                                        {c.updated_at ? ' (edited)' : ''}
+                                    </span>
                                 </div>
-                                <p className="text-slate-700 text-sm leading-relaxed whitespace-pre-wrap">{c.text}</p>
+                                {editingCommentId === c.id ? (
+                                    <div className="space-y-2">
+                                        <textarea
+                                            value={editingText}
+                                            onChange={(e) => setEditingText(e.target.value)}
+                                            className="w-full border-2 border-slate-300 rounded-lg p-2 text-sm focus:border-black focus:outline-none resize-none h-20"
+                                        />
+                                        <div className="flex items-center gap-2">
+                                            <Button
+                                                size="sm"
+                                                onClick={() => handleSaveEdit(c.id)}
+                                                disabled={savingEdit || !editingText.trim()}
+                                                isLoading={savingEdit}
+                                            >
+                                                <Save className="w-3 h-3 mr-1" />
+                                                Save
+                                            </Button>
+                                            <Button
+                                                size="sm"
+                                                variant="secondary"
+                                                onClick={handleCancelEdit}
+                                            >
+                                                <X className="w-3 h-3 mr-1" />
+                                                Cancel
+                                            </Button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <p className="text-slate-700 text-sm leading-relaxed whitespace-pre-wrap">{c.text}</p>
+                                )}
                                 <div className="mt-2 flex items-center gap-4">
                                     <button
                                         onClick={() => handleLike(c)}
@@ -121,12 +178,23 @@ export const CommentSection: React.FC<CommentSectionProps> = ({ projectId, onNav
                                 </div>
                             </div>
                             {user?.id === c.user_id && (
-                                <button
-                                    onClick={() => handleDelete(c.id)}
-                                    className="text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity self-start"
-                                >
-                                    <Trash2 className="w-4 h-4" />
-                                </button>
+                                <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity self-start">
+                                    <button
+                                        onClick={() => handleStartEdit(c)}
+                                        className="text-slate-300 hover:text-black"
+                                        disabled={editingCommentId === c.id}
+                                        title="Edit comment"
+                                    >
+                                        <Edit2 className="w-4 h-4" />
+                                    </button>
+                                    <button
+                                        onClick={() => handleDelete(c.id)}
+                                        className="text-slate-300 hover:text-red-500"
+                                        title="Delete comment"
+                                    >
+                                        <Trash2 className="w-4 h-4" />
+                                    </button>
+                                </div>
                             )}
                         </div>
                     ))

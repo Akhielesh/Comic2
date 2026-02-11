@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../services/supabase';
 import { Loader2, Heart, Eye, Search, Filter, BookOpen, User, Star } from 'lucide-react';
 import { Project } from '../types';
-import { incrementLikeCount } from '../services/db';
+import { getProjectLikeMap, toggleProjectLike } from '../services/db';
 
 interface PublicGalleryProps {
     onReadComic: (projectId: string) => void;
@@ -11,10 +11,12 @@ interface PublicGalleryProps {
 
 interface PublicProject extends Project {
     profiles?: { username: string };
+    user_id?: string;
     likes_count: number;
     views_count: number;
     average_rating?: number;
     review_count?: number;
+    isLiked?: boolean;
 }
 
 export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBack }) => {
@@ -22,6 +24,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState<'trending' | 'recent'>('trending');
     const [search, setSearch] = useState('');
+    const [likeBusy, setLikeBusy] = useState<Record<string, boolean>>({});
 
     useEffect(() => {
         fetchComics();
@@ -30,53 +33,41 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
     const fetchComics = async () => {
         setLoading(true);
         try {
-            let data, error;
+            let query = supabase
+                .from('projects')
+                .select(`*, profiles:user_id (username)`)
+                .eq('is_public', true);
 
-            // 1. Try fetching WITH reviews
-            try {
-                let query = supabase
-                    .from('projects')
-                    .select(`*, profiles:user_id (username), reviews (rating)`)
-                    .eq('is_public', true);
+            if (filter === 'trending') query = query.order('likes_count', { ascending: false });
+            else query = query.order('created_at', { ascending: false });
 
-                if (filter === 'trending') query = query.order('likes_count', { ascending: false });
-                else query = query.order('created_at', { ascending: false });
-
-                const result = await query;
-                if (result.error) throw result.error;
-                data = result.data;
-            } catch (err) {
-                console.warn("Complete fetch failed, trying fallback without reviews...", err);
-                // 2. Fallback: Fetch WITHOUT reviews (in case table missing)
-                let query = supabase
+            let { data, error } = await query;
+            if (error && filter === 'trending') {
+                // Schema fallback when likes_count is unavailable
+                const fallback = await supabase
                     .from('projects')
                     .select(`*, profiles:user_id (username)`)
-                    .eq('is_public', true);
-
-                if (filter === 'trending') query = query.order('likes_count', { ascending: false });
-                else query = query.order('created_at', { ascending: false });
-
-                const result = await query;
-                data = result.data;
-                error = result.error;
+                    .eq('is_public', true)
+                    .order('created_at', { ascending: false });
+                data = fallback.data;
+                error = fallback.error;
             }
-
             if (error) throw error;
 
             const mapped = (data || []).map((p: any) => {
-                const reviews = p.reviews || [];
-                const totalRating = reviews.reduce((sum: number, r: any) => sum + r.rating, 0);
-                const avgRating = reviews.length > 0 ? totalRating / reviews.length : 0;
-
                 return {
                     ...p,
                     coverImage: p.cover_image_url,
-                    average_rating: avgRating,
-                    review_count: reviews.length
+                    average_rating: 0,
+                    review_count: 0
                 };
             });
 
-            setProjects(mapped);
+            const likeMap = await getProjectLikeMap(mapped.map((project: PublicProject) => project.id));
+            setProjects(mapped.map((project: PublicProject) => ({
+                ...project,
+                isLiked: !!likeMap[project.id]
+            })));
         } catch (e) {
             console.error("Failed to load gallery", e);
             // Fallback for demo if RLS blocks or DB empty
@@ -184,21 +175,40 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                                     <div className="p-3 flex items-center justify-between border-t-2 border-slate-100 bg-white text-xs font-bold text-slate-500">
                                         <div className="flex items-center gap-3">
                                             <button
-                                                onClick={(e) => {
+                                                onClick={async (e) => {
                                                     e.stopPropagation();
-                                                    // Optimistic update
-                                                    const updated = projects.map(p => {
-                                                        if (p.id === project.id) {
-                                                            return { ...p, likes_count: (p.likes_count || 0) + 1 };
-                                                        }
-                                                        return p;
-                                                    });
-                                                    setProjects(updated);
-                                                    incrementLikeCount(project.id);
+                                                    if (likeBusy[project.id]) return;
+                                                    setLikeBusy(prev => ({ ...prev, [project.id]: true }));
+                                                    const currentLiked = !!project.isLiked;
+                                                    setProjects(prev => prev.map(p => {
+                                                        if (p.id !== project.id) return p;
+                                                        return {
+                                                            ...p,
+                                                            isLiked: !currentLiked,
+                                                            likes_count: Math.max(0, (p.likes_count || 0) + (currentLiked ? -1 : 1))
+                                                        };
+                                                    }));
+
+                                                    try {
+                                                        const result = await toggleProjectLike(project.id, project.user_id);
+                                                        setProjects(prev => prev.map(p => {
+                                                            if (p.id !== project.id) return p;
+                                                            if (p.isLiked === result.liked) return p;
+                                                            return {
+                                                                ...p,
+                                                                isLiked: result.liked,
+                                                                likes_count: Math.max(0, (p.likes_count || 0) + (result.liked ? 1 : -1))
+                                                            };
+                                                        }));
+                                                    } finally {
+                                                        setLikeBusy(prev => ({ ...prev, [project.id]: false }));
+                                                    }
                                                 }}
-                                                className="flex items-center gap-1 hover:text-red-500 transition-colors z-10 relative group-hover/btn:text-red-500"
+                                                className={`flex items-center gap-1 transition-colors z-10 relative group-hover/btn:text-red-500 ${project.isLiked ? 'text-red-500' : 'hover:text-red-500'}`}
+                                                disabled={!!likeBusy[project.id]}
+                                                title={project.isLiked ? 'Unlike comic' : 'Like comic'}
                                             >
-                                                <Heart size={14} className="group-active/btn:fill-current" /> {project.likes_count || 0}
+                                                <Heart size={14} className={project.isLiked ? 'fill-current' : 'group-active/btn:fill-current'} /> {project.likes_count || 0}
                                             </button>
                                             <div className="flex items-center gap-1 text-slate-400">
                                                 <Eye size={14} /> {project.views_count || 0}

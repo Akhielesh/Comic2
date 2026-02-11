@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Bell, Heart, MessageSquare, UserPlus, X } from 'lucide-react';
+import { Bell, Heart, MessageSquare, UserPlus, Sparkles, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { getNotifications, markNotificationRead } from '../services/db';
+import { getNotifications, markAllNotificationsRead, markNotificationRead } from '../services/db';
 import { AppNotification } from '../types';
 
 interface NotificationBellProps {
@@ -44,13 +44,6 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ onNavigate }
 
     const handleClick = () => {
         setIsOpen(!isOpen);
-        if (!isOpen && unreadCount > 0) {
-            // Mark visible as read? Or mark individual on click?
-            // Usually mark all read when opening or individual.
-            // Let's mark all as read locally for UI clear, and async update DB?
-            // Or just leave them unread until clicked? 
-            // Let's leave unread until clicked or "Mark all read" button.
-        }
     };
 
     const handleNotificationClick = async (n: AppNotification) => {
@@ -64,10 +57,10 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ onNavigate }
             onNavigate('reader', n.entity_id);
         } else if (n.type === 'follow' && n.actor?.username) {
             onNavigate('profile', n.actor.username);
-        } else if (n.type === 'like' && n.entity_id) {
-            // if entity_id is comment, maybe go to threaded view? 
-            // if entity_id is project, go to reader
+        } else if ((n.type === 'like' || n.type === 'generation') && n.entity_id) {
             onNavigate('reader', n.entity_id);
+        } else if (n.type === 'system') {
+            onNavigate('dashboard');
         }
     };
 
@@ -93,10 +86,9 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ onNavigate }
                             <button
                                 onClick={async (e) => {
                                     e.stopPropagation();
-                                    // Mark all logic would go here
-                                    notifications.forEach(n => !n.is_read && markNotificationRead(n.id));
-                                    setNotifications(notifications.map(n => ({ ...n, is_read: true })));
-                                    setUnreadCount(0);
+                                    if (!user) return;
+                                    await markAllNotificationsRead(user.id);
+                                    await loadNotifications();
                                 }}
                                 className="text-xs text-blue-500 hover:text-blue-600"
                             >
@@ -121,15 +113,29 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ onNavigate }
                                         {n.type === 'like' && <Heart className="w-4 h-4 text-red-500 fill-current" />}
                                         {n.type === 'comment' && <MessageSquare className="w-4 h-4 text-blue-500 fill-current" />}
                                         {n.type === 'follow' && <UserPlus className="w-4 h-4 text-green-500 fill-current" />}
+                                        {n.type === 'generation' && <Sparkles className="w-4 h-4 text-purple-500" />}
+                                        {n.type === 'system' && <AlertTriangle className="w-4 h-4 text-amber-500" />}
                                     </div>
                                     <div className="flex-1 min-w-0">
                                         <p className="text-sm text-gray-900 dark:text-gray-100">
-                                            <span className="font-semibold">{n.actor?.username || 'Someone'}</span>
-                                            {' '}
-                                            {n.type === 'like' && 'liked your comment'}
-                                            {n.type === 'comment' && 'commented on your comic'}
-                                            {n.type === 'follow' && 'started following you'}
+                                            {n.title ? (
+                                                <span className="font-semibold">{n.title}</span>
+                                            ) : (
+                                                <>
+                                                    <span className="font-semibold">{n.actor?.username || 'Someone'}</span>
+                                                    {' '}
+                                                    {n.type === 'like' && 'liked your comic'}
+                                                    {n.type === 'comment' && 'commented on your comic'}
+                                                    {n.type === 'follow' && 'started following you'}
+                                                    {n.type === 'system' && 'System notification'}
+                                                </>
+                                            )}
                                         </p>
+                                        {(n.message || n.type === 'generation' || n.type === 'system') && (
+                                            <p className="text-xs text-gray-500 mt-1">
+                                                {n.message || 'Your latest generation is complete.'}
+                                            </p>
+                                        )}
                                         <p className="text-xs text-gray-500 mt-1">
                                             {new Date(n.created_at).toLocaleDateString()}
                                         </p>

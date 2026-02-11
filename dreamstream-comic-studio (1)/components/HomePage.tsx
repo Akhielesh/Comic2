@@ -139,9 +139,9 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               <div className="col-span-2 bg-black text-white border-4 border-black rounded-2xl p-6 shadow-comic transform rotate-1 hover:rotate-0 transition-transform duration-300 flex items-center justify-between">
                 <div>
                   <div className="text-brand-yellow font-display text-xl">Community Challenge</div>
-                  <div className="text-sm font-mono text-zinc-400">Theme: Cyber-mainland</div>
+                  <div className="text-sm font-mono text-zinc-400">New events are launching soon.</div>
                 </div>
-                <Button size="sm" variant="secondary" onClick={onEnterStudio}>Join</Button>
+                <Button size="sm" variant="secondary" onClick={() => alert('Community Challenge is coming soon.')}>Coming Soon</Button>
               </div>
             </div>
           </div>

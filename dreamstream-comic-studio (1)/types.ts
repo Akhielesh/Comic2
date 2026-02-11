@@ -37,8 +37,9 @@ export type SettingsState = {
   showGeminiKey?: boolean;
   showFluxKey?: boolean;
   modelRouting?: Record<string, string>;
-  showAssistant?: boolean;
   defaultImageModel?: string;
+  defaultTextModel?: string;
+  defaultTextModelKey?: string;
 };
 
 export type TestLabRunStep = {
@@ -218,6 +219,67 @@ export interface Location {
   referenceImageIds: string[];
 }
 
+export type ContinuityEntityKind = 'character' | 'item' | 'location';
+
+export interface ContinuityEntity {
+  id: string;
+  kind: ContinuityEntityKind;
+  name: string;
+  description: string;
+  lockedTraits: string[];
+  referenceImageIds: string[];
+  required: boolean;
+}
+
+export interface SceneContinuityBinding {
+  sceneId: number;
+  characterIds: string[];
+  itemIds: string[];
+  locationId?: string;
+  requiredEntityIds: string[];
+}
+
+export interface ContinuityValidationIssue {
+  code: string;
+  message: string;
+  severity: 'error' | 'warning';
+  sceneId?: number;
+  panelId?: string;
+  entityId?: string;
+}
+
+export interface ContinuityValidationResult {
+  isValid: boolean;
+  missingEntityIds: string[];
+  issues: ContinuityValidationIssue[];
+  updatedAt: number;
+}
+
+export interface ContinuityBible {
+  version: number;
+  entities: ContinuityEntity[];
+  sceneBindings: SceneContinuityBinding[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface PanelContinuity {
+  requiredEntityIds: string[];
+  referenceImageIds: string[];
+  locationId?: string;
+  continuityNotes?: string;
+  driftScore?: number;
+  validatedAt?: number;
+  flaggedIssues?: string[];
+}
+
+export interface ContinuityState {
+  bible: ContinuityBible;
+  lockLevel: 'strict' | 'guided' | 'flexible';
+  fallbackPolicy: 'auto' | 'soft_fail' | 'hard_fail';
+  validation?: ContinuityValidationResult;
+}
+
 export interface ComicPanel {
   id: string;
   sceneId: number;
@@ -231,6 +293,7 @@ export interface ComicPanel {
   imageUrlHistory?: string[];
   isGenerating?: boolean;
   isPlanned?: boolean;
+  continuity?: PanelContinuity;
 }
 
 export interface StyleVariant {
@@ -350,6 +413,7 @@ export interface ComicState {
   };
   scenes: Scene[];
   continuitySummary?: string;
+  continuity?: ContinuityState;
   overview?: string;
   comments?: ProjectComment[];
   storyBuilder?: StoryBuilderState;
@@ -382,6 +446,7 @@ export interface ComicState {
   textLayout?: TextLayout;
   panelPlanVersion?: number;
   pricingConfig?: PricingConfig;
+  // Deprecated legacy field retained for backwards compatibility with older project payloads.
   assistantChat?: ChatMessage[];
   imageTags?: Record<string, ImageTag>;
   imageTagCounters?: Record<string, number>;
@@ -403,6 +468,9 @@ export interface ProjectVersion {
   createdAt: number;
   state: ComicState;
   thumbnail?: string;
+  reason?: string;
+  parentVersionId?: string;
+  snapshotHash?: string;
 }
 
 export interface Project {
@@ -413,6 +481,10 @@ export interface Project {
   coverImage?: string;
   state: ComicState;
   isPublic?: boolean;
+  userId?: string;
+  authorName?: string;
+  likesCount?: number;
+  viewsCount?: number;
 }
 
 export interface ChatMessage {
@@ -482,6 +554,7 @@ export interface Comment {
   user_id: string;
   text: string;
   created_at: string;
+  updated_at?: string;
   user?: { username?: string; avatar_url?: string };
   likes?: number;
   dislikes?: number; // Optional locally, or logic handles it
@@ -498,11 +571,13 @@ export interface AppNotification {
   id: string;
   user_id: string;
   actor_id?: string;
-  type: 'follow' | 'comment' | 'like';
+  type: 'follow' | 'comment' | 'like' | 'generation' | 'system';
   entity_id?: string;
   is_read: boolean;
   created_at: string;
   actor?: { username: string; avatar_url?: string };
+  title?: string;
+  message?: string;
 }
 
 export interface CommentLike {

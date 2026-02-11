@@ -18,12 +18,13 @@ interface ProjectDashboardProps {
   onDuplicateProject: (id: string) => void;
   onReadProject: (id: string) => void;
   onUpdateProject: (id: string, updates: Partial<Project> | ((prev: Project) => Partial<Project>)) => void;
+  onNavigate?: (view: string, id?: string) => void;
 }
 
 
 
 export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
-  projects, onCreateProject, onOpenProject, onDeleteProject, onDuplicateProject, onReadProject, onUpdateProject
+  projects, onCreateProject, onOpenProject, onDeleteProject, onDuplicateProject, onReadProject, onUpdateProject, onNavigate
 }) => {
   const [isCreating, setIsCreating] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
@@ -154,7 +155,13 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
               </div>
             </div>
             <div className="flex items-center gap-4">
-              <NotificationBell onNavigate={onOpenProject ? ((v, id) => { if (v === 'reader' && id) onReadProject(id) }) : undefined as any} />
+              <NotificationBell onNavigate={(view, id) => {
+                if (onNavigate) {
+                  onNavigate(view, id);
+                  return;
+                }
+                if (view === 'reader' && id) onReadProject(id);
+              }} />
               <Button onClick={() => setIsCreating(true)} icon={<Plus />}>New Comic</Button>
             </div>
           </div>

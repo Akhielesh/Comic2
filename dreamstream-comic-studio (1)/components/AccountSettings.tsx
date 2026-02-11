@@ -12,7 +12,7 @@ import {
     saveImage,
     savePublicContactMessage
 } from '../services/db';
-import { getFluxKeyInfo } from '../services/appSettings';
+import { getAllModelKeys, getSettingsState, setSettingsState as persistSettingsState } from '../services/appSettings';
 import { Button } from './Button';
 import { SettingsModal } from './SettingsModal';
 import { FluxKeyInput } from './FluxKeyInput';
@@ -22,21 +22,28 @@ import { User as UserIcon, Settings, CreditCard, Shield, Mail, Upload, Camera, S
 import { useAuth } from '../contexts/AuthContext';
 import { createCheckoutSession } from '../services/billing';
 import { useSearchParams } from 'react-router-dom';
+import { IMAGE_MODELS } from '../services/imageModels';
+import { TEXT_MODEL, TEXT_MODELS } from '../services/modelPolicy';
 
 interface AccountSettingsProps {
     onClose: () => void;
     initialTab?: 'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin';
+    onSignedOut?: () => void;
 }
 
 const ContactSection = () => {
     const { user } = useAuth();
     const [msg, setMsg] = useState('');
     const [contactEmail, setContactEmail] = useState(user?.email || '');
+    const [phone, setPhone] = useState('');
     const [sent, setSent] = useState(false);
+    const words = msg.trim() ? msg.trim().split(/\s+/).length : 0;
 
     const send = async (e: React.FormEvent) => {
         e.preventDefault();
-        await savePublicContactMessage(contactEmail, msg);
+        if (words > 300) return;
+        const finalMessage = phone.trim() ? `[Phone: ${phone.trim()}]\n\n${msg}` : msg;
+        await savePublicContactMessage(contactEmail, finalMessage);
         setSent(true);
     };
 
@@ -54,7 +61,14 @@ const ContactSection = () => {
     return (
         <div className="max-w-xl animate-fade-in">
             <h3 className="font-display text-2xl mb-2">Contact Support</h3>
-            <p className="text-slate-500 mb-6 font-comic">Found a bug? Have a feature request? Let us know.</p>
+            <p className="text-slate-500 mb-6 font-comic">
+                Share bugs, billing issues, or feature requests. We usually reply within 1-2 business days.
+            </p>
+            <div className="mb-6 p-4 bg-slate-50 border-2 border-slate-200 rounded-lg text-sm">
+                <p className="font-bold mb-1">Basic Contact Info</p>
+                <p className="text-slate-600">Support Email: support@dreamstream.com</p>
+                <p className="text-slate-600">Business Hours: Mon-Fri, 9:00 AM - 6:00 PM</p>
+            </div>
             <form onSubmit={send} className="space-y-4">
                 <div>
                     <label className="font-bold text-xs uppercase">Your Email</label>
@@ -62,17 +76,24 @@ const ContactSection = () => {
                         className="w-full mt-1 border-2 border-black rounded-lg px-4 py-2 font-mono" />
                 </div>
                 <div>
-                    <label className="font-bold text-xs uppercase">Message (Max 1000 chars)</label>
-                    <textarea required maxLength={1000} rows={6} value={msg} onChange={e => setMsg(e.target.value)}
+                    <label className="font-bold text-xs uppercase">Phone Number (Optional)</label>
+                    <input type="tel" value={phone} onChange={e => setPhone(e.target.value)}
                         className="w-full mt-1 border-2 border-black rounded-lg px-4 py-2 font-mono" />
-                    <div className="text-right text-xs text-slate-400 mt-1">{msg.length}/1000</div>
                 </div>
-                <Button type="submit" icon={<Mail size={16} />}>Send Message</Button>
+                <div>
+                    <label className="font-bold text-xs uppercase">Message (300 words max)</label>
+                    <textarea required rows={6} value={msg} onChange={e => setMsg(e.target.value)}
+                        className="w-full mt-1 border-2 border-black rounded-lg px-4 py-2 font-mono" />
+                    <div className={`text-right text-xs mt-1 ${words > 300 ? 'text-red-500 font-bold' : 'text-slate-400'}`}>
+                        {words}/300 words
+                    </div>
+                </div>
+                <Button type="submit" icon={<Mail size={16} />} disabled={words > 300}>Send Message</Button>
             </form>
         </div>
     );
 };
-export const AccountSettings: React.FC<AccountSettingsProps> = ({ onClose, initialTab = 'profile' }) => {
+export const AccountSettings: React.FC<AccountSettingsProps> = ({ onClose, initialTab = 'profile', onSignedOut }) => {
     const { user, signOut } = useAuth();
     const [activeTab, setActiveTab] = useState<'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin'>(initialTab);
     const [searchParams] = useSearchParams();
@@ -87,12 +108,16 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({ onClose, initi
             console.log("Upgrade canceled");
         }
     }, [searchParams]);
+    useEffect(() => {
+        setActiveTab(initialTab);
+    }, [initialTab]);
     const [profile, setProfile] = useState<UserProfile | null>(null);
     const [loading, setLoading] = useState(true);
     const [couponCode, setCouponCode] = useState('');
     const [redeemMsg, setRedeemMsg] = useState<{ type: 'success' | 'error', text: string } | null>(null);
     const [adminCoupons, setAdminCoupons] = useState<any[]>([]);
     const [isAdmin, setIsAdmin] = useState(false);
+    const [settingsState, setSettingsState] = useState(() => getSettingsState());
 
     useEffect(() => {
         if (user) {
@@ -311,23 +336,32 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({ onClose, initi
             <div className="bg-white border-2 border-black rounded-xl p-6 h-[400px] overflow-y-auto font-mono text-xs leading-relaxed">
                 <h3 className="font-bold text-lg mb-4 underline">Privacy Policy</h3>
                 <p><strong>Last Updated: Feb 06, 2026</strong></p>
-                <p className="mt-2">DreamStream Inc. ("we", "our") respects your privacy. This policy explains how we handle your data.</p>
-                <p className="mt-4 font-bold">1. Data Collection</p>
-                <p>We collect your email, username, and generation history. Images generated are stored in your private cloud bucket unless you choose to make them public.</p>
-                <p className="mt-4 font-bold">2. AI Usage</p>
-                <p>We use third-party AI providers (Google Gemini, Black Forest Labs). Your prompts are sent to these services for generation. We do not use your private data to train our models without consent.</p>
-                <p className="mt-4 font-bold">3. Data Security</p>
-                <p>All API keys provided by you are encrypted using AES-256 before storage. We cannot see your keys.</p>
+                <p className="mt-2">DreamStream collects account, content, and operational data needed to run the product securely.</p>
+                <p className="mt-4 font-bold">1. Data We Process</p>
+                <p>Profile data, projects, prompts, generated images, comments, and support messages.</p>
+                <p className="mt-4 font-bold">2. Processing Purpose</p>
+                <p>Service operation, abuse prevention, billing/limits, and support responses.</p>
+                <p className="mt-4 font-bold">3. Third-Party Providers</p>
+                <p>Generation requests may be processed by model vendors; auth/storage/payments use managed providers.</p>
+                <p className="mt-4 font-bold">4. Security</p>
+                <p>Data is transmitted over encrypted channels; key-management patterns reduce accidental exposure risk.</p>
+                <p className="mt-4 font-bold">Privacy FAQ</p>
+                <p>Q: Are private drafts public? A: No. Q: Can I delete my profile data? A: Yes, subject to legal/security retention needs.</p>
 
                 <hr className="my-6 border-slate-200" />
 
                 <h3 className="font-bold text-lg mb-4 underline">Terms of Service</h3>
-                <p><strong>1. Acceptance</strong></p>
-                <p>By using DreamStream, you agree to these terms.</p>
-                <p className="mt-4 font-bold">2. Content Ownership</p>
-                <p>You own the rights to the comics you create, subject to the terms of the AI models used (Flux/Gemini). You are responsible for ensuring your content does not violate copyright or safety guidelines.</p>
-                <p className="mt-4 font-bold">3. Termination</p>
-                <p>We reserve the right to terminate accounts that abuse the API or violate content safety policies.</p>
+                <p><strong>1. Acceptance</strong> By using DreamStream, you agree to these terms.</p>
+                <p className="mt-4 font-bold">2. Content Responsibility</p>
+                <p>You are responsible for lawful use, rights clearance, and final publishing decisions.</p>
+                <p className="mt-4 font-bold">3. Prohibited Use</p>
+                <p>No illegal, abusive, infringing, or security-harmful activity.</p>
+                <p className="mt-4 font-bold">4. Account Action</p>
+                <p>We may suspend accounts for violations, abuse, or legal/security risk.</p>
+                <p className="mt-4 font-bold">5. Warranty and Liability</p>
+                <p>The service is provided as-is; output quality/availability is not guaranteed.</p>
+                <p className="mt-4 font-bold">Terms FAQ</p>
+                <p>Q: Can I use generated work commercially? A: Generally yes, but provider terms and law still apply.</p>
             </div>
         </div>
     );
@@ -377,14 +411,76 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({ onClose, initi
     };
 
     // Reuse settings modal inner logic? Or simple manual version
-    const renderSettings = () => (
-        <div className="space-y-6 animate-fade-in max-w-2xl">
-            <div>
-                <h3 className="font-display text-xl mb-4">AI Configuration</h3>
-                <KeyManager />
+    const renderSettings = () => {
+        const modelKeys = getAllModelKeys();
+        const imageModelOptions = IMAGE_MODELS;
+        const textModelLabelMap = new Map(TEXT_MODELS.map((model) => [model.id, model.label]));
+        const textModelOptions = TEXT_MODELS.map((model) => model.id);
+        const imageModelIds = new Set(imageModelOptions.map((model) => model.id));
+        const textModelIds = new Set(textModelOptions);
+        const selectedImageModel = imageModelIds.has(settingsState.defaultImageModel || '')
+            ? settingsState.defaultImageModel
+            : imageModelOptions[0]?.id;
+        const requestedTextModel = settingsState.defaultTextModel || settingsState.defaultTextModelKey || TEXT_MODEL;
+        const selectedTextModel = textModelIds.has(requestedTextModel) ? requestedTextModel : TEXT_MODEL;
+
+        const saveSettings = (next: ReturnType<typeof getSettingsState>) => {
+            setSettingsState(next);
+            persistSettingsState(next);
+        };
+
+        return (
+            <div className="space-y-6 animate-fade-in max-w-3xl">
+                <div>
+                    <h3 className="font-display text-xl mb-4">API Keys</h3>
+                    <KeyManager />
+                </div>
+
+                <div className="border-2 border-slate-200 rounded-xl p-4 bg-white space-y-4">
+                    <div>
+                        <label className="text-xs font-bold uppercase text-slate-500">Default Image Model</label>
+                        <select
+                            value={selectedImageModel}
+                            onChange={(e) => saveSettings({ ...settingsState, defaultImageModel: e.target.value })}
+                            className="w-full mt-1 border-2 border-black rounded-lg px-3 py-2 text-sm bg-white"
+                        >
+                            {imageModelOptions.map((model) => (
+                                <option key={model.id} value={model.id}>
+                                    {model.label}{modelKeys[model.id] ? ' (your key)' : model.provider === 'flux' ? ' (system/free)' : ''}
+                                </option>
+                            ))}
+                        </select>
+                        <p className="text-xs text-slate-500 mt-1">
+                            Gemini image models can use either a model-specific Gemini key or your default Google AI Studio Gemini key.
+                        </p>
+                    </div>
+
+                    <div>
+                        <label className="text-xs font-bold uppercase text-slate-500">Default Text Model</label>
+                        <select
+                            value={selectedTextModel}
+                            onChange={(e) => saveSettings({
+                                ...settingsState,
+                                defaultTextModel: e.target.value,
+                                defaultTextModelKey: e.target.value
+                            })}
+                            className="w-full mt-1 border-2 border-black rounded-lg px-3 py-2 text-sm bg-white"
+                        >
+                            {textModelOptions.map((modelId) => (
+                                <option key={modelId} value={modelId}>
+                                    {(textModelLabelMap.get(modelId) || modelId)}
+                                    {modelKeys[modelId] ? ' (configured key)' : modelId === TEXT_MODEL ? ' (default)' : ''}
+                                </option>
+                            ))}
+                        </select>
+                        <p className="text-xs text-slate-500 mt-1">
+                            This model is used for script analysis and story tools. Matching saved key is used automatically.
+                        </p>
+                    </div>
+                </div>
             </div>
-        </div>
-    );
+        );
+    };
 
     return (
         <div className="min-h-screen bg-slate-50 pb-20">
@@ -409,7 +505,13 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({ onClose, initi
                     <NavButton icon={<Mail size={18} />} label="Contact" active={activeTab === 'contact'} onClick={() => setActiveTab('contact')} />
 
                     <div className="pt-8">
-                        <button onClick={signOut} className="w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-red-600 hover:bg-red-50 transition-colors">
+                        <button
+                            onClick={async () => {
+                                await signOut();
+                                onSignedOut?.();
+                            }}
+                            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-red-600 hover:bg-red-50 transition-colors"
+                        >
                             <LogOut size={18} /> Sign Out
                         </button>
                     </div>

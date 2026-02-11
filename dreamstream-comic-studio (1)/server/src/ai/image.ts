@@ -20,6 +20,66 @@ const fileToGenerativePart = (dataUrl: string, fallbackMime: string) => ({
   }
 });
 
+
+type GeminiInlineData = {
+  data?: string;
+  mimeType?: string;
+};
+
+type GeminiContentPart = {
+  text?: string;
+  inlineData?: GeminiInlineData;
+};
+
+type GeminiCandidate = {
+  content?: { parts?: GeminiContentPart[] };
+  finishReason?: string;
+  finishMessage?: string;
+};
+
+type GeminiPromptFeedback = {
+  blockReason?: string;
+};
+
+type GeminiUsageMetadata = Record<string, unknown>;
+
+type GeminiGenerateContentResponse = {
+  candidates?: GeminiCandidate[];
+  promptFeedback?: GeminiPromptFeedback;
+  usageMetadata?: GeminiUsageMetadata;
+};
+
+type ErrorWithMessage = { message?: string };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
+
+const isGeminiContentPart = (value: unknown): value is GeminiContentPart => {
+  if (!isRecord(value)) return false;
+  const inlineData = value.inlineData;
+  if (inlineData !== undefined && !isRecord(inlineData)) return false;
+  return true;
+};
+
+const toGeminiGenerateContentResponse = (value: unknown): GeminiGenerateContentResponse => {
+  if (!isRecord(value)) return {};
+  const candidates = Array.isArray(value.candidates)
+    ? value.candidates.filter((candidate): candidate is GeminiCandidate => isRecord(candidate))
+    : undefined;
+  const promptFeedback = isRecord(value.promptFeedback) ? value.promptFeedback as GeminiPromptFeedback : undefined;
+  const usageMetadata = isRecord(value.usageMetadata) ? value.usageMetadata : undefined;
+  return {
+    candidates,
+    promptFeedback,
+    usageMetadata
+  };
+};
+
+const isInvalidArgumentError = (err: unknown) => {
+  const message = String((isRecord(err) ? (err as ErrorWithMessage).message : err) || '');
+  return message.includes('INVALID_ARGUMENT') || message.toLowerCase().includes('invalid argument');
+};
+
 export const generateGeminiImage = async (
   apiKey: string,
   prompt: string,
@@ -74,7 +134,7 @@ export const generateGeminiImage = async (
       mimeType,
       prompt,
       usage: buildUsage(prompt, undefined, undefined),
-      model: IMAGE_MODEL,
+      model: effectiveModel,
       timings: { apiMs, totalMs: apiMs }
     };
   }
@@ -83,7 +143,9 @@ export const generateGeminiImage = async (
   const imageParts = referenceImages.map((img) => fileToGenerativePart(img, 'image/jpeg'));
 
   const requestImage = (imageConfig?: { aspectRatio?: string; imageSize?: string }) => {
-    const config: any = { responseModalities };
+    const config: { responseModalities: Modality[]; imageConfig?: { aspectRatio?: string; imageSize?: string } } = {
+      responseModalities
+    };
     if (imageConfig && Object.keys(imageConfig).length > 0) {
       config.imageConfig = imageConfig;
     }
@@ -119,21 +181,15 @@ export const generateGeminiImage = async (
   }
   configsToTry.push(undefined);
 
-  let response: any;
-  let usedConfig: { aspectRatio?: string; imageSize?: string } | undefined;
-  let lastError: any;
-  const isInvalidArgument = (err: any) => {
-    const message = String(err?.message || err || '');
-    return message.includes('INVALID_ARGUMENT') || message.toLowerCase().includes('invalid argument');
-  };
+  let response: GeminiGenerateContentResponse | undefined;
+  let lastError: unknown;
 
   for (const cfg of configsToTry) {
     try {
-      response = await requestImage(cfg);
-      usedConfig = cfg;
+      response = toGeminiGenerateContentResponse(await requestImage(cfg));
       break;
     } catch (err) {
-      if (isInvalidArgument(err)) {
+      if (isInvalidArgumentError(err)) {
         lastError = err;
         continue;
       }
@@ -146,13 +202,13 @@ export const generateGeminiImage = async (
 
   const apiMs = Math.round(nowMs() - requestStart);
   const candidate = response.candidates?.[0];
-  const parts = candidate?.content?.parts || [];
-  const inlinePart = parts.find((part: any) => part.inlineData?.data);
+  const parts = (candidate?.content?.parts || []).filter(isGeminiContentPart);
+  const inlinePart = parts.find((part) => part.inlineData?.data);
 
   if (!inlinePart?.inlineData?.data) {
     const finishReason = candidate?.finishReason || candidate?.finishMessage;
     const blockReason = response.promptFeedback?.blockReason;
-    const responseText = parts.map((part: any) => part.text).filter(Boolean).join(' ').trim();
+    const responseText = parts.map((part) => part.text).filter((text): text is string => typeof text === 'string').join(' ').trim();
     const details = [
       finishReason ? `finishReason=${finishReason}` : null,
       blockReason ? `blockReason=${blockReason}` : null,
@@ -172,7 +228,7 @@ export const generateGeminiImage = async (
     mimeType,
     prompt,
     usage: buildUsage(prompt, undefined, response.usageMetadata),
-    model: IMAGE_MODEL,
+    model: effectiveModel,
     timings: { apiMs, totalMs: apiMs },
   };
 };

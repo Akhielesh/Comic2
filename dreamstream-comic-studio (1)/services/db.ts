@@ -80,11 +80,171 @@ const parseDataUrl = (dataUrl: string) => {
 };
 
 
+type ProjectRow = {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  cover_image_url?: string;
+  state: Project['state'];
+  is_public?: boolean;
+  user_id?: string;
+  likes?: number;
+  views?: number;
+  likes_count?: number;
+  views_count?: number;
+  profiles?: { username?: string } | null;
+};
+
+type CommentRow = {
+  id: string;
+  project_id: string;
+  user_id: string;
+  text: string;
+  created_at: string;
+  updated_at?: string;
+  user?: { username?: string; avatar_url?: string } | null;
+};
+
+type ProjectWithStats = Project & { userId?: string; likes?: number; views?: number };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
+
+const isProjectRow = (value: unknown): value is ProjectRow => {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === 'string' &&
+    typeof value.name === 'string' &&
+    typeof value.created_at === 'string' &&
+    typeof value.updated_at === 'string' &&
+    'state' in value
+  );
+};
+
+const mapProjectRow = (row: ProjectRow): Project => ({
+  id: row.id,
+  name: row.name,
+  createdAt: new Date(row.created_at).getTime(),
+  updatedAt: new Date(row.updated_at).getTime(),
+  coverImage: row.cover_image_url,
+  state: row.state,
+  isPublic: row.is_public,
+  userId: row.user_id,
+  authorName: row.profiles?.username,
+  likesCount: row.likes_count ?? row.likes ?? 0,
+  viewsCount: row.views_count ?? row.views ?? 0
+});
+
+const isCommentRow = (value: unknown): value is CommentRow => {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === 'string' &&
+    typeof value.project_id === 'string' &&
+    typeof value.user_id === 'string' &&
+    typeof value.text === 'string' &&
+    typeof value.created_at === 'string'
+  );
+};
+
+const mapCommentRow = (row: CommentRow): Comment => ({
+  id: row.id,
+  project_id: row.project_id,
+  user_id: row.user_id,
+  text: row.text,
+  created_at: row.created_at,
+  updated_at: row.updated_at,
+  user: row.user ?? undefined,
+});
+
+
 // --- CLOUD STORAGE (Supabase) for Projects, Images, Artifacts ---
 
 // 1. Projects
 // --- Local Storage Key ---
 const LOCAL_STORAGE_PROJECTS_KEY = 'dreamstream_projects';
+const LOCAL_PROJECT_LIKES_KEY = 'dreamstream_project_likes';
+const LOCAL_NOTIFICATIONS_KEY = 'dreamstream_local_notifications';
+let projectLikesTableUnavailable = false;
+
+const getLocalProjectLikeKey = (userId?: string) => `${LOCAL_PROJECT_LIKES_KEY}:${userId || 'anon'}`;
+
+const getLocalLikedProjects = (userId?: string): Set<string> => {
+  try {
+    const raw = localStorage.getItem(getLocalProjectLikeKey(userId));
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((id) => typeof id === 'string'));
+  } catch {
+    return new Set();
+  }
+};
+
+const setLocalLikedProjects = (likes: Set<string>, userId?: string) => {
+  try {
+    localStorage.setItem(getLocalProjectLikeKey(userId), JSON.stringify(Array.from(likes)));
+  } catch {
+    // ignore
+  }
+};
+
+const getLocalNotificationsRaw = (): AppNotification[] => {
+  try {
+    const raw = localStorage.getItem(LOCAL_NOTIFICATIONS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isRecord).map((item) => ({
+      id: String(item.id || crypto.randomUUID()),
+      user_id: String(item.user_id || ''),
+      actor_id: item.actor_id ? String(item.actor_id) : undefined,
+      type: (
+        item.type === 'generation'
+          ? 'generation'
+          : item.type === 'follow'
+            ? 'follow'
+            : item.type === 'comment'
+              ? 'comment'
+              : item.type === 'system'
+                ? 'system'
+                : 'like'
+      ),
+      entity_id: item.entity_id ? String(item.entity_id) : undefined,
+      is_read: Boolean(item.is_read),
+      created_at: typeof item.created_at === 'string' ? item.created_at : new Date().toISOString(),
+      title: typeof item.title === 'string' ? item.title : undefined,
+      message: typeof item.message === 'string' ? item.message : undefined,
+      actor: isRecord(item.actor) ? {
+        username: typeof item.actor.username === 'string' ? item.actor.username : 'System',
+        avatar_url: typeof item.actor.avatar_url === 'string' ? item.actor.avatar_url : undefined
+      } : undefined
+    }));
+  } catch {
+    return [];
+  }
+};
+
+const setLocalNotificationsRaw = (items: AppNotification[]) => {
+  try {
+    localStorage.setItem(LOCAL_NOTIFICATIONS_KEY, JSON.stringify(items));
+  } catch {
+    // ignore
+  }
+};
+
+const isProjectLikesMissingError = (error: unknown): boolean => {
+  if (!isRecord(error)) return false;
+  const message = typeof error.message === 'string' ? error.message.toLowerCase() : '';
+  const details = typeof error.details === 'string' ? error.details.toLowerCase() : '';
+  const code = typeof error.code === 'string' ? error.code.toLowerCase() : '';
+  return (
+    message.includes('project_likes') ||
+    details.includes('project_likes') ||
+    code === '42p01' ||
+    message.includes('relation') && message.includes('does not exist')
+  );
+};
 
 // 1. Projects
 export const saveProject = async (project: Project): Promise<void> => {
@@ -156,21 +316,13 @@ export const loadProjects = async (): Promise<Project[]> => {
 
   const { data, error } = await supabase
     .from('projects')
-    .select('*')
+    .select('*, profiles:user_id(username)')
     .order('updated_at', { ascending: false });
 
   if (error) throw error;
 
   // Map DB representation back to Application Type
-  return (data || []).map((row: any) => ({
-    id: row.id,
-    name: row.name,
-    createdAt: new Date(row.created_at).getTime(),
-    updatedAt: new Date(row.updated_at).getTime(),
-    coverImage: row.cover_image_url,
-    state: row.state,
-    isPublic: row.is_public
-  }));
+  return (data || []).filter(isProjectRow).map(mapProjectRow);
 };
 
 export const reloadProjects = async (): Promise<Project[]> => {
@@ -180,22 +332,15 @@ export const reloadProjects = async (): Promise<Project[]> => {
 export const getPublicProject = async (projectId: string): Promise<Project | null> => {
   const { data, error } = await supabase
     .from('projects')
-    .select('*')
+    .select('*, profiles:user_id(username)')
     .eq('id', projectId)
     .eq('is_public', true) // Security check
     .single();
 
   if (error || !data) return null;
 
-  return {
-    id: data.id,
-    name: data.name,
-    createdAt: new Date(data.created_at).getTime(),
-    updatedAt: new Date(data.updated_at).getTime(),
-    coverImage: data.cover_image_url,
-    state: data.state,
-    isPublic: data.is_public
-  };
+  if (!isProjectRow(data)) return null;
+  return mapProjectRow(data);
 };
 
 export type PlanTier = 'free' | 'pro' | 'admin';
@@ -242,6 +387,150 @@ export const incrementViewCount = async (projectId: string) => {
 
 export const incrementLikeCount = async (projectId: string) => {
   await supabase.rpc('increment_project_like', { p_id: projectId });
+};
+
+const decrementLikeCount = async (projectId: string) => {
+  await supabase.rpc('decrement_project_like', { p_id: projectId });
+};
+
+export const getProjectLikeMap = async (projectIds: string[]): Promise<Record<string, boolean>> => {
+  if (!projectIds.length) return {};
+  const { data: { user } } = await supabase.auth.getUser();
+  const fallbackSet = getLocalLikedProjects(user?.id);
+  const fallbackMap = projectIds.reduce<Record<string, boolean>>((acc, projectId) => {
+    acc[projectId] = fallbackSet.has(projectId);
+    return acc;
+  }, {});
+
+  if (!user) return fallbackMap;
+  if (projectLikesTableUnavailable) return fallbackMap;
+
+  const { data, error } = await supabase
+    .from('project_likes')
+    .select('project_id')
+    .eq('user_id', user.id)
+    .in('project_id', projectIds);
+
+  if (error) {
+    if (isProjectLikesMissingError(error)) {
+      projectLikesTableUnavailable = true;
+    }
+    return fallbackMap;
+  }
+
+  const likedSet = new Set(
+    (data || [])
+      .filter(isRecord)
+      .map((row) => row.project_id)
+      .filter((id): id is string => typeof id === 'string')
+  );
+
+  return projectIds.reduce<Record<string, boolean>>((acc, projectId) => {
+    acc[projectId] = likedSet.has(projectId);
+    return acc;
+  }, {});
+};
+
+export const toggleProjectLike = async (projectId: string, ownerUserId?: string): Promise<{ liked: boolean; persisted: boolean }> => {
+  const { data: { user } } = await supabase.auth.getUser();
+
+  if (!user) {
+    const localLikes = getLocalLikedProjects();
+    if (localLikes.has(projectId)) {
+      localLikes.delete(projectId);
+      setLocalLikedProjects(localLikes);
+      await decrementLikeCount(projectId).catch(() => null);
+      return { liked: false, persisted: false };
+    }
+    localLikes.add(projectId);
+    setLocalLikedProjects(localLikes);
+    await incrementLikeCount(projectId).catch(() => null);
+    return { liked: true, persisted: false };
+  }
+
+  const localLikes = getLocalLikedProjects(user.id);
+  if (projectLikesTableUnavailable) {
+    if (localLikes.has(projectId)) {
+      localLikes.delete(projectId);
+      setLocalLikedProjects(localLikes, user.id);
+      await decrementLikeCount(projectId).catch(() => null);
+      return { liked: false, persisted: false };
+    }
+    localLikes.add(projectId);
+    setLocalLikedProjects(localLikes, user.id);
+    await incrementLikeCount(projectId).catch(() => null);
+    if (ownerUserId && ownerUserId !== user.id) {
+      await createNotification(ownerUserId, user.id, 'like', projectId);
+    }
+    return { liked: true, persisted: false };
+  }
+  const { data: existing, error: selectError } = await supabase
+    .from('project_likes')
+    .select('id')
+    .eq('project_id', projectId)
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (selectError) {
+    if (isProjectLikesMissingError(selectError)) {
+      projectLikesTableUnavailable = true;
+    }
+    if (localLikes.has(projectId)) {
+      localLikes.delete(projectId);
+      setLocalLikedProjects(localLikes, user.id);
+      await decrementLikeCount(projectId).catch(() => null);
+      return { liked: false, persisted: false };
+    }
+    localLikes.add(projectId);
+    setLocalLikedProjects(localLikes, user.id);
+    await incrementLikeCount(projectId).catch(() => null);
+    if (ownerUserId && ownerUserId !== user.id) {
+      await createNotification(ownerUserId, user.id, 'like', projectId);
+    }
+    return { liked: true, persisted: false };
+  }
+
+  if (existing?.id) {
+    const { error } = await supabase
+      .from('project_likes')
+      .delete()
+      .eq('project_id', projectId)
+      .eq('user_id', user.id);
+
+    if (error) {
+      return { liked: true, persisted: true };
+    }
+
+    localLikes.delete(projectId);
+    setLocalLikedProjects(localLikes, user.id);
+    await decrementLikeCount(projectId).catch(() => null);
+    return { liked: false, persisted: true };
+  }
+
+  const { error } = await supabase
+    .from('project_likes')
+    .insert({ project_id: projectId, user_id: user.id });
+
+  if (error) {
+    if (localLikes.has(projectId)) {
+      return { liked: true, persisted: false };
+    }
+    localLikes.add(projectId);
+    setLocalLikedProjects(localLikes, user.id);
+    await incrementLikeCount(projectId).catch(() => null);
+    if (ownerUserId && ownerUserId !== user.id) {
+      await createNotification(ownerUserId, user.id, 'like', projectId);
+    }
+    return { liked: true, persisted: false };
+  }
+
+  localLikes.add(projectId);
+  setLocalLikedProjects(localLikes, user.id);
+  await incrementLikeCount(projectId).catch(() => null);
+  if (ownerUserId && ownerUserId !== user.id) {
+    await createNotification(ownerUserId, user.id, 'like', projectId);
+  }
+  return { liked: true, persisted: true };
 };
 
 // 2. Images (Cloud Storage)
@@ -616,7 +905,7 @@ export const addComment = async (projectId: string, text: string): Promise<Comme
     await createNotification(project.user_id, user.id, 'comment', projectId);
   }
 
-  return data as Comment; // Needs casting if join types are tricky
+  return isCommentRow(data) ? mapCommentRow(data) : null;
 };
 
 export const getComments = async (projectId: string, currentUserId?: string): Promise<Comment[]> => {
@@ -631,33 +920,46 @@ export const getComments = async (projectId: string, currentUserId?: string): Pr
     return [];
   }
 
-  let validComments = data.map((c: any) => ({
-    ...c,
-    user: c.user // 'user' field comes from the join alias
-  }));
+  let validComments = (data || []).filter(isCommentRow).map(mapCommentRow);
 
   // Fetch likes for current user if provided
   if (currentUserId && validComments.length > 0) {
-    const commentIds = validComments.map((c: any) => c.id);
+    const commentIds = validComments.map((c) => c.id);
     const { data: likes } = await supabase
       .from('comment_likes')
       .select('comment_id')
       .eq('user_id', currentUserId)
       .in('comment_id', commentIds);
 
-    const likedSet = new Set(likes?.map((l: any) => l.comment_id));
-    validComments = validComments.map((c: any) => ({
+    const likedSet = new Set((likes || []).filter(isRecord).map((l) => l.comment_id).filter((id): id is string => typeof id === 'string'));
+    validComments = validComments.map((c) => ({
       ...c,
       isLiked: likedSet.has(c.id)
     }));
   }
 
-  return validComments as Comment[];
+  return validComments;
 };
 
 export const deleteComment = async (commentId: string): Promise<boolean> => {
   const { error } = await supabase.from('comments').delete().eq('id', commentId);
   return !error;
+};
+
+export const updateComment = async (commentId: string, text: string): Promise<Comment | null> => {
+  const { data, error } = await supabase
+    .from('comments')
+    .update({ text })
+    .eq('id', commentId)
+    .select('*, user:profiles!user_id(username, avatar_url)')
+    .single();
+
+  if (error) {
+    console.error("Failed to update comment:", error);
+    return null;
+  }
+
+  return isCommentRow(data) ? mapCommentRow(data) : null;
 };
 
 export const followUser = async (targetUserId: string): Promise<boolean> => {
@@ -723,25 +1025,22 @@ export const getProfileByUsername = async (username: string): Promise<UserProfil
 export const getPublicProjectsByUser = async (userId: string): Promise<Project[]> => {
   const { data, error } = await supabase
     .from('projects')
-    .select('*')
+    .select('*, profiles:user_id(username)')
     .eq('user_id', userId)
     .eq('is_public', true)
     .order('created_at', { ascending: false });
 
   if (error) return [];
 
-  return data.map(row => ({
-    id: row.id,
-    name: row.name,
-    createdAt: new Date(row.created_at).getTime(),
-    updatedAt: new Date(row.updated_at).getTime(),
-    coverImage: row.cover_image_url,
-    state: row.state,
-    isPublic: row.is_public,
-    userId: row.user_id, // Ensure Project type has userId if needed, or we just use it for display
-    likes: row.likes || 0,
-    views: row.views || 0
-  } as any)); // Casting mainly because Project type might not strictly match DB row fields perfectly without mapping
+  return (data || []).filter(isProjectRow).map((row): Project => {
+    const project: ProjectWithStats = {
+      ...mapProjectRow(row),
+      userId: row.user_id,
+      likes: row.likes_count ?? row.likes ?? 0,
+      views: row.views_count ?? row.views ?? 0
+    };
+    return project;
+  });
 };
 
 // --- Notifications ---
@@ -757,21 +1056,47 @@ export const getNotifications = async (userId: string): Promise<AppNotification[
     .order('created_at', { ascending: false })
     .limit(20);
 
-  if (error) return [];
-  return data as any;
+  const cloud = error ? [] : (data || []) as AppNotification[];
+  const local = getLocalNotificationsRaw().filter((notification) => notification.user_id === userId);
+  return [...cloud, ...local].sort((a, b) =>
+    new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  );
 };
 
 export const markNotificationRead = async (notificationId: string) => {
+  if (notificationId.startsWith('local:')) {
+    const current = getLocalNotificationsRaw();
+    const next = current.map((item) =>
+      item.id === notificationId ? { ...item, is_read: true } : item
+    );
+    setLocalNotificationsRaw(next);
+    return;
+  }
+
   await supabase
     .from('notifications')
     .update({ is_read: true })
     .eq('id', notificationId);
 };
 
+export const markAllNotificationsRead = async (userId: string) => {
+  await supabase
+    .from('notifications')
+    .update({ is_read: true })
+    .eq('user_id', userId)
+    .eq('is_read', false);
+
+  const local = getLocalNotificationsRaw();
+  const next = local.map((item) =>
+    item.user_id === userId ? { ...item, is_read: true } : item
+  );
+  setLocalNotificationsRaw(next);
+};
+
 export const createNotification = async (
   userId: string,
   actorId: string,
-  type: 'follow' | 'comment' | 'like',
+  type: 'follow' | 'comment' | 'like' | 'system',
   entityId?: string
 ) => {
   if (userId === actorId) return; // Don't notify self
@@ -781,6 +1106,63 @@ export const createNotification = async (
     type,
     entity_id: entityId
   });
+};
+
+export const createSystemNotification = async (
+  message: string,
+  context?: { projectId?: string; stage?: string }
+) => {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return;
+
+  const current = getLocalNotificationsRaw();
+  const duplicate = current.find((item) =>
+    item.user_id === user.id &&
+    item.type === 'system' &&
+    item.message === message &&
+    (Date.now() - new Date(item.created_at).getTime()) < 30_000
+  );
+  if (duplicate) return;
+
+  const next: AppNotification = {
+    id: `local:${crypto.randomUUID()}`,
+    user_id: user.id,
+    type: 'system',
+    entity_id: context?.projectId,
+    is_read: false,
+    created_at: new Date().toISOString(),
+    title: 'Auto Fallback Applied',
+    message
+  };
+  setLocalNotificationsRaw([next, ...current].slice(0, 50));
+};
+
+export const createGenerationNotification = async (projectId: string, projectName: string) => {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return;
+
+  const current = getLocalNotificationsRaw();
+  const recentDuplicate = current.find(
+    (item) =>
+      item.user_id === user.id &&
+      item.type === 'generation' &&
+      item.entity_id === projectId &&
+      (Date.now() - new Date(item.created_at).getTime()) < 30_000
+  );
+  if (recentDuplicate) return;
+
+  const notification: AppNotification = {
+    id: `local:${crypto.randomUUID()}`,
+    user_id: user.id,
+    type: 'generation',
+    entity_id: projectId,
+    is_read: false,
+    created_at: new Date().toISOString(),
+    title: 'Comic Generation Complete',
+    message: `"${projectName}" is ready to read.`
+  };
+
+  setLocalNotificationsRaw([notification, ...current].slice(0, 50));
 };
 
 // --- Comment Likes ---

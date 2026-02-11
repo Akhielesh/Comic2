@@ -24,17 +24,14 @@ export const IMAGE_MODELS: ImageModelDefinition[] = [
     supportsReferences: true,
     supportsAspectRatio: true,
     defaultSteps: 1
-  },
-  {
-    id: "gemini-2.0-flash-exp",
-    label: "Gemini 2.0 Flash (Experimental)",
-    provider: "gemini",
-    supportsReferences: true,
-    supportsAspectRatio: true,
-    defaultSteps: 1,
-    isFree: true
   }
 ];
 
 export const getImageModelByProvider = (provider: ImageProviderId) =>
+  IMAGE_MODELS.find((model) => model.provider === provider) || IMAGE_MODELS[0];
+
+export const getImageModelById = (modelId: string) =>
+  IMAGE_MODELS.find((model) => model.id === modelId);
+
+export const getDefaultImageModelByProvider = (provider: ImageProviderId) =>
   IMAGE_MODELS.find((model) => model.provider === provider) || IMAGE_MODELS[0];

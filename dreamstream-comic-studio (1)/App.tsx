@@ -6,7 +6,6 @@ import { HomePage } from './components/HomePage';
 const ProjectDashboard = React.lazy(() => import('./components/ProjectDashboard').then(module => ({ default: module.ProjectDashboard })));
 const ComicEditor = React.lazy(() => import('./components/ComicEditor').then(module => ({ default: module.ComicEditor })));
 const ComicReader = React.lazy(() => import('./components/ComicReader').then(module => ({ default: module.ComicReader })));
-const SettingsModal = React.lazy(() => import('./components/SettingsModal').then(module => ({ default: module.SettingsModal })));
 const TestLab = React.lazy(() => import('./components/TestLab').then(module => ({ default: module.TestLab })));
 const LearnHub = React.lazy(() => import('./components/LearnHub').then(module => ({ default: module.LearnHub })));
 const PublicGallery = React.lazy(() => import('./components/PublicGallery').then(module => ({ default: module.PublicGallery })));
@@ -15,20 +14,33 @@ const AccountSettings = React.lazy(() => import('./components/AccountSettings').
 const PrivacyPolicy = React.lazy(() => import('./components/PrivacyPolicy').then(module => ({ default: module.PrivacyPolicy })));
 const TermsOfService = React.lazy(() => import('./components/TermsOfService').then(module => ({ default: module.TermsOfService })));
 
-import { MasterAssistant } from './components/MasterAssistant';
 import { ModelSelector } from './components/ModelSelector';
 import { FluxKeyInput } from './components/FluxKeyInput';
 import { useProjectManager } from './hooks/useProjectManager';
-import { checkSystemStatus } from './services/geminiService';
+import { checkSystemDiagnostics, checkSystemStatus } from './services/geminiService';
 import { getFluxKeyInfo, getImageProvider, getLockedImageProvider } from './services/appSettings';
 import { useAuth } from './contexts/AuthContext';
 import { AuthPage } from './components/AuthPage';
 import { getPublicProject, incrementViewCount, incrementLikeCount } from './services/db';
 import { Project } from './types';
 import { Key, Zap, Loader2 } from 'lucide-react';
-import { SystemStatusResponse } from './apiTypes';
+import { SystemDiagnosticsResponse, SystemStatusResponse } from './apiTypes';
 import { UserAvatar } from './components/UserAvatar';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
+
+type AppView =
+  | 'home'
+  | 'auth'
+  | 'dashboard'
+  | 'editor'
+  | 'reader'
+  | 'test'
+  | 'learn'
+  | 'gallery'
+  | 'settings'
+  | 'privacy'
+  | 'terms'
+  | 'profile';
 
 const App: React.FC = () => {
   const { user, loading: authLoading } = useAuth();
@@ -37,15 +49,15 @@ const App: React.FC = () => {
   const [isCheckingKey, setIsCheckingKey] = useState(true);
   const [localKeyInput, setLocalKeyInput] = useState('');
   const [storedKeySuffix, setStoredKeySuffix] = useState<string | null>(null);
-  const [showSettings, setShowSettings] = useState(false);
   const [systemStatus, setSystemStatus] = useState<SystemStatusResponse | null>(null);
+  const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnosticsResponse | null>(null);
   const [isHydratingProject, setIsHydratingProject] = useState(false);
   const [settingsTab, setSettingsTab] = useState<'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin'>('profile');
-  const [returnView, setReturnView] = useState<'dashboard' | 'gallery' | 'home'>('dashboard');
-  const [lastView, setLastView] = useState<'home' | 'dashboard'>('home');
+  const [returnView, setReturnView] = useState<AppView>('dashboard');
+  const [settingsReturnView, setSettingsReturnView] = useState<AppView>('home');
 
   // Simple routing state
-  const [currentView, setCurrentView] = useState<'home' | 'auth' | 'dashboard' | 'editor' | 'reader' | 'test' | 'learn' | 'gallery' | 'settings' | 'privacy' | 'terms' | 'profile'>('home');
+  const [currentView, setCurrentView] = useState<AppView>('home');
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [publicProject, setPublicProject] = useState<Project | null>(null);
   const [viewedProfile, setViewedProfile] = useState<string | null>(null); // username
@@ -55,8 +67,8 @@ const App: React.FC = () => {
     const lockedProvider = getLockedImageProvider();
     const selectedProvider = getImageProvider();
     const requiresFlux = lockedProvider === 'flux' || selectedProvider === 'flux';
-    const serverGemini = systemStatus?.geminiKeyPresent ?? false;
-    const serverFlux = systemStatus?.pixazoKeyPresent ?? false;
+    const serverGemini = systemDiagnostics?.geminiKeyPresent ?? false;
+    const serverFlux = systemDiagnostics?.pixazoKeyPresent ?? false;
     const hasGemini = !!geminiKey || serverGemini;
     const hasFlux = !!fluxKey || serverFlux;
     return requiresFlux ? hasFlux : hasGemini;
@@ -76,6 +88,25 @@ const App: React.FC = () => {
         setSystemError(err?.message || "Unable to reach server");
       });
   }, []);
+
+  useEffect(() => {
+    if (!user?.email || user.email !== 'admin@test.com') {
+      setSystemDiagnostics(null);
+      return;
+    }
+
+    checkSystemDiagnostics()
+      .then(res => {
+        setSystemDiagnostics(res);
+        if (res.status === 'error') {
+          setSystemError(res.message || 'Unable to load system diagnostics');
+        }
+      })
+      .catch((err) => {
+        console.error('System diagnostics check failed:', err);
+        setSystemError(err?.message || 'Unable to load system diagnostics');
+      });
+  }, [user?.email]);
 
   useEffect(() => {
     // Check API Keys
@@ -103,6 +134,7 @@ const App: React.FC = () => {
     if (view === 'read' && id) {
       // Wait for projects to load from localstorage (handled by hook, but simple here)
       setTimeout(() => {
+        setReturnView('home');
         setIsHydratingProject(true);
         hydrateProjectAssets(id).finally(() => {
           setActiveProjectId(id);
@@ -111,7 +143,7 @@ const App: React.FC = () => {
         });
       }, 100);
     }
-  }, [systemStatus?.geminiKeyPresent, systemStatus?.pixazoKeyPresent]);
+  }, [systemDiagnostics?.geminiKeyPresent, systemDiagnostics?.pixazoKeyPresent]);
 
   // Effect: Load Public Project if needed (Moved to top level)
   useEffect(() => {
@@ -165,8 +197,7 @@ const App: React.FC = () => {
   const handleNavigate = (view: string, id?: string) => {
     // If going to reader, ensure we know where to return
     if (view === 'reader') {
-      const source = currentView === 'gallery' ? 'gallery' : 'dashboard';
-      setReturnView(source);
+      setReturnView(currentView);
     }
 
     if (view === 'reader' && id) {
@@ -190,7 +221,10 @@ const App: React.FC = () => {
     } else if (view === 'profile' && id) {
       setViewedProfile(id);
       setCurrentView('profile');
-    } else if (view === 'home' || view === 'dashboard' || view === 'auth' || view === 'settings') {
+    } else if (view === 'settings') {
+      setSettingsReturnView(currentView);
+      setCurrentView('settings');
+    } else if (view === 'home' || view === 'dashboard' || view === 'auth' || view === 'test' || view === 'learn' || view === 'gallery' || view === 'privacy' || view === 'terms') {
       setCurrentView(view);
     }
   };
@@ -241,6 +275,7 @@ const App: React.FC = () => {
   };
 
   const handleReadProject = (id: string) => {
+    setReturnView(currentView);
     setIsHydratingProject(true);
     hydrateProjectAssets(id).finally(() => {
       setActiveProjectId(id);
@@ -255,8 +290,23 @@ const App: React.FC = () => {
   };
 
   const handleCloseReader = () => {
-    setCurrentView(returnView);
+    const fallbackView: AppView = publicProject ? 'gallery' : 'dashboard';
+    const nextView = returnView && returnView !== 'reader' ? returnView : fallbackView;
+    setCurrentView(nextView);
     setActiveProjectId(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete('view');
+    url.searchParams.delete('id');
+    window.history.pushState({}, '', url);
+  };
+
+  const handleSignedOut = () => {
+    setActiveProjectId(null);
+    setPublicProject(null);
+    setViewedProfile(null);
+    setReturnView('home');
+    setSettingsReturnView('home');
+    setCurrentView('home');
     const url = new URL(window.location.href);
     url.searchParams.delete('view');
     url.searchParams.delete('id');
@@ -334,32 +384,6 @@ const App: React.FC = () => {
     />;
   }
 
-  if ((currentView as any) === 'gallery') {
-    return (
-      <PublicGallery
-        onReadComic={(pid) => {
-          // We need to load a public project.
-          // For MVP, we switch to Reader and tell Reader to load this ID.
-          // BUT Reader expects "activeProjectId" which usually implies OWNERSHIP or at least loaded in db.ts cache.
-          // We will set activeProjectId. The Reader component or App needs to handle loading logic.
-          // App.tsx usually loads project from useProjectManager.
-          // "activeProjectId" state is used.
-          // We need to distinguish between "User Project" and "Public Project".
-          // OR we just set activeProjectId and ensure the Reader can handle it?
-          // The Reader component uses 'projects.find(p => p.id === activeProjectId)'.
-          // Public projects are NOT in the 'projects' list (which is user's projects).
-          // FIX: We need a way to pass the Project Object to Reader, OR have Reader fetch it if not found.
-          //
-          // Quick Fix: We'll route to 'reader' but we need to inject the public project into the state or handle it.
-          // Let's modify Reader View logic below.
-          setActiveProjectId(pid);
-          setCurrentView('reader');
-        }}
-        onBack={() => setCurrentView('home')}
-      />
-    );
-  }
-
   // Protection: Views other than 'home' and 'auth' require User
   const isProtectedViewStrict = ['dashboard', 'editor', 'test', 'learn'].includes(currentView);
 
@@ -397,7 +421,7 @@ const App: React.FC = () => {
             currentView={currentView}
             setCurrentView={setCurrentView as any}
             setSettingsTab={setSettingsTab}
-            setLastView={setLastView}
+            setLastView={(view) => setSettingsReturnView(view as AppView)}
           />
         )}
 
@@ -407,10 +431,10 @@ const App: React.FC = () => {
             <HomePage
               onEnterStudio={() => user ? setCurrentView('dashboard') : setCurrentView('auth')}
               onViewComics={() => setCurrentView('gallery')}
-              onOpenProfile={() => { setSettingsTab('profile'); setLastView('home'); setCurrentView('settings'); }}
+              onOpenProfile={() => { setSettingsTab('profile'); setSettingsReturnView('home'); setCurrentView('settings'); }}
               onOpenPrivacy={() => setCurrentView('privacy')}
               onOpenTerms={() => setCurrentView('terms')}
-              onOpenUpgrade={() => { setSettingsTab('settings'); setLastView('home'); setCurrentView('settings'); }}
+              onOpenUpgrade={() => { setSettingsTab('settings'); setSettingsReturnView('home'); setCurrentView('settings'); }}
               onNavigate={handleNavigate}
             />
           )}
@@ -447,6 +471,7 @@ const App: React.FC = () => {
               onDuplicateProject={duplicateProject}
               onReadProject={handleReadProject}
               onUpdateProject={updateProject}
+              onNavigate={handleNavigate}
             />
           )}
 
@@ -494,33 +519,19 @@ const App: React.FC = () => {
 
           {currentView === 'settings' && (
             <AccountSettings
-              onClose={() => setCurrentView(lastView)}
+              onClose={() => {
+                if (settingsReturnView === 'reader' && !activeProjectId) {
+                  setCurrentView('dashboard');
+                  return;
+                }
+                setCurrentView(settingsReturnView);
+              }}
               initialTab={settingsTab}
+              onSignedOut={handleSignedOut}
             />
           )}
         </Suspense>
 
-        {/* Global Master Assistant */}
-        <MasterAssistant
-          currentView={currentView as any}
-          activeProject={activeProject}
-          projects={projects}
-          onPersistChat={(messages) => {
-            if (!activeProject) return;
-            updateProject(activeProject.id, (prev) => ({
-              state: { ...prev.state, assistantChat: messages }
-            }));
-          }}
-        />
-
-        {showSettings && (
-          <Suspense fallback={null}>
-            <SettingsModal
-              onClose={() => setShowSettings(false)}
-              onReloadProjects={() => reloadProjects()}
-            />
-          </Suspense>
-        )}
       </div>
     </ErrorBoundary>
   );

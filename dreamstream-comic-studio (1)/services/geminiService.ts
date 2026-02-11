@@ -6,6 +6,8 @@ import {
   StoryOutlineResponse,
   StoryDraftRequest,
   StoryDraftResponse,
+  StoryToolRequest,
+  StoryToolResponse,
   ExtractWorldRequest,
   ExtractWorldResponse,
   PanelBreakdownRequest,
@@ -14,23 +16,22 @@ import {
   LayoutAnalysisResponse,
   ImageGenerateRequest,
   ImageGenerateResponse,
-  StoryAssistantRequest,
-  StoryAssistantResponse,
-  MasterAssistantRequest,
-  MasterAssistantResponse,
   ContinuitySummaryRequest,
   ContinuitySummaryResponse,
+  ContinuityAuditRequest,
+  ContinuityAuditResponse,
   TestLabReportRequest,
   TestLabReportResponse,
   SystemStatusResponse,
+  SystemDiagnosticsResponse,
   AssistantMessage
 } from '../apiTypes';
-import { GenerationArtifact, Character, Item, Location } from '../types';
+import { GenerationArtifact, Character, Item, Location, ContinuityBible, SceneContinuityBinding } from '../types';
 import { saveArtifact, saveImage, saveTestImage, getImageUrl, getTestImageUrl, getImageDataUrl } from './db';
 import { IMAGE_TEXT_BLOCKER, NO_TEXT_IN_IMAGE, TEXT_MODEL, IMAGE_MODEL } from './modelPolicy';
 import { cropImageToRatio } from './imageUtils';
 import { updateDebugState } from './debugStore';
-import { getModelSpecificKey } from './appSettings';
+import { getAllModelKeys, getDefaultTextModel, getModelSpecificKey } from './appSettings';
 
 // --- Generic Helper ---
 
@@ -46,6 +47,74 @@ const handleGeminiError = (label: string, error: unknown) => {
   const message = error instanceof ApiError ? error.message : String(error);
   updateDebugState('gemini', { lastError: message, lastRequestType: label, lastRequestAt: Date.now() });
   throw error;
+};
+
+const getActiveTextModel = (): string => getDefaultTextModel();
+
+const getActiveTextApiKey = (): string | undefined => {
+  const preferredModel = getActiveTextModel();
+  const exact = getModelSpecificKey(preferredModel);
+  if (exact) return exact;
+  const fallback = getModelSpecificKey(TEXT_MODEL);
+  if (fallback) return fallback;
+  const anyGemini = Object.entries(getAllModelKeys()).find(([modelId, key]) =>
+    modelId.toLowerCase().includes('gemini') && !!key
+  );
+  return anyGemini?.[1] || undefined;
+};
+
+const isInvalidGeminiKeyError = (error: unknown): boolean => {
+  if (!(error instanceof ApiError)) return false;
+  const detailText = typeof error.details === 'string' ? error.details : JSON.stringify(error.details || {});
+  const combined = `${error.message} ${detailText}`.toLowerCase();
+  return combined.includes('api key not valid') || combined.includes('api_key_invalid');
+};
+
+const isUnsupportedTextModelError = (error: unknown): boolean => {
+  if (!(error instanceof ApiError)) return false;
+  const detailText = typeof error.details === 'string' ? error.details : JSON.stringify(error.details || {});
+  const combined = `${error.message} ${detailText}`.toLowerCase();
+  return (
+    combined.includes('models/') &&
+    (combined.includes('not found') || combined.includes('not supported')) &&
+    combined.includes('generatecontent')
+  );
+};
+
+const withTextKeyFallback = async <T>(call: (apiKey: string | undefined, modelId: string) => Promise<T>): Promise<T> => {
+  const preferredKey = getActiveTextApiKey();
+  const requestedModelId = getActiveTextModel();
+  const fallbackModelId = TEXT_MODEL;
+
+  const tryWithModelAndKey = (apiKey: string | undefined, modelId: string) => call(apiKey, modelId);
+
+  try {
+    return await tryWithModelAndKey(preferredKey, requestedModelId);
+  } catch (firstError) {
+    if (isInvalidGeminiKeyError(firstError)) {
+      try {
+        return await tryWithModelAndKey(undefined, requestedModelId);
+      } catch (secondError) {
+        if (isUnsupportedTextModelError(secondError) && requestedModelId !== fallbackModelId) {
+          return tryWithModelAndKey(undefined, fallbackModelId);
+        }
+        throw secondError;
+      }
+    }
+
+    if (isUnsupportedTextModelError(firstError) && requestedModelId !== fallbackModelId) {
+      try {
+        return await tryWithModelAndKey(preferredKey, fallbackModelId);
+      } catch (secondError) {
+        if (isInvalidGeminiKeyError(secondError)) {
+          return tryWithModelAndKey(undefined, fallbackModelId);
+        }
+        throw secondError;
+      }
+    }
+
+    throw firstError;
+  }
 };
 
 /**
@@ -112,6 +181,15 @@ export const checkSystemStatus = async (): Promise<SystemStatusResponse> => {
     return await get<SystemStatusResponse>('/api/system/status');
   } catch (e) {
     handleGeminiError('system_status', e);
+    return { status: 'error', message: String(e) };
+  }
+};
+
+export const checkSystemDiagnostics = async (): Promise<SystemDiagnosticsResponse> => {
+  try {
+    return await get<SystemDiagnosticsResponse>('/api/system/diagnostics');
+  } catch (e) {
+    handleGeminiError('system_diagnostics', e);
     return { status: 'error', geminiKeyPresent: false, pixazoKeyPresent: false, message: String(e) };
   }
 };
@@ -122,10 +200,9 @@ export const analyzeScript = async (script: string, projectId?: string) => {
     projectId,
     'text',
     'script',
-    async () => {
-      const apiKey = getModelSpecificKey(TEXT_MODEL);
-      return await post<AnalyzeScriptRequest, AnalyzeScriptResponse>('/api/text/analyze-script', { script }, { apiKey: apiKey || undefined });
-    },
+    async () => withTextKeyFallback((apiKey, modelId) =>
+      post<AnalyzeScriptRequest, AnalyzeScriptResponse>('/api/text/analyze-script', { script }, { apiKey, modelId })
+    ),
     script
   );
   return response.scenes;
@@ -137,7 +214,9 @@ export const generateStoryOutline = async (inputs: StoryOutlineRequest, projectI
     projectId,
     'text',
     'story_outline',
-    async () => post<StoryOutlineRequest, StoryOutlineResponse>('/api/text/story-outline', inputs),
+    async () => withTextKeyFallback((apiKey, modelId) =>
+      post<StoryOutlineRequest, StoryOutlineResponse>('/api/text/story-outline', inputs, { apiKey, modelId })
+    ),
     JSON.stringify(inputs)
   );
   return response.outline || '';
@@ -149,7 +228,9 @@ export const generateScriptDraft = async (inputs: StoryDraftRequest, projectId?:
     projectId,
     'text',
     'story_draft',
-    async () => post<StoryDraftRequest, StoryDraftResponse>('/api/text/story-draft', inputs),
+    async () => withTextKeyFallback((apiKey, modelId) =>
+      post<StoryDraftRequest, StoryDraftResponse>('/api/text/story-draft', inputs, { apiKey, modelId })
+    ),
     JSON.stringify(inputs)
   );
   return response.script || '';
@@ -164,7 +245,9 @@ export const extractWorldDetails = async (scenes: ExtractWorldRequest['scenes'],
     projectId,
     'text',
     'world',
-    async () => post<ExtractWorldRequest, ExtractWorldResponse>('/api/text/extract-world', { scenes }),
+    async () => withTextKeyFallback((apiKey, modelId) =>
+      post<ExtractWorldRequest, ExtractWorldResponse>('/api/text/extract-world', { scenes }, { apiKey, modelId })
+    ),
     scenes.map(s => s.synopsis || s.rawText).join('\n')
   );
   return {
@@ -180,23 +263,55 @@ export const generatePanelBreakdown = async (
   layoutType: PanelBreakdownRequest['layoutType'],
   projectId?: string,
   panelCount: number = 3,
-  options?: { stage?: string; abortSignal?: AbortSignal }
+  options?: {
+    stage?: string;
+    abortSignal?: AbortSignal;
+    continuityBible?: ContinuityBible;
+    sceneBindings?: SceneContinuityBinding[];
+    previousPanelContext?: Array<{ panelId?: string; sceneId?: number; description: string; dialogue?: string }>;
+  }
 ) => {
   const response = await safeGeminiCall(
     'panel_breakdown',
     projectId,
     'text',
     options?.stage || 'preview',
-    async () => post<PanelBreakdownRequest, PanelBreakdownResponse>('/api/text/panel-breakdown', {
-      scene,
-      style,
-      layoutType,
-      panelCount,
-      stage: options?.stage
-    }, { signal: options?.abortSignal }),
+    async () => withTextKeyFallback((apiKey, modelId) =>
+      post<PanelBreakdownRequest, PanelBreakdownResponse>('/api/text/panel-breakdown', {
+        scene,
+        style,
+        layoutType,
+        panelCount,
+        stage: options?.stage,
+        continuityBible: options?.continuityBible,
+        sceneBindings: options?.sceneBindings,
+        previousPanelContext: options?.previousPanelContext
+      }, { signal: options?.abortSignal, apiKey, modelId })
+    ),
     scene?.synopsis || scene?.rawText || ''
   );
   return response.panels || [];
+};
+
+export const runContinuityAudit = async (
+  payload: ContinuityAuditRequest,
+  projectId?: string
+) => {
+  const response = await safeGeminiCall(
+    'continuity_audit',
+    projectId,
+    'text',
+    'continuity_audit',
+    async () => withTextKeyFallback((apiKey, modelId) =>
+      post<ContinuityAuditRequest, ContinuityAuditResponse>(
+        '/api/text/continuity-audit',
+        payload,
+        { apiKey, modelId }
+      )
+    ),
+    JSON.stringify(payload.panels || [])
+  );
+  return response;
 };
 
 export const analyzeLayoutFromImages = async (images: string[], projectId?: string) => {
@@ -205,7 +320,9 @@ export const analyzeLayoutFromImages = async (images: string[], projectId?: stri
     projectId,
     'text',
     'layout',
-    async () => post<LayoutAnalysisRequest, LayoutAnalysisResponse>('/api/vision/analyze-layout', { images }),
+    async () => withTextKeyFallback((apiKey, modelId) =>
+      post<LayoutAnalysisRequest, LayoutAnalysisResponse>('/api/vision/analyze-layout', { images }, { apiKey, modelId })
+    ),
     'Analyze layout'
   );
   return response.description || 'Could not analyze layout.';
@@ -223,21 +340,40 @@ export const generateImage = async (
   updateDebugState('gemini', { lastRequestAt: Date.now(), lastRequestType: 'generate_image', lastError: undefined });
   const finalPrompt = NO_TEXT_IN_IMAGE ? `${prompt}\n\n${IMAGE_TEXT_BLOCKER}` : prompt;
   const startPerf = performance.now();
+  const targetModel = options?.modelId || IMAGE_MODEL;
 
   try {
     const referenceDataUrls = await Promise.all(referenceImageIds.map((id) => getImageDataUrl(id)));
     const validReferenceImages = referenceDataUrls.filter((img): img is string => !!img);
-    const targetModel = options?.modelId || IMAGE_MODEL;
-    const apiKey = getModelSpecificKey(targetModel);
-
-    const response = await post<ImageGenerateRequest & { model?: string }, ImageGenerateResponse>('/api/image/gemini', {
+    const modelSpecificKey = getModelSpecificKey(targetModel);
+    const requestBody: ImageGenerateRequest = {
       prompt: finalPrompt,
       aspectRatio,
       resolution,
       referenceImages: validReferenceImages,
       stage: options?.stage,
-      model: options?.modelId
-    }, { signal: options?.abortSignal, apiKey: apiKey || undefined });
+      model: targetModel
+    };
+
+    let response: ImageGenerateResponse;
+    try {
+      response = await post<ImageGenerateRequest, ImageGenerateResponse>(
+        '/api/image/gemini',
+        requestBody,
+        { signal: options?.abortSignal, apiKey: modelSpecificKey || undefined }
+      );
+    } catch (error) {
+      // If a model-specific key is invalid, retry with default Gemini key from local storage.
+      if (modelSpecificKey && isInvalidGeminiKeyError(error)) {
+        response = await post<ImageGenerateRequest, ImageGenerateResponse>(
+          '/api/image/gemini',
+          requestBody,
+          { signal: options?.abortSignal }
+        );
+      } else {
+        throw error;
+      }
+    }
 
     let dataUrl = response.dataUrl;
     if (options?.cropToRatio) {
@@ -277,7 +413,7 @@ export const generateImage = async (
         timestamp: Date.now(),
         type: 'image',
         provider: 'gemini',
-        model: TEXT_MODEL,
+        model: targetModel,
         stage: options?.stage || 'generation',
         prompt: finalPrompt,
         inputImageIds: referenceImageIds,
@@ -294,36 +430,35 @@ export const generateImage = async (
   }
 };
 
-export const queryStoryAssistant = async (
+const runStoryTool = async (
   script: string,
-  message: string,
-  history: AssistantMessage[]
+  instruction: string,
+  history: AssistantMessage[] = []
 ): Promise<string> => {
-  // Simpler call, no artifact recording needed generally, or we could add it.
-  // Keeping as is for now but wrapped in safe try/catch via direct call if we wanted, 
-  // but it doesn't match the recordArtifact pattern exactly (no projectId).
-  updateDebugState('gemini', { lastRequestAt: Date.now(), lastRequestType: 'story_assistant', lastError: undefined });
+  updateDebugState('gemini', { lastRequestAt: Date.now(), lastRequestType: 'story_tool', lastError: undefined });
   try {
-    const response = await post<StoryAssistantRequest, StoryAssistantResponse>('/api/assistant/story', {
-      script,
-      message,
-      history
-    });
-    return response.text || "";
+    const response = await withTextKeyFallback((apiKey, modelId) =>
+      post<StoryToolRequest, StoryToolResponse>(
+        '/api/text/story-tool',
+        { script, instruction, history },
+        { apiKey, modelId }
+      )
+    );
+    return response.text || '';
   } catch (e) {
-    handleGeminiError('story_assistant', e);
+    handleGeminiError('story_tool', e);
     throw e;
   }
 };
 
 export const suggestStyle = async (script: string): Promise<string> => {
-  const message = "Analyze this script and suggest a unique, creative visual style for a comic adaptation. Provide a concise, evocative style prompt (art style, colors, mood) suitable for an image generator. Output ONLY the prompt, no intro.";
-  return await queryStoryAssistant(script, message, []);
+  const instruction = "Analyze this script and suggest a unique, creative visual style for a comic adaptation. Provide a concise, evocative style prompt (art style, colors, mood) suitable for an image generator. Output ONLY the prompt, no intro.";
+  return await runStoryTool(script, instruction, []);
 };
 
 export const suggestFormFactor = async (script: string): Promise<string> => {
-  const message = "Analyze this script and suggest the best aspect ratio (Form Factor) for a comic book adaptation. Options: '1:1', '3:4', '4:3', '9:16', '16:9'. Return ONLY the ratio string (e.g. '16:9').";
-  const result = await queryStoryAssistant(script, message, []);
+  const instruction = "Analyze this script and suggest the best aspect ratio (Form Factor) for a comic book adaptation. Options: '1:1', '3:4', '4:3', '9:16', '16:9'. Return ONLY the ratio string (e.g. '16:9').";
+  const result = await runStoryTool(script, instruction, []);
   const match = result.match(/\d+:\d+/);
   return match ? match[0] : '1:1';
 };
@@ -343,32 +478,13 @@ export const checkConsistency = async (
   Example: { "char-123": ["Contradicts script: described as blonde but bio says dark hair"] }
   RETURN ONLY JSON.`;
 
-  const result = await queryStoryAssistant(script, message, []);
+  const result = await runStoryTool(script, message, []);
   try {
     const jsonStr = result.replace(/```json/g, '').replace(/```/g, '').trim();
     return JSON.parse(jsonStr);
   } catch (e) {
     console.warn("Failed to parse consistency check", e);
     return {};
-  }
-};
-
-export const queryMasterAssistant = async (
-  userMessage: string,
-  history: AssistantMessage[],
-  context: MasterAssistantRequest['context']
-): Promise<string> => {
-  updateDebugState('gemini', { lastRequestAt: Date.now(), lastRequestType: 'assistant', lastError: undefined });
-  try {
-    const response = await post<MasterAssistantRequest, MasterAssistantResponse>('/api/assistant/master', {
-      message: userMessage,
-      history,
-      context
-    });
-    return response.text || "";
-  } catch (e) {
-    handleGeminiError('assistant', e);
-    return "I'm having trouble connecting to the studio mainframe. Please try again in a moment.";
   }
 };
 
@@ -382,11 +498,13 @@ export const updateContinuitySummary = async (
   updateDebugState('gemini', { lastRequestAt: Date.now(), lastRequestType: 'continuity_summary', lastError: undefined });
   const startPerf = performance.now();
   try {
-    const response = await post<ContinuitySummaryRequest, ContinuitySummaryResponse>('/api/text/continuity-summary', {
-      currentSummary,
-      scene,
-      panels
-    });
+    const response = await withTextKeyFallback((apiKey, modelId) =>
+      post<ContinuitySummaryRequest, ContinuitySummaryResponse>('/api/text/continuity-summary', {
+        currentSummary,
+        scene,
+        panels
+      }, { apiKey, modelId })
+    );
     if (projectId) {
       void recordArtifact({
         projectId,
@@ -429,7 +547,9 @@ export const analyzeTestLabReport = async (report: Record<string, unknown>): Pro
     undefined,
     'text',
     'testlab',
-    async () => post<TestLabReportRequest, TestLabReportResponse>('/api/text/testlab-report', { report })
+    async () => withTextKeyFallback((apiKey, modelId) =>
+      post<TestLabReportRequest, TestLabReportResponse>('/api/text/testlab-report', { report }, { apiKey, modelId })
+    )
   );
   return response.text || '';
 };

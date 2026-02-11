@@ -5,8 +5,8 @@ import { Zap } from 'lucide-react';
 interface HeaderProps {
     currentView: string;
     setCurrentView: (view: string) => void;
-    setSettingsTab: (tab: 'profile' | 'settings' | 'billing' | 'legal') => void;
-    setLastView?: (view: 'home' | 'dashboard') => void;
+    setSettingsTab: (tab: 'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin') => void;
+    setLastView?: (view: string) => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({ currentView, setCurrentView, setSettingsTab, setLastView }) => {
@@ -41,7 +41,7 @@ export const Header: React.FC<HeaderProps> = ({ currentView, setCurrentView, set
                     </div>
                     <UserAvatar onClick={() => {
                         setSettingsTab('profile');
-                        if (setLastView) setLastView(currentView === 'home' ? 'home' : 'dashboard');
+                        if (setLastView) setLastView(currentView);
                         setCurrentView('settings');
                     }} />
                 </div>

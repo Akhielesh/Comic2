@@ -21,6 +21,9 @@ export type ImagePromptOptions = {
   subjectDescription?: string;
   instructions?: string;
   projectTitle?: string;
+  requiredEntityNames?: string;
+  continuityLock?: string;
+  lockedLocation?: string;
 };
 
 const clean = (value?: string) => (value || "").trim();
@@ -44,10 +47,12 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
     case "panel":
       lines.push("Comic panel illustration.");
       lines.push("Single full-bleed image, no panel borders or frames.");
+      lines.push("Strict continuity mode: keep the same character identity, wardrobe silhouettes, and key props.");
       break;
     case "panel_regen":
       lines.push("Regenerate the comic panel with updates.");
       lines.push("Single full-bleed image, no panel borders or frames.");
+      lines.push("Strict continuity mode: preserve canonical character/prop/location identity.");
       break;
     default:
       break;
@@ -64,6 +69,9 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
   if (clean(options.items)) lines.push(`Items: ${clean(options.items)}.`);
   if (clean(options.locations)) lines.push(`Locations: ${clean(options.locations)}.`);
   if (clean(options.continuitySummary)) lines.push(`Continuity Summary: ${clean(options.continuitySummary)}.`);
+  if (clean(options.requiredEntityNames)) lines.push(`Required entities: ${clean(options.requiredEntityNames)}.`);
+  if (clean(options.lockedLocation)) lines.push(`Locked location: ${clean(options.lockedLocation)}.`);
+  if (clean(options.continuityLock)) lines.push(`Continuity lock: ${clean(options.continuityLock)}.`);
   if (clean(options.recentPanels)) lines.push(`Recent Panels: ${clean(options.recentPanels)}.`);
   if (clean(options.instructions)) lines.push(`Instructions: ${clean(options.instructions)}.`);
   if (clean(options.extraNotes)) lines.push(`Extra Notes: ${clean(options.extraNotes)}.`);

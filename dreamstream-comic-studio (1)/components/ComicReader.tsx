@@ -1,8 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Project, ComicPanel, DialogueBlock, TextLayout, ProjectComment } from '../types';
-import { AiAssistant } from './AiAssistant';
 import { CommentSection } from './CommentSection';
-import { X, MessageCircle, ChevronLeft, ChevronRight, Maximize2, Minimize2, BookOpen, MessageSquareText, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Maximize2, Minimize2, BookOpen, MessageSquareText, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { ensureDialogueBlocks } from '../services/dialogueUtils';
 import { loadReaderState, saveReaderState } from '../services/db';
 
@@ -18,11 +17,8 @@ interface ComicReaderProps {
 }
 
 export const ComicReader: React.FC<ComicReaderProps> = ({ project, onClose, onUpdateProject, isReadOnly = false, onNavigate }) => {
-  const [showChat, setShowChat] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return window.innerWidth >= 768;
-  });
   const [showStory, setShowStory] = useState(false);
+  const [showInfo, setShowInfo] = useState(false);
   const [showComments, setShowComments] = useState(false);
   const [showReviewModal, setShowReviewModal] = useState(false);
   const [readerMode, setReaderMode] = useState<'scroll' | 'flip'>('scroll');
@@ -252,13 +248,40 @@ export const ComicReader: React.FC<ComicReaderProps> = ({ project, onClose, onUp
     <div ref={readerRef} className="fixed inset-0 z-50 bg-slate-100 overflow-hidden flex flex-col">
       {/* Reader Header */}
       <header className="h-16 bg-white border-b-4 border-black flex items-center justify-between px-6 shadow-lg shrink-0">
-        <h1 className="font-display text-2xl text-black truncate">{project.name}</h1>
+        <div className="flex items-center gap-3 min-w-0">
+          <button
+            onClick={() => onNavigate?.('home')}
+            className="w-9 h-9 bg-brand-yellow border-2 border-black rounded-md font-display text-lg leading-none"
+            title="Go Home"
+          >
+            D
+          </button>
+          <h1 className="font-display text-2xl text-black truncate">{project.name}</h1>
+        </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => onNavigate?.('gallery')}
+            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50"
+          >
+            Library
+          </button>
+          <button
+            onClick={() => onNavigate?.('dashboard')}
+            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50"
+          >
+            Dashboard
+          </button>
           <button
             onClick={() => setShowStory((prev) => !prev)}
             className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50 flex items-center gap-1"
           >
             <BookOpen className="w-4 h-4" /> Story
+          </button>
+          <button
+            onClick={() => setShowInfo((prev) => !prev)}
+            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50"
+          >
+            Info
           </button>
           {!isReadOnly && (
             <button
@@ -362,19 +385,35 @@ export const ComicReader: React.FC<ComicReaderProps> = ({ project, onClose, onUp
           )}
         </div>
 
-        {/* Sidebar (Chat) */}
-        <div className={`
-            fixed md:relative inset-y-0 right-0 w-full md:w-auto bg-white border-l-4 border-black transform transition-transform duration-300 z-40 overflow-visible
-            ${showChat ? 'translate-x-0' : 'translate-x-full md:translate-x-0 md:w-0 md:border-none'}
-        `}>
-          <div className="h-full w-full md:w-auto border-l-4 border-black md:border-none overflow-visible">
-            <AiAssistant script={project.state.script} />
-          </div>
-          {/* Mobile Close Chat */}
-          <button onClick={() => setShowChat(false)} className="absolute top-4 right-4 md:hidden p-2 bg-black text-white rounded-full">
-            <X size={20} />
-          </button>
-        </div>
+        {showInfo && (
+          <aside className="w-full md:w-80 border-l-4 border-black bg-white p-4 overflow-y-auto">
+            <h2 className="font-display text-xl mb-3">Comic Info</h2>
+            <div className="space-y-3 text-sm">
+              <div>
+                <div className="text-xs uppercase font-bold text-slate-500">Title</div>
+                <div className="font-semibold">{project.name}</div>
+              </div>
+              <div>
+                <div className="text-xs uppercase font-bold text-slate-500">Author</div>
+                <div>{project.authorName || 'Unknown creator'}</div>
+              </div>
+              <div>
+                <div className="text-xs uppercase font-bold text-slate-500">Overview</div>
+                <p className="text-slate-700 whitespace-pre-wrap">{project.state.overview || 'No overview added yet.'}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="border border-slate-200 rounded p-2">
+                  <div className="text-xs uppercase font-bold text-slate-500">Panels</div>
+                  <div>{project.state.panels.length}</div>
+                </div>
+                <div className="border border-slate-200 rounded p-2">
+                  <div className="text-xs uppercase font-bold text-slate-500">Layout</div>
+                  <div>{project.state.layoutType || 'grid'}</div>
+                </div>
+              </div>
+            </div>
+          </aside>
+        )}
       </div>
 
       {showComments && (
@@ -390,15 +429,6 @@ export const ComicReader: React.FC<ComicReaderProps> = ({ project, onClose, onUp
           </div>
         </div>
       )}
-
-      {/* Floating Chat Toggle for Mobile/Tablet */}
-      <button
-        onClick={() => setShowChat(!showChat)}
-        className="md:hidden fixed bottom-6 right-6 w-14 h-14 bg-brand-yellow border-4 border-black rounded-full flex items-center justify-center shadow-comic z-50"
-      >
-        <MessageCircle className="w-8 h-8 text-black" />
-      </button>
-
       {/* Review Modal */}
       <ReviewModal
         isOpen={showReviewModal}

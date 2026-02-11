@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Play, Coins, AlertCircle, RefreshCw, Plus, Minus } from 'lucide-react';
-import { ComicPanel, ComicState, DialogueBlock, TextLayout } from '../../types';
+import { AppStep, ComicPanel, ComicState, DialogueBlock, TextLayout } from '../../types';
 import { generatePanelBreakdown } from '../../services/geminiService';
 import { Button } from '../Button';
 import { ensureDialogueBlocks, normalizePanelDialogue } from '../../services/dialogueUtils';
+import { buildDefaultContinuityState, resolvePanelContinuity, validateContinuityState } from '../../services/continuity';
 import { 
   DEFAULT_PRICING_CONFIG, 
   normalizePricingConfig, 
@@ -96,6 +97,38 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
   const imageCostBatch = provider === 'flux' ? 0 : FLASH_IMAGE_BATCH * plannedPanelCount;
   const bananaProRate = state.imageResolution === '4K' ? BANANA_PRO_IMAGE_4K : BANANA_PRO_IMAGE_1K;
   const imageCostBananaPro = bananaProRate * plannedPanelCount;
+  const continuityValidation = useMemo(
+    () => validateContinuityState(state),
+    [state]
+  );
+
+  useEffect(() => {
+    const expectedEntityCount = (state.characters?.length || 0) + (state.items?.length || 0) + (state.locations?.length || 0);
+    const needsBibleRefresh =
+      !state.continuity ||
+      state.continuity.bible.entities.length !== expectedEntityCount ||
+      state.continuity.bible.sceneBindings.length !== (state.scenes?.length || 0);
+
+    if (needsBibleRefresh) {
+      onStateUpdate({ continuity: buildDefaultContinuityState(state) });
+      return;
+    }
+    const currentValidation = state.continuity.validation;
+    const hasChanged =
+      !currentValidation ||
+      currentValidation.isValid !== continuityValidation.isValid ||
+      currentValidation.issues.length !== continuityValidation.issues.length;
+    if (hasChanged) {
+      onStateUpdate({
+        continuity: {
+          ...state.continuity,
+          lockLevel: 'strict',
+          fallbackPolicy: 'auto',
+          validation: continuityValidation
+        }
+      });
+    }
+  }, [state, state.continuity, continuityValidation, onStateUpdate]);
 
   useEffect(() => {
     const legacyPricing = !state.pricingConfig ||
@@ -166,7 +199,20 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
     setPlanningSceneId(sceneId);
     try {
       const count = panelCounts[sceneId] || 3;
-      const result = await generatePanelBreakdown(scene, state.stylePrompt, state.layoutType, projectId, count, { stage: 'preview' });
+      const result = await generatePanelBreakdown(scene, state.stylePrompt, state.layoutType, projectId, count, {
+        stage: 'preview',
+        continuityBible: state.continuity?.bible,
+        sceneBindings: state.continuity?.bible.sceneBindings,
+        previousPanelContext: state.panels
+          .filter((panel) => panel.sceneId === sceneId)
+          .slice(-2)
+          .map((panel) => ({
+            panelId: panel.id,
+            sceneId: panel.sceneId,
+            description: panel.description,
+            dialogue: panel.dialogue
+          }))
+      });
       const newPanels = result.map((panel, index) => ({
         id: `s${scene.id}-p${index}-${Date.now()}`,
         sceneId: scene.id,
@@ -176,13 +222,26 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
         dialogueBlocks: panel.dialogueBlocks,
         imageIdHistory: [],
         imageUrlHistory: [],
-        isPlanned: true
+        isPlanned: true,
+        continuity: {
+          requiredEntityIds: panel.requiredEntityIds || [],
+          locationId: panel.locationId,
+          continuityNotes: panel.continuityNotes,
+          referenceImageIds: [],
+          flaggedIssues: []
+        }
       } as ComicPanel));
 
       const merged = [
         ...state.panels.filter(p => p.sceneId !== scene.id),
         ...newPanels
-      ].map(normalizePanel);
+      ].map((panel) => {
+        const normalized = normalizePanel(panel);
+        return {
+          ...normalized,
+          continuity: resolvePanelContinuity(state, normalized)
+        };
+      });
 
       onStateUpdate({ panels: merged, panelPlanVersion: computePanelPlanVersion(state.scenes) });
     } catch (e) {
@@ -199,7 +258,19 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
       const allPanels: ComicPanel[] = [];
       for (const scene of state.scenes) {
         const count = panelCounts[scene.id] || 3;
-        const result = await generatePanelBreakdown(scene, state.stylePrompt, state.layoutType, projectId, count, { stage: 'preview' });
+        const result = await generatePanelBreakdown(scene, state.stylePrompt, state.layoutType, projectId, count, {
+          stage: 'preview',
+          continuityBible: state.continuity?.bible,
+          sceneBindings: state.continuity?.bible.sceneBindings,
+          previousPanelContext: allPanels
+            .slice(-2)
+            .map((panel) => ({
+              panelId: panel.id,
+              sceneId: panel.sceneId,
+              description: panel.description,
+              dialogue: panel.dialogue
+            }))
+        });
         result.forEach((panel, index) => {
           allPanels.push(normalizePanel({
             id: `s${scene.id}-p${index}-${Date.now()}`,
@@ -210,11 +281,22 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
             dialogueBlocks: panel.dialogueBlocks,
             imageIdHistory: [],
             imageUrlHistory: [],
-            isPlanned: true
+            isPlanned: true,
+            continuity: {
+              requiredEntityIds: panel.requiredEntityIds || [],
+              locationId: panel.locationId,
+              continuityNotes: panel.continuityNotes,
+              referenceImageIds: [],
+              flaggedIssues: []
+            }
           } as ComicPanel));
         });
       }
-      onStateUpdate({ panels: allPanels, panelPlanVersion: computePanelPlanVersion(state.scenes) });
+      const normalizedPanels = allPanels.map((panel) => ({
+        ...panel,
+        continuity: resolvePanelContinuity(state, panel)
+      }));
+      onStateUpdate({ panels: normalizedPanels, panelPlanVersion: computePanelPlanVersion(state.scenes) });
     } catch (e) {
       console.error(e);
     } finally {
@@ -225,7 +307,9 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
   const updatePanel = (panelId: string, updates: Partial<ComicPanel>) => {
     const updated = state.panels.map(panel => {
       if (panel.id !== panelId) return panel;
-      const next = normalizePanel({ ...panel, ...updates });
+      const merged = normalizePanel({ ...panel, ...updates });
+      const continuity = resolvePanelContinuity(state, merged);
+      const next = { ...merged, continuity };
       return next;
     });
     onStateUpdate({ panels: updated });
@@ -260,6 +344,25 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
   const handleTextLayoutChange = (layout: TextLayout) => {
     onStateUpdate({ textLayout: layout });
   };
+
+  const handleStartGeneration = () => {
+    const validation = validateContinuityState(state);
+    onStateUpdate({
+      continuity: state.continuity
+        ? {
+            ...state.continuity,
+            lockLevel: 'strict',
+            fallbackPolicy: 'auto',
+            validation
+          }
+        : buildDefaultContinuityState(state)
+    });
+    if (state.continuity?.lockLevel === 'strict' || !state.continuity) {
+      if (!validation.isValid) return;
+    }
+    onConfirm();
+  };
+
   const formatCurrency = (value: number) => `${pricing.currency} ${value.toFixed(4)}`;
 
   return (
@@ -272,9 +375,37 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
           </div>
           <div className="flex flex-wrap gap-2">
             <Button onClick={generateAllPlans} isLoading={isPlanning} icon={<RefreshCw className="w-4 h-4" />}>Generate All Plans</Button>
-            <Button onClick={onConfirm} className="bg-brand-yellow" icon={<Play fill="currentColor" />}>Start Generation</Button>
+            <Button
+              onClick={handleStartGeneration}
+              className="bg-brand-yellow"
+              icon={<Play fill="currentColor" />}
+              disabled={state.continuity?.lockLevel === 'strict' && !continuityValidation.isValid}
+            >
+              Start Generation
+            </Button>
           </div>
         </div>
+        {!continuityValidation.isValid && (
+          <div className="mt-4 rounded-lg border-2 border-red-300 bg-red-50 p-3">
+            <div className="text-sm font-bold text-red-700">Continuity lock is blocking generation.</div>
+            <div className="text-xs text-red-700 mt-1">
+              Resolve required references or scene bindings first.
+            </div>
+            <div className="mt-2">
+              <button
+                onClick={() => onStateUpdate({ step: AppStep.REFERENCE_BUILDER })}
+                className="text-xs font-bold border border-red-400 text-red-700 bg-white rounded px-2 py-1 hover:bg-red-100"
+              >
+                Fix In World Builder
+              </button>
+            </div>
+            <ul className="mt-2 space-y-1 text-xs text-red-700 list-disc pl-5">
+              {continuityValidation.issues.slice(0, 5).map((issue, index) => (
+                <li key={`${issue.code}-${index}`}>{issue.message}</li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -323,6 +454,13 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
                     <div key={panel.id} className="border-2 border-black rounded-lg p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
                       <div className="space-y-3">
                         <div className="text-xs font-bold text-slate-500">Panel {idx + 1}</div>
+                        {(panel.continuity?.requiredEntityIds?.length || 0) > 0 && (
+                          <div className="text-[11px] text-slate-600">
+                            Required: {panel.continuity?.requiredEntityIds
+                              ?.map((entityId) => state.continuity?.bible.entities.find((entity) => entity.id === entityId)?.name || entityId)
+                              .join(', ')}
+                          </div>
+                        )}
                         <textarea
                           value={panel.description}
                           onChange={(e) => updatePanel(panel.id, { description: e.target.value, prompt: e.target.value })}

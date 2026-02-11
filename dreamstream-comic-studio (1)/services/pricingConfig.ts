@@ -3,6 +3,8 @@ import { IMAGE_MODEL, TEXT_MODEL } from "./modelPolicy";
 
 export const PRICING_AS_OF = "2026-02-02 UTC";
 export const FLASH_MODEL = "gemini-2.5-flash";
+export const FLASH_LITE_MODEL = "gemini-2.5-flash-lite";
+export const FLASH_20_MODEL = "gemini-2.0-flash";
 export const BANANA_PRO_IMAGE_MODEL = "gemini-3-pro-image-preview";
 export const FLUX_SCHNELL_MODEL = "pixazo/flux-1-schnell";
 
@@ -28,10 +30,14 @@ export const DEFAULT_PRICING_CONFIG: PricingConfig = {
   currency: "USD",
   models: {
     [TEXT_MODEL]: {
+      inputPer1k: FLASH_PRICING.inputPer1k,
+      outputPer1k: FLASH_PRICING.outputPer1k
+    },
+    [FLASH_LITE_MODEL]: {
       inputPer1k: FLASH_LITE_PRICING.inputPer1k,
       outputPer1k: FLASH_LITE_PRICING.outputPer1k
     },
-    [FLASH_MODEL]: {
+    [FLASH_20_MODEL]: {
       inputPer1k: FLASH_PRICING.inputPer1k,
       outputPer1k: FLASH_PRICING.outputPer1k
     },

@@ -1,5 +1,6 @@
 import { ImageProviderId } from "../types";
-import { DEFAULT_IMAGE_PROVIDER, IMAGE_PROVIDER_LOCK } from "./imageModels";
+import { DEFAULT_IMAGE_PROVIDER, IMAGE_MODELS, IMAGE_PROVIDER_LOCK } from "./imageModels";
+import { IMAGE_MODEL, TEXT_MODEL, TEXT_MODELS } from "./modelPolicy";
 
 const IMAGE_PROVIDER_KEY = "dreamstream_image_provider";
 const FLUX_KEY_STORAGE = "dreamstream_flux_key";
@@ -117,8 +118,9 @@ export const getSettingsState = (): {
   showGeminiKey?: boolean;
   showFluxKey?: boolean;
   modelRouting?: Record<string, string>;
-  showAssistant?: boolean;
   defaultImageModel?: string;
+  defaultTextModel?: string;
+  defaultTextModelKey?: string;
 } => {
   const raw = getFromStorage(SETTINGS_KEY);
   if (!raw) return {};
@@ -133,25 +135,57 @@ export const setSettingsState = (next: {
   showGeminiKey?: boolean;
   showFluxKey?: boolean;
   modelRouting?: Record<string, string>;
-  showAssistant?: boolean;
   defaultImageModel?: string;
+  defaultTextModel?: string;
+  defaultTextModelKey?: string;
 }) => {
   setInStorage(SETTINGS_KEY, JSON.stringify(next));
 };
 
-export const getShowAssistant = (): boolean => {
-  const settings = getSettingsState();
-  // Default to true if undefined
-  return settings.showAssistant !== false;
-};
-
 export const getDefaultImageModel = (): string => {
   const settings = getSettingsState();
-  return settings.defaultImageModel || "pixazo/flux-1-schnell";
+  const configured = settings.defaultImageModel?.trim();
+  if (configured) {
+    const isSupported = IMAGE_MODELS.some((model) => model.id === configured);
+    if (isSupported) return configured;
+    if (configured.toLowerCase().includes("gemini")) return IMAGE_MODEL;
+  }
+  return "pixazo/flux-1-schnell";
+};
+
+export const getDefaultTextModel = (): string => {
+  const settings = getSettingsState();
+  const configured = (settings.defaultTextModel || settings.defaultTextModelKey || TEXT_MODEL).trim();
+  const supportedTextModelIds = new Set(TEXT_MODELS.map((model) => model.id));
+  return supportedTextModelIds.has(configured) ? configured : TEXT_MODEL;
+};
+
+export const getDefaultTextModelKey = getDefaultTextModel;
+
+const TASK_ALIASES: Record<string, string> = {
+  style: "style",
+  world: "world",
+  cover: "cover",
+  panel: "panel",
+  panel_regen: "panel_regen",
+  generation: "panel",
+  preview: "panel",
+  script: "script_analysis",
+  script_analysis: "script_analysis",
+  story_builder: "story_builder",
+  layout: "panel_breakdown",
+  panel_breakdown: "panel_breakdown",
+  image_generation: "panel"
+};
+
+export const normalizeTaskKey = (task: string) => {
+  const key = (task || "").trim().toLowerCase();
+  return TASK_ALIASES[key] || key;
 };
 
 export const getModelForTask = (task: string): string => {
   const settings = getSettingsState();
   const routing = settings.modelRouting || {};
-  return routing[task] || getDefaultImageModel();
+  const normalized = normalizeTaskKey(task);
+  return routing[normalized] || getDefaultImageModel();
 };

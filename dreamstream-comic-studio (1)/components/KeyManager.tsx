@@ -1,19 +1,23 @@
 import React, { useState, useEffect } from 'react';
-import { IMAGE_MODELS, FLUX_SCHNELL_MODEL_ID } from '../services/imageModels';
-import { TEXT_MODEL } from '../services/modelPolicy';
+import { IMAGE_MODELS } from '../services/imageModels';
+import { TEXT_MODELS } from '../services/modelPolicy';
 import { getAllModelKeys, setModelSpecificKey, deleteModelKey } from '../services/appSettings';
 import { Button } from './Button';
-import { Trash2, Edit2, Plus, Save, Key, CheckCircle2 } from 'lucide-react';
+import { Trash2, Edit2, Save, Key, CheckCircle2 } from 'lucide-react';
 
 export const KeyManager: React.FC = () => {
     const [keys, setKeys] = useState<Record<string, string>>({});
-    const [selectedModelId, setSelectedModelId] = useState<string>(IMAGE_MODELS[0]?.id || "");
+    const [selectedModelId, setSelectedModelId] = useState<string>(TEXT_MODELS[0]?.id || IMAGE_MODELS[0]?.id || "");
     const [inputKey, setInputKey] = useState("");
     const [isEditing, setIsEditing] = useState(false);
 
     const availableModels = [
         ...IMAGE_MODELS,
-        { id: TEXT_MODEL, label: "Gemini 2.5 Flash Lite (Text Analysis)", provider: "gemini" }
+        ...TEXT_MODELS.map((model) => ({
+            id: model.id,
+            label: `${model.label} (Text)`,
+            provider: "gemini" as const
+        }))
     ];
 
     useEffect(() => {
@@ -22,40 +26,6 @@ export const KeyManager: React.FC = () => {
 
     const handleSave = () => {
         if (!inputKey.trim()) return;
-
-        // Check for duplicates
-        const providerToAdd = IMAGE_MODELS.find(m => m.id === selectedModelId)?.provider || (selectedModelId === TEXT_MODEL ? "gemini" : null);
-
-        // Find if we already have a key for this provider
-        const existingKeyId = Object.keys(keys).find(k => {
-            const p = IMAGE_MODELS.find(m => m.id === k)?.provider || (k === TEXT_MODEL ? "gemini" : null);
-            return p === providerToAdd;
-        });
-
-        // Use a more robust check. If the user is adding a key for a specific model, we assume they might want model-specific overrides.
-        // But the user asked to "tell them that it already exists".
-        // Let's check if the EXACT model ID already has a key, that's an update (allowed).
-        // If a DIFFERENT model of the SAME provider has a key, maybe we warn? 
-        // Actually the simple request: "if a user adds more than one api key tell them tat itnalready exisit"
-        // implies one key per provider usually. 
-        // But our system allows model-specific keys. 
-        // Let's start by warning if the key value itself is identical (unlikely use case but possible) OR if they try to add a second key for the same provider without deleting the first (if we enforce 1 key per provider).
-
-        // However, looking at the code, `keys` is a Record<ModelId, Key>.
-        // If I add a key for "gemini-1.5-flash", and then try to add one for "gemini-1.5-pro", that's technically valid in this system.
-        // BUT, if the user wants to enforce "One Key Rule", maybe they mean "Don't let me add 5 Gemini keys".
-        // Let's implement a check: if any key for this provider exists, warn user.
-
-        const isUpdate = !!keys[selectedModelId];
-        const providerKeys = Object.entries(keys).filter(([mid]) => {
-            const p = IMAGE_MODELS.find(m => m.id === mid)?.provider || (mid === TEXT_MODEL ? "gemini" : null);
-            return p === providerToAdd && mid !== selectedModelId;
-        });
-
-        if (providerKeys.length > 0 && !isUpdate) {
-            alert(`You already have an API key configured for ${providerToAdd}. Please delete it before adding a new one, or just use the existing one.`);
-            return;
-        }
 
         setModelSpecificKey(selectedModelId, inputKey.trim());
         setKeys(getAllModelKeys());
@@ -78,6 +48,9 @@ export const KeyManager: React.FC = () => {
     const getModelLabel = (id: string) => {
         return availableModels.find(m => m.id === id)?.label || id;
     };
+
+    const selectedModel = availableModels.find((model) => model.id === selectedModelId);
+    const selectedProvider = selectedModel?.provider || (selectedModelId.includes('flux') ? 'flux' : 'gemini');
 
     return (
         <div className="bg-slate-50 border-2 border-black rounded-xl p-6 space-y-6">
@@ -115,7 +88,9 @@ export const KeyManager: React.FC = () => {
                         />
                     </div>
                     <p className="text-[10px] text-slate-500">
-                        {selectedModelId.includes('exp') ? "Requires Helicone Key (starts with sk-helicone...)" : "Requires Google Gemini Key (starts with AI...)"}
+                        {selectedProvider === 'flux'
+                            ? "Requires Pixazo Flux key for Flux models."
+                            : "Requires Google AI Studio Gemini key (starts with AI...)."}
                     </p>
                 </div>
 

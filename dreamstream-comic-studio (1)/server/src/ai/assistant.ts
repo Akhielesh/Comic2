@@ -5,13 +5,20 @@ import { TEXT_MODEL, ASSISTANT_REQUEST_TIMEOUT_MS } from '../config.js';
 import { MasterAssistantContext, MasterAssistantResponse, StoryAssistantResponse } from '../../../apiTypes.js';
 import { AppStep } from '../../../types.js';
 
+const resolveTextModel = (modelOverride?: string) => {
+  const candidate = modelOverride?.trim();
+  return candidate || TEXT_MODEL;
+};
+
 export const queryStoryAssistant = async (
   apiKey: string,
   script: string,
   message: string,
-  history: { role: 'user' | 'model'; text: string }[]
+  history: { role: 'user' | 'model'; text: string }[],
+  modelOverride?: string
 ): Promise<StoryAssistantResponse> => {
   const ai = createClient(apiKey);
+  const model = resolveTextModel(modelOverride);
   const systemInstruction = `You are an AI Assistant for a comic book. 
             You have access to the script of the story. 
             Your job is to answer reader questions about the plot, characters, and world, strictly based on the script provided. 
@@ -33,7 +40,7 @@ export const queryStoryAssistant = async (
   const response = await withRetry(
     () => withTimeout(
       ai.models.generateContent({
-        model: TEXT_MODEL,
+        model,
         contents: [
           { role: 'user', parts: [{ text: systemInstruction }] },
           ...history.map(h => ({ role: h.role, parts: [{ text: h.text }] })),
@@ -54,7 +61,7 @@ export const queryStoryAssistant = async (
     prompt: `${systemInstruction}\n\nUser: ${message}`,
     responseText,
     usage: buildUsage(message, responseText, response.usageMetadata),
-    model: TEXT_MODEL
+    model
   };
 };
 
@@ -62,9 +69,11 @@ export const queryMasterAssistant = async (
   apiKey: string,
   userMessage: string,
   history: { role: 'user' | 'model'; text: string }[],
-  context: MasterAssistantContext
+  context: MasterAssistantContext,
+  modelOverride?: string
 ): Promise<MasterAssistantResponse> => {
   const ai = createClient(apiKey);
+  const model = resolveTextModel(modelOverride);
 
   const projectSummary = context.project ? {
     name: context.project.name,
@@ -134,7 +143,7 @@ export const queryMasterAssistant = async (
   const response = await withRetry(
     () => withTimeout(
       ai.models.generateContent({
-        model: TEXT_MODEL,
+        model,
         contents: [
           { role: 'user', parts: [{ text: systemPrompt }] },
           ...history.map(h => ({ role: h.role, parts: [{ text: h.text }] })),
@@ -155,6 +164,6 @@ export const queryMasterAssistant = async (
     prompt: `${systemPrompt}\n\nUser: ${userMessage}`,
     responseText,
     usage: buildUsage(userMessage, responseText, response.usageMetadata),
-    model: TEXT_MODEL
+    model
   };
 };

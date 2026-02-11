@@ -41,6 +41,11 @@ export const VersionHistoryModal: React.FC<VersionHistoryModalProps> = ({ versio
                                     <div className="text-xs mt-1 bg-slate-100 inline-block px-2 py-0.5 rounded border border-slate-300">
                                         Step: {v.state.step} • {v.state.panels.length} Panels
                                     </div>
+                                    {(v.reason || v.snapshotHash) && (
+                                        <div className="text-[11px] text-slate-500 mt-1 font-mono">
+                                            {v.reason ? `Reason: ${v.reason}` : ''}{v.reason && v.snapshotHash ? ' • ' : ''}{v.snapshotHash ? `Hash: ${v.snapshotHash}` : ''}
+                                        </div>
+                                    )}
                                 </div>
                                 <div className="flex gap-2 opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity">
                                     <button

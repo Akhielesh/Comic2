@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { StepIndicator } from './StepIndicator';
 import { ScriptInput } from './steps/ScriptInput';
 import { StyleSelection } from './steps/StyleSelection';
@@ -26,6 +26,10 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   const state = project.state;
   const [titleDraft, setTitleDraft] = useState(project.name);
   const [showVersions, setShowVersions] = useState(false);
+  const previousStepRef = useRef<AppStep>(state.step);
+  const previousGenerationActiveRef = useRef<boolean>(!!state.generationStatus?.isActive);
+  const lastAutoVersionKeyRef = useRef<string>('');
+  const lastPlanVersionKeyRef = useRef<string>('');
 
   const updateState = (updates: any) => {
     onUpdate({
@@ -47,6 +51,45 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
     }
   };
 
+  const snapshotState = (source: Project['state']): Project['state'] => {
+    const cloned = JSON.parse(JSON.stringify(source)) as Project['state'];
+    delete cloned.versions;
+    return cloned;
+  };
+
+  const computeSnapshotHash = (sourceState: Project['state']) => {
+    const raw = JSON.stringify(snapshotState(sourceState));
+    let hash = 2166136261;
+    for (let i = 0; i < raw.length; i += 1) {
+      hash ^= raw.charCodeAt(i);
+      hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+    }
+    return `v${Math.abs(hash >>> 0).toString(16)}`;
+  };
+
+  const appendVersion = (
+    name: string,
+    sourceState: Project['state'],
+    reason?: ProjectVersion['reason'],
+    parentVersionId?: string
+  ) => {
+    const snapshotHash = computeSnapshotHash(sourceState);
+    const currentVersions = state.versions || [];
+    if (currentVersions[currentVersions.length - 1]?.snapshotHash === snapshotHash) {
+      return currentVersions;
+    }
+    const newVersion: ProjectVersion = {
+      id: crypto.randomUUID(),
+      name,
+      createdAt: Date.now(),
+      state: snapshotState(sourceState),
+      reason,
+      parentVersionId,
+      snapshotHash
+    };
+    return [...currentVersions, newVersion].slice(-20);
+  };
+
   useEffect(() => {
     const status = state.generationStatus;
     const shouldAdvance = status && !status.isActive && state.panels.length > 0 && state.step === AppStep.FULL_GENERATION;
@@ -59,8 +102,88 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   }, [state.generationStatus?.isActive, state.panels.length, state.step, state.maxStepReached]);
 
   useEffect(() => {
+    const previousStep = previousStepRef.current;
+    if (previousStep === state.step) return;
+
+    let nextVersionName: string | null = null;
+    let autoKey = '';
+
+    if (state.step === AppStep.COMBINED_PREVIEW && state.panels.length > 0) {
+      autoKey = `preview:${state.panelPlanVersion || 0}:${state.panels.length}`;
+      nextVersionName = `Auto - Preview Plan (${new Date().toLocaleTimeString()})`;
+    }
+
+    if (state.step === AppStep.REVIEW_EXPORT && state.panels.length > 0) {
+      const imageSignature = state.panels.map((panel) => panel.imageId || '').join('|');
+      autoKey = `review:${state.panels.length}:${imageSignature}`;
+      nextVersionName = `Auto - Build Ready (${new Date().toLocaleTimeString()})`;
+    }
+
+    previousStepRef.current = state.step;
+
+    if (!nextVersionName || !autoKey || autoKey === lastAutoVersionKeyRef.current) return;
+    lastAutoVersionKeyRef.current = autoKey;
+    updateState({ versions: appendVersion(nextVersionName, state, 'panel') });
+  }, [state.step, state.panels, state.panelPlanVersion]);
+
+  useEffect(() => {
+    const previous = previousGenerationActiveRef.current;
+    const current = !!state.generationStatus?.isActive;
+    if (previous === current) return;
+
+    previousGenerationActiveRef.current = current;
+    if (current) {
+      updateState({
+        versions: appendVersion(
+          `Auto - Generation Started (${new Date().toLocaleTimeString()})`,
+          state,
+          'panel'
+        )
+      });
+      return;
+    }
+    if (!current && state.panels.length > 0) {
+      updateState({
+        versions: appendVersion(
+          `Auto - Generation Complete (${new Date().toLocaleTimeString()})`,
+          state,
+          'panel'
+        )
+      });
+    }
+  }, [state.generationStatus?.isActive, state.panels.length]);
+
+  useEffect(() => {
+    if (state.step !== AppStep.COMBINED_PREVIEW) return;
+    if (state.panels.length === 0) return;
+    const planIds = state.panels
+      .filter((panel) => panel.isPlanned !== false)
+      .map((panel) => panel.id)
+      .sort()
+      .join('|');
+    if (!planIds) return;
+    const key = `plan:${planIds}`;
+    if (key === lastPlanVersionKeyRef.current) return;
+    lastPlanVersionKeyRef.current = key;
+    updateState({
+      versions: appendVersion(
+        `Auto - Plan Updated (${new Date().toLocaleTimeString()})`,
+        state,
+        'panel'
+      )
+    });
+  }, [state.step, state.panels]);
+
+  useEffect(() => {
     setTitleDraft(project.name);
   }, [project.id, project.name]);
+
+  useEffect(() => {
+    previousStepRef.current = state.step;
+    previousGenerationActiveRef.current = !!state.generationStatus?.isActive;
+    lastAutoVersionKeyRef.current = '';
+    lastPlanVersionKeyRef.current = '';
+  }, [project.id]);
 
   useEffect(() => {
     const entries = collectStateImageEntries(state);
@@ -78,18 +201,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
     const name = prompt("Name this version:", `Version ${new Date().toLocaleTimeString()}`);
     if (!name) return;
 
-    const newVersion: ProjectVersion = {
-      id: crypto.randomUUID(),
-      name,
-      createdAt: Date.now(),
-      state: JSON.parse(JSON.stringify(state)) // Deep clone state
-    };
-
-    const currentVersions = state.versions || [];
-    // Limit to 10 versions max for storage size
-    const updatedVersions = [...currentVersions, newVersion].slice(-10);
-
-    updateState({ versions: updatedVersions });
+    updateState({ versions: appendVersion(name, state, 'manual') });
     alert("Version saved!");
   };
 
@@ -99,10 +211,17 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   };
 
   const restoreVersion = (version: ProjectVersion) => {
+    const restoredFromVersionId = version.id;
+    const historyWithCheckpoint = appendVersion(
+      `Auto - Before Restore (${new Date().toLocaleTimeString()})`,
+      state,
+      'manual',
+      restoredFromVersionId
+    );
     // Preserve versions list when restoring old state
     const mergedState = {
       ...version.state,
-      versions: state.versions
+      versions: historyWithCheckpoint
     };
     onUpdate({ state: mergedState });
     setShowVersions(false);
@@ -119,14 +238,14 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           onStoryBuilderUpdate={(storyBuilder) => updateState({ storyBuilder })}
           initialChecklist={state.scriptChecklist}
           onChecklistUpdate={(scriptChecklist) => updateState({ scriptChecklist })}
-          onScenesGenerated={(script, scenes) => { updateState({ script, scenes }); nextStep(); }}
+          onScenesGenerated={(script, scenes) => { updateState({ script, scenes, continuity: undefined }); nextStep(); }}
         />;
       case AppStep.STYLE_SELECTION:
         return <StyleSelection
           firstScene={state.scenes[0]}
           script={state.script}
           projectId={project.id}
-          onScenesGenerated={(scenes) => updateState({ scenes })}
+          onScenesGenerated={(scenes) => updateState({ scenes, continuity: undefined })}
           onScriptUpdate={(script) => updateState({ script })}
           initialVariants={state.styleVariants}
           selectedStyleId={state.selectedStyleId}
@@ -147,6 +266,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           initialCharacters={state.characters || []} // Ensure defaults
           initialItems={state.items || []}
           initialLocations={state.locations || []}
+          initialContinuity={state.continuity}
           onDataUpdate={(data) => updateState({ ...data })}
           onConfirm={() => nextStep()} />;
       case AppStep.COVER:
@@ -187,6 +307,9 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           projectName={project.name}
           panels={state.panels}
           state={state}
+          onReturnToPreview={() => {
+            updateState({ step: AppStep.COMBINED_PREVIEW });
+          }}
           onUpdatePanel={(id, imageId, imageUrl) => {
             const newPanels = state.panels.map(p => p.id === id ? {
               ...p,
@@ -195,7 +318,22 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
               imageIdHistory: [...(p.imageIdHistory || []), imageId],
               imageUrlHistory: [...(p.imageUrlHistory || []), imageUrl]
             } : p);
-            updateState({ panels: newPanels });
+            const imageSignature = newPanels.map((panel) => panel.imageId || '').join('|');
+            const autoKey = `review:${newPanels.length}:${imageSignature}`;
+            const shouldAutoSnapshot = autoKey !== lastAutoVersionKeyRef.current;
+            if (shouldAutoSnapshot) {
+              lastAutoVersionKeyRef.current = autoKey;
+            }
+            updateState({
+              panels: newPanels,
+              ...(shouldAutoSnapshot ? {
+                versions: appendVersion(
+                  `Auto - Review Update (${new Date().toLocaleTimeString()})`,
+                  { ...state, panels: newPanels },
+                  'regen'
+                )
+              } : {})
+            });
           }} />;
       default: return null;
     }

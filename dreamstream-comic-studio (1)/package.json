@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"npm run dev:server\" \"vite\"",
+    "dev": "concurrently --kill-others-on-fail \"npm run dev:server\" \"vite\"",
     "dev:server": "tsx watch server/src/index.ts",
     "build": "vite build",
     "build:server": "tsc -p server/tsconfig.json",

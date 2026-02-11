@@ -48,7 +48,7 @@ const getAuthToken = async (): Promise<string | undefined> => {
   return session?.access_token;
 };
 
-export const post = async <TReq, TRes>(path: string, body: TReq, options?: { signal?: AbortSignal; apiKey?: string }): Promise<TRes> => {
+export const post = async <TReq, TRes>(path: string, body: TReq, options?: { signal?: AbortSignal; apiKey?: string; modelId?: string }): Promise<TRes> => {
   const geminiKey = getGeminiKey();
   const fluxInfo = getFluxKeyInfo();
   const token = await getAuthToken();
@@ -59,6 +59,7 @@ export const post = async <TReq, TRes>(path: string, body: TReq, options?: { sig
       'Content-Type': 'application/json',
       ...(options?.apiKey ? { 'X-Gemini-Key': options.apiKey } : (geminiKey ? { 'X-Gemini-Key': geminiKey } : {})),
       ...(fluxInfo.key ? { 'X-Pixazo-Key': fluxInfo.key } : {}),
+      ...(options?.modelId ? { 'X-Gemini-Model': options.modelId } : {}),
       ...(token ? { 'Authorization': `Bearer ${token}` } : {})
     },
     body: JSON.stringify(body),
@@ -69,7 +70,7 @@ export const post = async <TReq, TRes>(path: string, body: TReq, options?: { sig
   return res.json() as Promise<TRes>;
 };
 
-export const get = async <TRes>(path: string): Promise<TRes> => {
+export const get = async <TRes>(path: string, options?: { modelId?: string }): Promise<TRes> => {
   const geminiKey = getGeminiKey();
   const fluxInfo = getFluxKeyInfo();
   const token = await getAuthToken();
@@ -78,10 +79,10 @@ export const get = async <TRes>(path: string): Promise<TRes> => {
     headers: {
       ...(geminiKey ? { 'X-Gemini-Key': geminiKey } : {}),
       ...(fluxInfo.key ? { 'X-Pixazo-Key': fluxInfo.key } : {}),
+      ...(options?.modelId ? { 'X-Gemini-Model': options.modelId } : {}),
       ...(token ? { 'Authorization': `Bearer ${token}` } : {})
     }
   });
   if (!res.ok) throw await parseError(res);
   return res.json() as Promise<TRes>;
 };
-

@@ -8,7 +8,6 @@ import { errorHandler } from './middleware/errors.js';
 import { requireAuth } from './middleware/auth.js';
 import { textRouter } from './routes/text.js';
 import { imageRouter } from './routes/image.js';
-import { assistantRouter } from './routes/assistant.js';
 import { visionRouter } from './routes/vision.js';
 import { systemRouter } from './routes/system.js';
 // import webhookRouter from './routes/webhook.js'; // [DISABLED]
@@ -37,7 +36,9 @@ app.use('/api', requireAuth);
 // app.use('/api/payments', paymentsRouter); // [DISABLED] Authenticated payments
 app.use('/api/text', textRouter);
 app.use('/api/image', imageRouter);
-app.use('/api/assistant', assistantRouter);
+app.use('/api/assistant', (_req, res) => {
+  res.status(410).json({ error: { message: 'Story Assistant has been removed.' } });
+});
 app.use('/api/vision', visionRouter);
 
 app.use(errorHandler);
