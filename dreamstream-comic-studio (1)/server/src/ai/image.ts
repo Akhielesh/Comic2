@@ -25,13 +25,16 @@ export const generateGeminiImage = async (
   prompt: string,
   aspectRatio: string,
   resolution: string,
-  referenceImages: string[] = []
+  referenceImages: string[] = [],
+  modelId?: string
 ): Promise<ImageGenerateResponse> => {
   const ai = createClient(apiKey);
   const hasReferences = referenceImages.length > 0;
-  const imageSize = supportsImageSize(IMAGE_MODEL) ? (resolution === '4K' ? '2K' : resolution) : undefined;
-  const shouldUseGenerateContent = hasReferences || isGeminiImageModel(IMAGE_MODEL);
-  const responseModalities = isGeminiImageModel(IMAGE_MODEL)
+  const effectiveModel = modelId || IMAGE_MODEL;
+
+  const imageSize = supportsImageSize(effectiveModel) ? (resolution === '4K' ? '2K' : resolution) : undefined;
+  const shouldUseGenerateContent = hasReferences || isGeminiImageModel(effectiveModel);
+  const responseModalities = isGeminiImageModel(effectiveModel)
     ? [Modality.TEXT, Modality.IMAGE]
     : [Modality.IMAGE];
 
@@ -41,7 +44,7 @@ export const generateGeminiImage = async (
     const response = await withRetry(
       () => withTimeout(
         ai.models.generateImages({
-          model: IMAGE_MODEL,
+          model: effectiveModel,
           prompt,
           config: {
             numberOfImages: 1,
@@ -87,7 +90,7 @@ export const generateGeminiImage = async (
     return withRetry(
       () => withTimeout(
         ai.models.generateContent({
-          model: IMAGE_MODEL,
+          model: effectiveModel,
           contents: [
             {
               role: 'user',

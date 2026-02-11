@@ -63,7 +63,7 @@ export const MessageCard: React.FC<MessageCardProps> = ({ text }) => {
         return (
           <div
             key={`${section.label}-${idx}`}
-            className={`border rounded-lg px-2 py-2 text-[13px] leading-relaxed ${meta.className}`}
+            className={`border rounded-lg px-2 py-2 text-[13px] leading-relaxed text-slate-800 ${meta.className}`}
           >
             {section.label !== 'Body' && (
               <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wide text-slate-600 mb-1">

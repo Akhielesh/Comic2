@@ -39,15 +39,35 @@ const computeDimensions = (aspectRatio: string, resolution: string) => {
 const bufferToDataUrl = (buffer: Buffer, mimeType: string) =>
   `data:${mimeType};base64,${buffer.toString('base64')}`;
 
-const fetchImageAsDataUrl = async (url: string): Promise<{ dataUrl: string; mimeType: string }> => {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch output image (${response.status}).`);
+const fetchImageAsDataUrl = async (url: string, retries = 3): Promise<{ dataUrl: string; mimeType: string }> => {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const response = await fetch(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+      });
+
+      if (!response.ok) {
+        if (response.status === 404 && i < retries - 1) {
+          // Wait and retry if 404 (maybe CDN propagation delay)
+          await new Promise(r => setTimeout(r, 1000));
+          continue;
+        }
+        throw new Error(`Failed to fetch output image (${response.status} ${response.statusText})`);
+      }
+
+      const mimeType = response.headers.get('content-type') || 'image/png';
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      return { dataUrl: bufferToDataUrl(buffer, mimeType), mimeType };
+    } catch (err) {
+      console.warn(`[Flux] Attempt ${i + 1} failed to fetch image:`, err);
+      if (i === retries - 1) throw err;
+      await new Promise(r => setTimeout(r, 1000));
+    }
   }
-  const mimeType = response.headers.get('content-type') || 'image/png';
-  const arrayBuffer = await response.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-  return { dataUrl: bufferToDataUrl(buffer, mimeType), mimeType };
+  throw new Error("Failed to fetch image after retries");
 };
 
 export const generateFluxImage = async (
@@ -127,6 +147,7 @@ export const generateFluxImage = async (
   const apiMs = Math.round(nowMs() - requestStart);
   const output = payload?.output;
   const outputUrl = Array.isArray(output) ? output[0] : output;
+  console.log('[Flux] Output URL received:', outputUrl); // Debugging
   if (!outputUrl) {
     throw new Error('Flux response did not include output image.');
   }

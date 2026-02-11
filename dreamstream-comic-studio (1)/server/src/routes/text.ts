@@ -61,10 +61,14 @@ textRouter.post('/panel-breakdown', async (req, res, next) => {
     const apiKey = requireGeminiKey(req, res);
     if (!apiKey) return;
     const { scene, style, layoutType, panelCount } = req.body || {};
-    if (!scene || !style || !layoutType) {
-      return res.status(400).json({ error: { message: 'scene, style, and layoutType are required' } });
+    // Relaxed validation: Default if missing to prevent build crashes
+    const effectiveStyle = style || "classic comic book style";
+    const effectiveLayout = layoutType || "classic";
+
+    if (!scene) {
+      return res.status(400).json({ error: { message: 'scene is required' } });
     }
-    const result = await generatePanelBreakdown(apiKey, scene, style, layoutType, panelCount || 3);
+    const result = await generatePanelBreakdown(apiKey, scene, effectiveStyle, effectiveLayout, panelCount || 3);
     res.json(result);
   } catch (err) {
     next(err);

@@ -7,7 +7,8 @@ import { loadArtifactsForProject, loadTestRuns } from '../services/db';
 import { MessageCard } from './MessageCard';
 import { buildProjectSnapshot, summarizeProject } from '../services/assistantContext';
 import { buildProjectReport } from '../services/reporting';
-import { ResizablePanel } from './ResizablePanel';
+import { ResizablePanel } from './ResizablePanel'; // Kept for types if needed, but switching to Draggable
+import { DraggablePanel } from './DraggablePanel';
 import { buildTestLabSummary, getRecentTestRuns } from '../services/testLabAnalytics';
 
 const areMessagesEqual = (a: ChatMessage[] = [], b: ChatMessage[] = []) => {
@@ -33,11 +34,22 @@ const withTimeout = async <T,>(promise: Promise<T>, ms: number) => {
 interface MasterAssistantProps {
   activeProject?: Project;
   projects?: Project[];
-  currentView: 'home' | 'dashboard' | 'editor' | 'reader' | 'test' | 'learn';
+  currentView: 'home' | 'dashboard' | 'editor' | 'reader' | 'test' | 'learn' | 'gallery' | 'settings' | 'privacy' | 'terms';
   onPersistChat?: (messages: ChatMessage[]) => void;
 }
 
+import { getShowAssistant } from '../services/appSettings';
+
 export const MasterAssistant: React.FC<MasterAssistantProps> = ({ activeProject, projects = [], currentView, onPersistChat }) => {
+  const [isEnabled, setIsEnabled] = useState(getShowAssistant());
+
+  // Re-check setting on mount/view change
+  useEffect(() => {
+    setIsEnabled(getShowAssistant());
+    const interval = setInterval(() => setIsEnabled(getShowAssistant()), 2000); // Poll for setting change (simple sync)
+    return () => clearInterval(interval);
+  }, []);
+
   const createMessage = (role: ChatMessage['role'], text: string): ChatMessage => ({
     id: crypto.randomUUID(),
     role,
@@ -93,7 +105,7 @@ export const MasterAssistant: React.FC<MasterAssistantProps> = ({ activeProject,
 
   const handleSend = async () => {
     if (!input.trim()) return;
-    
+
     const userMsg: ChatMessage = createMessage('user', input);
     setMessages(prev => [...prev, userMsg]);
     setInput('');
@@ -212,21 +224,21 @@ export const MasterAssistant: React.FC<MasterAssistantProps> = ({ activeProject,
 
       const trimmedHistory = messages.slice(-6);
       const responseText = await queryMasterAssistant(
-          userMsg.text, 
-          trimmedHistory, 
-          { 
-            view: currentView, 
-            project: activeProject,
-            artifactSummary,
-            panelPlanSummary,
-            pricingConfig: activeProject?.state.pricingConfig,
-            reportSummary,
-            allProjectsSummary,
-            projectSnapshot,
-            appSnapshot,
-            testLabSummary,
-            testLabRecentRuns
-          }
+        userMsg.text,
+        trimmedHistory,
+        {
+          view: currentView,
+          project: activeProject,
+          artifactSummary,
+          panelPlanSummary,
+          pricingConfig: activeProject?.state.pricingConfig,
+          reportSummary,
+          allProjectsSummary,
+          projectSnapshot,
+          appSnapshot,
+          testLabSummary,
+          testLabRecentRuns
+        }
       );
       setMessages(prev => [...prev, createMessage('model', responseText)]);
     } catch (e) {
@@ -250,12 +262,14 @@ export const MasterAssistant: React.FC<MasterAssistantProps> = ({ activeProject,
     }
   };
 
+  if (!isEnabled) return null;
+
   return (
     <>
       {/* Floating Toggle Button */}
       {!isOpen && (
         <>
-          <button 
+          <button
             onClick={() => setIsOpen(true)}
             className="fixed bottom-6 left-6 z-50 w-14 h-14 bg-black text-brand-yellow border-4 border-white rounded-full shadow-comic hover:scale-110 transition-transform flex items-center justify-center group"
             aria-label="Open Assistant"
@@ -275,32 +289,31 @@ export const MasterAssistant: React.FC<MasterAssistantProps> = ({ activeProject,
 
       {/* Chat Window */}
       {isOpen && (
-        <ResizablePanel
-          storageKey="dreamstream.masterAssistant.size"
+        <DraggablePanel
+          storageKey="dreamstream.masterAssistant.pos_v2"
           defaultSize={{ width: 384, height: 500 }}
-          minSize={{ width: 320, height: 360 }}
-          className="fixed bottom-6 left-6 z-50 bg-white rounded-xl border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,0.5)] flex flex-col animate-fade-in overflow-hidden"
-        >
-          {/* Header */}
-          <div className="bg-black text-brand-yellow p-4 flex justify-between items-center shrink-0">
-            <div className="flex items-center gap-2">
+          minSize={{ width: 320, height: 400 }}
+          className="z-50 bg-white rounded-xl border-4 border-black flex flex-col overflow-hidden"
+          headerBar={
+            <div className="bg-black text-brand-yellow p-4 flex justify-between items-center shrink-0">
+              <div className="flex items-center gap-2 pointer-events-none">
                 <div className="w-8 h-8 bg-brand-yellow rounded-full flex items-center justify-center border-2 border-white text-black">
-                    <Bot size={20} />
+                  <Bot size={20} />
                 </div>
                 <h3 className="font-display text-lg tracking-wide">Studio Assistant</h3>
-            </div>
-            <button onClick={() => setIsOpen(false)} className="text-white hover:text-brand-red transition-colors">
+              </div>
+              <button onPointerDown={(e) => e.stopPropagation()} onClick={() => setIsOpen(false)} className="text-white hover:text-brand-red transition-colors cursor-pointer">
                 <X size={24} />
-            </button>
-          </div>
-
-          {/* Messages */}
+              </button>
+            </div>
+          }
+        >
+          {/* Main Content (No Header here, it's in headerBar) */}
           <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4 bg-slate-50 custom-scrollbar">
             {messages.map((msg) => (
               <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[85%] p-3 rounded-lg text-sm font-medium border-2 border-black shadow-sm ${
-                  msg.role === 'user' ? 'bg-white text-black rounded-tr-none' : 'bg-brand-blue text-white rounded-tl-none'
-                }`}>
+                <div className={`max-w-[85%] p-3 rounded-lg text-sm font-medium border-2 border-black shadow-sm ${msg.role === 'user' ? 'bg-white text-black rounded-tr-none' : 'bg-brand-blue text-white rounded-tl-none'
+                  }`}>
                   <div className="flex items-center justify-between gap-2 mb-2">
                     <div className="text-[10px] font-bold uppercase opacity-70">
                       {msg.role === 'user' ? 'You' : 'Assistant'}
@@ -319,11 +332,11 @@ export const MasterAssistant: React.FC<MasterAssistantProps> = ({ activeProject,
               </div>
             ))}
             {isTyping && (
-                <div className="flex justify-start">
-                    <div className="bg-brand-blue/50 text-white p-2 rounded-lg rounded-tl-none text-xs animate-pulse">
-                        Analyzing Project State...
-                    </div>
+              <div className="flex justify-start">
+                <div className="bg-brand-blue/50 text-white p-2 rounded-lg rounded-tl-none text-xs animate-pulse">
+                  Analyzing Project State...
                 </div>
+              </div>
             )}
             <div ref={messagesEndRef} />
           </div>
@@ -331,15 +344,16 @@ export const MasterAssistant: React.FC<MasterAssistantProps> = ({ activeProject,
           {/* Input */}
           <div className="mt-auto p-3 bg-white border-t-4 border-black">
             <div className="flex gap-2">
-              <input 
-                type="text" 
+              <input
+                type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleSend()}
                 placeholder="Ask for help..."
                 className="flex-1 bg-slate-100 border-2 border-black rounded px-3 py-2 text-sm focus:outline-none focus:bg-white transition-colors"
+                onPointerDown={(e) => e.stopPropagation()} // Allow text selection/focus without dragging
               />
-              <button 
+              <button
                 onClick={handleSend}
                 disabled={!input.trim() || isTyping}
                 className="bg-brand-yellow border-2 border-black rounded p-2 hover:bg-black hover:text-brand-yellow transition-colors disabled:opacity-50"
@@ -348,7 +362,7 @@ export const MasterAssistant: React.FC<MasterAssistantProps> = ({ activeProject,
               </button>
             </div>
           </div>
-        </ResizablePanel>
+        </DraggablePanel>
       )}
     </>
   );

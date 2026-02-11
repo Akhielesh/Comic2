@@ -36,6 +36,8 @@ const removeFromStorage = (key: string) => {
 
 export const getLockedImageProvider = () => IMAGE_PROVIDER_LOCK;
 
+const IMAGE_MODEL_KEY = "dreamstream_image_model_id";
+
 export const getImageProvider = (): ImageProviderId => {
   if (IMAGE_PROVIDER_LOCK) return IMAGE_PROVIDER_LOCK;
   const stored = getFromStorage(IMAGE_PROVIDER_KEY) as ImageProviderId | null;
@@ -46,6 +48,48 @@ export const setImageProvider = (provider: ImageProviderId) => {
   const effective = IMAGE_PROVIDER_LOCK || provider;
   setInStorage(IMAGE_PROVIDER_KEY, effective);
   return effective;
+};
+
+export const getImageModelId = (): string | null => {
+  return getFromStorage(IMAGE_MODEL_KEY);
+};
+
+export const setImageModelId = (modelId: string) => {
+  setInStorage(IMAGE_MODEL_KEY, modelId);
+};
+
+// Model-Specific Key Management
+const MODEL_KEYS_STORAGE = "dreamstream_model_keys";
+
+export const getAllModelKeys = (): Record<string, string> => {
+  const stored = getFromStorage(MODEL_KEYS_STORAGE);
+  if (!stored) return {};
+  try {
+    return JSON.parse(stored);
+  } catch {
+    return {};
+  }
+};
+
+export const getModelSpecificKey = (modelId: string): string | null => {
+  const keys = getAllModelKeys();
+  return keys[modelId] || null;
+};
+
+export const setModelSpecificKey = (modelId: string, key: string) => {
+  const keys = getAllModelKeys();
+  if (key) {
+    keys[modelId] = key.trim();
+  } else {
+    delete keys[modelId];
+  }
+  setInStorage(MODEL_KEYS_STORAGE, JSON.stringify(keys));
+};
+
+export const deleteModelKey = (modelId: string) => {
+  const keys = getAllModelKeys();
+  delete keys[modelId];
+  setInStorage(MODEL_KEYS_STORAGE, JSON.stringify(keys));
 };
 
 export const getFluxKeyInfo = (): { key: string | null; source: KeySource } => {
@@ -73,6 +117,8 @@ export const getSettingsState = (): {
   showGeminiKey?: boolean;
   showFluxKey?: boolean;
   modelRouting?: Record<string, string>;
+  showAssistant?: boolean;
+  defaultImageModel?: string;
 } => {
   const raw = getFromStorage(SETTINGS_KEY);
   if (!raw) return {};
@@ -87,6 +133,25 @@ export const setSettingsState = (next: {
   showGeminiKey?: boolean;
   showFluxKey?: boolean;
   modelRouting?: Record<string, string>;
+  showAssistant?: boolean;
+  defaultImageModel?: string;
 }) => {
   setInStorage(SETTINGS_KEY, JSON.stringify(next));
+};
+
+export const getShowAssistant = (): boolean => {
+  const settings = getSettingsState();
+  // Default to true if undefined
+  return settings.showAssistant !== false;
+};
+
+export const getDefaultImageModel = (): string => {
+  const settings = getSettingsState();
+  return settings.defaultImageModel || "pixazo/flux-1-schnell";
+};
+
+export const getModelForTask = (task: string): string => {
+  const settings = getSettingsState();
+  const routing = settings.modelRouting || {};
+  return routing[task] || getDefaultImageModel();
 };

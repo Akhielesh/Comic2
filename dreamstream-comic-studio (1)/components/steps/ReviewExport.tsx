@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Download, Edit2, RefreshCw, X, History, Share2, FileCode } from 'lucide-react';
+import { Download, Edit2, RefreshCw, X, History, Share2, FileCode, Loader2 } from 'lucide-react';
 import { ComicPanel, ComicState, DialogueBlock, TextLayout, ProjectReport } from '../../types';
 import { generateImage } from '../../services/imageService';
 import { Button } from '../Button';
-import { ImagePreviewModal } from '../modals/ImagePreviewModal';
-import { RegenerateModal } from '../modals/RegenerateModal';
-import { ModalPortal } from '../modals/ModalPortal';
+// Lazy loaded components
+const ImagePreviewModal = React.lazy(() => import('../modals/ImagePreviewModal').then(module => ({ default: module.ImagePreviewModal })));
+const RegenerateModal = React.lazy(() => import('../modals/RegenerateModal').then(module => ({ default: module.RegenerateModal })));
+const HistoryModal = React.lazy(() => import('../modals/HistoryModal').then(module => ({ default: module.HistoryModal })));
+
 import { exportProject, getImageUrl, getImageDataUrl } from '../../services/db';
-import JSZip from 'jszip';
 import { ensureDialogueBlocks } from '../../services/dialogueUtils';
 import { buildImagePrompt } from '../../services/imagePrompt';
 import { parseRatio, resolveAspectRatio } from '../../services/imageUtils';
@@ -35,11 +36,10 @@ const renderPanelText = (panel: ComicPanel, layout: TextLayout) => {
         {blocks.map(block => (
           <div
             key={block.id}
-            className={`max-w-[80%] px-3 py-2 rounded-lg border-2 border-black text-xs font-comic font-bold ${
-              block.side === 'right'
-                ? 'ml-auto bg-brand-blue text-white'
-                : 'bg-brand-yellow text-black'
-            }`}
+            className={`max-w-[80%] px-3 py-2 rounded-lg border-2 border-black text-xs font-comic font-bold ${block.side === 'right'
+              ? 'ml-auto bg-brand-blue text-white'
+              : 'bg-brand-yellow text-black'
+              }`}
           >
             {block.speaker ? <span className="mr-1">{block.speaker}:</span> : null}
             {block.text}
@@ -55,13 +55,12 @@ const renderPanelText = (panel: ComicPanel, layout: TextLayout) => {
         {blocks.map((block, idx) => (
           <div
             key={block.id}
-            className={`absolute text-[11px] font-comic font-bold bg-white/90 border-2 border-black px-2 py-1 rounded ${
-              block.side === 'right'
-                ? 'top-2 right-2'
-                : block.side === 'center'
+            className={`absolute text-[11px] font-comic font-bold bg-white/90 border-2 border-black px-2 py-1 rounded ${block.side === 'right'
+              ? 'top-2 right-2'
+              : block.side === 'center'
                 ? 'top-2 left-1/2 -translate-x-1/2'
                 : 'top-2 left-2'
-            }`}
+              }`}
             style={{ top: `${8 + idx * 32}px` }}
           >
             {block.speaker ? <span className="mr-1">{block.speaker}:</span> : null}
@@ -209,8 +208,8 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
       );
       if (generated?.imageUrl) {
         onUpdatePanel(selectedPanel.id, generated.imageId, generated.imageUrl);
-        setSelectedPanel(prev => prev ? { 
-          ...prev, 
+        setSelectedPanel(prev => prev ? {
+          ...prev,
           imageId: generated.imageId,
           imageUrl: generated.imageUrl,
           imageIdHistory: [...(prev.imageIdHistory || []), generated.imageId],
@@ -218,20 +217,20 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
         } : null);
       }
     } catch (e) {
-        console.error(e);
+      console.error(e);
     } finally {
       setIsRegenerating(false);
     }
   };
-  
+
   const handleDownloadPDF = async () => {
     const comicEl = document.getElementById('comic-render-area');
     if (!comicEl) return;
-    
+
     const { jsPDF } = jspdf;
     const ratioValue = parseRatio(state.customAspectRatioEnabled && state.customAspectRatio ? state.customAspectRatio : state.styleAspectRatio) || 1;
     const pdf = new jsPDF(ratioValue < 1 ? 'p' : 'l', 'mm', 'a4');
-    
+
     // Temporarily expand full height to capture everything
     const originalHeight = comicEl.style.height;
     const originalOverflow = comicEl.style.overflow;
@@ -239,34 +238,34 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
     comicEl.style.overflow = 'visible';
 
     try {
-        const canvas = await html2canvas(comicEl, { scale: 2, backgroundColor: '#FFFFFF' });
-        const imgData = canvas.toDataURL('image/png');
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-        
-        // Split into pages if too long
-        if (pdfHeight > pdf.internal.pageSize.getHeight()) {
-             let heightLeft = pdfHeight;
-             let position = 0;
-             const pageHeight = pdf.internal.pageSize.getHeight();
+      const canvas = await html2canvas(comicEl, { scale: 2, backgroundColor: '#FFFFFF' });
+      const imgData = canvas.toDataURL('image/png');
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
 
-             pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight);
-             heightLeft -= pageHeight;
+      // Split into pages if too long
+      if (pdfHeight > pdf.internal.pageSize.getHeight()) {
+        let heightLeft = pdfHeight;
+        let position = 0;
+        const pageHeight = pdf.internal.pageSize.getHeight();
 
-             while (heightLeft >= 0) {
-               position = heightLeft - pdfHeight;
-               pdf.addPage();
-               pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight);
-               heightLeft -= pageHeight;
-             }
-        } else {
-             pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+        pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight);
+        heightLeft -= pageHeight;
+
+        while (heightLeft >= 0) {
+          position = heightLeft - pdfHeight;
+          pdf.addPage();
+          pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, pdfHeight);
+          heightLeft -= pageHeight;
         }
-        
-        pdf.save('dreamstream-comic.pdf');
+      } else {
+        pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      }
+
+      pdf.save('dreamstream-comic.pdf');
     } finally {
-        comicEl.style.height = originalHeight;
-        comicEl.style.overflow = originalOverflow;
+      comicEl.style.height = originalHeight;
+      comicEl.style.overflow = originalOverflow;
     }
   };
 
@@ -307,16 +306,16 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
         <div class="comic-container zoom-wrapper" id="zoomTarget">
           ${coverDataUrl ? `<div class="cover"><img src="${coverDataUrl}" /></div>` : ''}
           ${panelData.map(p => {
-            const dialogue = (p.dialogueBlocks && p.dialogueBlocks.length > 0)
-              ? p.dialogueBlocks.map(b => escapeHtml(b.text)).join(' ')
-              : escapeHtml(p.dialogue || '');
-            return `<div class="panel">
+      const dialogue = (p.dialogueBlocks && p.dialogueBlocks.length > 0)
+        ? p.dialogueBlocks.map(b => escapeHtml(b.text)).join(' ')
+        : escapeHtml(p.dialogue || '');
+      return `<div class="panel">
               <img src="${p.dataUrl || ''}" />
               ${textLayout === 'chat_bubbles'
-                ? `<div class="chat">${getDialogueBlocks(p).map(b => `<div class="${b.side === 'right' ? 'right' : 'left'}">${escapeHtml(b.text)}</div>`).join('')}</div>`
-                : textLayout === 'none' ? '' : `<div class="bubble">${dialogue}</div>`}
+          ? `<div class="chat">${getDialogueBlocks(p).map(b => `<div class="${b.side === 'right' ? 'right' : 'left'}">${escapeHtml(b.text)}</div>`).join('')}</div>`
+          : textLayout === 'none' ? '' : `<div class="bubble">${dialogue}</div>`}
             </div>`;
-          }).join('')}
+    }).join('')}
         </div>
         <script>
           const zoom = document.getElementById('zoom');
@@ -339,13 +338,13 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
   };
 
   const handleShare = () => {
-     const url = new URL(window.location.href);
-     url.searchParams.set('view', 'read');
-     url.searchParams.set('id', projectId);
-     const shareUrl = url.toString();
-     setShareLink(shareUrl);
-     navigator.clipboard.writeText(shareUrl);
-     setTimeout(() => setShareLink(null), 3000);
+    const url = new URL(window.location.href);
+    url.searchParams.set('view', 'read');
+    url.searchParams.set('id', projectId);
+    const shareUrl = url.toString();
+    setShareLink(shareUrl);
+    navigator.clipboard.writeText(shareUrl);
+    setTimeout(() => setShareLink(null), 3000);
   };
 
   const getExtensionFromMime = (mime: string) => {
@@ -367,6 +366,7 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
       const exportData = await exportProject(projectId);
       if (!exportData.project) return;
 
+      const JSZip = (await import('jszip')).default;
       const zip = new JSZip();
       const safeName = projectName.replace(/[^a-zA-Z0-9-_]+/g, '_');
 
@@ -376,7 +376,7 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
       const imageFileMap: Record<string, string> = {};
       if (imagesFolder) {
         Object.entries(exportData.images).forEach(([id, dataUrl]) => {
-          const { mimeType, base64 } = parseDataUrl(dataUrl);
+          const { mimeType, base64 } = parseDataUrl(dataUrl as string);
           const ext = getExtensionFromMime(mimeType);
           const filename = `${id}.${ext}`;
           imageFileMap[id] = filename;
@@ -427,17 +427,17 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
   <div class="comic-container zoom-wrapper" id="zoomTarget">
     ${coverImageRef ? `<div class="cover"><img src="${coverImageRef}" /></div>` : ''}
     ${panels.map(p => {
-      const dialogue = (p.dialogueBlocks && p.dialogueBlocks.length > 0)
-        ? p.dialogueBlocks.map(b => escapeHtml(b.text)).join(' ')
-        : escapeHtml(p.dialogue || '');
-      const imgRef = p.imageId ? `images/${imageFileMap[p.imageId] || ''}` : '';
-      return `<div class="panel">
+        const dialogue = (p.dialogueBlocks && p.dialogueBlocks.length > 0)
+          ? p.dialogueBlocks.map(b => escapeHtml(b.text)).join(' ')
+          : escapeHtml(p.dialogue || '');
+        const imgRef = p.imageId ? `images/${imageFileMap[p.imageId] || ''}` : '';
+        return `<div class="panel">
         <img src="${imgRef}" />
         ${textLayout === 'chat_bubbles'
-          ? `<div class="chat">${getDialogueBlocks(p).map(b => `<div class="${b.side === 'right' ? 'right' : 'left'}">${escapeHtml(b.text)}</div>`).join('')}</div>`
-          : textLayout === 'none' ? '' : `<div class="bubble">${dialogue}</div>`}
+            ? `<div class="chat">${getDialogueBlocks(p).map(b => `<div class="${b.side === 'right' ? 'right' : 'left'}">${escapeHtml(b.text)}</div>`).join('')}</div>`
+            : textLayout === 'none' ? '' : `<div class="bubble">${dialogue}</div>`}
       </div>`;
-    }).join('')}
+      }).join('')}
   </div>
   <script>
     const zoom = document.getElementById('zoom');
@@ -470,21 +470,21 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
   };
 
   const getLayoutClass = () => {
-    switch(state.layoutType) {
-        case 'webtoon': return 'flex flex-col items-center gap-4';
-        case 'strip': return 'flex flex-col items-center gap-2';
-        case 'graphic_novel': return 'grid grid-cols-3 gap-4 auto-rows-fr';
-        case 'conversation_grid': return 'grid grid-cols-2 gap-4 auto-rows-fr';
-        case 'splash_insets': return 'grid grid-cols-3 gap-4 auto-rows-[200px]';
-        case 'golden_ratio': return 'grid grid-cols-3 gap-4 auto-rows-[180px]';
-        case 'diagonal_action': return 'grid grid-cols-2 gap-4 auto-rows-[200px]';
-        case 'storyboard': return 'grid grid-cols-3 gap-2 auto-rows-[150px]';
-        case 'manga': return 'grid grid-cols-2 gap-4 auto-rows-fr';
-        case 'cinematic': return 'grid grid-cols-1 gap-4';
-        case 'grid':
-        case 'custom':
-        default:
-            return `grid grid-cols-2 gap-4 auto-rows-fr`;
+    switch (state.layoutType) {
+      case 'webtoon': return 'flex flex-col items-center gap-4';
+      case 'strip': return 'flex flex-col items-center gap-2';
+      case 'graphic_novel': return 'grid grid-cols-3 gap-4 auto-rows-fr';
+      case 'conversation_grid': return 'grid grid-cols-2 gap-4 auto-rows-fr';
+      case 'splash_insets': return 'grid grid-cols-3 gap-4 auto-rows-[200px]';
+      case 'golden_ratio': return 'grid grid-cols-3 gap-4 auto-rows-[180px]';
+      case 'diagonal_action': return 'grid grid-cols-2 gap-4 auto-rows-[200px]';
+      case 'storyboard': return 'grid grid-cols-3 gap-2 auto-rows-[150px]';
+      case 'manga': return 'grid grid-cols-2 gap-4 auto-rows-fr';
+      case 'cinematic': return 'grid grid-cols-1 gap-4';
+      case 'grid':
+      case 'custom':
+      default:
+        return `grid grid-cols-2 gap-4 auto-rows-fr`;
     }
   };
 
@@ -505,108 +505,101 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
 
   return (
     <div className="h-[calc(100vh-180px)] flex flex-col md:flex-row gap-6 animate-fade-in">
-        {/* Main Editor Area */}
-        <div className="flex-1 flex flex-col gap-6">
-            <div id="comic-render-area" className="flex-1 bg-white rounded-xl border-4 border-black shadow-comic p-8 overflow-y-auto custom-scrollbar">
-                {state.coverImageUrl && (
-                  <div className="mb-6 border-4 border-black rounded-lg overflow-hidden shadow-comic">
-                    <img src={state.coverImageUrl} alt={`${projectName} cover`} className="w-full h-auto object-cover" />
-                  </div>
-                )}
-                <div className={getLayoutClass()}>
-                    {panels.map((panel, idx) => (
-                        <div 
-                            key={panel.id} 
-                            className={`relative group border-4 border-black rounded-lg overflow-hidden shadow-comic cursor-pointer ${getPanelClass(idx)}`}
-                            onClick={() => setSelectedPanel(panel)}
-                        >
-                            <img src={panel.imageUrl} alt={`Panel ${idx+1}`} className="w-full h-full object-cover"/>
-                            {renderPanelText(panel, textLayout)}
-                            
-                            {/* Hover Overlay */}
-                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                                <button className="bg-white p-2 rounded-full hover:bg-brand-yellow border-2 border-black" onClick={(e) => {e.stopPropagation(); setSelectedPanel(panel); setShowRegenModal(true);}}><Edit2 size={16}/></button>
-                            </div>
-
-                            {selectedPanel?.id === panel.id && <div className="absolute inset-0 ring-4 ring-brand-yellow ring-offset-2 pointer-events-none"/>}
-                        </div>
-                    ))}
-                </div>
+      {/* Main Editor Area */}
+      <div className="flex-1 flex flex-col gap-6">
+        <div id="comic-render-area" className="flex-1 bg-white rounded-xl border-4 border-black shadow-comic p-8 overflow-y-auto custom-scrollbar">
+          {state.coverImageUrl && (
+            <div className="mb-6 border-4 border-black rounded-lg overflow-hidden shadow-comic">
+              <img src={state.coverImageUrl} alt={`${projectName} cover`} className="w-full h-auto object-cover" />
             </div>
+          )}
+          <div className={getLayoutClass()}>
+            {panels.map((panel, idx) => (
+              <div
+                key={panel.id}
+                className={`relative group border-4 border-black rounded-lg overflow-hidden shadow-comic cursor-pointer ${getPanelClass(idx)}`}
+                onClick={() => setSelectedPanel(panel)}
+              >
+                <img src={panel.imageUrl} alt={`Panel ${idx + 1}`} className="w-full h-full object-cover" />
+                {renderPanelText(panel, textLayout)}
 
-            <div className="bg-white border-4 border-black rounded-xl p-4 shadow-comic flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-              <div>
-                <div className="text-xs font-bold uppercase text-slate-500">Estimate (Auto-updating)</div>
-                <div className="text-lg font-display">
-                  {isCostLoading ? "Updating..." : costReport ? `$${costReport.cost_summary.totalCost.toFixed(4)}` : "n/a"}
+                {/* Hover Overlay */}
+                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                  <button className="bg-white p-2 rounded-full hover:bg-brand-yellow border-2 border-black" onClick={(e) => { e.stopPropagation(); setSelectedPanel(panel); setShowRegenModal(true); }} aria-label="Edit panel"><Edit2 size={16} /></button>
                 </div>
-                <div className="text-[11px] font-mono text-slate-500">
-                  {costUpdatedAt ? `Updated ${new Date(costUpdatedAt).toLocaleTimeString()}` : "Waiting for data..."}
-                </div>
+
+                {selectedPanel?.id === panel.id && <div className="absolute inset-0 ring-4 ring-brand-yellow ring-offset-2 pointer-events-none" />}
               </div>
-              {costReport && (
-                <div className="text-xs font-mono text-slate-600 space-y-1">
-                  <div>Tokens: {costReport.ai_usage.totalTokens}</div>
-                  <div>Artifacts: {costReport.ai_usage.totalArtifacts}</div>
-                </div>
-              )}
-            </div>
-
-            {/* Action Bar */}
-            <div className="h-24 bg-white border-4 border-black rounded-xl p-4 flex items-center justify-between shadow-comic">
-                 <div className="flex items-center gap-4">
-                     <Button variant="secondary" onClick={() => setShowRegenModal(true)} disabled={!selectedPanel} isLoading={isRegenerating} icon={<RefreshCw className="w-4 h-4" />}>Edit / Regenerate</Button>
-                     <Button variant="outline" onClick={() => setShowHistoryModal(true)} disabled={!selectedPanel || (selectedPanel.imageIdHistory?.length || 0) <= 1} icon={<History className="w-4 h-4" />}>History</Button>
-                 </div>
-                 <div className="flex items-center gap-4">
-                     <button onClick={handleShare} className="flex items-center gap-2 text-sm font-bold text-slate-600 hover:text-black">
-                        <Share2 size={16}/> {shareLink ? "Link Copied!" : "Share"}
-                     </button>
-                     <div className="flex gap-2">
-                        <Button onClick={handleDownloadProjectData} variant="outline">Project ZIP</Button>
-                        <Button onClick={handleDownloadHTML} variant="outline" icon={<FileCode className="w-4 h-4" />}>HTML</Button>
-                        <Button onClick={handleDownloadPDF} icon={<Download className="w-4 h-4" />} className="bg-brand-yellow">PDF</Button>
-                     </div>
-                 </div>
-            </div>
+            ))}
+          </div>
         </div>
-        
-        {/* History Modal */}
-        {showHistoryModal && selectedPanel && (
-            <ModalPortal>
-              <div className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-4 backdrop-blur-sm" onClick={() => setShowHistoryModal(false)}>
-                  <div className="bg-white rounded-xl border-4 border-black shadow-comic w-full max-w-4xl max-h-[80vh] flex flex-col p-6" onClick={e => e.stopPropagation()}>
-                      <div className="flex justify-between items-center mb-4">
-                           <h3 className="text-2xl font-display">Version History for Panel</h3>
-                           <button onClick={() => setShowHistoryModal(false)} className="p-2 rounded-full hover:bg-slate-100"><X/></button>
-                      </div>
-                      <div className="flex-1 overflow-y-auto grid grid-cols-2 md:grid-cols-4 gap-4 custom-scrollbar pr-2">
-                          {historyUrls.map((url, idx) => (
-                              <div key={idx} className="aspect-square relative group">
-                                  <img src={url} className="w-full h-full object-cover rounded-lg border-2 border-black"/>
-                                  <button onClick={() => { 
-                                    const imageId = selectedPanel.imageIdHistory?.[idx];
-                                    if (imageId) onUpdatePanel(selectedPanel.id, imageId, url);
-                                    setShowHistoryModal(false); 
-                                  }} className="absolute inset-0 bg-black/50 text-white font-bold text-sm items-center justify-center hidden group-hover:flex">Use This Version</button>
-                              </div>
-                          ))}
-                      </div>
-                  </div>
-              </div>
-            </ModalPortal>
-        )}
 
-        {showRegenModal && selectedPanel && selectedPanel.imageUrl && (
-            <RegenerateModal 
-                currentImageUrl={selectedPanel.imageUrl} 
-                isLoading={isRegenerating}
-                onConfirm={handleRegenerate}
-                onClose={() => setShowRegenModal(false)}
-            />
-        )}
+        <div className="bg-white border-4 border-black rounded-xl p-4 shadow-comic flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+          <div>
+            <div className="text-xs font-bold uppercase text-slate-500">Estimate (Auto-updating)</div>
+            <div className="text-lg font-display">
+              {isCostLoading ? "Updating..." : costReport ? `$${costReport.cost_summary.totalCost.toFixed(4)}` : "n/a"}
+            </div>
+            <div className="text-[11px] font-mono text-slate-500">
+              {costUpdatedAt ? `Updated ${new Date(costUpdatedAt).toLocaleTimeString()}` : "Waiting for data..."}
+            </div>
+          </div>
+          {costReport && (
+            <div className="text-xs font-mono text-slate-600 space-y-1">
+              <div>Tokens: {costReport.ai_usage.totalTokens}</div>
+              <div>Artifacts: {costReport.ai_usage.totalArtifacts}</div>
+            </div>
+          )}
+        </div>
 
-        {previewImage && <ImagePreviewModal imageUrl={previewImage} onClose={() => setPreviewImage(null)} />}
+        {/* Action Bar */}
+        <div className="h-24 bg-white border-4 border-black rounded-xl p-4 flex items-center justify-between shadow-comic">
+          <div className="flex items-center gap-4">
+            <Button variant="secondary" onClick={() => setShowRegenModal(true)} disabled={!selectedPanel} isLoading={isRegenerating} icon={<RefreshCw className="w-4 h-4" />}>Edit / Regenerate</Button>
+            <Button variant="outline" onClick={() => setShowHistoryModal(true)} disabled={!selectedPanel || (selectedPanel.imageIdHistory?.length || 0) <= 1} icon={<History className="w-4 h-4" />}>History</Button>
+          </div>
+          <div className="flex items-center gap-4">
+            <button onClick={handleShare} className="flex items-center gap-2 text-sm font-bold text-slate-600 hover:text-black">
+              <Share2 size={16} /> {shareLink ? "Link Copied!" : "Share"}
+            </button>
+            <div className="flex gap-2">
+              <Button onClick={handleDownloadProjectData} variant="outline">Project ZIP</Button>
+              <Button onClick={handleDownloadHTML} variant="outline" icon={<FileCode className="w-4 h-4" />}>HTML</Button>
+              <Button onClick={handleDownloadPDF} icon={<Download className="w-4 h-4" />} className="bg-brand-yellow">PDF</Button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* History Modal */}
+      {/* History Modal */}
+      {showHistoryModal && selectedPanel && (
+        <React.Suspense fallback={null}>
+          <HistoryModal
+            onClose={() => setShowHistoryModal(false)}
+            selectedPanel={selectedPanel}
+            historyUrls={historyUrls}
+            onUpdatePanel={onUpdatePanel}
+          />
+        </React.Suspense>
+      )}
+
+      {showRegenModal && selectedPanel && selectedPanel.imageUrl && (
+        <React.Suspense fallback={null}>
+          <RegenerateModal
+            currentImageUrl={selectedPanel.imageUrl}
+            isLoading={isRegenerating}
+            onConfirm={handleRegenerate}
+            onClose={() => setShowRegenModal(false)}
+          />
+        </React.Suspense>
+      )}
+
+      {previewImage && (
+        <React.Suspense fallback={null}>
+          <ImagePreviewModal imageUrl={previewImage} onClose={() => setPreviewImage(null)} />
+        </React.Suspense>
+      )}
     </div>
   );
 };

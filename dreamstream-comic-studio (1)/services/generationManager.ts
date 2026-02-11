@@ -184,7 +184,7 @@ export const startBackgroundGeneration = async (
               project.id,
               {
                 abortSignal: controller.signal,
-                stage: "generation",
+                stage: "panel",
                 cropToRatio: ratioConfig.cropRatio,
                 meta: {
                   source: {

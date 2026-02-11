@@ -4,6 +4,7 @@ export const MAX_BODY_SIZE = process.env.MAX_BODY_SIZE || '25mb';
 
 export const TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-2.5-flash-lite';
 export const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-2.5-flash-image';
+export const GEMINI_BASE_URL = process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com';
 
 export const TEXT_REQUEST_TIMEOUT_MS = Number(process.env.TEXT_REQUEST_TIMEOUT_MS || 60000);
 export const IMAGE_REQUEST_TIMEOUT_MS = Number(process.env.IMAGE_REQUEST_TIMEOUT_MS || 120000);
