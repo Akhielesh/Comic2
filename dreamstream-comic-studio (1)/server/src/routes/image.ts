@@ -6,7 +6,7 @@ import { generateFluxImage } from '../ai/flux.js';
 
 export const imageRouter = Router();
 
-imageRouter.post('/gemini', checkLimits, async (req, res, next) => { // [NEW] checkLimits
+imageRouter.post('/gemini', checkLimits('gemini'), async (req, res, next) => { // [NEW] checkLimits
   try {
     const apiKey = requireGeminiKey(req, res);
     if (!apiKey) return;
@@ -27,7 +27,7 @@ imageRouter.post('/gemini', checkLimits, async (req, res, next) => { // [NEW] ch
   }
 });
 
-imageRouter.post('/flux', checkLimits, async (req, res, next) => { // [NEW] checkLimits
+imageRouter.post('/flux', checkLimits('pixazo'), async (req, res, next) => { // [NEW] checkLimits
   try {
     const apiKey = requirePixazoKey(req, res);
     if (!apiKey) return;
