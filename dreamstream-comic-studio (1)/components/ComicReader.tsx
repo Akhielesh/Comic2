@@ -1,29 +1,53 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Project, ComicPanel, DialogueBlock, TextLayout, ProjectComment } from '../types';
-import { AiAssistant } from './AiAssistant';
-import { X, MessageCircle, ChevronLeft, ChevronRight, Maximize2, Minimize2, BookOpen, MessageSquareText, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { CommentSection } from './CommentSection';
+import { X, ChevronLeft, ChevronRight, Maximize2, Minimize2, BookOpen, MessageSquareText, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { ensureDialogueBlocks } from '../services/dialogueUtils';
 import { loadReaderState, saveReaderState } from '../services/db';
+
+import { ReviewModal } from './modals/ReviewModal';
+import { submitReview } from '../services/db';
 
 interface ComicReaderProps {
   project: Project;
   onClose: () => void;
   onUpdateProject: (projectId: string, updates: Partial<Project> | ((prev: Project) => Partial<Project>)) => void;
+  isReadOnly?: boolean;
+  onNavigate?: (view: string, id?: string) => void;
 }
 
-export const ComicReader: React.FC<ComicReaderProps> = ({ project, onClose, onUpdateProject }) => {
-  const [showChat, setShowChat] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return window.innerWidth >= 768;
-  });
+export const ComicReader: React.FC<ComicReaderProps> = ({ project, onClose, onUpdateProject, isReadOnly = false, onNavigate }) => {
   const [showStory, setShowStory] = useState(false);
+  const [showInfo, setShowInfo] = useState(false);
   const [showComments, setShowComments] = useState(false);
+  const [showReviewModal, setShowReviewModal] = useState(false);
   const [readerMode, setReaderMode] = useState<'scroll' | 'flip'>('scroll');
+  // ... existing state ...
+
+  // Review Trigger Logic
+  const handleAttemptClose = () => {
+    // Only prompt for read-only (public) comics, and 30% chance, and ensure we haven't already reviewed (locally tracked for session)
+    // For MVP, just random check.
+    const shouldPrompt = isReadOnly && Math.random() < 0.3;
+
+    if (shouldPrompt) {
+      setShowReviewModal(true);
+    } else {
+      onClose();
+    }
+  };
+
+  const handleReviewSubmit = async (data: any) => {
+    await submitReview({
+      ...data,
+      projectId: project.id
+    });
+    onClose(); // Close after review
+  };
+
   const [pageIndex, setPageIndex] = useState(0);
   const [flipDirection, setFlipDirection] = useState<'next' | 'prev' | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [commentAuthor, setCommentAuthor] = useState('');
-  const [commentText, setCommentText] = useState('');
   const readerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const saveTimer = useRef<number | null>(null);
@@ -83,11 +107,10 @@ export const ComicReader: React.FC<ComicReaderProps> = ({ project, onClose, onUp
           {blocks.map(block => (
             <div
               key={block.id}
-              className={`max-w-[80%] px-3 py-2 rounded-lg border-2 border-black text-xs font-comic font-bold ${
-                block.side === 'right'
-                  ? 'ml-auto bg-brand-blue text-white'
-                  : 'bg-brand-yellow text-black'
-              }`}
+              className={`max-w-[80%] px-3 py-2 rounded-lg border-2 border-black text-xs font-comic font-bold ${block.side === 'right'
+                ? 'ml-auto bg-brand-blue text-white'
+                : 'bg-brand-yellow text-black'
+                }`}
             >
               {block.speaker ? <span className="mr-1">{block.speaker}:</span> : null}
               {block.text}
@@ -103,13 +126,12 @@ export const ComicReader: React.FC<ComicReaderProps> = ({ project, onClose, onUp
           {blocks.map((block, idx) => (
             <div
               key={block.id}
-              className={`absolute text-[11px] font-comic font-bold bg-white/90 border-2 border-black px-2 py-1 rounded ${
-                block.side === 'right'
-                  ? 'top-2 right-2'
-                  : block.side === 'center'
+              className={`absolute text-[11px] font-comic font-bold bg-white/90 border-2 border-black px-2 py-1 rounded ${block.side === 'right'
+                ? 'top-2 right-2'
+                : block.side === 'center'
                   ? 'top-2 left-1/2 -translate-x-1/2'
                   : 'top-2 left-2'
-              }`}
+                }`}
               style={{ top: `${8 + idx * 32}px` }}
             >
               {block.speaker ? <span className="mr-1">{block.speaker}:</span> : null}
@@ -128,7 +150,7 @@ export const ComicReader: React.FC<ComicReaderProps> = ({ project, onClose, onUp
   };
 
   const getLayoutClass = () => {
-    switch(project.state.layoutType) {
+    switch (project.state.layoutType) {
       case 'webtoon': return 'flex flex-col items-center gap-4';
       case 'strip': return 'flex flex-col gap-2';
       case 'graphic_novel': return 'grid grid-cols-3 gap-4 auto-rows-fr';
@@ -222,46 +244,33 @@ export const ComicReader: React.FC<ComicReaderProps> = ({ project, onClose, onUp
     }
   };
 
-  const handleAddComment = () => {
-    const trimmed = commentText.trim();
-    if (!trimmed) return;
-    const newComment: ProjectComment = {
-      id: crypto.randomUUID(),
-      author: commentAuthor.trim() || undefined,
-      text: trimmed,
-      createdAt: Date.now(),
-      likes: 0,
-      dislikes: 0
-    };
-    onUpdateProject(project.id, (prev) => ({
-      state: { ...prev.state, comments: [...(prev.state.comments || []), newComment] }
-    }));
-    setCommentText('');
-    setCommentAuthor('');
-  };
-
-  const handleVote = (commentId: string, deltaLikes: number, deltaDislikes: number) => {
-    onUpdateProject(project.id, (prev) => ({
-      state: {
-        ...prev.state,
-        comments: (prev.state.comments || []).map((comment) => {
-          if (comment.id !== commentId) return comment;
-          return {
-            ...comment,
-            likes: Math.max(0, (comment.likes || 0) + deltaLikes),
-            dislikes: Math.max(0, (comment.dislikes || 0) + deltaDislikes)
-          };
-        })
-      }
-    }));
-  };
-
   return (
     <div ref={readerRef} className="fixed inset-0 z-50 bg-slate-100 overflow-hidden flex flex-col">
       {/* Reader Header */}
       <header className="h-16 bg-white border-b-4 border-black flex items-center justify-between px-6 shadow-lg shrink-0">
-        <h1 className="font-display text-2xl text-black truncate">{project.name}</h1>
+        <div className="flex items-center gap-3 min-w-0">
+          <button
+            onClick={() => onNavigate?.('home')}
+            className="w-9 h-9 bg-brand-yellow border-2 border-black rounded-md font-display text-lg leading-none"
+            title="Go Home"
+          >
+            D
+          </button>
+          <h1 className="font-display text-2xl text-black truncate">{project.name}</h1>
+        </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => onNavigate?.('gallery')}
+            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50"
+          >
+            Library
+          </button>
+          <button
+            onClick={() => onNavigate?.('dashboard')}
+            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50"
+          >
+            Dashboard
+          </button>
           <button
             onClick={() => setShowStory((prev) => !prev)}
             className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50 flex items-center gap-1"
@@ -269,11 +278,19 @@ export const ComicReader: React.FC<ComicReaderProps> = ({ project, onClose, onUp
             <BookOpen className="w-4 h-4" /> Story
           </button>
           <button
-            onClick={() => setShowComments((prev) => !prev)}
-            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50 flex items-center gap-1"
+            onClick={() => setShowInfo((prev) => !prev)}
+            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50"
           >
-            <MessageSquareText className="w-4 h-4" /> Comments
+            Info
           </button>
+          {!isReadOnly && (
+            <button
+              onClick={() => setShowComments((prev) => !prev)}
+              className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50 flex items-center gap-1"
+            >
+              <MessageSquareText className="w-4 h-4" /> Comments
+            </button>
+          )}
           <button
             onClick={() => setReaderMode(readerMode === 'scroll' ? 'flip' : 'scroll')}
             className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-brand-yellow"
@@ -287,11 +304,11 @@ export const ComicReader: React.FC<ComicReaderProps> = ({ project, onClose, onUp
             {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
             {isFullscreen ? 'Exit' : 'Full'}
           </button>
-          <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
-              <X className="w-6 h-6" />
+          <button onClick={handleAttemptClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+            <X className="w-6 h-6" />
           </button>
         </div>
-      </header>
+      </header >
 
       <div className="flex-1 flex overflow-hidden">
         {/* Main Comic Area */}
@@ -368,80 +385,57 @@ export const ComicReader: React.FC<ComicReaderProps> = ({ project, onClose, onUp
           )}
         </div>
 
-        {/* Sidebar (Chat) */}
-        <div className={`
-            fixed md:relative inset-y-0 right-0 w-full md:w-auto bg-white border-l-4 border-black transform transition-transform duration-300 z-40 overflow-visible
-            ${showChat ? 'translate-x-0' : 'translate-x-full md:translate-x-0 md:w-0 md:border-none'}
-        `}>
-            <div className="h-full w-full md:w-auto border-l-4 border-black md:border-none overflow-visible">
-                 <AiAssistant script={project.state.script} />
+        {showInfo && (
+          <aside className="w-full md:w-80 border-l-4 border-black bg-white p-4 overflow-y-auto">
+            <h2 className="font-display text-xl mb-3">Comic Info</h2>
+            <div className="space-y-3 text-sm">
+              <div>
+                <div className="text-xs uppercase font-bold text-slate-500">Title</div>
+                <div className="font-semibold">{project.name}</div>
+              </div>
+              <div>
+                <div className="text-xs uppercase font-bold text-slate-500">Author</div>
+                <div>{project.authorName || 'Unknown creator'}</div>
+              </div>
+              <div>
+                <div className="text-xs uppercase font-bold text-slate-500">Overview</div>
+                <p className="text-slate-700 whitespace-pre-wrap">{project.state.overview || 'No overview added yet.'}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="border border-slate-200 rounded p-2">
+                  <div className="text-xs uppercase font-bold text-slate-500">Panels</div>
+                  <div>{project.state.panels.length}</div>
+                </div>
+                <div className="border border-slate-200 rounded p-2">
+                  <div className="text-xs uppercase font-bold text-slate-500">Layout</div>
+                  <div>{project.state.layoutType || 'grid'}</div>
+                </div>
+              </div>
             </div>
-             {/* Mobile Close Chat */}
-            <button onClick={() => setShowChat(false)} className="absolute top-4 right-4 md:hidden p-2 bg-black text-white rounded-full">
-                <X size={20}/>
-            </button>
-        </div>
+          </aside>
+        )}
       </div>
 
       {showComments && (
         <div className="fixed inset-y-0 left-0 w-full md:w-96 bg-white border-r-4 border-black z-50 shadow-comic flex flex-col">
-          <div className="p-4 border-b-4 border-black flex items-center justify-between">
+          <div className="p-4 border-b-4 border-black flex items-center justify-between bg-white shrink-0">
             <div className="font-display text-xl">Comments</div>
             <button onClick={() => setShowComments(false)} className="p-2 rounded-full hover:bg-slate-100">
               <X className="w-5 h-5" />
             </button>
           </div>
-          <div className="flex-1 overflow-y-auto p-4 space-y-3">
-            {(project.state.comments || []).length === 0 && (
-              <div className="text-sm font-comic text-slate-500">No comments yet. Be the first!</div>
-            )}
-            {(project.state.comments || []).map((comment) => (
-              <div key={comment.id} className="border-2 border-black rounded-lg p-3 bg-slate-50">
-                <div className="flex items-center justify-between text-xs font-bold text-slate-500">
-                  <div>{comment.author || "Anonymous"}</div>
-                  <div>{new Date(comment.createdAt).toLocaleDateString()}</div>
-                </div>
-                <div className="mt-2 text-sm font-comic text-black">{comment.text}</div>
-                <div className="mt-3 flex items-center gap-3 text-xs font-bold">
-                  <button onClick={() => handleVote(comment.id, 1, 0)} className="flex items-center gap-1">
-                    <ThumbsUp className="w-4 h-4" /> {comment.likes || 0}
-                  </button>
-                  <button onClick={() => handleVote(comment.id, 0, 1)} className="flex items-center gap-1">
-                    <ThumbsDown className="w-4 h-4" /> {comment.dislikes || 0}
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="p-4 border-t-4 border-black space-y-2">
-            <input
-              value={commentAuthor}
-              onChange={(e) => setCommentAuthor(e.target.value)}
-              placeholder="Your name (optional)"
-              className="w-full border-2 border-black rounded px-3 py-2 text-xs"
-            />
-            <textarea
-              value={commentText}
-              onChange={(e) => setCommentText(e.target.value)}
-              placeholder="Write a comment..."
-              className="w-full border-2 border-black rounded px-3 py-2 text-sm min-h-[80px]"
-            />
-            <div className="flex justify-end">
-              <button onClick={handleAddComment} className="px-3 py-2 border-2 border-black rounded-lg text-xs font-bold bg-brand-yellow">
-                Post Comment
-              </button>
-            </div>
+          <div className="flex-1 overflow-y-auto bg-slate-50">
+            <CommentSection projectId={project.id} onNavigate={onNavigate} />
           </div>
         </div>
       )}
-
-      {/* Floating Chat Toggle for Mobile/Tablet */}
-      <button 
-        onClick={() => setShowChat(!showChat)}
-        className="md:hidden fixed bottom-6 right-6 w-14 h-14 bg-brand-yellow border-4 border-black rounded-full flex items-center justify-center shadow-comic z-50"
-      >
-        <MessageCircle className="w-8 h-8 text-black" />
-      </button>
-    </div>
+      {/* Review Modal */}
+      <ReviewModal
+        isOpen={showReviewModal}
+        onClose={onClose} // If they skip/close modal, we just close the reader
+        onSubmit={handleReviewSubmit}
+        projectName={project.name}
+      />
+    </div >
   );
 };

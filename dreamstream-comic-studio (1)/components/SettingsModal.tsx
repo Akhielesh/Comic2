@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from "react";
+import { supabase } from "../services/supabase";
+import { encryptKey } from "../services/crypto";
 import { X, Eye, EyeOff, Copy, ChevronDown, ChevronUp, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { Button } from "./Button";
 import { FluxKeyInput } from "./FluxKeyInput";
+import { KeyManager } from "./KeyManager";
 import { IMAGE_MODELS } from "../services/imageModels";
 import { clearImageCache, getDbStats } from "../services/db";
 import { getFluxKeyInfo, getSettingsState, setSettingsState } from "../services/appSettings";
@@ -10,6 +13,7 @@ import { getDebugState, subscribeDebugState } from "../services/debugStore";
 interface SettingsModalProps {
   onClose: () => void;
   onReloadProjects: () => void;
+  onUpdateSettings?: () => void;
 }
 
 const COMING_SOON_MODELS = [
@@ -27,11 +31,9 @@ const FEATURE_ROUTING = [
   { id: "image_generation", label: "Image Generation" }
 ];
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadProjects }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadProjects, onUpdateSettings }) => {
   const [dbStats, setDbStats] = useState<Awaited<ReturnType<typeof getDbStats>> | null>(null);
   const [settings, setSettings] = useState(() => getSettingsState());
-  const [geminiKey, setGeminiKey] = useState<string | null>(null);
-  const [geminiKeyInput, setGeminiKeyInput] = useState("");
   const [fluxKey, setFluxKey] = useState<string | null>(null);
   const [sectionsOpen, setSectionsOpen] = useState({
     keys: true,
@@ -39,20 +41,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadP
     routing: false,
     storage: false
   });
-  const [showFluxInput, setShowFluxInput] = useState(false);
-  const [showGeminiInput, setShowGeminiInput] = useState(false);
   const [debugState, setDebugState] = useState(getDebugState());
-
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem("dreamstream_api_key");
-      if (stored) setGeminiKey(stored);
-    } catch {
-      setGeminiKey(null);
-    }
-    const fluxInfo = getFluxKeyInfo();
-    setFluxKey(fluxInfo.key);
-  }, []);
 
   useEffect(() => {
     getDbStats().then(setDbStats).catch(() => setDbStats(null));
@@ -62,46 +51,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadP
     return subscribeDebugState(setDebugState);
   }, []);
 
+
   const toggleSetting = (key: "showGeminiKey" | "showFluxKey") => {
     const next = { ...settings, [key]: !settings[key] };
     setSettings(next);
     setSettingsState(next);
+    if (onUpdateSettings) onUpdateSettings();
   };
 
-  const handleSaveGemini = () => {
-    const trimmed = geminiKeyInput.trim();
-    if (!trimmed) return;
-    try {
-      localStorage.setItem("dreamstream_api_key", trimmed);
-      setGeminiKey(trimmed);
-      setGeminiKeyInput("");
-    } catch {
-      // ignore
-    }
-  };
 
-  const handleClearGemini = () => {
-    try {
-      localStorage.removeItem("dreamstream_api_key");
-      setGeminiKey(null);
-    } catch {
-      // ignore
-    }
-  };
-
-  const handleCopy = async (value: string | null) => {
-    if (!value) return;
-    try {
-      await navigator.clipboard.writeText(value);
-    } catch {
-      // ignore
-    }
-  };
 
   const fluxDebug = debugState.flux;
   const geminiDebug = debugState.gemini;
   const fluxStatus = fluxKey ? "Ready" : "Missing";
-  const geminiStatus = geminiKey ? "Ready" : "Missing";
 
   const SectionHeader = ({ title, sectionKey }: { title: string; sectionKey: keyof typeof sectionsOpen }) => (
     <button
@@ -125,105 +87,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadP
 
         <div className="p-6 space-y-6">
           <section className="space-y-3">
-            <SectionHeader title="API Keys" sectionKey="keys" />
+            {/* RENAMED SECTION FOR VISIBILITY */}
+            <SectionHeader title="API Keys & Models" sectionKey="keys" />
             {sectionsOpen.keys && (
-              <div className="space-y-4">
-                <div className="bg-white border-2 border-black rounded-lg p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="text-xs font-bold uppercase">Pixazo Flux Schnell</div>
-                    <div className="flex items-center gap-2 text-xs font-bold">
-                      {fluxKey ? <CheckCircle2 className="w-4 h-4 text-green-600" /> : <AlertTriangle className="w-4 h-4 text-red-500" />}
-                      {fluxStatus}
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between text-[11px] font-mono text-slate-600">
-                    <span>Key: {settings.showFluxKey && fluxKey ? fluxKey : fluxKey ? `••••${fluxKey.slice(-4)}` : "none"}</span>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => toggleSetting("showFluxKey")}
-                        className="text-xs font-bold flex items-center gap-1"
-                      >
-                        {settings.showFluxKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        {settings.showFluxKey ? "Hide" : "Show"}
-                      </button>
-                      <button
-                        onClick={() => handleCopy(fluxKey)}
-                        className="text-xs font-bold flex items-center gap-1"
-                      >
-                        <Copy className="w-3 h-3" /> Copy
-                      </button>
-                      <button
-                        onClick={() => setShowFluxInput((prev) => !prev)}
-                        className="text-xs font-bold underline"
-                      >
-                        {showFluxInput ? "Close" : fluxKey ? "Change Key" : "Add Key"}
-                      </button>
-                    </div>
-                  </div>
-                  {fluxDebug?.lastError && (
-                    <div className="text-[11px] text-red-600 font-mono">Last error: {String(fluxDebug.lastError).slice(0, 140)}</div>
-                  )}
-                  {showFluxInput && (
-                    <FluxKeyInput
-                      compact
-                      onStatusChange={() => {
-                        const info = getFluxKeyInfo();
-                        setFluxKey(info.key);
-                      }}
-                    />
-                  )}
+              <div className="space-y-4 animate-fade-in">
+                <div className="flex justify-end px-1">
+                  <a href="/docs/setup_keys.md" target="_blank" className="text-[11px] font-bold text-blue-600 underline hover:text-blue-800">
+                    Need help getting keys?
+                  </a>
                 </div>
 
-                <div className="bg-white border-2 border-black rounded-lg p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="text-xs font-bold uppercase">Gemini API Key</div>
-                    <div className="flex items-center gap-2 text-xs font-bold">
-                      {geminiKey ? <CheckCircle2 className="w-4 h-4 text-green-600" /> : <AlertTriangle className="w-4 h-4 text-red-500" />}
-                      {geminiStatus}
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between text-[11px] font-mono text-slate-600">
-                    <span>Key: {settings.showGeminiKey && geminiKey ? geminiKey : geminiKey ? `••••${geminiKey.slice(-4)}` : "none"}</span>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => toggleSetting("showGeminiKey")}
-                        className="text-xs font-bold flex items-center gap-1"
-                      >
-                        {settings.showGeminiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        {settings.showGeminiKey ? "Hide" : "Show"}
-                      </button>
-                      <button
-                        onClick={() => handleCopy(geminiKey)}
-                        className="text-xs font-bold flex items-center gap-1"
-                      >
-                        <Copy className="w-3 h-3" /> Copy
-                      </button>
-                      <button
-                        onClick={() => setShowGeminiInput((prev) => !prev)}
-                        className="text-xs font-bold underline"
-                      >
-                        {showGeminiInput ? "Close" : geminiKey ? "Change Key" : "Add Key"}
-                      </button>
-                    </div>
-                  </div>
-                  {geminiDebug?.lastError && (
-                    <div className="text-[11px] text-red-600 font-mono">Last error: {String(geminiDebug.lastError).slice(0, 140)}</div>
-                  )}
-                  {showGeminiInput && (
-                    <div className="space-y-2">
-                      <input
-                        type={settings.showGeminiKey ? "text" : "password"}
-                        value={geminiKeyInput}
-                        onChange={(e) => setGeminiKeyInput(e.target.value)}
-                        placeholder="Paste Gemini key"
-                        className="w-full border-2 border-black rounded px-3 py-2 text-sm"
-                      />
-                      <div className="flex gap-2">
-                        <Button size="sm" onClick={handleSaveGemini}>Save</Button>
-                        <Button size="sm" variant="secondary" onClick={handleClearGemini}>Clear</Button>
-                      </div>
-                    </div>
-                  )}
+                {/* New Key Manager for Model-Specific Keys */}
+                <div className="pt-2">
+                  <KeyManager />
                 </div>
               </div>
             )}
@@ -232,17 +108,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadP
           <section className="space-y-3">
             <SectionHeader title="Image Models" sectionKey="models" />
             {sectionsOpen.models && (
-              <div className="grid md:grid-cols-2 gap-3">
-                {IMAGE_MODELS.map((model) => (
-                  <div key={model.id} className="border-2 border-black rounded-lg p-3 bg-slate-50">
-                    <div className="text-sm font-bold">{model.label}</div>
-                    <div className="text-[11px] text-slate-500">{model.id}</div>
-                  </div>
-                ))}
-                {COMING_SOON_MODELS.map((name) => (
-                  <div key={name} className="border-2 border-black rounded-lg p-3 bg-white/60 opacity-70">
-                    <div className="text-sm font-bold">{name}</div>
-                    <div className="text-[11px] text-slate-500">Coming soon</div>
+              <div className="grid md:grid-cols-2 gap-3 animate-fade-in">
+                {IMAGE_MODELS.map(model => (
+                  <div
+                    key={model.id}
+                    onClick={() => {
+                      const next = { ...settings, defaultImageModel: model.id };
+                      setSettings(next);
+                      setSettingsState(next);
+                      if (onUpdateSettings) onUpdateSettings();
+                    }}
+                    className={`p-3 border-2 rounded-lg cursor-pointer transition-all ${settings.defaultImageModel === model.id ? 'border-brand-blue bg-brand-blue/20 ring-2 ring-brand-blue/50' : 'border-slate-200 hover:border-black'}`}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${(settings.defaultImageModel || IMAGE_MODELS[0].id) === model.id ? 'border-brand-blue bg-brand-blue' : 'border-slate-300'}`}>
+                        {(settings.defaultImageModel || IMAGE_MODELS[0].id) === model.id && <div className="w-2 h-2 bg-white rounded-full" />}
+                      </div>
+                      <div className="font-bold text-sm">{model.label}</div>
+                    </div>
+                    <div className="text-xs text-slate-500 ml-6">
+                      {model.provider === 'flux' ? 'Fast generation, good for styles.' : 'High detail, follows complex prompts.'}
+                      {model.isFree && <span className="ml-2 text-green-600 font-bold">FREE</span>}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -250,17 +137,41 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadP
           </section>
 
           <section className="space-y-3">
-            <SectionHeader title="Model Routing (Coming Soon)" sectionKey="routing" />
+            <SectionHeader title="Model Routing" sectionKey="routing" />
             {sectionsOpen.routing && (
-              <div className="grid md:grid-cols-2 gap-3">
-                {FEATURE_ROUTING.map((feature) => (
-                  <div key={feature.id} className="border-2 border-black rounded-lg p-3 bg-slate-50">
-                    <div className="text-xs font-bold uppercase">{feature.label}</div>
-                    <select disabled className="mt-2 w-full border-2 border-black rounded px-3 py-2 text-sm opacity-70">
-                      <option>Coming soon</option>
+              <div className="space-y-3 animate-fade-in">
+                <div className="p-4 bg-slate-50 border-2 border-slate-200 rounded-lg">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-bold text-sm">Cover Art</span>
+                    <select
+                      value={settings.modelRouting?.cover || settings.defaultImageModel || IMAGE_MODELS[0].id}
+                      onChange={(e) => {
+                        const next = { ...settings, modelRouting: { ...(settings.modelRouting || {}), cover: e.target.value } };
+                        setSettings(next);
+                        setSettingsState(next);
+                        if (onUpdateSettings) onUpdateSettings();
+                      }}
+                      className="text-xs border-2 border-slate-300 rounded px-2 py-1 bg-white"
+                    >
+                      {IMAGE_MODELS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
                     </select>
                   </div>
-                ))}
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-sm">Panels</span>
+                    <select
+                      value={settings.modelRouting?.panel || settings.defaultImageModel || IMAGE_MODELS[0].id}
+                      onChange={(e) => {
+                        const next = { ...settings, modelRouting: { ...(settings.modelRouting || {}), panel: e.target.value } };
+                        setSettings(next);
+                        setSettingsState(next);
+                        if (onUpdateSettings) onUpdateSettings();
+                      }}
+                      className="text-xs border-2 border-slate-300 rounded px-2 py-1 bg-white"
+                    >
+                      {IMAGE_MODELS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+                    </select>
+                  </div>
+                </div>
               </div>
             )}
           </section>
@@ -297,6 +208,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadP
                     Storage: {dbStats.storage.usage ?? 0} / {dbStats.storage.quota ?? 0} bytes
                   </div>
                 )}
+
+                <div className="mt-4 pt-4 border-t-2 border-slate-200">
+                  <h4 className="text-xs font-bold uppercase mb-2 text-slate-500">Legacy Data</h4>
+                  <div className="flex items-center justify-between bg-yellow-50 p-3 rounded-lg border-2 border-yellow-200">
+                    <div className="text-xs text-yellow-800">
+                      Missing your old projects? They are still on this device.
+                    </div>
+                    <Button size="sm" onClick={async () => {
+                      if (!confirm("This will upload all local projects to your cloud account. Continue?")) return;
+                      try {
+                        const { migrateLegacyData } = await import("../services/db");
+                        const result = await migrateLegacyData();
+                        alert(`Migration Complete! Moved ${result.projects} projects.`);
+                        onReloadProjects();
+                      } catch (e) {
+                        alert("Migration failed. See console for details.");
+                      }
+                    }}>
+                      Migrate Local Data
+                    </Button>
+                  </div>
+                </div>
               </>
             )}
           </section>

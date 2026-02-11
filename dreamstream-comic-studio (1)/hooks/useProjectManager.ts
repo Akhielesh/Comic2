@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef } from 'react';
-import { Project, ComicState, AppStep, ComicPanel, Character, Item, Location, StyleVariant, ChatMessage } from '../types';
+import { Project, ComicState, AppStep, ComicPanel, Character, Item, Location, StyleVariant } from '../types';
 import { startBackgroundGeneration, cancelGeneration } from '../services/generationManager';
 import { DEFAULT_PRICING_CONFIG } from '../services/pricingConfig';
-import { loadProjects, saveProject, deleteProject as deleteProjectRecord, saveImage, getImageUrl } from '../services/db';
+import { buildDefaultContinuityState, validateContinuityState } from '../services/continuity';
+import { createGenerationNotification, loadProjects, saveProject, deleteProject as deleteProjectRecord, saveImage, getImageUrl } from '../services/db';
 
 const STORAGE_KEY = 'dreamstream_projects';
 const SAVE_DEBOUNCE_MS = 500;
-const FLOW_VERSION = 2;
+const FLOW_VERSION = 3;
 
 const remapStep = (step: number) => {
   if (step === 2) return 3;
@@ -14,19 +15,15 @@ const remapStep = (step: number) => {
   return step;
 };
 
-const normalizeChatMessages = (messages: ChatMessage[] = []) => {
-  return messages.map((msg) => ({
-    id: msg.id || crypto.randomUUID(),
-    role: msg.role,
-    text: msg.text,
-    timestamp: msg.timestamp || Date.now()
-  }));
-};
-
 const applyStateMigrations = (state: ComicState): ComicState => {
   const flowVersion = state.flowVersion ?? 1;
   const nextStep = flowVersion === FLOW_VERSION ? state.step : remapStep(state.step);
   const nextMax = flowVersion === FLOW_VERSION ? state.maxStepReached : remapStep(state.maxStepReached);
+  const nextContinuity = state.continuity || buildDefaultContinuityState(state);
+  const nextValidation = validateContinuityState({
+    ...state,
+    continuity: nextContinuity
+  });
   return {
     ...state,
     step: nextStep,
@@ -39,10 +36,51 @@ const applyStateMigrations = (state: ComicState): ComicState => {
     customAspectRatioEnabled: state.customAspectRatioEnabled ?? false,
     customAspectRatio: state.customAspectRatio,
     scriptChecklist: state.scriptChecklist,
-    assistantChat: normalizeChatMessages(state.assistantChat || []),
     imageTags: state.imageTags || {},
-    imageTagCounters: state.imageTagCounters || {}
+    imageTagCounters: state.imageTagCounters || {},
+    continuity: {
+      ...nextContinuity,
+      lockLevel: 'strict',
+      fallbackPolicy: 'auto',
+      validation: nextValidation
+    }
   };
+};
+
+const hasLegacyStepShift = (state: ComicState): boolean => {
+  const isLegacyFlow = (state.flowVersion ?? 1) < FLOW_VERSION;
+  return (
+    isLegacyFlow &&
+    typeof state.coverTemplateId === 'undefined' &&
+    state.step >= 2 &&
+    (state.characters.length > 0 ||
+      state.items.length > 0 ||
+      state.locations.length > 0 ||
+      state.panels.length > 0 ||
+      state.layoutType !== 'grid')
+  );
+};
+
+const migrateHydratedCoverAndFlowState = async (
+  state: ComicState,
+  overrides: Partial<ComicState> = {}
+): Promise<ComicState> => {
+  const coverImageUrl = state.coverImageId ? await getImageUrl(state.coverImageId) : state.coverImageUrl;
+  const coverTemplateImageUrl = state.coverTemplateImageId
+    ? await getImageUrl(state.coverTemplateImageId)
+    : state.coverTemplateImageUrl;
+  const needsStepShift = hasLegacyStepShift(state);
+
+  return applyStateMigrations({
+    ...state,
+    ...overrides,
+    coverImageUrl,
+    coverTemplateImageUrl,
+    step: needsStepShift ? state.step + 1 : state.step,
+    maxStepReached: needsStepShift ? state.maxStepReached + 1 : state.maxStepReached,
+    textLayout: state.textLayout || 'caption',
+    pricingConfig: state.pricingConfig || structuredClone(DEFAULT_PRICING_CONFIG),
+  });
 };
 
 const INITIAL_STATE: ComicState = {
@@ -53,6 +91,23 @@ const INITIAL_STATE: ComicState = {
     scriptChecklist: undefined,
     scenes: [],
     continuitySummary: '',
+    continuity: {
+      bible: {
+        version: 1,
+        entities: [],
+        sceneBindings: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      },
+      lockLevel: 'strict',
+      fallbackPolicy: 'auto',
+      validation: {
+        isValid: true,
+        missingEntityIds: [],
+        issues: [],
+        updatedAt: Date.now()
+      }
+    },
     overview: '',
     comments: [],
     storyBuilder: undefined,
@@ -65,7 +120,6 @@ const INITIAL_STATE: ComicState = {
     coverTemplateImageUrl: undefined,
     textLayout: 'caption',
     pricingConfig: structuredClone(DEFAULT_PRICING_CONFIG),
-    assistantChat: [],
     imageTags: {},
     imageTagCounters: {},
     styleVariants: [],
@@ -137,40 +191,12 @@ export const useProjectManager = () => {
       const items = await Promise.all(project.state.items.map(hydrateEntity));
       const locations = await Promise.all(project.state.locations.map(hydrateEntity));
       const styleVariants = await Promise.all(project.state.styleVariants.map(hydrateVariant));
-      const coverImageUrl = project.state.coverImageId
-        ? await getImageUrl(project.state.coverImageId)
-        : project.state.coverImageUrl;
-      const coverTemplateImageUrl = project.state.coverTemplateImageId
-        ? await getImageUrl(project.state.coverTemplateImageId)
-        : project.state.coverTemplateImageUrl;
-
-      const isLegacyFlow = (project.state.flowVersion ?? 1) < FLOW_VERSION;
-      const needsStepShift =
-        isLegacyFlow &&
-        typeof project.state.coverTemplateId === 'undefined' &&
-        project.state.step >= 2 &&
-        (project.state.characters.length > 0 ||
-          project.state.items.length > 0 ||
-          project.state.locations.length > 0 ||
-          project.state.panels.length > 0 ||
-          project.state.layoutType !== 'grid');
-
-      const step = needsStepShift ? project.state.step + 1 : project.state.step;
-      const maxStepReached = needsStepShift ? project.state.maxStepReached + 1 : project.state.maxStepReached;
-
-      const migratedState = applyStateMigrations({
-        ...project.state,
+      const migratedState = await migrateHydratedCoverAndFlowState(project.state, {
         panels,
         characters,
         items,
         locations,
         styleVariants,
-        coverImageUrl,
-        coverTemplateImageUrl,
-        step,
-        maxStepReached,
-        textLayout: project.state.textLayout || 'caption',
-        pricingConfig: project.state.pricingConfig || structuredClone(DEFAULT_PRICING_CONFIG),
       });
 
       return {
@@ -180,36 +206,7 @@ export const useProjectManager = () => {
   };
 
   const hydrateProjectCover = async (project: Project): Promise<Project> => {
-      const coverImageUrl = project.state.coverImageId
-        ? await getImageUrl(project.state.coverImageId)
-        : project.state.coverImageUrl;
-      const coverTemplateImageUrl = project.state.coverTemplateImageId
-        ? await getImageUrl(project.state.coverTemplateImageId)
-        : project.state.coverTemplateImageUrl;
-
-      const isLegacyFlow = (project.state.flowVersion ?? 1) < FLOW_VERSION;
-      const needsStepShift =
-        isLegacyFlow &&
-        typeof project.state.coverTemplateId === 'undefined' &&
-        project.state.step >= 2 &&
-        (project.state.characters.length > 0 ||
-          project.state.items.length > 0 ||
-          project.state.locations.length > 0 ||
-          project.state.panels.length > 0 ||
-          project.state.layoutType !== 'grid');
-
-      const step = needsStepShift ? project.state.step + 1 : project.state.step;
-      const maxStepReached = needsStepShift ? project.state.maxStepReached + 1 : project.state.maxStepReached;
-
-      const migratedState = applyStateMigrations({
-        ...project.state,
-        coverImageUrl,
-        coverTemplateImageUrl,
-        step,
-        maxStepReached,
-        textLayout: project.state.textLayout || 'caption',
-        pricingConfig: project.state.pricingConfig || structuredClone(DEFAULT_PRICING_CONFIG),
-      });
+      const migratedState = await migrateHydratedCoverAndFlowState(project.state);
 
       return {
         ...project,
@@ -427,8 +424,7 @@ export const useProjectManager = () => {
         project,
         updateProject, // Pass the updater
         (pid, panels) => {
-             // On Complete
-             // Optionally trigger sound here if valid context, or handle in UI
+             void createGenerationNotification(pid, project.name);
         }
     );
   };

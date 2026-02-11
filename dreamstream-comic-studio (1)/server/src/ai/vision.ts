@@ -5,6 +5,11 @@ import { buildUsage } from './usage.js';
 import { TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS } from '../config.js';
 import { withRetry, withTimeout } from './utils.js';
 
+const resolveTextModel = (modelOverride?: string) => {
+  const candidate = modelOverride?.trim();
+  return candidate || TEXT_MODEL;
+};
+
 const fileToGenerativePart = (dataUrl: string, fallbackMime: string) => {
   const match = dataUrl.match(/^data:(.*?);base64,/);
   return {
@@ -15,15 +20,16 @@ const fileToGenerativePart = (dataUrl: string, fallbackMime: string) => {
   };
 };
 
-export const analyzeLayoutFromImages = async (apiKey: string, images: string[]): Promise<LayoutAnalysisResponse> => {
+export const analyzeLayoutFromImages = async (apiKey: string, images: string[], modelOverride?: string): Promise<LayoutAnalysisResponse> => {
   const ai = createClient(apiKey);
+  const model = resolveTextModel(modelOverride);
   const imageParts = images.map((img) => fileToGenerativePart(img, 'image/jpeg'));
   const prompt = 'Analyze these images of comic book pages. Describe the panel layout verbally in a single sentence. This description will be used as a creative brief for a comic generation AI. Example: \'A large horizontal panel at the top, with two smaller square panels underneath it.\'';
 
   const response = await withRetry(
     () => withTimeout(
       ai.models.generateContent({
-        model: TEXT_MODEL,
+        model,
         contents: [
           {
             role: 'user',
@@ -48,6 +54,6 @@ export const analyzeLayoutFromImages = async (apiKey: string, images: string[]):
     prompt,
     responseText,
     usage: buildUsage(prompt, responseText, response.usageMetadata),
-    model: TEXT_MODEL
+    model
   };
 };

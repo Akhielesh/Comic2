@@ -1,42 +1,74 @@
 
-import React, { useState, useEffect } from 'react';
-import { ProjectDashboard } from './components/ProjectDashboard';
+import React, { useState, useEffect, Suspense } from 'react';
+import { Header } from './components/Header';
 import { HomePage } from './components/HomePage';
-import { ComicEditor } from './components/ComicEditor';
-import { ComicReader } from './components/ComicReader';
-import { MasterAssistant } from './components/MasterAssistant';
+// Lazy Load Heavy Components
+const ProjectDashboard = React.lazy(() => import('./components/ProjectDashboard').then(module => ({ default: module.ProjectDashboard })));
+const ComicEditor = React.lazy(() => import('./components/ComicEditor').then(module => ({ default: module.ComicEditor })));
+const ComicReader = React.lazy(() => import('./components/ComicReader').then(module => ({ default: module.ComicReader })));
+const TestLab = React.lazy(() => import('./components/TestLab').then(module => ({ default: module.TestLab })));
+const LearnHub = React.lazy(() => import('./components/LearnHub').then(module => ({ default: module.LearnHub })));
+const PublicGallery = React.lazy(() => import('./components/PublicGallery').then(module => ({ default: module.PublicGallery })));
+const PublicProfile = React.lazy(() => import('./components/PublicProfile').then(module => ({ default: module.PublicProfile })));
+const AccountSettings = React.lazy(() => import('./components/AccountSettings').then(module => ({ default: module.AccountSettings })));
+const PrivacyPolicy = React.lazy(() => import('./components/PrivacyPolicy').then(module => ({ default: module.PrivacyPolicy })));
+const TermsOfService = React.lazy(() => import('./components/TermsOfService').then(module => ({ default: module.TermsOfService })));
+
 import { ModelSelector } from './components/ModelSelector';
 import { FluxKeyInput } from './components/FluxKeyInput';
-import { SettingsModal } from './components/SettingsModal';
-import { TestLab } from './components/TestLab';
-import { LearnHub } from './components/LearnHub';
 import { useProjectManager } from './hooks/useProjectManager';
-import { checkSystemStatus } from './services/geminiService';
+import { checkSystemDiagnostics, checkSystemStatus } from './services/geminiService';
 import { getFluxKeyInfo, getImageProvider, getLockedImageProvider } from './services/appSettings';
+import { useAuth } from './contexts/AuthContext';
+import { AuthPage } from './components/AuthPage';
+import { getPublicProject, incrementViewCount, incrementLikeCount } from './services/db';
+import { Project } from './types';
 import { Key, Zap, Loader2 } from 'lucide-react';
-import { SystemStatusResponse } from './apiTypes';
+import { SystemDiagnosticsResponse, SystemStatusResponse } from './apiTypes';
+import { UserAvatar } from './components/UserAvatar';
+import { ErrorBoundary } from './components/common/ErrorBoundary';
+
+type AppView =
+  | 'home'
+  | 'auth'
+  | 'dashboard'
+  | 'editor'
+  | 'reader'
+  | 'test'
+  | 'learn'
+  | 'gallery'
+  | 'settings'
+  | 'privacy'
+  | 'terms'
+  | 'profile';
 
 const App: React.FC = () => {
+  const { user, loading: authLoading } = useAuth();
   const { projects, createProject, updateProject, deleteProject, duplicateProject, getProject, startGeneration, stopGeneration, reloadProjects, hydrateProjectAssets } = useProjectManager();
   const [hasValidKey, setHasValidKey] = useState(false);
   const [isCheckingKey, setIsCheckingKey] = useState(true);
   const [localKeyInput, setLocalKeyInput] = useState('');
   const [storedKeySuffix, setStoredKeySuffix] = useState<string | null>(null);
-  const [showSettings, setShowSettings] = useState(false);
   const [systemStatus, setSystemStatus] = useState<SystemStatusResponse | null>(null);
+  const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnosticsResponse | null>(null);
   const [isHydratingProject, setIsHydratingProject] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin'>('profile');
+  const [returnView, setReturnView] = useState<AppView>('dashboard');
+  const [settingsReturnView, setSettingsReturnView] = useState<AppView>('home');
 
   // Simple routing state
-  const [currentView, setCurrentView] = useState<'home' | 'dashboard' | 'editor' | 'reader' | 'test' | 'learn'>('home');
+  const [currentView, setCurrentView] = useState<AppView>('home');
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [publicProject, setPublicProject] = useState<Project | null>(null);
+  const [viewedProfile, setViewedProfile] = useState<string | null>(null); // username
   const [systemError, setSystemError] = useState<string | null>(null);
 
   const computeHasValidKey = (geminiKey?: string | null, fluxKey?: string | null) => {
     const lockedProvider = getLockedImageProvider();
     const selectedProvider = getImageProvider();
     const requiresFlux = lockedProvider === 'flux' || selectedProvider === 'flux';
-    const serverGemini = systemStatus?.geminiKeyPresent ?? false;
-    const serverFlux = systemStatus?.pixazoKeyPresent ?? false;
+    const serverGemini = systemDiagnostics?.geminiKeyPresent ?? false;
+    const serverFlux = systemDiagnostics?.pixazoKeyPresent ?? false;
     const hasGemini = !!geminiKey || serverGemini;
     const hasFlux = !!fluxKey || serverFlux;
     return requiresFlux ? hasFlux : hasGemini;
@@ -56,6 +88,25 @@ const App: React.FC = () => {
         setSystemError(err?.message || "Unable to reach server");
       });
   }, []);
+
+  useEffect(() => {
+    if (!user?.email || user.email !== 'admin@test.com') {
+      setSystemDiagnostics(null);
+      return;
+    }
+
+    checkSystemDiagnostics()
+      .then(res => {
+        setSystemDiagnostics(res);
+        if (res.status === 'error') {
+          setSystemError(res.message || 'Unable to load system diagnostics');
+        }
+      })
+      .catch((err) => {
+        console.error('System diagnostics check failed:', err);
+        setSystemError(err?.message || 'Unable to load system diagnostics');
+      });
+  }, [user?.email]);
 
   useEffect(() => {
     // Check API Keys
@@ -80,18 +131,52 @@ const App: React.FC = () => {
     const params = new URLSearchParams(window.location.search);
     const view = params.get('view');
     const id = params.get('id');
-      if (view === 'read' && id) {
-        // Wait for projects to load from localstorage (handled by hook, but simple here)
-        setTimeout(() => {
+    if (view === 'read' && id) {
+      // Wait for projects to load from localstorage (handled by hook, but simple here)
+      setTimeout(() => {
+        setReturnView('home');
         setIsHydratingProject(true);
         hydrateProjectAssets(id).finally(() => {
           setActiveProjectId(id);
           setCurrentView('reader');
           setIsHydratingProject(false);
         });
-        }, 100);
+      }, 100);
+    }
+  }, [systemDiagnostics?.geminiKeyPresent, systemDiagnostics?.pixazoKeyPresent]);
+
+  // Effect: Load Public Project if needed (Moved to top level)
+  useEffect(() => {
+    if (authLoading || isCheckingKey) return;
+
+    const loadPublic = async () => {
+      if (currentView === 'reader' && activeProjectId) {
+        const localProject = projects.find(p => p.id === activeProjectId);
+        if (!localProject) {
+          // It's a public project
+          setIsHydratingProject(true);
+          try {
+            const proj = await getPublicProject(activeProjectId);
+            if (proj) {
+              setPublicProject(proj);
+              incrementViewCount(activeProjectId); // Increment view count
+            } else {
+              setSystemError("Comic not found or private.");
+              setCurrentView('dashboard');
+            }
+          } catch (e) {
+            console.error(e);
+            setSystemError("Failed to load comic.");
+          } finally {
+            setIsHydratingProject(false);
+          }
+        } else {
+          setPublicProject(null); // Clear public if we found local
+        }
       }
-  }, [systemStatus?.geminiKeyPresent, systemStatus?.pixazoKeyPresent]);
+    };
+    loadPublic();
+  }, [currentView, activeProjectId, projects, authLoading, isCheckingKey]);
 
   const handleSelectKey = async () => {
     try {
@@ -109,6 +194,41 @@ const App: React.FC = () => {
       }
     } catch (error) { console.error("Key selection failed:", error); }
   };
+  const handleNavigate = (view: string, id?: string) => {
+    // If going to reader, ensure we know where to return
+    if (view === 'reader') {
+      setReturnView(currentView);
+    }
+
+    if (view === 'reader' && id) {
+      const local = projects.find(p => p.id === id);
+      if (local) {
+        setActiveProjectId(id);
+        setCurrentView('reader');
+      } else {
+        setIsHydratingProject(true);
+        import('./services/db').then(async ({ getPublicProject, incrementViewCount }) => {
+          const p = await getPublicProject(id);
+          if (p) {
+            setPublicProject(p);
+            setActiveProjectId(p.id);
+            incrementViewCount(p.id);
+            setCurrentView('reader');
+          }
+          setIsHydratingProject(false);
+        });
+      }
+    } else if (view === 'profile' && id) {
+      setViewedProfile(id);
+      setCurrentView('profile');
+    } else if (view === 'settings') {
+      setSettingsReturnView(currentView);
+      setCurrentView('settings');
+    } else if (view === 'home' || view === 'dashboard' || view === 'auth' || view === 'test' || view === 'learn' || view === 'gallery' || view === 'privacy' || view === 'terms') {
+      setCurrentView(view);
+    }
+  };
+
 
   const handleSaveLocalKey = () => {
     const trimmed = localKeyInput.trim();
@@ -144,6 +264,10 @@ const App: React.FC = () => {
   const handleOpenProject = (id: string) => {
     setIsHydratingProject(true);
     hydrateProjectAssets(id).finally(() => {
+      // If we have an active project separate from the manager's list (public), clear it when switching
+      if (activeProjectId && !projects.find(p => p.id === activeProjectId)) {
+        setPublicProject(null);
+      }
       setActiveProjectId(id);
       setCurrentView('editor');
       setIsHydratingProject(false);
@@ -151,6 +275,7 @@ const App: React.FC = () => {
   };
 
   const handleReadProject = (id: string) => {
+    setReturnView(currentView);
     setIsHydratingProject(true);
     hydrateProjectAssets(id).finally(() => {
       setActiveProjectId(id);
@@ -164,9 +289,24 @@ const App: React.FC = () => {
     });
   };
 
-  const handleBackToDashboard = () => {
-    setCurrentView('dashboard');
+  const handleCloseReader = () => {
+    const fallbackView: AppView = publicProject ? 'gallery' : 'dashboard';
+    const nextView = returnView && returnView !== 'reader' ? returnView : fallbackView;
+    setCurrentView(nextView);
     setActiveProjectId(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete('view');
+    url.searchParams.delete('id');
+    window.history.pushState({}, '', url);
+  };
+
+  const handleSignedOut = () => {
+    setActiveProjectId(null);
+    setPublicProject(null);
+    setViewedProfile(null);
+    setReturnView('home');
+    setSettingsReturnView('home');
+    setCurrentView('home');
     const url = new URL(window.location.href);
     url.searchParams.delete('view');
     url.searchParams.delete('id');
@@ -192,12 +332,20 @@ const App: React.FC = () => {
             <p>Please check your server configuration:</p>
             <code className="bg-black/50 p-1 rounded mt-2 block">GEMINI_API_KEY=... (server)</code>
           </div>
-          <button
-            onClick={() => window.location.reload()}
-            className="mt-6 px-4 py-2 bg-red-600 hover:bg-red-500 rounded font-bold text-white transition-colors"
-          >
-            Retry
-          </button>
+          <div className="flex gap-2 justify-center mt-6">
+            <button
+              onClick={() => window.location.reload()}
+              className="px-4 py-2 bg-red-600 hover:bg-red-500 rounded font-bold text-white transition-colors"
+            >
+              Retry
+            </button>
+            <button
+              onClick={() => setSystemError(null)}
+              className="px-4 py-2 bg-transparent border border-red-500/50 hover:bg-red-900/30 rounded font-bold text-red-300 transition-colors"
+            >
+              Ignore
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -211,144 +359,181 @@ const App: React.FC = () => {
     );
   }
 
-  if (!hasValidKey) {
+
+
+  if (authLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-brand-blue p-4">
-        <div className="text-center p-8 bg-white rounded-xl border-4 border-black shadow-comic max-w-md transform -rotate-2">
-          <Key className="w-16 h-16 mx-auto text-brand-red mb-4" />
-          <h1 className="text-4xl font-display mb-2 text-black">Unlock Studio</h1>
-          <p className="text-slate-600 font-comic text-lg mb-6 leading-relaxed">
-            Image generation is locked to Flux Schnell (Pixazo) right now. Add your Pixazo API key to continue.
-          </p>
-          <div className="space-y-4">
-            <ModelSelector />
-            <FluxKeyInput
-              onStatusChange={(hasKey) => setHasValidKey(hasKey)}
-            />
-          </div>
-          <div className="mt-4 bg-slate-50 border-2 border-black rounded-lg p-4 text-left">
-            <div className="text-xs font-bold uppercase mb-2">Gemini API (for script analysis & assistants)</div>
-            <input
-              type="password"
-              value={localKeyInput}
-              onChange={(e) => setLocalKeyInput(e.target.value)}
-              placeholder="AIza..."
-              className="w-full border-2 border-black rounded px-3 py-2 text-sm mb-2"
-            />
-            <div className="flex gap-2">
-              <button onClick={handleSaveLocalKey} className="flex-1 bg-black text-white font-bold text-xs py-2 rounded">Save Gemini Key</button>
-              <button onClick={handleClearLocalKey} className="flex-1 bg-white border-2 border-black font-bold text-xs py-2 rounded">Clear</button>
-            </div>
-            <div className="mt-2 text-[11px] text-slate-500">
-              Stored locally in your browser. Current: {storedKeySuffix ? `••••${storedKeySuffix}` : 'none'}
-            </div>
-          </div>
-        </div>
+      <div className="min-h-screen flex items-center justify-center bg-brand-blue">
+        <Loader2 className="w-12 h-12 text-white animate-spin" />
       </div>
     );
   }
 
+  // Define Routing Logic
+
+  // Handlers for Views
+  const navigateToAuth = () => setCurrentView('auth');
+  const navigateToDashboard = () => setCurrentView('dashboard');
+
+  if ((currentView as any) === 'auth') {
+    if (user) { setCurrentView('dashboard'); return null; } // Auto-redirect if already logged in
+    return <AuthPage
+      onLoginSuccess={() => setCurrentView('dashboard')}
+      onOpenPrivacy={() => setCurrentView('privacy')}
+      onOpenTerms={() => setCurrentView('terms')}
+    />;
+  }
+
+  // Protection: Views other than 'home' and 'auth' require User
+  const isProtectedViewStrict = ['dashboard', 'editor', 'test', 'learn'].includes(currentView);
+
+  if (!user && isProtectedViewStrict) {
+    return <AuthPage
+      onLoginSuccess={() => setCurrentView('dashboard')}
+      onOpenPrivacy={() => setCurrentView('privacy')}
+      onOpenTerms={() => setCurrentView('terms')}
+    />;
+  }
+
+  // If we are here, and view is protected, User is guaranteed (except for type narrowing)
+  // If User is present, handle Key Check only for Protected Routes
+
+  // REMOVED: Blocking "Unlock Studio" screen.
+  // We now allow users to enter and configure keys later in Settings.
+  /*
+  if (user && isProtectedViewStrict && !hasValidKey) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-brand-blue p-4">
+        ...
+      </div>
+    );
+  }
+  */
+
   const activeProject = activeProjectId ? getProject(activeProjectId) : undefined;
 
   return (
-    <div className="min-h-screen font-sans relative">
-      {/* Header */}
-      {(currentView === 'dashboard' || currentView === 'test' || currentView === 'learn') && (
-        <header className="h-24 bg-white border-b-4 border-black flex items-center px-6 justify-between relative z-50 shadow-lg">
-          <div className="flex items-center gap-3 transform hover:scale-105 transition-transform cursor-default">
-            <div className="w-12 h-12 bg-brand-yellow border-2 border-black rounded-lg flex items-center justify-center text-black font-display text-3xl shadow-comic transform -rotate-3">D</div>
-            <div className="flex flex-col">
-              <span className="font-display text-3xl tracking-tight text-black leading-none" style={{ textShadow: '2px 2px 0px #ddd' }}>DreamStream</span>
-              <span className="font-comic font-bold text-brand-blue text-sm leading-none">Comic Studio</span>
-            </div>
-          </div>
-          <div className="hidden md:flex items-center gap-4">
-            <button onClick={handleBackToHome} className="text-xs font-bold font-mono text-slate-500 hover:text-brand-blue underline decoration-2 underline-offset-2 transition-colors">HOME</button>
-            <button onClick={() => setCurrentView('test')} className="text-xs font-bold font-mono text-slate-500 hover:text-brand-blue underline decoration-2 underline-offset-2 transition-colors">TEST LAB</button>
-            <button onClick={() => setCurrentView('learn')} className="text-xs font-bold font-mono text-slate-500 hover:text-brand-blue underline decoration-2 underline-offset-2 transition-colors">LEARN</button>
-            <button onClick={() => setCurrentView('dashboard')} className="text-xs font-bold font-mono text-slate-500 hover:text-brand-blue underline decoration-2 underline-offset-2 transition-colors">DASHBOARD</button>
-            <button onClick={() => setShowSettings(true)} className="text-xs font-bold font-mono text-slate-500 hover:text-brand-blue underline decoration-2 underline-offset-2 transition-colors">SETTINGS</button>
-            <button onClick={handleSelectKey} className="text-xs font-bold font-mono text-slate-500 hover:text-brand-blue underline decoration-2 underline-offset-2 transition-colors">GEMINI KEY</button>
-            <div className="flex items-center gap-2 px-4 py-2 bg-black text-white rounded-full font-bold font-mono text-xs border-2 border-white shadow-lg">
-              <Zap size={14} className="text-brand-yellow fill-brand-yellow" /> IMAGE: FLUX
-            </div>
-          </div>
-        </header>
-      )}
+    <ErrorBoundary>
+      <div className="min-h-screen font-sans relative">
+        {/* Header */}
+        {(currentView === 'dashboard' || currentView === 'test' || currentView === 'learn') && (
+          <Header
+            currentView={currentView}
+            setCurrentView={setCurrentView as any}
+            setSettingsTab={setSettingsTab}
+            setLastView={(view) => setSettingsReturnView(view as AppView)}
+          />
+        )}
 
-      {/* Views */}
-      {currentView === 'home' && (
-        <HomePage
-          onEnterStudio={() => setCurrentView('dashboard')}
-          onSelectKey={handleSelectKey}
-        />
-      )}
+        <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-brand-blue"><Loader2 className="w-12 h-12 text-white animate-spin" /></div>}>
+          {/* Views */}
+          {currentView === 'home' && (
+            <HomePage
+              onEnterStudio={() => user ? setCurrentView('dashboard') : setCurrentView('auth')}
+              onViewComics={() => setCurrentView('gallery')}
+              onOpenProfile={() => { setSettingsTab('profile'); setSettingsReturnView('home'); setCurrentView('settings'); }}
+              onOpenPrivacy={() => setCurrentView('privacy')}
+              onOpenTerms={() => setCurrentView('terms')}
+              onOpenUpgrade={() => { setSettingsTab('settings'); setSettingsReturnView('home'); setCurrentView('settings'); }}
+              onNavigate={handleNavigate}
+            />
+          )}
+          {currentView === 'auth' && (
+            <AuthPage
+              onLoginSuccess={() => setCurrentView('dashboard')}
+              onOpenPrivacy={() => setCurrentView('privacy')}
+              onOpenTerms={() => setCurrentView('terms')}
+            />
+          )}
+          {currentView === 'gallery' && (
+            <PublicGallery
+              onBack={() => setCurrentView('home')}
+              onReadComic={(id) => {
+                setReturnView('gallery');
+                import('./services/db').then(({ incrementViewCount }) => incrementViewCount(id)); // Proactive increment
+                handleNavigate('reader', id);
+              }}
+            />
+          )}
 
-      {currentView === 'dashboard' && (
-        <ProjectDashboard 
-            projects={projects}
-            onCreateProject={handleCreateProject}
-            onOpenProject={handleOpenProject}
-            onDeleteProject={deleteProject}
-            onDuplicateProject={duplicateProject}
-            onReadProject={handleReadProject}
-            onUpdateProject={updateProject}
-        />
-      )}
+          {currentView === 'privacy' && (
+            <PrivacyPolicy onBack={() => user ? setCurrentView('dashboard') : setCurrentView('home')} />
+          )}
 
-      {currentView === 'test' && (
-        <TestLab
-          onCreateProject={(name) => createProject(name)}
-          onUpdateProject={updateProject}
-          onOpenProject={(id) => {
-            setActiveProjectId(id);
-            setCurrentView('editor');
-          }}
-        />
-      )}
+          {currentView === 'terms' && <TermsOfService onBack={() => setCurrentView('home')} />}
 
-      {currentView === 'learn' && (
-        <LearnHub onLaunchTestLab={() => setCurrentView('test')} />
-      )}
+          {currentView === 'dashboard' && (
+            <ProjectDashboard
+              projects={projects}
+              onCreateProject={handleCreateProject}
+              onOpenProject={handleOpenProject}
+              onDeleteProject={deleteProject}
+              onDuplicateProject={duplicateProject}
+              onReadProject={handleReadProject}
+              onUpdateProject={updateProject}
+              onNavigate={handleNavigate}
+            />
+          )}
 
-      {currentView === 'editor' && activeProject && (
-        <ComicEditor
-          project={activeProject}
-          onUpdate={(updates) => updateProject(activeProject.id, updates)}
-          onStartGeneration={startGeneration}
-          onStopGeneration={stopGeneration}
-          onBack={handleBackToDashboard}
-        />
-      )}
+          {currentView === 'test' && (
+            <TestLab
+              onCreateProject={(name) => createProject(name)}
+              onUpdateProject={updateProject}
+              onOpenProject={(id) => {
+                setActiveProjectId(id);
+                setCurrentView('editor');
+              }}
+            />
+          )}
 
-      {currentView === 'reader' && activeProject && (
-        <ComicReader
-          project={activeProject}
-          onClose={handleBackToDashboard}
-          onUpdateProject={updateProject}
-        />
-      )}
+          {currentView === 'learn' && (
+            <LearnHub onLaunchTestLab={() => setCurrentView('test')} />
+          )}
 
-      {/* Global Master Assistant */}
-      <MasterAssistant
-        currentView={currentView}
-        activeProject={activeProject}
-        projects={projects}
-        onPersistChat={(messages) => {
-          if (!activeProject) return;
-          updateProject(activeProject.id, (prev) => ({
-            state: { ...prev.state, assistantChat: messages }
-          }));
-        }}
-      />
+          {currentView === 'editor' && activeProject && (
+            <ComicEditor
+              project={activeProject}
+              onUpdate={(updates) => updateProject(activeProject.id, updates)}
+              onStartGeneration={startGeneration}
+              onStopGeneration={stopGeneration}
+              onBack={() => setCurrentView('dashboard')}
+            />
+          )}
 
-      {showSettings && (
-        <SettingsModal
-          onClose={() => setShowSettings(false)}
-          onReloadProjects={() => reloadProjects()}
-        />
-      )}
-    </div>
+          {(currentView === 'reader') && (
+            <ComicReader
+              project={projects.find(p => p.id === activeProjectId) || publicProject!}
+              onClose={handleCloseReader}
+              onUpdateProject={updateProject}
+              isReadOnly={!!publicProject}
+              onNavigate={handleNavigate}
+            />
+          )}
+
+          {currentView === 'profile' && viewedProfile && (
+            <PublicProfile
+              username={viewedProfile}
+              onNavigate={handleNavigate}
+            />
+          )}
+
+          {currentView === 'settings' && (
+            <AccountSettings
+              onClose={() => {
+                if (settingsReturnView === 'reader' && !activeProjectId) {
+                  setCurrentView('dashboard');
+                  return;
+                }
+                setCurrentView(settingsReturnView);
+              }}
+              initialTab={settingsTab}
+              onSignedOut={handleSignedOut}
+            />
+          )}
+        </Suspense>
+
+      </div>
+    </ErrorBoundary>
   );
 };
 

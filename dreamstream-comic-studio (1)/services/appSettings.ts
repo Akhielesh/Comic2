@@ -1,5 +1,6 @@
 import { ImageProviderId } from "../types";
-import { DEFAULT_IMAGE_PROVIDER, IMAGE_PROVIDER_LOCK } from "./imageModels";
+import { DEFAULT_IMAGE_PROVIDER, IMAGE_MODELS, IMAGE_PROVIDER_LOCK } from "./imageModels";
+import { IMAGE_MODEL, TEXT_MODEL, TEXT_MODELS } from "./modelPolicy";
 
 const IMAGE_PROVIDER_KEY = "dreamstream_image_provider";
 const FLUX_KEY_STORAGE = "dreamstream_flux_key";
@@ -36,6 +37,8 @@ const removeFromStorage = (key: string) => {
 
 export const getLockedImageProvider = () => IMAGE_PROVIDER_LOCK;
 
+const IMAGE_MODEL_KEY = "dreamstream_image_model_id";
+
 export const getImageProvider = (): ImageProviderId => {
   if (IMAGE_PROVIDER_LOCK) return IMAGE_PROVIDER_LOCK;
   const stored = getFromStorage(IMAGE_PROVIDER_KEY) as ImageProviderId | null;
@@ -46,6 +49,48 @@ export const setImageProvider = (provider: ImageProviderId) => {
   const effective = IMAGE_PROVIDER_LOCK || provider;
   setInStorage(IMAGE_PROVIDER_KEY, effective);
   return effective;
+};
+
+export const getImageModelId = (): string | null => {
+  return getFromStorage(IMAGE_MODEL_KEY);
+};
+
+export const setImageModelId = (modelId: string) => {
+  setInStorage(IMAGE_MODEL_KEY, modelId);
+};
+
+// Model-Specific Key Management
+const MODEL_KEYS_STORAGE = "dreamstream_model_keys";
+
+export const getAllModelKeys = (): Record<string, string> => {
+  const stored = getFromStorage(MODEL_KEYS_STORAGE);
+  if (!stored) return {};
+  try {
+    return JSON.parse(stored);
+  } catch {
+    return {};
+  }
+};
+
+export const getModelSpecificKey = (modelId: string): string | null => {
+  const keys = getAllModelKeys();
+  return keys[modelId] || null;
+};
+
+export const setModelSpecificKey = (modelId: string, key: string) => {
+  const keys = getAllModelKeys();
+  if (key) {
+    keys[modelId] = key.trim();
+  } else {
+    delete keys[modelId];
+  }
+  setInStorage(MODEL_KEYS_STORAGE, JSON.stringify(keys));
+};
+
+export const deleteModelKey = (modelId: string) => {
+  const keys = getAllModelKeys();
+  delete keys[modelId];
+  setInStorage(MODEL_KEYS_STORAGE, JSON.stringify(keys));
 };
 
 export const getFluxKeyInfo = (): { key: string | null; source: KeySource } => {
@@ -73,6 +118,9 @@ export const getSettingsState = (): {
   showGeminiKey?: boolean;
   showFluxKey?: boolean;
   modelRouting?: Record<string, string>;
+  defaultImageModel?: string;
+  defaultTextModel?: string;
+  defaultTextModelKey?: string;
 } => {
   const raw = getFromStorage(SETTINGS_KEY);
   if (!raw) return {};
@@ -87,6 +135,57 @@ export const setSettingsState = (next: {
   showGeminiKey?: boolean;
   showFluxKey?: boolean;
   modelRouting?: Record<string, string>;
+  defaultImageModel?: string;
+  defaultTextModel?: string;
+  defaultTextModelKey?: string;
 }) => {
   setInStorage(SETTINGS_KEY, JSON.stringify(next));
+};
+
+export const getDefaultImageModel = (): string => {
+  const settings = getSettingsState();
+  const configured = settings.defaultImageModel?.trim();
+  if (configured) {
+    const isSupported = IMAGE_MODELS.some((model) => model.id === configured);
+    if (isSupported) return configured;
+    if (configured.toLowerCase().includes("gemini")) return IMAGE_MODEL;
+  }
+  return "pixazo/flux-1-schnell";
+};
+
+export const getDefaultTextModel = (): string => {
+  const settings = getSettingsState();
+  const configured = (settings.defaultTextModel || settings.defaultTextModelKey || TEXT_MODEL).trim();
+  const supportedTextModelIds = new Set(TEXT_MODELS.map((model) => model.id));
+  return supportedTextModelIds.has(configured) ? configured : TEXT_MODEL;
+};
+
+export const getDefaultTextModelKey = getDefaultTextModel;
+
+const TASK_ALIASES: Record<string, string> = {
+  style: "style",
+  world: "world",
+  cover: "cover",
+  panel: "panel",
+  panel_regen: "panel_regen",
+  generation: "panel",
+  preview: "panel",
+  script: "script_analysis",
+  script_analysis: "script_analysis",
+  story_builder: "story_builder",
+  layout: "panel_breakdown",
+  panel_breakdown: "panel_breakdown",
+  image_generation: "panel"
+};
+
+export const normalizeTaskKey = (task: string) => {
+  const key = (task || "").trim().toLowerCase();
+  return TASK_ALIASES[key] || key;
+};
+
+export const getModelForTask = (task: string): string => {
+  const settings = getSettingsState();
+  const routing = settings.modelRouting || {};
+  const normalized = normalizeTaskKey(task);
+  return routing[normalized] || getDefaultImageModel();
 };

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Wand2, Sparkles, Play, Save, BarChart3, Trash2 } from "lucide-react";
+import { Wand2, Sparkles, Play, Save, BarChart3, Trash2, CheckCircle2, XCircle } from "lucide-react";
 import { Button } from "./Button";
 import { TEST_TEMPLATES } from "../services/testTemplates";
 import { analyzeScript, generatePanelBreakdown, analyzeTestLabReport } from "../services/geminiService";
@@ -666,11 +666,13 @@ export const TestLab: React.FC<TestLabProps> = ({ onCreateProject, onUpdateProje
               <BarChart3 className="w-5 h-5" />
               <h3 className="font-display text-xl">Run History</h3>
             </div>
-            <Button size="sm" variant="secondary" onClick={async () => {
-              await clearTestRuns();
-              setRuns([]);
+            <Button size="sm" className="bg-red-600 hover:bg-red-700 text-white border-red-900" onClick={async () => {
+              if (confirm("Are you sure you want to clear all test history? This cannot be undone.")) {
+                await clearTestRuns();
+                setRuns([]);
+              }
             }} icon={<Trash2 className="w-4 h-4" />}>
-              Clear
+              Clear History
             </Button>
           </div>
           <div className="overflow-x-auto">
@@ -712,15 +714,31 @@ export const TestLab: React.FC<TestLabProps> = ({ onCreateProject, onUpdateProje
                         <td className="p-2">{step.provider || "—"}</td>
                         <td className="p-2">{step.model || "—"}</td>
                         <td className="p-2">{step.promptChars} chars</td>
-                        <td className="p-2">{step.success ? "Yes" : "No"}</td>
+                        <td className="p-2">
+                          {step.success ? (
+                            <CheckCircle2 className="w-5 h-5 text-green-600" />
+                          ) : (
+                            <XCircle className="w-5 h-5 text-red-500" />
+                          )}
+                        </td>
                         <td className="p-2">{step.outputImageBytes ? `${step.outputImageBytes} B` : "—"}</td>
                         <td className="p-2">
-                          <button
-                            onClick={() => setExpandedRunId(expandedRunId === run.id ? null : run.id)}
-                            className="text-xs font-bold underline"
-                          >
-                            {expandedRunId === run.id ? "Hide" : "View"}
-                          </button>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => setExpandedRunId(expandedRunId === run.id ? null : run.id)}
+                              className="text-xs font-bold underline"
+                            >
+                              {expandedRunId === run.id ? "Hide" : "Trace"}
+                            </button>
+                            {!step.success && step.error && (
+                              <button
+                                onClick={() => alert(`Error Trace:\n\n${step.error}`)}
+                                className="text-xs font-bold text-red-600 underline"
+                              >
+                                Advanced
+                              </button>
+                            )}
+                          </div>
                         </td>
                         <td className="p-2">
                           {run.report ? (

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Check, AlertCircle, ArrowLeft, Wand2, Sparkles, ChevronDown, ChevronLeft, ChevronRight, Search, X } from 'lucide-react';
-import { analyzeScript } from '../../services/geminiService';
+import { analyzeScript, suggestStyle, suggestFormFactor } from '../../services/geminiService';
 import { generateImage } from '../../services/imageService';
 import { Scene, StyleVariant, AspectRatio, ImageResolution } from '../../types';
 import { Button } from '../Button';
@@ -122,6 +122,11 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
   onCustomAspectRatioChange
 }) => {
   const [customPrompt, setCustomPrompt] = useState('');
+  const [customStyleInput, setCustomStyleInput] = useState('');
+  const [aiTheme, setAiTheme] = useState<StylePreset | null>(null);
+  const [isSuggestingValues, setIsSuggestingValues] = useState(false);
+  const [showAdvancedFormFactors, setShowAdvancedFormFactors] = useState(false);
+
   const [isBatchGenerating, setIsBatchGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -420,18 +425,76 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
     });
   };
 
-  const selectRecommended = () => {
+  const selectRecommended = async () => {
+    let bestFactor = DEFAULT_FORM_FACTOR; // Fallback
+
+    // Check if we have a global preference first, if not, ask AI
+    if (globalFormFactors.length > 0) {
+      bestFactor = globalFormFactors[0];
+    } else if (script) {
+      setIsSuggestingValues(true);
+      try {
+        const ratio = await suggestFormFactor(script);
+        // Map ratio to a valid ID (1K resolution default)
+        const mapping: Record<string, string> = {
+          '1:1': '1:1@1K',
+          '3:4': '3:4@1K',
+          '4:3': '4:3@1K',
+          '9:16': '9:16@1K',
+          '16:9': '16:9@1K'
+        };
+        if (mapping[ratio]) {
+          bestFactor = mapping[ratio];
+          // Also set it as global so user sees it
+          setGlobalFormFactors([bestFactor]);
+        }
+      } catch (e) {
+        console.warn("Auto-analyze form factor failed", e);
+      } finally {
+        setIsSuggestingValues(false);
+      }
+    }
+
     setStyleSelections((prev) => {
       const next = { ...prev };
       RECOMMENDED_STYLE_IDS.forEach((id) => {
         const current = next[id] || { selected: false, formFactors: [] };
+        // If style already has specific factors, keep them, otherwise use the Best Factor
+        const nextFactors = current.formFactors.length > 0 ? current.formFactors : [bestFactor];
+
         next[id] = {
           selected: true,
-          formFactors: globalFormFactors.length > 0 ? globalFormFactors : (current.formFactors.length > 0 ? current.formFactors : [DEFAULT_FORM_FACTOR])
+          formFactors: nextFactors
         };
       });
       return next;
     });
+  };
+
+  const handleSuggestTheme = async () => {
+    if (!script) return;
+    setIsSuggestingValues(true);
+    try {
+      const suggestedPrompt = await suggestStyle(script);
+      if (suggestedPrompt) {
+        const themeId = `ai-theme-${Date.now()}`;
+        const newTheme: StylePreset = {
+          id: themeId,
+          label: '✨ AI Suggested Theme',
+          prompt: suggestedPrompt,
+          description: 'A unique style tailored specifically for your story.'
+        };
+        setAiTheme(newTheme);
+        setStyleSelections(prev => ({
+          ...prev,
+          [themeId]: { selected: true, formFactors: [DEFAULT_FORM_FACTOR] }
+        }));
+      }
+    } catch (e) {
+      console.error("Failed to suggest theme", e);
+    } finally {
+      setIsSuggestingValues(false);
+    }
   };
 
   const runWithLimit = async <T,>(tasks: T[], limit: number, handler: (item: T) => Promise<void>) => {
@@ -452,10 +515,31 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
     setError(null);
 
     const selectedStyles = STYLE_PRESETS.filter((style) => styleSelections[style.id]?.selected);
-    if (selectedStyles.length === 0) {
-      setError('Select at least one style to generate.');
+
+    // Include AI Theme if selected
+    if (aiTheme && styleSelections[aiTheme.id]?.selected) {
+      selectedStyles.push(aiTheme);
+    }
+
+    if (selectedStyles.length === 0 && !customStyleInput) {
+      setError('Select at least one style or enter a custom style.');
       setIsBatchGenerating(false);
       return;
+    }
+
+    // Create a virtual preset for Custom Style if present
+    if (customStyleInput.trim()) {
+      const customPreset: StylePreset = {
+        id: `custom-${Date.now()}`,
+        label: 'Custom Style',
+        prompt: customStyleInput,
+        description: 'Your custom defined style.'
+      };
+      selectedStyles.push(customPreset);
+      // Ensure selections map has entry for it so form factor logic works
+      if (!styleSelections[customPreset.id]) {
+        styleSelections[customPreset.id] = { selected: true, formFactors: [DEFAULT_FORM_FACTOR] };
+      }
     }
 
     const normalizedCustomRatio = formatRatio(customRatioInput);
@@ -753,9 +837,9 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
   const visibleStyles = normalizedSearch.length === 0
     ? STYLE_PRESETS
     : STYLE_PRESETS.filter((style) =>
-        style.label.toLowerCase().includes(normalizedSearch) ||
-        style.description.toLowerCase().includes(normalizedSearch)
-      );
+      style.label.toLowerCase().includes(normalizedSearch) ||
+      style.description.toLowerCase().includes(normalizedSearch)
+    );
 
   const galleryItems = initialVariants.filter((variant) => variant.imageUrl);
   const activeGalleryIndex = galleryActiveId
@@ -842,37 +926,48 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
             </div>
 
             <div className="bg-slate-50 border-2 border-black rounded-lg p-4 space-y-3">
-              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                <div>
-                  <div className="text-xs font-bold uppercase">Global Form Factors</div>
-                  <div className="text-[11px] text-slate-500">Apply to all selected styles (max 2).</div>
+              <button
+                onClick={() => setShowAdvancedFormFactors(!showAdvancedFormFactors)}
+                className="w-full flex items-center justify-between"
+              >
+                <div className="text-left">
+                  <div className="text-xs font-bold uppercase flex items-center gap-2">
+                    <span className="bg-black text-white px-1 rounded text-[10px]">ADVANCED</span> Global Form Factors
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">Apply a default size/ratio to all selected styles.</div>
                 </div>
-                <Button
-                  onClick={applyGlobalToSelected}
-                  variant="secondary"
-                  className="px-4 py-2 text-xs"
-                >
-                  Apply to Selected
-                </Button>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {FORM_FACTORS.map((factor) => {
-                  const checked = globalFormFactors.includes(factor.id);
-                  const disabled = !checked && globalFormFactors.length >= 2;
-                  return (
-                    <button
-                      key={factor.id}
-                      onClick={() => toggleGlobalFormFactor(factor.id)}
-                      disabled={disabled}
-                      className={`text-[10px] font-bold border-2 rounded px-2 py-1 ${checked ? 'bg-brand-yellow border-black' : 'bg-white border-black/40'} ${disabled ? 'opacity-40 cursor-not-allowed' : ''}`}
+                {showAdvancedFormFactors ? <ChevronDown className="w-4 h-4 transform rotate-180" /> : <ChevronDown className="w-4 h-4" />}
+              </button>
+
+              {showAdvancedFormFactors && (
+                <div className="animate-fade-in pt-2 border-t border-slate-200 mt-2">
+                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-2">
+                    <div className="text-[10px] text-slate-400">Select up to 2 variants per style</div>
+                    <Button
+                      onClick={applyGlobalToSelected}
+                      variant="secondary"
+                      className="px-3 py-1 text-[10px] h-auto min-h-0"
                     >
-                      {factor.label}
-                    </button>
-                  );
-                })}
-              </div>
-              {globalFormFactors.length >= 2 && (
-                <div className="text-[10px] text-slate-500">Limit reached. Remove one to select another.</div>
+                      Apply to Selected
+                    </Button>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {FORM_FACTORS.map((factor) => {
+                      const checked = globalFormFactors.includes(factor.id);
+                      const disabled = !checked && globalFormFactors.length >= 2;
+                      return (
+                        <button
+                          key={factor.id}
+                          onClick={() => toggleGlobalFormFactor(factor.id)}
+                          disabled={disabled}
+                          className={`text-[10px] font-bold border-2 rounded px-2 py-1 ${checked ? 'bg-brand-yellow border-black' : 'bg-white border-black/40'} ${disabled ? 'opacity-40 cursor-not-allowed' : ''}`}
+                        >
+                          {factor.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               )}
             </div>
 
@@ -913,7 +1008,62 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
             </div>
 
             <div className="max-h-[520px] overflow-y-auto pr-2 custom-scrollbar">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+
+                {/* Custom Style Card */}
+                <div className={`border-4 rounded-xl p-4 space-y-3 transition-all ${customStyleInput ? 'border-brand-blue bg-brand-blue/5 shadow-comic' : 'border-dashed border-slate-300 bg-slate-50'}`}>
+                  <div className="font-display text-lg">Your Custom Style</div>
+                  <textarea
+                    value={customStyleInput}
+                    onChange={(e) => setCustomStyleInput(e.target.value)}
+                    placeholder="Describe a unique style e.g. 'Pixel art cyberpunk with neon pink outlines'..."
+                    className="w-full h-24 text-xs font-medium bg-white border-2 border-slate-200 rounded p-2 focus:border-black focus:ring-0 resize-none"
+                  />
+                  {customStyleInput && (
+                    <div className="text-[10px] text-brand-blue font-bold flex items-center gap-1">
+                      <Check size={12} /> Ready to generate
+                    </div>
+                  )}
+                </div>
+
+                {/* AI Theme Gen Card */}
+                {!aiTheme && (
+                  <button
+                    onClick={handleSuggestTheme}
+                    disabled={isSuggestingValues || !script}
+                    className="border-4 border-dashed border-brand-yellow/60 bg-brand-yellow/10 rounded-xl p-6 flex flex-col items-center justify-center gap-3 hover:bg-brand-yellow/20 transition-colors group text-center"
+                  >
+                    <div className="w-10 h-10 rounded-full bg-brand-yellow flex items-center justify-center transform group-hover:scale-110 transition-transform shadow-sm">
+                      {isSuggestingValues ? <span className="animate-spin text-lg">✨</span> : <Wand2 className="w-5 h-5" />}
+                    </div>
+                    <div>
+                      <div className="font-display text-lg">AI Suggested Theme</div>
+                      <div className="text-xs font-comic text-slate-600">Let the AI invent a unique style for this story.</div>
+                    </div>
+                  </button>
+                )}
+
+                {/* AI Theme Result Card */}
+                {aiTheme && (
+                  <div className={`border-4 rounded-xl p-4 space-y-3 transition-all ${styleSelections[aiTheme.id]?.selected ? 'border-brand-blue bg-brand-blue/5 shadow-comic' : 'border-brand-yellow bg-brand-yellow/10'}`}>
+                    <button
+                      onClick={() => toggleStyle(aiTheme.id)}
+                      className="w-full flex items-start justify-between gap-3 text-left"
+                    >
+                      <div>
+                        <div className="font-display text-lg flex items-center gap-2">
+                          {aiTheme.label}
+                        </div>
+                        <div className="text-xs font-comic text-slate-600 line-clamp-3">{aiTheme.prompt}</div>
+                      </div>
+                      <div className={`w-6 h-6 rounded-full border-2 border-black flex items-center justify-center ${styleSelections[aiTheme.id]?.selected ? 'bg-brand-yellow' : 'bg-white'}`}>
+                        {styleSelections[aiTheme.id]?.selected && <Check size={16} />}
+                      </div>
+                    </button>
+                    <button onClick={() => setAiTheme(null)} className="text-[10px] font-bold text-slate-400 hover:text-red-500 underline">Remove</button>
+                  </div>
+                )}
+
                 {visibleStyles.map((style) => {
                   const selection = styleSelections[style.id];
                   const isSelected = selection?.selected;
@@ -966,7 +1116,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
                   );
                 })}
               </div>
-              {visibleStyles.length === 0 && (
+              {visibleStyles.length === 0 && !aiTheme && !customStyleInput && (
                 <div className="text-xs font-bold text-slate-500 p-3">No styles match your search.</div>
               )}
             </div>
@@ -1078,13 +1228,12 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
               {pendingPreviews.length > 0 && (
                 <div className="mb-4">
                   <div className="text-xs font-bold uppercase text-slate-500 mb-2">Generating Previews</div>
-                  <div className="grid grid-cols-1 gap-4">
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                     {pendingPreviews.map((preview) => (
                       <div
                         key={preview.id}
-                        className={`bg-white rounded-xl border-4 shadow-comic flex flex-col ${
-                          preview.status === 'failed' ? 'border-brand-red bg-red-50/60' : 'border-black'
-                        }`}
+                        className={`bg-white rounded-xl border-4 shadow-comic flex flex-col ${preview.status === 'failed' ? 'border-brand-red bg-red-50/60' : 'border-black'
+                          }`}
                       >
                         <div className="aspect-square bg-slate-100 border-b-4 border-black flex items-center justify-center">
                           <div className="text-xs font-bold text-slate-500">
@@ -1110,56 +1259,56 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
                   </div>
                 </div>
               )}
-              <div className="grid grid-cols-1 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                 {initialVariants.map((variant) => {
                   const isSelected = selectedStyleId === variant.id;
                   return (
                     <div key={variant.id} className={`bg-white rounded-xl border-4 shadow-comic group flex flex-col ${isSelected ? 'border-brand-blue ring-4 ring-brand-blue/30' : 'border-black'}`}>
-                    <div
-                      className="aspect-square bg-slate-100 relative overflow-hidden border-b-4 border-black rounded-t-lg cursor-pointer"
-                      onClick={() => variant.imageUrl && setGalleryActiveId(variant.id)}
-                    >
-                      {variant.imageUrl ? (
-                        <img src={variant.imageUrl} alt={variant.category} className="w-full h-full object-cover" />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-slate-400 font-bold">No Preview</div>
-                      )}
-                      {isSelected && (
-                        <div className="absolute top-2 right-2 bg-brand-blue text-white p-1 rounded-full border-2 border-white shadow-md z-20">
-                          <Check size={20} strokeWidth={3} />
-                        </div>
-                      )}
-                      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent flex items-end p-4 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-                        <div className="w-full pointer-events-auto">
-                          <Button
-                            size="sm"
-                            variant={isSelected ? 'outline' : 'primary'}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onStyleConfirmed(variant);
-                            }}
-                            className="w-full"
-                            icon={<Check className="w-4 h-4" />}
-                          >
-                            {isSelected ? 'Selected' : 'Confirm This Style'}
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                    <div className={`p-3 text-center ${isSelected ? 'bg-brand-blue/5' : ''}`}>
-                      <div className="flex flex-wrap justify-center items-center gap-2">
-                        <span className="text-xs font-bold bg-brand-blue/20 text-brand-blue px-2 py-1 rounded">{variant.category}</span>
-                        {customRatioLabel ? (
-                          <>
-                            <span className="text-xs font-bold bg-slate-200 text-slate-600 px-2 py-1 rounded">Model {variant.aspectRatio}</span>
-                            <span className="text-xs font-bold bg-brand-yellow/60 text-black px-2 py-1 rounded">Custom {customRatioLabel}</span>
-                          </>
+                      <div
+                        className="aspect-square bg-slate-100 relative overflow-hidden border-b-4 border-black rounded-t-lg cursor-pointer"
+                        onClick={() => variant.imageUrl && setGalleryActiveId(variant.id)}
+                      >
+                        {variant.imageUrl ? (
+                          <img src={variant.imageUrl} alt={variant.category} className="w-full h-full object-cover" />
                         ) : (
-                          <span className="text-xs font-bold bg-slate-200 text-slate-600 px-2 py-1 rounded">{variant.aspectRatio}</span>
+                          <div className="w-full h-full flex items-center justify-center text-slate-400 font-bold">No Preview</div>
                         )}
-                        <span className="text-xs font-bold bg-slate-200 text-slate-600 px-2 py-1 rounded">{variant.resolution}</span>
+                        {isSelected && (
+                          <div className="absolute top-2 right-2 bg-brand-blue text-white p-1 rounded-full border-2 border-white shadow-md z-20">
+                            <Check size={20} strokeWidth={3} />
+                          </div>
+                        )}
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent flex items-end p-4 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                          <div className="w-full pointer-events-auto">
+                            <Button
+                              size="sm"
+                              variant={isSelected ? 'outline' : 'primary'}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onStyleConfirmed(variant);
+                              }}
+                              className="w-full"
+                              icon={<Check className="w-4 h-4" />}
+                            >
+                              {isSelected ? 'Selected' : 'Confirm This Style'}
+                            </Button>
+                          </div>
+                        </div>
                       </div>
-                    </div>
+                      <div className={`p-3 text-center ${isSelected ? 'bg-brand-blue/5' : ''}`}>
+                        <div className="flex flex-wrap justify-center items-center gap-2">
+                          <span className="text-xs font-bold bg-brand-blue/20 text-brand-blue px-2 py-1 rounded">{variant.category}</span>
+                          {customRatioLabel ? (
+                            <>
+                              <span className="text-xs font-bold bg-slate-200 text-slate-600 px-2 py-1 rounded">Model {variant.aspectRatio}</span>
+                              <span className="text-xs font-bold bg-brand-yellow/60 text-black px-2 py-1 rounded">Custom {customRatioLabel}</span>
+                            </>
+                          ) : (
+                            <span className="text-xs font-bold bg-slate-200 text-slate-600 px-2 py-1 rounded">{variant.aspectRatio}</span>
+                          )}
+                          <span className="text-xs font-bold bg-slate-200 text-slate-600 px-2 py-1 rounded">{variant.resolution}</span>
+                        </div>
+                      </div>
                     </div>
                   );
                 })}
@@ -1173,81 +1322,81 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
         <ModalPortal>
           <div className="fixed inset-0 z-[200] bg-black/90 flex items-center justify-center p-4 backdrop-blur-md" onClick={() => setGalleryActiveId(null)}>
             <div className="relative max-w-6xl w-full max-h-[90vh] bg-white border-4 border-black rounded-2xl shadow-comic p-4 md:p-6 flex flex-col gap-4" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <div className="text-xs font-bold uppercase text-slate-500">Style Preview</div>
-                <div className="font-display text-2xl">{activeGalleryItem.category}</div>
-              </div>
-              <button onClick={() => setGalleryActiveId(null)} className="text-slate-600 hover:text-brand-red">
-                <X className="w-6 h-6" />
-              </button>
-            </div>
-
-            <div className="relative bg-black/90 rounded-xl border-4 border-black overflow-hidden flex items-center justify-center min-h-[260px]">
-              {activeGalleryItem.imageUrl && (
-                <img src={activeGalleryItem.imageUrl} alt={activeGalleryItem.category} className="max-h-[60vh] w-auto object-contain" />
-              )}
-              {galleryItems.length > 1 && (
-                <>
-                  <button
-                    onClick={() => {
-                      if (galleryItems.length === 0) return;
-                      const nextIndex = (activeGalleryIndex - 1 + galleryItems.length) % galleryItems.length;
-                      setGalleryActiveId(galleryItems[nextIndex].id);
-                    }}
-                    className="absolute left-3 top-1/2 -translate-y-1/2 bg-white/90 border-2 border-black rounded-full p-2 hover:bg-brand-yellow"
-                  >
-                    <ChevronLeft className="w-5 h-5" />
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (galleryItems.length === 0) return;
-                      const nextIndex = (activeGalleryIndex + 1) % galleryItems.length;
-                      setGalleryActiveId(galleryItems[nextIndex].id);
-                    }}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 bg-white/90 border-2 border-black rounded-full p-2 hover:bg-brand-yellow"
-                  >
-                    <ChevronRight className="w-5 h-5" />
-                  </button>
-                </>
-              )}
-            </div>
-
-            <div className="flex flex-wrap gap-2 text-xs font-bold">
-              {customRatioLabel ? (
-                <>
-                  <span className="px-2 py-1 bg-brand-blue/20 text-brand-blue rounded">Model {activeGalleryItem.aspectRatio}</span>
-                  <span className="px-2 py-1 bg-brand-yellow/60 text-black rounded">Custom {customRatioLabel}</span>
-                </>
-              ) : (
-                <span className="px-2 py-1 bg-brand-blue/20 text-brand-blue rounded">{activeGalleryItem.aspectRatio}</span>
-              )}
-              <span className="px-2 py-1 bg-slate-200 text-slate-700 rounded">{activeGalleryItem.resolution}</span>
-              <span className="px-2 py-1 bg-slate-200 text-slate-700 rounded">Style: {activeGalleryItem.category}</span>
-            </div>
-
-            {activePromptPreview && (
-              <div className="text-xs font-comic text-slate-600 bg-slate-50 border-2 border-black rounded-lg p-3">
-                <span className="font-bold">Prompt:</span> {activePromptPreview}
-              </div>
-            )}
-
-            {galleryItems.length > 1 && (
-              <div className="border-t-2 border-black pt-3">
-                <div className="text-xs font-bold uppercase text-slate-500 mb-2">More Previews</div>
-                <div className="flex gap-2 overflow-x-auto custom-scrollbar pb-2">
-                  {galleryItems.map((variant) => (
-                    <button
-                      key={variant.id}
-                      onClick={() => setGalleryActiveId(variant.id)}
-                      className={`w-16 h-16 border-2 rounded-lg overflow-hidden ${variant.id === activeGalleryItem.id ? 'border-brand-blue ring-2 ring-brand-blue/40' : 'border-black'}`}
-                    >
-                      <img src={variant.imageUrl} alt={variant.category} className="w-full h-full object-cover" />
-                    </button>
-                  ))}
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-xs font-bold uppercase text-slate-500">Style Preview</div>
+                  <div className="font-display text-2xl">{activeGalleryItem.category}</div>
                 </div>
+                <button onClick={() => setGalleryActiveId(null)} className="text-slate-600 hover:text-brand-red">
+                  <X className="w-6 h-6" />
+                </button>
               </div>
-            )}
+
+              <div className="relative bg-black/90 rounded-xl border-4 border-black overflow-hidden flex items-center justify-center min-h-[260px]">
+                {activeGalleryItem.imageUrl && (
+                  <img src={activeGalleryItem.imageUrl} alt={activeGalleryItem.category} className="max-h-[60vh] w-auto object-contain" />
+                )}
+                {galleryItems.length > 1 && (
+                  <>
+                    <button
+                      onClick={() => {
+                        if (galleryItems.length === 0) return;
+                        const nextIndex = (activeGalleryIndex - 1 + galleryItems.length) % galleryItems.length;
+                        setGalleryActiveId(galleryItems[nextIndex].id);
+                      }}
+                      className="absolute left-3 top-1/2 -translate-y-1/2 bg-white/90 border-2 border-black rounded-full p-2 hover:bg-brand-yellow"
+                    >
+                      <ChevronLeft className="w-5 h-5" />
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (galleryItems.length === 0) return;
+                        const nextIndex = (activeGalleryIndex + 1) % galleryItems.length;
+                        setGalleryActiveId(galleryItems[nextIndex].id);
+                      }}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 bg-white/90 border-2 border-black rounded-full p-2 hover:bg-brand-yellow"
+                    >
+                      <ChevronRight className="w-5 h-5" />
+                    </button>
+                  </>
+                )}
+              </div>
+
+              <div className="flex flex-wrap gap-2 text-xs font-bold">
+                {customRatioLabel ? (
+                  <>
+                    <span className="px-2 py-1 bg-brand-blue/20 text-brand-blue rounded">Model {activeGalleryItem.aspectRatio}</span>
+                    <span className="px-2 py-1 bg-brand-yellow/60 text-black rounded">Custom {customRatioLabel}</span>
+                  </>
+                ) : (
+                  <span className="px-2 py-1 bg-brand-blue/20 text-brand-blue rounded">{activeGalleryItem.aspectRatio}</span>
+                )}
+                <span className="px-2 py-1 bg-slate-200 text-slate-700 rounded">{activeGalleryItem.resolution}</span>
+                <span className="px-2 py-1 bg-slate-200 text-slate-700 rounded">Style: {activeGalleryItem.category}</span>
+              </div>
+
+              {activePromptPreview && (
+                <div className="text-xs font-comic text-slate-600 bg-slate-50 border-2 border-black rounded-lg p-3">
+                  <span className="font-bold">Prompt:</span> {activePromptPreview}
+                </div>
+              )}
+
+              {galleryItems.length > 1 && (
+                <div className="border-t-2 border-black pt-3">
+                  <div className="text-xs font-bold uppercase text-slate-500 mb-2">More Previews</div>
+                  <div className="flex gap-2 overflow-x-auto custom-scrollbar pb-2">
+                    {galleryItems.map((variant) => (
+                      <button
+                        key={variant.id}
+                        onClick={() => setGalleryActiveId(variant.id)}
+                        className={`w-16 h-16 border-2 rounded-lg overflow-hidden ${variant.id === activeGalleryItem.id ? 'border-brand-blue ring-2 ring-brand-blue/40' : 'border-black'}`}
+                      >
+                        <img src={variant.imageUrl} alt={variant.category} className="w-full h-full object-cover" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </ModalPortal>

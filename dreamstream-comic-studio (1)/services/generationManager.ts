@@ -5,6 +5,14 @@ import { buildImagePrompt } from "./imagePrompt";
 import { resolveAspectRatio } from "./imageUtils";
 import { normalizePanelDialogue } from "./dialogueUtils";
 import { MAX_CONTINUITY_PANELS } from "./modelPolicy";
+import { createSystemNotification } from "./db";
+import {
+  collectPanelReferenceImageIds,
+  getEntityById,
+  getSceneBinding,
+  resolvePanelContinuity,
+  validateContinuityState
+} from "./continuity";
 
 const generationControllers = new Map<string, AbortController>();
 const generationCanceled = new Set<string>();
@@ -83,6 +91,25 @@ export const startBackgroundGeneration = async (
   try {
     addLog("Starting generation process...");
 
+    const validation = validateContinuityState(state);
+    onUpdate(project.id, (prev) => ({
+      state: {
+        ...prev.state,
+        continuity: prev.state.continuity
+          ? { ...prev.state.continuity, validation }
+          : prev.state.continuity
+      }
+    }));
+    if ((state.continuity?.lockLevel || "strict") === "strict" && !validation.isValid) {
+      addLog(`Continuity validation failed (${validation.issues.length} issues).`);
+      void createSystemNotification(
+        `Generation blocked: continuity validation failed (${validation.issues.length} issue${validation.issues.length === 1 ? '' : 's'}).`,
+        { projectId: project.id, stage: 'generation' }
+      );
+      stopWithStatus("Failed: Continuity");
+      return;
+    }
+
     const existingPanels = state.panels.map(panelToPlan);
     const planByScene = groupPanelsByScene(existingPanels);
     let totalPanelsEstimate = existingPanels.length > 0 ? existingPanels.length : state.scenes.length * 3;
@@ -122,7 +149,20 @@ export const startBackgroundGeneration = async (
             state.layoutType,
             project.id,
             3,
-            { abortSignal: controller.signal, stage: "preview" }
+            {
+              abortSignal: controller.signal,
+              stage: "preview",
+              continuityBible: state.continuity?.bible,
+              sceneBindings: state.continuity?.bible.sceneBindings,
+              previousPanelContext: freshPanels
+                .slice(-MAX_CONTINUITY_PANELS)
+                .map((panel) => ({
+                  panelId: panel.id,
+                  sceneId: panel.sceneId,
+                  description: panel.description,
+                  dialogue: panel.dialogue
+                }))
+            }
           );
           breakdown = panelData.map((panel, idx) => ({
             id: `s${scene.id}-p${idx}-${Date.now()}`,
@@ -133,7 +173,14 @@ export const startBackgroundGeneration = async (
             dialogueBlocks: panel.dialogueBlocks,
             imageIdHistory: [],
             imageUrlHistory: [],
-            isPlanned: true
+            isPlanned: true,
+            continuity: {
+              requiredEntityIds: panel.requiredEntityIds || [],
+              referenceImageIds: [],
+              locationId: panel.locationId,
+              continuityNotes: panel.continuityNotes,
+              flaggedIssues: []
+            }
           })).map(normalizePanelDialogue);
 
           totalPanelsEstimate = totalPanelsEstimate - 3 + breakdown.length;
@@ -152,6 +199,15 @@ export const startBackgroundGeneration = async (
 
         updateStatus({ currentStepDescription: `Generating Scene ${scene.id}` });
 
+        const sceneBinding = getSceneBinding(state, scene.id);
+        const panelContinuity = resolvePanelContinuity(state, panelData);
+        const continuityEntityNames = (panelContinuity.requiredEntityIds || [])
+          .map((entityId) => getEntityById(state, entityId)?.name)
+          .filter((name): name is string => !!name);
+        const lockedLocationName = panelContinuity.locationId
+          ? getEntityById(state, panelContinuity.locationId)?.name
+          : undefined;
+
         const characterContext = state.characters.map(c => `${c.name}: ${c.description}`).join('. ');
         const itemContext = state.items.map(i => `${i.name}: ${i.description}`).join('. ');
         const locContext = state.locations.map(l => `${l.name}: ${l.description}`).join('. ');
@@ -167,14 +223,20 @@ export const startBackgroundGeneration = async (
           sceneAction: panelData.description,
           setting: scene.setting,
           continuitySummary: continuitySummary || undefined,
-          recentPanels: continuityText || undefined
+          recentPanels: continuityText || undefined,
+          requiredEntityNames: continuityEntityNames.join(", ") || undefined,
+          lockedLocation: lockedLocationName,
+          continuityLock: panelContinuity.continuityNotes || (sceneBinding ? `Scene ${sceneBinding.sceneId} strict lock` : "strict")
         });
 
         let generatedImageId = panelData.imageId;
         let generatedImageUrl = panelData.imageUrl;
         if (!generatedImageId || !generatedImageUrl) {
           addLog(`Painting Panel: ${(panelData.description || "").substring(0, 30)}...`);
-          const continuityImageIds = recentPanelImageIds.slice(-MAX_CONTINUITY_PANELS);
+          const continuityImageIds = [
+            ...collectPanelReferenceImageIds(state, panelData),
+            ...recentPanelImageIds.slice(-MAX_CONTINUITY_PANELS)
+          ];
           try {
             const generated = await generateImage(
               imagePrompt,
@@ -184,7 +246,7 @@ export const startBackgroundGeneration = async (
               project.id,
               {
                 abortSignal: controller.signal,
-                stage: "generation",
+                stage: "panel",
                 cropToRatio: ratioConfig.cropRatio,
                 meta: {
                   source: {
@@ -210,6 +272,10 @@ export const startBackgroundGeneration = async (
 
         const newPanel: ComicPanel = normalizePanelDialogue({
           ...panelData,
+          continuity: {
+            ...panelContinuity,
+            referenceImageIds: collectPanelReferenceImageIds(state, panelData)
+          },
           imageId: generatedImageId,
           imageUrl: generatedImageUrl,
           imageIdHistory: generatedImageId ? [generatedImageId, ...(panelData.imageIdHistory || [])] : panelData.imageIdHistory || [],
@@ -270,6 +336,10 @@ export const startBackgroundGeneration = async (
   } catch (error: any) {
     console.error("Generation Error", error);
     addLog(`Error: ${error.message || String(error)}`);
+    void createSystemNotification(
+      `Generation failed: ${error?.message || 'Unknown error'}`,
+      { projectId: project.id, stage: 'generation' }
+    );
     updateStatus({
       isActive: false,
       currentStepDescription: `Failed: ${error.message || "Unknown error"}`,

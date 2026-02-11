@@ -249,7 +249,7 @@ K: "I'm just looking for dinner."`;
                     AI Analysis
                 </h3>
                 <p className="text-sm text-slate-600 font-medium mb-4 leading-relaxed">
-                    We use <strong className="text-brand-blue">Gemini 2.5 Flash Lite</strong> to rapidly understand characters, setting, and action at low cost.
+                    Script analysis uses your selected Gemini text model (Gemini 2.5 Flash, 2.0 Flash, or 2.5 Flash Lite).
                 </p>
                 {checklist && showChecklist && (
                   <div className="mb-4 bg-slate-50 border-2 border-black rounded-lg p-4 text-xs space-y-3">

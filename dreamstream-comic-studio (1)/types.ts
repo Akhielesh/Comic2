@@ -37,6 +37,9 @@ export type SettingsState = {
   showGeminiKey?: boolean;
   showFluxKey?: boolean;
   modelRouting?: Record<string, string>;
+  defaultImageModel?: string;
+  defaultTextModel?: string;
+  defaultTextModelKey?: string;
 };
 
 export type TestLabRunStep = {
@@ -216,11 +219,72 @@ export interface Location {
   referenceImageIds: string[];
 }
 
+export type ContinuityEntityKind = 'character' | 'item' | 'location';
+
+export interface ContinuityEntity {
+  id: string;
+  kind: ContinuityEntityKind;
+  name: string;
+  description: string;
+  lockedTraits: string[];
+  referenceImageIds: string[];
+  required: boolean;
+}
+
+export interface SceneContinuityBinding {
+  sceneId: number;
+  characterIds: string[];
+  itemIds: string[];
+  locationId?: string;
+  requiredEntityIds: string[];
+}
+
+export interface ContinuityValidationIssue {
+  code: string;
+  message: string;
+  severity: 'error' | 'warning';
+  sceneId?: number;
+  panelId?: string;
+  entityId?: string;
+}
+
+export interface ContinuityValidationResult {
+  isValid: boolean;
+  missingEntityIds: string[];
+  issues: ContinuityValidationIssue[];
+  updatedAt: number;
+}
+
+export interface ContinuityBible {
+  version: number;
+  entities: ContinuityEntity[];
+  sceneBindings: SceneContinuityBinding[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface PanelContinuity {
+  requiredEntityIds: string[];
+  referenceImageIds: string[];
+  locationId?: string;
+  continuityNotes?: string;
+  driftScore?: number;
+  validatedAt?: number;
+  flaggedIssues?: string[];
+}
+
+export interface ContinuityState {
+  bible: ContinuityBible;
+  lockLevel: 'strict' | 'guided' | 'flexible';
+  fallbackPolicy: 'auto' | 'soft_fail' | 'hard_fail';
+  validation?: ContinuityValidationResult;
+}
+
 export interface ComicPanel {
   id: string;
   sceneId: number;
-  description: string; 
-  dialogue: string; 
+  description: string;
+  dialogue: string;
   dialogueBlocks?: DialogueBlock[];
   prompt?: string;
   imageId?: string;
@@ -229,24 +293,25 @@ export interface ComicPanel {
   imageUrlHistory?: string[];
   isGenerating?: boolean;
   isPlanned?: boolean;
+  continuity?: PanelContinuity;
 }
 
 export interface StyleVariant {
-    id: string;
-    styleId?: string;
-    imageId?: string;
-    imageUrl?: string;
-    prompt: string;
-    category: string;
-    aspectRatio: AspectRatio;
-    resolution: ImageResolution;
-    cacheKey?: string;
-    generatedAt?: number;
-    timings?: {
-      apiMs?: number;
-      saveMs?: number;
-      totalMs?: number;
-    };
+  id: string;
+  styleId?: string;
+  imageId?: string;
+  imageUrl?: string;
+  prompt: string;
+  category: string;
+  aspectRatio: AspectRatio;
+  resolution: ImageResolution;
+  cacheKey?: string;
+  generatedAt?: number;
+  timings?: {
+    apiMs?: number;
+    saveMs?: number;
+    totalMs?: number;
+  };
 }
 
 export type LayoutType =
@@ -316,9 +381,28 @@ export interface GenerationStatus {
   totalPanels: number;
 }
 
+export interface Review {
+  id: string;
+  projectId: string;
+  userId: string;
+  rating: number; // 0.5 to 5.0
+  scores: {
+    story: number;
+    art: number;
+    characters: number;
+    pacing: number;
+  };
+  text: string;
+  createdAt: number;
+  user?: {
+    username: string;
+    avatar_url?: string;
+  };
+}
+
 export interface ComicState {
   step: number;
-  maxStepReached: number; 
+  maxStepReached: number;
   flowVersion?: number;
   script: string;
   scriptChecklist?: {
@@ -329,6 +413,7 @@ export interface ComicState {
   };
   scenes: Scene[];
   continuitySummary?: string;
+  continuity?: ContinuityState;
   overview?: string;
   comments?: ProjectComment[];
   storyBuilder?: StoryBuilderState;
@@ -339,38 +424,53 @@ export interface ComicState {
   coverTemplateId?: string;
   coverTemplateImageId?: string;
   coverTemplateImageUrl?: string;
-  
+
   // Style
   styleVariants: StyleVariant[];
   selectedStyleId?: string;
-  stylePrompt: string; 
+  stylePrompt: string;
   styleCategory: string;
   styleAspectRatio: AspectRatio;
   customAspectRatioEnabled?: boolean;
   customAspectRatio?: string;
   imageResolution: ImageResolution;
-  
+
   // References (World Building)
   characters: Character[];
   items: Item[];
   locations: Location[];
-  
+
   // Layout
   layoutType: LayoutType;
-  customLayoutPrompt?: string; 
+  customLayoutPrompt?: string;
   textLayout?: TextLayout;
   panelPlanVersion?: number;
   pricingConfig?: PricingConfig;
+  // Deprecated legacy field retained for backwards compatibility with older project payloads.
   assistantChat?: ChatMessage[];
   imageTags?: Record<string, ImageTag>;
   imageTagCounters?: Record<string, number>;
-  
+
   // Final Output
   panels: ComicPanel[];
-  
+
   // Background Process
   generationStatus?: GenerationStatus;
   generationArtifacts?: GenerationArtifact[];
+
+  // Versioning
+  versions?: ProjectVersion[];
+}
+
+export interface ProjectVersion {
+  id: string;
+  name: string;
+  createdAt: number;
+  state: ComicState;
+  thumbnail?: string;
+  reason?: string;
+  parentVersionId?: string;
+  snapshotHash?: string;
 }
 
 export interface Project {
@@ -380,24 +480,29 @@ export interface Project {
   updatedAt: number;
   coverImage?: string;
   state: ComicState;
+  isPublic?: boolean;
+  userId?: string;
+  authorName?: string;
+  likesCount?: number;
+  viewsCount?: number;
 }
 
 export interface ChatMessage {
-    id: string;
-    role: 'user' | 'model';
-    text: string;
-    timestamp: number;
+  id: string;
+  role: 'user' | 'model';
+  text: string;
+  timestamp: number;
 }
 
 export interface ProjectComment {
-    id: string;
-    authorId?: string;
-    author?: string;
-    text: string;
-    createdAt: number;
-    updatedAt?: number;
-    likes: number;
-    dislikes: number;
+  id: string;
+  authorId?: string;
+  author?: string;
+  text: string;
+  createdAt: number;
+  updatedAt?: number;
+  likes: number;
+  dislikes: number;
 }
 
 export interface ImageTag {
@@ -414,8 +519,8 @@ export interface ImageTag {
 }
 
 export interface MasterChatSession {
-    messages: ChatMessage[];
-    isOpen: boolean;
+  messages: ChatMessage[];
+  isOpen: boolean;
 }
 
 export enum AppStep {
@@ -427,4 +532,57 @@ export enum AppStep {
   COMBINED_PREVIEW = 5,
   FULL_GENERATION = 6,
   REVIEW_EXPORT = 7
+}
+
+export interface UserProfile {
+  id: string; // references auth.users
+  username?: string; // UNIQUE
+  email: string;
+  avatar_url?: string;
+  bio?: string;
+  full_name?: string;
+  website?: string;
+  created_at: string;
+  updated_at?: string;
+  is_premium?: boolean; // From usage_limits join
+  credits?: number; // From usage_limits
+}
+
+export interface Comment {
+  id: string;
+  project_id: string;
+  user_id: string;
+  text: string;
+  created_at: string;
+  updated_at?: string;
+  user?: { username?: string; avatar_url?: string };
+  likes?: number;
+  dislikes?: number; // Optional locally, or logic handles it
+  isLiked?: boolean;
+}
+
+export interface Follow {
+  follower_id: string;
+  following_id: string;
+  created_at: string;
+}
+
+export interface AppNotification {
+  id: string;
+  user_id: string;
+  actor_id?: string;
+  type: 'follow' | 'comment' | 'like' | 'generation' | 'system';
+  entity_id?: string;
+  is_read: boolean;
+  created_at: string;
+  actor?: { username: string; avatar_url?: string };
+  title?: string;
+  message?: string;
+}
+
+export interface CommentLike {
+  id: string;
+  user_id: string;
+  comment_id: string;
+  created_at: string;
 }

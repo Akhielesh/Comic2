@@ -1,4 +1,15 @@
-import { AspectRatio, ImageResolution, Scene, Character, Item, Location, DialogueBlock, Project } from './types.js';
+import {
+  AspectRatio,
+  ImageResolution,
+  Scene,
+  Character,
+  Item,
+  Location,
+  DialogueBlock,
+  Project,
+  ContinuityBible,
+  SceneContinuityBinding
+} from './types.js';
 
 export type ApiUsage = {
   promptTokens?: number;
@@ -56,6 +67,19 @@ export type StoryDraftResponse = {
   model: string;
 };
 
+export type StoryToolRequest = {
+  script: string;
+  instruction: string;
+  history?: Array<{ role: 'user' | 'model'; text: string }>;
+};
+export type StoryToolResponse = {
+  text: string;
+  prompt: string;
+  responseText?: string;
+  usage?: ApiUsage;
+  model: string;
+};
+
 export type ExtractWorldRequest = { scenes: Scene[] };
 export type ExtractWorldResponse = {
   characters: Character[];
@@ -73,9 +97,56 @@ export type PanelBreakdownRequest = {
   layoutType: string;
   panelCount?: number;
   stage?: string;
+  continuityBible?: ContinuityBible;
+  sceneBindings?: SceneContinuityBinding[];
+  previousPanelContext?: Array<{
+    panelId?: string;
+    sceneId?: number;
+    description: string;
+    dialogue?: string;
+  }>;
 };
 export type PanelBreakdownResponse = {
-  panels: Array<{ description: string; dialogue: string; dialogueBlocks?: DialogueBlock[] }>;
+  panels: Array<{
+    description: string;
+    dialogue: string;
+    dialogueBlocks?: DialogueBlock[];
+    requiredEntityIds?: string[];
+    locationId?: string;
+    continuityNotes?: string;
+  }>;
+  prompt: string;
+  responseText?: string;
+  usage?: ApiUsage;
+  model: string;
+};
+
+export type ContinuityAuditRequest = {
+  script?: string;
+  continuityBible?: ContinuityBible;
+  sceneBindings?: SceneContinuityBinding[];
+  panels: Array<{
+    id?: string;
+    sceneId: number;
+    description: string;
+    dialogue?: string;
+    requiredEntityIds?: string[];
+    locationId?: string;
+  }>;
+};
+
+export type ContinuityAuditResponse = {
+  panelScores: Array<{
+    panelId?: string;
+    sceneId: number;
+    driftScore: number;
+    issues: string[];
+    suggestedFix?: string;
+    requiredEntityIds?: string[];
+    locationId?: string;
+  }>;
+  overallScore: number;
+  summary: string;
   prompt: string;
   responseText?: string;
   usage?: ApiUsage;
@@ -110,6 +181,7 @@ export type ImageGenerateRequest = {
   resolution: ImageResolution;
   referenceImages?: string[]; // dataUrls
   stage?: string;
+  model?: string;
 };
 export type ImageGenerateResponse = {
   dataUrl: string;
@@ -138,6 +210,57 @@ export type FluxGenerateResponse = {
 
 export type AssistantMessage = { role: 'user' | 'model'; text: string };
 
+export type AssistantMap = Record<string, unknown>;
+
+export type AssistantSystemStatusSummary = {
+  status?: string;
+  geminiKeyPresent?: boolean;
+  pixazoKeyPresent?: boolean;
+  message?: string;
+};
+
+export type AssistantReportSummary = {
+  cost?: { currency?: string; totalCost?: number; estimatedArtifacts?: number };
+  storage?: {
+    imageCount?: number;
+    imageBytes?: number;
+    panelsCount?: number;
+    artifactsCount?: number;
+    indexedDb?: AssistantMap;
+  };
+  aiUsage?: { totalTokens?: number; totalArtifacts?: number };
+};
+
+export type AssistantArtifactSummary = {
+  total?: number;
+  byStage?: Record<string, number>;
+  byType?: Record<string, number>;
+  lastPrompts?: Array<{ stage?: string; model?: string; prompt?: string }>;
+};
+
+export type AssistantPanelPlanSummary = {
+  plannedPanels?: number;
+  generatedPanels?: number;
+  textLayout?: string;
+};
+
+export type AssistantProjectSummary = {
+  id?: string;
+  name?: string;
+  updatedAt?: number;
+  step?: number;
+  panelCount?: number;
+  generatedPanels?: number;
+  hasCover?: boolean;
+};
+
+export type AssistantAppSnapshot = {
+  view?: string;
+  totalProjects?: number;
+  generatingProjects?: Array<AssistantMap>;
+  lastUpdatedProject?: AssistantMap;
+};
+
 export type StoryAssistantRequest = {
   script: string;
   message: string;
@@ -154,16 +277,16 @@ export type StoryAssistantResponse = {
 export type MasterAssistantContext = {
   view: string;
   project?: Project;
-  systemStatus?: any;
-  reportSummary?: any;
-  artifactSummary?: any;
-  panelPlanSummary?: any;
-  pricingConfig?: any;
-  allProjectsSummary?: any;
-  projectSnapshot?: any;
-  appSnapshot?: any;
-  testLabSummary?: any;
-  testLabRecentRuns?: any;
+  systemStatus?: AssistantSystemStatusSummary;
+  reportSummary?: AssistantReportSummary;
+  artifactSummary?: AssistantArtifactSummary;
+  panelPlanSummary?: AssistantPanelPlanSummary;
+  pricingConfig?: unknown;
+  allProjectsSummary?: AssistantProjectSummary[];
+  projectSnapshot?: AssistantMap;
+  appSnapshot?: AssistantAppSnapshot;
+  testLabSummary?: AssistantMap;
+  testLabRecentRuns?: AssistantMap[];
 };
 
 export type MasterAssistantRequest = {
@@ -189,6 +312,11 @@ export type TestLabReportResponse = {
 };
 
 export type SystemStatusResponse = {
+  status: 'ok' | 'error';
+  message?: string;
+};
+
+export type SystemDiagnosticsResponse = {
   status: 'ok' | 'error';
   geminiKeyPresent: boolean;
   pixazoKeyPresent: boolean;
