@@ -6,6 +6,7 @@ import { Button } from "./Button";
 import { FluxKeyInput } from "./FluxKeyInput";
 import { KeyManager } from "./KeyManager";
 import { IMAGE_MODELS } from "../services/imageModels";
+import { TEXT_MODELS, DEFAULT_TEXT_MODEL } from "../services/data/textModels";
 import { clearImageCache, getDbStats } from "../services/db";
 import { getFluxKeyInfo, getSettingsState, setSettingsState } from "../services/appSettings";
 import { getDebugState, subscribeDebugState } from "../services/debugStore";
@@ -15,21 +16,6 @@ interface SettingsModalProps {
   onReloadProjects: () => void;
   onUpdateSettings?: () => void;
 }
-
-const COMING_SOON_MODELS = [
-  "Flux Dev",
-  "Flux Pro",
-  "SDXL Turbo",
-  "SD3 Large",
-  "Playground v2"
-];
-
-const FEATURE_ROUTING = [
-  { id: "script_analysis", label: "Script Analysis" },
-  { id: "story_builder", label: "Story Builder" },
-  { id: "panel_breakdown", label: "Panel Breakdown" },
-  { id: "image_generation", label: "Image Generation" }
-];
 
 const AssistantSettingsSection = ({ settings, onToggle }: { settings: ReturnType<typeof getSettingsState>, onToggle: () => void }) => (
   <div className="flex items-center justify-between p-4 border-2 border-slate-200 rounded-lg bg-slate-50">
@@ -49,11 +35,11 @@ const AssistantSettingsSection = ({ settings, onToggle }: { settings: ReturnType
 export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadProjects, onUpdateSettings }) => {
   const [dbStats, setDbStats] = useState<Awaited<ReturnType<typeof getDbStats>> | null>(null);
   const [settings, setSettings] = useState(() => getSettingsState());
-  const [fluxKey, setFluxKey] = useState<string | null>(null);
   const [sectionsOpen, setSectionsOpen] = useState({
     keys: true,
     assistant: false,
-    models: false,
+    imageModels: false,
+    textModels: false,
     routing: false,
     storage: false
   });
@@ -79,12 +65,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadP
     if (onUpdateSettings) onUpdateSettings();
   };
 
-
-
-  const fluxDebug = debugState.flux;
-  const geminiDebug = debugState.gemini;
-  const fluxStatus = fluxKey ? "Ready" : "Missing";
-
   const SectionHeader = ({ title, sectionKey }: { title: string; sectionKey: keyof typeof sectionsOpen }) => (
     <button
       className="w-full flex items-center justify-between text-left px-4 py-3 border-2 border-black rounded-lg bg-slate-50"
@@ -107,8 +87,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadP
 
         <div className="p-6 space-y-6">
           <section className="space-y-3">
-            {/* RENAMED SECTION FOR VISIBILITY */}
-            <SectionHeader title="API Keys & Models" sectionKey="keys" />
+            <SectionHeader title="API Keys" sectionKey="keys" />
             {sectionsOpen.keys && (
               <div className="space-y-4 animate-fade-in">
                 <div className="flex justify-end px-1">
@@ -116,8 +95,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadP
                     Need help getting keys?
                   </a>
                 </div>
-
-                {/* New Key Manager for Model-Specific Keys */}
                 <div className="pt-2">
                   <KeyManager />
                 </div>
@@ -135,8 +112,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadP
           </section>
 
           <section className="space-y-3">
-            <SectionHeader title="Image Models" sectionKey="models" />
-            {sectionsOpen.models && (
+            <SectionHeader title="Image Models" sectionKey="imageModels" />
+            {sectionsOpen.imageModels && (
               <div className="grid md:grid-cols-2 gap-3 animate-fade-in">
                 {IMAGE_MODELS.map(model => (
                   <div
@@ -162,6 +139,44 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadP
                   </div>
                 ))}
               </div>
+            )}
+          </section>
+
+          <section className="space-y-3">
+            <SectionHeader title="Text Models" sectionKey="textModels" />
+            {sectionsOpen.textModels && (
+               <div className="space-y-3 animate-fade-in">
+                   <div className="text-xs text-slate-500 mb-2">Select the default model for script analysis and story generation.</div>
+                    <div className="grid md:grid-cols-1 gap-3">
+                    {TEXT_MODELS.map(model => (
+                        <div
+                            key={model.id}
+                            onClick={() => {
+                                const next = { ...settings, defaultTextModel: model.id };
+                                setSettings(next);
+                                setSettingsState(next);
+                                if (onUpdateSettings) onUpdateSettings();
+                            }}
+                             className={`p-3 border-2 rounded-lg cursor-pointer transition-all ${settings.defaultTextModel === model.id ? 'border-brand-blue bg-brand-blue/20 ring-2 ring-brand-blue/50' : 'border-slate-200 hover:border-black'}`}
+                        >
+                             <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                     <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${(settings.defaultTextModel || DEFAULT_TEXT_MODEL) === model.id ? 'border-brand-blue bg-brand-blue' : 'border-slate-300'}`}>
+                                        {(settings.defaultTextModel || DEFAULT_TEXT_MODEL) === model.id && <div className="w-2 h-2 bg-white rounded-full" />}
+                                    </div>
+                                    <div>
+                                        <div className="font-bold text-sm">{model.label}</div>
+                                        <div className="text-xs text-slate-500">{model.description}</div>
+                                    </div>
+                                </div>
+                                <div className="text-xs font-mono font-bold text-slate-400 border border-slate-200 rounded px-2 py-1">
+                                    {model.cost}
+                                </div>
+                             </div>
+                        </div>
+                    ))}
+                    </div>
+               </div>
             )}
           </section>
 

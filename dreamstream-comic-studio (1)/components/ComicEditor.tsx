@@ -202,58 +202,59 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   };
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <StepIndicator currentStep={state.step} maxStepReached={state.maxStepReached} onStepClick={goToStep} />
-      <div className="p-4 border-b border-slate-200 bg-white/50 backdrop-blur-sm sticky top-24 z-30 flex items-center">
-        <button onClick={onBack} className="flex items-center text-sm font-bold text-slate-500 hover:text-black transition-colors">
-          <ArrowLeft className="w-4 h-4 mr-1" /> Back to Dashboard
-        </button>
-        <span className="mx-4 text-slate-300">|</span>
-        <input
-          value={titleDraft}
-          onChange={(e) => setTitleDraft(e.target.value)}
-          onBlur={() => {
-            const trimmed = titleDraft.trim();
-            if (trimmed && trimmed !== project.name) {
-              onUpdate({ name: trimmed });
-            } else {
-              setTitleDraft(project.name);
-            }
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              (e.target as HTMLInputElement).blur();
-            }
-          }}
-          className="font-display text-xl bg-transparent border-b-2 border-transparent focus:border-black outline-none"
-        />
-        {state.generationStatus?.isActive && (
-          <div className="ml-auto flex items-center gap-2 px-3 py-1 bg-brand-yellow rounded-full border border-black text-xs font-bold mr-4">
-            <div className="w-2 h-2 bg-black rounded-full animate-pulse" /> Building in background...
-          </div>
-        )}
+    <div className="min-h-screen flex flex-col pt-20">
+      <div className="bg-white border-b-4 border-black z-40 fixed top-20 left-0 right-0">
+          <StepIndicator currentStep={state.step} maxStepReached={state.maxStepReached} onStepClick={goToStep} />
 
-        <div className="ml-auto flex items-center gap-2">
-          <button
-            onClick={saveVersion}
-            className="p-2 hover:bg-slate-100 rounded-full text-slate-600 hover:text-black transition-colors"
-            title="Save Version Snapshot"
-          >
-            <Save size={20} />
-          </button>
-          <button
-            onClick={() => setShowVersions(true)}
-            className="p-2 hover:bg-slate-100 rounded-full text-slate-600 hover:text-black transition-colors relative"
-            title="Version History"
-          >
-            <History size={20} />
-            {(state.versions?.length || 0) > 0 && (
-              <span className="absolute top-1 right-1 w-2 h-2 bg-brand-blue rounded-full" />
-            )}
-          </button>
-        </div>
+           <div className="p-4 bg-white/50 backdrop-blur-sm flex items-center gap-4">
+              <input
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onBlur={() => {
+                  const trimmed = titleDraft.trim();
+                  if (trimmed && trimmed !== project.name) {
+                    onUpdate({ name: trimmed });
+                  } else {
+                    setTitleDraft(project.name);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    (e.target as HTMLInputElement).blur();
+                  }
+                }}
+                className="font-display text-xl bg-transparent border-b-2 border-transparent focus:border-black outline-none flex-1"
+                placeholder="Project Title"
+              />
+              {state.generationStatus?.isActive && (
+                <div className="flex items-center gap-2 px-3 py-1 bg-brand-yellow rounded-full border border-black text-xs font-bold">
+                  <div className="w-2 h-2 bg-black rounded-full animate-pulse" /> Building...
+                </div>
+              )}
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={saveVersion}
+                  className="p-2 hover:bg-slate-100 rounded-full text-slate-600 hover:text-black transition-colors"
+                  title="Save Version Snapshot"
+                >
+                  <Save size={20} />
+                </button>
+                <button
+                  onClick={() => setShowVersions(true)}
+                  className="p-2 hover:bg-slate-100 rounded-full text-slate-600 hover:text-black transition-colors relative"
+                  title="Version History"
+                >
+                  <History size={20} />
+                  {(state.versions?.length || 0) > 0 && (
+                    <span className="absolute top-1 right-1 w-2 h-2 bg-brand-blue rounded-full" />
+                  )}
+                </button>
+              </div>
+          </div>
       </div>
-      <main className="p-6 max-w-7xl mx-auto w-full flex-1">
+
+      <main className="p-6 max-w-7xl mx-auto w-full flex-1 mt-32">
         {renderStep()}
       </main>
 

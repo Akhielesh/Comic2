@@ -16,16 +16,14 @@ const PrivacyPolicy = React.lazy(() => import('./components/PrivacyPolicy').then
 const TermsOfService = React.lazy(() => import('./components/TermsOfService').then(module => ({ default: module.TermsOfService })));
 
 import { MasterAssistant } from './components/MasterAssistant';
-import { ModelSelector } from './components/ModelSelector';
-import { FluxKeyInput } from './components/FluxKeyInput';
 import { useProjectManager } from './hooks/useProjectManager';
 import { checkSystemStatus } from './services/geminiService';
 import { getFluxKeyInfo, getImageProvider, getLockedImageProvider } from './services/appSettings';
 import { useAuth } from './contexts/AuthContext';
 import { AuthPage } from './components/AuthPage';
-import { getPublicProject, incrementViewCount, incrementLikeCount } from './services/db';
+import { getPublicProject, incrementViewCount } from './services/db';
 import { Project } from './types';
-import { Key, Zap, Loader2 } from 'lucide-react';
+import { Zap, Loader2 } from 'lucide-react';
 import { SystemStatusResponse } from './apiTypes';
 import { UserAvatar } from './components/UserAvatar';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
@@ -146,22 +144,6 @@ const App: React.FC = () => {
     loadPublic();
   }, [currentView, activeProjectId, projects, authLoading, isCheckingKey]);
 
-  const handleSelectKey = async () => {
-    try {
-      const aiStudio = (window as any).aistudio;
-      if (aiStudio) {
-        await aiStudio.openSelectKey();
-      }
-      const manualKey = window.prompt('Paste your Gemini API key');
-      if (manualKey && manualKey.trim()) {
-        const trimmed = manualKey.trim();
-        localStorage.setItem('dreamstream_api_key', trimmed);
-        setStoredKeySuffix(trimmed.slice(-4));
-        const fluxInfo = getFluxKeyInfo();
-        setHasValidKey(computeHasValidKey(trimmed, fluxInfo.key));
-      }
-    } catch (error) { console.error("Key selection failed:", error); }
-  };
   const handleNavigate = (view: string, id?: string) => {
     // If going to reader, ensure we know where to return
     if (view === 'reader') {
@@ -192,32 +174,6 @@ const App: React.FC = () => {
       setCurrentView('profile');
     } else if (view === 'home' || view === 'dashboard' || view === 'auth' || view === 'settings') {
       setCurrentView(view);
-    }
-  };
-
-
-  const handleSaveLocalKey = () => {
-    const trimmed = localKeyInput.trim();
-    if (!trimmed) return;
-    try {
-      localStorage.setItem('dreamstream_api_key', trimmed);
-      setStoredKeySuffix(trimmed.slice(-4));
-      const fluxInfo = getFluxKeyInfo();
-      setHasValidKey(computeHasValidKey(trimmed, fluxInfo.key));
-      setLocalKeyInput('');
-    } catch (e) {
-      console.error("Failed to save API key", e);
-    }
-  };
-
-  const handleClearLocalKey = () => {
-    try {
-      localStorage.removeItem('dreamstream_api_key');
-      setStoredKeySuffix(null);
-      const fluxInfo = getFluxKeyInfo();
-      setHasValidKey(computeHasValidKey(null, fluxInfo.key));
-    } catch (e) {
-      console.error("Failed to clear API key", e);
     }
   };
 
@@ -263,15 +219,6 @@ const App: React.FC = () => {
     window.history.pushState({}, '', url);
   };
 
-  const handleBackToHome = () => {
-    setCurrentView('home');
-    setActiveProjectId(null);
-    const url = new URL(window.location.href);
-    url.searchParams.delete('view');
-    url.searchParams.delete('id');
-    window.history.pushState({}, '', url);
-  };
-
   if (systemError) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-zinc-950 text-white p-4">
@@ -309,8 +256,6 @@ const App: React.FC = () => {
     );
   }
 
-
-
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-brand-blue">
@@ -318,12 +263,6 @@ const App: React.FC = () => {
       </div>
     );
   }
-
-  // Define Routing Logic
-
-  // Handlers for Views
-  const navigateToAuth = () => setCurrentView('auth');
-  const navigateToDashboard = () => setCurrentView('dashboard');
 
   if ((currentView as any) === 'auth') {
     if (user) { setCurrentView('dashboard'); return null; } // Auto-redirect if already logged in
@@ -338,20 +277,6 @@ const App: React.FC = () => {
     return (
       <PublicGallery
         onReadComic={(pid) => {
-          // We need to load a public project.
-          // For MVP, we switch to Reader and tell Reader to load this ID.
-          // BUT Reader expects "activeProjectId" which usually implies OWNERSHIP or at least loaded in db.ts cache.
-          // We will set activeProjectId. The Reader component or App needs to handle loading logic.
-          // App.tsx usually loads project from useProjectManager.
-          // "activeProjectId" state is used.
-          // We need to distinguish between "User Project" and "Public Project".
-          // OR we just set activeProjectId and ensure the Reader can handle it?
-          // The Reader component uses 'projects.find(p => p.id === activeProjectId)'.
-          // Public projects are NOT in the 'projects' list (which is user's projects).
-          // FIX: We need a way to pass the Project Object to Reader, OR have Reader fetch it if not found.
-          //
-          // Quick Fix: We'll route to 'reader' but we need to inject the public project into the state or handle it.
-          // Let's modify Reader View logic below.
           setActiveProjectId(pid);
           setCurrentView('reader');
         }}
@@ -371,33 +296,21 @@ const App: React.FC = () => {
     />;
   }
 
-  // If we are here, and view is protected, User is guaranteed (except for type narrowing)
-  // If User is present, handle Key Check only for Protected Routes
-
-  // REMOVED: Blocking "Unlock Studio" screen.
-  // We now allow users to enter and configure keys later in Settings.
-  /*
-  if (user && isProtectedViewStrict && !hasValidKey) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-brand-blue p-4">
-        ...
-      </div>
-    );
-  }
-  */
-
   const activeProject = activeProjectId ? getProject(activeProjectId) : undefined;
 
   return (
     <ErrorBoundary>
       <div className="min-h-screen font-sans relative">
         {/* Header */}
-        {(currentView === 'dashboard' || currentView === 'test' || currentView === 'learn') && (
+        {(currentView === 'dashboard' || currentView === 'test' || currentView === 'learn' || currentView === 'editor') && (
           <Header
             currentView={currentView}
             setCurrentView={setCurrentView as any}
             setSettingsTab={setSettingsTab}
             setLastView={setLastView}
+            isEditorMode={currentView === 'editor'}
+            onBack={() => setCurrentView('dashboard')}
+            projectTitle={currentView === 'editor' ? activeProject?.name : undefined}
           />
         )}
 

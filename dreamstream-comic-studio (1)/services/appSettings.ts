@@ -1,5 +1,6 @@
 import { ImageProviderId } from "../types";
 import { DEFAULT_IMAGE_PROVIDER, IMAGE_PROVIDER_LOCK } from "./imageModels";
+import { DEFAULT_TEXT_MODEL } from "./data/textModels";
 
 const IMAGE_PROVIDER_KEY = "dreamstream_image_provider";
 const FLUX_KEY_STORAGE = "dreamstream_flux_key";
@@ -119,6 +120,7 @@ export const getSettingsState = (): {
   modelRouting?: Record<string, string>;
   showAssistant?: boolean;
   defaultImageModel?: string;
+  defaultTextModel?: string;
 } => {
   const raw = getFromStorage(SETTINGS_KEY);
   if (!raw) return {};
@@ -135,6 +137,7 @@ export const setSettingsState = (next: {
   modelRouting?: Record<string, string>;
   showAssistant?: boolean;
   defaultImageModel?: string;
+  defaultTextModel?: string;
 }) => {
   setInStorage(SETTINGS_KEY, JSON.stringify(next));
 };
@@ -148,6 +151,11 @@ export const getShowAssistant = (): boolean => {
 export const getDefaultImageModel = (): string => {
   const settings = getSettingsState();
   return settings.defaultImageModel || "pixazo/flux-1-schnell";
+};
+
+export const getDefaultTextModel = (): string => {
+  const settings = getSettingsState();
+  return settings.defaultTextModel || DEFAULT_TEXT_MODEL;
 };
 
 export const getModelForTask = (task: string): string => {
