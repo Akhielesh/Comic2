@@ -1,9 +1,7 @@
 import React, { useState, useEffect, useMemo, Suspense } from 'react';
-import { Plus, BookOpen, Edit, Trash2, Copy, LayoutGrid, Sparkles, Zap, CheckCircle2, XCircle, AlertTriangle, Info, Star, Filter, Calendar, ArrowDownAZ, ArrowUpAZ, Clock, Loader2 } from 'lucide-react';
+import { Plus, BookOpen, Edit, Trash2, Copy, LayoutGrid, Sparkles, Zap, CheckCircle2, XCircle, AlertTriangle, Info, Star, Filter, Calendar, ArrowDownAZ, ArrowUpAZ, Clock, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 import { Project } from '../types';
 import { Button } from './Button';
-// Lazy load ProjectInfoModal
-// Lazy load ProjectInfoModal
 const ProjectInfoModal = React.lazy(() => import('./modals/ProjectInfoModal').then(module => ({ default: module.ProjectInfoModal })));
 import { DataRescue } from './DataRescue';
 import { getFluxKeyInfo } from '../services/appSettings';
@@ -20,8 +18,6 @@ interface ProjectDashboardProps {
   onUpdateProject: (id: string, updates: Partial<Project> | ((prev: Project) => Partial<Project>)) => void;
 }
 
-
-
 export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   projects, onCreateProject, onOpenProject, onDeleteProject, onDuplicateProject, onReadProject, onUpdateProject
 }) => {
@@ -33,45 +29,11 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   const [sortOption, setSortOption] = useState<'updated' | 'created' | 'az' | 'za'>('updated');
   const [filterFeatured, setFilterFeatured] = useState(false);
   const [filterRecent, setFilterRecent] = useState(false);
-  const [dateRange, setDateRange] = useState<'all' | '7' | '30' | '90'>('all');
-  const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<'all' | 'generating' | 'completed' | 'draft'>('all');
-  const [hasCoverFilter, setHasCoverFilter] = useState(false);
-  const [hasCommentsFilter, setHasCommentsFilter] = useState(false);
-  const [stepFilter, setStepFilter] = useState<'all' | 'script' | 'style' | 'world' | 'cover' | 'layout' | 'preview' | 'build' | 'done'>('all');
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
 
   const filteredProjects = useMemo(() => {
     const now = Date.now();
-    const maxAgeDays = dateRange === 'all' ? null : Number(dateRange);
     const recentCutoff = now - 7 * 24 * 60 * 60 * 1000;
-    const dateCutoff = maxAgeDays ? now - maxAgeDays * 24 * 60 * 60 * 1000 : null;
-
-    const matchesStep = (project: Project) => {
-      if (stepFilter === 'all') return true;
-      const step = project.state.step;
-      switch (stepFilter) {
-        case 'script': return step === 0;
-        case 'style': return step === 1;
-        case 'world': return step === 2;
-        case 'cover': return step === 3;
-        case 'layout': return step === 4;
-        case 'preview': return step === 5;
-        case 'build': return step === 6;
-        case 'done': return step === 7;
-        default: return true;
-      }
-    };
-
-    const matchesStatus = (project: Project) => {
-      if (statusFilter === 'all') return true;
-      const isGenerating = !!project.state.generationStatus?.isActive;
-      const isCompleted = project.state.panels.length > 0 && !isGenerating;
-      const isDraft = project.state.panels.length === 0 && !isGenerating;
-      if (statusFilter === 'generating') return isGenerating;
-      if (statusFilter === 'completed') return isCompleted;
-      if (statusFilter === 'draft') return isDraft;
-      return true;
-    };
 
     return projects
       .filter((project) => {
@@ -83,20 +45,8 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
 
         const matchesFeatured = !filterFeatured || !!project.state.isFeatured;
         const matchesRecent = !filterRecent || project.updatedAt >= recentCutoff;
-        const matchesDateRange = !dateCutoff || project.updatedAt >= dateCutoff;
-        const matchesCover = !hasCoverFilter || !!project.state.coverImageUrl || !!project.state.coverImageId;
-        const matchesComments = !hasCommentsFilter || (project.state.comments?.length || 0) > 0;
 
-        return (
-          matchesSearch &&
-          matchesFeatured &&
-          matchesRecent &&
-          matchesDateRange &&
-          matchesStatus(project) &&
-          matchesCover &&
-          matchesComments &&
-          matchesStep(project)
-        );
+        return matchesSearch && matchesFeatured && matchesRecent;
       })
       .sort((a, b) => {
         if (sortOption === 'updated') return b.updatedAt - a.updatedAt;
@@ -105,14 +55,13 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
         if (sortOption === 'za') return b.name.localeCompare(a.name);
         return 0;
       });
-  }, [projects, searchTerm, filterFeatured, filterRecent, dateRange, sortOption, statusFilter, hasCoverFilter, hasCommentsFilter, stepFilter]);
+  }, [projects, searchTerm, filterFeatured, filterRecent, sortOption]);
 
   const [visibleCount, setVisibleCount] = useState(12);
 
-  // Reset visible count when filters change
   useEffect(() => {
     setVisibleCount(12);
-  }, [searchTerm, filterFeatured, filterRecent, dateRange, sortOption, statusFilter, hasCoverFilter, hasCommentsFilter, stepFilter]);
+  }, [searchTerm, filterFeatured, filterRecent, sortOption]);
 
   const displayedProjects = filteredProjects.slice(0, visibleCount);
   const hasMore = visibleCount < filteredProjects.length;
@@ -134,7 +83,6 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
       <div className="flex justify-center gap-6">
         <Button onClick={() => setIsCreating(true)} className="text-xl px-12 py-6" icon={<Sparkles />}>Create New Comic</Button>
       </div>
-
     </div>
   );
 
@@ -142,8 +90,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
     <div className="max-w-7xl mx-auto p-8 animate-fade-in">
       <DataRescue />
       {projects.length > 0 && (
-        <>
-          <div className="flex items-center justify-between mb-8">
+        <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-4">
             <div className="flex items-center gap-4">
               <div className="w-16 h-16 bg-brand-yellow border-4 border-black rounded-xl flex items-center justify-center shadow-comic transform -rotate-3">
                 <LayoutGrid className="w-8 h-8 text-black" />
@@ -157,9 +104,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
               <NotificationBell onNavigate={onOpenProject ? ((v, id) => { if (v === 'reader' && id) onReadProject(id) }) : undefined as any} />
               <Button onClick={() => setIsCreating(true)} icon={<Plus />}>New Comic</Button>
             </div>
-          </div>
-
-        </>
+        </div>
       )}
 
       {isCreating && (
@@ -184,123 +129,69 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
       {projects.length === 0 ? renderLanding() : (
         <>
           <div className="bg-white border-4 border-black rounded-xl shadow-comic p-4 mb-6">
-            <div className="flex flex-col lg:flex-row lg:items-center gap-3">
+            <div className="flex flex-col md:flex-row md:items-center gap-3">
               <input
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 placeholder="Search projects..."
-                className="flex-1 border-2 border-black rounded-lg px-3 py-2 text-sm font-bold"
+                className="flex-1 border-2 border-black rounded-lg px-3 py-2 text-sm font-bold bg-slate-50"
               />
-              <div className="flex flex-wrap gap-2">
-                <button
-                  onClick={() => setFilterFeatured((prev) => !prev)}
-                  className={`px-3 py-2 border-2 border-black rounded-lg text-xs font-bold flex items-center gap-1 ${filterFeatured ? 'bg-brand-yellow' : 'bg-white'}`}
-                >
-                  <Star className="w-4 h-4" /> Featured
-                </button>
-                <button
-                  onClick={() => setFilterRecent((prev) => !prev)}
-                  className={`px-3 py-2 border-2 border-black rounded-lg text-xs font-bold flex items-center gap-1 ${filterRecent ? 'bg-brand-yellow' : 'bg-white'}`}
-                >
-                  <Clock className="w-4 h-4" /> Recent Changes
-                </button>
-                <select
-                  value={dateRange}
-                  onChange={(e) => setDateRange(e.target.value as any)}
-                  className="px-3 py-2 border-2 border-black rounded-lg text-xs font-bold"
-                >
-                  <option value="all">All Dates</option>
-                  <option value="7">Last 7 Days</option>
-                  <option value="30">Last 30 Days</option>
-                  <option value="90">Last 90 Days</option>
-                </select>
-                <select
+              <div className="flex items-center gap-2">
+                 <button
+                    onClick={() => setIsFilterOpen(!isFilterOpen)}
+                    className={`px-3 py-2 border-2 border-black rounded-lg text-xs font-bold flex items-center gap-1 bg-white hover:bg-slate-50 transition-colors`}
+                 >
+                    <Filter className="w-4 h-4" /> Filters {isFilterOpen ? <ChevronUp size={14}/> : <ChevronDown size={14}/>}
+                 </button>
+                 <select
                   value={sortOption}
                   onChange={(e) => setSortOption(e.target.value as any)}
-                  className="px-3 py-2 border-2 border-black rounded-lg text-xs font-bold"
+                  className="px-3 py-2 border-2 border-black rounded-lg text-xs font-bold bg-white"
                 >
                   <option value="updated">Recent Updated</option>
                   <option value="created">Recent Created</option>
                   <option value="az">A–Z</option>
                   <option value="za">Z–A</option>
                 </select>
-                <button
-                  onClick={() => setAdvancedOpen((prev) => !prev)}
-                  className="px-3 py-2 border-2 border-black rounded-lg text-xs font-bold flex items-center gap-1"
-                >
-                  <Filter className="w-4 h-4" /> More Filters
-                </button>
               </div>
             </div>
-            {advancedOpen && (
-              <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3 text-xs font-bold">
-                <select
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value as any)}
-                  className="px-3 py-2 border-2 border-black rounded-lg"
-                >
-                  <option value="all">All Statuses</option>
-                  <option value="generating">Generating</option>
-                  <option value="completed">Completed</option>
-                  <option value="draft">Draft</option>
-                </select>
-                <select
-                  value={stepFilter}
-                  onChange={(e) => setStepFilter(e.target.value as any)}
-                  className="px-3 py-2 border-2 border-black rounded-lg"
-                >
-                  <option value="all">All Steps</option>
-                  <option value="script">Script</option>
-                  <option value="style">Style</option>
-                  <option value="world">World</option>
-                  <option value="cover">Cover</option>
-                  <option value="layout">Layout</option>
-                  <option value="preview">Preview</option>
-                  <option value="build">Build</option>
-                  <option value="done">Done</option>
-                </select>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setHasCoverFilter((prev) => !prev)}
-                    className={`flex-1 px-3 py-2 border-2 border-black rounded-lg ${hasCoverFilter ? 'bg-brand-yellow' : 'bg-white'}`}
-                  >
-                    Has Cover
-                  </button>
-                  <button
-                    onClick={() => setHasCommentsFilter((prev) => !prev)}
-                    className={`flex-1 px-3 py-2 border-2 border-black rounded-lg ${hasCommentsFilter ? 'bg-brand-yellow' : 'bg-white'}`}
-                  >
-                    Has Comments
-                  </button>
+
+            {isFilterOpen && (
+                <div className="mt-4 pt-4 border-t-2 border-slate-100 flex flex-wrap gap-2 animate-fade-in">
+                    <button
+                    onClick={() => setFilterFeatured((prev) => !prev)}
+                    className={`px-3 py-2 border-2 border-black rounded-lg text-xs font-bold flex items-center gap-1 ${filterFeatured ? 'bg-brand-yellow' : 'bg-white'}`}
+                    >
+                    <Star className="w-4 h-4" /> Featured Only
+                    </button>
+                    <button
+                    onClick={() => setFilterRecent((prev) => !prev)}
+                    className={`px-3 py-2 border-2 border-black rounded-lg text-xs font-bold flex items-center gap-1 ${filterRecent ? 'bg-brand-yellow' : 'bg-white'}`}
+                    >
+                    <Clock className="w-4 h-4" /> Recently Updated (7 Days)
+                    </button>
+                     <button
+                        onClick={() => {
+                            setSearchTerm('');
+                            setSortOption('updated');
+                            setFilterFeatured(false);
+                            setFilterRecent(false);
+                        }}
+                        className="px-3 py-2 border-2 border-black rounded-lg bg-white text-xs font-bold text-slate-500 hover:text-black ml-auto"
+                        >
+                        Reset All
+                    </button>
                 </div>
-                <button
-                  onClick={() => {
-                    setSearchTerm('');
-                    setSortOption('updated');
-                    setFilterFeatured(false);
-                    setFilterRecent(false);
-                    setDateRange('all');
-                    setStatusFilter('all');
-                    setHasCoverFilter(false);
-                    setHasCommentsFilter(false);
-                    setStepFilter('all');
-                  }}
-                  className="px-3 py-2 border-2 border-black rounded-lg bg-white"
-                >
-                  Reset Filters
-                </button>
-              </div>
             )}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 mb-8">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
             {filteredProjects.length === 0 && (
-              <div className="col-span-full text-center text-slate-500 font-comic text-lg">
+              <div className="col-span-full text-center text-slate-500 font-comic text-lg py-10">
                 No projects match the current filters.
               </div>
             )}
             {displayedProjects.map(project => {
-              // Determine image source
               let imgSrc = project.state.coverImageUrl;
               if (!imgSrc && project.state.panels.some(p => p.imageUrl)) {
                 imgSrc = project.state.panels.find(p => p.imageUrl)?.imageUrl;
@@ -310,13 +201,13 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
               }
 
               return (
-                <div key={project.id} className="group bg-white rounded-xl border-4 border-black shadow-comic hover:-translate-y-2 hover:shadow-[8px_8px_0px_0px_#000] transition-all duration-300 flex flex-col overflow-hidden">
+                <div key={project.id} className="group bg-white rounded-xl border-4 border-black shadow-comic hover:-translate-y-1 hover:shadow-[6px_6px_0px_0px_#000] transition-all duration-300 flex flex-col overflow-hidden">
                   <div className="aspect-video bg-slate-100 border-b-4 border-black relative overflow-hidden">
                     {imgSrc ? (
                       <SmartImage
                         src={imgSrc}
                         alt={`${project.name} cover`}
-                        className={`w-full h-full object-cover ${!project.state.coverImageUrl && !project.state.panels.some(p => p.imageUrl) ? 'opacity-50 grayscale' : ''}`}
+                        className={`w-full h-full object-cover ${!project.state.coverImageUrl && !project.state.panels.some(p => p.imageUrl) ? 'opacity-80 grayscale' : ''}`}
                         loadingComponent={<div className="w-full h-full flex items-center justify-center bg-slate-50"><div className="w-8 h-8 border-4 border-brand-blue border-t-transparent rounded-full animate-spin"></div></div>}
                         fallbackIcon={<div className="font-display text-4xl text-brand-blue/30">?</div>}
                         containerClassName="w-full h-full"
@@ -331,7 +222,6 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                         <div className="w-full h-2 bg-white/20 rounded-full mb-2 overflow-hidden">
                           <div className="h-full bg-brand-yellow transition-all duration-500" style={{ width: `${project.state.generationStatus.progress}%` }} />
                         </div>
-                        <div className="font-mono text-xs text-slate-300">Est: {project.state.generationStatus.estimatedTimeRemaining}</div>
                       </div>
                     )}
 
@@ -341,31 +231,29 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                       <Button size="sm" variant="outline" onClick={() => setInfoProjectId(project.id)} icon={<Info size={16} />}>Info</Button>
                     </div>
                   </div>
-                  <div className="p-5">
+                  <div className="p-4">
                     <div className="flex items-center justify-between mb-1">
-                      <h3 className="text-2xl font-display truncate">{project.name}</h3>
+                      <h3 className="text-xl font-display truncate pr-2">{project.name}</h3>
                       <button
                         onClick={() => onUpdateProject(project.id, (prev) => ({
                           state: { ...prev.state, isFeatured: !prev.state.isFeatured }
                         }))}
-                        className={`p-1 border-2 border-black rounded-full ${project.state.isFeatured ? 'bg-brand-yellow' : 'bg-white'}`}
-                        title="Toggle Featured"
-                        aria-label={project.state.isFeatured ? "Unmark as featured" : "Mark as featured"}
+                        className={`p-1 hover:bg-slate-100 rounded-full transition-colors`}
                       >
-                        <Star className={`w-4 h-4 ${project.state.isFeatured ? 'fill-black' : ''}`} />
+                        <Star className={`w-5 h-5 ${project.state.isFeatured ? 'fill-brand-yellow text-black' : 'text-slate-300'}`} />
                       </button>
                     </div>
-                    <div className="flex justify-between items-center mb-4">
-                      <p className="text-xs text-slate-500 font-mono">Updated: {new Date(project.updatedAt).toLocaleDateString()}</p>
-                      {project.state.generationStatus?.isActive && <span className="text-xs font-bold bg-brand-yellow px-2 py-0.5 rounded border border-black animate-pulse">BUILDING</span>}
+                    <div className="flex justify-between items-center text-xs text-slate-500 font-mono mb-3">
+                      <span>Updated: {new Date(project.updatedAt).toLocaleDateString()}</span>
+                       {project.state.generationStatus?.isActive && <span className="font-bold text-brand-blue">BUILDING</span>}
                     </div>
 
-                    <div className="flex justify-between border-t-2 border-slate-100 pt-4">
-                      <button onClick={() => onDuplicateProject(project.id)} className="text-slate-500 hover:text-brand-blue flex items-center gap-1 text-xs font-bold uppercase">
-                        <Copy size={14} /> Duplicate
+                    <div className="flex justify-end gap-2 pt-3 border-t-2 border-slate-100 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button onClick={() => onDuplicateProject(project.id)} className="text-slate-400 hover:text-brand-blue p-1" title="Duplicate">
+                        <Copy size={16} />
                       </button>
-                      <button onClick={() => onDeleteProject(project.id)} className="text-slate-500 hover:text-brand-red flex items-center gap-1 text-xs font-bold uppercase">
-                        <Trash2 size={14} /> Delete
+                      <button onClick={() => onDeleteProject(project.id)} className="text-slate-400 hover:text-brand-red p-1" title="Delete">
+                        <Trash2 size={16} />
                       </button>
                     </div>
                   </div>

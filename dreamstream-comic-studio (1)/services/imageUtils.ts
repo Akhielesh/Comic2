@@ -53,22 +53,21 @@ export const resolveAspectRatio = (
   return { modelRatio: fallback };
 };
 
+const loadImage = (src: string) =>
+  new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Failed to load image."));
+    image.src = src;
+  });
+
 export const cropImageToRatio = async (dataUrl: string, targetRatio: string): Promise<string> => {
   if (typeof window === "undefined") return dataUrl;
   const ratio = parseRatio(targetRatio);
   if (!ratio) return dataUrl;
 
-  const image = new Image();
-  image.crossOrigin = "anonymous";
-
-  const loadImage = () =>
-    new Promise<void>((resolve, reject) => {
-      image.onload = () => resolve();
-      image.onerror = () => reject(new Error("Failed to load image for crop."));
-    });
-
-  image.src = dataUrl;
-  await loadImage();
+  const image = await loadImage(dataUrl);
 
   const imgRatio = image.width / image.height;
   if (Math.abs(imgRatio - ratio) < 0.01) return dataUrl;
@@ -92,6 +91,32 @@ export const cropImageToRatio = async (dataUrl: string, targetRatio: string): Pr
   if (!ctx) return dataUrl;
   ctx.drawImage(image, sx, sy, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
   return canvas.toDataURL("image/png");
+};
+
+export const sliceGridImage = async (dataUrl: string, rows: number, cols: number): Promise<string[]> => {
+  if (typeof window === "undefined") return [dataUrl];
+
+  const image = await loadImage(dataUrl);
+  const cellWidth = Math.floor(image.width / cols);
+  const cellHeight = Math.floor(image.height / rows);
+
+  const chunks: string[] = [];
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const canvas = document.createElement("canvas");
+      canvas.width = cellWidth;
+      canvas.height = cellHeight;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        // Simple slicing - assumes even grid
+        ctx.drawImage(image, c * cellWidth, r * cellHeight, cellWidth, cellHeight, 0, 0, cellWidth, cellHeight);
+        chunks.push(canvas.toDataURL("image/png"));
+      }
+    }
+  }
+
+  return chunks;
 };
 
 export const formatRatio = (ratio?: string) => {

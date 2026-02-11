@@ -3,7 +3,8 @@ export type ImagePromptStage =
   | "world"
   | "cover"
   | "panel"
-  | "panel_regen";
+  | "panel_regen"
+  | "page_grid";
 
 export type ImagePromptOptions = {
   stage: ImagePromptStage;
@@ -21,6 +22,7 @@ export type ImagePromptOptions = {
   subjectDescription?: string;
   instructions?: string;
   projectTitle?: string;
+  panels?: Array<{ index: number; description: string }>;
 };
 
 const clean = (value?: string) => (value || "").trim();
@@ -49,6 +51,11 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
       lines.push("Regenerate the comic panel with updates.");
       lines.push("Single full-bleed image, no panel borders or frames.");
       break;
+    case "page_grid":
+      lines.push("Comic page layout with a 2x2 grid of panels.");
+      lines.push("Draw exactly 4 panels separated by white gutters.");
+      lines.push("Ensure consistent character appearance across all panels.");
+      break;
     default:
       break;
   }
@@ -63,6 +70,15 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
   if (clean(options.characters)) lines.push(`Characters: ${clean(options.characters)}.`);
   if (clean(options.items)) lines.push(`Items: ${clean(options.items)}.`);
   if (clean(options.locations)) lines.push(`Locations: ${clean(options.locations)}.`);
+
+  // Specific handling for page grid
+  if (options.stage === "page_grid" && options.panels) {
+      lines.push("\nPanels:");
+      options.panels.forEach(p => {
+          lines.push(`Panel ${p.index + 1}: ${p.description}`);
+      });
+  }
+
   if (clean(options.continuitySummary)) lines.push(`Continuity Summary: ${clean(options.continuitySummary)}.`);
   if (clean(options.recentPanels)) lines.push(`Recent Panels: ${clean(options.recentPanels)}.`);
   if (clean(options.instructions)) lines.push(`Instructions: ${clean(options.instructions)}.`);
