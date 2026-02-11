@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { PORT, CORS_ORIGIN, MAX_BODY_SIZE } from './config.js';
 import { attachKeys } from './middleware/keys.js';
+import { limiter } from './middleware/rateLimiter.js';
 import { errorHandler } from './middleware/errors.js';
 import { textRouter } from './routes/text.js';
 import { imageRouter } from './routes/image.js';
@@ -12,6 +13,7 @@ import { systemRouter } from './routes/system.js';
 const app = express();
 
 app.use(cors({ origin: CORS_ORIGIN, credentials: true }));
+app.use(limiter);
 app.use(express.json({ limit: MAX_BODY_SIZE }));
 app.use(attachKeys);
 
