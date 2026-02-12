@@ -19,6 +19,7 @@ create table if not exists public.profile_private (
 -- 2) Ensure profiles has required columns used by app
 alter table public.profiles add column if not exists terms_accepted boolean not null default false;
 alter table public.profiles add column if not exists marketing_consent boolean not null default false;
+alter table public.profiles add column if not exists updated_at timestamptz not null default now();
 
 -- 3) Username uniqueness (case-insensitive)
 create unique index if not exists profiles_username_lower_unique

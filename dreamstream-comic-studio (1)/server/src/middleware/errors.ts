@@ -48,6 +48,7 @@ export const errorHandler = (err: ErrorLike, req: Request, res: Response, _next:
 
   const logEvent = {
     event: 'server_error',
+    requestId: req.requestId,
     path: req.originalUrl,
     method: req.method,
     status,
@@ -64,11 +65,13 @@ export const errorHandler = (err: ErrorLike, req: Request, res: Response, _next:
   const errorResponse: {
     message: string;
     code: string;
+    requestId?: string;
     details?: unknown;
     internalCode?: string;
   } = {
     message: getClientMessage(status, err),
-    code
+    code,
+    requestId: req.requestId
   };
 
   if (!isProduction) {

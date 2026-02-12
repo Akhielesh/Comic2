@@ -1,7 +1,8 @@
 import { Router } from 'express';
+import { getMissingRequiredEnvVars, STRICT_ENV_VALIDATION } from '../config.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
-import { getSupabaseCapabilityStatus } from '../services/supabase.js';
+import { checkSupabaseReachability, getSupabaseCapabilityStatus } from '../services/supabase.js';
 
 export const systemRouter = Router();
 
@@ -10,6 +11,29 @@ systemRouter.get('/status', (_req, res) => {
   res.json({
     status: 'ok',
     ...capabilities
+  });
+});
+
+systemRouter.get('/ready', async (_req, res) => {
+  const missingEnvVars = getMissingRequiredEnvVars();
+  const supabase = await checkSupabaseReachability();
+  const ready = missingEnvVars.length === 0 && supabase.reachable;
+
+  res.status(ready ? 200 : 503).json({
+    status: ready ? 'ready' : 'not_ready',
+    strictEnvValidation: STRICT_ENV_VALIDATION,
+    checks: {
+      env: {
+        ok: missingEnvVars.length === 0,
+        missing: missingEnvVars
+      },
+      supabase: {
+        ok: supabase.reachable,
+        latencyMs: supabase.latencyMs,
+        ...(supabase.error ? { error: supabase.error } : {}),
+        ...(supabase.warning ? { warning: supabase.warning } : {})
+      }
+    }
   });
 });
 

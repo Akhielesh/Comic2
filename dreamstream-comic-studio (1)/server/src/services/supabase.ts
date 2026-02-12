@@ -1,4 +1,3 @@
-
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -54,3 +53,63 @@ export const getSupabaseCapabilityStatus = () => ({
     supabaseConfigured: Boolean(supabaseUrl && supabaseAnonKey),
     storagePersistenceEnabled: Boolean(supabaseUrl && supabaseServiceRoleKey)
 });
+
+export type SupabaseReachability = {
+    reachable: boolean;
+    latencyMs: number;
+    error?: string;
+    warning?: string;
+};
+
+const isNetworkErrorMessage = (message: string) => {
+    const normalized = message.toLowerCase();
+    return (
+        normalized.includes('fetch failed') ||
+        normalized.includes('network') ||
+        normalized.includes('timeout') ||
+        normalized.includes('dns')
+    );
+};
+
+export const checkSupabaseReachability = async (): Promise<SupabaseReachability> => {
+    if (!supabaseUrl || !supabaseAnonKey) {
+        return {
+            reachable: false,
+            latencyMs: 0,
+            error: 'Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY'
+        };
+    }
+
+    const startedAt = Date.now();
+    try {
+        const { error } = await supabase
+            .from('usage_limits')
+            .select('user_id')
+            .limit(1);
+
+        const latencyMs = Date.now() - startedAt;
+        if (!error) {
+            return { reachable: true, latencyMs };
+        }
+
+        if (isNetworkErrorMessage(error.message || '')) {
+            return {
+                reachable: false,
+                latencyMs,
+                error: error.message
+            };
+        }
+
+        return {
+            reachable: true,
+            latencyMs,
+            warning: error.message
+        };
+    } catch (error: any) {
+        return {
+            reachable: false,
+            latencyMs: Date.now() - startedAt,
+            error: error?.message || String(error)
+        };
+    }
+};

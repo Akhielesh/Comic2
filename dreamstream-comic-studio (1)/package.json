@@ -11,7 +11,9 @@
     "start:server": "node server/dist/server/src/index.js",
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest"
+    "test": "vitest",
+    "ops:verify:cors": "scripts/ops/verify-cors.sh",
+    "ops:verify:rate-limit": "scripts/ops/verify-rate-limit.sh"
   },
   "dependencies": {
     "@google/genai": "^1.30.0",
