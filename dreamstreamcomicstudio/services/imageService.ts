@@ -105,8 +105,7 @@ export const generateImage = async (
 
   const primaryModel = resolveInitialModel();
   const fallbackOrder = IMAGE_MODELS
-    .filter((model) => model.id !== primaryModel.id)
-    .filter((model) => !hasReferences || model.supportsReferences);
+    .filter((model) => model.id !== primaryModel.id);
 
   try {
     return await runModel(primaryModel.id, primaryModel.provider);
@@ -117,8 +116,12 @@ export const generateImage = async (
 
     for (const candidate of fallbackOrder) {
       try {
+        const referenceFallbackNote =
+          hasReferences && !candidate.supportsReferences
+            ? ` "${candidate.label}" does not support reference images, so fallback will run without references.`
+            : "";
         await notifyFallback(
-          `Image generation fallback: "${primaryModel.label}" failed (${primaryError instanceof Error ? primaryError.message : String(primaryError)}). Retrying with "${candidate.label}".`
+          `Image generation fallback: "${primaryModel.label}" failed (${primaryError instanceof Error ? primaryError.message : String(primaryError)}). Retrying with "${candidate.label}".${referenceFallbackNote}`
         );
         return await runModel(candidate.id, candidate.provider);
       } catch (fallbackError) {
