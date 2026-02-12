@@ -95,7 +95,7 @@ const escapeHtml = (value: string) =>
     .replace(/\"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
-const loadImage = (dataUrl: string) =>
+  const loadImage = (dataUrl: string) =>
   new Promise<HTMLImageElement>((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
@@ -499,24 +499,32 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
 
     const pdfWidth = pdf.internal.pageSize.getWidth();
     const pdfHeight = pdf.internal.pageSize.getHeight();
+    let renderedImageCount = 0;
 
     for (let i = 0; i < images.length; i += 1) {
       const dataUrl = images[i];
       if (!dataUrl) continue;
-      const img = await loadImage(dataUrl);
-      const imgRatio = img.width / img.height;
-      let targetWidth = pdfWidth;
-      let targetHeight = pdfWidth / imgRatio;
-      if (targetHeight > pdfHeight) {
-        targetHeight = pdfHeight;
-        targetWidth = pdfHeight * imgRatio;
+      try {
+        const img = await loadImage(dataUrl);
+        const imgRatio = img.width / img.height;
+        let targetWidth = pdfWidth;
+        let targetHeight = pdfWidth / imgRatio;
+        if (targetHeight > pdfHeight) {
+          targetHeight = pdfHeight;
+          targetWidth = pdfHeight * imgRatio;
+        }
+        const x = (pdfWidth - targetWidth) / 2;
+        const y = (pdfHeight - targetHeight) / 2;
+        const format = dataUrl.includes('image/jpeg') ? 'JPEG' : 'PNG';
+        if (renderedImageCount > 0) pdf.addPage();
+        pdf.addImage(dataUrl, format, x, y, targetWidth, targetHeight);
+        renderedImageCount += 1;
+      } catch (error) {
+        console.warn('Skipping image during PDF build; failed to load source.', { index: i, source: dataUrl, error });
       }
-      const x = (pdfWidth - targetWidth) / 2;
-      const y = (pdfHeight - targetHeight) / 2;
-      const format = dataUrl.includes('image/jpeg') ? 'JPEG' : 'PNG';
-      if (i > 0) pdf.addPage();
-      pdf.addImage(dataUrl, format, x, y, targetWidth, targetHeight);
     }
+
+    if (renderedImageCount === 0) throw new Error('No renderable images found for PDF export.');
 
     return pdf.output('blob');
   };
