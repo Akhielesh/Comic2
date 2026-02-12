@@ -82,6 +82,15 @@ const parseLegacyOwnerPath = (imagePath: string): { ownerId: string } | null => 
   return { ownerId: match[1] };
 };
 
+const buildLegacyFallbackPath = (imagePath: string): string | null => {
+  const legacy = parseLegacyOwnerPath(imagePath);
+  if (!legacy) return null;
+  const parts = imagePath.split('/');
+  const filename = parts[1];
+  if (!filename) return null;
+  return `u/${legacy.ownerId}/tmp/${filename}`;
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
 
@@ -281,9 +290,25 @@ systemRouter.get('/image-url', async (req, res, next) => {
     }
 
     const transform = parseImageTransform(req.query as Record<string, unknown>);
-    const { data, error } = await supabaseAdmin.storage
+    let finalPath = imagePath;
+    let { data, error } = await supabaseAdmin.storage
       .from(STORAGE_BUCKET)
-      .createSignedUrl(imagePath, SIGNED_URL_TTL_SECONDS, transform ? { transform } : undefined);
+      .createSignedUrl(finalPath, SIGNED_URL_TTL_SECONDS, transform ? { transform } : undefined);
+
+    if (error || !data?.signedUrl) {
+      const fallbackPath = buildLegacyFallbackPath(imagePath);
+      if (!fallbackPath) {
+        if (error) throw error;
+        return res.status(404).json({ error: { message: 'Image not found.' } });
+      }
+
+      finalPath = fallbackPath;
+      const fallbackResult = await supabaseAdmin.storage
+        .from(STORAGE_BUCKET)
+        .createSignedUrl(finalPath, SIGNED_URL_TTL_SECONDS, transform ? { transform } : undefined);
+      data = fallbackResult.data;
+      error = fallbackResult.error;
+    }
 
     if (error || !data?.signedUrl) {
       if (error) throw error;
@@ -292,7 +317,7 @@ systemRouter.get('/image-url', async (req, res, next) => {
 
     return res.json({
       url: data.signedUrl,
-      path: imagePath,
+      path: finalPath,
       expiresIn: SIGNED_URL_TTL_SECONDS
     });
   } catch (error) {
