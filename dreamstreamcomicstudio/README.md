@@ -54,3 +54,10 @@ This app is configured for public deployment with **Bring Your Own Key**:
 - Add your Pixazo Flux key in Settings (stored in localStorage).
 
 Server-side keys are optional and **never** embedded into the client bundle.
+
+### Universal Assistant Server Key
+The Universal Assistant can be pinned to a server-only Gemini key:
+
+- Set `ASSISTANT_GEMINI_API_KEY` in backend environment variables.
+- If unset, assistant falls back to `GEMINI_API_KEY`.
+- Client-provided `X-Gemini-Key` is ignored for `/api/assistant/chat`.

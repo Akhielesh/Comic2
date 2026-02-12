@@ -18,6 +18,9 @@ const PLATFORM_SCOPE = 'platform_only' as const;
 const PLATFORM_KEYWORDS = [
   'dreamstream',
   'comic studio',
+  'assistant',
+  'ai assistant',
+  'universal assistant',
   'studio',
   'comic',
   'script',
@@ -57,6 +60,13 @@ const PLATFORM_KEYWORDS = [
 
 const PLATFORM_HELP_PATTERNS = [
   /^(hi|hello|hey)\b/i,
+  /^(help|assist)\b/i,
+  /\bwho are you\b/i,
+  /\bwhat (?:can|do) you do\b/i,
+  /\bwhat are your (?:limits|capabilities)\b/i,
+  /\bwhat can i ask\b/i,
+  /\bwhat is this (?:assistant|ai)\b/i,
+  /\bhow can you help\b/i,
   /\bhow do i\b/i,
   /\bwhat is wrong\b/i,
   /\bwhy (?:isn'?t|is not|didn'?t|did not)\b/i,
@@ -315,9 +325,14 @@ export const isPlatformScopedMessage = (input: string): boolean => {
   const message = input.trim().toLowerCase();
   if (!message) return false;
 
-  if (PLATFORM_KEYWORDS.some((keyword) => message.includes(keyword))) return true;
-  if (LIKELY_OFF_TOPIC_PATTERNS.some((pattern) => pattern.test(message))) return false;
-  return PLATFORM_HELP_PATTERNS.some((pattern) => pattern.test(message));
+  const hasPlatformSignal =
+    PLATFORM_KEYWORDS.some((keyword) => message.includes(keyword)) ||
+    PLATFORM_HELP_PATTERNS.some((pattern) => pattern.test(message));
+  const isClearlyOffTopic = LIKELY_OFF_TOPIC_PATTERNS.some((pattern) => pattern.test(message));
+
+  if (isClearlyOffTopic && !hasPlatformSignal) return false;
+  // Allow broader phrasing by default, while still blocking explicit off-topic patterns above.
+  return true;
 };
 
 export const buildOffTopicResponse = (): string => {

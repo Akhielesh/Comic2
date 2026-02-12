@@ -71,6 +71,14 @@ describe('isPlatformScopedMessage', () => {
     expect(isPlatformScopedMessage('Hi')).toBe(true);
   });
 
+  it('accepts assistant identity/capability questions', () => {
+    expect(isPlatformScopedMessage('Who are you and what can you do?')).toBe(true);
+  });
+
+  it('accepts broad app-help phrasing', () => {
+    expect(isPlatformScopedMessage('Can you help me figure this out?')).toBe(true);
+  });
+
   it('accepts DreamStream platform questions', () => {
     expect(isPlatformScopedMessage('How do I generate comic panels in DreamStream?')).toBe(true);
   });

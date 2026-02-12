@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { AssistantAccountSummary, UniversalAssistantResponse } from '../../../apiTypes.js';
 import { queryUniversalAssistant } from '../ai/assistant.js';
+import { ASSISTANT_GEMINI_API_KEY } from '../config.js';
 import {
   ASSISTANT_POLICY_SCOPE,
   buildOffTopicResponse,
@@ -8,7 +9,6 @@ import {
   sanitizeAssistantContext,
   sanitizeAssistantHistory
 } from '../ai/assistantPolicy.js';
-import { requireGeminiKey } from '../middleware/keys.js';
 import { supabase } from '../services/supabase.js';
 
 export const assistantRouter = Router();
@@ -76,10 +76,16 @@ const resolveSafeAccountSummary = async (
 
 assistantRouter.post('/chat', async (req, res, next) => {
   try {
-    const apiKey = requireGeminiKey(req, res);
-    if (!apiKey) return;
+    const apiKey = ASSISTANT_GEMINI_API_KEY.trim();
+    if (!apiKey) {
+      return res.status(503).json({
+        error: {
+          message: 'Assistant provider key missing. Set ASSISTANT_GEMINI_API_KEY (or GEMINI_API_KEY).',
+          code: 'MISSING_ASSISTANT_API_KEY'
+        }
+      });
+    }
 
-    const requestedModel = req.header('X-Gemini-Model')?.trim() || undefined;
     const message = typeof req.body?.message === 'string' ? req.body.message.trim().slice(0, 2000) : '';
     if (!message) {
       return res.status(400).json({ error: { message: 'message is required' } });
@@ -106,7 +112,7 @@ assistantRouter.post('/chat', async (req, res, next) => {
       return res.json(blocked);
     }
 
-    const result = await queryUniversalAssistant(apiKey, message, history, context, requestedModel);
+    const result = await queryUniversalAssistant(apiKey, message, history, context);
     const payload: UniversalAssistantResponse = {
       text: result.text,
       usage: result.usage,
