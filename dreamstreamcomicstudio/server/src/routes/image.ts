@@ -1,11 +1,18 @@
 import { Request, Response, Router } from 'express';
 import crypto from 'node:crypto';
 import { requireGeminiKey, requirePixazoKey } from '../middleware/keys.js';
-import { checkLimits, incrementUserUsage } from '../middleware/limits.js';
-import { IDEMPOTENCY_TTL_MS, IMAGE_INCLUDE_DATA_URL_LEGACY } from '../config.js';
+import { checkLimits } from '../middleware/limits.js';
+import { FLUX_MODEL_ID, IDEMPOTENCY_TTL_MS, IMAGE_INCLUDE_DATA_URL_LEGACY, IMAGE_MODEL } from '../config.js';
 import { generateGeminiImage } from '../ai/image.js';
 import { generateFluxImage } from '../ai/flux.js';
 import { persistGeneratedImage } from '../services/imageStorage.js';
+import {
+  attachBillingToPayload,
+  formatLimitErrorResponse,
+  releaseReservedOperation,
+  reserveForOperation,
+  settleReservedOperation
+} from '../services/usageEnforcer.js';
 
 export const imageRouter = Router();
 
@@ -142,22 +149,23 @@ const isMissingServiceRoleKeyError = (error: unknown) => {
   );
 };
 
-const recordUsageBestEffort = async (userId: string, route: string) => {
-  try {
-    await incrementUserUsage(userId);
-  } catch (error) {
-    console.error(`[USAGE] ${route} generation succeeded but usage accounting failed`, {
-      userId,
-      error,
-    });
-  }
-};
-
 const buildTimings = (apiMs = 0, saveMs = 0) => ({
   apiMs,
   saveMs,
   totalMs: apiMs + saveMs
 });
+
+const toBillingLimitError = (details: unknown) => {
+  const error = new Error('Token billing limit exceeded.') as Error & {
+    status?: number;
+    publicCode?: string;
+    details?: unknown;
+  };
+  error.status = 402;
+  error.publicCode = 'BILLING_LIMIT_EXCEEDED';
+  error.details = details;
+  return error;
+};
 
 imageRouter.post('/gemini', checkLimits('gemini'), async (req, res, next) => {
   try {
@@ -182,43 +190,98 @@ imageRouter.post('/gemini', checkLimits('gemini'), async (req, res, next) => {
     }
 
     const payload = await withIdempotency(req, res, 'image:gemini', async () => {
+      const reserve = await reserveForOperation({
+        req,
+        operation: 'image.gemini.generate',
+        fallbackModel: modelId || IMAGE_MODEL,
+        provider: 'gemini',
+        imageUnits: 1,
+        projectId: typeof projectId === 'string' ? projectId : undefined,
+        comicId: typeof projectId === 'string' ? projectId : undefined,
+        stage: typeof req.body?.stage === 'string' ? req.body.stage : 'generation',
+        metadata: {
+          route: '/api/image/gemini',
+          storage
+        }
+      });
+
+      if ('details' in reserve) {
+        throw toBillingLimitError(formatLimitErrorResponse(reserve.details));
+      }
+
       const generated = await generateGeminiImage(apiKey, prompt, aspectRatio, resolution, referenceImages || [], modelId);
       const apiMs = generated.timings?.apiMs || 0;
       let responsePayload: Record<string, unknown> = { ...generated };
+      let settledBilling: Awaited<ReturnType<typeof settleReservedOperation>> | null = null;
 
-      if (storage !== 'test') {
-        const saved = await persistGeneratedImage({
-          userId: req.user!.id,
-          projectId,
-          dataUrl: generated.dataUrl,
-          source: 'gemini',
-          resolution,
-          cropToRatio
-        });
+      try {
+        if (storage !== 'test') {
+          const saved = await persistGeneratedImage({
+            userId: req.user!.id,
+            projectId,
+            dataUrl: generated.dataUrl,
+            source: 'gemini',
+            resolution,
+            cropToRatio
+          });
 
-        responsePayload = {
-          ...generated,
-          imageId: saved.imageId,
-          imageUrl: saved.imageUrl,
-          mimeType: saved.mimeType,
-          timings: buildTimings(apiMs, saved.saveMs),
-          dataUrl: IMAGE_INCLUDE_DATA_URL_LEGACY ? generated.dataUrl : undefined
-        };
+          responsePayload = {
+            ...generated,
+            imageId: saved.imageId,
+            imageUrl: saved.imageUrl,
+            mimeType: saved.mimeType,
+            timings: buildTimings(apiMs, saved.saveMs),
+            dataUrl: IMAGE_INCLUDE_DATA_URL_LEGACY ? generated.dataUrl : undefined
+          };
 
-        console.info('[METRICS] image_pipeline', {
+          console.info('[METRICS] image_pipeline', {
+            provider: 'gemini',
+            upload_bytes_original: saved.originalBytes,
+            upload_bytes_stored: saved.storedBytes,
+            compression_ratio: Number(saved.compressionRatio.toFixed(4)),
+            image_save_ms: saved.saveMs
+          });
+        }
+
+        settledBilling = await settleReservedOperation({
+          req,
+          operation: 'image.gemini.generate',
           provider: 'gemini',
-          upload_bytes_original: saved.originalBytes,
-          upload_bytes_stored: saved.storedBytes,
-          compression_ratio: Number(saved.compressionRatio.toFixed(4)),
-          image_save_ms: saved.saveMs
+          model: modelId || generated.model || IMAGE_MODEL,
+          seed: {
+            provider: 'gemini',
+            model: modelId || generated.model || IMAGE_MODEL,
+            operation: 'image.gemini.generate',
+            imageUnits: 1,
+            projectId: typeof projectId === 'string' ? projectId : undefined,
+            comicId: typeof projectId === 'string' ? projectId : undefined,
+            stage: typeof req.body?.stage === 'string' ? req.body.stage : 'generation',
+            byok: reserve.reservation.byokBypass
+          },
+          usage: (generated as { usage?: { promptTokens?: number; candidatesTokens?: number; totalTokens?: number; estimatedTokens?: number } }).usage,
+          imageUnits: 1,
+          metadata: {
+            route: '/api/image/gemini',
+            storage
+          }
         });
-      }
 
-      if (req.user?.id) {
-        await recordUsageBestEffort(req.user.id, '/image/gemini');
+        return attachBillingToPayload(responsePayload, reserve.reservation, settledBilling);
+      } catch (error) {
+        await releaseReservedOperation({
+          req,
+          operation: 'image.gemini.generate',
+          provider: 'gemini',
+          model: modelId || generated.model || IMAGE_MODEL,
+          projectId: typeof projectId === 'string' ? projectId : undefined,
+          reason: (error as Error)?.message || 'generation_failed',
+          metadata: {
+            route: '/api/image/gemini',
+            storage
+          }
+        });
+        throw error;
       }
-
-      return responsePayload;
     });
 
     res.json(payload);
@@ -261,43 +324,98 @@ imageRouter.post('/flux', checkLimits('pixazo'), async (req, res, next) => {
     }
 
     const payload = await withIdempotency(req, res, 'image:flux', async () => {
+      const reserve = await reserveForOperation({
+        req,
+        operation: 'image.flux.generate',
+        fallbackModel: FLUX_MODEL_ID,
+        provider: 'pixazo',
+        imageUnits: 1,
+        projectId: typeof projectId === 'string' ? projectId : undefined,
+        comicId: typeof projectId === 'string' ? projectId : undefined,
+        stage: typeof req.body?.stage === 'string' ? req.body.stage : 'generation',
+        metadata: {
+          route: '/api/image/flux',
+          storage
+        }
+      });
+
+      if ('details' in reserve) {
+        throw toBillingLimitError(formatLimitErrorResponse(reserve.details));
+      }
+
       const generated = await generateFluxImage(apiKey, { prompt, aspectRatio, resolution, negativePrompt, seed, steps });
       const apiMs = generated.timings?.apiMs || 0;
       let responsePayload: Record<string, unknown> = { ...generated };
+      let settledBilling: Awaited<ReturnType<typeof settleReservedOperation>> | null = null;
 
-      if (storage !== 'test') {
-        const saved = await persistGeneratedImage({
-          userId: req.user!.id,
-          projectId,
-          dataUrl: generated.dataUrl,
-          source: 'flux',
-          resolution,
-          cropToRatio
+      try {
+        if (storage !== 'test') {
+          const saved = await persistGeneratedImage({
+            userId: req.user!.id,
+            projectId,
+            dataUrl: generated.dataUrl,
+            source: 'flux',
+            resolution,
+            cropToRatio
+          });
+
+          responsePayload = {
+            ...generated,
+            imageId: saved.imageId,
+            imageUrl: saved.imageUrl,
+            mimeType: saved.mimeType,
+            timings: buildTimings(apiMs, saved.saveMs),
+            dataUrl: IMAGE_INCLUDE_DATA_URL_LEGACY ? generated.dataUrl : undefined
+          };
+
+          console.info('[METRICS] image_pipeline', {
+            provider: 'flux',
+            upload_bytes_original: saved.originalBytes,
+            upload_bytes_stored: saved.storedBytes,
+            compression_ratio: Number(saved.compressionRatio.toFixed(4)),
+            image_save_ms: saved.saveMs
+          });
+        }
+
+        settledBilling = await settleReservedOperation({
+          req,
+          operation: 'image.flux.generate',
+          provider: 'pixazo',
+          model: generated.model || FLUX_MODEL_ID,
+          seed: {
+            provider: 'pixazo',
+            model: generated.model || FLUX_MODEL_ID,
+            operation: 'image.flux.generate',
+            imageUnits: 1,
+            projectId: typeof projectId === 'string' ? projectId : undefined,
+            comicId: typeof projectId === 'string' ? projectId : undefined,
+            stage: typeof req.body?.stage === 'string' ? req.body.stage : 'generation',
+            byok: reserve.reservation.byokBypass
+          },
+          usage: (generated as { usage?: { promptTokens?: number; candidatesTokens?: number; totalTokens?: number; estimatedTokens?: number } }).usage,
+          imageUnits: 1,
+          metadata: {
+            route: '/api/image/flux',
+            storage
+          }
         });
 
-        responsePayload = {
-          ...generated,
-          imageId: saved.imageId,
-          imageUrl: saved.imageUrl,
-          mimeType: saved.mimeType,
-          timings: buildTimings(apiMs, saved.saveMs),
-          dataUrl: IMAGE_INCLUDE_DATA_URL_LEGACY ? generated.dataUrl : undefined
-        };
-
-        console.info('[METRICS] image_pipeline', {
-          provider: 'flux',
-          upload_bytes_original: saved.originalBytes,
-          upload_bytes_stored: saved.storedBytes,
-          compression_ratio: Number(saved.compressionRatio.toFixed(4)),
-          image_save_ms: saved.saveMs
+        return attachBillingToPayload(responsePayload, reserve.reservation, settledBilling);
+      } catch (error) {
+        await releaseReservedOperation({
+          req,
+          operation: 'image.flux.generate',
+          provider: 'pixazo',
+          model: generated.model || FLUX_MODEL_ID,
+          projectId: typeof projectId === 'string' ? projectId : undefined,
+          reason: (error as Error)?.message || 'generation_failed',
+          metadata: {
+            route: '/api/image/flux',
+            storage
+          }
         });
+        throw error;
       }
-
-      if (req.user?.id) {
-        await recordUsageBestEffort(req.user.id, '/image/flux');
-      }
-
-      return responsePayload;
     });
 
     res.json(payload);

@@ -6,6 +6,7 @@ import {
   PIXAZO_ENDPOINT
 } from '../config.js';
 import { nowMs } from './utils.js';
+import { buildUsage } from './usage.js';
 
 const RESOLUTION_BASE: Record<string, number> = {
   '1K': 1024,
@@ -237,6 +238,7 @@ export const generateFluxImage = async (
     dataUrl,
     mimeType,
     prompt: finalPrompt,
+    usage: buildUsage(finalPrompt),
     timings: { apiMs, totalMs },
     model: FLUX_MODEL_ID
   };

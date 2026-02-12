@@ -19,7 +19,7 @@ export const PrivacyPolicy: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                         <li><strong>Creative and Project Data:</strong> Scripts, prompts, scene breakdowns, continuity data, generated images, project state, reviews, and comments.</li>
                         <li><strong>Community Data:</strong> Public profile data, follows, likes, views, notifications, and other social interactions tied to your account.</li>
                         <li><strong>Support Data:</strong> Contact/support messages you submit (for example, email and message body).</li>
-                        <li><strong>Operational and Debug Data:</strong> Usage-limit counters, provider/model metadata, timing metrics, error logs, and stored generation artifacts (which can include prompts and model responses).</li>
+                        <li><strong>Operational and Debug Data:</strong> Token ledger events, pricing snapshot metadata, provider/model timing metrics, error logs, and stored generation artifacts (which can include prompts and model responses).</li>
                         <li><strong>Device-Stored Data:</strong> Browser local storage and IndexedDB records used for saved keys, guest projects, test runs/images, reader state, and learning progress.</li>
                     </ul>
 
@@ -39,7 +39,7 @@ export const PrivacyPolicy: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                         <li><strong>Supabase:</strong> Authentication, database tables, and cloud storage.</li>
                         <li><strong>Google Gemini APIs:</strong> Text, image, and vision processing.</li>
                         <li><strong>Pixazo Flux endpoint:</strong> Flux image generation requests.</li>
-                        <li><strong>Stripe:</strong> Payment processing if billing routes are enabled in your deployment.</li>
+                        <li><strong>Stripe:</strong> Payment processing and tokenized payment-method storage for subscriptions, credit packs, and overage flows.</li>
                     </ul>
                     <p>These providers process data under their own terms and policies. We do not sell personal data.</p>
 
@@ -48,6 +48,7 @@ export const PrivacyPolicy: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                         <li>Data is transmitted over encrypted channels.</li>
                         <li>Bring-your-own API keys may be stored in browser local storage and sent to the backend in request headers for provider calls.</li>
                         <li>Flux keys can also be synced to the database in encrypted form; decryption occurs client-side after login.</li>
+                        <li>Payment methods are stored as Stripe token references; DreamStream does not store raw card numbers.</li>
                         <li>No client-side storage method is perfect. You are responsible for securing your device, rotating keys, and protecting account credentials.</li>
                     </ul>
 
@@ -78,6 +79,7 @@ export const PrivacyPolicy: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                         <li><strong>Do you train your own model on my private projects?</strong> Not by default in this product flow. Third-party model providers may process requests under their own terms.</li>
                         <li><strong>What is sent to AI providers?</strong> The request data needed to fulfill your action, such as prompts, selected model context, and any reference images you submit.</li>
                         <li><strong>Where are my API keys stored?</strong> Keys can be stored in browser local storage; Flux keys may also be encrypted and synced to your account record for convenience.</li>
+                        <li><strong>What billing data is stored?</strong> DreamStream stores wallet balances, token usage events, and payment-method references required for billing operations.</li>
                         <li><strong>Can other users see my drafts?</strong> No, unless you intentionally make a project public.</li>
                         <li><strong>What data stays on my device?</strong> Local caches including key settings, guest projects, test runs/images, and reader/learning state can be stored in localStorage/IndexedDB.</li>
                         <li><strong>How do I delete my data?</strong> Delete content in-app where available and use support contact for account-level/privacy deletion requests.</li>

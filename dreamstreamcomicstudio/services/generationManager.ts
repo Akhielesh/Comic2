@@ -7,6 +7,7 @@ import { normalizePanelDialogue } from "./dialogueUtils";
 import { MAX_CONTINUITY_PANELS } from "./modelPolicy";
 import { createSystemNotification } from "./db";
 import { prependCappedHistory } from "./projectStorage";
+import { ApiError } from "./apiClient";
 import {
   collectPanelReferenceImageIds,
   getEntityById,
@@ -264,6 +265,13 @@ export const startBackgroundGeneration = async (
             generatedImageId = generated?.imageId;
             generatedImageUrl = generated?.imageUrl;
           } catch (e: any) {
+            const billingDetails = e instanceof ApiError
+              ? ((e.details as any)?.details || e.details)
+              : null;
+            if (billingDetails && typeof billingDetails === 'object' && typeof (billingDetails as any).reason === 'string') {
+              const resetAt = (billingDetails as any).resetAt ? new Date((billingDetails as any).resetAt).toLocaleString() : 'next reset';
+              addLog(`Token limit reached (${(billingDetails as any).reason}). Upgrade, add credits, or wait until ${resetAt}.`);
+            }
             addLog(`Error generating image for panel: ${e.message}`);
             throw e;
           }

@@ -202,7 +202,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
         <div className="max-w-7xl mx-auto">
           <div className="text-center mb-16">
             <h2 className="text-4xl md:text-5xl font-display mb-4">Choose Your Plan</h2>
-            <p className="font-comic text-slate-600">Start for free, upgrade for production power.</p>
+            <p className="font-comic text-slate-600">All plans are token-metered with Comic Tokens (CT): 10,000 CT = $1.00.</p>
           </div>
 
           <div className="grid md:grid-cols-3 gap-8 items-start">
@@ -211,35 +211,36 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               <div className="font-display text-2xl mb-2">Free Starter</div>
               <div className="text-4xl font-black mb-6">$0<span className="text-sm font-normal text-slate-500">/forever</span></div>
               <ul className="space-y-4 mb-4 text-sm font-bold">
-                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> 30 Images / Comic</li>
-                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> Basic Models (Lite)</li>
+                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> 10,000 CT / month</li>
+                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> 800 CT / day guardrail</li>
+                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> Per-action CT estimate shown</li>
                 <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> Community Support</li>
-                <li className="flex items-center gap-2 text-slate-400"><X size={16} /> Private Projects (Def: Public)</li>
+                <li className="flex items-center gap-2 text-slate-400"><X size={16} /> Overage without purchased credits</li>
               </ul>
               <div className="mt-6">
                 <Button onClick={onEnterStudio} variant="secondary" className="w-full">Start Free</Button>
               </div>
             </div>
 
-            {/* Pro Annual */}
+            {/* Creator */}
             <div className="bg-white border-4 border-black rounded-2xl p-8 shadow-comic hover:-translate-y-2 transition-transform duration-300">
-              <div className="font-display text-2xl mb-2">Pro Annual</div>
-              <div className="text-4xl font-black mb-6">$9.99<span className="text-sm font-normal text-slate-500">/mo</span></div>
+              <div className="font-display text-2xl mb-2">Creator</div>
+              <div className="text-4xl font-black mb-6">$19<span className="text-sm font-normal text-slate-500">/mo</span></div>
               <div className="text-xs font-bold mb-6 text-slate-800 bg-slate-100 border border-slate-300 rounded px-2 py-1 inline-block">
-                Billed $119 yearly
+                Monthly Included: 90,000 CT
               </div>
               <ul className="space-y-4 mb-4 text-sm font-bold">
-                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> 10 Comics / Month</li>
-                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> 100 Pages / Comic</li>
-                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> Premium Models (Pro 1.5)</li>
+                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> 6,000 CT / day guardrail</li>
+                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> Card-on-file overage support</li>
+                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> Exact CT + USD usage tracking</li>
                 <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> Private Projects</li>
               </ul>
               <div className="mt-6">
-                <Button onClick={onOpenUpgrade} variant="secondary" className="w-full">Upgrade (Enter Key)</Button>
+                <Button onClick={onOpenUpgrade} variant="secondary" className="w-full">Upgrade</Button>
               </div>
             </div>
 
-            {/* Go Crazy (Monthly) */}
+            {/* Studio */}
             <div className="bg-brand-red text-white border-4 border-black rounded-2xl p-8 shadow-comic transform scale-105 z-10 relative group hover:animate-shake hover:rotate-1 transition-all">
               <style>{`
                 @keyframes shake {
@@ -263,20 +264,20 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-black text-brand-yellow px-3 py-1 rounded-full text-xs font-bold uppercase tracking-widest border-2 border-brand-yellow shadow-sm flex items-center gap-2">
                 <Crown size={12} /> Ultimate
               </div>
-              <div className="font-display text-3xl mb-2 text-white drop-shadow-md">Go Crazy</div>
-              <div className="text-5xl font-black mb-6">$30<span className="text-lg font-normal text-white/80">/mo</span></div>
+              <div className="font-display text-3xl mb-2 text-white drop-shadow-md">Studio</div>
+              <div className="text-5xl font-black mb-6">$149<span className="text-lg font-normal text-white/80">/mo</span></div>
               <div className="text-xs font-bold mb-6 text-white bg-black/20 border border-white/20 rounded px-2 py-1 inline-block">
-                Monthly Only
+                700,000 CT / month
               </div>
               <ul className="space-y-4 mb-4 text-sm font-bold">
-                <li className="flex items-center gap-2"><Infinity size={16} className="text-brand-yellow" /> Unlimited Generations</li>
-                <li className="flex items-center gap-2"><Infinity size={16} className="text-brand-yellow" /> Unlimited Storage</li>
+                <li className="flex items-center gap-2"><Infinity size={16} className="text-brand-yellow" /> 50,000 CT / day guardrail</li>
+                <li className="flex items-center gap-2"><Infinity size={16} className="text-brand-yellow" /> Team-scale token pool</li>
                 <li className="flex items-center gap-2"><Check size={16} className="text-brand-yellow" /> All AI Models Included</li>
                 <li className="flex items-center gap-2"><Check size={16} className="text-brand-yellow" /> Priority Support</li>
               </ul>
               <div className="mt-6">
                 <button onClick={onOpenUpgrade} className="w-full bg-white text-black font-display text-xl py-3 rounded-xl border-4 border-black hover:bg-brand-yellow transition-colors shadow-lg">
-                  Unleash (Enter Key)
+                  Upgrade
                 </button>
               </div>
             </div>
@@ -319,11 +320,11 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
           <h3 className="text-center font-display text-2xl mb-8">Frequently Asked Questions</h3>
           <div className="space-y-2">
             {[
-              { q: "Is it really free?", a: "Yes. The Free Starter plan gives you 30 images per comic project with no credit card required." },
-              { q: "Can I use my own API keys?", a: "Absolutely! We have a wide selection of models including the latest ones. You can plug in your own keys in Settings to bypass free limits." },
+              { q: "Is it really free?", a: "Yes. Free Starter includes 10,000 CT monthly and 800 CT daily without a required card." },
+              { q: "Can I use my own API keys?", a: "Yes. BYOK usage is tracked for reporting but does not burn platform CT." },
               { q: "Do I own the comics I create?", a: "Yes, you own full commercial rights to all comics generated on the platform, subject to the AI model's specific terms." },
-              { q: "What export formats do you support?", a: "We export to ZIP (raw images), HTML (web reader), and PDF (print ready)." },
-              { q: "How do I upgrade to Go Crazy?", a: "Currently, we are in Beta. The Go Crazy plan will be available shortly for unlimited creative freedom." }
+              { q: "How is cost shown?", a: "Each action shows estimated CT before run and actual CT after completion, with per-comic breakdown by stage and model." },
+              { q: "What happens at limits?", a: "If usage exceeds limits, you'll be prompted to upgrade, add credits, or wait for reset at the shown timestamp." }
             ].map((faq, i) => (
               <div key={i} className="border border-zinc-800 rounded-lg overflow-hidden">
                 <button

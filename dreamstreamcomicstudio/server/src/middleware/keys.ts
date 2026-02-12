@@ -11,7 +11,12 @@ declare module 'express-serve-static-core' {
 
 export const attachKeys = (req: Request, _res: Response, next: NextFunction) => {
   const geminiKey = req.header('X-Gemini-Key') || process.env.GEMINI_API_KEY || null;
-  const pixazoKey = req.header('X-Pixazo-Key') || process.env.PIXAZO_API_KEY || process.env.PIXAZO_SUBSCRIPTION_KEY || process.env.FLUX_API_KEY || null;
+  const pixazoKey = req.header('X-Pixazo-Key')
+    || req.header('X-Flux-Key')
+    || process.env.PIXAZO_API_KEY
+    || process.env.PIXAZO_SUBSCRIPTION_KEY
+    || process.env.FLUX_API_KEY
+    || null;
   req.apiKeys = { geminiKey, pixazoKey };
   next();
 };

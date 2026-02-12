@@ -46,9 +46,11 @@ export const TermsOfService: React.FC<{ onBack: () => void }> = ({ onBack }) => 
 
                     <h3>6. Plans, Usage Limits, and Payments</h3>
                     <ul className="list-disc pl-5 space-y-2">
-                        <li>Free and paid feature limits may apply (including generation caps or BYOK requirements).</li>
+                        <li>Usage is governed by Comic Tokens (CT) with plan-based monthly allocations and daily guardrails.</li>
+                        <li>DreamStream displays estimated CT before generation and settled CT after generation where supported.</li>
                         <li>You are responsible for charges from third-party providers tied to keys you supply.</li>
-                        <li>If billing is enabled, purchase and renewal terms are presented at checkout.</li>
+                        <li>Direct credit purchases and subscriptions are processed through Stripe checkout/payment flows.</li>
+                        <li>Usage beyond available credits may require a payment method on file and may be subject to overage caps.</li>
                         <li>Refund handling follows applicable law and any posted billing policy.</li>
                     </ul>
 
@@ -87,7 +89,7 @@ export const TermsOfService: React.FC<{ onBack: () => void }> = ({ onBack }) => 
                     <ul className="list-disc pl-5 space-y-2">
                         <li><strong>Can I use generated comics commercially?</strong> Often yes, but you must confirm provider terms, rights clearance, and local law for each use case.</li>
                         <li><strong>Who pays provider API charges for BYOK?</strong> You do. Keys you provide are your responsibility, including provider-side charges.</li>
-                        <li><strong>What happens when free limits are reached?</strong> Certain actions may require your own key or a paid plan depending on current product rules.</li>
+                        <li><strong>What happens when limits are reached?</strong> You may be prompted to upgrade, add credits, or wait for reset windows.</li>
                         <li><strong>Can DreamStream remove content or suspend accounts?</strong> Yes, for policy/legal/security reasons or Terms violations.</li>
                         <li><strong>Are AI outputs guaranteed to be original or accurate?</strong> No. You must review output for quality, rights, and compliance before publishing.</li>
                         <li><strong>Will features always stay the same?</strong> No. Integrations, models, and limits may change over time.</li>

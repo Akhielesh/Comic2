@@ -22,6 +22,8 @@ import { getImageProvider } from '../../services/appSettings';
 import { getImageModelByProvider } from '../../services/imageModels';
 import { loadArtifactsForProject } from '../../services/db';
 import { buildProjectReport } from '../../services/reporting';
+import { ApiError } from '../../services/apiClient';
+import { LimitExceededModal } from '../modals/LimitExceededModal';
 
 interface CombinedPreviewProps {
   state: ComicState;
@@ -77,6 +79,7 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
   const [isPlanning, setIsPlanning] = useState(false);
   const [planningSceneId, setPlanningSceneId] = useState<number | null>(null);
   const [costSummary, setCostSummary] = useState<{ total: number; estimated: boolean }>({ total: 0, estimated: true });
+  const [limitDetails, setLimitDetails] = useState<Record<string, unknown> | null>(null);
   const pricing = useMemo(() => normalizePricingConfig(state.pricingConfig || DEFAULT_PRICING_CONFIG), [state.pricingConfig]);
   const plannedPanelCount = state.panels.length;
   const estimatedTokens = useMemo(() => {
@@ -97,6 +100,7 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
   const imageCostBatch = provider === 'flux' ? 0 : FLASH_IMAGE_BATCH * plannedPanelCount;
   const bananaProRate = state.imageResolution === '4K' ? BANANA_PRO_IMAGE_4K : BANANA_PRO_IMAGE_1K;
   const imageCostBananaPro = bananaProRate * plannedPanelCount;
+  const estimatedCt = Math.ceil(costSummary.total / 0.0001);
   const continuityValidation = useMemo(
     () => validateContinuityState(state),
     [state]
@@ -246,6 +250,8 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
       onStateUpdate({ panels: merged, panelPlanVersion: computePanelPlanVersion(state.scenes) });
     } catch (e) {
       console.error(e);
+      const details = extractLimitDetails(e);
+      if (details) setLimitDetails(details);
     } finally {
       setIsPlanning(false);
       setPlanningSceneId(null);
@@ -299,6 +305,8 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
       onStateUpdate({ panels: normalizedPanels, panelPlanVersion: computePanelPlanVersion(state.scenes) });
     } catch (e) {
       console.error(e);
+      const details = extractLimitDetails(e);
+      if (details) setLimitDetails(details);
     } finally {
       setIsPlanning(false);
     }
@@ -343,6 +351,15 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
 
   const handleTextLayoutChange = (layout: TextLayout) => {
     onStateUpdate({ textLayout: layout });
+  };
+
+  const extractLimitDetails = (error: unknown): Record<string, unknown> | null => {
+    if (!(error instanceof ApiError)) return null;
+    const details = error.details as Record<string, unknown> | undefined;
+    if (!details) return null;
+    if (typeof details.reason === 'string' && typeof details.requiredCt === 'number') return details;
+    if (details.details && typeof details.details === 'object') return details.details as Record<string, unknown>;
+    return null;
   };
 
   const handleStartGeneration = () => {
@@ -550,7 +567,7 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
             <div className="absolute top-0 right-0 p-4 opacity-10">
               <Coins size={100} />
             </div>
-            <h3 className="text-2xl font-display mb-6 border-b-2 border-black pb-2">Estimated API Cost</h3>
+            <h3 className="text-2xl font-display mb-6 border-b-2 border-black pb-2">Estimated Token Cost</h3>
             <div className="space-y-3 relative z-10">
               <div className="flex items-center justify-between text-sm font-bold">
                 <span>Panels Planned</span>
@@ -568,8 +585,12 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
                 <span>Estimated Total</span>
                 <span className="font-mono">{formatCurrency(costSummary.total)}</span>
               </div>
+              <div className="flex items-center justify-between text-sm font-bold">
+                <span>Estimated CT</span>
+                <span className="font-mono">{estimatedCt.toLocaleString()} CT</span>
+              </div>
               <div className="text-[10px] text-amber-900 font-mono">
-                Includes existing usage + estimated generation. Pricing as of {PRICING_AS_OF}.
+                Includes existing usage + estimated generation. 1 CT = $0.0001. Pricing as of {PRICING_AS_OF}.
               </div>
             </div>
           </div>
@@ -639,6 +660,21 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
           </div>
         </div>
       </div>
+      {limitDetails && (
+        <LimitExceededModal
+          details={limitDetails}
+          onClose={() => setLimitDetails(null)}
+          onUpgrade={() => {
+            setLimitDetails(null);
+            window.alert('Open Account Settings > Billing to upgrade your plan.');
+          }}
+          onAddCredits={() => {
+            setLimitDetails(null);
+            window.alert('Open Account Settings > Billing to add credits.');
+          }}
+          onWait={() => setLimitDetails(null)}
+        />
+      )}
     </div>
   );
 };

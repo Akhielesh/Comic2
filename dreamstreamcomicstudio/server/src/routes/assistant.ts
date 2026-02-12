@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { AssistantAccountSummary, UniversalAssistantResponse } from '../../../apiTypes.js';
 import { queryUniversalAssistant } from '../ai/assistant.js';
-import { ASSISTANT_GEMINI_API_KEY } from '../config.js';
+import { ASSISTANT_GEMINI_API_KEY, TEXT_MODEL } from '../config.js';
 import {
   ASSISTANT_POLICY_SCOPE,
   buildOffTopicResponse,
@@ -10,6 +10,14 @@ import {
   sanitizeAssistantHistory
 } from '../ai/assistantPolicy.js';
 import { supabase } from '../services/supabase.js';
+import { getBillingSummary } from '../services/billingLedger.js';
+import {
+  attachBillingToPayload,
+  formatLimitErrorResponse,
+  releaseReservedOperation,
+  reserveForOperation,
+  settleReservedOperation
+} from '../services/usageEnforcer.js';
 
 export const assistantRouter = Router();
 
@@ -36,11 +44,7 @@ const resolveSafeAccountSummary = async (
         .select('username')
         .eq('id', user.id)
         .maybeSingle(),
-      supabase
-        .from('usage_limits')
-        .select('images_generated_count, max_images_allowed, has_byok, is_premium, plan_tier')
-        .eq('user_id', user.id)
-        .maybeSingle()
+      getBillingSummary(user.id)
     ]);
 
     const username = profileResult.data?.username;
@@ -48,20 +52,16 @@ const resolveSafeAccountSummary = async (
       account.username = username.trim();
     }
 
-    const usage = usageResult.data;
-    if (usage) {
-      const rawTier = typeof usage.plan_tier === 'string' ? usage.plan_tier.toLowerCase() : 'free';
-      const tier = rawTier === 'pro' || rawTier === 'admin'
-        ? rawTier
-        : (usage.is_premium ? 'pro' : 'free');
+    if (usageResult) {
+      const tier = usageResult.plan.id;
       account.planTier = tier;
       account.isAdmin = tier === 'admin' || user.email === 'admin@test.com';
       account.usage = {
-        imagesGenerated: typeof usage.images_generated_count === 'number' ? usage.images_generated_count : undefined,
-        maxImagesAllowed: typeof usage.max_images_allowed === 'number' ? usage.max_images_allowed : undefined,
-        hasByok: typeof usage.has_byok === 'boolean' ? usage.has_byok : undefined,
-        isPremium: usage.is_premium === true
+        dailyRemainingCt: usageResult.usage.dailyRemainingCt,
+        availableCt: usageResult.wallet.availableCt,
+        isPremium: tier === 'pro' || tier === 'studio' || tier === 'admin'
       };
+      account.billing = usageResult;
     } else {
       account.planTier = user.email === 'admin@test.com' ? 'admin' : 'free';
       account.isAdmin = user.email === 'admin@test.com';
@@ -112,18 +112,76 @@ assistantRouter.post('/chat', async (req, res, next) => {
       return res.json(blocked);
     }
 
-    const result = await queryUniversalAssistant(apiKey, message, history, context);
-    const payload: UniversalAssistantResponse = {
-      text: result.text,
-      usage: result.usage,
-      model: result.model,
-      limitInfo: req.assistantLimitInfo,
-      policy: {
-        scope: ASSISTANT_POLICY_SCOPE,
-        offTopicBlocked: false
+    const requestedModel = req.header('X-Gemini-Model')?.trim() || TEXT_MODEL;
+    const reserve = req.user?.id
+      ? await reserveForOperation({
+          req,
+          operation: 'assistant.chat',
+          fallbackModel: requestedModel,
+          provider: 'gemini',
+          stage: 'assistant',
+          metadata: {
+            route: req.path,
+            historyLength: history.length
+          }
+        })
+      : null;
+
+    if (reserve && 'details' in reserve) {
+      return res.status(402).json({ error: formatLimitErrorResponse(reserve.details) });
+    }
+
+    try {
+      const result = await queryUniversalAssistant(apiKey, message, history, context, requestedModel);
+      const settled = reserve && reserve.allowed
+        ? await settleReservedOperation({
+            req,
+            operation: 'assistant.chat',
+            provider: 'gemini',
+            model: requestedModel,
+            seed: {
+              provider: 'gemini',
+              model: requestedModel,
+              operation: 'assistant.chat',
+              stage: 'assistant',
+              byok: reserve.reservation.byokBypass
+            },
+            usage: result.usage,
+            metadata: {
+              route: req.path,
+              historyLength: history.length
+            }
+          })
+        : null;
+
+      const payload: UniversalAssistantResponse = {
+        text: result.text,
+        usage: result.usage,
+        model: result.model,
+        limitInfo: req.assistantLimitInfo,
+        policy: {
+          scope: ASSISTANT_POLICY_SCOPE,
+          offTopicBlocked: false
+        }
+      };
+
+      res.json(reserve && reserve.allowed ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled) : payload);
+    } catch (error) {
+      if (reserve && reserve.allowed) {
+        await releaseReservedOperation({
+          req,
+          operation: 'assistant.chat',
+          provider: 'gemini',
+          model: requestedModel,
+          reason: (error as Error)?.message || 'assistant_request_failed',
+          metadata: {
+            route: req.path,
+            historyLength: history.length
+          }
+        });
       }
-    };
-    res.json(payload);
+      throw error;
+    }
   } catch (err) {
     next(err);
   }

@@ -2,6 +2,7 @@ import { PricingConfig } from "../types";
 import { IMAGE_MODEL, TEXT_MODEL } from "./modelPolicy";
 
 export const PRICING_AS_OF = "2026-02-02 UTC";
+export const CT_PER_USD = 10_000;
 export const FLASH_MODEL = "gemini-2.5-flash";
 export const FLASH_LITE_MODEL = "gemini-2.5-flash-lite";
 export const FLASH_20_MODEL = "gemini-2.0-flash";

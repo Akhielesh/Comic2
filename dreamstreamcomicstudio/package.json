@@ -12,6 +12,8 @@
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest",
+    "pricing:sync": "tsx server/src/jobs/dailyPricingSync.ts",
+    "pricing:sync:check": "tsx server/src/jobs/dailyPricingSync.ts --check",
     "ops:verify:cors": "scripts/ops/verify-cors.sh",
     "ops:verify:rate-limit": "scripts/ops/verify-rate-limit.sh"
   },

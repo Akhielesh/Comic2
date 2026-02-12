@@ -6,13 +6,11 @@ const router = express.Router();
 // POST /api/payments/create-checkout-session
 router.post('/create-checkout-session', async (req, res) => {
     try {
-        const { userId, email } = req.body;
-
-        if (!userId || !email) {
-            return res.status(400).json({ error: 'Missing userId or email' });
+        if (!req.user?.id || !req.user.email) {
+            return res.status(401).json({ error: 'Missing authenticated user identity' });
         }
 
-        const session = await createCheckoutSession(userId, email);
+        const session = await createCheckoutSession(req.user.id, req.user.email);
         res.json({ url: session.url });
     } catch (err: any) {
         console.error('Checkout Session Error:', err);

@@ -532,7 +532,7 @@ export const getPublicProject = async (projectId: string): Promise<Project | nul
   return hydratePublicProjectForRead(mapProjectRow(data, profileMap));
 };
 
-export type PlanTier = 'free' | 'pro' | 'admin';
+export type PlanTier = 'free' | 'creator' | 'pro' | 'studio' | 'custom' | 'admin';
 
 export interface UsageLimits {
   images_generated_count: number;
@@ -540,6 +540,9 @@ export interface UsageLimits {
   has_byok: boolean;
   is_premium: boolean; // Computed or legacy
   plan_tier: PlanTier;
+  available_ct?: number;
+  daily_remaining_ct?: number;
+  daily_guardrail_ct?: number;
 }
 
 export const getUsageLimits = async (): Promise<UsageLimits | null> => {
@@ -551,8 +554,42 @@ export const getUsageLimits = async (): Promise<UsageLimits | null> => {
     max_images_allowed: 30,
     has_byok: false,
     is_premium: false,
-    plan_tier: 'free'
+    plan_tier: 'free',
+    available_ct: 0,
+    daily_remaining_ct: 0,
+    daily_guardrail_ct: 0
   };
+
+  const { data: walletData } = await supabase
+    .from('token_wallets')
+    .select('plan_tier, included_monthly_ct, used_monthly_ct, purchased_ct, reserved_ct, daily_guardrail_ct, used_daily_ct')
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (walletData) {
+    const rawTier = typeof walletData.plan_tier === 'string' ? walletData.plan_tier.toLowerCase() : 'free';
+    const plan_tier: PlanTier =
+      rawTier === 'creator' || rawTier === 'pro' || rawTier === 'studio' || rawTier === 'custom' || rawTier === 'admin'
+        ? rawTier
+        : 'free';
+    const included = typeof walletData.included_monthly_ct === 'number' ? walletData.included_monthly_ct : 0;
+    const used = typeof walletData.used_monthly_ct === 'number' ? walletData.used_monthly_ct : 0;
+    const purchased = typeof walletData.purchased_ct === 'number' ? walletData.purchased_ct : 0;
+    const reserved = typeof walletData.reserved_ct === 'number' ? walletData.reserved_ct : 0;
+    const dailyGuardrail = typeof walletData.daily_guardrail_ct === 'number' ? walletData.daily_guardrail_ct : 0;
+    const dailyUsed = typeof walletData.used_daily_ct === 'number' ? walletData.used_daily_ct : 0;
+
+    return {
+      images_generated_count: 0,
+      max_images_allowed: 30,
+      has_byok: false,
+      is_premium: plan_tier === 'pro' || plan_tier === 'studio' || plan_tier === 'admin',
+      plan_tier,
+      available_ct: Math.max(0, included - used + purchased - reserved),
+      daily_guardrail_ct: Math.max(0, dailyGuardrail),
+      daily_remaining_ct: Math.max(0, dailyGuardrail - dailyUsed)
+    };
+  }
 
   const { data, error } = await supabase
     .from('usage_limits')
@@ -564,7 +601,7 @@ export const getUsageLimits = async (): Promise<UsageLimits | null> => {
 
   const rawTier = typeof data.plan_tier === 'string' ? data.plan_tier.toLowerCase() : 'free';
   const plan_tier: PlanTier =
-    rawTier === 'pro' || rawTier === 'admin'
+    rawTier === 'creator' || rawTier === 'pro' || rawTier === 'studio' || rawTier === 'custom' || rawTier === 'admin'
       ? rawTier
       : (data.is_premium ? 'pro' : 'free');
 

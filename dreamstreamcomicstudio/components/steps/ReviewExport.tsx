@@ -18,6 +18,9 @@ import { loadArtifactsForProject } from '../../services/db';
 import { downloadBlob } from '../../services/download';
 import { collectPanelReferenceImageIds, resolvePanelContinuity, validateContinuityState } from '../../services/continuity';
 import { appendCappedHistory } from '../../services/projectStorage';
+import { ApiError } from '../../services/apiClient';
+import { LimitExceededModal } from '../modals/LimitExceededModal';
+import { getComicCost } from '../../services/billing';
 
 declare const jspdf: any;
 declare const html2canvas: any;
@@ -110,6 +113,9 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
   const [auditSummary, setAuditSummary] = useState<string>('');
   const [auditScoresByPanel, setAuditScoresByPanel] = useState<Record<string, { driftScore: number; issues: string[]; suggestedFix?: string }>>({});
   const [regenError, setRegenError] = useState<string | null>(null);
+  const [limitDetails, setLimitDetails] = useState<Record<string, unknown> | null>(null);
+  const estimatedCt = costReport ? Math.ceil(costReport.cost_summary.totalCost / 0.0001) : null;
+  const [comicCost, setComicCost] = useState<{ totalActualCt: number; totalBillableUsd: number } | null>(null);
 
   const textLayout = state.textLayout || 'caption';
 
@@ -146,6 +152,26 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
       isActive = false;
     };
   }, [projectId, projectName, panels, state, state.pricingConfig]);
+
+  useEffect(() => {
+    let active = true;
+    const loadComicCost = async () => {
+      try {
+        const cost = await getComicCost(projectId);
+        if (!active) return;
+        setComicCost({
+          totalActualCt: cost.totalActualCt,
+          totalBillableUsd: cost.totalBillableUsd
+        });
+      } catch {
+        if (active) setComicCost(null);
+      }
+    };
+    void loadComicCost();
+    return () => {
+      active = false;
+    };
+  }, [projectId, panels.length, costUpdatedAt]);
 
   useEffect(() => {
     const loadHistory = async () => {
@@ -247,10 +273,24 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
       }
     } catch (e) {
       console.error(e);
-      setRegenError((e as Error)?.message || 'Regeneration failed.');
+      const details = extractLimitDetails(e);
+      if (details) {
+        setLimitDetails(details);
+      } else {
+        setRegenError((e as Error)?.message || 'Regeneration failed.');
+      }
     } finally {
       setIsRegenerating(false);
     }
+  };
+
+  const extractLimitDetails = (error: unknown): Record<string, unknown> | null => {
+    if (!(error instanceof ApiError)) return null;
+    const details = error.details as Record<string, unknown> | undefined;
+    if (!details) return null;
+    if (typeof details.reason === 'string' && typeof details.requiredCt === 'number') return details;
+    if (details.details && typeof details.details === 'object') return details.details as Record<string, unknown>;
+    return null;
   };
 
   const handleRunContinuityAudit = async () => {
@@ -629,6 +669,9 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
           </div>
           {costReport && (
             <div className="text-xs font-mono text-slate-600 space-y-1">
+              <div>Estimated CT: {estimatedCt?.toLocaleString()}</div>
+              {comicCost && <div>Actual CT: {comicCost.totalActualCt.toLocaleString()}</div>}
+              {comicCost && <div>Actual USD: ${comicCost.totalBillableUsd.toFixed(4)}</div>}
               <div>Tokens: {costReport.ai_usage.totalTokens}</div>
               <div>Artifacts: {costReport.ai_usage.totalArtifacts}</div>
             </div>
@@ -693,6 +736,21 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
         <React.Suspense fallback={null}>
           <ImagePreviewModal imageUrl={previewImage} onClose={() => setPreviewImage(null)} />
         </React.Suspense>
+      )}
+      {limitDetails && (
+        <LimitExceededModal
+          details={limitDetails}
+          onClose={() => setLimitDetails(null)}
+          onUpgrade={() => {
+            setLimitDetails(null);
+            window.alert('Open Account Settings > Billing to upgrade your plan.');
+          }}
+          onAddCredits={() => {
+            setLimitDetails(null);
+            window.alert('Open Account Settings > Billing to add credits.');
+          }}
+          onWait={() => setLimitDetails(null)}
+        />
       )}
     </div>
   );

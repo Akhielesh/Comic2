@@ -21,6 +21,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSearchParams } from 'react-router-dom';
 import { IMAGE_MODELS } from '../services/imageModels';
 import { TEXT_MODEL, TEXT_MODELS } from '../services/modelPolicy';
+import { addCredits, createCheckoutSession, getBillingSummary, setupPaymentMethod, updateAutoReload } from '../services/billing';
 
 type SettingsTab = 'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin' | 'preferences' | 'security';
 
@@ -155,6 +156,10 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     const [adminCoupons, setAdminCoupons] = useState<any[]>([]);
     const [isAdmin, setIsAdmin] = useState(false);
     const [settingsState, setSettingsState] = useState(() => getSettingsState());
+    const [billingSummary, setBillingSummary] = useState<any | null>(null);
+    const [billingLoading, setBillingLoading] = useState(false);
+    const [billingActionMessage, setBillingActionMessage] = useState<MessageState>(null);
+    const [billingBusy, setBillingBusy] = useState(false);
 
     const [username, setUsername] = useState('');
     const [avatarUrl, setAvatarUrl] = useState('');
@@ -209,6 +214,30 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
 
         void loadAdminData();
     }, [activeTab, user?.email]);
+
+    useEffect(() => {
+        if (activeTab !== 'billing' || !user) return;
+        let alive = true;
+
+        const loadBilling = async () => {
+            setBillingLoading(true);
+            try {
+                const summary = await getBillingSummary();
+                if (!alive) return;
+                setBillingSummary(summary);
+            } catch (err: any) {
+                if (!alive) return;
+                setBillingActionMessage({ type: 'error', text: err?.message || 'Failed to load billing summary.' });
+            } finally {
+                if (alive) setBillingLoading(false);
+            }
+        };
+
+        void loadBilling();
+        return () => {
+            alive = false;
+        };
+    }, [activeTab, user]);
 
     useEffect(() => {
         if (!user) return;
@@ -274,6 +303,93 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         setRedeemMsg({ type: res.success ? 'success' : 'error', text: res.message });
         if (res.success) {
             setTimeout(() => window.location.reload(), 1500);
+        }
+    };
+
+    const refreshBillingSummary = async () => {
+        try {
+            const summary = await getBillingSummary();
+            setBillingSummary(summary);
+        } catch {
+            // handled by action-specific flows
+        }
+    };
+
+    const handleUpgradeCheckout = async (planTier: 'creator' | 'pro' | 'studio') => {
+        setBillingActionMessage(null);
+        setBillingBusy(true);
+        try {
+            const session = await createCheckoutSession(planTier);
+            if (session.url) {
+                window.location.href = session.url;
+                return;
+            }
+            setBillingActionMessage({ type: 'error', text: 'Checkout URL was not returned.' });
+        } catch (err: any) {
+            setBillingActionMessage({ type: 'error', text: err?.message || 'Unable to start checkout.' });
+        } finally {
+            setBillingBusy(false);
+        }
+    };
+
+    const handleAddCredits = async (packUsd: number) => {
+        setBillingActionMessage(null);
+        setBillingBusy(true);
+        try {
+            const result = await addCredits(packUsd);
+            if (result.mode === 'simulated') {
+                setBillingActionMessage({
+                    type: 'success',
+                    text: `Added ${(result.addedCt as number).toLocaleString()} CT in simulation mode.`
+                });
+                await refreshBillingSummary();
+                return;
+            }
+            setBillingActionMessage({
+                type: 'success',
+                text: 'Credit purchase intent created. Complete payment with returned client secret integration.'
+            });
+            await refreshBillingSummary();
+        } catch (err: any) {
+            setBillingActionMessage({ type: 'error', text: err?.message || 'Unable to purchase credits.' });
+        } finally {
+            setBillingBusy(false);
+        }
+    };
+
+    const handleSetupPaymentMethod = async () => {
+        setBillingActionMessage(null);
+        setBillingBusy(true);
+        try {
+            const response = await setupPaymentMethod();
+            setBillingActionMessage({
+                type: 'success',
+                text: response.setupIntentClientSecret
+                    ? 'Setup intent created. Finish card collection in Stripe-enabled UI.'
+                    : 'Payment setup initiated.'
+            });
+            await refreshBillingSummary();
+        } catch (err: any) {
+            setBillingActionMessage({ type: 'error', text: err?.message || 'Unable to start payment setup.' });
+        } finally {
+            setBillingBusy(false);
+        }
+    };
+
+    const handleToggleAutoReload = async (enabled: boolean) => {
+        setBillingActionMessage(null);
+        setBillingBusy(true);
+        try {
+            await updateAutoReload({ enabled, thresholdCt: 5000, packUsd: 25 });
+            setBillingActionMessage({
+                type: 'success',
+                text: enabled ? 'Auto-reload enabled.' : 'Auto-reload disabled.'
+            });
+            await refreshBillingSummary();
+        } catch (err: any) {
+            setBillingActionMessage({ type: 'error', text: err?.message || 'Unable to update auto-reload.' });
+        } finally {
+            setBillingBusy(false);
         }
     };
 
@@ -687,58 +803,116 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         );
     };
 
-    const renderBilling = () => (
-        <div className="space-y-6 animate-fade-in">
-            <div className="grid md:grid-cols-2 gap-6">
-                <div className="border-4 border-slate-200 bg-slate-50 p-6 rounded-2xl opacity-70">
-                    <h3 className="font-display text-2xl text-slate-500">Free Tier</h3>
-                    <p className="font-mono text-sm mt-2 mb-4">You are currently on this plan.</p>
-                    <ul className="space-y-2 text-sm text-slate-600 mb-6">
-                        <li>• 30 Daily Credits</li>
-                        <li>• Standard Speed</li>
-                        <li>• Public Gallery Access</li>
-                    </ul>
-                    <button disabled className="w-full py-2 border-2 border-slate-300 rounded-lg text-slate-400 font-bold">Current Plan</button>
+    const renderBilling = () => {
+        const formatCt = (value?: number) => typeof value === 'number' ? value.toLocaleString() : 'n/a';
+        const summary = billingSummary;
+        const planName = summary?.plan?.name || 'Free';
+        const planTier = summary?.plan?.id || 'free';
+        const availableCt = summary?.wallet?.availableCt || 0;
+        const dailyRemainingCt = summary?.usage?.dailyRemainingCt || 0;
+        const monthlyResetAt = summary?.usage?.monthlyResetAt ? new Date(summary.usage.monthlyResetAt).toLocaleString() : 'n/a';
+        const dailyResetAt = summary?.usage?.dailyResetAt ? new Date(summary.usage.dailyResetAt).toLocaleString() : 'n/a';
+
+        return (
+            <div className="space-y-6 animate-fade-in">
+                {billingLoading && <div className="text-sm font-bold text-slate-500">Loading billing summary...</div>}
+                {renderMessage(billingActionMessage)}
+
+                <div className="grid md:grid-cols-2 gap-6">
+                    <div className="border-4 border-black bg-white p-6 rounded-2xl">
+                        <h3 className="font-display text-2xl">Current Plan: {planName}</h3>
+                        <p className="font-mono text-xs mt-1 uppercase text-slate-500">{planTier}</p>
+                        <div className="mt-4 space-y-2 text-sm">
+                            <div className="flex justify-between"><span>Available CT</span><strong>{formatCt(availableCt)}</strong></div>
+                            <div className="flex justify-between"><span>Daily Remaining CT</span><strong>{formatCt(dailyRemainingCt)}</strong></div>
+                            <div className="flex justify-between"><span>Monthly Included CT</span><strong>{formatCt(summary?.wallet?.includedMonthlyCt)}</strong></div>
+                            <div className="flex justify-between"><span>Used This Month CT</span><strong>{formatCt(summary?.wallet?.usedMonthlyCt)}</strong></div>
+                            <div className="flex justify-between"><span>Purchased CT</span><strong>{formatCt(summary?.wallet?.purchasedCt)}</strong></div>
+                            <div className="flex justify-between"><span>Reserved CT</span><strong>{formatCt(summary?.wallet?.reservedCt)}</strong></div>
+                        </div>
+                        <div className="mt-4 text-xs text-slate-500 space-y-1">
+                            <div>Daily reset: {dailyResetAt}</div>
+                            <div>Monthly reset: {monthlyResetAt}</div>
+                        </div>
+                    </div>
+
+                    <div className="border-4 border-black bg-brand-yellow/10 p-6 rounded-2xl">
+                        <h3 className="font-display text-2xl">Upgrade Plans</h3>
+                        <p className="text-xs text-slate-600 mb-4">Token-based monthly plans with daily guardrails.</p>
+                        <div className="grid gap-2">
+                            <Button className="w-full" disabled={billingBusy} onClick={() => handleUpgradeCheckout('creator')}>Creator · $19 · 90,000 CT</Button>
+                            <Button className="w-full" disabled={billingBusy} onClick={() => handleUpgradeCheckout('pro')}>Pro · $49 · 240,000 CT</Button>
+                            <Button className="w-full" disabled={billingBusy} onClick={() => handleUpgradeCheckout('studio')}>Studio · $149 · 700,000 CT</Button>
+                        </div>
+                        <div className="mt-4 text-xs text-slate-600">
+                            Overage beyond credits requires a payment method on file.
+                        </div>
+                    </div>
                 </div>
 
-                <div className="relative border-4 border-black bg-brand-yellow/10 p-6 rounded-2xl transform hover:-translate-y-1 transition-transform">
-                    <div className="absolute -top-4 right-4 bg-brand-yellow border-2 border-black px-3 py-1 text-xs font-bold uppercase shadow-comic animate-pulse">
-                        Best Value
+                <div className="grid lg:grid-cols-3 gap-6">
+                    <div className="border-2 border-black rounded-xl p-4 space-y-3">
+                        <h4 className="font-display text-xl">Credit Packs</h4>
+                        <div className="space-y-2 text-sm">
+                            <button className="w-full border-2 border-black rounded px-3 py-2 font-bold text-left" disabled={billingBusy} onClick={() => handleAddCredits(10)}>
+                                $10 · 100,000 CT
+                            </button>
+                            <button className="w-full border-2 border-black rounded px-3 py-2 font-bold text-left" disabled={billingBusy} onClick={() => handleAddCredits(25)}>
+                                $25 · 260,000 CT
+                            </button>
+                            <button className="w-full border-2 border-black rounded px-3 py-2 font-bold text-left" disabled={billingBusy} onClick={() => handleAddCredits(100)}>
+                                $100 · 1,100,000 CT
+                            </button>
+                        </div>
                     </div>
-                    <h3 className="font-display text-2xl text-black">Pro Annual</h3>
-                    <div className="flex items-baseline gap-1 mt-2 mb-4">
-                        <span className="text-4xl font-black font-display">$19</span>
-                        <span className="text-sm font-bold text-slate-500">/mo</span>
-                    </div>
-                    <ul className="space-y-2 text-sm text-slate-800 font-medium mb-6">
-                        <li>• Unlimited Generations (BYOK)</li>
-                        <li>• Priority Access</li>
-                        <li>• Private Projects</li>
-                    </ul>
-                    <Button className="w-full shadow-comic" icon={<CreditCard size={18} />} onClick={() => setActiveTab('settings')}>Upgrade (Enter Key)</Button>
-                </div>
-            </div>
 
-            <div className="border-2 border-black rounded-xl p-4 max-w-md">
-                <label className="font-bold text-xs uppercase">Redeem Coupon</label>
-                <div className="flex gap-2 mt-2">
-                    <input
-                        type="text"
-                        value={couponCode}
-                        onChange={(e) => setCouponCode(e.target.value)}
-                        placeholder="Enter coupon code"
-                        className="flex-1 border-2 border-black rounded-lg px-3 py-2 font-mono text-sm"
-                    />
-                    <Button onClick={handleRedeem}>Redeem</Button>
+                    <div className="border-2 border-black rounded-xl p-4 space-y-3">
+                        <h4 className="font-display text-xl">Payment Method</h4>
+                        <div className="text-sm text-slate-700">
+                            {summary?.hasPaymentMethodOnFile
+                                ? 'Payment method on file for overage and direct credit purchases.'
+                                : 'No payment method on file. Required for overage usage and paid credit purchases.'}
+                        </div>
+                        <Button icon={<CreditCard size={16} />} onClick={handleSetupPaymentMethod} disabled={billingBusy}>
+                            {summary?.hasPaymentMethodOnFile ? 'Update Card' : 'Add Card'}
+                        </Button>
+                        <div className="text-xs text-slate-500">Cards are stored with Stripe; DreamStream stores tokenized references only.</div>
+                    </div>
+
+                    <div className="border-2 border-black rounded-xl p-4 space-y-3">
+                        <h4 className="font-display text-xl">Auto Reload</h4>
+                        <div className="text-sm text-slate-700">
+                            Trigger at &lt; 5,000 CT, reload $25 pack.
+                        </div>
+                        <div className="flex gap-2">
+                            <Button variant="secondary" disabled={billingBusy} onClick={() => handleToggleAutoReload(true)}>Enable</Button>
+                            <Button variant="outline" disabled={billingBusy} onClick={() => handleToggleAutoReload(false)}>Disable</Button>
+                        </div>
+                        <div className="text-xs text-slate-500">Default overage hard cap: $100/month.</div>
+                    </div>
                 </div>
-                {redeemMsg && (
-                    <p className={`text-sm mt-2 font-semibold ${redeemMsg.type === 'success' ? 'text-green-700' : 'text-red-700'}`}>
-                        {redeemMsg.text}
-                    </p>
-                )}
+
+                <div className="border-2 border-black rounded-xl p-4 max-w-md">
+                    <label className="font-bold text-xs uppercase">Redeem Coupon</label>
+                    <div className="flex gap-2 mt-2">
+                        <input
+                            type="text"
+                            value={couponCode}
+                            onChange={(e) => setCouponCode(e.target.value)}
+                            placeholder="Enter coupon code"
+                            className="flex-1 border-2 border-black rounded-lg px-3 py-2 font-mono text-sm"
+                        />
+                        <Button onClick={handleRedeem}>Redeem</Button>
+                    </div>
+                    {redeemMsg && (
+                        <p className={`text-sm mt-2 font-semibold ${redeemMsg.type === 'success' ? 'text-green-700' : 'text-red-700'}`}>
+                            {redeemMsg.text}
+                        </p>
+                    )}
+                </div>
             </div>
-        </div>
-    );
+        );
+    };
 
     const renderAdmin = () => (
         <div className="space-y-6 animate-fade-in">
@@ -781,9 +955,9 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                 <p><strong>Last Updated: Feb 11, 2026</strong></p>
                 <p className="mt-2">DreamStream processes account, project, and operational data to run comic generation and community features.</p>
                 <p className="mt-4 font-bold">1. Data We Process</p>
-                <p>Account/profile data, consent values, project scripts/prompts/images, artifacts/logs, comments/follows/reviews, usage limits, and support messages.</p>
+                <p>Account/profile data, consent values, project scripts/prompts/images, artifacts/logs, comments/follows/reviews, token usage ledger events, and support messages.</p>
                 <p className="mt-4 font-bold">2. Where Data Is Processed</p>
-                <p>Supabase (auth/db/storage), Google Gemini APIs (text/image/vision), Pixazo Flux endpoint (image generation), and Stripe if billing routes are enabled.</p>
+                <p>Supabase (auth/db/storage), Google Gemini APIs (text/image/vision), Pixazo Flux endpoint (image generation), and Stripe for subscriptions, credit packs, and payment methods.</p>
                 <p className="mt-4 font-bold">3. Device Storage</p>
                 <p>LocalStorage/IndexedDB may keep key settings, guest projects, test runs/images, reader state, and local notifications.</p>
                 <p className="mt-4 font-bold">4. Visibility and Retention</p>
@@ -796,7 +970,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                 <p className="mt-4 font-bold">1. Your Responsibilities</p>
                 <p>You are responsible for account security, key handling, rights clearance, and lawful use of generated output.</p>
                 <p className="mt-4 font-bold">2. Plans and BYOK</p>
-                <p>Free/premium limits may apply. If you supply your own provider key, provider-side charges are your responsibility.</p>
+                <p>Token-based limits apply by plan tier. If you supply your own provider key, provider-side charges remain your responsibility.</p>
                 <p className="mt-4 font-bold">3. Prohibited Use</p>
                 <p>No unlawful, abusive, infringing, deceptive, or infrastructure-harmful activity.</p>
                 <p className="mt-4 font-bold">4. Enforcement and Availability</p>
