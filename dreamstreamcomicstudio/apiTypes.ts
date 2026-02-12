@@ -6,7 +6,6 @@ import {
   Item,
   Location,
   DialogueBlock,
-  Project,
   ContinuityBible,
   SceneContinuityBinding
 } from './types.js';
@@ -272,46 +271,68 @@ export type AssistantAppSnapshot = {
   lastUpdatedProject?: AssistantMap;
 };
 
-export type StoryAssistantRequest = {
-  script: string;
-  message: string;
-  history: AssistantMessage[];
-};
-export type StoryAssistantResponse = {
-  text: string;
-  prompt: string;
-  responseText?: string;
-  usage?: ApiUsage;
-  model: string;
+export type AssistantAccountSummary = {
+  isAuthenticated: boolean;
+  username?: string;
+  maskedEmail?: string;
+  isAdmin?: boolean;
+  planTier?: 'free' | 'pro' | 'admin';
+  usage?: {
+    imagesGenerated?: number;
+    maxImagesAllowed?: number;
+    hasByok?: boolean;
+    isPremium?: boolean;
+  };
 };
 
-export type MasterAssistantContext = {
-  view: string;
-  project?: Project;
+export type UniversalAssistantContext = {
+  view?: string;
+  account?: AssistantAccountSummary;
   systemStatus?: AssistantSystemStatusSummary;
   reportSummary?: AssistantReportSummary;
   artifactSummary?: AssistantArtifactSummary;
   panelPlanSummary?: AssistantPanelPlanSummary;
-  pricingConfig?: unknown;
   allProjectsSummary?: AssistantProjectSummary[];
   projectSnapshot?: AssistantMap;
   appSnapshot?: AssistantAppSnapshot;
   testLabSummary?: AssistantMap;
   testLabRecentRuns?: AssistantMap[];
+  publicHints?: string[];
 };
 
-export type MasterAssistantRequest = {
+export type UniversalAssistantRequest = {
   message: string;
   history: AssistantMessage[];
-  context: MasterAssistantContext;
+  context?: UniversalAssistantContext;
 };
-export type MasterAssistantResponse = {
+
+export type AssistantLimitInfo = {
+  scope: 'guest' | 'free' | 'bypass';
+  by?: 'ip' | 'user';
+  limit?: number;
+  remaining?: number;
+  resetAt?: number;
+  windowMs?: number;
+};
+
+export type AssistantPolicyInfo = {
+  scope: 'platform_only';
+  offTopicBlocked: boolean;
+  reason?: 'NON_PLATFORM' | 'SENSITIVE_CONTEXT_REDACTED';
+};
+
+export type UniversalAssistantResponse = {
   text: string;
-  prompt: string;
-  responseText?: string;
   usage?: ApiUsage;
   model: string;
+  limitInfo?: AssistantLimitInfo;
+  policy: AssistantPolicyInfo;
 };
+
+// Backwards-compatible aliases for legacy references.
+export type MasterAssistantContext = UniversalAssistantContext;
+export type MasterAssistantRequest = UniversalAssistantRequest;
+export type MasterAssistantResponse = UniversalAssistantResponse;
 
 export type TestLabReportRequest = { report: Record<string, unknown> };
 export type TestLabReportResponse = {

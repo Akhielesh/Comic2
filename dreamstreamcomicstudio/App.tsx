@@ -27,6 +27,7 @@ import { SystemDiagnosticsResponse } from './apiTypes';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { StaticSiteHeader } from './components/layout/StaticSiteHeader';
 import { LegalMicroLinks } from './components/layout/LegalMicroLinks';
+import { UniversalAssistant } from './components/UniversalAssistant';
 
 type AppView =
   | 'home'
@@ -588,6 +589,7 @@ const App: React.FC = () => {
   const activeProject = activeProjectId ? getProject(activeProjectId) : undefined;
   const showSharedHeader = effectiveView !== 'home' && effectiveView !== 'reader';
   const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader';
+  const showUniversalAssistant = effectiveView !== 'auth-callback';
 
   return (
     <ErrorBoundary>
@@ -757,6 +759,14 @@ const App: React.FC = () => {
             onOpenPrivacy={() => setCurrentView('privacy')}
             onOpenTerms={() => setCurrentView('terms')}
             onOpenFaq={handleOpenFaq}
+          />
+        )}
+
+        {showUniversalAssistant && (
+          <UniversalAssistant
+            currentView={effectiveView}
+            activeProject={activeProject}
+            projects={projects}
           />
         )}
       </div>
