@@ -17,6 +17,7 @@ const clampFinite = (value: unknown, fallback: number, min = 0) => {
 };
 
 const tierOrder: BillingPlanTier[] = ['free', 'creator', 'pro', 'studio', 'custom', 'admin'];
+type PricingChangelogEntry = NonNullable<PricingCatalogResponse['pricingChangelog']>[number];
 
 export const DEFAULT_BILLING_PLANS: BillingPlanDefinition[] = [
   {
@@ -272,7 +273,10 @@ export const getPlanCatalog = async (): Promise<BillingPlanDefinition[]> => {
   }
 };
 
-const getPricingChangelog = async () => {
+const normalizeChangelogStatus = (value: unknown): PricingChangelogEntry['status'] =>
+  String(value || 'ACTIVE').toUpperCase() === 'REVIEW_REQUIRED' ? 'REVIEW_REQUIRED' : 'ACTIVE';
+
+const getPricingChangelog = async (): Promise<PricingChangelogEntry[]> => {
   try {
     const admin = getSupabaseAdmin();
     const { data, error } = await admin
@@ -285,14 +289,18 @@ const getPricingChangelog = async () => {
       return [];
     }
 
-    return data.map((row) => ({
-      createdAt: String((row as Record<string, unknown>).created_at || new Date().toISOString()),
-      status: String((row as Record<string, unknown>).status || 'ACTIVE').toUpperCase() === 'REVIEW_REQUIRED' ? 'REVIEW_REQUIRED' : 'ACTIVE',
-      summary: String((row as Record<string, unknown>).summary || ''),
-      details: typeof (row as Record<string, unknown>).details === 'object'
-        ? (row as Record<string, unknown>).details as Record<string, unknown>
-        : undefined
-    }));
+    return data.map((row) => {
+      const record = row as Record<string, unknown>;
+      const details = record.details;
+      return {
+        createdAt: String(record.created_at || new Date().toISOString()),
+        status: normalizeChangelogStatus(record.status),
+        summary: String(record.summary || ''),
+        details: details && typeof details === 'object'
+          ? details as Record<string, unknown>
+          : undefined
+      };
+    });
   } catch {
     return [];
   }
