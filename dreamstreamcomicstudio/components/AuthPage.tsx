@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { getAuthPersistMode, setAuthPersistMode, supabase } from '../services/supabase';
+import { getAuthPersistMode, getAuthRedirectUrl, setAuthPersistMode, supabase } from '../services/supabase';
 import { Loader2, ArrowRight, Eye, EyeOff, CheckSquare } from 'lucide-react';
 
 interface AuthPageProps {
@@ -29,6 +29,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
     const [showPassword, setShowPassword] = useState(false);
     const [rememberMe, setRememberMe] = useState(getAuthPersistMode() === 'local');
     const [pendingVerificationEmail, setPendingVerificationEmail] = useState<string | null>(null);
+    const authRedirectUrl = getAuthRedirectUrl();
 
     // Consents
     const [termsAccepted, setTermsAccepted] = useState(false);
@@ -68,7 +69,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 type: 'signup',
                 email: normalizedEmail,
                 options: {
-                    emailRedirectTo: `${window.location.origin}/auth/callback`
+                    emailRedirectTo: authRedirectUrl
                 }
             });
             if (resendError) throw resendError;
@@ -141,7 +142,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                     email: normalizedEmail,
                     password,
                     options: {
-                        emailRedirectTo: `${window.location.origin}/auth/callback`,
+                        emailRedirectTo: authRedirectUrl,
                         data: {
                             username: normalizedUsername,
                             first_name: normalizedFirstName,
@@ -197,7 +198,17 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                     email: signInEmail,
                     password,
                 });
-                if (signInError) throw signInError;
+                if (signInError) {
+                    const signInMessage = String(signInError.message || '').toLowerCase();
+                    if (signInMessage.includes('email not confirmed') || signInMessage.includes('email not verified')) {
+                        setPendingVerificationEmail(signInEmail);
+                        throw new Error("Verify your email first. Use the resend button below if needed.");
+                    }
+                    if (signInMessage.includes('invalid login credentials')) {
+                        throw new Error("Invalid credentials. If this account is new, verify your email first.");
+                    }
+                    throw signInError;
+                }
                 const signedInUser = signInData.user || signInData.session?.user;
                 if (!signedInUser?.email_confirmed_at) {
                     await supabase.auth.signOut({ scope: 'local' });
@@ -218,7 +229,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 const { error } = await supabase.auth.signInWithOtp({
                     email: normalizedEmail,
                     options: {
-                        emailRedirectTo: `${window.location.origin}/auth/callback`
+                        emailRedirectTo: authRedirectUrl
                     }
                 });
                 if (error) throw error;
@@ -232,7 +243,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 }
                 // Forgot Password
                 const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
-                    redirectTo: `${window.location.origin}/auth/callback`
+                    redirectTo: authRedirectUrl
                 });
                 if (error) throw error;
                 setMessage("Password reset link sent! Check your email.");

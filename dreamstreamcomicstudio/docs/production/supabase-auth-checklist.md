@@ -7,10 +7,11 @@ Use this checklist to make signup verification and account policies work in prod
 1. Open Supabase Dashboard > `Authentication` > `URL Configuration`.
 2. Set `Site URL` to `https://comic2.pages.dev`.
 3. Add redirect URL: `https://comic2.pages.dev/auth/callback`.
-4. Open `Authentication` > `Email`.
-5. Enable email confirmation for signups.
-6. Configure SMTP using Resend, Postmark, or SES with a verified sender domain.
-7. Confirm email templates for signup and magic link are enabled and non-empty.
+4. If you use previews/custom domains, add each callback URL to Redirect URLs (for example `https://<preview>.pages.dev/auth/callback`).
+5. Open `Authentication` > `Email`.
+6. Enable email confirmation for signups.
+7. Configure SMTP using Resend, Postmark, or SES with a verified sender domain.
+8. Confirm email templates for signup and magic link are enabled and non-empty.
 
 ## SQL Migration Order
 

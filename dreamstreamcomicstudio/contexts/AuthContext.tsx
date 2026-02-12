@@ -1,7 +1,7 @@
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
-import { supabase } from '../services/supabase';
+import { getAuthRedirectUrl, supabase } from '../services/supabase';
 import { decryptKey } from '../services/crypto';
 import { clearFluxKey, setFluxKey } from '../services/appSettings';
 
@@ -84,7 +84,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             type: 'signup',
             email: user.email,
             options: {
-                emailRedirectTo: `${window.location.origin}/auth/callback`
+                emailRedirectTo: getAuthRedirectUrl()
             }
         });
 

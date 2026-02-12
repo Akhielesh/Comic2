@@ -3,6 +3,7 @@ import { buildProjectReport } from "./reporting";
 import { supabase } from "./supabase";
 import { ImageTransformPreset, sanitizeProjectForStorage } from "./projectStorage";
 import { isMissingPrivateProfileTableError } from "./profilePrivate";
+import { buildApiUrl } from "./clientConfig";
 
 // --- Local Storage (IndexedDB) for Ephemeral Data (Tests, Learning, UI State) ---
 const DB_NAME = "dreamstream_local_cache"; // Renamed to avoid confusion, though we can keep same name if we migrated data.
@@ -14,6 +15,9 @@ const LEARN_PROGRESS_STORE = "learn_progress";
 const READER_STATE_STORE = "reader_state";
 const IMAGE_FETCH_METRIC_WINDOW = 200;
 const imageFetchSamplesMs: number[] = [];
+const IMAGE_URL_CACHE_TTL_MS = 15 * 60 * 1000;
+const SIGNED_IMAGE_URL_TIMEOUT_MS = 8000;
+const imageUrlCache = new Map<string, { url: string; expiresAt: number }>();
 
 // (Keeping IndexedDB logic for these specific stores)
 const openDb = (): Promise<IDBDatabase> => {
@@ -81,6 +85,91 @@ const parseDataUrl = (dataUrl: string) => {
   const [meta] = dataUrl.split(",");
   const mimeMatch = meta.match(/data:(.*?);base64/);
   return { mimeType: mimeMatch?.[1] || "image/png" };
+};
+
+const buildImagePathCandidates = (imagePath: string): string[] => {
+  const trimmed = imagePath.trim();
+  if (!trimmed) return [];
+  const filename = trimmed.split('/').pop() || '';
+  if (filename.includes('.')) return [trimmed];
+  return [trimmed, `${trimmed}.webp`, `${trimmed}.png`, `${trimmed}.jpg`, `${trimmed}.jpeg`];
+};
+
+const buildImageCacheKey = (path: string, options?: { transform?: ImageTransformPreset }) => {
+  const transform = options?.transform;
+  const transformKey = transform
+    ? [transform.width || '', transform.height || '', transform.quality || '', transform.format || ''].join(':')
+    : 'origin';
+  return `${path}::${transformKey}`;
+};
+
+const readCachedImageUrl = (cacheKey: string): string | undefined => {
+  const cached = imageUrlCache.get(cacheKey);
+  if (!cached) return undefined;
+  if (cached.expiresAt <= Date.now()) {
+    imageUrlCache.delete(cacheKey);
+    return undefined;
+  }
+  return cached.url;
+};
+
+const writeCachedImageUrl = (cacheKey: string, url: string) => {
+  imageUrlCache.set(cacheKey, {
+    url,
+    expiresAt: Date.now() + IMAGE_URL_CACHE_TTL_MS
+  });
+};
+
+const toTransformQuery = (transform?: ImageTransformPreset): string => {
+  if (!transform) return '';
+  const params = new URLSearchParams();
+  if (typeof transform.width === 'number' && Number.isFinite(transform.width)) {
+    params.set('w', String(Math.max(1, Math.floor(transform.width))));
+  }
+  if (typeof transform.height === 'number' && Number.isFinite(transform.height)) {
+    params.set('h', String(Math.max(1, Math.floor(transform.height))));
+  }
+  if (typeof transform.quality === 'number' && Number.isFinite(transform.quality)) {
+    params.set('q', String(Math.max(1, Math.floor(transform.quality))));
+  }
+  if (transform.format) {
+    params.set('f', transform.format);
+  }
+  return params.toString();
+};
+
+const fetchSignedImageUrlFromApi = async (
+  imagePath: string,
+  options?: { transform?: ImageTransformPreset }
+): Promise<string | undefined> => {
+  if (typeof window === 'undefined') return undefined;
+
+  const query = new URLSearchParams();
+  query.set('path', imagePath);
+  const transformQuery = toTransformQuery(options?.transform);
+  if (transformQuery) {
+    const parsed = new URLSearchParams(transformQuery);
+    parsed.forEach((value, key) => query.set(key, value));
+  }
+
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), SIGNED_IMAGE_URL_TIMEOUT_MS);
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const response = await fetch(buildApiUrl(`/api/system/image-url?${query.toString()}`), {
+      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+      signal: controller.signal
+    });
+    if (!response.ok) return undefined;
+
+    const payload = await response.json().catch(() => null) as { url?: unknown } | null;
+    if (!payload || typeof payload.url !== 'string' || !payload.url.trim()) return undefined;
+    return payload.url.trim();
+  } catch {
+    return undefined;
+  } finally {
+    window.clearTimeout(timeout);
+  }
 };
 
 
@@ -317,6 +406,30 @@ export const reloadProjects = async (): Promise<Project[]> => {
   return loadProjects();
 };
 
+const hydratePublicProjectForRead = async (project: Project): Promise<Project> => {
+  const [coverImageUrl, panels] = await Promise.all([
+    project.state.coverImageId
+      ? getImageUrl(project.state.coverImageId)
+      : Promise.resolve(project.state.coverImageUrl),
+    Promise.all(project.state.panels.map(async (panel) => {
+      const imageUrl = panel.imageId ? await getImageUrl(panel.imageId) : panel.imageUrl;
+      const imageUrlHistory = panel.imageIdHistory
+        ? await Promise.all(panel.imageIdHistory.map((id) => getImageUrl(id)))
+        : panel.imageUrlHistory;
+      return { ...panel, imageUrl, imageUrlHistory };
+    }))
+  ]);
+
+  return {
+    ...project,
+    state: {
+      ...project.state,
+      coverImageUrl,
+      panels
+    }
+  };
+};
+
 export const getPublicProject = async (projectId: string): Promise<Project | null> => {
   const { data, error } = await supabase
     .from('projects')
@@ -328,7 +441,7 @@ export const getPublicProject = async (projectId: string): Promise<Project | nul
   if (error || !data) return null;
 
   if (!isProjectRow(data)) return null;
-  return mapProjectRow(data);
+  return hydratePublicProjectForRead(mapProjectRow(data));
 };
 
 export type PlanTier = 'free' | 'pro' | 'admin';
@@ -568,21 +681,28 @@ export const getImageUrl = async (
 ): Promise<string | undefined> => {
   if (!imageId) return undefined;
 
-  // FIX: Old images were saved with IDs missing extensions (e.g. "path/to/uuid")
-  // but stored as "path/to/uuid.png".
-  // If ID has no extension, assume .png to recover them.
-  let finalPath = imageId;
-  const filename = imageId.split('/').pop();
-  if (filename && !filename.includes('.')) {
-    finalPath = `${imageId}.png`;
+  const candidatePaths = buildImagePathCandidates(imageId);
+  for (const candidate of candidatePaths) {
+    const cacheKey = buildImageCacheKey(candidate, options);
+    const cachedUrl = readCachedImageUrl(cacheKey);
+    if (cachedUrl) return cachedUrl;
+
+    const signedUrl = await fetchSignedImageUrlFromApi(candidate, options);
+    if (signedUrl) {
+      writeCachedImageUrl(cacheKey, signedUrl);
+      return signedUrl;
+    }
+
+    const { data } = supabase.storage
+      .from(BUCKET_NAME)
+      .getPublicUrl(candidate, options?.transform ? { transform: options.transform as any } : undefined);
+    if (data?.publicUrl) {
+      writeCachedImageUrl(cacheKey, data.publicUrl);
+      return data.publicUrl;
+    }
   }
 
-  // Check memory cache first (optional, but good for perf)
-  const { data } = supabase.storage
-    .from(BUCKET_NAME)
-    .getPublicUrl(finalPath, options?.transform ? { transform: options.transform as any } : undefined);
-
-  return data.publicUrl;
+  return undefined;
 };
 
 export const getImageDataUrl = async (imageId: string): Promise<string | undefined> => {

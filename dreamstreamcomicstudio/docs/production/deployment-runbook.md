@@ -24,6 +24,7 @@
 `VITE_API_BASE_URL=https://api.yourdomain.com`
 `VITE_SUPABASE_URL=<your_supabase_url>`
 `VITE_SUPABASE_ANON_KEY=<your_supabase_anon_key>`
+`VITE_AUTH_REDIRECT_URL=https://app.yourdomain.com/auth/callback`
 
 ## Backend Deployment (Railway)
 

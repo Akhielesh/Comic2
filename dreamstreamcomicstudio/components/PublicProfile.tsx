@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { UserProfile, Project } from '../types';
-import { getProfileByUsername, getPublicProjectsByUser, isFollowing, followUser, unfollowUser, getFollowersCount } from '../services/db';
+import { getImageUrl, getProfileByUsername, getPublicProjectsByUser, isFollowing, followUser, unfollowUser, getFollowersCount } from '../services/db';
 import { UserAvatar } from './UserAvatar';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from './Button';
 import { UserPlus, UserCheck, Grid, Heart, Eye } from 'lucide-react';
+import { IMAGE_TRANSFORMS } from '../services/projectStorage';
 
 
 interface PublicProfileProps {
@@ -25,13 +26,54 @@ export const PublicProfile: React.FC<PublicProfileProps> = ({ username, onNaviga
         loadData();
     }, [username]);
 
+    const hydratePreview = async (project: Project): Promise<Project> => {
+        const nextProject = structuredClone(project);
+        let coverImage = nextProject.coverImage;
+
+        if (!coverImage && nextProject.state.coverImageId) {
+            coverImage = await getImageUrl(nextProject.state.coverImageId, { transform: IMAGE_TRANSFORMS.thumb });
+        }
+
+        if (Array.isArray(nextProject.state.panels)) {
+            const index = nextProject.state.panels.findIndex((panel) => !panel.imageUrl && !!panel.imageId);
+            if (index >= 0) {
+                const panel = nextProject.state.panels[index];
+                const panelPreview = panel.imageId
+                    ? await getImageUrl(panel.imageId, { transform: IMAGE_TRANSFORMS.thumb })
+                    : undefined;
+                if (panelPreview) {
+                    nextProject.state.panels[index] = { ...panel, imageUrl: panelPreview };
+                }
+            }
+        }
+
+        if (Array.isArray(nextProject.state.styleVariants)) {
+            const index = nextProject.state.styleVariants.findIndex((variant) => !variant.imageUrl && !!variant.imageId);
+            if (index >= 0) {
+                const variant = nextProject.state.styleVariants[index];
+                const variantPreview = variant.imageId
+                    ? await getImageUrl(variant.imageId, { transform: IMAGE_TRANSFORMS.thumb })
+                    : undefined;
+                if (variantPreview) {
+                    nextProject.state.styleVariants[index] = { ...variant, imageUrl: variantPreview };
+                }
+            }
+        }
+
+        return {
+            ...nextProject,
+            coverImage
+        };
+    };
+
     const loadData = async () => {
         setLoading(true);
         const p = await getProfileByUsername(username);
         if (p) {
             setProfile(p);
             const projs = await getPublicProjectsByUser(p.id);
-            setProjects(projs);
+            const hydratedProjects = await Promise.all(projs.map(hydratePreview));
+            setProjects(hydratedProjects);
 
             const count = await getFollowersCount(p.id);
             setFollowersCount(count);

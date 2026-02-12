@@ -2,8 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../services/supabase';
 import { Loader2, Heart, Eye, Search, BookOpen, User, Star } from 'lucide-react';
 import { Project } from '../types';
-import { getProjectLikeMap, toggleProjectLike } from '../services/db';
+import { getImageUrl, getProjectLikeMap, toggleProjectLike } from '../services/db';
 import { useAuth } from '../contexts/AuthContext';
+import { IMAGE_TRANSFORMS } from '../services/projectStorage';
 
 interface PublicGalleryProps {
     onReadComic: (projectId: string) => void;
@@ -32,6 +33,46 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
     useEffect(() => {
         fetchComics();
     }, [filter, user?.id]);
+
+    const hydratePreview = async (project: PublicProject): Promise<PublicProject> => {
+        const nextProject = structuredClone(project);
+        let coverImage = nextProject.coverImage;
+
+        if (!coverImage && nextProject.state.coverImageId) {
+            coverImage = await getImageUrl(nextProject.state.coverImageId, { transform: IMAGE_TRANSFORMS.thumb });
+        }
+
+        if (Array.isArray(nextProject.state.panels)) {
+            const index = nextProject.state.panels.findIndex((panel) => !panel.imageUrl && !!panel.imageId);
+            if (index >= 0) {
+                const panel = nextProject.state.panels[index];
+                const previewUrl = panel.imageId
+                    ? await getImageUrl(panel.imageId, { transform: IMAGE_TRANSFORMS.thumb })
+                    : undefined;
+                if (previewUrl) {
+                    nextProject.state.panels[index] = { ...panel, imageUrl: previewUrl };
+                }
+            }
+        }
+
+        if (Array.isArray(nextProject.state.styleVariants)) {
+            const index = nextProject.state.styleVariants.findIndex((variant) => !variant.imageUrl && !!variant.imageId);
+            if (index >= 0) {
+                const variant = nextProject.state.styleVariants[index];
+                const previewUrl = variant.imageId
+                    ? await getImageUrl(variant.imageId, { transform: IMAGE_TRANSFORMS.thumb })
+                    : undefined;
+                if (previewUrl) {
+                    nextProject.state.styleVariants[index] = { ...variant, imageUrl: previewUrl };
+                }
+            }
+        }
+
+        return {
+            ...nextProject,
+            coverImage
+        };
+    };
 
     const fetchComics = async () => {
         setLoading(true);
@@ -63,9 +104,10 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                 average_rating: 0,
                 review_count: 0
             }));
+            const hydrated = await Promise.all(mapped.map((project: PublicProject) => hydratePreview(project)));
 
-            const likeMap = await getProjectLikeMap(mapped.map((project: PublicProject) => project.id));
-            setProjects(mapped.map((project: PublicProject) => ({
+            const likeMap = await getProjectLikeMap(hydrated.map((project: PublicProject) => project.id));
+            setProjects(hydrated.map((project: PublicProject) => ({
                 ...project,
                 isLiked: !!likeMap[project.id]
             })));

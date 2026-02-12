@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 // These will be populated by the user in .env.local
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const explicitAuthRedirectUrl = import.meta.env.VITE_AUTH_REDIRECT_URL;
 const AUTH_PERSISTENCE_KEY = 'dreamstream_auth_persist';
 const SUPABASE_AUTH_STORAGE_KEY = 'dreamstream_auth_token';
 
@@ -50,6 +51,14 @@ export const getAuthPersistMode = (): AuthPersistMode => {
 export const setAuthPersistMode = (mode: AuthPersistMode) => {
     if (typeof window === 'undefined') return;
     safeStorageSet(window.localStorage, AUTH_PERSISTENCE_KEY, mode);
+};
+
+export const getAuthRedirectUrl = () => {
+    if (explicitAuthRedirectUrl && explicitAuthRedirectUrl.trim()) {
+        return explicitAuthRedirectUrl.trim();
+    }
+    if (typeof window === 'undefined') return '/auth/callback';
+    return `${window.location.origin}/auth/callback`;
 };
 
 const authStorage = {
