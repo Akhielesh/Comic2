@@ -24,7 +24,9 @@ import {
   TestLabReportResponse,
   SystemStatusResponse,
   SystemDiagnosticsResponse,
-  AssistantMessage
+  AssistantMessage,
+  UniversalAssistantRequest,
+  UniversalAssistantResponse
 } from '../apiTypes';
 import { GenerationArtifact, Character, Item, Location, ContinuityBible, SceneContinuityBinding } from '../types';
 import { saveArtifact, saveImage, saveTestImage, getImageUrl, getTestImageUrl, getImageDataUrl } from './db';
@@ -191,6 +193,26 @@ export const checkSystemDiagnostics = async (): Promise<SystemDiagnosticsRespons
   } catch (e) {
     handleGeminiError('system_diagnostics', e);
     return { status: 'error', geminiKeyPresent: false, pixazoKeyPresent: false, message: String(e) };
+  }
+};
+
+export const queryUniversalAssistant = async (
+  message: string,
+  history: AssistantMessage[] = [],
+  context?: UniversalAssistantRequest['context']
+): Promise<UniversalAssistantResponse> => {
+  updateDebugState('gemini', { lastRequestAt: Date.now(), lastRequestType: 'assistant_chat', lastError: undefined });
+  try {
+    return await withTextKeyFallback((apiKey, modelId) =>
+      post<UniversalAssistantRequest, UniversalAssistantResponse>(
+        '/api/assistant/chat',
+        { message, history, context },
+        { apiKey, modelId }
+      )
+    );
+  } catch (e) {
+    handleGeminiError('assistant_chat', e);
+    throw e;
   }
 };
 

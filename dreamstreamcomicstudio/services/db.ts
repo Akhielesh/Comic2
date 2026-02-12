@@ -542,6 +542,41 @@ export interface UsageLimits {
   plan_tier: PlanTier;
 }
 
+export const getUsageLimits = async (): Promise<UsageLimits | null> => {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+
+  const fallback: UsageLimits = {
+    images_generated_count: 0,
+    max_images_allowed: 30,
+    has_byok: false,
+    is_premium: false,
+    plan_tier: 'free'
+  };
+
+  const { data, error } = await supabase
+    .from('usage_limits')
+    .select('images_generated_count, max_images_allowed, has_byok, is_premium, plan_tier')
+    .eq('user_id', user.id)
+    .maybeSingle();
+
+  if (error || !data) return fallback;
+
+  const rawTier = typeof data.plan_tier === 'string' ? data.plan_tier.toLowerCase() : 'free';
+  const plan_tier: PlanTier =
+    rawTier === 'pro' || rawTier === 'admin'
+      ? rawTier
+      : (data.is_premium ? 'pro' : 'free');
+
+  return {
+    images_generated_count: typeof data.images_generated_count === 'number' ? data.images_generated_count : 0,
+    max_images_allowed: typeof data.max_images_allowed === 'number' ? data.max_images_allowed : 30,
+    has_byok: data.has_byok === true,
+    is_premium: data.is_premium === true,
+    plan_tier
+  };
+};
+
 export const generateCoupon = async (): Promise<string | null> => {
   const code = Math.random().toString(36).substring(2, 10).toUpperCase();
   const { error } = await supabase.from('coupons').insert({ code });

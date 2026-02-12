@@ -12,19 +12,24 @@ declare module 'express-serve-static-core' {
 }
 
 export const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader) {
+    const token = extractBearerToken(req.headers.authorization);
+    if (!token) {
         res.status(401).json({ error: { message: 'Missing Authorization header' } });
-        return; // STOP execution
+        return;
     }
 
-    const token = authHeader.replace('Bearer ', '');
-    let user: { id: string; email?: string | null } | null = null;
-    let error: { message?: string } | null = null;
     try {
-        const result = await supabase.auth.getUser(token);
-        user = result.data.user;
-        error = result.error;
+        const user = await resolveAuthUser(token);
+        if (!user) {
+            res.status(401).json({ error: { message: 'Invalid or expired token' } });
+            return;
+        }
+
+        req.user = {
+            id: user.id,
+            email: user.email
+        };
+        next();
     } catch (e: any) {
         res.status(503).json({
             error: {
@@ -35,16 +40,39 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
         });
         return;
     }
+};
 
-    if (error || !user) {
-        res.status(401).json({ error: { message: 'Invalid or expired token', details: error?.message } });
-        return; // STOP execution
+export const optionalAuth = async (req: Request, _res: Response, next: NextFunction) => {
+    const token = extractBearerToken(req.headers.authorization);
+    if (!token) {
+        next();
+        return;
     }
 
-    req.user = {
-        id: user.id,
-        email: user.email
-    };
+    try {
+        const user = await resolveAuthUser(token);
+        if (user) {
+            req.user = {
+                id: user.id,
+                email: user.email
+            };
+        }
+    } catch {
+        // Fail-open by design for optional auth routes; request proceeds as guest.
+    }
 
     next();
+};
+
+const extractBearerToken = (authorizationHeader: unknown): string | null => {
+    if (typeof authorizationHeader !== 'string') return null;
+    const match = authorizationHeader.match(/^Bearer\s+(.+)$/i);
+    const token = match?.[1]?.trim();
+    return token || null;
+};
+
+const resolveAuthUser = async (token: string) => {
+    const result = await supabase.auth.getUser(token);
+    if (result.error || !result.data.user) return null;
+    return result.data.user;
 };

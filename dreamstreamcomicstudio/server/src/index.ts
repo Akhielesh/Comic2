@@ -16,10 +16,12 @@ import {
 } from './config.js';
 import { attachKeys } from './middleware/keys.js';
 import { errorHandler } from './middleware/errors.js';
-import { requireAuth } from './middleware/auth.js';
+import { optionalAuth, requireAuth } from './middleware/auth.js';
+import { assistantLimits } from './middleware/assistantLimits.js';
 import { createRateLimit } from './middleware/rateLimit.js';
 import { attachRequestContext, requestLogger } from './middleware/requestContext.js';
 import { applySecurityHeaders } from './middleware/security.js';
+import { assistantRouter } from './routes/assistant.js';
 import { textRouter } from './routes/text.js';
 import { imageRouter } from './routes/image.js';
 import { visionRouter } from './routes/vision.js';
@@ -93,6 +95,7 @@ app.get('/api/health', (_req, res) => {
 
 // Public routes
 app.use('/api/system', systemRateLimit, systemRouter);
+app.use('/api/assistant', optionalAuth, assistantLimits, assistantRouter);
 
 // Protect all API routes
 app.use('/api', requireAuth);
@@ -100,9 +103,6 @@ app.use('/api', requireAuth);
 // app.use('/api/payments', paymentsRouter); // [DISABLED] Authenticated payments
 app.use('/api/text', textRateLimit, textRouter);
 app.use('/api/image', imageRateLimit, imageRouter);
-app.use('/api/assistant', textRateLimit, (_req, res) => {
-  res.status(410).json({ error: { message: 'Story Assistant has been removed.' } });
-});
 app.use('/api/vision', visionRateLimit, visionRouter);
 
 app.use(errorHandler);
