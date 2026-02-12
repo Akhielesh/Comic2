@@ -13,14 +13,26 @@ interface PublicGalleryProps {
 }
 
 interface PublicProject extends Project {
-    profiles?: { username: string };
-    user_id?: string;
-    likes_count: number;
-    views_count: number;
     average_rating?: number;
     review_count?: number;
     isLiked?: boolean;
 }
+
+const normalizeTimestamp = (value: unknown): number | undefined => {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    if (typeof value === 'string' && value.trim()) {
+        const numeric = Number(value);
+        if (Number.isFinite(numeric)) return numeric;
+        const parsed = new Date(value).getTime();
+        if (Number.isFinite(parsed)) return parsed;
+    }
+    return undefined;
+};
+
+const fallbackUsernameFromId = (userId?: string): string => {
+    if (!userId) return 'Unknown creator';
+    return `user-${userId.slice(0, 8)}`;
+};
 
 export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBack, onRequireAuth }) => {
     const { user } = useAuth();
@@ -79,7 +91,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
         try {
             let query = supabase
                 .from('projects')
-                .select('*, profiles:user_id (username)')
+                .select('*')
                 .eq('is_public', true);
 
             if (filter === 'trending') query = query.order('likes_count', { ascending: false });
@@ -90,7 +102,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                 // Schema fallback when likes_count is unavailable
                 const fallback = await supabase
                     .from('projects')
-                    .select('*, profiles:user_id (username)')
+                    .select('*')
                     .eq('is_public', true)
                     .order('created_at', { ascending: false });
                 data = fallback.data;
@@ -98,12 +110,70 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
             }
             if (error) throw error;
 
-            const mapped = (data || []).map((p: any) => ({
-                ...p,
-                coverImage: p.cover_image_url,
-                average_rating: 0,
-                review_count: 0
-            }));
+            const rows = (data || []).filter((p: any) =>
+                p &&
+                typeof p.id === 'string' &&
+                typeof p.name === 'string' &&
+                typeof p.created_at === 'string' &&
+                typeof p.updated_at === 'string' &&
+                typeof p.state === 'object'
+            );
+            const userIds = Array.from(
+                new Set(
+                    rows
+                        .map((row: any) => (typeof row.user_id === 'string' ? row.user_id : undefined))
+                        .filter((id: string | undefined): id is string => !!id)
+                )
+            );
+
+            const authorMap = new Map<string, string>();
+            if (userIds.length > 0) {
+                const { data: profiles, error: profileError } = await supabase
+                    .from('profiles')
+                    .select('id, username')
+                    .in('id', userIds);
+                if (profileError) {
+                    console.warn('Failed to load author usernames for public gallery.', profileError);
+                } else {
+                    (profiles || []).forEach((profile: any) => {
+                        if (!profile || typeof profile.id !== 'string') return;
+                        if (typeof profile.username === 'string' && profile.username.trim()) {
+                            authorMap.set(profile.id, profile.username.trim());
+                        }
+                    });
+                }
+            }
+
+            const mapped = rows.map((row: any): PublicProject => {
+                const createdAt = new Date(row.created_at).getTime();
+                const publishedAt =
+                    normalizeTimestamp(row.published_at)
+                    ?? normalizeTimestamp(row.state?.publishedAt)
+                    ?? createdAt;
+                const likesCount = typeof row.likes_count === 'number'
+                    ? row.likes_count
+                    : (typeof row.likes === 'number' ? row.likes : 0);
+                const viewsCount = typeof row.views_count === 'number'
+                    ? row.views_count
+                    : (typeof row.views === 'number' ? row.views : 0);
+
+                return {
+                    id: row.id,
+                    name: row.name,
+                    createdAt,
+                    updatedAt: new Date(row.updated_at).getTime(),
+                    publishedAt,
+                    coverImage: typeof row.cover_image_url === 'string' ? row.cover_image_url : undefined,
+                    state: row.state as Project['state'],
+                    isPublic: !!row.is_public,
+                    userId: typeof row.user_id === 'string' ? row.user_id : undefined,
+                    authorName: authorMap.get(row.user_id) || fallbackUsernameFromId(row.user_id),
+                    likesCount,
+                    viewsCount,
+                    average_rating: 0,
+                    review_count: 0
+                };
+            });
             const hydrated = await Promise.all(mapped.map((project: PublicProject) => hydratePreview(project)));
 
             const likeMap = await getProjectLikeMap(hydrated.map((project: PublicProject) => project.id));
@@ -121,7 +191,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
 
     const filteredProjects = projects.filter((project) =>
         project.name.toLowerCase().includes(search.toLowerCase()) ||
-        project.profiles?.username?.toLowerCase().includes(search.toLowerCase())
+        (project.authorName || '').toLowerCase().includes(search.toLowerCase())
     );
 
     return (
@@ -220,7 +290,10 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                                         <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-black/80 to-transparent p-4 text-white pt-10">
                                             <h3 className="font-display text-lg leading-tight mb-1">{project.name}</h3>
                                             <div className="flex items-center gap-1 text-xs font-mono text-white/70">
-                                                <User size={10} /> {project.profiles?.username || 'Unknown'}
+                                                <User size={10} /> {project.authorName || 'Unknown creator'}
+                                            </div>
+                                            <div className="text-[10px] font-mono text-white/60 mt-1">
+                                                Published {new Date(project.publishedAt || project.createdAt).toLocaleDateString()}
                                             </div>
                                         </div>
                                     </div>
@@ -239,19 +312,19 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                                                         return {
                                                             ...p,
                                                             isLiked: !currentLiked,
-                                                            likes_count: Math.max(0, (p.likes_count || 0) + (currentLiked ? -1 : 1))
+                                                            likesCount: Math.max(0, (p.likesCount || 0) + (currentLiked ? -1 : 1))
                                                         };
                                                     }));
 
                                                     try {
-                                                        const result = await toggleProjectLike(project.id, project.user_id);
+                                                        const result = await toggleProjectLike(project.id, project.userId);
                                                         setProjects((prev) => prev.map((p) => {
                                                             if (p.id !== project.id) return p;
                                                             if (p.isLiked === result.liked) return p;
                                                             return {
                                                                 ...p,
                                                                 isLiked: result.liked,
-                                                                likes_count: Math.max(0, (p.likes_count || 0) + (result.liked ? 1 : -1))
+                                                                likesCount: Math.max(0, (p.likesCount || 0) + (result.liked ? 1 : -1))
                                                             };
                                                         }));
                                                     } finally {
@@ -262,10 +335,10 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                                                 disabled={!user || !!likeBusy[project.id]}
                                                 title={user ? (project.isLiked ? 'Unlike comic' : 'Like comic') : 'Log in to like comics'}
                                             >
-                                                <Heart size={14} className={project.isLiked ? 'fill-current' : ''} /> {project.likes_count || 0}
+                                                <Heart size={14} className={project.isLiked ? 'fill-current' : ''} /> {project.likesCount || 0}
                                             </button>
                                             <div className="flex items-center gap-1 text-slate-400">
-                                                <Eye size={14} /> {project.views_count || 0}
+                                                <Eye size={14} /> {project.viewsCount || 0}
                                             </div>
                                         </div>
                                         {project.average_rating !== undefined && project.average_rating > 0 && (

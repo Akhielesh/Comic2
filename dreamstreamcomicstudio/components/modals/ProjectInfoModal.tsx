@@ -816,7 +816,18 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
                     onClick={() => {
                       const next = !isPublic;
                       setIsPublic(next);
-                      onUpdateProject(project.id, { isPublic: next });
+                      onUpdateProject(project.id, (prev) => {
+                        const existingPublishedAt = prev.publishedAt ?? prev.state.publishedAt;
+                        const publishedAt = next ? (existingPublishedAt ?? Date.now()) : existingPublishedAt;
+                        return {
+                          isPublic: next,
+                          publishedAt,
+                          state: {
+                            ...prev.state,
+                            publishedAt
+                          }
+                        };
+                      });
                     }}
                     className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold border-2 border-black transition-all ${isPublic ? 'bg-green-400 shadow-[2px_2px_0px_0px_#000]' : 'bg-slate-200 opacity-70'
                       }`}

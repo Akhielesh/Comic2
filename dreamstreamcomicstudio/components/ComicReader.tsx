@@ -415,6 +415,14 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
                 <div>{project.authorName || 'Unknown creator'}</div>
               </div>
               <div>
+                <div className="text-xs uppercase font-bold text-slate-500">Published</div>
+                <div>
+                  {project.isPublic
+                    ? new Date(project.publishedAt || project.createdAt).toLocaleDateString()
+                    : 'Not public yet'}
+                </div>
+              </div>
+              <div>
                 <div className="text-xs uppercase font-bold text-slate-500">Overview</div>
                 <p className="text-slate-700 whitespace-pre-wrap">{project.state.overview || 'No overview added yet.'}</p>
               </div>

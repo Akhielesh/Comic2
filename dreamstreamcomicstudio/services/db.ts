@@ -186,6 +186,7 @@ type ProjectRow = {
   name: string;
   created_at: string;
   updated_at: string;
+  published_at?: string | null;
   cover_image_url?: string;
   state: Project['state'];
   is_public?: boolean;
@@ -208,9 +209,70 @@ type CommentRow = {
 };
 
 type ProjectWithStats = Project & { userId?: string; likes?: number; views?: number };
+type ProfilePreview = { username?: string; avatar_url?: string };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
+
+const normalizeTimestamp = (value: unknown): number | undefined => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+    const parsed = new Date(value).getTime();
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+};
+
+const fallbackUsernameFromId = (userId?: string): string => {
+  if (!userId) return 'Unknown creator';
+  return `user-${userId.slice(0, 8)}`;
+};
+
+const readPublishedAtFromState = (state: Project['state']): number | undefined => {
+  if (!isRecord(state)) return undefined;
+  return normalizeTimestamp(state.publishedAt);
+};
+
+const resolvePublishedAt = (row: ProjectRow): number | undefined =>
+  normalizeTimestamp(row.published_at)
+  ?? readPublishedAtFromState(row.state)
+  ?? (row.is_public ? normalizeTimestamp(row.created_at) : undefined);
+
+const fetchProfileMapByIds = async (userIds: Array<string | undefined>): Promise<Map<string, ProfilePreview>> => {
+  const ids = Array.from(
+    new Set(
+      userIds
+        .filter((userId): userId is string => typeof userId === 'string' && userId.trim().length > 0)
+    )
+  );
+
+  if (ids.length === 0) return new Map();
+
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, username, avatar_url')
+    .in('id', ids);
+
+  if (error) {
+    console.warn('Failed to load profile usernames for user IDs.', error);
+    return new Map();
+  }
+
+  const map = new Map<string, ProfilePreview>();
+  for (const row of data || []) {
+    if (!isRecord(row) || typeof row.id !== 'string') continue;
+    const username = typeof row.username === 'string' && row.username.trim()
+      ? row.username.trim()
+      : undefined;
+    const avatar_url = typeof row.avatar_url === 'string' && row.avatar_url.trim()
+      ? row.avatar_url.trim()
+      : undefined;
+    map.set(row.id, { username, avatar_url });
+  }
+  return map;
+};
 
 const isProjectRow = (value: unknown): value is ProjectRow => {
   if (!isRecord(value)) return false;
@@ -223,19 +285,24 @@ const isProjectRow = (value: unknown): value is ProjectRow => {
   );
 };
 
-const mapProjectRow = (row: ProjectRow): Project => ({
-  id: row.id,
-  name: row.name,
-  createdAt: new Date(row.created_at).getTime(),
-  updatedAt: new Date(row.updated_at).getTime(),
-  coverImage: row.cover_image_url,
-  state: row.state,
-  isPublic: row.is_public,
-  userId: row.user_id,
-  authorName: row.profiles?.username,
-  likesCount: row.likes_count ?? row.likes ?? 0,
-  viewsCount: row.views_count ?? row.views ?? 0
-});
+const mapProjectRow = (row: ProjectRow, profileMap?: Map<string, ProfilePreview>): Project => {
+  const profile = row.user_id ? profileMap?.get(row.user_id) : undefined;
+  const authorName = row.profiles?.username || profile?.username || fallbackUsernameFromId(row.user_id);
+  return {
+    id: row.id,
+    name: row.name,
+    createdAt: new Date(row.created_at).getTime(),
+    updatedAt: new Date(row.updated_at).getTime(),
+    coverImage: row.cover_image_url,
+    state: row.state,
+    isPublic: row.is_public,
+    userId: row.user_id,
+    authorName,
+    publishedAt: resolvePublishedAt(row),
+    likesCount: row.likes_count ?? row.likes ?? 0,
+    viewsCount: row.views_count ?? row.views ?? 0
+  };
+};
 
 const isCommentRow = (value: unknown): value is CommentRow => {
   if (!isRecord(value)) return false;
@@ -248,15 +315,21 @@ const isCommentRow = (value: unknown): value is CommentRow => {
   );
 };
 
-const mapCommentRow = (row: CommentRow): Comment => ({
-  id: row.id,
-  project_id: row.project_id,
-  user_id: row.user_id,
-  text: row.text,
-  created_at: row.created_at,
-  updated_at: row.updated_at,
-  user: row.user ?? undefined,
-});
+const mapCommentRow = (row: CommentRow, profileMap?: Map<string, ProfilePreview>): Comment => {
+  const profile = row.user ?? (row.user_id ? profileMap?.get(row.user_id) : undefined);
+  return {
+    id: row.id,
+    project_id: row.project_id,
+    user_id: row.user_id,
+    text: row.text,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    user: {
+      username: profile?.username || fallbackUsernameFromId(row.user_id),
+      avatar_url: profile?.avatar_url
+    }
+  };
+};
 
 
 // --- CLOUD STORAGE (Supabase) for Projects, Images, Artifacts ---
@@ -356,8 +429,13 @@ export const saveProject = async (project: Project): Promise<void> => {
   }
 
   const sanitized = sanitizeProjectForStorage(project);
-  const { id, name, coverImage, state, createdAt, updatedAt, isPublic } = sanitized;
-  const stateBytes = new Blob([JSON.stringify(state)]).size;
+  const { id, name, coverImage, state, createdAt, updatedAt, isPublic, publishedAt } = sanitized;
+  const effectivePublishedAt =
+    normalizeTimestamp(publishedAt)
+    ?? readPublishedAtFromState(state)
+    ?? (isPublic ? Date.now() : undefined);
+  const stateWithPublishMeta = effectivePublishedAt ? { ...state, publishedAt: effectivePublishedAt } : state;
+  const stateBytes = new Blob([JSON.stringify(stateWithPublishMeta)]).size;
   console.info("[METRICS] project_state_bytes", { projectId: id, bytes: stateBytes });
 
   const { error } = await supabase.from('projects').upsert({
@@ -366,7 +444,7 @@ export const saveProject = async (project: Project): Promise<void> => {
     name,
     cover_image_url: coverImage,
     is_public: !!isPublic,
-    state: state, // JSONB
+    state: stateWithPublishMeta, // JSONB
     updated_at: new Date(updatedAt).toISOString(),
     created_at: new Date(createdAt).toISOString()
   });
@@ -400,14 +478,15 @@ export const loadProjects = async (): Promise<Project[]> => {
 
   const { data, error } = await supabase
     .from('projects')
-    .select('*, profiles:user_id(username)')
+    .select('*')
     .eq('user_id', user.id)
     .order('updated_at', { ascending: false });
 
   if (error) throw error;
 
-  // Map DB representation back to Application Type
-  return (data || []).filter(isProjectRow).map(mapProjectRow);
+  const rows = (data || []).filter(isProjectRow);
+  const profileMap = await fetchProfileMapByIds(rows.map((row) => row.user_id));
+  return rows.map((row) => mapProjectRow(row, profileMap));
 };
 
 export const reloadProjects = async (): Promise<Project[]> => {
@@ -441,7 +520,7 @@ const hydratePublicProjectForRead = async (project: Project): Promise<Project> =
 export const getPublicProject = async (projectId: string): Promise<Project | null> => {
   const { data, error } = await supabase
     .from('projects')
-    .select('*, profiles:user_id(username)')
+    .select('*')
     .eq('id', projectId)
     .eq('is_public', true) // Security check
     .single();
@@ -449,7 +528,8 @@ export const getPublicProject = async (projectId: string): Promise<Project | nul
   if (error || !data) return null;
 
   if (!isProjectRow(data)) return null;
-  return hydratePublicProjectForRead(mapProjectRow(data));
+  const profileMap = await fetchProfileMapByIds([data.user_id]);
+  return hydratePublicProjectForRead(mapProjectRow(data, profileMap));
 };
 
 export type PlanTier = 'free' | 'pro' | 'admin';
@@ -1075,7 +1155,7 @@ export const addComment = async (projectId: string, text: string): Promise<Comme
   const { data, error } = await supabase
     .from('comments')
     .insert({ project_id: projectId, user_id: user.id, text })
-    .select('*, user:user_id(username, avatar_url)') // Join with profile
+    .select('*')
     .single();
 
   if (error) {
@@ -1088,13 +1168,15 @@ export const addComment = async (projectId: string, text: string): Promise<Comme
     await createNotification(project.user_id, user.id, 'comment', projectId);
   }
 
-  return isCommentRow(data) ? mapCommentRow(data) : null;
+  if (!isCommentRow(data)) return null;
+  const profileMap = await fetchProfileMapByIds([data.user_id]);
+  return mapCommentRow(data, profileMap);
 };
 
 export const getComments = async (projectId: string, currentUserId?: string): Promise<Comment[]> => {
   const { data, error } = await supabase
     .from('comments')
-    .select('*, user:profiles!user_id(username, avatar_url)') // Explicit join on profiles table via user_id
+    .select('*')
     .eq('project_id', projectId)
     .order('created_at', { ascending: true });
 
@@ -1103,7 +1185,9 @@ export const getComments = async (projectId: string, currentUserId?: string): Pr
     return [];
   }
 
-  let validComments = (data || []).filter(isCommentRow).map(mapCommentRow);
+  const rows = (data || []).filter(isCommentRow);
+  const profileMap = await fetchProfileMapByIds(rows.map((row) => row.user_id));
+  let validComments = rows.map((row) => mapCommentRow(row, profileMap));
 
   // Fetch likes for current user if provided
   if (currentUserId && validComments.length > 0) {
@@ -1134,7 +1218,7 @@ export const updateComment = async (commentId: string, text: string): Promise<Co
     .from('comments')
     .update({ text })
     .eq('id', commentId)
-    .select('*, user:profiles!user_id(username, avatar_url)')
+    .select('*')
     .single();
 
   if (error) {
@@ -1142,7 +1226,9 @@ export const updateComment = async (commentId: string, text: string): Promise<Co
     return null;
   }
 
-  return isCommentRow(data) ? mapCommentRow(data) : null;
+  if (!isCommentRow(data)) return null;
+  const profileMap = await fetchProfileMapByIds([data.user_id]);
+  return mapCommentRow(data, profileMap);
 };
 
 export const followUser = async (targetUserId: string): Promise<boolean> => {
@@ -1208,16 +1294,18 @@ export const getProfileByUsername = async (username: string): Promise<UserProfil
 export const getPublicProjectsByUser = async (userId: string): Promise<Project[]> => {
   const { data, error } = await supabase
     .from('projects')
-    .select('*, profiles:user_id(username)')
+    .select('*')
     .eq('user_id', userId)
     .eq('is_public', true)
     .order('created_at', { ascending: false });
 
   if (error) return [];
 
-  return (data || []).filter(isProjectRow).map((row): Project => {
+  const rows = (data || []).filter(isProjectRow);
+  const profileMap = await fetchProfileMapByIds(rows.map((row) => row.user_id));
+  return rows.map((row): Project => {
     const project: ProjectWithStats = {
-      ...mapProjectRow(row),
+      ...mapProjectRow(row, profileMap),
       userId: row.user_id,
       likes: row.likes_count ?? row.likes ?? 0,
       views: row.views_count ?? row.views ?? 0
@@ -1406,10 +1494,7 @@ export const submitReview = async (review: Omit<Review, 'id' | 'userId' | 'creat
 export const getReviews = async (projectId: string): Promise<Review[]> => {
   const { data, error } = await supabase
     .from('reviews')
-    .select(`
-      *,
-      user:user_id (username, avatar_url)
-    `)
+    .select('*')
     .eq('project_id', projectId)
     .order('created_at', { ascending: false });
 
@@ -1418,14 +1503,36 @@ export const getReviews = async (projectId: string): Promise<Review[]> => {
     return [];
   }
 
-  return (data || []).map((r: any) => ({
-    id: r.id,
-    projectId: r.project_id,
-    userId: r.user_id,
-    rating: r.rating,
-    scores: r.scores,
-    text: r.text,
-    createdAt: new Date(r.created_at).getTime(),
-    user: r.user
-  }));
+  const rows = (data || []).filter(isRecord);
+  const profileMap = await fetchProfileMapByIds(
+    rows.map((row) => (typeof row.user_id === 'string' ? row.user_id : undefined))
+  );
+
+  return rows
+    .filter((row) =>
+      typeof row.id === 'string' &&
+      typeof row.project_id === 'string' &&
+      typeof row.user_id === 'string' &&
+      typeof row.created_at === 'string' &&
+      typeof row.text === 'string'
+    )
+    .map((row) => {
+      const profile = profileMap.get(row.user_id as string);
+      const numericRating = typeof row.rating === 'number'
+        ? row.rating
+        : Number(row.rating);
+      return {
+        id: row.id as string,
+        projectId: row.project_id as string,
+        userId: row.user_id as string,
+        rating: Number.isFinite(numericRating) ? numericRating : 0,
+        scores: row.scores as Review['scores'],
+        text: row.text as string,
+        createdAt: new Date(row.created_at as string).getTime(),
+        user: {
+          username: profile?.username || fallbackUsernameFromId(row.user_id as string),
+          avatar_url: profile?.avatar_url
+        }
+      };
+    });
 };

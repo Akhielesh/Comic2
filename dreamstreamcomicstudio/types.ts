@@ -415,6 +415,7 @@ export interface ComicState {
   continuitySummary?: string;
   continuity?: ContinuityState;
   overview?: string;
+  publishedAt?: number;
   comments?: ProjectComment[];
   storyBuilder?: StoryBuilderState;
   isFeatured?: boolean;
@@ -478,6 +479,7 @@ export interface Project {
   name: string;
   createdAt: number;
   updatedAt: number;
+  publishedAt?: number;
   coverImage?: string;
   state: ComicState;
   isPublic?: boolean;
