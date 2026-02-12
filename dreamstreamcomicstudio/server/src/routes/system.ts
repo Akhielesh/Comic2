@@ -75,6 +75,75 @@ const parseTempPath = (imagePath: string): { ownerId: string } | null => {
   return { ownerId: match[1] };
 };
 
+const parseLegacyOwnerPath = (imagePath: string): { ownerId: string } | null => {
+  if (imagePath.startsWith('u/')) return null;
+  const match = imagePath.match(/^([0-9a-f-]{36})\/[^/]+$/i);
+  if (!match) return null;
+  return { ownerId: match[1] };
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
+
+const readStringArray = (value: unknown): string[] => {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+};
+
+const projectStateReferencesImagePath = (state: unknown, imagePath: string): boolean => {
+  if (!isRecord(state)) return false;
+
+  if (typeof state.coverImageId === 'string' && state.coverImageId === imagePath) return true;
+  if (typeof state.coverTemplateImageId === 'string' && state.coverTemplateImageId === imagePath) return true;
+
+  const matchPanel = (panel: unknown) => {
+    if (!isRecord(panel)) return false;
+    if (typeof panel.imageId === 'string' && panel.imageId === imagePath) return true;
+    const history = readStringArray(panel.imageIdHistory);
+    return history.includes(imagePath);
+  };
+
+  const matchEntity = (entity: unknown) => {
+    if (!isRecord(entity)) return false;
+    if (typeof entity.imageId === 'string' && entity.imageId === imagePath) return true;
+    const refs = readStringArray(entity.referenceImageIds);
+    return refs.includes(imagePath);
+  };
+
+  const matchStyle = (variant: unknown) => {
+    if (!isRecord(variant)) return false;
+    return typeof variant.imageId === 'string' && variant.imageId === imagePath;
+  };
+
+  if (Array.isArray(state.panels) && state.panels.some(matchPanel)) return true;
+  if (Array.isArray(state.characters) && state.characters.some(matchEntity)) return true;
+  if (Array.isArray(state.items) && state.items.some(matchEntity)) return true;
+  if (Array.isArray(state.locations) && state.locations.some(matchEntity)) return true;
+  if (Array.isArray(state.styleVariants) && state.styleVariants.some(matchStyle)) return true;
+
+  if (isRecord(state.imageTags) && Object.prototype.hasOwnProperty.call(state.imageTags, imagePath)) {
+    return true;
+  }
+
+  return false;
+};
+
+const isLegacyPathReferencedByPublicProject = async (
+  supabaseAdmin: SupabaseClient,
+  ownerId: string,
+  imagePath: string
+): Promise<boolean> => {
+  const { data, error } = await supabaseAdmin
+    .from('projects')
+    .select('state')
+    .eq('user_id', ownerId)
+    .eq('is_public', true);
+
+  if (error) throw error;
+  if (!Array.isArray(data) || data.length === 0) return false;
+  return data.some((row) => projectStateReferencesImagePath((row as { state?: unknown }).state, imagePath));
+};
+
 type AccessCheckResult =
   | { allowed: true }
   | { allowed: false; status: number; message: string };
@@ -113,6 +182,21 @@ const canAccessImagePath = async (
       return { allowed: false, status: 403, message: 'Image access denied.' };
     }
     return { allowed: true };
+  }
+
+  const legacyScoped = parseLegacyOwnerPath(imagePath);
+  if (legacyScoped) {
+    if (requesterId && requesterId === legacyScoped.ownerId) {
+      return { allowed: true };
+    }
+    if (!requesterId) {
+      return { allowed: false, status: 401, message: 'Authentication required for this image.' };
+    }
+    const referencedByPublicProject = await isLegacyPathReferencedByPublicProject(supabaseAdmin, legacyScoped.ownerId, imagePath);
+    if (referencedByPublicProject) {
+      return { allowed: true };
+    }
+    return { allowed: false, status: 403, message: 'Image access denied.' };
   }
 
   if (!requesterId) {

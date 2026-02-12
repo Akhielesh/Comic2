@@ -90,9 +90,17 @@ const parseDataUrl = (dataUrl: string) => {
 const buildImagePathCandidates = (imagePath: string): string[] => {
   const trimmed = imagePath.trim();
   if (!trimmed) return [];
+  const candidates: string[] = [trimmed];
   const filename = trimmed.split('/').pop() || '';
-  if (filename.includes('.')) return [trimmed];
-  return [trimmed, `${trimmed}.webp`, `${trimmed}.png`, `${trimmed}.jpg`, `${trimmed}.jpeg`];
+  if (!filename.includes('.')) {
+    candidates.push(`${trimmed}.webp`, `${trimmed}.png`, `${trimmed}.jpg`, `${trimmed}.jpeg`);
+  } else {
+    const legacyMatch = trimmed.match(/^([0-9a-f-]{36})\/([^/]+)$/i);
+    if (legacyMatch) {
+      candidates.push(`u/${legacyMatch[1]}/tmp/${legacyMatch[2]}`);
+    }
+  }
+  return Array.from(new Set(candidates));
 };
 
 const buildImageCacheKey = (path: string, options?: { transform?: ImageTransformPreset }) => {
