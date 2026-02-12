@@ -315,7 +315,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
         </div>
 
         {/* FAQs Accordion (Simple) */}
-        <div className="max-w-3xl mx-auto border-t border-zinc-800 pt-10">
+        <div id="home-faq" className="max-w-3xl mx-auto border-t border-zinc-800 pt-10">
           <h3 className="text-center font-display text-2xl mb-8">Frequently Asked Questions</h3>
           <div className="space-y-2">
             {[

@@ -17,6 +17,7 @@ import { buildProjectReport } from '../../services/reporting';
 import { loadArtifactsForProject } from '../../services/db';
 import { downloadBlob } from '../../services/download';
 import { collectPanelReferenceImageIds, resolvePanelContinuity, validateContinuityState } from '../../services/continuity';
+import { appendCappedHistory } from '../../services/projectStorage';
 
 declare const jspdf: any;
 declare const html2canvas: any;
@@ -240,8 +241,8 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
           ...prev,
           imageId: generated.imageId,
           imageUrl: generated.imageUrl,
-          imageIdHistory: [...(prev.imageIdHistory || []), generated.imageId],
-          imageUrlHistory: [...(prev.imageUrlHistory || []), generated.imageUrl]
+          imageIdHistory: appendCappedHistory(prev.imageIdHistory, generated.imageId),
+          imageUrlHistory: appendCappedHistory(prev.imageUrlHistory, generated.imageUrl)
         } : null);
       }
     } catch (e) {

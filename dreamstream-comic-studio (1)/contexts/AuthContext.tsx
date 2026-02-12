@@ -10,6 +10,9 @@ type AuthContextType = {
     session: Session | null;
     loading: boolean;
     signOut: () => Promise<void>;
+    signOutAll: () => Promise<void>;
+    resendVerificationEmail: () => Promise<{ success: boolean; message: string }>;
+    changePassword: (newPassword: string) => Promise<{ success: boolean; message: string }>;
 };
 
 const AuthContext = createContext<AuthContextType>({
@@ -17,6 +20,9 @@ const AuthContext = createContext<AuthContextType>({
     session: null,
     loading: true,
     signOut: async () => { },
+    signOutAll: async () => { },
+    resendVerificationEmail: async () => ({ success: false, message: 'Unavailable' }),
+    changePassword: async () => ({ success: false, message: 'Unavailable' })
 });
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
@@ -48,14 +54,44 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         return () => subscription.unsubscribe();
     }, []);
 
-    const signOut = async () => {
-        // Clear state first to update UI immediately and avoid loops driven by session listener
+    const clearLocalAuthState = () => {
         setUser(null);
         setSession(null);
         localStorage.removeItem('dreamstream_api_key');
         setFluxKey(null);
+    };
 
-        await supabase.auth.signOut();
+    const signOut = async () => {
+        clearLocalAuthState();
+        await supabase.auth.signOut({ scope: 'local' });
+    };
+
+    const signOutAll = async () => {
+        clearLocalAuthState();
+        await supabase.auth.signOut({ scope: 'global' });
+    };
+
+    const resendVerificationEmail = async (): Promise<{ success: boolean; message: string }> => {
+        if (!user?.email) {
+            return { success: false, message: 'No account email found for verification.' };
+        }
+
+        const { error } = await supabase.auth.resend({
+            type: 'signup',
+            email: user.email,
+            options: {
+                emailRedirectTo: `${window.location.origin}/auth/callback`
+            }
+        });
+
+        if (error) return { success: false, message: error.message || 'Failed to resend verification email.' };
+        return { success: true, message: 'Verification email sent. Check your inbox.' };
+    };
+
+    const changePassword = async (newPassword: string): Promise<{ success: boolean; message: string }> => {
+        const { error } = await supabase.auth.updateUser({ password: newPassword });
+        if (error) return { success: false, message: error.message || 'Failed to update password.' };
+        return { success: true, message: 'Password updated successfully.' };
     };
 
     const syncKeys = async (userId: string) => {
@@ -79,7 +115,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     };
 
     return (
-        <AuthContext.Provider value={{ user, session, loading, signOut }}>
+        <AuthContext.Provider value={{ user, session, loading, signOut, signOutAll, resendVerificationEmail, changePassword }}>
             {children}
         </AuthContext.Provider>
     );

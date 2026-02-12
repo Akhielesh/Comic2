@@ -4,8 +4,9 @@ import { startBackgroundGeneration, cancelGeneration } from '../services/generat
 import { DEFAULT_PRICING_CONFIG } from '../services/pricingConfig';
 import { buildDefaultContinuityState, validateContinuityState } from '../services/continuity';
 import { createGenerationNotification, loadProjects, saveProject, deleteProject as deleteProjectRecord, saveImage, getImageUrl } from '../services/db';
+import { useAuth } from '../contexts/AuthContext';
+import { IMAGE_TRANSFORMS } from '../services/projectStorage';
 
-const STORAGE_KEY = 'dreamstream_projects';
 const SAVE_DEBOUNCE_MS = 500;
 const FLOW_VERSION = 3;
 
@@ -63,11 +64,15 @@ const hasLegacyStepShift = (state: ComicState): boolean => {
 
 const migrateHydratedCoverAndFlowState = async (
   state: ComicState,
-  overrides: Partial<ComicState> = {}
+  overrides: Partial<ComicState> = {},
+  options?: { useThumbTransform?: boolean }
 ): Promise<ComicState> => {
-  const coverImageUrl = state.coverImageId ? await getImageUrl(state.coverImageId) : state.coverImageUrl;
+  const coverTransform = options?.useThumbTransform ? IMAGE_TRANSFORMS.thumb : IMAGE_TRANSFORMS.editor;
+  const coverImageUrl = state.coverImageId
+    ? await getImageUrl(state.coverImageId, { transform: coverTransform })
+    : state.coverImageUrl;
   const coverTemplateImageUrl = state.coverTemplateImageId
-    ? await getImageUrl(state.coverTemplateImageId)
+    ? await getImageUrl(state.coverTemplateImageId, { transform: IMAGE_TRANSFORMS.editor })
     : state.coverTemplateImageUrl;
   const needsStepShift = hasLegacyStepShift(state);
 
@@ -139,6 +144,7 @@ const INITIAL_STATE: ComicState = {
 };
 
 export const useProjectManager = () => {
+  const { user, loading: authLoading } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
   const saveTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const pendingSavesRef = useRef<Map<string, Project>>(new Map());
@@ -197,7 +203,7 @@ export const useProjectManager = () => {
         items,
         locations,
         styleVariants,
-      });
+      }, { useThumbTransform: false });
 
       return {
         ...project,
@@ -206,7 +212,47 @@ export const useProjectManager = () => {
   };
 
   const hydrateProjectCover = async (project: Project): Promise<Project> => {
-      const migratedState = await migrateHydratedCoverAndFlowState(project.state);
+      let panelOverrides: ComicPanel[] | undefined;
+      const firstPanelWithImageIdIndex = project.state.panels.findIndex(
+        (panel) => !panel.imageUrl && (!!panel.imageId || (panel.imageIdHistory?.length || 0) > 0)
+      );
+      if (firstPanelWithImageIdIndex >= 0) {
+        const target = project.state.panels[firstPanelWithImageIdIndex];
+        const previewImageId = target.imageId || target.imageIdHistory?.[target.imageIdHistory.length - 1];
+        const hydratedPanelUrl = previewImageId
+          ? await getImageUrl(previewImageId, { transform: IMAGE_TRANSFORMS.thumb })
+          : undefined;
+        if (hydratedPanelUrl) {
+          panelOverrides = [...project.state.panels];
+          panelOverrides[firstPanelWithImageIdIndex] = {
+            ...target,
+            imageUrl: hydratedPanelUrl
+          };
+        }
+      }
+
+      let styleOverrides: StyleVariant[] | undefined;
+      const firstStyleWithImageIdIndex = project.state.styleVariants.findIndex((variant) => !variant.imageUrl && !!variant.imageId);
+      if (firstStyleWithImageIdIndex >= 0) {
+        const target = project.state.styleVariants[firstStyleWithImageIdIndex];
+        const hydratedStyleUrl = await getImageUrl(target.imageId!, { transform: IMAGE_TRANSFORMS.thumb });
+        if (hydratedStyleUrl) {
+          styleOverrides = [...project.state.styleVariants];
+          styleOverrides[firstStyleWithImageIdIndex] = {
+            ...target,
+            imageUrl: hydratedStyleUrl
+          };
+        }
+      }
+
+      const migratedState = await migrateHydratedCoverAndFlowState(
+        project.state,
+        {
+          ...(panelOverrides ? { panels: panelOverrides } : {}),
+          ...(styleOverrides ? { styleVariants: styleOverrides } : {})
+        },
+        { useThumbTransform: true }
+      );
 
       return {
         ...project,
@@ -219,7 +265,7 @@ export const useProjectManager = () => {
         if (!url) return { imageId: undefined as string | undefined, imageUrl: undefined as string | undefined };
         if (url.startsWith('data:')) {
           const imageId = await saveImage(url);
-          const imageUrl = (await getImageUrl(imageId)) || url;
+          const imageUrl = (await getImageUrl(imageId, { transform: IMAGE_TRANSFORMS.editor })) || url;
           return { imageId, imageUrl };
         }
         return { imageId: undefined, imageUrl: url };
@@ -320,29 +366,23 @@ export const useProjectManager = () => {
 
   const loadAllProjects = async () => {
     try {
-      const storedProjects = await loadProjects();
-      if (storedProjects.length > 0) {
-        const hydrated = await Promise.all(storedProjects.map(hydrateProjectCover));
-        setProjects(hydrated);
+      if (!user) {
+        setProjects([]);
         return;
       }
 
-      const legacy = localStorage.getItem(STORAGE_KEY);
-      if (legacy) {
-        const parsed: Project[] = JSON.parse(legacy);
-        const migrated = await Promise.all(parsed.map(migrateLegacyProject));
-        await Promise.all(migrated.map(saveProject));
-        const hydrated = await Promise.all(migrated.map(hydrateProjectCover));
-        setProjects(hydrated);
-      }
+      const storedProjects = await loadProjects();
+      const hydrated = await Promise.all(storedProjects.map(hydrateProjectCover));
+      setProjects(hydrated);
     } catch (e) {
       console.error("Failed to load projects", e);
     }
   };
 
   useEffect(() => {
-    loadAllProjects();
-  }, []);
+    if (authLoading) return;
+    void loadAllProjects();
+  }, [authLoading, user?.id]);
 
   const createProject = (name: string): Project => {
     const newProject: Project = {

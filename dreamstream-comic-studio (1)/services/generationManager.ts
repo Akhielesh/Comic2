@@ -6,6 +6,7 @@ import { resolveAspectRatio } from "./imageUtils";
 import { normalizePanelDialogue } from "./dialogueUtils";
 import { MAX_CONTINUITY_PANELS } from "./modelPolicy";
 import { createSystemNotification } from "./db";
+import { prependCappedHistory } from "./projectStorage";
 import {
   collectPanelReferenceImageIds,
   getEntityById,
@@ -278,8 +279,8 @@ export const startBackgroundGeneration = async (
           },
           imageId: generatedImageId,
           imageUrl: generatedImageUrl,
-          imageIdHistory: generatedImageId ? [generatedImageId, ...(panelData.imageIdHistory || [])] : panelData.imageIdHistory || [],
-          imageUrlHistory: generatedImageUrl ? [generatedImageUrl, ...(panelData.imageUrlHistory || [])] : panelData.imageUrlHistory || [],
+          imageIdHistory: prependCappedHistory(panelData.imageIdHistory, generatedImageId),
+          imageUrlHistory: prependCappedHistory(panelData.imageUrlHistory, generatedImageUrl),
           isPlanned: false
         });
 

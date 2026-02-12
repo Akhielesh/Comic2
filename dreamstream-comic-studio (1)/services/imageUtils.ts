@@ -91,7 +91,23 @@ export const cropImageToRatio = async (dataUrl: string, targetRatio: string): Pr
   const ctx = canvas.getContext("2d");
   if (!ctx) return dataUrl;
   ctx.drawImage(image, sx, sy, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
-  return canvas.toDataURL("image/png");
+  const hasAlpha = (() => {
+    try {
+      const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      for (let i = 3; i < pixels.length; i += 4) {
+        if (pixels[i] < 255) return true;
+      }
+    } catch {
+      return true;
+    }
+    return false;
+  })();
+
+  const webpDataUrl = canvas.toDataURL("image/webp", 0.8);
+  if (webpDataUrl.startsWith("data:image/webp")) return webpDataUrl;
+
+  if (hasAlpha) return canvas.toDataURL("image/png");
+  return canvas.toDataURL("image/jpeg", 0.9);
 };
 
 export const formatRatio = (ratio?: string) => {

@@ -307,23 +307,26 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
               </div>
             )}
             {displayedProjects.map(project => {
-              // Determine image source
-              let imgSrc = project.state.coverImageUrl;
-              if (!imgSrc && project.state.panels.some(p => p.imageUrl)) {
-                imgSrc = project.state.panels.find(p => p.imageUrl)?.imageUrl;
-              }
-              if (!imgSrc && project.state.styleVariants.length > 0) {
-                imgSrc = project.state.styleVariants[0].imageUrl;
-              }
+              const previewCandidates = [
+                project.state.coverImageUrl,
+                project.state.panels.find((panel) => panel.imageUrl)?.imageUrl,
+                project.state.styleVariants.find((variant) => variant.imageUrl)?.imageUrl
+              ].filter((value): value is string => Boolean(value));
+              const primaryPreview = previewCandidates[0];
+              const fallbackPreviews = previewCandidates.slice(1);
+              const hasPanelPreview = project.state.panels.some((panel) => panel.imageUrl);
+              const hasStylePreview = project.state.styleVariants.some((variant) => variant.imageUrl);
+              const hasCoverPreview = Boolean(project.state.coverImageUrl);
 
               return (
                 <div key={project.id} className="group bg-white rounded-xl border-4 border-black shadow-comic hover:-translate-y-2 hover:shadow-[8px_8px_0px_0px_#000] transition-all duration-300 flex flex-col overflow-hidden">
                   <div className="aspect-video bg-slate-100 border-b-4 border-black relative overflow-hidden">
-                    {imgSrc ? (
+                    {primaryPreview ? (
                       <SmartImage
-                        src={imgSrc}
+                        src={primaryPreview}
+                        fallbackSources={fallbackPreviews}
                         alt={`${project.name} cover`}
-                        className={`w-full h-full object-cover ${!project.state.coverImageUrl && !project.state.panels.some(p => p.imageUrl) ? 'opacity-50 grayscale' : ''}`}
+                        className={`w-full h-full object-cover ${!hasCoverPreview && !hasPanelPreview && !hasStylePreview ? 'opacity-50 grayscale' : ''}`}
                         loadingComponent={<div className="w-full h-full flex items-center justify-center bg-slate-50"><div className="w-8 h-8 border-4 border-brand-blue border-t-transparent rounded-full animate-spin"></div></div>}
                         fallbackIcon={<div className="font-display text-4xl text-brand-blue/30">?</div>}
                         containerClassName="w-full h-full"

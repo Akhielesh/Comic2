@@ -346,12 +346,16 @@ export const generateImage = async (
     const referenceDataUrls = await Promise.all(referenceImageIds.map((id) => getImageDataUrl(id)));
     const validReferenceImages = referenceDataUrls.filter((img): img is string => !!img);
     const modelSpecificKey = getModelSpecificKey(targetModel);
+    const storageMode = options?.storage || 'project';
     const requestBody: ImageGenerateRequest = {
       prompt: finalPrompt,
       aspectRatio,
       resolution,
       referenceImages: validReferenceImages,
       stage: options?.stage,
+      projectId,
+      storage: storageMode,
+      cropToRatio: options?.cropToRatio,
       model: targetModel
     };
 
@@ -375,15 +379,22 @@ export const generateImage = async (
       }
     }
 
-    let dataUrl = response.dataUrl;
-    if (options?.cropToRatio) {
-      dataUrl = await cropImageToRatio(dataUrl, options.cropToRatio);
-    }
+    let imageId = response.imageId;
+    let imageUrl = response.imageUrl;
 
-    const imageId = options?.storage === 'test' ? await saveTestImage(dataUrl) : await saveImage(dataUrl);
-    const imageUrl = options?.storage === 'test'
-      ? (await getTestImageUrl(imageId)) || dataUrl
-      : (await getImageUrl(imageId)) || dataUrl;
+    if (!imageId || !imageUrl || storageMode === 'test') {
+      let dataUrl = response.dataUrl;
+      if (!dataUrl) {
+        throw new Error('Image generation response did not include image payload.');
+      }
+      if (options?.cropToRatio) {
+        dataUrl = await cropImageToRatio(dataUrl, options.cropToRatio);
+      }
+      imageId = storageMode === 'test' ? await saveTestImage(dataUrl) : await saveImage(dataUrl);
+      imageUrl = storageMode === 'test'
+        ? (await getTestImageUrl(imageId)) || dataUrl
+        : (await getImageUrl(imageId)) || dataUrl;
+    }
 
     if (projectId) {
       void recordArtifact({

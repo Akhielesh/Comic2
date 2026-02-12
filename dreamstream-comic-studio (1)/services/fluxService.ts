@@ -54,20 +54,35 @@ export const generateFluxImage = async ({
       resolution,
       negativePrompt,
       seed,
-      steps
+      steps,
+      stage,
+      projectId,
+      storage,
+      cropToRatio
     }, { signal: abortSignal });
 
-    let dataUrl = response.dataUrl;
-    if (cropToRatio) {
-      dataUrl = await cropImageToRatio(dataUrl, cropToRatio);
+    const saveStart = performance.now();
+    let imageId = response.imageId;
+    let imageUrl = response.imageUrl;
+    let usedLocalSave = false;
+
+    if (!imageId || !imageUrl || storage === "test") {
+      usedLocalSave = true;
+      let dataUrl = response.dataUrl;
+      if (!dataUrl) {
+        throw new Error('Flux response did not include image payload.');
+      }
+      if (cropToRatio) {
+        dataUrl = await cropImageToRatio(dataUrl, cropToRatio);
+      }
+      imageId = storage === "test" ? await saveTestImage(dataUrl) : await saveImage(dataUrl);
+      imageUrl = storage === "test"
+        ? (await getTestImageUrl(imageId)) || dataUrl
+        : (await getImageUrl(imageId)) || dataUrl;
     }
 
-    const saveStart = performance.now();
-    const imageId = storage === "test" ? await saveTestImage(dataUrl) : await saveImage(dataUrl);
-    const imageUrl = storage === "test"
-      ? (await getTestImageUrl(imageId)) || dataUrl
-      : (await getImageUrl(imageId)) || dataUrl;
-    const saveMs = Math.round(performance.now() - saveStart);
+    const localSaveMs = Math.round(performance.now() - saveStart);
+    const saveMs = usedLocalSave ? localSaveMs : (response.timings?.saveMs ?? localSaveMs);
     const apiMs = response.timings?.apiMs ?? 0;
     const totalMs = response.timings?.totalMs ?? apiMs + saveMs;
     const durationMs = Math.round(performance.now() - startPerf);

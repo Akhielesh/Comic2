@@ -238,7 +238,7 @@ export const CommentSection: React.FC<CommentSectionProps> = ({ projectId, onNav
                 </div>
             ) : (
                 <div className="bg-slate-50 p-4 rounded-lg text-center text-sm text-slate-500">
-                    Please <button className="text-black font-bold underline">log in</button> to comment.
+                    Please <button onClick={() => onNavigate?.('auth')} className="text-black font-bold underline">log in</button> to comment.
                 </div>
             )}
         </div>

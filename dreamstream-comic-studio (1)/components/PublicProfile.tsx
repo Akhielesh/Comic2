@@ -73,21 +73,12 @@ export const PublicProfile: React.FC<PublicProfileProps> = ({ username, onNaviga
 
     return (
         <div className="min-h-screen bg-slate-100 pb-20">
-            {/* Header / Nav would go here ideally */}
-            <div className="bg-white border-b-4 border-black p-4 flex justify-between items-center shadow-md">
-                <button onClick={() => onNavigate('home')} className="font-display text-xl px-4 py-2 hover:underline">
-                    DreamStream
-                </button>
-                <div className="flex gap-4">
-                    {currentUser ? (
-                        <button onClick={() => onNavigate('dashboard')} className="font-bold hover:underline">Dashboard</button>
-                    ) : (
-                        <button onClick={() => onNavigate('auth')} className="font-bold hover:underline">Log In</button>
-                    )}
-                </div>
-            </div>
-
             <div className="container mx-auto max-w-5xl p-4 md:p-6">
+                <div className="mb-6">
+                    <button onClick={() => onNavigate('gallery')} className="text-xs font-bold text-slate-500 hover:text-black">
+                        Back to Library
+                    </button>
+                </div>
                 {/* Profile Card */}
                 <div className="bg-white border-4 border-black shadow-comic rounded-xl p-6 md:p-8 mb-10 flex flex-col md:flex-row items-center md:items-start gap-8">
                     <div className="flex-shrink-0">

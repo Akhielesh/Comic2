@@ -1,6 +1,8 @@
-import { Project, GenerationArtifact, ComicPanel, Character, Item, Location, StyleVariant, ProjectReport, TestLabRun, LearnProgress, ReaderState, UserProfile, Comment, Follow, AppNotification, Review } from "../types";
+import { Project, GenerationArtifact, ComicPanel, Character, Item, Location, StyleVariant, ProjectReport, TestLabRun, LearnProgress, ReaderState, UserProfile, UserPrivateProfile, AccountProfile, Comment, Follow, AppNotification, Review } from "../types";
 import { buildProjectReport } from "./reporting";
 import { supabase } from "./supabase";
+import { ImageTransformPreset, sanitizeProjectForStorage } from "./projectStorage";
+import { isMissingPrivateProfileTableError } from "./profilePrivate";
 
 // --- Local Storage (IndexedDB) for Ephemeral Data (Tests, Learning, UI State) ---
 const DB_NAME = "dreamstream_local_cache"; // Renamed to avoid confusion, though we can keep same name if we migrated data.
@@ -10,6 +12,8 @@ const TEST_RUNS_STORE = "test_runs";
 const TEST_IMAGES_STORE = "test_images";
 const LEARN_PROGRESS_STORE = "learn_progress";
 const READER_STATE_STORE = "reader_state";
+const IMAGE_FETCH_METRIC_WINDOW = 200;
+const imageFetchSamplesMs: number[] = [];
 
 // (Keeping IndexedDB logic for these specific stores)
 const openDb = (): Promise<IDBDatabase> => {
@@ -162,7 +166,6 @@ const mapCommentRow = (row: CommentRow): Comment => ({
 
 // 1. Projects
 // --- Local Storage Key ---
-const LOCAL_STORAGE_PROJECTS_KEY = 'dreamstream_projects';
 const LOCAL_PROJECT_LIKES_KEY = 'dreamstream_project_likes';
 const LOCAL_NOTIFICATIONS_KEY = 'dreamstream_local_notifications';
 let projectLikesTableUnavailable = false;
@@ -251,27 +254,14 @@ export const saveProject = async (project: Project): Promise<void> => {
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {
-    // Guest Mode: Save to LocalStorage
-    try {
-      const existing = localStorage.getItem(LOCAL_STORAGE_PROJECTS_KEY);
-      const projects: Project[] = existing ? JSON.parse(existing) : [];
-      const index = projects.findIndex(p => p.id === project.id);
-      if (index >= 0) {
-        projects[index] = project;
-      } else {
-        projects.unshift(project);
-      }
-      localStorage.setItem(LOCAL_STORAGE_PROJECTS_KEY, JSON.stringify(projects));
-      return;
-    } catch (e) {
-      console.error("Failed to save to localStorage", e);
-      throw new Error("Failed to save project locally.");
-    }
+    // Auth-first mode: do not persist projects without a signed-in user.
+    return;
   }
 
-  // Logged In: Save to Supabase
-  // We split the "Project" object: High-level metadata goes to columns, State goes to JSONB
-  const { id, name, coverImage, state, createdAt, updatedAt, isPublic } = project;
+  const sanitized = sanitizeProjectForStorage(project);
+  const { id, name, coverImage, state, createdAt, updatedAt, isPublic } = sanitized;
+  const stateBytes = new Blob([JSON.stringify(state)]).size;
+  console.info("[METRICS] project_state_bytes", { projectId: id, bytes: stateBytes });
 
   const { error } = await supabase.from('projects').upsert({
     id,
@@ -291,17 +281,15 @@ export const deleteProject = async (projectId: string): Promise<void> => {
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {
-    // Guest Mode: Delete from LocalStorage
-    const existing = localStorage.getItem(LOCAL_STORAGE_PROJECTS_KEY);
-    if (existing) {
-      const projects: Project[] = JSON.parse(existing);
-      const filtered = projects.filter(p => p.id !== projectId);
-      localStorage.setItem(LOCAL_STORAGE_PROJECTS_KEY, JSON.stringify(filtered));
-    }
+    // Auth-first mode: nothing to delete while signed out.
     return;
   }
 
-  const { error } = await supabase.from('projects').delete().eq('id', projectId);
+  const { error } = await supabase
+    .from('projects')
+    .delete()
+    .eq('id', projectId)
+    .eq('user_id', user.id);
   if (error) throw error;
 };
 
@@ -309,14 +297,14 @@ export const loadProjects = async (): Promise<Project[]> => {
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {
-    // Guest Mode: Load from LocalStorage
-    const existing = localStorage.getItem(LOCAL_STORAGE_PROJECTS_KEY);
-    return existing ? JSON.parse(existing) : [];
+    // Auth-first mode: dashboard data is user-owned and stored in Supabase.
+    return [];
   }
 
   const { data, error } = await supabase
     .from('projects')
     .select('*, profiles:user_id(username)')
+    .eq('user_id', user.id)
     .order('updated_at', { ascending: false });
 
   if (error) throw error;
@@ -396,13 +384,17 @@ const decrementLikeCount = async (projectId: string) => {
 export const getProjectLikeMap = async (projectIds: string[]): Promise<Record<string, boolean>> => {
   if (!projectIds.length) return {};
   const { data: { user } } = await supabase.auth.getUser();
+  const emptyMap = projectIds.reduce<Record<string, boolean>>((acc, projectId) => {
+    acc[projectId] = false;
+    return acc;
+  }, {});
   const fallbackSet = getLocalLikedProjects(user?.id);
   const fallbackMap = projectIds.reduce<Record<string, boolean>>((acc, projectId) => {
     acc[projectId] = fallbackSet.has(projectId);
     return acc;
   }, {});
 
-  if (!user) return fallbackMap;
+  if (!user) return emptyMap;
   if (projectLikesTableUnavailable) return fallbackMap;
 
   const { data, error } = await supabase
@@ -435,17 +427,7 @@ export const toggleProjectLike = async (projectId: string, ownerUserId?: string)
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {
-    const localLikes = getLocalLikedProjects();
-    if (localLikes.has(projectId)) {
-      localLikes.delete(projectId);
-      setLocalLikedProjects(localLikes);
-      await decrementLikeCount(projectId).catch(() => null);
-      return { liked: false, persisted: false };
-    }
-    localLikes.add(projectId);
-    setLocalLikedProjects(localLikes);
-    await incrementLikeCount(projectId).catch(() => null);
-    return { liked: true, persisted: false };
+    return { liked: false, persisted: false };
   }
 
   const localLikes = getLocalLikedProjects(user.id);
@@ -544,14 +526,15 @@ export const saveImage = async (dataUrl: string): Promise<string> => {
   const id = crypto.randomUUID();
   const blob = dataUrlToBlob(dataUrl);
   const ext = blob.type.split('/')[1] || 'png';
-  const filePath = `${user.id}/${id}.${ext}`;
+  const filePath = `u/${user.id}/tmp/${id}.${ext}`;
 
   console.log('[DB] saveImage uploading to:', filePath);
   const { error } = await supabase.storage
     .from(BUCKET_NAME)
     .upload(filePath, blob, {
-      upsert: true,
-      contentType: blob.type
+      upsert: false,
+      contentType: blob.type,
+      cacheControl: "31536000"
     });
 
   if (error) {
@@ -563,11 +546,26 @@ export const saveImage = async (dataUrl: string): Promise<string> => {
     throw error;
   }
 
-  // Return the FULL path so getPublicUrl works
+  // Best-effort metadata write if image_assets migration exists.
+  const { error: metadataError } = await supabase.rpc("register_image_asset", {
+    p_path: filePath,
+    p_bucket: BUCKET_NAME,
+    p_mime_type: blob.type,
+    p_bytes: blob.size,
+    p_source: "upload",
+    p_project_id: null
+  });
+  if (metadataError) {
+    console.warn("[DB] register_image_asset RPC unavailable or failed", metadataError.message);
+  }
+
   return filePath;
 };
 
-export const getImageUrl = async (imageId: string): Promise<string | undefined> => {
+export const getImageUrl = async (
+  imageId: string,
+  options?: { transform?: ImageTransformPreset }
+): Promise<string | undefined> => {
   if (!imageId) return undefined;
 
   // FIX: Old images were saved with IDs missing extensions (e.g. "path/to/uuid")
@@ -582,7 +580,7 @@ export const getImageUrl = async (imageId: string): Promise<string | undefined> 
   // Check memory cache first (optional, but good for perf)
   const { data } = supabase.storage
     .from(BUCKET_NAME)
-    .getPublicUrl(finalPath);
+    .getPublicUrl(finalPath, options?.transform ? { transform: options.transform as any } : undefined);
 
   return data.publicUrl;
 };
@@ -602,8 +600,18 @@ export const getImageDataUrl = async (imageId: string): Promise<string | undefin
   if (!url) return undefined;
 
   try {
+    const fetchStart = performance.now();
     const response = await fetch(url);
     const blob = await response.blob();
+    const fetchMs = Math.round(performance.now() - fetchStart);
+    imageFetchSamplesMs.push(fetchMs);
+    if (imageFetchSamplesMs.length > IMAGE_FETCH_METRIC_WINDOW) {
+      imageFetchSamplesMs.splice(0, imageFetchSamplesMs.length - IMAGE_FETCH_METRIC_WINDOW);
+    }
+    const sorted = [...imageFetchSamplesMs].sort((a, b) => a - b);
+    const p95Index = Math.max(0, Math.ceil(sorted.length * 0.95) - 1);
+    const p95 = sorted[p95Index] || fetchMs;
+    console.info("[METRICS] image_fetch_ms_p95", { p95, samples: sorted.length });
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onloadend = () => resolve(reader.result as string);
@@ -849,6 +857,41 @@ export const getUserProfile = async (userId: string): Promise<UserProfile | null
   return data as UserProfile;
 };
 
+export const getPrivateProfile = async (userId: string): Promise<UserPrivateProfile | null> => {
+  const { data, error } = await supabase
+    .from('profile_private')
+    .select('*')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingPrivateProfileTableError(error)) return null;
+    throw error;
+  }
+  return data as UserPrivateProfile | null;
+};
+
+export const upsertPrivateProfile = async (
+  userId: string,
+  updates: Partial<Omit<UserPrivateProfile, 'id' | 'created_at' | 'updated_at'>>
+) => {
+  const payload = { id: userId, ...updates };
+  const { error } = await supabase
+    .from('profile_private')
+    .upsert(payload, { onConflict: 'id' });
+
+  if (error) throw error;
+};
+
+export const getAccountProfile = async (userId: string): Promise<AccountProfile> => {
+  const [publicProfile, privateProfile] = await Promise.all([
+    getUserProfile(userId),
+    getPrivateProfile(userId)
+  ]);
+
+  return { publicProfile, privateProfile };
+};
+
 export const updateUserProfile = async (userId: string, updates: Partial<UserProfile>) => {
   const { error } = await supabase
     .from('profiles')
@@ -860,6 +903,15 @@ export const updateUserProfile = async (userId: string, updates: Partial<UserPro
 
 export const updateUserAvatar = async (userId: string, avatarUrl: string) => {
   return updateUserProfile(userId, { avatar_url: avatarUrl });
+};
+
+export const syncMarketingConsentLegacy = async (userId: string, marketingEnabled: boolean) => {
+  const { error } = await supabase
+    .from('profiles')
+    .update({ marketing_consent: marketingEnabled })
+    .eq('id', userId);
+
+  if (error) throw error;
 };
 
 // --- CONTACT FORM ---

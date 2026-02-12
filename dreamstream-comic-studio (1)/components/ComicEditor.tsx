@@ -342,7 +342,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   return (
     <div className="min-h-screen flex flex-col">
       <StepIndicator currentStep={state.step} maxStepReached={state.maxStepReached} onStepClick={goToStep} />
-      <div className="p-4 border-b border-slate-200 bg-white/50 backdrop-blur-sm sticky top-24 z-30 flex items-center">
+      <div className="p-4 border-b border-slate-200 bg-white/50 backdrop-blur-sm sticky top-44 z-30 flex items-center">
         <button onClick={onBack} className="flex items-center text-sm font-bold text-slate-500 hover:text-black transition-colors">
           <ArrowLeft className="w-4 h-4 mr-1" /> Back to Dashboard
         </button>

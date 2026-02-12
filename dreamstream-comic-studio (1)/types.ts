@@ -539,6 +539,8 @@ export interface UserProfile {
   username?: string; // UNIQUE
   email: string;
   avatar_url?: string;
+  terms_accepted?: boolean;
+  marketing_consent?: boolean;
   bio?: string;
   full_name?: string;
   website?: string;
@@ -546,6 +548,23 @@ export interface UserProfile {
   updated_at?: string;
   is_premium?: boolean; // From usage_limits join
   credits?: number; // From usage_limits
+}
+
+export interface UserPrivateProfile {
+  id: string; // references auth.users
+  first_name?: string | null;
+  last_name?: string | null;
+  phone_number?: string | null;
+  dob?: string | null; // YYYY-MM-DD
+  email_pref_product_updates?: boolean | null;
+  email_pref_marketing?: boolean | null;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface AccountProfile {
+  publicProfile: UserProfile | null;
+  privateProfile: UserPrivateProfile | null;
 }
 
 export interface Comment {

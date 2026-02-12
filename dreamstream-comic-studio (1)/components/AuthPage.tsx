@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { supabase } from '../services/supabase';
-import { Loader2, ArrowRight, Eye, EyeOff, CheckSquare, Square } from 'lucide-react';
+import { Loader2, ArrowRight, Eye, EyeOff, CheckSquare } from 'lucide-react';
 
 interface AuthPageProps {
     onLoginSuccess: () => void;
@@ -9,7 +9,9 @@ interface AuthPageProps {
 }
 
 export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivacy, onOpenTerms }) => {
-    const [mode, setMode] = useState<'signin' | 'signup' | 'forgot'>('signin');
+    const USERNAME_REGEX = /^[A-Za-z0-9_]{3,20}$/;
+    const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const [mode, setMode] = useState<'signin' | 'signup' | 'forgot' | 'magic-link'>('signin');
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [message, setMessage] = useState<string | null>(null);
@@ -17,6 +19,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
     // Fields
     const [email, setEmail] = useState('');
     const [username, setUsername] = useState('');
+    const [firstName, setFirstName] = useState('');
+    const [lastName, setLastName] = useState('');
+    const [phoneNumber, setPhoneNumber] = useState('');
+    const [dob, setDob] = useState('');
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
@@ -36,47 +42,72 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
         try {
             if (mode === 'signup') {
                 // Validation
+                const normalizedEmail = email.trim().toLowerCase();
+                const normalizedUsername = username.trim();
+                const normalizedFirstName = firstName.trim();
+
+                if (!normalizedEmail) throw new Error("Email is required.");
+                if (!EMAIL_REGEX.test(normalizedEmail)) throw new Error("Please enter a valid email.");
+                if (!normalizedUsername) throw new Error("Username is required.");
+                if (!USERNAME_REGEX.test(normalizedUsername)) {
+                    throw new Error("Username must be 3-20 chars and use only letters, numbers, or underscore.");
+                }
+                if (!normalizedFirstName) throw new Error("First name is required.");
                 if (password !== confirmPassword) throw new Error("Passwords do not match.");
                 if (!termsAccepted) throw new Error("You must accept the Terms & Conditions.");
-                if (username.length < 3) throw new Error("Username must be at least 3 characters.");
+                if (!dob) throw new Error("Date of birth is required.");
 
-                // 1. Sign Up
+                const dobDate = new Date(`${dob}T00:00:00`);
+                if (Number.isNaN(dobDate.getTime())) throw new Error("Date of birth must be valid.");
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                if (dobDate > today) throw new Error("Date of birth cannot be in the future.");
+
+                // Sign up with metadata. Profile rows are created by Supabase DB trigger.
                 const { data, error: signUpError } = await supabase.auth.signUp({
-                    email,
+                    email: normalizedEmail,
                     password,
                     options: {
-                        data: { username } // Pass metadata for verification emails
+                        data: {
+                            username: normalizedUsername,
+                            first_name: normalizedFirstName,
+                            last_name: lastName.trim() || null,
+                            phone_number: phoneNumber.trim() || null,
+                            dob,
+                            terms_accepted: termsAccepted,
+                            marketing_consent: marketingConsent,
+                            email_pref_product_updates: true,
+                            email_pref_marketing: marketingConsent
+                        }
                     }
                 });
                 if (signUpError) throw signUpError;
                 if (!data.user) throw new Error("Signup failed.");
 
-                // 2. Profile Update (Trigger fallback/ensure)
-                const { error: profileError } = await supabase.from('profiles').update({
-                    username,
-                    terms_accepted: termsAccepted,
-                    marketing_consent: marketingConsent
-                }).eq('id', data.user.id);
-
-                if (profileError) {
-                    // Non-blocking warning, but good to know
-                    console.warn("Profile update warning:", profileError);
-                }
-
                 setMessage("Account created! Please check your email to confirm.");
                 setMode('signin');
+                setPassword('');
+                setConfirmPassword('');
             } else if (mode === 'signin') {
                 // Sign In
-                let signInEmail = email;
+                const loginInput = email.trim();
+                if (!loginInput) throw new Error("Email or username is required.");
+                let signInEmail = loginInput;
 
                 // Simple heuristic: if doesn't contain '@', treat as username lookup
-                if (!email.includes('@')) {
-                    // Try to find email by username from profiles (Public Read allowed)
-                    const { data, error } = await supabase.from('profiles').select('email').eq('username', email).single();
-                    if (error || !data || !data.email) {
+                if (!loginInput.includes('@')) {
+                    const { data, error } = await supabase.rpc('resolve_email_from_username', { login_username: loginInput });
+                    if (error) throw error;
+
+                    const resolvedEmail = Array.isArray(data)
+                        ? data[0]?.email
+                        : (data as { email?: string } | null)?.email;
+                    if (!resolvedEmail) {
                         throw new Error("Username not found. Please use your email.");
                     }
-                    signInEmail = data.email;
+                    signInEmail = resolvedEmail;
+                } else {
+                    signInEmail = loginInput.toLowerCase();
                 }
 
                 const { error: signInError } = await supabase.auth.signInWithPassword({
@@ -87,10 +118,30 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
 
                 // Success
                 onLoginSuccess();
+            } else if (mode === 'magic-link') {
+                const normalizedEmail = email.trim().toLowerCase();
+                if (!EMAIL_REGEX.test(normalizedEmail)) {
+                    throw new Error("Enter a valid email to receive a magic link.");
+                }
+
+                const { error } = await supabase.auth.signInWithOtp({
+                    email: normalizedEmail,
+                    options: {
+                        emailRedirectTo: `${window.location.origin}/auth/callback`
+                    }
+                });
+                if (error) throw error;
+
+                setMessage("Magic link sent! Check your email to continue.");
+                setMode('signin');
             } else if (mode === 'forgot') {
+                const normalizedEmail = email.trim().toLowerCase();
+                if (!EMAIL_REGEX.test(normalizedEmail)) {
+                    throw new Error("Enter a valid email for password reset.");
+                }
                 // Forgot Password
-                const { error } = await supabase.auth.resetPasswordForEmail(email, {
-                    redirectTo: window.location.origin + '?view=reset'
+                const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
+                    redirectTo: `${window.location.origin}/auth/callback`
                 });
                 if (error) throw error;
                 setMessage("Password reset link sent! Check your email.");
@@ -118,13 +169,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 {/* Tabs */}
                 <div className="flex border-b-4 border-black">
                     <button
-                        onClick={() => { setMode('signin'); setError(null); }}
-                        className={`flex-1 py-4 font-display text-xl transition-colors ${mode === 'signin' ? 'bg-brand-yellow text-black' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`}
+                        onClick={() => { setMode('signin'); setError(null); setMessage(null); }}
+                        className={`flex-1 py-4 font-display text-xl transition-colors ${(mode === 'signin' || mode === 'forgot' || mode === 'magic-link') ? 'bg-brand-yellow text-black' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`}
                     >
                         Sign In
                     </button>
                     <button
-                        onClick={() => { setMode('signup'); setError(null); }}
+                        onClick={() => { setMode('signup'); setError(null); setMessage(null); }}
                         className={`flex-1 py-4 font-display text-xl transition-colors ${mode === 'signup' ? 'bg-brand-blue text-white' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`}
                     >
                         Sign Up
@@ -137,6 +188,12 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                         <div className="mb-6 text-center">
                             <h3 className="font-display text-xl mb-1">Reset Password</h3>
                             <p className="text-sm text-slate-500">Enter your email to receive a reset link.</p>
+                        </div>
+                    )}
+                    {mode === 'magic-link' && (
+                        <div className="mb-6 text-center">
+                            <h3 className="font-display text-xl mb-1">Magic Link Sign In</h3>
+                            <p className="text-sm text-slate-500">Enter your email and we will send a secure sign-in link.</p>
                         </div>
                     )}
 
@@ -161,15 +218,41 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                                     value={username}
                                     onChange={(e) => setUsername(e.target.value)}
                                     className="w-full border-2 border-black rounded-lg px-4 py-3 font-mono text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none"
-                                    placeholder="ComicArtist99"
+                                    placeholder="Super_hero"
                                 />
                             </div>
                         )}
 
+                        {mode === 'signup' && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-bold uppercase mb-1">First Name *</label>
+                                    <input
+                                        type="text"
+                                        required
+                                        value={firstName}
+                                        onChange={(e) => setFirstName(e.target.value)}
+                                        className="w-full border-2 border-black rounded-lg px-4 py-3 font-mono text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none"
+                                        placeholder="Super"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold uppercase mb-1">Last Name (Optional)</label>
+                                    <input
+                                        type="text"
+                                        value={lastName}
+                                        onChange={(e) => setLastName(e.target.value)}
+                                        className="w-full border-2 border-black rounded-lg px-4 py-3 font-mono text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none"
+                                        placeholder="Hero"
+                                    />
+                                </div>
+                            </div>
+                        )}
+
                         <div>
-                            <label className="block text-xs font-bold uppercase mb-1">{mode === 'signin' ? 'Email / Username' : 'Email'}</label>
-                            <input
-                                type="text" // Allow text to support username theoretically, but validation warns.
+                                <label className="block text-xs font-bold uppercase mb-1">{mode === 'signin' ? 'Email / Username' : 'Email'}</label>
+                                <input
+                                type={mode === 'signin' ? 'text' : 'email'}
                                 required
                                 value={email}
                                 onChange={(e) => setEmail(e.target.value)}
@@ -178,7 +261,33 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                             />
                         </div>
 
-                        {mode !== 'forgot' && (
+                        {mode === 'signup' && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-xs font-bold uppercase mb-1">Date of Birth *</label>
+                                    <input
+                                        type="date"
+                                        required
+                                        value={dob}
+                                        onChange={(e) => setDob(e.target.value)}
+                                        max={new Date().toISOString().slice(0, 10)}
+                                        className="w-full border-2 border-black rounded-lg px-4 py-3 font-mono text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold uppercase mb-1">Phone Number (Optional)</label>
+                                    <input
+                                        type="tel"
+                                        value={phoneNumber}
+                                        onChange={(e) => setPhoneNumber(e.target.value)}
+                                        className="w-full border-2 border-black rounded-lg px-4 py-3 font-mono text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none"
+                                        placeholder="+1 555 123 4567"
+                                    />
+                                </div>
+                            </div>
+                        )}
+
+                        {mode !== 'forgot' && mode !== 'magic-link' && (
                             <div className="relative">
                                 <label className="block text-xs font-bold uppercase mb-1">Password</label>
                                 <input
@@ -236,20 +345,33 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                             </div>
                         )}
 
-                        {mode === 'signin' && (
+                        {(mode === 'signin' || mode === 'magic-link') && (
                             <div className="flex items-center justify-between pt-2">
-                                <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-600 hover:text-black">
-                                    <input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} className="accent-black" />
-                                    Remember me
-                                </label>
-                                <button type="button" onClick={() => { setMode('forgot'); setError(null); }} className="text-xs font-bold text-slate-400 hover:text-black hover:underline">
-                                    Forgot password?
-                                </button>
+                                {mode === 'signin' ? (
+                                    <>
+                                        <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-600 hover:text-black">
+                                            <input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} className="accent-black" />
+                                            Remember me
+                                        </label>
+                                        <div className="flex items-center gap-3">
+                                            <button type="button" onClick={() => { setMode('magic-link'); setError(null); setMessage(null); }} className="text-xs font-bold text-slate-400 hover:text-black hover:underline">
+                                                Continue with Magic Link
+                                            </button>
+                                            <button type="button" onClick={() => { setMode('forgot'); setError(null); setMessage(null); }} className="text-xs font-bold text-slate-400 hover:text-black hover:underline">
+                                                Forgot password?
+                                            </button>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <button type="button" onClick={() => { setMode('signin'); setError(null); setMessage(null); }} className="text-xs font-bold text-slate-500 hover:text-black hover:underline block ml-auto">
+                                        Back to Password Sign In
+                                    </button>
+                                )}
                             </div>
                         )}
 
                         {mode === 'forgot' && (
-                            <button type="button" onClick={() => { setMode('signin'); setError(null); }} className="text-xs font-bold text-slate-500 hover:text-black hover:underline block mx-auto">
+                            <button type="button" onClick={() => { setMode('signin'); setError(null); setMessage(null); }} className="text-xs font-bold text-slate-500 hover:text-black hover:underline block mx-auto">
                                 Back to Sign In
                             </button>
                         )}
@@ -261,7 +383,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                         >
                             {isLoading ? <Loader2 className="animate-spin" /> : (
                                 <>
-                                    {mode === 'signin' ? 'Enter Studio' : mode === 'forgot' ? 'Send Reset Link' : 'Create Account'} <ArrowRight size={20} />
+                                    {mode === 'signin'
+                                        ? 'Enter Studio'
+                                        : mode === 'magic-link'
+                                            ? 'Send Magic Link'
+                                            : mode === 'forgot'
+                                                ? 'Send Reset Link'
+                                                : 'Create Account'} <ArrowRight size={20} />
                                 </>
                             )}
                         </button>

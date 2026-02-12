@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../services/supabase';
-import { Loader2, Heart, Eye, Search, Filter, BookOpen, User, Star } from 'lucide-react';
+import { Loader2, Heart, Eye, Search, BookOpen, User, Star } from 'lucide-react';
 import { Project } from '../types';
 import { getProjectLikeMap, toggleProjectLike } from '../services/db';
+import { useAuth } from '../contexts/AuthContext';
 
 interface PublicGalleryProps {
     onReadComic: (projectId: string) => void;
     onBack: () => void;
+    onRequireAuth?: () => void;
 }
 
 interface PublicProject extends Project {
@@ -19,7 +21,8 @@ interface PublicProject extends Project {
     isLiked?: boolean;
 }
 
-export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBack }) => {
+export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBack, onRequireAuth }) => {
+    const { user } = useAuth();
     const [projects, setProjects] = useState<PublicProject[]>([]);
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState<'trending' | 'recent'>('trending');
@@ -28,14 +31,14 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
 
     useEffect(() => {
         fetchComics();
-    }, [filter]);
+    }, [filter, user?.id]);
 
     const fetchComics = async () => {
         setLoading(true);
         try {
             let query = supabase
                 .from('projects')
-                .select(`*, profiles:user_id (username)`)
+                .select('*, profiles:user_id (username)')
                 .eq('is_public', true);
 
             if (filter === 'trending') query = query.order('likes_count', { ascending: false });
@@ -46,7 +49,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                 // Schema fallback when likes_count is unavailable
                 const fallback = await supabase
                     .from('projects')
-                    .select(`*, profiles:user_id (username)`)
+                    .select('*, profiles:user_id (username)')
                     .eq('is_public', true)
                     .order('created_at', { ascending: false });
                 data = fallback.data;
@@ -54,14 +57,12 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
             }
             if (error) throw error;
 
-            const mapped = (data || []).map((p: any) => {
-                return {
-                    ...p,
-                    coverImage: p.cover_image_url,
-                    average_rating: 0,
-                    review_count: 0
-                };
-            });
+            const mapped = (data || []).map((p: any) => ({
+                ...p,
+                coverImage: p.cover_image_url,
+                average_rating: 0,
+                review_count: 0
+            }));
 
             const likeMap = await getProjectLikeMap(mapped.map((project: PublicProject) => project.id));
             setProjects(mapped.map((project: PublicProject) => ({
@@ -69,30 +70,31 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                 isLiked: !!likeMap[project.id]
             })));
         } catch (e) {
-            console.error("Failed to load gallery", e);
-            // Fallback for demo if RLS blocks or DB empty
+            console.error('Failed to load gallery', e);
             setProjects([]);
         } finally {
             setLoading(false);
         }
     };
 
-    const filteredProjects = projects.filter(p =>
-        p.name.toLowerCase().includes(search.toLowerCase()) ||
-        p.profiles?.username?.toLowerCase().includes(search.toLowerCase())
+    const filteredProjects = projects.filter((project) =>
+        project.name.toLowerCase().includes(search.toLowerCase()) ||
+        project.profiles?.username?.toLowerCase().includes(search.toLowerCase())
     );
 
     return (
         <div className="min-h-screen bg-slate-50 font-sans pb-20">
-            {/* Gallery Header */}
-            <header className="bg-white border-b-4 border-black sticky top-0 z-40">
-                <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-2 cursor-pointer" onClick={onBack}>
-                        <div className="w-8 h-8 bg-brand-yellow border-2 border-black rounded flex items-center justify-center font-display text-lg">D</div>
-                        <span className="font-display text-xl hidden md:block">Gallery</span>
+            <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
+                <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                        <button onClick={onBack} className="text-xs font-bold text-slate-500 hover:text-black mb-2">
+                            Back Home
+                        </button>
+                        <h1 className="font-display text-3xl text-black">Library</h1>
+                        <p className="text-sm font-comic text-slate-500">Browse public comics from creators.</p>
                     </div>
 
-                    <div className="flex-1 max-w-lg relative">
+                    <div className="flex-1 md:max-w-lg relative">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                         <input
                             type="text"
@@ -118,10 +120,20 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                         </button>
                     </div>
                 </div>
-            </header>
 
-            {/* Grid */}
-            <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
+                {!user && (
+                    <div className="mb-6 border-2 border-black rounded-xl bg-white p-4 flex flex-wrap items-center gap-3 justify-between">
+                        <p className="text-sm font-bold text-slate-700">Log in to read comics, like, and comment.</p>
+                        <button
+                            type="button"
+                            onClick={onRequireAuth}
+                            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-brand-yellow hover:bg-yellow-300"
+                        >
+                            Log In
+                        </button>
+                    </div>
+                )}
+
                 {loading ? (
                     <div className="flex justify-center py-20">
                         <Loader2 className="w-10 h-10 animate-spin text-slate-300" />
@@ -177,10 +189,10 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                                             <button
                                                 onClick={async (e) => {
                                                     e.stopPropagation();
-                                                    if (likeBusy[project.id]) return;
-                                                    setLikeBusy(prev => ({ ...prev, [project.id]: true }));
+                                                    if (!user || likeBusy[project.id]) return;
+                                                    setLikeBusy((prev) => ({ ...prev, [project.id]: true }));
                                                     const currentLiked = !!project.isLiked;
-                                                    setProjects(prev => prev.map(p => {
+                                                    setProjects((prev) => prev.map((p) => {
                                                         if (p.id !== project.id) return p;
                                                         return {
                                                             ...p,
@@ -191,7 +203,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
 
                                                     try {
                                                         const result = await toggleProjectLike(project.id, project.user_id);
-                                                        setProjects(prev => prev.map(p => {
+                                                        setProjects((prev) => prev.map((p) => {
                                                             if (p.id !== project.id) return p;
                                                             if (p.isLiked === result.liked) return p;
                                                             return {
@@ -201,14 +213,14 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                                                             };
                                                         }));
                                                     } finally {
-                                                        setLikeBusy(prev => ({ ...prev, [project.id]: false }));
+                                                        setLikeBusy((prev) => ({ ...prev, [project.id]: false }));
                                                     }
                                                 }}
-                                                className={`flex items-center gap-1 transition-colors z-10 relative group-hover/btn:text-red-500 ${project.isLiked ? 'text-red-500' : 'hover:text-red-500'}`}
-                                                disabled={!!likeBusy[project.id]}
-                                                title={project.isLiked ? 'Unlike comic' : 'Like comic'}
+                                                className={`flex items-center gap-1 transition-colors z-10 relative ${user ? 'group-hover/btn:text-red-500' : 'opacity-50 cursor-not-allowed'} ${project.isLiked ? 'text-red-500' : 'hover:text-red-500'}`}
+                                                disabled={!user || !!likeBusy[project.id]}
+                                                title={user ? (project.isLiked ? 'Unlike comic' : 'Like comic') : 'Log in to like comics'}
                                             >
-                                                <Heart size={14} className={project.isLiked ? 'fill-current' : 'group-active/btn:fill-current'} /> {project.likes_count || 0}
+                                                <Heart size={14} className={project.isLiked ? 'fill-current' : ''} /> {project.likes_count || 0}
                                             </button>
                                             <div className="flex items-center gap-1 text-slate-400">
                                                 <Eye size={14} /> {project.views_count || 0}
@@ -222,7 +234,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                                         )}
                                     </div>
                                 </div>
-                            )
+                            );
                         })}
                     </div>
                 )}

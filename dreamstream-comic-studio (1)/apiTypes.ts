@@ -181,10 +181,15 @@ export type ImageGenerateRequest = {
   resolution: ImageResolution;
   referenceImages?: string[]; // dataUrls
   stage?: string;
+  projectId?: string;
+  storage?: 'project' | 'test';
+  cropToRatio?: string;
   model?: string;
 };
 export type ImageGenerateResponse = {
-  dataUrl: string;
+  imageId?: string;
+  imageUrl?: string;
+  dataUrl?: string;
   mimeType: string;
   prompt: string;
   usage?: ApiUsage;
@@ -199,9 +204,15 @@ export type FluxGenerateRequest = {
   negativePrompt?: string;
   seed?: number;
   steps?: number;
+  stage?: string;
+  projectId?: string;
+  storage?: 'project' | 'test';
+  cropToRatio?: string;
 };
 export type FluxGenerateResponse = {
-  dataUrl: string;
+  imageId?: string;
+  imageUrl?: string;
+  dataUrl?: string;
   mimeType: string;
   prompt: string;
   timings?: ApiTimings;
@@ -314,6 +325,8 @@ export type TestLabReportResponse = {
 export type SystemStatusResponse = {
   status: 'ok' | 'error';
   message?: string;
+  supabaseConfigured?: boolean;
+  storagePersistenceEnabled?: boolean;
 };
 
 export type SystemDiagnosticsResponse = {
@@ -321,4 +334,6 @@ export type SystemDiagnosticsResponse = {
   geminiKeyPresent: boolean;
   pixazoKeyPresent: boolean;
   message?: string;
+  supabaseConfigured?: boolean;
+  storagePersistenceEnabled?: boolean;
 };

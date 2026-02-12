@@ -1,6 +1,4 @@
-
-import React, { useState, useEffect, Suspense } from 'react';
-import { Header } from './components/Header';
+import React, { useEffect, useRef, useState, Suspense } from 'react';
 import { HomePage } from './components/HomePage';
 // Lazy Load Heavy Components
 const ProjectDashboard = React.lazy(() => import('./components/ProjectDashboard').then(module => ({ default: module.ProjectDashboard })));
@@ -14,23 +12,25 @@ const AccountSettings = React.lazy(() => import('./components/AccountSettings').
 const PrivacyPolicy = React.lazy(() => import('./components/PrivacyPolicy').then(module => ({ default: module.PrivacyPolicy })));
 const TermsOfService = React.lazy(() => import('./components/TermsOfService').then(module => ({ default: module.TermsOfService })));
 
-import { ModelSelector } from './components/ModelSelector';
-import { FluxKeyInput } from './components/FluxKeyInput';
 import { useProjectManager } from './hooks/useProjectManager';
 import { checkSystemDiagnostics, checkSystemStatus } from './services/geminiService';
-import { getFluxKeyInfo, getImageProvider, getLockedImageProvider } from './services/appSettings';
+import { getFluxKeyInfo } from './services/appSettings';
 import { useAuth } from './contexts/AuthContext';
 import { AuthPage } from './components/AuthPage';
-import { getPublicProject, incrementViewCount, incrementLikeCount } from './services/db';
+import { AuthCallbackPage } from './components/AuthCallbackPage';
+import { supabase } from './services/supabase';
+import { getPrivateProfile, getPublicProject, incrementViewCount } from './services/db';
 import { Project } from './types';
-import { Key, Zap, Loader2 } from 'lucide-react';
-import { SystemDiagnosticsResponse, SystemStatusResponse } from './apiTypes';
-import { UserAvatar } from './components/UserAvatar';
+import { Loader2 } from 'lucide-react';
+import { SystemDiagnosticsResponse } from './apiTypes';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
+import { StaticSiteHeader } from './components/layout/StaticSiteHeader';
+import { LegalMicroLinks } from './components/layout/LegalMicroLinks';
 
 type AppView =
   | 'home'
   | 'auth'
+  | 'auth-callback'
   | 'dashboard'
   | 'editor'
   | 'reader'
@@ -42,19 +42,32 @@ type AppView =
   | 'terms'
   | 'profile';
 
+type SettingsTab = 'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin' | 'preferences' | 'security';
+
+type AuthCallbackStatus = 'idle' | 'verifying' | 'success' | 'error';
+type AuthCallbackFlow = 'magiclink' | 'recovery' | 'signup' | 'unknown';
+
+type PendingReaderTarget = {
+  id: string;
+  returnView: AppView;
+};
+
 const App: React.FC = () => {
   const { user, loading: authLoading } = useAuth();
-  const { projects, createProject, updateProject, deleteProject, duplicateProject, getProject, startGeneration, stopGeneration, reloadProjects, hydrateProjectAssets } = useProjectManager();
-  const [hasValidKey, setHasValidKey] = useState(false);
+  const { projects, createProject, updateProject, deleteProject, duplicateProject, getProject, startGeneration, stopGeneration, hydrateProjectAssets } = useProjectManager();
+
   const [isCheckingKey, setIsCheckingKey] = useState(true);
-  const [localKeyInput, setLocalKeyInput] = useState('');
-  const [storedKeySuffix, setStoredKeySuffix] = useState<string | null>(null);
-  const [systemStatus, setSystemStatus] = useState<SystemStatusResponse | null>(null);
   const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnosticsResponse | null>(null);
   const [isHydratingProject, setIsHydratingProject] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin'>('profile');
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('profile');
   const [returnView, setReturnView] = useState<AppView>('dashboard');
   const [settingsReturnView, setSettingsReturnView] = useState<AppView>('home');
+  const [needsDobCompletion, setNeedsDobCompletion] = useState(false);
+  const [hasPromptedDobThisSession, setHasPromptedDobThisSession] = useState(false);
+  const [openSecurityPasswordReset, setOpenSecurityPasswordReset] = useState(false);
+  const [authCallbackStatus, setAuthCallbackStatus] = useState<AuthCallbackStatus>('idle');
+  const [authCallbackMessage, setAuthCallbackMessage] = useState<string | null>(null);
+  const [authCallbackFlow, setAuthCallbackFlow] = useState<AuthCallbackFlow>('unknown');
 
   // Simple routing state
   const [currentView, setCurrentView] = useState<AppView>('home');
@@ -62,30 +75,117 @@ const App: React.FC = () => {
   const [publicProject, setPublicProject] = useState<Project | null>(null);
   const [viewedProfile, setViewedProfile] = useState<string | null>(null); // username
   const [systemError, setSystemError] = useState<string | null>(null);
+  const [pendingReaderTarget, setPendingReaderTarget] = useState<PendingReaderTarget | null>(null);
+  const hasWarnedDobProfileCheckRef = useRef(false);
 
-  const computeHasValidKey = (geminiKey?: string | null, fluxKey?: string | null) => {
-    const lockedProvider = getLockedImageProvider();
-    const selectedProvider = getImageProvider();
-    const requiresFlux = lockedProvider === 'flux' || selectedProvider === 'flux';
-    const serverGemini = systemDiagnostics?.geminiKeyPresent ?? false;
-    const serverFlux = systemDiagnostics?.pixazoKeyPresent ?? false;
-    const hasGemini = !!geminiKey || serverGemini;
-    const hasFlux = !!fluxKey || serverFlux;
-    return requiresFlux ? hasFlux : hasGemini;
+  const setReaderUrlParams = (id: string) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('view', 'read');
+    url.searchParams.set('id', id);
+    window.history.pushState({}, '', url);
+  };
+
+  const clearReaderUrlParams = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('view');
+    url.searchParams.delete('id');
+    window.history.pushState({}, '', url);
+  };
+
+  const clearAuthUrlArtifacts = () => {
+    const url = new URL(window.location.href);
+    const authParams = ['code', 'type', 'token_hash', 'error', 'error_description', 'flow'];
+    authParams.forEach((key) => url.searchParams.delete(key));
+    if (url.hash) url.hash = '';
+    if (url.pathname === '/auth/callback') {
+      url.pathname = '/';
+    }
+    window.history.replaceState({}, '', url);
+  };
+
+  const isSettingsTab = (value?: string): value is SettingsTab => (
+    value === 'profile' ||
+    value === 'settings' ||
+    value === 'billing' ||
+    value === 'legal' ||
+    value === 'contact' ||
+    value === 'admin' ||
+    value === 'preferences' ||
+    value === 'security'
+  );
+
+  const handleBackToHome = () => {
+    setCurrentView('home');
+    setActiveProjectId(null);
+    clearReaderUrlParams();
+  };
+
+  const handleOpenFaq = () => {
+    handleBackToHome();
+    window.setTimeout(() => {
+      document.getElementById('home-faq')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 180);
+  };
+
+  const navigateToReader = async (id: string, originView: AppView = currentView) => {
+    if (!user) {
+      setPendingReaderTarget((prev) => {
+        if (prev?.id === id && prev.returnView === originView) return prev;
+        return { id, returnView: originView };
+      });
+      setReturnView(originView);
+      setCurrentView('auth');
+      return;
+    }
+
+    setReturnView(originView);
+
+    const local = projects.find((project) => project.id === id);
+    if (local) {
+      setIsHydratingProject(true);
+      hydrateProjectAssets(id).finally(() => {
+        setPublicProject(null);
+        setActiveProjectId(id);
+        setCurrentView('reader');
+        setReaderUrlParams(id);
+        setIsHydratingProject(false);
+      });
+      return;
+    }
+
+    setIsHydratingProject(true);
+    try {
+      const project = await getPublicProject(id);
+      if (!project) {
+        setSystemError('Comic not found or private.');
+        setCurrentView('gallery');
+        return;
+      }
+
+      setPublicProject(project);
+      setActiveProjectId(project.id);
+      setCurrentView('reader');
+      setReaderUrlParams(project.id);
+      await incrementViewCount(project.id).catch(() => null);
+    } catch (e) {
+      console.error(e);
+      setSystemError('Failed to load comic.');
+    } finally {
+      setIsHydratingProject(false);
+    }
   };
 
   useEffect(() => {
-    // Check System Config
+    // Check system config
     checkSystemStatus()
-      .then(res => {
-        setSystemStatus(res);
+      .then((res) => {
         if (res.status === 'error') {
-          setSystemError(res.message || "Unknown Error");
+          setSystemError(res.message || 'Unknown Error');
         }
       })
       .catch((err) => {
-        console.error("System status check failed:", err);
-        setSystemError(err?.message || "Unable to reach server");
+        console.error('System status check failed:', err);
+        setSystemError(err?.message || 'Unable to reach server');
       });
   }, []);
 
@@ -96,162 +196,304 @@ const App: React.FC = () => {
     }
 
     checkSystemDiagnostics()
-      .then(res => {
+      .then((res) => {
         setSystemDiagnostics(res);
         if (res.status === 'error') {
-          setSystemError(res.message || 'Unable to load system diagnostics');
+          console.warn('System diagnostics returned non-ok status:', res.message || 'Unknown diagnostics error');
         }
       })
       .catch((err) => {
         console.error('System diagnostics check failed:', err);
-        setSystemError(err?.message || 'Unable to load system diagnostics');
+        setSystemDiagnostics({
+          status: 'error',
+          geminiKeyPresent: false,
+          pixazoKeyPresent: false,
+          message: err?.message || 'Unable to load system diagnostics'
+        });
       });
   }, [user?.email]);
 
   useEffect(() => {
-    // Check API Keys
     const checkKey = async () => {
       try {
-        const fluxInfo = getFluxKeyInfo();
-        let stored = '';
-        try {
-          stored = localStorage.getItem('dreamstream_api_key') || '';
-        } catch {
-          stored = '';
-        }
-        if (stored) setStoredKeySuffix(stored.slice(-4));
-        setHasValidKey(computeHasValidKey(stored, fluxInfo.key));
+        getFluxKeyInfo();
+        localStorage.getItem('dreamstream_api_key');
       } catch (e) {
-        console.error("Error checking API key:", e);
-      } finally { setIsCheckingKey(false); }
+        console.error('Error checking API key:', e);
+      } finally {
+        setIsCheckingKey(false);
+      }
     };
     checkKey();
-
-    // Check URL for shared link access
-    const params = new URLSearchParams(window.location.search);
-    const view = params.get('view');
-    const id = params.get('id');
-    if (view === 'read' && id) {
-      // Wait for projects to load from localstorage (handled by hook, but simple here)
-      setTimeout(() => {
-        setReturnView('home');
-        setIsHydratingProject(true);
-        hydrateProjectAssets(id).finally(() => {
-          setActiveProjectId(id);
-          setCurrentView('reader');
-          setIsHydratingProject(false);
-        });
-      }, 100);
-    }
   }, [systemDiagnostics?.geminiKeyPresent, systemDiagnostics?.pixazoKeyPresent]);
 
-  // Effect: Load Public Project if needed (Moved to top level)
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const hashParams = new URLSearchParams(url.hash.startsWith('#') ? url.hash.slice(1) : url.hash);
+    const searchParams = url.searchParams;
+    const code = searchParams.get('code');
+    const tokenHash = searchParams.get('token_hash') || hashParams.get('token_hash');
+    const rawType = searchParams.get('type') || hashParams.get('type') || 'magiclink';
+    const type: AuthCallbackFlow =
+      rawType === 'recovery' || rawType === 'signup' || rawType === 'magiclink'
+        ? rawType
+        : 'unknown';
+    const accessToken = hashParams.get('access_token');
+    const refreshToken = hashParams.get('refresh_token');
+    const authError = searchParams.get('error_description') || hashParams.get('error_description');
+    const hasAuthIntent =
+      url.pathname === '/auth/callback' ||
+      Boolean(code || tokenHash || accessToken || authError);
+
+    if (!hasAuthIntent) return;
+
+    let active = true;
+    const handleCallback = async () => {
+      setAuthCallbackStatus('verifying');
+      setAuthCallbackMessage(null);
+      setAuthCallbackFlow(type || 'unknown');
+      setCurrentView('auth-callback');
+
+      try {
+        if (authError) throw new Error(decodeURIComponent(authError));
+
+        if (code) {
+          const { error } = await supabase.auth.exchangeCodeForSession(code);
+          if (error) throw error;
+        } else if (tokenHash) {
+          const verifyType =
+            rawType === 'recovery' || rawType === 'signup' || rawType === 'email_change'
+              ? rawType
+              : 'magiclink';
+          const { error } = await supabase.auth.verifyOtp({
+            type: verifyType,
+            token_hash: tokenHash
+          });
+          if (error) throw error;
+        } else if (accessToken && refreshToken) {
+          const { error } = await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken
+          });
+          if (error) throw error;
+        } else {
+          throw new Error('Invalid callback link. Please request a new one.');
+        }
+
+        if (!active) return;
+        setAuthCallbackStatus('success');
+        setAuthCallbackFlow(type || 'magiclink');
+        setAuthCallbackMessage(
+          type === 'recovery'
+            ? 'Recovery link verified. Continue to set a new password.'
+            : 'Authentication successful.'
+        );
+      } catch (err: any) {
+        if (!active) return;
+        setAuthCallbackStatus('error');
+        setAuthCallbackMessage(err?.message || 'Failed to verify link.');
+      } finally {
+        clearAuthUrlArtifacts();
+      }
+    };
+
+    void handleCallback();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!user) {
+      setNeedsDobCompletion(false);
+      setHasPromptedDobThisSession(false);
+      hasWarnedDobProfileCheckRef.current = false;
+      return;
+    }
+
+    let active = true;
+    const checkDob = async () => {
+      try {
+        const profile = await getPrivateProfile(user.id);
+        if (!active) return;
+        setNeedsDobCompletion(!profile?.dob);
+      } catch (err) {
+        if (!active) return;
+        setNeedsDobCompletion(true);
+        if (!hasWarnedDobProfileCheckRef.current) {
+          hasWarnedDobProfileCheckRef.current = true;
+          console.warn('Failed to check DOB completion status', err);
+        }
+      }
+    };
+
+    void checkDob();
+    return () => {
+      active = false;
+    };
+  }, [user]);
+
+  // Gate shared links (?view=read&id=...) behind auth and restore after login.
   useEffect(() => {
     if (authLoading || isCheckingKey) return;
 
+    const params = new URLSearchParams(window.location.search);
+    const view = params.get('view');
+    const id = params.get('id');
+    if (view !== 'read' || !id) return;
+
+    if (currentView === 'reader' && activeProjectId === id) return;
+    if (!user && currentView === 'auth' && pendingReaderTarget?.id === id) return;
+
+    void navigateToReader(id, 'home');
+  }, [authLoading, isCheckingKey, user, currentView, activeProjectId, pendingReaderTarget]);
+
+  // Ensure public reader fallback still hydrates if needed.
+  useEffect(() => {
+    if (authLoading || isCheckingKey) return;
+    if (currentView !== 'reader' || !activeProjectId) return;
+
+    const localProject = projects.find((project) => project.id === activeProjectId);
+    if (localProject) {
+      if (publicProject) setPublicProject(null);
+      return;
+    }
+
+    if (publicProject?.id === activeProjectId) return;
+
     const loadPublic = async () => {
-      if (currentView === 'reader' && activeProjectId) {
-        const localProject = projects.find(p => p.id === activeProjectId);
-        if (!localProject) {
-          // It's a public project
-          setIsHydratingProject(true);
-          try {
-            const proj = await getPublicProject(activeProjectId);
-            if (proj) {
-              setPublicProject(proj);
-              incrementViewCount(activeProjectId); // Increment view count
-            } else {
-              setSystemError("Comic not found or private.");
-              setCurrentView('dashboard');
-            }
-          } catch (e) {
-            console.error(e);
-            setSystemError("Failed to load comic.");
-          } finally {
-            setIsHydratingProject(false);
-          }
+      setIsHydratingProject(true);
+      try {
+        const project = await getPublicProject(activeProjectId);
+        if (project) {
+          setPublicProject(project);
         } else {
-          setPublicProject(null); // Clear public if we found local
+          setSystemError('Comic not found or private.');
+          setCurrentView('gallery');
         }
+      } catch (e) {
+        console.error(e);
+        setSystemError('Failed to load comic.');
+      } finally {
+        setIsHydratingProject(false);
       }
     };
-    loadPublic();
-  }, [currentView, activeProjectId, projects, authLoading, isCheckingKey]);
 
-  const handleSelectKey = async () => {
-    try {
-      const aiStudio = (window as any).aistudio;
-      if (aiStudio) {
-        await aiStudio.openSelectKey();
-      }
-      const manualKey = window.prompt('Paste your Gemini API key');
-      if (manualKey && manualKey.trim()) {
-        const trimmed = manualKey.trim();
-        localStorage.setItem('dreamstream_api_key', trimmed);
-        setStoredKeySuffix(trimmed.slice(-4));
-        const fluxInfo = getFluxKeyInfo();
-        setHasValidKey(computeHasValidKey(trimmed, fluxInfo.key));
-      }
-    } catch (error) { console.error("Key selection failed:", error); }
-  };
-  const handleNavigate = (view: string, id?: string) => {
-    // If going to reader, ensure we know where to return
-    if (view === 'reader') {
-      setReturnView(currentView);
+    void loadPublic();
+  }, [currentView, activeProjectId, projects, authLoading, isCheckingKey, publicProject]);
+
+  // Resume pending reader target right after successful login.
+  useEffect(() => {
+    if (authLoading || isCheckingKey) return;
+    if (!user || currentView !== 'auth' || !pendingReaderTarget) return;
+
+    const target = pendingReaderTarget;
+    setPendingReaderTarget(null);
+    void navigateToReader(target.id, target.returnView);
+  }, [user, currentView, pendingReaderTarget, authLoading, isCheckingKey]);
+
+  // Default auth redirect when no pending comic intent exists.
+  useEffect(() => {
+    if (!user || currentView !== 'auth' || pendingReaderTarget || isHydratingProject) return;
+    setCurrentView('dashboard');
+  }, [user, currentView, pendingReaderTarget, isHydratingProject]);
+
+  // If a reader session becomes unauthenticated, gate it and remember intent.
+  useEffect(() => {
+    if (authLoading || isCheckingKey) return;
+    if (user || currentView !== 'reader' || !activeProjectId) return;
+    setPendingReaderTarget((prev) => prev || { id: activeProjectId, returnView: returnView || 'gallery' });
+    setCurrentView('auth');
+  }, [user, currentView, activeProjectId, returnView, authLoading, isCheckingKey]);
+
+  // Prompt existing users to complete DOB in profile settings (non-blocking).
+  useEffect(() => {
+    if (!user || authLoading || isCheckingKey) return;
+    if (!needsDobCompletion || hasPromptedDobThisSession) return;
+    if (currentView === 'auth' || currentView === 'settings') return;
+
+    setHasPromptedDobThisSession(true);
+    setSettingsTab('profile');
+    setSettingsReturnView(currentView);
+    setCurrentView('settings');
+  }, [user, authLoading, isCheckingKey, needsDobCompletion, hasPromptedDobThisSession, currentView]);
+
+  useEffect(() => {
+    if (!needsDobCompletion) {
+      setHasPromptedDobThisSession(false);
+    }
+  }, [needsDobCompletion]);
+
+  const handleAuthCallbackContinue = () => {
+    if (authCallbackStatus === 'error') {
+      setCurrentView('auth');
+      setAuthCallbackStatus('idle');
+      setAuthCallbackMessage(null);
+      return;
     }
 
+    if (authCallbackFlow === 'recovery') {
+      setSettingsTab('security');
+      setSettingsReturnView('home');
+      setOpenSecurityPasswordReset(true);
+      setCurrentView('settings');
+      setAuthCallbackStatus('idle');
+      setAuthCallbackMessage(null);
+      return;
+    }
+
+    if (pendingReaderTarget) {
+      const target = pendingReaderTarget;
+      setPendingReaderTarget(null);
+      void navigateToReader(target.id, target.returnView);
+    } else {
+      setCurrentView('dashboard');
+    }
+
+    setAuthCallbackStatus('idle');
+    setAuthCallbackMessage(null);
+  };
+
+  const handleNavigate = (view: string, id?: string) => {
     if (view === 'reader' && id) {
-      const local = projects.find(p => p.id === id);
-      if (local) {
-        setActiveProjectId(id);
-        setCurrentView('reader');
-      } else {
-        setIsHydratingProject(true);
-        import('./services/db').then(async ({ getPublicProject, incrementViewCount }) => {
-          const p = await getPublicProject(id);
-          if (p) {
-            setPublicProject(p);
-            setActiveProjectId(p.id);
-            incrementViewCount(p.id);
-            setCurrentView('reader');
-          }
-          setIsHydratingProject(false);
-        });
-      }
-    } else if (view === 'profile' && id) {
+      void navigateToReader(id, currentView);
+      return;
+    }
+
+    if (view === 'profile' && id) {
+      clearReaderUrlParams();
       setViewedProfile(id);
       setCurrentView('profile');
-    } else if (view === 'settings') {
+      return;
+    }
+
+    if (view === 'settings') {
+      clearReaderUrlParams();
+      if (isSettingsTab(id)) {
+        setSettingsTab(id);
+        if (id !== 'security') setOpenSecurityPasswordReset(false);
+      }
       setSettingsReturnView(currentView);
       setCurrentView('settings');
-    } else if (view === 'home' || view === 'dashboard' || view === 'auth' || view === 'test' || view === 'learn' || view === 'gallery' || view === 'privacy' || view === 'terms') {
-      setCurrentView(view);
+      return;
     }
-  };
 
-
-  const handleSaveLocalKey = () => {
-    const trimmed = localKeyInput.trim();
-    if (!trimmed) return;
-    try {
-      localStorage.setItem('dreamstream_api_key', trimmed);
-      setStoredKeySuffix(trimmed.slice(-4));
-      const fluxInfo = getFluxKeyInfo();
-      setHasValidKey(computeHasValidKey(trimmed, fluxInfo.key));
-      setLocalKeyInput('');
-    } catch (e) {
-      console.error("Failed to save API key", e);
+    if (view === 'home') {
+      handleBackToHome();
+      return;
     }
-  };
 
-  const handleClearLocalKey = () => {
-    try {
-      localStorage.removeItem('dreamstream_api_key');
-      setStoredKeySuffix(null);
-      const fluxInfo = getFluxKeyInfo();
-      setHasValidKey(computeHasValidKey(null, fluxInfo.key));
-    } catch (e) {
-      console.error("Failed to clear API key", e);
+    if (
+      view === 'dashboard' ||
+      view === 'auth' ||
+      view === 'test' ||
+      view === 'learn' ||
+      view === 'gallery' ||
+      view === 'privacy' ||
+      view === 'terms'
+    ) {
+      clearReaderUrlParams();
+      setCurrentView(view as AppView);
     }
   };
 
@@ -264,8 +506,7 @@ const App: React.FC = () => {
   const handleOpenProject = (id: string) => {
     setIsHydratingProject(true);
     hydrateProjectAssets(id).finally(() => {
-      // If we have an active project separate from the manager's list (public), clear it when switching
-      if (activeProjectId && !projects.find(p => p.id === activeProjectId)) {
+      if (activeProjectId && !projects.find((project) => project.id === activeProjectId)) {
         setPublicProject(null);
       }
       setActiveProjectId(id);
@@ -275,18 +516,7 @@ const App: React.FC = () => {
   };
 
   const handleReadProject = (id: string) => {
-    setReturnView(currentView);
-    setIsHydratingProject(true);
-    hydrateProjectAssets(id).finally(() => {
-      setActiveProjectId(id);
-      setCurrentView('reader');
-      setIsHydratingProject(false);
-      // Update URL for sharing without reload
-      const url = new URL(window.location.href);
-      url.searchParams.set('view', 'read');
-      url.searchParams.set('id', id);
-      window.history.pushState({}, '', url);
-    });
+    void navigateToReader(id, currentView);
   };
 
   const handleCloseReader = () => {
@@ -294,10 +524,7 @@ const App: React.FC = () => {
     const nextView = returnView && returnView !== 'reader' ? returnView : fallbackView;
     setCurrentView(nextView);
     setActiveProjectId(null);
-    const url = new URL(window.location.href);
-    url.searchParams.delete('view');
-    url.searchParams.delete('id');
-    window.history.pushState({}, '', url);
+    clearReaderUrlParams();
   };
 
   const handleSignedOut = () => {
@@ -306,20 +533,14 @@ const App: React.FC = () => {
     setViewedProfile(null);
     setReturnView('home');
     setSettingsReturnView('home');
+    setNeedsDobCompletion(false);
+    setHasPromptedDobThisSession(false);
+    setOpenSecurityPasswordReset(false);
+    setAuthCallbackStatus('idle');
+    setAuthCallbackMessage(null);
+    setPendingReaderTarget(null);
     setCurrentView('home');
-    const url = new URL(window.location.href);
-    url.searchParams.delete('view');
-    url.searchParams.delete('id');
-    window.history.pushState({}, '', url);
-  };
-
-  const handleBackToHome = () => {
-    setCurrentView('home');
-    setActiveProjectId(null);
-    const url = new URL(window.location.href);
-    url.searchParams.delete('view');
-    url.searchParams.delete('id');
-    window.history.pushState({}, '', url);
+    clearReaderUrlParams();
   };
 
   if (systemError) {
@@ -351,7 +572,7 @@ const App: React.FC = () => {
     );
   }
 
-  if (isCheckingKey || isHydratingProject) {
+  if (isCheckingKey || isHydratingProject || authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-brand-blue">
         <Loader2 className="w-12 h-12 text-white animate-spin" />
@@ -359,110 +580,99 @@ const App: React.FC = () => {
     );
   }
 
-
-
-  if (authLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-brand-blue">
-        <Loader2 className="w-12 h-12 text-white animate-spin" />
-      </div>
-    );
-  }
-
-  // Define Routing Logic
-
-  // Handlers for Views
-  const navigateToAuth = () => setCurrentView('auth');
-  const navigateToDashboard = () => setCurrentView('dashboard');
-
-  if ((currentView as any) === 'auth') {
-    if (user) { setCurrentView('dashboard'); return null; } // Auto-redirect if already logged in
-    return <AuthPage
-      onLoginSuccess={() => setCurrentView('dashboard')}
-      onOpenPrivacy={() => setCurrentView('privacy')}
-      onOpenTerms={() => setCurrentView('terms')}
-    />;
-  }
-
-  // Protection: Views other than 'home' and 'auth' require User
-  const isProtectedViewStrict = ['dashboard', 'editor', 'test', 'learn'].includes(currentView);
-
-  if (!user && isProtectedViewStrict) {
-    return <AuthPage
-      onLoginSuccess={() => setCurrentView('dashboard')}
-      onOpenPrivacy={() => setCurrentView('privacy')}
-      onOpenTerms={() => setCurrentView('terms')}
-    />;
-  }
-
-  // If we are here, and view is protected, User is guaranteed (except for type narrowing)
-  // If User is present, handle Key Check only for Protected Routes
-
-  // REMOVED: Blocking "Unlock Studio" screen.
-  // We now allow users to enter and configure keys later in Settings.
-  /*
-  if (user && isProtectedViewStrict && !hasValidKey) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-brand-blue p-4">
-        ...
-      </div>
-    );
-  }
-  */
+  // Protection: studio and reader views require an authenticated user.
+  const isProtectedViewStrict = ['dashboard', 'editor', 'reader', 'test', 'learn', 'settings'].includes(currentView);
+  const effectiveView: AppView = !user && isProtectedViewStrict ? 'auth' : currentView;
 
   const activeProject = activeProjectId ? getProject(activeProjectId) : undefined;
+  const showSharedHeader = effectiveView !== 'home' && effectiveView !== 'reader';
+  const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader';
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen font-sans relative">
-        {/* Header */}
-        {(currentView === 'dashboard' || currentView === 'test' || currentView === 'learn') && (
-          <Header
-            currentView={currentView}
-            setCurrentView={setCurrentView as any}
-            setSettingsTab={setSettingsTab}
-            setLastView={(view) => setSettingsReturnView(view as AppView)}
+      <div className="min-h-screen font-sans relative bg-slate-50">
+        {showSharedHeader && (
+          <StaticSiteHeader
+            isAuthenticated={!!user}
+            onGoHome={handleBackToHome}
+            onViewComics={() => handleNavigate('gallery')}
+            onEnterStudio={() => handleNavigate('dashboard')}
+            onSignIn={() => handleNavigate('auth')}
+            onOpenProfile={() => {
+              setSettingsTab('profile');
+              setSettingsReturnView(currentView);
+              setCurrentView('settings');
+            }}
+            onNavigate={handleNavigate}
           />
         )}
 
         <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-brand-blue"><Loader2 className="w-12 h-12 text-white animate-spin" /></div>}>
           {/* Views */}
-          {currentView === 'home' && (
+          {effectiveView === 'home' && (
             <HomePage
-              onEnterStudio={() => user ? setCurrentView('dashboard') : setCurrentView('auth')}
+              onEnterStudio={() => (user ? setCurrentView('dashboard') : setCurrentView('auth'))}
               onViewComics={() => setCurrentView('gallery')}
-              onOpenProfile={() => { setSettingsTab('profile'); setSettingsReturnView('home'); setCurrentView('settings'); }}
+              onOpenProfile={() => {
+                setSettingsTab('profile');
+                setSettingsReturnView('home');
+                setCurrentView('settings');
+              }}
               onOpenPrivacy={() => setCurrentView('privacy')}
               onOpenTerms={() => setCurrentView('terms')}
-              onOpenUpgrade={() => { setSettingsTab('settings'); setSettingsReturnView('home'); setCurrentView('settings'); }}
+              onOpenUpgrade={() => {
+                setSettingsTab('settings');
+                setSettingsReturnView('home');
+                setCurrentView('settings');
+              }}
               onNavigate={handleNavigate}
             />
           )}
-          {currentView === 'auth' && (
+
+          {effectiveView === 'auth' && (
             <AuthPage
-              onLoginSuccess={() => setCurrentView('dashboard')}
+              onLoginSuccess={() => {
+                if (pendingReaderTarget) {
+                  const target = pendingReaderTarget;
+                  setPendingReaderTarget(null);
+                  void navigateToReader(target.id, target.returnView);
+                  return;
+                }
+                setCurrentView('dashboard');
+              }}
               onOpenPrivacy={() => setCurrentView('privacy')}
               onOpenTerms={() => setCurrentView('terms')}
             />
           )}
-          {currentView === 'gallery' && (
+
+          {effectiveView === 'auth-callback' && (
+            <AuthCallbackPage
+              status={authCallbackStatus === 'idle' ? 'verifying' : authCallbackStatus}
+              message={authCallbackMessage || undefined}
+              flowType={authCallbackFlow}
+              onContinue={handleAuthCallbackContinue}
+            />
+          )}
+
+          {effectiveView === 'gallery' && (
             <PublicGallery
-              onBack={() => setCurrentView('home')}
+              onBack={handleBackToHome}
+              onRequireAuth={() => setCurrentView('auth')}
               onReadComic={(id) => {
-                setReturnView('gallery');
-                import('./services/db').then(({ incrementViewCount }) => incrementViewCount(id)); // Proactive increment
-                handleNavigate('reader', id);
+                void navigateToReader(id, 'gallery');
               }}
             />
           )}
 
-          {currentView === 'privacy' && (
-            <PrivacyPolicy onBack={() => user ? setCurrentView('dashboard') : setCurrentView('home')} />
+          {effectiveView === 'privacy' && (
+            <PrivacyPolicy onBack={() => (user ? setCurrentView('dashboard') : setCurrentView('home'))} />
           )}
 
-          {currentView === 'terms' && <TermsOfService onBack={() => setCurrentView('home')} />}
+          {effectiveView === 'terms' && (
+            <TermsOfService onBack={() => (user ? setCurrentView('dashboard') : setCurrentView('home'))} />
+          )}
 
-          {currentView === 'dashboard' && (
+          {effectiveView === 'dashboard' && (
             <ProjectDashboard
               projects={projects}
               onCreateProject={handleCreateProject}
@@ -475,7 +685,7 @@ const App: React.FC = () => {
             />
           )}
 
-          {currentView === 'test' && (
+          {effectiveView === 'test' && (
             <TestLab
               onCreateProject={(name) => createProject(name)}
               onUpdateProject={updateProject}
@@ -486,11 +696,11 @@ const App: React.FC = () => {
             />
           )}
 
-          {currentView === 'learn' && (
+          {effectiveView === 'learn' && (
             <LearnHub onLaunchTestLab={() => setCurrentView('test')} />
           )}
 
-          {currentView === 'editor' && activeProject && (
+          {effectiveView === 'editor' && activeProject && (
             <ComicEditor
               project={activeProject}
               onUpdate={(updates) => updateProject(activeProject.id, updates)}
@@ -500,24 +710,27 @@ const App: React.FC = () => {
             />
           )}
 
-          {(currentView === 'reader') && (
+          {effectiveView === 'reader' && (
             <ComicReader
-              project={projects.find(p => p.id === activeProjectId) || publicProject!}
+              project={projects.find((project) => project.id === activeProjectId) || publicProject!}
               onClose={handleCloseReader}
               onUpdateProject={updateProject}
               isReadOnly={!!publicProject}
               onNavigate={handleNavigate}
+              onOpenPrivacy={() => setCurrentView('privacy')}
+              onOpenTerms={() => setCurrentView('terms')}
+              onOpenFaq={handleOpenFaq}
             />
           )}
 
-          {currentView === 'profile' && viewedProfile && (
+          {effectiveView === 'profile' && viewedProfile && (
             <PublicProfile
               username={viewedProfile}
               onNavigate={handleNavigate}
             />
           )}
 
-          {currentView === 'settings' && (
+          {effectiveView === 'settings' && (
             <AccountSettings
               onClose={() => {
                 if (settingsReturnView === 'reader' && !activeProjectId) {
@@ -528,10 +741,23 @@ const App: React.FC = () => {
               }}
               initialTab={settingsTab}
               onSignedOut={handleSignedOut}
+              requireDobCompletion={needsDobCompletion}
+              onDobCompletionStatusChange={(needsCompletion) => {
+                setNeedsDobCompletion(needsCompletion);
+              }}
+              openPasswordReset={openSecurityPasswordReset}
+              onPasswordResetHandled={() => setOpenSecurityPasswordReset(false)}
             />
           )}
         </Suspense>
 
+        {showSharedLegalLinks && (
+          <LegalMicroLinks
+            onOpenPrivacy={() => setCurrentView('privacy')}
+            onOpenTerms={() => setCurrentView('terms')}
+            onOpenFaq={handleOpenFaq}
+          />
+        )}
       </div>
     </ErrorBoundary>
   );

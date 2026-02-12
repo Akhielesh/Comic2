@@ -1,12 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Project, ComicPanel, DialogueBlock, TextLayout, ProjectComment } from '../types';
+import { Project, ComicPanel, DialogueBlock, TextLayout } from '../types';
 import { CommentSection } from './CommentSection';
-import { X, ChevronLeft, ChevronRight, Maximize2, Minimize2, BookOpen, MessageSquareText, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Maximize2, Minimize2, BookOpen, MessageSquareText } from 'lucide-react';
 import { ensureDialogueBlocks } from '../services/dialogueUtils';
 import { loadReaderState, saveReaderState } from '../services/db';
 
 import { ReviewModal } from './modals/ReviewModal';
 import { submitReview } from '../services/db';
+import { useAuth } from '../contexts/AuthContext';
+import { StaticSiteHeader } from './layout/StaticSiteHeader';
+import { LegalMicroLinks } from './layout/LegalMicroLinks';
 
 interface ComicReaderProps {
   project: Project;
@@ -14,9 +17,22 @@ interface ComicReaderProps {
   onUpdateProject: (projectId: string, updates: Partial<Project> | ((prev: Project) => Partial<Project>)) => void;
   isReadOnly?: boolean;
   onNavigate?: (view: string, id?: string) => void;
+  onOpenPrivacy: () => void;
+  onOpenTerms: () => void;
+  onOpenFaq: () => void;
 }
 
-export const ComicReader: React.FC<ComicReaderProps> = ({ project, onClose, onUpdateProject, isReadOnly = false, onNavigate }) => {
+export const ComicReader: React.FC<ComicReaderProps> = ({
+  project,
+  onClose,
+  onUpdateProject,
+  isReadOnly = false,
+  onNavigate,
+  onOpenPrivacy,
+  onOpenTerms,
+  onOpenFaq
+}) => {
+  const { user } = useAuth();
   const [showStory, setShowStory] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [showComments, setShowComments] = useState(false);
@@ -246,16 +262,19 @@ export const ComicReader: React.FC<ComicReaderProps> = ({ project, onClose, onUp
 
   return (
     <div ref={readerRef} className="fixed inset-0 z-50 bg-slate-100 overflow-hidden flex flex-col">
-      {/* Reader Header */}
+      <StaticSiteHeader
+        isAuthenticated={!!user}
+        onGoHome={() => onNavigate?.('home')}
+        onViewComics={() => onNavigate?.('gallery')}
+        onEnterStudio={() => onNavigate?.('dashboard')}
+        onSignIn={() => onNavigate?.('auth')}
+        onOpenProfile={() => onNavigate?.('settings')}
+        onNavigate={onNavigate || (() => undefined)}
+      />
+
+      {/* Reader Controls */}
       <header className="h-16 bg-white border-b-4 border-black flex items-center justify-between px-6 shadow-lg shrink-0">
         <div className="flex items-center gap-3 min-w-0">
-          <button
-            onClick={() => onNavigate?.('home')}
-            className="w-9 h-9 bg-brand-yellow border-2 border-black rounded-md font-display text-lg leading-none"
-            title="Go Home"
-          >
-            D
-          </button>
           <h1 className="font-display text-2xl text-black truncate">{project.name}</h1>
         </div>
         <div className="flex items-center gap-2">
@@ -283,14 +302,12 @@ export const ComicReader: React.FC<ComicReaderProps> = ({ project, onClose, onUp
           >
             Info
           </button>
-          {!isReadOnly && (
-            <button
-              onClick={() => setShowComments((prev) => !prev)}
-              className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50 flex items-center gap-1"
-            >
-              <MessageSquareText className="w-4 h-4" /> Comments
-            </button>
-          )}
+          <button
+            onClick={() => setShowComments((prev) => !prev)}
+            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50 flex items-center gap-1"
+          >
+            <MessageSquareText className="w-4 h-4" /> Comments
+          </button>
           <button
             onClick={() => setReaderMode(readerMode === 'scroll' ? 'flip' : 'scroll')}
             className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-brand-yellow"
@@ -415,6 +432,12 @@ export const ComicReader: React.FC<ComicReaderProps> = ({ project, onClose, onUp
           </aside>
         )}
       </div>
+
+      <LegalMicroLinks
+        onOpenPrivacy={onOpenPrivacy}
+        onOpenTerms={onOpenTerms}
+        onOpenFaq={onOpenFaq}
+      />
 
       {showComments && (
         <div className="fixed inset-y-0 left-0 w-full md:w-96 bg-white border-r-4 border-black z-50 shadow-comic flex flex-col">

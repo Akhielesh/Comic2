@@ -21,7 +21,7 @@ const steps = [
 
 export const StepIndicator: React.FC<StepIndicatorProps> = ({ currentStep, maxStepReached, onStepClick }) => {
   return (
-    <div className="w-full py-6 sticky top-0 z-40 bg-brand-blue/90 backdrop-blur-sm border-b-4 border-black">
+    <div className="w-full py-6 sticky top-20 z-40 bg-brand-blue/90 backdrop-blur-sm border-b-4 border-black">
       <div className="max-w-6xl mx-auto px-4">
         <div className="flex items-center justify-between relative">
           {/* Connecting Line */}

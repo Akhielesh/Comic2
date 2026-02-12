@@ -15,3 +15,6 @@ export const FLUX_FETCH_IMAGE_TIMEOUT_MS = Number(process.env.FLUX_FETCH_IMAGE_T
 
 export const PIXAZO_ENDPOINT = process.env.PIXAZO_ENDPOINT || 'https://gateway.pixazo.ai/flux-1-schnell/v1/getData';
 export const FLUX_MODEL_ID = process.env.FLUX_MODEL_ID || 'pixazo/flux-1-schnell';
+
+export const STORAGE_BUCKET = process.env.STORAGE_BUCKET || 'comic-assets';
+export const IMAGE_INCLUDE_DATA_URL_LEGACY = (process.env.IMAGE_INCLUDE_DATA_URL_LEGACY || '').toLowerCase() === 'true';
