@@ -21,6 +21,10 @@ create table if not exists public.user_plan_subscriptions (
   plan_tier text not null default 'free' references public.billing_plans(id),
   status text not null default 'active',
   stripe_subscription_id text,
+  stripe_status text,
+  cancel_at_period_end boolean not null default false,
+  cancel_requested_at timestamptz,
+  canceled_at timestamptz,
   current_period_start timestamptz,
   current_period_end timestamptz,
   metadata jsonb not null default '{}'::jsonb,
@@ -173,6 +177,20 @@ create table if not exists public.payment_profiles (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.stripe_webhook_events (
+  id uuid primary key default gen_random_uuid(),
+  event_id text not null unique,
+  event_type text not null,
+  status text not null default 'processing',
+  received_at timestamptz not null default now(),
+  processed_at timestamptz,
+  error text,
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_stripe_webhook_events_received
+  on public.stripe_webhook_events(received_at desc);
+
 insert into public.billing_plans (id, name, monthly_included_ct, daily_guardrail_ct, monthly_price_usd, allow_overage)
 values
   ('free', 'Free', 10000, 800, 0, false),
@@ -244,3 +262,231 @@ select
 from public.user_plan_subscriptions ups
 join public.billing_plans bp on bp.id = ups.plan_tier
 on conflict (user_id) do nothing;
+
+alter table public.user_plan_subscriptions
+  add column if not exists stripe_status text,
+  add column if not exists cancel_at_period_end boolean not null default false,
+  add column if not exists cancel_requested_at timestamptz,
+  add column if not exists canceled_at timestamptz;
+
+create or replace function public.billing_try_reserve_tokens(
+  p_user_id uuid,
+  p_required_ct integer,
+  p_allow_overage boolean default false
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_wallet public.token_wallets%rowtype;
+  v_daily_remaining integer;
+  v_available integer;
+begin
+  select * into v_wallet
+  from public.token_wallets
+  where user_id = p_user_id
+  for update;
+
+  if not found then
+    return jsonb_build_object(
+      'allowed', false,
+      'reason', 'WALLET_NOT_FOUND'
+    );
+  end if;
+
+  v_daily_remaining := greatest(v_wallet.daily_guardrail_ct - v_wallet.used_daily_ct, 0);
+  v_available := greatest((v_wallet.included_monthly_ct - v_wallet.used_monthly_ct) + v_wallet.purchased_ct - v_wallet.reserved_ct, 0);
+
+  if p_required_ct > v_daily_remaining then
+    return jsonb_build_object(
+      'allowed', false,
+      'reason', 'DAILY_LIMIT_EXCEEDED',
+      'daily_remaining_ct', v_daily_remaining,
+      'available_ct', v_available
+    );
+  end if;
+
+  if not p_allow_overage and p_required_ct > v_available then
+    return jsonb_build_object(
+      'allowed', false,
+      'reason', 'INSUFFICIENT_CREDITS',
+      'daily_remaining_ct', v_daily_remaining,
+      'available_ct', v_available
+    );
+  end if;
+
+  update public.token_wallets
+  set
+    reserved_ct = reserved_ct + p_required_ct,
+    updated_at = now()
+  where user_id = p_user_id;
+
+  return jsonb_build_object(
+    'allowed', true,
+    'reason', 'OK'
+  );
+end;
+$$;
+
+create or replace function public.billing_release_reserved_tokens(
+  p_user_id uuid,
+  p_release_ct integer
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_wallet public.token_wallets%rowtype;
+begin
+  select * into v_wallet
+  from public.token_wallets
+  where user_id = p_user_id
+  for update;
+
+  if not found then
+    return jsonb_build_object('ok', false, 'reason', 'WALLET_NOT_FOUND');
+  end if;
+
+  update public.token_wallets
+  set
+    reserved_ct = greatest(reserved_ct - greatest(p_release_ct, 0), 0),
+    updated_at = now()
+  where user_id = p_user_id;
+
+  return jsonb_build_object('ok', true);
+end;
+$$;
+
+create or replace function public.billing_settle_tokens(
+  p_user_id uuid,
+  p_estimated_ct integer,
+  p_actual_ct integer,
+  p_ct_usd numeric
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_wallet public.token_wallets%rowtype;
+  v_remaining integer;
+  v_included_remaining integer;
+  v_from_included integer;
+  v_from_purchased integer;
+  v_overage_ct integer;
+begin
+  select * into v_wallet
+  from public.token_wallets
+  where user_id = p_user_id
+  for update;
+
+  if not found then
+    return jsonb_build_object('ok', false, 'reason', 'WALLET_NOT_FOUND');
+  end if;
+
+  v_remaining := greatest(p_actual_ct, 0);
+  v_included_remaining := greatest(v_wallet.included_monthly_ct - v_wallet.used_monthly_ct, 0);
+  v_from_included := least(v_remaining, v_included_remaining);
+  v_remaining := v_remaining - v_from_included;
+
+  v_from_purchased := least(v_remaining, greatest(v_wallet.purchased_ct, 0));
+  v_remaining := v_remaining - v_from_purchased;
+
+  v_overage_ct := greatest(v_remaining, 0);
+
+  update public.token_wallets
+  set
+    reserved_ct = greatest(reserved_ct - greatest(p_estimated_ct, 0), 0),
+    used_monthly_ct = used_monthly_ct + v_from_included,
+    purchased_ct = greatest(purchased_ct - v_from_purchased, 0),
+    overage_ct = overage_ct + v_overage_ct,
+    pending_overage_usd = pending_overage_usd + (v_overage_ct * greatest(p_ct_usd, 0)),
+    used_daily_ct = used_daily_ct + greatest(p_actual_ct, 0),
+    updated_at = now()
+  where user_id = p_user_id;
+
+  return jsonb_build_object(
+    'ok', true,
+    'from_included', v_from_included,
+    'from_purchased', v_from_purchased,
+    'overage_ct', v_overage_ct
+  );
+end;
+$$;
+
+alter table public.billing_plans enable row level security;
+alter table public.user_plan_subscriptions enable row level security;
+alter table public.token_wallets enable row level security;
+alter table public.token_ledger_entries enable row level security;
+alter table public.usage_daily_rollups enable row level security;
+alter table public.model_pricing_snapshots enable row level security;
+alter table public.model_pricing_sources enable row level security;
+alter table public.pricing_changelog_entries enable row level security;
+alter table public.generation_cost_events enable row level security;
+alter table public.payment_profiles enable row level security;
+alter table public.stripe_webhook_events enable row level security;
+
+drop policy if exists billing_plans_read on public.billing_plans;
+create policy billing_plans_read on public.billing_plans
+for select
+to authenticated
+using (true);
+
+drop policy if exists user_plan_subscriptions_read_own on public.user_plan_subscriptions;
+create policy user_plan_subscriptions_read_own on public.user_plan_subscriptions
+for select
+to authenticated
+using (auth.uid() = user_id);
+
+drop policy if exists token_wallets_read_own on public.token_wallets;
+create policy token_wallets_read_own on public.token_wallets
+for select
+to authenticated
+using (auth.uid() = user_id);
+
+drop policy if exists token_ledger_entries_read_own on public.token_ledger_entries;
+create policy token_ledger_entries_read_own on public.token_ledger_entries
+for select
+to authenticated
+using (auth.uid() = user_id);
+
+drop policy if exists usage_daily_rollups_read_own on public.usage_daily_rollups;
+create policy usage_daily_rollups_read_own on public.usage_daily_rollups
+for select
+to authenticated
+using (auth.uid() = user_id);
+
+drop policy if exists generation_cost_events_read_own on public.generation_cost_events;
+create policy generation_cost_events_read_own on public.generation_cost_events
+for select
+to authenticated
+using (auth.uid() = user_id);
+
+drop policy if exists payment_profiles_read_own on public.payment_profiles;
+create policy payment_profiles_read_own on public.payment_profiles
+for select
+to authenticated
+using (auth.uid() = user_id);
+
+drop policy if exists model_pricing_snapshots_read on public.model_pricing_snapshots;
+create policy model_pricing_snapshots_read on public.model_pricing_snapshots
+for select
+to authenticated
+using (true);
+
+drop policy if exists model_pricing_sources_read on public.model_pricing_sources;
+create policy model_pricing_sources_read on public.model_pricing_sources
+for select
+to authenticated
+using (true);
+
+drop policy if exists pricing_changelog_entries_read on public.pricing_changelog_entries;
+create policy pricing_changelog_entries_read on public.pricing_changelog_entries
+for select
+to authenticated
+using (true);

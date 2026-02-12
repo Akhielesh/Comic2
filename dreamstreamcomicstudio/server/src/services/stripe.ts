@@ -1,5 +1,7 @@
 import Stripe from 'stripe';
+import type { BillingPlanTier, BillingSubscriptionStatus, CreditPackId, PurchasablePlanTier } from '../../../shared/types/billing.js';
 import { addPurchasedCredits, setUserPlanTier, upsertPaymentProfile } from './billingLedger.js';
+import { getCreditPackById } from './pricingCatalog.js';
 import { getSupabaseAdmin } from './supabase.js';
 
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY || '';
@@ -8,19 +10,46 @@ const stripe = stripeSecretKey
   : null;
 
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
-const processedSetupIntents = new Set<string>();
-const processedPaymentIntents = new Set<string>();
-const processedCheckoutSessions = new Set<string>();
+const BILLING_PORTAL_RETURN_URL = process.env.STRIPE_BILLING_PORTAL_RETURN_URL || `${CLIENT_URL}/settings?tab=billing`;
+const WEBHOOK_MAX_AGE_SECONDS = Number(process.env.STRIPE_WEBHOOK_MAX_AGE_SECONDS || '86400');
 
-const resolvePlanPriceId = (planTier: string) => {
-  const normalized = planTier.trim().toLowerCase();
-  if (normalized === 'creator') {
-    return process.env.STRIPE_PRICE_ID_CREATOR || process.env.STRIPE_PRICE_ID;
+const PURCHASABLE_TIERS: PurchasablePlanTier[] = ['creator', 'pro', 'studio'];
+
+const planPriceByTier: Record<PurchasablePlanTier, string | undefined> = {
+  creator: process.env.STRIPE_PRICE_ID_CREATOR || process.env.STRIPE_PRICE_ID,
+  pro: process.env.STRIPE_PRICE_ID_PRO || process.env.STRIPE_PRICE_ID,
+  studio: process.env.STRIPE_PRICE_ID_STUDIO || process.env.STRIPE_PRICE_ID
+};
+
+const creditPriceByPackId: Record<CreditPackId, string | undefined> = {
+  pack_10: process.env.STRIPE_PRICE_ID_CREDIT_PACK_10,
+  pack_25: process.env.STRIPE_PRICE_ID_CREDIT_PACK_25,
+  pack_100: process.env.STRIPE_PRICE_ID_CREDIT_PACK_100
+};
+
+const isPurchasablePlanTier = (value: unknown): value is PurchasablePlanTier =>
+  typeof value === 'string' && PURCHASABLE_TIERS.includes(value as PurchasablePlanTier);
+
+const resolvePlanPriceId = (planTier: PurchasablePlanTier) => planPriceByTier[planTier];
+
+const resolvePlanTierFromPriceId = (priceId?: string | null): PurchasablePlanTier | null => {
+  if (!priceId) return null;
+  for (const tier of PURCHASABLE_TIERS) {
+    if (planPriceByTier[tier] === priceId) return tier;
   }
-  if (normalized === 'studio') {
-    return process.env.STRIPE_PRICE_ID_STUDIO || process.env.STRIPE_PRICE_ID;
+  return null;
+};
+
+const resolveCreditPackByPriceId = (priceId?: string | null) => {
+  if (!priceId) return null;
+  for (const [packId, configuredPriceId] of Object.entries(creditPriceByPackId) as Array<[CreditPackId, string | undefined]>) {
+    if (configuredPriceId === priceId) {
+      const pack = getCreditPackById(packId);
+      if (!pack) return null;
+      return { packId, pack };
+    }
   }
-  return process.env.STRIPE_PRICE_ID_PRO || process.env.STRIPE_PRICE_ID;
+  return null;
 };
 
 const assertStripe = () => {
@@ -30,138 +59,181 @@ const assertStripe = () => {
   return stripe;
 };
 
-export const isStripeConfigured = () => Boolean(stripe);
-
-export const ensureStripeCustomer = async (userId: string, email?: string) => {
-  const client = assertStripe();
-
-  try {
-    const admin = getSupabaseAdmin();
-    const { data } = await admin
-      .from('payment_profiles')
-      .select('stripe_customer_id')
-      .eq('user_id', userId)
-      .maybeSingle();
-
-    const existingId = typeof data?.stripe_customer_id === 'string' ? data.stripe_customer_id : null;
-    if (existingId) {
-      const customer = await client.customers.retrieve(existingId);
-      if (!('deleted' in customer)) {
-        return customer;
-      }
-    }
-  } catch {
-    // continue with creation path
+const toBillingTier = (value: unknown): BillingPlanTier => {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : 'free';
+  if (normalized === 'free' || normalized === 'creator' || normalized === 'pro' || normalized === 'studio' || normalized === 'custom' || normalized === 'admin') {
+    return normalized;
   }
-
-  const customer = await client.customers.create({
-    email,
-    metadata: {
-      userId
-    }
-  });
-
-  await upsertPaymentProfile(userId, {
-    stripe_customer_id: customer.id
-  });
-
-  return customer;
+  return 'free';
 };
 
-export const createPlanCheckoutSession = async (input: {
+const toIsoOrUndefined = (value?: number | null) => {
+  if (!value || !Number.isFinite(value)) return undefined;
+  return new Date(value * 1000).toISOString();
+};
+
+const nowIso = () => new Date().toISOString();
+
+const getAdmin = () => getSupabaseAdmin();
+
+const getSubscriptionPeriodWindow = (subscription: Stripe.Subscription) => {
+  const firstItem = subscription.items.data[0];
+  const start = typeof firstItem?.current_period_start === 'number' ? firstItem.current_period_start : null;
+  const end = typeof firstItem?.current_period_end === 'number' ? firstItem.current_period_end : null;
+  return { start, end };
+};
+
+const getInvoiceSubscriptionId = (invoice: Stripe.Invoice): string | null => {
+  const fromParent = invoice.parent?.subscription_details?.subscription;
+  if (typeof fromParent === 'string') return fromParent;
+  if (fromParent && typeof fromParent === 'object' && typeof fromParent.id === 'string') {
+    return fromParent.id;
+  }
+  return null;
+};
+
+const findUserIdBySubscriptionId = async (subscriptionId: string): Promise<string | null> => {
+  const admin = getAdmin();
+  const { data, error } = await admin
+    .from('user_plan_subscriptions')
+    .select('user_id')
+    .eq('stripe_subscription_id', subscriptionId)
+    .maybeSingle();
+
+  if (error || !data) return null;
+  const userId = (data as Record<string, unknown>).user_id;
+  return typeof userId === 'string' ? userId : null;
+};
+
+const getUserSubscriptionRow = async (userId: string) => {
+  const admin = getAdmin();
+  const { data, error } = await admin
+    .from('user_plan_subscriptions')
+    .select('plan_tier, status, stripe_subscription_id, stripe_status, cancel_at_period_end, cancel_requested_at, canceled_at, current_period_start, current_period_end')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (error || !data) return null;
+  return data as Record<string, unknown>;
+};
+
+const hasProcessedCreditCheckout = async (userId: string, checkoutSessionId: string) => {
+  const admin = getAdmin();
+  const { data, error } = await admin
+    .from('token_ledger_entries')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('entry_type', 'CREDIT_PURCHASE')
+    .contains('metadata', { checkoutSessionId })
+    .limit(1);
+
+  if (error) return false;
+  return Array.isArray(data) && data.length > 0;
+};
+
+const upsertSubscriptionState = async (input: {
   userId: string;
-  email: string;
-  planTier: string;
+  planTier: BillingPlanTier;
+  status: string;
+  stripeSubscriptionId?: string;
+  stripeStatus?: string;
+  cancelAtPeriodEnd?: boolean;
+  cancelRequestedAt?: string | null;
+  canceledAt?: string | null;
+  currentPeriodStart?: string | null;
+  currentPeriodEnd?: string | null;
+  metadata?: Record<string, unknown>;
 }) => {
-  const client = assertStripe();
-  const priceId = resolvePlanPriceId(input.planTier);
-  if (!priceId) {
-    throw new Error(`Stripe price ID missing for plan tier ${input.planTier}.`);
-  }
-
-  const customer = await ensureStripeCustomer(input.userId, input.email);
-
-  return client.checkout.sessions.create({
-    payment_method_types: ['card'],
-    customer: customer.id,
-    client_reference_id: input.userId,
-    line_items: [{ price: priceId, quantity: 1 }],
-    mode: 'subscription',
-    success_url: `${CLIENT_URL}/settings?billing=success`,
-    cancel_url: `${CLIENT_URL}/settings?billing=cancelled`,
-    metadata: {
-      userId: input.userId,
-      planTier: input.planTier
-    }
-  });
+  const admin = getAdmin();
+  await admin
+    .from('user_plan_subscriptions')
+    .upsert({
+      user_id: input.userId,
+      plan_tier: input.planTier,
+      status: input.status,
+      stripe_subscription_id: input.stripeSubscriptionId || null,
+      stripe_status: input.stripeStatus || null,
+      cancel_at_period_end: input.cancelAtPeriodEnd === true,
+      cancel_requested_at: input.cancelRequestedAt || null,
+      canceled_at: input.canceledAt || null,
+      current_period_start: input.currentPeriodStart || null,
+      current_period_end: input.currentPeriodEnd || null,
+      metadata: input.metadata || {},
+      updated_at: nowIso()
+    }, { onConflict: 'user_id' });
 };
 
-// Legacy alias retained for existing route usage.
-export const createCheckoutSession = async (userId: string, email: string) =>
-  createPlanCheckoutSession({ userId, email, planTier: 'pro' });
+const upsertWebhookProcessingState = async (eventId: string, eventType: string) => {
+  const admin = getAdmin();
+  const { data, error } = await admin
+    .from('stripe_webhook_events')
+    .select('status')
+    .eq('event_id', eventId)
+    .maybeSingle();
 
-export const createSetupIntent = async (customerId: string, userId: string) => {
-  const client = assertStripe();
-  return client.setupIntents.create({
-    customer: customerId,
-    payment_method_types: ['card'],
-    usage: 'off_session',
-    metadata: {
-      userId
-    }
-  });
-};
-
-export const createCreditPackPaymentIntent = async (input: {
-  customerId: string;
-  userId: string;
-  packUsd: number;
-  packCt: number;
-}) => {
-  const client = assertStripe();
-  return client.paymentIntents.create({
-    customer: input.customerId,
-    amount: Math.round(input.packUsd * 100),
-    currency: 'usd',
-    setup_future_usage: 'off_session',
-    automatic_payment_methods: { enabled: true },
-    metadata: {
-      kind: 'credit_pack',
-      userId: input.userId,
-      packUsd: String(input.packUsd),
-      packCt: String(input.packCt)
-    }
-  });
-};
-
-const hasProcessedCreditPurchase = async (userId: string, paymentIntentId: string) => {
-  if (processedPaymentIntents.has(paymentIntentId)) {
-    return true;
+  if (error) {
+    throw error;
   }
 
-  try {
-    const admin = getSupabaseAdmin();
-    const { data, error } = await admin
-      .from('token_ledger_entries')
-      .select('id')
-      .eq('user_id', userId)
-      .eq('entry_type', 'CREDIT_PURCHASE')
-      .contains('metadata', { paymentIntentId })
-      .limit(1);
-
-    if (!error && Array.isArray(data) && data.length > 0) {
-      processedPaymentIntents.add(paymentIntentId);
-      return true;
-    }
-  } catch {
-    // Continue with best-effort in-memory idempotency.
+  const status = typeof data?.status === 'string' ? data.status : undefined;
+  if (status === 'processed') {
+    return { alreadyProcessed: true };
   }
 
-  return false;
+  if (data) {
+    await admin
+      .from('stripe_webhook_events')
+      .update({
+        event_type: eventType,
+        status: 'processing',
+        processed_at: null,
+        error: null,
+        updated_at: nowIso()
+      })
+      .eq('event_id', eventId);
+    return { alreadyProcessed: false };
+  }
+
+  await admin
+    .from('stripe_webhook_events')
+    .insert({
+      event_id: eventId,
+      event_type: eventType,
+      status: 'processing',
+      received_at: nowIso(),
+      updated_at: nowIso()
+    });
+
+  return { alreadyProcessed: false };
+};
+
+const markWebhookProcessed = async (eventId: string) => {
+  const admin = getAdmin();
+  await admin
+    .from('stripe_webhook_events')
+    .update({
+      status: 'processed',
+      processed_at: nowIso(),
+      error: null,
+      updated_at: nowIso()
+    })
+    .eq('event_id', eventId);
+};
+
+const markWebhookFailed = async (eventId: string, errorMessage: string) => {
+  const admin = getAdmin();
+  await admin
+    .from('stripe_webhook_events')
+    .update({
+      status: 'failed',
+      processed_at: nowIso(),
+      error: errorMessage,
+      updated_at: nowIso()
+    })
+    .eq('event_id', eventId);
 };
 
 const syncPaymentMethodFromSetupIntent = async (setupIntent: Stripe.SetupIntent) => {
-  if (processedSetupIntents.has(setupIntent.id)) return;
   const userId = setupIntent.metadata?.userId || '';
   if (!userId) return;
 
@@ -189,86 +261,439 @@ const syncPaymentMethodFromSetupIntent = async (setupIntent: Stripe.SetupIntent)
     payment_method_brand: paymentMethod.card?.brand || null,
     payment_method_last4: paymentMethod.card?.last4 || null
   });
-  processedSetupIntents.add(setupIntent.id);
 };
 
-const handleCreditPurchase = async (intent: Stripe.PaymentIntent) => {
-  if (intent.metadata?.kind !== 'credit_pack') return;
-  const userId = intent.metadata.userId;
-  if (!userId) return;
-  if (!intent.id) return;
-
-  if (await hasProcessedCreditPurchase(userId, intent.id)) {
-    return;
-  }
-
-  const packUsd = Number(intent.metadata.packUsd || 0);
-  const packCt = Number(intent.metadata.packCt || 0);
-  if (!Number.isFinite(packUsd) || !Number.isFinite(packCt) || packUsd <= 0 || packCt <= 0) return;
-
-  await addPurchasedCredits({
-    userId,
-    ctAmount: Math.floor(packCt),
-    usdAmount: packUsd,
-    source: 'stripe_credit_pack',
-    metadata: {
-      paymentIntentId: intent.id,
-      amountReceived: intent.amount_received
-    }
-  });
-
+const syncPaymentMethodFromPaymentIntent = async (intent: Stripe.PaymentIntent, userId: string) => {
   const paymentMethodId = typeof intent.payment_method === 'string'
     ? intent.payment_method
     : intent.payment_method?.id;
   const customerId = typeof intent.customer === 'string' ? intent.customer : intent.customer?.id;
 
-  if (paymentMethodId) {
-    const client = assertStripe();
-    const paymentMethod = await client.paymentMethods.retrieve(paymentMethodId);
+  if (!paymentMethodId) {
     if (customerId) {
-      await client.customers.update(customerId, {
-        invoice_settings: { default_payment_method: paymentMethodId }
+      await upsertPaymentProfile(userId, {
+        stripe_customer_id: customerId
       });
     }
-    await upsertPaymentProfile(userId, {
-      stripe_customer_id: customerId || undefined,
-      default_payment_method_id: paymentMethodId,
-      has_payment_method: true,
-      overage_enabled: true,
-      payment_method_brand: paymentMethod.card?.brand || null,
-      payment_method_last4: paymentMethod.card?.last4 || null
+    return;
+  }
+
+  const client = assertStripe();
+  const paymentMethod = await client.paymentMethods.retrieve(paymentMethodId);
+
+  if (customerId) {
+    await client.customers.update(customerId, {
+      invoice_settings: { default_payment_method: paymentMethodId }
     });
   }
 
-  processedPaymentIntents.add(intent.id);
+  await upsertPaymentProfile(userId, {
+    stripe_customer_id: customerId || undefined,
+    default_payment_method_id: paymentMethodId,
+    has_payment_method: true,
+    overage_enabled: true,
+    payment_method_brand: paymentMethod.card?.brand || null,
+    payment_method_last4: paymentMethod.card?.last4 || null
+  });
+};
+
+const syncSubscriptionFromStripe = async (subscription: Stripe.Subscription, source: string) => {
+  const subscriptionId = subscription.id;
+  const metadataUserId = subscription.metadata?.userId;
+  const userId = metadataUserId || (await findUserIdBySubscriptionId(subscriptionId));
+  if (!userId) return;
+
+  const firstItem = subscription.items.data[0];
+  const periodWindow = getSubscriptionPeriodWindow(subscription);
+  const resolvedTier = resolvePlanTierFromPriceId(firstItem?.price?.id) || null;
+  const existing = await getUserSubscriptionRow(userId);
+  const existingTier = existing ? toBillingTier(existing.plan_tier) : 'free';
+  const effectiveTier: BillingPlanTier = resolvedTier
+    || (existingTier === 'creator' || existingTier === 'pro' || existingTier === 'studio' || existingTier === 'free'
+      ? existingTier
+      : 'free');
+
+  await upsertSubscriptionState({
+    userId,
+    planTier: effectiveTier,
+    status: ['active', 'trialing', 'past_due', 'unpaid'].includes(subscription.status) ? 'active' : 'inactive',
+    stripeSubscriptionId: subscription.id,
+    stripeStatus: subscription.status,
+    cancelAtPeriodEnd: subscription.cancel_at_period_end,
+    cancelRequestedAt: subscription.cancel_at_period_end ? nowIso() : null,
+    canceledAt: toIsoOrUndefined(subscription.canceled_at),
+    currentPeriodStart: toIsoOrUndefined(periodWindow.start),
+    currentPeriodEnd: toIsoOrUndefined(periodWindow.end),
+    metadata: {
+      source,
+      stripeSubscriptionId: subscription.id,
+      stripeStatus: subscription.status
+    }
+  });
+
+  if (['active', 'trialing', 'past_due', 'unpaid'].includes(subscription.status) && resolvedTier) {
+    await setUserPlanTier(userId, resolvedTier, {
+      source,
+      stripeSubscriptionId: subscription.id,
+      stripeStatus: subscription.status
+    });
+  }
+};
+
+const handleSubscriptionDeleted = async (subscription: Stripe.Subscription) => {
+  const subscriptionId = subscription.id;
+  const userId = subscription.metadata?.userId || (await findUserIdBySubscriptionId(subscriptionId));
+  if (!userId) return;
+  const periodWindow = getSubscriptionPeriodWindow(subscription);
+
+  await upsertSubscriptionState({
+    userId,
+    planTier: 'free',
+    status: 'canceled',
+    stripeSubscriptionId: subscription.id,
+    stripeStatus: subscription.status,
+    cancelAtPeriodEnd: false,
+    cancelRequestedAt: null,
+    canceledAt: nowIso(),
+    currentPeriodStart: toIsoOrUndefined(periodWindow.start),
+    currentPeriodEnd: toIsoOrUndefined(periodWindow.end),
+    metadata: {
+      source: 'stripe_subscription_deleted',
+      stripeSubscriptionId: subscription.id
+    }
+  });
+
+  await setUserPlanTier(userId, 'free', {
+    source: 'stripe_subscription_deleted',
+    stripeSubscriptionId: subscription.id
+  });
+};
+
+const handleInvoiceLifecycleUpdate = async (invoice: Stripe.Invoice, stripeStatus: string) => {
+  const subscriptionId = getInvoiceSubscriptionId(invoice);
+  if (!subscriptionId) return;
+
+  const userId = await findUserIdBySubscriptionId(subscriptionId);
+  if (!userId) return;
+
+  const existing = await getUserSubscriptionRow(userId);
+  await upsertSubscriptionState({
+    userId,
+    planTier: existing ? toBillingTier(existing.plan_tier) : 'free',
+    status: existing ? String(existing.status || 'active') : 'active',
+    stripeSubscriptionId: subscriptionId,
+    stripeStatus,
+    cancelAtPeriodEnd: Boolean(existing?.cancel_at_period_end),
+    cancelRequestedAt: typeof existing?.cancel_requested_at === 'string' ? existing.cancel_requested_at : null,
+    canceledAt: typeof existing?.canceled_at === 'string' ? existing.canceled_at : null,
+    currentPeriodStart: typeof existing?.current_period_start === 'string' ? existing.current_period_start : null,
+    currentPeriodEnd: typeof existing?.current_period_end === 'string' ? existing.current_period_end : null,
+    metadata: {
+      source: 'stripe_invoice_event',
+      invoiceId: invoice.id
+    }
+  });
 };
 
 const handleCheckoutCompleted = async (session: Stripe.Checkout.Session) => {
-  if (processedCheckoutSessions.has(session.id)) return;
   const userId = session.client_reference_id || session.metadata?.userId;
   if (!userId) return;
-
-  const planTier = session.metadata?.planTier || 'pro';
-  await setUserPlanTier(userId, ['free', 'creator', 'pro', 'studio', 'custom', 'admin'].includes(planTier) ? (planTier as any) : 'pro', {
-    source: 'stripe_checkout',
-    sessionId: session.id,
-    subscriptionId: typeof session.subscription === 'string' ? session.subscription : session.subscription?.id
-  });
 
   if (typeof session.customer === 'string') {
     await upsertPaymentProfile(userId, {
       stripe_customer_id: session.customer
     });
   }
-  processedCheckoutSessions.add(session.id);
+
+  if (session.mode === 'subscription') {
+    const subscriptionId = typeof session.subscription === 'string'
+      ? session.subscription
+      : session.subscription?.id;
+
+    if (!subscriptionId) return;
+
+    const client = assertStripe();
+    const subscription = await client.subscriptions.retrieve(subscriptionId);
+    await syncSubscriptionFromStripe(subscription, 'stripe_checkout_subscription');
+    return;
+  }
+
+  if (session.mode === 'payment' && session.metadata?.kind === 'credit_pack') {
+    if (session.payment_status !== 'paid' && session.payment_status !== 'no_payment_required') {
+      return;
+    }
+
+    if (await hasProcessedCreditCheckout(userId, session.id)) {
+      return;
+    }
+
+    const lineItemPriceId = session.metadata?.priceId || null;
+    const fromPrice = resolveCreditPackByPriceId(lineItemPriceId);
+    const fromMetadataPack = session.metadata?.packId ? getCreditPackById(session.metadata.packId) : null;
+    const selectedPack = fromPrice?.pack || fromMetadataPack;
+    if (!selectedPack) {
+      return;
+    }
+
+    await addPurchasedCredits({
+      userId,
+      ctAmount: selectedPack.ct,
+      usdAmount: selectedPack.usd,
+      source: 'stripe_checkout_credit_pack',
+      metadata: {
+        checkoutSessionId: session.id,
+        packId: fromPrice?.packId || fromMetadataPack?.id,
+        amountTotal: session.amount_total || 0,
+        paymentIntentId: typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id
+      }
+    });
+
+    const paymentIntentId = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id;
+    if (paymentIntentId) {
+      const client = assertStripe();
+      const intent = await client.paymentIntents.retrieve(paymentIntentId);
+      await syncPaymentMethodFromPaymentIntent(intent, userId);
+    }
+  }
 };
 
-const handleSubscriptionCancelled = async (subscription: Stripe.Subscription) => {
-  const userId = subscription.metadata?.userId;
+const handleLegacyCreditPaymentIntent = async (intent: Stripe.PaymentIntent) => {
+  if (intent.metadata?.kind !== 'credit_pack') return;
+  const userId = intent.metadata.userId;
   if (!userId) return;
-  await setUserPlanTier(userId, 'free', {
-    source: 'stripe_subscription_cancelled',
-    subscriptionId: subscription.id
+
+  const checkoutSessionId = intent.metadata.checkoutSessionId;
+  if (checkoutSessionId && await hasProcessedCreditCheckout(userId, checkoutSessionId)) {
+    return;
+  }
+
+  const packId = intent.metadata.packId;
+  const pack = packId ? getCreditPackById(packId) : null;
+  if (!pack) return;
+
+  await addPurchasedCredits({
+    userId,
+    ctAmount: pack.ct,
+    usdAmount: pack.usd,
+    source: 'stripe_payment_intent_credit_pack',
+    metadata: {
+      paymentIntentId: intent.id
+    }
+  });
+
+  await syncPaymentMethodFromPaymentIntent(intent, userId);
+};
+
+const getSubscriptionStatusFromDb = async (userId: string): Promise<BillingSubscriptionStatus> => {
+  const row = await getUserSubscriptionRow(userId);
+  if (!row) {
+    return {
+      planTier: 'free',
+      status: 'inactive',
+      cancelAtPeriodEnd: false
+    };
+  }
+
+  return {
+    planTier: toBillingTier(row.plan_tier),
+    status: String(row.status || 'inactive'),
+    stripeStatus: typeof row.stripe_status === 'string' ? row.stripe_status : undefined,
+    stripeSubscriptionId: typeof row.stripe_subscription_id === 'string' ? row.stripe_subscription_id : undefined,
+    cancelAtPeriodEnd: Boolean(row.cancel_at_period_end),
+    cancelRequestedAt: typeof row.cancel_requested_at === 'string' ? row.cancel_requested_at : undefined,
+    canceledAt: typeof row.canceled_at === 'string' ? row.canceled_at : undefined,
+    currentPeriodStart: typeof row.current_period_start === 'string' ? row.current_period_start : undefined,
+    currentPeriodEnd: typeof row.current_period_end === 'string' ? row.current_period_end : undefined
+  };
+};
+
+const resolveSubscriptionForUser = async (userId: string) => {
+  const row = await getUserSubscriptionRow(userId);
+  const existingId = typeof row?.stripe_subscription_id === 'string' ? row.stripe_subscription_id : null;
+  if (existingId) {
+    return existingId;
+  }
+
+  const admin = getAdmin();
+  const { data: profile } = await admin
+    .from('payment_profiles')
+    .select('stripe_customer_id')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  const customerId = typeof profile?.stripe_customer_id === 'string' ? profile.stripe_customer_id : null;
+  if (!customerId) return null;
+
+  const client = assertStripe();
+  const subscriptions = await client.subscriptions.list({
+    customer: customerId,
+    status: 'all',
+    limit: 20
+  });
+
+  const activeSubscription = subscriptions.data.find((sub) => ['active', 'trialing', 'past_due', 'unpaid'].includes(sub.status));
+  return activeSubscription?.id || null;
+};
+
+export const isStripeConfigured = () => Boolean(stripe);
+
+export const ensureStripeCustomer = async (userId: string, email?: string) => {
+  const client = assertStripe();
+  const admin = getAdmin();
+
+  const { data } = await admin
+    .from('payment_profiles')
+    .select('stripe_customer_id')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  const existingId = typeof data?.stripe_customer_id === 'string' ? data.stripe_customer_id : null;
+  if (existingId) {
+    const customer = await client.customers.retrieve(existingId);
+    if (!('deleted' in customer)) {
+      return customer;
+    }
+  }
+
+  const customer = await client.customers.create({
+    email,
+    metadata: {
+      userId
+    }
+  });
+
+  await upsertPaymentProfile(userId, {
+    stripe_customer_id: customer.id
+  });
+
+  return customer;
+};
+
+export const createPlanCheckoutSession = async (input: {
+  userId: string;
+  email: string;
+  planTier: PurchasablePlanTier;
+}) => {
+  const client = assertStripe();
+  const priceId = resolvePlanPriceId(input.planTier);
+  if (!priceId) {
+    throw new Error(`Stripe price ID missing for plan tier ${input.planTier}.`);
+  }
+
+  const customer = await ensureStripeCustomer(input.userId, input.email);
+
+  return client.checkout.sessions.create({
+    payment_method_types: ['card'],
+    customer: customer.id,
+    client_reference_id: input.userId,
+    line_items: [{ price: priceId, quantity: 1 }],
+    mode: 'subscription',
+    success_url: `${CLIENT_URL}/settings?billing=success&type=subscription`,
+    cancel_url: `${CLIENT_URL}/settings?billing=cancelled&type=subscription`,
+    metadata: {
+      kind: 'subscription',
+      userId: input.userId,
+      planTier: input.planTier
+    },
+    subscription_data: {
+      metadata: {
+        userId: input.userId,
+        planTier: input.planTier
+      }
+    }
+  });
+};
+
+export const createCreditPackCheckoutSession = async (input: {
+  userId: string;
+  email: string;
+  packId: CreditPackId;
+}) => {
+  const client = assertStripe();
+  const stripePriceId = creditPriceByPackId[input.packId];
+  if (!stripePriceId) {
+    throw new Error(`Stripe price ID missing for credit pack ${input.packId}.`);
+  }
+
+  const pack = getCreditPackById(input.packId);
+  if (!pack) {
+    throw new Error(`Unknown credit pack ${input.packId}.`);
+  }
+
+  const customer = await ensureStripeCustomer(input.userId, input.email);
+
+  return client.checkout.sessions.create({
+    payment_method_types: ['card'],
+    customer: customer.id,
+    client_reference_id: input.userId,
+    line_items: [{ price: stripePriceId, quantity: 1 }],
+    mode: 'payment',
+    success_url: `${CLIENT_URL}/settings?billing=success&type=credits`,
+    cancel_url: `${CLIENT_URL}/settings?billing=cancelled&type=credits`,
+    metadata: {
+      kind: 'credit_pack',
+      userId: input.userId,
+      packId: input.packId,
+      packCt: String(pack.ct),
+      packUsd: String(pack.usd),
+      priceId: stripePriceId
+    }
+  });
+};
+
+export const createBillingPortalSession = async (input: { userId: string; email?: string; returnUrl?: string }) => {
+  const client = assertStripe();
+  const customer = await ensureStripeCustomer(input.userId, input.email);
+
+  return client.billingPortal.sessions.create({
+    customer: customer.id,
+    return_url: input.returnUrl || BILLING_PORTAL_RETURN_URL
+  });
+};
+
+export const cancelSubscriptionAtPeriodEnd = async (userId: string) => {
+  const client = assertStripe();
+  const subscriptionId = await resolveSubscriptionForUser(userId);
+  if (!subscriptionId) {
+    throw new Error('No active subscription found for user.');
+  }
+
+  const updated = await client.subscriptions.update(subscriptionId, {
+    cancel_at_period_end: true
+  });
+
+  await syncSubscriptionFromStripe(updated, 'api_cancel_at_period_end');
+
+  return getSubscriptionStatusFromDb(userId);
+};
+
+export const reactivateSubscription = async (userId: string) => {
+  const client = assertStripe();
+  const subscriptionId = await resolveSubscriptionForUser(userId);
+  if (!subscriptionId) {
+    throw new Error('No active subscription found for user.');
+  }
+
+  const updated = await client.subscriptions.update(subscriptionId, {
+    cancel_at_period_end: false
+  });
+
+  await syncSubscriptionFromStripe(updated, 'api_reactivate_subscription');
+
+  return getSubscriptionStatusFromDb(userId);
+};
+
+export const getSubscriptionStatus = async (userId: string) => getSubscriptionStatusFromDb(userId);
+
+export const createSetupIntent = async (customerId: string, userId: string) => {
+  const client = assertStripe();
+  return client.setupIntents.create({
+    customer: customerId,
+    payment_method_types: ['card'],
+    usage: 'off_session',
+    metadata: {
+      userId
+    }
   });
 };
 
@@ -285,22 +710,66 @@ export const handleStripeWebhook = async (sig: string, body: Buffer) => {
     throw new Error(`Webhook Error: ${err.message}`);
   }
 
-  switch (event.type) {
-    case 'checkout.session.completed':
-      await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
-      break;
-    case 'setup_intent.succeeded':
-      await syncPaymentMethodFromSetupIntent(event.data.object as Stripe.SetupIntent);
-      break;
-    case 'payment_intent.succeeded':
-      await handleCreditPurchase(event.data.object as Stripe.PaymentIntent);
-      break;
-    case 'customer.subscription.deleted':
-      await handleSubscriptionCancelled(event.data.object as Stripe.Subscription);
-      break;
-    default:
-      break;
+  const eventAgeSeconds = Math.max(0, Math.floor(Date.now() / 1000) - Number(event.created || 0));
+  if (WEBHOOK_MAX_AGE_SECONDS > 0 && eventAgeSeconds > WEBHOOK_MAX_AGE_SECONDS) {
+    throw new Error(`Webhook event too old (${eventAgeSeconds}s > ${WEBHOOK_MAX_AGE_SECONDS}s).`);
   }
 
-  return { received: true };
+  const webhookState = await upsertWebhookProcessingState(event.id, event.type);
+  if (webhookState.alreadyProcessed) {
+    return { received: true, replayed: true };
+  }
+
+  try {
+    switch (event.type) {
+      case 'checkout.session.completed':
+      case 'checkout.session.async_payment_succeeded':
+        await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session);
+        break;
+      case 'setup_intent.succeeded':
+        await syncPaymentMethodFromSetupIntent(event.data.object as Stripe.SetupIntent);
+        break;
+      case 'payment_intent.succeeded':
+        await handleLegacyCreditPaymentIntent(event.data.object as Stripe.PaymentIntent);
+        break;
+      case 'customer.subscription.created':
+      case 'customer.subscription.updated':
+        await syncSubscriptionFromStripe(event.data.object as Stripe.Subscription, event.type);
+        break;
+      case 'customer.subscription.deleted':
+        await handleSubscriptionDeleted(event.data.object as Stripe.Subscription);
+        break;
+      case 'invoice.payment_failed':
+        await handleInvoiceLifecycleUpdate(event.data.object as Stripe.Invoice, 'payment_failed');
+        break;
+      case 'invoice.paid':
+        await handleInvoiceLifecycleUpdate(event.data.object as Stripe.Invoice, 'paid');
+        break;
+      default:
+        break;
+    }
+
+    await markWebhookProcessed(event.id);
+    return { received: true };
+  } catch (error: any) {
+    await markWebhookFailed(event.id, error?.message || String(error));
+    throw error;
+  }
+};
+
+export const assertPurchasableTier = (value: unknown): PurchasablePlanTier => {
+  if (!isPurchasablePlanTier(value)) {
+    throw new Error('Invalid plan tier. Allowed values: creator, pro, studio.');
+  }
+  return value;
+};
+
+export const assertCreditPackId = (value: unknown): CreditPackId => {
+  if (typeof value !== 'string') {
+    throw new Error('Invalid credit pack ID.');
+  }
+  if (value !== 'pack_10' && value !== 'pack_25' && value !== 'pack_100') {
+    throw new Error('Invalid credit pack ID. Allowed values: pack_10, pack_25, pack_100.');
+  }
+  return value;
 };

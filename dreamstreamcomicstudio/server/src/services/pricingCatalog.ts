@@ -71,9 +71,9 @@ export const DEFAULT_BILLING_PLANS: BillingPlanDefinition[] = [
 ];
 
 export const CREDIT_PACKS: CreditPackDefinition[] = [
-  { label: '$10 Pack', usd: 10, ct: 100_000 },
-  { label: '$25 Pack', usd: 25, ct: 260_000 },
-  { label: '$100 Pack', usd: 100, ct: 1_100_000 }
+  { id: 'pack_10', label: '$10 Pack', usd: 10, ct: 100_000 },
+  { id: 'pack_25', label: '$25 Pack', usd: 25, ct: 260_000 },
+  { id: 'pack_100', label: '$100 Pack', usd: 100, ct: 1_100_000 }
 ];
 
 export type ModelPricing = {
@@ -153,6 +153,9 @@ export const resolvePlanDefinition = (
 
 export const getCreditPackByUsd = (usd: number): CreditPackDefinition | undefined =>
   CREDIT_PACKS.find((pack) => pack.usd === usd);
+
+export const getCreditPackById = (id: string): CreditPackDefinition | undefined =>
+  CREDIT_PACKS.find((pack) => pack.id === id);
 
 const mapModelPricingRow = (row: Record<string, unknown>): ModelPricing => ({
   provider: String(row.provider || 'gemini'),

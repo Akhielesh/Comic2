@@ -40,6 +40,17 @@
 `SUPABASE_SERVICE_ROLE_KEY=<service_role_key>`
 `GEMINI_API_KEY=<optional_server_key>`
 `PIXAZO_API_KEY=<optional_server_key>`
+`BILLING_ENABLED=true`
+`STRIPE_SECRET_KEY=<stripe_secret>`
+`STRIPE_WEBHOOK_SECRET=<stripe_webhook_secret>`
+`STRIPE_PRICE_ID_CREATOR=<creator_monthly_price_id>`
+`STRIPE_PRICE_ID_PRO=<pro_monthly_price_id>`
+`STRIPE_PRICE_ID_STUDIO=<studio_monthly_price_id>`
+`STRIPE_PRICE_ID_CREDIT_PACK_10=<one_time_pack_10_price_id>`
+`STRIPE_PRICE_ID_CREDIT_PACK_25=<one_time_pack_25_price_id>`
+`STRIPE_PRICE_ID_CREDIT_PACK_100=<one_time_pack_100_price_id>`
+`STRIPE_WEBHOOK_MAX_AGE_SECONDS=86400`
+`STRIPE_BILLING_PORTAL_RETURN_URL=https://app.yourdomain.com/settings?tab=billing`
 `TRUST_PROXY=true`
 `STRICT_ENV_VALIDATION=true`
 `MAX_BODY_SIZE=10mb`
@@ -65,6 +76,7 @@
 3. Verify frontend loads and can call API.
 4. Verify auth login flow.
 5. Verify text generation and image generation success.
+6. Verify Stripe webhook receives events at `/api/webhook/stripe`.
 
 ## Monitoring and Alerts
 

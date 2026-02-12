@@ -37,6 +37,7 @@ const parseTrustProxy = (raw: string | undefined, fallback: boolean): boolean | 
 
 export const NODE_ENV = process.env.NODE_ENV || 'development';
 export const IS_PRODUCTION = NODE_ENV === 'production';
+export const BILLING_ENABLED = parseBooleanEnv(process.env.BILLING_ENABLED, true);
 
 export const PORT = parseIntegerEnv(process.env.PORT, 7071, 'PORT', 1);
 export const CORS_ORIGINS = parseCorsOrigins(process.env.CORS_ORIGIN);
@@ -98,19 +99,40 @@ export const IMAGE_INCLUDE_DATA_URL_LEGACY = (process.env.IMAGE_INCLUDE_DATA_URL
 
 export const REQUIRED_RUNTIME_ENV_VARS = ['CORS_ORIGIN', 'VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY'] as const;
 type RequiredRuntimeEnv = (typeof REQUIRED_RUNTIME_ENV_VARS)[number];
+export const REQUIRED_BILLING_ENV_VARS = [
+  'STRIPE_SECRET_KEY',
+  'STRIPE_WEBHOOK_SECRET',
+  'STRIPE_PRICE_ID_CREATOR',
+  'STRIPE_PRICE_ID_PRO',
+  'STRIPE_PRICE_ID_STUDIO',
+  'STRIPE_PRICE_ID_CREDIT_PACK_10',
+  'STRIPE_PRICE_ID_CREDIT_PACK_25',
+  'STRIPE_PRICE_ID_CREDIT_PACK_100'
+] as const;
+type RequiredBillingEnv = (typeof REQUIRED_BILLING_ENV_VARS)[number];
 
 export const STRICT_ENV_VALIDATION = parseBooleanEnv(process.env.STRICT_ENV_VALIDATION, IS_PRODUCTION);
 
 export const getMissingRequiredEnvVars = (): RequiredRuntimeEnv[] =>
   REQUIRED_RUNTIME_ENV_VARS.filter((envName) => !process.env[envName]?.trim());
 
+export const getMissingBillingEnvVars = (): RequiredBillingEnv[] =>
+  REQUIRED_BILLING_ENV_VARS.filter((envName) => !process.env[envName]?.trim());
+
 export const validateRuntimeConfig = () => {
   const missing = getMissingRequiredEnvVars();
-  if (missing.length === 0) return;
-
-  const message = `[CONFIG] Missing required environment variables: ${missing.join(', ')}.`;
-  if (STRICT_ENV_VALIDATION) {
-    throw new Error(message);
+  if (missing.length > 0) {
+    const message = `[CONFIG] Missing required environment variables: ${missing.join(', ')}.`;
+    if (STRICT_ENV_VALIDATION) {
+      throw new Error(message);
+    }
+    console.warn(`${message} Running with degraded behavior because STRICT_ENV_VALIDATION=false.`);
   }
-  console.warn(`${message} Running with degraded behavior because STRICT_ENV_VALIDATION=false.`);
+
+  if (IS_PRODUCTION && BILLING_ENABLED) {
+    const missingBilling = getMissingBillingEnvVars();
+    if (missingBilling.length > 0) {
+      throw new Error(`[CONFIG] Billing is enabled but Stripe variables are missing: ${missingBilling.join(', ')}.`);
+    }
+  }
 };

@@ -50,7 +50,11 @@ export const TermsOfService: React.FC<{ onBack: () => void }> = ({ onBack }) => 
                         <li>DreamStream displays estimated CT before generation and settled CT after generation where supported.</li>
                         <li>You are responsible for charges from third-party providers tied to keys you supply.</li>
                         <li>Direct credit purchases and subscriptions are processed through Stripe checkout/payment flows.</li>
+                        <li>Subscription cancellations are end-of-period by default: when you cancel, your paid plan remains active until the current billing period ends.</li>
+                        <li>No prorated automatic refund is issued by default when cancellation is scheduled at period end, unless required by law or an explicit published policy.</li>
+                        <li>Purchased credit packs remain in your account after plan cancellation unless an expiry policy is explicitly published.</li>
                         <li>Usage beyond available credits may require a payment method on file and may be subject to overage caps.</li>
+                        <li>By enabling overage usage, you authorize off-session charges for usage that exceeds included and purchased credits, subject to your configured overage cap.</li>
                         <li>Refund handling follows applicable law and any posted billing policy.</li>
                     </ul>
 

@@ -14,6 +14,8 @@
     "test": "vitest",
     "pricing:sync": "tsx server/src/jobs/dailyPricingSync.ts",
     "pricing:sync:check": "tsx server/src/jobs/dailyPricingSync.ts --check",
+    "billing:reconcile": "tsx server/src/jobs/dailyBillingReconciliation.ts",
+    "billing:reconcile:check": "tsx server/src/jobs/dailyBillingReconciliation.ts --check",
     "ops:verify:cors": "scripts/ops/verify-cors.sh",
     "ops:verify:rate-limit": "scripts/ops/verify-rate-limit.sh"
   },
