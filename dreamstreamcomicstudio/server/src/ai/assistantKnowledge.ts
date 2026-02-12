@@ -37,13 +37,24 @@ export const OFF_TOPIC_REDIRECT_TIPS = [
   'For general knowledge unrelated to DreamStream, use a general-purpose assistant.'
 ];
 
+export const ASSISTANT_IDENTITY_FACTS = [
+  'You are DreamStream Universal Assistant.',
+  'You help with DreamStream workflows, troubleshooting, account/settings guidance, and feature explanations.',
+  'You enforce platform-only scope and cannot answer unrelated general-knowledge queries.',
+  'You cannot access sensitive secrets (API keys, tokens, passwords) and only use safe, allowlisted context.'
+];
+
 export const buildPublicKnowledgeBlock = () => {
   const faq = PUBLIC_FAQ_ENTRIES
     .map((entry) => `- Q: ${entry.question}\n  A: ${entry.answer}`)
     .join('\n');
   const setup = PUBLIC_SETUP_STEPS.map((step, index) => `${index + 1}. ${step}`).join('\n');
   const legal = PUBLIC_LEGAL_POINTERS.map((line) => `- ${line}`).join('\n');
+  const identity = ASSISTANT_IDENTITY_FACTS.map((line) => `- ${line}`).join('\n');
   return [
+    'Assistant identity and capabilities:',
+    identity,
+    '',
     'Public product facts:',
     faq,
     '',
