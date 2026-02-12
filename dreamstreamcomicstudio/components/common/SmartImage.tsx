@@ -20,6 +20,11 @@ export const SmartImage: React.FC<SmartImageProps> = ({
     containerClassName,
     ...props
 }) => {
+    const fallbackSignature = (fallbackSources || [])
+        .map((candidate) => (candidate || '').trim())
+        .filter(Boolean)
+        .join('|');
+
     const sourceCandidates = useMemo(() => {
         const unique = new Set<string>();
         if (typeof src === 'string' && src.trim()) unique.add(src);
@@ -28,7 +33,7 @@ export const SmartImage: React.FC<SmartImageProps> = ({
             if (candidate?.trim()) unique.add(candidate);
         }
         return Array.from(unique);
-    }, [src, fallbackSrc, fallbackSources]);
+    }, [src, fallbackSrc, fallbackSignature]);
 
     const [activeSrcIndex, setActiveSrcIndex] = useState(0);
     const [status, setStatus] = useState<'loading' | 'loaded' | 'error'>('loading');
@@ -47,15 +52,23 @@ export const SmartImage: React.FC<SmartImageProps> = ({
             setStatus('error');
             return;
         }
+        let cancelled = false;
         const img = new Image();
         img.src = sourceCandidates[activeSrcIndex];
-        img.onload = () => setStatus('loaded');
+        img.onload = () => {
+            if (cancelled) return;
+            setStatus('loaded');
+        };
         img.onerror = () => {
+            if (cancelled) return;
             if (activeSrcIndex < sourceCandidates.length - 1) {
                 setActiveSrcIndex((prev) => prev + 1);
                 return;
             }
             setStatus('error');
+        };
+        return () => {
+            cancelled = true;
         };
     }, [sourceCandidates, activeSrcIndex]);
 

@@ -1,16 +1,17 @@
 import React, { useEffect, useRef, useState, Suspense } from 'react';
 import { HomePage } from './components/HomePage';
+import { lazyImportWithRetry } from './services/lazyImportWithRetry';
 // Lazy Load Heavy Components
-const ProjectDashboard = React.lazy(() => import('./components/ProjectDashboard').then(module => ({ default: module.ProjectDashboard })));
-const ComicEditor = React.lazy(() => import('./components/ComicEditor').then(module => ({ default: module.ComicEditor })));
-const ComicReader = React.lazy(() => import('./components/ComicReader').then(module => ({ default: module.ComicReader })));
-const TestLab = React.lazy(() => import('./components/TestLab').then(module => ({ default: module.TestLab })));
-const LearnHub = React.lazy(() => import('./components/LearnHub').then(module => ({ default: module.LearnHub })));
-const PublicGallery = React.lazy(() => import('./components/PublicGallery').then(module => ({ default: module.PublicGallery })));
-const PublicProfile = React.lazy(() => import('./components/PublicProfile').then(module => ({ default: module.PublicProfile })));
-const AccountSettings = React.lazy(() => import('./components/AccountSettings').then(module => ({ default: module.AccountSettings })));
-const PrivacyPolicy = React.lazy(() => import('./components/PrivacyPolicy').then(module => ({ default: module.PrivacyPolicy })));
-const TermsOfService = React.lazy(() => import('./components/TermsOfService').then(module => ({ default: module.TermsOfService })));
+const ProjectDashboard = lazyImportWithRetry(() => import('./components/ProjectDashboard').then(module => ({ default: module.ProjectDashboard })));
+const ComicEditor = lazyImportWithRetry(() => import('./components/ComicEditor').then(module => ({ default: module.ComicEditor })));
+const ComicReader = lazyImportWithRetry(() => import('./components/ComicReader').then(module => ({ default: module.ComicReader })));
+const TestLab = lazyImportWithRetry(() => import('./components/TestLab').then(module => ({ default: module.TestLab })));
+const LearnHub = lazyImportWithRetry(() => import('./components/LearnHub').then(module => ({ default: module.LearnHub })));
+const PublicGallery = lazyImportWithRetry(() => import('./components/PublicGallery').then(module => ({ default: module.PublicGallery })));
+const PublicProfile = lazyImportWithRetry(() => import('./components/PublicProfile').then(module => ({ default: module.PublicProfile })));
+const AccountSettings = lazyImportWithRetry(() => import('./components/AccountSettings').then(module => ({ default: module.AccountSettings })));
+const PrivacyPolicy = lazyImportWithRetry(() => import('./components/PrivacyPolicy').then(module => ({ default: module.PrivacyPolicy })));
+const TermsOfService = lazyImportWithRetry(() => import('./components/TermsOfService').then(module => ({ default: module.TermsOfService })));
 
 import { useProjectManager } from './hooks/useProjectManager';
 import { checkSystemDiagnostics, checkSystemStatus } from './services/geminiService';

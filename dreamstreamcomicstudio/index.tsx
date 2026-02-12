@@ -5,6 +5,20 @@ import { AuthProvider } from './contexts/AuthContext';
 
 import { BrowserRouter } from 'react-router-dom';
 
+const VITE_PRELOAD_RETRY_KEY = 'dreamstream_vite_preload_retry';
+
+window.addEventListener('vite:preloadError', (event) => {
+  const hasRetried = sessionStorage.getItem(VITE_PRELOAD_RETRY_KEY) === '1';
+  if (hasRetried) return;
+  event.preventDefault();
+  sessionStorage.setItem(VITE_PRELOAD_RETRY_KEY, '1');
+  window.location.reload();
+});
+
+window.addEventListener('load', () => {
+  sessionStorage.removeItem(VITE_PRELOAD_RETRY_KEY);
+});
+
 const rootElement = document.getElementById('root');
 if (!rootElement) {
   throw new Error("Could not find root element to mount to");
