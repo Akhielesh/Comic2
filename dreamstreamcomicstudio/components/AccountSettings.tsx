@@ -21,7 +21,17 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSearchParams } from 'react-router-dom';
 import { IMAGE_MODELS } from '../services/imageModels';
 import { TEXT_MODEL, TEXT_MODELS } from '../services/modelPolicy';
-import { addCredits, createCheckoutSession, getBillingSummary, setupPaymentMethod, updateAutoReload } from '../services/billing';
+import type { CreditPackId, PurchasablePlanTier } from '../shared/types/billing';
+import {
+    addCredits,
+    cancelSubscription,
+    createBillingPortal,
+    createCheckoutSession,
+    getBillingSummary,
+    reactivateSubscription,
+    setupPaymentMethod,
+    updateAutoReload
+} from '../services/billing';
 
 type SettingsTab = 'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin' | 'preferences' | 'security';
 
@@ -180,11 +190,18 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     const [confirmNewPassword, setConfirmNewPassword] = useState('');
 
     useEffect(() => {
-        if (searchParams.get('success') === 'true') {
-            alert("Upgrade Successful! You are now a Pro member.");
+        const billing = searchParams.get('billing');
+        const billingType = searchParams.get('type');
+        if (billing === 'success') {
+            const detail = billingType === 'credits' ? 'Credits purchase completed.' : 'Subscription updated successfully.';
+            setBillingActionMessage({ type: 'success', text: detail });
+            void refreshBillingSummary();
         }
-        if (searchParams.get('canceled') === 'true') {
-            console.log("Upgrade canceled");
+        if (billing === 'cancelled') {
+            const detail = billingType === 'credits'
+                ? 'Credits checkout was cancelled.'
+                : 'Subscription checkout was cancelled.';
+            setBillingActionMessage({ type: 'error', text: detail });
         }
     }, [searchParams]);
 
@@ -315,7 +332,9 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         }
     };
 
-    const handleUpgradeCheckout = async (planTier: 'creator' | 'pro' | 'studio') => {
+    const handleUpgradeCheckout = async (planTier: PurchasablePlanTier) => {
+        const confirmed = window.confirm(`Confirm subscription change to ${planTier.toUpperCase()}? You will be redirected to Stripe Checkout.`);
+        if (!confirmed) return;
         setBillingActionMessage(null);
         setBillingBusy(true);
         try {
@@ -332,24 +351,18 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         }
     };
 
-    const handleAddCredits = async (packUsd: number) => {
+    const handleAddCredits = async (packId: CreditPackId, label: string) => {
+        const confirmed = window.confirm(`Confirm purchase for ${label}? You will be redirected to Stripe Checkout.`);
+        if (!confirmed) return;
         setBillingActionMessage(null);
         setBillingBusy(true);
         try {
-            const result = await addCredits(packUsd);
-            if (result.mode === 'simulated') {
-                setBillingActionMessage({
-                    type: 'success',
-                    text: `Added ${(result.addedCt as number).toLocaleString()} CT in simulation mode.`
-                });
-                await refreshBillingSummary();
+            const session = await addCredits(packId);
+            if (session.url) {
+                window.location.href = session.url;
                 return;
             }
-            setBillingActionMessage({
-                type: 'success',
-                text: 'Credit purchase intent created. Complete payment with returned client secret integration.'
-            });
-            await refreshBillingSummary();
+            setBillingActionMessage({ type: 'error', text: 'Checkout URL was not returned.' });
         } catch (err: any) {
             setBillingActionMessage({ type: 'error', text: err?.message || 'Unable to purchase credits.' });
         } finally {
@@ -380,14 +393,66 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         setBillingActionMessage(null);
         setBillingBusy(true);
         try {
-            await updateAutoReload({ enabled, thresholdCt: 5000, packUsd: 25 });
+            await updateAutoReload({ enabled: false, thresholdCt: 5000, packUsd: 25 });
             setBillingActionMessage({
-                type: 'success',
-                text: enabled ? 'Auto-reload enabled.' : 'Auto-reload disabled.'
+                type: enabled ? 'error' : 'success',
+                text: enabled ? 'Auto-reload is disabled by billing policy.' : 'Auto-reload remains disabled.'
             });
             await refreshBillingSummary();
         } catch (err: any) {
             setBillingActionMessage({ type: 'error', text: err?.message || 'Unable to update auto-reload.' });
+        } finally {
+            setBillingBusy(false);
+        }
+    };
+
+    const handleOpenBillingPortal = async () => {
+        setBillingActionMessage(null);
+        setBillingBusy(true);
+        try {
+            const result = await createBillingPortal();
+            if (result.url) {
+                window.location.href = result.url;
+                return;
+            }
+            setBillingActionMessage({ type: 'error', text: 'Billing portal URL was not returned.' });
+        } catch (err: any) {
+            setBillingActionMessage({ type: 'error', text: err?.message || 'Unable to open billing portal.' });
+        } finally {
+            setBillingBusy(false);
+        }
+    };
+
+    const handleCancelAtPeriodEnd = async () => {
+        const confirmed = window.confirm('Cancel subscription at period end? You will keep access until your current period ends.');
+        if (!confirmed) return;
+        setBillingActionMessage(null);
+        setBillingBusy(true);
+        try {
+            const status = await cancelSubscription();
+            setBillingActionMessage({
+                type: 'success',
+                text: status.currentPeriodEnd
+                    ? `Cancellation scheduled. Plan remains active until ${new Date(status.currentPeriodEnd).toLocaleString()}.`
+                    : 'Cancellation scheduled at period end.'
+            });
+            await refreshBillingSummary();
+        } catch (err: any) {
+            setBillingActionMessage({ type: 'error', text: err?.message || 'Unable to schedule cancellation.' });
+        } finally {
+            setBillingBusy(false);
+        }
+    };
+
+    const handleReactivateSubscription = async () => {
+        setBillingActionMessage(null);
+        setBillingBusy(true);
+        try {
+            await reactivateSubscription();
+            setBillingActionMessage({ type: 'success', text: 'Subscription reactivated successfully.' });
+            await refreshBillingSummary();
+        } catch (err: any) {
+            setBillingActionMessage({ type: 'error', text: err?.message || 'Unable to reactivate subscription.' });
         } finally {
             setBillingBusy(false);
         }
@@ -812,6 +877,9 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         const dailyRemainingCt = summary?.usage?.dailyRemainingCt || 0;
         const monthlyResetAt = summary?.usage?.monthlyResetAt ? new Date(summary.usage.monthlyResetAt).toLocaleString() : 'n/a';
         const dailyResetAt = summary?.usage?.dailyResetAt ? new Date(summary.usage.dailyResetAt).toLocaleString() : 'n/a';
+        const subscription = summary?.subscription;
+        const subscriptionEnd = subscription?.currentPeriodEnd ? new Date(subscription.currentPeriodEnd).toLocaleString() : null;
+        const isCancelPending = subscription?.cancelAtPeriodEnd === true;
 
         return (
             <div className="space-y-6 animate-fade-in">
@@ -833,6 +901,9 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                         <div className="mt-4 text-xs text-slate-500 space-y-1">
                             <div>Daily reset: {dailyResetAt}</div>
                             <div>Monthly reset: {monthlyResetAt}</div>
+                            {subscription?.status && <div>Subscription status: {subscription.status}</div>}
+                            {subscriptionEnd && <div>Current period ends: {subscriptionEnd}</div>}
+                            {isCancelPending && <div className="text-red-600 font-bold">Cancellation scheduled at period end.</div>}
                         </div>
                     </div>
 
@@ -847,6 +918,15 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                         <div className="mt-4 text-xs text-slate-600">
                             Overage beyond credits requires a payment method on file.
                         </div>
+                        <div className="mt-4 flex gap-2">
+                            <Button variant="outline" disabled={billingBusy} onClick={handleOpenBillingPortal}>Open Billing Portal</Button>
+                            {!isCancelPending && planTier !== 'free' && (
+                                <Button variant="outline" disabled={billingBusy} onClick={handleCancelAtPeriodEnd}>Cancel at Period End</Button>
+                            )}
+                            {isCancelPending && (
+                                <Button variant="secondary" disabled={billingBusy} onClick={handleReactivateSubscription}>Reactivate</Button>
+                            )}
+                        </div>
                     </div>
                 </div>
 
@@ -854,13 +934,13 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                     <div className="border-2 border-black rounded-xl p-4 space-y-3">
                         <h4 className="font-display text-xl">Credit Packs</h4>
                         <div className="space-y-2 text-sm">
-                            <button className="w-full border-2 border-black rounded px-3 py-2 font-bold text-left" disabled={billingBusy} onClick={() => handleAddCredits(10)}>
+                            <button className="w-full border-2 border-black rounded px-3 py-2 font-bold text-left" disabled={billingBusy} onClick={() => handleAddCredits('pack_10', '$10 · 100,000 CT')}>
                                 $10 · 100,000 CT
                             </button>
-                            <button className="w-full border-2 border-black rounded px-3 py-2 font-bold text-left" disabled={billingBusy} onClick={() => handleAddCredits(25)}>
+                            <button className="w-full border-2 border-black rounded px-3 py-2 font-bold text-left" disabled={billingBusy} onClick={() => handleAddCredits('pack_25', '$25 · 260,000 CT')}>
                                 $25 · 260,000 CT
                             </button>
-                            <button className="w-full border-2 border-black rounded px-3 py-2 font-bold text-left" disabled={billingBusy} onClick={() => handleAddCredits(100)}>
+                            <button className="w-full border-2 border-black rounded px-3 py-2 font-bold text-left" disabled={billingBusy} onClick={() => handleAddCredits('pack_100', '$100 · 1,100,000 CT')}>
                                 $100 · 1,100,000 CT
                             </button>
                         </div>
@@ -880,15 +960,14 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                     </div>
 
                     <div className="border-2 border-black rounded-xl p-4 space-y-3">
-                        <h4 className="font-display text-xl">Auto Reload</h4>
+                        <h4 className="font-display text-xl">Auto Reload Policy</h4>
                         <div className="text-sm text-slate-700">
-                            Trigger at &lt; 5,000 CT, reload $25 pack.
+                            Auto-reload is disabled. Every credit purchase requires explicit Stripe Checkout confirmation.
                         </div>
                         <div className="flex gap-2">
-                            <Button variant="secondary" disabled={billingBusy} onClick={() => handleToggleAutoReload(true)}>Enable</Button>
-                            <Button variant="outline" disabled={billingBusy} onClick={() => handleToggleAutoReload(false)}>Disable</Button>
+                            <Button variant="outline" disabled={billingBusy} onClick={() => handleToggleAutoReload(false)}>Acknowledge</Button>
                         </div>
-                        <div className="text-xs text-slate-500">Default overage hard cap: $100/month.</div>
+                        <div className="text-xs text-slate-500">Default overage hard cap: $100/month unless increased by support.</div>
                     </div>
                 </div>
 

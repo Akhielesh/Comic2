@@ -27,8 +27,7 @@ import { imageRouter } from './routes/image.js';
 import { visionRouter } from './routes/vision.js';
 import { systemRouter } from './routes/system.js';
 import webhookRouter from './routes/webhook.js';
-import paymentsRouter from './routes/payments.js';
-import billingRouter from './routes/billing.js';
+import { billingRouter } from './routes/billing.js';
 
 validateRuntimeConfig();
 
@@ -102,7 +101,6 @@ app.use('/api/billing', systemRateLimit, optionalAuth, billingRouter);
 // Protect all API routes
 app.use('/api', requireAuth);
 
-app.use('/api/payments', paymentsRouter);
 app.use('/api/text', textRateLimit, textRouter);
 app.use('/api/image', imageRateLimit, imageRouter);
 app.use('/api/vision', visionRateLimit, visionRouter);

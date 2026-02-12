@@ -1,4 +1,6 @@
 export type BillingPlanTier = 'free' | 'creator' | 'pro' | 'studio' | 'custom' | 'admin';
+export type PurchasablePlanTier = 'creator' | 'pro' | 'studio';
+export type CreditPackId = 'pack_10' | 'pack_25' | 'pack_100';
 
 export type BillingPlanDefinition = {
   id: BillingPlanTier;
@@ -10,6 +12,7 @@ export type BillingPlanDefinition = {
 };
 
 export type CreditPackDefinition = {
+  id: CreditPackId;
   usd: number;
   ct: number;
   label: string;
@@ -120,11 +123,24 @@ export type BillingSummaryResponse = {
   hasPaymentMethodOnFile: boolean;
   overageEnabled: boolean;
   overageHardCapUsd: number;
+  subscription?: BillingSubscriptionStatus;
   autoReload: {
     enabled: boolean;
     thresholdCt: number;
     packUsd: number;
   };
+};
+
+export type BillingSubscriptionStatus = {
+  planTier: BillingPlanTier;
+  status: string;
+  stripeStatus?: string;
+  stripeSubscriptionId?: string;
+  cancelAtPeriodEnd: boolean;
+  cancelRequestedAt?: string;
+  canceledAt?: string;
+  currentPeriodStart?: string;
+  currentPeriodEnd?: string;
 };
 
 export type PricingCatalogResponse = {
@@ -151,6 +167,11 @@ export type PricingCatalogResponse = {
     summary: string;
     details?: Record<string, unknown>;
   }>;
+};
+
+export type CheckoutSessionResponse = {
+  url: string;
+  id: string;
 };
 
 export type BillingUsageHistoryItem = {

@@ -12,6 +12,14 @@ export const PUBLIC_FAQ_ENTRIES = [
     answer: 'Users see estimated CT before generation and actual CT + USD settlement after generation.'
   },
   {
+    question: 'How do credit purchases work?',
+    answer: 'Credit packs require explicit Stripe Checkout confirmation; DreamStream does not auto-add credits without payment confirmation.'
+  },
+  {
+    question: 'How does subscription cancellation work?',
+    answer: 'Cancellation is end-of-period by default. Access remains active until the current billing period end timestamp.'
+  },
+  {
     question: 'Can users bring their own API keys?',
     answer: 'Yes. Users can configure Gemini and Flux/Pixazo keys in Settings. BYOK usage is tracked but does not deduct platform CT.'
   },

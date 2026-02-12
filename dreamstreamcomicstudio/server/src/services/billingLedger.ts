@@ -48,11 +48,9 @@ type PaymentProfile = {
 };
 
 const inMemoryWallets = new Map<string, WalletRow>();
-const inMemoryLedger: BillingUsageHistoryItem[] = [];
-const inMemoryEvents: Array<Record<string, unknown>> = [];
-const inMemoryPayments = new Map<string, PaymentProfile>();
 const autoReloadInFlight = new Set<string>();
 const overageCaptureInFlight = new Set<string>();
+const AUTO_RELOAD_POLICY_ENABLED = false;
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY || '';
 const stripe = stripeSecretKey
   ? new Stripe(stripeSecretKey, { apiVersion: '2026-01-28.clover' })
@@ -91,6 +89,75 @@ const nextUtcDay = (value: Date) => new Date(Date.UTC(value.getUTCFullYear(), va
 const isMissingTableError = (error: unknown) => {
   const code = String((error as { code?: string })?.code || '').toUpperCase();
   return code === '42P01' || code === 'PGRST205';
+};
+
+const createBillingBackendUnavailableError = (details?: unknown) => {
+  const error = new Error('Billing backend unavailable. Configure Supabase service role and billing tables.') as Error & {
+    status?: number;
+    publicCode?: string;
+    details?: unknown;
+  };
+  error.status = 503;
+  error.publicCode = 'BILLING_BACKEND_UNAVAILABLE';
+  error.details = details;
+  return error;
+};
+
+const getBillingAdmin = () => {
+  try {
+    return getSupabaseAdmin();
+  } catch (error) {
+    throw createBillingBackendUnavailableError(error);
+  }
+};
+
+const callTryReserveTokens = async (input: { userId: string; requiredCt: number; allowOverage: boolean }) => {
+  const admin = getBillingAdmin();
+  const { data, error } = await admin.rpc('billing_try_reserve_tokens', {
+    p_user_id: input.userId,
+    p_required_ct: input.requiredCt,
+    p_allow_overage: input.allowOverage
+  });
+
+  if (error) {
+    throw createBillingBackendUnavailableError(error);
+  }
+
+  inMemoryWallets.delete(input.userId);
+
+  return (data || {}) as Record<string, unknown>;
+};
+
+const callReleaseReservedTokens = async (input: { userId: string; releaseCt: number }) => {
+  const admin = getBillingAdmin();
+  const { error } = await admin.rpc('billing_release_reserved_tokens', {
+    p_user_id: input.userId,
+    p_release_ct: input.releaseCt
+  });
+
+  if (error) {
+    throw createBillingBackendUnavailableError(error);
+  }
+
+  inMemoryWallets.delete(input.userId);
+};
+
+const callSettleTokens = async (input: { userId: string; estimatedCt: number; actualCt: number }) => {
+  const admin = getBillingAdmin();
+  const { data, error } = await admin.rpc('billing_settle_tokens', {
+    p_user_id: input.userId,
+    p_estimated_ct: input.estimatedCt,
+    p_actual_ct: input.actualCt,
+    p_ct_usd: CT_USD
+  });
+
+  if (error) {
+    throw createBillingBackendUnavailableError(error);
+  }
+
+  inMemoryWallets.delete(input.userId);
+
+  return (data || {}) as Record<string, unknown>;
 };
 
 const makeWalletForTier = (userId: string, planTier: BillingPlanTier, at = now()): WalletRow => {
@@ -199,74 +266,64 @@ const getFallbackPlanTierFromLegacyUsage = async (userId: string): Promise<Billi
 };
 
 const getUserPlanTier = async (userId: string): Promise<BillingPlanTier> => {
-  try {
-    const admin = getSupabaseAdmin();
-    const { data, error } = await admin
-      .from('user_plan_subscriptions')
-      .select('plan_tier, status')
-      .eq('user_id', userId)
-      .in('status', ['active', 'trialing'])
-      .maybeSingle();
+  const admin = getBillingAdmin();
+  const { data, error } = await admin
+    .from('user_plan_subscriptions')
+    .select('plan_tier, status')
+    .eq('user_id', userId)
+    .in('status', ['active', 'trialing'])
+    .maybeSingle();
 
-    if (error && !isMissingTableError(error)) {
+  if (error) {
+    if (isMissingTableError(error)) {
       return getFallbackPlanTierFromLegacyUsage(userId);
     }
+    throw createBillingBackendUnavailableError(error);
+  }
 
-    if (!error && data && isRecord(data)) {
-      return toTier(data.plan_tier);
-    }
-  } catch {
-    // ignore and fallback
+  if (data && isRecord(data)) {
+    return toTier(data.plan_tier);
   }
 
   return getFallbackPlanTierFromLegacyUsage(userId);
 };
 
 const persistWallet = async (wallet: WalletRow): Promise<WalletRow> => {
-  try {
-    const admin = getSupabaseAdmin();
-    const payload = {
-      user_id: wallet.user_id,
-      plan_tier: wallet.plan_tier,
-      included_monthly_ct: wallet.included_monthly_ct,
-      used_monthly_ct: wallet.used_monthly_ct,
-      purchased_ct: wallet.purchased_ct,
-      reserved_ct: wallet.reserved_ct,
-      overage_ct: wallet.overage_ct,
-      daily_guardrail_ct: wallet.daily_guardrail_ct,
-      used_daily_ct: wallet.used_daily_ct,
-      daily_cycle_date: wallet.daily_cycle_date,
-      cycle_starts_at: wallet.cycle_starts_at,
-      cycle_ends_at: wallet.cycle_ends_at,
-      pending_overage_usd: wallet.pending_overage_usd,
-      auto_reload_enabled: wallet.auto_reload_enabled,
-      auto_reload_threshold_ct: wallet.auto_reload_threshold_ct,
-      auto_reload_pack_usd: wallet.auto_reload_pack_usd,
-      overage_hard_cap_usd: wallet.overage_hard_cap_usd,
-      updated_at: toIso(now())
-    };
+  const admin = getBillingAdmin();
+  const payload = {
+    user_id: wallet.user_id,
+    plan_tier: wallet.plan_tier,
+    included_monthly_ct: wallet.included_monthly_ct,
+    used_monthly_ct: wallet.used_monthly_ct,
+    purchased_ct: wallet.purchased_ct,
+    reserved_ct: wallet.reserved_ct,
+    overage_ct: wallet.overage_ct,
+    daily_guardrail_ct: wallet.daily_guardrail_ct,
+    used_daily_ct: wallet.used_daily_ct,
+    daily_cycle_date: wallet.daily_cycle_date,
+    cycle_starts_at: wallet.cycle_starts_at,
+    cycle_ends_at: wallet.cycle_ends_at,
+    pending_overage_usd: wallet.pending_overage_usd,
+    auto_reload_enabled: wallet.auto_reload_enabled,
+    auto_reload_threshold_ct: wallet.auto_reload_threshold_ct,
+    auto_reload_pack_usd: wallet.auto_reload_pack_usd,
+    overage_hard_cap_usd: wallet.overage_hard_cap_usd,
+    updated_at: toIso(now())
+  };
 
-    const { data, error } = await admin
-      .from('token_wallets')
-      .upsert(payload, { onConflict: 'user_id' })
-      .select('*')
-      .single();
+  const { data, error } = await admin
+    .from('token_wallets')
+    .upsert(payload, { onConflict: 'user_id' })
+    .select('*')
+    .single();
 
-    if (error) {
-      if (!isMissingTableError(error)) {
-        throw error;
-      }
-      inMemoryWallets.set(wallet.user_id, wallet);
-      return wallet;
-    }
-
-    const mapped = mapWallet(data as Record<string, unknown>);
-    inMemoryWallets.set(wallet.user_id, mapped);
-    return mapped;
-  } catch {
-    inMemoryWallets.set(wallet.user_id, wallet);
-    return wallet;
+  if (error) {
+    throw createBillingBackendUnavailableError(error);
   }
+
+  const mapped = mapWallet(data as Record<string, unknown>);
+  inMemoryWallets.set(wallet.user_id, mapped);
+  return mapped;
 };
 
 const mapWallet = (row: Record<string, unknown>): WalletRow => ({
@@ -292,35 +349,22 @@ const mapWallet = (row: Record<string, unknown>): WalletRow => ({
 });
 
 const getWalletFromDb = async (userId: string): Promise<WalletRow | null> => {
-  try {
-    const admin = getSupabaseAdmin();
-    const { data, error } = await admin
-      .from('token_wallets')
-      .select('*')
-      .eq('user_id', userId)
-      .maybeSingle();
+  const admin = getBillingAdmin();
+  const { data, error } = await admin
+    .from('token_wallets')
+    .select('*')
+    .eq('user_id', userId)
+    .maybeSingle();
 
-    if (error) {
-      if (isMissingTableError(error)) return null;
-      throw error;
-    }
-    if (!data || !isRecord(data)) return null;
-    return mapWallet(data);
-  } catch {
-    return null;
+  if (error) {
+    if (isMissingTableError(error)) return null;
+    throw createBillingBackendUnavailableError(error);
   }
+  if (!data || !isRecord(data)) return null;
+  return mapWallet(data);
 };
 
 const ensureWallet = async (userId: string): Promise<WalletRow> => {
-  const cached = inMemoryWallets.get(userId);
-  if (cached) {
-    const reset = maybeResetWalletCycles(cached);
-    if (reset.changed) {
-      await persistWallet(reset.wallet);
-    }
-    return reset.wallet;
-  }
-
   const dbWallet = await getWalletFromDb(userId);
   if (dbWallet) {
     const reset = maybeResetWalletCycles(dbWallet);
@@ -337,54 +381,47 @@ const ensureWallet = async (userId: string): Promise<WalletRow> => {
 };
 
 const getPaymentProfile = async (userId: string): Promise<PaymentProfile> => {
-  const cached = inMemoryPayments.get(userId);
-  if (cached) return cached;
+  const admin = getBillingAdmin();
+  const { data, error } = await admin
+    .from('payment_profiles')
+    .select('user_id, has_payment_method, overage_enabled, stripe_customer_id, default_payment_method_id, payment_method_brand, payment_method_last4')
+    .eq('user_id', userId)
+    .maybeSingle();
 
-  try {
-    const admin = getSupabaseAdmin();
-    const { data, error } = await admin
-      .from('payment_profiles')
-      .select('user_id, has_payment_method, overage_enabled, stripe_customer_id, default_payment_method_id, payment_method_brand, payment_method_last4')
-      .eq('user_id', userId)
-      .maybeSingle();
-
-    if (error && !isMissingTableError(error)) throw error;
-
-    const profile: PaymentProfile = data && isRecord(data)
-      ? {
-          user_id: userId,
-          has_payment_method: Boolean(data.has_payment_method),
-          overage_enabled: data.overage_enabled !== false,
-          stripe_customer_id: typeof data.stripe_customer_id === 'string' ? data.stripe_customer_id : null,
-          default_payment_method_id: typeof data.default_payment_method_id === 'string' ? data.default_payment_method_id : null,
-          payment_method_brand: typeof data.payment_method_brand === 'string' ? data.payment_method_brand : null,
-          payment_method_last4: typeof data.payment_method_last4 === 'string' ? data.payment_method_last4 : null
-        }
-      : {
-          user_id: userId,
-          has_payment_method: false,
-          overage_enabled: false,
-          stripe_customer_id: null,
-          default_payment_method_id: null,
-          payment_method_brand: null,
-          payment_method_last4: null
-        };
-
-    inMemoryPayments.set(userId, profile);
-    return profile;
-  } catch {
-    const profile: PaymentProfile = {
-      user_id: userId,
-      has_payment_method: false,
-      overage_enabled: false,
-      stripe_customer_id: null,
-      default_payment_method_id: null,
-      payment_method_brand: null,
-      payment_method_last4: null
-    };
-    inMemoryPayments.set(userId, profile);
-    return profile;
+  if (error) {
+    if (isMissingTableError(error)) {
+      return {
+        user_id: userId,
+        has_payment_method: false,
+        overage_enabled: false,
+        stripe_customer_id: null,
+        default_payment_method_id: null,
+        payment_method_brand: null,
+        payment_method_last4: null
+      };
+    }
+    throw createBillingBackendUnavailableError(error);
   }
+
+  return data && isRecord(data)
+    ? {
+        user_id: userId,
+        has_payment_method: Boolean(data.has_payment_method),
+        overage_enabled: data.overage_enabled !== false,
+        stripe_customer_id: typeof data.stripe_customer_id === 'string' ? data.stripe_customer_id : null,
+        default_payment_method_id: typeof data.default_payment_method_id === 'string' ? data.default_payment_method_id : null,
+        payment_method_brand: typeof data.payment_method_brand === 'string' ? data.payment_method_brand : null,
+        payment_method_last4: typeof data.payment_method_last4 === 'string' ? data.payment_method_last4 : null
+      }
+    : {
+        user_id: userId,
+        has_payment_method: false,
+        overage_enabled: false,
+        stripe_customer_id: null,
+        default_payment_method_id: null,
+        payment_method_brand: null,
+        payment_method_last4: null
+      };
 };
 
 export const upsertPaymentProfile = async (
@@ -398,16 +435,15 @@ export const upsertPaymentProfile = async (
     user_id: userId
   };
 
-  try {
-    const admin = getSupabaseAdmin();
-    await admin
-      .from('payment_profiles')
-      .upsert(merged, { onConflict: 'user_id' });
-  } catch {
-    // keep memory fallback
+  const admin = getBillingAdmin();
+  const { error } = await admin
+    .from('payment_profiles')
+    .upsert(merged, { onConflict: 'user_id' });
+
+  if (error) {
+    throw createBillingBackendUnavailableError(error);
   }
 
-  inMemoryPayments.set(userId, merged);
   return merged;
 };
 
@@ -458,6 +494,7 @@ const createOffSessionCharge = async (input: {
 };
 
 const maybeAutoReloadWallet = async (userId: string, wallet: WalletRow) => {
+  if (!AUTO_RELOAD_POLICY_ENABLED) return null;
   if (!wallet.auto_reload_enabled) return null;
   const balance = walletBalance(wallet);
   if (balance.availableCt >= wallet.auto_reload_threshold_ct) return null;
@@ -587,94 +624,73 @@ const recordLedgerEntry = async (
     metadata: entry.metadata || {}
   };
 
-  inMemoryLedger.unshift({
-    id: row.id,
-    createdAt: row.created_at,
-    entryType: row.entry_type,
-    ctDelta: row.ct_delta,
-    usdDelta: row.usd_delta,
-    provider: row.provider || undefined,
-    model: row.model || undefined,
-    operation: row.operation || undefined,
-    projectId: row.project_id || undefined,
-    metadata: {
-      ...(isRecord(row.metadata) ? row.metadata : {}),
-      userId
-    }
-  });
-
-  try {
-    const admin = getSupabaseAdmin();
-    await admin.from('token_ledger_entries').insert(row);
-  } catch {
-    // ignore for memory fallback
+  const admin = getBillingAdmin();
+  const { error } = await admin.from('token_ledger_entries').insert(row);
+  if (error) {
+    throw createBillingBackendUnavailableError(error);
   }
 };
 
 const recordCostEvent = async (event: Record<string, unknown>) => {
-  inMemoryEvents.unshift(event);
-  try {
-    const admin = getSupabaseAdmin();
-    await admin.from('generation_cost_events').insert(event);
-  } catch {
-    // ignore for memory fallback
+  const admin = getBillingAdmin();
+  const { error } = await admin.from('generation_cost_events').insert(event);
+  if (error) {
+    throw createBillingBackendUnavailableError(error);
   }
 };
 
 const updateCostEvent = async (reservationId: string, patch: Record<string, unknown>) => {
-  for (const event of inMemoryEvents) {
-    if (event.reservation_id === reservationId) {
-      Object.assign(event, patch);
-      break;
-    }
-  }
+  const admin = getBillingAdmin();
+  const { error } = await admin
+    .from('generation_cost_events')
+    .update(patch)
+    .eq('reservation_id', reservationId);
 
-  try {
-    const admin = getSupabaseAdmin();
-    await admin
-      .from('generation_cost_events')
-      .update(patch)
-      .eq('reservation_id', reservationId);
-  } catch {
-    // ignore for memory fallback
+  if (error) {
+    throw createBillingBackendUnavailableError(error);
   }
 };
 
 const upsertDailyRollup = async (userId: string, ctSpent: number, byokTrackedCt: number, usdBillable: number) => {
   const usageDate = utcDateString(now());
-  try {
-    const admin = getSupabaseAdmin();
-    const { data, error } = await admin
-      .from('usage_daily_rollups')
-      .select('ct_spent, ct_byok_tracked, usd_estimated')
-      .eq('user_id', userId)
-      .eq('usage_date', usageDate)
-      .maybeSingle();
+  const admin = getBillingAdmin();
+  const { data, error } = await admin
+    .from('usage_daily_rollups')
+    .select('ct_spent, ct_byok_tracked, usd_estimated')
+    .eq('user_id', userId)
+    .eq('usage_date', usageDate)
+    .maybeSingle();
 
-    if (error && !isMissingTableError(error)) throw error;
+  if (error) {
+    throw createBillingBackendUnavailableError(error);
+  }
 
-    if (!data) {
-      await admin.from('usage_daily_rollups').insert({
-        user_id: userId,
-        usage_date: usageDate,
-        ct_spent: ctSpent,
-        ct_byok_tracked: byokTrackedCt,
-        usd_estimated: usdBillable
-      });
-      return;
+  if (!data) {
+    const insertResult = await admin.from('usage_daily_rollups').insert({
+      user_id: userId,
+      usage_date: usageDate,
+      ct_spent: ctSpent,
+      ct_byok_tracked: byokTrackedCt,
+      usd_estimated: usdBillable
+    });
+    if (insertResult.error) {
+      throw createBillingBackendUnavailableError(insertResult.error);
     }
+    return;
+  }
 
-    await admin
-      .from('usage_daily_rollups')
-      .update({
-        ct_spent: Math.max(0, asNumber((data as Record<string, unknown>).ct_spent) + ctSpent),
-        ct_byok_tracked: Math.max(0, asNumber((data as Record<string, unknown>).ct_byok_tracked) + byokTrackedCt),
-        usd_estimated: Math.max(0, asNumber((data as Record<string, unknown>).usd_estimated) + usdBillable)
-      })
-      .eq('user_id', userId)
-      .eq('usage_date', usageDate);
-  } catch {
-    // no-op when table is unavailable
+  const updateResult = await admin
+    .from('usage_daily_rollups')
+    .update({
+      ct_spent: Math.max(0, asNumber((data as Record<string, unknown>).ct_spent) + ctSpent),
+      ct_byok_tracked: Math.max(0, asNumber((data as Record<string, unknown>).ct_byok_tracked) + byokTrackedCt),
+      usd_estimated: Math.max(0, asNumber((data as Record<string, unknown>).usd_estimated) + usdBillable)
+    })
+    .eq('user_id', userId)
+    .eq('usage_date', usageDate);
+
+  if (updateResult.error) {
+    throw createBillingBackendUnavailableError(updateResult.error);
   }
 };
 
@@ -719,7 +735,7 @@ export const reserveUsageTokens = async (input: {
   byok?: boolean;
   metadata?: Record<string, unknown>;
 }): Promise<{ allowed: true; reservation: ReservationState } | { allowed: false; details: LimitExceededDetails }> => {
-  const wallet = await ensureWallet(input.userId);
+  let wallet = await ensureWallet(input.userId);
 
   if (input.byok) {
     const bypass: ReservationState = {
@@ -762,6 +778,7 @@ export const reserveUsageTokens = async (input: {
   }
 
   const profile = await getPaymentProfile(input.userId);
+  const allowOverage = requiredCt > balance.availableCt;
   if (requiredCt > balance.availableCt) {
     const shortfallCt = requiredCt - balance.availableCt;
 
@@ -796,9 +813,23 @@ export const reserveUsageTokens = async (input: {
   }
 
   const reservationId = crypto.randomUUID();
-  wallet.reserved_ct += requiredCt;
-  wallet.updated_at = toIso(now());
-  await persistWallet(wallet);
+  const reserveResult = await callTryReserveTokens({
+    userId: input.userId,
+    requiredCt,
+    allowOverage
+  });
+
+  if (reserveResult.allowed !== true) {
+    const reason = String(reserveResult.reason || 'INSUFFICIENT_CREDITS');
+    const mappedReason = reason === 'DAILY_LIMIT_EXCEEDED' ? 'DAILY_LIMIT_EXCEEDED' : 'INSUFFICIENT_CREDITS';
+    wallet = await ensureWallet(input.userId);
+    return {
+      allowed: false,
+      details: buildLimitExceeded(mappedReason, requiredCt, wallet, false)
+    };
+  }
+
+  wallet = await ensureWallet(input.userId);
 
   await recordLedgerEntry(input.userId, {
     entryType: 'RESERVE',
@@ -860,10 +891,10 @@ export const releaseReservation = async (input: {
   metadata?: Record<string, unknown>;
 }) => {
   if (!input.reservationId) return;
-  const wallet = await ensureWallet(input.userId);
-  wallet.reserved_ct = Math.max(0, wallet.reserved_ct - Math.max(0, Math.floor(input.estimatedCt)));
-  wallet.updated_at = toIso(now());
-  await persistWallet(wallet);
+  await callReleaseReservedTokens({
+    userId: input.userId,
+    releaseCt: Math.max(0, Math.floor(input.estimatedCt))
+  });
 
   await recordLedgerEntry(input.userId, {
     entryType: 'RELEASE',
@@ -944,26 +975,18 @@ export const settleReservation = async (input: {
     };
   }
 
-  const wallet = await ensureWallet(input.userId);
   const estimatedCt = Math.max(0, Math.floor(input.estimatedCt));
-  wallet.reserved_ct = Math.max(0, wallet.reserved_ct - estimatedCt);
-
-  let remaining = actualCt;
-  const includedRemaining = Math.max(0, wallet.included_monthly_ct - wallet.used_monthly_ct);
-  const fromIncluded = Math.min(remaining, includedRemaining);
-  wallet.used_monthly_ct += fromIncluded;
-  remaining -= fromIncluded;
-
-  const fromPurchased = Math.min(remaining, wallet.purchased_ct);
-  wallet.purchased_ct -= fromPurchased;
-  remaining -= fromPurchased;
-
-  const overageCt = Math.max(0, remaining);
-  wallet.overage_ct += overageCt;
-  wallet.pending_overage_usd = Number((wallet.pending_overage_usd + overageCt * CT_USD).toFixed(6));
-  wallet.used_daily_ct += actualCt;
-  wallet.updated_at = toIso(now());
-  await persistWallet(wallet);
+  const settleResult = await callSettleTokens({
+    userId: input.userId,
+    estimatedCt,
+    actualCt
+  });
+  if (settleResult.ok === false) {
+    throw createBillingBackendUnavailableError(settleResult);
+  }
+  const fromIncluded = Math.max(0, Math.floor(asNumber(settleResult.from_included, 0)));
+  const fromPurchased = Math.max(0, Math.floor(asNumber(settleResult.from_purchased, 0)));
+  const overageCt = Math.max(0, Math.floor(asNumber(settleResult.overage_ct, 0)));
 
   await recordLedgerEntry(input.userId, {
     entryType: 'SETTLE',
@@ -999,6 +1022,7 @@ export const settleReservation = async (input: {
 
   await upsertDailyRollup(input.userId, actualCt, 0, billableUsd);
 
+  const wallet = await ensureWallet(input.userId);
   const overageCapture = await maybeCapturePendingOverage(input.userId, wallet);
   const autoReload = await maybeAutoReloadWallet(input.userId, wallet);
   const latestWallet = await ensureWallet(input.userId);
@@ -1046,6 +1070,34 @@ export const getBillingSummary = async (userId: string): Promise<BillingSummaryR
   const wallet = await ensureWallet(userId);
   const profile = await getPaymentProfile(userId);
   const plan = resolvePlanDefinition(wallet.plan_tier);
+  const admin = getBillingAdmin();
+  const { data: subscriptionRow, error: subscriptionError } = await admin
+    .from('user_plan_subscriptions')
+    .select('plan_tier, status, stripe_status, stripe_subscription_id, cancel_at_period_end, cancel_requested_at, canceled_at, current_period_start, current_period_end')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (subscriptionError) {
+    throw createBillingBackendUnavailableError(subscriptionError);
+  }
+
+  const subscription = subscriptionRow && isRecord(subscriptionRow)
+    ? {
+        planTier: toTier(subscriptionRow.plan_tier),
+        status: String(subscriptionRow.status || 'inactive'),
+        stripeStatus: typeof subscriptionRow.stripe_status === 'string' ? subscriptionRow.stripe_status : undefined,
+        stripeSubscriptionId: typeof subscriptionRow.stripe_subscription_id === 'string' ? subscriptionRow.stripe_subscription_id : undefined,
+        cancelAtPeriodEnd: Boolean(subscriptionRow.cancel_at_period_end),
+        cancelRequestedAt: typeof subscriptionRow.cancel_requested_at === 'string' ? subscriptionRow.cancel_requested_at : undefined,
+        canceledAt: typeof subscriptionRow.canceled_at === 'string' ? subscriptionRow.canceled_at : undefined,
+        currentPeriodStart: typeof subscriptionRow.current_period_start === 'string' ? subscriptionRow.current_period_start : undefined,
+        currentPeriodEnd: typeof subscriptionRow.current_period_end === 'string' ? subscriptionRow.current_period_end : undefined
+      }
+    : {
+        planTier: plan.id,
+        status: 'inactive',
+        cancelAtPeriodEnd: false
+      };
 
   return {
     currency: 'USD',
@@ -1056,8 +1108,9 @@ export const getBillingSummary = async (userId: string): Promise<BillingSummaryR
     hasPaymentMethodOnFile: profile.has_payment_method,
     overageEnabled: profile.overage_enabled,
     overageHardCapUsd: wallet.overage_hard_cap_usd,
+    subscription,
     autoReload: {
-      enabled: wallet.auto_reload_enabled,
+      enabled: false,
       thresholdCt: wallet.auto_reload_threshold_ct,
       packUsd: wallet.auto_reload_pack_usd
     }
@@ -1071,7 +1124,13 @@ export const updateAutoReloadSettings = async (input: {
   packUsd?: number;
 }) => {
   const wallet = await ensureWallet(input.userId);
-  wallet.auto_reload_enabled = input.enabled;
+  if (input.enabled) {
+    const error = new Error('Auto-reload is disabled by billing policy.') as Error & { status?: number; publicCode?: string };
+    error.status = 409;
+    error.publicCode = 'AUTO_RELOAD_DISABLED';
+    throw error;
+  }
+  wallet.auto_reload_enabled = false;
   if (typeof input.thresholdCt === 'number' && Number.isFinite(input.thresholdCt)) {
     wallet.auto_reload_threshold_ct = Math.max(1_000, Math.floor(input.thresholdCt));
   }
@@ -1089,37 +1148,30 @@ export const updateAutoReloadSettings = async (input: {
 
 export const listUsageHistory = async (userId: string, limit = 100): Promise<BillingUsageHistoryItem[]> => {
   const safeLimit = Math.max(1, Math.min(500, Math.floor(limit)));
+  const admin = getBillingAdmin();
+  const { data, error } = await admin
+    .from('token_ledger_entries')
+    .select('id, created_at, entry_type, ct_delta, usd_delta, provider, model, operation, project_id, metadata')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(safeLimit);
 
-  try {
-    const admin = getSupabaseAdmin();
-    const { data, error } = await admin
-      .from('token_ledger_entries')
-      .select('id, created_at, entry_type, ct_delta, usd_delta, provider, model, operation, project_id, metadata')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(safeLimit);
-
-    if (error || !Array.isArray(data)) {
-      throw error;
-    }
-
-    return data.map((row) => ({
-      id: String((row as Record<string, unknown>).id),
-      createdAt: String((row as Record<string, unknown>).created_at),
-      entryType: String((row as Record<string, unknown>).entry_type),
-      ctDelta: Math.floor(asNumber((row as Record<string, unknown>).ct_delta, 0)),
-      usdDelta: Number(asNumber((row as Record<string, unknown>).usd_delta, 0).toFixed(6)),
-      provider: typeof (row as Record<string, unknown>).provider === 'string' ? String((row as Record<string, unknown>).provider) : undefined,
-      model: typeof (row as Record<string, unknown>).model === 'string' ? String((row as Record<string, unknown>).model) : undefined,
-      operation: typeof (row as Record<string, unknown>).operation === 'string' ? String((row as Record<string, unknown>).operation) : undefined,
-      projectId: typeof (row as Record<string, unknown>).project_id === 'string' ? String((row as Record<string, unknown>).project_id) : undefined,
-      metadata: isRecord((row as Record<string, unknown>).metadata) ? (row as Record<string, unknown>).metadata as Record<string, unknown> : undefined
-    }));
-  } catch {
-    return inMemoryLedger
-      .filter((row) => row.metadata?.userId === undefined || row.metadata?.userId === userId)
-      .slice(0, safeLimit);
+  if (error || !Array.isArray(data)) {
+    throw createBillingBackendUnavailableError(error);
   }
+
+  return data.map((row) => ({
+    id: String((row as Record<string, unknown>).id),
+    createdAt: String((row as Record<string, unknown>).created_at),
+    entryType: String((row as Record<string, unknown>).entry_type),
+    ctDelta: Math.floor(asNumber((row as Record<string, unknown>).ct_delta, 0)),
+    usdDelta: Number(asNumber((row as Record<string, unknown>).usd_delta, 0).toFixed(6)),
+    provider: typeof (row as Record<string, unknown>).provider === 'string' ? String((row as Record<string, unknown>).provider) : undefined,
+    model: typeof (row as Record<string, unknown>).model === 'string' ? String((row as Record<string, unknown>).model) : undefined,
+    operation: typeof (row as Record<string, unknown>).operation === 'string' ? String((row as Record<string, unknown>).operation) : undefined,
+    projectId: typeof (row as Record<string, unknown>).project_id === 'string' ? String((row as Record<string, unknown>).project_id) : undefined,
+    metadata: isRecord((row as Record<string, unknown>).metadata) ? (row as Record<string, unknown>).metadata as Record<string, unknown> : undefined
+  }));
 };
 
 export const getComicCostReport = async (userId: string, comicId: string): Promise<ComicCostReport> => {
@@ -1141,52 +1193,33 @@ export const getComicCostReport = async (userId: string, comicId: string): Promi
     status: string;
   }> = [];
 
-  try {
-    const admin = getSupabaseAdmin();
-    const { data, error } = await admin
-      .from('generation_cost_events')
-      .select('id, created_at, operation, stage, provider, model, estimated_ct, actual_ct, billable_usd, provider_cost_usd, is_byok, status')
-      .eq('user_id', userId)
-      .or(`comic_id.eq.${comicId},project_id.eq.${comicId}`)
-      .order('created_at', { ascending: false })
-      .limit(500);
+  const admin = getBillingAdmin();
+  const { data, error } = await admin
+    .from('generation_cost_events')
+    .select('id, created_at, operation, stage, provider, model, estimated_ct, actual_ct, billable_usd, provider_cost_usd, is_byok, status')
+    .eq('user_id', userId)
+    .or(`comic_id.eq.${comicId},project_id.eq.${comicId}`)
+    .order('created_at', { ascending: false })
+    .limit(500);
 
-    if (error || !Array.isArray(data)) {
-      throw error;
-    }
-
-    events = data.map((row) => ({
-      id: String((row as Record<string, unknown>).id),
-      createdAt: String((row as Record<string, unknown>).created_at),
-      operation: String((row as Record<string, unknown>).operation || 'unknown'),
-      stage: typeof (row as Record<string, unknown>).stage === 'string' ? String((row as Record<string, unknown>).stage) : undefined,
-      provider: String((row as Record<string, unknown>).provider || 'unknown'),
-      model: String((row as Record<string, unknown>).model || 'unknown'),
-      estimatedCt: Math.floor(asNumber((row as Record<string, unknown>).estimated_ct, 0)),
-      actualCt: Math.floor(asNumber((row as Record<string, unknown>).actual_ct, 0)),
-      billableUsd: Number(asNumber((row as Record<string, unknown>).billable_usd, 0).toFixed(6)),
-      providerCostUsd: Number(asNumber((row as Record<string, unknown>).provider_cost_usd, 0).toFixed(6)),
-      isByok: Boolean((row as Record<string, unknown>).is_byok),
-      status: String((row as Record<string, unknown>).status || 'UNKNOWN')
-    }));
-  } catch {
-    events = inMemoryEvents
-      .filter((event) => event.user_id === userId && (event.comic_id === comicId || event.project_id === comicId))
-      .map((event) => ({
-        id: String(event.id || crypto.randomUUID()),
-        createdAt: String(event.created_at || toIso(now())),
-        operation: String(event.operation || 'unknown'),
-        stage: typeof event.stage === 'string' ? event.stage : undefined,
-        provider: String(event.provider || 'unknown'),
-        model: String(event.model || 'unknown'),
-        estimatedCt: Math.floor(asNumber(event.estimated_ct, 0)),
-        actualCt: Math.floor(asNumber(event.actual_ct, 0)),
-        billableUsd: Number(asNumber(event.billable_usd, 0).toFixed(6)),
-        providerCostUsd: Number(asNumber(event.provider_cost_usd, 0).toFixed(6)),
-        isByok: Boolean(event.is_byok),
-        status: String(event.status || 'UNKNOWN')
-      }));
+  if (error || !Array.isArray(data)) {
+    throw createBillingBackendUnavailableError(error);
   }
+
+  events = data.map((row) => ({
+    id: String((row as Record<string, unknown>).id),
+    createdAt: String((row as Record<string, unknown>).created_at),
+    operation: String((row as Record<string, unknown>).operation || 'unknown'),
+    stage: typeof (row as Record<string, unknown>).stage === 'string' ? String((row as Record<string, unknown>).stage) : undefined,
+    provider: String((row as Record<string, unknown>).provider || 'unknown'),
+    model: String((row as Record<string, unknown>).model || 'unknown'),
+    estimatedCt: Math.floor(asNumber((row as Record<string, unknown>).estimated_ct, 0)),
+    actualCt: Math.floor(asNumber((row as Record<string, unknown>).actual_ct, 0)),
+    billableUsd: Number(asNumber((row as Record<string, unknown>).billable_usd, 0).toFixed(6)),
+    providerCostUsd: Number(asNumber((row as Record<string, unknown>).provider_cost_usd, 0).toFixed(6)),
+    isByok: Boolean((row as Record<string, unknown>).is_byok),
+    status: String((row as Record<string, unknown>).status || 'UNKNOWN')
+  }));
 
   let totalEstimatedCt = 0;
   let totalActualCt = 0;
@@ -1234,19 +1267,19 @@ export const setUserPlanTier = async (userId: string, planTier: BillingPlanTier,
   wallet.updated_at = toIso(now());
   await persistWallet(wallet);
 
-  try {
-    const admin = getSupabaseAdmin();
-    await admin
-      .from('user_plan_subscriptions')
-      .upsert({
-        user_id: userId,
-        plan_tier: plan.id,
-        status: 'active',
-        updated_at: toIso(now()),
-        metadata: metadata || {}
-      }, { onConflict: 'user_id' });
-  } catch {
-    // no-op
+  const admin = getBillingAdmin();
+  const { error } = await admin
+    .from('user_plan_subscriptions')
+    .upsert({
+      user_id: userId,
+      plan_tier: plan.id,
+      status: 'active',
+      updated_at: toIso(now()),
+      metadata: metadata || {}
+    }, { onConflict: 'user_id' });
+
+  if (error) {
+    throw createBillingBackendUnavailableError(error);
   }
 
   await recordLedgerEntry(userId, {

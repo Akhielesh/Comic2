@@ -32,9 +32,11 @@ Used for: Flux-based panel generation.
 
 ## Billing and Credits
 - Free + paid plans include monthly CT pools and daily guardrails.
-- Users can buy direct CT credit packs.
+- Users buy CT credit packs through Stripe Checkout confirmation.
 - To continue usage beyond available credits, a payment method must be on file.
 - Payment methods are stored as Stripe tokenized references.
+- Auto-reload is disabled by policy; each purchase must be explicitly confirmed.
+- Subscription cancellation follows end-of-period policy (access continues through current period end timestamp).
 
 ## BYOK Policy
 If you bring your own provider key:
