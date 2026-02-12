@@ -144,7 +144,9 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
           imagesGenerated: usage.images_generated_count,
           maxImagesAllowed: usage.max_images_allowed,
           hasByok: usage.has_byok,
-          isPremium: usage.is_premium
+          isPremium: usage.is_premium,
+          dailyRemainingCt: usage.daily_remaining_ct,
+          availableCt: usage.available_ct
         } : undefined
       },
       reportSummary: activeSummary ? {

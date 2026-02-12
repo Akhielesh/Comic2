@@ -26,8 +26,9 @@ import { textRouter } from './routes/text.js';
 import { imageRouter } from './routes/image.js';
 import { visionRouter } from './routes/vision.js';
 import { systemRouter } from './routes/system.js';
-// import webhookRouter from './routes/webhook.js'; // [DISABLED]
-// import paymentsRouter from './routes/payments.js'; // [DISABLED]
+import webhookRouter from './routes/webhook.js';
+import paymentsRouter from './routes/payments.js';
+import billingRouter from './routes/billing.js';
 
 validateRuntimeConfig();
 
@@ -62,8 +63,8 @@ app.use(
   })
 );
 
-// [DISABLED] Webhook must be before express.json() to get raw body
-// app.use('/api/webhook', express.raw({ type: 'application/json' }), webhookRouter);
+// Webhook must be before express.json() to get raw body
+app.use('/api/webhook', express.raw({ type: 'application/json' }), webhookRouter);
 
 app.use(express.json({ limit: MAX_BODY_SIZE }));
 app.use(attachKeys);
@@ -96,11 +97,12 @@ app.get('/api/health', (_req, res) => {
 // Public routes
 app.use('/api/system', systemRateLimit, systemRouter);
 app.use('/api/assistant', optionalAuth, assistantLimits, assistantRouter);
+app.use('/api/billing', systemRateLimit, optionalAuth, billingRouter);
 
 // Protect all API routes
 app.use('/api', requireAuth);
 
-// app.use('/api/payments', paymentsRouter); // [DISABLED] Authenticated payments
+app.use('/api/payments', paymentsRouter);
 app.use('/api/text', textRateLimit, textRouter);
 app.use('/api/image', imageRateLimit, imageRouter);
 app.use('/api/vision', visionRateLimit, visionRouter);

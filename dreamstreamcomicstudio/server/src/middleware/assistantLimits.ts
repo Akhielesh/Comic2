@@ -1,11 +1,10 @@
 import { NextFunction, Request, Response } from 'express';
 import type { AssistantLimitInfo } from '../../../apiTypes.js';
-import { supabase } from '../services/supabase.js';
+import { getBillingSummary } from '../services/billingLedger.js';
 
 const GUEST_LIMIT = 5;
 const GUEST_WINDOW_MS = 60 * 60 * 1000;
-const FREE_LIMIT = 30;
-const FREE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const MIN_ASSISTANT_CT = 120;
 
 type AssistantTier = 'free' | 'pro' | 'admin';
 
@@ -54,29 +53,6 @@ const resolveBucket = (key: string, limit: number, windowMs: number, now = Date.
   };
 };
 
-const resolveUserTier = async (req: Request): Promise<AssistantTier> => {
-  if (!req.user) return 'free';
-  if (req.user.email === 'admin@test.com') return 'admin';
-
-  try {
-    const { data, error } = await supabase
-      .from('usage_limits')
-      .select('plan_tier, is_premium')
-      .eq('user_id', req.user.id)
-      .maybeSingle();
-
-    if (error || !data) return 'free';
-
-    const planTier = typeof data.plan_tier === 'string' ? data.plan_tier.toLowerCase() : '';
-    if (planTier === 'admin') return 'admin';
-    if (planTier === 'pro') return 'pro';
-    if (data.is_premium === true) return 'pro';
-    return 'free';
-  } catch {
-    return 'free';
-  }
-};
-
 const setLimitHeaders = (res: Response, limitInfo: AssistantLimitInfo) => {
   res.setHeader('X-Assistant-Limit-Scope', limitInfo.scope);
   if (typeof limitInfo.limit === 'number') res.setHeader('X-Assistant-Limit', String(limitInfo.limit));
@@ -118,47 +94,55 @@ export const assistantLimits = async (req: Request, res: Response, next: NextFun
     return;
   }
 
-  const tier = await resolveUserTier(req);
-  req.assistantTier = tier;
+  try {
+    const summary = await getBillingSummary(requester.id);
+    const tier = summary.plan.id === 'admin' ? 'admin' : summary.plan.id === 'pro' || summary.plan.id === 'studio' ? 'pro' : 'free';
+    req.assistantTier = tier;
 
-  if (tier === 'pro' || tier === 'admin') {
+    const remainingCt = Math.min(summary.usage.dailyRemainingCt, summary.wallet.availableCt);
+    const resetAt = new Date(summary.usage.dailyResetAt).getTime();
+
     const info: AssistantLimitInfo = {
-      scope: 'bypass',
-      by: 'user'
+      scope: tier === 'admin' ? 'bypass' : 'free',
+      by: 'user',
+      limit: summary.usage.dailyGuardrailCt,
+      remaining: Math.max(0, remainingCt),
+      resetAt,
+      windowMs: Math.max(1, resetAt - Date.now())
     };
+
+    req.assistantLimitInfo = info;
+    setLimitHeaders(res, info);
+
+    const canUseOverage = summary.hasPaymentMethodOnFile && summary.overageEnabled && summary.plan.id !== 'free';
+    if (remainingCt < MIN_ASSISTANT_CT && !canUseOverage) {
+      res.status(402).json({
+        error: {
+          message: `Assistant limit reached. At least ${MIN_ASSISTANT_CT} CT are required per request estimate.`,
+          code: 'ASSISTANT_TOKEN_LIMIT_REACHED',
+          details: {
+            ...info,
+            minRequiredCt: MIN_ASSISTANT_CT,
+            options: {
+              canUpgrade: true,
+              canAddCredits: true,
+              canWaitForReset: true
+            }
+          }
+        }
+      });
+      return;
+    }
+
+    next();
+  } catch {
+    // If billing summary fails, allow the route to proceed and enforce inside route-level reserve.
+    const info: AssistantLimitInfo = { scope: 'free', by: 'user' };
+    req.assistantTier = 'free';
     req.assistantLimitInfo = info;
     setLimitHeaders(res, info);
     next();
-    return;
   }
-
-  const key = `assistant:free:${requester.id}`;
-  const bucket = resolveBucket(key, FREE_LIMIT, FREE_WINDOW_MS);
-  const info: AssistantLimitInfo = {
-    scope: 'free',
-    by: 'user',
-    limit: FREE_LIMIT,
-    remaining: bucket.remaining,
-    resetAt: bucket.resetAt,
-    windowMs: FREE_WINDOW_MS
-  };
-  req.assistantLimitInfo = info;
-  setLimitHeaders(res, info);
-
-  if (bucket.allowed) {
-    next();
-    return;
-  }
-
-  const retryAfterSeconds = Math.max(1, Math.ceil(bucket.retryAfterMs / 1000));
-  res.setHeader('Retry-After', String(retryAfterSeconds));
-  res.status(429).json({
-    error: {
-      message: `Assistant free-tier limit reached (${FREE_LIMIT} requests/day). Retry in ${retryAfterSeconds}s.`,
-      code: 'ASSISTANT_RATE_LIMITED',
-      details: info
-    }
-  });
 };
 
 export const clearAssistantLimitBuckets = () => {

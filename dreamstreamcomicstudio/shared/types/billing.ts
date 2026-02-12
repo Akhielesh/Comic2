@@ -1,0 +1,191 @@
+export type BillingPlanTier = 'free' | 'creator' | 'pro' | 'studio' | 'custom' | 'admin';
+
+export type BillingPlanDefinition = {
+  id: BillingPlanTier;
+  name: string;
+  monthlyIncludedCt: number;
+  dailyGuardrailCt: number;
+  monthlyPriceUsd: number;
+  allowOverage: boolean;
+};
+
+export type CreditPackDefinition = {
+  usd: number;
+  ct: number;
+  label: string;
+};
+
+export type TokenBreakdownLine = {
+  kind: 'input_tokens' | 'output_tokens' | 'image_units' | 'other_billable';
+  quantity: number;
+  unitPriceUsd: number;
+  providerCostUsd: number;
+  billableUsd: number;
+  ct: number;
+};
+
+export type TokenEstimateRequest = {
+  provider: 'gemini' | 'pixazo' | 'internal';
+  model: string;
+  operation: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  imageUnits?: number;
+  otherBillableUnits?: number;
+  otherBillableUnitPriceUsd?: number;
+  projectId?: string;
+  comicId?: string;
+  stage?: string;
+  byok?: boolean;
+  metadata?: Record<string, unknown>;
+};
+
+export type TokenEstimateResponse = {
+  currency: 'USD';
+  ctPerUsd: number;
+  markup: number;
+  estimatedProviderCostUsd: number;
+  estimatedBillableUsd: number;
+  estimatedCt: number;
+  lines: TokenBreakdownLine[];
+  modelPricing: {
+    provider: string;
+    model: string;
+    inputPer1kUsd: number;
+    outputPer1kUsd: number;
+    imagePerOutputUsd: number;
+    source: string;
+    confidence: number;
+    status: 'ACTIVE' | 'REVIEW_REQUIRED';
+    effectiveFrom: string;
+  };
+};
+
+export type WalletBalance = {
+  availableCt: number;
+  reservedCt: number;
+  purchasedCt: number;
+  includedMonthlyCt: number;
+  usedMonthlyCt: number;
+  overageCt: number;
+  pendingOverageUsd: number;
+};
+
+export type UsageLimitState = {
+  planTier: BillingPlanTier;
+  dailyGuardrailCt: number;
+  dailyUsedCt: number;
+  dailyRemainingCt: number;
+  monthlyResetAt: string;
+  dailyResetAt: string;
+};
+
+export type LimitExceededResolutionOptions = {
+  canUpgrade: boolean;
+  canAddCredits: boolean;
+  canWaitForReset: boolean;
+  paymentMethodRequired: boolean;
+  recommendedAction: 'upgrade' | 'add_credits' | 'wait_for_reset';
+};
+
+export type LimitExceededReason =
+  | 'DAILY_LIMIT_EXCEEDED'
+  | 'MONTHLY_INCLUDED_EXHAUSTED'
+  | 'INSUFFICIENT_CREDITS'
+  | 'PAYMENT_METHOD_REQUIRED'
+  | 'OVERAGE_CAP_REACHED';
+
+export type LimitExceededDetails = {
+  reason: LimitExceededReason;
+  requiredCt: number;
+  availableCt: number;
+  resetAt: string;
+  usage: UsageLimitState;
+  options: LimitExceededResolutionOptions;
+};
+
+export type ReservationState = {
+  reservationId?: string;
+  byokBypass: boolean;
+  estimated: TokenEstimateResponse;
+  usage: UsageLimitState;
+};
+
+export type BillingSummaryResponse = {
+  currency: 'USD';
+  ctPerUsd: number;
+  wallet: WalletBalance;
+  usage: UsageLimitState;
+  plan: BillingPlanDefinition;
+  hasPaymentMethodOnFile: boolean;
+  overageEnabled: boolean;
+  overageHardCapUsd: number;
+  autoReload: {
+    enabled: boolean;
+    thresholdCt: number;
+    packUsd: number;
+  };
+};
+
+export type PricingCatalogResponse = {
+  currency: 'USD';
+  ctPerUsd: number;
+  markup: number;
+  plans: BillingPlanDefinition[];
+  creditPacks: CreditPackDefinition[];
+  modelPricing: Array<{
+    provider: string;
+    model: string;
+    inputPer1kUsd: number;
+    outputPer1kUsd: number;
+    imagePerOutputUsd: number;
+    source: string;
+    confidence: number;
+    status: 'ACTIVE' | 'REVIEW_REQUIRED';
+    effectiveFrom: string;
+  }>;
+  lastSyncedAt?: string;
+  pricingChangelog?: Array<{
+    createdAt: string;
+    status: 'ACTIVE' | 'REVIEW_REQUIRED';
+    summary: string;
+    details?: Record<string, unknown>;
+  }>;
+};
+
+export type BillingUsageHistoryItem = {
+  id: string;
+  createdAt: string;
+  entryType: string;
+  ctDelta: number;
+  usdDelta: number;
+  provider?: string;
+  model?: string;
+  operation?: string;
+  projectId?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type ComicCostReport = {
+  comicId: string;
+  totalEstimatedCt: number;
+  totalActualCt: number;
+  totalBillableUsd: number;
+  totalProviderCostUsd: number;
+  byStage: Record<string, { ct: number; usd: number }>;
+  byModel: Record<string, { ct: number; usd: number }>;
+  events: Array<{
+    id: string;
+    createdAt: string;
+    operation: string;
+    stage?: string;
+    provider: string;
+    model: string;
+    estimatedCt: number;
+    actualCt: number;
+    billableUsd: number;
+    providerCostUsd: number;
+    isByok: boolean;
+    status: string;
+  }>;
+};

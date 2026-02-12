@@ -9,6 +9,33 @@ import {
   ContinuityBible,
   SceneContinuityBinding
 } from './types.js';
+import type {
+  BillingSummaryResponse,
+  LimitExceededDetails,
+  ReservationState,
+  TokenEstimateResponse
+} from './shared/types/billing.js';
+
+export type ApiBillingInfo = {
+  reservationId?: string;
+  byokBypass?: boolean;
+  estimated?: TokenEstimateResponse;
+  settled?: {
+    actualCt: number;
+    billableUsd: number;
+    providerCostUsd: number;
+    reservationReleased?: boolean;
+    autoReload?: {
+      paymentIntentId: string;
+      addedCt: number;
+      chargedUsd: number;
+    };
+    overageCapture?: {
+      paymentIntentId: string;
+      capturedUsd: number;
+    };
+  };
+};
 
 export type ApiUsage = {
   promptTokens?: number;
@@ -31,6 +58,7 @@ export type AnalyzeScriptResponse = {
   responseText?: string;
   usage?: ApiUsage;
   model: string;
+  billing?: ApiBillingInfo;
 };
 
 export type StoryOutlineRequest = {
@@ -48,6 +76,7 @@ export type StoryOutlineResponse = {
   responseText?: string;
   usage?: ApiUsage;
   model: string;
+  billing?: ApiBillingInfo;
 };
 
 export type StoryDraftRequest = {
@@ -64,6 +93,7 @@ export type StoryDraftResponse = {
   responseText?: string;
   usage?: ApiUsage;
   model: string;
+  billing?: ApiBillingInfo;
 };
 
 export type StoryToolRequest = {
@@ -77,6 +107,7 @@ export type StoryToolResponse = {
   responseText?: string;
   usage?: ApiUsage;
   model: string;
+  billing?: ApiBillingInfo;
 };
 
 export type ExtractWorldRequest = { scenes: Scene[] };
@@ -88,6 +119,7 @@ export type ExtractWorldResponse = {
   responseText?: string;
   usage?: ApiUsage;
   model: string;
+  billing?: ApiBillingInfo;
 };
 
 export type PanelBreakdownRequest = {
@@ -118,6 +150,7 @@ export type PanelBreakdownResponse = {
   responseText?: string;
   usage?: ApiUsage;
   model: string;
+  billing?: ApiBillingInfo;
 };
 
 export type ContinuityAuditRequest = {
@@ -150,6 +183,7 @@ export type ContinuityAuditResponse = {
   responseText?: string;
   usage?: ApiUsage;
   model: string;
+  billing?: ApiBillingInfo;
 };
 
 export type ContinuitySummaryRequest = {
@@ -163,6 +197,7 @@ export type ContinuitySummaryResponse = {
   responseText?: string;
   usage?: ApiUsage;
   model: string;
+  billing?: ApiBillingInfo;
 };
 
 export type LayoutAnalysisRequest = { images: string[] };
@@ -172,6 +207,7 @@ export type LayoutAnalysisResponse = {
   responseText?: string;
   usage?: ApiUsage;
   model: string;
+  billing?: ApiBillingInfo;
 };
 
 export type ImageGenerateRequest = {
@@ -194,6 +230,7 @@ export type ImageGenerateResponse = {
   usage?: ApiUsage;
   model: string;
   timings?: ApiTimings;
+  billing?: ApiBillingInfo;
 };
 
 export type FluxGenerateRequest = {
@@ -214,8 +251,10 @@ export type FluxGenerateResponse = {
   dataUrl?: string;
   mimeType: string;
   prompt: string;
+  usage?: ApiUsage;
   timings?: ApiTimings;
   model: string;
+  billing?: ApiBillingInfo;
 };
 
 export type AssistantMessage = { role: 'user' | 'model'; text: string };
@@ -276,13 +315,16 @@ export type AssistantAccountSummary = {
   username?: string;
   maskedEmail?: string;
   isAdmin?: boolean;
-  planTier?: 'free' | 'pro' | 'admin';
+  planTier?: 'free' | 'creator' | 'pro' | 'studio' | 'custom' | 'admin';
   usage?: {
     imagesGenerated?: number;
     maxImagesAllowed?: number;
     hasByok?: boolean;
     isPremium?: boolean;
+    dailyRemainingCt?: number;
+    availableCt?: number;
   };
+  billing?: BillingSummaryResponse;
 };
 
 export type UniversalAssistantContext = {
@@ -327,6 +369,7 @@ export type UniversalAssistantResponse = {
   model: string;
   limitInfo?: AssistantLimitInfo;
   policy: AssistantPolicyInfo;
+  billing?: ApiBillingInfo;
 };
 
 // Backwards-compatible aliases for legacy references.
@@ -341,7 +384,12 @@ export type TestLabReportResponse = {
   responseText?: string;
   usage?: ApiUsage;
   model: string;
+  billing?: ApiBillingInfo;
 };
+
+export type BillingReserveResponse =
+  | { allowed: true; reservation: ReservationState }
+  | { allowed: false; details: LimitExceededDetails };
 
 export type SystemStatusResponse = {
   status: 'ok' | 'error';
