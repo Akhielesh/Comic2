@@ -75,6 +75,7 @@ export const IDEMPOTENCY_TTL_MS = parseIntegerEnv(process.env.IDEMPOTENCY_TTL_MS
 
 export const TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
 export const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-2.5-flash-image';
+export const ASSISTANT_GEMINI_API_KEY = process.env.ASSISTANT_GEMINI_API_KEY || process.env.GEMINI_API_KEY || '';
 export const GEMINI_BASE_URL = process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com';
 
 export const TEXT_REQUEST_TIMEOUT_MS = parseIntegerEnv(process.env.TEXT_REQUEST_TIMEOUT_MS, 60_000, 'TEXT_REQUEST_TIMEOUT_MS', 1_000);
