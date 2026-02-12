@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { supabase } from '../services/supabase';
+import { getAuthPersistMode, setAuthPersistMode, supabase } from '../services/supabase';
 import { Loader2, ArrowRight, Eye, EyeOff, CheckSquare } from 'lucide-react';
 
 interface AuthPageProps {
@@ -11,6 +11,7 @@ interface AuthPageProps {
 export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivacy, onOpenTerms }) => {
     const USERNAME_REGEX = /^[A-Za-z0-9_]{3,20}$/;
     const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const MIN_SIGNUP_AGE_YEARS = 8;
     const [mode, setMode] = useState<'signin' | 'signup' | 'forgot' | 'magic-link'>('signin');
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -26,17 +27,66 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
-    const [rememberMe, setRememberMe] = useState(true);
+    const [rememberMe, setRememberMe] = useState(getAuthPersistMode() === 'local');
+    const [pendingVerificationEmail, setPendingVerificationEmail] = useState<string | null>(null);
 
     // Consents
     const [termsAccepted, setTermsAccepted] = useState(false);
     const [marketingConsent, setMarketingConsent] = useState(false);
+    const maxSignupDob = (() => {
+        const date = new Date();
+        date.setHours(0, 0, 0, 0);
+        date.setFullYear(date.getFullYear() - MIN_SIGNUP_AGE_YEARS);
+        return date.toISOString().slice(0, 10);
+    })();
+
+    const getDuplicateSignupError = (err: unknown): string | null => {
+        const message = String((err as { message?: string } | null)?.message || '').toLowerCase();
+        if (
+            message.includes('already registered') ||
+            message.includes('already exists') ||
+            message.includes('user already') ||
+            message.includes('email address already')
+        ) {
+            return 'An account with this email already exists. Please sign in or reset your password.';
+        }
+        return null;
+    };
+
+    const handleResendVerification = async () => {
+        const normalizedEmail = (pendingVerificationEmail || email || '').trim().toLowerCase();
+        if (!EMAIL_REGEX.test(normalizedEmail)) {
+            setError('Enter a valid email address to resend verification.');
+            return;
+        }
+
+        setError(null);
+        setMessage(null);
+        setIsLoading(true);
+        try {
+            const { error: resendError } = await supabase.auth.resend({
+                type: 'signup',
+                email: normalizedEmail,
+                options: {
+                    emailRedirectTo: `${window.location.origin}/auth/callback`
+                }
+            });
+            if (resendError) throw resendError;
+            setPendingVerificationEmail(normalizedEmail);
+            setMessage('Verification email sent. Check inbox and spam.');
+        } catch (err: any) {
+            setError(err?.message || 'Failed to resend verification email.');
+        } finally {
+            setIsLoading(false);
+        }
+    };
 
     // Handlers
     const handleAuth = async (e: React.FormEvent) => {
         e.preventDefault();
         setError(null);
         setMessage(null);
+        if (mode !== 'signin') setPendingVerificationEmail(null);
         setIsLoading(true);
 
         try {
@@ -45,6 +95,9 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 const normalizedEmail = email.trim().toLowerCase();
                 const normalizedUsername = username.trim();
                 const normalizedFirstName = firstName.trim();
+                const normalizedLastName = lastName.trim();
+                const normalizedPhoneNumber = phoneNumber.trim();
+                const normalizedDob = dob.trim();
 
                 if (!normalizedEmail) throw new Error("Email is required.");
                 if (!EMAIL_REGEX.test(normalizedEmail)) throw new Error("Please enter a valid email.");
@@ -53,27 +106,48 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                     throw new Error("Username must be 3-20 chars and use only letters, numbers, or underscore.");
                 }
                 if (!normalizedFirstName) throw new Error("First name is required.");
+                if (password.length < 8) throw new Error("Password must be at least 8 characters.");
                 if (password !== confirmPassword) throw new Error("Passwords do not match.");
                 if (!termsAccepted) throw new Error("You must accept the Terms & Conditions.");
-                if (!dob) throw new Error("Date of birth is required.");
+                if (!normalizedDob) throw new Error("Date of birth is required.");
 
-                const dobDate = new Date(`${dob}T00:00:00`);
+                const dobDate = new Date(`${normalizedDob}T00:00:00`);
                 if (Number.isNaN(dobDate.getTime())) throw new Error("Date of birth must be valid.");
                 const today = new Date();
                 today.setHours(0, 0, 0, 0);
                 if (dobDate > today) throw new Error("Date of birth cannot be in the future.");
+                const minAllowedDob = new Date(today);
+                minAllowedDob.setFullYear(today.getFullYear() - MIN_SIGNUP_AGE_YEARS);
+                if (dobDate > minAllowedDob) throw new Error(`You must be at least ${MIN_SIGNUP_AGE_YEARS} years old to sign up.`);
+
+                // Fast username availability check before submit.
+                const { data: usernameLookupData, error: usernameLookupError } = await supabase.rpc('resolve_email_from_username', { login_username: normalizedUsername });
+                if (usernameLookupError) {
+                    const usernameLookupMessage = String(usernameLookupError?.message || '').toLowerCase();
+                    const missingResolver = usernameLookupMessage.includes('resolve_email_from_username') && usernameLookupMessage.includes('does not exist');
+                    if (!missingResolver) throw usernameLookupError;
+                    console.warn('Username resolver RPC missing; relying on DB uniqueness enforcement.');
+                } else {
+                    const existingEmailForUsername = Array.isArray(usernameLookupData)
+                        ? usernameLookupData[0]?.email
+                        : (usernameLookupData as { email?: string } | null)?.email;
+                    if (existingEmailForUsername) {
+                        throw new Error("Username is already taken. Please choose another.");
+                    }
+                }
 
                 // Sign up with metadata. Profile rows are created by Supabase DB trigger.
                 const { data, error: signUpError } = await supabase.auth.signUp({
                     email: normalizedEmail,
                     password,
                     options: {
+                        emailRedirectTo: `${window.location.origin}/auth/callback`,
                         data: {
                             username: normalizedUsername,
                             first_name: normalizedFirstName,
-                            last_name: lastName.trim() || null,
-                            phone_number: phoneNumber.trim() || null,
-                            dob,
+                            last_name: normalizedLastName || null,
+                            phone_number: normalizedPhoneNumber || null,
+                            dob: normalizedDob,
                             terms_accepted: termsAccepted,
                             marketing_consent: marketingConsent,
                             email_pref_product_updates: true,
@@ -81,8 +155,15 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                         }
                     }
                 });
-                if (signUpError) throw signUpError;
+                if (signUpError) {
+                    const duplicateMessage = getDuplicateSignupError(signUpError);
+                    if (duplicateMessage) throw new Error(duplicateMessage);
+                    throw signUpError;
+                }
                 if (!data.user) throw new Error("Signup failed.");
+                if (Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+                    throw new Error("An account with this email already exists. Please sign in or reset your password.");
+                }
 
                 setMessage("Account created! Please check your email to confirm.");
                 setMode('signin');
@@ -93,6 +174,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 const loginInput = email.trim();
                 if (!loginInput) throw new Error("Email or username is required.");
                 let signInEmail = loginInput;
+                setPendingVerificationEmail(null);
+                setAuthPersistMode(rememberMe ? 'local' : 'session');
 
                 // Simple heuristic: if doesn't contain '@', treat as username lookup
                 if (!loginInput.includes('@')) {
@@ -110,19 +193,27 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                     signInEmail = loginInput.toLowerCase();
                 }
 
-                const { error: signInError } = await supabase.auth.signInWithPassword({
+                const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
                     email: signInEmail,
                     password,
                 });
                 if (signInError) throw signInError;
+                const signedInUser = signInData.user || signInData.session?.user;
+                if (!signedInUser?.email_confirmed_at) {
+                    await supabase.auth.signOut({ scope: 'local' });
+                    setPendingVerificationEmail(signInEmail);
+                    throw new Error("Verify your email first. Use the resend button below if needed.");
+                }
 
                 // Success
+                setPendingVerificationEmail(null);
                 onLoginSuccess();
             } else if (mode === 'magic-link') {
                 const normalizedEmail = email.trim().toLowerCase();
                 if (!EMAIL_REGEX.test(normalizedEmail)) {
                     throw new Error("Enter a valid email to receive a magic link.");
                 }
+                setAuthPersistMode(rememberMe ? 'local' : 'session');
 
                 const { error } = await supabase.auth.signInWithOtp({
                     email: normalizedEmail,
@@ -148,7 +239,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 setMode('signin');
             }
         } catch (err: any) {
-            setError(err.message || "Authentication failed.");
+            setError(err?.message || "Authentication failed.");
         } finally {
             setIsLoading(false);
         }
@@ -169,13 +260,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 {/* Tabs */}
                 <div className="flex border-b-4 border-black">
                     <button
-                        onClick={() => { setMode('signin'); setError(null); setMessage(null); }}
+                        onClick={() => { setMode('signin'); setError(null); setMessage(null); setPendingVerificationEmail(null); }}
                         className={`flex-1 py-4 font-display text-xl transition-colors ${(mode === 'signin' || mode === 'forgot' || mode === 'magic-link') ? 'bg-brand-yellow text-black' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`}
                     >
                         Sign In
                     </button>
                     <button
-                        onClick={() => { setMode('signup'); setError(null); setMessage(null); }}
+                        onClick={() => { setMode('signup'); setError(null); setMessage(null); setPendingVerificationEmail(null); }}
                         className={`flex-1 py-4 font-display text-xl transition-colors ${mode === 'signup' ? 'bg-brand-blue text-white' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`}
                     >
                         Sign Up
@@ -205,6 +296,19 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                     {message && (
                         <div className="bg-green-50 border-2 border-green-500 text-green-600 p-3 rounded-lg mb-6 text-sm font-bold flex items-start gap-2">
                             <span className="mt-0.5">✅</span> {message}
+                        </div>
+                    )}
+                    {mode === 'signin' && pendingVerificationEmail && (
+                        <div className="bg-amber-50 border-2 border-amber-500 text-amber-800 p-3 rounded-lg mb-6 text-sm font-bold">
+                            <div className="mb-2">Email not verified for <span className="font-mono">{pendingVerificationEmail}</span>.</div>
+                            <button
+                                type="button"
+                                onClick={handleResendVerification}
+                                disabled={isLoading}
+                                className="underline disabled:opacity-60"
+                            >
+                                {isLoading ? 'Sending…' : 'Resend verification email'}
+                            </button>
                         </div>
                     )}
 
@@ -270,9 +374,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                                         required
                                         value={dob}
                                         onChange={(e) => setDob(e.target.value)}
-                                        max={new Date().toISOString().slice(0, 10)}
+                                        max={maxSignupDob}
                                         className="w-full border-2 border-black rounded-lg px-4 py-3 font-mono text-sm focus:ring-2 focus:ring-brand-blue focus:outline-none"
                                     />
+                                    <p className="text-[10px] text-slate-500 mt-1">Must be at least {MIN_SIGNUP_AGE_YEARS} years old.</p>
                                 </div>
                                 <div>
                                     <label className="block text-xs font-bold uppercase mb-1">Phone Number (Optional)</label>
@@ -354,24 +459,30 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                                             Remember me
                                         </label>
                                         <div className="flex items-center gap-3">
-                                            <button type="button" onClick={() => { setMode('magic-link'); setError(null); setMessage(null); }} className="text-xs font-bold text-slate-400 hover:text-black hover:underline">
+                                            <button type="button" onClick={() => { setMode('magic-link'); setError(null); setMessage(null); setPendingVerificationEmail(null); }} className="text-xs font-bold text-slate-400 hover:text-black hover:underline">
                                                 Continue with Magic Link
                                             </button>
-                                            <button type="button" onClick={() => { setMode('forgot'); setError(null); setMessage(null); }} className="text-xs font-bold text-slate-400 hover:text-black hover:underline">
+                                            <button type="button" onClick={() => { setMode('forgot'); setError(null); setMessage(null); setPendingVerificationEmail(null); }} className="text-xs font-bold text-slate-400 hover:text-black hover:underline">
                                                 Forgot password?
                                             </button>
                                         </div>
                                     </>
                                 ) : (
-                                    <button type="button" onClick={() => { setMode('signin'); setError(null); setMessage(null); }} className="text-xs font-bold text-slate-500 hover:text-black hover:underline block ml-auto">
-                                        Back to Password Sign In
-                                    </button>
+                                    <>
+                                        <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-600 hover:text-black">
+                                            <input type="checkbox" checked={rememberMe} onChange={(e) => setRememberMe(e.target.checked)} className="accent-black" />
+                                            Remember me
+                                        </label>
+                                        <button type="button" onClick={() => { setMode('signin'); setError(null); setMessage(null); setPendingVerificationEmail(null); }} className="text-xs font-bold text-slate-500 hover:text-black hover:underline block ml-auto">
+                                            Back to Password Sign In
+                                        </button>
+                                    </>
                                 )}
                             </div>
                         )}
 
                         {mode === 'forgot' && (
-                            <button type="button" onClick={() => { setMode('signin'); setError(null); setMessage(null); }} className="text-xs font-bold text-slate-500 hover:text-black hover:underline block mx-auto">
+                            <button type="button" onClick={() => { setMode('signin'); setError(null); setMessage(null); setPendingVerificationEmail(null); }} className="text-xs font-bold text-slate-500 hover:text-black hover:underline block mx-auto">
                                 Back to Sign In
                             </button>
                         )}

@@ -37,6 +37,7 @@ interface AccountSettingsProps {
 type MessageState = { type: 'success' | 'error'; text: string } | null;
 
 const USERNAME_REGEX = /^[A-Za-z0-9_]{3,20}$/;
+const normalizeText = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
 
 const ContactSection = () => {
     const { user } = useAuth();
@@ -44,14 +45,27 @@ const ContactSection = () => {
     const [contactEmail, setContactEmail] = useState(user?.email || '');
     const [phone, setPhone] = useState('');
     const [sent, setSent] = useState(false);
-    const words = msg.trim() ? msg.trim().split(/\s+/).length : 0;
+    const [sendError, setSendError] = useState<string | null>(null);
+    const words = normalizeText(msg) ? normalizeText(msg).split(/\s+/).length : 0;
 
     const send = async (e: React.FormEvent) => {
         e.preventDefault();
+        setSendError(null);
         if (words > 300) return;
-        const finalMessage = phone.trim() ? `[Phone: ${phone.trim()}]\n\n${msg}` : msg;
-        await savePublicContactMessage(contactEmail, finalMessage);
-        setSent(true);
+        const normalizedEmail = normalizeText(contactEmail);
+        const normalizedMessage = normalizeText(msg);
+        const normalizedPhone = normalizeText(phone);
+        if (!normalizedEmail || !normalizedMessage) {
+            setSendError('Email and message are required.');
+            return;
+        }
+        const finalMessage = normalizedPhone ? `[Phone: ${normalizedPhone}]\n\n${normalizedMessage}` : normalizedMessage;
+        const saved = await savePublicContactMessage(normalizedEmail, finalMessage);
+        if (saved) {
+            setSent(true);
+        } else {
+            setSendError('Unable to send message right now. Please try again.');
+        }
     };
 
     if (sent) {
@@ -111,6 +125,7 @@ const ContactSection = () => {
                         {words}/300 words
                     </div>
                 </div>
+                {sendError && <div className="text-xs font-bold text-red-600">{sendError}</div>}
                 <Button type="submit" icon={<Mail size={16} />} disabled={words > 300}>Send Message</Button>
             </form>
         </div>
@@ -227,7 +242,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
             setPrivateProfile(privateData);
 
             setUsername(publicProfile?.username || '');
-            setAvatarUrl((publicProfile?.avatar_url || '').trim());
+            setAvatarUrl(normalizeText(publicProfile?.avatar_url));
 
             setFirstName(privateData?.first_name || '');
             setLastName(privateData?.last_name || '');
@@ -270,7 +285,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
             try {
                 const path = await saveImage(reader.result as string);
                 const { data } = supabase.storage.from('comic-assets').getPublicUrl(path);
-                setAvatarUrl((data.publicUrl || '').trim());
+                setAvatarUrl(normalizeText(data.publicUrl));
             } catch (err) {
                 alert("Upload failed");
             }
@@ -296,12 +311,12 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         setProfileMessage(null);
         setIsSavingProfile(true);
         try {
-            const normalizedUsername = username.trim();
-            const normalizedFirstName = firstName.trim();
-            const normalizedLastName = lastName.trim();
-            const normalizedPhone = phoneNumber.trim();
-            const normalizedAvatar = avatarUrl.trim();
-            const normalizedDob = dob.trim();
+            const normalizedUsername = normalizeText(username);
+            const normalizedFirstName = normalizeText(firstName);
+            const normalizedLastName = normalizeText(lastName);
+            const normalizedPhone = normalizeText(phoneNumber);
+            const normalizedAvatar = normalizeText(avatarUrl);
+            const normalizedDob = normalizeText(dob);
 
             if (!normalizedUsername) throw new Error("Username is required.");
             if (!USERNAME_REGEX.test(normalizedUsername)) {
@@ -402,7 +417,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         e.preventDefault();
         setSecurityMessage(null);
 
-        const candidate = newPassword.trim();
+        const candidate = normalizeText(newPassword);
         if (candidate.length < 8) {
             setSecurityMessage({ type: 'error', text: 'Password must be at least 8 characters.' });
             return;
@@ -411,7 +426,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
             setSecurityMessage({ type: 'error', text: 'Password must include letters and numbers.' });
             return;
         }
-        if (candidate !== confirmNewPassword.trim()) {
+        if (candidate !== normalizeText(confirmNewPassword)) {
             setSecurityMessage({ type: 'error', text: 'Passwords do not match.' });
             return;
         }

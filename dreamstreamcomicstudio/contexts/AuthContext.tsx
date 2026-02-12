@@ -3,7 +3,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '../services/supabase';
 import { decryptKey } from '../services/crypto';
-import { setFluxKey } from '../services/appSettings';
+import { clearFluxKey, setFluxKey } from '../services/appSettings';
 
 type AuthContextType = {
     user: User | null;
@@ -57,8 +57,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const clearLocalAuthState = () => {
         setUser(null);
         setSession(null);
-        localStorage.removeItem('dreamstream_api_key');
-        setFluxKey(null);
+        try {
+            localStorage.removeItem('dreamstream_api_key');
+        } catch {
+            // ignore storage access issues
+        }
+        clearFluxKey();
     };
 
     const signOut = async () => {

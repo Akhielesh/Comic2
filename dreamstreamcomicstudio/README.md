@@ -32,6 +32,7 @@ Production artifacts are in:
 5. `docs/production/alerting-thresholds.md`
 6. `docs/production/scaling-and-cost.md`
 7. `docs/production/load-test-plan.md`
+8. `docs/production/supabase-auth-checklist.md`
 
 ## Verification Commands
 

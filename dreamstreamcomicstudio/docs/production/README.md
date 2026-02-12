@@ -10,6 +10,7 @@ This folder contains the deployment and operations artifacts for launching Dream
 4. `docs/production/alerting-thresholds.md`
 5. `docs/production/scaling-and-cost.md`
 6. `docs/production/load-test-plan.md`
+7. `docs/production/supabase-auth-checklist.md`
 
 ## Suggested Execution Order
 

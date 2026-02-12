@@ -47,7 +47,9 @@ const getExtensionFromMime = (mime: string) => {
 };
 
 const parseDataUrl = (dataUrl: string) => {
+  if (typeof dataUrl !== 'string') throw new Error('Invalid image payload.');
   const [meta, base64] = dataUrl.split(',');
+  if (!meta || !base64) throw new Error('Invalid image data URL.');
   const mimeMatch = meta.match(/data:(.*?);base64/);
   const mimeType = mimeMatch?.[1] || 'image/png';
   return { mimeType, base64 };
@@ -95,8 +97,12 @@ const escapeHtml = (value: string) =>
     .replace(/\"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
-  const loadImage = (dataUrl: string) =>
+const loadImage = (dataUrl: string) =>
   new Promise<HTMLImageElement>((resolve, reject) => {
+    if (typeof dataUrl !== 'string' || !dataUrl.trim()) {
+      reject(new Error('Image source missing.'));
+      return;
+    }
     const img = new Image();
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error('Failed to load image.'));
@@ -122,6 +128,7 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
   const [sizeUpdatedAt, setSizeUpdatedAt] = useState<number | null>(null);
   const [sizeSourceUpdatedAt, setSizeSourceUpdatedAt] = useState<number | null>(null);
   const [sizeStatus, setSizeStatus] = useState<'latest' | 'stale' | 'updating'>('stale');
+  const [didAutoRefreshSizeForSnapshot, setDidAutoRefreshSizeForSnapshot] = useState(false);
   const hasExport = !!exportData?.project;
   const [artifacts, setArtifacts] = useState<GenerationArtifact[]>([]);
   const [isLoadingArtifacts, setIsLoadingArtifacts] = useState(false);
@@ -133,6 +140,7 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [galleryIndex, setGalleryIndex] = useState(0);
   const [galleryModalItems, setGalleryModalItems] = useState<MasterGalleryItem[]>([]);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
 
   useEffect(() => {
     setOverview(project.state.overview || '');
@@ -151,9 +159,11 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
         if (active) {
           setExportData(data);
           setExportUpdatedAt(project.updatedAt);
+          setExportNotice(null);
         }
       } catch (e) {
-        console.error(e);
+        console.warn('Failed to load export payload for ProjectInfoModal.', e);
+        if (active) setExportNotice('Some export data could not be loaded. Downloads may be limited.');
       } finally {
         if (active) setIsLoadingExport(false);
       }
@@ -172,7 +182,7 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
         const data = await loadArtifactsForProject(project.id);
         if (active) setArtifacts(data.sort((a, b) => b.timestamp - a.timestamp));
       } catch (e) {
-        console.error(e);
+        console.warn('Failed to load generation artifacts for ProjectInfoModal.', e);
       } finally {
         if (active) setIsLoadingArtifacts(false);
       }
@@ -542,11 +552,16 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
     const imageFileMap: Record<string, string> = {};
     if (imagesFolder) {
       Object.entries(data.images).forEach(([id, dataUrl]) => {
-        const { mimeType, base64 } = parseDataUrl(dataUrl as string);
-        const ext = getExtensionFromMime(mimeType);
-        const filename = `${id}.${ext}`;
-        imageFileMap[id] = filename;
-        imagesFolder.file(filename, base64, { base64: true });
+        try {
+          if (typeof dataUrl !== 'string' || !dataUrl.trim()) return;
+          const { mimeType, base64 } = parseDataUrl(dataUrl);
+          const ext = getExtensionFromMime(mimeType);
+          const filename = `${id}.${ext}`;
+          imageFileMap[id] = filename;
+          imagesFolder.file(filename, base64, { base64: true });
+        } catch (error) {
+          console.warn('Skipping invalid image during ZIP export.', { id, error });
+        }
       });
     }
 
@@ -626,6 +641,7 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
 
   const handleDownloadPdf = async () => {
     try {
+      setExportNotice(null);
       setIsBuildingPdf(true);
       const data = await ensureExportData();
       const blob = await buildPdfBlob(data);
@@ -635,7 +651,8 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
       setSizeStatus('latest');
       downloadBlob(blob, `${project.name.replace(/[^a-zA-Z0-9-_]+/g, '_') || 'comic'}_comic.pdf`);
     } catch (e) {
-      console.error(e);
+      console.warn('PDF export failed in ProjectInfoModal.', e);
+      setExportNotice('PDF export failed. Please retry after refreshing project assets.');
     } finally {
       setIsBuildingPdf(false);
     }
@@ -643,6 +660,7 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
 
   const handleDownloadHtml = async () => {
     try {
+      setExportNotice(null);
       const data = exportData;
       const cover = getCoverImageUrl(data);
       const html = `<!DOCTYPE html>
@@ -672,12 +690,14 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
       const blob = new Blob([html], { type: 'text/html' });
       downloadBlob(blob, `${project.name.replace(/[^a-zA-Z0-9-_]+/g, '_') || 'comic'}.html`);
     } catch (e) {
-      console.error(e);
+      console.warn('HTML export failed in ProjectInfoModal.', e);
+      setExportNotice('HTML export failed. Please retry.');
     }
   };
 
   const handleDownloadZip = async () => {
     try {
+      setExportNotice(null);
       setIsBuildingZip(true);
       const data = await ensureExportData();
       const { blob, filename } = await buildProjectZip(data);
@@ -687,7 +707,8 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
       setSizeStatus('latest');
       downloadBlob(blob, filename);
     } catch (e) {
-      console.error(e);
+      console.warn('ZIP export failed in ProjectInfoModal.', e);
+      setExportNotice('ZIP export failed. Some image sources may be invalid.');
     } finally {
       setIsBuildingZip(false);
     }
@@ -695,6 +716,7 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
 
   const handleRefreshSizes = async () => {
     try {
+      setExportNotice(null);
       setIsBuildingPdf(true);
       setIsBuildingZip(true);
       setSizeStatus('updating');
@@ -706,7 +728,8 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
       setSizeSourceUpdatedAt(project.updatedAt);
       setSizeStatus('latest');
     } catch (e) {
-      console.error(e);
+      console.warn('Failed to refresh export sizes.', e);
+      setExportNotice('Unable to refresh file sizes right now.');
       setSizeStatus('stale');
     } finally {
       setIsBuildingPdf(false);
@@ -738,6 +761,10 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
   }, [artifacts, project.id, project.state, project.state.imageTags, project.state.imageTagCounters, onUpdateProject]);
 
   useEffect(() => {
+    setDidAutoRefreshSizeForSnapshot(false);
+  }, [project.id, project.updatedAt]);
+
+  useEffect(() => {
     if (!sizeSourceUpdatedAt) {
       setSizeStatus('stale');
       return;
@@ -750,12 +777,13 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
   }, [project.updatedAt, sizeSourceUpdatedAt]);
 
   useEffect(() => {
-    if (sizeStatus !== 'stale') return;
+    if (sizeStatus !== 'stale' || didAutoRefreshSizeForSnapshot) return;
+    setDidAutoRefreshSizeForSnapshot(true);
     const handle = setTimeout(() => {
       void handleRefreshSizes();
     }, 1200);
     return () => clearTimeout(handle);
-  }, [sizeStatus, project.updatedAt]);
+  }, [sizeStatus, project.updatedAt, didAutoRefreshSizeForSnapshot]);
 
   return (
     <ModalPortal>
@@ -891,6 +919,11 @@ export const ProjectInfoModal: React.FC<ProjectInfoModalProps> = ({ project, onC
             <div className="space-y-6">
               <div className="border-4 border-black rounded-xl p-4 bg-white shadow-comic">
                 <div className="text-xs font-bold uppercase text-slate-500">Storage & Files</div>
+                {exportNotice && (
+                  <div className="mt-3 border-2 border-amber-500 bg-amber-50 text-amber-800 rounded-lg px-3 py-2 text-xs font-bold">
+                    {exportNotice}
+                  </div>
+                )}
                 {isLoadingExport ? (
                   <div className="mt-3 text-sm font-comic text-slate-500">Loading storage…</div>
                 ) : (

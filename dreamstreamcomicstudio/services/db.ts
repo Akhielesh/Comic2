@@ -919,11 +919,14 @@ export const syncMarketingConsentLegacy = async (userId: string, marketingEnable
 export const savePublicContactMessage = async (email: string, message: string) => {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return false;
+  const normalizedEmail = typeof email === 'string' ? email.trim() : '';
+  const normalizedMessage = typeof message === 'string' ? message.trim() : '';
+  if (!normalizedEmail || !normalizedMessage) return false;
 
   const { error } = await supabase.from('contact_messages').insert({
     user_id: user.id,
-    email,
-    message
+    email: normalizedEmail,
+    message: normalizedMessage
   });
 
   if (error) {

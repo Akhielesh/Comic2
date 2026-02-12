@@ -101,8 +101,13 @@ export const getFluxKeyInfo = (): { key: string | null; source: KeySource } => {
 
 export const getFluxKey = (): string | null => getFluxKeyInfo().key;
 
-export const setFluxKey = (key: string) => {
-  setInStorage(FLUX_KEY_STORAGE, key.trim());
+export const setFluxKey = (key: string | null) => {
+  const normalized = typeof key === "string" ? key.trim() : "";
+  if (!normalized) {
+    removeFromStorage(FLUX_KEY_STORAGE);
+    return;
+  }
+  setInStorage(FLUX_KEY_STORAGE, normalized);
 };
 
 export const clearFluxKey = () => {
