@@ -1,7 +1,6 @@
 import crypto from 'node:crypto';
 import Stripe from 'stripe';
 import type {
-  BillingCouponEntitlement,
   BillingPlanDefinition,
   BillingSummaryResponse,
   BillingPlanTier,
@@ -16,7 +15,6 @@ import type {
 } from '../../../shared/types/billing.js';
 import { CT_USD, DEFAULT_MARKUP, getCreditPackByUsd, resolvePlanDefinition } from './pricingCatalog.js';
 import { getSupabaseAdmin, supabase } from './supabase.js';
-import { getActiveCouponEntitlementForUser } from './coupons.js';
 
 type WalletRow = {
   user_id: string;
@@ -55,8 +53,6 @@ type WalletEntitlementContext = {
   basePlan: BillingPlanDefinition;
   effectivePlan: BillingPlanDefinition;
   effectiveUsageSource: BillingSummaryResponse['effectiveUsageSource'];
-  activeCouponEntitlement?: BillingCouponEntitlement;
-  overageEnabledOverride?: boolean;
 };
 
 const inMemoryWallets = new Map<string, WalletRow>();
@@ -392,29 +388,12 @@ const loadOrCreateWallet = async (userId: string): Promise<WalletRow> => {
   return persisted;
 };
 
-const resolveWalletEntitlementContext = async (userId: string, walletInput: WalletRow): Promise<WalletEntitlementContext> => {
+const resolveWalletEntitlementContext = async (_userId: string, walletInput: WalletRow): Promise<WalletEntitlementContext> => {
   const basePlan = resolvePlanDefinition(walletInput.plan_tier);
-  const activeCouponEntitlement = await getActiveCouponEntitlementForUser({ userId });
-  const entitlementPolicy = activeCouponEntitlement?.policy;
-  const effectivePlan = entitlementPolicy?.planTierOverride
-    ? resolvePlanDefinition(entitlementPolicy.planTierOverride)
-    : basePlan;
+  const effectivePlan = basePlan;
 
-  let includedMonthlyCt = effectivePlan.monthlyIncludedCt;
-  let dailyGuardrailCt = effectivePlan.dailyGuardrailCt;
-
-  if (typeof entitlementPolicy?.includedMonthlyCtOverride === 'number') {
-    includedMonthlyCt = Math.max(0, Math.floor(entitlementPolicy.includedMonthlyCtOverride));
-  }
-  if (typeof entitlementPolicy?.dailyGuardrailCtOverride === 'number') {
-    dailyGuardrailCt = Math.max(0, Math.floor(entitlementPolicy.dailyGuardrailCtOverride));
-  }
-  if (typeof entitlementPolicy?.includedMonthlyCtBonus === 'number') {
-    includedMonthlyCt += Math.max(0, Math.floor(entitlementPolicy.includedMonthlyCtBonus));
-  }
-  if (typeof entitlementPolicy?.dailyGuardrailCtBonus === 'number') {
-    dailyGuardrailCt += Math.max(0, Math.floor(entitlementPolicy.dailyGuardrailCtBonus));
-  }
+  const includedMonthlyCt = effectivePlan.monthlyIncludedCt;
+  const dailyGuardrailCt = effectivePlan.dailyGuardrailCt;
 
   let wallet = walletInput;
   const shouldPersistLimits = wallet.included_monthly_ct !== includedMonthlyCt
@@ -433,9 +412,7 @@ const resolveWalletEntitlementContext = async (userId: string, walletInput: Wall
     wallet,
     basePlan,
     effectivePlan,
-    effectiveUsageSource: activeCouponEntitlement ? 'coupon_entitlement' : 'subscription',
-    activeCouponEntitlement: activeCouponEntitlement || undefined,
-    overageEnabledOverride: entitlementPolicy?.overageEnabledOverride
+    effectiveUsageSource: 'subscription'
   };
 };
 
@@ -848,7 +825,7 @@ export const reserveUsageTokens = async (input: {
   }
 
   const profile = await getPaymentProfile(input.userId);
-  const effectiveOverageEnabled = walletContext.overageEnabledOverride ?? profile.overage_enabled;
+  const effectiveOverageEnabled = profile.overage_enabled;
   const allowOverage = requiredCt > balance.availableCt;
   if (requiredCt > balance.availableCt) {
     const shortfallCt = requiredCt - balance.availableCt;
@@ -1143,7 +1120,7 @@ export const getBillingSummary = async (userId: string): Promise<BillingSummaryR
   const walletContext = await ensureWalletContext(userId);
   const wallet = walletContext.wallet;
   const profile = await getPaymentProfile(userId);
-  const effectiveOverageEnabled = walletContext.overageEnabledOverride ?? profile.overage_enabled;
+  const effectiveOverageEnabled = profile.overage_enabled;
   const admin = getBillingAdmin();
   const { data: subscriptionRow, error: subscriptionError } = await admin
     .from('user_plan_subscriptions')
@@ -1190,7 +1167,7 @@ export const getBillingSummary = async (userId: string): Promise<BillingSummaryR
     basePlan: walletContext.basePlan,
     effectivePlan: walletContext.effectivePlan,
     effectiveUsageSource: walletContext.effectiveUsageSource,
-    activeCouponEntitlement: walletContext.activeCouponEntitlement,
+    activeCouponEntitlement: undefined,
     plan: walletContext.effectivePlan,
     hasPaymentMethodOnFile: profile.has_payment_method,
     overageEnabled: effectiveOverageEnabled,

@@ -8,6 +8,7 @@ import type {
   CheckoutSessionConfirmResponse,
   CheckoutSessionResponse,
   ComicCostReport,
+  CouponPreviewResult,
   CouponRedemptionResult,
   CreditPackId,
   PricingCatalogResponse,
@@ -71,22 +72,41 @@ export const getComicCost = async (comicId: string): Promise<ComicCostReport> =>
 export const redeemCoupon = async (couponCode: string): Promise<CouponRedemptionResult & { summary?: BillingSummaryResponse }> =>
   post<{ couponCode: string }, CouponRedemptionResult & { summary?: BillingSummaryResponse }>('/api/billing/coupons/redeem', { couponCode });
 
+export const previewCoupon = async (couponCode: string): Promise<CouponPreviewResult> =>
+  post<{ couponCode: string }, CouponPreviewResult>('/api/billing/coupons/preview', { couponCode });
+
 export const listAdminCoupons = async (limit = 100): Promise<{
   definitions: AdminCouponDefinition[];
   assignments: AdminCouponAssignment[];
   events: AdminCouponRedemptionEvent[];
+  nextCursor?: string;
 }> =>
   get<{
     definitions: AdminCouponDefinition[];
     assignments: AdminCouponAssignment[];
     events: AdminCouponRedemptionEvent[];
+    nextCursor?: string;
   }>(`/api/billing/admin/coupons?limit=${Math.max(10, Math.floor(limit))}`);
 
+export const listAdminCouponsByCursor = async (input: {
+  limit?: number;
+  cursor?: string;
+}): Promise<{
+  definitions: AdminCouponDefinition[];
+  assignments: AdminCouponAssignment[];
+  events: AdminCouponRedemptionEvent[];
+  nextCursor?: string;
+}> =>
+  get<{
+    definitions: AdminCouponDefinition[];
+    assignments: AdminCouponAssignment[];
+    events: AdminCouponRedemptionEvent[];
+    nextCursor?: string;
+  }>(`/api/billing/admin/coupons?limit=${Math.max(10, Math.floor(input.limit || 100))}${input.cursor ? `&cursor=${encodeURIComponent(input.cursor)}` : ''}`);
+
 export const createAdminCouponDefinition = async (payload: {
-  code: string;
-  startsAt: string;
-  endsAt: string;
-  policy: Record<string, unknown>;
+  tokenAmountCt: number;
+  validForHours: number;
 }) =>
   post<typeof payload, AdminCouponDefinition>('/api/billing/admin/coupons', payload);
 

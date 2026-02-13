@@ -1,0 +1,659 @@
+[dotenv@17.2.4] injecting env (7) from .env.local -- tip: 🔐 prevent committing .env to code: https://dotenvx.com/precommit
+[dotenv@17.2.4] injecting env (0) from .env -- tip: ⚙️  specify custom .env file path with { path: '/custom/path/.env' }
+Searching for project with name like "%Tarkan%"...
+Found 1 project(s). Analyzing the first one...
+{
+  "id": "935ad22a-c59e-447a-9c07-9b3f0d681679",
+  "name": "tarkan",
+  "created_at": "2026-02-13T01:34:36.905+00:00",
+  "metadata": {
+    "style_prompt": "",
+    "style_category": "",
+    "resolution": "1K",
+    "aspect_ratio": "1:1"
+  },
+  "generation_steps": [
+    {
+      "step": "Story/Script",
+      "input_context": {
+        "user_input_script": "This is a reimagining of the classic legend, titled TARZAN: GHOST OF THE BURNING SANDS.\n\nThe lush jungles of the Congo are replaced by the vast, unforgiving \"Sea of Glass\"—a desert so brutal that only the most resilient life survives. Tarzan is not a swinger of vines, but a master of the dunes, a \"sand-surfer\" who moves with the fluid grace of a sidewinder.\n\nTARZAN: GHOST OF THE BURNING SANDS\nCHARACTERS:\n\nTARKAN (TARZAN): Mid-20s. Skin bronzed to the color of cedar, eyes a piercing, startling blue. He wears wrappings of sun-bleached hide and carries a spear tipped with obsidian.\n\nJANE PORTER: 20s. An adventurous hydrologist and cartographer. She is resilient but exhausted by the heat.\n\nCLAYTON: 40s. A mercenary hired to find \"The Blue Vein\"—a legendary subterranean river.\n\nKALA: A matriarchal Hamadryas baboon, larger and more predatory than those known to science.\n\nSCENE 1: THE INFINITE ERG - DAY\nThe sun is a white-hot coin in a bleached sky.\n\nA massive sandstorm—a haboob—towers a thousand feet high, swallowing the world. In the chaos of the past, a steam-powered crawler (an 1890s desert tank) lies half-buried, its iron hull sandblasted to a shine.\n\nNARRATOR (V.O.)\nThe desert does not forgive. It does not forget. It only consumes.\n\nA young boy crawls from the wreckage of the crawler. He is alone. A shadow looms over him. It is KALA. She is gray-furred, scarred, and ancient. She doesn't snarl; she tilts her head, feeling the heat off the child. She reaches out a leathery hand.\n\nCUT TO:\n\nSCENE 2: THE CANYON OF WHISPERS - FIFTEEN YEARS LATER\nThe silence of the desert is broken by a rhythmic shick-shick-shick.\n\nTARKAN (Tarzan) is \"surfing\" down a 300-foot dune. He uses a flat piece of polished chitin (from a giant desert beetle) as a board. He moves at 40 miles per hour, trailing a plume of golden dust.\n\nHe reaches the bottom, leaps, and digs his fingers into a rock face. He climbs with the speed of a lizard.\n\nHe reaches a high ledge where a troop of GIANT BABOONS waits. They don't hoot; they communicate in low-frequency clicks and whistles that mimic the wind. Tarkan mimics them perfectly. He drops a freshly caught desert hare at Kala’s feet. She grunts—a sign of respect.\n\nSCENE 3: THE EXPEDITION CAMP - NIGHT\nA small oasis, barely a puddle. Three tents are pitched.\n\nJANE PORTER sits by a flickering oil lamp, sketching a map. CLAYTON stands at the edge of the light, cleaning a long-range rifle.\n\nJANE\nThe water table is dropping, Clayton. If we don’t find the source within forty-eight hours, the camels won't make the return trip.\n\nCLAYTON\nThe \"Blue Vein\" exists, Jane. My sensors picked up the seismic resonance. There’s an ocean under these sands. And where there’s water in a wasteland, there’s a fortune.\n\nJANE\n(Disgusted)\nYou’re looking for a payday. I’m looking for the reason this entire ecosystem hasn't collapsed.\n\nA shadow flits across the top of a nearby dune. Clayton snaps his rifle up.\n\nCLAYTON\nMovement. Out there.\n\nJANE\n(Standing)\nWait! Don’t shoot. It might be one of the nomads.\n\nCLAYTON\nToo fast for a nomad.\n\nSCENE 4: THE AMBUSH - DAY\nJane is scouting a narrow canyon. She’s separated from the group, following a series of strange markings on the stone—petroglyphs that look fresh.\n\nSuddenly, the ground erupts. A DUNE-RIPPER (a prehistoric, land-dwelling crocodilian) bursts from the sand. It is fifteen feet of muscle and scales the color of dust.\n\nJane falls back, her pistol jamming as sand gets into the chamber. The Ripper lunges.\n\nWHOOSH.\n\nA spear thrashes into the Ripper’s neck. TARKAN drops from the canyon wall like a falling star. He lands on the beast’s back. He doesn’t scream a jungle yell; he emits a piercing, high-pitched WHISTLE that echoes off the walls, disorienting the predator.\n\nHe uses a bone knife to finish the job. The beast collapses.\n\nTarkan stands. He is a silhouette against the blinding sun. Jane gazes up, shielding her eyes.\n\nJANE\nYou... you saved me.\n\nTarkan tilts his head. He approaches her with the caution of a wolf. He smells her—scents of lavender soap and sweat. He touches the fabric of her sleeve.\n\nTARKAN\n(In a voice like grinding stones)\nNot... sand.\n\nJANE\n(Breathless)\nNo. It’s cotton. I’m Jane.\n\nTarkan points to himself.\n\nTARKAN\nTar-Kan. (He points to the sun) Child of the Fire.\n\nSCENE 5: THE HIDDEN GARDEN - NIGHT\nTarkan has led Jane to his \"home\"—not a treehouse, but a series of interconnected caverns cooled by a subterranean spring. It is a lush, hidden grotto of ferns and phosphorescent moss.\n\nThey sit by a pool of crystal-clear water.\n\nJANE\nYou’ve been here your whole life, haven't you? You’re the one who’s been protecting the water.\n\nTarkan watches his reflection. He touches the scars on his chest.\n\nTARKAN\nOthers come. With loud sticks. (He mimics a gun blast). They take. The sand grows angry.\n\nJANE\nClayton. He’s going to blast the shelf to get to the aquifer. Tarkan, if he does that, the pressure will blow this entire oasis apart. It’ll dry up forever.\n\nTarkan looks at her. He understands \"dry.\" He understands \"dead.\" He stands, grabbing his spear.\n\nSCENE 6: THE FINAL CONFRONTATION - DAY\nAt the \"Eye of the Desert\"—a massive salt flat—Clayton’s men are setting seismic charges. The machines hum with a low, vibrating growl that agitates the ground.\n\nCLAYTON\nSet the timers! We blow the cap, and we’ll have a geyser a hundred feet high!\n\nSuddenly, the wind picks up. But it’s not the wind. It’s the whistle.\n\nFrom the crest of every surrounding dune, the Sand-Stalkers (the baboons) appear. Hundreds of them. They sit silent, watching.\n\nIn the center, Tarkan appears. He is riding a massive, tamed Dune-Ripper, his feet locked into a saddle of hide.\n\nCLAYTON\nWhat in the hell...\n\nTARKAN\n(Booming)\nLEAVE. THE. WATER.\n\nCLAYTON\nA wild man? You’re the one the legends talk about. The Ghost.\n\nClayton raises his rifle.\n\nCLAYTON\nYou’re just meat and bone, Ghost!\n\nClayton fires. Tarkan leans, the bullet grazing his shoulder. He kicks the Ripper into a gallop.\n\nThe battle is a whirlwind of sand and steel. The baboons descend like a gray tide, dismantling the machinery with brute strength. Tarkan leaps from his mount, tackling Clayton into a deep sand-pit.\n\nThey struggle. The sand is \"quick\"—a literal sinkhole triggered by the vibrations of the machines.\n\nCLAYTON\n(Sinking)\nHelp me! Grab the rope!\n\nTarkan looks at the rope, then at the dying plants at the edge of the oasis. He looks at Jane, who is watching from the ridge.\n\nTarkan throws the rope—not to Clayton, but to the detonator box, yanking it away from the hole just as Clayton sinks to his chest.\n\nTARKAN\nThe desert... decides.\n\nTarkan reaches down and grabs Clayton by the collar, hauling him out with superhuman strength, but tosses him toward his fleeing mercenaries.\n\nTARKAN\nGo. Or stay... and become the sand.\n\nSCENE 7: EPILOGUE - SUNSET\nThe mercenaries are gone. The \"Eye of the Desert\" is quiet.\n\nJane stands by her remaining supplies. A rescue crawler is visible on the horizon.\n\nJANE\nCome with me, Tarkan. There are cities. Rivers that never end. You don't have to fight for every drop of life.\n\nTarkan looks out over the dunes. The sand is turning a deep, royal purple as the stars begin to wake.\n\nTARKAN\nThe desert is harsh. But it is true.\n\nHe takes her hand and presses a small, smooth desert rose (a stone formation) into her palm.\n\nTARKAN\nTell them... the Ghost is watching the water.\n\nHe turns and runs. Not a clumsy human run, but a beautiful, bounding sprint. He hits a steep dune and \"surfs\" down the other side, disappearing into the shadows of the shifting sands.\n\nJane watches until he is gone. She looks at her map, then takes a pen and crosses out the location of the oasis, marking it simply: MIRAGE.\n\nFADE OUT."
+      },
+      "output_context": {
+        "scenes": [
+          {
+            "id": 1,
+            "synopsis": "A massive sandstorm, a haboob, dominates the sky above the brutal desert. A steam-powered crawler lies half-buried in the sand. A young boy crawls from the wreckage and is approached by Kala, an ancient, scarred Hamadryas baboon, who gently reaches out to him.",
+            "setting": "The Infinite Erg - A vast, unforgiving desert",
+            "characters": [
+              "Young boy (Tarkan)",
+              "Kala",
+              "Narrator (V.O.)"
+            ]
+          },
+          {
+            "id": 2,
+            "synopsis": "Fifteen years later, Tarkan (Tarzan) sand-surfs down a 300-foot dune using a piece of polished chitin, moving with fluid grace. He then climbs a rock face with lizard-like speed, reaching a high ledge. There, he communicates with a troop of giant baboons using low-frequency clicks and whistles, and offers a freshly caught desert hare to Kala, who grunts in respect.",
+            "setting": "The Canyon of Whispers, on a high ledge",
+            "characters": [
+              "Tarkan",
+              "Kala",
+              "Giant Baboons"
+            ]
+          },
+          {
+            "id": 3,
+            "synopsis": "At a small oasis, Jane Porter sketches a map by a flickering oil lamp while Clayton cleans a long-range rifle nearby. They discuss the dropping water table; Jane is concerned about the ecosystem, while Clayton seeks the legendary 'Blue Vein' for fortune. A shadow flits across a dune, prompting Clayton to raise his rifle, but Jane cautions against shooting, believing it might be a nomad.",
+            "setting": "Expedition Camp at a small oasis",
+            "characters": [
+              "Jane Porter",
+              "Clayton"
+            ]
+          },
+          {
+            "id": 4,
+            "synopsis": "Jane scouts a narrow canyon, examining fresh petroglyphs on the stone walls, separated from her group. Suddenly, a fifteen-foot Dune-Ripper (a prehistoric crocodilian) erupts from the sand and attacks her, causing her pistol to jam. Tarkan drops from the canyon wall, spearing the beast in the neck. He lands on its back, emits a disorienting whistle, and uses a bone knife to finish it off, saving Jane. He then cautiously approaches her, touching her sleeve and introducing himself as Tar-Kan, 'Child of the Fire.' Jane, breathless, introduces herself.",
+            "setting": "A narrow canyon",
+            "characters": [
+              "Jane Porter",
+              "Tarkan"
+            ]
+          },
+          {
+            "id": 5,
+            "synopsis": "Tarkan leads Jane to his 'home,' a hidden grotto of interconnected caverns cooled by a subterranean spring, lush with ferns and phosphorescent moss. They sit by a pool of clear water. Jane realizes Tarkan has been protecting the water source his whole life. Tarkan explains that 'others' come with 'loud sticks' and take the water, making the 'sand angry.' Jane warns him that Clayton plans to blast the aquifer, which would destroy the oasis by blowing it apart and drying it up forever. Tarkan understands the gravity of her words.",
+            "setting": "The Hidden Garden - A lush grotto of interconnected caverns with a subterranean spring",
+            "characters": [
+              "Tarkan",
+              "Jane Porter"
+            ]
+          },
+          {
+            "id": 6,
+            "synopsis": "At the 'Eye of the Desert,' a vast salt flat, Clayton's men are setting seismic charges, the machines humming with a vibrating growl. Suddenly, the wind-like whistle of Tarkan is heard, and hundreds of Sand-Stalkers (baboons) appear on the surrounding dunes. Tarkan rides a massive, tamed Dune-Ripper into the center, booming a demand for them to leave the water. Clayton recognizes him as 'The Ghost' and fires his rifle, grazing Tarkan's shoulder. Tarkan kicks his Ripper into a gallop, and the baboons descend, dismantling machinery. Tarkan tackles Clayton into a quicksand-like sand-pit. Tarkan, instead of leaving him to sink, yanks the detonator box away from the hole and then hauls Clayton out, tossing him towards his fleeing mercenaries, warning them to go or 'become the sand.'",
+            "setting": "The 'Eye of the Desert' - a massive salt flat",
+            "characters": [
+              "Tarkan",
+              "Clayton",
+              "Jane Porter",
+              "Clayton's men",
+              "Sand-Stalkers (baboons)"
+            ]
+          },
+          {
+            "id": 7,
+            "synopsis": "With Clayton and his mercenaries gone, the 'Eye of the Desert' is quiet at sunset. Jane stands by her remaining supplies, seeing a rescue crawler on the horizon. She invites Tarkan to join her in civilization, where 'rivers never end.' Tarkan looks out over the dunes, now turning purple, and declines, saying the desert is 'true.' He presses a smooth desert rose stone into her palm, asking her to tell them 'the Ghost is watching the water.' He then turns and sprints, sand-surfing down a steep dune and disappearing into the shadows. Jane watches him go, then crosses out the oasis location on her map, marking it simply: 'MIRAGE.'",
+            "setting": "The 'Eye of the Desert' at sunset",
+            "characters": [
+              "Jane Porter",
+              "Tarkan"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "step": "Character Definitions",
+      "input_context": "Extracted from script",
+      "output_context": [
+        {
+          "id": "509a83a7-b894-426b-8b33-dc2f05dfe553",
+          "name": "Tarkan",
+          "description": "A young man of fluid grace and lizard-like speed, adapted to the desert. He wears minimal, practical clothing, suggesting resourcefulness and integration with his environment. He is strong, agile, and often carries a bone knife as his primary tool and weapon. He later sustains a graze wound on his shoulder from a rifle shot.",
+          "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9d108585-7447-4272-b43f-9e0d9ab59380.webp"
+        },
+        {
+          "id": "245bd204-2048-4e12-80dc-1d05fdc9ebdc",
+          "name": "Kala",
+          "description": "A large, powerful, and ancient Hamadryas baboon with noticeable scars, indicating a lifetime of survival in the harsh desert. Her demeanor suggests wisdom and authority.",
+          "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/090a079c-3716-4bbc-b712-37137061edfe.webp"
+        },
+        {
+          "id": "4727f04b-ba22-445a-a7b0-652001fdbcaf",
+          "name": "Jane Porter",
+          "description": "Wears practical exploration attire suitable for desert conditions, emphasizing functionality over aesthetics. She carries a pistol for self-defense and is frequently seen sketching maps in her notebook, demonstrating her scientific approach.",
+          "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/c44b592b-b366-4735-840d-2be732d56d55.webp"
+        },
+        {
+          "id": "c0fc8bc4-2a75-48a5-9133-badae00a8194",
+          "name": "Clayton",
+          "description": "A commanding figure, typically seen with a long-range rifle, which he cleans and uses with expertise. His appearance is hardened and determined, reflecting his mercenary nature and single-minded pursuit of wealth.",
+          "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f1fb47ef-9be5-42a5-8455-4bf20f39249d.webp"
+        },
+        {
+          "id": "46ec8644-7ea5-44b9-80d5-b5861eaf14e0",
+          "name": "Giant Baboons / Sand-Stalkers",
+          "description": "Numerous, large baboons that appear suddenly and silently on surrounding dunes, capable of organized and coordinated action, such as descending to dismantle machinery during conflict.",
+          "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/bf5351f7-c712-4b7c-89ac-a4cabe6625a9.webp"
+        },
+        {
+          "id": "eb6b653a-ffb3-438f-8b09-0fa1672c2ba3",
+          "name": "Dune-Ripper",
+          "description": "A fifteen-foot prehistoric crocodilian, incredibly powerful and dangerous, with strong limbs and a thick hide. The tamed version demonstrates a surprising loyalty and responsiveness to Tarkan's commands.",
+          "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/1a12ebe4-4b51-43f8-9f8d-885850cfbb0b.webp"
+        }
+      ]
+    },
+    {
+      "step": "Panel 1 Generation",
+      "panel_id": "s1-p0-1770946949164",
+      "scene_id": 1,
+      "input_context": {
+        "description": "A wide shot of the brutal desert engulfed by a massive haboob (sandstorm). The half-buried steam-powered crawler wreckage is partially visible in the foreground, dwarfed by the storm and obscured by sand and dust.",
+        "dialogue": "The desert offered no mercy, even to the machines.",
+        "prompt_used": "A wide shot of the brutal desert engulfed by a massive haboob (sandstorm). The half-buried steam-powered crawler wreckage is partially visible in the foreground, dwarfed by the storm and obscured by sand and dust.",
+        "negative_prompt": "default negative prompt",
+        "reference_images": [
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9fa3f9b4-e13f-4c08-9f0d-62945e2cf9d6.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/090a079c-3716-4bbc-b712-37137061edfe.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/5f6f0b9f-453e-41a6-a08f-b15ac2bb37c9.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f7f57626-850b-48d8-a5f1-2e7a8b2d26ca.webp"
+        ],
+        "layout": "grid"
+      },
+      "output_context": {
+        "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/71b626dc-0ba7-4994-8f02-3b818ebd787b.webp"
+      },
+      "metadata": {}
+    },
+    {
+      "step": "Panel 2 Generation",
+      "panel_id": "s1-p1-1770946949164",
+      "scene_id": 1,
+      "input_context": {
+        "description": "A medium shot focusing on the half-buried steam-powered crawler wreckage. Tarkan, a young boy, crawls out from a damaged opening, his face grimy but determined, looking out into the swirling sandstorm.",
+        "dialogue": "But life, stubborn as a desert bloom, found a way.",
+        "prompt_used": "A medium shot focusing on the half-buried steam-powered crawler wreckage. Tarkan, a young boy, crawls out from a damaged opening, his face grimy but determined, looking out into the swirling sandstorm.",
+        "negative_prompt": "default negative prompt",
+        "reference_images": [
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9d108585-7447-4272-b43f-9e0d9ab59380.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9fa3f9b4-e13f-4c08-9f0d-62945e2cf9d6.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/090a079c-3716-4bbc-b712-37137061edfe.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/5f6f0b9f-453e-41a6-a08f-b15ac2bb37c9.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f7f57626-850b-48d8-a5f1-2e7a8b2d26ca.webp"
+        ],
+        "layout": "grid"
+      },
+      "output_context": {
+        "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f703b188-4e72-4707-b307-20451b6debdf.webp"
+      },
+      "metadata": {}
+    },
+    {
+      "step": "Panel 3 Generation",
+      "panel_id": "s1-p2-1770946949164",
+      "scene_id": 1,
+      "input_context": {
+        "description": "A medium-close shot. Tarkan, standing beside the wreckage of the crawler, looks up cautiously. Kala, an ancient and scarred Hamadryas baboon, stands before him, her paw gently extended towards him in a gesture of comfort or greeting. The sandstorm begins to clear in the background, revealing more of the vast desert.",
+        "dialogue": "And sometimes, hope arrives in unexpected forms.",
+        "prompt_used": "A medium-close shot. Tarkan, standing beside the wreckage of the crawler, looks up cautiously. Kala, an ancient and scarred Hamadryas baboon, stands before him, her paw gently extended towards him in a gesture of comfort or greeting. The sandstorm begins to clear in the background, revealing more of the vast desert.",
+        "negative_prompt": "default negative prompt",
+        "reference_images": [
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9d108585-7447-4272-b43f-9e0d9ab59380.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/c44b592b-b366-4735-840d-2be732d56d55.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9fa3f9b4-e13f-4c08-9f0d-62945e2cf9d6.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/090a079c-3716-4bbc-b712-37137061edfe.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/5f6f0b9f-453e-41a6-a08f-b15ac2bb37c9.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f7f57626-850b-48d8-a5f1-2e7a8b2d26ca.webp"
+        ],
+        "layout": "grid"
+      },
+      "output_context": {
+        "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/1066c756-b804-40ee-b3ae-b4357ce631cc.webp"
+      },
+      "metadata": {}
+    },
+    {
+      "step": "Panel 4 Generation",
+      "panel_id": "s2-p0-1770947018556",
+      "scene_id": 2,
+      "input_context": {
+        "description": "A dynamic shot of Tarkan, now a young man, fluidly carving down the massive 300-foot dune on a piece of polished chitin. Sand sprays dramatically behind him, emphasizing his speed and grace. The vast, arid desert stretches out in the background under a clear sky.",
+        "dialogue": "Fifteen years later, the desert had shaped him.",
+        "prompt_used": "A dynamic shot of Tarkan, now a young man, fluidly carving down the massive 300-foot dune on a piece of polished chitin. Sand sprays dramatically behind him, emphasizing his speed and grace. The vast, arid desert stretches out in the background under a clear sky.",
+        "negative_prompt": "default negative prompt",
+        "reference_images": [
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9d108585-7447-4272-b43f-9e0d9ab59380.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/5f6f0b9f-453e-41a6-a08f-b15ac2bb37c9.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/090a079c-3716-4bbc-b712-37137061edfe.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9fa3f9b4-e13f-4c08-9f0d-62945e2cf9d6.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/3d9189ae-68c3-4123-a90a-cd6dceee8186.webp"
+        ],
+        "layout": "grid"
+      },
+      "output_context": {
+        "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/5452da5b-91a4-4609-b858-1013588d2256.webp"
+      },
+      "metadata": {}
+    },
+    {
+      "step": "Panel 5 Generation",
+      "panel_id": "s2-p1-1770947018556",
+      "scene_id": 2,
+      "input_context": {
+        "description": "Tarkan scales a sheer rock face with incredible speed and agility, his strong body pressed close to the stone like a lizard. His movements are precise and effortless. The high ledge, his apparent destination, is visible just above him.",
+        "dialogue": "He moved through the sands and stone as if born of them.",
+        "prompt_used": "Tarkan scales a sheer rock face with incredible speed and agility, his strong body pressed close to the stone like a lizard. His movements are precise and effortless. The high ledge, his apparent destination, is visible just above him.",
+        "negative_prompt": "default negative prompt",
+        "reference_images": [
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9d108585-7447-4272-b43f-9e0d9ab59380.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/4fde033b-42fa-44d1-b329-fef523e44ab8.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/090a079c-3716-4bbc-b712-37137061edfe.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9fa3f9b4-e13f-4c08-9f0d-62945e2cf9d6.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/3d9189ae-68c3-4123-a90a-cd6dceee8186.webp"
+        ],
+        "layout": "grid"
+      },
+      "output_context": {
+        "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/ee0e9b54-6156-4534-89d2-8a7e46fc0c8d.webp"
+      },
+      "metadata": {}
+    },
+    {
+      "step": "Panel 6 Generation",
+      "panel_id": "s2-p2-1770947018556",
+      "scene_id": 2,
+      "input_context": {
+        "description": "On the high ledge, Tarkan kneels slightly, respectfully offering a freshly caught desert hare to Kala, who stands imposingly before him, grunting in acknowledgment. A troop of Giant Baboons is gathered around, observing from the background, their presence signifying Tarkan's acceptance into their fold.",
+        "dialogue": "And found his family in the silent canyons.",
+        "prompt_used": "On the high ledge, Tarkan kneels slightly, respectfully offering a freshly caught desert hare to Kala, who stands imposingly before him, grunting in acknowledgment. A troop of Giant Baboons is gathered around, observing from the background, their presence signifying Tarkan's acceptance into their fold.",
+        "negative_prompt": "default negative prompt",
+        "reference_images": [
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9d108585-7447-4272-b43f-9e0d9ab59380.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/c44b592b-b366-4735-840d-2be732d56d55.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f1fb47ef-9be5-42a5-8455-4bf20f39249d.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/0412ffaf-034e-45b5-9802-dca7463d1806.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/4fde033b-42fa-44d1-b329-fef523e44ab8.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/090a079c-3716-4bbc-b712-37137061edfe.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9fa3f9b4-e13f-4c08-9f0d-62945e2cf9d6.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/3d9189ae-68c3-4123-a90a-cd6dceee8186.webp"
+        ],
+        "layout": "grid"
+      },
+      "output_context": {
+        "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/7d0303cf-c309-4e8a-8090-78e289db93f0.webp"
+      },
+      "metadata": {}
+    },
+    {
+      "step": "Panel 7 Generation",
+      "panel_id": "s3-p0-1770947087388",
+      "scene_id": 3,
+      "input_context": {
+        "description": "Jane Porter, illuminated by a flickering oil lamp, sketches a detailed map in her notebook, her expression thoughtful and concerned. Clayton is nearby, meticulously cleaning his long-range rifle, his gaze fixed on the weapon. The background shows the sparse vegetation of the small oasis under a dim desert night, with signs of a dropping water level.",
+        "dialogue": "The water table is dropping, Clayton. This oasis won't last much longer.",
+        "prompt_used": "Jane Porter, illuminated by a flickering oil lamp, sketches a detailed map in her notebook, her expression thoughtful and concerned. Clayton is nearby, meticulously cleaning his long-range rifle, his gaze fixed on the weapon. The background shows the sparse vegetation of the small oasis under a dim desert night, with signs of a dropping water level.",
+        "negative_prompt": "default negative prompt",
+        "reference_images": [
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9d108585-7447-4272-b43f-9e0d9ab59380.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/c44b592b-b366-4735-840d-2be732d56d55.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f1fb47ef-9be5-42a5-8455-4bf20f39249d.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/358d5b2a-bc7f-4cb3-a5f7-f3812cf4f369.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/6f3bbb5e-bfd7-4921-a369-a3cdbf2eac95.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/98794c7b-9ce8-4a29-ba6f-7b9a4852a3b5.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/be3005f1-7280-4cd4-a23d-f290a92f9d2d.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/0412ffaf-034e-45b5-9802-dca7463d1806.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f7f57626-850b-48d8-a5f1-2e7a8b2d26ca.webp"
+        ],
+        "layout": "grid"
+      },
+      "output_context": {
+        "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/566d4630-5474-4ed6-b21f-61848a4b068a.webp"
+      },
+      "metadata": {}
+    },
+    {
+      "step": "Panel 8 Generation",
+      "panel_id": "s3-p1-1770947087388",
+      "scene_id": 3,
+      "input_context": {
+        "description": "Clayton looks up from his rifle, a glint in his eye and a smirk playing on his lips, as he gestures dismissively towards the surrounding desert. Jane looks up from her map, her expression a mix of concern and exasperation at his callousness.",
+        "dialogue": "Then the Blue Vein is ours for the taking. Fortune, Jane. Pure, untainted fortune.",
+        "prompt_used": "Clayton looks up from his rifle, a glint in his eye and a smirk playing on his lips, as he gestures dismissively towards the surrounding desert. Jane looks up from her map, her expression a mix of concern and exasperation at his callousness.",
+        "negative_prompt": "default negative prompt",
+        "reference_images": [
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9d108585-7447-4272-b43f-9e0d9ab59380.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/c44b592b-b366-4735-840d-2be732d56d55.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/358d5b2a-bc7f-4cb3-a5f7-f3812cf4f369.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/6f3bbb5e-bfd7-4921-a369-a3cdbf2eac95.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f1fb47ef-9be5-42a5-8455-4bf20f39249d.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/98794c7b-9ce8-4a29-ba6f-7b9a4852a3b5.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/be3005f1-7280-4cd4-a23d-f290a92f9d2d.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/0412ffaf-034e-45b5-9802-dca7463d1806.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f7f57626-850b-48d8-a5f1-2e7a8b2d26ca.webp"
+        ],
+        "layout": "grid"
+      },
+      "output_context": {
+        "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/e09eb9eb-68f0-42fc-8a66-11ceb417f648.webp"
+      },
+      "metadata": {}
+    },
+    {
+      "step": "Panel 9 Generation",
+      "panel_id": "s3-p2-1770947087388",
+      "scene_id": 3,
+      "input_context": {
+        "description": "A tense wide shot of the camp. A swift, dark shadow streaks across a distant sand dune. Clayton is now standing, his long-range rifle shouldered and aimed precisely at the dune. Jane, alarmed, grabs his arm, her eyes wide with urgency. The flickering oil lamp casts long, dancing shadows, heightening the suspense.",
+        "dialogue": "Stop! Don't shoot, Clayton! It could be a nomad!",
+        "prompt_used": "A tense wide shot of the camp. A swift, dark shadow streaks across a distant sand dune. Clayton is now standing, his long-range rifle shouldered and aimed precisely at the dune. Jane, alarmed, grabs his arm, her eyes wide with urgency. The flickering oil lamp casts long, dancing shadows, heightening the suspense.",
+        "negative_prompt": "default negative prompt",
+        "reference_images": [
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9d108585-7447-4272-b43f-9e0d9ab59380.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/c44b592b-b366-4735-840d-2be732d56d55.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/6f3bbb5e-bfd7-4921-a369-a3cdbf2eac95.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f1fb47ef-9be5-42a5-8455-4bf20f39249d.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/98794c7b-9ce8-4a29-ba6f-7b9a4852a3b5.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/be3005f1-7280-4cd4-a23d-f290a92f9d2d.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/0412ffaf-034e-45b5-9802-dca7463d1806.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f7f57626-850b-48d8-a5f1-2e7a8b2d26ca.webp"
+        ],
+        "layout": "grid"
+      },
+      "output_context": {
+        "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/97e0613d-025e-476f-8bd3-4535bd0972c0.webp"
+      },
+      "metadata": {}
+    },
+    {
+      "step": "Panel 10 Generation",
+      "panel_id": "s4-p0-1770947159965",
+      "scene_id": 4,
+      "input_context": {
+        "description": "Jane Porter, separated from her group, meticulously examines ancient petroglyphs carved into the narrow canyon's stone wall. Suddenly, the sand beside her explodes upwards as a massive, fifteen-foot Dune-Ripper bursts forth, jaws open, lunging directly at her. Jane is startled, reaching for her pistol.",
+        "dialogue": "What in the...!",
+        "prompt_used": "Jane Porter, separated from her group, meticulously examines ancient petroglyphs carved into the narrow canyon's stone wall. Suddenly, the sand beside her explodes upwards as a massive, fifteen-foot Dune-Ripper bursts forth, jaws open, lunging directly at her. Jane is startled, reaching for her pistol.",
+        "negative_prompt": "default negative prompt",
+        "reference_images": [
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/090a079c-3716-4bbc-b712-37137061edfe.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9fa3f9b4-e13f-4c08-9f0d-62945e2cf9d6.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/3d9189ae-68c3-4123-a90a-cd6dceee8186.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9d108585-7447-4272-b43f-9e0d9ab59380.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/c44b592b-b366-4735-840d-2be732d56d55.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/e3b2a44e-447e-40dc-b799-2f41bdd4f916.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/8e8198e6-417d-448c-a0e5-96e4d37e199a.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f7f57626-850b-48d8-a5f1-2e7a8b2d26ca.webp"
+        ],
+        "layout": "grid"
+      },
+      "output_context": {
+        "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/4dcb4741-30b8-450b-bc3e-6dbe94cc5425.webp"
+      },
+      "metadata": {}
+    },
+    {
+      "step": "Panel 11 Generation",
+      "panel_id": "s4-p1-1770947159965",
+      "scene_id": 4,
+      "input_context": {
+        "description": "The powerful Dune-Ripper snaps its jaws menacingly close to Jane Porter, who desperately tries to fire her pistol, but it's clearly jammed, a spent casing half-ejected. From above, Tarkan drops with fluid grace from the canyon wall, a bone knife held firmly, plunging it into the Dune-Ripper's neck as he lands on its back.",
+        "dialogue": "KRAKA-DOOM! HA!",
+        "prompt_used": "The powerful Dune-Ripper snaps its jaws menacingly close to Jane Porter, who desperately tries to fire her pistol, but it's clearly jammed, a spent casing half-ejected. From above, Tarkan drops with fluid grace from the canyon wall, a bone knife held firmly, plunging it into the Dune-Ripper's neck as he lands on its back.",
+        "negative_prompt": "default negative prompt",
+        "reference_images": [
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/090a079c-3716-4bbc-b712-37137061edfe.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9d108585-7447-4272-b43f-9e0d9ab59380.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9fa3f9b4-e13f-4c08-9f0d-62945e2cf9d6.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/3d9189ae-68c3-4123-a90a-cd6dceee8186.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f1fb47ef-9be5-42a5-8455-4bf20f39249d.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/c44b592b-b366-4735-840d-2be732d56d55.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/e3b2a44e-447e-40dc-b799-2f41bdd4f916.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/8e8198e6-417d-448c-a0e5-96e4d37e199a.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f7f57626-850b-48d8-a5f1-2e7a8b2d26ca.webp"
+        ],
+        "layout": "grid"
+      },
+      "output_context": {
+        "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/95b80728-48c6-4239-8aa6-fb37517a093f.webp"
+      },
+      "metadata": {}
+    },
+    {
+      "step": "Panel 12 Generation",
+      "panel_id": "s4-p2-1770947159965",
+      "scene_id": 4,
+      "input_context": {
+        "description": "Tarkan, now standing over the defeated Dune-Ripper, pulls his bone knife from its hide. He turns with a cautious yet confident demeanor towards Jane Porter, who is still catching her breath, wide-eyed from the ordeal. Tarkan gently touches her sleeve. The narrow canyon walls frame the scene, with the dead beast at their feet.",
+        "dialogue": "Tar-Kan. Child of the Fire. Jane. Just... Jane.",
+        "prompt_used": "Tarkan, now standing over the defeated Dune-Ripper, pulls his bone knife from its hide. He turns with a cautious yet confident demeanor towards Jane Porter, who is still catching her breath, wide-eyed from the ordeal. Tarkan gently touches her sleeve. The narrow canyon walls frame the scene, with the dead beast at their feet.",
+        "negative_prompt": "default negative prompt",
+        "reference_images": [
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/090a079c-3716-4bbc-b712-37137061edfe.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9d108585-7447-4272-b43f-9e0d9ab59380.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9fa3f9b4-e13f-4c08-9f0d-62945e2cf9d6.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f1fb47ef-9be5-42a5-8455-4bf20f39249d.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/c44b592b-b366-4735-840d-2be732d56d55.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/e3b2a44e-447e-40dc-b799-2f41bdd4f916.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/8e8198e6-417d-448c-a0e5-96e4d37e199a.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f7f57626-850b-48d8-a5f1-2e7a8b2d26ca.webp"
+        ],
+        "layout": "grid"
+      },
+      "output_context": {
+        "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/963222b3-4456-400e-984d-3cc9b1a71bef.webp"
+      },
+      "metadata": {}
+    },
+    {
+      "step": "Panel 13 Generation",
+      "panel_id": "s5-p0-1770947219552",
+      "scene_id": 5,
+      "input_context": {
+        "description": "Tarkan gestures with an open hand, indicating the lush grotto around them. Jane Porter sits beside him by a clear pool of water, taking in the beauty of the phosphorescent moss and ferns. She looks around with a sense of wonder and dawning realization.",
+        "dialogue": "This... this is your home, Tarkan. And you've protected it all this time.",
+        "prompt_used": "Tarkan gestures with an open hand, indicating the lush grotto around them. Jane Porter sits beside him by a clear pool of water, taking in the beauty of the phosphorescent moss and ferns. She looks around with a sense of wonder and dawning realization.",
+        "negative_prompt": "default negative prompt",
+        "reference_images": [
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/5f6f0b9f-453e-41a6-a08f-b15ac2bb37c9.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/090a079c-3716-4bbc-b712-37137061edfe.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9d108585-7447-4272-b43f-9e0d9ab59380.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/c44b592b-b366-4735-840d-2be732d56d55.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f7f57626-850b-48d8-a5f1-2e7a8b2d26ca.webp"
+        ],
+        "layout": "grid"
+      },
+      "output_context": {
+        "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/166f04b4-ad22-458b-9c19-aff572bea9d1.webp"
+      },
+      "metadata": {}
+    },
+    {
+      "step": "Panel 14 Generation",
+      "panel_id": "s5-p1-1770947219552",
+      "scene_id": 5,
+      "input_context": {
+        "description": "Close-up on Tarkan, his expression serious, as he explains to Jane. He gestures vaguely outwards, perhaps towards the grotto entrance, using his hands to mimic 'loud sticks' or 'taking water.' Jane listens intently, her brow furrowed in concern.",
+        "dialogue": "Others come. Loud sticks. Take water. Sand gets angry.",
+        "prompt_used": "Close-up on Tarkan, his expression serious, as he explains to Jane. He gestures vaguely outwards, perhaps towards the grotto entrance, using his hands to mimic 'loud sticks' or 'taking water.' Jane listens intently, her brow furrowed in concern.",
+        "negative_prompt": "default negative prompt",
+        "reference_images": [
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/5f6f0b9f-453e-41a6-a08f-b15ac2bb37c9.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/090a079c-3716-4bbc-b712-37137061edfe.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9d108585-7447-4272-b43f-9e0d9ab59380.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/c44b592b-b366-4735-840d-2be732d56d55.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f7f57626-850b-48d8-a5f1-2e7a8b2d26ca.webp"
+        ],
+        "layout": "grid"
+      },
+      "output_context": {
+        "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/4c6ce02f-9208-4b1c-9141-8a138f1fa65a.webp"
+      },
+      "metadata": {}
+    },
+    {
+      "step": "Panel 15 Generation",
+      "panel_id": "s5-p2-1770947219552",
+      "scene_id": 5,
+      "input_context": {
+        "description": "Jane Porter leans forward urgently, her hand on Tarkan's arm, her face conveying the gravity of her words. Tarkan's eyes are wide, his expression shifting from concern to a deep understanding and anger at the threat. The phosphorescent moss glows softly in the background.",
+        "dialogue": "Clayton. He plans to blast this aquifer. Destroy this oasis, Tarkan. Dry it up forever!",
+        "prompt_used": "Jane Porter leans forward urgently, her hand on Tarkan's arm, her face conveying the gravity of her words. Tarkan's eyes are wide, his expression shifting from concern to a deep understanding and anger at the threat. The phosphorescent moss glows softly in the background.",
+        "negative_prompt": "default negative prompt",
+        "reference_images": [
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/5f6f0b9f-453e-41a6-a08f-b15ac2bb37c9.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/090a079c-3716-4bbc-b712-37137061edfe.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9d108585-7447-4272-b43f-9e0d9ab59380.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/c44b592b-b366-4735-840d-2be732d56d55.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f7f57626-850b-48d8-a5f1-2e7a8b2d26ca.webp"
+        ],
+        "layout": "grid"
+      },
+      "output_context": {
+        "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/35d87c67-ff5b-494a-8b0b-d8e31c1e6fd9.webp"
+      },
+      "metadata": {}
+    },
+    {
+      "step": "Panel 16 Generation",
+      "panel_id": "s6-p0-1770947297383",
+      "scene_id": 6,
+      "input_context": {
+        "description": "A wide shot of the 'Eye of the Desert,' a vast, reflective salt flat. Clayton's men are busy setting seismic charges; the machines hum with a vibrating growl. On the surrounding dunes, hundreds of Sand-Stalkers (baboons) appear suddenly. Tarkan, riding a massive, tamed Dune-Ripper, enters the center of the scene, his posture commanding.",
+        "dialogue": "LEAVE THIS PLACE! THIS WATER IS NOT YOURS!",
+        "prompt_used": "A wide shot of the 'Eye of the Desert,' a vast, reflective salt flat. Clayton's men are busy setting seismic charges; the machines hum with a vibrating growl. On the surrounding dunes, hundreds of Sand-Stalkers (baboons) appear suddenly. Tarkan, riding a massive, tamed Dune-Ripper, enters the center of the scene, his posture commanding.",
+        "negative_prompt": "default negative prompt",
+        "reference_images": [
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9d108585-7447-4272-b43f-9e0d9ab59380.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/090a079c-3716-4bbc-b712-37137061edfe.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/5f6f0b9f-453e-41a6-a08f-b15ac2bb37c9.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f1fb47ef-9be5-42a5-8455-4bf20f39249d.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9fa3f9b4-e13f-4c08-9f0d-62945e2cf9d6.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/c44b592b-b366-4735-840d-2be732d56d55.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/6f3bbb5e-bfd7-4921-a369-a3cdbf2eac95.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/358d5b2a-bc7f-4cb3-a5f7-f3812cf4f369.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f7f57626-850b-48d8-a5f1-2e7a8b2d26ca.webp"
+        ],
+        "layout": "grid"
+      },
+      "output_context": {
+        "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/e90c54f7-e85d-4531-9ce8-95f2164251ee.webp"
+      },
+      "metadata": {}
+    },
+    {
+      "step": "Panel 17 Generation",
+      "panel_id": "s6-p1-1770947297383",
+      "scene_id": 6,
+      "input_context": {
+        "description": "An action-packed mid-shot. Clayton, holding his long-range rifle, fires, grazing Tarkan's shoulder. Tarkan, his face grimacing from the wound, kicks his Dune-Ripper into a gallop. Hundreds of Sand-Stalkers are now descending the dunes, swarming towards Clayton's men and their seismic charges, beginning to dismantle the equipment.",
+        "dialogue": "The Ghost! Fire! GRRRR!",
+        "prompt_used": "An action-packed mid-shot. Clayton, holding his long-range rifle, fires, grazing Tarkan's shoulder. Tarkan, his face grimacing from the wound, kicks his Dune-Ripper into a gallop. Hundreds of Sand-Stalkers are now descending the dunes, swarming towards Clayton's men and their seismic charges, beginning to dismantle the equipment.",
+        "negative_prompt": "default negative prompt",
+        "reference_images": [
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9d108585-7447-4272-b43f-9e0d9ab59380.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/c44b592b-b366-4735-840d-2be732d56d55.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/e3b2a44e-447e-40dc-b799-2f41bdd4f916.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9fa3f9b4-e13f-4c08-9f0d-62945e2cf9d6.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f1fb47ef-9be5-42a5-8455-4bf20f39249d.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/090a079c-3716-4bbc-b712-37137061edfe.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/5f6f0b9f-453e-41a6-a08f-b15ac2bb37c9.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/6f3bbb5e-bfd7-4921-a369-a3cdbf2eac95.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/358d5b2a-bc7f-4cb3-a5f7-f3812cf4f369.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f7f57626-850b-48d8-a5f1-2e7a8b2d26ca.webp"
+        ],
+        "layout": "grid"
+      },
+      "output_context": {
+        "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/fdceda4a-ab42-48be-b1d2-1b9e4d100cb5.webp"
+      },
+      "metadata": {}
+    },
+    {
+      "step": "Panel 18 Generation",
+      "panel_id": "s6-p2-1770947297383",
+      "scene_id": 6,
+      "input_context": {
+        "description": "A close-up of Tarkan, powerful and resolute, holding up the retrieved detonator box. He has just hauled a disheveled and sand-covered Clayton out of a quicksand-like pit, tossing him towards his fleeing mercenaries visible in the background. Tarkan points sternly, delivering a final warning.",
+        "dialogue": "GO. Or become the sand.",
+        "prompt_used": "A close-up of Tarkan, powerful and resolute, holding up the retrieved detonator box. He has just hauled a disheveled and sand-covered Clayton out of a quicksand-like pit, tossing him towards his fleeing mercenaries visible in the background. Tarkan points sternly, delivering a final warning.",
+        "negative_prompt": "default negative prompt",
+        "reference_images": [
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9d108585-7447-4272-b43f-9e0d9ab59380.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/c44b592b-b366-4735-840d-2be732d56d55.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/98794c7b-9ce8-4a29-ba6f-7b9a4852a3b5.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/090a079c-3716-4bbc-b712-37137061edfe.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f1fb47ef-9be5-42a5-8455-4bf20f39249d.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/6f3bbb5e-bfd7-4921-a369-a3cdbf2eac95.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/358d5b2a-bc7f-4cb3-a5f7-f3812cf4f369.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f7f57626-850b-48d8-a5f1-2e7a8b2d26ca.webp"
+        ],
+        "layout": "grid"
+      },
+      "output_context": {
+        "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/324143ab-2873-47ca-ac8d-148926738966.webp"
+      },
+      "metadata": {}
+    },
+    {
+      "step": "Panel 19 Generation",
+      "panel_id": "s7-p0-1770947366745",
+      "scene_id": 7,
+      "input_context": {
+        "description": "Wide shot of the 'Eye of the Desert' at sunset. Jane Porter stands next to her remaining supplies, looking towards the distant horizon where a small steam-powered crawler is visible. Tarkan stands beside her, looking out over the vast, quiet salt flats.",
+        "dialogue": "Come to civilization, Tarkan. Where rivers never end.",
+        "prompt_used": "Wide shot of the 'Eye of the Desert' at sunset. Jane Porter stands next to her remaining supplies, looking towards the distant horizon where a small steam-powered crawler is visible. Tarkan stands beside her, looking out over the vast, quiet salt flats.",
+        "negative_prompt": "default negative prompt",
+        "reference_images": [
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9d108585-7447-4272-b43f-9e0d9ab59380.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/c44b592b-b366-4735-840d-2be732d56d55.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/6f3bbb5e-bfd7-4921-a369-a3cdbf2eac95.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/d41ef7a0-f1b2-44bc-9ab0-733dcb59a240.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/0412ffaf-034e-45b5-9802-dca7463d1806.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f7f57626-850b-48d8-a5f1-2e7a8b2d26ca.webp"
+        ],
+        "layout": "grid"
+      },
+      "output_context": {
+        "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/718e698e-d616-495e-a631-c73bb682c5f6.webp"
+      },
+      "metadata": {}
+    },
+    {
+      "step": "Panel 20 Generation",
+      "panel_id": "s7-p1-1770947366745",
+      "scene_id": 7,
+      "input_context": {
+        "description": "Close-up on Tarkan and Jane. Tarkan gently presses a smooth desert rose stone into Jane's open palm. The desert dunes behind them are bathed in purple light. Tarkan's expression is solemn but resolute.",
+        "dialogue": "The desert is true. Tell them: the Ghost is watching the water.",
+        "prompt_used": "Close-up on Tarkan and Jane. Tarkan gently presses a smooth desert rose stone into Jane's open palm. The desert dunes behind them are bathed in purple light. Tarkan's expression is solemn but resolute.",
+        "negative_prompt": "default negative prompt",
+        "reference_images": [
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9d108585-7447-4272-b43f-9e0d9ab59380.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/c44b592b-b366-4735-840d-2be732d56d55.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f1fb47ef-9be5-42a5-8455-4bf20f39249d.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/d41ef7a0-f1b2-44bc-9ab0-733dcb59a240.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/0412ffaf-034e-45b5-9802-dca7463d1806.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f7f57626-850b-48d8-a5f1-2e7a8b2d26ca.webp"
+        ],
+        "layout": "grid"
+      },
+      "output_context": {
+        "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/39bc20bd-5640-4f03-903d-e5423bd497de.webp"
+      },
+      "metadata": {}
+    },
+    {
+      "step": "Panel 21 Generation",
+      "panel_id": "s7-p2-1770947366745",
+      "scene_id": 7,
+      "input_context": {
+        "description": "Two-part panel. Top half shows Tarkan, using a polished chitin for sand-surfing, rapidly descending a steep, purple-hued dune, disappearing into the growing shadows. Bottom half shows a close-up of Jane's hands, crossing out 'Oasis' on her map and writing 'MIRAGE' next to it with a pen. Her expression is thoughtful, reflecting acceptance and understanding.",
+        "dialogue": "Some truths, like the desert, must be faced alone.",
+        "prompt_used": "Two-part panel. Top half shows Tarkan, using a polished chitin for sand-surfing, rapidly descending a steep, purple-hued dune, disappearing into the growing shadows. Bottom half shows a close-up of Jane's hands, crossing out 'Oasis' on her map and writing 'MIRAGE' next to it with a pen. Her expression is thoughtful, reflecting acceptance and understanding.",
+        "negative_prompt": "default negative prompt",
+        "reference_images": [
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/c44b592b-b366-4735-840d-2be732d56d55.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/9d108585-7447-4272-b43f-9e0d9ab59380.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/358d5b2a-bc7f-4cb3-a5f7-f3812cf4f369.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/0412ffaf-034e-45b5-9802-dca7463d1806.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/d41ef7a0-f1b2-44bc-9ab0-733dcb59a240.webp",
+          "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/f7f57626-850b-48d8-a5f1-2e7a8b2d26ca.webp"
+        ],
+        "layout": "grid"
+      },
+      "output_context": {
+        "image_id": "u/2ddb4a81-d4be-4572-b841-c4b78bdced92/p/935ad22a-c59e-447a-9c07-9b3f0d681679/img/c6028274-a594-44be-aa6a-b2f6fb8c0348.webp"
+      },
+      "metadata": {}
+    }
+  ]
+}

@@ -9,6 +9,7 @@ import {
   reserveForOperation,
   settleReservedOperation
 } from '../services/usageEnforcer.js';
+import { assertModelAllowedForUser } from '../services/modelAccessPolicy.js';
 
 export const visionRouter = Router();
 
@@ -18,6 +19,15 @@ visionRouter.post('/analyze-layout', async (req, res, next) => {
     if (!apiKey) return;
 
     const requestedModel = req.header('X-Gemini-Model')?.trim() || TEXT_MODEL;
+    let effectiveModel = requestedModel;
+    if (req.user?.id) {
+      const access = await assertModelAllowedForUser({
+        userId: req.user.id,
+        scope: 'vision',
+        requestedModel
+      });
+      effectiveModel = access.effectiveModel;
+    }
     const { images } = req.body || {};
     if (!Array.isArray(images) || images.length === 0) {
       return res.status(400).json({ error: { message: 'images array is required' } });
@@ -27,7 +37,7 @@ visionRouter.post('/analyze-layout', async (req, res, next) => {
     const reserve = await reserveForOperation({
       req,
       operation: 'vision.analyze_layout',
-      fallbackModel: requestedModel,
+      fallbackModel: effectiveModel,
       provider: 'gemini',
       imageUnits: images.length,
       projectId,
@@ -44,15 +54,15 @@ visionRouter.post('/analyze-layout', async (req, res, next) => {
     }
 
     try {
-      const result = await analyzeLayoutFromImages(apiKey, images, requestedModel);
+      const result = await analyzeLayoutFromImages(apiKey, images, effectiveModel);
       const settled = await settleReservedOperation({
         req,
         operation: 'vision.analyze_layout',
         provider: 'gemini',
-        model: requestedModel,
+        model: effectiveModel,
         seed: {
           provider: 'gemini',
-          model: requestedModel,
+          model: effectiveModel,
           operation: 'vision.analyze_layout',
           imageUnits: images.length,
           projectId,
@@ -70,13 +80,13 @@ visionRouter.post('/analyze-layout', async (req, res, next) => {
 
       res.json(attachBillingToPayload(result as unknown as Record<string, unknown>, reserve.reservation, settled));
     } catch (error) {
-      await releaseReservedOperation({
-        req,
-        operation: 'vision.analyze_layout',
-        provider: 'gemini',
-        model: requestedModel,
-        projectId,
-        reason: (error as Error)?.message || 'vision_request_failed',
+        await releaseReservedOperation({
+          req,
+          operation: 'vision.analyze_layout',
+          provider: 'gemini',
+          model: effectiveModel,
+          projectId,
+          reason: (error as Error)?.message || 'vision_request_failed',
         metadata: {
           route: req.path,
           imageCount: images.length

@@ -92,7 +92,7 @@ export const generateGeminiImage = async (
   const hasReferences = referenceImages.length > 0;
   const effectiveModel = modelId || IMAGE_MODEL;
 
-  const imageSize = supportsImageSize(effectiveModel) ? (resolution === '4K' ? '2K' : resolution) : undefined;
+  const imageSize = supportsImageSize(effectiveModel) ? resolution : undefined;
   const shouldUseGenerateContent = hasReferences || isGeminiImageModel(effectiveModel);
   const responseModalities = isGeminiImageModel(effectiveModel)
     ? [Modality.TEXT, Modality.IMAGE]

@@ -1,6 +1,13 @@
 import type { TokenEstimateRequest, TokenEstimateResponse, TokenBreakdownLine } from '../../../shared/types/billing.js';
 import { CT_USD, DEFAULT_MARKUP, resolveModelPricing } from './pricingCatalog.js';
 
+const NANO_BANANA_PRO_MODEL_ID = 'gemini-3-pro-image-preview';
+const IMAGE_RESOLUTION_MULTIPLIER: Record<'1K' | '2K' | '4K', number> = {
+  '1K': 1,
+  '2K': 2,
+  '4K': 4
+};
+
 const estimateTokensFromText = (text?: string) => {
   if (!text) return 0;
   const words = text.trim().split(/\s+/).filter(Boolean).length;
@@ -29,6 +36,34 @@ const resolveNumber = (value: unknown, fallback = 0) => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
+const normalizeModelId = (model: string) => {
+  const trimmed = model.trim();
+  if (trimmed.startsWith('models/')) {
+    return trimmed.slice('models/'.length);
+  }
+  return trimmed;
+};
+
+const resolveResolution = (request: TokenEstimateRequest): '1K' | '2K' | '4K' | undefined => {
+  if (request.resolution) return request.resolution;
+  const metadataResolution = (request.metadata as Record<string, unknown> | undefined)?.resolution;
+  if (typeof metadataResolution !== 'string') return undefined;
+  const normalized = metadataResolution.trim().toUpperCase();
+  if (normalized === '1K' || normalized === '2K' || normalized === '4K') {
+    return normalized;
+  }
+  return undefined;
+};
+
+const resolveImageUnitPriceUsd = (request: TokenEstimateRequest, basePrice: number) => {
+  if (!basePrice) return 0;
+  if (normalizeModelId(request.model) !== NANO_BANANA_PRO_MODEL_ID) {
+    return basePrice;
+  }
+  const resolution = resolveResolution(request) || '1K';
+  return Number((basePrice * IMAGE_RESOLUTION_MULTIPLIER[resolution]).toFixed(6));
+};
+
 export const buildEstimateFromRequestBody = (
   provider: TokenEstimateRequest['provider'],
   model: string,
@@ -51,6 +86,7 @@ export const buildEstimateFromRequestBody = (
     inputTokens: resolveNumber(explicit?.inputTokens, roughInputTokens),
     outputTokens: resolveNumber(explicit?.outputTokens, roughOutputTokens),
     imageUnits,
+    resolution: explicit?.resolution,
     otherBillableUnits: resolveNumber(explicit?.otherBillableUnits, 0),
     otherBillableUnitPriceUsd: resolveNumber(explicit?.otherBillableUnitPriceUsd, 0),
     projectId: explicit?.projectId,
@@ -73,6 +109,7 @@ export const estimateCharge = async (
   const imageUnits = resolveNumber(request.imageUnits, 0);
   const otherUnits = resolveNumber(request.otherBillableUnits, 0);
   const otherUnitPrice = resolveNumber(request.otherBillableUnitPriceUsd, 0);
+  const imageUnitPriceUsd = resolveImageUnitPriceUsd(request, pricing.imagePerOutputUsd);
 
   const lines: TokenBreakdownLine[] = [];
 
@@ -92,7 +129,7 @@ export const estimateCharge = async (
 
   addLine('input_tokens', inputTokens / 1000, pricing.inputPer1kUsd);
   addLine('output_tokens', outputTokens / 1000, pricing.outputPer1kUsd);
-  addLine('image_units', imageUnits, pricing.imagePerOutputUsd);
+  addLine('image_units', imageUnits, imageUnitPriceUsd);
   addLine('other_billable', otherUnits, otherUnitPrice);
 
   const estimatedProviderCostUsd = lines.reduce((sum, line) => sum + line.providerCostUsd, 0);

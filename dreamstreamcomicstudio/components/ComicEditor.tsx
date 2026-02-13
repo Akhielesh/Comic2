@@ -281,10 +281,12 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
       case AppStep.LAYOUT_SELECTION:
         return <LayoutSelector
           currentLayoutType={state.layoutType}
+          currentGridTemplateId={state.gridTemplateId}
+          selectedFormFactor={state.styleAspectRatio}
           currentTextLayout={state.textLayout || 'caption'}
           projectId={project.id}
           onTextLayoutChange={(textLayout) => updateState({ textLayout })}
-          onLayoutConfirmed={(layoutType, customLayoutPrompt) => { updateState({ layoutType, customLayoutPrompt }); nextStep(); }} />;
+          onLayoutConfirmed={(layoutType, customLayoutPrompt, gridTemplateId) => { updateState({ layoutType, customLayoutPrompt, gridTemplateId }); nextStep(); }} />;
       case AppStep.COMBINED_PREVIEW:
         return (
           <CombinedPreview

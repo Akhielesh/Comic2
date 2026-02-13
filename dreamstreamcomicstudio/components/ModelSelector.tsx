@@ -1,16 +1,30 @@
-import React, { useEffect, useState } from "react";
-import { Lock } from "lucide-react";
-import { ImageProviderId } from "../types";
-import { getImageProvider, getLockedImageProvider, setImageProvider, getImageModelId, setImageModelId } from "../services/appSettings";
-import { IMAGE_MODELS } from "../services/imageModels";
+import React, { useEffect, useMemo, useState } from 'react';
+import { Lock } from 'lucide-react';
+import { ImageProviderId } from '../types';
+import {
+  getImageProvider,
+  getLockedImageProvider,
+  setImageProvider,
+  getImageModelId,
+  setImageModelId
+} from '../services/appSettings';
+import {
+  IMAGE_MODELS,
+  getDefaultImageModelForPlan,
+  isImageModelAllowedForPlan
+} from '../services/imageModels';
+import { getBillingSummary } from '../services/billing';
+import { getPlanTierFromBillingSummary } from '../services/modelEntitlements';
 
 interface ModelSelectorProps {
   className?: string;
+  planTier?: string;
 }
 
-export const ModelSelector: React.FC<ModelSelectorProps> = ({ className = "" }) => {
+export const ModelSelector: React.FC<ModelSelectorProps> = ({ className = '', planTier }) => {
   const [provider, setProvider] = useState<ImageProviderId>(getImageProvider());
   const [modelId, setModelId] = useState<string | null>(getImageModelId());
+  const [effectivePlanTier, setEffectivePlanTier] = useState<string>(planTier || 'free');
   const locked = getLockedImageProvider();
 
   useEffect(() => {
@@ -18,7 +32,55 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ className = "" }) 
     setModelId(getImageModelId());
   }, []);
 
-  const handleSelect = (model: { provider: ImageProviderId, id: string }) => {
+  useEffect(() => {
+    let active = true;
+    if (planTier) {
+      setEffectivePlanTier(planTier);
+      return () => {
+        active = false;
+      };
+    }
+
+    const loadPlan = async () => {
+      try {
+        const summary = await getBillingSummary();
+        if (!active) return;
+        setEffectivePlanTier(getPlanTierFromBillingSummary(summary));
+      } catch {
+        if (!active) return;
+        setEffectivePlanTier('free');
+      }
+    };
+
+    void loadPlan();
+    return () => {
+      active = false;
+    };
+  }, [planTier]);
+
+  useEffect(() => {
+    const storedModelId = getImageModelId();
+    if (storedModelId && !isImageModelAllowedForPlan(storedModelId, effectivePlanTier)) {
+      const fallback = getDefaultImageModelForPlan(effectivePlanTier);
+      const fallbackProvider = setImageProvider(fallback.provider);
+      setImageModelId(fallback.id);
+      setProvider(fallbackProvider);
+      setModelId(fallback.id);
+    }
+  }, [effectivePlanTier]);
+
+  const allowedModelIds = useMemo(() => {
+    const allowed = new Set<string>();
+    IMAGE_MODELS.forEach((model) => {
+      if (isImageModelAllowedForPlan(model.id, effectivePlanTier)) {
+        allowed.add(model.id);
+      }
+    });
+    return allowed;
+  }, [effectivePlanTier]);
+
+  const handleSelect = (model: { provider: ImageProviderId; id: string }) => {
+    if (!allowedModelIds.has(model.id)) return;
     const effectiveProvider = setImageProvider(model.provider);
     setImageModelId(model.id);
     setProvider(effectiveProvider);
@@ -37,37 +99,32 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({ className = "" }) 
       </div>
       <div className="space-y-2">
         {IMAGE_MODELS.map((model) => {
-          // If a model is selected, use exact ID match. If none selected for provider, fallback to first of that provider?
-          // Simpler: Just check if this model ID matches stored ID.
-          // BUT: If user explicitly switched providers but stored ID is stale?
-          // Let's rely on provider check + model ID check.
-
           const isProviderActive = provider === model.provider;
           const isModelActive = modelId === model.id;
-
-          // If no model ID is stored (legacy), default to first model of active provider
-          const isDefaultActive = !modelId && isProviderActive && IMAGE_MODELS.find(m => m.provider === provider)?.id === model.id;
-
+          const isDefaultActive = !modelId && isProviderActive && IMAGE_MODELS.find((entry) => entry.provider === provider)?.id === model.id;
           const isSelected = isModelActive || isDefaultActive;
-          const isDisabled = !!locked && locked !== model.provider;
+          const blockedByPlan = !allowedModelIds.has(model.id);
+          const blockedByProviderLock = !!locked && locked !== model.provider;
+          const isDisabled = blockedByProviderLock || blockedByPlan;
+
           return (
             <button
               key={model.id}
               onClick={() => handleSelect(model)}
               disabled={isDisabled}
-              className={`w-full flex items-center justify-between border-2 rounded-lg px-3 py-2 text-xs font-bold transition-colors ${isSelected ? "bg-brand-blue text-white border-black" : "bg-slate-50 text-slate-700 border-black"
-                } ${isDisabled ? "opacity-50 cursor-not-allowed" : "hover:bg-brand-yellow/60"}`}
+              className={`w-full flex items-center justify-between border-2 rounded-lg px-3 py-2 text-xs font-bold transition-colors ${isSelected ? 'bg-brand-blue text-white border-black' : 'bg-slate-50 text-slate-700 border-black'} ${isDisabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-brand-yellow/60'}`}
             >
               <span>{model.label}</span>
-              {isSelected && <span className="text-[10px] uppercase">Active</span>}
+              {blockedByPlan && <span className="text-[10px] uppercase">Pro</span>}
+              {isSelected && !blockedByPlan && <span className="text-[10px] uppercase">Active</span>}
             </button>
           );
         })}
       </div>
       <div className="mt-2 text-[11px] text-slate-500">
         {locked
-          ? "Model selection is locked to Flux (Pixazo) for now."
-          : "You can switch models at any time."}
+          ? 'Model selection is locked to Flux (Pixazo) for now.'
+          : 'Free plan includes Flux and Nano Banana. Pro unlocks Nano Banana Pro.'}
       </div>
     </div>
   );

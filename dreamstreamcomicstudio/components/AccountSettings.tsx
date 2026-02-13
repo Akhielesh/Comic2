@@ -16,8 +16,15 @@ import { KeyManager } from './KeyManager';
 import { AlertTriangle, CheckCircle2, CreditCard, LogOut, Mail, Save, Settings, Shield, Upload, User as UserIcon, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useSearchParams } from 'react-router-dom';
-import { IMAGE_MODELS } from '../services/imageModels';
-import { TEXT_MODEL, TEXT_MODELS } from '../services/modelPolicy';
+import {
+    getAllowedImageModelsForPlan,
+    isImageModelAllowedForPlan
+} from '../services/imageModels';
+import {
+    TEXT_MODEL,
+    TEXT_MODELS,
+    getAllowedTextModelIdsForPlan
+} from '../services/modelPolicy';
 import type {
     AdminCouponAssignment,
     AdminCouponDefinition,
@@ -26,12 +33,12 @@ import type {
     BillingPlanDefinition,
     BillingPlanPricing,
     BillingSummaryResponse,
+    CouponPreviewResult,
     CreditPackId,
     PurchasablePlanTier
 } from '../shared/types/billing';
 import {
     addCredits,
-    assignAdminCouponDefinition,
     cancelSubscription,
     confirmCheckoutSession,
     createAdminCouponDefinition,
@@ -40,12 +47,14 @@ import {
     getBillingSummary,
     getPricingCatalog,
     listAdminCoupons,
+    listAdminCouponsByCursor,
+    previewCoupon,
     redeemCoupon,
     reactivateSubscription,
-    revokeAdminCouponAssignment,
     setupPaymentMethod,
     updateAutoReload
 } from '../services/billing';
+import { buildModelEntitlements } from '../services/modelEntitlements';
 
 type SettingsTab = 'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin' | 'preferences' | 'security';
 
@@ -177,6 +186,8 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     const [privateProfileWarning, setPrivateProfileWarning] = useState<string | null>(null);
 
     const [couponCode, setCouponCode] = useState('');
+    const [couponPreview, setCouponPreview] = useState<CouponPreviewResult | null>(null);
+    const [couponPreviewBusy, setCouponPreviewBusy] = useState(false);
     const [redeemMsg, setRedeemMsg] = useState<MessageState>(null);
     const [isAdmin, setIsAdmin] = useState(false);
     const [settingsState, setSettingsState] = useState(() => getSettingsState());
@@ -193,21 +204,10 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     const [adminCouponEvents, setAdminCouponEvents] = useState<AdminCouponRedemptionEvent[]>([]);
     const [adminActionMessage, setAdminActionMessage] = useState<MessageState>(null);
     const [adminBusy, setAdminBusy] = useState(false);
-    const [newCouponCode, setNewCouponCode] = useState('');
-    const [newCouponStartsAt, setNewCouponStartsAt] = useState('');
-    const [newCouponEndsAt, setNewCouponEndsAt] = useState('');
-    const [newCouponPlanOverride, setNewCouponPlanOverride] = useState('');
-    const [newCouponIncludedOverride, setNewCouponIncludedOverride] = useState('');
-    const [newCouponDailyOverride, setNewCouponDailyOverride] = useState('');
-    const [newCouponIncludedBonus, setNewCouponIncludedBonus] = useState('');
-    const [newCouponDailyBonus, setNewCouponDailyBonus] = useState('');
-    const [newCouponBonusCt, setNewCouponBonusCt] = useState('');
-    const [newCouponOverageOverride, setNewCouponOverageOverride] = useState('');
-    const [assignCouponDefinitionId, setAssignCouponDefinitionId] = useState('');
-    const [assignTargetUserId, setAssignTargetUserId] = useState('');
-    const [assignTargetEmail, setAssignTargetEmail] = useState('');
-    const [assignStartsAt, setAssignStartsAt] = useState('');
-    const [assignEndsAt, setAssignEndsAt] = useState('');
+    const [newCouponTokenAmount, setNewCouponTokenAmount] = useState('10000');
+    const [newCouponValidForHours, setNewCouponValidForHours] = useState('168');
+    const [createdAdminCoupon, setCreatedAdminCoupon] = useState<AdminCouponDefinition | null>(null);
+    const [adminLastRefreshedAt, setAdminLastRefreshedAt] = useState<string | null>(null);
 
     const [username, setUsername] = useState('');
     const [avatarUrl, setAvatarUrl] = useState('');
@@ -270,31 +270,54 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         setIsAdmin(user.email === 'admin@test.com');
     }, [user]);
 
+    const loadAdminCouponState = async () => {
+        const firstPage = await listAdminCoupons(200);
+        const definitionRows = [...firstPage.definitions];
+        let cursor = firstPage.nextCursor;
+        let pageCount = 0;
+        while (cursor && pageCount < 25) {
+            const nextPage = await listAdminCouponsByCursor({ limit: 200, cursor });
+            definitionRows.push(...nextPage.definitions);
+            cursor = nextPage.nextCursor;
+            pageCount += 1;
+        }
+        setAdminCouponDefinitions(definitionRows);
+        setAdminCouponAssignments(firstPage.assignments);
+        setAdminCouponEvents(firstPage.events);
+        setAdminLastRefreshedAt(new Date().toISOString());
+    };
+
     useEffect(() => {
         if (activeTab !== 'admin' || user?.email !== 'admin@test.com') return;
         let alive = true;
+        let inFlight = false;
 
         const loadAdminData = async () => {
+            if (inFlight) return;
+            inFlight = true;
             try {
-                const state = await listAdminCoupons(200);
-                if (!alive) return;
-                setAdminCouponDefinitions(state.definitions);
-                setAdminCouponAssignments(state.assignments);
-                setAdminCouponEvents(state.events);
+                await loadAdminCouponState();
             } catch (err: any) {
                 if (!alive) return;
                 setAdminActionMessage({ type: 'error', text: err?.message || 'Failed to load coupon admin data.' });
+            } finally {
+                inFlight = false;
             }
         };
 
         void loadAdminData();
+        const timer = window.setInterval(() => {
+            void loadAdminData();
+        }, 15_000);
+
         return () => {
             alive = false;
+            window.clearInterval(timer);
         };
     }, [activeTab, user?.email]);
 
     useEffect(() => {
-        if (activeTab !== 'billing' || !user) return;
+        if ((activeTab !== 'billing' && activeTab !== 'settings' && activeTab !== 'admin') || !user) return;
         let alive = true;
 
         const loadBilling = async () => {
@@ -321,6 +344,29 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
             alive = false;
         };
     }, [activeTab, user]);
+
+    useEffect(() => {
+        if (!billingSummary) return;
+        const entitlements = buildModelEntitlements(billingSummary);
+        const requestedTextModel = settingsState.defaultTextModel || settingsState.defaultTextModelKey || TEXT_MODEL;
+        const nextSettings = { ...settingsState };
+        let changed = false;
+
+        if (!isImageModelAllowedForPlan(settingsState.defaultImageModel || '', entitlements.planTier)) {
+            nextSettings.defaultImageModel = entitlements.defaultImageModelId;
+            changed = true;
+        }
+        if (!entitlements.allowedTextModelIds.includes(requestedTextModel)) {
+            nextSettings.defaultTextModel = entitlements.defaultTextModelId;
+            nextSettings.defaultTextModelKey = entitlements.defaultTextModelId;
+            changed = true;
+        }
+
+        if (changed) {
+            setSettingsState(nextSettings);
+            persistSettingsState(nextSettings);
+        }
+    }, [billingSummary, settingsState]);
 
     useEffect(() => {
         if (!user) return;
@@ -373,23 +419,38 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         };
     }, [user, onDobCompletionStatusChange]);
 
+    const handlePreviewCoupon = async () => {
+        const normalizedCode = couponCode.trim();
+        if (!normalizedCode) return;
+        setCouponPreviewBusy(true);
+        setRedeemMsg(null);
+        try {
+            const preview = await previewCoupon(normalizedCode);
+            setCouponPreview(preview);
+        } catch (err: any) {
+            setCouponPreview(null);
+            setRedeemMsg({ type: 'error', text: err?.message || 'Unable to preview coupon.' });
+        } finally {
+            setCouponPreviewBusy(false);
+        }
+    };
+
     const handleRedeem = async () => {
-        if (!couponCode) return;
+        const normalizedCode = couponCode.trim();
+        if (!normalizedCode) return;
         setBillingBusy(true);
         setRedeemMsg(null);
         try {
-            const res = await redeemCoupon(couponCode.trim());
+            const res = await redeemCoupon(normalizedCode);
             setRedeemMsg({ type: res.success ? 'success' : 'error', text: res.message });
+            setCouponPreview(null);
             if (res.summary) {
                 setBillingSummary(res.summary);
             } else {
                 await refreshBillingSummary();
             }
             if (isAdmin && activeTab === 'admin') {
-                const state = await listAdminCoupons(200);
-                setAdminCouponDefinitions(state.definitions);
-                setAdminCouponAssignments(state.assignments);
-                setAdminCouponEvents(state.events);
+                await loadAdminCouponState();
             }
         } catch (err: any) {
             setRedeemMsg({ type: 'error', text: err?.message || 'Unable to redeem coupon.' });
@@ -398,90 +459,32 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         }
     };
 
-    const parseOptionalNumber = (value: string) => {
+    const parsePositiveInteger = (value: string, fieldName: string, min = 1) => {
         const normalized = value.trim();
-        if (!normalized) return undefined;
+        if (!normalized) throw new Error(`${fieldName} is required.`);
         const parsed = Number(normalized);
-        if (!Number.isFinite(parsed) || parsed < 0) {
-            throw new Error('Coupon numeric fields must be non-negative numbers.');
+        if (!Number.isFinite(parsed) || Math.floor(parsed) !== parsed || parsed < min) {
+            throw new Error(`${fieldName} must be an integer >= ${min}.`);
         }
         return Math.floor(parsed);
-    };
-
-    const loadAdminCouponState = async () => {
-        const state = await listAdminCoupons(200);
-        setAdminCouponDefinitions(state.definitions);
-        setAdminCouponAssignments(state.assignments);
-        setAdminCouponEvents(state.events);
     };
 
     const handleCreateAdminCoupon = async () => {
         setAdminActionMessage(null);
         setAdminBusy(true);
         try {
-            const policy: Record<string, unknown> = {};
-            if (newCouponPlanOverride.trim()) policy.planTierOverride = newCouponPlanOverride.trim();
-            const includedOverride = parseOptionalNumber(newCouponIncludedOverride);
-            const dailyOverride = parseOptionalNumber(newCouponDailyOverride);
-            const includedBonus = parseOptionalNumber(newCouponIncludedBonus);
-            const dailyBonus = parseOptionalNumber(newCouponDailyBonus);
-            const bonusCt = parseOptionalNumber(newCouponBonusCt);
-
-            if (includedOverride !== undefined) policy.includedMonthlyCtOverride = includedOverride;
-            if (dailyOverride !== undefined) policy.dailyGuardrailCtOverride = dailyOverride;
-            if (includedBonus !== undefined) policy.includedMonthlyCtBonus = includedBonus;
-            if (dailyBonus !== undefined) policy.dailyGuardrailCtBonus = dailyBonus;
-            if (bonusCt !== undefined) policy.bonusCt = bonusCt;
-            if (newCouponOverageOverride === 'true') policy.overageEnabledOverride = true;
-            if (newCouponOverageOverride === 'false') policy.overageEnabledOverride = false;
+            const tokenAmountCt = parsePositiveInteger(newCouponTokenAmount, 'Token amount');
+            const validForHours = parsePositiveInteger(newCouponValidForHours, 'Validity (hours)');
 
             const created = await createAdminCouponDefinition({
-                code: newCouponCode.trim().toUpperCase(),
-                startsAt: newCouponStartsAt,
-                endsAt: newCouponEndsAt,
-                policy
+                tokenAmountCt,
+                validForHours
             });
+            setCreatedAdminCoupon(created);
             setAdminActionMessage({ type: 'success', text: `Coupon ${created.code} created.` });
-            if (!assignCouponDefinitionId) {
-                setAssignCouponDefinitionId(created.id);
-            }
             await loadAdminCouponState();
         } catch (err: any) {
             setAdminActionMessage({ type: 'error', text: err?.message || 'Failed to create coupon.' });
-        } finally {
-            setAdminBusy(false);
-        }
-    };
-
-    const handleAssignAdminCoupon = async () => {
-        setAdminActionMessage(null);
-        setAdminBusy(true);
-        try {
-            const assignment = await assignAdminCouponDefinition({
-                couponDefinitionId: assignCouponDefinitionId,
-                userId: assignTargetUserId.trim() || undefined,
-                email: assignTargetEmail.trim() || undefined,
-                startsAt: assignStartsAt,
-                endsAt: assignEndsAt
-            });
-            setAdminActionMessage({ type: 'success', text: `Coupon assigned (${assignment.couponCode}).` });
-            await loadAdminCouponState();
-        } catch (err: any) {
-            setAdminActionMessage({ type: 'error', text: err?.message || 'Failed to assign coupon.' });
-        } finally {
-            setAdminBusy(false);
-        }
-    };
-
-    const handleRevokeAssignment = async (assignmentId: string) => {
-        setAdminActionMessage(null);
-        setAdminBusy(true);
-        try {
-            await revokeAdminCouponAssignment(assignmentId, 'revoked_by_admin');
-            setAdminActionMessage({ type: 'success', text: 'Coupon assignment revoked.' });
-            await loadAdminCouponState();
-        } catch (err: any) {
-            setAdminActionMessage({ type: 'error', text: err?.message || 'Failed to revoke assignment.' });
         } finally {
             setAdminBusy(false);
         }
@@ -1043,7 +1046,6 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         const summary = billingSummary;
         const planName = summary?.effectivePlan?.name || summary?.plan?.name || 'Free';
         const planTier = summary?.effectivePlan?.id || summary?.plan?.id || 'free';
-        const basePlanName = summary?.basePlan?.name || summary?.plan?.name || 'Free';
         const availableCt = summary?.wallet?.availableCt || 0;
         const dailyRemainingCt = summary?.usage?.dailyRemainingCt || 0;
         const monthlyResetAt = summary?.usage?.monthlyResetAt ? new Date(summary.usage.monthlyResetAt).toLocaleString() : 'n/a';
@@ -1051,12 +1053,14 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         const subscription = summary?.subscription;
         const subscriptionEnd = subscription?.currentPeriodEnd ? new Date(subscription.currentPeriodEnd).toLocaleString() : null;
         const isCancelPending = subscription?.cancelAtPeriodEnd === true;
-        const activeCoupon = summary?.activeCouponEntitlement;
         const tierOrder: PurchasablePlanTier[] = ['creator', 'pro', 'studio'];
         const pricingForInterval = tierOrder
             .map((tier) => planPricing.find((entry) => entry.planTier === tier && entry.interval === selectedBillingInterval))
             .filter((entry): entry is BillingPlanPricing => !!entry);
         const planById = new Map<string, BillingPlanDefinition>(catalogPlans.map((plan) => [plan.id, plan]));
+        const normalizedCode = couponCode.trim().toUpperCase();
+        const previewMatchesInput = Boolean(couponPreview?.couponCode && couponPreview.couponCode === normalizedCode);
+        const canRedeemPreviewedCoupon = previewMatchesInput && couponPreview?.canRedeemNow === true;
 
         return (
             <div className="space-y-6 animate-fade-in">
@@ -1067,14 +1071,6 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                     <div className="border-4 border-black bg-white p-6 rounded-2xl">
                         <h3 className="font-display text-2xl">Current Plan: {planName}</h3>
                         <p className="font-mono text-xs mt-1 uppercase text-slate-500">{planTier}</p>
-                        {summary?.effectiveUsageSource === 'coupon_entitlement' && (
-                            <p className="mt-1 text-xs font-bold text-amber-700">Coupon entitlement active (base plan: {basePlanName}).</p>
-                        )}
-                        {activeCoupon && (
-                            <p className="mt-1 text-xs text-slate-600">
-                                Coupon: <span className="font-mono font-bold">{activeCoupon.couponCode}</span> (valid until {new Date(activeCoupon.endsAt).toLocaleString()})
-                            </p>
-                        )}
                         <div className="mt-4 space-y-2 text-sm">
                             <div className="flex justify-between"><span>Available CT</span><strong>{formatCt(availableCt)}</strong></div>
                             <div className="flex justify-between"><span>Daily Remaining CT</span><strong>{formatCt(dailyRemainingCt)}</strong></div>
@@ -1184,18 +1180,50 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                     </div>
                 </div>
 
-                <div className="border-2 border-black rounded-xl p-4 max-w-md">
+                <div className="border-2 border-black rounded-xl p-4 max-w-2xl space-y-3">
                     <label className="font-bold text-xs uppercase">Redeem Coupon</label>
+                    <p className="text-xs text-slate-600">
+                        Coupons add CT to your wallet and are single-use globally. Preview first to verify amount, expiry, and remaining availability.
+                    </p>
                     <div className="flex gap-2 mt-2">
                         <input
                             type="text"
                             value={couponCode}
-                            onChange={(e) => setCouponCode(e.target.value)}
+                            onChange={(e) => {
+                                setCouponCode(e.target.value);
+                                setCouponPreview(null);
+                                setRedeemMsg(null);
+                            }}
                             placeholder="Enter coupon code"
                             className="flex-1 border-2 border-black rounded-lg px-3 py-2 font-mono text-sm"
                         />
-                        <Button onClick={handleRedeem} disabled={billingBusy}>Redeem</Button>
+                        <Button onClick={handlePreviewCoupon} disabled={billingBusy || couponPreviewBusy || !couponCode.trim()}>
+                            {couponPreviewBusy ? 'Checking...' : 'Preview'}
+                        </Button>
+                        <Button onClick={handleRedeem} disabled={billingBusy || !canRedeemPreviewedCoupon}>
+                            Redeem
+                        </Button>
                     </div>
+
+                    {couponPreview && (
+                        <div className={`border-2 rounded-lg p-3 text-sm ${couponPreview.success ? 'border-green-400 bg-green-50' : 'border-amber-400 bg-amber-50'}`}>
+                            <div className="font-semibold">{couponPreview.message}</div>
+                            <div className="mt-2 text-xs space-y-1">
+                                <div>Code: <span className="font-mono font-bold">{couponPreview.couponCode}</span></div>
+                                <div>Token amount: <span className="font-semibold">{formatCt(couponPreview.tokenAmountCt)} CT</span></div>
+                                {couponPreview.startsAt && couponPreview.endsAt && (
+                                    <div>Validity: {new Date(couponPreview.startsAt).toLocaleString()} to {new Date(couponPreview.endsAt).toLocaleString()}</div>
+                                )}
+                                <div>Remaining redemptions: {couponPreview.remainingRedemptions ?? 0} / {couponPreview.maxRedemptions ?? 1}</div>
+                                {couponPreview.warnings?.expiresSoon && (
+                                    <div className="text-amber-700 font-semibold">
+                                        Expiry warning: this coupon expires in about {couponPreview.warnings.expiresInHours ?? 0} hours.
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
                     {redeemMsg && (
                         <p className={`text-sm mt-2 font-semibold ${redeemMsg.type === 'success' ? 'text-green-700' : 'text-red-700'}`}>
                             {redeemMsg.text}
@@ -1211,203 +1239,176 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
             {renderMessage(adminActionMessage)}
 
             <div className="bg-slate-100 p-6 rounded-xl border-4 border-black space-y-4">
-                <h3 className="font-display text-2xl">Create Coupon Definition</h3>
-                <div className="grid md:grid-cols-2 gap-3">
-                    <input
-                        value={newCouponCode}
-                        onChange={(e) => setNewCouponCode(e.target.value)}
-                        placeholder="Code (e.g. VIP_CREATOR_2026)"
-                        className="border-2 border-black rounded-lg px-3 py-2 font-mono text-sm"
-                    />
-                    <select
-                        value={newCouponPlanOverride}
-                        onChange={(e) => setNewCouponPlanOverride(e.target.value)}
-                        className="border-2 border-black rounded-lg px-3 py-2 text-sm"
-                    >
-                        <option value="">No plan override</option>
-                        <option value="free">free</option>
-                        <option value="creator">creator</option>
-                        <option value="pro">pro</option>
-                        <option value="studio">studio</option>
-                        <option value="custom">custom</option>
-                        <option value="admin">admin</option>
-                    </select>
-                    <input
-                        type="datetime-local"
-                        value={newCouponStartsAt}
-                        onChange={(e) => setNewCouponStartsAt(e.target.value)}
-                        className="border-2 border-black rounded-lg px-3 py-2 text-sm"
-                    />
-                    <input
-                        type="datetime-local"
-                        value={newCouponEndsAt}
-                        onChange={(e) => setNewCouponEndsAt(e.target.value)}
-                        className="border-2 border-black rounded-lg px-3 py-2 text-sm"
-                    />
-                    <input
-                        value={newCouponIncludedOverride}
-                        onChange={(e) => setNewCouponIncludedOverride(e.target.value)}
-                        placeholder="Included CT override"
-                        className="border-2 border-black rounded-lg px-3 py-2 font-mono text-sm"
-                    />
-                    <input
-                        value={newCouponDailyOverride}
-                        onChange={(e) => setNewCouponDailyOverride(e.target.value)}
-                        placeholder="Daily CT override"
-                        className="border-2 border-black rounded-lg px-3 py-2 font-mono text-sm"
-                    />
-                    <input
-                        value={newCouponIncludedBonus}
-                        onChange={(e) => setNewCouponIncludedBonus(e.target.value)}
-                        placeholder="Included CT bonus"
-                        className="border-2 border-black rounded-lg px-3 py-2 font-mono text-sm"
-                    />
-                    <input
-                        value={newCouponDailyBonus}
-                        onChange={(e) => setNewCouponDailyBonus(e.target.value)}
-                        placeholder="Daily CT bonus"
-                        className="border-2 border-black rounded-lg px-3 py-2 font-mono text-sm"
-                    />
-                    <input
-                        value={newCouponBonusCt}
-                        onChange={(e) => setNewCouponBonusCt(e.target.value)}
-                        placeholder="One-time bonus CT"
-                        className="border-2 border-black rounded-lg px-3 py-2 font-mono text-sm"
-                    />
-                    <select
-                        value={newCouponOverageOverride}
-                        onChange={(e) => setNewCouponOverageOverride(e.target.value)}
-                        className="border-2 border-black rounded-lg px-3 py-2 text-sm"
-                    >
-                        <option value="">Keep overage policy</option>
-                        <option value="true">Force overage enabled</option>
-                        <option value="false">Force overage disabled</option>
-                    </select>
+                <h3 className="font-display text-2xl">Create Coupon</h3>
+                <p className="text-xs text-slate-600">
+                    Admin-only flow: enter token amount and validity duration. Code is securely generated and single-use global.
+                </p>
+                <div className="grid md:grid-cols-3 gap-3 items-end">
+                    <div className="space-y-1">
+                        <label className="text-xs font-bold uppercase text-slate-500">Token Amount (CT)</label>
+                        <input
+                            value={newCouponTokenAmount}
+                            onChange={(e) => setNewCouponTokenAmount(e.target.value)}
+                            placeholder="10000"
+                            className="border-2 border-black rounded-lg px-3 py-2 font-mono text-sm"
+                        />
+                    </div>
+                    <div className="space-y-1">
+                        <label className="text-xs font-bold uppercase text-slate-500">Valid For (Hours)</label>
+                        <input
+                            value={newCouponValidForHours}
+                            onChange={(e) => setNewCouponValidForHours(e.target.value)}
+                            placeholder="168"
+                            className="border-2 border-black rounded-lg px-3 py-2 font-mono text-sm"
+                        />
+                    </div>
+                    <Button onClick={handleCreateAdminCoupon} disabled={adminBusy}>
+                        {adminBusy ? 'Saving...' : 'Save'}
+                    </Button>
                 </div>
-                <Button onClick={handleCreateAdminCoupon} disabled={adminBusy}>Create Definition</Button>
+
+                {createdAdminCoupon && (
+                    <div className="border-2 border-green-500 bg-green-50 rounded-lg p-4 space-y-2">
+                        <div className="text-sm font-bold text-green-800">Coupon created</div>
+                        <div className="text-sm">
+                            Code: <span className="font-mono font-bold">{createdAdminCoupon.code}</span>
+                        </div>
+                        <div className="text-xs text-slate-700">
+                            {createdAdminCoupon.tokenAmountCt.toLocaleString()} CT · Expires {new Date(createdAdminCoupon.endsAt).toLocaleString()}
+                        </div>
+                        <div>
+                            <Button
+                                variant="outline"
+                                onClick={async () => {
+                                    try {
+                                        await navigator.clipboard.writeText(createdAdminCoupon.code);
+                                        setAdminActionMessage({ type: 'success', text: `Copied ${createdAdminCoupon.code} to clipboard.` });
+                                    } catch {
+                                        setAdminActionMessage({ type: 'error', text: 'Unable to copy automatically. Copy the code manually.' });
+                                    }
+                                }}
+                            >
+                                Copy Code
+                            </Button>
+                        </div>
+                    </div>
+                )}
             </div>
 
-            <div className="bg-white p-6 rounded-xl border-2 border-black space-y-4">
-                <h3 className="font-display text-2xl">Assign Coupon</h3>
-                <div className="grid md:grid-cols-2 gap-3">
-                    <select
-                        value={assignCouponDefinitionId}
-                        onChange={(e) => setAssignCouponDefinitionId(e.target.value)}
-                        className="border-2 border-black rounded-lg px-3 py-2 text-sm"
-                    >
-                        <option value="">Select coupon definition</option>
-                        {adminCouponDefinitions.map((definition) => (
-                            <option key={definition.id} value={definition.id}>
-                                {definition.code}
-                            </option>
-                        ))}
-                    </select>
-                    <input
-                        value={assignTargetUserId}
-                        onChange={(e) => setAssignTargetUserId(e.target.value)}
-                        placeholder="Target user ID (optional)"
-                        className="border-2 border-black rounded-lg px-3 py-2 font-mono text-sm"
-                    />
-                    <input
-                        value={assignTargetEmail}
-                        onChange={(e) => setAssignTargetEmail(e.target.value)}
-                        placeholder="Target email (optional)"
-                        className="border-2 border-black rounded-lg px-3 py-2 font-mono text-sm"
-                    />
-                    <input
-                        type="datetime-local"
-                        value={assignStartsAt}
-                        onChange={(e) => setAssignStartsAt(e.target.value)}
-                        className="border-2 border-black rounded-lg px-3 py-2 text-sm"
-                    />
-                    <input
-                        type="datetime-local"
-                        value={assignEndsAt}
-                        onChange={(e) => setAssignEndsAt(e.target.value)}
-                        className="border-2 border-black rounded-lg px-3 py-2 text-sm"
-                    />
-                </div>
-                <Button onClick={handleAssignAdminCoupon} disabled={adminBusy}>Assign Coupon</Button>
+            <div className="flex items-center justify-between text-xs text-slate-500">
+                <div>Live coupon status refreshes every 15 seconds.</div>
+                <div>{adminLastRefreshedAt ? `Last refreshed: ${new Date(adminLastRefreshedAt).toLocaleTimeString()}` : ''}</div>
             </div>
 
-            <div className="bg-white border-2 border-slate-200 rounded-xl overflow-hidden">
-                <table className="w-full text-sm text-left">
+            <div className="bg-white border-2 border-slate-200 rounded-xl overflow-auto">
+                <table className="w-full text-sm text-left min-w-[900px]">
                     <thead className="bg-slate-50 border-b-2 border-slate-200">
                         <tr>
                             <th className="p-3 font-bold">Code</th>
-                            <th className="p-3 font-bold">Window</th>
+                            <th className="p-3 font-bold">Mode</th>
+                            <th className="p-3 font-bold">Token CT</th>
+                            <th className="p-3 font-bold">Validity</th>
+                            <th className="p-3 font-bold">Usage</th>
                             <th className="p-3 font-bold">Status</th>
+                            <th className="p-3 font-bold">First/Last Redeemed By</th>
                         </tr>
                     </thead>
                     <tbody>
+                        {adminCouponDefinitions.length === 0 && (
+                            <tr>
+                                <td className="p-3 text-slate-500 text-sm" colSpan={7}>No coupon history found.</td>
+                            </tr>
+                        )}
                         {adminCouponDefinitions.map((definition) => (
                             <tr key={definition.id} className="border-b border-slate-100 last:border-0">
                                 <td className="p-3 font-mono font-bold">{definition.code}</td>
+                                <td className="p-3 text-xs uppercase">{definition.couponMode}</td>
+                                <td className="p-3 text-xs">{definition.tokenAmountCt.toLocaleString()}</td>
                                 <td className="p-3 text-xs text-slate-500">{new Date(definition.startsAt).toLocaleString()} → {new Date(definition.endsAt).toLocaleString()}</td>
-                                <td className="p-3 text-xs">{definition.isActive ? 'Active' : 'Inactive'}</td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-
-            <div className="bg-white border-2 border-slate-200 rounded-xl overflow-hidden">
-                <table className="w-full text-sm text-left">
-                    <thead className="bg-slate-50 border-b-2 border-slate-200">
-                        <tr>
-                            <th className="p-3 font-bold">Coupon</th>
-                            <th className="p-3 font-bold">Target</th>
-                            <th className="p-3 font-bold">Status</th>
-                            <th className="p-3 font-bold">Action</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {adminCouponAssignments.map((assignment) => (
-                            <tr key={assignment.id} className="border-b border-slate-100 last:border-0">
-                                <td className="p-3 font-mono">{assignment.couponCode}</td>
-                                <td className="p-3 text-xs text-slate-600">{assignment.userId || assignment.email || '-'}</td>
+                                <td className="p-3 text-xs">{definition.redemptionCount}/{definition.maxRedemptions}</td>
                                 <td className="p-3 text-xs">
-                                    {assignment.revokedAt
-                                        ? 'Revoked'
-                                        : assignment.isRedeemed
-                                            ? `Redeemed ${assignment.redeemedAt ? new Date(assignment.redeemedAt).toLocaleString() : ''}`
-                                            : assignment.isActive ? 'Assigned' : 'Inactive'}
-                                </td>
-                                <td className="p-3">
-                                    {!assignment.revokedAt && assignment.isActive && (
-                                        <Button variant="outline" onClick={() => handleRevokeAssignment(assignment.id)} disabled={adminBusy}>
-                                            Revoke
-                                        </Button>
+                                    <span className={`inline-flex px-2 py-1 rounded-full font-semibold uppercase ${definition.status === 'active' ? 'bg-green-100 text-green-700' : definition.status === 'expired' || definition.status === 'exhausted' ? 'bg-slate-200 text-slate-700' : 'bg-amber-100 text-amber-700'}`}>
+                                        {definition.status}
+                                    </span>
+                                    {definition.warningExpiresSoon && (
+                                        <span className="ml-2 text-amber-700 font-semibold">Expires &lt; 72h</span>
                                     )}
                                 </td>
+                                <td className="p-3 text-xs text-slate-600">
+                                    <div>{definition.firstRedeemedBy || '-'}</div>
+                                    <div>{definition.lastRedeemedBy || '-'}</div>
+                                </td>
                             </tr>
                         ))}
                     </tbody>
                 </table>
             </div>
 
-            <div className="bg-white border-2 border-slate-200 rounded-xl overflow-hidden">
-                <table className="w-full text-sm text-left">
+            <div className="bg-white border-2 border-slate-200 rounded-xl overflow-auto">
+                <table className="w-full text-sm text-left min-w-[760px]">
                     <thead className="bg-slate-50 border-b-2 border-slate-200">
                         <tr>
                             <th className="p-3 font-bold">When</th>
                             <th className="p-3 font-bold">Code</th>
                             <th className="p-3 font-bold">Outcome</th>
+                            <th className="p-3 font-bold">User</th>
+                            <th className="p-3 font-bold">Token CT</th>
                             <th className="p-3 font-bold">Reason</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {adminCouponEvents.slice(0, 100).map((event) => (
+                        {adminCouponEvents.length === 0 && (
+                            <tr>
+                                <td className="p-3 text-slate-500 text-sm" colSpan={6}>No redemption events yet.</td>
+                            </tr>
+                        )}
+                        {adminCouponEvents.slice(0, 300).map((event) => (
                             <tr key={event.id} className="border-b border-slate-100 last:border-0">
                                 <td className="p-3 text-xs">{new Date(event.createdAt).toLocaleString()}</td>
                                 <td className="p-3 font-mono">{event.couponCode}</td>
                                 <td className="p-3 text-xs">{event.outcome}</td>
+                                <td className="p-3 text-xs text-slate-600">{event.userId || event.email || '-'}</td>
+                                <td className="p-3 text-xs">{event.tokenAmountCt?.toLocaleString?.() || '-'}</td>
                                 <td className="p-3 text-xs text-slate-500">{event.reason || '-'}</td>
                             </tr>
                         ))}
                     </tbody>
                 </table>
             </div>
+
+            {adminCouponAssignments.length > 0 && (
+                <div className="bg-white border-2 border-slate-200 rounded-xl overflow-auto">
+                    <div className="px-4 py-3 text-xs font-bold uppercase border-b border-slate-200 bg-slate-50">Legacy Assignments (Read-only)</div>
+                    <table className="w-full text-sm text-left min-w-[760px]">
+                        <thead className="bg-slate-50 border-b-2 border-slate-200">
+                            <tr>
+                                <th className="p-3 font-bold">Coupon</th>
+                                <th className="p-3 font-bold">Target</th>
+                                <th className="p-3 font-bold">Window</th>
+                                <th className="p-3 font-bold">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {adminCouponAssignments.map((assignment) => (
+                                <tr key={assignment.id} className="border-b border-slate-100 last:border-0">
+                                    <td className="p-3 font-mono">{assignment.couponCode}</td>
+                                    <td className="p-3 text-xs text-slate-600">{assignment.userId || assignment.email || '-'}</td>
+                                    <td className="p-3 text-xs text-slate-600">
+                                        {new Date(assignment.startsAt).toLocaleString()} → {new Date(assignment.endsAt).toLocaleString()}
+                                    </td>
+                                    <td className="p-3 text-xs">
+                                        {assignment.revokedAt
+                                            ? 'Revoked'
+                                            : assignment.isRedeemed
+                                                ? `Redeemed ${assignment.redeemedAt ? new Date(assignment.redeemedAt).toLocaleString() : ''}`
+                                                : assignment.isActive ? 'Assigned' : 'Inactive'}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            )}
         </div>
     );
 
@@ -1446,16 +1447,17 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
 
     const renderSettings = () => {
         const modelKeys = getAllModelKeys();
-        const imageModelOptions = IMAGE_MODELS;
+        const entitlements = buildModelEntitlements(billingSummary);
+        const imageModelOptions = getAllowedImageModelsForPlan(entitlements.planTier);
         const textModelLabelMap = new Map(TEXT_MODELS.map((model) => [model.id, model.label]));
-        const textModelOptions = TEXT_MODELS.map((model) => model.id);
+        const textModelOptions = getAllowedTextModelIdsForPlan(entitlements.planTier);
         const imageModelIds = new Set(imageModelOptions.map((model) => model.id));
         const textModelIds = new Set(textModelOptions);
         const selectedImageModel = imageModelIds.has(settingsState.defaultImageModel || '')
             ? settingsState.defaultImageModel
-            : imageModelOptions[0]?.id;
+            : entitlements.defaultImageModelId;
         const requestedTextModel = settingsState.defaultTextModel || settingsState.defaultTextModelKey || TEXT_MODEL;
-        const selectedTextModel = textModelIds.has(requestedTextModel) ? requestedTextModel : TEXT_MODEL;
+        const selectedTextModel = textModelIds.has(requestedTextModel) ? requestedTextModel : entitlements.defaultTextModelId;
 
         const saveSettings = (next: ReturnType<typeof getSettingsState>) => {
             setSettingsState(next);
@@ -1466,7 +1468,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
             <div className="space-y-6 animate-fade-in max-w-3xl">
                 <div>
                     <h3 className="font-display text-xl mb-4">API Keys</h3>
-                    <KeyManager />
+                    <KeyManager planTier={entitlements.planTier} />
                 </div>
 
                 <div className="border-2 border-slate-200 rounded-xl p-4 bg-white space-y-4">
@@ -1503,6 +1505,9 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                                 </option>
                             ))}
                         </select>
+                    </div>
+                    <div className="text-xs text-slate-500">
+                        Plan tier <span className="font-bold uppercase">{entitlements.planTier}</span> controls visible model options. Upgrade to Pro for Gemini 3 and Nano Banana Pro.
                     </div>
                 </div>
             </div>

@@ -19,4 +19,30 @@ describe('estimateCharge', () => {
     expect(result.estimatedCt).toBe(expectedCt);
     expect(result.ctPerUsd).toBe(10_000);
   });
+
+  it('applies higher Nano Banana Pro price path for 4K images', async () => {
+    const oneK = await estimateCharge({
+      provider: 'gemini',
+      model: 'gemini-3-pro-image-preview',
+      operation: 'unit_test_image_pricing',
+      imageUnits: 1,
+      resolution: '1K'
+    });
+
+    const fourK = await estimateCharge({
+      provider: 'gemini',
+      model: 'gemini-3-pro-image-preview',
+      operation: 'unit_test_image_pricing',
+      imageUnits: 1,
+      resolution: '4K'
+    });
+
+    const oneKImageLine = oneK.lines.find((line) => line.kind === 'image_units');
+    const fourKImageLine = fourK.lines.find((line) => line.kind === 'image_units');
+
+    expect(oneKImageLine).toBeDefined();
+    expect(fourKImageLine).toBeDefined();
+    expect((fourKImageLine?.unitPriceUsd || 0)).toBeGreaterThan(oneKImageLine?.unitPriceUsd || 0);
+    expect(fourK.estimatedCt).toBeGreaterThan(oneK.estimatedCt);
+  });
 });
