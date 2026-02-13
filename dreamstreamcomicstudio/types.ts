@@ -443,6 +443,16 @@ export interface ComicState {
 
   // Layout
   layoutType: LayoutType;
+  /** ID of the selected grid template from gridTemplates.ts */
+  gridTemplateId?: string;
+  /** Snapshot of panel slot positions used at generation time (for versioning) */
+  panelSlotsSnapshot?: Array<{
+    id: string;
+    x: number; y: number;
+    width: number; height: number;
+    effectiveRatio: AspectRatio;
+    label?: string;
+  }>;
   customLayoutPrompt?: string;
   textLayout?: TextLayout;
   panelPlanVersion?: number;

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Download, Edit2, RefreshCw, X, History, Share2, FileCode, Loader2, ArrowLeftRight } from 'lucide-react';
 import { ComicPanel, ComicState, DialogueBlock, TextLayout, ProjectReport } from '../../types';
+import { PanelDialogue } from '../PanelDialogue';
 import { generateImage } from '../../services/imageService';
 import { runContinuityAudit } from '../../services/geminiService';
 import { Button } from '../Button';
@@ -34,58 +35,7 @@ interface ReviewExportProps {
   onUpdatePanel: (panelId: string, imageId: string, imageUrl: string) => void;
 }
 
-const renderPanelText = (panel: ComicPanel, layout: TextLayout) => {
-  const blocks = ensureDialogueBlocks(panel.dialogue, panel.dialogueBlocks, panel.description);
-  if (layout === 'none' || blocks.length === 0) return null;
-
-  if (layout === 'chat_bubbles') {
-    return (
-      <div className="mt-2 space-y-2">
-        {blocks.map(block => (
-          <div
-            key={block.id}
-            className={`max-w-[80%] px-3 py-2 rounded-lg border-2 border-black text-xs font-comic font-bold ${block.side === 'right'
-              ? 'ml-auto bg-brand-blue text-white'
-              : 'bg-brand-yellow text-black'
-              }`}
-          >
-            {block.speaker ? <span className="mr-1">{block.speaker}:</span> : null}
-            {block.text}
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  if (layout === 'speech_bubbles') {
-    return (
-      <div className="absolute inset-0 pointer-events-none">
-        {blocks.map((block, idx) => (
-          <div
-            key={block.id}
-            className={`absolute text-[11px] font-comic font-bold bg-white/90 border-2 border-black px-2 py-1 rounded ${block.side === 'right'
-              ? 'top-2 right-2'
-              : block.side === 'center'
-                ? 'top-2 left-1/2 -translate-x-1/2'
-                : 'top-2 left-2'
-              }`}
-            style={{ top: `${8 + idx * 32}px` }}
-          >
-            {block.speaker ? <span className="mr-1">{block.speaker}:</span> : null}
-            {block.text}
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  // caption
-  return (
-    <div className="absolute bottom-2 left-2 right-2 bg-white/90 p-2 text-sm font-comic font-bold text-black border-2 border-black rounded">
-      {blocks.map(block => block.text).filter(Boolean).join(' ')}
-    </div>
-  );
-};
+// renderPanelText removed — use <PanelDialogue /> component instead
 
 const escapeHtml = (value: string) =>
   value
@@ -629,13 +579,12 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
                 onClick={() => setSelectedPanel(panel)}
               >
                 <img src={panel.imageUrl} alt={`Panel ${idx + 1}`} className="w-full h-full object-cover" />
-                {renderPanelText(panel, textLayout)}
+                <PanelDialogue panel={panel} layout={textLayout} />
                 {auditScoresByPanel[panel.id] && (
-                  <div className={`absolute left-2 top-2 px-2 py-1 text-[10px] font-bold rounded border ${
-                    auditScoresByPanel[panel.id].driftScore > 0.35
+                  <div className={`absolute left-2 top-2 px-2 py-1 text-[10px] font-bold rounded border ${auditScoresByPanel[panel.id].driftScore > 0.35
                       ? 'bg-red-100 text-red-700 border-red-300'
                       : 'bg-green-100 text-green-700 border-green-300'
-                  }`}>
+                    }`}>
                     Drift {Math.round(auditScoresByPanel[panel.id].driftScore * 100)}%
                   </div>
                 )}

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Project, ComicPanel, DialogueBlock, TextLayout } from '../types';
 import { CommentSection } from './CommentSection';
 import { X, ChevronLeft, ChevronRight, Maximize2, Minimize2, BookOpen, MessageSquareText } from 'lucide-react';
-import { ensureDialogueBlocks } from '../services/dialogueUtils';
+import { PanelDialogue } from './PanelDialogue';
 import { loadReaderState, saveReaderState } from '../services/db';
 
 import { ReviewModal } from './modals/ReviewModal';
@@ -109,61 +109,7 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
     saveReaderState(payload);
   };
 
-  const getDialogueBlocks = (panel: ComicPanel): DialogueBlock[] => {
-    return ensureDialogueBlocks(panel.dialogue, panel.dialogueBlocks, panel.description);
-  };
-
-  const renderPanelText = (panel: ComicPanel, layout: TextLayout) => {
-    const blocks = getDialogueBlocks(panel);
-    if (layout === 'none' || blocks.length === 0) return null;
-
-    if (layout === 'chat_bubbles') {
-      return (
-        <div className="mt-2 space-y-2 px-4 pb-4">
-          {blocks.map(block => (
-            <div
-              key={block.id}
-              className={`max-w-[80%] px-3 py-2 rounded-lg border-2 border-black text-xs font-comic font-bold ${block.side === 'right'
-                ? 'ml-auto bg-brand-blue text-white'
-                : 'bg-brand-yellow text-black'
-                }`}
-            >
-              {block.speaker ? <span className="mr-1">{block.speaker}:</span> : null}
-              {block.text}
-            </div>
-          ))}
-        </div>
-      );
-    }
-
-    if (layout === 'speech_bubbles') {
-      return (
-        <div className="absolute inset-0 pointer-events-none">
-          {blocks.map((block, idx) => (
-            <div
-              key={block.id}
-              className={`absolute text-[11px] font-comic font-bold bg-white/90 border-2 border-black px-2 py-1 rounded ${block.side === 'right'
-                ? 'top-2 right-2'
-                : block.side === 'center'
-                  ? 'top-2 left-1/2 -translate-x-1/2'
-                  : 'top-2 left-2'
-                }`}
-              style={{ top: `${8 + idx * 32}px` }}
-            >
-              {block.speaker ? <span className="mr-1">{block.speaker}:</span> : null}
-              {block.text}
-            </div>
-          ))}
-        </div>
-      );
-    }
-
-    return (
-      <div className="bg-white/90 border-2 border-black p-2 absolute bottom-4 left-4 right-4 text-center font-comic font-bold text-sm md:text-base rounded shadow-sm">
-        {blocks.map(block => block.text).filter(Boolean).join(' ')}
-      </div>
-    );
-  };
+  // renderPanelText removed — use <PanelDialogue /> component instead
 
   const getLayoutClass = () => {
     switch (project.state.layoutType) {
@@ -356,7 +302,7 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
                   {project.state.panels.map((panel, idx) => (
                     <div key={idx} className={`border-2 border-black shadow-sm relative ${getPanelClass(idx)}`}>
                       <img src={panel.imageUrl} alt={panel.description} className="w-full h-auto" />
-                      {renderPanelText(panel, textLayout)}
+                      <PanelDialogue panel={panel} layout={textLayout} />
                     </div>
                   ))}
                   {project.state.panels.length === 0 && (
@@ -383,7 +329,7 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
                     {pages[pageIndex]?.imageUrl && (
                       <img src={pages[pageIndex].imageUrl} alt="Comic page" className="w-full h-auto" />
                     )}
-                    {pages[pageIndex]?.panel && renderPanelText(pages[pageIndex].panel!, textLayout)}
+                    {pages[pageIndex]?.panel && <PanelDialogue panel={pages[pageIndex].panel!} layout={textLayout} />}
                   </div>
                 ) : (
                   <div className="p-10 text-center text-slate-400 font-display text-2xl">This comic hasn't been drawn yet!</div>
