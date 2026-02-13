@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assertCreditPackId, assertPurchasableTier } from './stripe.js';
+import { assertBillingInterval, assertCreditPackId, assertPurchasableTier } from './stripe.js';
 
 describe('stripe input assertions', () => {
   it('accepts only purchasable plan tiers', () => {
@@ -16,5 +16,12 @@ describe('stripe input assertions', () => {
     expect(assertCreditPackId('pack_100')).toBe('pack_100');
     expect(() => assertCreditPackId('100')).toThrow();
     expect(() => assertCreditPackId('pack_custom')).toThrow();
+  });
+
+  it('accepts only supported billing intervals', () => {
+    expect(assertBillingInterval('month')).toBe('month');
+    expect(assertBillingInterval('year')).toBe('year');
+    expect(() => assertBillingInterval('weekly')).toThrow();
+    expect(() => assertBillingInterval('')).toThrow();
   });
 });

@@ -5,6 +5,7 @@ import type {
   PricingCatalogResponse
 } from '../../../shared/types/billing.js';
 import { getSupabaseAdmin } from './supabase.js';
+import { getPlanPricingCatalog } from './stripePriceConfig.js';
 
 export const CT_USD = 0.0001;
 export const DEFAULT_MARKUP = Number(process.env.BILLING_PLATFORM_MARKUP || '1.30');
@@ -31,9 +32,9 @@ export const DEFAULT_BILLING_PLANS: BillingPlanDefinition[] = [
   {
     id: 'creator',
     name: 'Creator',
-    monthlyIncludedCt: 90_000,
-    dailyGuardrailCt: 6_000,
-    monthlyPriceUsd: 19,
+    monthlyIncludedCt: 120_000,
+    dailyGuardrailCt: 8_000,
+    monthlyPriceUsd: 20,
     allowOverage: true
   },
   {
@@ -47,9 +48,9 @@ export const DEFAULT_BILLING_PLANS: BillingPlanDefinition[] = [
   {
     id: 'studio',
     name: 'Studio',
-    monthlyIncludedCt: 700_000,
-    dailyGuardrailCt: 50_000,
-    monthlyPriceUsd: 149,
+    monthlyIncludedCt: 350_000,
+    dailyGuardrailCt: 25_000,
+    monthlyPriceUsd: 50,
     allowOverage: true
   },
   {
@@ -315,12 +316,14 @@ export const getPricingCatalog = async (): Promise<PricingCatalogResponse> => {
     getActiveModelPricingCatalog(),
     getPricingChangelog()
   ]);
+  const planPricing = await getPlanPricingCatalog(plans);
 
   return {
     currency: DEFAULT_CURRENCY,
     ctPerUsd: Math.round(1 / CT_USD),
     markup: DEFAULT_MARKUP,
     plans,
+    planPricing,
     creditPacks: CREDIT_PACKS,
     modelPricing: modelCatalog.models,
     lastSyncedAt: modelCatalog.lastSyncedAt,

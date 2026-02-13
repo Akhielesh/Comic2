@@ -1,7 +1,8 @@
 import { Router } from 'express';
-import type { CreditPackId, PurchasablePlanTier, TokenEstimateRequest } from '../../../shared/types/billing.js';
+import type { BillingInterval, CreditPackId, PurchasablePlanTier, TokenEstimateRequest } from '../../../shared/types/billing.js';
 import { estimateCharge } from '../services/costEstimator.js';
 import {
+  addPurchasedCredits,
   getBillingSummary,
   getComicCostReport,
   listUsageHistory,
@@ -12,9 +13,11 @@ import {
 } from '../services/billingLedger.js';
 import { getPricingCatalog } from '../services/pricingCatalog.js';
 import {
+  assertBillingInterval,
   assertCreditPackId,
   assertPurchasableTier,
   cancelSubscriptionAtPeriodEnd,
+  confirmCheckoutSession,
   createBillingPortalSession,
   createCreditPackCheckoutSession,
   createPlanCheckoutSession,
@@ -24,6 +27,14 @@ import {
   isStripeConfigured,
   reactivateSubscription
 } from '../services/stripe.js';
+import { requireAdmin } from '../middleware/requireAdmin.js';
+import {
+  assignCouponDefinition,
+  createCouponDefinition,
+  listCouponAdminState,
+  redeemAssignedCoupon,
+  revokeCouponAssignment
+} from '../services/coupons.js';
 
 export const billingRouter = Router();
 
@@ -70,6 +81,14 @@ const parseCheckoutPlanTier = (value: unknown): PurchasablePlanTier => {
     return assertPurchasableTier(value);
   } catch {
     throw Object.assign(new Error('Invalid plan tier. Allowed values: creator, pro, studio.'), { status: 400, publicCode: 'BAD_REQUEST' });
+  }
+};
+
+const parseBillingInterval = (value: unknown): BillingInterval => {
+  try {
+    return assertBillingInterval(value);
+  } catch {
+    throw Object.assign(new Error('Invalid billing interval. Allowed values: month, year.'), { status: 400, publicCode: 'BAD_REQUEST' });
   }
 };
 
@@ -260,10 +279,12 @@ billingRouter.post('/checkout/subscription', async (req, res, next) => {
     }
 
     const planTier = parseCheckoutPlanTier(req.body?.planTier);
+    const interval = parseBillingInterval(req.body?.interval);
     const session = await createPlanCheckoutSession({
       userId: user.id,
       email: user.email,
-      planTier
+      planTier,
+      interval
     });
 
     res.json({ url: session.url, id: session.id });
@@ -288,6 +309,26 @@ billingRouter.post('/checkout/credits', async (req, res, next) => {
     });
 
     res.json({ url: session.url, id: session.id });
+  } catch (error) {
+    next(error);
+  }
+});
+
+billingRouter.post('/checkout/confirm', async (req, res, next) => {
+  try {
+    const user = requireAuthUser(req.user);
+    requireStripe();
+    const sessionId = typeof req.body?.sessionId === 'string' ? req.body.sessionId.trim() : '';
+    if (!sessionId) {
+      throw Object.assign(new Error('sessionId is required.'), { status: 400, publicCode: 'BAD_REQUEST' });
+    }
+
+    const result = await confirmCheckoutSession({
+      userId: user.id,
+      sessionId
+    });
+
+    res.json(result);
   } catch (error) {
     next(error);
   }
@@ -349,6 +390,106 @@ billingRouter.get('/comic-cost/:comicId', async (req, res, next) => {
   }
 });
 
+billingRouter.post('/coupons/redeem', async (req, res, next) => {
+  try {
+    const user = requireAuthUser(req.user);
+    const couponCode = typeof req.body?.couponCode === 'string' ? req.body.couponCode : '';
+    const result = await redeemAssignedCoupon({
+      userId: user.id,
+      email: user.email,
+      couponCode
+    });
+
+    if (result.success && result.bonusCt && result.bonusCt > 0 && result.entitlement) {
+      await addPurchasedCredits({
+        userId: user.id,
+        ctAmount: result.bonusCt,
+        usdAmount: 0,
+        source: 'coupon_bonus',
+        metadata: {
+          assignmentId: result.entitlement.assignmentId,
+          couponDefinitionId: result.entitlement.couponDefinitionId,
+          couponCode: result.entitlement.couponCode
+        }
+      });
+    }
+
+    if (!result.success) {
+      return res.status(409).json(result);
+    }
+
+    const summary = await getBillingSummary(user.id);
+    res.json({
+      ...result,
+      summary
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+billingRouter.get('/admin/coupons', requireAdmin, async (req, res, next) => {
+  try {
+    requireAuthUser(req.user);
+    const limit = parseLimit(req.query.limit);
+    const state = await listCouponAdminState({ limit });
+    res.json(state);
+  } catch (error) {
+    next(error);
+  }
+});
+
+billingRouter.post('/admin/coupons', requireAdmin, async (req, res, next) => {
+  try {
+    const user = requireAuthUser(req.user);
+    const created = await createCouponDefinition({
+      code: String(req.body?.code || ''),
+      startsAt: String(req.body?.startsAt || ''),
+      endsAt: String(req.body?.endsAt || ''),
+      policy: req.body?.policy,
+      createdBy: user.id
+    });
+    res.status(201).json(created);
+  } catch (error) {
+    next(error);
+  }
+});
+
+billingRouter.post('/admin/coupons/assign', requireAdmin, async (req, res, next) => {
+  try {
+    const user = requireAuthUser(req.user);
+    const assignment = await assignCouponDefinition({
+      couponDefinitionId: String(req.body?.couponDefinitionId || ''),
+      userId: typeof req.body?.userId === 'string' ? req.body.userId : undefined,
+      email: typeof req.body?.email === 'string' ? req.body.email : undefined,
+      startsAt: String(req.body?.startsAt || ''),
+      endsAt: String(req.body?.endsAt || ''),
+      createdBy: user.id
+    });
+    res.status(201).json(assignment);
+  } catch (error) {
+    next(error);
+  }
+});
+
+billingRouter.post('/admin/coupons/assignments/:assignmentId/revoke', requireAdmin, async (req, res, next) => {
+  try {
+    const user = requireAuthUser(req.user);
+    const assignmentId = typeof req.params.assignmentId === 'string' ? req.params.assignmentId.trim() : '';
+    if (!assignmentId) {
+      throw Object.assign(new Error('assignmentId is required.'), { status: 400, publicCode: 'BAD_REQUEST' });
+    }
+    const revoked = await revokeCouponAssignment({
+      assignmentId,
+      revokedBy: user.id,
+      reason: typeof req.body?.reason === 'string' ? req.body.reason : undefined
+    });
+    res.json(revoked);
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Backward-compatible alias; strict validation still applies.
 billingRouter.post('/checkout-plan', async (req, res, next) => {
   try {
@@ -359,10 +500,12 @@ billingRouter.post('/checkout-plan', async (req, res, next) => {
     }
 
     const planTier = parseCheckoutPlanTier(req.body?.planTier);
+    const interval = req.body?.interval ? parseBillingInterval(req.body?.interval) : 'month';
     const session = await createPlanCheckoutSession({
       userId: user.id,
       email: user.email,
-      planTier
+      planTier,
+      interval
     });
 
     res.json({ url: session.url, id: session.id });
@@ -370,4 +513,3 @@ billingRouter.post('/checkout-plan', async (req, res, next) => {
     next(error);
   }
 });
-

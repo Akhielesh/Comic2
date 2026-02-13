@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
 import Stripe from 'stripe';
 import type {
+  BillingCouponEntitlement,
+  BillingPlanDefinition,
   BillingSummaryResponse,
   BillingPlanTier,
   BillingUsageHistoryItem,
@@ -14,6 +16,7 @@ import type {
 } from '../../../shared/types/billing.js';
 import { CT_USD, DEFAULT_MARKUP, getCreditPackByUsd, resolvePlanDefinition } from './pricingCatalog.js';
 import { getSupabaseAdmin, supabase } from './supabase.js';
+import { getActiveCouponEntitlementForUser } from './coupons.js';
 
 type WalletRow = {
   user_id: string;
@@ -45,6 +48,15 @@ type PaymentProfile = {
   default_payment_method_id?: string | null;
   payment_method_brand?: string | null;
   payment_method_last4?: string | null;
+};
+
+type WalletEntitlementContext = {
+  wallet: WalletRow;
+  basePlan: BillingPlanDefinition;
+  effectivePlan: BillingPlanDefinition;
+  effectiveUsageSource: BillingSummaryResponse['effectiveUsageSource'];
+  activeCouponEntitlement?: BillingCouponEntitlement;
+  overageEnabledOverride?: boolean;
 };
 
 const inMemoryWallets = new Map<string, WalletRow>();
@@ -364,7 +376,7 @@ const getWalletFromDb = async (userId: string): Promise<WalletRow | null> => {
   return mapWallet(data);
 };
 
-const ensureWallet = async (userId: string): Promise<WalletRow> => {
+const loadOrCreateWallet = async (userId: string): Promise<WalletRow> => {
   const dbWallet = await getWalletFromDb(userId);
   if (dbWallet) {
     const reset = maybeResetWalletCycles(dbWallet);
@@ -378,6 +390,63 @@ const ensureWallet = async (userId: string): Promise<WalletRow> => {
   const persisted = await persistWallet(wallet);
   inMemoryWallets.set(userId, persisted);
   return persisted;
+};
+
+const resolveWalletEntitlementContext = async (userId: string, walletInput: WalletRow): Promise<WalletEntitlementContext> => {
+  const basePlan = resolvePlanDefinition(walletInput.plan_tier);
+  const activeCouponEntitlement = await getActiveCouponEntitlementForUser({ userId });
+  const entitlementPolicy = activeCouponEntitlement?.policy;
+  const effectivePlan = entitlementPolicy?.planTierOverride
+    ? resolvePlanDefinition(entitlementPolicy.planTierOverride)
+    : basePlan;
+
+  let includedMonthlyCt = effectivePlan.monthlyIncludedCt;
+  let dailyGuardrailCt = effectivePlan.dailyGuardrailCt;
+
+  if (typeof entitlementPolicy?.includedMonthlyCtOverride === 'number') {
+    includedMonthlyCt = Math.max(0, Math.floor(entitlementPolicy.includedMonthlyCtOverride));
+  }
+  if (typeof entitlementPolicy?.dailyGuardrailCtOverride === 'number') {
+    dailyGuardrailCt = Math.max(0, Math.floor(entitlementPolicy.dailyGuardrailCtOverride));
+  }
+  if (typeof entitlementPolicy?.includedMonthlyCtBonus === 'number') {
+    includedMonthlyCt += Math.max(0, Math.floor(entitlementPolicy.includedMonthlyCtBonus));
+  }
+  if (typeof entitlementPolicy?.dailyGuardrailCtBonus === 'number') {
+    dailyGuardrailCt += Math.max(0, Math.floor(entitlementPolicy.dailyGuardrailCtBonus));
+  }
+
+  let wallet = walletInput;
+  const shouldPersistLimits = wallet.included_monthly_ct !== includedMonthlyCt
+    || wallet.daily_guardrail_ct !== dailyGuardrailCt;
+
+  if (shouldPersistLimits) {
+    wallet = await persistWallet({
+      ...wallet,
+      included_monthly_ct: includedMonthlyCt,
+      daily_guardrail_ct: dailyGuardrailCt,
+      updated_at: toIso(now())
+    });
+  }
+
+  return {
+    wallet,
+    basePlan,
+    effectivePlan,
+    effectiveUsageSource: activeCouponEntitlement ? 'coupon_entitlement' : 'subscription',
+    activeCouponEntitlement: activeCouponEntitlement || undefined,
+    overageEnabledOverride: entitlementPolicy?.overageEnabledOverride
+  };
+};
+
+const ensureWalletContext = async (userId: string): Promise<WalletEntitlementContext> => {
+  const wallet = await loadOrCreateWallet(userId);
+  return resolveWalletEntitlementContext(userId, wallet);
+};
+
+const ensureWallet = async (userId: string): Promise<WalletRow> => {
+  const context = await ensureWalletContext(userId);
+  return context.wallet;
 };
 
 const getPaymentProfile = async (userId: string): Promise<PaymentProfile> => {
@@ -735,7 +804,8 @@ export const reserveUsageTokens = async (input: {
   byok?: boolean;
   metadata?: Record<string, unknown>;
 }): Promise<{ allowed: true; reservation: ReservationState } | { allowed: false; details: LimitExceededDetails }> => {
-  let wallet = await ensureWallet(input.userId);
+  let walletContext = await ensureWalletContext(input.userId);
+  let wallet = walletContext.wallet;
 
   if (input.byok) {
     const bypass: ReservationState = {
@@ -778,11 +848,12 @@ export const reserveUsageTokens = async (input: {
   }
 
   const profile = await getPaymentProfile(input.userId);
+  const effectiveOverageEnabled = walletContext.overageEnabledOverride ?? profile.overage_enabled;
   const allowOverage = requiredCt > balance.availableCt;
   if (requiredCt > balance.availableCt) {
     const shortfallCt = requiredCt - balance.availableCt;
 
-    if (wallet.plan_tier === 'free') {
+    if (walletContext.effectivePlan.id === 'free') {
       return {
         allowed: false,
         details: buildLimitExceeded('INSUFFICIENT_CREDITS', requiredCt, wallet, false)
@@ -796,7 +867,7 @@ export const reserveUsageTokens = async (input: {
       };
     }
 
-    if (!profile.overage_enabled) {
+    if (!effectiveOverageEnabled) {
       return {
         allowed: false,
         details: buildLimitExceeded('PAYMENT_METHOD_REQUIRED', requiredCt, wallet, true)
@@ -822,14 +893,16 @@ export const reserveUsageTokens = async (input: {
   if (reserveResult.allowed !== true) {
     const reason = String(reserveResult.reason || 'INSUFFICIENT_CREDITS');
     const mappedReason = reason === 'DAILY_LIMIT_EXCEEDED' ? 'DAILY_LIMIT_EXCEEDED' : 'INSUFFICIENT_CREDITS';
-    wallet = await ensureWallet(input.userId);
+    walletContext = await ensureWalletContext(input.userId);
+    wallet = walletContext.wallet;
     return {
       allowed: false,
       details: buildLimitExceeded(mappedReason, requiredCt, wallet, false)
     };
   }
 
-  wallet = await ensureWallet(input.userId);
+  walletContext = await ensureWalletContext(input.userId);
+  wallet = walletContext.wallet;
 
   await recordLedgerEntry(input.userId, {
     entryType: 'RESERVE',
@@ -1067,13 +1140,14 @@ export const addPurchasedCredits = async (input: {
 };
 
 export const getBillingSummary = async (userId: string): Promise<BillingSummaryResponse> => {
-  const wallet = await ensureWallet(userId);
+  const walletContext = await ensureWalletContext(userId);
+  const wallet = walletContext.wallet;
   const profile = await getPaymentProfile(userId);
-  const plan = resolvePlanDefinition(wallet.plan_tier);
+  const effectiveOverageEnabled = walletContext.overageEnabledOverride ?? profile.overage_enabled;
   const admin = getBillingAdmin();
   const { data: subscriptionRow, error: subscriptionError } = await admin
     .from('user_plan_subscriptions')
-    .select('plan_tier, status, stripe_status, stripe_subscription_id, cancel_at_period_end, cancel_requested_at, canceled_at, current_period_start, current_period_end')
+    .select('plan_tier, status, stripe_status, stripe_subscription_id, cancel_at_period_end, cancel_requested_at, canceled_at, current_period_start, current_period_end, metadata')
     .eq('user_id', userId)
     .maybeSingle();
 
@@ -1081,10 +1155,19 @@ export const getBillingSummary = async (userId: string): Promise<BillingSummaryR
     throw createBillingBackendUnavailableError(subscriptionError);
   }
 
+  const metadataIntervalValue = subscriptionRow && isRecord(subscriptionRow.metadata)
+    ? subscriptionRow.metadata.interval
+    : undefined;
+  const intervalFromMetadata: 'month' | 'year' | undefined =
+    metadataIntervalValue === 'month' || metadataIntervalValue === 'year'
+    ? metadataIntervalValue
+    : undefined;
+
   const subscription = subscriptionRow && isRecord(subscriptionRow)
     ? {
         planTier: toTier(subscriptionRow.plan_tier),
         status: String(subscriptionRow.status || 'inactive'),
+        interval: intervalFromMetadata,
         stripeStatus: typeof subscriptionRow.stripe_status === 'string' ? subscriptionRow.stripe_status : undefined,
         stripeSubscriptionId: typeof subscriptionRow.stripe_subscription_id === 'string' ? subscriptionRow.stripe_subscription_id : undefined,
         cancelAtPeriodEnd: Boolean(subscriptionRow.cancel_at_period_end),
@@ -1094,7 +1177,7 @@ export const getBillingSummary = async (userId: string): Promise<BillingSummaryR
         currentPeriodEnd: typeof subscriptionRow.current_period_end === 'string' ? subscriptionRow.current_period_end : undefined
       }
     : {
-        planTier: plan.id,
+        planTier: walletContext.basePlan.id,
         status: 'inactive',
         cancelAtPeriodEnd: false
       };
@@ -1104,9 +1187,13 @@ export const getBillingSummary = async (userId: string): Promise<BillingSummaryR
     ctPerUsd: Math.round(1 / CT_USD),
     wallet: walletBalance(wallet),
     usage: usageState(wallet),
-    plan,
+    basePlan: walletContext.basePlan,
+    effectivePlan: walletContext.effectivePlan,
+    effectiveUsageSource: walletContext.effectiveUsageSource,
+    activeCouponEntitlement: walletContext.activeCouponEntitlement,
+    plan: walletContext.effectivePlan,
     hasPaymentMethodOnFile: profile.has_payment_method,
-    overageEnabled: profile.overage_enabled,
+    overageEnabled: effectiveOverageEnabled,
     overageHardCapUsd: wallet.overage_hard_cap_usd,
     subscription,
     autoReload: {
