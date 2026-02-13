@@ -92,6 +92,17 @@ export type ModelPricing = {
 export const FALLBACK_MODEL_PRICING: ModelPricing[] = [
   {
     provider: 'gemini',
+    model: 'gemini-2.0-flash',
+    inputPer1kUsd: 0.0003,
+    outputPer1kUsd: 0.0025,
+    imagePerOutputUsd: 0,
+    source: 'fallback/default',
+    confidence: 0.5,
+    status: 'ACTIVE',
+    effectiveFrom: '2026-02-13T00:00:00.000Z'
+  },
+  {
+    provider: 'gemini',
     model: 'gemini-2.5-flash',
     inputPer1kUsd: 0.0003,
     outputPer1kUsd: 0.0025,
@@ -99,7 +110,7 @@ export const FALLBACK_MODEL_PRICING: ModelPricing[] = [
     source: 'fallback/default',
     confidence: 0.5,
     status: 'ACTIVE',
-    effectiveFrom: '2026-02-12T00:00:00.000Z'
+    effectiveFrom: '2026-02-13T00:00:00.000Z'
   },
   {
     provider: 'gemini',
@@ -110,7 +121,7 @@ export const FALLBACK_MODEL_PRICING: ModelPricing[] = [
     source: 'fallback/default',
     confidence: 0.5,
     status: 'ACTIVE',
-    effectiveFrom: '2026-02-12T00:00:00.000Z'
+    effectiveFrom: '2026-02-13T00:00:00.000Z'
   },
   {
     provider: 'gemini',
@@ -121,7 +132,40 @@ export const FALLBACK_MODEL_PRICING: ModelPricing[] = [
     source: 'fallback/default',
     confidence: 0.5,
     status: 'ACTIVE',
-    effectiveFrom: '2026-02-12T00:00:00.000Z'
+    effectiveFrom: '2026-02-13T00:00:00.000Z'
+  },
+  {
+    provider: 'gemini',
+    model: 'gemini-3-flash-preview',
+    inputPer1kUsd: 0.0004,
+    outputPer1kUsd: 0.003,
+    imagePerOutputUsd: 0,
+    source: 'fallback/default',
+    confidence: 0.5,
+    status: 'ACTIVE',
+    effectiveFrom: '2026-02-13T00:00:00.000Z'
+  },
+  {
+    provider: 'gemini',
+    model: 'gemini-3-pro-preview',
+    inputPer1kUsd: 0.001,
+    outputPer1kUsd: 0.006,
+    imagePerOutputUsd: 0,
+    source: 'fallback/default',
+    confidence: 0.5,
+    status: 'ACTIVE',
+    effectiveFrom: '2026-02-13T00:00:00.000Z'
+  },
+  {
+    provider: 'gemini',
+    model: 'gemini-3-pro-image-preview',
+    inputPer1kUsd: 0,
+    outputPer1kUsd: 0,
+    imagePerOutputUsd: 0.134,
+    source: 'fallback/default',
+    confidence: 0.5,
+    status: 'ACTIVE',
+    effectiveFrom: '2026-02-13T00:00:00.000Z'
   },
   {
     provider: 'pixazo',
@@ -132,7 +176,7 @@ export const FALLBACK_MODEL_PRICING: ModelPricing[] = [
     source: 'fallback/default',
     confidence: 0.5,
     status: 'ACTIVE',
-    effectiveFrom: '2026-02-12T00:00:00.000Z'
+    effectiveFrom: '2026-02-13T00:00:00.000Z'
   }
 ];
 

@@ -13,6 +13,12 @@ import {
   reserveForOperation,
   settleReservedOperation
 } from '../services/usageEnforcer.js';
+import {
+  assertModelAllowedForTier,
+  createFreeNanoBananaLimitError,
+  resolvePlanTierForUser,
+  tryConsumeFreeNanoBananaUsage
+} from '../services/modelAccessPolicy.js';
 
 export const imageRouter = Router();
 
@@ -190,11 +196,40 @@ imageRouter.post('/gemini', checkLimits('gemini'), async (req, res, next) => {
     }
 
     const payload = await withIdempotency(req, res, 'image:gemini', async () => {
+      const effectiveModel = modelId || IMAGE_MODEL;
+      const planTier = req.user?.id ? await resolvePlanTierForUser(req.user.id) : 'free';
+      assertModelAllowedForTier({
+        scope: 'image',
+        planTier,
+        requestedModel: effectiveModel
+      });
+
+      const freeNanoBananaUsage = req.user?.id
+        ? await tryConsumeFreeNanoBananaUsage({
+            userId: req.user.id,
+            planTier,
+            modelId: effectiveModel
+          })
+        : {
+            applied: false as const,
+            allowed: true as const,
+            usedCount: 0,
+            limit: 0
+          };
+      if (freeNanoBananaUsage.applied && !freeNanoBananaUsage.allowed) {
+        throw createFreeNanoBananaLimitError({
+          usedCount: freeNanoBananaUsage.usedCount,
+          limit: freeNanoBananaUsage.limit,
+          resetAt: freeNanoBananaUsage.resetAt
+        });
+      }
+
       const reserve = await reserveForOperation({
         req,
         operation: 'image.gemini.generate',
-        fallbackModel: modelId || IMAGE_MODEL,
+        fallbackModel: effectiveModel,
         provider: 'gemini',
+        resolution,
         imageUnits: 1,
         projectId: typeof projectId === 'string' ? projectId : undefined,
         comicId: typeof projectId === 'string' ? projectId : undefined,
@@ -209,7 +244,7 @@ imageRouter.post('/gemini', checkLimits('gemini'), async (req, res, next) => {
         throw toBillingLimitError(formatLimitErrorResponse(reserve.details));
       }
 
-      const generated = await generateGeminiImage(apiKey, prompt, aspectRatio, resolution, referenceImages || [], modelId);
+      const generated = await generateGeminiImage(apiKey, prompt, aspectRatio, resolution, referenceImages || [], effectiveModel);
       const apiMs = generated.timings?.apiMs || 0;
       let responsePayload: Record<string, unknown> = { ...generated };
       let settledBilling: Awaited<ReturnType<typeof settleReservedOperation>> | null = null;
@@ -247,12 +282,13 @@ imageRouter.post('/gemini', checkLimits('gemini'), async (req, res, next) => {
           req,
           operation: 'image.gemini.generate',
           provider: 'gemini',
-          model: modelId || generated.model || IMAGE_MODEL,
+          model: effectiveModel || generated.model || IMAGE_MODEL,
           seed: {
             provider: 'gemini',
-            model: modelId || generated.model || IMAGE_MODEL,
+            model: effectiveModel || generated.model || IMAGE_MODEL,
             operation: 'image.gemini.generate',
             imageUnits: 1,
+            resolution,
             projectId: typeof projectId === 'string' ? projectId : undefined,
             comicId: typeof projectId === 'string' ? projectId : undefined,
             stage: typeof req.body?.stage === 'string' ? req.body.stage : 'generation',
@@ -272,7 +308,7 @@ imageRouter.post('/gemini', checkLimits('gemini'), async (req, res, next) => {
           req,
           operation: 'image.gemini.generate',
           provider: 'gemini',
-          model: modelId || generated.model || IMAGE_MODEL,
+          model: effectiveModel || generated.model || IMAGE_MODEL,
           projectId: typeof projectId === 'string' ? projectId : undefined,
           reason: (error as Error)?.message || 'generation_failed',
           metadata: {
@@ -329,6 +365,7 @@ imageRouter.post('/flux', checkLimits('pixazo'), async (req, res, next) => {
         operation: 'image.flux.generate',
         fallbackModel: FLUX_MODEL_ID,
         provider: 'pixazo',
+        resolution,
         imageUnits: 1,
         projectId: typeof projectId === 'string' ? projectId : undefined,
         comicId: typeof projectId === 'string' ? projectId : undefined,
@@ -387,6 +424,7 @@ imageRouter.post('/flux', checkLimits('pixazo'), async (req, res, next) => {
             model: generated.model || FLUX_MODEL_ID,
             operation: 'image.flux.generate',
             imageUnits: 1,
+            resolution,
             projectId: typeof projectId === 'string' ? projectId : undefined,
             comicId: typeof projectId === 'string' ? projectId : undefined,
             stage: typeof req.body?.stage === 'string' ? req.body.stage : 'generation',

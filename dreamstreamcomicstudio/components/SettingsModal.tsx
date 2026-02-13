@@ -5,10 +5,17 @@ import { X, Eye, EyeOff, Copy, ChevronDown, ChevronUp, AlertTriangle, CheckCircl
 import { Button } from "./Button";
 import { FluxKeyInput } from "./FluxKeyInput";
 import { KeyManager } from "./KeyManager";
-import { IMAGE_MODELS } from "../services/imageModels";
+import {
+  IMAGE_MODELS,
+  getAllowedImageModelsForPlan,
+  getDefaultImageModelForPlan,
+  isImageModelAllowedForPlan
+} from "../services/imageModels";
 import { clearImageCache, getDbStats } from "../services/db";
 import { getFluxKeyInfo, getSettingsState, setSettingsState } from "../services/appSettings";
 import { getDebugState, subscribeDebugState } from "../services/debugStore";
+import { getBillingSummary } from "../services/billing";
+import { getPlanTierFromBillingSummary } from "../services/modelEntitlements";
 
 interface SettingsModalProps {
   onClose: () => void;
@@ -34,6 +41,7 @@ const FEATURE_ROUTING = [
 export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadProjects, onUpdateSettings }) => {
   const [dbStats, setDbStats] = useState<Awaited<ReturnType<typeof getDbStats>> | null>(null);
   const [settings, setSettings] = useState(() => getSettingsState());
+  const [planTier, setPlanTier] = useState<string>("free");
   const [fluxKey, setFluxKey] = useState<string | null>(null);
   const [sectionsOpen, setSectionsOpen] = useState({
     keys: true,
@@ -48,8 +56,66 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadP
   }, []);
 
   useEffect(() => {
+    let active = true;
+    const loadPlan = async () => {
+      try {
+        const summary = await getBillingSummary();
+        if (!active) return;
+        setPlanTier(getPlanTierFromBillingSummary(summary));
+      } catch {
+        if (!active) return;
+        setPlanTier("free");
+      }
+    };
+    void loadPlan();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     return subscribeDebugState(setDebugState);
   }, []);
+
+  const allowedImageModels = getAllowedImageModelsForPlan(planTier);
+  const fallbackImageModel = getDefaultImageModelForPlan(planTier);
+  const effectiveDefaultImageModel = isImageModelAllowedForPlan(settings.defaultImageModel || "", planTier)
+    ? (settings.defaultImageModel as string)
+    : fallbackImageModel.id;
+
+  const effectiveCoverModel = isImageModelAllowedForPlan(settings.modelRouting?.cover || "", planTier)
+    ? (settings.modelRouting?.cover as string)
+    : effectiveDefaultImageModel;
+  const effectivePanelModel = isImageModelAllowedForPlan(settings.modelRouting?.panel || "", planTier)
+    ? (settings.modelRouting?.panel as string)
+    : effectiveDefaultImageModel;
+
+  useEffect(() => {
+    if (effectiveDefaultImageModel === settings.defaultImageModel &&
+      effectiveCoverModel === (settings.modelRouting?.cover || settings.defaultImageModel) &&
+      effectivePanelModel === (settings.modelRouting?.panel || settings.defaultImageModel)
+    ) {
+      return;
+    }
+    const next = {
+      ...settings,
+      defaultImageModel: effectiveDefaultImageModel,
+      modelRouting: {
+        ...(settings.modelRouting || {}),
+        cover: effectiveCoverModel,
+        panel: effectivePanelModel
+      }
+    };
+    setSettings(next);
+    setSettingsState(next);
+    if (onUpdateSettings) onUpdateSettings();
+  }, [
+    effectiveDefaultImageModel,
+    effectiveCoverModel,
+    effectivePanelModel,
+    onUpdateSettings,
+    settings
+  ]);
 
 
   const toggleSetting = (key: "showGeminiKey" | "showFluxKey") => {
@@ -99,7 +165,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadP
 
                 {/* New Key Manager for Model-Specific Keys */}
                 <div className="pt-2">
-                  <KeyManager />
+                  <KeyManager planTier={planTier} />
                 </div>
               </div>
             )}
@@ -113,22 +179,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadP
                   <div
                     key={model.id}
                     onClick={() => {
+                      if (!isImageModelAllowedForPlan(model.id, planTier)) return;
                       const next = { ...settings, defaultImageModel: model.id };
                       setSettings(next);
                       setSettingsState(next);
                       if (onUpdateSettings) onUpdateSettings();
                     }}
-                    className={`p-3 border-2 rounded-lg cursor-pointer transition-all ${settings.defaultImageModel === model.id ? 'border-brand-blue bg-brand-blue/20 ring-2 ring-brand-blue/50' : 'border-slate-200 hover:border-black'}`}
+                    className={`p-3 border-2 rounded-lg transition-all ${!isImageModelAllowedForPlan(model.id, planTier) ? 'opacity-50 cursor-not-allowed border-slate-200' : 'cursor-pointer'} ${effectiveDefaultImageModel === model.id ? 'border-brand-blue bg-brand-blue/20 ring-2 ring-brand-blue/50' : 'border-slate-200 hover:border-black'}`}
                   >
                     <div className="flex items-center gap-2 mb-1">
-                      <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${(settings.defaultImageModel || IMAGE_MODELS[0].id) === model.id ? 'border-brand-blue bg-brand-blue' : 'border-slate-300'}`}>
-                        {(settings.defaultImageModel || IMAGE_MODELS[0].id) === model.id && <div className="w-2 h-2 bg-white rounded-full" />}
+                      <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${effectiveDefaultImageModel === model.id ? 'border-brand-blue bg-brand-blue' : 'border-slate-300'}`}>
+                        {effectiveDefaultImageModel === model.id && <div className="w-2 h-2 bg-white rounded-full" />}
                       </div>
                       <div className="font-bold text-sm">{model.label}</div>
                     </div>
                     <div className="text-xs text-slate-500 ml-6">
                       {model.provider === 'flux' ? 'Fast generation, good for styles.' : 'High detail, follows complex prompts.'}
                       {model.isFree && <span className="ml-2 text-green-600 font-bold">FREE</span>}
+                      {!isImageModelAllowedForPlan(model.id, planTier) && <span className="ml-2 text-amber-700 font-bold">PRO</span>}
                     </div>
                   </div>
                 ))}
@@ -144,7 +212,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadP
                   <div className="flex items-center justify-between mb-2">
                     <span className="font-bold text-sm">Cover Art</span>
                     <select
-                      value={settings.modelRouting?.cover || settings.defaultImageModel || IMAGE_MODELS[0].id}
+                      value={effectiveCoverModel}
                       onChange={(e) => {
                         const next = { ...settings, modelRouting: { ...(settings.modelRouting || {}), cover: e.target.value } };
                         setSettings(next);
@@ -153,13 +221,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadP
                       }}
                       className="text-xs border-2 border-slate-300 rounded px-2 py-1 bg-white"
                     >
-                      {IMAGE_MODELS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+                      {allowedImageModels.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
                     </select>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-sm">Panels</span>
                     <select
-                      value={settings.modelRouting?.panel || settings.defaultImageModel || IMAGE_MODELS[0].id}
+                      value={effectivePanelModel}
                       onChange={(e) => {
                         const next = { ...settings, modelRouting: { ...(settings.modelRouting || {}), panel: e.target.value } };
                         setSettings(next);
@@ -168,7 +236,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadP
                       }}
                       className="text-xs border-2 border-slate-300 rounded px-2 py-1 bg-white"
                     >
-                      {IMAGE_MODELS.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+                      {allowedImageModels.map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
                     </select>
                   </div>
                 </div>

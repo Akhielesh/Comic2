@@ -11,6 +11,7 @@ export type ImageModelDefinition = {
   supportsAspectRatio: boolean;
   defaultSteps?: number;
   isFree?: boolean;
+  minimumPlanTier?: 'pro';
 };
 
 export interface AppSettings {

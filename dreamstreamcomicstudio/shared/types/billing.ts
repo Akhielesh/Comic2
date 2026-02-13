@@ -61,6 +61,7 @@ export type TokenEstimateRequest = {
   inputTokens?: number;
   outputTokens?: number;
   imageUnits?: number;
+  resolution?: '1K' | '2K' | '4K';
   otherBillableUnits?: number;
   otherBillableUnitPriceUsd?: number;
   projectId?: string;
@@ -215,16 +216,39 @@ export type CheckoutSessionConfirmResponse = {
 export type CouponRedemptionResult = {
   success: boolean;
   message: string;
-  entitlement?: BillingCouponEntitlement;
+  couponCode?: string;
+  tokenAmountCt?: number;
+  redeemedAt?: string;
+  startsAt?: string;
+  endsAt?: string;
+  maxRedemptions?: number;
+  redemptionCount?: number;
+  remainingRedemptions?: number;
+  canRedeemNow?: boolean;
+  warnings?: {
+    expiresSoon: boolean;
+    expiresInHours?: number;
+  };
 };
 
 export type AdminCouponDefinition = {
   id: string;
   code: string;
+  tokenAmountCt: number;
   startsAt: string;
   endsAt: string;
   isActive: boolean;
-  policy: CouponEntitlementPolicy;
+  couponMode: 'single_use_global' | 'legacy';
+  maxRedemptions: number;
+  redemptionCount: number;
+  remainingRedemptions: number;
+  firstRedeemedAt?: string;
+  lastRedeemedAt?: string;
+  firstRedeemedBy?: string;
+  lastRedeemedBy?: string;
+  status: 'active' | 'inactive' | 'expired' | 'exhausted' | 'scheduled';
+  isRedeemableNow: boolean;
+  warningExpiresSoon: boolean;
   createdAt: string;
   updatedAt: string;
 };
@@ -255,7 +279,27 @@ export type AdminCouponRedemptionEvent = {
   couponCode: string;
   outcome: string;
   reason?: string;
+  tokenAmountCt?: number;
+  redemptionCount?: number;
   createdAt: string;
+};
+
+export type CouponPreviewResult = {
+  success: boolean;
+  message: string;
+  couponCode: string;
+  tokenAmountCt?: number;
+  startsAt?: string;
+  endsAt?: string;
+  maxRedemptions?: number;
+  redemptionCount?: number;
+  remainingRedemptions?: number;
+  isActive?: boolean;
+  canRedeemNow?: boolean;
+  warnings?: {
+    expiresSoon: boolean;
+    expiresInHours?: number;
+  };
 };
 
 export type BillingUsageHistoryItem = {

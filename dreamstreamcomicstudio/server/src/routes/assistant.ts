@@ -18,6 +18,7 @@ import {
   reserveForOperation,
   settleReservedOperation
 } from '../services/usageEnforcer.js';
+import { assertModelAllowedForTier } from '../services/modelAccessPolicy.js';
 
 export const assistantRouter = Router();
 
@@ -113,11 +114,17 @@ assistantRouter.post('/chat', async (req, res, next) => {
     }
 
     const requestedModel = req.header('X-Gemini-Model')?.trim() || TEXT_MODEL;
+    const access = assertModelAllowedForTier({
+      scope: 'assistant',
+      planTier: context.account?.planTier || 'free',
+      requestedModel
+    });
+    const effectiveModel = access.effectiveModel;
     const reserve = req.user?.id
       ? await reserveForOperation({
           req,
           operation: 'assistant.chat',
-          fallbackModel: requestedModel,
+          fallbackModel: effectiveModel,
           provider: 'gemini',
           stage: 'assistant',
           metadata: {
@@ -132,16 +139,16 @@ assistantRouter.post('/chat', async (req, res, next) => {
     }
 
     try {
-      const result = await queryUniversalAssistant(apiKey, message, history, context, requestedModel);
+      const result = await queryUniversalAssistant(apiKey, message, history, context, effectiveModel);
       const settled = reserve && reserve.allowed
         ? await settleReservedOperation({
             req,
             operation: 'assistant.chat',
             provider: 'gemini',
-            model: requestedModel,
+            model: effectiveModel,
             seed: {
               provider: 'gemini',
-              model: requestedModel,
+              model: effectiveModel,
               operation: 'assistant.chat',
               stage: 'assistant',
               byok: reserve.reservation.byokBypass
@@ -172,7 +179,7 @@ assistantRouter.post('/chat', async (req, res, next) => {
           req,
           operation: 'assistant.chat',
           provider: 'gemini',
-          model: requestedModel,
+          model: effectiveModel,
           reason: (error as Error)?.message || 'assistant_request_failed',
           metadata: {
             route: req.path,

@@ -1,5 +1,5 @@
 import type { Request } from 'express';
-import type { LimitExceededDetails, ReservationState, TokenEstimateResponse } from '../../../shared/types/billing.js';
+import type { LimitExceededDetails, ReservationState, TokenEstimateRequest, TokenEstimateResponse } from '../../../shared/types/billing.js';
 import {
   reserveUsageTokens,
   releaseReservation,
@@ -46,6 +46,7 @@ export const reserveForOperation = async (input: {
   operation: string;
   fallbackModel: string;
   provider?: 'gemini' | 'pixazo' | 'internal';
+  resolution?: TokenEstimateRequest['resolution'];
   imageUnits?: number;
   inputTokens?: number;
   outputTokens?: number;
@@ -64,6 +65,7 @@ export const reserveForOperation = async (input: {
         inputTokens?: number;
         outputTokens?: number;
         imageUnits?: number;
+        resolution?: TokenEstimateRequest['resolution'];
         otherBillableUnits?: number;
         otherBillableUnitPriceUsd?: number;
         projectId?: string;
@@ -112,6 +114,7 @@ export const reserveForOperation = async (input: {
     inputTokens: input.inputTokens,
     outputTokens: input.outputTokens,
     imageUnits: input.imageUnits,
+    resolution: input.resolution,
     projectId: input.projectId,
     comicId: input.comicId,
     stage: input.stage,
@@ -160,6 +163,7 @@ export const settleReservedOperation = async (input: {
     inputTokens?: number;
     outputTokens?: number;
     imageUnits?: number;
+    resolution?: TokenEstimateRequest['resolution'];
     otherBillableUnits?: number;
     otherBillableUnitPriceUsd?: number;
     projectId?: string;

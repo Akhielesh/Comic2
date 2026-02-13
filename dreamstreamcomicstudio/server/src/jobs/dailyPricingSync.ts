@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { getSupabaseAdmin } from '../services/supabase.js';
+import { FALLBACK_MODEL_PRICING } from '../services/pricingCatalog.js';
 
 type ParsedModel = {
   provider: 'gemini' | 'pixazo';
@@ -30,6 +31,15 @@ const PIXAZO_SOURCE = process.env.PIXAZO_PRICING_SOURCE_URL || 'https://www.pixa
 const ACTIVE_THRESHOLD = 0.8;
 const MAJOR_DELTA_THRESHOLD = Number(process.env.PRICING_MAJOR_DELTA_THRESHOLD || '0.35');
 const REQUEST_TIMEOUT_MS = 20_000;
+const REQUIRED_GEMINI_MODEL_IDS = new Set([
+  'gemini-2.0-flash',
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-2.5-flash-image',
+  'gemini-3-flash-preview',
+  'gemini-3-pro-preview',
+  'gemini-3-pro-image-preview'
+]);
 
 const hashModels = (models: ParsedModel[]) =>
   crypto
@@ -156,6 +166,35 @@ const parseGeminiPricing = (text: string): ParsedModel[] => {
   }
 
   return rows;
+};
+
+const ensureRequiredGeminiModels = (rows: ParsedModel[]): ParsedModel[] => {
+  const existing = new Set(
+    rows
+      .filter((row) => row.provider === 'gemini')
+      .map((row) => row.model)
+  );
+
+  const ensured = [...rows];
+  for (const model of FALLBACK_MODEL_PRICING) {
+    if (model.provider !== 'gemini') continue;
+    if (!REQUIRED_GEMINI_MODEL_IDS.has(model.model)) continue;
+    if (existing.has(model.model)) continue;
+
+    ensured.push({
+      provider: 'gemini',
+      model: model.model,
+      inputPer1kUsd: model.inputPer1kUsd,
+      outputPer1kUsd: model.outputPer1kUsd,
+      imagePerOutputUsd: model.imagePerOutputUsd,
+      sourceUrl: GEMINI_SOURCE,
+      // Keep confidence above ACTIVE_THRESHOLD so required model coverage
+      // does not force review-required snapshots on every sync.
+      confidence: 0.82
+    });
+  }
+
+  return ensured;
 };
 
 const parsePixazoPricing = (text: string): ParsedModel[] => {
@@ -305,7 +344,7 @@ export const runDailyPricingSync = async (options?: { dryRun?: boolean; failOnLo
     fetchText(PIXAZO_SOURCE)
   ]);
 
-  const geminiModels = parseGeminiPricing(geminiText);
+  const geminiModels = ensureRequiredGeminiModels(parseGeminiPricing(geminiText));
   const pixazoModels = parsePixazoPricing(pixazoText);
   const models = [...geminiModels, ...pixazoModels];
 
