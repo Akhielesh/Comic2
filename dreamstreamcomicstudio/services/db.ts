@@ -615,31 +615,18 @@ export const getUsageLimits = async (): Promise<UsageLimits | null> => {
 };
 
 export const generateCoupon = async (): Promise<string | null> => {
-  const code = Math.random().toString(36).substring(2, 10).toUpperCase();
-  const { error } = await supabase.from('coupons').insert({ code });
-  if (error) {
-    console.error("Failed to generate coupon:", error);
-    return null;
-  }
-  return code;
+  console.warn('[db] generateCoupon is deprecated. Use /api/billing/admin/coupons.');
+  return null;
 };
 
 export const redeemCoupon = async (code: string): Promise<{ success: boolean; message: string }> => {
-  const { data, error } = await supabase.rpc('redeem_coupon', { coupon_code: code });
-  if (error) {
-    console.error("Redemption failed:", error);
-    return { success: false, message: "Invalid or expired code." }; // RPC error usually means constraint/logic failed
-  }
-  if (!data) {
-    return { success: false, message: "Invalid or expired code." };
-  }
-  return { success: true, message: "Coupon redeemed! Welcome to Pro." };
+  console.warn('[db] redeemCoupon via direct RPC is deprecated. Use /api/billing/coupons/redeem.', code);
+  return { success: false, message: 'Legacy coupon redemption is disabled.' };
 };
 
 export const loadCoupons = async (): Promise<any[]> => {
-  const { data, error } = await supabase.from('coupons').select('*').order('created_at', { ascending: false });
-  if (error) return [];
-  return data;
+  console.warn('[db] loadCoupons is deprecated. Use /api/billing/admin/coupons.');
+  return [];
 };
 
 export const incrementViewCount = async (projectId: string) => {

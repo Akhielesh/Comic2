@@ -194,9 +194,9 @@ create index if not exists idx_stripe_webhook_events_received
 insert into public.billing_plans (id, name, monthly_included_ct, daily_guardrail_ct, monthly_price_usd, allow_overage)
 values
   ('free', 'Free', 10000, 800, 0, false),
-  ('creator', 'Creator', 90000, 6000, 19, true),
+  ('creator', 'Creator', 120000, 8000, 20, true),
   ('pro', 'Pro', 240000, 16000, 49, true),
-  ('studio', 'Studio', 700000, 50000, 149, true),
+  ('studio', 'Studio', 350000, 25000, 50, true),
   ('custom', 'Custom Credits', 0, 20000, 0, true),
   ('admin', 'Admin', 5000000, 500000, 0, false)
 on conflict (id) do update

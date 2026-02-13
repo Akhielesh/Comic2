@@ -1,8 +1,14 @@
 import Stripe from 'stripe';
-import type { BillingPlanTier, BillingSubscriptionStatus, CreditPackId, PurchasablePlanTier } from '../../../shared/types/billing.js';
+import type { BillingInterval, BillingPlanTier, BillingSubscriptionStatus, CreditPackId, PurchasablePlanTier } from '../../../shared/types/billing.js';
 import { addPurchasedCredits, setUserPlanTier, upsertPaymentProfile } from './billingLedger.js';
 import { getCreditPackById } from './pricingCatalog.js';
 import { getSupabaseAdmin } from './supabase.js';
+import {
+  resolveCreditPackFromStripePriceId,
+  resolveCreditPackStripePriceId,
+  resolvePlanFromStripePriceId,
+  resolvePlanStripePriceId
+} from './stripePriceConfig.js';
 
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY || '';
 const stripe = stripeSecretKey
@@ -15,42 +21,11 @@ const WEBHOOK_MAX_AGE_SECONDS = Number(process.env.STRIPE_WEBHOOK_MAX_AGE_SECOND
 
 const PURCHASABLE_TIERS: PurchasablePlanTier[] = ['creator', 'pro', 'studio'];
 
-const planPriceByTier: Record<PurchasablePlanTier, string | undefined> = {
-  creator: process.env.STRIPE_PRICE_ID_CREATOR || process.env.STRIPE_PRICE_ID,
-  pro: process.env.STRIPE_PRICE_ID_PRO || process.env.STRIPE_PRICE_ID,
-  studio: process.env.STRIPE_PRICE_ID_STUDIO || process.env.STRIPE_PRICE_ID
-};
-
-const creditPriceByPackId: Record<CreditPackId, string | undefined> = {
-  pack_10: process.env.STRIPE_PRICE_ID_CREDIT_PACK_10,
-  pack_25: process.env.STRIPE_PRICE_ID_CREDIT_PACK_25,
-  pack_100: process.env.STRIPE_PRICE_ID_CREDIT_PACK_100
-};
-
 const isPurchasablePlanTier = (value: unknown): value is PurchasablePlanTier =>
   typeof value === 'string' && PURCHASABLE_TIERS.includes(value as PurchasablePlanTier);
 
-const resolvePlanPriceId = (planTier: PurchasablePlanTier) => planPriceByTier[planTier];
-
-const resolvePlanTierFromPriceId = (priceId?: string | null): PurchasablePlanTier | null => {
-  if (!priceId) return null;
-  for (const tier of PURCHASABLE_TIERS) {
-    if (planPriceByTier[tier] === priceId) return tier;
-  }
-  return null;
-};
-
-const resolveCreditPackByPriceId = (priceId?: string | null) => {
-  if (!priceId) return null;
-  for (const [packId, configuredPriceId] of Object.entries(creditPriceByPackId) as Array<[CreditPackId, string | undefined]>) {
-    if (configuredPriceId === priceId) {
-      const pack = getCreditPackById(packId);
-      if (!pack) return null;
-      return { packId, pack };
-    }
-  }
-  return null;
-};
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
 
 const assertStripe = () => {
   if (!stripe) {
@@ -66,6 +41,12 @@ const toBillingTier = (value: unknown): BillingPlanTier => {
   }
   return 'free';
 };
+
+const isBillingInterval = (value: unknown): value is BillingInterval =>
+  value === 'month' || value === 'year';
+
+const toBillingInterval = (value: unknown): BillingInterval | undefined =>
+  isBillingInterval(value) ? value : undefined;
 
 const toIsoOrUndefined = (value?: number | null) => {
   if (!value || !Number.isFinite(value)) return undefined;
@@ -109,7 +90,7 @@ const getUserSubscriptionRow = async (userId: string) => {
   const admin = getAdmin();
   const { data, error } = await admin
     .from('user_plan_subscriptions')
-    .select('plan_tier, status, stripe_subscription_id, stripe_status, cancel_at_period_end, cancel_requested_at, canceled_at, current_period_start, current_period_end')
+    .select('plan_tier, status, stripe_subscription_id, stripe_status, cancel_at_period_end, cancel_requested_at, canceled_at, current_period_start, current_period_end, metadata')
     .eq('user_id', userId)
     .maybeSingle();
 
@@ -305,7 +286,10 @@ const syncSubscriptionFromStripe = async (subscription: Stripe.Subscription, sou
 
   const firstItem = subscription.items.data[0];
   const periodWindow = getSubscriptionPeriodWindow(subscription);
-  const resolvedTier = resolvePlanTierFromPriceId(firstItem?.price?.id) || null;
+  const resolvedPlan = await resolvePlanFromStripePriceId(firstItem?.price?.id);
+  const metadataInterval = toBillingInterval(subscription.metadata?.interval);
+  const resolvedInterval = resolvedPlan?.interval || metadataInterval;
+  const resolvedTier = resolvedPlan?.planTier || null;
   const existing = await getUserSubscriptionRow(userId);
   const existingTier = existing ? toBillingTier(existing.plan_tier) : 'free';
   const effectiveTier: BillingPlanTier = resolvedTier
@@ -327,7 +311,8 @@ const syncSubscriptionFromStripe = async (subscription: Stripe.Subscription, sou
     metadata: {
       source,
       stripeSubscriptionId: subscription.id,
-      stripeStatus: subscription.status
+      stripeStatus: subscription.status,
+      interval: resolvedInterval || undefined
     }
   });
 
@@ -335,7 +320,8 @@ const syncSubscriptionFromStripe = async (subscription: Stripe.Subscription, sou
     await setUserPlanTier(userId, resolvedTier, {
       source,
       stripeSubscriptionId: subscription.id,
-      stripeStatus: subscription.status
+      stripeStatus: subscription.status,
+      interval: resolvedInterval || undefined
     });
   }
 };
@@ -377,6 +363,9 @@ const handleInvoiceLifecycleUpdate = async (invoice: Stripe.Invoice, stripeStatu
   if (!userId) return;
 
   const existing = await getUserSubscriptionRow(userId);
+  const existingMetadata = existing && isRecord(existing.metadata)
+    ? existing.metadata
+    : {};
   await upsertSubscriptionState({
     userId,
     planTier: existing ? toBillingTier(existing.plan_tier) : 'free',
@@ -389,6 +378,7 @@ const handleInvoiceLifecycleUpdate = async (invoice: Stripe.Invoice, stripeStatu
     currentPeriodStart: typeof existing?.current_period_start === 'string' ? existing.current_period_start : null,
     currentPeriodEnd: typeof existing?.current_period_end === 'string' ? existing.current_period_end : null,
     metadata: {
+      ...existingMetadata,
       source: 'stripe_invoice_event',
       invoiceId: invoice.id
     }
@@ -428,9 +418,10 @@ const handleCheckoutCompleted = async (session: Stripe.Checkout.Session) => {
     }
 
     const lineItemPriceId = session.metadata?.priceId || null;
-    const fromPrice = resolveCreditPackByPriceId(lineItemPriceId);
+    const mappedPackId = await resolveCreditPackFromStripePriceId(lineItemPriceId);
+    const fromPrice = mappedPackId ? getCreditPackById(mappedPackId) : null;
     const fromMetadataPack = session.metadata?.packId ? getCreditPackById(session.metadata.packId) : null;
-    const selectedPack = fromPrice?.pack || fromMetadataPack;
+    const selectedPack = fromPrice || fromMetadataPack;
     if (!selectedPack) {
       return;
     }
@@ -442,7 +433,7 @@ const handleCheckoutCompleted = async (session: Stripe.Checkout.Session) => {
       source: 'stripe_checkout_credit_pack',
       metadata: {
         checkoutSessionId: session.id,
-        packId: fromPrice?.packId || fromMetadataPack?.id,
+        packId: mappedPackId || fromMetadataPack?.id,
         amountTotal: session.amount_total || 0,
         paymentIntentId: typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id
       }
@@ -494,9 +485,13 @@ const getSubscriptionStatusFromDb = async (userId: string): Promise<BillingSubsc
     };
   }
 
+  const metadata = isRecord(row.metadata) ? row.metadata : null;
+  const interval = metadata ? toBillingInterval(metadata.interval) : undefined;
+
   return {
     planTier: toBillingTier(row.plan_tier),
     status: String(row.status || 'inactive'),
+    interval,
     stripeStatus: typeof row.stripe_status === 'string' ? row.stripe_status : undefined,
     stripeSubscriptionId: typeof row.stripe_subscription_id === 'string' ? row.stripe_subscription_id : undefined,
     cancelAtPeriodEnd: Boolean(row.cancel_at_period_end),
@@ -573,11 +568,12 @@ export const createPlanCheckoutSession = async (input: {
   userId: string;
   email: string;
   planTier: PurchasablePlanTier;
+  interval: BillingInterval;
 }) => {
   const client = assertStripe();
-  const priceId = resolvePlanPriceId(input.planTier);
+  const priceId = await resolvePlanStripePriceId(input.planTier, input.interval);
   if (!priceId) {
-    throw new Error(`Stripe price ID missing for plan tier ${input.planTier}.`);
+    throw new Error(`Stripe price ID missing for plan tier ${input.planTier} (${input.interval}).`);
   }
 
   const customer = await ensureStripeCustomer(input.userId, input.email);
@@ -588,17 +584,20 @@ export const createPlanCheckoutSession = async (input: {
     client_reference_id: input.userId,
     line_items: [{ price: priceId, quantity: 1 }],
     mode: 'subscription',
-    success_url: `${CLIENT_URL}/settings?billing=success&type=subscription`,
+    success_url: `${CLIENT_URL}/settings?billing=success&type=subscription&session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${CLIENT_URL}/settings?billing=cancelled&type=subscription`,
     metadata: {
       kind: 'subscription',
       userId: input.userId,
-      planTier: input.planTier
+      planTier: input.planTier,
+      interval: input.interval,
+      priceId
     },
     subscription_data: {
       metadata: {
         userId: input.userId,
-        planTier: input.planTier
+        planTier: input.planTier,
+        interval: input.interval
       }
     }
   });
@@ -610,7 +609,7 @@ export const createCreditPackCheckoutSession = async (input: {
   packId: CreditPackId;
 }) => {
   const client = assertStripe();
-  const stripePriceId = creditPriceByPackId[input.packId];
+  const stripePriceId = await resolveCreditPackStripePriceId(input.packId);
   if (!stripePriceId) {
     throw new Error(`Stripe price ID missing for credit pack ${input.packId}.`);
   }
@@ -628,7 +627,7 @@ export const createCreditPackCheckoutSession = async (input: {
     client_reference_id: input.userId,
     line_items: [{ price: stripePriceId, quantity: 1 }],
     mode: 'payment',
-    success_url: `${CLIENT_URL}/settings?billing=success&type=credits`,
+    success_url: `${CLIENT_URL}/settings?billing=success&type=credits&session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${CLIENT_URL}/settings?billing=cancelled&type=credits`,
     metadata: {
       kind: 'credit_pack',
@@ -697,6 +696,36 @@ export const createSetupIntent = async (customerId: string, userId: string) => {
   });
 };
 
+export const confirmCheckoutSession = async (input: { userId: string; sessionId: string }) => {
+  const client = assertStripe();
+  const sessionId = typeof input.sessionId === 'string' ? input.sessionId.trim() : '';
+  if (!sessionId) {
+    throw new Error('sessionId is required.');
+  }
+
+  const session = await client.checkout.sessions.retrieve(sessionId);
+  const ownerUserId = session.client_reference_id || session.metadata?.userId;
+  if (!ownerUserId || ownerUserId !== input.userId) {
+    const error = new Error('Checkout session does not belong to the authenticated user.') as Error & { status?: number; publicCode?: string };
+    error.status = 403;
+    error.publicCode = 'FORBIDDEN';
+    throw error;
+  }
+
+  if (session.status !== 'complete') {
+    const error = new Error('Checkout session is not complete yet.') as Error & { status?: number; publicCode?: string };
+    error.status = 409;
+    error.publicCode = 'CHECKOUT_NOT_COMPLETE';
+    throw error;
+  }
+
+  await handleCheckoutCompleted(session);
+  return {
+    synced: true,
+    subscription: await getSubscriptionStatusFromDb(input.userId)
+  };
+};
+
 export const handleStripeWebhook = async (sig: string, body: Buffer) => {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!webhookSecret) throw new Error('STRIPE_WEBHOOK_SECRET missing');
@@ -760,6 +789,13 @@ export const handleStripeWebhook = async (sig: string, body: Buffer) => {
 export const assertPurchasableTier = (value: unknown): PurchasablePlanTier => {
   if (!isPurchasablePlanTier(value)) {
     throw new Error('Invalid plan tier. Allowed values: creator, pro, studio.');
+  }
+  return value;
+};
+
+export const assertBillingInterval = (value: unknown): BillingInterval => {
+  if (value !== 'month' && value !== 'year') {
+    throw new Error('Invalid billing interval. Allowed values: month, year.');
   }
   return value;
 };

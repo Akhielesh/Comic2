@@ -1,6 +1,7 @@
 export type BillingPlanTier = 'free' | 'creator' | 'pro' | 'studio' | 'custom' | 'admin';
 export type PurchasablePlanTier = 'creator' | 'pro' | 'studio';
 export type CreditPackId = 'pack_10' | 'pack_25' | 'pack_100';
+export type BillingInterval = 'month' | 'year';
 
 export type BillingPlanDefinition = {
   id: BillingPlanTier;
@@ -16,6 +17,32 @@ export type CreditPackDefinition = {
   usd: number;
   ct: number;
   label: string;
+};
+
+export type BillingPlanPricing = {
+  planTier: PurchasablePlanTier;
+  interval: BillingInterval;
+  priceUsd: number;
+  stripePriceConfigured: boolean;
+};
+
+export type CouponEntitlementPolicy = {
+  planTierOverride?: BillingPlanTier;
+  includedMonthlyCtOverride?: number;
+  dailyGuardrailCtOverride?: number;
+  includedMonthlyCtBonus?: number;
+  dailyGuardrailCtBonus?: number;
+  bonusCt?: number;
+  overageEnabledOverride?: boolean;
+};
+
+export type BillingCouponEntitlement = {
+  assignmentId: string;
+  couponDefinitionId: string;
+  couponCode: string;
+  startsAt: string;
+  endsAt: string;
+  policy: CouponEntitlementPolicy;
 };
 
 export type TokenBreakdownLine = {
@@ -119,6 +146,10 @@ export type BillingSummaryResponse = {
   ctPerUsd: number;
   wallet: WalletBalance;
   usage: UsageLimitState;
+  basePlan: BillingPlanDefinition;
+  effectivePlan: BillingPlanDefinition;
+  effectiveUsageSource: 'subscription' | 'coupon_entitlement' | 'fallback';
+  activeCouponEntitlement?: BillingCouponEntitlement;
   plan: BillingPlanDefinition;
   hasPaymentMethodOnFile: boolean;
   overageEnabled: boolean;
@@ -134,6 +165,7 @@ export type BillingSummaryResponse = {
 export type BillingSubscriptionStatus = {
   planTier: BillingPlanTier;
   status: string;
+  interval?: BillingInterval;
   stripeStatus?: string;
   stripeSubscriptionId?: string;
   cancelAtPeriodEnd: boolean;
@@ -148,6 +180,7 @@ export type PricingCatalogResponse = {
   ctPerUsd: number;
   markup: number;
   plans: BillingPlanDefinition[];
+  planPricing: BillingPlanPricing[];
   creditPacks: CreditPackDefinition[];
   modelPricing: Array<{
     provider: string;
@@ -172,6 +205,57 @@ export type PricingCatalogResponse = {
 export type CheckoutSessionResponse = {
   url: string;
   id: string;
+};
+
+export type CheckoutSessionConfirmResponse = {
+  synced: boolean;
+  subscription?: BillingSubscriptionStatus;
+};
+
+export type CouponRedemptionResult = {
+  success: boolean;
+  message: string;
+  entitlement?: BillingCouponEntitlement;
+};
+
+export type AdminCouponDefinition = {
+  id: string;
+  code: string;
+  startsAt: string;
+  endsAt: string;
+  isActive: boolean;
+  policy: CouponEntitlementPolicy;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AdminCouponAssignment = {
+  id: string;
+  couponDefinitionId: string;
+  couponCode: string;
+  userId?: string;
+  email?: string;
+  startsAt: string;
+  endsAt: string;
+  isActive: boolean;
+  isRedeemed: boolean;
+  redeemedAt?: string;
+  revokedAt?: string;
+  revokeReason?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AdminCouponRedemptionEvent = {
+  id: string;
+  couponDefinitionId: string;
+  assignmentId?: string;
+  userId?: string;
+  email?: string;
+  couponCode: string;
+  outcome: string;
+  reason?: string;
+  createdAt: string;
 };
 
 export type BillingUsageHistoryItem = {

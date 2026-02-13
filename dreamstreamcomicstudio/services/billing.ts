@@ -1,8 +1,14 @@
 import type {
+  AdminCouponAssignment,
+  AdminCouponDefinition,
+  AdminCouponRedemptionEvent,
+  BillingInterval,
   BillingSubscriptionStatus,
   BillingSummaryResponse,
+  CheckoutSessionConfirmResponse,
   CheckoutSessionResponse,
   ComicCostReport,
+  CouponRedemptionResult,
   CreditPackId,
   PricingCatalogResponse,
   PurchasablePlanTier,
@@ -32,11 +38,17 @@ export const settleTokenCharge = async (payload: Record<string, unknown>) =>
 export const setupPaymentMethod = async () =>
   post<Record<string, never>, { customerId: string; setupIntentClientSecret: string }>('/api/billing/setup-payment-method', {});
 
-export const createSubscriptionCheckout = async (planTier: PurchasablePlanTier): Promise<CheckoutSessionResponse> =>
-  post<{ planTier: PurchasablePlanTier }, CheckoutSessionResponse>('/api/billing/checkout/subscription', { planTier });
+export const createSubscriptionCheckout = async (
+  planTier: PurchasablePlanTier,
+  interval: BillingInterval
+): Promise<CheckoutSessionResponse> =>
+  post<{ planTier: PurchasablePlanTier; interval: BillingInterval }, CheckoutSessionResponse>('/api/billing/checkout/subscription', { planTier, interval });
 
 export const createCreditPackCheckout = async (packId: CreditPackId): Promise<CheckoutSessionResponse> =>
   post<{ packId: CreditPackId }, CheckoutSessionResponse>('/api/billing/checkout/credits', { packId });
+
+export const confirmCheckoutSession = async (sessionId: string): Promise<CheckoutSessionConfirmResponse> =>
+  post<{ sessionId: string }, CheckoutSessionConfirmResponse>('/api/billing/checkout/confirm', { sessionId });
 
 export const createBillingPortal = async (returnUrl?: string): Promise<{ url: string }> =>
   post<{ returnUrl?: string }, { url: string }>('/api/billing/portal', { returnUrl });
@@ -56,9 +68,46 @@ export const getUsageHistory = async (limit = 100) =>
 export const getComicCost = async (comicId: string): Promise<ComicCostReport> =>
   get<ComicCostReport>(`/api/billing/comic-cost/${encodeURIComponent(comicId)}`);
 
+export const redeemCoupon = async (couponCode: string): Promise<CouponRedemptionResult & { summary?: BillingSummaryResponse }> =>
+  post<{ couponCode: string }, CouponRedemptionResult & { summary?: BillingSummaryResponse }>('/api/billing/coupons/redeem', { couponCode });
+
+export const listAdminCoupons = async (limit = 100): Promise<{
+  definitions: AdminCouponDefinition[];
+  assignments: AdminCouponAssignment[];
+  events: AdminCouponRedemptionEvent[];
+}> =>
+  get<{
+    definitions: AdminCouponDefinition[];
+    assignments: AdminCouponAssignment[];
+    events: AdminCouponRedemptionEvent[];
+  }>(`/api/billing/admin/coupons?limit=${Math.max(10, Math.floor(limit))}`);
+
+export const createAdminCouponDefinition = async (payload: {
+  code: string;
+  startsAt: string;
+  endsAt: string;
+  policy: Record<string, unknown>;
+}) =>
+  post<typeof payload, AdminCouponDefinition>('/api/billing/admin/coupons', payload);
+
+export const assignAdminCouponDefinition = async (payload: {
+  couponDefinitionId: string;
+  userId?: string;
+  email?: string;
+  startsAt: string;
+  endsAt: string;
+}) =>
+  post<typeof payload, AdminCouponAssignment>('/api/billing/admin/coupons/assign', payload);
+
+export const revokeAdminCouponAssignment = async (assignmentId: string, reason?: string) =>
+  post<{ reason?: string }, AdminCouponAssignment>(`/api/billing/admin/coupons/assignments/${encodeURIComponent(assignmentId)}/revoke`, { reason });
+
 // Backward compatible wrappers
-export const createCheckoutSession = async (planTier: PurchasablePlanTier = 'pro') =>
-  createSubscriptionCheckout(planTier);
+export const createCheckoutSession = async (
+  planTier: PurchasablePlanTier = 'creator',
+  interval: BillingInterval = 'month'
+) =>
+  createSubscriptionCheckout(planTier, interval);
 
 export const addCredits = async (packId: CreditPackId) =>
   createCreditPackCheckout(packId);
