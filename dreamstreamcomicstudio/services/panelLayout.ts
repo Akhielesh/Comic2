@@ -1,5 +1,25 @@
 import type { ComicPanel, DialogueBlock, TextLayout } from '../types';
 import { ensureDialogueBlocks } from './dialogueUtils';
+import { getTemplateById, type GridTemplate, type PanelSlot } from './gridTemplates';
+
+// ---------------------------------------------------------------------------
+// Grid-template helpers (slot-based absolute-position rendering)
+// ---------------------------------------------------------------------------
+
+/** Return the full GridTemplate definition for a given ID, or null. */
+export const getGridTemplate = (gridTemplateId?: string): GridTemplate | null => {
+    if (!gridTemplateId) return null;
+    const t = getTemplateById(gridTemplateId);
+    // getTemplateById falls back to CLASSIC_GRID — only return if it matches
+    return t.id === gridTemplateId ? t : null;
+};
+
+/** Return the PanelSlot for a given panel index inside the template, or null. */
+export const getTemplateSlot = (gridTemplateId: string, panelIndex: number): PanelSlot | null => {
+    const template = getGridTemplate(gridTemplateId);
+    if (!template || panelIndex >= template.panelSlots.length) return null;
+    return template.panelSlots[panelIndex];
+};
 
 // ---------------------------------------------------------------------------
 // Shared layout class helpers (used by ReviewExport + ComicReader)

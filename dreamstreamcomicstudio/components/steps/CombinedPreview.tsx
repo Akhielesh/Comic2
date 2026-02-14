@@ -5,13 +5,13 @@ import { generatePanelBreakdown } from '../../services/geminiService';
 import { Button } from '../Button';
 import { ensureDialogueBlocks, normalizePanelDialogue } from '../../services/dialogueUtils';
 import { buildDefaultContinuityState, resolvePanelContinuity, validateContinuityState } from '../../services/continuity';
-import { 
-  DEFAULT_PRICING_CONFIG, 
-  normalizePricingConfig, 
-  PRICING_AS_OF, 
-  FLASH_IMAGE_BATCH, 
-  FLASH_IMAGE_STANDARD, 
-  BANANA_PRO_IMAGE_1K, 
+import {
+  DEFAULT_PRICING_CONFIG,
+  normalizePricingConfig,
+  PRICING_AS_OF,
+  FLASH_IMAGE_BATCH,
+  FLASH_IMAGE_STANDARD,
+  BANANA_PRO_IMAGE_1K,
   BANANA_PRO_IMAGE_4K,
   FLASH_LITE_PRICING,
   FLASH_PRICING
@@ -57,13 +57,12 @@ const PanelWireframe: React.FC<{ panel: ComicPanel; textLayout: TextLayout }> = 
           {blocks.map((block) => (
             <div
               key={block.id}
-              className={`text-[10px] border border-black rounded px-2 py-1 ${
-                textLayout === 'chat_bubbles'
+              className={`text-[10px] border border-black rounded px-2 py-1 ${textLayout === 'chat_bubbles'
                   ? block.side === 'right'
                     ? 'bg-brand-blue text-white ml-auto'
                     : 'bg-brand-yellow text-black'
                   : 'bg-white text-black'
-              }`}
+                }`}
             >
               <strong className="mr-1">{block.speaker || block.kind}:</strong> {block.text}
             </div>
@@ -367,11 +366,11 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
     onStateUpdate({
       continuity: state.continuity
         ? {
-            ...state.continuity,
-            lockLevel: 'strict',
-            fallbackPolicy: 'auto',
-            validation
-          }
+          ...state.continuity,
+          lockLevel: 'strict',
+          fallbackPolicy: 'auto',
+          validation
+        }
         : buildDefaultContinuityState(state)
     });
     if (state.continuity?.lockLevel === 'strict' || !state.continuity) {
@@ -389,6 +388,12 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
           <div>
             <h2 className="text-4xl font-display text-black">Panel Plan</h2>
             <p className="text-slate-600 font-comic">Review every panel before we draw. Edit prompts, dialogue, and layout.</p>
+            <div className="flex items-center gap-2 mt-1 text-xs font-mono text-slate-500">
+              <span className="inline-block w-2 h-2 rounded-full bg-brand-blue" />
+              <span className="font-bold text-slate-600">Active Model:</span> {activeImageModel?.label || provider}
+              <span className="text-slate-300">·</span>
+              <span>{plannedPanelCount} panels planned</span>
+            </div>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button onClick={generateAllPlans} isLoading={isPlanning} icon={<RefreshCw className="w-4 h-4" />}>Generate All Plans</Button>
@@ -653,7 +658,7 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
           </div>
 
           <div className="bg-white p-4 rounded-xl border-4 border-black shadow-comic flex gap-3 items-start">
-            <AlertCircle className="text-brand-blue shrink-0 mt-1"/>
+            <AlertCircle className="text-brand-blue shrink-0 mt-1" />
             <p className="text-xs font-comic text-slate-700 leading-relaxed">
               This preview is fully editable. Update prompts and dialogue until the plan is perfect, then start generation.
             </p>

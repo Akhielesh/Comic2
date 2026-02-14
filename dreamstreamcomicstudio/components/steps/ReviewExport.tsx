@@ -10,10 +10,13 @@ import { Button } from '../Button';
 const ImagePreviewModal = React.lazy(() => import('../modals/ImagePreviewModal').then(module => ({ default: module.ImagePreviewModal })));
 const RegenerateModal = React.lazy(() => import('../modals/RegenerateModal').then(module => ({ default: module.RegenerateModal })));
 const HistoryModal = React.lazy(() => import('../modals/HistoryModal').then(module => ({ default: module.HistoryModal })));
+const BubbleEditorModal = React.lazy(() => import('../modals/BubbleEditorModal').then(module => ({ default: module.BubbleEditorModal })));
 
 import { exportProject, getImageUrl, getImageDataUrl } from '../../services/db';
 import { ensureDialogueBlocks } from '../../services/dialogueUtils';
-import { getLayoutClass as sharedGetLayoutClass, getPanelClass as sharedGetPanelClass, EXPORT_DIALOGUE_CSS, buildPanelDialogueHtml } from '../../services/panelLayout';
+import { getLayoutClass as sharedGetLayoutClass, getPanelClass as sharedGetPanelClass, getGridTemplate, EXPORT_DIALOGUE_CSS, buildPanelDialogueHtml } from '../../services/panelLayout';
+import { getModelForTask } from '../../services/appSettings';
+import { getImageModelById } from '../../services/imageModels';
 import { buildImagePrompt } from '../../services/imagePrompt';
 import { parseRatio, resolveAspectRatio } from '../../services/imageUtils';
 import { buildProjectReport } from '../../services/reporting';
@@ -70,8 +73,13 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
   const [limitDetails, setLimitDetails] = useState<Record<string, unknown> | null>(null);
   const estimatedCt = costReport ? Math.ceil(costReport.cost_summary.totalCost / 0.0001) : null;
   const [comicCost, setComicCost] = useState<{ totalActualCt: number; totalBillableUsd: number } | null>(null);
+  const [showBubbleEditor, setShowBubbleEditor] = useState(false);
 
   const textLayout = state.textLayout || 'caption';
+  const gridTemplate = getGridTemplate(state.gridTemplateId);
+  const activeModel = getImageModelById(getModelForTask('panel'));
+  const [showVersionPicker, setShowVersionPicker] = useState(false);
+  const versions = state.versions || [];
 
   useEffect(() => {
     let isActive = true;
@@ -493,44 +501,56 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
               <img src={state.coverImageUrl} alt={`${projectName} cover`} className="w-full h-auto object-cover" />
             </div>
           )}
-          <div className={getLayoutClass()}>
-            {panels.map((panel, idx) => (
-              <div
-                key={panel.id}
-                className={`relative group border-4 ${panel.failureReason ? 'border-red-400' : 'border-black'} rounded-lg overflow-hidden shadow-comic cursor-pointer ${getPanelClass(idx)}`}
-                onClick={() => setSelectedPanel(panel)}
-              >
-                {panel.imageUrl ? (
-                  <img src={panel.imageUrl} alt={`Panel ${idx + 1}`} className="w-full h-full object-cover" />
-                ) : (
-                  <div className="w-full h-full min-h-[120px] flex flex-col items-center justify-center bg-slate-100 text-slate-400">
-                    <RefreshCw size={24} className="mb-1" />
-                    <span className="text-[10px] font-bold uppercase">Failed</span>
-                  </div>
-                )}
-                <PanelDialogue panel={panel} layout={textLayout} />
-                {panel.failureReason && (
-                  <div className="absolute left-2 top-2 px-2 py-1 text-[10px] font-bold rounded border bg-red-100 text-red-700 border-red-300 max-w-[80%] truncate">
-                    ⚠ {panel.failureReason}
-                  </div>
-                )}
-                {auditScoresByPanel[panel.id] && !panel.failureReason && (
-                  <div className={`absolute left-2 top-2 px-2 py-1 text-[10px] font-bold rounded border ${auditScoresByPanel[panel.id].driftScore > 0.35
-                    ? 'bg-red-100 text-red-700 border-red-300'
-                    : 'bg-green-100 text-green-700 border-green-300'
-                    }`}>
-                    Drift {Math.round(auditScoresByPanel[panel.id].driftScore * 100)}%
-                  </div>
-                )}
+          <div className={gridTemplate ? 'relative w-full' : getLayoutClass()}
+            style={gridTemplate ? { paddingBottom: `${gridTemplate.panelSlots.reduce((max, s) => Math.max(max, s.y + s.height), 0)}%` } : undefined}>
+            {panels.map((panel, idx) => {
+              const slot = gridTemplate?.panelSlots[idx];
+              return (
+                <div
+                  key={panel.id}
+                  className={`relative group border-4 ${panel.failureReason ? 'border-red-400' : 'border-black'} rounded-lg overflow-hidden shadow-comic cursor-pointer ${gridTemplate ? '' : getPanelClass(idx)}`}
+                  style={slot ? {
+                    position: 'absolute',
+                    left: `${slot.x}%`,
+                    top: `${slot.y}%`,
+                    width: `${slot.width}%`,
+                    height: `${slot.height}%`,
+                  } : undefined}
+                  onClick={() => setSelectedPanel(panel)}
+                >
+                  {panel.imageUrl ? (
+                    <img src={panel.imageUrl} alt={`Panel ${idx + 1}`} className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="w-full h-full min-h-[120px] flex flex-col items-center justify-center bg-slate-100 text-slate-400">
+                      <RefreshCw size={24} className="mb-1" />
+                      <span className="text-[10px] font-bold uppercase">Failed</span>
+                    </div>
+                  )}
+                  <PanelDialogue panel={panel} layout={textLayout} />
+                  {panel.failureReason && (
+                    <div className="absolute left-2 top-2 px-2 py-1 text-[10px] font-bold rounded border bg-red-100 text-red-700 border-red-300 max-w-[80%] truncate">
+                      ⚠ {panel.failureReason}
+                    </div>
+                  )}
+                  {auditScoresByPanel[panel.id] && !panel.failureReason && (
+                    <div className={`absolute left-2 top-2 px-2 py-1 text-[10px] font-bold rounded border ${auditScoresByPanel[panel.id].driftScore > 0.35
+                      ? 'bg-red-100 text-red-700 border-red-300'
+                      : 'bg-green-100 text-green-700 border-green-300'
+                      }`}>
+                      Drift {Math.round(auditScoresByPanel[panel.id].driftScore * 100)}%
+                    </div>
+                  )}
 
-                {/* Hover Overlay */}
-                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                  <button className="bg-white p-2 rounded-full hover:bg-brand-yellow border-2 border-black" onClick={(e) => { e.stopPropagation(); setSelectedPanel(panel); setShowRegenModal(true); }} aria-label="Edit panel"><Edit2 size={16} /></button>
+                  {/* Hover Overlay */}
+                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                    <button className="bg-white p-2 rounded-full hover:bg-brand-yellow border-2 border-black" onClick={(e) => { e.stopPropagation(); setSelectedPanel(panel); setShowRegenModal(true); }} aria-label="Regenerate panel"><RefreshCw size={16} /></button>
+                    <button className="bg-white p-2 rounded-full hover:bg-brand-yellow border-2 border-black" onClick={(e) => { e.stopPropagation(); setSelectedPanel(panel); setShowBubbleEditor(true); }} aria-label="Edit bubbles"><Edit2 size={16} /></button>
+                  </div>
+
+                  {selectedPanel?.id === panel.id && <div className="absolute inset-0 ring-4 ring-brand-yellow ring-offset-2 pointer-events-none" />}
                 </div>
-
-                {selectedPanel?.id === panel.id && <div className="absolute inset-0 ring-4 ring-brand-yellow ring-offset-2 pointer-events-none" />}
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
@@ -561,6 +581,29 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
           )}
         </div>
 
+        {/* Model & Layout Info Bar */}
+        <div className="bg-slate-50 border-2 border-slate-200 rounded-lg px-4 py-2 flex flex-wrap items-center gap-4 text-xs font-mono text-slate-600">
+          <div className="flex items-center gap-1.5">
+            <span className="inline-block w-2 h-2 rounded-full bg-brand-blue" />
+            <span className="font-bold text-slate-700">Model:</span> {activeModel?.label || 'Default'}
+          </div>
+          {gridTemplate ? (
+            <div className="flex items-center gap-1.5">
+              <span className="inline-block w-2 h-2 rounded-full bg-brand-yellow" />
+              <span className="font-bold text-slate-700">Layout:</span> {gridTemplate.title}
+            </div>
+          ) : state.layoutType ? (
+            <div className="flex items-center gap-1.5">
+              <span className="inline-block w-2 h-2 rounded-full bg-brand-yellow" />
+              <span className="font-bold text-slate-700">Layout:</span> {state.layoutType}
+            </div>
+          ) : null}
+          <div className="flex items-center gap-1.5">
+            <span className="inline-block w-2 h-2 rounded-full bg-emerald-400" />
+            <span className="font-bold text-slate-700">Panels:</span> {panels.length}
+          </div>
+        </div>
+
         {/* Action Bar */}
         <div className="min-h-24 bg-white border-4 border-black rounded-xl p-4 flex flex-wrap items-center justify-between gap-3 shadow-comic">
           <div className="flex items-center gap-4">
@@ -582,6 +625,32 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
             <button onClick={handleShare} className="flex items-center gap-2 text-sm font-bold text-slate-600 hover:text-black">
               <Share2 size={16} /> {shareLink ? "Link Copied!" : "Share"}
             </button>
+            {versions.length > 0 && (
+              <div className="relative">
+                <Button variant="outline" onClick={() => setShowVersionPicker(!showVersionPicker)}>
+                  Versions ({versions.length})
+                </Button>
+                {showVersionPicker && (
+                  <div className="absolute bottom-full mb-2 right-0 bg-white border-2 border-black rounded-lg shadow-comic p-2 z-50 w-72 max-h-56 overflow-y-auto">
+                    <div className="text-xs font-bold text-slate-500 uppercase mb-2 px-2">Version History</div>
+                    {versions.map(v => (
+                      <button
+                        key={v.id}
+                        onClick={() => {
+                          onUpdateProject({ state: v.state });
+                          setShowVersionPicker(false);
+                        }}
+                        className="w-full text-left p-2 hover:bg-slate-100 rounded text-xs transition-colors"
+                      >
+                        <div className="font-bold truncate">{v.name}</div>
+                        <div className="text-slate-500">{new Date(v.createdAt).toLocaleString()}</div>
+                        {v.reason && <div className="text-[10px] text-slate-400 italic">{v.reason}</div>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="flex gap-2">
               <Button onClick={handleDownloadProjectData} variant="outline">Project ZIP</Button>
               <Button onClick={handleDownloadHTML} variant="outline" icon={<FileCode className="w-4 h-4" />}>HTML</Button>
@@ -591,8 +660,7 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
         </div>
       </div>
 
-      {/* History Modal */}
-      {/* History Modal */}
+      {/* Modals */}
       {showHistoryModal && selectedPanel && (
         <React.Suspense fallback={null}>
           <HistoryModal
@@ -600,6 +668,27 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
             selectedPanel={selectedPanel}
             historyUrls={historyUrls}
             onUpdatePanel={onUpdatePanel}
+          />
+        </React.Suspense>
+      )}
+
+      {showBubbleEditor && selectedPanel && (
+        <React.Suspense fallback={null}>
+          <BubbleEditorModal
+            isOpen={showBubbleEditor}
+            onClose={() => setShowBubbleEditor(false)}
+            panel={selectedPanel}
+            layout={textLayout}
+            onUpdatePanel={(updatedPanel) => {
+              const newPanels = panels.map(p => p.id === updatedPanel.id ? updatedPanel : p);
+              onUpdateProject({
+                state: {
+                  ...state,
+                  panels: newPanels
+                }
+              });
+              setSelectedPanel(updatedPanel);
+            }}
           />
         </React.Suspense>
       )}
@@ -620,6 +709,7 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
           <ImagePreviewModal imageUrl={previewImage} onClose={() => setPreviewImage(null)} />
         </React.Suspense>
       )}
+
       {limitDetails && (
         <LimitExceededModal
           details={limitDetails}

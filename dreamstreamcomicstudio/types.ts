@@ -119,6 +119,8 @@ export type DialogueBlock = {
   speaker?: string;
   text: string;
   side?: 'left' | 'right' | 'center';
+  position?: { x: number; y: number }; // Percentage 0-100
+  style?: 'speech' | 'thought' | 'shout' | 'whisper' | 'caption';
 };
 
 export type TextLayout = 'caption' | 'speech_bubbles' | 'chat_bubbles' | 'none';
