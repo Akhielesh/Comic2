@@ -1,4 +1,5 @@
 import type {
+  BillingInterval,
   BillingPlanDefinition,
   BillingPlanTier,
   CreditPackDefinition,
@@ -18,6 +19,7 @@ const clampFinite = (value: unknown, fallback: number, min = 0) => {
 };
 
 const tierOrder: BillingPlanTier[] = ['free', 'creator', 'pro', 'studio', 'custom', 'admin'];
+const intervalOrder: BillingInterval[] = ['month', 'year'];
 type PricingChangelogEntry = NonNullable<PricingCatalogResponse['pricingChangelog']>[number];
 
 export const DEFAULT_BILLING_PLANS: BillingPlanDefinition[] = [
@@ -26,6 +28,7 @@ export const DEFAULT_BILLING_PLANS: BillingPlanDefinition[] = [
     name: 'Free',
     monthlyIncludedCt: 10_000,
     dailyGuardrailCt: 800,
+    dailyLimitEnabled: true,
     monthlyPriceUsd: 0,
     allowOverage: false
   },
@@ -33,8 +36,9 @@ export const DEFAULT_BILLING_PLANS: BillingPlanDefinition[] = [
     id: 'creator',
     name: 'Creator',
     monthlyIncludedCt: 120_000,
-    dailyGuardrailCt: 8_000,
-    monthlyPriceUsd: 20,
+    dailyGuardrailCt: 0,
+    dailyLimitEnabled: false,
+    monthlyPriceUsd: 11.99,
     allowOverage: true
   },
   {
@@ -42,22 +46,25 @@ export const DEFAULT_BILLING_PLANS: BillingPlanDefinition[] = [
     name: 'Pro',
     monthlyIncludedCt: 240_000,
     dailyGuardrailCt: 16_000,
+    dailyLimitEnabled: true,
     monthlyPriceUsd: 49,
     allowOverage: true
   },
   {
     id: 'studio',
     name: 'Studio',
-    monthlyIncludedCt: 350_000,
-    dailyGuardrailCt: 25_000,
-    monthlyPriceUsd: 50,
+    monthlyIncludedCt: 390_000,
+    dailyGuardrailCt: 0,
+    dailyLimitEnabled: false,
+    monthlyPriceUsd: 39.99,
     allowOverage: true
   },
   {
     id: 'custom',
     name: 'Custom Credits',
     monthlyIncludedCt: 0,
-    dailyGuardrailCt: 20_000,
+    dailyGuardrailCt: 0,
+    dailyLimitEnabled: false,
     monthlyPriceUsd: 0,
     allowOverage: true
   },
@@ -65,10 +72,35 @@ export const DEFAULT_BILLING_PLANS: BillingPlanDefinition[] = [
     id: 'admin',
     name: 'Admin',
     monthlyIncludedCt: 5_000_000,
-    dailyGuardrailCt: 500_000,
+    dailyGuardrailCt: 0,
+    dailyLimitEnabled: false,
     monthlyPriceUsd: 0,
     allowOverage: false
   }
+];
+
+export type BillingPlanEntitlement = {
+  planTier: BillingPlanTier;
+  interval: BillingInterval;
+  includedMonthlyCt: number;
+  dailyGuardrailCt: number;
+  dailyLimitEnabled: boolean;
+  isActive: boolean;
+};
+
+export const DEFAULT_PLAN_ENTITLEMENTS: BillingPlanEntitlement[] = [
+  { planTier: 'free', interval: 'month', includedMonthlyCt: 10_000, dailyGuardrailCt: 800, dailyLimitEnabled: true, isActive: true },
+  { planTier: 'free', interval: 'year', includedMonthlyCt: 10_000, dailyGuardrailCt: 800, dailyLimitEnabled: true, isActive: true },
+  { planTier: 'creator', interval: 'month', includedMonthlyCt: 120_000, dailyGuardrailCt: 0, dailyLimitEnabled: false, isActive: true },
+  { planTier: 'creator', interval: 'year', includedMonthlyCt: 100_000, dailyGuardrailCt: 0, dailyLimitEnabled: false, isActive: true },
+  { planTier: 'pro', interval: 'month', includedMonthlyCt: 240_000, dailyGuardrailCt: 16_000, dailyLimitEnabled: true, isActive: true },
+  { planTier: 'pro', interval: 'year', includedMonthlyCt: 240_000, dailyGuardrailCt: 16_000, dailyLimitEnabled: true, isActive: true },
+  { planTier: 'studio', interval: 'month', includedMonthlyCt: 390_000, dailyGuardrailCt: 0, dailyLimitEnabled: false, isActive: true },
+  { planTier: 'studio', interval: 'year', includedMonthlyCt: 340_000, dailyGuardrailCt: 0, dailyLimitEnabled: false, isActive: true },
+  { planTier: 'custom', interval: 'month', includedMonthlyCt: 0, dailyGuardrailCt: 0, dailyLimitEnabled: false, isActive: true },
+  { planTier: 'custom', interval: 'year', includedMonthlyCt: 0, dailyGuardrailCt: 0, dailyLimitEnabled: false, isActive: true },
+  { planTier: 'admin', interval: 'month', includedMonthlyCt: 5_000_000, dailyGuardrailCt: 0, dailyLimitEnabled: false, isActive: true },
+  { planTier: 'admin', interval: 'year', includedMonthlyCt: 5_000_000, dailyGuardrailCt: 0, dailyLimitEnabled: false, isActive: true }
 ];
 
 export const CREDIT_PACKS: CreditPackDefinition[] = [
@@ -189,6 +221,11 @@ const toPlanTier = (value: unknown): BillingPlanTier | null => {
   return null;
 };
 
+const toBillingInterval = (value: unknown): BillingInterval | null => {
+  if (value === 'month' || value === 'year') return value;
+  return null;
+};
+
 export const resolvePlanDefinition = (
   planTier: BillingPlanTier | string | null | undefined
 ): BillingPlanDefinition => {
@@ -292,7 +329,7 @@ export const getPlanCatalog = async (): Promise<BillingPlanDefinition[]> => {
     const admin = getSupabaseAdmin();
     const { data, error } = await admin
       .from('billing_plans')
-      .select('id, name, monthly_included_ct, daily_guardrail_ct, monthly_price_usd, allow_overage, is_active')
+      .select('id, name, monthly_included_ct, daily_guardrail_ct, daily_limit_enabled, monthly_price_usd, allow_overage, is_active')
       .eq('is_active', true);
 
     if (error || !Array.isArray(data) || data.length === 0) {
@@ -308,6 +345,8 @@ export const getPlanCatalog = async (): Promise<BillingPlanDefinition[]> => {
           name: String((row as Record<string, unknown>).name || tier),
           monthlyIncludedCt: Math.max(0, Math.floor(clampFinite((row as Record<string, unknown>).monthly_included_ct, 0))),
           dailyGuardrailCt: Math.max(0, Math.floor(clampFinite((row as Record<string, unknown>).daily_guardrail_ct, 0))),
+          dailyLimitEnabled: (row as Record<string, unknown>).daily_limit_enabled === true
+            || Math.max(0, Math.floor(clampFinite((row as Record<string, unknown>).daily_guardrail_ct, 0))) > 0,
           monthlyPriceUsd: clampFinite((row as Record<string, unknown>).monthly_price_usd, 0),
           allowOverage: Boolean((row as Record<string, unknown>).allow_overage)
         } satisfies BillingPlanDefinition;
@@ -319,6 +358,71 @@ export const getPlanCatalog = async (): Promise<BillingPlanDefinition[]> => {
   } catch {
     return DEFAULT_BILLING_PLANS;
   }
+};
+
+export const getPlanEntitlementCatalog = async (): Promise<BillingPlanEntitlement[]> => {
+  try {
+    const admin = getSupabaseAdmin();
+    const { data, error } = await admin
+      .from('billing_plan_entitlements')
+      .select('plan_tier, interval, included_monthly_ct, daily_guardrail_ct, daily_limit_enabled, is_active')
+      .eq('is_active', true);
+
+    if (error || !Array.isArray(data) || data.length === 0) {
+      return DEFAULT_PLAN_ENTITLEMENTS;
+    }
+
+    const mapped = data
+      .map((row): BillingPlanEntitlement | null => {
+        const record = row as Record<string, unknown>;
+        const planTier = toPlanTier(record.plan_tier);
+        const interval = toBillingInterval(record.interval);
+        if (!planTier || !interval) return null;
+        const includedMonthlyCt = Math.max(0, Math.floor(clampFinite(record.included_monthly_ct, 0)));
+        const dailyGuardrailCt = Math.max(0, Math.floor(clampFinite(record.daily_guardrail_ct, 0)));
+        const dailyLimitEnabled = record.daily_limit_enabled === true || dailyGuardrailCt > 0;
+        return {
+          planTier,
+          interval,
+          includedMonthlyCt,
+          dailyGuardrailCt,
+          dailyLimitEnabled,
+          isActive: true
+        };
+      })
+      .filter((entry): entry is BillingPlanEntitlement => entry !== null)
+      .sort((a, b) => {
+        const planOrder = tierOrder.indexOf(a.planTier) - tierOrder.indexOf(b.planTier);
+        if (planOrder !== 0) return planOrder;
+        return intervalOrder.indexOf(a.interval) - intervalOrder.indexOf(b.interval);
+      });
+
+    return mapped.length > 0 ? mapped : DEFAULT_PLAN_ENTITLEMENTS;
+  } catch {
+    return DEFAULT_PLAN_ENTITLEMENTS;
+  }
+};
+
+export const resolvePlanEntitlement = async (
+  planTier: BillingPlanTier | string | null | undefined,
+  interval: BillingInterval = 'month'
+): Promise<BillingPlanEntitlement> => {
+  const normalizedPlan = toPlanTier(planTier) || 'free';
+  const catalog = await getPlanEntitlementCatalog();
+  const exact = catalog.find((entry) => entry.planTier === normalizedPlan && entry.interval === interval);
+  if (exact) return exact;
+  const monthlyFallback = catalog.find((entry) => entry.planTier === normalizedPlan && entry.interval === 'month');
+  if (monthlyFallback) return monthlyFallback;
+
+  const plan = resolvePlanDefinition(normalizedPlan);
+  return {
+    planTier: plan.id,
+    interval,
+    includedMonthlyCt: plan.monthlyIncludedCt,
+    dailyGuardrailCt: plan.dailyGuardrailCt,
+    dailyLimitEnabled: plan.dailyLimitEnabled,
+    isActive: true
+  };
 };
 
 const normalizeChangelogStatus = (value: unknown): PricingChangelogEntry['status'] =>
@@ -355,18 +459,21 @@ const getPricingChangelog = async (): Promise<PricingChangelogEntry[]> => {
 };
 
 export const getPricingCatalog = async (): Promise<PricingCatalogResponse> => {
-  const [plans, modelCatalog, pricingChangelog] = await Promise.all([
+  const [plans, entitlements, modelCatalog, pricingChangelog] = await Promise.all([
     getPlanCatalog(),
+    getPlanEntitlementCatalog(),
     getActiveModelPricingCatalog(),
     getPricingChangelog()
   ]);
-  const planPricing = await getPlanPricingCatalog(plans);
+  const publicPlans = plans.filter((plan) => plan.id !== 'pro');
+  const publicEntitlements = entitlements.filter((entry) => entry.planTier !== 'pro');
+  const planPricing = await getPlanPricingCatalog(publicPlans, publicEntitlements);
 
   return {
     currency: DEFAULT_CURRENCY,
     ctPerUsd: Math.round(1 / CT_USD),
     markup: DEFAULT_MARKUP,
-    plans,
+    plans: publicPlans,
     planPricing,
     creditPacks: CREDIT_PACKS,
     modelPricing: modelCatalog.models,

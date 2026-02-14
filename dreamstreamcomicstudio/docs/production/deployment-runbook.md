@@ -45,8 +45,6 @@
 `STRIPE_WEBHOOK_SECRET=<stripe_webhook_secret>`
 `STRIPE_PRICE_ID_CREATOR=<creator_monthly_price_id>`
 `STRIPE_PRICE_ID_CREATOR_ANNUAL=<creator_annual_price_id>`
-`STRIPE_PRICE_ID_PRO=<pro_monthly_price_id>`
-`STRIPE_PRICE_ID_PRO_ANNUAL=<pro_annual_price_id>`
 `STRIPE_PRICE_ID_STUDIO=<studio_monthly_price_id>`
 `STRIPE_PRICE_ID_STUDIO_ANNUAL=<studio_annual_price_id>`
 `STRIPE_PRICE_ID_CREDIT_PACK_10=<one_time_pack_10_price_id>`

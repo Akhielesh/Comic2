@@ -28,6 +28,8 @@ import { visionRouter } from './routes/vision.js';
 import { systemRouter } from './routes/system.js';
 import webhookRouter from './routes/webhook.js';
 import { billingRouter } from './routes/billing.js';
+import { adminRouter } from './routes/admin.js';
+import { moderationRouter } from './routes/moderation.js';
 
 validateRuntimeConfig();
 
@@ -88,6 +90,16 @@ const visionRateLimit = createRateLimit({
   windowMs: RATE_LIMIT_WINDOW_MS,
   maxRequests: RATE_LIMIT_VISION_MAX_REQUESTS
 });
+const adminRateLimit = createRateLimit({
+  scope: 'admin',
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  maxRequests: Math.max(30, Math.floor(RATE_LIMIT_SYSTEM_MAX_REQUESTS / 2))
+});
+const moderationRateLimit = createRateLimit({
+  scope: 'moderation',
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  maxRequests: Math.max(30, Math.floor(RATE_LIMIT_SYSTEM_MAX_REQUESTS / 2))
+});
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok' });
@@ -101,6 +113,8 @@ app.use('/api/billing', systemRateLimit, optionalAuth, billingRouter);
 // Protect all API routes
 app.use('/api', requireAuth);
 
+app.use('/api/admin', adminRateLimit, adminRouter);
+app.use('/api/moderation', moderationRateLimit, moderationRouter);
 app.use('/api/text', textRateLimit, textRouter);
 app.use('/api/image', imageRateLimit, imageRouter);
 app.use('/api/vision', visionRateLimit, visionRouter);
