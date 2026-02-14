@@ -202,6 +202,11 @@ export interface Character {
   referenceImageIds: string[];
 }
 
+export interface CharacterLibraryItem extends Character {
+  userId: string;
+  createdAt: string;
+}
+
 export interface Item {
   id: string;
   name: string;

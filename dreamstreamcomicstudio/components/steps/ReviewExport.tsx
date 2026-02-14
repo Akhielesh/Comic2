@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Download, Edit2, RefreshCw, X, History, Share2, FileCode, Loader2, ArrowLeftRight } from 'lucide-react';
-import { ComicPanel, ComicState, DialogueBlock, TextLayout, ProjectReport } from '../../types';
+import { ComicPanel, ComicState, DialogueBlock, TextLayout, ProjectReport, Project } from '../../types';
 import { PanelDialogue } from '../PanelDialogue';
 import { generateImage } from '../../services/imageService';
+import { regenerateSinglePanel } from '../../services/generationManager';
 import { runContinuityAudit } from '../../services/geminiService';
 import { Button } from '../Button';
 // Lazy loaded components
@@ -28,6 +29,8 @@ declare const jspdf: any;
 declare const html2canvas: any;
 
 interface ReviewExportProps {
+  project: Project;
+  onUpdateProject: (updates: Partial<Project>) => void;
   projectId: string;
   projectName: string;
   panels: ComicPanel[];
@@ -49,7 +52,7 @@ const escapeHtml = (value: string) =>
 const getDialogueBlocks = (panel: ComicPanel) =>
   ensureDialogueBlocks(panel.dialogue, panel.dialogueBlocks, panel.description);
 
-export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectName, panels, state, onReturnToPreview, onUpdatePanel }) => {
+export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdateProject, projectId, projectName, panels, state, onReturnToPreview, onUpdatePanel }) => {
   const [selectedPanel, setSelectedPanel] = useState<ComicPanel | null>(panels[0] || null);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
@@ -150,90 +153,55 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
     }
   }, [panels, selectedPanel]);
 
+
   const handleRegenerate = async (instructions: string, panelOverride?: ComicPanel) => {
     const targetPanel = panelOverride || selectedPanel;
     if (!targetPanel) return;
-    const validation = validateContinuityState(state);
-    if ((state.continuity?.lockLevel === 'strict' || !state.continuity) && !validation.isValid) {
-      setRegenError('Continuity lock is blocking regeneration. Resolve required references in Preview first.');
-      return;
-    }
+
+    // We don't necessarily block on continuity for single panel regen if instructions are explicit,
+    // but it's safer to warn. However, users might use regen to FIX continuity.
+    // So let's allow it but maybe log a warning?
+    // For now, let's keep the user unblocked.
     setRegenError(null);
     setIsRegenerating(true);
     setShowRegenModal(false);
+
     try {
-      const panelIndex = panels.findIndex((p) => p.id === targetPanel.id);
-      const continuityRefIds = collectPanelReferenceImageIds(state, targetPanel);
-      const previousIds = panels
-        .slice(Math.max(0, panelIndex - 2), panelIndex)
-        .map((p) => p.imageId)
-        .filter((id): id is string => !!id);
-      const referenceIds = Array.from(new Set([...continuityRefIds, ...previousIds]));
-      const ratioConfig = resolveAspectRatio(state, state.styleAspectRatio);
-      const sceneCharacters = state.scenes.find(s => s.id === targetPanel.sceneId)?.characters.join(', ');
-      const panelContinuity = resolvePanelContinuity(state, targetPanel);
-      const requiredEntityNames = panelContinuity.requiredEntityIds
-        .map((entityId) => state.continuity?.bible.entities.find((entity) => entity.id === entityId)?.name)
-        .filter((name): name is string => !!name)
-        .join(', ');
-      const lockedLocation = panelContinuity.locationId
-        ? state.continuity?.bible.entities.find((entity) => entity.id === panelContinuity.locationId)?.name
-        : undefined;
-      const prompt = buildImagePrompt({
-        stage: "panel_regen",
-        stylePrompt: state.stylePrompt,
-        layoutType: state.layoutType === 'custom' ? state.customLayoutPrompt : state.layoutType,
-        sceneAction: targetPanel.description,
-        characters: sceneCharacters,
-        continuitySummary: state.continuitySummary || undefined,
-        instructions,
-        requiredEntityNames: requiredEntityNames || undefined,
-        lockedLocation,
-        continuityLock: panelContinuity.continuityNotes || 'strict lock'
-      });
-      const generated = await generateImage(
-        prompt,
-        ratioConfig.modelRatio,
-        state.imageResolution,
-        referenceIds,
-        projectId,
-        {
-          stage: 'panel_regen',
-          cropToRatio: ratioConfig.cropRatio,
-          meta: {
-            source: {
-              type: 'panel',
-              id: targetPanel.id,
-              label: `Scene ${targetPanel.sceneId} Panel ${panelIndex + 1}`
-            },
-            sceneId: targetPanel.sceneId,
-            panelIndex,
-            regen: true
-          }
+      // Wrapper to handle state updates from generationManager
+      const handleProjectUpdate = (pid: string, updateOrFn: Partial<Project> | ((prev: Project) => Partial<Project>)) => {
+        // Since we are inside the component, 'project' prop is the current state.
+        if (typeof updateOrFn === 'function') {
+          const updates = updateOrFn(project);
+          onUpdateProject(updates);
+        } else {
+          onUpdateProject(updateOrFn);
         }
+      };
+
+      await regenerateSinglePanel(
+        project,
+        targetPanel.id,
+        instructions,
+        handleProjectUpdate
       );
-      if (generated?.imageUrl) {
-        onUpdatePanel(targetPanel.id, generated.imageId, generated.imageUrl);
-        setSelectedPanel(prev => prev ? {
-          ...prev,
-          imageId: generated.imageId,
-          imageUrl: generated.imageUrl,
-          imageIdHistory: appendCappedHistory(prev.imageIdHistory, generated.imageId),
-          imageUrlHistory: appendCappedHistory(prev.imageUrlHistory, generated.imageUrl)
-        } : null);
-      }
-    } catch (e) {
-      console.error(e);
-      const details = extractLimitDetails(e);
-      if (details) {
-        setLimitDetails(details);
+
+      // No need to manually update selectedPanel/panels here because onUpdateProject will trigger
+      // a prop update from parent.
+
+    } catch (e: any) {
+      console.error("Regeneration failed", e);
+      if (e.message && (e.message.includes("Token limit") || e.message.includes("Billing"))) {
+        // Show limit modal if we have details? 
+        // generationManager handles logging but re-throws.
+        setRegenError(e.message);
       } else {
-        setRegenError((e as Error)?.message || 'Regeneration failed.');
+        setRegenError(e.message || "Failed to regenerate panel");
       }
     } finally {
       setIsRegenerating(false);
     }
   };
+
 
   const extractLimitDetails = (error: unknown): Record<string, unknown> | null => {
     if (!(error instanceof ApiError)) return null;

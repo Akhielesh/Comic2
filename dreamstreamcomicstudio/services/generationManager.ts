@@ -6,7 +6,7 @@ import { resolveAspectRatio } from "./imageUtils";
 import { normalizePanelDialogue } from "./dialogueUtils";
 import { MAX_CONTINUITY_PANELS } from "./modelPolicy";
 import { createSystemNotification } from "./db";
-import { prependCappedHistory } from "./projectStorage";
+import { prependCappedHistory, appendCappedHistory } from "./projectStorage";
 import { ApiError } from "./apiClient";
 import {
   collectPanelReferenceImageIds,
@@ -398,5 +398,115 @@ export const startBackgroundGeneration = async (
   } finally {
     generationControllers.delete(project.id);
     generationCanceled.delete(project.id);
+  }
+};
+
+export const regenerateSinglePanel = async (
+  project: Project,
+  panelId: string,
+  instructions: string,
+  onUpdate: (projectId: string, updateOrFn: Partial<Project> | ((prev: Project) => Partial<Project>)) => void
+) => {
+  const state = project.state;
+  const panelIndex = state.panels.findIndex((p) => p.id === panelId);
+  if (panelIndex === -1) throw new Error("Panel not found");
+
+  const targetPanel = state.panels[panelIndex];
+  const scene = state.scenes.find((s) => s.id === targetPanel.sceneId);
+  const sceneBinding = scene ? getSceneBinding(state, scene.id) : undefined;
+
+  // 1. Gather Context
+  const continuityRefIds = collectPanelReferenceImageIds(state, targetPanel);
+  const previousIds = state.panels
+    .slice(Math.max(0, panelIndex - 2), panelIndex)
+    .map((p) => p.imageId)
+    .filter((id): id is string => !!id);
+
+  // Deduplicate reference IDs
+  const referenceIds = Array.from(new Set([...continuityRefIds, ...previousIds]));
+
+  // Context strings
+  const characterContext = state.characters.map((c) => `${c.name}: ${c.description}`).join('. ');
+  const itemContext = state.items.map((i) => `${i.name}: ${i.description}`).join('. ');
+  const locContext = state.locations.map((l) => `${l.name}: ${l.description}`).join('. ');
+  const recentPanels = state.panels
+    .slice(Math.max(0, panelIndex - 3), panelIndex)
+    .map(p => p.description)
+    .join(" | ");
+
+  const panelContinuity = resolvePanelContinuity(state, targetPanel);
+  const requiredEntityNames = (panelContinuity.requiredEntityIds || [])
+    .map((entityId) => getEntityById(state, entityId)?.name)
+    .filter((name): name is string => !!name)
+    .join(', ');
+
+  const lockedLocation = panelContinuity.locationId
+    ? getEntityById(state, panelContinuity.locationId)?.name
+    : undefined;
+
+  // 2. Build Prompt
+  const prompt = buildImagePrompt({
+    stage: "panel_regen",
+    stylePrompt: state.stylePrompt,
+    layoutType: state.layoutType === 'custom' ? state.customLayoutPrompt : state.layoutType,
+    sceneAction: targetPanel.description,
+    characters: characterContext, // Full context for regen to be safe
+    items: itemContext,
+    locations: locContext,
+    setting: scene?.setting,
+    continuitySummary: state.continuitySummary || undefined,
+    recentPanels: recentPanels || undefined,
+    instructions, // USER INSTRUCTIONS
+    requiredEntityNames: requiredEntityNames || undefined,
+    lockedLocation,
+    continuityLock: panelContinuity.continuityNotes || (sceneBinding ? `Scene ${sceneBinding.sceneId} strict lock` : "strict")
+  });
+
+  const ratioConfig = resolveAspectRatio(state, state.styleAspectRatio);
+
+  // 3. Generate
+  const generated = await generateImage(
+    prompt,
+    ratioConfig.modelRatio,
+    state.imageResolution,
+    referenceIds,
+    project.id,
+    {
+      stage: 'panel_regen',
+      cropToRatio: ratioConfig.cropRatio,
+      meta: {
+        source: {
+          type: 'panel',
+          id: targetPanel.id,
+          label: `Scene ${targetPanel.sceneId} Panel ${panelIndex + 1}`
+        },
+        sceneId: targetPanel.sceneId,
+        panelIndex,
+        regen: true
+      }
+    }
+  );
+
+  // 4. Update State
+  if (generated?.imageUrl) {
+    onUpdate(project.id, (prev) => {
+      const existing = prev.state.panels.find((p) => p.id === panelId);
+      if (!existing) return {}; // Should not happen
+
+      const newPanels = prev.state.panels.map((p) => p.id === panelId ? {
+        ...p,
+        imageId: generated.imageId,
+        imageUrl: generated.imageUrl,
+        imageIdHistory: appendCappedHistory(p.imageIdHistory, generated.imageId),
+        imageUrlHistory: appendCappedHistory(p.imageUrlHistory, generated.imageUrl),
+        failureReason: undefined // Clear any failure flag
+      } : p);
+
+      return {
+        state: { ...prev.state, panels: newPanels }
+      };
+    });
+  } else {
+    throw new Error("Generation failed to produce an image URL.");
   }
 };
