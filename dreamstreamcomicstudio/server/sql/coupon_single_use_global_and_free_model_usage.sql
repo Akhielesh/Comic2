@@ -57,8 +57,8 @@ aggregated as (
     max(redemption_count)::integer as redemption_count,
     min(created_at) as first_redeemed_at,
     max(created_at) as last_redeemed_at,
-    max(case when rn_first = 1 then user_id end) as first_redeemed_by,
-    max(case when rn_last = 1 then user_id end) as last_redeemed_by
+    max(user_id::text) filter (where rn_first = 1)::uuid as first_redeemed_by,
+    max(user_id::text) filter (where rn_last = 1)::uuid as last_redeemed_by
   from redeemed
   group by coupon_definition_id
 )
