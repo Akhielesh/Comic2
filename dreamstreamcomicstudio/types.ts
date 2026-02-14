@@ -295,6 +295,10 @@ export interface ComicPanel {
   isGenerating?: boolean;
   isPlanned?: boolean;
   continuity?: PanelContinuity;
+  /** Set when a panel fails during generation — allows retry */
+  failureReason?: string;
+  /** Style override for Live Panel Remix (future feature) */
+  styleOverride?: string;
 }
 
 export interface StyleVariant {

@@ -12,6 +12,7 @@ const HistoryModal = React.lazy(() => import('../modals/HistoryModal').then(modu
 
 import { exportProject, getImageUrl, getImageDataUrl } from '../../services/db';
 import { ensureDialogueBlocks } from '../../services/dialogueUtils';
+import { getLayoutClass as sharedGetLayoutClass, getPanelClass as sharedGetPanelClass, EXPORT_DIALOGUE_CSS, buildPanelDialogueHtml } from '../../services/panelLayout';
 import { buildImagePrompt } from '../../services/imagePrompt';
 import { parseRatio, resolveAspectRatio } from '../../services/imageUtils';
 import { buildProjectReport } from '../../services/reporting';
@@ -357,11 +358,8 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
           .cover img{width:100%;display:block;}
           .panel{margin-bottom:20px;border:2px solid black;position:relative;overflow:hidden;}
           .panel img{width:100%;display:block;}
-          .bubble{position:absolute;left:10px;right:10px;bottom:10px;background:#fff;padding:8px;border:2px solid #000;border-radius:8px;font-weight:bold;font-size:14px;}
-          .chat{display:flex;flex-direction:column;gap:8px;padding:10px;}
-          .chat .left{align-self:flex-start;background:#f9e547;color:#000;padding:6px 10px;border:2px solid #000;border-radius:10px;max-width:80%;font-size:13px;font-weight:bold;}
-          .chat .right{align-self:flex-end;background:#2867ff;color:#fff;padding:6px 10px;border:2px solid #000;border-radius:10px;max-width:80%;font-size:13px;font-weight:bold;}
           .zoom-wrapper{transform-origin:top center;}
+          ${EXPORT_DIALOGUE_CSS}
         </style>
       </head>
       <body>
@@ -374,14 +372,9 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
         <div class="comic-container zoom-wrapper" id="zoomTarget">
           ${coverDataUrl ? `<div class="cover"><img src="${coverDataUrl}" /></div>` : ''}
           ${panelData.map(p => {
-      const dialogue = (p.dialogueBlocks && p.dialogueBlocks.length > 0)
-        ? p.dialogueBlocks.map(b => escapeHtml(b.text)).join(' ')
-        : escapeHtml(p.dialogue || '');
       return `<div class="panel">
               <img src="${p.dataUrl || ''}" />
-              ${textLayout === 'chat_bubbles'
-          ? `<div class="chat">${getDialogueBlocks(p).map(b => `<div class="${b.side === 'right' ? 'right' : 'left'}">${escapeHtml(b.text)}</div>`).join('')}</div>`
-          : textLayout === 'none' ? '' : `<div class="bubble">${dialogue}</div>`}
+              ${buildPanelDialogueHtml(p, textLayout)}
             </div>`;
     }).join('')}
         </div>
@@ -473,11 +466,8 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
     .cover img{width:100%;display:block;}
     .panel{margin-bottom:20px;border:2px solid black;position:relative;overflow:hidden;}
     .panel img{width:100%;display:block;}
-    .bubble{position:absolute;left:10px;right:10px;bottom:10px;background:#fff;padding:8px;border:2px solid #000;border-radius:8px;font-weight:bold;font-size:14px;}
-    .chat{display:flex;flex-direction:column;gap:8px;padding:10px;}
-    .chat .left{align-self:flex-start;background:#f9e547;color:#000;padding:6px 10px;border:2px solid #000;border-radius:10px;max-width:80%;font-size:13px;font-weight:bold;}
-    .chat .right{align-self:flex-end;background:#2867ff;color:#fff;padding:6px 10px;border:2px solid #000;border-radius:10px;max-width:80%;font-size:13px;font-weight:bold;}
     .zoom-wrapper{transform-origin:top center;}
+    ${EXPORT_DIALOGUE_CSS}
   </style>
 </head>
 <body>
@@ -490,15 +480,10 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
   <div class="comic-container zoom-wrapper" id="zoomTarget">
     ${coverImageRef ? `<div class="cover"><img src="${coverImageRef}" /></div>` : ''}
     ${panels.map(p => {
-        const dialogue = (p.dialogueBlocks && p.dialogueBlocks.length > 0)
-          ? p.dialogueBlocks.map(b => escapeHtml(b.text)).join(' ')
-          : escapeHtml(p.dialogue || '');
         const imgRef = p.imageId ? `images/${imageFileMap[p.imageId] || ''}` : '';
         return `<div class="panel">
         <img src="${imgRef}" />
-        ${textLayout === 'chat_bubbles'
-            ? `<div class="chat">${getDialogueBlocks(p).map(b => `<div class="${b.side === 'right' ? 'right' : 'left'}">${escapeHtml(b.text)}</div>`).join('')}</div>`
-            : textLayout === 'none' ? '' : `<div class="bubble">${dialogue}</div>`}
+        ${buildPanelDialogueHtml(p, textLayout)}
       </div>`;
       }).join('')}
   </div>
@@ -527,39 +512,8 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
     }
   };
 
-  const getLayoutClass = () => {
-    switch (state.layoutType) {
-      case 'webtoon': return 'flex flex-col items-center gap-4';
-      case 'strip': return 'flex flex-col items-center gap-2';
-      case 'graphic_novel': return 'grid grid-cols-3 gap-4 auto-rows-fr';
-      case 'conversation_grid': return 'grid grid-cols-2 gap-4 auto-rows-fr';
-      case 'splash_insets': return 'grid grid-cols-3 gap-4 auto-rows-[200px]';
-      case 'golden_ratio': return 'grid grid-cols-3 gap-4 auto-rows-[180px]';
-      case 'diagonal_action': return 'grid grid-cols-2 gap-4 auto-rows-[200px]';
-      case 'storyboard': return 'grid grid-cols-3 gap-2 auto-rows-[150px]';
-      case 'manga': return 'grid grid-cols-2 gap-4 auto-rows-fr';
-      case 'cinematic': return 'grid grid-cols-1 gap-4';
-      case 'grid':
-      case 'custom':
-      default:
-        return `grid grid-cols-2 gap-4 auto-rows-fr`;
-    }
-  };
-
-  const getPanelClass = (idx: number) => {
-    switch (state.layoutType) {
-      case 'splash_insets':
-        return idx === 0 ? 'col-span-3 row-span-2' : 'col-span-1 row-span-1';
-      case 'golden_ratio':
-        return idx === 0 ? 'col-span-2 row-span-2' : 'col-span-1 row-span-1';
-      case 'diagonal_action':
-        return idx % 3 === 0 ? 'col-span-2 row-span-1' : 'col-span-1 row-span-1';
-      case 'graphic_novel':
-        return idx % 4 === 0 ? 'col-span-2 row-span-1' : 'col-span-1 row-span-1';
-      default:
-        return 'col-span-1 row-span-1';
-    }
-  };
+  const getLayoutClass = () => sharedGetLayoutClass(state.layoutType);
+  const getPanelClass = (idx: number) => sharedGetPanelClass(state.layoutType, idx);
 
   return (
     <div className="h-[calc(100vh-180px)] flex flex-col md:flex-row gap-6 animate-fade-in">
@@ -575,15 +529,27 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
             {panels.map((panel, idx) => (
               <div
                 key={panel.id}
-                className={`relative group border-4 border-black rounded-lg overflow-hidden shadow-comic cursor-pointer ${getPanelClass(idx)}`}
+                className={`relative group border-4 ${panel.failureReason ? 'border-red-400' : 'border-black'} rounded-lg overflow-hidden shadow-comic cursor-pointer ${getPanelClass(idx)}`}
                 onClick={() => setSelectedPanel(panel)}
               >
-                <img src={panel.imageUrl} alt={`Panel ${idx + 1}`} className="w-full h-full object-cover" />
+                {panel.imageUrl ? (
+                  <img src={panel.imageUrl} alt={`Panel ${idx + 1}`} className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full min-h-[120px] flex flex-col items-center justify-center bg-slate-100 text-slate-400">
+                    <RefreshCw size={24} className="mb-1" />
+                    <span className="text-[10px] font-bold uppercase">Failed</span>
+                  </div>
+                )}
                 <PanelDialogue panel={panel} layout={textLayout} />
-                {auditScoresByPanel[panel.id] && (
+                {panel.failureReason && (
+                  <div className="absolute left-2 top-2 px-2 py-1 text-[10px] font-bold rounded border bg-red-100 text-red-700 border-red-300 max-w-[80%] truncate">
+                    ⚠ {panel.failureReason}
+                  </div>
+                )}
+                {auditScoresByPanel[panel.id] && !panel.failureReason && (
                   <div className={`absolute left-2 top-2 px-2 py-1 text-[10px] font-bold rounded border ${auditScoresByPanel[panel.id].driftScore > 0.35
-                      ? 'bg-red-100 text-red-700 border-red-300'
-                      : 'bg-green-100 text-green-700 border-green-300'
+                    ? 'bg-red-100 text-red-700 border-red-300'
+                    : 'bg-green-100 text-green-700 border-green-300'
                     }`}>
                     Drift {Math.round(auditScoresByPanel[panel.id].driftScore * 100)}%
                   </div>

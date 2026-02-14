@@ -72,7 +72,8 @@ function SpeechBubble({
             <div className={`
         bg-white border-2 border-black shadow-[2px_2px_0px_0px_#000]
         ${compact ? 'px-2 py-1 text-[9px] rounded-lg' : 'px-3 py-2 text-[11px] rounded-xl'}
-        font-comic font-bold text-black leading-snug
+        font-comic font-bold text-black leading-snug overflow-hidden
+        ${compact ? 'max-h-[3.5em]' : 'max-h-[5em]'}
       `}>
                 {block.speaker && (
                     <span className={`
@@ -83,7 +84,7 @@ function SpeechBubble({
                         {block.speaker}
                     </span>
                 )}
-                {block.text}
+                <span className={`line-clamp-3 ${compact ? 'line-clamp-2' : ''}`}>{block.text}</span>
             </div>
             <BubbleTail side={side} />
         </div>
@@ -119,7 +120,7 @@ function CaptionBar({
             ${compact ? 'text-[8px]' : 'text-[11px]'}
           `}
                 >
-                    {block.text}
+                    <span className={`line-clamp-2 ${compact ? 'line-clamp-1' : ''}`}>{block.text}</span>
                 </div>
             ))}
             {speeches.length > 0 && (
@@ -127,6 +128,7 @@ function CaptionBar({
           bg-white/95 border-2 border-black rounded
           ${compact ? 'px-1.5 py-1 text-[9px]' : 'px-3 py-2 text-sm'}
           font-comic font-bold text-black text-center
+          max-h-[4em] overflow-hidden
         `}>
                     {speeches.map((block, idx) => (
                         <span key={block.id}>
@@ -165,7 +167,7 @@ function ChatMessage({
         text-center font-serif italic text-slate-500
         ${compact ? 'text-[8px] py-0.5' : 'text-[11px] py-1'}
       `}>
-                {block.text}
+                <span className={`line-clamp-2 ${compact ? 'line-clamp-1' : ''}`}>{block.text}</span>
             </div>
         );
     }
@@ -189,7 +191,7 @@ function ChatMessage({
                         {block.speaker}
                     </span>
                 )}
-                {block.text}
+                <span className={`line-clamp-3 ${compact ? 'line-clamp-2' : ''}`}>{block.text}</span>
             </div>
         </div>
     );
@@ -233,8 +235,8 @@ export const PanelDialogue: React.FC<PanelDialogueProps> = ({
                         <div
                             key={block.id}
                             className={`absolute ${side === 'right' ? 'right-2' :
-                                    side === 'center' ? 'left-1/2 -translate-x-1/2' :
-                                        'left-2'
+                                side === 'center' ? 'left-1/2 -translate-x-1/2' :
+                                    'left-2'
                                 }`}
                             style={{ top: `${positions[idx]}%` }}
                         >

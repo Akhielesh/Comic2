@@ -44,6 +44,83 @@ const STORY_TEMPLATES = [
     conflict: "A local music contest deadline",
     ending: "Optimistic, supportive community",
     length: "short"
+  },
+  {
+    id: "horror-mystery",
+    label: "Horror Mystery",
+    genre: "Horror Mystery",
+    tone: "Suspenseful, atmospheric",
+    setting: "Abandoned Victorian mansion on a cliff",
+    characters: "A paranormal investigator, a skeptical journalist, a spectral presence",
+    conflict: "Disappearances linked to a sealed room in the house",
+    ending: "Twist revelation — the investigator is part of the mystery",
+    length: "medium"
+  },
+  {
+    id: "superhero-origin",
+    label: "Superhero Origin",
+    genre: "Superhero",
+    tone: "Dramatic, action-packed",
+    setting: "Modern metropolis with underground labs",
+    characters: "An ordinary teen, a mentor scientist, a rival with powers",
+    conflict: "Accidental powers and a villain who caused the same accident",
+    ending: "Hero accepts responsibility, vows to protect the city",
+    length: "medium"
+  },
+  {
+    id: "space-opera",
+    label: "Space Opera",
+    genre: "Science Fiction",
+    tone: "Epic, adventurous",
+    setting: "Galaxy-spanning civilization, space stations and alien worlds",
+    characters: "A smuggler captain, an alien diplomat, a rogue bounty hunter",
+    conflict: "An ancient weapon is awakened at the galaxy's edge",
+    ending: "Fragile peace brokered between factions",
+    length: "long"
+  },
+  {
+    id: "detective-noir",
+    label: "Detective Noir",
+    genre: "Crime Noir",
+    tone: "Moody, hard-boiled",
+    setting: "Rainy 1940s city, jazz clubs and back alleys",
+    characters: "A washed-up private eye, a femme fatale, a corrupt politician",
+    conflict: "A stolen painting leads to a web of blackmail",
+    ending: "Justice served, but the detective walks away alone",
+    length: "medium"
+  },
+  {
+    id: "romance-drama",
+    label: "Romance Drama",
+    genre: "Romance",
+    tone: "Heartfelt, emotional",
+    setting: "Coastal Italian village during summer",
+    characters: "A traveling artist, a local bookshop owner, an old friend",
+    conflict: "Past heartbreak versus a new chance at love",
+    ending: "Reunited, choosing to stay",
+    length: "short"
+  },
+  {
+    id: "historical-epic",
+    label: "Historical Epic",
+    genre: "Historical Fiction",
+    tone: "Grand, sweeping",
+    setting: "Ancient Rome during the fall of the Republic",
+    characters: "A senator's daughter, a gladiator, a scheming general",
+    conflict: "A plot to overthrow the senate, caught between loyalty and survival",
+    ending: "Freedom won, but the republic is forever changed",
+    length: "long"
+  },
+  {
+    id: "mecha-action",
+    label: "Mecha Action",
+    genre: "Mecha / Sci-Fi",
+    tone: "Intense, high-stakes",
+    setting: "War-torn Earth, colossal mech hangars and ruined cities",
+    characters: "A rookie pilot, a veteran commander, an enemy defector",
+    conflict: "A final offensive against an invading force, using an untested mech",
+    ending: "Victory at great personal cost, hope for reconstruction",
+    length: "medium"
   }
 ];
 
