@@ -1,11 +1,12 @@
 import React from 'react';
 import { UserAvatar } from './UserAvatar';
 import { Zap } from 'lucide-react';
+import { TokenAvailabilityPill } from './TokenAvailabilityPill';
 
 interface HeaderProps {
     currentView: string;
     setCurrentView: (view: string) => void;
-    setSettingsTab: (tab: 'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin') => void;
+    setSettingsTab: (tab: 'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin' | 'preferences' | 'security') => void;
     setLastView?: (view: string) => void;
 }
 
@@ -35,6 +36,7 @@ export const Header: React.FC<HeaderProps> = ({ currentView, setCurrentView, set
                 <div className="h-8 w-[2px] bg-slate-200"></div>
 
                 <div className="flex items-center gap-4">
+                    <TokenAvailabilityPill />
                     <div className="flex items-center gap-2 px-3 py-1.5 bg-black text-white rounded-full font-bold font-mono text-[10px] border-2 border-white shadow-md">
                         <Zap size={12} className="text-brand-yellow fill-brand-yellow" />
                         <span className="opacity-80">AI POWERED</span>

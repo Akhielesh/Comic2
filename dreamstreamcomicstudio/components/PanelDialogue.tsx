@@ -19,8 +19,8 @@ export interface PanelDialogueProps {
 // SVG speech bubble tail
 // ---------------------------------------------------------------------------
 
-function BubbleTail({ side, className }: { side: 'left' | 'right' | 'center'; className?: string }) {
-    if (side === 'center') return null;
+function BubbleTail({ side, className, style = 'speech' }: { side: 'left' | 'right' | 'center'; className?: string, style?: 'speech' | 'thought' | 'shout' | 'whisper' | 'caption' }) {
+    if (side === 'center' || style === 'caption' || style === 'thought') return null; // Thought bubbles use small circles instead of tails
     const isLeft = side === 'left';
     return (
         <svg
@@ -30,10 +30,21 @@ function BubbleTail({ side, className }: { side: 'left' | 'right' | 'center'; cl
             className={`absolute -bottom-[9px] ${isLeft ? 'left-3' : 'right-3'} ${className || ''}`}
             style={{ transform: isLeft ? 'none' : 'scaleX(-1)' }}
         >
-            <path d="M0 0 L8 10 L16 0" fill="white" stroke="black" strokeWidth="2" strokeLinejoin="round" />
+            <path d={style === 'shout' ? "M0 0 L8 10 L16 0" : "M0 0 Q8 10 16 0"} fill="white" stroke="black" strokeWidth="2" strokeLinejoin="round" />
             {/* White cover to hide the top border where bubble meets tail */}
             <rect x="1" y="0" width="14" height="2" fill="white" />
         </svg>
+    );
+}
+
+function ThoughtTail({ side }: { side: 'left' | 'right' | 'center' }) {
+    if (side === 'center') return null;
+    const isLeft = side === 'left';
+    return (
+        <div className={`absolute -bottom-4 ${isLeft ? 'left-4' : 'right-4'} flex flex-col items-center gap-0.5 pointer-events-none`}>
+            <div className="w-2 h-2 bg-white border border-black rounded-full" />
+            <div className="w-1.5 h-1.5 bg-white border border-black rounded-full ml-1" />
+        </div>
     );
 }
 
@@ -41,7 +52,7 @@ function BubbleTail({ side, className }: { side: 'left' | 'right' | 'center'; cl
 // Narration box (rectangular, italic)
 // ---------------------------------------------------------------------------
 
-function NarrationBox({ text, compact }: { text: string; compact?: boolean }) {
+export function NarrationBox({ text, compact }: { text: string; compact?: boolean }) {
     return (
         <div className={`
       bg-amber-50 border-2 border-black rounded-sm shadow-[2px_2px_0px_0px_#000]
@@ -57,7 +68,7 @@ function NarrationBox({ text, compact }: { text: string; compact?: boolean }) {
 // Speech bubble (rounded, with tail)
 // ---------------------------------------------------------------------------
 
-function SpeechBubble({
+export function SpeechBubble({
     block,
     compact,
 }: {
@@ -66,14 +77,28 @@ function SpeechBubble({
 }) {
     const side = block.side || 'left';
     const isRight = side === 'right';
+    const style = block.style || 'speech';
+
+    let containerClasses = `
+        bg-white border-2 border-black
+        ${compact ? 'px-2 py-1 text-[9px]' : 'px-3 py-2 text-[11px]'}
+        font-comic font-bold text-black leading-snug overflow-hidden
+    `;
+
+    // Style variations
+    if (style === 'thought') {
+        containerClasses += " rounded-[20px] border-dashed"; // Cloud-like shape
+    } else if (style === 'shout') {
+        containerClasses += " rounded-sm border-[3px]"; // High impact
+    } else if (style === 'whisper') {
+        containerClasses += " rounded-xl border-dotted text-slate-500 bg-white/90";
+    } else {
+        containerClasses += " rounded-xl shadow-[2px_2px_0px_0px_#000]";
+    }
 
     return (
         <div className={`relative max-w-[85%] ${isRight ? 'ml-auto' : ''}`}>
-            <div className={`
-        bg-white border-2 border-black shadow-[2px_2px_0px_0px_#000]
-        ${compact ? 'px-2 py-1 text-[9px] rounded-lg' : 'px-3 py-2 text-[11px] rounded-xl'}
-        font-comic font-bold text-black leading-snug
-      `}>
+            <div className={containerClasses} style={style === 'shout' ? { transform: 'rotate(-1deg)' } : {}}>
                 {block.speaker && (
                     <span className={`
             font-display uppercase text-brand-blue
@@ -83,9 +108,9 @@ function SpeechBubble({
                         {block.speaker}
                     </span>
                 )}
-                {block.text}
+                <span className={`line-clamp-3 ${compact ? 'line-clamp-2' : ''} ${style === 'shout' ? 'uppercase text-red-600' : ''}`}>{block.text}</span>
             </div>
-            <BubbleTail side={side} />
+            {style === 'thought' ? <ThoughtTail side={side} /> : (style !== 'caption' ? <BubbleTail side={side} style={style} /> : null)}
         </div>
     );
 }
@@ -119,7 +144,7 @@ function CaptionBar({
             ${compact ? 'text-[8px]' : 'text-[11px]'}
           `}
                 >
-                    {block.text}
+                    <span className={`line-clamp-2 ${compact ? 'line-clamp-1' : ''}`}>{block.text}</span>
                 </div>
             ))}
             {speeches.length > 0 && (
@@ -127,6 +152,7 @@ function CaptionBar({
           bg-white/95 border-2 border-black rounded
           ${compact ? 'px-1.5 py-1 text-[9px]' : 'px-3 py-2 text-sm'}
           font-comic font-bold text-black text-center
+          max-h-[4em] overflow-hidden
         `}>
                     {speeches.map((block, idx) => (
                         <span key={block.id}>
@@ -165,7 +191,7 @@ function ChatMessage({
         text-center font-serif italic text-slate-500
         ${compact ? 'text-[8px] py-0.5' : 'text-[11px] py-1'}
       `}>
-                {block.text}
+                <span className={`line-clamp-2 ${compact ? 'line-clamp-1' : ''}`}>{block.text}</span>
             </div>
         );
     }
@@ -189,7 +215,7 @@ function ChatMessage({
                         {block.speaker}
                     </span>
                 )}
-                {block.text}
+                <span className={`line-clamp-3 ${compact ? 'line-clamp-2' : ''}`}>{block.text}</span>
             </div>
         </div>
     );
@@ -224,19 +250,28 @@ export const PanelDialogue: React.FC<PanelDialogueProps> = ({
         });
 
         return (
+
             <div className="absolute inset-0 pointer-events-none overflow-hidden">
                 {visibleBlocks.map((block, idx) => {
+                    // Use stored position if available, otherwise fallback to calculated default
                     const side = block.side || (idx % 2 === 0 ? 'left' : 'right');
+                    const defaultTop = 8 + (idx / Math.max(totalSlots, 1)) * 55; // 8% to 63%
+                    const topPct = block.position?.y ?? defaultTop;
+                    const leftPct = block.position?.x; // If undefined, we use side-based logic
+
                     const isNarration = block.kind === 'narration';
 
                     return (
                         <div
                             key={block.id}
-                            className={`absolute ${side === 'right' ? 'right-2' :
-                                    side === 'center' ? 'left-1/2 -translate-x-1/2' :
-                                        'left-2'
-                                }`}
-                            style={{ top: `${positions[idx]}%` }}
+                            className={`absolute transition-all duration-200`}
+                            style={{
+                                top: `${topPct}%`,
+                                left: leftPct !== undefined ? `${leftPct}%` : (side === 'left' ? '2%' : 'auto'),
+                                right: leftPct !== undefined ? 'auto' : (side === 'right' ? '2%' : 'auto'),
+                                transform: side === 'center' && leftPct === undefined ? 'translateX(-50%)' : 'none',
+                                ...(side === 'center' && leftPct === undefined ? { left: '50%' } : {})
+                            }}
                         >
                             {isNarration ? (
                                 <NarrationBox text={block.text} compact={compact} />
@@ -253,6 +288,7 @@ export const PanelDialogue: React.FC<PanelDialogueProps> = ({
                 )}
             </div>
         );
+
     }
 
     // ---- Captions (gradient overlay at bottom) -----------------------------

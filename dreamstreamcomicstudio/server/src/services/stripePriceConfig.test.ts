@@ -11,8 +11,6 @@ const ENV_KEYS = [
   'STRIPE_PRICE_ID',
   'STRIPE_PRICE_ID_CREATOR',
   'STRIPE_PRICE_ID_CREATOR_ANNUAL',
-  'STRIPE_PRICE_ID_PRO',
-  'STRIPE_PRICE_ID_PRO_ANNUAL',
   'STRIPE_PRICE_ID_STUDIO',
   'STRIPE_PRICE_ID_STUDIO_ANNUAL',
   'STRIPE_PRICE_ID_CREDIT_PACK_10',
@@ -45,13 +43,13 @@ describe('stripePriceConfig env fallback', () => {
   it('resolves plan price ids by tier + interval', async () => {
     process.env.STRIPE_PRICE_ID_CREATOR = 'price_creator_month';
     process.env.STRIPE_PRICE_ID_CREATOR_ANNUAL = 'price_creator_year';
-    process.env.STRIPE_PRICE_ID_PRO = 'price_pro_month';
-    process.env.STRIPE_PRICE_ID_PRO_ANNUAL = 'price_pro_year';
+    process.env.STRIPE_PRICE_ID_STUDIO = 'price_studio_month';
+    process.env.STRIPE_PRICE_ID_STUDIO_ANNUAL = 'price_studio_year';
 
     await expect(resolvePlanStripePriceId('creator', 'month')).resolves.toBe('price_creator_month');
     await expect(resolvePlanStripePriceId('creator', 'year')).resolves.toBe('price_creator_year');
-    await expect(resolvePlanStripePriceId('pro', 'month')).resolves.toBe('price_pro_month');
-    await expect(resolvePlanStripePriceId('pro', 'year')).resolves.toBe('price_pro_year');
+    await expect(resolvePlanStripePriceId('studio', 'month')).resolves.toBe('price_studio_month');
+    await expect(resolvePlanStripePriceId('studio', 'year')).resolves.toBe('price_studio_year');
   });
 
   it('supports reverse lookup from price id to plan tier + interval', async () => {

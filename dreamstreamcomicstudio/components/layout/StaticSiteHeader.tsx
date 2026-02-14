@@ -4,6 +4,7 @@ import { Button } from '../Button';
 import { BrandLockup } from './BrandLockup';
 import { NotificationBell } from '../NotificationBell';
 import { UserAvatar } from '../UserAvatar';
+import { TokenAvailabilityPill } from '../TokenAvailabilityPill';
 
 interface StaticSiteHeaderProps {
   isAuthenticated: boolean;
@@ -34,6 +35,7 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
           </button>
           {isAuthenticated ? (
             <>
+              <TokenAvailabilityPill />
               <Button onClick={onEnterStudio} size="sm" icon={<ArrowRight size={16} />}>
                 Studio
               </Button>

@@ -88,6 +88,21 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
     return () => document.removeEventListener('fullscreenchange', handleChange);
   }, []);
 
+  // Preload next panel images for smoother navigation
+  useEffect(() => {
+    const panels = project.state.panels || [];
+    const PRELOAD_AHEAD = 3;
+    const startIdx = readerMode === 'flip' ? pageIndex + 1 : 0;
+    const endIdx = readerMode === 'flip' ? Math.min(pageIndex + 1 + PRELOAD_AHEAD, panels.length) : panels.length;
+    for (let i = startIdx; i < endIdx; i++) {
+      const url = panels[i]?.imageUrl;
+      if (url) {
+        const img = new Image();
+        img.src = url;
+      }
+    }
+  }, [pageIndex, readerMode, project.state.panels]);
+
   useEffect(() => {
     return () => {
       persistReaderState();

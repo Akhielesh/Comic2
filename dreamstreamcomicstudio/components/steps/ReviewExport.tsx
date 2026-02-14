@@ -1,17 +1,22 @@
 import React, { useState, useEffect } from 'react';
 import { Download, Edit2, RefreshCw, X, History, Share2, FileCode, Loader2, ArrowLeftRight } from 'lucide-react';
-import { ComicPanel, ComicState, DialogueBlock, TextLayout, ProjectReport } from '../../types';
+import { ComicPanel, ComicState, DialogueBlock, TextLayout, ProjectReport, Project } from '../../types';
 import { PanelDialogue } from '../PanelDialogue';
 import { generateImage } from '../../services/imageService';
+import { regenerateSinglePanel } from '../../services/generationManager';
 import { runContinuityAudit } from '../../services/geminiService';
 import { Button } from '../Button';
 // Lazy loaded components
 const ImagePreviewModal = React.lazy(() => import('../modals/ImagePreviewModal').then(module => ({ default: module.ImagePreviewModal })));
 const RegenerateModal = React.lazy(() => import('../modals/RegenerateModal').then(module => ({ default: module.RegenerateModal })));
 const HistoryModal = React.lazy(() => import('../modals/HistoryModal').then(module => ({ default: module.HistoryModal })));
+const BubbleEditorModal = React.lazy(() => import('../modals/BubbleEditorModal').then(module => ({ default: module.BubbleEditorModal })));
 
 import { exportProject, getImageUrl, getImageDataUrl } from '../../services/db';
 import { ensureDialogueBlocks } from '../../services/dialogueUtils';
+import { getLayoutClass as sharedGetLayoutClass, getPanelClass as sharedGetPanelClass, getGridTemplate, EXPORT_DIALOGUE_CSS, buildPanelDialogueHtml } from '../../services/panelLayout';
+import { getModelForTask } from '../../services/appSettings';
+import { getImageModelById } from '../../services/imageModels';
 import { buildImagePrompt } from '../../services/imagePrompt';
 import { parseRatio, resolveAspectRatio } from '../../services/imageUtils';
 import { buildProjectReport } from '../../services/reporting';
@@ -27,6 +32,8 @@ declare const jspdf: any;
 declare const html2canvas: any;
 
 interface ReviewExportProps {
+  project: Project;
+  onUpdateProject: (updates: Partial<Project>) => void;
   projectId: string;
   projectName: string;
   panels: ComicPanel[];
@@ -48,7 +55,7 @@ const escapeHtml = (value: string) =>
 const getDialogueBlocks = (panel: ComicPanel) =>
   ensureDialogueBlocks(panel.dialogue, panel.dialogueBlocks, panel.description);
 
-export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectName, panels, state, onReturnToPreview, onUpdatePanel }) => {
+export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdateProject, projectId, projectName, panels, state, onReturnToPreview, onUpdatePanel }) => {
   const [selectedPanel, setSelectedPanel] = useState<ComicPanel | null>(panels[0] || null);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
@@ -66,8 +73,13 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
   const [limitDetails, setLimitDetails] = useState<Record<string, unknown> | null>(null);
   const estimatedCt = costReport ? Math.ceil(costReport.cost_summary.totalCost / 0.0001) : null;
   const [comicCost, setComicCost] = useState<{ totalActualCt: number; totalBillableUsd: number } | null>(null);
+  const [showBubbleEditor, setShowBubbleEditor] = useState(false);
 
   const textLayout = state.textLayout || 'caption';
+  const gridTemplate = getGridTemplate(state.gridTemplateId);
+  const activeModel = getImageModelById(getModelForTask('panel'));
+  const [showVersionPicker, setShowVersionPicker] = useState(false);
+  const versions = state.versions || [];
 
   useEffect(() => {
     let isActive = true;
@@ -149,90 +161,55 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
     }
   }, [panels, selectedPanel]);
 
+
   const handleRegenerate = async (instructions: string, panelOverride?: ComicPanel) => {
     const targetPanel = panelOverride || selectedPanel;
     if (!targetPanel) return;
-    const validation = validateContinuityState(state);
-    if ((state.continuity?.lockLevel === 'strict' || !state.continuity) && !validation.isValid) {
-      setRegenError('Continuity lock is blocking regeneration. Resolve required references in Preview first.');
-      return;
-    }
+
+    // We don't necessarily block on continuity for single panel regen if instructions are explicit,
+    // but it's safer to warn. However, users might use regen to FIX continuity.
+    // So let's allow it but maybe log a warning?
+    // For now, let's keep the user unblocked.
     setRegenError(null);
     setIsRegenerating(true);
     setShowRegenModal(false);
+
     try {
-      const panelIndex = panels.findIndex((p) => p.id === targetPanel.id);
-      const continuityRefIds = collectPanelReferenceImageIds(state, targetPanel);
-      const previousIds = panels
-        .slice(Math.max(0, panelIndex - 2), panelIndex)
-        .map((p) => p.imageId)
-        .filter((id): id is string => !!id);
-      const referenceIds = Array.from(new Set([...continuityRefIds, ...previousIds]));
-      const ratioConfig = resolveAspectRatio(state, state.styleAspectRatio);
-      const sceneCharacters = state.scenes.find(s => s.id === targetPanel.sceneId)?.characters.join(', ');
-      const panelContinuity = resolvePanelContinuity(state, targetPanel);
-      const requiredEntityNames = panelContinuity.requiredEntityIds
-        .map((entityId) => state.continuity?.bible.entities.find((entity) => entity.id === entityId)?.name)
-        .filter((name): name is string => !!name)
-        .join(', ');
-      const lockedLocation = panelContinuity.locationId
-        ? state.continuity?.bible.entities.find((entity) => entity.id === panelContinuity.locationId)?.name
-        : undefined;
-      const prompt = buildImagePrompt({
-        stage: "panel_regen",
-        stylePrompt: state.stylePrompt,
-        layoutType: state.layoutType === 'custom' ? state.customLayoutPrompt : state.layoutType,
-        sceneAction: targetPanel.description,
-        characters: sceneCharacters,
-        continuitySummary: state.continuitySummary || undefined,
-        instructions,
-        requiredEntityNames: requiredEntityNames || undefined,
-        lockedLocation,
-        continuityLock: panelContinuity.continuityNotes || 'strict lock'
-      });
-      const generated = await generateImage(
-        prompt,
-        ratioConfig.modelRatio,
-        state.imageResolution,
-        referenceIds,
-        projectId,
-        {
-          stage: 'panel_regen',
-          cropToRatio: ratioConfig.cropRatio,
-          meta: {
-            source: {
-              type: 'panel',
-              id: targetPanel.id,
-              label: `Scene ${targetPanel.sceneId} Panel ${panelIndex + 1}`
-            },
-            sceneId: targetPanel.sceneId,
-            panelIndex,
-            regen: true
-          }
+      // Wrapper to handle state updates from generationManager
+      const handleProjectUpdate = (pid: string, updateOrFn: Partial<Project> | ((prev: Project) => Partial<Project>)) => {
+        // Since we are inside the component, 'project' prop is the current state.
+        if (typeof updateOrFn === 'function') {
+          const updates = updateOrFn(project);
+          onUpdateProject(updates);
+        } else {
+          onUpdateProject(updateOrFn);
         }
+      };
+
+      await regenerateSinglePanel(
+        project,
+        targetPanel.id,
+        instructions,
+        handleProjectUpdate
       );
-      if (generated?.imageUrl) {
-        onUpdatePanel(targetPanel.id, generated.imageId, generated.imageUrl);
-        setSelectedPanel(prev => prev ? {
-          ...prev,
-          imageId: generated.imageId,
-          imageUrl: generated.imageUrl,
-          imageIdHistory: appendCappedHistory(prev.imageIdHistory, generated.imageId),
-          imageUrlHistory: appendCappedHistory(prev.imageUrlHistory, generated.imageUrl)
-        } : null);
-      }
-    } catch (e) {
-      console.error(e);
-      const details = extractLimitDetails(e);
-      if (details) {
-        setLimitDetails(details);
+
+      // No need to manually update selectedPanel/panels here because onUpdateProject will trigger
+      // a prop update from parent.
+
+    } catch (e: any) {
+      console.error("Regeneration failed", e);
+      if (e.message && (e.message.includes("Token limit") || e.message.includes("Billing"))) {
+        // Show limit modal if we have details? 
+        // generationManager handles logging but re-throws.
+        setRegenError(e.message);
       } else {
-        setRegenError((e as Error)?.message || 'Regeneration failed.');
+        setRegenError(e.message || "Failed to regenerate panel");
       }
     } finally {
       setIsRegenerating(false);
     }
   };
+
 
   const extractLimitDetails = (error: unknown): Record<string, unknown> | null => {
     if (!(error instanceof ApiError)) return null;
@@ -357,11 +334,8 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
           .cover img{width:100%;display:block;}
           .panel{margin-bottom:20px;border:2px solid black;position:relative;overflow:hidden;}
           .panel img{width:100%;display:block;}
-          .bubble{position:absolute;left:10px;right:10px;bottom:10px;background:#fff;padding:8px;border:2px solid #000;border-radius:8px;font-weight:bold;font-size:14px;}
-          .chat{display:flex;flex-direction:column;gap:8px;padding:10px;}
-          .chat .left{align-self:flex-start;background:#f9e547;color:#000;padding:6px 10px;border:2px solid #000;border-radius:10px;max-width:80%;font-size:13px;font-weight:bold;}
-          .chat .right{align-self:flex-end;background:#2867ff;color:#fff;padding:6px 10px;border:2px solid #000;border-radius:10px;max-width:80%;font-size:13px;font-weight:bold;}
           .zoom-wrapper{transform-origin:top center;}
+          ${EXPORT_DIALOGUE_CSS}
         </style>
       </head>
       <body>
@@ -374,14 +348,9 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
         <div class="comic-container zoom-wrapper" id="zoomTarget">
           ${coverDataUrl ? `<div class="cover"><img src="${coverDataUrl}" /></div>` : ''}
           ${panelData.map(p => {
-      const dialogue = (p.dialogueBlocks && p.dialogueBlocks.length > 0)
-        ? p.dialogueBlocks.map(b => escapeHtml(b.text)).join(' ')
-        : escapeHtml(p.dialogue || '');
       return `<div class="panel">
               <img src="${p.dataUrl || ''}" />
-              ${textLayout === 'chat_bubbles'
-          ? `<div class="chat">${getDialogueBlocks(p).map(b => `<div class="${b.side === 'right' ? 'right' : 'left'}">${escapeHtml(b.text)}</div>`).join('')}</div>`
-          : textLayout === 'none' ? '' : `<div class="bubble">${dialogue}</div>`}
+              ${buildPanelDialogueHtml(p, textLayout)}
             </div>`;
     }).join('')}
         </div>
@@ -473,11 +442,8 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
     .cover img{width:100%;display:block;}
     .panel{margin-bottom:20px;border:2px solid black;position:relative;overflow:hidden;}
     .panel img{width:100%;display:block;}
-    .bubble{position:absolute;left:10px;right:10px;bottom:10px;background:#fff;padding:8px;border:2px solid #000;border-radius:8px;font-weight:bold;font-size:14px;}
-    .chat{display:flex;flex-direction:column;gap:8px;padding:10px;}
-    .chat .left{align-self:flex-start;background:#f9e547;color:#000;padding:6px 10px;border:2px solid #000;border-radius:10px;max-width:80%;font-size:13px;font-weight:bold;}
-    .chat .right{align-self:flex-end;background:#2867ff;color:#fff;padding:6px 10px;border:2px solid #000;border-radius:10px;max-width:80%;font-size:13px;font-weight:bold;}
     .zoom-wrapper{transform-origin:top center;}
+    ${EXPORT_DIALOGUE_CSS}
   </style>
 </head>
 <body>
@@ -490,15 +456,10 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
   <div class="comic-container zoom-wrapper" id="zoomTarget">
     ${coverImageRef ? `<div class="cover"><img src="${coverImageRef}" /></div>` : ''}
     ${panels.map(p => {
-        const dialogue = (p.dialogueBlocks && p.dialogueBlocks.length > 0)
-          ? p.dialogueBlocks.map(b => escapeHtml(b.text)).join(' ')
-          : escapeHtml(p.dialogue || '');
         const imgRef = p.imageId ? `images/${imageFileMap[p.imageId] || ''}` : '';
         return `<div class="panel">
         <img src="${imgRef}" />
-        ${textLayout === 'chat_bubbles'
-            ? `<div class="chat">${getDialogueBlocks(p).map(b => `<div class="${b.side === 'right' ? 'right' : 'left'}">${escapeHtml(b.text)}</div>`).join('')}</div>`
-            : textLayout === 'none' ? '' : `<div class="bubble">${dialogue}</div>`}
+        ${buildPanelDialogueHtml(p, textLayout)}
       </div>`;
       }).join('')}
   </div>
@@ -527,39 +488,8 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
     }
   };
 
-  const getLayoutClass = () => {
-    switch (state.layoutType) {
-      case 'webtoon': return 'flex flex-col items-center gap-4';
-      case 'strip': return 'flex flex-col items-center gap-2';
-      case 'graphic_novel': return 'grid grid-cols-3 gap-4 auto-rows-fr';
-      case 'conversation_grid': return 'grid grid-cols-2 gap-4 auto-rows-fr';
-      case 'splash_insets': return 'grid grid-cols-3 gap-4 auto-rows-[200px]';
-      case 'golden_ratio': return 'grid grid-cols-3 gap-4 auto-rows-[180px]';
-      case 'diagonal_action': return 'grid grid-cols-2 gap-4 auto-rows-[200px]';
-      case 'storyboard': return 'grid grid-cols-3 gap-2 auto-rows-[150px]';
-      case 'manga': return 'grid grid-cols-2 gap-4 auto-rows-fr';
-      case 'cinematic': return 'grid grid-cols-1 gap-4';
-      case 'grid':
-      case 'custom':
-      default:
-        return `grid grid-cols-2 gap-4 auto-rows-fr`;
-    }
-  };
-
-  const getPanelClass = (idx: number) => {
-    switch (state.layoutType) {
-      case 'splash_insets':
-        return idx === 0 ? 'col-span-3 row-span-2' : 'col-span-1 row-span-1';
-      case 'golden_ratio':
-        return idx === 0 ? 'col-span-2 row-span-2' : 'col-span-1 row-span-1';
-      case 'diagonal_action':
-        return idx % 3 === 0 ? 'col-span-2 row-span-1' : 'col-span-1 row-span-1';
-      case 'graphic_novel':
-        return idx % 4 === 0 ? 'col-span-2 row-span-1' : 'col-span-1 row-span-1';
-      default:
-        return 'col-span-1 row-span-1';
-    }
-  };
+  const getLayoutClass = () => sharedGetLayoutClass(state.layoutType);
+  const getPanelClass = (idx: number) => sharedGetPanelClass(state.layoutType, idx);
 
   return (
     <div className="h-[calc(100vh-180px)] flex flex-col md:flex-row gap-6 animate-fade-in">
@@ -571,32 +501,56 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
               <img src={state.coverImageUrl} alt={`${projectName} cover`} className="w-full h-auto object-cover" />
             </div>
           )}
-          <div className={getLayoutClass()}>
-            {panels.map((panel, idx) => (
-              <div
-                key={panel.id}
-                className={`relative group border-4 border-black rounded-lg overflow-hidden shadow-comic cursor-pointer ${getPanelClass(idx)}`}
-                onClick={() => setSelectedPanel(panel)}
-              >
-                <img src={panel.imageUrl} alt={`Panel ${idx + 1}`} className="w-full h-full object-cover" />
-                <PanelDialogue panel={panel} layout={textLayout} />
-                {auditScoresByPanel[panel.id] && (
-                  <div className={`absolute left-2 top-2 px-2 py-1 text-[10px] font-bold rounded border ${auditScoresByPanel[panel.id].driftScore > 0.35
+          <div className={gridTemplate ? 'relative w-full' : getLayoutClass()}
+            style={gridTemplate ? { paddingBottom: `${gridTemplate.panelSlots.reduce((max, s) => Math.max(max, s.y + s.height), 0)}%` } : undefined}>
+            {panels.map((panel, idx) => {
+              const slot = gridTemplate?.panelSlots[idx];
+              return (
+                <div
+                  key={panel.id}
+                  className={`relative group border-4 ${panel.failureReason ? 'border-red-400' : 'border-black'} rounded-lg overflow-hidden shadow-comic cursor-pointer ${gridTemplate ? '' : getPanelClass(idx)}`}
+                  style={slot ? {
+                    position: 'absolute',
+                    left: `${slot.x}%`,
+                    top: `${slot.y}%`,
+                    width: `${slot.width}%`,
+                    height: `${slot.height}%`,
+                  } : undefined}
+                  onClick={() => setSelectedPanel(panel)}
+                >
+                  {panel.imageUrl ? (
+                    <img src={panel.imageUrl} alt={`Panel ${idx + 1}`} className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="w-full h-full min-h-[120px] flex flex-col items-center justify-center bg-slate-100 text-slate-400">
+                      <RefreshCw size={24} className="mb-1" />
+                      <span className="text-[10px] font-bold uppercase">Failed</span>
+                    </div>
+                  )}
+                  <PanelDialogue panel={panel} layout={textLayout} />
+                  {panel.failureReason && (
+                    <div className="absolute left-2 top-2 px-2 py-1 text-[10px] font-bold rounded border bg-red-100 text-red-700 border-red-300 max-w-[80%] truncate">
+                      ⚠ {panel.failureReason}
+                    </div>
+                  )}
+                  {auditScoresByPanel[panel.id] && !panel.failureReason && (
+                    <div className={`absolute left-2 top-2 px-2 py-1 text-[10px] font-bold rounded border ${auditScoresByPanel[panel.id].driftScore > 0.35
                       ? 'bg-red-100 text-red-700 border-red-300'
                       : 'bg-green-100 text-green-700 border-green-300'
-                    }`}>
-                    Drift {Math.round(auditScoresByPanel[panel.id].driftScore * 100)}%
+                      }`}>
+                      Drift {Math.round(auditScoresByPanel[panel.id].driftScore * 100)}%
+                    </div>
+                  )}
+
+                  {/* Hover Overlay */}
+                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                    <button className="bg-white p-2 rounded-full hover:bg-brand-yellow border-2 border-black" onClick={(e) => { e.stopPropagation(); setSelectedPanel(panel); setShowRegenModal(true); }} aria-label="Regenerate panel"><RefreshCw size={16} /></button>
+                    <button className="bg-white p-2 rounded-full hover:bg-brand-yellow border-2 border-black" onClick={(e) => { e.stopPropagation(); setSelectedPanel(panel); setShowBubbleEditor(true); }} aria-label="Edit bubbles"><Edit2 size={16} /></button>
                   </div>
-                )}
 
-                {/* Hover Overlay */}
-                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                  <button className="bg-white p-2 rounded-full hover:bg-brand-yellow border-2 border-black" onClick={(e) => { e.stopPropagation(); setSelectedPanel(panel); setShowRegenModal(true); }} aria-label="Edit panel"><Edit2 size={16} /></button>
+                  {selectedPanel?.id === panel.id && <div className="absolute inset-0 ring-4 ring-brand-yellow ring-offset-2 pointer-events-none" />}
                 </div>
-
-                {selectedPanel?.id === panel.id && <div className="absolute inset-0 ring-4 ring-brand-yellow ring-offset-2 pointer-events-none" />}
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
@@ -627,6 +581,29 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
           )}
         </div>
 
+        {/* Model & Layout Info Bar */}
+        <div className="bg-slate-50 border-2 border-slate-200 rounded-lg px-4 py-2 flex flex-wrap items-center gap-4 text-xs font-mono text-slate-600">
+          <div className="flex items-center gap-1.5">
+            <span className="inline-block w-2 h-2 rounded-full bg-brand-blue" />
+            <span className="font-bold text-slate-700">Model:</span> {activeModel?.label || 'Default'}
+          </div>
+          {gridTemplate ? (
+            <div className="flex items-center gap-1.5">
+              <span className="inline-block w-2 h-2 rounded-full bg-brand-yellow" />
+              <span className="font-bold text-slate-700">Layout:</span> {gridTemplate.title}
+            </div>
+          ) : state.layoutType ? (
+            <div className="flex items-center gap-1.5">
+              <span className="inline-block w-2 h-2 rounded-full bg-brand-yellow" />
+              <span className="font-bold text-slate-700">Layout:</span> {state.layoutType}
+            </div>
+          ) : null}
+          <div className="flex items-center gap-1.5">
+            <span className="inline-block w-2 h-2 rounded-full bg-emerald-400" />
+            <span className="font-bold text-slate-700">Panels:</span> {panels.length}
+          </div>
+        </div>
+
         {/* Action Bar */}
         <div className="min-h-24 bg-white border-4 border-black rounded-xl p-4 flex flex-wrap items-center justify-between gap-3 shadow-comic">
           <div className="flex items-center gap-4">
@@ -648,6 +625,32 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
             <button onClick={handleShare} className="flex items-center gap-2 text-sm font-bold text-slate-600 hover:text-black">
               <Share2 size={16} /> {shareLink ? "Link Copied!" : "Share"}
             </button>
+            {versions.length > 0 && (
+              <div className="relative">
+                <Button variant="outline" onClick={() => setShowVersionPicker(!showVersionPicker)}>
+                  Versions ({versions.length})
+                </Button>
+                {showVersionPicker && (
+                  <div className="absolute bottom-full mb-2 right-0 bg-white border-2 border-black rounded-lg shadow-comic p-2 z-50 w-72 max-h-56 overflow-y-auto">
+                    <div className="text-xs font-bold text-slate-500 uppercase mb-2 px-2">Version History</div>
+                    {versions.map(v => (
+                      <button
+                        key={v.id}
+                        onClick={() => {
+                          onUpdateProject({ state: v.state });
+                          setShowVersionPicker(false);
+                        }}
+                        className="w-full text-left p-2 hover:bg-slate-100 rounded text-xs transition-colors"
+                      >
+                        <div className="font-bold truncate">{v.name}</div>
+                        <div className="text-slate-500">{new Date(v.createdAt).toLocaleString()}</div>
+                        {v.reason && <div className="text-[10px] text-slate-400 italic">{v.reason}</div>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="flex gap-2">
               <Button onClick={handleDownloadProjectData} variant="outline">Project ZIP</Button>
               <Button onClick={handleDownloadHTML} variant="outline" icon={<FileCode className="w-4 h-4" />}>HTML</Button>
@@ -657,8 +660,7 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
         </div>
       </div>
 
-      {/* History Modal */}
-      {/* History Modal */}
+      {/* Modals */}
       {showHistoryModal && selectedPanel && (
         <React.Suspense fallback={null}>
           <HistoryModal
@@ -666,6 +668,27 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
             selectedPanel={selectedPanel}
             historyUrls={historyUrls}
             onUpdatePanel={onUpdatePanel}
+          />
+        </React.Suspense>
+      )}
+
+      {showBubbleEditor && selectedPanel && (
+        <React.Suspense fallback={null}>
+          <BubbleEditorModal
+            isOpen={showBubbleEditor}
+            onClose={() => setShowBubbleEditor(false)}
+            panel={selectedPanel}
+            layout={textLayout}
+            onUpdatePanel={(updatedPanel) => {
+              const newPanels = panels.map(p => p.id === updatedPanel.id ? updatedPanel : p);
+              onUpdateProject({
+                state: {
+                  ...state,
+                  panels: newPanels
+                }
+              });
+              setSelectedPanel(updatedPanel);
+            }}
           />
         </React.Suspense>
       )}
@@ -686,6 +709,7 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ projectId, projectNa
           <ImagePreviewModal imageUrl={previewImage} onClose={() => setPreviewImage(null)} />
         </React.Suspense>
       )}
+
       {limitDetails && (
         <LimitExceededModal
           details={limitDetails}

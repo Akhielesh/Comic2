@@ -6,7 +6,7 @@ import { resolveAspectRatio } from "./imageUtils";
 import { normalizePanelDialogue } from "./dialogueUtils";
 import { MAX_CONTINUITY_PANELS } from "./modelPolicy";
 import { createSystemNotification } from "./db";
-import { prependCappedHistory } from "./projectStorage";
+import { prependCappedHistory, appendCappedHistory } from "./projectStorage";
 import { ApiError } from "./apiClient";
 import {
   collectPanelReferenceImageIds,
@@ -192,54 +192,63 @@ export const startBackgroundGeneration = async (
         }
       }
 
-      for (const [panelIndex, panelData] of breakdown.entries()) {
+      // --- Batched parallel generation (GENERATION_BATCH_SIZE at a time) ---
+      const GENERATION_BATCH_SIZE = 3;
+      const sceneBinding = getSceneBinding(state, scene.id);
+      const characterContext = state.characters.map(c => `${c.name}: ${c.description}`).join('. ');
+      const itemContext = state.items.map(i => `${i.name}: ${i.description}`).join('. ');
+      const locContext = state.locations.map(l => `${l.name}: ${l.description}`).join('. ');
+
+      for (let batchStart = 0; batchStart < breakdown.length; batchStart += GENERATION_BATCH_SIZE) {
         if (isCanceled(project.id)) {
           addLog("Generation stopped by user.");
           stopWithStatus("Stopped");
           return;
         }
 
-        updateStatus({ currentStepDescription: `Generating Scene ${scene.id}` });
+        const batch = breakdown.slice(batchStart, batchStart + GENERATION_BATCH_SIZE);
+        const batchEnd = Math.min(batchStart + GENERATION_BATCH_SIZE, breakdown.length);
+        updateStatus({ currentStepDescription: `Scene ${scene.id} — panels ${batchStart + 1}–${batchEnd} of ${breakdown.length}` });
+        addLog(`Generating batch: Scene ${scene.id}, panels ${batchStart + 1}–${batchEnd}…`);
 
-        const sceneBinding = getSceneBinding(state, scene.id);
-        const panelContinuity = resolvePanelContinuity(state, panelData);
-        const continuityEntityNames = (panelContinuity.requiredEntityIds || [])
-          .map((entityId) => getEntityById(state, entityId)?.name)
-          .filter((name): name is string => !!name);
-        const lockedLocationName = panelContinuity.locationId
-          ? getEntityById(state, panelContinuity.locationId)?.name
-          : undefined;
-
-        const characterContext = state.characters.map(c => `${c.name}: ${c.description}`).join('. ');
-        const itemContext = state.items.map(i => `${i.name}: ${i.description}`).join('. ');
-        const locContext = state.locations.map(l => `${l.name}: ${l.description}`).join('. ');
+        // Capture continuity context snapshot BEFORE batch starts
         const continuityText = recentPanelDescriptions.slice(-MAX_CONTINUITY_PANELS).join(" | ");
+        const continuityImageIdsSnapshot = [...recentPanelImageIds.slice(-MAX_CONTINUITY_PANELS)];
 
-        const imagePrompt = buildImagePrompt({
-          stage: "panel",
-          stylePrompt: state.stylePrompt,
-          layoutType: state.layoutType === 'custom' ? state.customLayoutPrompt : state.layoutType,
-          characters: characterContext,
-          items: itemContext,
-          locations: locContext,
-          sceneAction: panelData.description,
-          setting: scene.setting,
-          continuitySummary: continuitySummary || undefined,
-          recentPanels: continuityText || undefined,
-          requiredEntityNames: continuityEntityNames.join(", ") || undefined,
-          lockedLocation: lockedLocationName,
-          continuityLock: panelContinuity.continuityNotes || (sceneBinding ? `Scene ${sceneBinding.sceneId} strict lock` : "strict")
-        });
+        const batchPromises = batch.map(async (panelData, idxInBatch) => {
+          const panelIndex = batchStart + idxInBatch;
+          const panelContinuity = resolvePanelContinuity(state, panelData);
+          const continuityEntityNames = (panelContinuity.requiredEntityIds || [])
+            .map((entityId) => getEntityById(state, entityId)?.name)
+            .filter((name): name is string => !!name);
+          const lockedLocationName = panelContinuity.locationId
+            ? getEntityById(state, panelContinuity.locationId)?.name
+            : undefined;
 
-        let generatedImageId = panelData.imageId;
-        let generatedImageUrl = panelData.imageUrl;
-        if (!generatedImageId || !generatedImageUrl) {
-          addLog(`Painting Panel: ${(panelData.description || "").substring(0, 30)}...`);
-          const continuityImageIds = [
-            ...collectPanelReferenceImageIds(state, panelData),
-            ...recentPanelImageIds.slice(-MAX_CONTINUITY_PANELS)
-          ];
-          try {
+          const imagePrompt = buildImagePrompt({
+            stage: "panel",
+            stylePrompt: state.stylePrompt,
+            layoutType: state.layoutType === 'custom' ? state.customLayoutPrompt : state.layoutType,
+            characters: characterContext,
+            items: itemContext,
+            locations: locContext,
+            sceneAction: panelData.description,
+            setting: scene.setting,
+            continuitySummary: continuitySummary || undefined,
+            recentPanels: continuityText || undefined,
+            requiredEntityNames: continuityEntityNames.join(", ") || undefined,
+            lockedLocation: lockedLocationName,
+            continuityLock: panelContinuity.continuityNotes || (sceneBinding ? `Scene ${sceneBinding.sceneId} strict lock` : "strict")
+          });
+
+          let generatedImageId = panelData.imageId;
+          let generatedImageUrl = panelData.imageUrl;
+
+          if (!generatedImageId || !generatedImageUrl) {
+            const continuityImageIds = [
+              ...collectPanelReferenceImageIds(state, panelData),
+              ...continuityImageIdsSnapshot
+            ];
             const generated = await generateImage(
               imagePrompt,
               ratioConfig.modelRatio,
@@ -264,46 +273,72 @@ export const startBackgroundGeneration = async (
             );
             generatedImageId = generated?.imageId;
             generatedImageUrl = generated?.imageUrl;
-          } catch (e: any) {
-            const billingDetails = e instanceof ApiError
-              ? ((e.details as any)?.details || e.details)
-              : null;
-            if (billingDetails && typeof billingDetails === 'object' && typeof (billingDetails as any).reason === 'string') {
-              const resetAt = (billingDetails as any).resetAt ? new Date((billingDetails as any).resetAt).toLocaleString() : 'next reset';
-              addLog(`Token limit reached (${(billingDetails as any).reason}). Upgrade, add credits, or wait until ${resetAt}.`);
-            }
-            addLog(`Error generating image for panel: ${e.message}`);
-            throw e;
           }
-        } else {
-          addLog(`Skipping existing image for panel ${panelData.id}`);
-        }
 
-        const newPanel: ComicPanel = normalizePanelDialogue({
-          ...panelData,
-          continuity: {
-            ...panelContinuity,
-            referenceImageIds: collectPanelReferenceImageIds(state, panelData)
-          },
-          imageId: generatedImageId,
-          imageUrl: generatedImageUrl,
-          imageIdHistory: prependCappedHistory(panelData.imageIdHistory, generatedImageId),
-          imageUrlHistory: prependCappedHistory(panelData.imageUrlHistory, generatedImageUrl),
-          isPlanned: false
+          return normalizePanelDialogue({
+            ...panelData,
+            continuity: {
+              ...panelContinuity,
+              referenceImageIds: collectPanelReferenceImageIds(state, panelData)
+            },
+            imageId: generatedImageId,
+            imageUrl: generatedImageUrl,
+            imageIdHistory: prependCappedHistory(panelData.imageIdHistory, generatedImageId),
+            imageUrlHistory: prependCappedHistory(panelData.imageUrlHistory, generatedImageUrl),
+            isPlanned: false
+          });
         });
 
-        freshPanels.push(newPanel);
-        if (generatedImageId) {
-          recentPanelImageIds.push(generatedImageId);
-        }
-        recentPanelDescriptions.push(panelData.description || "");
+        const batchResults = await Promise.allSettled(batchPromises);
 
-        stepsCompleted++;
+        // Process batch results — failed panels still get added with failureReason
+        let batchHadBillingError = false;
+        for (let i = 0; i < batchResults.length; i++) {
+          const result = batchResults[i];
+          const panelData = batch[i];
+
+          if (result.status === 'fulfilled') {
+            const newPanel = result.value;
+            freshPanels.push(newPanel);
+            if (newPanel.imageId) {
+              recentPanelImageIds.push(newPanel.imageId);
+            }
+            recentPanelDescriptions.push(panelData.description || "");
+          } else {
+            // Panel failed — add it with failure marker so user can retry later
+            const error = result.reason;
+            const billingDetails = error instanceof ApiError
+              ? ((error.details as any)?.details || error.details)
+              : null;
+            if (billingDetails && typeof billingDetails === 'object' && typeof (billingDetails as any).reason === 'string') {
+              batchHadBillingError = true;
+              const resetAt = (billingDetails as any).resetAt ? new Date((billingDetails as any).resetAt).toLocaleString() : 'next reset';
+              addLog(`Token limit reached (${(billingDetails as any).reason}). Wait until ${resetAt} or upgrade.`);
+            }
+            addLog(`⚠ Panel failed: ${(panelData.description || "").substring(0, 40)}… — ${error?.message || 'Unknown error'}`);
+
+            const panelContinuity = resolvePanelContinuity(state, panelData);
+            freshPanels.push(normalizePanelDialogue({
+              ...panelData,
+              continuity: { ...panelContinuity, referenceImageIds: collectPanelReferenceImageIds(state, panelData) },
+              imageId: undefined as any,
+              imageUrl: undefined as any,
+              imageIdHistory: panelData.imageIdHistory || [],
+              imageUrlHistory: panelData.imageUrlHistory || [],
+              isPlanned: false,
+              failureReason: error?.message || 'Generation failed'
+            }));
+            recentPanelDescriptions.push(panelData.description || "");
+          }
+
+          stepsCompleted++;
+        }
+
+        // Update progress after batch
         const elapsedSeconds = (Date.now() - startTime) / 1000;
         const ratePerStep = stepsCompleted ? elapsedSeconds / stepsCompleted : 0;
         const remainingSteps = Math.max(totalPanelsEstimate - stepsCompleted, 0);
         const estSecondsLeft = remainingSteps * ratePerStep;
-
         const timeString = estSecondsLeft < 60
           ? `${Math.ceil(estSecondsLeft)}s`
           : `${Math.ceil(estSecondsLeft / 60)}m ${Math.ceil(estSecondsLeft % 60)}s`;
@@ -318,6 +353,12 @@ export const startBackgroundGeneration = async (
         onUpdate(project.id, (prev) => ({
           state: { ...prev.state, panels: freshPanels }
         }));
+
+        // Stop if billing limit hit — remaining panels would all fail
+        if (batchHadBillingError) {
+          addLog("Stopping remaining generation due to billing limit. Completed panels are saved.");
+          break;
+        }
       }
 
       continuitySummary = await updateContinuitySummary(
@@ -357,5 +398,115 @@ export const startBackgroundGeneration = async (
   } finally {
     generationControllers.delete(project.id);
     generationCanceled.delete(project.id);
+  }
+};
+
+export const regenerateSinglePanel = async (
+  project: Project,
+  panelId: string,
+  instructions: string,
+  onUpdate: (projectId: string, updateOrFn: Partial<Project> | ((prev: Project) => Partial<Project>)) => void
+) => {
+  const state = project.state;
+  const panelIndex = state.panels.findIndex((p) => p.id === panelId);
+  if (panelIndex === -1) throw new Error("Panel not found");
+
+  const targetPanel = state.panels[panelIndex];
+  const scene = state.scenes.find((s) => s.id === targetPanel.sceneId);
+  const sceneBinding = scene ? getSceneBinding(state, scene.id) : undefined;
+
+  // 1. Gather Context
+  const continuityRefIds = collectPanelReferenceImageIds(state, targetPanel);
+  const previousIds = state.panels
+    .slice(Math.max(0, panelIndex - 2), panelIndex)
+    .map((p) => p.imageId)
+    .filter((id): id is string => !!id);
+
+  // Deduplicate reference IDs
+  const referenceIds = Array.from(new Set([...continuityRefIds, ...previousIds]));
+
+  // Context strings
+  const characterContext = state.characters.map((c) => `${c.name}: ${c.description}`).join('. ');
+  const itemContext = state.items.map((i) => `${i.name}: ${i.description}`).join('. ');
+  const locContext = state.locations.map((l) => `${l.name}: ${l.description}`).join('. ');
+  const recentPanels = state.panels
+    .slice(Math.max(0, panelIndex - 3), panelIndex)
+    .map(p => p.description)
+    .join(" | ");
+
+  const panelContinuity = resolvePanelContinuity(state, targetPanel);
+  const requiredEntityNames = (panelContinuity.requiredEntityIds || [])
+    .map((entityId) => getEntityById(state, entityId)?.name)
+    .filter((name): name is string => !!name)
+    .join(', ');
+
+  const lockedLocation = panelContinuity.locationId
+    ? getEntityById(state, panelContinuity.locationId)?.name
+    : undefined;
+
+  // 2. Build Prompt
+  const prompt = buildImagePrompt({
+    stage: "panel_regen",
+    stylePrompt: state.stylePrompt,
+    layoutType: state.layoutType === 'custom' ? state.customLayoutPrompt : state.layoutType,
+    sceneAction: targetPanel.description,
+    characters: characterContext, // Full context for regen to be safe
+    items: itemContext,
+    locations: locContext,
+    setting: scene?.setting,
+    continuitySummary: state.continuitySummary || undefined,
+    recentPanels: recentPanels || undefined,
+    instructions, // USER INSTRUCTIONS
+    requiredEntityNames: requiredEntityNames || undefined,
+    lockedLocation,
+    continuityLock: panelContinuity.continuityNotes || (sceneBinding ? `Scene ${sceneBinding.sceneId} strict lock` : "strict")
+  });
+
+  const ratioConfig = resolveAspectRatio(state, state.styleAspectRatio);
+
+  // 3. Generate
+  const generated = await generateImage(
+    prompt,
+    ratioConfig.modelRatio,
+    state.imageResolution,
+    referenceIds,
+    project.id,
+    {
+      stage: 'panel_regen',
+      cropToRatio: ratioConfig.cropRatio,
+      meta: {
+        source: {
+          type: 'panel',
+          id: targetPanel.id,
+          label: `Scene ${targetPanel.sceneId} Panel ${panelIndex + 1}`
+        },
+        sceneId: targetPanel.sceneId,
+        panelIndex,
+        regen: true
+      }
+    }
+  );
+
+  // 4. Update State
+  if (generated?.imageUrl) {
+    onUpdate(project.id, (prev) => {
+      const existing = prev.state.panels.find((p) => p.id === panelId);
+      if (!existing) return {}; // Should not happen
+
+      const newPanels = prev.state.panels.map((p) => p.id === panelId ? {
+        ...p,
+        imageId: generated.imageId,
+        imageUrl: generated.imageUrl,
+        imageIdHistory: appendCappedHistory(p.imageIdHistory, generated.imageId),
+        imageUrlHistory: appendCappedHistory(p.imageUrlHistory, generated.imageUrl),
+        failureReason: undefined // Clear any failure flag
+      } : p);
+
+      return {
+        state: { ...prev.state, panels: newPanels }
+      };
+    });
+  } else {
+    throw new Error("Generation failed to produce an image URL.");
   }
 };

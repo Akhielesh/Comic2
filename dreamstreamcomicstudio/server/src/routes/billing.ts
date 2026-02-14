@@ -85,7 +85,7 @@ const parseCheckoutPlanTier = (value: unknown): PurchasablePlanTier => {
   try {
     return assertPurchasableTier(value);
   } catch {
-    throw Object.assign(new Error('Invalid plan tier. Allowed values: creator, pro, studio.'), { status: 400, publicCode: 'BAD_REQUEST' });
+    throw Object.assign(new Error('Invalid plan tier. Allowed values: creator, studio.'), { status: 400, publicCode: 'BAD_REQUEST' });
   }
 };
 

@@ -9,6 +9,7 @@ import {
   getDefaultImageModelByProvider,
   getImageModelById
 } from "./imageModels";
+import { emitBillingSummaryRefresh } from "./billing";
 import { generateFluxImage } from "./fluxService";
 import { generateImage as generateGeminiImage } from "./geminiService";
 import { ApiError } from "./apiClient";
@@ -108,7 +109,9 @@ export const generateImage = async (
     .filter((model) => model.id !== primaryModel.id);
 
   try {
-    return await runModel(primaryModel.id, primaryModel.provider);
+    const result = await runModel(primaryModel.id, primaryModel.provider);
+    emitBillingSummaryRefresh();
+    return result;
   } catch (primaryError) {
     if (!shouldAutoFallback(primaryError) || fallbackOrder.length === 0) {
       throw primaryError;
@@ -123,7 +126,9 @@ export const generateImage = async (
         await notifyFallback(
           `Image generation fallback: "${primaryModel.label}" failed (${primaryError instanceof Error ? primaryError.message : String(primaryError)}). Retrying with "${candidate.label}".${referenceFallbackNote}`
         );
-        return await runModel(candidate.id, candidate.provider);
+        const result = await runModel(candidate.id, candidate.provider);
+        emitBillingSummaryRefresh();
+        return result;
       } catch (fallbackError) {
         if (!shouldAutoFallback(fallbackError)) {
           throw fallbackError;

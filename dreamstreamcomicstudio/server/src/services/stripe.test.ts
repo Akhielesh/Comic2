@@ -4,8 +4,8 @@ import { assertBillingInterval, assertCreditPackId, assertPurchasableTier } from
 describe('stripe input assertions', () => {
   it('accepts only purchasable plan tiers', () => {
     expect(assertPurchasableTier('creator')).toBe('creator');
-    expect(assertPurchasableTier('pro')).toBe('pro');
     expect(assertPurchasableTier('studio')).toBe('studio');
+    expect(() => assertPurchasableTier('pro')).toThrow();
     expect(() => assertPurchasableTier('admin')).toThrow();
     expect(() => assertPurchasableTier('free')).toThrow();
   });

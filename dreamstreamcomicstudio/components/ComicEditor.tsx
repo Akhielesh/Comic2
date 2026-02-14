@@ -305,6 +305,8 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
         />;
       case AppStep.REVIEW_EXPORT:
         return <ReviewExport
+          project={project}
+          onUpdateProject={onUpdate}
           projectId={project.id}
           projectName={project.name}
           panels={state.panels}

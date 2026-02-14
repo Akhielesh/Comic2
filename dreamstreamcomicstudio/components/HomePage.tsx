@@ -5,6 +5,9 @@ import { getStudioStats, StudioStats } from '../services/stats';
 import { useAuth } from '../contexts/AuthContext';
 import { UserAvatar } from './UserAvatar';
 import { NotificationBell } from './NotificationBell';
+import { TokenAvailabilityPill } from './TokenAvailabilityPill';
+import { getPricingCatalog } from '../services/billing';
+import type { BillingInterval, BillingPlanDefinition, BillingPlanPricing } from '../shared/types/billing';
 
 interface HomePageProps {
   onEnterStudio: () => void;
@@ -29,25 +32,52 @@ const PROCESS_STAGES = [
 
 export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics, onOpenProfile, onOpenPrivacy, onOpenTerms, onOpenUpgrade, onNavigate }) => {
   const { user } = useAuth();
-  // ... existing code ...
-
-  // Footer Section (inside return)
-  // I need to find where the Footer is rendered.
-  // Wait, I am restricted to 2000 chars context window if I use simple replace, but the file is large.
-  // I'll assume the Footer is at the bottom.
-  // I'll scroll to bottom to see where it is. 
-  // Ah, I already read 'HomePage.tsx' in step 799 (partially) and 806.
-  // Let me check the content of HomePage again to find the Footer.
-
   const [activeStage, setActiveStage] = useState(1);
   const [faqOpen, setFaqOpen] = useState<number | null>(null);
   const [stats, setStats] = useState<StudioStats>({ userCount: 0, comicCount: 0 });
+  const [selectedBillingInterval, setSelectedBillingInterval] = useState<BillingInterval>('month');
+  const [planPricing, setPlanPricing] = useState<BillingPlanPricing[]>([]);
+  const [catalogPlans, setCatalogPlans] = useState<BillingPlanDefinition[]>([]);
 
   useEffect(() => {
     getStudioStats().then(setStats);
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    const loadPricing = async () => {
+      try {
+        const catalog = await getPricingCatalog();
+        if (!active) return;
+        setPlanPricing(catalog.planPricing || []);
+        setCatalogPlans(catalog.plans || []);
+      } catch {
+        // Keep fallback values if pricing catalog cannot be loaded.
+      }
+    };
+    void loadPricing();
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const toggleFaq = (index: number) => setFaqOpen(faqOpen === index ? null : index);
+  const formatCt = (value: number) => Math.max(0, Math.floor(value)).toLocaleString();
+  const formatUsd = (value: number) => Number(value).toFixed(value % 1 === 0 ? 0 : 2);
+  const openUpgrade = () => (onOpenUpgrade ? onOpenUpgrade() : onEnterStudio());
+
+  const planById = new Map<string, BillingPlanDefinition>(catalogPlans.map((plan) => [plan.id, plan]));
+  const freePlan = planById.get('free');
+  const creatorPlan = planById.get('creator');
+  const studioPlan = planById.get('studio');
+  const creatorPricing = planPricing.find((entry) => entry.planTier === 'creator' && entry.interval === selectedBillingInterval);
+  const studioPricing = planPricing.find((entry) => entry.planTier === 'studio' && entry.interval === selectedBillingInterval);
+  const creatorPrice = creatorPricing?.priceUsd ?? (selectedBillingInterval === 'year' ? 119.88 : 11.99);
+  const studioPrice = studioPricing?.priceUsd ?? (selectedBillingInterval === 'year' ? 419.88 : 39.99);
+  const creatorIncludedCt = creatorPricing?.includedMonthlyCt ?? creatorPlan?.monthlyIncludedCt ?? 120_000;
+  const studioIncludedCt = studioPricing?.includedMonthlyCt ?? studioPlan?.monthlyIncludedCt ?? 390_000;
+  const freeIncludedCt = freePlan?.monthlyIncludedCt ?? 10_000;
+  const freeDailyGuardrailCt = freePlan?.dailyGuardrailCt ?? 800;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
@@ -65,6 +95,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
             <button onClick={onViewComics} className="hidden md:block text-sm font-bold hover:underline">View Comics</button>
             {user ? (
               <>
+                <TokenAvailabilityPill />
                 <Button onClick={onEnterStudio} size="sm" icon={<ArrowRight size={16} />}>Studio</Button>
                 {onNavigate && <NotificationBell onNavigate={onNavigate} />}
                 <UserAvatar onClick={onOpenProfile} />
@@ -203,6 +234,20 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
           <div className="text-center mb-16">
             <h2 className="text-4xl md:text-5xl font-display mb-4">Choose Your Plan</h2>
             <p className="font-comic text-slate-600">All plans are token-metered with Comic Tokens (CT): 10,000 CT = $1.00.</p>
+            <div className="mt-5 inline-flex items-center gap-2 rounded-full border-2 border-black bg-white p-1">
+              <button
+                onClick={() => setSelectedBillingInterval('month')}
+                className={`px-3 py-1 rounded-full text-xs font-bold ${selectedBillingInterval === 'month' ? 'bg-black text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+              >
+                Monthly
+              </button>
+              <button
+                onClick={() => setSelectedBillingInterval('year')}
+                className={`px-3 py-1 rounded-full text-xs font-bold ${selectedBillingInterval === 'year' ? 'bg-black text-white' : 'text-slate-700 hover:bg-slate-100'}`}
+              >
+                Annual
+              </button>
+            </div>
           </div>
 
           <div className="grid md:grid-cols-3 gap-8 items-start">
@@ -211,8 +256,8 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               <div className="font-display text-2xl mb-2">Free Starter</div>
               <div className="text-4xl font-black mb-6">$0<span className="text-sm font-normal text-slate-500">/forever</span></div>
               <ul className="space-y-4 mb-4 text-sm font-bold">
-                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> 10,000 CT / month</li>
-                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> 800 CT / day guardrail</li>
+                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> {formatCt(freeIncludedCt)} CT / month</li>
+                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> {formatCt(freeDailyGuardrailCt)} CT / day guardrail</li>
                 <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> Per-action CT estimate shown</li>
                 <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> Community Support</li>
                 <li className="flex items-center gap-2 text-slate-400"><X size={16} /> Overage without purchased credits</li>
@@ -225,18 +270,25 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
             {/* Creator */}
             <div className="bg-white border-4 border-black rounded-2xl p-8 shadow-comic hover:-translate-y-2 transition-transform duration-300">
               <div className="font-display text-2xl mb-2">Creator</div>
-              <div className="text-4xl font-black mb-6">$19<span className="text-sm font-normal text-slate-500">/mo</span></div>
+              <div className="text-4xl font-black mb-6">
+                ${formatUsd(creatorPrice)}<span className="text-sm font-normal text-slate-500">{selectedBillingInterval === 'year' ? '/yr' : '/mo'}</span>
+              </div>
+              {selectedBillingInterval === 'year' && (
+                <div className="text-xs font-semibold text-slate-600 -mt-4 mb-4">
+                  ${formatUsd(creatorPrice / 12)} /mo equivalent
+                </div>
+              )}
               <div className="text-xs font-bold mb-6 text-slate-800 bg-slate-100 border border-slate-300 rounded px-2 py-1 inline-block">
-                Monthly Included: 90,000 CT
+                Monthly Included: {formatCt(creatorIncludedCt)} CT
               </div>
               <ul className="space-y-4 mb-4 text-sm font-bold">
-                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> 6,000 CT / day guardrail</li>
+                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> No daily cap (monthly quota only)</li>
                 <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> Card-on-file overage support</li>
                 <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> Exact CT + USD usage tracking</li>
                 <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> Private Projects</li>
               </ul>
               <div className="mt-6">
-                <Button onClick={onOpenUpgrade} variant="secondary" className="w-full">Upgrade</Button>
+                <Button onClick={openUpgrade} variant="secondary" className="w-full">Upgrade</Button>
               </div>
             </div>
 
@@ -265,18 +317,25 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
                 <Crown size={12} /> Ultimate
               </div>
               <div className="font-display text-3xl mb-2 text-white drop-shadow-md">Studio</div>
-              <div className="text-5xl font-black mb-6">$149<span className="text-lg font-normal text-white/80">/mo</span></div>
+              <div className="text-5xl font-black mb-6">
+                ${formatUsd(studioPrice)}<span className="text-lg font-normal text-white/80">{selectedBillingInterval === 'year' ? '/yr' : '/mo'}</span>
+              </div>
+              {selectedBillingInterval === 'year' && (
+                <div className="text-xs font-semibold text-white/90 -mt-4 mb-4">
+                  ${formatUsd(studioPrice / 12)} /mo equivalent
+                </div>
+              )}
               <div className="text-xs font-bold mb-6 text-white bg-black/20 border border-white/20 rounded px-2 py-1 inline-block">
-                700,000 CT / month
+                {formatCt(studioIncludedCt)} CT / month
               </div>
               <ul className="space-y-4 mb-4 text-sm font-bold">
-                <li className="flex items-center gap-2"><Infinity size={16} className="text-brand-yellow" /> 50,000 CT / day guardrail</li>
+                <li className="flex items-center gap-2"><Infinity size={16} className="text-brand-yellow" /> No daily cap (monthly quota only)</li>
                 <li className="flex items-center gap-2"><Infinity size={16} className="text-brand-yellow" /> Team-scale token pool</li>
                 <li className="flex items-center gap-2"><Check size={16} className="text-brand-yellow" /> All AI Models Included</li>
                 <li className="flex items-center gap-2"><Check size={16} className="text-brand-yellow" /> Priority Support</li>
               </ul>
               <div className="mt-6">
-                <button onClick={onOpenUpgrade} className="w-full bg-white text-black font-display text-xl py-3 rounded-xl border-4 border-black hover:bg-brand-yellow transition-colors shadow-lg">
+                <button onClick={openUpgrade} className="w-full bg-white text-black font-display text-xl py-3 rounded-xl border-4 border-black hover:bg-brand-yellow transition-colors shadow-lg">
                   Upgrade
                 </button>
               </div>

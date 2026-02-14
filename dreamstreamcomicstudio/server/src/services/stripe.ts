@@ -19,7 +19,7 @@ const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
 const BILLING_PORTAL_RETURN_URL = process.env.STRIPE_BILLING_PORTAL_RETURN_URL || `${CLIENT_URL}/settings?tab=billing`;
 const WEBHOOK_MAX_AGE_SECONDS = Number(process.env.STRIPE_WEBHOOK_MAX_AGE_SECONDS || '86400');
 
-const PURCHASABLE_TIERS: PurchasablePlanTier[] = ['creator', 'pro', 'studio'];
+const PURCHASABLE_TIERS: PurchasablePlanTier[] = ['creator', 'studio'];
 
 const isPurchasablePlanTier = (value: unknown): value is PurchasablePlanTier =>
   typeof value === 'string' && PURCHASABLE_TIERS.includes(value as PurchasablePlanTier);
@@ -788,7 +788,7 @@ export const handleStripeWebhook = async (sig: string, body: Buffer) => {
 
 export const assertPurchasableTier = (value: unknown): PurchasablePlanTier => {
   if (!isPurchasablePlanTier(value)) {
-    throw new Error('Invalid plan tier. Allowed values: creator, pro, studio.');
+    throw new Error('Invalid plan tier. Allowed values: creator, studio.');
   }
   return value;
 };

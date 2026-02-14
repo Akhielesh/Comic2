@@ -13,7 +13,15 @@ type StripePriceConfigRecord = {
   source: 'database' | 'env';
 };
 
-const PURCHASABLE_PLAN_TIERS: PurchasablePlanTier[] = ['creator', 'pro', 'studio'];
+type PlanEntitlementLike = {
+  planTier: string;
+  interval: BillingInterval;
+  includedMonthlyCt: number;
+  dailyGuardrailCt: number;
+  dailyLimitEnabled: boolean;
+};
+
+const PURCHASABLE_PLAN_TIERS: PurchasablePlanTier[] = ['creator', 'studio'];
 const CREDIT_PACK_IDS: CreditPackId[] = ['pack_10', 'pack_25', 'pack_100'];
 const INTERVALS: BillingInterval[] = ['month', 'year'];
 const CACHE_TTL_MS = 30_000;
@@ -39,7 +47,7 @@ const toInterval = (value: unknown): BillingInterval | undefined => {
 const toPlanTier = (value: unknown): PurchasablePlanTier | undefined => {
   if (typeof value !== 'string') return undefined;
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'creator' || normalized === 'pro' || normalized === 'studio') {
+  if (normalized === 'creator' || normalized === 'studio') {
     return normalized;
   }
   return undefined;
@@ -53,7 +61,7 @@ const toCreditPackId = (value: unknown): CreditPackId | undefined => {
 };
 
 const getEnvPlanPriceId = (planTier: PurchasablePlanTier, interval: BillingInterval): string | undefined => {
-  const monthlyFallback = planTier === 'creator' || planTier === 'pro' || planTier === 'studio'
+  const monthlyFallback = planTier === 'creator' || planTier === 'studio'
     ? process.env.STRIPE_PRICE_ID
     : undefined;
 
@@ -61,12 +69,6 @@ const getEnvPlanPriceId = (planTier: PurchasablePlanTier, interval: BillingInter
     return interval === 'month'
       ? process.env.STRIPE_PRICE_ID_CREATOR || monthlyFallback
       : process.env.STRIPE_PRICE_ID_CREATOR_ANNUAL;
-  }
-
-  if (planTier === 'pro') {
-    return interval === 'month'
-      ? process.env.STRIPE_PRICE_ID_PRO || monthlyFallback
-      : process.env.STRIPE_PRICE_ID_PRO_ANNUAL;
   }
 
   return interval === 'month'
@@ -244,29 +246,49 @@ export const resolveCreditPackFromStripePriceId = async (priceId?: string | null
   return match?.packId || null;
 };
 
-export const getPlanPricingCatalog = async (plans: BillingPlanDefinition[]): Promise<BillingPlanPricing[]> => {
+export const getPlanPricingCatalog = async (
+  plans: BillingPlanDefinition[],
+  entitlements: PlanEntitlementLike[] = []
+): Promise<BillingPlanPricing[]> => {
   const values = await getConfigValues();
   const monthlyByTier = new Map<PurchasablePlanTier, number>();
 
   for (const plan of plans) {
-    if (plan.id === 'creator' || plan.id === 'pro' || plan.id === 'studio') {
+    if (plan.id === 'creator' || plan.id === 'studio') {
       monthlyByTier.set(plan.id, Math.max(0, Number(plan.monthlyPriceUsd || 0)));
     }
   }
+
+  const defaultAnnualByTier: Record<PurchasablePlanTier, number> = {
+    creator: 119.88,
+    studio: 419.88
+  };
 
   const catalog: BillingPlanPricing[] = [];
   for (const tier of PURCHASABLE_PLAN_TIERS) {
     const monthly = monthlyByTier.get(tier) || 0;
     for (const interval of INTERVALS) {
       const configured = values.find((row) => row.resourceType === 'plan' && row.planTier === tier && row.interval === interval);
+      const entitlement = entitlements.find((entry) => entry.planTier === tier && entry.interval === interval)
+        || entitlements.find((entry) => entry.planTier === tier && entry.interval === 'month');
+      const fallbackPlan = plans.find((entry) => entry.id === tier);
       const defaultPrice = interval === 'month'
         ? monthly
-        : Number((monthly * 12).toFixed(2));
+        : defaultAnnualByTier[tier] ?? Number((monthly * 12).toFixed(2));
 
       catalog.push({
         planTier: tier,
         interval,
         priceUsd: configured?.priceUsd ?? defaultPrice,
+        includedMonthlyCt: entitlement?.includedMonthlyCt
+          ?? fallbackPlan?.monthlyIncludedCt
+          ?? 0,
+        dailyGuardrailCt: entitlement?.dailyGuardrailCt
+          ?? fallbackPlan?.dailyGuardrailCt
+          ?? 0,
+        dailyLimitEnabled: entitlement?.dailyLimitEnabled
+          ?? fallbackPlan?.dailyLimitEnabled
+          ?? false,
         stripePriceConfigured: Boolean(configured?.priceId)
       });
     }

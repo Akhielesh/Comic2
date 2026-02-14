@@ -9,6 +9,9 @@ import { Button } from '../Button';
 import { ImagePreviewModal } from '../modals/ImagePreviewModal';
 import { buildImagePrompt } from '../../services/imagePrompt';
 import { buildContinuityFromWorld } from '../../services/continuity';
+import { saveCharacterToLibrary } from '../../services/characterLibrary';
+
+const CharacterLibraryModal = React.lazy(() => import('../modals/CharacterLibraryModal').then(module => ({ default: module.CharacterLibraryModal })));
 
 // Declare HTML2Canvas and jsPDF for downloadable cards
 declare const html2canvas: any;
@@ -61,6 +64,7 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
   const [characters, setCharacters] = useState<Character[]>(initialCharacters);
   const [items, setItems] = useState<Item[]>(initialItems);
   const [locations, setLocations] = useState<Location[]>(initialLocations);
+  const [showLibraryModal, setShowLibraryModal] = useState(false);
   const entitiesRef = useRef({ characters: initialCharacters, items: initialItems, locations: initialLocations });
 
   const makeContinuity = (nextCharacters: Character[], nextItems: Item[], nextLocations: Location[]) =>
@@ -302,6 +306,28 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
         pdf.save(`${name.replace(/\s+/g, '_')}_card.pdf`);
       }
     } catch (e) { console.error("Download failed", e); }
+
+  };
+
+  const handleSaveToLibrary = async (character: Character) => {
+    try {
+      if (!confirm(`Save "${character.name}" to your Character Library? This will make it available in all your projects.`)) return;
+      await saveCharacterToLibrary(character);
+      alert("Saved to Library!");
+    } catch (e: any) {
+      alert("Failed to save: " + (e.message || "Unknown error"));
+    }
+  };
+
+  const handleLibrarySelect = (libraryItem: Character) => {
+    // Clone library item to new character with new ID to link to project
+    const newChar: Character = {
+      ...libraryItem,
+      id: `char-lib-${Date.now()}`,
+      referenceImageIds: libraryItem.referenceImageIds || []
+    };
+    setCharacters(prev => [...prev, newChar]);
+    setShowLibraryModal(false);
   };
 
   const downloadSelectedAsPDF = async () => {
@@ -411,6 +437,10 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
             <Button size="sm" variant="secondary" onClick={() => generateEntityImage(type, entity.id)} icon={<Wand2 size={14} />}>Gen</Button>
             <Button size="sm" variant="secondary" onClick={() => downloadCardAs(`card-${entity.id}`, entity.name, 'image')} icon={<ImageIcon size={14} />}>Img</Button>
             <Button size="sm" variant="secondary" onClick={() => downloadCardAs(`card-${entity.id}`, entity.name, 'pdf')} icon={<Download size={14} />}>PDF</Button>
+
+            {type === 'characters' && (
+              <Button size="sm" variant="secondary" onClick={() => handleSaveToLibrary(entity)} icon={<UploadCloud size={14} />}>Save</Button>
+            )}
           </div>
         </div>
       </div>
@@ -438,6 +468,11 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
         <Users className="w-8 h-8" />
       </div>
       <div className="font-bold font-display text-lg">Add {type === 'characters' ? 'Character' : type === 'items' ? 'Item' : 'Location'}</div>
+      {type === 'characters' && (
+        <Button size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); setShowLibraryModal(true); }}>
+          Load from Library
+        </Button>
+      )}
     </button>
   );
 
@@ -486,6 +521,11 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
       </div>
 
       {previewImage && <ImagePreviewModal imageUrl={previewImage.url} title={previewImage.title} onClose={() => setPreviewImage(null)} />}
+      {showLibraryModal && (
+        <React.Suspense fallback={null}>
+          <CharacterLibraryModal onClose={() => setShowLibraryModal(false)} onSelect={handleLibrarySelect} />
+        </React.Suspense>
+      )}
     </div>
   );
 };

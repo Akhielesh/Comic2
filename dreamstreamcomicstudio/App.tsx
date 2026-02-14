@@ -624,7 +624,7 @@ const App: React.FC = () => {
               onOpenPrivacy={() => setCurrentView('privacy')}
               onOpenTerms={() => setCurrentView('terms')}
               onOpenUpgrade={() => {
-                setSettingsTab('settings');
+                setSettingsTab('billing');
                 setSettingsReturnView('home');
                 setCurrentView('settings');
               }}

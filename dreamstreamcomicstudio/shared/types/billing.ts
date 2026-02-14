@@ -1,5 +1,6 @@
 export type BillingPlanTier = 'free' | 'creator' | 'pro' | 'studio' | 'custom' | 'admin';
-export type PurchasablePlanTier = 'creator' | 'pro' | 'studio';
+// NOTE: `pro` remains in BillingPlanTier for backward-compatible reads only.
+export type PurchasablePlanTier = 'creator' | 'studio';
 export type CreditPackId = 'pack_10' | 'pack_25' | 'pack_100';
 export type BillingInterval = 'month' | 'year';
 
@@ -8,6 +9,7 @@ export type BillingPlanDefinition = {
   name: string;
   monthlyIncludedCt: number;
   dailyGuardrailCt: number;
+  dailyLimitEnabled: boolean;
   monthlyPriceUsd: number;
   allowOverage: boolean;
 };
@@ -23,6 +25,9 @@ export type BillingPlanPricing = {
   planTier: PurchasablePlanTier;
   interval: BillingInterval;
   priceUsd: number;
+  includedMonthlyCt: number;
+  dailyGuardrailCt: number;
+  dailyLimitEnabled: boolean;
   stripePriceConfigured: boolean;
 };
 
@@ -337,4 +342,48 @@ export type ComicCostReport = {
     isByok: boolean;
     status: string;
   }>;
+};
+
+export type UserRole = 'admin' | 'moderator';
+
+export type AdminAccessResponse = {
+  userId: string;
+  isAdmin: boolean;
+  isModerator: boolean;
+  bootstrapAdmin: boolean;
+  roles: UserRole[];
+};
+
+export type AdminUserRecord = {
+  userId: string;
+  username?: string;
+  email?: string;
+  maskedEmail?: string;
+  planTier: BillingPlanTier;
+  subscriptionStatus?: string;
+  roles: UserRole[];
+  moderationStatus: 'active' | 'restricted' | 'suspended';
+  moderationReason?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type AdminUserListResponse = {
+  items: AdminUserRecord[];
+  nextCursor?: string;
+};
+
+export type ProjectModerationQueueItem = {
+  projectId: string;
+  ownerUserId: string;
+  projectName?: string;
+  isPublic: boolean;
+  isForcedPrivate: boolean;
+  forcedPrivateReason?: string;
+  forcedPrivateAt?: string;
+  republishRequestStatus: 'none' | 'pending' | 'approved' | 'rejected';
+  republishRequestReason?: string;
+  republishRequestedAt?: string;
+  republishReviewedAt?: string;
+  republishReviewReason?: string;
 };

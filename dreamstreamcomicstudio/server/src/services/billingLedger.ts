@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import Stripe from 'stripe';
 import type {
+  BillingInterval,
   BillingPlanDefinition,
   BillingSummaryResponse,
   BillingPlanTier,
@@ -13,18 +14,26 @@ import type {
   UsageLimitState,
   WalletBalance
 } from '../../../shared/types/billing.js';
-import { CT_USD, DEFAULT_MARKUP, getCreditPackByUsd, resolvePlanDefinition } from './pricingCatalog.js';
+import {
+  CT_USD,
+  DEFAULT_MARKUP,
+  getCreditPackByUsd,
+  resolvePlanDefinition,
+  resolvePlanEntitlement
+} from './pricingCatalog.js';
 import { getSupabaseAdmin, supabase } from './supabase.js';
 
 type WalletRow = {
   user_id: string;
   plan_tier: BillingPlanTier;
+  billing_interval: BillingInterval;
   included_monthly_ct: number;
   used_monthly_ct: number;
   purchased_ct: number;
   reserved_ct: number;
   overage_ct: number;
   daily_guardrail_ct: number;
+  daily_limit_enabled: boolean;
   used_daily_ct: number;
   daily_cycle_date: string;
   cycle_starts_at: string;
@@ -78,6 +87,10 @@ const toTier = (value: unknown): BillingPlanTier => {
     return normalized;
   }
   return 'free';
+};
+
+const toInterval = (value: unknown): BillingInterval => {
+  return value === 'year' ? 'year' : 'month';
 };
 
 const now = () => new Date();
@@ -173,12 +186,14 @@ const makeWalletForTier = (userId: string, planTier: BillingPlanTier, at = now()
   return {
     user_id: userId,
     plan_tier: plan.id,
+    billing_interval: 'month',
     included_monthly_ct: plan.monthlyIncludedCt,
     used_monthly_ct: 0,
     purchased_ct: 0,
     reserved_ct: 0,
     overage_ct: 0,
     daily_guardrail_ct: plan.dailyGuardrailCt,
+    daily_limit_enabled: plan.dailyLimitEnabled,
     used_daily_ct: 0,
     daily_cycle_date: utcDateString(at),
     cycle_starts_at: toIso(startOfUtcMonth(at)),
@@ -210,11 +225,14 @@ const walletBalance = (wallet: WalletRow): WalletBalance => {
 const usageState = (wallet: WalletRow): UsageLimitState => {
   const nowTs = now();
   const dailyReset = nextUtcDay(nowTs);
-  const dailyRemaining = Math.max(0, wallet.daily_guardrail_ct - wallet.used_daily_ct);
+  const balance = walletBalance(wallet);
+  const dailyRemaining = wallet.daily_limit_enabled
+    ? Math.max(0, wallet.daily_guardrail_ct - wallet.used_daily_ct)
+    : balance.availableCt;
   return {
     planTier: wallet.plan_tier,
-    dailyGuardrailCt: Math.max(0, wallet.daily_guardrail_ct),
-    dailyUsedCt: Math.max(0, wallet.used_daily_ct),
+    dailyGuardrailCt: wallet.daily_limit_enabled ? Math.max(0, wallet.daily_guardrail_ct) : 0,
+    dailyUsedCt: wallet.daily_limit_enabled ? Math.max(0, wallet.used_daily_ct) : 0,
     dailyRemainingCt: dailyRemaining,
     monthlyResetAt: wallet.cycle_ends_at,
     dailyResetAt: toIso(dailyReset)
@@ -296,17 +314,37 @@ const getUserPlanTier = async (userId: string): Promise<BillingPlanTier> => {
   return getFallbackPlanTierFromLegacyUsage(userId);
 };
 
+const getUserBillingInterval = async (userId: string): Promise<BillingInterval> => {
+  const admin = getBillingAdmin();
+  const { data, error } = await admin
+    .from('user_plan_subscriptions')
+    .select('metadata')
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (error) {
+    if (isMissingTableError(error)) return 'month';
+    throw createBillingBackendUnavailableError(error);
+  }
+
+  if (!data || !isRecord(data)) return 'month';
+  const metadata = isRecord(data.metadata) ? data.metadata : {};
+  return toInterval(metadata.interval);
+};
+
 const persistWallet = async (wallet: WalletRow): Promise<WalletRow> => {
   const admin = getBillingAdmin();
   const payload = {
     user_id: wallet.user_id,
     plan_tier: wallet.plan_tier,
+    billing_interval: wallet.billing_interval,
     included_monthly_ct: wallet.included_monthly_ct,
     used_monthly_ct: wallet.used_monthly_ct,
     purchased_ct: wallet.purchased_ct,
     reserved_ct: wallet.reserved_ct,
     overage_ct: wallet.overage_ct,
     daily_guardrail_ct: wallet.daily_guardrail_ct,
+    daily_limit_enabled: wallet.daily_limit_enabled,
     used_daily_ct: wallet.used_daily_ct,
     daily_cycle_date: wallet.daily_cycle_date,
     cycle_starts_at: wallet.cycle_starts_at,
@@ -337,12 +375,14 @@ const persistWallet = async (wallet: WalletRow): Promise<WalletRow> => {
 const mapWallet = (row: Record<string, unknown>): WalletRow => ({
   user_id: String(row.user_id),
   plan_tier: toTier(row.plan_tier),
+  billing_interval: toInterval(row.billing_interval),
   included_monthly_ct: Math.max(0, Math.floor(asNumber(row.included_monthly_ct, 0))),
   used_monthly_ct: Math.max(0, Math.floor(asNumber(row.used_monthly_ct, 0))),
   purchased_ct: Math.max(0, Math.floor(asNumber(row.purchased_ct, 0))),
   reserved_ct: Math.max(0, Math.floor(asNumber(row.reserved_ct, 0))),
   overage_ct: Math.max(0, Math.floor(asNumber(row.overage_ct, 0))),
   daily_guardrail_ct: Math.max(0, Math.floor(asNumber(row.daily_guardrail_ct, 0))),
+  daily_limit_enabled: row.daily_limit_enabled === true || Math.max(0, Math.floor(asNumber(row.daily_guardrail_ct, 0))) > 0,
   used_daily_ct: Math.max(0, Math.floor(asNumber(row.used_daily_ct, 0))),
   daily_cycle_date: String(row.daily_cycle_date || utcDateString(now())),
   cycle_starts_at: String(row.cycle_starts_at || toIso(startOfUtcMonth(now()))),
@@ -388,22 +428,34 @@ const loadOrCreateWallet = async (userId: string): Promise<WalletRow> => {
   return persisted;
 };
 
-const resolveWalletEntitlementContext = async (_userId: string, walletInput: WalletRow): Promise<WalletEntitlementContext> => {
+const resolveWalletEntitlementContext = async (userId: string, walletInput: WalletRow): Promise<WalletEntitlementContext> => {
   const basePlan = resolvePlanDefinition(walletInput.plan_tier);
-  const effectivePlan = basePlan;
+  const billingInterval = walletInput.billing_interval || await getUserBillingInterval(userId);
+  const entitlement = await resolvePlanEntitlement(basePlan.id, billingInterval);
+  const effectivePlan: BillingPlanDefinition = {
+    ...basePlan,
+    monthlyIncludedCt: entitlement.includedMonthlyCt,
+    dailyGuardrailCt: entitlement.dailyLimitEnabled ? entitlement.dailyGuardrailCt : 0,
+    dailyLimitEnabled: entitlement.dailyLimitEnabled
+  };
 
   const includedMonthlyCt = effectivePlan.monthlyIncludedCt;
   const dailyGuardrailCt = effectivePlan.dailyGuardrailCt;
+  const dailyLimitEnabled = effectivePlan.dailyLimitEnabled;
 
   let wallet = walletInput;
   const shouldPersistLimits = wallet.included_monthly_ct !== includedMonthlyCt
-    || wallet.daily_guardrail_ct !== dailyGuardrailCt;
+    || wallet.daily_guardrail_ct !== dailyGuardrailCt
+    || wallet.daily_limit_enabled !== dailyLimitEnabled
+    || wallet.billing_interval !== billingInterval;
 
   if (shouldPersistLimits) {
     wallet = await persistWallet({
       ...wallet,
+      billing_interval: billingInterval,
       included_monthly_ct: includedMonthlyCt,
       daily_guardrail_ct: dailyGuardrailCt,
+      daily_limit_enabled: dailyLimitEnabled,
       updated_at: toIso(now())
     });
   }
@@ -817,7 +869,7 @@ export const reserveUsageTokens = async (input: {
   const balance = walletBalance(wallet);
   const usage = usageState(wallet);
 
-  if (requiredCt > usage.dailyRemainingCt) {
+  if (wallet.daily_limit_enabled && requiredCt > usage.dailyRemainingCt) {
     return {
       allowed: false,
       details: buildLimitExceeded('DAILY_LIMIT_EXCEEDED', requiredCt, wallet, false)
@@ -1139,12 +1191,13 @@ export const getBillingSummary = async (userId: string): Promise<BillingSummaryR
     metadataIntervalValue === 'month' || metadataIntervalValue === 'year'
     ? metadataIntervalValue
     : undefined;
+  const resolvedInterval = intervalFromMetadata || wallet.billing_interval;
 
   const subscription = subscriptionRow && isRecord(subscriptionRow)
     ? {
         planTier: toTier(subscriptionRow.plan_tier),
         status: String(subscriptionRow.status || 'inactive'),
-        interval: intervalFromMetadata,
+        interval: resolvedInterval,
         stripeStatus: typeof subscriptionRow.stripe_status === 'string' ? subscriptionRow.stripe_status : undefined,
         stripeSubscriptionId: typeof subscriptionRow.stripe_subscription_id === 'string' ? subscriptionRow.stripe_subscription_id : undefined,
         cancelAtPeriodEnd: Boolean(subscriptionRow.cancel_at_period_end),
@@ -1156,6 +1209,7 @@ export const getBillingSummary = async (userId: string): Promise<BillingSummaryR
     : {
         planTier: walletContext.basePlan.id,
         status: 'inactive',
+        interval: wallet.billing_interval,
         cancelAtPeriodEnd: false
       };
 
@@ -1323,11 +1377,15 @@ export const getComicCostReport = async (userId: string, comicId: string): Promi
 
 export const setUserPlanTier = async (userId: string, planTier: BillingPlanTier, metadata?: Record<string, unknown>) => {
   const plan = resolvePlanDefinition(planTier);
+  const billingInterval = toInterval((metadata || {}).interval);
+  const entitlement = await resolvePlanEntitlement(plan.id, billingInterval);
   const wallet = await ensureWallet(userId);
 
   wallet.plan_tier = plan.id;
-  wallet.included_monthly_ct = plan.monthlyIncludedCt;
-  wallet.daily_guardrail_ct = plan.dailyGuardrailCt;
+  wallet.billing_interval = billingInterval;
+  wallet.included_monthly_ct = entitlement.includedMonthlyCt;
+  wallet.daily_guardrail_ct = entitlement.dailyLimitEnabled ? entitlement.dailyGuardrailCt : 0;
+  wallet.daily_limit_enabled = entitlement.dailyLimitEnabled;
   wallet.updated_at = toIso(now());
   await persistWallet(wallet);
 
@@ -1354,8 +1412,10 @@ export const setUserPlanTier = async (userId: string, planTier: BillingPlanTier,
     metadata: {
       ...metadata,
       newPlanTier: plan.id,
-      includedMonthlyCt: plan.monthlyIncludedCt,
-      dailyGuardrailCt: plan.dailyGuardrailCt
+      includedMonthlyCt: entitlement.includedMonthlyCt,
+      dailyGuardrailCt: entitlement.dailyGuardrailCt,
+      dailyLimitEnabled: entitlement.dailyLimitEnabled,
+      billingInterval
     }
   });
 

@@ -119,6 +119,8 @@ export type DialogueBlock = {
   speaker?: string;
   text: string;
   side?: 'left' | 'right' | 'center';
+  position?: { x: number; y: number }; // Percentage 0-100
+  style?: 'speech' | 'thought' | 'shout' | 'whisper' | 'caption';
 };
 
 export type TextLayout = 'caption' | 'speech_bubbles' | 'chat_bubbles' | 'none';
@@ -200,6 +202,11 @@ export interface Character {
   imageId?: string;
   imageUrl?: string;
   referenceImageIds: string[];
+}
+
+export interface CharacterLibraryItem extends Character {
+  userId: string;
+  createdAt: string;
 }
 
 export interface Item {
@@ -295,6 +302,10 @@ export interface ComicPanel {
   isGenerating?: boolean;
   isPlanned?: boolean;
   continuity?: PanelContinuity;
+  /** Set when a panel fails during generation — allows retry */
+  failureReason?: string;
+  /** Style override for Live Panel Remix (future feature) */
+  styleOverride?: string;
 }
 
 export interface StyleVariant {
