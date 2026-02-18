@@ -8,11 +8,14 @@ import { buildImagePrompt } from "../services/imagePrompt";
 import { AspectRatio, ImageResolution, Project, Scene, TestLabRun, TestLabRunStep } from "../types";
 import { buildTestLabSummary } from "../services/testLabAnalytics";
 import { clearTestRuns, getTestImageDataUrl, loadTestRuns, saveTestRun } from "../services/db";
-import { getImageProvider } from "../services/appSettings";
-import { getImageModelByProvider } from "../services/imageModels";
+import { getDefaultImageModel, getImageProvider } from "../services/appSettings";
+import { getImageModelById, getImageModelByProvider } from "../services/imageModels";
+import { ContinuityBible, ContinuityEntity } from "../types";
 import { TEXT_MODEL } from "../services/modelPolicy";
 import { buildTestLabReport } from "../services/testLabReport";
 import { ModalPortal } from "./modals/ModalPortal";
+import { useAuth } from "../contexts/AuthContext";
+import JSZip from "jszip";
 
 interface TestLabProps {
   onCreateProject: (name: string) => Project;
@@ -22,11 +25,39 @@ interface TestLabProps {
 
 const DEFAULT_RATIO: AspectRatio = "3:4";
 const DEFAULT_RES: ImageResolution = "1K";
+// Helper to build a temporary Continuity Bible from Test Lab inputs
+const buildTestContinuity = (
+  characters: string,
+  items: string,
+  locations: string,
+  setting: string
+): ContinuityBible => {
+  const entities: ContinuityEntity[] = [];
 
-import { useAuth } from "../contexts/AuthContext";
-import JSZip from "jszip";
+  const parse = (input: string, kind: ContinuityEntity['kind']) =>
+    input.split(',').map(s => s.trim()).filter(s => s).map(name => ({
+      id: crypto.randomUUID(),
+      kind,
+      name,
+      description: kind === 'character' ? 'Test Character' : kind === 'item' ? 'Test Item' : 'Test Location',
+      imageReferences: [],
+      lockedTraits: [],
+      referenceImageIds: [],
+      required: false
+    } as ContinuityEntity));
 
-// ... existing imports ...
+  entities.push(...parse(characters, 'character'));
+  entities.push(...parse(items, 'item'));
+  entities.push(...parse(locations, 'location'));
+
+  return {
+    version: 1,
+    entities,
+    sceneBindings: [],
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  };
+};
 
 export const TestLab: React.FC<TestLabProps> = ({ onCreateProject, onUpdateProject, onOpenProject }) => {
   const { user } = useAuth();
