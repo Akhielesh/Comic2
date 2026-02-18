@@ -210,12 +210,15 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
 
     markGenerating(entity.id, true);
     try {
+      const isCharacter = type === 'characters';
       const prompt = buildImagePrompt({
         stage: "world",
         stylePrompt: currentStyle,
         subjectName: entity.name,
         subjectDescription: entity.description,
-        extraNotes: `Concept art for ${type === 'characters' ? 'Character' : type === 'items' ? 'Item' : 'Location'}`
+        extraNotes: isCharacter
+          ? `Character turnaround reference sheet: show the character in three poses side by side — front view, three-quarter view, and back view. White background, full body, consistent proportions and outfit across all three views. No text labels.`
+          : `Concept art for ${type === 'items' ? 'Item' : 'Location'}`
       });
       const generated = await generateImage(prompt, "1:1", "1K", entity.referenceImageIds || [], projectId, {
         stage: "world",

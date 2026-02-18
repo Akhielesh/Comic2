@@ -11,6 +11,7 @@ const ImagePreviewModal = React.lazy(() => import('../modals/ImagePreviewModal')
 const RegenerateModal = React.lazy(() => import('../modals/RegenerateModal').then(module => ({ default: module.RegenerateModal })));
 const HistoryModal = React.lazy(() => import('../modals/HistoryModal').then(module => ({ default: module.HistoryModal })));
 const BubbleEditorModal = React.lazy(() => import('../modals/BubbleEditorModal').then(module => ({ default: module.BubbleEditorModal })));
+const ShareModal = React.lazy(() => import('../modals/ShareModal').then(module => ({ default: module.ShareModal })));
 
 import { exportProject, getImageUrl, getImageDataUrl } from '../../services/db';
 import { ensureDialogueBlocks } from '../../services/dialogueUtils';
@@ -62,6 +63,7 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
   const [showRegenModal, setShowRegenModal] = useState(false);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [shareLink, setShareLink] = useState<string | null>(null);
+  const [showShareModal, setShowShareModal] = useState(false);
   const [historyUrls, setHistoryUrls] = useState<string[]>([]);
   const [costReport, setCostReport] = useState<ProjectReport | null>(null);
   const [costUpdatedAt, setCostUpdatedAt] = useState<number | null>(null);
@@ -370,13 +372,7 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
   };
 
   const handleShare = () => {
-    const url = new URL(window.location.href);
-    url.searchParams.set('view', 'read');
-    url.searchParams.set('id', projectId);
-    const shareUrl = url.toString();
-    setShareLink(shareUrl);
-    navigator.clipboard.writeText(shareUrl);
-    setTimeout(() => setShareLink(null), 3000);
+    setShowShareModal(true);
   };
 
   const getExtensionFromMime = (mime: string) => {
@@ -724,6 +720,12 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
           }}
           onWait={() => setLimitDetails(null)}
         />
+      )}
+
+      {showShareModal && (
+        <React.Suspense fallback={null}>
+          <ShareModal projectId={projectId} onClose={() => setShowShareModal(false)} />
+        </React.Suspense>
       )}
     </div>
   );

@@ -48,6 +48,7 @@ const buildEntity = (
     kind === "character" ? `${(entity as Character).bio || ""}. ${entity.description || ""}` : entity.description || ""
   ),
   referenceImageIds: dedupe([...(entity.referenceImageIds || []), ...(entity.imageId ? [entity.imageId] : [])]),
+  imageId: entity.imageId,
   required: kind === "character"
 });
 
@@ -185,9 +186,22 @@ export const resolvePanelContinuity = (state: ComicState, panel: ComicPanel): Pa
   const referenceImageIds = dedupe([
     ...(panel.continuity?.referenceImageIds || []),
     ...requiredEntityIds
-      .map((entityId) => getEntityById(state, entityId)?.referenceImageIds || [])
+      .map((entityId) => {
+        const entity = getEntityById(state, entityId);
+        if (!entity) return [];
+        // Include both user-uploaded references AND the generated turnaround/concept image
+        const ids = [...(entity.referenceImageIds || [])];
+        if (entity.imageId) ids.push(entity.imageId);
+        return ids;
+      })
       .flat(),
-    ...(locationId ? getEntityById(state, locationId)?.referenceImageIds || [] : [])
+    ...(locationId ? (() => {
+      const loc = getEntityById(state, locationId);
+      if (!loc) return [];
+      const ids = [...(loc.referenceImageIds || [])];
+      if (loc.imageId) ids.push(loc.imageId);
+      return ids;
+    })() : [])
   ]);
 
   return {

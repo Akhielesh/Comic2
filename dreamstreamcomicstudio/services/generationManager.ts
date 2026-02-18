@@ -8,6 +8,7 @@ import { MAX_CONTINUITY_PANELS } from "./modelPolicy";
 import { createSystemNotification } from "./db";
 import { prependCappedHistory, appendCappedHistory } from "./projectStorage";
 import { ApiError } from "./apiClient";
+import { computeDefaultBubblePositions } from "./bubbleLayout";
 import {
   collectPanelReferenceImageIds,
   getEntityById,
@@ -281,6 +282,9 @@ export const startBackgroundGeneration = async (
               ...panelContinuity,
               referenceImageIds: collectPanelReferenceImageIds(state, panelData)
             },
+            dialogueBlocks: panelData.dialogueBlocks?.length
+              ? computeDefaultBubblePositions(panelData.dialogueBlocks)
+              : panelData.dialogueBlocks,
             imageId: generatedImageId,
             imageUrl: generatedImageUrl,
             imageIdHistory: prependCappedHistory(panelData.imageIdHistory, generatedImageId),
@@ -499,6 +503,9 @@ export const regenerateSinglePanel = async (
         imageUrl: generated.imageUrl,
         imageIdHistory: appendCappedHistory(p.imageIdHistory, generated.imageId),
         imageUrlHistory: appendCappedHistory(p.imageUrlHistory, generated.imageUrl),
+        dialogueBlocks: p.dialogueBlocks?.length
+          ? computeDefaultBubblePositions(p.dialogueBlocks)
+          : p.dialogueBlocks,
         failureReason: undefined // Clear any failure flag
       } : p);
 

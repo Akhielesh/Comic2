@@ -236,6 +236,7 @@ export interface ContinuityEntity {
   description: string;
   lockedTraits: string[];
   referenceImageIds: string[];
+  imageId?: string;
   required: boolean;
 }
 
@@ -467,6 +468,10 @@ export interface ComicState {
   }>;
   customLayoutPrompt?: string;
   textLayout?: TextLayout;
+  /** 'universal' applies one dialogue style to all panels; 'per_panel' allows individual overrides */
+  dialogueMode?: 'universal' | 'per_panel';
+  /** Default dialogue bubble kind when dialogueMode is 'universal' */
+  universalDialogueStyle?: 'speech' | 'thought' | 'narration' | 'shout';
   panelPlanVersion?: number;
   pricingConfig?: PricingConfig;
   // Deprecated legacy field retained for backwards compatibility with older project payloads.

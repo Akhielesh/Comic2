@@ -15,6 +15,10 @@ interface LayoutSelectorProps {
     projectId: string;
     currentTextLayout?: TextLayout;
     onTextLayoutChange?: (layout: TextLayout) => void;
+    currentDialogueMode?: 'universal' | 'per_panel';
+    onDialogueModeChange?: (mode: 'universal' | 'per_panel') => void;
+    currentDialogueStyle?: 'speech' | 'thought' | 'narration' | 'shout';
+    onDialogueStyleChange?: (style: 'speech' | 'thought' | 'narration' | 'shout') => void;
 }
 
 const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
@@ -70,7 +74,11 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
     selectedFormFactor,
     projectId,
     currentTextLayout = 'caption',
-    onTextLayoutChange
+    onTextLayoutChange,
+    currentDialogueMode = 'universal',
+    onDialogueModeChange,
+    currentDialogueStyle = 'speech',
+    onDialogueStyleChange
 }) => {
     const [customImages, setCustomImages] = useState<string[]>([]);
     const [customLayoutPrompt, setCustomLayoutPrompt] = useState<string | null>(null);
@@ -128,10 +136,10 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
             <div
                 key={template.id}
                 className={`group relative bg-white rounded-xl border-4 shadow-comic transition-all duration-300 flex flex-col overflow-hidden ${isSelected
-                        ? 'border-brand-blue ring-4 ring-brand-blue/30 scale-105 z-10'
-                        : isIncompatible
-                            ? 'border-slate-300 opacity-50'
-                            : 'border-black hover:-translate-y-2 hover:shadow-[8px_8px_0px_0px_#000]'
+                    ? 'border-brand-blue ring-4 ring-brand-blue/30 scale-105 z-10'
+                    : isIncompatible
+                        ? 'border-slate-300 opacity-50'
+                        : 'border-black hover:-translate-y-2 hover:shadow-[8px_8px_0px_0px_#000]'
                     }`}
             >
                 <div className="aspect-[3/4] bg-slate-50 p-4 border-b-4 border-black relative">
@@ -253,6 +261,47 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                             {layout.replace('_', ' ')}
                         </button>
                     ))}
+                </div>
+
+                {/* Dialogue Mode Toggle */}
+                <div className="mt-6 pt-6 border-t-2 border-slate-200">
+                    <h4 className="text-lg font-display text-black mb-2">Dialogue Mode</h4>
+                    <p className="text-xs text-slate-600 font-comic mb-3">Choose how dialogue is applied to panels.</p>
+                    <div className="flex gap-3 mb-4">
+                        {(['universal', 'per_panel'] as const).map(mode => (
+                            <button
+                                key={mode}
+                                onClick={() => onDialogueModeChange?.(mode)}
+                                className={`flex-1 border-2 border-black rounded-lg px-3 py-3 text-xs font-bold uppercase transition-all ${currentDialogueMode === mode ? 'bg-brand-blue text-white' : 'bg-white hover:bg-slate-50'
+                                    }`}
+                            >
+                                {mode === 'universal' ? '🌐 Universal' : '🎯 Per-Panel'}
+                            </button>
+                        ))}
+                    </div>
+                    <p className="text-[10px] text-slate-500 font-comic">
+                        {currentDialogueMode === 'universal'
+                            ? 'One dialogue style applies to all panels. You can still override individual panels in the review stage.'
+                            : 'Full control over each panel\'s dialogue style individually.'}
+                    </p>
+
+                    {currentDialogueMode === 'universal' && (
+                        <div className="mt-4">
+                            <h5 className="text-sm font-display text-black mb-2">Bubble Style</h5>
+                            <div className="grid grid-cols-4 gap-2">
+                                {(['speech', 'thought', 'narration', 'shout'] as const).map(style => (
+                                    <button
+                                        key={style}
+                                        onClick={() => onDialogueStyleChange?.(style)}
+                                        className={`border-2 border-black rounded-lg px-2 py-2 text-xs font-bold capitalize transition-all ${currentDialogueStyle === style ? 'bg-brand-yellow' : 'bg-white hover:bg-slate-50'
+                                            }`}
+                                    >
+                                        {style === 'speech' ? '💬' : style === 'thought' ? '💭' : style === 'narration' ? '📖' : '💥'} {style}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
 
