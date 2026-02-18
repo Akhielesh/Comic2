@@ -247,6 +247,7 @@ export const startBackgroundGeneration = async (
 
           if (!generatedImageId || !generatedImageUrl) {
             const continuityImageIds = [
+              ...(state.styleImageId ? [state.styleImageId] : []),
               ...collectPanelReferenceImageIds(state, panelData),
               ...continuityImageIdsSnapshot
             ];
@@ -427,7 +428,11 @@ export const regenerateSinglePanel = async (
     .filter((id): id is string => !!id);
 
   // Deduplicate reference IDs
-  const referenceIds = Array.from(new Set([...continuityRefIds, ...previousIds]));
+  const referenceIds = Array.from(new Set([
+    ...(state.styleImageId ? [state.styleImageId] : []),
+    ...continuityRefIds,
+    ...previousIds
+  ]));
 
   // Context strings
   const characterContext = state.characters.map((c) => `${c.name}: ${c.description}`).join('. ');

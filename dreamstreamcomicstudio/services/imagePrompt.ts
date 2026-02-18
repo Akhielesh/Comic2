@@ -3,7 +3,8 @@ export type ImagePromptStage =
   | "world"
   | "cover"
   | "panel"
-  | "panel_regen";
+  | "panel_regen"
+  | "character_sheet";
 
 export type ImagePromptOptions = {
   stage: ImagePromptStage;
@@ -40,6 +41,11 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
       lines.push("Concept art sheet.");
       lines.push("Single full-bleed image, no panel borders or frames.");
       break;
+    case "character_sheet":
+      lines.push("Character reference sheet in the project's established art style.");
+      lines.push("Show the character in three poses: front, three-quarter, and back view.");
+      lines.push("Consistent proportions and outfit across all views. No text labels.");
+      break;
     case "cover":
       lines.push("Comic book cover illustration.");
       lines.push("Single full-bleed image, no panel borders or frames.");
@@ -59,7 +65,7 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
   }
 
   if (clean(options.projectTitle)) lines.push(`Project: ${clean(options.projectTitle)}.`);
-  if (clean(options.stylePrompt)) lines.push(`Style: ${clean(options.stylePrompt)}.`);
+  if (clean(options.stylePrompt)) lines.push(`IMPORTANT — Art style (match exactly): ${clean(options.stylePrompt)}.`);
   if (clean(options.layoutType)) lines.push(`Layout: ${clean(options.layoutType)}.`);
   if (clean(options.subjectName)) lines.push(`Subject: ${clean(options.subjectName)}.`);
   if (clean(options.subjectDescription)) lines.push(`Description: ${clean(options.subjectDescription)}.`);
