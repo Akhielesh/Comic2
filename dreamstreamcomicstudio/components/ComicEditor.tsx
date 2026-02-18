@@ -286,6 +286,10 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           currentTextLayout={state.textLayout || 'caption'}
           projectId={project.id}
           onTextLayoutChange={(textLayout) => updateState({ textLayout })}
+          currentDialogueMode={state.dialogueMode || 'universal'}
+          onDialogueModeChange={(dialogueMode) => updateState({ dialogueMode })}
+          currentDialogueStyle={state.universalDialogueStyle || 'speech'}
+          onDialogueStyleChange={(universalDialogueStyle) => updateState({ universalDialogueStyle })}
           onLayoutConfirmed={(layoutType, customLayoutPrompt, gridTemplateId) => { updateState({ layoutType, customLayoutPrompt, gridTemplateId }); nextStep(); }} />;
       case AppStep.COMBINED_PREVIEW:
         return (

@@ -16,6 +16,7 @@ interface ComicReaderProps {
   onClose: () => void;
   onUpdateProject: (projectId: string, updates: Partial<Project> | ((prev: Project) => Partial<Project>)) => void;
   isReadOnly?: boolean;
+  allowDownload?: boolean;
   onNavigate?: (view: string, id?: string) => void;
   onOpenPrivacy: () => void;
   onOpenTerms: () => void;
@@ -27,6 +28,7 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
   onClose,
   onUpdateProject,
   isReadOnly = false,
+  allowDownload = true,
   onNavigate,
   onOpenPrivacy,
   onOpenTerms,

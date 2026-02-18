@@ -30,6 +30,7 @@ import webhookRouter from './routes/webhook.js';
 import { billingRouter } from './routes/billing.js';
 import { adminRouter } from './routes/admin.js';
 import { moderationRouter } from './routes/moderation.js';
+import { sharingRouter } from './routes/sharing.js';
 
 validateRuntimeConfig();
 
@@ -110,6 +111,9 @@ app.use('/api/system', systemRateLimit, systemRouter);
 app.use('/api/assistant', optionalAuth, assistantLimits, assistantRouter);
 app.use('/api/billing', systemRateLimit, optionalAuth, billingRouter);
 
+// Share token validation needs optionalAuth (returns loginRequired hint if not authenticated)
+app.use('/api/shares/token', optionalAuth, systemRateLimit, sharingRouter);
+
 // Protect all API routes
 app.use('/api', requireAuth);
 
@@ -118,6 +122,7 @@ app.use('/api/moderation', moderationRateLimit, moderationRouter);
 app.use('/api/text', textRateLimit, textRouter);
 app.use('/api/image', imageRateLimit, imageRouter);
 app.use('/api/vision', visionRateLimit, visionRouter);
+app.use('/api/shares', systemRateLimit, sharingRouter);
 
 app.use(errorHandler);
 

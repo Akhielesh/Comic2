@@ -101,7 +101,7 @@ export const FEATURE_FLAGS = {
   /** Phase 1: Filter grid templates by form-factor compatibility. */
   ENABLE_FORM_FACTOR_FILTERING: true,
   /** Phase 2: Generate character turnaround sheets before panels. */
-  ENABLE_CHAR_SHEETS: false,
+  ENABLE_CHAR_SHEETS: true,
   /** Phase 3: Generate panels in parallel batches. */
   ENABLE_PARALLEL_GEN: false,
   /** Phase 4: Compose panels into full-page images on the server. */
