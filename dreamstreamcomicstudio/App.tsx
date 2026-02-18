@@ -12,6 +12,7 @@ const PublicProfile = lazyImportWithRetry(() => import('./components/PublicProfi
 const AccountSettings = lazyImportWithRetry(() => import('./components/AccountSettings').then(module => ({ default: module.AccountSettings })));
 const PrivacyPolicy = lazyImportWithRetry(() => import('./components/PrivacyPolicy').then(module => ({ default: module.PrivacyPolicy })));
 const TermsOfService = lazyImportWithRetry(() => import('./components/TermsOfService').then(module => ({ default: module.TermsOfService })));
+const SharedViewer = lazyImportWithRetry(() => import('./components/SharedViewer').then(module => ({ default: module.SharedViewer })));
 
 import { useProjectManager } from './hooks/useProjectManager';
 import { checkSystemDiagnostics, checkSystemStatus } from './services/geminiService';
@@ -42,7 +43,8 @@ type AppView =
   | 'settings'
   | 'privacy'
   | 'terms'
-  | 'profile';
+  | 'profile'
+  | 'shared';
 
 type SettingsTab = 'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin' | 'preferences' | 'security';
 
@@ -78,6 +80,7 @@ const App: React.FC = () => {
   const [viewedProfile, setViewedProfile] = useState<string | null>(null); // username
   const [systemError, setSystemError] = useState<string | null>(null);
   const [pendingReaderTarget, setPendingReaderTarget] = useState<PendingReaderTarget | null>(null);
+  const [shareToken, setShareToken] = useState<string | null>(null);
   const hasWarnedDobProfileCheckRef = useRef(false);
 
   const setReaderUrlParams = (id: string) => {
@@ -189,6 +192,17 @@ const App: React.FC = () => {
         console.error('System status check failed:', err);
         setSystemError(err?.message || 'Unable to reach server');
       });
+  }, []);
+
+  useEffect(() => {
+
+    // Check for share URL: /share/:token
+    const path = window.location.pathname;
+    const shareMatch = path.match(/^\/share\/([^/]+)$/);
+    if (shareMatch && shareMatch[1]) {
+      setShareToken(shareMatch[1]);
+      setCurrentView('shared');
+    }
   }, []);
 
   useEffect(() => {
@@ -587,9 +601,9 @@ const App: React.FC = () => {
   const effectiveView: AppView = !user && isProtectedViewStrict ? 'auth' : currentView;
 
   const activeProject = activeProjectId ? getProject(activeProjectId) : undefined;
-  const showSharedHeader = effectiveView !== 'home' && effectiveView !== 'reader';
-  const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader';
-  const showUniversalAssistant = effectiveView !== 'auth-callback';
+  const showSharedHeader = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared';
+  const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared';
+  const showUniversalAssistant = effectiveView !== 'auth-callback' && effectiveView !== 'shared';
 
   return (
     <ErrorBoundary>
@@ -750,6 +764,16 @@ const App: React.FC = () => {
               }}
               openPasswordReset={openSecurityPasswordReset}
               onPasswordResetHandled={() => setOpenSecurityPasswordReset(false)}
+            />
+          )}
+
+          {effectiveView === 'shared' && shareToken && (
+            <SharedViewer
+              shareToken={shareToken}
+              onNavigate={handleNavigate}
+              onOpenPrivacy={() => setCurrentView('privacy')}
+              onOpenTerms={() => setCurrentView('terms')}
+              onOpenFaq={handleOpenFaq}
             />
           )}
         </Suspense>
