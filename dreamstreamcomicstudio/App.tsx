@@ -764,6 +764,7 @@ const App: React.FC = () => {
               }}
               openPasswordReset={openSecurityPasswordReset}
               onPasswordResetHandled={() => setOpenSecurityPasswordReset(false)}
+              onNavigate={handleNavigate}
             />
           )}
 
