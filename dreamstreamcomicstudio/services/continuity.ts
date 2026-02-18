@@ -220,6 +220,45 @@ export const collectPanelReferenceImageIds = (state: ComicState, panel: ComicPan
   return dedupe(continuity.referenceImageIds || []);
 };
 
+export const resolveVisibleEntities = (state: ComicState, panel: ComicPanel) => {
+  const continuity = resolvePanelContinuity(state, panel);
+  return (continuity.requiredEntityIds || [])
+    .map((id) => getEntityById(state, id))
+    .filter((e): e is ContinuityEntity => !!e);
+};
+
+export const buildEntityTextContext = (state: ComicState, panel: ComicPanel): string => {
+  const entities = resolveVisibleEntities(state, panel);
+  if (entities.length === 0) return "";
+
+  return entities.map(e => {
+    const parts = [
+      `[${e.name}]`,
+      e.description ? `Description: ${e.description}` : "",
+      // If it's a character, we might want more specific fields if they existed, 
+      // but ContinuityEntity seems to be a unified type or we look at the specific lists.
+      // Let's check if we can access the original Character/Item/Location objects for more detail.
+      // The ContinuityEntity is likely a subset or reference. 
+      // Actually getEntityById looks up in state.continuity.bible.entities.
+      // Let's assume ContinuityEntity has the fields we need or we look up in state.characters/items/locations.
+    ].filter(Boolean).join(" ");
+
+    // Better lookup: find the actual Character/Item/Location because ContinuityEntity might be sparse?
+    // The previous code mapped entity IDs to names.
+    // Let's try to find the full object for better description.
+    const fullChar = state.characters.find(c => c.id === e.id);
+    const fullItem = state.items.find(i => i.id === e.id);
+    const fullLoc = state.locations.find(l => l.id === e.id);
+    const fullObj = fullChar || fullItem || fullLoc;
+
+    if (fullObj) {
+      // Use the full object description if available
+      return `[${fullObj.name}]: ${fullObj.description}`;
+    }
+    return `[${e.name}]: ${e.description}`;
+  }).join("\n");
+};
+
 export const validateContinuityState = (state: ComicState): ContinuityValidationResult => {
   const issues: ContinuityValidationResult["issues"] = [];
   const bible = state.continuity?.bible;

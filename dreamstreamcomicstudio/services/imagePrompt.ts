@@ -25,6 +25,7 @@ export type ImagePromptOptions = {
   requiredEntityNames?: string;
   continuityLock?: string;
   lockedLocation?: string;
+  entityVisualRef?: string;
 };
 
 const clean = (value?: string) => (value || "").trim();
@@ -78,6 +79,7 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
   if (clean(options.requiredEntityNames)) lines.push(`Required entities: ${clean(options.requiredEntityNames)}.`);
   if (clean(options.lockedLocation)) lines.push(`Locked location: ${clean(options.lockedLocation)}.`);
   if (clean(options.continuityLock)) lines.push(`Continuity lock: ${clean(options.continuityLock)}.`);
+  if (clean(options.entityVisualRef)) lines.push(`VISUAL REFERENCES:\n${clean(options.entityVisualRef)}`);
   if (clean(options.recentPanels)) lines.push(`Recent Panels: ${clean(options.recentPanels)}.`);
   if (clean(options.instructions)) lines.push(`Instructions: ${clean(options.instructions)}.`);
   if (clean(options.extraNotes)) lines.push(`Extra Notes: ${clean(options.extraNotes)}.`);

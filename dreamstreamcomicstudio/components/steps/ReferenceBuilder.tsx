@@ -219,8 +219,20 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
         subjectDescription: entity.description,
         extraNotes: !isCharacter ? `Concept art for ${type === 'items' ? 'Item' : 'Location'}` : undefined,
       });
-      const refIds = [...(entity.referenceImageIds || [])];
-      if (styleImageId) refIds.unshift(styleImageId);
+      // COST OPTIMIZATION: Smart Deduplication
+      // If the entity already has a generated style-consistent image (imageId),
+      // use ONLY that image as the reference. Do not send the user's uploaded photos (referenceImageIds)
+      // because the generated image effectively "bakes in" those details into the correct style.
+      // This saves tokens and strengthens style consistency.
+      const refIds: string[] = [];
+
+      if (styleImageId) refIds.push(styleImageId);
+
+      if (entity.imageId) {
+        refIds.push(entity.imageId);
+      } else {
+        refIds.push(...(entity.referenceImageIds || []));
+      }
       const generated = await generateImage(prompt, "1:1", "1K", refIds, projectId, {
         stage: "world",
         meta: {

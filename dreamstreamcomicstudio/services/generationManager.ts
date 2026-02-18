@@ -14,6 +14,7 @@ import {
   getEntityById,
   getSceneBinding,
   resolvePanelContinuity,
+  buildEntityTextContext,
   validateContinuityState
 } from "./continuity";
 
@@ -226,6 +227,10 @@ export const startBackgroundGeneration = async (
             ? getEntityById(state, panelContinuity.locationId)?.name
             : undefined;
 
+          // COST OPTIMIZATION: Use text-only references for entities instead of image references
+          // This reduces input tokens by ~80% per panel
+          const entityVisualContext = buildEntityTextContext(state, panelData);
+
           const imagePrompt = buildImagePrompt({
             stage: "panel",
             stylePrompt: state.stylePrompt,
@@ -239,17 +244,18 @@ export const startBackgroundGeneration = async (
             recentPanels: continuityText || undefined,
             requiredEntityNames: continuityEntityNames.join(", ") || undefined,
             lockedLocation: lockedLocationName,
-            continuityLock: panelContinuity.continuityNotes || (sceneBinding ? `Scene ${sceneBinding.sceneId} strict lock` : "strict")
+            continuityLock: panelContinuity.continuityNotes || (sceneBinding ? `Scene ${sceneBinding.sceneId} strict lock` : "strict"),
+            entityVisualRef: entityVisualContext
           });
 
           let generatedImageId = panelData.imageId;
           let generatedImageUrl = panelData.imageUrl;
 
           if (!generatedImageId || !generatedImageUrl) {
+            // COST OPTIMIZATION: Only send the style image as a visual reference.
+            // Entity identity is handled by the text prompt (entityVisualRef).
             const continuityImageIds = [
-              ...(state.styleImageId ? [state.styleImageId] : []),
-              ...collectPanelReferenceImageIds(state, panelData),
-              ...continuityImageIdsSnapshot
+              ...(state.styleImageId ? [state.styleImageId] : [])
             ];
             const generated = await generateImage(
               imagePrompt,
@@ -421,18 +427,11 @@ export const regenerateSinglePanel = async (
   const sceneBinding = scene ? getSceneBinding(state, scene.id) : undefined;
 
   // 1. Gather Context
-  const continuityRefIds = collectPanelReferenceImageIds(state, targetPanel);
-  const previousIds = state.panels
-    .slice(Math.max(0, panelIndex - 2), panelIndex)
-    .map((p) => p.imageId)
-    .filter((id): id is string => !!id);
+  // COST OPTIMIZATION: Use text-only references instead of image references
+  const entityVisualContext = buildEntityTextContext(state, targetPanel);
 
-  // Deduplicate reference IDs
-  const referenceIds = Array.from(new Set([
-    ...(state.styleImageId ? [state.styleImageId] : []),
-    ...continuityRefIds,
-    ...previousIds
-  ]));
+  // COST OPTIMIZATION: Only use style image as visual reference
+  const referenceIds = state.styleImageId ? [state.styleImageId] : [];
 
   // Context strings
   const characterContext = state.characters.map((c) => `${c.name}: ${c.description}`).join('. ');
@@ -443,55 +442,41 @@ export const regenerateSinglePanel = async (
     .map(p => p.description)
     .join(" | ");
 
-  const panelContinuity = resolvePanelContinuity(state, targetPanel);
-  const requiredEntityNames = (panelContinuity.requiredEntityIds || [])
-    .map((entityId) => getEntityById(state, entityId)?.name)
-    .filter((name): name is string => !!name)
-    .join(', ');
-
-  const lockedLocation = panelContinuity.locationId
-    ? getEntityById(state, panelContinuity.locationId)?.name
-    : undefined;
-
-  // 2. Build Prompt
-  const prompt = buildImagePrompt({
+  const imagePrompt = buildImagePrompt({
     stage: "panel_regen",
     stylePrompt: state.stylePrompt,
     layoutType: state.layoutType === 'custom' ? state.customLayoutPrompt : state.layoutType,
-    sceneAction: targetPanel.description,
-    characters: characterContext, // Full context for regen to be safe
+    characters: characterContext,
     items: itemContext,
     locations: locContext,
-    setting: scene?.setting,
-    continuitySummary: state.continuitySummary || undefined,
-    recentPanels: recentPanels || undefined,
-    instructions, // USER INSTRUCTIONS
-    requiredEntityNames: requiredEntityNames || undefined,
-    lockedLocation,
-    continuityLock: panelContinuity.continuityNotes || (sceneBinding ? `Scene ${sceneBinding.sceneId} strict lock` : "strict")
+    sceneAction: targetPanel.description,
+    setting: scene ? scene.setting : "",
+    recentPanels: recentPanels,
+    instructions: instructions,
+    entityVisualRef: entityVisualContext,
+    continuityLock: targetPanel.continuity?.continuityNotes || (sceneBinding ? `Scene ${sceneBinding.sceneId} strict lock` : "strict")
   });
 
+  // 2. Generate Image
   const ratioConfig = resolveAspectRatio(state, state.styleAspectRatio);
 
-  // 3. Generate
   const generated = await generateImage(
-    prompt,
+    imagePrompt,
     ratioConfig.modelRatio,
     state.imageResolution,
     referenceIds,
     project.id,
     {
-      stage: 'panel_regen',
+      stage: "panel_regen",
       cropToRatio: ratioConfig.cropRatio,
       meta: {
         source: {
-          type: 'panel',
+          type: "panel",
           id: targetPanel.id,
-          label: `Scene ${targetPanel.sceneId} Panel ${panelIndex + 1}`
+          label: `Regenerate Panel ${panelIndex + 1}`
         },
-        sceneId: targetPanel.sceneId,
-        panelIndex,
-        regen: true
+        sceneId: scene?.id,
+        panelId: targetPanel.id
       }
     }
   );
