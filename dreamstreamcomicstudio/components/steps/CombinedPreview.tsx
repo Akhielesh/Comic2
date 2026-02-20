@@ -24,6 +24,8 @@ import { loadArtifactsForProject } from '../../services/db';
 import { buildProjectReport } from '../../services/reporting';
 import { ApiError } from '../../services/apiClient';
 import { LimitExceededModal } from '../modals/LimitExceededModal';
+import { applyStyleLockResolution, resolveStyleLock } from '../../services/styleLock';
+import { hasMultiFrameLanguage, sanitizePanelDescription } from '../../services/panelDescription';
 
 interface CombinedPreviewProps {
   state: ComicState;
@@ -103,6 +105,14 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
   const continuityValidation = useMemo(
     () => validateContinuityState(state),
     [state]
+  );
+  const styleLockResolution = useMemo(
+    () => resolveStyleLock(state),
+    [state.selectedStyleId, state.styleVariants]
+  );
+  const multiFramePanels = useMemo(
+    () => state.panels.filter((panel) => hasMultiFrameLanguage(panel.description || panel.prompt || "")),
+    [state.panels]
   );
 
   useEffect(() => {
@@ -217,10 +227,15 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
           }))
       });
       const newPanels = result.map((panel, index) => ({
+        ...(() => {
+          const sanitized = sanitizePanelDescription(panel.description);
+          return {
+            description: sanitized.text,
+            prompt: sanitized.text
+          };
+        })(),
         id: `s${scene.id}-p${index}-${Date.now()}`,
         sceneId: scene.id,
-        description: panel.description,
-        prompt: panel.description,
         dialogue: panel.dialogue || '',
         dialogueBlocks: panel.dialogueBlocks,
         imageIdHistory: [],
@@ -277,11 +292,12 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
             }))
         });
         result.forEach((panel, index) => {
+          const sanitized = sanitizePanelDescription(panel.description);
           allPanels.push(normalizePanel({
             id: `s${scene.id}-p${index}-${Date.now()}`,
             sceneId: scene.id,
-            description: panel.description,
-            prompt: panel.description,
+            description: sanitized.text,
+            prompt: sanitized.text,
             dialogue: panel.dialogue || '',
             dialogueBlocks: panel.dialogueBlocks,
             imageIdHistory: [],
@@ -314,7 +330,13 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
   const updatePanel = (panelId: string, updates: Partial<ComicPanel>) => {
     const updated = state.panels.map(panel => {
       if (panel.id !== panelId) return panel;
-      const merged = normalizePanel({ ...panel, ...updates });
+      const mergedInput: ComicPanel = { ...panel, ...updates };
+      if (typeof mergedInput.description === 'string') {
+        const sanitized = sanitizePanelDescription(mergedInput.description);
+        mergedInput.description = sanitized.text;
+        mergedInput.prompt = sanitized.text;
+      }
+      const merged = normalizePanel(mergedInput);
       const continuity = resolvePanelContinuity(state, merged);
       const next = { ...merged, continuity };
       return next;
@@ -362,18 +384,46 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
   };
 
   const handleStartGeneration = () => {
-    const validation = validateContinuityState(state);
+    const styleApplied = applyStyleLockResolution(state);
+    const sanitizedPanels = styleApplied.state.panels.map((panel) => {
+      const sanitized = sanitizePanelDescription(panel.description || panel.prompt || '');
+      return {
+        ...panel,
+        description: sanitized.text || panel.description,
+        prompt: sanitized.text || panel.prompt
+      };
+    });
+    const hasRemainingMultiFrame = sanitizedPanels.some((panel) =>
+      hasMultiFrameLanguage(panel.description || panel.prompt || "")
+    );
+    const validation = validateContinuityState({
+      ...styleApplied.state,
+      panels: sanitizedPanels
+    });
+
     onStateUpdate({
-      continuity: state.continuity
+      selectedStyleId: styleApplied.state.selectedStyleId,
+      stylePrompt: styleApplied.state.stylePrompt,
+      styleImageId: styleApplied.state.styleImageId,
+      styleImageUrl: styleApplied.state.styleImageUrl,
+      styleCategory: styleApplied.state.styleCategory,
+      styleAspectRatio: styleApplied.state.styleAspectRatio,
+      imageResolution: styleApplied.state.imageResolution,
+      styleLockStatus: styleApplied.state.styleLockStatus,
+      styleLockResolvedAt: styleApplied.state.styleLockResolvedAt,
+      panels: sanitizedPanels,
+      continuity: styleApplied.state.continuity
         ? {
-          ...state.continuity,
+          ...styleApplied.state.continuity,
           lockLevel: 'strict',
           fallbackPolicy: 'auto',
           validation
         }
-        : buildDefaultContinuityState(state)
+        : buildDefaultContinuityState(styleApplied.state)
     });
-    if (state.continuity?.lockLevel === 'strict' || !state.continuity) {
+    if (!styleApplied.resolution.resolved) return;
+    if (hasRemainingMultiFrame) return;
+    if (styleApplied.state.continuity?.lockLevel === 'strict' || !styleApplied.state.continuity) {
       if (!validation.isValid) return;
     }
     onConfirm();
@@ -401,12 +451,40 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
               onClick={handleStartGeneration}
               className="bg-brand-yellow"
               icon={<Play fill="currentColor" />}
-              disabled={state.continuity?.lockLevel === 'strict' && !continuityValidation.isValid}
+              disabled={
+                (state.continuity?.lockLevel === 'strict' && !continuityValidation.isValid) ||
+                !styleLockResolution.resolved ||
+                multiFramePanels.length > 0
+              }
             >
               Start Generation
             </Button>
           </div>
         </div>
+        {!styleLockResolution.resolved && (
+          <div className="mt-4 rounded-lg border-2 border-amber-400 bg-amber-50 p-3">
+            <div className="text-sm font-bold text-amber-800">Style lock is unresolved.</div>
+            <div className="text-xs text-amber-700 mt-1">
+              Select or regenerate a style variant with a valid style reference image before starting generation.
+            </div>
+            <div className="mt-2">
+              <button
+                onClick={() => onStateUpdate({ step: AppStep.STYLE_SELECTION })}
+                className="text-xs font-bold border border-amber-500 text-amber-800 bg-white rounded px-2 py-1 hover:bg-amber-100"
+              >
+                Fix In Style Stage
+              </button>
+            </div>
+          </div>
+        )}
+        {multiFramePanels.length > 0 && (
+          <div className="mt-4 rounded-lg border-2 border-orange-300 bg-orange-50 p-3">
+            <div className="text-sm font-bold text-orange-800">Multi-frame panel descriptions detected.</div>
+            <div className="text-xs text-orange-700 mt-1">
+              Remove split-panel/montage language before generation. Detected in {multiFramePanels.length} panel{multiFramePanels.length === 1 ? '' : 's'}.
+            </div>
+          </div>
+        )}
         {!continuityValidation.isValid && (
           <div className="mt-4 rounded-lg border-2 border-red-300 bg-red-50 p-3">
             <div className="text-sm font-bold text-red-700">Continuity lock is blocking generation.</div>

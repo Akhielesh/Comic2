@@ -115,6 +115,15 @@ export type ExtractWorldResponse = {
   characters: Character[];
   items: Item[];
   locations: Location[];
+  diagnostics?: {
+    input_scene_count: number;
+    entity_counts: {
+      characters: number;
+      items: number;
+      locations: number;
+    };
+    filtered_entity_count: number;
+  };
   prompt: string;
   responseText?: string;
   usage?: ApiUsage;

@@ -41,6 +41,7 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
       "Show the character in three poses: front, three-quarter, and back view.",
       styleLine ? `Art Style: ${styleLine}` : "",
       options.subjectDescription ? `Character Description: ${clean(options.subjectDescription)}` : "",
+      "Turnaround sheet only, neutral/plain background, no environment storytelling, no action scene, no other characters.",
       "Consistent proportions and outfit across all views. No text labels."
     ].filter(Boolean).join(" ");
   }
@@ -53,7 +54,8 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
     return [
       options.subjectDescription ? `${label}: ${clean(options.subjectDescription)}` : "",
       styleLine ? `Art Style: ${styleLine}` : "",
-      "Single concept art image."
+      "Single concept image of the subject only.",
+      "No narrative scene, no sequence, no montage, no implied story progression, no extra named characters."
     ].filter(Boolean).join(" ");
   }
 
@@ -77,11 +79,13 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
     case "panel":
       lines.push("Comic panel illustration.");
       lines.push("Single full-bleed image, no panel borders or frames.");
+      lines.push("Single frame only. No split panels, no montage, no comic page layout, no gutters, no panel numbering.");
       lines.push("Strict continuity mode: keep the same character identity, wardrobe silhouettes, and key props.");
       break;
     case "panel_regen":
       lines.push("Regenerate the comic panel with updates.");
       lines.push("Single full-bleed image, no panel borders or frames.");
+      lines.push("Single frame only. No split panels, no montage, no comic page layout, no gutters, no panel numbering.");
       lines.push("Strict continuity mode: preserve canonical character/prop/location identity.");
       break;
     default:
@@ -90,7 +94,9 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
 
   if (clean(options.projectTitle)) lines.push(`Project: ${clean(options.projectTitle)}.`);
   if (styleLine) lines.push(`IMPORTANT — Art style (match exactly): ${styleLine}.`);
-  if (clean(options.layoutType)) lines.push(`Layout: ${clean(options.layoutType)}.`);
+  if (options.stage === "style" && clean(options.layoutType)) {
+    lines.push(`Layout: ${clean(options.layoutType)}.`);
+  }
   if (clean(options.subjectName)) lines.push(`Subject: ${clean(options.subjectName)}.`);
   // Description is handled in the custom blocks above for world/char stages, 
   // but kept here for fallback/panel stages if needed.

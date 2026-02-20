@@ -27,11 +27,158 @@ const normalizeScenes = (raw: any[]): Scene[] => {
     .filter((s) => s && isString(s.synopsis) && isString(s.setting))
     .map((scene, index) => ({
       id: index + 1,
-      rawText: isString(scene.rawText) ? scene.rawText : '',
+      rawText: isString(scene.rawText) && scene.rawText.trim().length > 0 ? scene.rawText : scene.synopsis,
       synopsis: scene.synopsis,
       characters: ensureArray<string>(scene.characters, []),
       setting: scene.setting
     }));
+};
+
+type WorldExtractionDiagnostics = {
+  input_scene_count: number;
+  entity_counts: {
+    characters: number;
+    items: number;
+    locations: number;
+  };
+  filtered_entity_count: number;
+};
+
+const MAX_WORLD_CHARACTER_COUNT = 12;
+const MAX_WORLD_ITEM_COUNT = 20;
+const MAX_WORLD_LOCATION_COUNT = 12;
+
+const normalizeEntityName = (value: string) =>
+  value
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+
+const normalizeForMatch = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const containsNormalizedName = (haystack: string, rawName: string) => {
+  const target = normalizeForMatch(rawName);
+  if (!target) return false;
+  const source = normalizeForMatch(haystack);
+  if (!source) return false;
+  const pattern = new RegExp(`(^|\\s)${escapeRegex(target)}($|\\s)`);
+  return pattern.test(source);
+};
+
+const hasGoodDescription = (value: unknown) =>
+  typeof value === 'string' && value.trim().length >= 8;
+
+const dedupeByName = <T extends { name: string; description?: string }>(list: T[]): T[] => {
+  const byName = new Map<string, T>();
+  for (const entry of list) {
+    const key = normalizeEntityName(entry.name || '');
+    if (!key) continue;
+    const existing = byName.get(key);
+    if (!existing) {
+      byName.set(key, entry);
+      continue;
+    }
+    const existingScore = (existing.description || '').trim().length;
+    const nextScore = (entry.description || '').trim().length;
+    if (nextScore > existingScore) {
+      byName.set(key, entry);
+    }
+  }
+  return Array.from(byName.values());
+};
+
+const buildSceneGroundingContext = (scenes: Scene[]) => {
+  const sceneText = scenes
+    .map((scene) => [
+      scene.synopsis || '',
+      scene.setting || '',
+      ...(scene.characters || [])
+    ].join(' '))
+    .join('\n');
+  const sceneCharacterNames = new Set(
+    scenes
+      .flatMap((scene) => scene.characters || [])
+      .map((name) => normalizeEntityName(name))
+      .filter(Boolean)
+  );
+  return { sceneText, sceneCharacterNames };
+};
+
+export const buildWorldExtractionPrompt = (sceneContext: string) => `
+You are extracting world entities for a comic production pipeline.
+Use ONLY the provided scenes. Do not use outside knowledge.
+
+Hard rules:
+- No invented characters, items, or locations.
+- No cross-story contamination.
+- Return canonical names and concise visual descriptions.
+- Ground every entity directly in the provided scenes.
+- Do not add backstory, motivations, new plot beats, or future events.
+- Descriptions must be visual and present-tense only (appearance, materials, environment cues).
+- Characters max: ${MAX_WORLD_CHARACTER_COUNT}
+- Items max: ${MAX_WORLD_ITEM_COUNT}
+- Locations max: ${MAX_WORLD_LOCATION_COUNT}
+
+Scenes:
+${sceneContext}
+`;
+
+export const filterExtractedWorldData = (
+  scenes: Scene[],
+  extracted: {
+    characters: Character[];
+    items: Item[];
+    locations: Location[];
+  }
+) => {
+  const { sceneText, sceneCharacterNames } = buildSceneGroundingContext(scenes);
+
+  const dedupedCharacters = dedupeByName(extracted.characters);
+  const dedupedItems = dedupeByName(extracted.items);
+  const dedupedLocations = dedupeByName(extracted.locations);
+
+  const characters = dedupedCharacters
+    .filter((entry) => {
+      const normalized = normalizeEntityName(entry.name || '');
+      if (!normalized || !hasGoodDescription(entry.description)) return false;
+      return sceneCharacterNames.has(normalized) || containsNormalizedName(sceneText, entry.name);
+    })
+    .slice(0, MAX_WORLD_CHARACTER_COUNT);
+
+  const items = dedupedItems
+    .filter((entry) => {
+      if (!entry.name || !hasGoodDescription(entry.description)) return false;
+      return containsNormalizedName(sceneText, entry.name);
+    })
+    .slice(0, MAX_WORLD_ITEM_COUNT);
+
+  const locations = dedupedLocations
+    .filter((entry) => {
+      if (!entry.name || !hasGoodDescription(entry.description)) return false;
+      return containsNormalizedName(sceneText, entry.name);
+    })
+    .slice(0, MAX_WORLD_LOCATION_COUNT);
+
+  const rawCount = extracted.characters.length + extracted.items.length + extracted.locations.length;
+  const filteredCount = characters.length + items.length + locations.length;
+  const diagnostics: WorldExtractionDiagnostics = {
+    input_scene_count: scenes.length,
+    entity_counts: {
+      characters: characters.length,
+      items: items.length,
+      locations: locations.length
+    },
+    filtered_entity_count: Math.max(rawCount - filteredCount, 0)
+  };
+
+  return { characters, items, locations, diagnostics };
 };
 
 export const analyzeScript = async (apiKey: string, script: string, modelOverride?: string): Promise<AnalyzeScriptResponse> => {
@@ -43,11 +190,16 @@ export const analyzeScript = async (apiKey: string, script: string, modelOverrid
     1. A synopsis (visual description of what happens).
     2. A list of characters present.
     3. The setting/location.
+    4. rawText as a short verbatim excerpt from that exact scene in the provided script.
     
     Script:
     ${script}
 
     CRITICAL:
+    - Use ONLY information present in the provided script.
+    - Keep chronological order exactly as written.
+    - Do NOT invent scenes, characters, items, locations, backstory, motives, or future events.
+    - If details are ambiguous, keep the synopsis minimal and literal instead of guessing.
     - In synthesis and setting descriptions, focus on VISUAL CONTENT (place, lighting, mood) only.
     - DO NOT include art style, medium, or rendering terms (e.g. 'watercolor', 'noir style', '3d render').
     - Keep it style-neutral.
@@ -236,13 +388,29 @@ export const runStoryToolPrompt = async (
 export const extractWorldDetails = async (apiKey: string, scenes: Scene[], modelOverride?: string): Promise<ExtractWorldResponse> => {
   const model = resolveTextModel(modelOverride);
   if (!scenes || scenes.length === 0) {
-    return { characters: [], items: [], locations: [], prompt: '', responseText: '', model };
+    return {
+      characters: [],
+      items: [],
+      locations: [],
+      prompt: '',
+      responseText: '',
+      model,
+      diagnostics: {
+        input_scene_count: 0,
+        entity_counts: { characters: 0, items: 0, locations: 0 },
+        filtered_entity_count: 0
+      }
+    };
   }
   const ai = createClient(apiKey);
-  const sceneContext = scenes.map(s => `Scene ${s.id}: ${s.synopsis} (Chars: ${s.characters?.join(', ') || ''})`).join('\n');
-  const prompt = `
-
-  `;
+  const sceneContext = scenes.map((scene) => [
+    `Scene ${scene.id}:`,
+    `Raw: ${scene.rawText || ''}`,
+    `Synopsis: ${scene.synopsis || ''}`,
+    `Setting: ${scene.setting || ''}`,
+    `Characters: ${(scene.characters || []).join(', ') || 'None listed'}`
+  ].join('\n')).join('\n\n');
+  const prompt = buildWorldExtractionPrompt(sceneContext);
 
   const response = await withRetry(
     () => ai.models.generateContent({
@@ -303,27 +471,35 @@ export const extractWorldDetails = async (apiKey: string, scenes: Scene[], model
   const responseText = response.text || '';
   const data = extractJson(responseText) || {};
 
-  const characters: Character[] = ensureArray<any>(data.characters).map((c) => ({
+  const extractedCharacters: Character[] = ensureArray<any>(data.characters).map((c) => ({
     id: crypto.randomUUID(),
-    name: isString(c?.name) ? c.name : 'Unnamed',
-    bio: isString(c?.bio) ? c.bio : '',
-    description: isString(c?.description) ? c.description : '',
+    name: isString(c?.name) ? c.name.trim() : 'Unnamed',
+    bio: isString(c?.bio) ? c.bio.trim() : '',
+    description: isString(c?.description) ? c.description.trim() : '',
     referenceImageIds: []
   }));
 
-  const items: Item[] = ensureArray<any>(data.items).map((i) => ({
+  const extractedItems: Item[] = ensureArray<any>(data.items).map((i) => ({
     id: crypto.randomUUID(),
-    name: isString(i?.name) ? i.name : 'Unnamed',
-    description: isString(i?.description) ? i.description : '',
+    name: isString(i?.name) ? i.name.trim() : 'Unnamed',
+    description: isString(i?.description) ? i.description.trim() : '',
     referenceImageIds: []
   }));
 
-  const locations: Location[] = ensureArray<any>(data.locations).map((l) => ({
+  const extractedLocations: Location[] = ensureArray<any>(data.locations).map((l) => ({
     id: crypto.randomUUID(),
-    name: isString(l?.name) ? l.name : 'Unnamed',
-    description: isString(l?.description) ? l.description : '',
+    name: isString(l?.name) ? l.name.trim() : 'Unnamed',
+    description: isString(l?.description) ? l.description.trim() : '',
     referenceImageIds: []
   }));
+
+  const { characters, items, locations, diagnostics } = filterExtractedWorldData(scenes, {
+    characters: extractedCharacters,
+    items: extractedItems,
+    locations: extractedLocations
+  });
+
+  console.info('[WORLD_EXTRACTION_DIAGNOSTICS]', diagnostics);
 
   return {
     characters,
@@ -331,6 +507,7 @@ export const extractWorldDetails = async (apiKey: string, scenes: Scene[], model
     locations,
     prompt,
     responseText,
+    diagnostics,
     usage: buildUsage(prompt, responseText, response.usageMetadata),
     model
   };
@@ -359,6 +536,9 @@ export const generatePanelBreakdown = async (
       Style: ${style}.
       Layout: ${layoutType}.
       Continuity mode is strict. Do not introduce new characters, props, or settings unless explicitly listed in allowed continuity entities.
+      Every output entry must describe exactly one single frame.
+      Never describe split panels, two-part layouts, montages, top-half/bottom-half compositions, or triptychs.
+      Do not include panel numbering text in descriptions (forbidden examples: "Panel 1", "Panel 2").
       
       Scene Synopsis: ${scene.synopsis}
       Scene Characters: ${(scene.characters || []).join(', ') || 'Unknown'}
@@ -380,6 +560,7 @@ export const generatePanelBreakdown = async (
 
       Every panel must include at least one dialogue or caption line. If unsure, add a short narration caption.
       Keep character identity visually consistent across all panels.
+      Ensure each description can be generated as a single full-bleed image frame.
     `;
 
   const response = await withRetry(

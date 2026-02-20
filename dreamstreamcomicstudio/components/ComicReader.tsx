@@ -70,6 +70,9 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
   const scrollRef = useRef<HTMLDivElement>(null);
   const saveTimer = useRef<number | null>(null);
   const textLayout = project.state.textLayout || 'caption';
+  const panelCount = project.state.panels.length;
+  const panelsWithArtCount = project.state.panels.filter((panel) => !!panel.imageUrl).length;
+  const allPanelsMissingArt = panelCount > 0 && panelsWithArtCount === 0;
 
   useEffect(() => {
     loadReaderState(project.id).then((state) => {
@@ -316,9 +319,25 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
                   </div>
                 )}
                 <div className={`p-8 grid gap-6 ${getLayoutClass()}`}>
+                  {allPanelsMissingArt && (
+                    <div className="col-span-full text-center py-6 text-amber-700 font-bold border-2 border-amber-400 bg-amber-50 rounded-lg">
+                      All panel artwork is currently missing for this comic.
+                    </div>
+                  )}
                   {project.state.panels.map((panel, idx) => (
                     <div key={idx} className={`border-2 border-black shadow-sm relative ${getPanelClass(idx)}`}>
-                      <img src={panel.imageUrl} alt={panel.description} className="w-full h-auto" />
+                      {panel.imageUrl ? (
+                        <img src={panel.imageUrl} alt={panel.description} className="w-full h-auto" />
+                      ) : (
+                        <div className="w-full min-h-[280px] flex items-center justify-center bg-amber-50 text-amber-800 text-sm font-bold border-b-2 border-black">
+                          Image missing for this panel
+                        </div>
+                      )}
+                      {!panel.imageUrl && (
+                        <div className="px-3 py-1 text-[11px] font-bold bg-amber-100 border-b border-amber-300 text-amber-800">
+                          Dialogue shown without artwork
+                        </div>
+                      )}
                       <PanelDialogue panel={panel} layout={textLayout} />
                     </div>
                   ))}
@@ -343,8 +362,17 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
                 )}
                 {pages.length > 0 ? (
                   <div className={`relative bg-white ${flipDirection === 'next' ? 'animate-page-flip-next' : flipDirection === 'prev' ? 'animate-page-flip-prev' : ''}`}>
-                    {pages[pageIndex]?.imageUrl && (
+                    {pages[pageIndex]?.imageUrl ? (
                       <img src={pages[pageIndex].imageUrl} alt="Comic page" className="w-full h-auto" />
+                    ) : (
+                      <div className="w-full min-h-[420px] flex items-center justify-center bg-amber-50 text-amber-800 text-sm font-bold border-b-2 border-black">
+                        {pages[pageIndex]?.type === 'panel' ? 'Image missing for this panel' : 'Image missing for this page'}
+                      </div>
+                    )}
+                    {pages[pageIndex]?.panel && !pages[pageIndex]?.imageUrl && (
+                      <div className="px-3 py-2 text-[11px] font-bold bg-amber-100 border-b border-amber-300 text-amber-800">
+                        Dialogue shown without artwork
+                      </div>
                     )}
                     {pages[pageIndex]?.panel && <PanelDialogue panel={pages[pageIndex].panel!} layout={textLayout} />}
                   </div>

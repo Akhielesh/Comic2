@@ -119,6 +119,49 @@ const withTextKeyFallback = async <T>(call: (apiKey: string | undefined, modelId
   }
 };
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isRetryableTextError = (error: unknown): boolean => {
+  if (error instanceof ApiError) {
+    if ([408, 429, 500, 502, 503, 504].includes(error.status)) return true;
+    if (error.status === 401) {
+      const detailText = typeof error.details === 'string' ? error.details : JSON.stringify(error.details || {});
+      const combined = `${error.message} ${detailText}`.toLowerCase();
+      return (
+        combined.includes('missing authorization header') ||
+        combined.includes('invalid or expired token') ||
+        combined.includes('auth provider unavailable')
+      );
+    }
+    return false;
+  }
+  const text = String(error || '').toLowerCase();
+  return text.includes('failed to fetch') || text.includes('networkerror') || text.includes('load failed');
+};
+
+const withTextRetry = async <T>(
+  call: () => Promise<T>,
+  options?: { attempts?: number; delayMs?: number }
+): Promise<T> => {
+  const attempts = Math.max(1, options?.attempts ?? 2);
+  const delayMs = Math.max(100, options?.delayMs ?? 350);
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await call();
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableTextError(error) || attempt >= attempts) {
+        throw error;
+      }
+      await sleep(delayMs * attempt);
+    }
+  }
+
+  throw lastError ?? new Error('Text request failed');
+};
+
 /**
  * Generic wrapper for Gemini API calls to handle timing, debug state, and artifact recording.
  */
@@ -141,6 +184,7 @@ async function safeGeminiCall<TRes extends {
   try {
     const response = await fn();
     if (projectId) {
+      const diagnostics = (response as unknown as { diagnostics?: unknown }).diagnostics;
       void recordArtifact({
         projectId,
         timestamp: Date.now(),
@@ -152,7 +196,8 @@ async function safeGeminiCall<TRes extends {
         responseText: response.responseText,
         usage: response.usage,
         success: true,
-        timings: { ...(response.timings || {}), durationMs: Math.round(performance.now() - startPerf) }
+        timings: { ...(response.timings || {}), durationMs: Math.round(performance.now() - startPerf) },
+        meta: diagnostics ? { diagnostics } : undefined
       });
     }
     return response;
@@ -222,8 +267,11 @@ export const analyzeScript = async (script: string, projectId?: string) => {
     projectId,
     'text',
     'script',
-    async () => withTextKeyFallback((apiKey, modelId) =>
-      post<AnalyzeScriptRequest, AnalyzeScriptResponse>('/api/text/analyze-script', { script }, { apiKey, modelId })
+    async () => withTextRetry(
+      () => withTextKeyFallback((apiKey, modelId) =>
+        post<AnalyzeScriptRequest, AnalyzeScriptResponse>('/api/text/analyze-script', { script }, { apiKey, modelId })
+      ),
+      { attempts: 2, delayMs: 350 }
     ),
     script
   );
@@ -356,13 +404,29 @@ export const generateImage = async (
   resolution: ImageGenerateRequest['resolution'] = '1K',
   referenceImageIds: string[] = [],
   projectId?: string,
-  options?: { abortSignal?: AbortSignal; stage?: string; cropToRatio?: string; storage?: 'project' | 'test'; meta?: Record<string, unknown>; modelId?: string }
+  options?: {
+    abortSignal?: AbortSignal;
+    stage?: string;
+    cropToRatio?: string;
+    storage?: 'project' | 'test';
+    meta?: Record<string, unknown>;
+    modelId?: string;
+    continuitySensitive?: boolean;
+    requiredReferences?: boolean;
+    lockedModelId?: string;
+  }
 ) => {
   // Special handling for generateImage since it has unique artifact fields (images) and logic
   updateDebugState('gemini', { lastRequestAt: Date.now(), lastRequestType: 'generate_image', lastError: undefined });
   const finalPrompt = NO_TEXT_IN_IMAGE ? `${prompt}\n\n${IMAGE_TEXT_BLOCKER}` : prompt;
   const startPerf = performance.now();
   const targetModel = options?.modelId || IMAGE_MODEL;
+  const artifactMeta = options?.meta || {};
+  const referenceCount = Number(artifactMeta.referenceCount);
+  const fallbackOccurred = Boolean(artifactMeta.fallbackOccurred);
+  const fallbackFromModel = typeof artifactMeta.fallbackFromModel === 'string' ? artifactMeta.fallbackFromModel : undefined;
+  const fallbackToModel = typeof artifactMeta.fallbackToModel === 'string' ? artifactMeta.fallbackToModel : undefined;
+  const styleLockUsed = Boolean(artifactMeta.styleLockUsed);
 
   try {
     const referenceDataUrls = await Promise.all(referenceImageIds.map((id) => getImageDataUrl(id)));
@@ -434,7 +498,12 @@ export const generateImage = async (
         success: true,
         timings: { ...response.timings, durationMs: Math.round(performance.now() - startPerf) },
         meta: options?.meta,
-        usage: response.usage
+        usage: response.usage,
+        referenceCount: Number.isFinite(referenceCount) ? referenceCount : undefined,
+        fallbackOccurred,
+        fallbackFromModel,
+        fallbackToModel,
+        styleLockUsed
       });
     }
 
@@ -455,7 +524,12 @@ export const generateImage = async (
         success: false,
         error: (e as Error)?.message || String(e),
         timings: { durationMs: Math.round(performance.now() - startPerf) },
-        meta: options?.meta
+        meta: options?.meta,
+        referenceCount: Number.isFinite(referenceCount) ? referenceCount : undefined,
+        fallbackOccurred,
+        fallbackFromModel,
+        fallbackToModel,
+        styleLockUsed
       });
     }
     handleGeminiError('generate_image', e);

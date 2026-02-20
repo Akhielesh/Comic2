@@ -16,6 +16,9 @@
     "pricing:sync:check": "tsx server/src/jobs/dailyPricingSync.ts --check",
     "billing:reconcile": "tsx server/src/jobs/dailyBillingReconciliation.ts",
     "billing:reconcile:check": "tsx server/src/jobs/dailyBillingReconciliation.ts --check",
+    "consistency:repair": "tsx scripts/repair_project_consistency.ts",
+    "consistency:repair:apply": "tsx scripts/repair_project_consistency.ts --apply",
+    "consistency:metrics": "tsx scripts/consistency_metrics.ts",
     "ops:verify:cors": "scripts/ops/verify-cors.sh",
     "ops:verify:rate-limit": "scripts/ops/verify-rate-limit.sh"
   },

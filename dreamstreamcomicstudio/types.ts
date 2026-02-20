@@ -357,6 +357,11 @@ export interface GenerationArtifact {
   responseText?: string;
   inputImageIds?: string[];
   outputImageId?: string;
+  referenceCount?: number;
+  fallbackOccurred?: boolean;
+  fallbackFromModel?: string;
+  fallbackToModel?: string;
+  styleLockUsed?: boolean;
   meta?: Record<string, unknown>;
   stage?: string;
   success?: boolean;
@@ -445,6 +450,8 @@ export interface ComicState {
   stylePrompt: string;
   styleImageId?: string;
   styleImageUrl?: string;
+  styleLockStatus?: 'resolved' | 'missing';
+  styleLockResolvedAt?: number;
   styleCategory: string;
   styleAspectRatio: AspectRatio;
   customAspectRatioEnabled?: boolean;

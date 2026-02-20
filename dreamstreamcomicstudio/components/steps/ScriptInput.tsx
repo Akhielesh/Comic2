@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Sparkles, ArrowRight, Pencil } from 'lucide-react';
 import { analyzeScript } from '../../services/geminiService';
+import { ApiError } from '../../services/apiClient';
 import { Scene } from '../../types';
 import { Button } from '../Button';
 import { ScriptChecklist, analyzeScriptChecklist } from '../../services/scriptChecklist';
@@ -17,6 +18,29 @@ interface ScriptInputProps {
   initialStoryBuilder?: StoryBuilderState;
   onStoryBuilderUpdate?: (state: StoryBuilderState) => void;
 }
+
+const getAnalyzeErrorMessage = (error: unknown): string => {
+  if (error instanceof ApiError) {
+    if (error.status === 401) {
+      return 'Your login session was not ready. Please click Analyze again.';
+    }
+    if (error.status === 402) {
+      return 'Usage limit reached. Add credits or provide BYOK, then retry.';
+    }
+    if (error.status === 429) {
+      return 'Too many requests. Wait a few seconds and try again.';
+    }
+    if (error.status >= 500) {
+      return 'Temporary server/model issue while analyzing. Please retry.';
+    }
+  }
+
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (message.toLowerCase().includes('no scenes found')) {
+    return "The model response wasn't usable on the first pass. Please retry analyze once.";
+  }
+  return 'Failed to analyze script. Please retry.';
+};
 
 export const ScriptInput: React.FC<ScriptInputProps> = ({ initialScript, projectId, onScenesGenerated, onScriptChange, initialChecklist, onChecklistUpdate, initialStoryBuilder, onStoryBuilderUpdate }) => {
   const [script, setScript] = useState(initialScript);
@@ -142,6 +166,7 @@ export const ScriptInput: React.FC<ScriptInputProps> = ({ initialScript, project
   const handleChange = (newScript: string) => {
     setScript(newScript);
     onScriptChange(newScript);
+    setError(null);
     if (awaitingConfirm && newScript !== lastChecklistScriptRef.current) {
       setAwaitingConfirm(false);
     }
@@ -166,7 +191,7 @@ export const ScriptInput: React.FC<ScriptInputProps> = ({ initialScript, project
     } catch (e) {
       if (analysisRequestIdRef.current !== requestId) return;
       console.error(e);
-      setError("Failed to analyze script. Ensure API Key is set and valid.");
+      setError(getAnalyzeErrorMessage(e));
     } finally {
       if (analysisRequestIdRef.current !== requestId) return;
       stopAnalysisTimer();
@@ -176,6 +201,7 @@ export const ScriptInput: React.FC<ScriptInputProps> = ({ initialScript, project
 
   const handleAnalyze = () => {
     if (!script.trim()) return;
+    setError(null);
     if (!awaitingConfirm || script !== lastChecklistScriptRef.current) {
       const nextChecklist = analyzeScriptChecklist(script);
       setChecklist(nextChecklist);

@@ -220,11 +220,167 @@ export const collectPanelReferenceImageIds = (state: ComicState, panel: ComicPan
   return dedupe(continuity.referenceImageIds || []);
 };
 
+type ContinuityEntityAsset = {
+  id: string;
+  kind: ContinuityEntity["kind"];
+  name: string;
+  description: string;
+  imageId?: string;
+  referenceImageIds: string[];
+};
+
+const resolveContinuityEntityAsset = (state: ComicState, entityId: string): ContinuityEntityAsset | undefined => {
+  const character = state.characters.find((entry) => entry.id === entityId);
+  if (character) {
+    return {
+      id: character.id,
+      kind: "character",
+      name: character.name,
+      description: character.description,
+      imageId: character.imageId,
+      referenceImageIds: dedupe(character.referenceImageIds || [])
+    };
+  }
+
+  const item = state.items.find((entry) => entry.id === entityId);
+  if (item) {
+    return {
+      id: item.id,
+      kind: "item",
+      name: item.name,
+      description: item.description,
+      imageId: item.imageId,
+      referenceImageIds: dedupe(item.referenceImageIds || [])
+    };
+  }
+
+  const location = state.locations.find((entry) => entry.id === entityId);
+  if (location) {
+    return {
+      id: location.id,
+      kind: "location",
+      name: location.name,
+      description: location.description,
+      imageId: location.imageId,
+      referenceImageIds: dedupe(location.referenceImageIds || [])
+    };
+  }
+
+  const continuityEntity = getEntityById(state, entityId);
+  if (!continuityEntity) return undefined;
+  return {
+    id: continuityEntity.id,
+    kind: continuityEntity.kind,
+    name: continuityEntity.name,
+    description: continuityEntity.description,
+    imageId: continuityEntity.imageId,
+    referenceImageIds: dedupe(continuityEntity.referenceImageIds || [])
+  };
+};
+
+export type PanelReferencePack = {
+  imageIds: string[];
+  requiredEntityIds: string[];
+  requiredEntityPrimaryImageIds: string[];
+  fallbackEntityReferenceIds: string[];
+  locationImageId?: string;
+  styleImageId?: string;
+  priorPanelImageId?: string;
+};
+
+export const buildPanelReferencePack = (
+  state: ComicState,
+  panel: ComicPanel,
+  options?: {
+    styleImageId?: string;
+    lastPanelImageId?: string;
+    maxReferences?: number;
+  }
+): PanelReferencePack => {
+  const maxReferences = Math.max(1, options?.maxReferences || 8);
+  const continuity = resolvePanelContinuity(state, panel);
+  const requiredEntityIds = dedupe(continuity.requiredEntityIds || []);
+
+  const requiredEntityPrimaryImageIds: string[] = [];
+  const fallbackEntityReferenceIds: string[] = [];
+
+  for (const entityId of requiredEntityIds) {
+    if (requiredEntityPrimaryImageIds.length >= 4) break;
+    const entity = resolveContinuityEntityAsset(state, entityId);
+    if (!entity) continue;
+    if (entity.imageId) {
+      requiredEntityPrimaryImageIds.push(entity.imageId);
+      continue;
+    }
+    const fallback = entity.referenceImageIds.find(Boolean);
+    if (fallback) {
+      fallbackEntityReferenceIds.push(fallback);
+    }
+  }
+
+  const locationAsset = continuity.locationId
+    ? resolveContinuityEntityAsset(state, continuity.locationId)
+    : undefined;
+  const locationImageId = locationAsset?.imageId;
+
+  const styleImageId = options?.styleImageId;
+  const priorPanelImageId = options?.lastPanelImageId;
+
+  const ordered = dedupe([
+    ...(styleImageId ? [styleImageId] : []),
+    ...requiredEntityPrimaryImageIds,
+    ...(locationImageId ? [locationImageId] : []),
+    ...(priorPanelImageId ? [priorPanelImageId] : []),
+    ...fallbackEntityReferenceIds.slice(0, 2)
+  ]).slice(0, maxReferences);
+
+  return {
+    imageIds: ordered,
+    requiredEntityIds,
+    requiredEntityPrimaryImageIds: dedupe(requiredEntityPrimaryImageIds).slice(0, 4),
+    fallbackEntityReferenceIds: dedupe(fallbackEntityReferenceIds).slice(0, 2),
+    locationImageId,
+    styleImageId,
+    priorPanelImageId
+  };
+};
+
 export const resolveVisibleEntities = (state: ComicState, panel: ComicPanel) => {
   const continuity = resolvePanelContinuity(state, panel);
   return (continuity.requiredEntityIds || [])
     .map((id) => getEntityById(state, id))
     .filter((e): e is ContinuityEntity => !!e);
+};
+
+export const buildPanelScopedContext = (state: ComicState, panel: ComicPanel) => {
+  const continuity = resolvePanelContinuity(state, panel);
+  const requiredEntities = dedupe(continuity.requiredEntityIds || [])
+    .map((entityId) => resolveContinuityEntityAsset(state, entityId))
+    .filter((entry): entry is ContinuityEntityAsset => !!entry);
+
+  const characterContext = requiredEntities
+    .filter((entry) => entry.kind === "character")
+    .map((entry) => `${entry.name}: ${entry.description}`)
+    .join(". ");
+
+  const itemContext = requiredEntities
+    .filter((entry) => entry.kind === "item")
+    .map((entry) => `${entry.name}: ${entry.description}`)
+    .join(". ");
+
+  const lockedLocation = continuity.locationId
+    ? resolveContinuityEntityAsset(state, continuity.locationId)
+    : undefined;
+
+  const locationContext = lockedLocation
+    ? `${lockedLocation.name}: ${lockedLocation.description}`
+    : "";
+
+  return {
+    characters: characterContext,
+    items: itemContext,
+    location: locationContext
+  };
 };
 
 export const buildEntityTextContext = (state: ComicState, panel: ComicPanel): string => {
