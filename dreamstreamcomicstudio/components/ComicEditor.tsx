@@ -255,13 +255,14 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           customAspectRatio={state.customAspectRatio}
           onCustomAspectRatioChange={(enabled, ratio) => updateState({ customAspectRatioEnabled: enabled, customAspectRatio: ratio })}
           onStyleConfirmed={(style) => {
-            updateState({ selectedStyleId: style.id, stylePrompt: style.prompt, styleCategory: style.category, styleAspectRatio: style.aspectRatio, imageResolution: style.resolution });
+            updateState({ selectedStyleId: style.id, stylePrompt: style.prompt, styleImageId: style.imageId, styleImageUrl: style.imageUrl, styleCategory: style.category, styleAspectRatio: style.aspectRatio, imageResolution: style.resolution });
             nextStep();
           }} />;
       case AppStep.REFERENCE_BUILDER:
         return <ReferenceBuilder
           scenes={state.scenes}
           currentStyle={state.stylePrompt}
+          styleImageId={state.styleImageId}
           projectId={project.id}
           initialCharacters={state.characters || []} // Ensure defaults
           initialItems={state.items || []}

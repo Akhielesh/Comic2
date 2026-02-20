@@ -249,8 +249,8 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
 
             {/* Text Layout */}
             <div className="bg-white p-6 rounded-xl border-4 border-black shadow-comic max-w-4xl mx-auto">
-                <h3 className="text-2xl font-display text-black mb-4">Text Layout</h3>
-                <p className="text-xs text-slate-600 font-comic mb-4">Choose how dialogue is rendered on top of panels.</p>
+                <h3 className="text-2xl font-display text-black mb-4">Default Text Style</h3>
+                <p className="text-xs text-slate-600 font-comic mb-4">Set the default dialogue style for all panels. You can customize individual panels in the Review stage.</p>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     {(['caption', 'speech_bubbles', 'chat_bubbles', 'none'] as TextLayout[]).map(layout => (
                         <button
@@ -265,8 +265,8 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
 
                 {/* Dialogue Mode Toggle */}
                 <div className="mt-6 pt-6 border-t-2 border-slate-200">
-                    <h4 className="text-lg font-display text-black mb-2">Dialogue Mode</h4>
-                    <p className="text-xs text-slate-600 font-comic mb-3">Choose how dialogue is applied to panels.</p>
+                    <h4 className="text-lg font-display text-black mb-2">Default Dialogue Mode</h4>
+                    <p className="text-xs text-slate-600 font-comic mb-3">Set the starting dialogue mode. Override individual panels in Review.</p>
                     <div className="flex gap-3 mb-4">
                         {(['universal', 'per_panel'] as const).map(mode => (
                             <button

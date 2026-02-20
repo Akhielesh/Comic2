@@ -39,6 +39,7 @@ export const sanitizeProjectForStorage = (project: Project): Project => {
   cloned.state.styleVariants.forEach(stripVariantUrls);
   delete (cloned.state as any).coverImageUrl;
   delete (cloned.state as any).coverTemplateImageUrl;
+  delete (cloned.state as any).styleImageUrl;
 
   return cloned;
 };

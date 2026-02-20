@@ -443,6 +443,8 @@ export interface ComicState {
   styleVariants: StyleVariant[];
   selectedStyleId?: string;
   stylePrompt: string;
+  styleImageId?: string;
+  styleImageUrl?: string;
   styleCategory: string;
   styleAspectRatio: AspectRatio;
   customAspectRatioEnabled?: boolean;

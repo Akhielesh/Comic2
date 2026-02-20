@@ -46,6 +46,11 @@ export const analyzeScript = async (apiKey: string, script: string, modelOverrid
     
     Script:
     ${script}
+
+    CRITICAL:
+    - In synthesis and setting descriptions, focus on VISUAL CONTENT (place, lighting, mood) only.
+    - DO NOT include art style, medium, or rendering terms (e.g. 'watercolor', 'noir style', '3d render').
+    - Keep it style-neutral.
   `;
 
   const response = await withRetry(
@@ -236,14 +241,7 @@ export const extractWorldDetails = async (apiKey: string, scenes: Scene[], model
   const ai = createClient(apiKey);
   const sceneContext = scenes.map(s => `Scene ${s.id}: ${s.synopsis} (Chars: ${s.characters?.join(', ') || ''})`).join('\n');
   const prompt = `
-    Based on these scenes, extract the visual definitions for the comic.
-    
-    1. Characters: Identify main characters. Include a short bio (personality/backstory) and a precise visual description for an artist.
-    2. Items: Identify key props or items that appear (e.g., weapons, artifacts, vehicles).
-    3. Locations: Identify key recurring settings/backgrounds.
-    
-    Scenes:
-    ${sceneContext}
+
   `;
 
   const response = await withRetry(

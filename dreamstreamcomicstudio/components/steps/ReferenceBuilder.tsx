@@ -28,6 +28,7 @@ interface ReferenceBuilderProps {
   scenes: Scene[];
   script?: string; // Add script prop
   currentStyle: ComicState['stylePrompt'];
+  styleImageId?: string;
   projectId: string;
   initialCharacters: Character[];
   initialItems: Item[];
@@ -49,7 +50,7 @@ const fileToBase64 = (file: File): Promise<string> => {
 type Tab = 'characters' | 'items' | 'locations';
 
 export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
-  scenes, script, currentStyle, projectId, initialCharacters, initialItems, initialLocations, initialContinuity, onDataUpdate, onConfirm
+  scenes, script, currentStyle, styleImageId, projectId, initialCharacters, initialItems, initialLocations, initialContinuity, onDataUpdate, onConfirm
 }) => {
   const [activeTab, setActiveTab] = useState<Tab>('characters');
   const [isLoading, setIsLoading] = useState(initialCharacters.length === 0 && initialItems.length === 0);
@@ -212,15 +213,27 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
     try {
       const isCharacter = type === 'characters';
       const prompt = buildImagePrompt({
-        stage: "world",
+        stage: isCharacter ? "character_sheet" : "world",
         stylePrompt: currentStyle,
         subjectName: entity.name,
         subjectDescription: entity.description,
-        extraNotes: isCharacter
-          ? `Character turnaround reference sheet: show the character in three poses side by side — front view, three-quarter view, and back view. White background, full body, consistent proportions and outfit across all three views. No text labels.`
-          : `Concept art for ${type === 'items' ? 'Item' : 'Location'}`
+        extraNotes: !isCharacter ? `Concept art for ${type === 'items' ? 'Item' : 'Location'}` : undefined,
       });
-      const generated = await generateImage(prompt, "1:1", "1K", entity.referenceImageIds || [], projectId, {
+      // COST OPTIMIZATION: Smart Deduplication
+      // If the entity already has a generated style-consistent image (imageId),
+      // use ONLY that image as the reference. Do not send the user's uploaded photos (referenceImageIds)
+      // because the generated image effectively "bakes in" those details into the correct style.
+      // This saves tokens and strengthens style consistency.
+      const refIds: string[] = [];
+
+      if (styleImageId) refIds.push(styleImageId);
+
+      if (entity.imageId) {
+        refIds.push(entity.imageId);
+      } else {
+        refIds.push(...(entity.referenceImageIds || []));
+      }
+      const generated = await generateImage(prompt, "1:1", "1K", refIds, projectId, {
         stage: "world",
         meta: {
           source: { type: type === 'characters' ? 'character' : type === 'items' ? 'item' : 'location', id: entity.id, label: entity.name },

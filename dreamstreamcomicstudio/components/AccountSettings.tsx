@@ -78,6 +78,7 @@ interface AccountSettingsProps {
     onDobCompletionStatusChange?: (needsCompletion: boolean) => void;
     openPasswordReset?: boolean;
     onPasswordResetHandled?: () => void;
+    onNavigate?: (view: string) => void;
 }
 
 type MessageState = { type: 'success' | 'error'; text: string } | null;
@@ -186,7 +187,8 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     requireDobCompletion = false,
     onDobCompletionStatusChange,
     openPasswordReset = false,
-    onPasswordResetHandled
+    onPasswordResetHandled,
+    onNavigate
 }) => {
     const { user, signOut, signOutAll, resendVerificationEmail, changePassword } = useAuth();
     const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
@@ -1438,6 +1440,29 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                             }}
                         >
                             Refresh
+                        </Button>
+                    </div>
+                </div>
+
+                <div className="border-4 border-purple-500 bg-purple-50 rounded-xl p-6 flex flex-col md:flex-row items-center justify-between gap-6 shadow-sm">
+                    <div>
+                        <h3 className="font-display text-2xl text-purple-900">Test Lab</h3>
+                        <p className="text-sm text-purple-800 font-bold mt-1">
+                            Restricted environment for model consistency testing.
+                        </p>
+                        <ul className="mt-2 text-xs text-purple-700 space-y-1 list-disc list-inside">
+                            <li>Strict limits (max 2 chars/items/locations)</li>
+                            <li>No token burn (uses guardrail or test key)</li>
+                            <li>Full raw metadata & AI audit</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <Button
+                            onClick={() => onNavigate?.('test')}
+                            className="bg-purple-600 hover:bg-purple-700 text-white border-purple-900 shadow-md"
+                            icon={<Settings size={18} />}
+                        >
+                            Launch Test Lab
                         </Button>
                     </div>
                 </div>

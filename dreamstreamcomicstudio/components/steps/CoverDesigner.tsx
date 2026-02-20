@@ -80,6 +80,7 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
       const referenceIds: string[] = [];
       if (state.coverTemplateImageId) referenceIds.push(state.coverTemplateImageId);
       if (styleVariant?.imageId) referenceIds.push(styleVariant.imageId);
+      else if (state.styleImageId) referenceIds.push(state.styleImageId);
 
       const ratioConfig = resolveAspectRatio(state, state.styleAspectRatio);
       const prompt = buildImagePrompt({
