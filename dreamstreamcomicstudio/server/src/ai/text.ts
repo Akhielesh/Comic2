@@ -27,7 +27,7 @@ const normalizeScenes = (raw: any[]): Scene[] => {
     .filter((s) => s && isString(s.synopsis) && isString(s.setting))
     .map((scene, index) => ({
       id: index + 1,
-      rawText: isString(scene.rawText) ? scene.rawText : '',
+      rawText: isString(scene.rawText) && scene.rawText.trim().length > 0 ? scene.rawText : scene.synopsis,
       synopsis: scene.synopsis,
       characters: ensureArray<string>(scene.characters, []),
       setting: scene.setting
@@ -120,6 +120,8 @@ Hard rules:
 - No cross-story contamination.
 - Return canonical names and concise visual descriptions.
 - Ground every entity directly in the provided scenes.
+- Do not add backstory, motivations, new plot beats, or future events.
+- Descriptions must be visual and present-tense only (appearance, materials, environment cues).
 - Characters max: ${MAX_WORLD_CHARACTER_COUNT}
 - Items max: ${MAX_WORLD_ITEM_COUNT}
 - Locations max: ${MAX_WORLD_LOCATION_COUNT}
@@ -188,11 +190,16 @@ export const analyzeScript = async (apiKey: string, script: string, modelOverrid
     1. A synopsis (visual description of what happens).
     2. A list of characters present.
     3. The setting/location.
+    4. rawText as a short verbatim excerpt from that exact scene in the provided script.
     
     Script:
     ${script}
 
     CRITICAL:
+    - Use ONLY information present in the provided script.
+    - Keep chronological order exactly as written.
+    - Do NOT invent scenes, characters, items, locations, backstory, motives, or future events.
+    - If details are ambiguous, keep the synopsis minimal and literal instead of guessing.
     - In synthesis and setting descriptions, focus on VISUAL CONTENT (place, lighting, mood) only.
     - DO NOT include art style, medium, or rendering terms (e.g. 'watercolor', 'noir style', '3d render').
     - Keep it style-neutral.
@@ -398,6 +405,7 @@ export const extractWorldDetails = async (apiKey: string, scenes: Scene[], model
   const ai = createClient(apiKey);
   const sceneContext = scenes.map((scene) => [
     `Scene ${scene.id}:`,
+    `Raw: ${scene.rawText || ''}`,
     `Synopsis: ${scene.synopsis || ''}`,
     `Setting: ${scene.setting || ''}`,
     `Characters: ${(scene.characters || []).join(', ') || 'None listed'}`

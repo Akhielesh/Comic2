@@ -41,6 +41,7 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
       "Show the character in three poses: front, three-quarter, and back view.",
       styleLine ? `Art Style: ${styleLine}` : "",
       options.subjectDescription ? `Character Description: ${clean(options.subjectDescription)}` : "",
+      "Turnaround sheet only, neutral/plain background, no environment storytelling, no action scene, no other characters.",
       "Consistent proportions and outfit across all views. No text labels."
     ].filter(Boolean).join(" ");
   }
@@ -53,7 +54,8 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
     return [
       options.subjectDescription ? `${label}: ${clean(options.subjectDescription)}` : "",
       styleLine ? `Art Style: ${styleLine}` : "",
-      "Single concept art image."
+      "Single concept image of the subject only.",
+      "No narrative scene, no sequence, no montage, no implied story progression, no extra named characters."
     ].filter(Boolean).join(" ");
   }
 

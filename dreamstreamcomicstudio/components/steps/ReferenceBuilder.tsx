@@ -212,11 +212,14 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
     markGenerating(entity.id, true);
     try {
       const isCharacter = type === 'characters';
+      const subjectDescription = isCharacter
+        ? (((entity as Character).description || (entity as Character).bio || ''))
+        : (entity.description || '');
       const prompt = buildImagePrompt({
         stage: isCharacter ? "character_sheet" : "world",
         stylePrompt: currentStyle,
         subjectName: entity.name,
-        subjectDescription: entity.description,
+        subjectDescription,
         extraNotes: !isCharacter ? `Concept art for ${type === 'items' ? 'Item' : 'Location'}` : undefined,
       });
       // COST OPTIMIZATION: Smart Deduplication
@@ -385,6 +388,9 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
 
   const renderEntityCard = (entity: any, type: Tab) => {
     const isSelected = selectedIds.has(entity.id);
+    const editableDescription = type === 'characters'
+      ? (entity.description || entity.bio || '')
+      : (entity.description || '');
     return (
       <div id={`card-${entity.id}`} key={entity.id} className="bg-white rounded-xl border-4 shadow-comic overflow-hidden flex flex-col relative group">
         {/* Selection Checkbox */}
@@ -430,8 +436,15 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
               )}
             </div>
             <textarea
-              value={entity.bio || entity.description} // Fallback for items/locs that might not have bio
-              onChange={(e) => updateEntity(type, entity.id, { [type === 'characters' ? 'bio' : 'description']: e.target.value })}
+              value={editableDescription}
+              onChange={(e) => {
+                const value = e.target.value;
+                if (type === 'characters') {
+                  updateEntity(type, entity.id, { bio: value, description: value });
+                } else {
+                  updateEntity(type, entity.id, { description: value });
+                }
+              }}
               className="w-full text-sm font-comic text-slate-600 mt-2 resize-none bg-transparent border-2 border-transparent hover:border-slate-200 focus:border-brand-blue rounded p-1"
               rows={3}
               placeholder="Enter description..."

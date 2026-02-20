@@ -119,6 +119,49 @@ const withTextKeyFallback = async <T>(call: (apiKey: string | undefined, modelId
   }
 };
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isRetryableTextError = (error: unknown): boolean => {
+  if (error instanceof ApiError) {
+    if ([408, 429, 500, 502, 503, 504].includes(error.status)) return true;
+    if (error.status === 401) {
+      const detailText = typeof error.details === 'string' ? error.details : JSON.stringify(error.details || {});
+      const combined = `${error.message} ${detailText}`.toLowerCase();
+      return (
+        combined.includes('missing authorization header') ||
+        combined.includes('invalid or expired token') ||
+        combined.includes('auth provider unavailable')
+      );
+    }
+    return false;
+  }
+  const text = String(error || '').toLowerCase();
+  return text.includes('failed to fetch') || text.includes('networkerror') || text.includes('load failed');
+};
+
+const withTextRetry = async <T>(
+  call: () => Promise<T>,
+  options?: { attempts?: number; delayMs?: number }
+): Promise<T> => {
+  const attempts = Math.max(1, options?.attempts ?? 2);
+  const delayMs = Math.max(100, options?.delayMs ?? 350);
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await call();
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableTextError(error) || attempt >= attempts) {
+        throw error;
+      }
+      await sleep(delayMs * attempt);
+    }
+  }
+
+  throw lastError ?? new Error('Text request failed');
+};
+
 /**
  * Generic wrapper for Gemini API calls to handle timing, debug state, and artifact recording.
  */
@@ -224,8 +267,11 @@ export const analyzeScript = async (script: string, projectId?: string) => {
     projectId,
     'text',
     'script',
-    async () => withTextKeyFallback((apiKey, modelId) =>
-      post<AnalyzeScriptRequest, AnalyzeScriptResponse>('/api/text/analyze-script', { script }, { apiKey, modelId })
+    async () => withTextRetry(
+      () => withTextKeyFallback((apiKey, modelId) =>
+        post<AnalyzeScriptRequest, AnalyzeScriptResponse>('/api/text/analyze-script', { script }, { apiKey, modelId })
+      ),
+      { attempts: 2, delayMs: 350 }
     ),
     script
   );
