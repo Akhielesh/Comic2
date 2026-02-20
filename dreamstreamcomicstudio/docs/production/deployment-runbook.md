@@ -12,10 +12,22 @@
 1. `app.yourdomain.com` for frontend.
 2. `api.yourdomain.com` for backend.
 
+## Source Of Truth (Pinning)
+
+1. Deploy frontend and backend from the same repo:
+`https://github.com/Akhielesh/Comic2`
+2. Use project root:
+`/Users/Akhielesh/Coding Projects/Neural graph/Comic2/dreamstreamcomicstudio`
+3. Pin both deploy targets to the same commit SHA before release.
+4. Set build metadata env vars in deploy targets:
+`APP_VERSION=<package_version>`
+`GIT_SHA=<commit_sha>`
+`BUILD_TIMESTAMP=<ISO8601_utc_timestamp>`
+
 ## Frontend Deployment (Cloudflare Pages)
 
 1. Connect repo and select project root:
-`/Users/Akhielesh/Coding Projects/Neural graph/Comic2/dreamstream-comic-studio (1)`
+`/Users/Akhielesh/Coding Projects/Neural graph/Comic2/dreamstreamcomicstudio`
 2. Build command:
 `npm run build`
 3. Output directory:
@@ -74,10 +86,12 @@
 `curl -i https://api.yourdomain.com/api/health`
 2. Verify readiness:
 `curl -i https://api.yourdomain.com/api/system/ready`
-3. Verify frontend loads and can call API.
-4. Verify auth login flow.
-5. Verify text generation and image generation success.
-6. Verify Stripe webhook receives events at `/api/webhook/stripe`.
+3. Verify version endpoint:
+`curl -i https://api.yourdomain.com/api/system/version`
+4. Verify frontend loads and can call API.
+5. Verify auth login flow.
+6. Verify text generation and image generation success.
+7. Verify Stripe webhook receives events at `/api/webhook/stripe`.
 
 ## Monitoring and Alerts
 

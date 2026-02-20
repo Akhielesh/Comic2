@@ -16,6 +16,7 @@
 - [ ] Backend reachable at `https://api.yourdomain.com`.
 - [ ] Health endpoint returns `200`.
 - [ ] Readiness endpoint returns `200`.
+- [ ] Version endpoint returns `200` and `worldExtractionContractVersion >= 2`.
 - [ ] End-to-end auth login works.
 - [ ] Text generation flow works.
 - [ ] Image generation flow works.

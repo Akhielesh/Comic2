@@ -1,14 +1,40 @@
 import { Router } from 'express';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getMissingRequiredEnvVars, STORAGE_BUCKET, STRICT_ENV_VALIDATION } from '../config.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
 import { checkSupabaseReachability, getSupabaseAdmin, getSupabaseCapabilityStatus, supabase } from '../services/supabase.js';
+import { WORLD_EXTRACTION_CONTRACT_VERSION } from '../../../shared/contracts/worldExtraction.js';
 
 export const systemRouter = Router();
 const SIGNED_URL_TTL_SECONDS = 60 * 30;
 const STORAGE_PATH_MAX_LENGTH = 512;
 type SignedTransform = { width?: number; height?: number; quality?: number; format?: 'origin' };
+const SERVER_START_TIMESTAMP = new Date().toISOString();
+
+const resolveAppVersion = () => {
+  if (process.env.APP_VERSION?.trim()) return process.env.APP_VERSION.trim();
+  try {
+    const packageJsonPath = path.resolve(process.cwd(), 'package.json');
+    const parsed = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as { version?: string };
+    return parsed.version?.trim() || '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+};
+
+const APP_VERSION = resolveAppVersion();
+const GIT_SHA = process.env.GIT_SHA?.trim()
+  || process.env.RAILWAY_GIT_COMMIT_SHA?.trim()
+  || process.env.VERCEL_GIT_COMMIT_SHA?.trim()
+  || process.env.CF_PAGES_COMMIT_SHA?.trim()
+  || 'unknown';
+const BUILD_TIMESTAMP = process.env.BUILD_TIMESTAMP?.trim()
+  || process.env.RAILWAY_DEPLOYMENT_TIMESTAMP?.trim()
+  || process.env.CF_PAGES_COMMIT_TIMESTAMP?.trim()
+  || SERVER_START_TIMESTAMP;
 
 const parsePositiveInt = (value: unknown, min: number, max: number): number | undefined => {
   const normalized = typeof value === 'string' ? value : Array.isArray(value) ? value[0] : undefined;
@@ -248,6 +274,15 @@ systemRouter.get('/status', (_req, res) => {
   res.json({
     status: 'ok',
     ...capabilities
+  });
+});
+
+systemRouter.get('/version', (_req, res) => {
+  res.json({
+    appVersion: APP_VERSION,
+    gitSha: GIT_SHA,
+    buildTimestamp: BUILD_TIMESTAMP,
+    worldExtractionContractVersion: WORLD_EXTRACTION_CONTRACT_VERSION
   });
 });
 
