@@ -423,6 +423,10 @@ export interface ComicState {
   maxStepReached: number;
   flowVersion?: number;
   script: string;
+  scriptHash?: string;
+  sceneHash?: string;
+  worldHash?: string;
+  lastResetSourceStage?: 'script_analysis' | 'style_confirm' | 'world_confirm' | 'layout_confirm';
   scriptChecklist?: {
     found: string[];
     missing: string[];

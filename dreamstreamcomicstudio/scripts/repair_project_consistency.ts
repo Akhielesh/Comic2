@@ -10,11 +10,25 @@ import { hasMultiFrameLanguage } from "../services/panelDescription";
 dotenv.config({ path: path.resolve(process.cwd(), ".env.local") });
 dotenv.config();
 
+const FLOW_VERSION = 3;
+const MIN_STEP = 0;
+const MAX_STEP = 7;
+
+const stableHash = (value: string) => {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+  }
+  return `h${Math.abs(hash >>> 0).toString(16)}`;
+};
+
 type RiskTag =
   | "STYLE_LOCK_MISSING"
   | "WORLD_CONTAMINATED"
   | "ZERO_PANEL_REFS"
-  | "MULTI_FRAME_DESCRIPTIONS";
+  | "MULTI_FRAME_DESCRIPTIONS"
+  | "FLOW_VERSION_MISMATCH";
 
 type ProjectRow = {
   id: string;
@@ -54,8 +68,10 @@ const containsName = (source: string, name: string) => {
 };
 
 const detectWorldContamination = (state: ComicState): ContaminationReport => {
-  const sceneText = (state.scenes || [])
-    .map((scene) => [scene.synopsis || "", scene.setting || "", ...(scene.characters || [])].join(" "))
+  const sceneText = [
+    state.script || "",
+    ...(state.scenes || []).map((scene) => scene.rawText || "")
+  ]
     .join("\n");
 
   const canonicalCharacters = new Set(
@@ -81,6 +97,87 @@ const detectWorldContamination = (state: ComicState): ContaminationReport => {
     characters: Array.from(new Set(characters)),
     items: Array.from(new Set(items)),
     locations: Array.from(new Set(locations))
+  };
+};
+
+const computeSceneHash = (state: ComicState) =>
+  stableHash(
+    JSON.stringify(
+      (state.scenes || []).map((scene) => ({
+        id: scene.id,
+        rawText: scene.rawText || "",
+        synopsis: scene.synopsis || "",
+        setting: scene.setting || "",
+        characters: scene.characters || []
+      }))
+    )
+  );
+
+const computeWorldHash = (state: ComicState) =>
+  stableHash(
+    JSON.stringify({
+      characters: (state.characters || []).map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        description: entry.description,
+        bio: entry.bio,
+        referenceImageIds: entry.referenceImageIds || []
+      })),
+      items: (state.items || []).map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        description: entry.description,
+        referenceImageIds: entry.referenceImageIds || []
+      })),
+      locations: (state.locations || []).map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        description: entry.description,
+        referenceImageIds: entry.referenceImageIds || []
+      }))
+    })
+  );
+
+const repairPipelineHashes = (state: ComicState): ComicState => ({
+  ...state,
+  scriptHash: stableHash(state.script || ""),
+  sceneHash: computeSceneHash(state),
+  worldHash: computeWorldHash(state)
+});
+
+const normalizeFlowVersionState = (state: ComicState) => {
+  let changed = false;
+  let mismatchDetected = false;
+  let nextState: ComicState = { ...state };
+
+  const isModernFingerprint =
+    typeof state.coverTemplateId !== "undefined" ||
+    typeof state.styleLockStatus !== "undefined" ||
+    typeof state.styleLockResolvedAt !== "undefined" ||
+    typeof state.panelPlanVersion !== "undefined";
+
+  if (isModernFingerprint && state.flowVersion !== FLOW_VERSION) {
+    nextState = { ...nextState, flowVersion: FLOW_VERSION };
+    mismatchDetected = true;
+    changed = true;
+  }
+
+  const safeStep = Math.max(MIN_STEP, Math.min(MAX_STEP, Number(nextState.step || 0)));
+  const safeMaxStep = Math.max(safeStep, Math.min(MAX_STEP, Number(nextState.maxStepReached || safeStep)));
+  if (safeStep !== nextState.step || safeMaxStep !== nextState.maxStepReached) {
+    nextState = {
+      ...nextState,
+      step: safeStep,
+      maxStepReached: safeMaxStep
+    };
+    mismatchDetected = true;
+    changed = true;
+  }
+
+  return {
+    state: nextState,
+    mismatchDetected,
+    changed
   };
 };
 
@@ -125,6 +222,11 @@ const main = async () => {
         resolved: boolean;
         source: string;
       };
+      flowVersion: {
+        before?: number;
+        after?: number;
+        mismatchDetected: boolean;
+      };
       errors?: string[];
     }>
   };
@@ -158,6 +260,7 @@ const main = async () => {
             contamination: { characters: [], items: [], locations: [] },
             panelStats: { totalPanels: 0, zeroRefPanels: 0, multiFramePanels: 0 },
             styleLock: { resolved: false, source: "invalid_state" },
+            flowVersion: { before: undefined, after: undefined, mismatchDetected: true },
             errors: ["State payload is missing or invalid."]
           });
           continue;
@@ -165,6 +268,8 @@ const main = async () => {
 
         const styleResult = applyStyleLockResolution(parsed);
         let nextState = styleResult.state;
+        const flowRepair = normalizeFlowVersionState(nextState);
+        nextState = flowRepair.state;
 
         const nextContinuity = buildContinuityFromWorld(
           nextState.scenes || [],
@@ -191,7 +296,7 @@ const main = async () => {
             continuity
           };
         });
-        nextState = { ...nextState, panels: nextPanels };
+        nextState = repairPipelineHashes({ ...nextState, panels: nextPanels });
 
         const contamination = detectWorldContamination(nextState);
         const riskTags: RiskTag[] = [];
@@ -201,6 +306,7 @@ const main = async () => {
         }
         if (zeroRefPanels > 0) riskTags.push("ZERO_PANEL_REFS");
         if (multiFramePanels > 0) riskTags.push("MULTI_FRAME_DESCRIPTIONS");
+        if (flowRepair.mismatchDetected) riskTags.push("FLOW_VERSION_MISMATCH");
 
         const before = JSON.stringify(parsed);
         const after = JSON.stringify(nextState);
@@ -235,6 +341,11 @@ const main = async () => {
           styleLock: {
             resolved: styleResult.resolution.resolved,
             source: styleResult.resolution.source
+          },
+          flowVersion: {
+            before: parsed.flowVersion,
+            after: nextState.flowVersion,
+            mismatchDetected: flowRepair.mismatchDetected
           }
         });
       } catch (error) {
@@ -248,6 +359,7 @@ const main = async () => {
           contamination: { characters: [], items: [], locations: [] },
           panelStats: { totalPanels: 0, zeroRefPanels: 0, multiFramePanels: 0 },
           styleLock: { resolved: false, source: "error" },
+          flowVersion: { before: undefined, after: undefined, mismatchDetected: false },
           errors: [error instanceof Error ? error.message : String(error)]
         });
       }

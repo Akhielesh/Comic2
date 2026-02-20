@@ -278,7 +278,7 @@ textRouter.post('/extract-world', async (req, res, next) => {
     const apiKey = requireGeminiKey(req, res);
     if (!apiKey) return;
     const effectiveModel = await assertTextModelAccess(req, resolveRequestedModel(req.header('X-Gemini-Model')));
-    const { scenes } = req.body || {};
+    const { scenes, script } = req.body || {};
     if (!Array.isArray(scenes)) {
       return res.status(400).json({ error: { message: 'scenes array is required' } });
     }
@@ -296,7 +296,12 @@ textRouter.post('/extract-world', async (req, res, next) => {
     if ('details' in reserve) return res.status(402).json({ error: formatLimitErrorResponse(reserve.details) });
 
     try {
-      const result = await extractWorldDetails(apiKey, scenes, effectiveModel);
+      const result = await extractWorldDetails(
+        apiKey,
+        scenes,
+        typeof script === 'string' ? script : undefined,
+        effectiveModel
+      );
       const settled = await settleReservedOperation({
         req,
         operation: 'text.extract_world',

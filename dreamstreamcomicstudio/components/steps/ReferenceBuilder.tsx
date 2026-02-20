@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Users, Wand2, Check, UploadCloud, Download, Image as ImageIcon, CheckSquare, Square, Zap, Box, MapPin, AlertCircle } from 'lucide-react';
 import { extractWorldDetails, checkConsistency } from '../../services/geminiService';
 import { generateImage } from '../../services/imageService';
@@ -52,15 +52,16 @@ type Tab = 'characters' | 'items' | 'locations';
 export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
   scenes, script, currentStyle, styleImageId, projectId, initialCharacters, initialItems, initialLocations, initialContinuity, onDataUpdate, onConfirm
 }) => {
+  const hasInitialWorldData = initialCharacters.length > 0 || initialItems.length > 0 || initialLocations.length > 0;
   const [activeTab, setActiveTab] = useState<Tab>('characters');
-  const [isLoading, setIsLoading] = useState(initialCharacters.length === 0 && initialItems.length === 0);
+  const [isLoading, setIsLoading] = useState(!hasInitialWorldData);
   const [generatingIds, setGeneratingIds] = useState<Set<string>>(new Set());
   const [isBatchGenerating, setIsBatchGenerating] = useState(false);
   const [isCheckingConsistency, setIsCheckingConsistency] = useState(false);
   const [consistencyWarnings, setConsistencyWarnings] = useState<Record<string, string[]>>({});
   const [previewImage, setPreviewImage] = useState<{ url: string, title: string } | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const hasFetched = useRef(initialCharacters.length > 0);
+  const hasFetched = useRef(hasInitialWorldData);
   const [referenceUrlMap, setReferenceUrlMap] = useState<Record<string, string>>({});
   const [characters, setCharacters] = useState<Character[]>(initialCharacters);
   const [items, setItems] = useState<Item[]>(initialItems);
@@ -68,8 +69,31 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
   const [showLibraryModal, setShowLibraryModal] = useState(false);
   const entitiesRef = useRef({ characters: initialCharacters, items: initialItems, locations: initialLocations });
 
-  const makeContinuity = (nextCharacters: Character[], nextItems: Item[], nextLocations: Location[]) =>
-    buildContinuityFromWorld(scenes, nextCharacters, nextItems, nextLocations, initialContinuity);
+  const makeContinuity = useCallback(
+    (nextCharacters: Character[], nextItems: Item[], nextLocations: Location[]) =>
+      buildContinuityFromWorld(scenes, nextCharacters, nextItems, nextLocations, initialContinuity),
+    [scenes, initialContinuity]
+  );
+
+  const commitWorldState = useCallback(
+    (nextCharacters: Character[], nextItems: Item[], nextLocations: Location[]) => {
+      entitiesRef.current = {
+        characters: nextCharacters,
+        items: nextItems,
+        locations: nextLocations
+      };
+      setCharacters(nextCharacters);
+      setItems(nextItems);
+      setLocations(nextLocations);
+      onDataUpdate({
+        characters: nextCharacters,
+        items: nextItems,
+        locations: nextLocations,
+        continuity: makeContinuity(nextCharacters, nextItems, nextLocations)
+      });
+    },
+    [makeContinuity, onDataUpdate]
+  );
 
   useEffect(() => {
     if (hasFetched.current) return;
@@ -77,8 +101,8 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
 
     const fetchWorld = async () => {
       try {
-        const data = await extractWorldDetails(scenes, projectId);
-        onDataUpdate({ ...data, continuity: makeContinuity(data.characters, data.items, data.locations) });
+        const data = await extractWorldDetails(scenes, projectId, script);
+        commitWorldState(data.characters, data.items, data.locations);
       } catch (e) {
         console.error(e);
       } finally {
@@ -86,7 +110,7 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
       }
     };
     fetchWorld();
-  }, [scenes, onDataUpdate, projectId]);
+  }, [commitWorldState, scenes, projectId, script]);
 
   useEffect(() => {
     setCharacters(initialCharacters);
@@ -99,6 +123,12 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
   useEffect(() => {
     setLocations(initialLocations);
   }, [initialLocations]);
+
+  useEffect(() => {
+    if (initialCharacters.length > 0 || initialItems.length > 0 || initialLocations.length > 0) {
+      setIsLoading(false);
+    }
+  }, [initialCharacters.length, initialItems.length, initialLocations.length]);
 
   useEffect(() => {
     entitiesRef.current = { characters, items, locations };
@@ -123,42 +153,21 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
 
   // Generic handlers for updating any entity list
   const updateEntity = (type: Tab, id: string, updates: any) => {
+    const {
+      characters: currentCharacters,
+      items: currentItems,
+      locations: currentLocations
+    } = entitiesRef.current;
+
     if (type === 'characters') {
-      setCharacters(prev => {
-        const updated = prev.map(c => c.id === id ? { ...c, ...updates } : c);
-        const { items: currentItems, locations: currentLocations } = entitiesRef.current;
-        onDataUpdate({
-          characters: updated,
-          items: currentItems,
-          locations: currentLocations,
-          continuity: makeContinuity(updated, currentItems, currentLocations)
-        });
-        return updated;
-      });
+      const nextCharacters = currentCharacters.map((entry) => entry.id === id ? { ...entry, ...updates } : entry);
+      commitWorldState(nextCharacters, currentItems, currentLocations);
     } else if (type === 'items') {
-      setItems(prev => {
-        const updated = prev.map(i => i.id === id ? { ...i, ...updates } : i);
-        const { characters: currentCharacters, locations: currentLocations } = entitiesRef.current;
-        onDataUpdate({
-          characters: currentCharacters,
-          items: updated,
-          locations: currentLocations,
-          continuity: makeContinuity(currentCharacters, updated, currentLocations)
-        });
-        return updated;
-      });
+      const nextItems = currentItems.map((entry) => entry.id === id ? { ...entry, ...updates } : entry);
+      commitWorldState(currentCharacters, nextItems, currentLocations);
     } else {
-      setLocations(prev => {
-        const updated = prev.map(l => l.id === id ? { ...l, ...updates } : l);
-        const { characters: currentCharacters, items: currentItems } = entitiesRef.current;
-        onDataUpdate({
-          characters: currentCharacters,
-          items: currentItems,
-          locations: updated,
-          continuity: makeContinuity(currentCharacters, currentItems, updated)
-        });
-        return updated;
-      });
+      const nextLocations = currentLocations.map((entry) => entry.id === id ? { ...entry, ...updates } : entry);
+      commitWorldState(currentCharacters, currentItems, nextLocations);
     }
   };
 
@@ -166,13 +175,30 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
     const id = `${type.slice(0, 4)}-${Date.now()}`;
     const name = "New " + (type === 'characters' ? "Character" : type === 'items' ? "Item" : "Location");
     const desc = "Description...";
+    const {
+      characters: currentCharacters,
+      items: currentItems,
+      locations: currentLocations
+    } = entitiesRef.current;
 
     if (type === 'characters') {
-      setCharacters(prev => [...prev, { id, name, description: desc, bio: desc, referenceImageIds: [] }]);
+      commitWorldState(
+        [...currentCharacters, { id, name, description: desc, bio: desc, referenceImageIds: [] }],
+        currentItems,
+        currentLocations
+      );
     } else if (type === 'items') {
-      setItems(prev => [...prev, { id, name, description: desc, referenceImageIds: [] }]);
+      commitWorldState(
+        currentCharacters,
+        [...currentItems, { id, name, description: desc, referenceImageIds: [] }],
+        currentLocations
+      );
     } else {
-      setLocations(prev => [...prev, { id, name, description: desc, referenceImageIds: [] }]);
+      commitWorldState(
+        currentCharacters,
+        currentItems,
+        [...currentLocations, { id, name, description: desc, referenceImageIds: [] }]
+      );
     }
   };
 
@@ -345,7 +371,8 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
       id: `char-lib-${Date.now()}`,
       referenceImageIds: libraryItem.referenceImageIds || []
     };
-    setCharacters(prev => [...prev, newChar]);
+    const { items: currentItems, locations: currentLocations } = entitiesRef.current;
+    commitWorldState([...entitiesRef.current.characters, newChar], currentItems, currentLocations);
     setShowLibraryModal(false);
   };
 

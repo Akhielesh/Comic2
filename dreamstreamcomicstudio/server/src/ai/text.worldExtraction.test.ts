@@ -6,7 +6,7 @@ describe("world extraction grounding", () => {
   const scenes: Scene[] = [
     {
       id: 1,
-      rawText: "",
+      rawText: "Arjun studies the Zenith Spear in the attic workshop while Sana watches.",
       synopsis: "Arjun studies the Zenith Spear in the attic.",
       characters: ["Arjun", "Sana"],
       setting: "Dusty attic workshop"
@@ -37,12 +37,16 @@ describe("world extraction grounding", () => {
       { id: "6", name: "Mars Colony", description: "A red-planet megacity dome", referenceImageIds: [] }
     ];
 
-    const filtered = filterExtractedWorldData(scenes, { characters, items, locations });
+    const filtered = filterExtractedWorldData(scenes, { characters, items, locations }, {
+      script: "Arjun studies the Zenith Spear in the attic workshop while Sana watches."
+    });
 
     expect(filtered.characters.map((entry) => entry.name)).toEqual(["Arjun"]);
     expect(filtered.items.map((entry) => entry.name)).toEqual(["Zenith Spear"]);
     expect(filtered.locations.map((entry) => entry.name)).toEqual(["Attic workshop"]);
     expect(filtered.diagnostics.input_scene_count).toBe(1);
     expect(filtered.diagnostics.filtered_entity_count).toBeGreaterThan(0);
+    expect(filtered.diagnostics.ungrounded_characters_dropped).toBeGreaterThanOrEqual(1);
+    expect(filtered.diagnostics.dropped_entities.length).toBeGreaterThan(0);
   });
 });

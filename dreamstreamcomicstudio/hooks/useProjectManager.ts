@@ -11,6 +11,53 @@ import { applyStyleLockResolution } from '../services/styleLock';
 const SAVE_DEBOUNCE_MS = 500;
 const FLOW_VERSION = 3;
 
+const stableHash = (value: string) => {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+  }
+  return `h${Math.abs(hash >>> 0).toString(16)}`;
+};
+
+const computeSceneHash = (state: ComicState) =>
+  stableHash(
+    JSON.stringify(
+      (state.scenes || []).map((scene) => ({
+        id: scene.id,
+        rawText: scene.rawText || '',
+        synopsis: scene.synopsis || '',
+        setting: scene.setting || '',
+        characters: scene.characters || []
+      }))
+    )
+  );
+
+const computeWorldHash = (state: ComicState) =>
+  stableHash(
+    JSON.stringify({
+      characters: (state.characters || []).map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        description: entry.description,
+        bio: entry.bio,
+        referenceImageIds: entry.referenceImageIds || []
+      })),
+      items: (state.items || []).map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        description: entry.description,
+        referenceImageIds: entry.referenceImageIds || []
+      })),
+      locations: (state.locations || []).map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        description: entry.description,
+        referenceImageIds: entry.referenceImageIds || []
+      }))
+    })
+  );
+
 const remapStep = (step: number) => {
   if (step === 2) return 3;
   if (step === 3) return 2;
@@ -18,7 +65,7 @@ const remapStep = (step: number) => {
 };
 
 const applyStateMigrations = (state: ComicState): ComicState => {
-  const flowVersion = state.flowVersion ?? 1;
+  const flowVersion = typeof state.flowVersion === 'number' ? state.flowVersion : FLOW_VERSION;
   const nextStep = flowVersion === FLOW_VERSION ? state.step : remapStep(state.step);
   const nextMax = flowVersion === FLOW_VERSION ? state.maxStepReached : remapStep(state.maxStepReached);
   const nextContinuity = state.continuity || buildDefaultContinuityState(state);
@@ -38,6 +85,9 @@ const applyStateMigrations = (state: ComicState): ComicState => {
     customAspectRatioEnabled: state.customAspectRatioEnabled ?? false,
     customAspectRatio: state.customAspectRatio,
     scriptChecklist: state.scriptChecklist,
+    scriptHash: state.scriptHash || stableHash(state.script || ''),
+    sceneHash: state.sceneHash || computeSceneHash(state),
+    worldHash: state.worldHash || computeWorldHash(state),
     imageTags: state.imageTags || {},
     imageTagCounters: state.imageTagCounters || {},
     continuity: {
@@ -62,17 +112,27 @@ const didStyleLockRepairOccur = (before: ComicState, after: ComicState) => {
 };
 
 const hasLegacyStepShift = (state: ComicState): boolean => {
-  const isLegacyFlow = (state.flowVersion ?? 1) < FLOW_VERSION;
-  return (
-    isLegacyFlow &&
+  if (typeof state.flowVersion !== 'number') return false;
+  if (state.flowVersion >= FLOW_VERSION) return false;
+
+  const hasLegacyIndicators =
     typeof state.coverTemplateId === 'undefined' &&
-    state.step >= 2 &&
-    (state.characters.length > 0 ||
-      state.items.length > 0 ||
-      state.locations.length > 0 ||
-      state.panels.length > 0 ||
-      state.layoutType !== 'grid')
-  );
+    state.step >= AppStep.REFERENCE_BUILDER &&
+    (
+      (state.characters?.length || 0) > 0 ||
+      (state.items?.length || 0) > 0 ||
+      (state.locations?.length || 0) > 0 ||
+      (state.panels?.length || 0) > 0 ||
+      state.layoutType !== 'grid'
+    );
+
+  const hasModernIndicators =
+    typeof state.coverTemplateId !== 'undefined' ||
+    typeof state.styleLockStatus !== 'undefined' ||
+    typeof state.styleLockResolvedAt !== 'undefined' ||
+    typeof state.panelPlanVersion !== 'undefined';
+
+  return hasLegacyIndicators && !hasModernIndicators;
 };
 
 const migrateHydratedCoverAndFlowState = async (
@@ -104,7 +164,7 @@ const migrateHydratedCoverAndFlowState = async (
 const INITIAL_STATE: ComicState = {
   step: AppStep.SCRIPT_INPUT,
   maxStepReached: AppStep.SCRIPT_INPUT,
-  flowVersion: 2,
+  flowVersion: FLOW_VERSION,
   script: '',
   scriptChecklist: undefined,
   scenes: [],
@@ -362,14 +422,7 @@ export const useProjectManager = () => {
     const styleVariants = await Promise.all(project.state.styleVariants.map(migrateVariant));
     const migratedCover = await migrateImage((project.state as any).coverImageUrl || (project as any).coverImage);
     const migratedCoverTemplate = await migrateImage((project.state as any).coverTemplateImageUrl);
-    const needsStepShift =
-      typeof project.state.coverTemplateId === 'undefined' &&
-      project.state.step >= 2 &&
-      (project.state.characters.length > 0 ||
-        project.state.items.length > 0 ||
-        project.state.locations.length > 0 ||
-        project.state.panels.length > 0 ||
-        project.state.layoutType !== 'grid');
+    const needsStepShift = hasLegacyStepShift(project.state);
     const migratedStep = needsStepShift ? project.state.step + 1 : project.state.step;
     const migratedMaxStep = needsStepShift ? project.state.maxStepReached + 1 : project.state.maxStepReached;
 

@@ -15,6 +15,23 @@ import {
 
 const normalizeName = (value: string) => value.trim().toLowerCase();
 
+const normalizeForMatch = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const containsGroundedName = (source: string, rawName: string) => {
+  const target = normalizeForMatch(rawName);
+  const normalizedSource = normalizeForMatch(source || "");
+  if (!target || !normalizedSource) return false;
+  const pattern = new RegExp(`(^|\\s)${escapeRegex(target)}($|\\s)`);
+  return pattern.test(normalizedSource);
+};
+
 const dedupe = (items: string[]) => {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -52,14 +69,30 @@ const buildEntity = (
   required: kind === "character"
 });
 
-const findLocationId = (scene: Scene, locations: Location[]): string | undefined => {
-  const setting = normalizeName(scene.setting || "");
-  const direct = locations.find((location) => setting.includes(normalizeName(location.name)));
-  if (direct) return direct.id;
+const findLocationId = (
+  scene: Scene,
+  locations: Location[],
+  strictMode: boolean
+): string | undefined => {
+  const rawText = scene.rawText || "";
+  const setting = scene.setting || "";
+  const synopsis = scene.synopsis || "";
+
+  const fromRaw = locations.find((location) => containsGroundedName(rawText, location.name));
+  if (fromRaw) return fromRaw.id;
+
+  const fromSetting = locations.find((location) => containsGroundedName(setting, location.name));
+  if (fromSetting) return fromSetting.id;
+
+  if (!strictMode) {
+    const fromSynopsis = locations.find((location) => containsGroundedName(synopsis, location.name));
+    if (fromSynopsis) return fromSynopsis.id;
+  }
+
   return locations[0]?.id;
 };
 
-const findCharacterIds = (scene: Scene, characters: Character[]) => {
+const findCharacterIds = (scene: Scene, characters: Character[], strictMode: boolean) => {
   const names = scene.characters || [];
   const fromScene = characters
     .filter((character) =>
@@ -68,16 +101,33 @@ const findCharacterIds = (scene: Scene, characters: Character[]) => {
     .map((character) => character.id);
   if (fromScene.length > 0) return fromScene;
 
-  const synopsis = normalizeName(scene.synopsis || "");
+  const fromRawText = characters
+    .filter((character) => containsGroundedName(scene.rawText || "", character.name))
+    .map((character) => character.id);
+  if (fromRawText.length > 0) return fromRawText;
+
+  if (strictMode) return [];
+
+  const fromSynopsis = characters
+    .filter((character) => containsGroundedName(scene.synopsis || "", character.name))
+    .map((character) => character.id);
+  if (fromSynopsis.length > 0) return fromSynopsis;
+
   return characters
-    .filter((character) => synopsis.includes(normalizeName(character.name)))
+    .filter((character) => containsGroundedName(scene.setting || "", character.name))
     .map((character) => character.id);
 };
 
-const findItemIds = (scene: Scene, items: Item[]) => {
-  const synopsis = normalizeName(scene.synopsis || "");
+const findItemIds = (scene: Scene, items: Item[], strictMode: boolean) => {
+  const fromRawText = items
+    .filter((item) => containsGroundedName(scene.rawText || "", item.name))
+    .map((item) => item.id);
+  if (fromRawText.length > 0) return fromRawText;
+
+  if (strictMode) return [];
+
   return items
-    .filter((item) => synopsis.includes(normalizeName(item.name)))
+    .filter((item) => containsGroundedName(scene.synopsis || "", item.name))
     .map((item) => item.id);
 };
 
@@ -86,8 +136,12 @@ export const buildContinuityBible = (
   characters: Character[],
   items: Item[],
   locations: Location[],
-  previous?: ContinuityBible
+  previous?: ContinuityBible,
+  options?: {
+    strictMode?: boolean;
+  }
 ): ContinuityBible => {
+  const strictMode = options?.strictMode ?? true;
   const entities: ContinuityEntity[] = [
     ...characters.map((character) => buildEntity("character", character)),
     ...items.map((item) => buildEntity("item", item)),
@@ -95,9 +149,9 @@ export const buildContinuityBible = (
   ];
 
   const sceneBindings: SceneContinuityBinding[] = scenes.map((scene) => {
-    const characterIds = findCharacterIds(scene, characters);
-    const itemIds = findItemIds(scene, items);
-    const locationId = findLocationId(scene, locations);
+    const characterIds = findCharacterIds(scene, characters, strictMode);
+    const itemIds = findItemIds(scene, items, strictMode);
+    const locationId = findLocationId(scene, locations, strictMode);
     return {
       sceneId: scene.id,
       characterIds,
@@ -123,7 +177,8 @@ export const buildDefaultContinuityState = (state: ComicState): ContinuityState 
     state.characters || [],
     state.items || [],
     state.locations || [],
-    state.continuity?.bible
+    state.continuity?.bible,
+    { strictMode: (state.continuity?.lockLevel || "strict") === "strict" }
   );
   return {
     bible,
@@ -147,7 +202,8 @@ export const buildContinuityFromWorld = (
   locations: Location[],
   existing?: ContinuityState
 ): ContinuityState => {
-  const bible = buildContinuityBible(scenes, characters, items, locations, existing?.bible);
+  const strictMode = (existing?.lockLevel || "strict") === "strict";
+  const bible = buildContinuityBible(scenes, characters, items, locations, existing?.bible, { strictMode });
   const baseState = {
     scenes,
     characters,

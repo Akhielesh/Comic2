@@ -38,6 +38,11 @@ const toBoolean = (value: unknown): boolean | undefined => {
   return undefined;
 };
 
+const asRecord = (value: unknown): Record<string, unknown> | undefined => {
+  if (!value || typeof value !== "object") return undefined;
+  return value as Record<string, unknown>;
+};
+
 const main = async () => {
   const supabaseUrl = process.env.VITE_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -60,6 +65,18 @@ const main = async () => {
   if (error) throw error;
 
   const rows = (data || []) as ArtifactRow[];
+  const worldArtifacts = rows.filter((row) => {
+    const artifact = row.data || {};
+    const stage = String(artifact.stage || "").toLowerCase();
+    const type = String(artifact.type || "").toLowerCase();
+    return type === "text" && stage === "world";
+  });
+  const scriptArtifacts = rows.filter((row) => {
+    const artifact = row.data || {};
+    const stage = String(artifact.stage || "").toLowerCase();
+    const type = String(artifact.type || "").toLowerCase();
+    return type === "text" && stage === "script";
+  });
   const panelArtifacts = rows.filter((row) => {
     const artifact = row.data || {};
     const stage = String(artifact.stage || "").toLowerCase();
@@ -74,8 +91,30 @@ const main = async () => {
   let multiFrameDetected = 0;
   let styleLockAttemptCount = 0;
   let styleLockUnresolvedCount = 0;
+  let staleDownstreamFingerprintCount = 0;
+  let ungroundedEntityCount = 0;
+  let rawExcerptFallbackCount = 0;
+  let analyzedSceneCount = 0;
 
   const runModels = new Map<string, Set<string>>();
+
+  for (const row of worldArtifacts) {
+    const artifact = row.data || {};
+    const meta = asRecord(artifact.meta);
+    const diagnostics = asRecord(meta?.diagnostics);
+    const dropped = toNumber(diagnostics?.ungrounded_characters_dropped)
+      ?? toNumber(diagnostics?.ungroundedCharactersDropped)
+      ?? 0;
+    ungroundedEntityCount += dropped;
+  }
+
+  for (const row of scriptArtifacts) {
+    const artifact = row.data || {};
+    const meta = asRecord(artifact.meta);
+    const diagnostics = asRecord(meta?.diagnostics);
+    rawExcerptFallbackCount += toNumber(diagnostics?.rawExcerptFallbackCount) || 0;
+    analyzedSceneCount += toNumber(diagnostics?.sceneCount) || 0;
+  }
 
   for (const row of panelArtifacts) {
     const artifact = row.data || {};
@@ -111,6 +150,10 @@ const main = async () => {
       multiFrameDetected += 1;
     }
 
+    if (toBoolean(meta.stale_downstream_fingerprint) === true) {
+      staleDownstreamFingerprintCount += 1;
+    }
+
     const styleLockResolved = toBoolean(meta.style_lock_resolved);
     if (typeof styleLockResolved === "boolean") {
       styleLockAttemptCount += 1;
@@ -127,19 +170,26 @@ const main = async () => {
   const mixedModelRunRate = totalRuns > 0 ? mixedRuns / totalRuns : 0;
   const multiFrameRate = panelArtifacts.length > 0 ? multiFrameDetected / panelArtifacts.length : 0;
   const avgPanelRefCount = referenceCountSamples > 0 ? referenceCountTotal / referenceCountSamples : 0;
+  const rawExcerptFallbackRate = analyzedSceneCount > 0 ? rawExcerptFallbackCount / analyzedSceneCount : 0;
 
   const thresholds = {
     zero_ref_strict_panels_max_rate: 0.01,
     mixed_model_runs_max_rate: 0.02,
     multi_frame_descriptions_max_rate: 0.01,
-    unresolved_style_lock_attempts_max: 0
+    unresolved_style_lock_attempts_max: 0,
+    ungrounded_entities_max: 0,
+    stale_downstream_fingerprint_max: 0,
+    scene_raw_excerpt_fallback_max_rate: 0.05
   };
 
   const alerts = {
     zero_ref_strict_panels_breach: zeroRefStrictRate > thresholds.zero_ref_strict_panels_max_rate,
     mixed_model_runs_breach: mixedModelRunRate > thresholds.mixed_model_runs_max_rate,
     multi_frame_descriptions_breach: multiFrameRate > thresholds.multi_frame_descriptions_max_rate,
-    unresolved_style_lock_attempts_breach: styleLockUnresolvedCount > thresholds.unresolved_style_lock_attempts_max
+    unresolved_style_lock_attempts_breach: styleLockUnresolvedCount > thresholds.unresolved_style_lock_attempts_max,
+    ungrounded_entities_breach: ungroundedEntityCount > thresholds.ungrounded_entities_max,
+    stale_downstream_fingerprint_breach: staleDownstreamFingerprintCount > thresholds.stale_downstream_fingerprint_max,
+    scene_raw_excerpt_fallback_breach: rawExcerptFallbackRate > thresholds.scene_raw_excerpt_fallback_max_rate
   };
 
   const output = {
@@ -150,6 +200,8 @@ const main = async () => {
     },
     totals: {
       panelArtifacts: panelArtifacts.length,
+      worldArtifacts: worldArtifacts.length,
+      scriptArtifacts: scriptArtifacts.length,
       strictPanels: strictPanelCount,
       runCount: totalRuns
     },
@@ -170,6 +222,13 @@ const main = async () => {
       style_lock_resolved: {
         attempts: styleLockAttemptCount,
         unresolvedAttempts: styleLockUnresolvedCount
+      },
+      ungrounded_entity_count: ungroundedEntityCount,
+      stale_downstream_fingerprint: staleDownstreamFingerprintCount,
+      scene_raw_excerpt_fallback: {
+        count: rawExcerptFallbackCount,
+        sceneCount: analyzedSceneCount,
+        rate: Number(rawExcerptFallbackRate.toFixed(6))
       }
     },
     thresholds,

@@ -30,6 +30,73 @@ const STRICT_STYLE_LOCK_ERROR = "STRICT_STYLE_LOCK_UNRESOLVED";
 const STRICT_REFERENCE_ERROR = "STRICT_REFERENCE_REQUIRED";
 const MULTI_FRAME_ERROR = "MULTI_FRAME_DESCRIPTION";
 
+const stableHash = (value: string) => {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+  }
+  return `h${Math.abs(hash >>> 0).toString(16)}`;
+};
+
+const hashScenes = (state: Project["state"]) =>
+  stableHash(
+    JSON.stringify(
+      (state.scenes || []).map((scene) => ({
+        id: scene.id,
+        rawText: scene.rawText || "",
+        synopsis: scene.synopsis || "",
+        setting: scene.setting || "",
+        characters: scene.characters || []
+      }))
+    )
+  );
+
+const hashWorld = (state: Project["state"]) =>
+  stableHash(
+    JSON.stringify({
+      characters: (state.characters || []).map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        description: entry.description,
+        bio: entry.bio,
+        referenceImageIds: entry.referenceImageIds || []
+      })),
+      items: (state.items || []).map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        description: entry.description,
+        referenceImageIds: entry.referenceImageIds || []
+      })),
+      locations: (state.locations || []).map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        description: entry.description,
+        referenceImageIds: entry.referenceImageIds || []
+      }))
+    })
+  );
+
+const hasStaleDownstreamFingerprint = (state: Project["state"]) => {
+  const expectedScriptHash = stableHash(state.script || "");
+  const expectedSceneHash = hashScenes(state);
+  const expectedWorldHash = hashWorld(state);
+  if (!state.scriptHash || !state.sceneHash || !state.worldHash) return true;
+  return (
+    state.scriptHash !== expectedScriptHash ||
+    state.sceneHash !== expectedSceneHash ||
+    state.worldHash !== expectedWorldHash
+  );
+};
+
+const countUngroundedEntities = (state: Project["state"]) =>
+  (state.continuity?.validation?.issues || []).filter((issue) => issue.code === "ENTITY_NOT_FOUND").length;
+
+const countDroppedEntities = (state: Project["state"]) =>
+  (state.continuity?.validation?.issues || []).filter((issue) =>
+    issue.code === "ENTITY_NOT_FOUND" || issue.code === "ENTITY_REFERENCE_MISSING"
+  ).length;
+
 const resolveLockedPanelModelId = (): string => {
   const configured = getModelForTask("panel");
   const model = getImageModelById(configured);
@@ -79,6 +146,9 @@ export const startBackgroundGeneration = async (
   const panelRunId = crypto.randomUUID();
   const configuredPanelModelId = getModelForTask("panel");
   const lockedPanelModelId = resolveLockedPanelModelId();
+  const staleDownstreamFingerprint = hasStaleDownstreamFingerprint(state);
+  const droppedEntityCount = countDroppedEntities(state);
+  const ungroundedEntityCount = countUngroundedEntities(state);
   const panelModelsUsed = new Set<string>();
   const panelReferenceCounts: number[] = [];
   let zeroRefPanelCount = 0;
@@ -122,6 +192,9 @@ export const startBackgroundGeneration = async (
 
   try {
     addLog("Starting generation process...");
+    if (staleDownstreamFingerprint) {
+      addLog("Warning: generation started with stale script/scene/world fingerprints.");
+    }
     if (configuredPanelModelId !== lockedPanelModelId) {
       addLog(`Configured panel model "${configuredPanelModelId}" does not support references. Locking run to "${lockedPanelModelId}".`);
     }
@@ -365,7 +438,14 @@ export const startBackgroundGeneration = async (
                   style_lock_used: Boolean(referencePack.styleImageId),
                   requiredReferences,
                   referenceCount: referencePack.imageIds.length,
-                  styleLockUsed: Boolean(referencePack.styleImageId)
+                  styleLockUsed: Boolean(referencePack.styleImageId),
+                  script_hash: state.scriptHash || stableHash(state.script || ""),
+                  scene_hash: state.sceneHash || hashScenes(state),
+                  world_hash: state.worldHash || hashWorld(state),
+                  reset_source_stage: state.lastResetSourceStage || "unknown",
+                  dropped_entity_count: droppedEntityCount,
+                  ungrounded_entity_count: ungroundedEntityCount,
+                  stale_downstream_fingerprint: staleDownstreamFingerprint
                 }
               }
             );
@@ -505,7 +585,7 @@ export const startBackgroundGeneration = async (
       ? Number((panelReferenceCounts.reduce((sum, value) => sum + value, 0) / panelReferenceCounts.length).toFixed(2))
       : 0;
     addLog(
-      `[METRICS] panel_ref_count=${averageRefCount} zero_ref_panel=${zeroRefPanelCount} mixed_model_in_run=${mixedModelInRun} multi_frame_description_detected=${multiFrameDetectedCount} style_lock_resolved=${initialStyleResolution.resolution.resolved ? 1 : 0}`
+      `[METRICS] panel_ref_count=${averageRefCount} zero_ref_panel=${zeroRefPanelCount} mixed_model_in_run=${mixedModelInRun} multi_frame_description_detected=${multiFrameDetectedCount} style_lock_resolved=${initialStyleResolution.resolution.resolved ? 1 : 0} stale_downstream_fingerprint=${staleDownstreamFingerprint ? 1 : 0} dropped_entity_count=${droppedEntityCount} ungrounded_entity_count=${ungroundedEntityCount}`
     );
 
     addLog("Build Complete!");
@@ -546,6 +626,9 @@ export const regenerateSinglePanel = async (
   const styleApplied = applyStyleLockResolution(project.state);
   const state = styleApplied.state;
   const strictMode = (state.continuity?.lockLevel || "strict") === "strict";
+  const staleDownstreamFingerprint = hasStaleDownstreamFingerprint(state);
+  const droppedEntityCount = countDroppedEntities(state);
+  const ungroundedEntityCount = countUngroundedEntities(state);
   if (strictMode && !styleApplied.resolution.resolved) {
     throw new Error(`${STRICT_STYLE_LOCK_ERROR}: Style lock must be resolved before panel regeneration.`);
   }
@@ -638,7 +721,14 @@ export const regenerateSinglePanel = async (
         style_lock_used: Boolean(referencePack.styleImageId),
         requiredReferences,
         referenceCount: referencePack.imageIds.length,
-        styleLockUsed: Boolean(referencePack.styleImageId)
+        styleLockUsed: Boolean(referencePack.styleImageId),
+        script_hash: state.scriptHash || stableHash(state.script || ""),
+        scene_hash: state.sceneHash || hashScenes(state),
+        world_hash: state.worldHash || hashWorld(state),
+        reset_source_stage: state.lastResetSourceStage || "unknown",
+        dropped_entity_count: droppedEntityCount,
+        ungrounded_entity_count: ungroundedEntityCount,
+        stale_downstream_fingerprint: staleDownstreamFingerprint
       }
     }
   );

@@ -306,7 +306,11 @@ export const generateScriptDraft = async (inputs: StoryDraftRequest, projectId?:
   return response.script || '';
 };
 
-export const extractWorldDetails = async (scenes: ExtractWorldRequest['scenes'], projectId?: string) => {
+export const extractWorldDetails = async (
+  scenes: ExtractWorldRequest['scenes'],
+  projectId?: string,
+  script?: string
+) => {
   if (!scenes || scenes.length === 0) {
     return { characters: [], items: [], locations: [] };
   }
@@ -316,7 +320,7 @@ export const extractWorldDetails = async (scenes: ExtractWorldRequest['scenes'],
     'text',
     'world',
     async () => withTextKeyFallback((apiKey, modelId) =>
-      post<ExtractWorldRequest, ExtractWorldResponse>('/api/text/extract-world', { scenes }, { apiKey, modelId })
+      post<ExtractWorldRequest, ExtractWorldResponse>('/api/text/extract-world', { scenes, script }, { apiKey, modelId })
     ),
     scenes.map(s => s.synopsis || s.rawText).join('\n')
   );

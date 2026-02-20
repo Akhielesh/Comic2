@@ -22,33 +22,20 @@ const resolveTextModel = (modelOverride?: string) => {
   return candidate || TEXT_MODEL;
 };
 
-const filterGroundedCharacterNames = (names: string[], sceneRawText: string, fullScript: string): string[] => {
-  const grounded = new Set<string>();
-  for (const rawName of names) {
-    const name = String(rawName || '').trim();
-    if (!name) continue;
-    if (containsNormalizedName(sceneRawText, name) || containsNormalizedName(fullScript, name)) {
-      grounded.add(name);
-    }
-  }
-  return Array.from(grounded);
+type AnalyzeScriptDiagnostics = {
+  ungroundedCharactersDropped: number;
+  rawExcerptFallbackCount: number;
 };
 
-const normalizeScenes = (raw: any[], fullScript: string): Scene[] => {
-  return raw
-    .filter((s) => s && isString(s.synopsis) && isString(s.setting))
-    .map((scene, index) => {
-      const rawText = isString(scene.rawText) && scene.rawText.trim().length > 0 ? scene.rawText : scene.synopsis;
-      const rawCharacters = ensureArray<string>(scene.characters, []);
-      const characters = filterGroundedCharacterNames(rawCharacters, rawText, fullScript);
-      return {
-        id: index + 1,
-        rawText,
-        synopsis: scene.synopsis,
-        characters,
-        setting: scene.setting
-      };
-    });
+type EntityDropReason =
+  | 'NOT_IN_SCRIPT'
+  | 'LOW_DESCRIPTION_QUALITY'
+  | 'DUPLICATE_NORMALIZED_NAME';
+
+type DroppedEntityDiagnostic = {
+  name: string;
+  kind: 'character' | 'item' | 'location';
+  reason: EntityDropReason;
 };
 
 type WorldExtractionDiagnostics = {
@@ -59,6 +46,8 @@ type WorldExtractionDiagnostics = {
     locations: number;
   };
   filtered_entity_count: number;
+  dropped_entities: DroppedEntityDiagnostic[];
+  ungrounded_characters_dropped: number;
 };
 
 const MAX_WORLD_CHARACTER_COUNT = 12;
@@ -89,43 +78,148 @@ const containsNormalizedName = (haystack: string, rawName: string) => {
   return pattern.test(source);
 };
 
+const containsNormalizedSnippet = (haystack: string, snippet: string) => {
+  const target = normalizeForMatch(snippet);
+  if (!target) return false;
+  const source = normalizeForMatch(haystack);
+  if (!source) return false;
+  return source.includes(target);
+};
+
+const clipExcerpt = (value: string, max = 260) => value.trim().slice(0, max).trim();
+
+const splitScriptIntoSegments = (script: string): string[] => {
+  const sceneDelimited = script
+    .split(/\n(?=\s*(scene|act)\s+\d+[:.-]?)/gi)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (sceneDelimited.length > 1) return sceneDelimited;
+
+  const paragraphs = script
+    .split(/\n{2,}/g)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (paragraphs.length > 0) return paragraphs;
+
+  return script.trim() ? [script.trim()] : [];
+};
+
+const deriveSceneRawExcerpt = (
+  scene: any,
+  index: number,
+  fullScript: string,
+  scriptSegments: string[]
+) => {
+  const providedRaw = isString(scene?.rawText) ? scene.rawText.trim() : '';
+  if (providedRaw && containsNormalizedSnippet(fullScript, providedRaw)) {
+    return {
+      rawText: clipExcerpt(providedRaw),
+      usedFallback: false
+    };
+  }
+
+  const synopsis = isString(scene?.synopsis) ? scene.synopsis.trim() : '';
+  if (synopsis) {
+    const directMatch = scriptSegments.find((segment) => containsNormalizedSnippet(segment, synopsis));
+    if (directMatch) {
+      return {
+        rawText: clipExcerpt(directMatch),
+        usedFallback: true
+      };
+    }
+
+    const synopsisAnchor = synopsis.split(/\s+/).slice(0, 10).join(' ');
+    if (synopsisAnchor) {
+      const anchorMatch = scriptSegments.find((segment) => containsNormalizedSnippet(segment, synopsisAnchor));
+      if (anchorMatch) {
+        return {
+          rawText: clipExcerpt(anchorMatch),
+          usedFallback: true
+        };
+      }
+    }
+  }
+
+  const segmentByIndex = scriptSegments[index]
+    || scriptSegments[Math.max(0, scriptSegments.length - 1)]
+    || fullScript;
+  return {
+    rawText: clipExcerpt(segmentByIndex || synopsis || 'Scene context unavailable.'),
+    usedFallback: true
+  };
+};
+
+const filterGroundedCharacterNames = (names: string[], sceneRawText: string): { names: string[]; dropped: number } => {
+  const grounded = new Set<string>();
+  let dropped = 0;
+
+  for (const rawName of names) {
+    const name = String(rawName || '').trim();
+    if (!name) continue;
+    if (containsNormalizedName(sceneRawText, name)) {
+      grounded.add(name);
+    } else {
+      dropped += 1;
+    }
+  }
+
+  return {
+    names: Array.from(grounded),
+    dropped
+  };
+};
+
+const normalizeScenes = (
+  raw: any[],
+  fullScript: string
+): { scenes: Scene[]; diagnostics: AnalyzeScriptDiagnostics } => {
+  const scriptSegments = splitScriptIntoSegments(fullScript);
+  let ungroundedCharactersDropped = 0;
+  let rawExcerptFallbackCount = 0;
+
+  const scenes = raw
+    .filter((s) => s && isString(s.synopsis) && isString(s.setting))
+    .map((scene, index) => {
+      const excerpt = deriveSceneRawExcerpt(scene, index, fullScript, scriptSegments);
+      if (excerpt.usedFallback) rawExcerptFallbackCount += 1;
+
+      const rawCharacters = ensureArray<string>(scene.characters, []);
+      const grounded = filterGroundedCharacterNames(rawCharacters, excerpt.rawText);
+      ungroundedCharactersDropped += grounded.dropped;
+
+      return {
+        id: index + 1,
+        rawText: excerpt.rawText,
+        synopsis: scene.synopsis.trim(),
+        characters: grounded.names,
+        setting: scene.setting.trim()
+      };
+    });
+
+  return {
+    scenes,
+    diagnostics: {
+      ungroundedCharactersDropped,
+      rawExcerptFallbackCount
+    }
+  };
+};
+
+export const normalizeAnalyzedScenes = normalizeScenes;
+
 const hasGoodDescription = (value: unknown) =>
   typeof value === 'string' && value.trim().length >= 8;
 
-const dedupeByName = <T extends { name: string; description?: string }>(list: T[]): T[] => {
-  const byName = new Map<string, T>();
-  for (const entry of list) {
-    const key = normalizeEntityName(entry.name || '');
-    if (!key) continue;
-    const existing = byName.get(key);
-    if (!existing) {
-      byName.set(key, entry);
-      continue;
-    }
-    const existingScore = (existing.description || '').trim().length;
-    const nextScore = (entry.description || '').trim().length;
-    if (nextScore > existingScore) {
-      byName.set(key, entry);
-    }
-  }
-  return Array.from(byName.values());
-};
-
-const buildSceneGroundingContext = (scenes: Scene[]) => {
-  const sceneText = scenes
-    .map((scene) => [
-      scene.synopsis || '',
-      scene.setting || '',
-      ...(scene.characters || [])
-    ].join(' '))
+const buildSceneGroundingContext = (scenes: Scene[], script?: string) => {
+  const rawSceneText = scenes
+    .map((scene) => scene.rawText || '')
     .join('\n');
-  const sceneCharacterNames = new Set(
-    scenes
-      .flatMap((scene) => scene.characters || [])
-      .map((name) => normalizeEntityName(name))
-      .filter(Boolean)
-  );
-  return { sceneText, sceneCharacterNames };
+
+  const scriptGroundingText = [script || '', rawSceneText]
+    .filter(Boolean)
+    .join('\n');
+
+  return { scriptGroundingText };
 };
 
 export const buildWorldExtractionPrompt = (sceneContext: string) => `
@@ -153,38 +247,87 @@ export const filterExtractedWorldData = (
     characters: Character[];
     items: Item[];
     locations: Location[];
-  }
+  },
+  options?: { script?: string }
 ) => {
-  const { sceneText, sceneCharacterNames } = buildSceneGroundingContext(scenes);
+  const { scriptGroundingText } = buildSceneGroundingContext(scenes, options?.script);
+  const dropped_entities: DroppedEntityDiagnostic[] = [];
 
-  const dedupedCharacters = dedupeByName(extracted.characters);
-  const dedupedItems = dedupeByName(extracted.items);
-  const dedupedLocations = dedupeByName(extracted.locations);
+  const filterEntityList = <T extends { name: string; description?: string }>(
+    list: T[],
+    kind: DroppedEntityDiagnostic['kind'],
+    limit: number
+  ): T[] => {
+    const deduped = new Map<string, T>();
 
-  const characters = dedupedCharacters
-    .filter((entry) => {
-      const normalized = normalizeEntityName(entry.name || '');
-      if (!normalized || !hasGoodDescription(entry.description)) return false;
-      return sceneCharacterNames.has(normalized) || containsNormalizedName(sceneText, entry.name);
-    })
-    .slice(0, MAX_WORLD_CHARACTER_COUNT);
+    for (const entry of list) {
+      const name = String(entry.name || '').trim();
+      const normalized = normalizeEntityName(name);
+      const description = String(entry.description || '').trim();
 
-  const items = dedupedItems
-    .filter((entry) => {
-      if (!entry.name || !hasGoodDescription(entry.description)) return false;
-      return containsNormalizedName(sceneText, entry.name);
-    })
-    .slice(0, MAX_WORLD_ITEM_COUNT);
+      if (!normalized) {
+        dropped_entities.push({
+          name: name || 'Unnamed',
+          kind,
+          reason: 'NOT_IN_SCRIPT'
+        });
+        continue;
+      }
 
-  const locations = dedupedLocations
-    .filter((entry) => {
-      if (!entry.name || !hasGoodDescription(entry.description)) return false;
-      return containsNormalizedName(sceneText, entry.name);
-    })
-    .slice(0, MAX_WORLD_LOCATION_COUNT);
+      if (!hasGoodDescription(description)) {
+        dropped_entities.push({
+          name,
+          kind,
+          reason: 'LOW_DESCRIPTION_QUALITY'
+        });
+        continue;
+      }
+
+      if (!containsNormalizedName(scriptGroundingText, name)) {
+        dropped_entities.push({
+          name,
+          kind,
+          reason: 'NOT_IN_SCRIPT'
+        });
+        continue;
+      }
+
+      const existing = deduped.get(normalized);
+      if (!existing) {
+        deduped.set(normalized, entry);
+        continue;
+      }
+
+      const existingScore = (existing.description || '').trim().length;
+      const nextScore = description.length;
+      if (nextScore > existingScore) {
+        dropped_entities.push({
+          name: existing.name || name,
+          kind,
+          reason: 'DUPLICATE_NORMALIZED_NAME'
+        });
+        deduped.set(normalized, entry);
+      } else {
+        dropped_entities.push({
+          name,
+          kind,
+          reason: 'DUPLICATE_NORMALIZED_NAME'
+        });
+      }
+    }
+
+    return Array.from(deduped.values()).slice(0, limit);
+  };
+
+  const characters = filterEntityList(extracted.characters, 'character', MAX_WORLD_CHARACTER_COUNT);
+  const items = filterEntityList(extracted.items, 'item', MAX_WORLD_ITEM_COUNT);
+  const locations = filterEntityList(extracted.locations, 'location', MAX_WORLD_LOCATION_COUNT);
 
   const rawCount = extracted.characters.length + extracted.items.length + extracted.locations.length;
   const filteredCount = characters.length + items.length + locations.length;
+  const ungroundedCharacterDrops = dropped_entities.filter(
+    (entry) => entry.kind === 'character' && entry.reason === 'NOT_IN_SCRIPT'
+  ).length;
   const diagnostics: WorldExtractionDiagnostics = {
     input_scene_count: scenes.length,
     entity_counts: {
@@ -192,7 +335,9 @@ export const filterExtractedWorldData = (
       items: items.length,
       locations: locations.length
     },
-    filtered_entity_count: Math.max(rawCount - filteredCount, 0)
+    filtered_entity_count: Math.max(rawCount - filteredCount, 0),
+    dropped_entities,
+    ungrounded_characters_dropped: ungroundedCharacterDrops
   };
 
   return { characters, items, locations, diagnostics };
@@ -228,6 +373,7 @@ export const analyzeScript = async (apiKey: string, script: string, modelOverrid
         model,
         contents: prompt,
         config: {
+          temperature: 0.1,
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.ARRAY,
@@ -255,13 +401,19 @@ export const analyzeScript = async (apiKey: string, script: string, modelOverrid
 
   const responseText = response.text || '';
   const rawScenes = extractJson(responseText);
-  const scenes = normalizeScenes(Array.isArray(rawScenes) ? rawScenes : [], script);
+  const normalized = normalizeScenes(Array.isArray(rawScenes) ? rawScenes : [], script);
+  const scenes = normalized.scenes;
   if (scenes.length === 0) {
     throw new Error('No scenes found in analysis response');
   }
 
   return {
     scenes,
+    diagnostics: {
+      ungroundedCharactersDropped: normalized.diagnostics.ungroundedCharactersDropped,
+      rawExcerptFallbackCount: normalized.diagnostics.rawExcerptFallbackCount,
+      sceneCount: scenes.length
+    },
     prompt,
     responseText,
     usage: buildUsage(prompt, responseText, response.usageMetadata),
@@ -402,7 +554,12 @@ export const runStoryToolPrompt = async (
   };
 };
 
-export const extractWorldDetails = async (apiKey: string, scenes: Scene[], modelOverride?: string): Promise<ExtractWorldResponse> => {
+export const extractWorldDetails = async (
+  apiKey: string,
+  scenes: Scene[],
+  script?: string,
+  modelOverride?: string
+): Promise<ExtractWorldResponse> => {
   const model = resolveTextModel(modelOverride);
   if (!scenes || scenes.length === 0) {
     return {
@@ -415,17 +572,19 @@ export const extractWorldDetails = async (apiKey: string, scenes: Scene[], model
       diagnostics: {
         input_scene_count: 0,
         entity_counts: { characters: 0, items: 0, locations: 0 },
-        filtered_entity_count: 0
+        filtered_entity_count: 0,
+        dropped_entities: [],
+        ungrounded_characters_dropped: 0
       }
     };
   }
   const ai = createClient(apiKey);
   const sceneContext = scenes.map((scene) => [
     `Scene ${scene.id}:`,
-    `Raw: ${scene.rawText || ''}`,
-    `Synopsis: ${scene.synopsis || ''}`,
-    `Setting: ${scene.setting || ''}`,
-    `Characters: ${(scene.characters || []).join(', ') || 'None listed'}`
+    `Raw Script Excerpt: ${scene.rawText || ''}`,
+    `Synopsis Hint: ${scene.synopsis || ''}`,
+    `Setting Hint: ${scene.setting || ''}`,
+    `Known Scene Characters: ${(scene.characters || []).join(', ') || 'None listed'}`
   ].join('\n')).join('\n\n');
   const prompt = buildWorldExtractionPrompt(sceneContext);
 
@@ -434,6 +593,7 @@ export const extractWorldDetails = async (apiKey: string, scenes: Scene[], model
       model,
       contents: prompt,
       config: {
+        temperature: 0.1,
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,
@@ -514,7 +674,7 @@ export const extractWorldDetails = async (apiKey: string, scenes: Scene[], model
     characters: extractedCharacters,
     items: extractedItems,
     locations: extractedLocations
-  });
+  }, { script });
 
   console.info('[WORLD_EXTRACTION_DIAGNOSTICS]', diagnostics);
 
@@ -558,6 +718,7 @@ export const generatePanelBreakdown = async (
       Do not include panel numbering text in descriptions (forbidden examples: "Panel 1", "Panel 2").
       
       Scene Synopsis: ${scene.synopsis}
+      Scene Raw Excerpt: ${scene.rawText || ''}
       Scene Characters: ${(scene.characters || []).join(', ') || 'Unknown'}
       Scene Setting: ${scene.setting || 'Unknown'}
       Allowed continuity entities:
@@ -585,6 +746,7 @@ export const generatePanelBreakdown = async (
       model,
       contents: prompt,
       config: {
+        temperature: 0.1,
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.ARRAY,
