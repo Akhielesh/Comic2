@@ -426,3 +426,10 @@ export type SystemDiagnosticsResponse = {
   supabaseConfigured?: boolean;
   storagePersistenceEnabled?: boolean;
 };
+
+export type SystemVersionResponse = {
+  appVersion: string;
+  gitSha: string;
+  buildTimestamp: string;
+  worldExtractionContractVersion: number;
+};

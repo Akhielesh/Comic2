@@ -24,6 +24,7 @@ import {
   TestLabReportResponse,
   SystemStatusResponse,
   SystemDiagnosticsResponse,
+  SystemVersionResponse,
   AssistantMessage,
   UniversalAssistantRequest,
   UniversalAssistantResponse
@@ -34,6 +35,8 @@ import { IMAGE_TEXT_BLOCKER, NO_TEXT_IN_IMAGE, TEXT_MODEL, IMAGE_MODEL } from '.
 import { cropImageToRatio } from './imageUtils';
 import { updateDebugState } from './debugStore';
 import { getAllModelKeys, getDefaultTextModel, getModelSpecificKey } from './appSettings';
+import { groundWorldEntities } from './worldGrounding';
+import { WORLD_EXTRACTION_CONTRACT_VERSION } from '../shared/contracts/worldExtraction';
 
 // --- Generic Helper ---
 
@@ -52,6 +55,37 @@ const handleGeminiError = (label: string, error: unknown) => {
 };
 
 const getActiveTextModel = (): string => getDefaultTextModel();
+const LEGACY_WORLD_CONTRACT_VERSION = 0;
+const SYSTEM_VERSION_CACHE_MS = 5 * 60_000;
+let systemVersionCache: { value: SystemVersionResponse; fetchedAt: number } | null = null;
+let legacyWorldContractWarningShown = false;
+
+const buildUnknownSystemVersion = (): SystemVersionResponse => ({
+  appVersion: 'unknown',
+  gitSha: 'unknown',
+  buildTimestamp: new Date(0).toISOString(),
+  worldExtractionContractVersion: LEGACY_WORLD_CONTRACT_VERSION
+});
+
+const fetchSystemVersion = async (): Promise<SystemVersionResponse> => {
+  try {
+    return await get<SystemVersionResponse>('/api/system/version');
+  } catch (error) {
+    const message = error instanceof ApiError ? `${error.status} ${error.message}` : String(error);
+    console.warn(`[SYSTEM_VERSION_CHECK] Falling back to legacy contract mode: ${message}`);
+    return buildUnknownSystemVersion();
+  }
+};
+
+const getCachedSystemVersion = async (): Promise<SystemVersionResponse> => {
+  const now = Date.now();
+  if (systemVersionCache && (now - systemVersionCache.fetchedAt) < SYSTEM_VERSION_CACHE_MS) {
+    return systemVersionCache.value;
+  }
+  const value = await fetchSystemVersion();
+  systemVersionCache = { value, fetchedAt: now };
+  return value;
+};
 
 const getActiveTextApiKey = (): string | undefined => {
   const preferredModel = getActiveTextModel();
@@ -241,6 +275,10 @@ export const checkSystemDiagnostics = async (): Promise<SystemDiagnosticsRespons
   }
 };
 
+export const checkSystemVersion = async (): Promise<SystemVersionResponse> => {
+  return getCachedSystemVersion();
+};
+
 export const queryUniversalAssistant = async (
   message: string,
   history: AssistantMessage[] = [],
@@ -314,6 +352,16 @@ export const extractWorldDetails = async (
   if (!scenes || scenes.length === 0) {
     return { characters: [], items: [], locations: [] };
   }
+  const systemVersion = await getCachedSystemVersion();
+  const backendContractVersion = systemVersion.worldExtractionContractVersion;
+  const useLegacyFallback = backendContractVersion < WORLD_EXTRACTION_CONTRACT_VERSION;
+  if (useLegacyFallback && !legacyWorldContractWarningShown) {
+    legacyWorldContractWarningShown = true;
+    console.warn(
+      `[WORLD_EXTRACTION] Backend contract v${backendContractVersion} is older than required v${WORLD_EXTRACTION_CONTRACT_VERSION}. Applying client-side grounding fallback.`
+    );
+  }
+
   const response = await safeGeminiCall(
     'extract_world',
     projectId,
@@ -324,10 +372,61 @@ export const extractWorldDetails = async (
     ),
     scenes.map(s => s.synopsis || s.rawText).join('\n')
   );
+  let characters = response.characters;
+  let items = response.items;
+  let locations = response.locations;
+  let diagnostics = response.diagnostics;
+
+  if (useLegacyFallback) {
+    const grounded = groundWorldEntities({
+      scenes,
+      script,
+      characters: response.characters,
+      items: response.items,
+      locations: response.locations
+    });
+
+    characters = grounded.characters;
+    items = grounded.items;
+    locations = grounded.locations;
+    diagnostics = grounded.diagnostics;
+
+    if (grounded.diagnostics.dropped_entities.length > 0) {
+      console.warn('[WORLD_EXTRACTION] Client-side fallback dropped ungrounded entities.', {
+        droppedCount: grounded.diagnostics.dropped_entities.length,
+        backendContractVersion
+      });
+      updateDebugState('gemini', {
+        lastRequestAt: Date.now(),
+        lastRequestType: 'extract_world_fallback'
+      });
+      if (projectId) {
+        void recordArtifact({
+          projectId,
+          timestamp: Date.now(),
+          type: 'text',
+          provider: 'gemini',
+          model: response.model || TEXT_MODEL,
+          stage: 'world_fallback_filter',
+          prompt: 'Client-side world extraction grounding fallback',
+          responseText: JSON.stringify(grounded.diagnostics),
+          success: true,
+          meta: {
+            backendContractVersion,
+            requiredContractVersion: WORLD_EXTRACTION_CONTRACT_VERSION,
+            backendDiagnostics: response.diagnostics,
+            fallbackDiagnostics: grounded.diagnostics
+          }
+        });
+      }
+    }
+  }
+
   return {
-    characters: response.characters,
-    items: response.items,
-    locations: response.locations
+    characters,
+    items,
+    locations,
+    diagnostics
   };
 };
 

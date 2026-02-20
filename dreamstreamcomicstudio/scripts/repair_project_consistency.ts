@@ -6,6 +6,7 @@ import type { ComicState } from "../types";
 import { applyStyleLockResolution } from "../services/styleLock";
 import { buildContinuityFromWorld, resolvePanelContinuity } from "../services/continuity";
 import { hasMultiFrameLanguage } from "../services/panelDescription";
+import { groundWorldEntities } from "../services/worldGrounding";
 
 dotenv.config({ path: path.resolve(process.cwd(), ".env.local") });
 dotenv.config();
@@ -43,6 +44,7 @@ type ContaminationReport = {
 };
 
 const isApply = process.argv.includes("--apply") && !process.argv.includes("--dry-run");
+const shouldCleanWorld = process.argv.includes("--clean-world");
 
 const normalizeForMatch = (value: string) =>
   value
@@ -200,6 +202,7 @@ const main = async () => {
   const report = {
     generatedAt: new Date().toISOString(),
     mode: isApply ? "apply" : "dry-run",
+    cleanWorld: shouldCleanWorld,
     totals: {
       scanned: 0,
       repaired: 0,
@@ -213,10 +216,21 @@ const main = async () => {
       applied: boolean;
       riskTags: RiskTag[];
       contamination: ContaminationReport;
+      contaminationBefore: ContaminationReport;
       panelStats: {
         totalPanels: number;
         zeroRefPanels: number;
         multiFramePanels: number;
+      };
+      cleanup: {
+        enabled: boolean;
+        droppedEntityCount: number;
+        removed: {
+          characters: number;
+          items: number;
+          locations: number;
+          total: number;
+        };
       };
       styleLock: {
         resolved: boolean;
@@ -258,7 +272,13 @@ const main = async () => {
             applied: false,
             riskTags: ["STYLE_LOCK_MISSING"],
             contamination: { characters: [], items: [], locations: [] },
+            contaminationBefore: { characters: [], items: [], locations: [] },
             panelStats: { totalPanels: 0, zeroRefPanels: 0, multiFramePanels: 0 },
+            cleanup: {
+              enabled: shouldCleanWorld,
+              droppedEntityCount: 0,
+              removed: { characters: 0, items: 0, locations: 0, total: 0 }
+            },
             styleLock: { resolved: false, source: "invalid_state" },
             flowVersion: { before: undefined, after: undefined, mismatchDetected: true },
             errors: ["State payload is missing or invalid."]
@@ -270,6 +290,42 @@ const main = async () => {
         let nextState = styleResult.state;
         const flowRepair = normalizeFlowVersionState(nextState);
         nextState = flowRepair.state;
+        const contaminationBefore = detectWorldContamination(nextState);
+        let cleanupDroppedEntityCount = 0;
+        let cleanupRemoved = { characters: 0, items: 0, locations: 0, total: 0 };
+
+        if (shouldCleanWorld) {
+          const previousCharacters = nextState.characters || [];
+          const previousItems = nextState.items || [];
+          const previousLocations = nextState.locations || [];
+          const cleanupResult = groundWorldEntities({
+            scenes: nextState.scenes || [],
+            script: nextState.script || "",
+            characters: previousCharacters,
+            items: previousItems,
+            locations: previousLocations,
+            limits: {
+              characters: Math.max(previousCharacters.length, 12),
+              items: Math.max(previousItems.length, 20),
+              locations: Math.max(previousLocations.length, 12)
+            }
+          });
+
+          cleanupDroppedEntityCount = cleanupResult.diagnostics.dropped_entities.length;
+          cleanupRemoved = {
+            characters: Math.max(previousCharacters.length - cleanupResult.characters.length, 0),
+            items: Math.max(previousItems.length - cleanupResult.items.length, 0),
+            locations: Math.max(previousLocations.length - cleanupResult.locations.length, 0),
+            total: 0
+          };
+          cleanupRemoved.total = cleanupRemoved.characters + cleanupRemoved.items + cleanupRemoved.locations;
+          nextState = {
+            ...nextState,
+            characters: cleanupResult.characters,
+            items: cleanupResult.items,
+            locations: cleanupResult.locations
+          };
+        }
 
         const nextContinuity = buildContinuityFromWorld(
           nextState.scenes || [],
@@ -333,10 +389,16 @@ const main = async () => {
           applied: isApply && changed,
           riskTags,
           contamination,
+          contaminationBefore,
           panelStats: {
             totalPanels: nextPanels.length,
             zeroRefPanels,
             multiFramePanels
+          },
+          cleanup: {
+            enabled: shouldCleanWorld,
+            droppedEntityCount: cleanupDroppedEntityCount,
+            removed: cleanupRemoved
           },
           styleLock: {
             resolved: styleResult.resolution.resolved,
@@ -357,7 +419,13 @@ const main = async () => {
           applied: false,
           riskTags: [],
           contamination: { characters: [], items: [], locations: [] },
+          contaminationBefore: { characters: [], items: [], locations: [] },
           panelStats: { totalPanels: 0, zeroRefPanels: 0, multiFramePanels: 0 },
+          cleanup: {
+            enabled: shouldCleanWorld,
+            droppedEntityCount: 0,
+            removed: { characters: 0, items: 0, locations: 0, total: 0 }
+          },
           styleLock: { resolved: false, source: "error" },
           flowVersion: { before: undefined, after: undefined, mismatchDetected: false },
           errors: [error instanceof Error ? error.message : String(error)]

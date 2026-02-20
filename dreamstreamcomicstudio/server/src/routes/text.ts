@@ -302,6 +302,21 @@ textRouter.post('/extract-world', async (req, res, next) => {
         typeof script === 'string' ? script : undefined,
         effectiveModel
       );
+      const diagnostics = result.diagnostics || {
+        input_scene_count: Array.isArray(scenes) ? scenes.length : 0,
+        entity_counts: {
+          characters: Array.isArray(result.characters) ? result.characters.length : 0,
+          items: Array.isArray(result.items) ? result.items.length : 0,
+          locations: Array.isArray(result.locations) ? result.locations.length : 0
+        },
+        filtered_entity_count: 0,
+        dropped_entities: [],
+        ungrounded_characters_dropped: 0
+      };
+      const resultWithDiagnostics = {
+        ...result,
+        diagnostics
+      };
       const settled = await settleReservedOperation({
         req,
         operation: 'text.extract_world',
@@ -316,10 +331,10 @@ textRouter.post('/extract-world', async (req, res, next) => {
           stage: 'world',
           byok: reserve.reservation.byokBypass
         },
-        usage: result.usage,
+        usage: resultWithDiagnostics.usage,
         metadata: { route: req.path, method: req.method }
       });
-      res.json(attachBillingToPayload(result as unknown as Record<string, unknown>, reserve.reservation, settled));
+      res.json(attachBillingToPayload(resultWithDiagnostics as unknown as Record<string, unknown>, reserve.reservation, settled));
     } catch (error) {
       await releaseReservedOperation({
         req,
