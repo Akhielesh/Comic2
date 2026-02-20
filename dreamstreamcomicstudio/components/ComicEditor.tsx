@@ -16,7 +16,7 @@ import { ProjectVersion } from '../types';
 
 interface ComicEditorProps {
   project: Project;
-  onUpdate: (updates: Partial<Project>) => void;
+  onUpdate: (updates: Partial<Project> | ((prev: Project) => Partial<Project>)) => void;
   onStartGeneration: (projectId: string) => void;
   onStopGeneration: (projectId: string) => void;
   onBack: () => void;
@@ -31,11 +31,37 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   const lastAutoVersionKeyRef = useRef<string>('');
   const lastPlanVersionKeyRef = useRef<string>('');
 
-  const updateState = (updates: any) => {
-    onUpdate({
-      state: { ...state, ...updates }
+  const updateState = (updates: Partial<Project['state']> | ((prev: Project['state']) => Partial<Project['state']>)) => {
+    onUpdate((prevProject) => {
+      const patch = typeof updates === 'function' ? updates(prevProject.state) : updates;
+      return {
+        state: { ...prevProject.state, ...patch }
+      };
     });
   };
+
+  const buildScriptReanalysisReset = (nextScript: string, nextScenes: Project['state']['scenes']): Partial<Project['state']> => ({
+    script: nextScript,
+    scenes: nextScenes,
+    step: AppStep.STYLE_SELECTION,
+    maxStepReached: AppStep.STYLE_SELECTION,
+    continuitySummary: '',
+    continuity: undefined,
+    characters: [],
+    items: [],
+    locations: [],
+    coverImageId: undefined,
+    coverImageUrl: undefined,
+    coverPrompt: '',
+    coverTemplateId: undefined,
+    coverTemplateImageId: undefined,
+    coverTemplateImageUrl: undefined,
+    customLayoutPrompt: undefined,
+    panelSlotsSnapshot: undefined,
+    panelPlanVersion: undefined,
+    panels: [],
+    generationStatus: undefined
+  });
 
   const nextStep = () => {
     const next = state.step + 1;
@@ -238,14 +264,18 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           onStoryBuilderUpdate={(storyBuilder) => updateState({ storyBuilder })}
           initialChecklist={state.scriptChecklist}
           onChecklistUpdate={(scriptChecklist) => updateState({ scriptChecklist })}
-          onScenesGenerated={(script, scenes) => { updateState({ script, scenes, continuity: undefined }); nextStep(); }}
+          onScenesGenerated={(script, scenes) => {
+            updateState(buildScriptReanalysisReset(script, scenes));
+          }}
         />;
       case AppStep.STYLE_SELECTION:
         return <StyleSelection
           firstScene={state.scenes[0]}
           script={state.script}
           projectId={project.id}
-          onScenesGenerated={(scenes) => updateState({ scenes, continuity: undefined })}
+          onScenesGenerated={(scenes, analyzedScript) => {
+            updateState((prev) => buildScriptReanalysisReset(analyzedScript || prev.script, scenes));
+          }}
           onScriptUpdate={(script) => updateState({ script })}
           initialVariants={state.styleVariants}
           selectedStyleId={state.selectedStyleId}
@@ -261,6 +291,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
       case AppStep.REFERENCE_BUILDER:
         return <ReferenceBuilder
           scenes={state.scenes}
+          script={state.script}
           currentStyle={state.stylePrompt}
           styleImageId={state.styleImageId}
           projectId={project.id}

@@ -14,7 +14,7 @@ interface StyleSelectionProps {
   firstScene?: Scene;
   script: string;
   projectId: string;
-  onScenesGenerated: (scenes: Scene[]) => void;
+  onScenesGenerated: (scenes: Scene[], analyzedScript?: string) => void;
   onStyleConfirmed: (style: StyleVariant) => void;
   initialVariants: StyleVariant[];
   onVariantsChange: (variants: StyleVariant[]) => void;
@@ -355,7 +355,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
         if (onScriptUpdate && script !== scriptToAnalyze) {
           onScriptUpdate(scriptToAnalyze);
         }
-        onScenesGenerated(scenes);
+        onScenesGenerated(scenes, scriptToAnalyze);
       } else {
         setError("Analysis failed. The AI couldn't identify scenes. Please try editing your script to be clearer.");
       }

@@ -22,16 +22,33 @@ const resolveTextModel = (modelOverride?: string) => {
   return candidate || TEXT_MODEL;
 };
 
-const normalizeScenes = (raw: any[]): Scene[] => {
+const filterGroundedCharacterNames = (names: string[], sceneRawText: string, fullScript: string): string[] => {
+  const grounded = new Set<string>();
+  for (const rawName of names) {
+    const name = String(rawName || '').trim();
+    if (!name) continue;
+    if (containsNormalizedName(sceneRawText, name) || containsNormalizedName(fullScript, name)) {
+      grounded.add(name);
+    }
+  }
+  return Array.from(grounded);
+};
+
+const normalizeScenes = (raw: any[], fullScript: string): Scene[] => {
   return raw
     .filter((s) => s && isString(s.synopsis) && isString(s.setting))
-    .map((scene, index) => ({
-      id: index + 1,
-      rawText: isString(scene.rawText) && scene.rawText.trim().length > 0 ? scene.rawText : scene.synopsis,
-      synopsis: scene.synopsis,
-      characters: ensureArray<string>(scene.characters, []),
-      setting: scene.setting
-    }));
+    .map((scene, index) => {
+      const rawText = isString(scene.rawText) && scene.rawText.trim().length > 0 ? scene.rawText : scene.synopsis;
+      const rawCharacters = ensureArray<string>(scene.characters, []);
+      const characters = filterGroundedCharacterNames(rawCharacters, rawText, fullScript);
+      return {
+        id: index + 1,
+        rawText,
+        synopsis: scene.synopsis,
+        characters,
+        setting: scene.setting
+      };
+    });
 };
 
 type WorldExtractionDiagnostics = {
@@ -223,7 +240,7 @@ export const analyzeScript = async (apiKey: string, script: string, modelOverrid
                 characters: { type: Type.ARRAY, items: { type: Type.STRING } },
                 setting: { type: Type.STRING }
               },
-              required: ['id', 'synopsis', 'characters', 'setting']
+              required: ['id', 'rawText', 'synopsis', 'characters', 'setting']
             }
           }
         }
@@ -238,7 +255,7 @@ export const analyzeScript = async (apiKey: string, script: string, modelOverrid
 
   const responseText = response.text || '';
   const rawScenes = extractJson(responseText);
-  const scenes = normalizeScenes(Array.isArray(rawScenes) ? rawScenes : []);
+  const scenes = normalizeScenes(Array.isArray(rawScenes) ? rawScenes : [], script);
   if (scenes.length === 0) {
     throw new Error('No scenes found in analysis response');
   }
