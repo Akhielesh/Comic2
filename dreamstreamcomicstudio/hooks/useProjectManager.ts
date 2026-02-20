@@ -6,6 +6,7 @@ import { buildDefaultContinuityState, validateContinuityState } from '../service
 import { createGenerationNotification, loadProjects, saveProject, deleteProject as deleteProjectRecord, saveImage, getImageUrl } from '../services/db';
 import { useAuth } from '../contexts/AuthContext';
 import { IMAGE_TRANSFORMS } from '../services/projectStorage';
+import { applyStyleLockResolution } from '../services/styleLock';
 
 const SAVE_DEBOUNCE_MS = 500;
 const FLOW_VERSION = 3;
@@ -25,7 +26,7 @@ const applyStateMigrations = (state: ComicState): ComicState => {
     ...state,
     continuity: nextContinuity
   });
-  return {
+  const migrated: ComicState = {
     ...state,
     step: nextStep,
     maxStepReached: nextMax,
@@ -46,6 +47,18 @@ const applyStateMigrations = (state: ComicState): ComicState => {
       validation: nextValidation
     }
   };
+  return applyStyleLockResolution(migrated).state;
+};
+
+const didStyleLockRepairOccur = (before: ComicState, after: ComicState) => {
+  return (
+    before.selectedStyleId !== after.selectedStyleId ||
+    before.stylePrompt !== after.stylePrompt ||
+    before.styleImageId !== after.styleImageId ||
+    before.styleImageUrl !== after.styleImageUrl ||
+    before.styleLockStatus !== after.styleLockStatus ||
+    before.styleLockResolvedAt !== after.styleLockResolvedAt
+  );
 };
 
 const hasLegacyStepShift = (state: ComicState): boolean => {
@@ -132,6 +145,8 @@ const INITIAL_STATE: ComicState = {
   stylePrompt: '',
   styleImageId: undefined,
   styleImageUrl: undefined,
+  styleLockStatus: 'missing',
+  styleLockResolvedAt: undefined,
   styleCategory: '',
   styleAspectRatio: '1:1',
   customAspectRatioEnabled: false,
@@ -214,10 +229,16 @@ export const useProjectManager = () => {
       styleImageUrl,
     }, { useThumbTransform: false });
 
-    return {
+    const hydratedProject: Project = {
       ...project,
       state: migratedState
     };
+
+    if (didStyleLockRepairOccur(project.state, migratedState)) {
+      void saveProject(hydratedProject);
+    }
+
+    return hydratedProject;
   };
 
   const hydrateProjectCover = async (project: Project): Promise<Project> => {
@@ -263,10 +284,14 @@ export const useProjectManager = () => {
       { useThumbTransform: true }
     );
 
-    return {
+    const hydratedProject: Project = {
       ...project,
       state: migratedState
     };
+    if (didStyleLockRepairOccur(project.state, migratedState)) {
+      void saveProject(hydratedProject);
+    }
+    return hydratedProject;
   };
 
   const migrateLegacyProject = async (project: Project): Promise<Project> => {
@@ -467,10 +492,28 @@ export const useProjectManager = () => {
   const startGeneration = (projectId: string) => {
     const project = getProject(projectId);
     if (!project) return;
+    const { state: repairedState, resolution, changed } = applyStyleLockResolution(project.state);
+    if (!resolution.resolved) {
+      updateProject(projectId, {
+        state: repairedState
+      });
+      return;
+    }
+    const generationProject = changed
+      ? {
+        ...project,
+        state: repairedState
+      }
+      : project;
+    if (changed) {
+      updateProject(projectId, {
+        state: repairedState
+      });
+    }
 
     // Start the background process
     startBackgroundGeneration(
-      project,
+      generationProject,
       updateProject, // Pass the updater
       (pid, panels) => {
         void createGenerationNotification(pid, project.name);

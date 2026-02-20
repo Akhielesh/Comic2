@@ -1,4 +1,4 @@
-import { ComicState, Project, GenerationStatus, ComicPanel, Scene } from "../types";
+import { Project, GenerationStatus, ComicPanel } from "../types";
 import { generatePanelBreakdown, updateContinuitySummary } from "./geminiService";
 import { generateImage } from "./imageService";
 import { buildImagePrompt } from "./imagePrompt";
@@ -10,16 +10,34 @@ import { prependCappedHistory, appendCappedHistory } from "./projectStorage";
 import { ApiError } from "./apiClient";
 import { computeDefaultBubblePositions } from "./bubbleLayout";
 import {
-  collectPanelReferenceImageIds,
+  buildPanelReferencePack,
+  buildPanelScopedContext,
   getEntityById,
   getSceneBinding,
   resolvePanelContinuity,
   buildEntityTextContext,
   validateContinuityState
 } from "./continuity";
+import { applyStyleLockResolution } from "./styleLock";
+import { hasMultiFrameLanguage, sanitizePanelDescription } from "./panelDescription";
+import { getModelForTask } from "./appSettings";
+import { GEMINI_IMAGE_MODEL_ID, getImageModelById } from "./imageModels";
 
 const generationControllers = new Map<string, AbortController>();
 const generationCanceled = new Set<string>();
+
+const STRICT_STYLE_LOCK_ERROR = "STRICT_STYLE_LOCK_UNRESOLVED";
+const STRICT_REFERENCE_ERROR = "STRICT_REFERENCE_REQUIRED";
+const MULTI_FRAME_ERROR = "MULTI_FRAME_DESCRIPTION";
+
+const resolveLockedPanelModelId = (): string => {
+  const configured = getModelForTask("panel");
+  const model = getImageModelById(configured);
+  if (model?.supportsReferences) {
+    return model.id;
+  }
+  return GEMINI_IMAGE_MODEL_ID;
+};
 
 export const cancelGeneration = (projectId: string) => {
   generationCanceled.add(projectId);
@@ -52,9 +70,19 @@ export const startBackgroundGeneration = async (
   onUpdate: (projectId: string, updates: Partial<Project> | ((prev: Project) => Partial<Project>)) => void,
   onComplete: (projectId: string, panels: ComicPanel[]) => void
 ) => {
-  const state = project.state;
+  let state = project.state;
   const startTime = Date.now();
+  const initialStyleResolution = applyStyleLockResolution(state);
+  state = initialStyleResolution.state;
+  const strictMode = (state.continuity?.lockLevel || "strict") === "strict";
   const ratioConfig = resolveAspectRatio(state, state.styleAspectRatio);
+  const panelRunId = crypto.randomUUID();
+  const configuredPanelModelId = getModelForTask("panel");
+  const lockedPanelModelId = resolveLockedPanelModelId();
+  const panelModelsUsed = new Set<string>();
+  const panelReferenceCounts: number[] = [];
+  let zeroRefPanelCount = 0;
+  let multiFrameDetectedCount = 0;
 
   generationCanceled.delete(project.id);
   const controller = new AbortController();
@@ -94,6 +122,34 @@ export const startBackgroundGeneration = async (
 
   try {
     addLog("Starting generation process...");
+    if (configuredPanelModelId !== lockedPanelModelId) {
+      addLog(`Configured panel model "${configuredPanelModelId}" does not support references. Locking run to "${lockedPanelModelId}".`);
+    }
+    if (initialStyleResolution.changed) {
+      onUpdate(project.id, (prev) => ({
+        state: {
+          ...prev.state,
+          selectedStyleId: state.selectedStyleId,
+          stylePrompt: state.stylePrompt,
+          styleImageId: state.styleImageId,
+          styleImageUrl: state.styleImageUrl,
+          styleCategory: state.styleCategory,
+          styleAspectRatio: state.styleAspectRatio,
+          imageResolution: state.imageResolution,
+          styleLockStatus: state.styleLockStatus,
+          styleLockResolvedAt: state.styleLockResolvedAt
+        }
+      }));
+    }
+    if (strictMode && !initialStyleResolution.resolution.resolved) {
+      addLog("Generation blocked: strict mode requires a resolved style lock.");
+      void createSystemNotification(
+        "Generation blocked: style lock is unresolved. Select a style variant with a generated style image.",
+        { projectId: project.id, stage: "generation" }
+      );
+      stopWithStatus(`Failed: ${STRICT_STYLE_LOCK_ERROR}`);
+      return;
+    }
 
     const validation = validateContinuityState(state);
     onUpdate(project.id, (prev) => ({
@@ -104,7 +160,7 @@ export const startBackgroundGeneration = async (
           : prev.state.continuity
       }
     }));
-    if ((state.continuity?.lockLevel || "strict") === "strict" && !validation.isValid) {
+    if (strictMode && !validation.isValid) {
       addLog(`Continuity validation failed (${validation.issues.length} issues).`);
       void createSystemNotification(
         `Generation blocked: continuity validation failed (${validation.issues.length} issue${validation.issues.length === 1 ? '' : 's'}).`,
@@ -168,24 +224,28 @@ export const startBackgroundGeneration = async (
                 }))
             }
           );
-          breakdown = panelData.map((panel, idx) => ({
-            id: `s${scene.id}-p${idx}-${Date.now()}`,
-            sceneId: scene.id,
-            description: panel.description,
-            prompt: panel.description,
-            dialogue: panel.dialogue || "",
-            dialogueBlocks: panel.dialogueBlocks,
-            imageIdHistory: [],
-            imageUrlHistory: [],
-            isPlanned: true,
-            continuity: {
-              requiredEntityIds: panel.requiredEntityIds || [],
-              referenceImageIds: [],
-              locationId: panel.locationId,
-              continuityNotes: panel.continuityNotes,
-              flaggedIssues: []
-            }
-          })).map(normalizePanelDialogue);
+          breakdown = panelData.map((panel, idx) => {
+            const sanitized = sanitizePanelDescription(panel.description || "");
+            if (sanitized.flagged) multiFrameDetectedCount += 1;
+            return {
+              id: `s${scene.id}-p${idx}-${Date.now()}`,
+              sceneId: scene.id,
+              description: sanitized.text,
+              prompt: sanitized.text,
+              dialogue: panel.dialogue || "",
+              dialogueBlocks: panel.dialogueBlocks,
+              imageIdHistory: [],
+              imageUrlHistory: [],
+              isPlanned: true,
+              continuity: {
+                requiredEntityIds: panel.requiredEntityIds || [],
+                referenceImageIds: [],
+                locationId: panel.locationId,
+                continuityNotes: panel.continuityNotes,
+                flaggedIssues: []
+              }
+            };
+          }).map(normalizePanelDialogue);
 
           totalPanelsEstimate = totalPanelsEstimate - 3 + breakdown.length;
         } catch (e: any) {
@@ -197,9 +257,6 @@ export const startBackgroundGeneration = async (
       // --- Batched parallel generation (GENERATION_BATCH_SIZE at a time) ---
       const GENERATION_BATCH_SIZE = 3;
       const sceneBinding = getSceneBinding(state, scene.id);
-      const characterContext = state.characters.map(c => `${c.name}: ${c.description}`).join('. ');
-      const itemContext = state.items.map(i => `${i.name}: ${i.description}`).join('. ');
-      const locContext = state.locations.map(l => `${l.name}: ${l.description}`).join('. ');
 
       for (let batchStart = 0; batchStart < breakdown.length; batchStart += GENERATION_BATCH_SIZE) {
         if (isCanceled(project.id)) {
@@ -219,26 +276,52 @@ export const startBackgroundGeneration = async (
 
         const batchPromises = batch.map(async (panelData, idxInBatch) => {
           const panelIndex = batchStart + idxInBatch;
-          const panelContinuity = resolvePanelContinuity(state, panelData);
+          const sanitizedDescription = sanitizePanelDescription(panelData.description || panelData.prompt || "");
+          if (sanitizedDescription.flagged) multiFrameDetectedCount += 1;
+          if (hasMultiFrameLanguage(sanitizedDescription.text)) {
+            throw new Error(`${MULTI_FRAME_ERROR}: Scene ${scene.id} panel ${panelIndex + 1} contains multi-frame directives.`);
+          }
+          const normalizedPanel = normalizePanelDialogue({
+            ...panelData,
+            description: sanitizedDescription.text,
+            prompt: sanitizedDescription.text
+          });
+          const panelContinuity = resolvePanelContinuity(state, normalizedPanel);
           const continuityEntityNames = (panelContinuity.requiredEntityIds || [])
             .map((entityId) => getEntityById(state, entityId)?.name)
             .filter((name): name is string => !!name);
           const lockedLocationName = panelContinuity.locationId
             ? getEntityById(state, panelContinuity.locationId)?.name
             : undefined;
+          const panelScopedContext = buildPanelScopedContext(state, normalizedPanel);
 
-          // COST OPTIMIZATION: Use text-only references for entities instead of image references
-          // This reduces input tokens by ~80% per panel
-          const entityVisualContext = buildEntityTextContext(state, panelData);
+          const entityVisualContext = buildEntityTextContext(state, normalizedPanel);
+          const lastPanelImageId = continuityImageIdsSnapshot[continuityImageIdsSnapshot.length - 1];
+          const referencePack = buildPanelReferencePack(state, normalizedPanel, {
+            styleImageId: state.styleImageId,
+            lastPanelImageId,
+            maxReferences: 8
+          });
+          panelReferenceCounts.push(referencePack.imageIds.length);
+
+          const requiredReferences = strictMode && (panelContinuity.requiredEntityIds?.length || 0) > 0;
+          if (requiredReferences && referencePack.imageIds.length === 0) {
+            zeroRefPanelCount += 1;
+            throw new Error(
+              `${STRICT_REFERENCE_ERROR}: Scene ${scene.id} panel ${panelIndex + 1} requires entity references but none were resolved.`
+            );
+          }
+          if (strictMode && referencePack.imageIds.length === 0) {
+            zeroRefPanelCount += 1;
+          }
 
           const imagePrompt = buildImagePrompt({
             stage: "panel",
             stylePrompt: state.stylePrompt,
-            layoutType: state.layoutType === 'custom' ? state.customLayoutPrompt : state.layoutType,
-            characters: characterContext,
-            items: itemContext,
-            locations: locContext,
-            sceneAction: panelData.description,
+            characters: panelScopedContext.characters || undefined,
+            items: panelScopedContext.items || undefined,
+            locations: panelScopedContext.location || undefined,
+            sceneAction: normalizedPanel.description,
             setting: scene.setting,
             continuitySummary: continuitySummary || undefined,
             recentPanels: continuityText || undefined,
@@ -248,54 +331,71 @@ export const startBackgroundGeneration = async (
             entityVisualRef: entityVisualContext
           });
 
-          let generatedImageId = panelData.imageId;
-          let generatedImageUrl = panelData.imageUrl;
+          let generatedImageId = normalizedPanel.imageId;
+          let generatedImageUrl = normalizedPanel.imageUrl;
 
           if (!generatedImageId || !generatedImageUrl) {
-            // COST OPTIMIZATION: Only send the style image as a visual reference.
-            // Entity identity is handled by the text prompt (entityVisualRef).
-            const continuityImageIds = [
-              ...(state.styleImageId ? [state.styleImageId] : [])
-            ];
             const generated = await generateImage(
               imagePrompt,
               ratioConfig.modelRatio,
               state.imageResolution,
-              continuityImageIds,
+              referencePack.imageIds,
               project.id,
               {
                 abortSignal: controller.signal,
                 stage: "panel",
                 cropToRatio: ratioConfig.cropRatio,
+                continuitySensitive: true,
+                requiredReferences,
+                lockedModelId: lockedPanelModelId,
                 meta: {
                   source: {
                     type: "panel",
-                    id: panelData.id,
+                    id: normalizedPanel.id,
                     label: `Scene ${scene.id} Panel ${panelIndex + 1}`
                   },
                   sceneId: scene.id,
                   panelIndex,
-                  regen: false
+                  regen: false,
+                  runId: panelRunId,
+                  panel_ref_count: referencePack.imageIds.length,
+                  zero_ref_panel: referencePack.imageIds.length === 0 ? 1 : 0,
+                  multi_frame_description_detected: sanitizedDescription.flagged ? 1 : 0,
+                  style_lock_resolved: initialStyleResolution.resolution.resolved,
+                  style_lock_used: Boolean(referencePack.styleImageId),
+                  requiredReferences,
+                  referenceCount: referencePack.imageIds.length,
+                  styleLockUsed: Boolean(referencePack.styleImageId)
                 }
               }
             );
             generatedImageId = generated?.imageId;
             generatedImageUrl = generated?.imageUrl;
+            if (generated?.modelId) {
+              panelModelsUsed.add(generated.modelId);
+            } else {
+              panelModelsUsed.add(lockedPanelModelId);
+            }
+            if (generated?.fallbackOccurred) {
+              addLog(
+                `Model fallback on Scene ${scene.id} Panel ${panelIndex + 1}: ${generated.fallbackFromModel || lockedPanelModelId} -> ${generated.fallbackToModel || generated.modelId || lockedPanelModelId}`
+              );
+            }
           }
 
           return normalizePanelDialogue({
-            ...panelData,
+            ...normalizedPanel,
             continuity: {
               ...panelContinuity,
-              referenceImageIds: collectPanelReferenceImageIds(state, panelData)
+              referenceImageIds: referencePack.imageIds
             },
-            dialogueBlocks: panelData.dialogueBlocks?.length
-              ? computeDefaultBubblePositions(panelData.dialogueBlocks)
-              : panelData.dialogueBlocks,
+            dialogueBlocks: normalizedPanel.dialogueBlocks?.length
+              ? computeDefaultBubblePositions(normalizedPanel.dialogueBlocks)
+              : normalizedPanel.dialogueBlocks,
             imageId: generatedImageId,
             imageUrl: generatedImageUrl,
-            imageIdHistory: prependCappedHistory(panelData.imageIdHistory, generatedImageId),
-            imageUrlHistory: prependCappedHistory(panelData.imageUrlHistory, generatedImageUrl),
+            imageIdHistory: prependCappedHistory(normalizedPanel.imageIdHistory, generatedImageId),
+            imageUrlHistory: prependCappedHistory(normalizedPanel.imageUrlHistory, generatedImageUrl),
             isPlanned: false
           });
         });
@@ -304,9 +404,11 @@ export const startBackgroundGeneration = async (
 
         // Process batch results — failed panels still get added with failureReason
         let batchHadBillingError = false;
+        let batchHadStrictFailure = false;
         for (let i = 0; i < batchResults.length; i++) {
           const result = batchResults[i];
           const panelData = batch[i];
+          const sanitizedPanelDescription = sanitizePanelDescription(panelData.description || panelData.prompt || '');
 
           if (result.status === 'fulfilled') {
             const newPanel = result.value;
@@ -314,10 +416,14 @@ export const startBackgroundGeneration = async (
             if (newPanel.imageId) {
               recentPanelImageIds.push(newPanel.imageId);
             }
-            recentPanelDescriptions.push(panelData.description || "");
+            recentPanelDescriptions.push(newPanel.description || sanitizedPanelDescription.text || "");
           } else {
             // Panel failed — add it with failure marker so user can retry later
             const error = result.reason;
+            const errorMessage = String(error?.message || error || 'Unknown error');
+            if (errorMessage.includes(STRICT_REFERENCE_ERROR) || errorMessage.includes(MULTI_FRAME_ERROR)) {
+              batchHadStrictFailure = true;
+            }
             const billingDetails = error instanceof ApiError
               ? ((error.details as any)?.details || error.details)
               : null;
@@ -326,20 +432,27 @@ export const startBackgroundGeneration = async (
               const resetAt = (billingDetails as any).resetAt ? new Date((billingDetails as any).resetAt).toLocaleString() : 'next reset';
               addLog(`Token limit reached (${(billingDetails as any).reason}). Wait until ${resetAt} or upgrade.`);
             }
-            addLog(`⚠ Panel failed: ${(panelData.description || "").substring(0, 40)}… — ${error?.message || 'Unknown error'}`);
+            addLog(`⚠ Panel failed: ${(sanitizedPanelDescription.text || "").substring(0, 40)}… — ${errorMessage}`);
 
             const panelContinuity = resolvePanelContinuity(state, panelData);
+            const failurePack = buildPanelReferencePack(state, panelData, {
+              styleImageId: state.styleImageId,
+              lastPanelImageId: recentPanelImageIds[recentPanelImageIds.length - 1],
+              maxReferences: 8
+            });
             freshPanels.push(normalizePanelDialogue({
               ...panelData,
-              continuity: { ...panelContinuity, referenceImageIds: collectPanelReferenceImageIds(state, panelData) },
+              description: sanitizedPanelDescription.text || panelData.description,
+              prompt: sanitizedPanelDescription.text || panelData.prompt,
+              continuity: { ...panelContinuity, referenceImageIds: failurePack.imageIds },
               imageId: undefined as any,
               imageUrl: undefined as any,
               imageIdHistory: panelData.imageIdHistory || [],
               imageUrlHistory: panelData.imageUrlHistory || [],
               isPlanned: false,
-              failureReason: error?.message || 'Generation failed'
+              failureReason: errorMessage || 'Generation failed'
             }));
-            recentPanelDescriptions.push(panelData.description || "");
+            recentPanelDescriptions.push(sanitizedPanelDescription.text || "");
           }
 
           stepsCompleted++;
@@ -365,6 +478,10 @@ export const startBackgroundGeneration = async (
           state: { ...prev.state, panels: freshPanels }
         }));
 
+        if (batchHadStrictFailure) {
+          throw new Error(`${STRICT_REFERENCE_ERROR}: Strict continuity constraints were violated in this batch.`);
+        }
+
         // Stop if billing limit hit — remaining panels would all fail
         if (batchHadBillingError) {
           addLog("Stopping remaining generation due to billing limit. Completed panels are saved.");
@@ -382,6 +499,14 @@ export const startBackgroundGeneration = async (
         state: { ...prev.state, continuitySummary }
       }));
     }
+
+    const mixedModelInRun = panelModelsUsed.size > 1 ? 1 : 0;
+    const averageRefCount = panelReferenceCounts.length
+      ? Number((panelReferenceCounts.reduce((sum, value) => sum + value, 0) / panelReferenceCounts.length).toFixed(2))
+      : 0;
+    addLog(
+      `[METRICS] panel_ref_count=${averageRefCount} zero_ref_panel=${zeroRefPanelCount} mixed_model_in_run=${mixedModelInRun} multi_frame_description_detected=${multiFrameDetectedCount} style_lock_resolved=${initialStyleResolution.resolution.resolved ? 1 : 0}`
+    );
 
     addLog("Build Complete!");
     updateStatus({
@@ -418,65 +543,102 @@ export const regenerateSinglePanel = async (
   instructions: string,
   onUpdate: (projectId: string, updateOrFn: Partial<Project> | ((prev: Project) => Partial<Project>)) => void
 ) => {
-  const state = project.state;
+  const styleApplied = applyStyleLockResolution(project.state);
+  const state = styleApplied.state;
+  const strictMode = (state.continuity?.lockLevel || "strict") === "strict";
+  if (strictMode && !styleApplied.resolution.resolved) {
+    throw new Error(`${STRICT_STYLE_LOCK_ERROR}: Style lock must be resolved before panel regeneration.`);
+  }
+  if (styleApplied.changed) {
+    onUpdate(project.id, { state });
+  }
+
   const panelIndex = state.panels.findIndex((p) => p.id === panelId);
   if (panelIndex === -1) throw new Error("Panel not found");
 
   const targetPanel = state.panels[panelIndex];
+  const sanitizedDescription = sanitizePanelDescription(targetPanel.description || targetPanel.prompt || "");
+  if (sanitizedDescription.flagged && hasMultiFrameLanguage(sanitizedDescription.text)) {
+    throw new Error(`${MULTI_FRAME_ERROR}: Panel description must describe a single frame.`);
+  }
+  const normalizedTargetPanel: ComicPanel = normalizePanelDialogue({
+    ...targetPanel,
+    description: sanitizedDescription.text || targetPanel.description,
+    prompt: sanitizedDescription.text || targetPanel.prompt
+  });
   const scene = state.scenes.find((s) => s.id === targetPanel.sceneId);
   const sceneBinding = scene ? getSceneBinding(state, scene.id) : undefined;
+  const panelContinuity = resolvePanelContinuity(state, normalizedTargetPanel);
+  const panelScopedContext = buildPanelScopedContext(state, normalizedTargetPanel);
+  const referencePack = buildPanelReferencePack(state, normalizedTargetPanel, {
+    styleImageId: state.styleImageId,
+    lastPanelImageId: state.panels
+      .slice(0, panelIndex)
+      .map((panel) => panel.imageId)
+      .filter((imageId): imageId is string => !!imageId)
+      .at(-1),
+    maxReferences: 8
+  });
+  const requiredReferences = strictMode && (panelContinuity.requiredEntityIds?.length || 0) > 0;
+  if (requiredReferences && referencePack.imageIds.length === 0) {
+    throw new Error(`${STRICT_REFERENCE_ERROR}: Required continuity references are missing for this panel.`);
+  }
 
   // 1. Gather Context
-  // COST OPTIMIZATION: Use text-only references instead of image references
-  const entityVisualContext = buildEntityTextContext(state, targetPanel);
-
-  // COST OPTIMIZATION: Only use style image as visual reference
-  const referenceIds = state.styleImageId ? [state.styleImageId] : [];
-
-  // Context strings
-  const characterContext = state.characters.map((c) => `${c.name}: ${c.description}`).join('. ');
-  const itemContext = state.items.map((i) => `${i.name}: ${i.description}`).join('. ');
-  const locContext = state.locations.map((l) => `${l.name}: ${l.description}`).join('. ');
+  const entityVisualContext = buildEntityTextContext(state, normalizedTargetPanel);
   const recentPanels = state.panels
     .slice(Math.max(0, panelIndex - 3), panelIndex)
-    .map(p => p.description)
+    .map((panel) => sanitizePanelDescription(panel.description || panel.prompt || '').text)
     .join(" | ");
 
   const imagePrompt = buildImagePrompt({
     stage: "panel_regen",
     stylePrompt: state.stylePrompt,
-    layoutType: state.layoutType === 'custom' ? state.customLayoutPrompt : state.layoutType,
-    characters: characterContext,
-    items: itemContext,
-    locations: locContext,
-    sceneAction: targetPanel.description,
+    characters: panelScopedContext.characters || undefined,
+    items: panelScopedContext.items || undefined,
+    locations: panelScopedContext.location || undefined,
+    sceneAction: normalizedTargetPanel.description,
     setting: scene ? scene.setting : "",
     recentPanels: recentPanels,
     instructions: instructions,
     entityVisualRef: entityVisualContext,
-    continuityLock: targetPanel.continuity?.continuityNotes || (sceneBinding ? `Scene ${sceneBinding.sceneId} strict lock` : "strict")
+    continuityLock: normalizedTargetPanel.continuity?.continuityNotes || (sceneBinding ? `Scene ${sceneBinding.sceneId} strict lock` : "strict")
   });
 
   // 2. Generate Image
   const ratioConfig = resolveAspectRatio(state, state.styleAspectRatio);
+  const lockedModelId = resolveLockedPanelModelId();
+  const runId = crypto.randomUUID();
 
   const generated = await generateImage(
     imagePrompt,
     ratioConfig.modelRatio,
     state.imageResolution,
-    referenceIds,
+    referencePack.imageIds,
     project.id,
     {
       stage: "panel_regen",
       cropToRatio: ratioConfig.cropRatio,
+      continuitySensitive: true,
+      requiredReferences,
+      lockedModelId,
       meta: {
         source: {
           type: "panel",
-          id: targetPanel.id,
+          id: normalizedTargetPanel.id,
           label: `Regenerate Panel ${panelIndex + 1}`
         },
         sceneId: scene?.id,
-        panelId: targetPanel.id
+        panelId: normalizedTargetPanel.id,
+        runId,
+        panel_ref_count: referencePack.imageIds.length,
+        zero_ref_panel: referencePack.imageIds.length === 0 ? 1 : 0,
+        multi_frame_description_detected: sanitizedDescription.flagged ? 1 : 0,
+        style_lock_resolved: styleApplied.resolution.resolved,
+        style_lock_used: Boolean(referencePack.styleImageId),
+        requiredReferences,
+        referenceCount: referencePack.imageIds.length,
+        styleLockUsed: Boolean(referencePack.styleImageId)
       }
     }
   );
@@ -489,10 +651,16 @@ export const regenerateSinglePanel = async (
 
       const newPanels = prev.state.panels.map((p) => p.id === panelId ? {
         ...p,
+        description: normalizedTargetPanel.description,
+        prompt: normalizedTargetPanel.prompt,
         imageId: generated.imageId,
         imageUrl: generated.imageUrl,
         imageIdHistory: appendCappedHistory(p.imageIdHistory, generated.imageId),
         imageUrlHistory: appendCappedHistory(p.imageUrlHistory, generated.imageUrl),
+        continuity: {
+          ...resolvePanelContinuity(prev.state, normalizedTargetPanel),
+          referenceImageIds: referencePack.imageIds
+        },
         dialogueBlocks: p.dialogueBlocks?.length
           ? computeDefaultBubblePositions(p.dialogueBlocks)
           : p.dialogueBlocks,

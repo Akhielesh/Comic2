@@ -77,11 +77,13 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
     case "panel":
       lines.push("Comic panel illustration.");
       lines.push("Single full-bleed image, no panel borders or frames.");
+      lines.push("Single frame only. No split panels, no montage, no comic page layout, no gutters, no panel numbering.");
       lines.push("Strict continuity mode: keep the same character identity, wardrobe silhouettes, and key props.");
       break;
     case "panel_regen":
       lines.push("Regenerate the comic panel with updates.");
       lines.push("Single full-bleed image, no panel borders or frames.");
+      lines.push("Single frame only. No split panels, no montage, no comic page layout, no gutters, no panel numbering.");
       lines.push("Strict continuity mode: preserve canonical character/prop/location identity.");
       break;
     default:
@@ -90,7 +92,9 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
 
   if (clean(options.projectTitle)) lines.push(`Project: ${clean(options.projectTitle)}.`);
   if (styleLine) lines.push(`IMPORTANT — Art style (match exactly): ${styleLine}.`);
-  if (clean(options.layoutType)) lines.push(`Layout: ${clean(options.layoutType)}.`);
+  if (options.stage === "style" && clean(options.layoutType)) {
+    lines.push(`Layout: ${clean(options.layoutType)}.`);
+  }
   if (clean(options.subjectName)) lines.push(`Subject: ${clean(options.subjectName)}.`);
   // Description is handled in the custom blocks above for world/char stages, 
   // but kept here for fallback/panel stages if needed.

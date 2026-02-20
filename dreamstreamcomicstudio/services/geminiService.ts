@@ -141,6 +141,7 @@ async function safeGeminiCall<TRes extends {
   try {
     const response = await fn();
     if (projectId) {
+      const diagnostics = (response as unknown as { diagnostics?: unknown }).diagnostics;
       void recordArtifact({
         projectId,
         timestamp: Date.now(),
@@ -152,7 +153,8 @@ async function safeGeminiCall<TRes extends {
         responseText: response.responseText,
         usage: response.usage,
         success: true,
-        timings: { ...(response.timings || {}), durationMs: Math.round(performance.now() - startPerf) }
+        timings: { ...(response.timings || {}), durationMs: Math.round(performance.now() - startPerf) },
+        meta: diagnostics ? { diagnostics } : undefined
       });
     }
     return response;
@@ -356,13 +358,29 @@ export const generateImage = async (
   resolution: ImageGenerateRequest['resolution'] = '1K',
   referenceImageIds: string[] = [],
   projectId?: string,
-  options?: { abortSignal?: AbortSignal; stage?: string; cropToRatio?: string; storage?: 'project' | 'test'; meta?: Record<string, unknown>; modelId?: string }
+  options?: {
+    abortSignal?: AbortSignal;
+    stage?: string;
+    cropToRatio?: string;
+    storage?: 'project' | 'test';
+    meta?: Record<string, unknown>;
+    modelId?: string;
+    continuitySensitive?: boolean;
+    requiredReferences?: boolean;
+    lockedModelId?: string;
+  }
 ) => {
   // Special handling for generateImage since it has unique artifact fields (images) and logic
   updateDebugState('gemini', { lastRequestAt: Date.now(), lastRequestType: 'generate_image', lastError: undefined });
   const finalPrompt = NO_TEXT_IN_IMAGE ? `${prompt}\n\n${IMAGE_TEXT_BLOCKER}` : prompt;
   const startPerf = performance.now();
   const targetModel = options?.modelId || IMAGE_MODEL;
+  const artifactMeta = options?.meta || {};
+  const referenceCount = Number(artifactMeta.referenceCount);
+  const fallbackOccurred = Boolean(artifactMeta.fallbackOccurred);
+  const fallbackFromModel = typeof artifactMeta.fallbackFromModel === 'string' ? artifactMeta.fallbackFromModel : undefined;
+  const fallbackToModel = typeof artifactMeta.fallbackToModel === 'string' ? artifactMeta.fallbackToModel : undefined;
+  const styleLockUsed = Boolean(artifactMeta.styleLockUsed);
 
   try {
     const referenceDataUrls = await Promise.all(referenceImageIds.map((id) => getImageDataUrl(id)));
@@ -434,7 +452,12 @@ export const generateImage = async (
         success: true,
         timings: { ...response.timings, durationMs: Math.round(performance.now() - startPerf) },
         meta: options?.meta,
-        usage: response.usage
+        usage: response.usage,
+        referenceCount: Number.isFinite(referenceCount) ? referenceCount : undefined,
+        fallbackOccurred,
+        fallbackFromModel,
+        fallbackToModel,
+        styleLockUsed
       });
     }
 
@@ -455,7 +478,12 @@ export const generateImage = async (
         success: false,
         error: (e as Error)?.message || String(e),
         timings: { durationMs: Math.round(performance.now() - startPerf) },
-        meta: options?.meta
+        meta: options?.meta,
+        referenceCount: Number.isFinite(referenceCount) ? referenceCount : undefined,
+        fallbackOccurred,
+        fallbackFromModel,
+        fallbackToModel,
+        styleLockUsed
       });
     }
     handleGeminiError('generate_image', e);

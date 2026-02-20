@@ -14,19 +14,46 @@ import { generateFluxImage } from "./fluxService";
 import { generateImage as generateGeminiImage } from "./geminiService";
 import { ApiError } from "./apiClient";
 
+export type GenerateImageOptions = {
+  abortSignal?: AbortSignal;
+  stage?: string;
+  cropToRatio?: string;
+  storage?: "project" | "test";
+  meta?: Record<string, unknown>;
+  continuitySensitive?: boolean;
+  requiredReferences?: boolean;
+  lockedModelId?: string;
+};
+
+export type GenerateImageResult = {
+  imageId: string;
+  imageUrl: string;
+  timings?: ApiTimings;
+  modelId?: string;
+  fallbackOccurred?: boolean;
+  fallbackFromModel?: string;
+  fallbackToModel?: string;
+  referenceDropped?: boolean;
+};
+
 export const generateImage = async (
   prompt: string,
   aspectRatio: AspectRatio = "1:1",
   resolution: ImageResolution = "1K",
   referenceImageIds: string[] = [],
   projectId?: string,
-  options?: { abortSignal?: AbortSignal; stage?: string; cropToRatio?: string; storage?: "project" | "test"; meta?: Record<string, unknown> }
-): Promise<{ imageId: string; imageUrl: string; timings?: ApiTimings } | undefined> => {
+  options?: GenerateImageOptions
+): Promise<GenerateImageResult | undefined> => {
   const stage = options?.stage || 'general';
-  const requestedModelId = getModelForTask(stage);
+  const requestedModelId = options?.lockedModelId?.trim() || getModelForTask(stage);
   const hasReferences = referenceImageIds.length > 0;
+  const continuitySensitive = Boolean(options?.continuitySensitive);
+  const requiredReferences = Boolean(options?.requiredReferences);
+  const requiresReferenceCapableModel = requiredReferences || (continuitySensitive && hasReferences);
   const requestedModel = getImageModelById(requestedModelId);
-  const fallbackGeminiModel = getImageModelById(GEMINI_IMAGE_MODEL_ID) || getDefaultImageModelByProvider("gemini");
+  const fallbackGeminiModel = getImageModelById(GEMINI_IMAGE_MODEL_ID)
+    || IMAGE_MODELS.find((model) => model.provider === "gemini" && model.supportsReferences)
+    || getDefaultImageModelByProvider("gemini");
   const fallbackFluxModel = getDefaultImageModelByProvider("flux");
 
   const notifyFallback = async (message: string) => {
@@ -40,7 +67,19 @@ export const generateImage = async (
 
   const resolveInitialModel = () => {
     if (requestedModel) {
+      if (requiresReferenceCapableModel && !requestedModel.supportsReferences) {
+        if (!fallbackGeminiModel?.supportsReferences) {
+          throw new Error("No reference-capable image model is available for continuity-sensitive generation.");
+        }
+        void notifyFallback(
+          `Requested model "${requestedModel.label}" does not support reference images required for continuity. Auto-switched to "${fallbackGeminiModel.label}".`
+        );
+        return fallbackGeminiModel;
+      }
       if (hasReferences && !requestedModel.supportsReferences) {
+        if (!fallbackGeminiModel?.supportsReferences) {
+          throw new Error("No reference-capable image model is available while references were supplied.");
+        }
         void notifyFallback(
           `Requested model "${requestedModel.label}" does not support reference images. Auto-switched to "${fallbackGeminiModel.label}".`
         );
@@ -48,7 +87,10 @@ export const generateImage = async (
       }
       return requestedModel;
     }
-    if (hasReferences) {
+    if (requiresReferenceCapableModel || hasReferences) {
+      if (!fallbackGeminiModel?.supportsReferences) {
+        throw new Error("No compatible image model is configured for reference-guided generation.");
+      }
       void notifyFallback(
         `No compatible image model configured for reference-guided generation. Auto-switched to "${fallbackGeminiModel.label}".`
       );
@@ -60,7 +102,23 @@ export const generateImage = async (
     return fallbackFluxModel;
   };
 
-  const runModel = async (modelId: string, provider: "flux" | "gemini") => {
+  const runModel = async (
+    modelId: string,
+    provider: "flux" | "gemini",
+    runtimeMeta?: {
+      fallbackOccurred?: boolean;
+      fallbackFromModel?: string;
+      fallbackToModel?: string;
+      referenceDropped?: boolean;
+    }
+  ) => {
+    const meta = {
+      ...(options?.meta || {}),
+      fallbackOccurred: Boolean(runtimeMeta?.fallbackOccurred),
+      fallbackFromModel: runtimeMeta?.fallbackFromModel,
+      fallbackToModel: runtimeMeta?.fallbackToModel,
+      referenceDropped: Boolean(runtimeMeta?.referenceDropped)
+    };
     if (provider === "flux") {
       return generateFluxImage({
         prompt,
@@ -73,13 +131,14 @@ export const generateImage = async (
         abortSignal: options?.abortSignal,
         storage: options?.storage,
         meta: {
-          ...(options?.meta || {}),
+          ...meta,
           modelId
         }
       });
     }
     return generateGeminiImage(prompt, aspectRatio, resolution, referenceImageIds, projectId, {
       ...options,
+      meta,
       modelId
     });
   };
@@ -105,13 +164,28 @@ export const generateImage = async (
     isKeyError(error) || isModelError(error) || isRateOrServerError(error);
 
   const primaryModel = resolveInitialModel();
-  const fallbackOrder = IMAGE_MODELS
+  let fallbackOrder = IMAGE_MODELS
     .filter((model) => model.id !== primaryModel.id);
+  if (hasReferences || requiresReferenceCapableModel) {
+    fallbackOrder = fallbackOrder.filter((model) => model.supportsReferences);
+  }
 
   try {
-    const result = await runModel(primaryModel.id, primaryModel.provider);
+    const result = await runModel(primaryModel.id, primaryModel.provider, {
+      fallbackOccurred: false,
+      fallbackFromModel: undefined,
+      fallbackToModel: undefined,
+      referenceDropped: false
+    });
     emitBillingSummaryRefresh();
-    return result;
+    return {
+      ...result,
+      modelId: primaryModel.id,
+      fallbackOccurred: false,
+      fallbackFromModel: undefined,
+      fallbackToModel: undefined,
+      referenceDropped: false
+    };
   } catch (primaryError) {
     if (!shouldAutoFallback(primaryError) || fallbackOrder.length === 0) {
       throw primaryError;
@@ -119,16 +193,33 @@ export const generateImage = async (
 
     for (const candidate of fallbackOrder) {
       try {
+        const referenceDropped =
+          hasReferences && !candidate.supportsReferences;
         const referenceFallbackNote =
-          hasReferences && !candidate.supportsReferences
+          referenceDropped
             ? ` "${candidate.label}" does not support reference images, so fallback will run without references.`
             : "";
+        if ((requiresReferenceCapableModel || requiredReferences) && referenceDropped) {
+          continue;
+        }
         await notifyFallback(
           `Image generation fallback: "${primaryModel.label}" failed (${primaryError instanceof Error ? primaryError.message : String(primaryError)}). Retrying with "${candidate.label}".${referenceFallbackNote}`
         );
-        const result = await runModel(candidate.id, candidate.provider);
+        const result = await runModel(candidate.id, candidate.provider, {
+          fallbackOccurred: true,
+          fallbackFromModel: primaryModel.id,
+          fallbackToModel: candidate.id,
+          referenceDropped
+        });
         emitBillingSummaryRefresh();
-        return result;
+        return {
+          ...result,
+          modelId: candidate.id,
+          fallbackOccurred: true,
+          fallbackFromModel: primaryModel.id,
+          fallbackToModel: candidate.id,
+          referenceDropped
+        };
       } catch (fallbackError) {
         if (!shouldAutoFallback(fallbackError)) {
           throw fallbackError;
