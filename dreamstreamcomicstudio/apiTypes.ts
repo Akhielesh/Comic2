@@ -54,6 +54,11 @@ export type ApiTimings = {
 export type AnalyzeScriptRequest = { script: string };
 export type AnalyzeScriptResponse = {
   scenes: Scene[];
+  diagnostics?: {
+    ungroundedCharactersDropped?: number;
+    rawExcerptFallbackCount?: number;
+    sceneCount?: number;
+  };
   prompt: string;
   responseText?: string;
   usage?: ApiUsage;
@@ -110,7 +115,7 @@ export type StoryToolResponse = {
   billing?: ApiBillingInfo;
 };
 
-export type ExtractWorldRequest = { scenes: Scene[] };
+export type ExtractWorldRequest = { scenes: Scene[]; script?: string };
 export type ExtractWorldResponse = {
   characters: Character[];
   items: Item[];
@@ -123,6 +128,12 @@ export type ExtractWorldResponse = {
       locations: number;
     };
     filtered_entity_count: number;
+    dropped_entities?: Array<{
+      name: string;
+      kind: 'character' | 'item' | 'location';
+      reason: 'NOT_IN_SCRIPT' | 'LOW_DESCRIPTION_QUALITY' | 'DUPLICATE_NORMALIZED_NAME';
+    }>;
+    ungrounded_characters_dropped?: number;
   };
   prompt: string;
   responseText?: string;

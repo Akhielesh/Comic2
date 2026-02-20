@@ -9,12 +9,13 @@ import { buildImagePrompt } from '../../services/imagePrompt';
 import { formatRatio, getNearestAspectRatio, parseRatio } from '../../services/imageUtils';
 import { getImageProvider } from '../../services/appSettings';
 import { DebugState, getDebugState, subscribeDebugState } from '../../services/debugStore';
+import { ApiError } from '../../services/apiClient';
 
 interface StyleSelectionProps {
   firstScene?: Scene;
   script: string;
   projectId: string;
-  onScenesGenerated: (scenes: Scene[]) => void;
+  onScenesGenerated: (scenes: Scene[], analyzedScript?: string) => void;
   onStyleConfirmed: (style: StyleVariant) => void;
   initialVariants: StyleVariant[];
   onVariantsChange: (variants: StyleVariant[]) => void;
@@ -105,6 +106,29 @@ const FORM_FACTORS: FormFactor[] = [
 ];
 
 const DEFAULT_FORM_FACTOR = '1:1@1K';
+
+const getAnalyzeErrorMessage = (error: unknown): string => {
+  if (error instanceof ApiError) {
+    if (error.status === 401) {
+      return 'Your login session was not ready. Please click Analyze again.';
+    }
+    if (error.status === 402) {
+      return 'Usage limit reached. Add credits or provide BYOK, then retry.';
+    }
+    if (error.status === 429) {
+      return 'Too many requests. Wait a few seconds and try again.';
+    }
+    if (error.status >= 500) {
+      return 'Temporary server/model issue while analyzing. Please retry.';
+    }
+  }
+
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (message.toLowerCase().includes('no scenes found')) {
+    return "The model response wasn't usable on the first pass. Please retry analyze once.";
+  }
+  return 'Failed to analyze script. Please retry.';
+};
 
 export const StyleSelection: React.FC<StyleSelectionProps> = ({
   firstScene,
@@ -355,13 +379,13 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
         if (onScriptUpdate && script !== scriptToAnalyze) {
           onScriptUpdate(scriptToAnalyze);
         }
-        onScenesGenerated(scenes);
+        onScenesGenerated(scenes, scriptToAnalyze);
       } else {
         setError("Analysis failed. The AI couldn't identify scenes. Please try editing your script to be clearer.");
       }
     } catch (e) {
       if (analysisRequestIdRef.current !== requestId) return;
-      setError('Failed to analyze script. Please check your connection.');
+      setError(getAnalyzeErrorMessage(e));
     } finally {
       if (analysisRequestIdRef.current !== requestId) return;
       stopAnalysisTimer();
@@ -536,10 +560,12 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
         description: 'Your custom defined style.'
       };
       selectedStyles.push(customPreset);
-      // Ensure selections map has entry for it so form factor logic works
-      if (!styleSelections[customPreset.id]) {
-        styleSelections[customPreset.id] = { selected: true, formFactors: [DEFAULT_FORM_FACTOR] };
-      }
+    }
+
+    const selectionLookup: Record<string, StyleSelectionState> = { ...styleSelections };
+    const customSelection = selectedStyles.find((entry) => entry.id.startsWith('custom-'));
+    if (customSelection && !selectionLookup[customSelection.id]) {
+      selectionLookup[customSelection.id] = { selected: true, formFactors: [DEFAULT_FORM_FACTOR] };
     }
 
     const normalizedCustomRatio = formatRatio(customRatioInput);
@@ -561,7 +587,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
     }> = [];
 
     selectedStyles.forEach((style) => {
-      const chosen = styleSelections[style.id]?.formFactors || [];
+      const chosen = selectionLookup[style.id]?.formFactors || [];
       const formFactors = chosen.length > 0 ? chosen : [DEFAULT_FORM_FACTOR];
       formFactors.forEach((formId) => {
         const factor = FORM_FACTORS.find((f) => f.id === formId);

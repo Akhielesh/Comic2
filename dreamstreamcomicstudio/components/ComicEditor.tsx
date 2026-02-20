@@ -10,13 +10,19 @@ import { ReviewExport } from './steps/ReviewExport';
 import { CombinedPreview } from './steps/CombinedPreview';
 import { AppStep, Project } from '../types';
 import { assignImageTags, collectStateImageEntries } from '../services/imageTags';
+import {
+  resetFromLayoutConfirm,
+  resetFromScriptAnalysis,
+  resetFromStyleConfirm,
+  resetFromWorldConfirm
+} from '../services/pipelineReset';
 import { ArrowLeft, Save, History } from 'lucide-react';
 import { VersionHistoryModal } from './modals/VersionHistoryModal';
 import { ProjectVersion } from '../types';
 
 interface ComicEditorProps {
   project: Project;
-  onUpdate: (updates: Partial<Project>) => void;
+  onUpdate: (updates: Partial<Project> | ((prev: Project) => Partial<Project>)) => void;
   onStartGeneration: (projectId: string) => void;
   onStopGeneration: (projectId: string) => void;
   onBack: () => void;
@@ -31,9 +37,12 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   const lastAutoVersionKeyRef = useRef<string>('');
   const lastPlanVersionKeyRef = useRef<string>('');
 
-  const updateState = (updates: any) => {
-    onUpdate({
-      state: { ...state, ...updates }
+  const updateState = (updates: Partial<Project['state']> | ((prev: Project['state']) => Partial<Project['state']>)) => {
+    onUpdate((prevProject) => {
+      const patch = typeof updates === 'function' ? updates(prevProject.state) : updates;
+      return {
+        state: { ...prevProject.state, ...patch }
+      };
     });
   };
 
@@ -238,14 +247,18 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           onStoryBuilderUpdate={(storyBuilder) => updateState({ storyBuilder })}
           initialChecklist={state.scriptChecklist}
           onChecklistUpdate={(scriptChecklist) => updateState({ scriptChecklist })}
-          onScenesGenerated={(script, scenes) => { updateState({ script, scenes, continuity: undefined }); nextStep(); }}
+          onScenesGenerated={(script, scenes) => {
+            updateState((prev) => resetFromScriptAnalysis(prev, script, scenes));
+          }}
         />;
       case AppStep.STYLE_SELECTION:
         return <StyleSelection
           firstScene={state.scenes[0]}
           script={state.script}
           projectId={project.id}
-          onScenesGenerated={(scenes) => updateState({ scenes, continuity: undefined })}
+          onScenesGenerated={(scenes, analyzedScript) => {
+            updateState((prev) => resetFromScriptAnalysis(prev, analyzedScript || prev.script, scenes));
+          }}
           onScriptUpdate={(script) => updateState({ script })}
           initialVariants={state.styleVariants}
           selectedStyleId={state.selectedStyleId}
@@ -255,12 +268,12 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           customAspectRatio={state.customAspectRatio}
           onCustomAspectRatioChange={(enabled, ratio) => updateState({ customAspectRatioEnabled: enabled, customAspectRatio: ratio })}
           onStyleConfirmed={(style) => {
-            updateState({ selectedStyleId: style.id, stylePrompt: style.prompt, styleImageId: style.imageId, styleImageUrl: style.imageUrl, styleCategory: style.category, styleAspectRatio: style.aspectRatio, imageResolution: style.resolution });
-            nextStep();
+            updateState((prev) => resetFromStyleConfirm(prev, style));
           }} />;
       case AppStep.REFERENCE_BUILDER:
         return <ReferenceBuilder
           scenes={state.scenes}
+          script={state.script}
           currentStyle={state.stylePrompt}
           styleImageId={state.styleImageId}
           projectId={project.id}
@@ -269,7 +282,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           initialLocations={state.locations || []}
           initialContinuity={state.continuity}
           onDataUpdate={(data) => updateState({ ...data })}
-          onConfirm={() => nextStep()} />;
+          onConfirm={() => updateState((prev) => resetFromWorldConfirm(prev))} />;
       case AppStep.COVER:
         return (
           <CoverDesigner
@@ -291,7 +304,9 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           onDialogueModeChange={(dialogueMode) => updateState({ dialogueMode })}
           currentDialogueStyle={state.universalDialogueStyle || 'speech'}
           onDialogueStyleChange={(universalDialogueStyle) => updateState({ universalDialogueStyle })}
-          onLayoutConfirmed={(layoutType, customLayoutPrompt, gridTemplateId) => { updateState({ layoutType, customLayoutPrompt, gridTemplateId }); nextStep(); }} />;
+          onLayoutConfirmed={(layoutType, customLayoutPrompt, gridTemplateId) => {
+            updateState((prev) => resetFromLayoutConfirm(prev, layoutType, customLayoutPrompt, gridTemplateId));
+          }} />;
       case AppStep.COMBINED_PREVIEW:
         return (
           <CombinedPreview
