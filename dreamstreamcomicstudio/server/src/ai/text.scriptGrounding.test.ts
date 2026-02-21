@@ -56,4 +56,30 @@ Scene 1: SALTY and PIP creep through the flooded tunnel at dusk.
     expect(normalized.scenes[0].setting.toLowerCase()).toContain("scene");
     expect(normalized.diagnostics.plotDriftCorrections).toBeGreaterThan(0);
   });
+
+  it("keeps grounded character names inside scene raw excerpts for review validation", () => {
+    const longLeadIn = "The rooftop hums with vents and rain-soaked cables while sirens echo in the distance. ".repeat(8);
+    const script = `
+Scene 1: ${longLeadIn} Milo spots the yellow ball first, and Pepper charges after him.
+    `.trim();
+
+    const normalized = normalizeAnalyzedScenes(
+      [
+        {
+          id: 1,
+          segmentId: 1,
+          rawText: "The rooftop hums with vents and rain-soaked cables.",
+          synopsis: "Milo and Pepper race toward the yellow ball.",
+          characters: ["Milo", "Pepper"],
+          setting: "Rooftop at dusk"
+        }
+      ],
+      script
+    );
+
+    expect(normalized.scenes).toHaveLength(1);
+    expect(normalized.scenes[0].characters).toEqual(["Milo", "Pepper"]);
+    expect(normalized.scenes[0].rawText.toLowerCase()).toContain("milo");
+    expect(normalized.scenes[0].rawText.toLowerCase()).toContain("pepper");
+  });
 });

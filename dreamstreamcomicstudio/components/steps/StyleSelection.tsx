@@ -794,6 +794,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
     if (pendingScriptReview) {
       return (
         <ScriptAnalysisReview
+          script={pendingScriptReview.script}
           scenes={pendingScriptReview.scenes}
           diagnostics={pendingScriptReview.diagnostics}
           onBackToScript={() => setPendingScriptReview(null)}

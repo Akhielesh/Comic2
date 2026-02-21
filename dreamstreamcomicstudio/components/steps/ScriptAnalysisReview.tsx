@@ -3,8 +3,10 @@ import { AlertCircle, CheckCircle2, RotateCcw, ArrowLeft } from 'lucide-react';
 import { Scene } from '../../types';
 import { AnalyzeScriptResponse } from '../../apiTypes';
 import { Button } from '../Button';
+import { segmentScriptForReview } from '../../services/scriptSegmentation';
 
 type ScriptAnalysisReviewProps = {
+  script?: string;
   scenes: Scene[];
   diagnostics?: AnalyzeScriptResponse['diagnostics'];
   onApprove: (scenes: Scene[]) => void;
@@ -47,6 +49,7 @@ const normalizeCharacters = (value: string[]) => {
 const toCharacterInput = (characters: string[]) => (characters || []).join(', ');
 
 export const ScriptAnalysisReview: React.FC<ScriptAnalysisReviewProps> = ({
+  script,
   scenes,
   diagnostics,
   onApprove,
@@ -65,14 +68,31 @@ export const ScriptAnalysisReview: React.FC<ScriptAnalysisReviewProps> = ({
     setSubmitAttempted(false);
   }, [scenes]);
 
+  const scriptSegments = useMemo(() => segmentScriptForReview(script || ''), [script]);
+
+  const sourceByScene = useMemo(() => {
+    const map = new Map<number, { display: string; validation: string }>();
+    for (let index = 0; index < localScenes.length; index += 1) {
+      const scene = localScenes[index];
+      const primary = String(scene.rawText || '').trim();
+      const fallback = String(scriptSegments[index] || '').trim();
+      map.set(scene.id, {
+        display: primary || fallback,
+        validation: [primary, fallback].filter(Boolean).join('\n')
+      });
+    }
+    return map;
+  }, [localScenes, scriptSegments]);
+
   const validationByScene = useMemo(() => {
     const map = new Map<number, SceneValidation>();
     for (const scene of localScenes) {
-      const invalidCharacters = (scene.characters || []).filter((name) => !containsNormalizedName(scene.rawText || '', name));
+      const source = sourceByScene.get(scene.id)?.validation || '';
+      const invalidCharacters = (scene.characters || []).filter((name) => !containsNormalizedName(source, name));
       map.set(scene.id, { invalidCharacters });
     }
     return map;
-  }, [localScenes]);
+  }, [localScenes, sourceByScene]);
 
   const totalInvalidCharacters = useMemo(() => {
     let count = 0;
@@ -103,7 +123,7 @@ export const ScriptAnalysisReview: React.FC<ScriptAnalysisReviewProps> = ({
       id: index + 1,
       synopsis: scene.synopsis.trim(),
       setting: scene.setting.trim(),
-      rawText: scene.rawText.trim(),
+      rawText: (sourceByScene.get(scene.id)?.display || scene.rawText || '').trim(),
       characters: normalizeCharacters(scene.characters || [])
     }));
 
@@ -119,7 +139,7 @@ export const ScriptAnalysisReview: React.FC<ScriptAnalysisReviewProps> = ({
         </p>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs font-bold">
           <div className="border-2 border-black rounded px-2 py-1 bg-slate-50">Scenes: {localScenes.length}</div>
-          <div className="border-2 border-black rounded px-2 py-1 bg-slate-50">Segments: {diagnostics?.segmentCount ?? '—'}</div>
+          <div className="border-2 border-black rounded px-2 py-1 bg-slate-50">Segments: {diagnostics?.segmentCount ?? (scriptSegments.length || '—')}</div>
           <div className="border-2 border-black rounded px-2 py-1 bg-slate-50">Fallback scenes: {diagnostics?.fallbackSceneCount ?? diagnostics?.rawExcerptFallbackCount ?? 0}</div>
           <div className="border-2 border-black rounded px-2 py-1 bg-slate-50">Core drops: {diagnostics?.coreEntityDrops ?? diagnostics?.ungroundedCharactersDropped ?? 0}</div>
         </div>
@@ -151,7 +171,7 @@ export const ScriptAnalysisReview: React.FC<ScriptAnalysisReviewProps> = ({
 
               <div>
                 <div className="text-[11px] font-bold uppercase text-slate-500 mb-1">Source Excerpt (locked)</div>
-                <pre className="text-xs whitespace-pre-wrap bg-slate-50 border-2 border-black rounded p-3 font-mono">{scene.rawText}</pre>
+                <pre className="text-xs whitespace-pre-wrap bg-slate-50 border-2 border-black rounded p-3 font-mono">{sourceByScene.get(scene.id)?.display || ''}</pre>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
