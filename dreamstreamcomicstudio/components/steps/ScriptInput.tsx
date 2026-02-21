@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, ArrowRight, Pencil } from 'lucide-react';
-import { analyzeScript } from '../../services/geminiService';
+import { Sparkles, ArrowRight } from 'lucide-react';
+import { analyzeScriptDetailed } from '../../services/geminiService';
 import { ApiError } from '../../services/apiClient';
 import { Scene } from '../../types';
 import { Button } from '../Button';
 import { ScriptChecklist, analyzeScriptChecklist } from '../../services/scriptChecklist';
 import { StoryBuilder } from '../StoryBuilder';
 import { StoryBuilderState } from '../../types';
+import { AnalyzeScriptResponse } from '../../apiTypes';
+import { ScriptAnalysisReview } from './ScriptAnalysisReview';
 
 interface ScriptInputProps {
   initialScript: string;
@@ -61,6 +63,11 @@ export const ScriptInput: React.FC<ScriptInputProps> = ({ initialScript, project
   const [awaitingConfirm, setAwaitingConfirm] = useState(false);
   const lastChecklistScriptRef = useRef<string>(initialScript);
   const [storyBuilderState, setStoryBuilderState] = useState<StoryBuilderState | undefined>(initialStoryBuilder);
+  const [pendingReview, setPendingReview] = useState<{
+    script: string;
+    scenes: Scene[];
+    diagnostics?: AnalyzeScriptResponse['diagnostics'];
+  } | null>(null);
 
   // Sync with initialScript if it changes externally (e.g. loading a project)
   useEffect(() => {
@@ -167,24 +174,29 @@ export const ScriptInput: React.FC<ScriptInputProps> = ({ initialScript, project
     setScript(newScript);
     onScriptChange(newScript);
     setError(null);
+    setPendingReview(null);
     if (awaitingConfirm && newScript !== lastChecklistScriptRef.current) {
       setAwaitingConfirm(false);
     }
   };
 
-  const runAnalysis = async () => {
-    if (!script.trim()) return;
+  const runAnalysis = async (targetScript = script) => {
+    if (!targetScript.trim()) return;
     const requestId = analysisRequestIdRef.current + 1;
     analysisRequestIdRef.current = requestId;
     setIsAnalyzing(true);
     setError(null);
-    startAnalysisTimer(script, requestId);
+    startAnalysisTimer(targetScript, requestId);
     
     try {
-      const scenes = await analyzeScript(script, projectId);
+      const result = await analyzeScriptDetailed(targetScript, projectId);
       if (analysisRequestIdRef.current !== requestId) return;
-      if (scenes && scenes.length > 0) {
-        onScenesGenerated(script, scenes);
+      if (result.scenes && result.scenes.length > 0) {
+        setPendingReview({
+          script: targetScript,
+          scenes: result.scenes,
+          diagnostics: result.diagnostics
+        });
       } else {
         setError("Could not identify scenes. Please check the format.");
       }
@@ -212,13 +224,13 @@ export const ScriptInput: React.FC<ScriptInputProps> = ({ initialScript, project
       return;
     }
     setShowChecklist(false);
-    void runAnalysis();
+    void runAnalysis(script);
   };
 
   const handleConfirmAnalyze = () => {
     setShowChecklist(false);
     setAwaitingConfirm(false);
-    void runAnalysis();
+    void runAnalysis(script);
   };
 
   const handleDismissChecklist = () => {
@@ -239,6 +251,24 @@ Scene 2: Inside a noodle bar. It is crowded and smoky. K sits at the counter. A 
 
 VIVIAN: "You're looking for the ghost in the machine, aren't you?"
 K: "I'm just looking for dinner."`;
+
+  if (pendingReview) {
+    return (
+      <ScriptAnalysisReview
+        scenes={pendingReview.scenes}
+        diagnostics={pendingReview.diagnostics}
+        onBackToScript={() => setPendingReview(null)}
+        onReanalyze={() => {
+          setPendingReview(null);
+          void runAnalysis(pendingReview.script);
+        }}
+        onApprove={(approvedScenes) => {
+          onScenesGenerated(pendingReview.script, approvedScenes);
+          setPendingReview(null);
+        }}
+      />
+    );
+  }
 
   return (
     <div className="max-w-5xl mx-auto space-y-8 animate-fade-in">

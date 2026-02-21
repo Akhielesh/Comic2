@@ -300,6 +300,11 @@ export const queryUniversalAssistant = async (
 };
 
 export const analyzeScript = async (script: string, projectId?: string) => {
+  const response = await analyzeScriptDetailed(script, projectId);
+  return response.scenes;
+};
+
+export const analyzeScriptDetailed = async (script: string, projectId?: string) => {
   const response = await safeGeminiCall(
     'analyze_script',
     projectId,
@@ -313,7 +318,7 @@ export const analyzeScript = async (script: string, projectId?: string) => {
     ),
     script
   );
-  return response.scenes;
+  return response;
 };
 
 export const generateStoryOutline = async (inputs: StoryOutlineRequest, projectId?: string) => {
@@ -350,7 +355,21 @@ export const extractWorldDetails = async (
   script?: string
 ) => {
   if (!scenes || scenes.length === 0) {
-    return { characters: [], items: [], locations: [] };
+    return {
+      characters: [],
+      items: [],
+      locations: [],
+      diagnostics: {
+        input_scene_count: 0,
+        entity_counts: { characters: 0, items: 0, locations: 0 },
+        filtered_entity_count: 0,
+        dropped_entities: [],
+        ungrounded_characters_dropped: 0
+      }
+    };
+  }
+  if (!script || !script.trim()) {
+    throw new Error('Script is required for world extraction.');
   }
   const systemVersion = await getCachedSystemVersion();
   const backendContractVersion = systemVersion.worldExtractionContractVersion;
@@ -368,7 +387,7 @@ export const extractWorldDetails = async (
     'text',
     'world',
     async () => withTextKeyFallback((apiKey, modelId) =>
-      post<ExtractWorldRequest, ExtractWorldResponse>('/api/text/extract-world', { scenes, script }, { apiKey, modelId })
+      post<ExtractWorldRequest, ExtractWorldResponse>('/api/text/extract-world', { scenes, script: script.trim() }, { apiKey, modelId })
     ),
     scenes.map(s => s.synopsis || s.rawText).join('\n')
   );

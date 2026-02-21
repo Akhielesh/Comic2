@@ -20,6 +20,7 @@ import {
   settleReservedOperation
 } from '../services/usageEnforcer.js';
 import { assertModelAllowedForUser } from '../services/modelAccessPolicy.js';
+import { validateExtractWorldBody } from './text.validation.js';
 
 export const textRouter = Router();
 
@@ -278,10 +279,9 @@ textRouter.post('/extract-world', async (req, res, next) => {
     const apiKey = requireGeminiKey(req, res);
     if (!apiKey) return;
     const effectiveModel = await assertTextModelAccess(req, resolveRequestedModel(req.header('X-Gemini-Model')));
-    const { scenes, script } = req.body || {};
-    if (!Array.isArray(scenes)) {
-      return res.status(400).json({ error: { message: 'scenes array is required' } });
-    }
+    const validated = validateExtractWorldBody(req.body);
+    if (!validated.ok) return res.status(validated.status).json({ error: validated.error });
+    const { scenes, script } = validated;
 
     const reserve = await reserveForOperation({
       req,
@@ -299,7 +299,7 @@ textRouter.post('/extract-world', async (req, res, next) => {
       const result = await extractWorldDetails(
         apiKey,
         scenes,
-        typeof script === 'string' ? script : undefined,
+        script,
         effectiveModel
       );
       const diagnostics = result.diagnostics || {

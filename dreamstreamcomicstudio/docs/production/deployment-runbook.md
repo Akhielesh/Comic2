@@ -30,6 +30,8 @@
 `/Users/Akhielesh/Coding Projects/Neural graph/Comic2/dreamstreamcomicstudio`
 2. Build command:
 `npm run build`
+2.1. Contract verification command (run after build):
+`npm run verify:world-contract`
 3. Output directory:
 `dist`
 4. Environment variables:
@@ -88,10 +90,16 @@
 `curl -i https://api.yourdomain.com/api/system/ready`
 3. Verify version endpoint:
 `curl -i https://api.yourdomain.com/api/system/version`
-4. Verify frontend loads and can call API.
-5. Verify auth login flow.
-6. Verify text generation and image generation success.
-7. Verify Stripe webhook receives events at `/api/webhook/stripe`.
+3.1 Verify `worldExtractionContractVersion >= 3`.
+4. Verify frontend bundle contract before publish:
+`npm run build && npm run verify:world-contract`
+5. Verify `extract-world` rejects missing script:
+`curl -i -X POST https://api.yourdomain.com/api/text/extract-world -H 'Content-Type: application/json' -H 'Authorization: Bearer <token>' -d '{\"scenes\":[]}'`
+Expected: `400` with `SCRIPT_REQUIRED_FOR_WORLD_EXTRACTION`.
+6. Verify frontend loads and can call API.
+7. Verify auth login flow.
+8. Verify text generation and image generation success.
+9. Verify Stripe webhook receives events at `/api/webhook/stripe`.
 
 ## Monitoring and Alerts
 

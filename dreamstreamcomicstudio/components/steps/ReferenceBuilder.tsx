@@ -10,6 +10,7 @@ import { ImagePreviewModal } from '../modals/ImagePreviewModal';
 import { buildImagePrompt } from '../../services/imagePrompt';
 import { buildContinuityFromWorld } from '../../services/continuity';
 import { saveCharacterToLibrary } from '../../services/characterLibrary';
+import { ExtractWorldResponse } from '../../apiTypes';
 
 const CharacterLibraryModal = React.lazy(() => import('../modals/CharacterLibraryModal').then(module => ({ default: module.CharacterLibraryModal })));
 
@@ -67,6 +68,8 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
   const [items, setItems] = useState<Item[]>(initialItems);
   const [locations, setLocations] = useState<Location[]>(initialLocations);
   const [showLibraryModal, setShowLibraryModal] = useState(false);
+  const [worldDiagnostics, setWorldDiagnostics] = useState<ExtractWorldResponse['diagnostics']>();
+  const [worldDiagnosticsAcknowledged, setWorldDiagnosticsAcknowledged] = useState(false);
   const entitiesRef = useRef({ characters: initialCharacters, items: initialItems, locations: initialLocations });
 
   const makeContinuity = useCallback(
@@ -103,6 +106,8 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
       try {
         const data = await extractWorldDetails(scenes, projectId, script);
         commitWorldState(data.characters, data.items, data.locations);
+        setWorldDiagnostics(data.diagnostics);
+        setWorldDiagnosticsAcknowledged(false);
       } catch (e) {
         console.error(e);
       } finally {
@@ -513,6 +518,9 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
   }
 
   const activeList = activeTab === 'characters' ? characters : activeTab === 'items' ? items : locations;
+  const contaminationDrops = (worldDiagnostics?.dropped_entities || []).filter((entry) => entry.reason === 'NOT_IN_SCRIPT');
+  const requiresContaminationAck = contaminationDrops.length > 0;
+  const canConfirmWorld = !requiresContaminationAck || worldDiagnosticsAcknowledged;
 
   // Add Button Card
   const AddButtonCard = ({ type }: { type: Tab }) => (
@@ -567,9 +575,42 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
           ) : (
             <Button onClick={handleGenerateAll} isLoading={isBatchGenerating} icon={<Wand2 />}>Generate All</Button>
           )}
-          <Button onClick={onConfirm} variant="primary">Confirm World <Check className="ml-2 w-4 h-4" /></Button>
+          <Button onClick={onConfirm} variant="primary" disabled={!canConfirmWorld}>Confirm World <Check className="ml-2 w-4 h-4" /></Button>
         </div>
       </div>
+
+      {requiresContaminationAck && (
+        <div className="bg-red-50 border-4 border-brand-red rounded-xl shadow-comic p-4 space-y-3">
+          <div className="flex items-start gap-2 text-brand-red">
+            <AlertCircle className="w-5 h-5 mt-0.5" />
+            <div>
+              <div className="font-display text-xl">Script Contamination Block</div>
+              <div className="text-sm font-bold">
+                The model proposed entities not found in your script/scenes. These entries were dropped and must be reviewed before continuing.
+              </div>
+            </div>
+          </div>
+          <div className="bg-white border-2 border-black rounded p-3 text-xs font-mono max-h-40 overflow-auto">
+            {contaminationDrops.map((entry, index) => (
+              <div key={`${entry.kind}-${entry.name}-${index}`}>
+                [{entry.kind}] {entry.name} - {entry.reason}
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              id="world-contamination-ack"
+              type="checkbox"
+              checked={worldDiagnosticsAcknowledged}
+              onChange={(event) => setWorldDiagnosticsAcknowledged(event.target.checked)}
+              className="w-4 h-4"
+            />
+            <label htmlFor="world-contamination-ack" className="text-sm font-bold text-brand-red">
+              I reviewed dropped entities and accept filtered world results.
+            </label>
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {activeList.map(entity => renderEntityCard(entity, activeTab))}

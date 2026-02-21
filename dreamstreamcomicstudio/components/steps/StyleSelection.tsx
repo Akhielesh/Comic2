@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Check, AlertCircle, ArrowLeft, Wand2, Sparkles, ChevronDown, ChevronLeft, ChevronRight, Search, X } from 'lucide-react';
-import { analyzeScript, suggestStyle, suggestFormFactor } from '../../services/geminiService';
+import { analyzeScriptDetailed, suggestStyle, suggestFormFactor } from '../../services/geminiService';
 import { generateImage } from '../../services/imageService';
 import { Scene, StyleVariant, AspectRatio, ImageResolution } from '../../types';
 import { Button } from '../Button';
@@ -10,6 +10,8 @@ import { formatRatio, getNearestAspectRatio, parseRatio } from '../../services/i
 import { getImageProvider } from '../../services/appSettings';
 import { DebugState, getDebugState, subscribeDebugState } from '../../services/debugStore';
 import { ApiError } from '../../services/apiClient';
+import { AnalyzeScriptResponse } from '../../apiTypes';
+import { ScriptAnalysisReview } from './ScriptAnalysisReview';
 
 interface StyleSelectionProps {
   firstScene?: Scene;
@@ -160,6 +162,11 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
   const [analysisElapsed, setAnalysisElapsed] = useState(0);
   const [analysisEstimate, setAnalysisEstimate] = useState<number | null>(null);
   const [localScript, setLocalScript] = useState(script || '');
+  const [pendingScriptReview, setPendingScriptReview] = useState<{
+    script: string;
+    scenes: Scene[];
+    diagnostics?: AnalyzeScriptResponse['diagnostics'];
+  } | null>(null);
   const [styleSearch, setStyleSearch] = useState('');
   const [globalFormFactors, setGlobalFormFactors] = useState<string[]>([]);
   const [galleryActiveId, setGalleryActiveId] = useState<string | null>(null);
@@ -359,8 +366,8 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
     setAnalysisEstimate(null);
   };
 
-  const handleAnalyzeHere = async () => {
-    const scriptToAnalyze = localScript || script;
+  const handleAnalyzeHere = async (scriptOverride?: string) => {
+    const scriptToAnalyze = scriptOverride ?? (localScript || script);
 
     if (!scriptToAnalyze.trim()) {
       setError('Please enter a script to analyze.');
@@ -373,13 +380,14 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
     setError(null);
     startAnalysisTimer(scriptToAnalyze, requestId);
     try {
-      const scenes = await analyzeScript(scriptToAnalyze, projectId);
+      const result = await analyzeScriptDetailed(scriptToAnalyze, projectId);
       if (analysisRequestIdRef.current !== requestId) return;
-      if (scenes && scenes.length > 0 && scenes[0].synopsis) {
-        if (onScriptUpdate && script !== scriptToAnalyze) {
-          onScriptUpdate(scriptToAnalyze);
-        }
-        onScenesGenerated(scenes, scriptToAnalyze);
+      if (result.scenes && result.scenes.length > 0 && result.scenes[0].synopsis) {
+        setPendingScriptReview({
+          script: scriptToAnalyze,
+          scenes: result.scenes,
+          diagnostics: result.diagnostics
+        });
       } else {
         setError("Analysis failed. The AI couldn't identify scenes. Please try editing your script to be clearer.");
       }
@@ -783,6 +791,29 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
   };
 
   if (!firstScene) {
+    if (pendingScriptReview) {
+      return (
+        <ScriptAnalysisReview
+          scenes={pendingScriptReview.scenes}
+          diagnostics={pendingScriptReview.diagnostics}
+          onBackToScript={() => setPendingScriptReview(null)}
+          onReanalyze={() => {
+            const value = pendingScriptReview.script;
+            setPendingScriptReview(null);
+            setLocalScript(value);
+            void handleAnalyzeHere(value);
+          }}
+          onApprove={(approvedScenes) => {
+            if (onScriptUpdate && script !== pendingScriptReview.script) {
+              onScriptUpdate(pendingScriptReview.script);
+            }
+            onScenesGenerated(approvedScenes, pendingScriptReview.script);
+            setPendingScriptReview(null);
+          }}
+        />
+      );
+    }
+
     return (
       <div className="max-w-7xl mx-auto p-8 text-center space-y-6 animate-fade-in flex flex-col items-center">
         <div className="bg-red-50 border-4 border-red-500 text-red-700 p-8 rounded-xl shadow-comic inline-block transform -rotate-1 max-w-2xl w-full">
@@ -814,7 +845,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
               </Button>
             )}
             <Button
-              onClick={handleAnalyzeHere}
+              onClick={() => { void handleAnalyzeHere(); }}
               isLoading={isAnalyzing}
               variant="danger"
               icon={<Wand2 className="w-5 h-5" />}
