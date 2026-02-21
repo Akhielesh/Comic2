@@ -4,6 +4,7 @@
 
 - [ ] `npm run typecheck` passes.
 - [ ] `npm run build` passes.
+- [ ] `npm run verify:world-contract` passes after build.
 - [ ] `npm run build:server` passes.
 - [ ] Unknown CORS origins are rejected.
 - [ ] Burst test shows HTTP 429 with retry headers.
@@ -16,7 +17,7 @@
 - [ ] Backend reachable at `https://api.yourdomain.com`.
 - [ ] Health endpoint returns `200`.
 - [ ] Readiness endpoint returns `200`.
-- [ ] Version endpoint returns `200` and `worldExtractionContractVersion >= 2`.
+- [ ] Version endpoint returns `200` and `worldExtractionContractVersion >= 3`.
 - [ ] End-to-end auth login works.
 - [ ] Text generation flow works.
 - [ ] Image generation flow works.

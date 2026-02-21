@@ -27,5 +27,33 @@ Scene 2: Leo calibrates the signal device near the window.
     expect(normalized.scenes[0].characters).toEqual(["Arjun", "Sana"]);
     expect(normalized.diagnostics.ungroundedCharactersDropped).toBe(1);
     expect(normalized.diagnostics.rawExcerptFallbackCount).toBe(1);
+    expect(normalized.diagnostics.coreEntityDrops).toBe(1);
+    expect(normalized.diagnostics.segmentCount).toBeGreaterThanOrEqual(1);
+    expect(normalized.diagnostics.fallbackSceneCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("repairs synopsis and setting drift with literal grounded fallbacks", () => {
+    const script = `
+Scene 1: SALTY and PIP creep through the flooded tunnel at dusk.
+    `.trim();
+
+    const normalized = normalizeAnalyzedScenes(
+      [
+        {
+          id: 1,
+          segmentId: 1,
+          rawText: "SALTY and PIP creep through the flooded tunnel at dusk.",
+          synopsis: "A dragon army storms a floating palace above a crystal sea.",
+          characters: ["SALTY", "PIP"],
+          setting: "Sky citadel above the clouds"
+        }
+      ],
+      script
+    );
+
+    expect(normalized.scenes).toHaveLength(1);
+    expect(normalized.scenes[0].synopsis.toLowerCase()).toContain("salty");
+    expect(normalized.scenes[0].setting.toLowerCase()).toContain("scene");
+    expect(normalized.diagnostics.plotDriftCorrections).toBeGreaterThan(0);
   });
 });

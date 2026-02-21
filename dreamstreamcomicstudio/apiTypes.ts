@@ -57,6 +57,10 @@ export type AnalyzeScriptResponse = {
   diagnostics?: {
     ungroundedCharactersDropped?: number;
     rawExcerptFallbackCount?: number;
+    segmentCount?: number;
+    fallbackSceneCount?: number;
+    coreEntityDrops?: number;
+    plotDriftCorrections?: number;
     sceneCount?: number;
   };
   prompt: string;
@@ -115,7 +119,7 @@ export type StoryToolResponse = {
   billing?: ApiBillingInfo;
 };
 
-export type ExtractWorldRequest = { scenes: Scene[]; script?: string };
+export type ExtractWorldRequest = { scenes: Scene[]; script: string };
 export type ExtractWorldResponse = {
   characters: Character[];
   items: Item[];

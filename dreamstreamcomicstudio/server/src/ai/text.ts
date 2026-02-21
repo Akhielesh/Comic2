@@ -16,6 +16,7 @@ import { extractJson, ensureArray, isString } from './json.js';
 import { buildUsage } from './usage.js';
 import { withRetry, withTimeout } from './utils.js';
 import { TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS } from '../config.js';
+import { ScriptSegment, segmentScript } from './scriptSegmentation.js';
 
 const resolveTextModel = (modelOverride?: string) => {
   const candidate = modelOverride?.trim();
@@ -25,6 +26,10 @@ const resolveTextModel = (modelOverride?: string) => {
 type AnalyzeScriptDiagnostics = {
   ungroundedCharactersDropped: number;
   rawExcerptFallbackCount: number;
+  segmentCount: number;
+  fallbackSceneCount: number;
+  coreEntityDrops: number;
+  plotDriftCorrections: number;
 };
 
 type EntityDropReason =
@@ -88,30 +93,115 @@ const containsNormalizedSnippet = (haystack: string, snippet: string) => {
 
 const clipExcerpt = (value: string, max = 260) => value.trim().slice(0, max).trim();
 
-const splitScriptIntoSegments = (script: string): string[] => {
-  const sceneDelimited = script
-    .split(/\n(?=\s*(scene|act)\s+\d+[:.-]?)/gi)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  if (sceneDelimited.length > 1) return sceneDelimited;
+const firstWords = (value: string, maxWords: number) => {
+  return value
+    .trim()
+    .split(/\s+/)
+    .slice(0, maxWords)
+    .join(' ')
+    .trim();
+};
 
-  const paragraphs = script
-    .split(/\n{2,}/g)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  if (paragraphs.length > 0) return paragraphs;
+const lexicalTokenSet = (value: string) => new Set(
+  normalizeForMatch(value)
+    .split(' ')
+    .filter((token) => token.length >= 3)
+);
 
-  return script.trim() ? [script.trim()] : [];
+const lexicalOverlap = (candidate: string, source: string) => {
+  const candidateTokens = lexicalTokenSet(candidate);
+  if (candidateTokens.size === 0) return 0;
+  const sourceTokens = lexicalTokenSet(source);
+  if (sourceTokens.size === 0) return 0;
+
+  let shared = 0;
+  for (const token of candidateTokens) {
+    if (sourceTokens.has(token)) shared += 1;
+  }
+  return shared / candidateTokens.size;
+};
+
+const extractSegmentCharacterHints = (segmentText: string) => {
+  const names = new Set<string>();
+  const regex = /^([A-Z][A-Z0-9 _'".-]{1,40}):/gm;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(segmentText)) !== null) {
+    const name = match[1].trim();
+    if (name.length > 1 && name.length <= 40) names.add(name);
+  }
+  return Array.from(names);
+};
+
+const buildLiteralSynopsis = (segmentText: string) => {
+  const firstLine = segmentText.split('\n').map((line) => line.trim()).find(Boolean) || segmentText;
+  return clipExcerpt(firstWords(firstLine, 28) || 'Literal scene excerpt.');
+};
+
+const buildLiteralSetting = (segmentText: string) => {
+  const heading = segmentText
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => /^(scene|act|int\.?|ext\.?|int\/ext|i\/e)/i.test(line));
+  if (heading) return clipExcerpt(heading, 140);
+  const locationMatch = segmentText.match(/\b(?:in|at|inside|outside|near|within)\s+([a-z0-9' -]{3,80})/i);
+  if (locationMatch) return clipExcerpt(locationMatch[0], 140);
+  return 'Script-defined location';
+};
+
+const shouldRepairNarrativeField = (candidate: string, segmentText: string) => {
+  const trimmed = candidate.trim();
+  if (!trimmed) return true;
+  if (containsNormalizedSnippet(segmentText, trimmed)) return false;
+  return lexicalOverlap(trimmed, segmentText) < 0.22;
+};
+
+const selectSegmentForScene = (
+  scene: any,
+  index: number,
+  segments: ScriptSegment[],
+  fullScript: string
+): ScriptSegment => {
+  if (segments.length === 0) {
+    return {
+      id: 1,
+      order: 0,
+      rawText: fullScript,
+      source: 'full_script'
+    };
+  }
+
+  const segmentId = Number(scene?.segmentId);
+  if (Number.isFinite(segmentId)) {
+    const byId = segments.find((segment) => segment.id === Math.floor(segmentId));
+    if (byId) return byId;
+  }
+
+  const providedRaw = isString(scene?.rawText) ? scene.rawText.trim() : '';
+  if (providedRaw) {
+    const byRaw = segments.find((segment) => containsNormalizedSnippet(segment.rawText, providedRaw));
+    if (byRaw) return byRaw;
+  }
+
+  const synopsis = isString(scene?.synopsis) ? scene.synopsis.trim() : '';
+  if (synopsis) {
+    const bySynopsis = segments.find((segment) => containsNormalizedSnippet(segment.rawText, synopsis));
+    if (bySynopsis) return bySynopsis;
+  }
+
+  return segments[index] || segments[Math.max(0, segments.length - 1)];
 };
 
 const deriveSceneRawExcerpt = (
   scene: any,
-  index: number,
-  fullScript: string,
-  scriptSegments: string[]
+  segment: ScriptSegment,
+  fullScript: string
 ) => {
   const providedRaw = isString(scene?.rawText) ? scene.rawText.trim() : '';
-  if (providedRaw && containsNormalizedSnippet(fullScript, providedRaw)) {
+  if (
+    providedRaw
+    && containsNormalizedSnippet(fullScript, providedRaw)
+    && containsNormalizedSnippet(segment.rawText, providedRaw)
+  ) {
     return {
       rawText: clipExcerpt(providedRaw),
       usedFallback: false
@@ -120,31 +210,24 @@ const deriveSceneRawExcerpt = (
 
   const synopsis = isString(scene?.synopsis) ? scene.synopsis.trim() : '';
   if (synopsis) {
-    const directMatch = scriptSegments.find((segment) => containsNormalizedSnippet(segment, synopsis));
-    if (directMatch) {
+    if (containsNormalizedSnippet(segment.rawText, synopsis)) {
       return {
-        rawText: clipExcerpt(directMatch),
+        rawText: clipExcerpt(segment.rawText),
         usedFallback: true
       };
     }
 
     const synopsisAnchor = synopsis.split(/\s+/).slice(0, 10).join(' ');
-    if (synopsisAnchor) {
-      const anchorMatch = scriptSegments.find((segment) => containsNormalizedSnippet(segment, synopsisAnchor));
-      if (anchorMatch) {
-        return {
-          rawText: clipExcerpt(anchorMatch),
-          usedFallback: true
-        };
-      }
+    if (synopsisAnchor && containsNormalizedSnippet(segment.rawText, synopsisAnchor)) {
+      return {
+        rawText: clipExcerpt(segment.rawText),
+        usedFallback: true
+      };
     }
   }
 
-  const segmentByIndex = scriptSegments[index]
-    || scriptSegments[Math.max(0, scriptSegments.length - 1)]
-    || fullScript;
   return {
-    rawText: clipExcerpt(segmentByIndex || synopsis || 'Scene context unavailable.'),
+    rawText: clipExcerpt(segment.rawText || synopsis || fullScript || 'Scene context unavailable.'),
     usedFallback: true
   };
 };
@@ -171,36 +254,97 @@ const filterGroundedCharacterNames = (names: string[], sceneRawText: string): { 
 
 const normalizeScenes = (
   raw: any[],
-  fullScript: string
+  fullScript: string,
+  providedSegments?: ScriptSegment[]
 ): { scenes: Scene[]; diagnostics: AnalyzeScriptDiagnostics } => {
-  const scriptSegments = splitScriptIntoSegments(fullScript);
+  const scriptSegments = providedSegments && providedSegments.length > 0
+    ? providedSegments
+    : segmentScript(fullScript);
   let ungroundedCharactersDropped = 0;
   let rawExcerptFallbackCount = 0;
+  let fallbackSceneCount = 0;
+  let plotDriftCorrections = 0;
 
-  const scenes = raw
-    .filter((s) => s && isString(s.synopsis) && isString(s.setting))
+  const staged = raw
+    .filter((scene) => scene && (isString(scene.synopsis) || isString(scene.setting) || isString(scene.rawText)))
     .map((scene, index) => {
-      const excerpt = deriveSceneRawExcerpt(scene, index, fullScript, scriptSegments);
+      const segment = selectSegmentForScene(scene, index, scriptSegments, fullScript);
+      const excerpt = deriveSceneRawExcerpt(scene, segment, fullScript);
       if (excerpt.usedFallback) rawExcerptFallbackCount += 1;
 
       const rawCharacters = ensureArray<string>(scene.characters, []);
-      const grounded = filterGroundedCharacterNames(rawCharacters, excerpt.rawText);
+      const grounded = filterGroundedCharacterNames(rawCharacters, segment.rawText);
+      const hinted = filterGroundedCharacterNames(extractSegmentCharacterHints(segment.rawText), segment.rawText);
+      const finalCharacters = grounded.names.length > 0 ? grounded.names : hinted.names;
       ungroundedCharactersDropped += grounded.dropped;
 
+      let synopsis = isString(scene.synopsis) ? scene.synopsis.trim() : '';
+      let setting = isString(scene.setting) ? scene.setting.trim() : '';
+      let sceneFallback = excerpt.usedFallback;
+
+      if (shouldRepairNarrativeField(synopsis, segment.rawText)) {
+        synopsis = buildLiteralSynopsis(segment.rawText);
+        plotDriftCorrections += 1;
+        sceneFallback = true;
+      }
+      if (shouldRepairNarrativeField(setting, segment.rawText)) {
+        setting = buildLiteralSetting(segment.rawText);
+        plotDriftCorrections += 1;
+        sceneFallback = true;
+      }
+      if (sceneFallback) fallbackSceneCount += 1;
+
       return {
-        id: index + 1,
-        rawText: excerpt.rawText,
-        synopsis: scene.synopsis.trim(),
-        characters: grounded.names,
-        setting: scene.setting.trim()
+        segment,
+        score: firstWords(synopsis, 40).length + firstWords(setting, 20).length,
+        scene: {
+          id: 0,
+          rawText: excerpt.rawText,
+          synopsis,
+          characters: finalCharacters,
+          setting
+        } as Scene
       };
     });
+
+  const dedupedBySegment = new Map<number, { segment: ScriptSegment; score: number; scene: Scene }>();
+  for (const entry of staged) {
+    const existing = dedupedBySegment.get(entry.segment.id);
+    if (!existing || entry.score > existing.score) {
+      dedupedBySegment.set(entry.segment.id, entry);
+    }
+  }
+
+  const scenes = Array.from(dedupedBySegment.values())
+    .sort((a, b) => a.segment.order - b.segment.order)
+    .map((entry, index) => ({
+      ...entry.scene,
+      id: index + 1
+    }));
+
+  if (scenes.length === 0 && scriptSegments.length > 0) {
+    fallbackSceneCount += scriptSegments.length;
+    for (const segment of scriptSegments) {
+      const hinted = filterGroundedCharacterNames(extractSegmentCharacterHints(segment.rawText), segment.rawText);
+      scenes.push({
+        id: scenes.length + 1,
+        rawText: clipExcerpt(segment.rawText),
+        synopsis: buildLiteralSynopsis(segment.rawText),
+        characters: hinted.names,
+        setting: buildLiteralSetting(segment.rawText)
+      });
+    }
+  }
 
   return {
     scenes,
     diagnostics: {
       ungroundedCharactersDropped,
-      rawExcerptFallbackCount
+      rawExcerptFallbackCount,
+      segmentCount: scriptSegments.length,
+      fallbackSceneCount,
+      coreEntityDrops: ungroundedCharactersDropped,
+      plotDriftCorrections
     }
   };
 };
@@ -224,7 +368,7 @@ const buildSceneGroundingContext = (scenes: Scene[], script?: string) => {
 
 export const buildWorldExtractionPrompt = (sceneContext: string) => `
 You are extracting world entities for a comic production pipeline.
-Use ONLY the provided scenes. Do not use outside knowledge.
+Use ONLY the provided source excerpts. Do not use outside knowledge.
 
 Hard rules:
 - No invented characters, items, or locations.
@@ -233,6 +377,7 @@ Hard rules:
 - Ground every entity directly in the provided scenes.
 - Do not add backstory, motivations, new plot beats, or future events.
 - Descriptions must be visual and present-tense only (appearance, materials, environment cues).
+- If an entity is not explicitly named in source excerpts, do not return it.
 - Characters max: ${MAX_WORLD_CHARACTER_COUNT}
 - Items max: ${MAX_WORLD_ITEM_COUNT}
 - Locations max: ${MAX_WORLD_LOCATION_COUNT}
@@ -346,20 +491,29 @@ export const filterExtractedWorldData = (
 export const analyzeScript = async (apiKey: string, script: string, modelOverride?: string): Promise<AnalyzeScriptResponse> => {
   const ai = createClient(apiKey);
   const model = resolveTextModel(modelOverride);
+  const segments = segmentScript(script);
+  const segmentContext = segments
+    .map((segment) => [
+      `Segment ${segment.id} (source=${segment.source}, order=${segment.order + 1}):`,
+      segment.rawText
+    ].join('\n'))
+    .join('\n\n');
   const prompt = `
-    Analyze the following comic script. Break it down into individual scenes.
+    Analyze the following comic script. Break it down into individual scenes anchored to source segments.
     For each scene, provide:
+    0. segmentId (must reference one of the provided Segment IDs).
     1. A synopsis (visual description of what happens).
     2. A list of characters present.
     3. The setting/location.
-    4. rawText as a short verbatim excerpt from that exact scene in the provided script.
+    4. rawText as a short verbatim excerpt from that exact source segment.
     
-    Script:
-    ${script}
+    Source Segments:
+    ${segmentContext}
 
     CRITICAL:
     - Use ONLY information present in the provided script.
-    - Keep chronological order exactly as written.
+    - Keep chronological order exactly as written using segment order.
+    - Never reference a segmentId not provided above.
     - Do NOT invent scenes, characters, items, locations, backstory, motives, or future events.
     - If details are ambiguous, keep the synopsis minimal and literal instead of guessing.
     - In synthesis and setting descriptions, focus on VISUAL CONTENT (place, lighting, mood) only.
@@ -381,12 +535,13 @@ export const analyzeScript = async (apiKey: string, script: string, modelOverrid
               type: Type.OBJECT,
               properties: {
                 id: { type: Type.INTEGER },
+                segmentId: { type: Type.INTEGER },
                 rawText: { type: Type.STRING },
                 synopsis: { type: Type.STRING },
                 characters: { type: Type.ARRAY, items: { type: Type.STRING } },
                 setting: { type: Type.STRING }
               },
-              required: ['id', 'rawText', 'synopsis', 'characters', 'setting']
+              required: ['segmentId', 'rawText', 'synopsis', 'characters', 'setting']
             }
           }
         }
@@ -401,7 +556,7 @@ export const analyzeScript = async (apiKey: string, script: string, modelOverrid
 
   const responseText = response.text || '';
   const rawScenes = extractJson(responseText);
-  const normalized = normalizeScenes(Array.isArray(rawScenes) ? rawScenes : [], script);
+  const normalized = normalizeScenes(Array.isArray(rawScenes) ? rawScenes : [], script, segments);
   const scenes = normalized.scenes;
   if (scenes.length === 0) {
     throw new Error('No scenes found in analysis response');
@@ -412,6 +567,10 @@ export const analyzeScript = async (apiKey: string, script: string, modelOverrid
     diagnostics: {
       ungroundedCharactersDropped: normalized.diagnostics.ungroundedCharactersDropped,
       rawExcerptFallbackCount: normalized.diagnostics.rawExcerptFallbackCount,
+      segmentCount: normalized.diagnostics.segmentCount,
+      fallbackSceneCount: normalized.diagnostics.fallbackSceneCount,
+      coreEntityDrops: normalized.diagnostics.coreEntityDrops,
+      plotDriftCorrections: normalized.diagnostics.plotDriftCorrections,
       sceneCount: scenes.length
     },
     prompt,
@@ -582,8 +741,6 @@ export const extractWorldDetails = async (
   const sceneContext = scenes.map((scene) => [
     `Scene ${scene.id}:`,
     `Raw Script Excerpt: ${scene.rawText || ''}`,
-    `Synopsis Hint: ${scene.synopsis || ''}`,
-    `Setting Hint: ${scene.setting || ''}`,
     `Known Scene Characters: ${(scene.characters || []).join(', ') || 'None listed'}`
   ].join('\n')).join('\n\n');
   const prompt = buildWorldExtractionPrompt(sceneContext);

@@ -21,6 +21,7 @@
     "consistency:repair:clean-world": "tsx scripts/repair_project_consistency.ts --clean-world",
     "consistency:repair:clean-world:apply": "tsx scripts/repair_project_consistency.ts --apply --clean-world",
     "consistency:metrics": "tsx scripts/consistency_metrics.ts",
+    "verify:world-contract": "tsx scripts/verify_world_contract_bundle.ts",
     "ops:verify:cors": "scripts/ops/verify-cors.sh",
     "ops:verify:rate-limit": "scripts/ops/verify-rate-limit.sh"
   },

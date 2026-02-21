@@ -19,7 +19,7 @@ describe("world extraction grounding", () => {
       .join("\n");
     const prompt = buildWorldExtractionPrompt(sceneContext);
 
-    expect(prompt).toContain("Use ONLY the provided scenes");
+    expect(prompt).toContain("Use ONLY the provided source excerpts");
     expect(prompt).toContain("Scene 1: Arjun studies the Zenith Spear in the attic.");
   });
 
