@@ -137,7 +137,8 @@ alter table public.panel_lettering enable row level security;
 alter table public.generation_jobs enable row level security;
 
 -- Ownership via projects.user_id
-create policy if not exists scripts_owner_policy on public.scripts
+drop policy if exists scripts_owner_policy on public.scripts;
+create policy scripts_owner_policy on public.scripts
   for all
   using (
     exists (
@@ -152,7 +153,8 @@ create policy if not exists scripts_owner_policy on public.scripts
     )
   );
 
-create policy if not exists asset_cards_owner_policy on public.asset_cards
+drop policy if exists asset_cards_owner_policy on public.asset_cards;
+create policy asset_cards_owner_policy on public.asset_cards
   for all
   using (
     exists (
@@ -167,7 +169,8 @@ create policy if not exists asset_cards_owner_policy on public.asset_cards
     )
   );
 
-create policy if not exists layout_templates_owner_policy on public.layout_templates
+drop policy if exists layout_templates_owner_policy on public.layout_templates;
+create policy layout_templates_owner_policy on public.layout_templates
   for all
   using (
     project_id is null or exists (
@@ -182,7 +185,8 @@ create policy if not exists layout_templates_owner_policy on public.layout_templ
     )
   );
 
-create policy if not exists pages_owner_policy on public.pages
+drop policy if exists pages_owner_policy on public.pages;
+create policy pages_owner_policy on public.pages
   for all
   using (
     exists (
@@ -197,7 +201,8 @@ create policy if not exists pages_owner_policy on public.pages
     )
   );
 
-create policy if not exists panels_owner_policy on public.panels
+drop policy if exists panels_owner_policy on public.panels;
+create policy panels_owner_policy on public.panels
   for all
   using (
     exists (
@@ -212,7 +217,8 @@ create policy if not exists panels_owner_policy on public.panels
     )
   );
 
-create policy if not exists panel_lettering_owner_policy on public.panel_lettering
+drop policy if exists panel_lettering_owner_policy on public.panel_lettering;
+create policy panel_lettering_owner_policy on public.panel_lettering
   for all
   using (
     exists (
@@ -231,7 +237,8 @@ create policy if not exists panel_lettering_owner_policy on public.panel_letteri
     )
   );
 
-create policy if not exists generation_jobs_owner_policy on public.generation_jobs
+drop policy if exists generation_jobs_owner_policy on public.generation_jobs;
+create policy generation_jobs_owner_policy on public.generation_jobs
   for all
   using (
     exists (
