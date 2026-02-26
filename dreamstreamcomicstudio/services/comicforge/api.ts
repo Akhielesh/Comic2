@@ -48,6 +48,16 @@ import {
 } from '../../apiTypes';
 import { buildApiUrl } from '../clientConfig';
 import { supabase } from '../supabase';
+import { getFluxKeyInfo } from '../appSettings';
+
+const getGeminiKey = () => {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem('dreamstream_api_key');
+  } catch {
+    return null;
+  }
+};
 
 const request = async <TResponse, TBody = unknown>(
   path: string,
@@ -55,10 +65,14 @@ const request = async <TResponse, TBody = unknown>(
   body?: TBody
 ): Promise<TResponse> => {
   const { data: { session } } = await supabase.auth.getSession();
+  const geminiKey = getGeminiKey();
+  const fluxInfo = getFluxKeyInfo();
   const response = await fetch(buildApiUrl(path), {
     method,
     headers: {
       'Content-Type': 'application/json',
+      ...(geminiKey ? { 'X-Gemini-Key': geminiKey } : {}),
+      ...(fluxInfo.key ? { 'X-Pixazo-Key': fluxInfo.key } : {}),
       ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {})
     },
     ...(method === 'GET' ? {} : { body: JSON.stringify(body || {}) })
@@ -124,10 +138,10 @@ export const comicForgeApi = {
     request<ComicForgePatchPanelLetteringResponse, ComicForgePatchPanelLetteringRequest>(v1(`/panel-lettering/${panelLetteringId}`), 'PATCH', body),
   exportProject: (projectId: string, body: ComicForgeExportRequest) =>
     request<ComicForgeExportResponse, ComicForgeExportRequest>(v1(`/projects/${projectId}/export`), 'POST', body),
-  getJobStatus: (jobId: string) =>
-    request<ComicForgeJobStatusResponse>(v1(`/jobs/${jobId}/status`), 'GET'),
-  getJobEvents: (jobId: string) =>
-    request<ComicForgeJobEventsResponse>(v1(`/jobs/${jobId}/events`), 'GET'),
+  getJobStatus: (jobId: string, projectId: string) =>
+    request<ComicForgeJobStatusResponse>(v1(`/jobs/${jobId}/status?projectId=${encodeURIComponent(projectId)}`), 'GET'),
+  getJobEvents: (jobId: string, projectId: string) =>
+    request<ComicForgeJobEventsResponse>(v1(`/jobs/${jobId}/events?projectId=${encodeURIComponent(projectId)}`), 'GET'),
   getCostTracker: (projectId: string) =>
     request<ComicForgeCostTrackerResponse>(v1(`/projects/${projectId}/cost-tracker`), 'GET')
 };

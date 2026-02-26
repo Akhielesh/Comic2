@@ -450,6 +450,23 @@ export type ComicForgeQCReport = {
   panelFlags: ComicForgeQCFlag[];
 };
 
+export type ComicForgePanelArtifact = {
+  panelId: string;
+  pageNumber: number;
+  panelIndex: number;
+  description: string;
+  prompt: string;
+  thumbnailImageId?: string;
+  thumbnailImageUrl?: string;
+  draftImageId?: string;
+  draftImageUrl?: string;
+  finalImageId?: string;
+  finalImageUrl?: string;
+  modelByQuality?: Partial<Record<'thumbnail' | 'draft' | 'final', string>>;
+  updatedAt: number;
+  error?: string;
+};
+
 export type ComicForgeExportPreset =
   | 'webtoon_episode'
   | 'tapas_episode'
@@ -491,6 +508,7 @@ export type ComicForgeState = {
   assetCards?: ComicForgeAssetCard[];
   layoutTemplate?: ComicForgeLayoutTemplate;
   balloonZones?: ComicForgeBalloonZone[];
+  panelArtifacts?: ComicForgePanelArtifact[];
   storyboardValidation?: ComicForgeStoryboardValidation;
   previewPack?: ComicForgePreviewPack;
   qcReports?: ComicForgeQCReport[];

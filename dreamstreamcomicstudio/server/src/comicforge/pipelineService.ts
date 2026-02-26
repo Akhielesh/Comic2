@@ -5,6 +5,7 @@ import {
   ComicForgeBalloonZone,
   ComicForgeExportPreset,
   ComicForgeJobSummary,
+  ComicForgePanelArtifact,
   ComicForgeLayoutTemplate,
   ComicForgePagePlanRow,
   ComicForgePreviewPack,
@@ -29,10 +30,17 @@ import {
 } from './repositories.js';
 import { enqueueComicForgeJob, getComicForgeJobState, isComicForgeQueueConfigured } from './queue.js';
 import { TaskType, assertNoTextPromptContract, buildNoTextPrompt, getModelPolicy } from './modelRouter.js';
+import { generateGeminiImage } from '../ai/image.js';
+import { generateFluxImage } from '../ai/flux.js';
+import { persistGeneratedImage } from '../services/imageStorage.js';
 
 type ServiceContext = {
   userId: string;
   projectId: string;
+  apiKeys?: {
+    geminiKey?: string | null;
+    pixazoKey?: string | null;
+  };
 };
 
 const stageOrderIndex = (stage: ComicForgeStage) => COMICFORGE_STAGE_ORDER.indexOf(stage);
@@ -217,6 +225,17 @@ const isQueueUnavailableError = (error: unknown): boolean => {
     || message.includes('econnrefused');
 };
 
+const isStoragePersistenceUnavailableError = (error: unknown): boolean => {
+  const code = String((error as { publicCode?: string })?.publicCode || '').toUpperCase();
+  if (code === 'MISSING_SERVICE_ROLE_KEY' || code === 'MISSING_SUPABASE_CONFIG') {
+    return true;
+  }
+  const message = String((error as { message?: string })?.message || '').toLowerCase();
+  return message.includes('storage persistence')
+    || message.includes('service role key')
+    || message.includes('supabase configuration is incomplete');
+};
+
 const estimatePagePlanCount = (panelCount: number) => Math.max(1, Math.ceil(panelCount / 4));
 
 const resolvePagePurpose = (index: number, pageCount: number): ComicForgePagePlanRow['purpose'] => {
@@ -286,13 +305,309 @@ const buildStyleRecommendations = (tone?: string, genre?: string): ComicForgeSty
 const createAssetHash = (input: string) =>
   crypto.createHash('sha256').update(input).digest('hex');
 
+type QueueJobOptions = {
+  queuePayload?: Record<string, unknown>;
+  inlineProcessor?: (jobId: string) => Promise<Record<string, unknown>>;
+};
+
+const runInlineProcessorAsync = (jobId: string, inlineProcessor: (jobId: string) => Promise<Record<string, unknown>>) => {
+  void (async () => {
+    try {
+      appendJobEvent(jobId, {
+        type: 'running',
+        message: 'Inline processor started',
+        timestamp: Date.now(),
+        progress: 8
+      });
+      await updateGenerationJob(jobId, {
+        status: 'running',
+        progress: 8
+      });
+
+      const result = await inlineProcessor(jobId);
+
+      appendJobEvent(jobId, {
+        type: 'done',
+        message: 'Inline processor completed',
+        timestamp: Date.now(),
+        progress: 100,
+        payload: result
+      });
+      await updateGenerationJob(jobId, {
+        status: 'done',
+        progress: 100,
+        completedAt: Date.now(),
+        outputPayload: result,
+        result
+      });
+    } catch (error) {
+      const message = (error as Error)?.message || 'Inline processor failed';
+      appendJobEvent(jobId, {
+        type: 'failed',
+        message,
+        timestamp: Date.now(),
+        progress: 100
+      });
+      await updateGenerationJob(jobId, {
+        status: 'failed',
+        progress: 100,
+        completedAt: Date.now(),
+        errorMessage: message
+      });
+    }
+  })();
+};
+
+const resolveAspectRatioForState = (state: ComicForgeState): string => {
+  const format = state.formatSpec?.readingFormat;
+  if (format === 'webtoon_vertical') return '9:16';
+  if (format === 'social_shorts') return '1:1';
+  return '3:4';
+};
+
+const resolveResolutionForTask = (state: ComicForgeState, taskType: TaskType): '1K' | '2K' | '4K' => {
+  if (taskType === TaskType.THUMBNAIL_GEN) return '1K';
+  if (taskType === TaskType.PANEL_GEN_DRAFT) return '1K';
+  if (state.formatSpec?.resolutionTarget === 'print_300') return '4K';
+  if (state.formatSpec?.resolutionTarget === 'screen_hd_150') return '2K';
+  return '1K';
+};
+
+type PanelWorkItem = {
+  panelId: string;
+  pageNumber: number;
+  panelIndex: number;
+  description: string;
+  cameraShot: string;
+  timeOfDay: string;
+  locationName: string;
+  characterNames: string[];
+};
+
+const inferCharactersForPanel = (description: string, castNames: string[]): string[] => {
+  const lower = description.toLowerCase();
+  const matches = castNames.filter((name) => lower.includes(name.toLowerCase()));
+  return matches.length > 0 ? matches : castNames.slice(0, 2);
+};
+
+const buildPanelWorkItems = (state: ComicForgeState, panelIdFilter?: string): PanelWorkItem[] => {
+  const pages = state.analysis?.structuredScript || [];
+  const castNames = (state.analysis?.castList || []).map((entry) => entry.name).filter(Boolean);
+
+  const items: PanelWorkItem[] = [];
+  for (const page of pages) {
+    for (const panel of page.panels) {
+      const panelId = `p${page.page}-panel${panel.panelIndex}`;
+      if (panelIdFilter && panelId !== panelIdFilter) continue;
+      items.push({
+        panelId,
+        pageNumber: page.page,
+        panelIndex: panel.panelIndex,
+        description: panel.description,
+        cameraShot: panel.cameraShotSuggestion,
+        timeOfDay: panel.timeOfDay,
+        locationName: panel.locationName,
+        characterNames: inferCharactersForPanel(panel.description, castNames)
+      });
+    }
+  }
+
+  return items;
+};
+
+const upsertPanelArtifact = (
+  artifacts: ComicForgePanelArtifact[],
+  update: ComicForgePanelArtifact
+): ComicForgePanelArtifact[] => {
+  const next = [...artifacts];
+  const index = next.findIndex((artifact) => artifact.panelId === update.panelId);
+  if (index >= 0) {
+    next[index] = {
+      ...next[index],
+      ...update,
+      modelByQuality: {
+        ...(next[index].modelByQuality || {}),
+        ...(update.modelByQuality || {})
+      }
+    };
+    return next;
+  }
+  next.push(update);
+  return next;
+};
+
+const buildPanelPrompt = (
+  state: ComicForgeState,
+  item: PanelWorkItem,
+  quality: 'thumbnail' | 'draft' | 'final'
+): string => {
+  const style = state.styleBible?.baseGenerationPromptFragment
+    || 'Comic panel illustration with strong readability and clear silhouettes.';
+  const tone = quality === 'thumbnail'
+    ? 'Rough storyboard thumbnail, grayscale, quick sketch style.'
+    : quality === 'draft'
+      ? 'Draft comic panel, clean layout, medium detail.'
+      : 'Final comic panel, polished linework, production-ready detail.';
+  const characters = item.characterNames.length > 0 ? item.characterNames.join(', ') : 'none explicitly named';
+
+  return buildNoTextPrompt(
+    `${style}
+
+${tone}
+Scene: ${item.description}
+Camera: ${item.cameraShot}
+Location: ${item.locationName}
+Time of day: ${item.timeOfDay}
+Characters present: ${characters}`,
+    'Composition rule: keep upper-left and lower-third areas visually quieter for later lettering overlays.'
+  );
+};
+
+const requireProviderKey = (provider: 'gemini' | 'pixazo', ctx: ServiceContext): string => {
+  if (provider === 'gemini') {
+    const key = ctx.apiKeys?.geminiKey || process.env.GEMINI_API_KEY || '';
+    if (!key.trim()) {
+      throw new Error('Gemini API key missing for ComicForge image generation.');
+    }
+    return key;
+  }
+  const key = ctx.apiKeys?.pixazoKey
+    || process.env.PIXAZO_API_KEY
+    || process.env.PIXAZO_SUBSCRIPTION_KEY
+    || process.env.FLUX_API_KEY
+    || '';
+  if (!key.trim()) {
+    throw new Error('Pixazo API key missing for ComicForge image generation.');
+  }
+  return key;
+};
+
+const applyTaskResultToState = async (
+  ctx: ServiceContext,
+  taskType: TaskType,
+  panelIdFilter: string | undefined,
+  progress: (value: number, message: string, payload?: Record<string, unknown>) => Promise<void>
+): Promise<Record<string, unknown>> => {
+  const state = await readComicForgeState(ctx.projectId, ctx.userId);
+  if (!state.analysis?.structuredScript?.length) {
+    throw new Error('Script analysis must be completed before generation.');
+  }
+
+  const quality: 'thumbnail' | 'draft' | 'final' =
+    taskType === TaskType.THUMBNAIL_GEN ? 'thumbnail' : taskType === TaskType.PANEL_GEN_DRAFT ? 'draft' : 'final';
+  const items = buildPanelWorkItems(state, panelIdFilter);
+  if (items.length === 0) {
+    throw new Error('No panels available for generation.');
+  }
+
+  const policy = getModelPolicy(taskType);
+  const apiKey = requireProviderKey(policy.provider, ctx);
+  const aspectRatio = resolveAspectRatioForState(state);
+  const resolution = resolveResolutionForTask(state, taskType);
+  let artifacts = state.panelArtifacts || [];
+
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    const prompt = buildPanelPrompt(state, item, quality);
+    await progress(
+      Math.max(10, Math.round((index / Math.max(1, items.length)) * 90)),
+      `Generating ${quality} panel ${index + 1}/${items.length}`,
+      { panelId: item.panelId }
+    );
+
+    const generated = policy.provider === 'gemini'
+      ? await generateGeminiImage(apiKey, prompt, aspectRatio, resolution, [], policy.model)
+      : await generateFluxImage(apiKey, {
+          prompt,
+          aspectRatio,
+          resolution
+        });
+
+    let savedImageId = '';
+    let savedImageUrl = '';
+    try {
+      const saved = await persistGeneratedImage({
+        userId: ctx.userId,
+        projectId: ctx.projectId,
+        dataUrl: generated.dataUrl,
+        source: policy.provider === 'gemini' ? 'gemini' : 'flux',
+        resolution
+      });
+      savedImageId = saved.imageId;
+      savedImageUrl = saved.imageUrl;
+    } catch (error) {
+      if (!isStoragePersistenceUnavailableError(error)) {
+        throw error;
+      }
+      savedImageUrl = generated.dataUrl;
+      await progress(
+        Math.max(10, Math.round(((index + 0.5) / Math.max(1, items.length)) * 90)),
+        'Storage unavailable; keeping generated image in memory for this run.',
+        { panelId: item.panelId, persistenceMode: 'memory_only' }
+      );
+    }
+
+    artifacts = upsertPanelArtifact(artifacts, {
+      panelId: item.panelId,
+      pageNumber: item.pageNumber,
+      panelIndex: item.panelIndex,
+      description: item.description,
+      prompt,
+      ...(quality === 'thumbnail'
+        ? {
+            ...(savedImageId ? { thumbnailImageId: savedImageId } : {}),
+            thumbnailImageUrl: savedImageUrl || generated.dataUrl
+          }
+        : {}),
+      ...(quality === 'draft'
+        ? {
+            ...(savedImageId ? { draftImageId: savedImageId } : {}),
+            draftImageUrl: savedImageUrl || generated.dataUrl
+          }
+        : {}),
+      ...(quality === 'final'
+        ? {
+            ...(savedImageId ? { finalImageId: savedImageId } : {}),
+            finalImageUrl: savedImageUrl || generated.dataUrl
+          }
+        : {}),
+      modelByQuality: { [quality]: generated.model || policy.model },
+      updatedAt: Date.now()
+    });
+  }
+
+  const nextState = markStageProgress({
+    ...state,
+    panelArtifacts: artifacts
+  }, taskType === TaskType.THUMBNAIL_GEN ? ComicForgeStage.STORYBOARD : ComicForgeStage.GENERATION);
+  await writeComicForgeState(ctx.projectId, ctx.userId, nextState);
+
+  const generatedCount = artifacts.filter((artifact) => {
+    if (quality === 'thumbnail') return Boolean(artifact.thumbnailImageId || artifact.thumbnailImageUrl);
+    if (quality === 'draft') return Boolean(artifact.draftImageId || artifact.draftImageUrl);
+    return Boolean(artifact.finalImageId || artifact.finalImageUrl);
+  }).length;
+
+  return {
+    quality,
+    generatedCount,
+    panelArtifacts: artifacts
+  };
+};
+
 const queueJobForTask = async (
   projectId: string,
   taskType: TaskType,
   payload: Record<string, unknown>,
-  entity?: { id?: string; type?: string }
+  entity?: { id?: string; type?: string },
+  options?: QueueJobOptions
 ): Promise<ComicForgeJobSummary> => {
   const policy = getModelPolicy(taskType);
+  const queuePayload = options?.queuePayload || {
+    projectId,
+    taskType,
+    ...payload
+  };
   const job = await createGenerationJob({
     projectId,
     taskType,
@@ -303,29 +618,25 @@ const queueJobForTask = async (
     entityType: entity?.type
   });
 
-  const inlineResult = {
-    completed: true,
-    mode: 'inline',
-    reason: 'queue_unavailable',
-    taskType,
-    payload,
-    completedAt: Date.now()
-  };
-
   if (!isComicForgeQueueConfigured()) {
+    if (options?.inlineProcessor) {
+      runInlineProcessorAsync(job.id, options.inlineProcessor);
+      return job;
+    }
+    const inlineResult = {
+      completed: true,
+      mode: 'inline',
+      reason: 'queue_unavailable',
+      taskType,
+      payload,
+      completedAt: Date.now()
+    };
     await updateGenerationJob(job.id, {
       status: 'done',
       progress: 100,
       completedAt: Date.now(),
       outputPayload: inlineResult,
       result: inlineResult
-    });
-    appendJobEvent(job.id, {
-      type: 'done',
-      message: 'Completed inline (queue unavailable)',
-      timestamp: Date.now(),
-      progress: 100,
-      payload: inlineResult
     });
     return {
       ...job,
@@ -337,11 +648,7 @@ const queueJobForTask = async (
   }
 
   try {
-    await enqueueComicForgeJob(taskType, {
-      projectId,
-      taskType,
-      ...payload
-    }, {
+    await enqueueComicForgeJob(taskType, queuePayload, {
       jobId: job.id
     });
     return job;
@@ -350,19 +657,24 @@ const queueJobForTask = async (
       throw error;
     }
 
+    if (options?.inlineProcessor) {
+      runInlineProcessorAsync(job.id, options.inlineProcessor);
+      return job;
+    }
+    const inlineResult = {
+      completed: true,
+      mode: 'inline',
+      reason: 'queue_unavailable',
+      taskType,
+      payload,
+      completedAt: Date.now()
+    };
     await updateGenerationJob(job.id, {
       status: 'done',
       progress: 100,
       completedAt: Date.now(),
       outputPayload: inlineResult,
       result: inlineResult
-    });
-    appendJobEvent(job.id, {
-      type: 'done',
-      message: 'Completed inline (queue unavailable)',
-      timestamp: Date.now(),
-      progress: 100,
-      payload: inlineResult
     });
     return {
       ...job,
@@ -835,12 +1147,31 @@ export const comicForgePipelineService = {
   },
 
   async generateThumbnails(ctx: ServiceContext) {
-    const job = await queueJobForTask(ctx.projectId, TaskType.THUMBNAIL_GEN, {
+    const payload = {
       pipelineStage: ComicForgeStage.STORYBOARD
-    }, {
-      type: 'project',
-      id: ctx.projectId
-    });
+    };
+    const job = await queueJobForTask(
+      ctx.projectId,
+      TaskType.THUMBNAIL_GEN,
+      payload,
+      { type: 'project', id: ctx.projectId },
+      {
+        queuePayload: {
+          ...payload,
+          projectId: ctx.projectId,
+          userId: ctx.userId,
+          apiKeys: ctx.apiKeys
+        },
+        inlineProcessor: async (jobId) => applyTaskResultToState(
+          ctx,
+          TaskType.THUMBNAIL_GEN,
+          undefined,
+          async (value, message, progressPayload) => {
+            await comicForgePipelineService.notifyJobProgress(jobId, value, message, progressPayload);
+          }
+        )
+      }
+    );
 
     return {
       stage: ComicForgeStage.STORYBOARD,
@@ -919,13 +1250,32 @@ export const comicForgePipelineService = {
 
   async generate(ctx: ServiceContext, input: { quality: 'draft' | 'final' }) {
     const taskType = input.quality === 'draft' ? TaskType.PANEL_GEN_DRAFT : TaskType.PANEL_GEN_FINAL;
-    const job = await queueJobForTask(ctx.projectId, taskType, {
+    const payload = {
       quality: input.quality,
       pipelineStage: ComicForgeStage.GENERATION
-    }, {
-      type: 'project',
-      id: ctx.projectId
-    });
+    };
+    const job = await queueJobForTask(
+      ctx.projectId,
+      taskType,
+      payload,
+      { type: 'project', id: ctx.projectId },
+      {
+        queuePayload: {
+          ...payload,
+          projectId: ctx.projectId,
+          userId: ctx.userId,
+          apiKeys: ctx.apiKeys
+        },
+        inlineProcessor: async (jobId) => applyTaskResultToState(
+          ctx,
+          taskType,
+          undefined,
+          async (value, message, progressPayload) => {
+            await comicForgePipelineService.notifyJobProgress(jobId, value, message, progressPayload);
+          }
+        )
+      }
+    );
 
     return {
       stage: ComicForgeStage.GENERATION,
@@ -935,14 +1285,33 @@ export const comicForgePipelineService = {
 
   async regeneratePanel(ctx: ServiceContext, panelId: string, input: { quality: 'draft' | 'final'; reason?: string }) {
     const taskType = input.quality === 'draft' ? TaskType.PANEL_GEN_DRAFT : TaskType.PANEL_GEN_FINAL;
-    const job = await queueJobForTask(ctx.projectId, taskType, {
+    const payload = {
       quality: input.quality,
       reason: input.reason || null,
       panelId
-    }, {
-      type: 'panel',
-      id: panelId
-    });
+    };
+    const job = await queueJobForTask(
+      ctx.projectId,
+      taskType,
+      payload,
+      { type: 'panel', id: panelId },
+      {
+        queuePayload: {
+          ...payload,
+          projectId: ctx.projectId,
+          userId: ctx.userId,
+          apiKeys: ctx.apiKeys
+        },
+        inlineProcessor: async (jobId) => applyTaskResultToState(
+          ctx,
+          taskType,
+          panelId,
+          async (value, message, progressPayload) => {
+            await comicForgePipelineService.notifyJobProgress(jobId, value, message, progressPayload);
+          }
+        )
+      }
+    );
 
     return {
       stage: ComicForgeStage.GENERATION,
@@ -951,13 +1320,23 @@ export const comicForgePipelineService = {
   },
 
   async assemblePage(ctx: ServiceContext, pageId: string) {
-    const job = await queueJobForTask(ctx.projectId, TaskType.PANEL_GEN_FINAL, {
+    const payload = {
       operation: 'assemble_page',
       pageId
-    }, {
-      type: 'page',
-      id: pageId
-    });
+    };
+    const job = await queueJobForTask(
+      ctx.projectId,
+      TaskType.PANEL_GEN_FINAL,
+      payload,
+      { type: 'page', id: pageId },
+      {
+        queuePayload: {
+          ...payload,
+          projectId: ctx.projectId,
+          userId: ctx.userId
+        }
+      }
+    );
 
     return {
       stage: ComicForgeStage.GENERATION,
@@ -966,13 +1345,23 @@ export const comicForgePipelineService = {
   },
 
   async renderLettering(ctx: ServiceContext, pageId: string) {
-    const job = await queueJobForTask(ctx.projectId, TaskType.PANEL_GEN_FINAL, {
+    const payload = {
       operation: 'render_lettering',
       pageId
-    }, {
-      type: 'page',
-      id: pageId
-    });
+    };
+    const job = await queueJobForTask(
+      ctx.projectId,
+      TaskType.PANEL_GEN_FINAL,
+      payload,
+      { type: 'page', id: pageId },
+      {
+        queuePayload: {
+          ...payload,
+          projectId: ctx.projectId,
+          userId: ctx.userId
+        }
+      }
+    );
 
     return {
       stage: ComicForgeStage.GENERATION,
@@ -1026,14 +1415,40 @@ export const comicForgePipelineService = {
   },
 
   async exportProject(ctx: ServiceContext, input: { preset: ComicForgeExportPreset; pageRange?: { from: number; to: number }; upscaleIfNeeded?: boolean }) {
-    const job = await queueJobForTask(ctx.projectId, TaskType.PANEL_GEN_EXPORT, {
+    const payload = {
       preset: input.preset,
       pageRange: input.pageRange || null,
       upscaleIfNeeded: Boolean(input.upscaleIfNeeded)
-    }, {
-      type: 'project',
-      id: ctx.projectId
-    });
+    };
+    const job = await queueJobForTask(
+      ctx.projectId,
+      TaskType.PANEL_GEN_EXPORT,
+      payload,
+      { type: 'project', id: ctx.projectId },
+      {
+        queuePayload: {
+          ...payload,
+          projectId: ctx.projectId,
+          userId: ctx.userId
+        },
+        inlineProcessor: async () => {
+          const state = await readComicForgeState(ctx.projectId, ctx.userId);
+          const finals = (state.panelArtifacts || []).filter((artifact) =>
+            artifact.finalImageId
+            || artifact.finalImageUrl
+            || artifact.draftImageId
+            || artifact.draftImageUrl
+            || artifact.thumbnailImageId
+            || artifact.thumbnailImageUrl
+          );
+          return {
+            preset: input.preset,
+            exportedPanels: finals.length,
+            downloadUrl: finals[0]?.finalImageUrl || finals[0]?.draftImageUrl || finals[0]?.thumbnailImageUrl || ''
+          };
+        }
+      }
+    );
 
     return {
       stage: ComicForgeStage.EXPORT,
@@ -1041,10 +1456,68 @@ export const comicForgePipelineService = {
     };
   },
 
-  async getJobStatus(_ctx: ServiceContext, jobId: string) {
+  async processJob(jobId: string, taskType: TaskType, payload: Record<string, unknown>) {
+    const projectId = typeof payload.projectId === 'string' ? payload.projectId : '';
+    const userId = typeof payload.userId === 'string' ? payload.userId : '';
+    if (!projectId || !userId) {
+      throw new Error('ComicForge job payload missing projectId or userId.');
+    }
+    const ctx: ServiceContext = {
+      projectId,
+      userId,
+      apiKeys: {
+        geminiKey: typeof payload.apiKeys === 'object' && payload.apiKeys && 'geminiKey' in payload.apiKeys
+          ? String((payload.apiKeys as Record<string, unknown>).geminiKey || '')
+          : undefined,
+        pixazoKey: typeof payload.apiKeys === 'object' && payload.apiKeys && 'pixazoKey' in payload.apiKeys
+          ? String((payload.apiKeys as Record<string, unknown>).pixazoKey || '')
+          : undefined
+      }
+    };
+
+    if (taskType === TaskType.THUMBNAIL_GEN) {
+      return applyTaskResultToState(ctx, taskType, undefined, async (value, message, progressPayload) => {
+        await comicForgePipelineService.notifyJobProgress(jobId, value, message, progressPayload);
+      });
+    }
+
+    if (taskType === TaskType.PANEL_GEN_DRAFT || taskType === TaskType.PANEL_GEN_FINAL) {
+      const panelId = typeof payload.panelId === 'string' ? payload.panelId : undefined;
+      return applyTaskResultToState(ctx, taskType, panelId, async (value, message, progressPayload) => {
+        await comicForgePipelineService.notifyJobProgress(jobId, value, message, progressPayload);
+      });
+    }
+
+    if (taskType === TaskType.PANEL_GEN_EXPORT) {
+      const state = await readComicForgeState(projectId, userId);
+      const finals = (state.panelArtifacts || []).filter((artifact) =>
+        artifact.finalImageId
+        || artifact.finalImageUrl
+        || artifact.draftImageId
+        || artifact.draftImageUrl
+        || artifact.thumbnailImageId
+        || artifact.thumbnailImageUrl
+      );
+      return {
+        exportedPanels: finals.length,
+        downloadUrl: finals[0]?.finalImageUrl || finals[0]?.draftImageUrl || finals[0]?.thumbnailImageUrl || ''
+      };
+    }
+
+    return {
+      completed: true,
+      taskType,
+      payload
+    };
+  },
+
+  async getJobStatus(ctx: ServiceContext, jobId: string) {
     const base = await getGenerationJob(jobId);
     if (!base) {
-      throw new Error('Job not found.');
+      const error = new Error('Job not found.') as Error & { status?: number; publicCode?: string };
+      error.status = 404;
+      error.publicCode = 'NOT_FOUND';
+      throw error;
     }
 
     try {
@@ -1066,17 +1539,26 @@ export const comicForgePipelineService = {
 
       return {
         stage: ComicForgeStage.GENERATION,
-        job: merged
+        job: merged,
+        panelArtifacts: (await readComicForgeState(ctx.projectId, ctx.userId)).panelArtifacts || []
       };
     } catch {
       return {
         stage: ComicForgeStage.GENERATION,
-        job: base
+        job: base,
+        panelArtifacts: (await readComicForgeState(ctx.projectId, ctx.userId)).panelArtifacts || []
       };
     }
   },
 
   async getJobEvents(_ctx: ServiceContext, jobId: string) {
+    const job = await getGenerationJob(jobId);
+    if (!job) {
+      const error = new Error('Job not found.') as Error & { status?: number; publicCode?: string };
+      error.status = 404;
+      error.publicCode = 'NOT_FOUND';
+      throw error;
+    }
     const events = listJobEvents(jobId).map((event) => ({
       id: event.id,
       jobId,

@@ -17,12 +17,20 @@ const parseBooleanEnv = (raw: string | undefined, fallback: boolean) => {
   return fallback;
 };
 
-const parseCorsOrigins = (raw: string | undefined) => {
-  const parsed = (raw || 'http://localhost:7000')
+const NODE_ENV_FALLBACK = process.env.NODE_ENV || 'development';
+const IS_PRODUCTION_FALLBACK = NODE_ENV_FALLBACK === 'production';
+const DEFAULT_PUBLIC_CORS_ORIGINS = ['https://comic2.pages.dev'];
+const DEFAULT_LOCAL_CORS_ORIGINS = ['http://localhost:7000', 'http://localhost:7001', 'http://localhost:5173'];
+
+const parseCorsOrigins = (raw: string | undefined, isProduction: boolean) => {
+  const parsed = (raw || '')
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
-  return parsed.length > 0 ? parsed : ['http://localhost:7000'];
+  const defaults = isProduction
+    ? DEFAULT_PUBLIC_CORS_ORIGINS
+    : [...DEFAULT_PUBLIC_CORS_ORIGINS, ...DEFAULT_LOCAL_CORS_ORIGINS];
+  return Array.from(new Set([...defaults, ...parsed]));
 };
 
 const parseTrustProxy = (raw: string | undefined, fallback: boolean): boolean | number | string => {
@@ -35,12 +43,13 @@ const parseTrustProxy = (raw: string | undefined, fallback: boolean): boolean | 
   return raw.trim();
 };
 
-export const NODE_ENV = process.env.NODE_ENV || 'development';
-export const IS_PRODUCTION = NODE_ENV === 'production';
+export const NODE_ENV = NODE_ENV_FALLBACK;
+export const IS_PRODUCTION = IS_PRODUCTION_FALLBACK;
 export const BILLING_ENABLED = parseBooleanEnv(process.env.BILLING_ENABLED, true);
 
 export const PORT = parseIntegerEnv(process.env.PORT, 7071, 'PORT', 1);
-export const CORS_ORIGINS = parseCorsOrigins(process.env.CORS_ORIGIN);
+const CORS_ORIGIN_RAW = process.env.CORS_ORIGIN || process.env.CORS_ALLOWED_ORIGINS || '';
+export const CORS_ORIGINS = parseCorsOrigins(CORS_ORIGIN_RAW, IS_PRODUCTION);
 export const CORS_ORIGIN = CORS_ORIGINS.join(',');
 export const MAX_BODY_SIZE = process.env.MAX_BODY_SIZE || '10mb';
 export const TRUST_PROXY = parseTrustProxy(process.env.TRUST_PROXY, IS_PRODUCTION);
@@ -136,7 +145,12 @@ export const OPTIONAL_BILLING_PRICE_ENV_VARS = [
 export const STRICT_ENV_VALIDATION = parseBooleanEnv(process.env.STRICT_ENV_VALIDATION, IS_PRODUCTION);
 
 export const getMissingRequiredEnvVars = (): RequiredRuntimeEnv[] =>
-  REQUIRED_RUNTIME_ENV_VARS.filter((envName) => !process.env[envName]?.trim());
+  REQUIRED_RUNTIME_ENV_VARS.filter((envName) => {
+    if (envName === 'CORS_ORIGIN') {
+      return !process.env.CORS_ORIGIN?.trim() && !process.env.CORS_ALLOWED_ORIGINS?.trim();
+    }
+    return !process.env[envName]?.trim();
+  });
 
 export const getMissingBillingEnvVars = (): RequiredBillingEnv[] =>
   REQUIRED_BILLING_ENV_VARS.filter((envName) => !process.env[envName]?.trim());

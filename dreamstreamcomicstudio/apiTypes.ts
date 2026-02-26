@@ -15,6 +15,7 @@ import {
   ComicForgeFormatSpec,
   ComicForgeJobSummary,
   ComicForgeLayoutTemplate,
+  ComicForgePanelArtifact,
   ComicForgePreviewPack,
   ComicForgeQCReport,
   ComicForgeStage,
@@ -364,6 +365,7 @@ export type ComicForgeExportResponse = ComicForgeApiEnvelope<{
 
 export type ComicForgeJobStatusResponse = ComicForgeApiEnvelope<{
   job: ComicForgeJobSummary;
+  panelArtifacts?: ComicForgePanelArtifact[];
 }>;
 
 export type ComicForgeJobEvent = {

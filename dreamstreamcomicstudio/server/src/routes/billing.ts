@@ -11,7 +11,7 @@ import {
   updateAutoReloadSettings,
   upsertPaymentProfile
 } from '../services/billingLedger.js';
-import { getPricingCatalog } from '../services/pricingCatalog.js';
+import { CT_USD, getPricingCatalog, resolvePlanDefinition } from '../services/pricingCatalog.js';
 import {
   assertBillingInterval,
   assertCreditPackId,
@@ -81,6 +81,53 @@ const parseTokenEstimateRequest = (body: unknown): TokenEstimateRequest => {
   return input as unknown as TokenEstimateRequest;
 };
 
+const nextUtcDayIso = () => {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0, 0)).toISOString();
+};
+
+const nextUtcMonthIso = () => {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0, 0)).toISOString();
+};
+
+const buildFallbackBillingSummary = () => {
+  const freePlan = resolvePlanDefinition('free');
+  return {
+    currency: 'USD' as const,
+    ctPerUsd: CT_USD,
+    wallet: {
+      availableCt: freePlan.monthlyIncludedCt,
+      reservedCt: 0,
+      purchasedCt: 0,
+      includedMonthlyCt: freePlan.monthlyIncludedCt,
+      usedMonthlyCt: 0,
+      overageCt: 0,
+      pendingOverageUsd: 0
+    },
+    usage: {
+      planTier: freePlan.id,
+      dailyGuardrailCt: freePlan.dailyGuardrailCt,
+      dailyUsedCt: 0,
+      dailyRemainingCt: freePlan.dailyGuardrailCt,
+      monthlyResetAt: nextUtcMonthIso(),
+      dailyResetAt: nextUtcDayIso()
+    },
+    basePlan: freePlan,
+    effectivePlan: freePlan,
+    effectiveUsageSource: 'fallback' as const,
+    plan: freePlan,
+    hasPaymentMethodOnFile: false,
+    overageEnabled: false,
+    overageHardCapUsd: 0,
+    autoReload: {
+      enabled: false,
+      thresholdCt: 0,
+      packUsd: 0
+    }
+  };
+};
+
 const parseCheckoutPlanTier = (value: unknown): PurchasablePlanTier => {
   try {
     return assertPurchasableTier(value);
@@ -120,6 +167,10 @@ billingRouter.get('/summary', async (req, res, next) => {
     const summary = await getBillingSummary(user.id);
     res.json(summary);
   } catch (error) {
+    const code = String((error as { publicCode?: string })?.publicCode || '').toUpperCase();
+    if (code === 'BILLING_BACKEND_UNAVAILABLE' || code === 'MISSING_SERVICE_ROLE_KEY' || code === 'MISSING_SUPABASE_CONFIG') {
+      return res.json(buildFallbackBillingSummary());
+    }
     next(error);
   }
 });

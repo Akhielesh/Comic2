@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   COMICFORGE_STAGE_ORDER,
   ComicForgeAssetCard,
+  ComicForgePanelArtifact,
   ComicForgeStage,
   ComicForgeState,
   Project,
@@ -91,9 +92,16 @@ export const ComicForgeStudio: React.FC<ComicForgeStudioProps> = ({
     let cancelled = false;
     const pollStatus = async () => {
       try {
-        const response = await comicForgeApi.getJobStatus(lastJob.id);
+        const response = await comicForgeApi.getJobStatus(lastJob.id, activeForgeProject.id);
         if (!cancelled) {
           setLastJob(response.data.job);
+          if (response.data.panelArtifacts) {
+            applyState((prev) => ({
+              ...prev,
+              panelArtifacts: response.data.panelArtifacts as ComicForgePanelArtifact[],
+              updatedAt: Date.now()
+            }));
+          }
         }
       } catch {
         // Non-blocking: keep current status and let user retry action.
@@ -421,6 +429,7 @@ export const ComicForgeStudio: React.FC<ComicForgeStudioProps> = ({
           <StoryboardScreen
             latestJob={lastJob}
             validation={state.storyboardValidation}
+            panelArtifacts={state.panelArtifacts}
             approved={getApproval(state, ComicForgeStage.STORYBOARD)}
             onGenerateThumbnails={async () => {
               setError(null);
@@ -472,6 +481,7 @@ export const ComicForgeStudio: React.FC<ComicForgeStudioProps> = ({
         {state.stage === ComicForgeStage.GENERATION && (
           <GenerationScreen
             latestJob={lastJob}
+            panelArtifacts={state.panelArtifacts}
             approved={getApproval(state, ComicForgeStage.GENERATION)}
             onGenerate={async (quality) => {
               setError(null);

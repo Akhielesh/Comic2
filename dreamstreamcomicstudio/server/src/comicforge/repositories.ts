@@ -16,6 +16,22 @@ const isMissingTableError = (error: unknown): boolean => {
   return code === '42P01' || code === 'PGRST205';
 };
 
+const isServiceRoleUnavailableError = (error: unknown): boolean => {
+  const code = String((error as { publicCode?: string; code?: string })?.publicCode || (error as { code?: string })?.code || '').toUpperCase();
+  return code === 'MISSING_SERVICE_ROLE_KEY' || code === 'MISSING_SUPABASE_CONFIG';
+};
+
+const tryGetSupabaseAdmin = () => {
+  try {
+    return getSupabaseAdmin();
+  } catch (error) {
+    if (isServiceRoleUnavailableError(error)) {
+      return null;
+    }
+    throw error;
+  }
+};
+
 const toNotFoundError = (message: string) => {
   const error = new Error(message) as Error & { status?: number; publicCode?: string };
   error.status = 404;
@@ -50,6 +66,7 @@ type GenerationJobRow = {
 const inMemoryAssetCards = new Map<string, ComicForgeAssetCard[]>();
 const inMemoryAssetCardProjectIndex = new Map<string, string>();
 const inMemoryJobs = new Map<string, ComicForgeJobSummary & { projectId: string; estimatedCostUsd: number; taskType: string }>();
+const inMemoryProjects = new Map<string, ProjectRow>();
 const inMemoryJobEvents = new Map<string, Array<{
   id: string;
   type: 'queued' | 'running' | 'progress' | 'done' | 'failed';
@@ -60,7 +77,19 @@ const inMemoryJobEvents = new Map<string, Array<{
 }>>();
 
 export const getProjectOwnedByUser = async (projectId: string, userId: string): Promise<ProjectRow> => {
-  const admin = getSupabaseAdmin();
+  const admin = tryGetSupabaseAdmin();
+  if (!admin) {
+    const existing = inMemoryProjects.get(projectId);
+    if (existing && existing.user_id !== userId) throw toForbiddenError('Project access denied.');
+    const fallback: ProjectRow = existing || {
+      id: projectId,
+      user_id: userId,
+      state: {}
+    };
+    inMemoryProjects.set(projectId, fallback);
+    return fallback;
+  }
+
   const { data, error } = await admin
     .from('projects')
     .select('id, user_id, state')
@@ -72,11 +101,13 @@ export const getProjectOwnedByUser = async (projectId: string, userId: string): 
   if (data.user_id !== userId) throw toForbiddenError('Project access denied.');
 
   const state = isRecord(data.state) ? data.state : {};
-  return {
+  const row: ProjectRow = {
     id: data.id,
     user_id: data.user_id,
     state
   };
+  inMemoryProjects.set(projectId, row);
+  return row;
 };
 
 export const readComicForgeState = async (projectId: string, userId: string): Promise<ComicForgeState> => {
@@ -96,7 +127,6 @@ export const readComicForgeState = async (projectId: string, userId: string): Pr
 
 export const writeComicForgeState = async (projectId: string, userId: string, nextState: ComicForgeState): Promise<void> => {
   const project = await getProjectOwnedByUser(projectId, userId);
-  const admin = getSupabaseAdmin();
   const nextProjectState = {
     ...project.state,
     pipelineMode: 'comicforge',
@@ -105,6 +135,14 @@ export const writeComicForgeState = async (projectId: string, userId: string, ne
       updatedAt: Date.now()
     }
   };
+  inMemoryProjects.set(projectId, {
+    id: projectId,
+    user_id: userId,
+    state: nextProjectState as Record<string, unknown>
+  });
+
+  const admin = tryGetSupabaseAdmin();
+  if (!admin) return;
 
   const { error } = await admin
     .from('projects')
@@ -128,7 +166,10 @@ const readAssetCardsInMemory = (projectId: string): ComicForgeAssetCard[] => {
 };
 
 export const listAssetCards = async (projectId: string): Promise<ComicForgeAssetCard[]> => {
-  const admin = getSupabaseAdmin();
+  const admin = tryGetSupabaseAdmin();
+  if (!admin) {
+    return readAssetCardsInMemory(projectId);
+  }
   const { data, error } = await admin
     .from('asset_cards')
     .select('id, project_id, card_type, name, canonical_description, do_not_change, negative_constraints, allowed_variants, reference_images, consistency_method, hash')
@@ -161,25 +202,27 @@ export const listAssetCards = async (projectId: string): Promise<ComicForgeAsset
 };
 
 export const createAssetCard = async (projectId: string, card: ComicForgeAssetCard): Promise<ComicForgeAssetCard> => {
-  const admin = getSupabaseAdmin();
-  const { error } = await admin
-    .from('asset_cards')
-    .insert({
-      id: card.id,
-      project_id: projectId,
-      card_type: card.cardType,
-      name: card.name,
-      canonical_description: card.canonicalDescription,
-      do_not_change: card.doNotChange,
-      negative_constraints: card.negativeConstraints,
-      allowed_variants: card.allowedVariants,
-      reference_images: card.referenceImages,
-      consistency_method: card.consistencyMethod,
-      hash: card.hash
-    });
+  const admin = tryGetSupabaseAdmin();
+  if (admin) {
+    const { error } = await admin
+      .from('asset_cards')
+      .insert({
+        id: card.id,
+        project_id: projectId,
+        card_type: card.cardType,
+        name: card.name,
+        canonical_description: card.canonicalDescription,
+        do_not_change: card.doNotChange,
+        negative_constraints: card.negativeConstraints,
+        allowed_variants: card.allowedVariants,
+        reference_images: card.referenceImages,
+        consistency_method: card.consistencyMethod,
+        hash: card.hash
+      });
 
-  if (error && !isMissingTableError(error)) {
-    throw error;
+    if (error && !isMissingTableError(error)) {
+      throw error;
+    }
   }
 
   const nextCards = [...readAssetCardsInMemory(projectId), card];
@@ -193,7 +236,10 @@ export const updateAssetCard = async (assetCardId: string, patch: Partial<ComicF
   let existing = cards.find((card) => card.id === assetCardId);
 
   if (!existing) {
-    const admin = getSupabaseAdmin();
+    const admin = tryGetSupabaseAdmin();
+    if (!admin) {
+      throw toNotFoundError('Asset card not found.');
+    }
     const { data, error } = await admin
       .from('asset_cards')
       .select('id, project_id, card_type, name, canonical_description, do_not_change, negative_constraints, allowed_variants, reference_images, consistency_method, hash')
@@ -238,25 +284,27 @@ export const updateAssetCard = async (assetCardId: string, patch: Partial<ComicF
     id: existing.id
   };
 
-  const admin = getSupabaseAdmin();
-  const { error } = await admin
-    .from('asset_cards')
-    .update({
-      card_type: nextCard.cardType,
-      name: nextCard.name,
-      canonical_description: nextCard.canonicalDescription,
-      do_not_change: nextCard.doNotChange,
-      negative_constraints: nextCard.negativeConstraints,
-      allowed_variants: nextCard.allowedVariants,
-      reference_images: nextCard.referenceImages,
-      consistency_method: nextCard.consistencyMethod,
-      hash: nextCard.hash,
-      updated_at: new Date().toISOString()
-    })
-    .eq('id', assetCardId);
+  const admin = tryGetSupabaseAdmin();
+  if (admin) {
+    const { error } = await admin
+      .from('asset_cards')
+      .update({
+        card_type: nextCard.cardType,
+        name: nextCard.name,
+        canonical_description: nextCard.canonicalDescription,
+        do_not_change: nextCard.doNotChange,
+        negative_constraints: nextCard.negativeConstraints,
+        allowed_variants: nextCard.allowedVariants,
+        reference_images: nextCard.referenceImages,
+        consistency_method: nextCard.consistencyMethod,
+        hash: nextCard.hash,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', assetCardId);
 
-  if (error && !isMissingTableError(error)) {
-    throw error;
+    if (error && !isMissingTableError(error)) {
+      throw error;
+    }
   }
 
   upsertAssetCardsInMemory(
@@ -301,13 +349,15 @@ export const createGenerationJob = async (input: {
     created_at: new Date(now).toISOString()
   };
 
-  const admin = getSupabaseAdmin();
-  const { error } = await admin
-    .from('generation_jobs')
-    .insert(rowPayload);
+  const admin = tryGetSupabaseAdmin();
+  if (admin) {
+    const { error } = await admin
+      .from('generation_jobs')
+      .insert(rowPayload);
 
-  if (error && !isMissingTableError(error)) {
-    throw error;
+    if (error && !isMissingTableError(error)) {
+      throw error;
+    }
   }
 
   inMemoryJobs.set(id, {
@@ -344,19 +394,21 @@ export const updateGenerationJob = async (jobId: string, patch: Partial<ComicFor
 
   inMemoryJobs.set(jobId, next);
 
-  const admin = getSupabaseAdmin();
-  const { error } = await admin
-    .from('generation_jobs')
-    .update({
-      status: next.status,
-      output_payload: patch.outputPayload || existing.result || {},
-      error_message: patch.errorMessage || null,
-      completed_at: next.status === 'done' || next.status === 'failed' ? new Date().toISOString() : null
-    })
-    .eq('id', jobId);
+  const admin = tryGetSupabaseAdmin();
+  if (admin) {
+    const { error } = await admin
+      .from('generation_jobs')
+      .update({
+        status: next.status,
+        output_payload: patch.outputPayload || existing.result || {},
+        error_message: patch.errorMessage || null,
+        completed_at: next.status === 'done' || next.status === 'failed' ? new Date().toISOString() : null
+      })
+      .eq('id', jobId);
 
-  if (error && !isMissingTableError(error)) {
-    throw error;
+    if (error && !isMissingTableError(error)) {
+      throw error;
+    }
   }
 
   appendJobEvent(jobId, {
@@ -394,7 +446,8 @@ export const getGenerationJob = async (jobId: string): Promise<ComicForgeJobSumm
     };
   }
 
-  const admin = getSupabaseAdmin();
+  const admin = tryGetSupabaseAdmin();
+  if (!admin) return null;
   const { data, error } = await admin
     .from('generation_jobs')
     .select('id, project_id, task_type, status, cost, completed_at, error_message, output_payload')
@@ -445,17 +498,19 @@ export const getProjectCostTracker = async (projectId: string) => {
 
   const estimatedUsd = Number(inMemory.reduce((sum, job) => sum + job.estimatedCostUsd, 0).toFixed(6));
 
-  const admin = getSupabaseAdmin();
-  const { data, error } = await admin
-    .from('generation_jobs')
-    .select('task_type, cost')
-    .eq('project_id', projectId);
+  const admin = tryGetSupabaseAdmin();
+  let persistedRows: Array<{ task_type?: string; cost?: number }> = [];
+  if (admin) {
+    const { data, error } = await admin
+      .from('generation_jobs')
+      .select('task_type, cost')
+      .eq('project_id', projectId);
 
-  if (error && !isMissingTableError(error)) {
-    throw error;
+    if (error && !isMissingTableError(error)) {
+      throw error;
+    }
+    persistedRows = (data || []) as Array<{ task_type?: string; cost?: number }>;
   }
-
-  const persistedRows = (data || []) as Array<{ task_type?: string; cost?: number }>;
   const persistedByTaskType = persistedRows.reduce<Record<string, number>>((acc, row) => {
     const key = row.task_type || 'unknown';
     const value = Number(row.cost || 0);

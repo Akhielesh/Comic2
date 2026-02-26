@@ -837,6 +837,8 @@ export const getImageUrl = async (
   options?: { transform?: ImageTransformPreset }
 ): Promise<string | undefined> => {
   if (!imageId) return undefined;
+  if (imageId.startsWith('data:')) return imageId;
+  if (/^https?:\/\//i.test(imageId)) return imageId;
 
   const candidatePaths = buildImagePathCandidates(imageId);
   for (const candidate of candidatePaths) {
