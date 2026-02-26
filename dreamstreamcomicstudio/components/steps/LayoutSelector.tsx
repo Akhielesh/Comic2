@@ -1,17 +1,19 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { LayoutTemplate, UploadCloud, Wand2, Check, Grid } from 'lucide-react';
-import { ComicState, LayoutType, TextLayout, AspectRatio } from '../../types';
+import { ComicState, LayoutType, TextLayout, AspectRatio, Scene } from '../../types';
 import { analyzeLayoutFromImages } from '../../services/geminiService';
 import { Button } from '../Button';
 import { ImagePreviewModal } from '../modals/ImagePreviewModal';
 import { GRID_TEMPLATES, getTemplatesForRatio, getTemplateById, GridTemplate, PanelSlot } from '../../services/gridTemplates';
 import { FEATURE_FLAGS } from '../../services/modelPolicy';
+import { recommendLayouts } from '../../services/layoutRecommendation';
 
 interface LayoutSelectorProps {
     onLayoutConfirmed: (layout: LayoutType, customPrompt?: string, gridTemplateId?: string) => void;
     currentLayoutType?: LayoutType;
     currentGridTemplateId?: string;
     selectedFormFactor?: AspectRatio;
+    scenes: Scene[];
     projectId: string;
     currentTextLayout?: TextLayout;
     onTextLayoutChange?: (layout: TextLayout) => void;
@@ -72,6 +74,7 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
     currentLayoutType,
     currentGridTemplateId,
     selectedFormFactor,
+    scenes,
     projectId,
     currentTextLayout = 'caption',
     onTextLayoutChange,
@@ -84,6 +87,7 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
     const [customLayoutPrompt, setCustomLayoutPrompt] = useState<string | null>(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [previewImage, setPreviewImage] = useState<string | null>(null);
+    const [pendingConfirmTemplate, setPendingConfirmTemplate] = useState<GridTemplate | null>(null);
 
     // ---- Determine which templates to show ---------------------------------
 
@@ -96,6 +100,13 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
     const incompatibleTemplates = useFiltering
         ? GRID_TEMPLATES.filter(t => !t.compatibleRatios.includes(selectedFormFactor!))
         : [];
+
+    const layoutRecommendations = useMemo(
+        () => recommendLayouts({ scenes, selectedFormFactor, templates: GRID_TEMPLATES }),
+        [scenes, selectedFormFactor]
+    );
+    const recommendedTemplateId = layoutRecommendations[0]?.templateId;
+    const recommendedReason = layoutRecommendations[0]?.reason;
 
     // ---- Handlers ----------------------------------------------------------
 
@@ -122,6 +133,10 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
     };
 
     const handleSelectTemplate = (template: GridTemplate) => {
+        if (recommendedTemplateId && template.id !== recommendedTemplateId) {
+            setPendingConfirmTemplate(template);
+            return;
+        }
         onLayoutConfirmed(template.id as LayoutType, undefined, template.id);
     };
 
@@ -159,6 +174,11 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                             Not optimal
                         </div>
                     )}
+                    {template.id === recommendedTemplateId && (
+                        <div className="absolute top-2 left-2 bg-green-100 text-green-800 text-[9px] font-bold px-2 py-0.5 rounded border border-green-300">
+                            Recommended
+                        </div>
+                    )}
                 </div>
                 <div className="p-6 flex flex-col flex-1">
                     <h3 className="text-xl font-display text-black mb-2 uppercase">{template.title}</h3>
@@ -189,6 +209,11 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
             <div className="text-center space-y-2 bg-white p-6 rounded-xl border-4 border-black shadow-comic max-w-2xl mx-auto transform -rotate-1">
                 <h2 className="text-4xl font-display text-black">Choose Your Layout</h2>
                 <p className="text-slate-600 font-comic font-bold">How should the reader experience your story?</p>
+                {recommendedTemplateId && (
+                    <p className="text-xs text-green-700 font-bold">
+                        Auto recommendation: {getTemplateById(recommendedTemplateId).title} ({recommendedReason})
+                    </p>
+                )}
                 {selectedFormFactor && (
                     <p className="text-xs text-brand-blue font-bold">
                         Showing layouts optimized for {selectedFormFactor} format
@@ -306,6 +331,30 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
             </div>
 
             {previewImage && <ImagePreviewModal imageUrl={previewImage} onClose={() => setPreviewImage(null)} />}
+            {pendingConfirmTemplate && (
+                <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+                    <div className="bg-white border-4 border-black rounded-xl shadow-comic p-6 max-w-md space-y-4">
+                        <h3 className="text-2xl font-display">Confirm Non-Recommended Layout</h3>
+                        <p className="text-sm text-slate-600 font-comic">
+                            "{pendingConfirmTemplate.title}" is not the top recommended layout for your story pacing.
+                            Continue anyway?
+                        </p>
+                        <div className="flex justify-end gap-2">
+                            <Button variant="secondary" onClick={() => setPendingConfirmTemplate(null)}>
+                                Cancel
+                            </Button>
+                            <Button
+                                onClick={() => {
+                                    onLayoutConfirmed(pendingConfirmTemplate.id as LayoutType, undefined, pendingConfirmTemplate.id);
+                                    setPendingConfirmTemplate(null);
+                                }}
+                            >
+                                Confirm Selection
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

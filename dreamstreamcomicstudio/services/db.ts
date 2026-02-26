@@ -90,11 +90,21 @@ const parseDataUrl = (dataUrl: string) => {
 const buildImagePathCandidates = (imagePath: string): string[] => {
   const trimmed = imagePath.trim();
   if (!trimmed) return [];
-  const candidates: string[] = [trimmed];
   const filename = trimmed.split('/').pop() || '';
+  const candidates: string[] = [];
   if (!filename.includes('.')) {
-    candidates.push(`${trimmed}.webp`, `${trimmed}.png`, `${trimmed}.jpg`, `${trimmed}.jpeg`);
+    const legacyMatch = trimmed.match(/^([0-9a-f-]{36})\/([^/]+)$/i);
+    if (legacyMatch) {
+      candidates.push(
+        `u/${legacyMatch[1]}/tmp/${legacyMatch[2]}.webp`,
+        `u/${legacyMatch[1]}/tmp/${legacyMatch[2]}.png`,
+        `u/${legacyMatch[1]}/tmp/${legacyMatch[2]}.jpg`,
+        `u/${legacyMatch[1]}/tmp/${legacyMatch[2]}.jpeg`
+      );
+    }
+    candidates.push(`${trimmed}.webp`, `${trimmed}.png`, `${trimmed}.jpg`, `${trimmed}.jpeg`, trimmed);
   } else {
+    candidates.push(trimmed);
     const legacyMatch = trimmed.match(/^([0-9a-f-]{36})\/([^/]+)$/i);
     if (legacyMatch) {
       candidates.push(`u/${legacyMatch[1]}/tmp/${legacyMatch[2]}`);

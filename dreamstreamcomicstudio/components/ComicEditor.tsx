@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { StepIndicator } from './StepIndicator';
 import { ScriptInput } from './steps/ScriptInput';
+import { StoryPlanning } from './steps/StoryPlanning';
 import { StyleSelection } from './steps/StyleSelection';
 import { CoverDesigner } from './steps/CoverDesigner';
 import { ReferenceBuilder } from './steps/ReferenceBuilder';
@@ -13,12 +14,15 @@ import { assignImageTags, collectStateImageEntries } from '../services/imageTags
 import {
   resetFromLayoutConfirm,
   resetFromScriptAnalysis,
+  resetFromStoryPlanningConfirm,
   resetFromStyleConfirm,
   resetFromWorldConfirm
 } from '../services/pipelineReset';
 import { ArrowLeft, Save, History } from 'lucide-react';
 import { VersionHistoryModal } from './modals/VersionHistoryModal';
 import { ProjectVersion } from '../types';
+import { checkDeploymentParity, DeploymentParityStatus } from '../services/geminiService';
+import { getFormFactorDefaultAspectRatio } from '../services/storyPlanning';
 
 interface ComicEditorProps {
   project: Project;
@@ -32,6 +36,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   const state = project.state;
   const [titleDraft, setTitleDraft] = useState(project.name);
   const [showVersions, setShowVersions] = useState(false);
+  const [deploymentParity, setDeploymentParity] = useState<DeploymentParityStatus | null>(null);
   const previousStepRef = useRef<AppStep>(state.step);
   const previousGenerationActiveRef = useRef<boolean>(!!state.generationStatus?.isActive);
   const lastAutoVersionKeyRef = useRef<string>('');
@@ -188,6 +193,24 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   }, [project.id, project.name]);
 
   useEffect(() => {
+    let active = true;
+    const loadParity = async () => {
+      try {
+        const parity = await checkDeploymentParity();
+        if (!active) return;
+        setDeploymentParity(parity);
+      } catch {
+        if (!active) return;
+        setDeploymentParity(null);
+      }
+    };
+    void loadParity();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     previousStepRef.current = state.step;
     previousGenerationActiveRef.current = !!state.generationStatus?.isActive;
     lastAutoVersionKeyRef.current = '';
@@ -251,6 +274,16 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
             updateState((prev) => resetFromScriptAnalysis(prev, script, scenes));
           }}
         />;
+      case AppStep.STORY_PLANNING:
+        return (
+          <StoryPlanning
+            script={state.script}
+            scenes={state.scenes}
+            planning={state.storyPlanning}
+            onPlanningChange={(storyPlanning) => updateState({ storyPlanning })}
+            onConfirm={() => updateState((prev) => resetFromStoryPlanningConfirm(prev))}
+          />
+        );
       case AppStep.STYLE_SELECTION:
         return <StyleSelection
           firstScene={state.scenes[0]}
@@ -296,7 +329,8 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
         return <LayoutSelector
           currentLayoutType={state.layoutType}
           currentGridTemplateId={state.gridTemplateId}
-          selectedFormFactor={state.styleAspectRatio}
+          selectedFormFactor={state.storyPlanning ? getFormFactorDefaultAspectRatio(state.storyPlanning.formFactor) : state.styleAspectRatio}
+          scenes={state.scenes}
           currentTextLayout={state.textLayout || 'caption'}
           projectId={project.id}
           onTextLayoutChange={(textLayout) => updateState({ textLayout })}
@@ -415,7 +449,13 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           </button>
         </div>
       </div>
-      <main className="p-6 max-w-7xl mx-auto w-full flex-1">
+      <main className="p-6 max-w-7xl mx-auto w-full flex-1 space-y-4">
+        {deploymentParity?.mismatch && (
+          <div className="max-w-7xl mx-auto border-2 border-amber-500 bg-amber-50 rounded-lg p-3 text-xs font-bold text-amber-800">
+            Deployment mismatch detected: frontend `{deploymentParity.frontendGitSha}` vs backend `{deploymentParity.backendGitSha}`.
+            Some features may behave inconsistently until both deployments use the same commit.
+          </div>
+        )}
         {renderStep()}
       </main>
 

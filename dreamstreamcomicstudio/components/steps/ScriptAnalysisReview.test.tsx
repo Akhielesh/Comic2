@@ -52,4 +52,58 @@ describe('ScriptAnalysisReview', () => {
     expect(onApprove).not.toHaveBeenCalled();
     expect(screen.getByText(/Not found in this scene excerpt/i)).toBeInTheDocument();
   });
+
+  it('uses script segment fallback when raw excerpt is truncated or missing', () => {
+    const onApprove = vi.fn();
+    const scenes: Scene[] = [{
+      id: 1,
+      rawText: '',
+      synopsis: 'Two friends chase a ball over rooftops.',
+      characters: ['Milo', 'Pepper'],
+      setting: 'Rooftops at dusk'
+    }];
+    const script = 'Scene 1: Milo the cat and Pepper the corgi sprint across the rooftop chasing a yellow ball.';
+
+    render(
+      <ScriptAnalysisReview
+        script={script}
+        scenes={scenes}
+        diagnostics={{ sceneCount: 1 }}
+        onApprove={onApprove}
+        onBackToScript={() => {}}
+        onReanalyze={() => {}}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Approve & Continue/i }));
+    expect(onApprove).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks approval with explicit source-unavailable message when no source text exists', () => {
+    const onApprove = vi.fn();
+    const scenes: Scene[] = [{
+      id: 1,
+      rawText: '',
+      synopsis: 'Unknown.',
+      characters: ['Milo'],
+      setting: 'Unknown'
+    }];
+
+    render(
+      <ScriptAnalysisReview
+        script={''}
+        scenes={scenes}
+        diagnostics={{ sceneCount: 1 }}
+        onApprove={onApprove}
+        onBackToScript={() => {}}
+        onReanalyze={() => {}}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Approve & Continue/i }));
+    expect(onApprove).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(/Source excerpt unavailable for one or more scenes/i)
+    ).toBeInTheDocument();
+  });
 });

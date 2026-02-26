@@ -7,7 +7,23 @@ import {
   Location,
   DialogueBlock,
   ContinuityBible,
-  SceneContinuityBinding
+  SceneContinuityBinding,
+  ComicForgeAmbiguityFlag,
+  ComicForgeAssetCard,
+  ComicForgeBalloonZone,
+  ComicForgeExportPreset,
+  ComicForgeFormatSpec,
+  ComicForgeJobSummary,
+  ComicForgeLayoutTemplate,
+  ComicForgePreviewPack,
+  ComicForgeQCReport,
+  ComicForgeStage,
+  ComicForgeStoryArchitecture,
+  ComicForgeStoryboardValidation,
+  ComicForgeStructuredScriptAnalysis,
+  ComicForgeStyleBible,
+  ComicForgeStyleRecommendation,
+  ComicForgeCostTracker
 } from './types.js';
 import type {
   BillingSummaryResponse,
@@ -145,6 +161,227 @@ export type ExtractWorldResponse = {
   model: string;
   billing?: ApiBillingInfo;
 };
+
+export type ComicForgeApiEnvelope<T> = {
+  ok: boolean;
+  stage?: ComicForgeStage;
+  data: T;
+};
+
+export type ComicForgeFormatLockRequest = {
+  readingFormat: ComicForgeFormatSpec['readingFormat'];
+  platform: ComicForgeFormatSpec['platform'];
+  resolutionTarget: ComicForgeFormatSpec['resolutionTarget'];
+  rtlReading?: boolean;
+};
+
+export type ComicForgeFormatLockResponse = ComicForgeApiEnvelope<{
+  formatSpec: ComicForgeFormatSpec;
+}>;
+
+export type ComicForgeAnalyzeScriptRequest = {
+  rawScriptText: string;
+};
+
+export type ComicForgeAnalyzeScriptResponse = ComicForgeApiEnvelope<{
+  analysis: ComicForgeStructuredScriptAnalysis;
+  unresolvedFlags: ComicForgeAmbiguityFlag[];
+}>;
+
+export type ComicForgeResolveAmbiguityRequest = {
+  flagId: string;
+  resolution: string;
+};
+
+export type ComicForgeResolveAmbiguityResponse = ComicForgeApiEnvelope<{
+  analysis: ComicForgeStructuredScriptAnalysis;
+  unresolvedFlags: ComicForgeAmbiguityFlag[];
+}>;
+
+export type ComicForgeBuildArchitectureRequest = {
+  pacingPreference: 'fast_action' | 'balanced' | 'slow_emotional';
+  targetPageCountOverride?: number;
+};
+
+export type ComicForgeBuildArchitectureResponse = ComicForgeApiEnvelope<{
+  architecture: ComicForgeStoryArchitecture;
+}>;
+
+export type ComicForgeSuggestStylesRequest = {
+  customStyleHint?: string;
+};
+
+export type ComicForgeSuggestStylesResponse = ComicForgeApiEnvelope<{
+  recommendations: ComicForgeStyleRecommendation[];
+}>;
+
+export type ComicForgeBuildStyleBibleRequest = {
+  selectedStyle: string;
+  customPromptOverride?: string;
+};
+
+export type ComicForgeBuildStyleBibleResponse = ComicForgeApiEnvelope<{
+  styleBible: ComicForgeStyleBible;
+}>;
+
+export type ComicForgeAssetCardsListResponse = ComicForgeApiEnvelope<{
+  cards: ComicForgeAssetCard[];
+}>;
+
+export type ComicForgeCreateAssetCardRequest = {
+  cardType: ComicForgeAssetCard['cardType'];
+  name: string;
+  canonicalDescription: string;
+  doNotChange?: string[];
+  negativeConstraints?: string[];
+  allowedVariants?: string[];
+};
+
+export type ComicForgeCreateAssetCardResponse = ComicForgeApiEnvelope<{
+  card: ComicForgeAssetCard;
+}>;
+
+export type ComicForgePatchAssetCardRequest = Partial<ComicForgeCreateAssetCardRequest> & {
+  status?: ComicForgeAssetCard['status'];
+};
+
+export type ComicForgePatchAssetCardResponse = ComicForgeApiEnvelope<{
+  card: ComicForgeAssetCard;
+}>;
+
+export type ComicForgeGenerateRefsRequest = {
+  angles?: string[];
+};
+
+export type ComicForgeGenerateRefsResponse = ComicForgeApiEnvelope<{
+  card: ComicForgeAssetCard;
+}>;
+
+export type ComicForgeExtractLayoutRequest = {
+  referenceImageUrl?: string;
+  layoutHint?: string;
+};
+
+export type ComicForgeExtractLayoutResponse = ComicForgeApiEnvelope<{
+  layoutTemplate: ComicForgeLayoutTemplate;
+}>;
+
+export type ComicForgeBuildLetteringRulesRequest = {
+  captionStyle?: 'box' | 'borderless';
+  balloonStyle?: 'round' | 'spiky' | 'cloud' | 'rectangular';
+  sfxStyle?: string;
+};
+
+export type ComicForgeBuildLetteringRulesResponse = ComicForgeApiEnvelope<{
+  letteringRules: Record<string, unknown>;
+}>;
+
+export type ComicForgeGenerateBalloonZonesRequest = {
+  pageId: string;
+};
+
+export type ComicForgeGenerateBalloonZonesResponse = ComicForgeApiEnvelope<{
+  balloonZones: ComicForgeBalloonZone[];
+}>;
+
+export type ComicForgeGenerateThumbnailsRequest = {
+  quality?: 'thumbnail';
+};
+
+export type ComicForgeGenerateThumbnailsResponse = ComicForgeApiEnvelope<{
+  job: ComicForgeJobSummary;
+}>;
+
+export type ComicForgeValidateStoryboardResponse = ComicForgeApiEnvelope<{
+  validation: ComicForgeStoryboardValidation;
+}>;
+
+export type ComicForgePreviewPackResponse = ComicForgeApiEnvelope<{
+  preview: ComicForgePreviewPack;
+}>;
+
+export type ComicForgeGenerateRequest = {
+  quality: 'draft' | 'final';
+};
+
+export type ComicForgeGenerateResponse = ComicForgeApiEnvelope<{
+  job: ComicForgeJobSummary;
+}>;
+
+export type ComicForgeRegeneratePanelRequest = {
+  quality: 'draft' | 'final';
+  reason?: string;
+};
+
+export type ComicForgeRegeneratePanelResponse = ComicForgeApiEnvelope<{
+  job: ComicForgeJobSummary;
+}>;
+
+export type ComicForgeAssemblePageRequest = {
+  pageId: string;
+};
+
+export type ComicForgeAssemblePageResponse = ComicForgeApiEnvelope<{
+  job: ComicForgeJobSummary;
+}>;
+
+export type ComicForgeRenderLetteringRequest = {
+  pageId: string;
+};
+
+export type ComicForgeRenderLetteringResponse = ComicForgeApiEnvelope<{
+  job: ComicForgeJobSummary;
+}>;
+
+export type ComicForgeRunQcRequest = {
+  pageId: string;
+};
+
+export type ComicForgeRunQcResponse = ComicForgeApiEnvelope<{
+  report: ComicForgeQCReport;
+  job?: ComicForgeJobSummary;
+}>;
+
+export type ComicForgePatchPanelLetteringRequest = {
+  elements: Array<Record<string, unknown>>;
+};
+
+export type ComicForgePatchPanelLetteringResponse = ComicForgeApiEnvelope<{
+  letteringId: string;
+  elements: Array<Record<string, unknown>>;
+}>;
+
+export type ComicForgeExportRequest = {
+  preset: ComicForgeExportPreset;
+  pageRange?: { from: number; to: number };
+  upscaleIfNeeded?: boolean;
+};
+
+export type ComicForgeExportResponse = ComicForgeApiEnvelope<{
+  job: ComicForgeJobSummary;
+}>;
+
+export type ComicForgeJobStatusResponse = ComicForgeApiEnvelope<{
+  job: ComicForgeJobSummary;
+}>;
+
+export type ComicForgeJobEvent = {
+  id: string;
+  jobId: string;
+  type: 'queued' | 'running' | 'progress' | 'done' | 'failed';
+  message: string;
+  timestamp: number;
+  progress?: number;
+  payload?: Record<string, unknown>;
+};
+
+export type ComicForgeJobEventsResponse = ComicForgeApiEnvelope<{
+  events: ComicForgeJobEvent[];
+}>;
+
+export type ComicForgeCostTrackerResponse = ComicForgeApiEnvelope<{
+  cost: ComicForgeCostTracker;
+}>;
 
 export type PanelBreakdownRequest = {
   scene: Scene;

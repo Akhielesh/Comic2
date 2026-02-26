@@ -1,7 +1,9 @@
+import type { Scene } from '../../../types.js';
+
 export type ExtractWorldBodyValidationResult =
   | {
     ok: true;
-    scenes: unknown[];
+    scenes: Scene[];
     script: string;
   }
   | {
@@ -19,6 +21,17 @@ export const validateExtractWorldBody = (body: unknown): ExtractWorldBodyValidat
   const payload = (body && typeof body === 'object') ? (body as Record<string, unknown>) : {};
   const scenes = payload.scenes;
   const script = payload.script;
+
+  const isScene = (value: unknown): value is Scene => {
+    if (!value || typeof value !== 'object') return false;
+    const scene = value as Record<string, unknown>;
+    return Number.isFinite(Number(scene.id))
+      && typeof scene.rawText === 'string'
+      && typeof scene.synopsis === 'string'
+      && typeof scene.setting === 'string'
+      && Array.isArray(scene.characters)
+      && scene.characters.every((name) => typeof name === 'string');
+  };
 
   if (!Array.isArray(scenes)) {
     return {
@@ -43,9 +56,20 @@ export const validateExtractWorldBody = (body: unknown): ExtractWorldBodyValidat
     };
   }
 
+  const typedScenes = scenes.filter(isScene);
+  if (typedScenes.length !== scenes.length) {
+    return {
+      ok: false,
+      status: 400,
+      error: {
+        message: 'scenes array contains invalid scene payloads'
+      }
+    };
+  }
+
   return {
     ok: true,
-    scenes,
+    scenes: typedScenes,
     script: script.trim()
   };
 };

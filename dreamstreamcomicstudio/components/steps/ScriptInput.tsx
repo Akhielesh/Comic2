@@ -255,6 +255,7 @@ K: "I'm just looking for dinner."`;
   if (pendingReview) {
     return (
       <ScriptAnalysisReview
+        script={pendingReview.script}
         scenes={pendingReview.scenes}
         diagnostics={pendingReview.diagnostics}
         onBackToScript={() => setPendingReview(null)}

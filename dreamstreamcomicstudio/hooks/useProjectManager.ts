@@ -7,9 +7,10 @@ import { createGenerationNotification, loadProjects, saveProject, deleteProject 
 import { useAuth } from '../contexts/AuthContext';
 import { IMAGE_TRANSFORMS } from '../services/projectStorage';
 import { applyStyleLockResolution } from '../services/styleLock';
+import { getDefaultStoryPlanningState, recommendStoryPlanning } from '../services/storyPlanning';
 
 const SAVE_DEBOUNCE_MS = 500;
-const FLOW_VERSION = 3;
+const FLOW_VERSION = 4;
 
 const stableHash = (value: string) => {
   let hash = 2166136261;
@@ -58,16 +59,49 @@ const computeWorldHash = (state: ComicState) =>
     })
   );
 
-const remapStep = (step: number) => {
-  if (step === 2) return 3;
-  if (step === 3) return 2;
+const remapLegacyStepOrder = (step: number, flowVersion: number) => {
+  if (flowVersion < 3) {
+    if (step === 2) return 3;
+    if (step === 3) return 2;
+  }
   return step;
 };
 
+const injectStoryPlanningStep = (step: number, flowVersion: number) => {
+  if (flowVersion >= FLOW_VERSION) return step;
+  // STORY_PLANNING was inserted after SCRIPT_INPUT in flow v4.
+  // For legacy flows (<4), every step from prior index 1 onward shifts by +1.
+  return step >= AppStep.STORY_PLANNING ? step + 1 : step;
+};
+
 const applyStateMigrations = (state: ComicState): ComicState => {
-  const flowVersion = typeof state.flowVersion === 'number' ? state.flowVersion : FLOW_VERSION;
-  const nextStep = flowVersion === FLOW_VERSION ? state.step : remapStep(state.step);
-  const nextMax = flowVersion === FLOW_VERSION ? state.maxStepReached : remapStep(state.maxStepReached);
+  const sourceFlowVersion = typeof state.flowVersion === 'number' ? state.flowVersion : 0;
+  const migratedStepOrder = remapLegacyStepOrder(state.step, sourceFlowVersion);
+  const migratedMaxOrder = remapLegacyStepOrder(state.maxStepReached, sourceFlowVersion);
+  let nextStep = injectStoryPlanningStep(migratedStepOrder, sourceFlowVersion);
+  let nextMax = injectStoryPlanningStep(migratedMaxOrder, sourceFlowVersion);
+
+  const planningFromState = state.storyPlanning;
+  let computedPlanning = planningFromState || (
+    (state.script || '').trim() && (state.scenes || []).length > 0
+      ? recommendStoryPlanning({ script: state.script || '', scenes: state.scenes || [] })
+      : getDefaultStoryPlanningState()
+  );
+  const needsPlanningGate = (
+    ((state.script || '').trim().length > 0 || (state.scenes || []).length > 0)
+    && !computedPlanning.approved
+    && nextStep >= AppStep.STYLE_SELECTION
+  );
+  if (needsPlanningGate) {
+    const resumeStep = nextStep;
+    nextStep = AppStep.STORY_PLANNING;
+    nextMax = AppStep.STORY_PLANNING;
+    computedPlanning = {
+      ...computedPlanning,
+      resumeStep
+    };
+  }
+
   const nextContinuity = state.continuity || buildDefaultContinuityState(state);
   const nextValidation = validateContinuityState({
     ...state,
@@ -75,11 +109,13 @@ const applyStateMigrations = (state: ComicState): ComicState => {
   });
   const migrated: ComicState = {
     ...state,
+    pipelineMode: state.pipelineMode || 'classic',
     step: nextStep,
     maxStepReached: nextMax,
     flowVersion: FLOW_VERSION,
     overview: state.overview || '',
     comments: state.comments || [],
+    storyPlanning: computedPlanning,
     storyBuilder: state.storyBuilder,
     isFeatured: state.isFeatured ?? false,
     customAspectRatioEnabled: state.customAspectRatioEnabled ?? false,
@@ -100,6 +136,8 @@ const applyStateMigrations = (state: ComicState): ComicState => {
   return applyStyleLockResolution(migrated).state;
 };
 
+export const migrateComicStateForFlow = (state: ComicState) => applyStateMigrations(state);
+
 const didStyleLockRepairOccur = (before: ComicState, after: ComicState) => {
   return (
     before.selectedStyleId !== after.selectedStyleId ||
@@ -115,9 +153,10 @@ const hasLegacyStepShift = (state: ComicState): boolean => {
   if (typeof state.flowVersion !== 'number') return false;
   if (state.flowVersion >= FLOW_VERSION) return false;
 
+  const legacyReferenceBuilderStep = 2;
   const hasLegacyIndicators =
     typeof state.coverTemplateId === 'undefined' &&
-    state.step >= AppStep.REFERENCE_BUILDER &&
+    state.step >= legacyReferenceBuilderStep &&
     (
       (state.characters?.length || 0) > 0 ||
       (state.items?.length || 0) > 0 ||
@@ -162,10 +201,12 @@ const migrateHydratedCoverAndFlowState = async (
 };
 
 const INITIAL_STATE: ComicState = {
+  pipelineMode: 'classic',
   step: AppStep.SCRIPT_INPUT,
   maxStepReached: AppStep.SCRIPT_INPUT,
   flowVersion: FLOW_VERSION,
   script: '',
+  storyPlanning: getDefaultStoryPlanningState(),
   scriptChecklist: undefined,
   scenes: [],
   continuitySummary: '',

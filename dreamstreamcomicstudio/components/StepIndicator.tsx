@@ -10,6 +10,7 @@ interface StepIndicatorProps {
 
 const steps = [
   { id: AppStep.SCRIPT_INPUT, label: "Script" },
+  { id: AppStep.STORY_PLANNING, label: "Plan" },
   { id: AppStep.STYLE_SELECTION, label: "Style" },
   { id: AppStep.REFERENCE_BUILDER, label: "World" },
   { id: AppStep.COVER, label: "Cover" },

@@ -280,7 +280,7 @@ textRouter.post('/extract-world', async (req, res, next) => {
     if (!apiKey) return;
     const effectiveModel = await assertTextModelAccess(req, resolveRequestedModel(req.header('X-Gemini-Model')));
     const validated = validateExtractWorldBody(req.body);
-    if (!validated.ok) return res.status(validated.status).json({ error: validated.error });
+    if ('status' in validated) return res.status(validated.status).json({ error: validated.error });
     const { scenes, script } = validated;
 
     const reserve = await reserveForOperation({

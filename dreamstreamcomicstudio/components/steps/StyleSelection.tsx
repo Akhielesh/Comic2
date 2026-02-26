@@ -12,6 +12,7 @@ import { DebugState, getDebugState, subscribeDebugState } from '../../services/d
 import { ApiError } from '../../services/apiClient';
 import { AnalyzeScriptResponse } from '../../apiTypes';
 import { ScriptAnalysisReview } from './ScriptAnalysisReview';
+import { buildStyleOnlyNotes } from '../../services/styleGrounding';
 
 interface StyleSelectionProps {
   firstScene?: Scene;
@@ -542,7 +543,6 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
   };
 
   const handleGenerateSelected = async () => {
-    if (!firstScene) return;
     setIsBatchGenerating(true);
     setError(null);
 
@@ -610,8 +610,10 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
       });
     });
 
-    const synopsis = firstScene?.synopsis || 'A cinematic comic scene';
-    const setting = firstScene?.setting || 'Unknown setting';
+    const styleOnlyNotes = buildStyleOnlyNotes({
+      customNotes: customPrompt,
+      scenes: firstScene ? [firstScene] : []
+    });
     let failedCount = 0;
     let lastFailureReason: string | null = null;
 
@@ -681,9 +683,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
         const fullPrompt = buildImagePrompt({
           stage: "style",
           stylePrompt: style.prompt,
-          sceneAction: synopsis,
-          setting,
-          extraNotes: customPrompt || undefined
+          extraNotes: styleOnlyNotes || 'Linework and palette study only.'
         });
         try {
           const generated = await generateImage(fullPrompt, ratio, resolution, [], projectId, {
@@ -794,6 +794,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
     if (pendingScriptReview) {
       return (
         <ScriptAnalysisReview
+          script={pendingScriptReview.script}
           scenes={pendingScriptReview.scenes}
           diagnostics={pendingScriptReview.diagnostics}
           onBackToScript={() => setPendingScriptReview(null)}

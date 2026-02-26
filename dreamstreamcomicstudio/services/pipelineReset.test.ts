@@ -4,6 +4,7 @@ import { AppStep } from "../types";
 import {
   resetFromLayoutConfirm,
   resetFromScriptAnalysis,
+  resetFromStoryPlanningConfirm,
   resetFromStyleConfirm,
   resetFromWorldConfirm
 } from "./pipelineReset";
@@ -13,6 +14,20 @@ const makeState = (): ComicState => ({
   maxStepReached: AppStep.REVIEW_EXPORT,
   flowVersion: 3,
   script: "Old script",
+  storyPlanning: {
+    formFactor: "webtoon_vertical",
+    recommendedRange: { min: 8, max: 14 },
+    userRange: { min: 8, max: 14 },
+    recommendedPageCount: 10,
+    approvedPageCount: 10,
+    feasibility: {
+      status: "ok",
+      reason: "Looks good.",
+      estimatedPanels: { min: 40, max: 90 }
+    },
+    estimatedCostRange: { currency: "USD", minUsd: 1.2, maxUsd: 3.4 },
+    approved: true
+  },
   scenes: [
     {
       id: 1,
@@ -121,8 +136,9 @@ describe("pipeline reset matrix", () => {
     ];
     const reset = resetFromScriptAnalysis(state, "New script", nextScenes);
 
-    expect(reset.step).toBe(AppStep.STYLE_SELECTION);
-    expect(reset.maxStepReached).toBe(AppStep.STYLE_SELECTION);
+    expect(reset.step).toBe(AppStep.STORY_PLANNING);
+    expect(reset.maxStepReached).toBe(AppStep.STORY_PLANNING);
+    expect(reset.storyPlanning).toBeDefined();
     expect(reset.styleVariants).toEqual([]);
     expect(reset.characters).toEqual([]);
     expect(reset.items).toEqual([]);
@@ -162,6 +178,16 @@ describe("pipeline reset matrix", () => {
     expect(reset.locations?.[0].imageId).toBeUndefined();
     expect(reset.characters?.[0].referenceImageIds).toEqual(["char-ref-1"]);
     expect(reset.worldHash).toBeDefined();
+  });
+
+  it("story planning confirm advances to style and applies form-factor aspect ratio", () => {
+    const state = makeState();
+    const reset = resetFromStoryPlanningConfirm(state);
+
+    expect(reset.step).toBe(AppStep.STYLE_SELECTION);
+    expect(reset.maxStepReached).toBe(AppStep.STYLE_SELECTION);
+    expect(reset.styleAspectRatio).toBe("9:16");
+    expect(reset.lastResetSourceStage).toBe("story_planning_confirm");
   });
 
   it("world confirm clears cover and panel outputs", () => {

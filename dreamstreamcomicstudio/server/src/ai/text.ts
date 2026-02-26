@@ -65,6 +65,20 @@ const normalizeEntityName = (value: string) =>
     .replace(/\s+/g, ' ')
     .toLowerCase();
 
+const readStructuredObject = (value: unknown, allowedKeys: string[]) => {
+  if (!value || typeof value !== 'object') return undefined;
+  const source = value as Record<string, unknown>;
+  const output: Record<string, string> = {};
+  for (const key of allowedKeys) {
+    const candidate = source[key];
+    if (typeof candidate !== 'string') continue;
+    const normalized = candidate.trim();
+    if (!normalized) continue;
+    output[key] = normalized;
+  }
+  return Object.keys(output).length > 0 ? output : undefined;
+};
+
 const normalizeForMatch = (value: string) =>
   value
     .toLowerCase()
@@ -91,7 +105,62 @@ const containsNormalizedSnippet = (haystack: string, snippet: string) => {
   return source.includes(target);
 };
 
+const SCENE_RAW_EXCERPT_MAX_CHARS = 620;
+const SCENE_RAW_EXCERPT_CONTEXT_CHARS = 120;
+
 const clipExcerpt = (value: string, max = 260) => value.trim().slice(0, max).trim();
+
+const findExcerptAnchor = (source: string, term: string) => {
+  const trimmed = term.trim();
+  if (!trimmed) return -1;
+  const escaped = escapeRegex(trimmed).replace(/\s+/g, '\\s+');
+  const pattern = new RegExp(`\\b${escaped}\\b`, 'i');
+  const match = source.match(pattern);
+  return typeof match?.index === 'number' ? match.index : -1;
+};
+
+const clipSceneExcerptForCharacters = (segmentText: string, characters: string[]) => {
+  const source = String(segmentText || '').trim();
+  if (!source) return '';
+  if (source.length <= SCENE_RAW_EXCERPT_MAX_CHARS) return source;
+
+  const validCharacters = (characters || [])
+    .map((entry) => String(entry || '').trim())
+    .filter(Boolean)
+    .filter((name) => containsNormalizedName(source, name));
+  if (validCharacters.length === 0) {
+    return clipExcerpt(source, SCENE_RAW_EXCERPT_MAX_CHARS);
+  }
+
+  const anchors = validCharacters
+    .map((name) => findExcerptAnchor(source, name))
+    .filter((index) => index >= 0)
+    .sort((a, b) => a - b);
+
+  if (anchors.length === 0) {
+    return clipExcerpt(source, SCENE_RAW_EXCERPT_MAX_CHARS);
+  }
+
+  const minAnchor = anchors[0];
+  const maxAnchor = anchors[anchors.length - 1];
+  let start = Math.max(0, minAnchor - SCENE_RAW_EXCERPT_CONTEXT_CHARS);
+  let end = Math.min(source.length, maxAnchor + SCENE_RAW_EXCERPT_CONTEXT_CHARS);
+
+  if (end - start < SCENE_RAW_EXCERPT_MAX_CHARS) {
+    const deficit = SCENE_RAW_EXCERPT_MAX_CHARS - (end - start);
+    const extendRight = Math.min(source.length - end, Math.ceil(deficit / 2));
+    end += extendRight;
+    start = Math.max(0, start - (deficit - extendRight));
+  }
+
+  if (end - start > SCENE_RAW_EXCERPT_MAX_CHARS) {
+    end = start + SCENE_RAW_EXCERPT_MAX_CHARS;
+  }
+
+  const prefix = start > 0 ? '... ' : '';
+  const suffix = end < source.length ? ' ...' : '';
+  return `${prefix}${source.slice(start, end).trim()}${suffix}`.trim();
+};
 
 const firstWords = (value: string, maxWords: number) => {
   return value
@@ -203,7 +272,7 @@ const deriveSceneRawExcerpt = (
     && containsNormalizedSnippet(segment.rawText, providedRaw)
   ) {
     return {
-      rawText: clipExcerpt(providedRaw),
+      rawText: clipExcerpt(providedRaw, SCENE_RAW_EXCERPT_MAX_CHARS),
       usedFallback: false
     };
   }
@@ -212,7 +281,7 @@ const deriveSceneRawExcerpt = (
   if (synopsis) {
     if (containsNormalizedSnippet(segment.rawText, synopsis)) {
       return {
-        rawText: clipExcerpt(segment.rawText),
+        rawText: clipExcerpt(segment.rawText, SCENE_RAW_EXCERPT_MAX_CHARS),
         usedFallback: true
       };
     }
@@ -220,14 +289,14 @@ const deriveSceneRawExcerpt = (
     const synopsisAnchor = synopsis.split(/\s+/).slice(0, 10).join(' ');
     if (synopsisAnchor && containsNormalizedSnippet(segment.rawText, synopsisAnchor)) {
       return {
-        rawText: clipExcerpt(segment.rawText),
+        rawText: clipExcerpt(segment.rawText, SCENE_RAW_EXCERPT_MAX_CHARS),
         usedFallback: true
       };
     }
   }
 
   return {
-    rawText: clipExcerpt(segment.rawText || synopsis || fullScript || 'Scene context unavailable.'),
+    rawText: clipExcerpt(segment.rawText || synopsis || fullScript || 'Scene context unavailable.', SCENE_RAW_EXCERPT_MAX_CHARS),
     usedFallback: true
   };
 };
@@ -276,6 +345,8 @@ const normalizeScenes = (
       const grounded = filterGroundedCharacterNames(rawCharacters, segment.rawText);
       const hinted = filterGroundedCharacterNames(extractSegmentCharacterHints(segment.rawText), segment.rawText);
       const finalCharacters = grounded.names.length > 0 ? grounded.names : hinted.names;
+      const rawExcerpt = clipSceneExcerptForCharacters(segment.rawText, finalCharacters)
+        || excerpt.rawText;
       ungroundedCharactersDropped += grounded.dropped;
 
       let synopsis = isString(scene.synopsis) ? scene.synopsis.trim() : '';
@@ -299,7 +370,7 @@ const normalizeScenes = (
         score: firstWords(synopsis, 40).length + firstWords(setting, 20).length,
         scene: {
           id: 0,
-          rawText: excerpt.rawText,
+          rawText: rawExcerpt,
           synopsis,
           characters: finalCharacters,
           setting
@@ -328,7 +399,8 @@ const normalizeScenes = (
       const hinted = filterGroundedCharacterNames(extractSegmentCharacterHints(segment.rawText), segment.rawText);
       scenes.push({
         id: scenes.length + 1,
-        rawText: clipExcerpt(segment.rawText),
+        rawText: clipSceneExcerptForCharacters(segment.rawText, hinted.names)
+          || clipExcerpt(segment.rawText, SCENE_RAW_EXCERPT_MAX_CHARS),
         synopsis: buildLiteralSynopsis(segment.rawText),
         characters: hinted.names,
         setting: buildLiteralSetting(segment.rawText)
@@ -763,7 +835,19 @@ export const extractWorldDetails = async (
                   id: { type: Type.STRING },
                   name: { type: Type.STRING },
                   bio: { type: Type.STRING },
-                  description: { type: Type.STRING }
+                  description: { type: Type.STRING },
+                  structured: {
+                    type: Type.OBJECT,
+                    properties: {
+                      role: { type: Type.STRING },
+                      ageBand: { type: Type.STRING },
+                      physicalTraits: { type: Type.STRING },
+                      outfit: { type: Type.STRING },
+                      colorPalette: { type: Type.STRING },
+                      personality: { type: Type.STRING },
+                      constraints: { type: Type.STRING }
+                    }
+                  }
                 },
                 required: ['id', 'name', 'bio', 'description']
               }
@@ -775,7 +859,18 @@ export const extractWorldDetails = async (
                 properties: {
                   id: { type: Type.STRING },
                   name: { type: Type.STRING },
-                  description: { type: Type.STRING }
+                  description: { type: Type.STRING },
+                  structured: {
+                    type: Type.OBJECT,
+                    properties: {
+                      itemType: { type: Type.STRING },
+                      material: { type: Type.STRING },
+                      condition: { type: Type.STRING },
+                      scale: { type: Type.STRING },
+                      visualMotif: { type: Type.STRING },
+                      constraints: { type: Type.STRING }
+                    }
+                  }
                 },
                 required: ['id', 'name', 'description']
               }
@@ -787,7 +882,18 @@ export const extractWorldDetails = async (
                 properties: {
                   id: { type: Type.STRING },
                   name: { type: Type.STRING },
-                  description: { type: Type.STRING }
+                  description: { type: Type.STRING },
+                  structured: {
+                    type: Type.OBJECT,
+                    properties: {
+                      environmentType: { type: Type.STRING },
+                      eraMood: { type: Type.STRING },
+                      lighting: { type: Type.STRING },
+                      landmarks: { type: Type.STRING },
+                      palette: { type: Type.STRING },
+                      constraints: { type: Type.STRING }
+                    }
+                  }
                 },
                 required: ['id', 'name', 'description']
               }
@@ -810,6 +916,15 @@ export const extractWorldDetails = async (
     name: isString(c?.name) ? c.name.trim() : 'Unnamed',
     bio: isString(c?.bio) ? c.bio.trim() : '',
     description: isString(c?.description) ? c.description.trim() : '',
+    structured: readStructuredObject(c?.structured, [
+      'role',
+      'ageBand',
+      'physicalTraits',
+      'outfit',
+      'colorPalette',
+      'personality',
+      'constraints'
+    ]),
     referenceImageIds: []
   }));
 
@@ -817,6 +932,14 @@ export const extractWorldDetails = async (
     id: crypto.randomUUID(),
     name: isString(i?.name) ? i.name.trim() : 'Unnamed',
     description: isString(i?.description) ? i.description.trim() : '',
+    structured: readStructuredObject(i?.structured, [
+      'itemType',
+      'material',
+      'condition',
+      'scale',
+      'visualMotif',
+      'constraints'
+    ]),
     referenceImageIds: []
   }));
 
@@ -824,6 +947,14 @@ export const extractWorldDetails = async (
     id: crypto.randomUUID(),
     name: isString(l?.name) ? l.name.trim() : 'Unnamed',
     description: isString(l?.description) ? l.description.trim() : '',
+    structured: readStructuredObject(l?.structured, [
+      'environmentType',
+      'eraMood',
+      'lighting',
+      'landmarks',
+      'palette',
+      'constraints'
+    ]),
     referenceImageIds: []
   }));
 

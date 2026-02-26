@@ -552,9 +552,15 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
 
         <div className="bg-white border-4 border-black rounded-xl p-4 shadow-comic flex flex-col md:flex-row md:items-center md:justify-between gap-3">
           <div>
-            <div className="text-xs font-bold uppercase text-slate-500">Estimate (Auto-updating)</div>
+            <div className="text-xs font-bold uppercase text-slate-500">Cost Summary</div>
             <div className="text-lg font-display">
-              {isCostLoading ? "Updating..." : costReport ? `$${costReport.cost_summary.totalCost.toFixed(4)}` : "n/a"}
+              {isCostLoading
+                ? "Updating..."
+                : comicCost
+                  ? `$${comicCost.totalBillableUsd.toFixed(4)}`
+                  : costReport
+                    ? `$${costReport.cost_summary.totalCost.toFixed(4)}`
+                    : "n/a"}
             </div>
             <div className="text-[11px] font-mono text-slate-500">
               {costUpdatedAt ? `Updated ${new Date(costUpdatedAt).toLocaleTimeString()}` : "Waiting for data..."}
@@ -568,9 +574,10 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
           </div>
           {costReport && (
             <div className="text-xs font-mono text-slate-600 space-y-1">
-              <div>Estimated CT: {estimatedCt?.toLocaleString()}</div>
-              {comicCost && <div>Actual CT: {comicCost.totalActualCt.toLocaleString()}</div>}
-              {comicCost && <div>Actual USD: ${comicCost.totalBillableUsd.toFixed(4)}</div>}
+              <div>Estimated USD (artifact-based): ${costReport.cost_summary.totalCost.toFixed(4)}</div>
+              <div>Estimated CT (artifact-based): {estimatedCt?.toLocaleString()}</div>
+              {comicCost && <div>Actual CT (billing events): {comicCost.totalActualCt.toLocaleString()}</div>}
+              {comicCost && <div>Actual USD (billing events): ${comicCost.totalBillableUsd.toFixed(4)}</div>}
               <div>Tokens: {costReport.ai_usage.totalTokens}</div>
               <div>Artifacts: {costReport.ai_usage.totalArtifacts}</div>
             </div>

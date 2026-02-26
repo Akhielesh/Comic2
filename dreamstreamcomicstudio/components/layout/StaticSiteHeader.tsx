@@ -11,6 +11,7 @@ interface StaticSiteHeaderProps {
   onGoHome: () => void;
   onViewComics: () => void;
   onEnterStudio: () => void;
+  onEnterComicForge: () => void;
   onSignIn: () => void;
   onOpenProfile: () => void;
   onNavigate: (view: string, id?: string) => void;
@@ -21,6 +22,7 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
   onGoHome,
   onViewComics,
   onEnterStudio,
+  onEnterComicForge,
   onSignIn,
   onOpenProfile,
   onNavigate
@@ -38,6 +40,9 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
               <TokenAvailabilityPill />
               <Button onClick={onEnterStudio} size="sm" icon={<ArrowRight size={16} />}>
                 Studio
+              </Button>
+              <Button onClick={onEnterComicForge} size="sm" variant="secondary">
+                ComicForge
               </Button>
               <NotificationBell onNavigate={onNavigate} />
               <UserAvatar onClick={onOpenProfile} />
