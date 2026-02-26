@@ -26,6 +26,7 @@ import { ApiError } from '../../services/apiClient';
 import { LimitExceededModal } from '../modals/LimitExceededModal';
 import { applyStyleLockResolution, resolveStyleLock } from '../../services/styleLock';
 import { hasMultiFrameLanguage, sanitizePanelDescription } from '../../services/panelDescription';
+import { buildCostViewModel } from '../../services/costViewModel';
 
 interface CombinedPreviewProps {
   state: ComicState;
@@ -79,7 +80,12 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
   const [panelCounts, setPanelCounts] = useState<Record<number, number>>({});
   const [isPlanning, setIsPlanning] = useState(false);
   const [planningSceneId, setPlanningSceneId] = useState<number | null>(null);
-  const [costSummary, setCostSummary] = useState<{ total: number; estimated: boolean }>({ total: 0, estimated: true });
+  const [costSummary, setCostSummary] = useState<{ accrued: number; projectedRemaining: number; totalProjected: number; estimated: boolean }>({
+    accrued: 0,
+    projectedRemaining: 0,
+    totalProjected: 0,
+    estimated: true
+  });
   const [limitDetails, setLimitDetails] = useState<Record<string, unknown> | null>(null);
   const pricing = useMemo(() => normalizePricingConfig(state.pricingConfig || DEFAULT_PRICING_CONFIG), [state.pricingConfig]);
   const plannedPanelCount = state.panels.length;
@@ -101,7 +107,7 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
   const imageCostBatch = provider === 'flux' ? 0 : FLASH_IMAGE_BATCH * plannedPanelCount;
   const bananaProRate = state.imageResolution === '4K' ? BANANA_PRO_IMAGE_4K : BANANA_PRO_IMAGE_1K;
   const imageCostBananaPro = bananaProRate * plannedPanelCount;
-  const estimatedCt = Math.ceil(costSummary.total / 0.0001);
+  const estimatedCt = Math.ceil(costSummary.totalProjected / 0.0001);
   const continuityValidation = useMemo(
     () => validateContinuityState(state),
     [state]
@@ -188,18 +194,21 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
           {},
           pricing
         );
-        const estimatedTextCost =
-          ((FLASH_LITE_PRICING.inputPer1k + FLASH_LITE_PRICING.outputPer1k) *
-            estimatedTokens) /
-          1000;
-        const estimatedImageCost = FLASH_IMAGE_STANDARD * plannedPanelCount;
-        const estimatedCost = estimatedTextCost + estimatedImageCost;
+        const pendingPanelCount = state.panels.filter((panel) => !panel.imageId).length;
+        const model = buildCostViewModel({
+          accruedUsd: (report.cost_summary as any).totalCost,
+          estimatedTokens,
+          pendingPanelCount,
+          pricingConfig: pricing
+        });
         setCostSummary({
-          total: Number(((report.cost_summary as any).totalCost + estimatedCost).toFixed(6)),
+          accrued: model.accruedUsd,
+          projectedRemaining: model.projectedRemainingUsd,
+          totalProjected: model.totalProjectedUsd,
           estimated: true
         });
       } catch {
-        setCostSummary({ total: 0, estimated: true });
+        setCostSummary({ accrued: 0, projectedRemaining: 0, totalProjected: 0, estimated: true });
       }
     };
     computeCost();
@@ -650,7 +659,7 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
             <div className="absolute top-0 right-0 p-4 opacity-10">
               <Coins size={100} />
             </div>
-            <h3 className="text-2xl font-display mb-6 border-b-2 border-black pb-2">Estimated Token Cost</h3>
+            <h3 className="text-2xl font-display mb-6 border-b-2 border-black pb-2">Cost Projection</h3>
             <div className="space-y-3 relative z-10">
               <div className="flex items-center justify-between text-sm font-bold">
                 <span>Panels Planned</span>
@@ -665,15 +674,23 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
                 <span className="font-mono">{activeImageModel.label}</span>
               </div>
               <div className="flex items-center justify-between text-sm font-bold">
-                <span>Estimated Total</span>
-                <span className="font-mono">{formatCurrency(costSummary.total)}</span>
+                <span>Accrued (to date)</span>
+                <span className="font-mono">{formatCurrency(costSummary.accrued)}</span>
+              </div>
+              <div className="flex items-center justify-between text-sm font-bold">
+                <span>Projected Remaining</span>
+                <span className="font-mono">{formatCurrency(costSummary.projectedRemaining)}</span>
+              </div>
+              <div className="flex items-center justify-between text-sm font-bold">
+                <span>Total Projected</span>
+                <span className="font-mono">{formatCurrency(costSummary.totalProjected)}</span>
               </div>
               <div className="flex items-center justify-between text-sm font-bold">
                 <span>Estimated CT</span>
                 <span className="font-mono">{estimatedCt.toLocaleString()} CT</span>
               </div>
               <div className="text-[10px] text-amber-900 font-mono">
-                Includes existing usage + estimated generation. 1 CT = $0.0001. Pricing as of {PRICING_AS_OF}.
+                Accrued values come from recorded artifacts; projected remaining is model-based. 1 CT = $0.0001. Pricing as of {PRICING_AS_OF}.
               </div>
             </div>
           </div>

@@ -65,6 +65,20 @@ const normalizeEntityName = (value: string) =>
     .replace(/\s+/g, ' ')
     .toLowerCase();
 
+const readStructuredObject = (value: unknown, allowedKeys: string[]) => {
+  if (!value || typeof value !== 'object') return undefined;
+  const source = value as Record<string, unknown>;
+  const output: Record<string, string> = {};
+  for (const key of allowedKeys) {
+    const candidate = source[key];
+    if (typeof candidate !== 'string') continue;
+    const normalized = candidate.trim();
+    if (!normalized) continue;
+    output[key] = normalized;
+  }
+  return Object.keys(output).length > 0 ? output : undefined;
+};
+
 const normalizeForMatch = (value: string) =>
   value
     .toLowerCase()
@@ -821,7 +835,19 @@ export const extractWorldDetails = async (
                   id: { type: Type.STRING },
                   name: { type: Type.STRING },
                   bio: { type: Type.STRING },
-                  description: { type: Type.STRING }
+                  description: { type: Type.STRING },
+                  structured: {
+                    type: Type.OBJECT,
+                    properties: {
+                      role: { type: Type.STRING },
+                      ageBand: { type: Type.STRING },
+                      physicalTraits: { type: Type.STRING },
+                      outfit: { type: Type.STRING },
+                      colorPalette: { type: Type.STRING },
+                      personality: { type: Type.STRING },
+                      constraints: { type: Type.STRING }
+                    }
+                  }
                 },
                 required: ['id', 'name', 'bio', 'description']
               }
@@ -833,7 +859,18 @@ export const extractWorldDetails = async (
                 properties: {
                   id: { type: Type.STRING },
                   name: { type: Type.STRING },
-                  description: { type: Type.STRING }
+                  description: { type: Type.STRING },
+                  structured: {
+                    type: Type.OBJECT,
+                    properties: {
+                      itemType: { type: Type.STRING },
+                      material: { type: Type.STRING },
+                      condition: { type: Type.STRING },
+                      scale: { type: Type.STRING },
+                      visualMotif: { type: Type.STRING },
+                      constraints: { type: Type.STRING }
+                    }
+                  }
                 },
                 required: ['id', 'name', 'description']
               }
@@ -845,7 +882,18 @@ export const extractWorldDetails = async (
                 properties: {
                   id: { type: Type.STRING },
                   name: { type: Type.STRING },
-                  description: { type: Type.STRING }
+                  description: { type: Type.STRING },
+                  structured: {
+                    type: Type.OBJECT,
+                    properties: {
+                      environmentType: { type: Type.STRING },
+                      eraMood: { type: Type.STRING },
+                      lighting: { type: Type.STRING },
+                      landmarks: { type: Type.STRING },
+                      palette: { type: Type.STRING },
+                      constraints: { type: Type.STRING }
+                    }
+                  }
                 },
                 required: ['id', 'name', 'description']
               }
@@ -868,6 +916,15 @@ export const extractWorldDetails = async (
     name: isString(c?.name) ? c.name.trim() : 'Unnamed',
     bio: isString(c?.bio) ? c.bio.trim() : '',
     description: isString(c?.description) ? c.description.trim() : '',
+    structured: readStructuredObject(c?.structured, [
+      'role',
+      'ageBand',
+      'physicalTraits',
+      'outfit',
+      'colorPalette',
+      'personality',
+      'constraints'
+    ]),
     referenceImageIds: []
   }));
 
@@ -875,6 +932,14 @@ export const extractWorldDetails = async (
     id: crypto.randomUUID(),
     name: isString(i?.name) ? i.name.trim() : 'Unnamed',
     description: isString(i?.description) ? i.description.trim() : '',
+    structured: readStructuredObject(i?.structured, [
+      'itemType',
+      'material',
+      'condition',
+      'scale',
+      'visualMotif',
+      'constraints'
+    ]),
     referenceImageIds: []
   }));
 
@@ -882,6 +947,14 @@ export const extractWorldDetails = async (
     id: crypto.randomUUID(),
     name: isString(l?.name) ? l.name.trim() : 'Unnamed',
     description: isString(l?.description) ? l.description.trim() : '',
+    structured: readStructuredObject(l?.structured, [
+      'environmentType',
+      'eraMood',
+      'lighting',
+      'landmarks',
+      'palette',
+      'constraints'
+    ]),
     referenceImageIds: []
   }));
 

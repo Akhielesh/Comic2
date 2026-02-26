@@ -233,6 +233,7 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
         onGoHome={() => onNavigate?.('home')}
         onViewComics={() => onNavigate?.('gallery')}
         onEnterStudio={() => onNavigate?.('dashboard')}
+        onEnterComicForge={() => onNavigate?.('comicforge')}
         onSignIn={() => onNavigate?.('auth')}
         onOpenProfile={() => onNavigate?.('settings')}
         onNavigate={onNavigate || (() => undefined)}

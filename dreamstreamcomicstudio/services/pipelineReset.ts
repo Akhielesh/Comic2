@@ -1,8 +1,10 @@
 import { AppStep, Character, ComicState, Item, LayoutType, Location, Scene, StyleVariant } from "../types";
 import { buildContinuityFromWorld } from "./continuity";
+import { getFormFactorDefaultAspectRatio, recommendStoryPlanning } from "./storyPlanning";
 
 type ResetSourceStage =
   | "script_analysis"
+  | "story_planning_confirm"
   | "style_confirm"
   | "world_confirm"
   | "layout_confirm";
@@ -108,12 +110,18 @@ export const resetFromScriptAnalysis = (
     state.continuity
   );
 
+  const storyPlanning = recommendStoryPlanning({
+    script: nextScript,
+    scenes: nextScenes
+  });
+
   return {
-    ...withStepGate(state, AppStep.STYLE_SELECTION),
+    ...withStepGate(state, AppStep.STORY_PLANNING),
     ...applyResetSource("script_analysis"),
     ...clearCoverState(),
     ...clearPanelState(),
     script: nextScript,
+    storyPlanning,
     scenes: nextScenes,
     styleVariants: [],
     selectedStyleId: undefined,
@@ -135,6 +143,19 @@ export const resetFromScriptAnalysis = (
     scriptHash: stableHash(nextScript || ""),
     sceneHash: hashScenes(nextScenes),
     worldHash: undefined
+  };
+};
+
+export const resetFromStoryPlanningConfirm = (
+  state: ComicState
+): Partial<ComicState> => {
+  const styleAspectRatio = state.storyPlanning
+    ? getFormFactorDefaultAspectRatio(state.storyPlanning.formFactor)
+    : state.styleAspectRatio;
+  return {
+    ...withStepGate(state, AppStep.STYLE_SELECTION),
+    ...applyResetSource("story_planning_confirm"),
+    styleAspectRatio
   };
 };
 

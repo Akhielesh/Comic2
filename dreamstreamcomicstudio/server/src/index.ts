@@ -31,6 +31,7 @@ import { billingRouter } from './routes/billing.js';
 import { adminRouter } from './routes/admin.js';
 import { moderationRouter } from './routes/moderation.js';
 import { sharingRouter } from './routes/sharing.js';
+import { comicForgeRouter } from './routes/comicforge.js';
 
 validateRuntimeConfig();
 
@@ -91,6 +92,11 @@ const visionRateLimit = createRateLimit({
   windowMs: RATE_LIMIT_WINDOW_MS,
   maxRequests: RATE_LIMIT_VISION_MAX_REQUESTS
 });
+const comicForgeRateLimit = createRateLimit({
+  scope: 'comicforge',
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  maxRequests: Math.max(30, Math.floor(RATE_LIMIT_TEXT_MAX_REQUESTS / 2))
+});
 const adminRateLimit = createRateLimit({
   scope: 'admin',
   windowMs: RATE_LIMIT_WINDOW_MS,
@@ -123,6 +129,7 @@ app.use('/api/text', textRateLimit, textRouter);
 app.use('/api/image', imageRateLimit, imageRouter);
 app.use('/api/vision', visionRateLimit, visionRouter);
 app.use('/api/shares', systemRateLimit, sharingRouter);
+app.use('/api/v1/comicforge', comicForgeRateLimit, comicForgeRouter);
 
 app.use(errorHandler);
 

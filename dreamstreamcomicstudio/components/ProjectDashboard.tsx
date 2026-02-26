@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, Suspense } from 'react';
 import { Plus, BookOpen, Edit, Trash2, Copy, LayoutGrid, Sparkles, Zap, CheckCircle2, XCircle, AlertTriangle, Info, Star, Filter, Calendar, ArrowDownAZ, ArrowUpAZ, Clock, Loader2 } from 'lucide-react';
-import { Project } from '../types';
+import { AppStep, Project } from '../types';
 import { Button } from './Button';
 // Lazy load ProjectInfoModal
 // Lazy load ProjectInfoModal
@@ -39,7 +39,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   const [statusFilter, setStatusFilter] = useState<'all' | 'generating' | 'completed' | 'draft'>('all');
   const [hasCoverFilter, setHasCoverFilter] = useState(false);
   const [hasCommentsFilter, setHasCommentsFilter] = useState(false);
-  const [stepFilter, setStepFilter] = useState<'all' | 'script' | 'style' | 'world' | 'cover' | 'layout' | 'preview' | 'build' | 'done'>('all');
+  const [stepFilter, setStepFilter] = useState<'all' | 'script' | 'plan' | 'style' | 'world' | 'cover' | 'layout' | 'preview' | 'build' | 'done'>('all');
 
   const filteredProjects = useMemo(() => {
     const now = Date.now();
@@ -51,14 +51,15 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
       if (stepFilter === 'all') return true;
       const step = project.state.step;
       switch (stepFilter) {
-        case 'script': return step === 0;
-        case 'style': return step === 1;
-        case 'world': return step === 2;
-        case 'cover': return step === 3;
-        case 'layout': return step === 4;
-        case 'preview': return step === 5;
-        case 'build': return step === 6;
-        case 'done': return step === 7;
+        case 'script': return step === AppStep.SCRIPT_INPUT;
+        case 'plan': return step === AppStep.STORY_PLANNING;
+        case 'style': return step === AppStep.STYLE_SELECTION;
+        case 'world': return step === AppStep.REFERENCE_BUILDER;
+        case 'cover': return step === AppStep.COVER;
+        case 'layout': return step === AppStep.LAYOUT_SELECTION;
+        case 'preview': return step === AppStep.COMBINED_PREVIEW;
+        case 'build': return step === AppStep.FULL_GENERATION;
+        case 'done': return step === AppStep.REVIEW_EXPORT;
         default: return true;
       }
     };
@@ -258,6 +259,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                 >
                   <option value="all">All Steps</option>
                   <option value="script">Script</option>
+                  <option value="plan">Plan</option>
                   <option value="style">Style</option>
                   <option value="world">World</option>
                   <option value="cover">Cover</option>

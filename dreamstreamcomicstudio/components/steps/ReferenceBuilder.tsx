@@ -11,6 +11,7 @@ import { buildImagePrompt } from '../../services/imagePrompt';
 import { buildContinuityFromWorld } from '../../services/continuity';
 import { saveCharacterToLibrary } from '../../services/characterLibrary';
 import { ExtractWorldResponse } from '../../apiTypes';
+import { syncCharacterDescription, syncItemDescription, syncLocationDescription } from '../../services/worldSchema';
 
 const CharacterLibraryModal = React.lazy(() => import('../modals/CharacterLibraryModal').then(module => ({ default: module.CharacterLibraryModal })));
 
@@ -49,6 +50,33 @@ const fileToBase64 = (file: File): Promise<string> => {
 };
 
 type Tab = 'characters' | 'items' | 'locations';
+
+const STRUCTURED_FIELDS: Record<Tab, Array<{ key: string; label: string; placeholder: string }>> = {
+  characters: [
+    { key: 'role', label: 'Role', placeholder: 'Captain, scout, rival...' },
+    { key: 'physicalTraits', label: 'Physical Traits', placeholder: 'Build, fur, face marks, silhouette...' },
+    { key: 'outfit', label: 'Outfit/Gear', placeholder: 'Clothing, armor, accessories...' },
+    { key: 'colorPalette', label: 'Palette', placeholder: 'Dominant colors and accents...' },
+    { key: 'personality', label: 'Personality Cues', placeholder: 'Body language and expression vibe...' },
+    { key: 'constraints', label: 'Constraints', placeholder: 'Must-keep traits, avoid changes...' }
+  ],
+  items: [
+    { key: 'itemType', label: 'Item Type', placeholder: 'Artifact, weapon, device...' },
+    { key: 'material', label: 'Material', placeholder: 'Steel, wood, neon polymer...' },
+    { key: 'condition', label: 'Condition', placeholder: 'Pristine, rusty, cracked...' },
+    { key: 'scale', label: 'Scale', placeholder: 'Handheld, two-handed, massive...' },
+    { key: 'visualMotif', label: 'Visual Motif', placeholder: 'Runes, stars, hazard stripes...' },
+    { key: 'constraints', label: 'Constraints', placeholder: 'Must remain lime-green, no glow...' }
+  ],
+  locations: [
+    { key: 'environmentType', label: 'Environment Type', placeholder: 'Alley, temple, sewer junction...' },
+    { key: 'eraMood', label: 'Era/Mood', placeholder: 'Victorian industrial, retro-future...' },
+    { key: 'lighting', label: 'Lighting', placeholder: 'Dusk, flickering neon, moonlit...' },
+    { key: 'landmarks', label: 'Landmarks', placeholder: 'Broken gate, vent fan, rusted valves...' },
+    { key: 'palette', label: 'Palette', placeholder: 'Soot black, moss green, amber...' },
+    { key: 'constraints', label: 'Constraints', placeholder: 'Keep bent bars and whirlpool visible...' }
+  ]
+};
 
 export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
   scenes, script, currentStyle, styleImageId, projectId, initialCharacters, initialItems, initialLocations, initialContinuity, onDataUpdate, onConfirm
@@ -165,13 +193,31 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
     } = entitiesRef.current;
 
     if (type === 'characters') {
-      const nextCharacters = currentCharacters.map((entry) => entry.id === id ? { ...entry, ...updates } : entry);
+      const nextCharacters = currentCharacters.map((entry) => (
+        entry.id === id
+          ? (Object.prototype.hasOwnProperty.call(updates, 'structured')
+            ? syncCharacterDescription({ ...entry, ...updates })
+            : { ...entry, ...updates })
+          : entry
+      ));
       commitWorldState(nextCharacters, currentItems, currentLocations);
     } else if (type === 'items') {
-      const nextItems = currentItems.map((entry) => entry.id === id ? { ...entry, ...updates } : entry);
+      const nextItems = currentItems.map((entry) => (
+        entry.id === id
+          ? (Object.prototype.hasOwnProperty.call(updates, 'structured')
+            ? syncItemDescription({ ...entry, ...updates })
+            : { ...entry, ...updates })
+          : entry
+      ));
       commitWorldState(currentCharacters, nextItems, currentLocations);
     } else {
-      const nextLocations = currentLocations.map((entry) => entry.id === id ? { ...entry, ...updates } : entry);
+      const nextLocations = currentLocations.map((entry) => (
+        entry.id === id
+          ? (Object.prototype.hasOwnProperty.call(updates, 'structured')
+            ? syncLocationDescription({ ...entry, ...updates })
+            : { ...entry, ...updates })
+          : entry
+      ));
       commitWorldState(currentCharacters, currentItems, nextLocations);
     }
   };
@@ -188,21 +234,21 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
 
     if (type === 'characters') {
       commitWorldState(
-        [...currentCharacters, { id, name, description: desc, bio: desc, referenceImageIds: [] }],
+        [...currentCharacters, { id, name, description: desc, bio: desc, structured: {}, referenceImageIds: [] }],
         currentItems,
         currentLocations
       );
     } else if (type === 'items') {
       commitWorldState(
         currentCharacters,
-        [...currentItems, { id, name, description: desc, referenceImageIds: [] }],
+        [...currentItems, { id, name, description: desc, structured: {}, referenceImageIds: [] }],
         currentLocations
       );
     } else {
       commitWorldState(
         currentCharacters,
         currentItems,
-        [...currentLocations, { id, name, description: desc, referenceImageIds: [] }]
+        [...currentLocations, { id, name, description: desc, structured: {}, referenceImageIds: [] }]
       );
     }
   };
@@ -483,6 +529,29 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
             />
           </div>
 
+          <div className="space-y-2">
+            <div className="text-[10px] font-bold uppercase text-slate-500">Structured Fields</div>
+            <div className="grid grid-cols-1 gap-2">
+              {STRUCTURED_FIELDS[type].map((field) => (
+                <div key={field.key} className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase">{field.label}</label>
+                  <input
+                    value={entity.structured?.[field.key] || ''}
+                    onChange={(e) => {
+                      const structured = {
+                        ...(entity.structured || {}),
+                        [field.key]: e.target.value
+                      };
+                      updateEntity(type, entity.id, { structured });
+                    }}
+                    className="w-full border border-slate-300 rounded px-2 py-1 text-xs font-comic"
+                    placeholder={field.placeholder}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
           {/* Refs */}
           <div className="flex gap-2">
             {(entity.referenceImageIds || []).map((id: string, i: number) => (
@@ -523,22 +592,35 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
   const canConfirmWorld = !requiresContaminationAck || worldDiagnosticsAcknowledged;
 
   // Add Button Card
-  const AddButtonCard = ({ type }: { type: Tab }) => (
-    <button
-      onClick={() => addEntity(type)}
-      className="bg-slate-50 border-4 border-dashed border-slate-300 rounded-xl flex flex-col items-center justify-center min-h-[300px] gap-4 text-slate-400 hover:text-brand-blue hover:border-brand-blue hover:bg-brand-blue/5 transition-all group"
-    >
-      <div className="w-16 h-16 rounded-full bg-slate-200 group-hover:bg-brand-blue group-hover:text-white flex items-center justify-center transition-colors">
-        <Users className="w-8 h-8" />
+  const AddButtonCard = ({ type }: { type: Tab }) => {
+    const handleActivate = () => addEntity(type);
+    const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        handleActivate();
+      }
+    };
+
+    return (
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={handleActivate}
+        onKeyDown={handleKeyDown}
+        className="bg-slate-50 border-4 border-dashed border-slate-300 rounded-xl flex flex-col items-center justify-center min-h-[300px] gap-4 text-slate-400 hover:text-brand-blue hover:border-brand-blue hover:bg-brand-blue/5 transition-all group cursor-pointer"
+      >
+        <div className="w-16 h-16 rounded-full bg-slate-200 group-hover:bg-brand-blue group-hover:text-white flex items-center justify-center transition-colors">
+          <Users className="w-8 h-8" />
+        </div>
+        <div className="font-bold font-display text-lg">Add {type === 'characters' ? 'Character' : type === 'items' ? 'Item' : 'Location'}</div>
+        {type === 'characters' && (
+          <Button size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); setShowLibraryModal(true); }}>
+            Load from Library
+          </Button>
+        )}
       </div>
-      <div className="font-bold font-display text-lg">Add {type === 'characters' ? 'Character' : type === 'items' ? 'Item' : 'Location'}</div>
-      {type === 'characters' && (
-        <Button size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); setShowLibraryModal(true); }}>
-          Load from Library
-        </Button>
-      )}
-    </button>
-  );
+    );
+  };
 
   return (
     <div className="max-w-6xl mx-auto space-y-6 animate-fade-in">

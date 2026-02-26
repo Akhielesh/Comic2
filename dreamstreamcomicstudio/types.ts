@@ -194,11 +194,369 @@ export interface Scene {
   setting: string;
 }
 
+export type ComicBookFormFactor =
+  | 'us_comic'
+  | 'manga_tankobon'
+  | 'european_album'
+  | 'webtoon_vertical'
+  | 'trade_paperback'
+  | 'custom';
+
+export interface StoryPlanningState {
+  formFactor: ComicBookFormFactor;
+  customFormFactorNote?: string;
+  recommendedRange: {
+    min: number;
+    max: number;
+  };
+  userRange: {
+    min: number;
+    max: number;
+  };
+  recommendedPageCount: number;
+  approvedPageCount?: number;
+  feasibility: {
+    status: 'ok' | 'tight' | 'insufficient';
+    reason: string;
+    estimatedPanels: {
+      min: number;
+      max: number;
+    };
+  };
+  estimatedCostRange: {
+    currency: string;
+    minUsd: number;
+    maxUsd: number;
+  };
+  approved: boolean;
+  approvedAt?: number;
+  resumeStep?: number;
+}
+
+export type PipelineMode = 'classic' | 'comicforge';
+
+export enum ComicForgeStage {
+  FORMAT_SETUP = 'format_setup',
+  SCRIPT_ANALYSIS = 'script_analysis',
+  STORY_ARCHITECTURE = 'story_architecture',
+  STYLE_SELECTION = 'style_selection',
+  ASSET_LIBRARY = 'asset_library',
+  LAYOUT_SYSTEM = 'layout_system',
+  STORYBOARD = 'storyboard',
+  PREVIEW_PACK = 'preview_pack',
+  GENERATION = 'generation',
+  QC_REVIEW = 'qc_review',
+  EXPORT = 'export'
+}
+
+export type ComicForgeApprovalGate = {
+  stage: ComicForgeStage;
+  approved: boolean;
+  approvedAt?: number;
+};
+
+export type ComicForgeFormatSpec = {
+  readingFormat: 'print' | 'webtoon_vertical' | 'digital_paged' | 'social_shorts';
+  platform: 'webtoon' | 'tapas' | 'print_a4' | 'print_us_letter' | 'pdf_portfolio' | 'instagram';
+  resolutionTarget: 'screen_72' | 'print_300' | 'screen_hd_150';
+  rtlReading: boolean;
+  canvasWidthPx: number;
+  canvasHeightPx: number;
+  panelDensityMax: number;
+  safeTextSizeMinPt: number;
+  bleedPx: number;
+  trimPx: number;
+  safeAreaPx: number;
+  gutterMinPx: number;
+  exportPresets: string[];
+  warnings: string[];
+};
+
+export type ComicForgeAmbiguityFlag = {
+  id: string;
+  type: 'speaker_unclear' | 'location_unclear' | 'timeline_gap';
+  page: number;
+  panel: number;
+  description: string;
+  resolved?: boolean;
+  resolution?: string;
+};
+
+export type ComicForgeStructuredPanel = {
+  panelIndex: number;
+  description: string;
+  dialogue: Array<{ speaker: string; text: string; order: number }>;
+  captions: Array<{ text: string; order: number }>;
+  sfx: Array<{ text: string; style: string }>;
+  cameraShotSuggestion: 'close-up' | 'medium' | 'wide' | 'extreme-close' | 'bird-eye' | 'worm-eye' | 'over-shoulder';
+  timeOfDay: string;
+  locationName: string;
+};
+
+export type ComicForgeStructuredPage = {
+  page: number;
+  panels: ComicForgeStructuredPanel[];
+};
+
+export type ComicForgeStructuredScriptAnalysis = {
+  structuredScript: ComicForgeStructuredPage[];
+  sceneList: Array<{ sceneId: string; name: string; location: string; time: string; pagesInvolved: number[] }>;
+  castList: Array<{ name: string; role?: string; firstAppearancePage: number; descriptionHints?: string }>;
+  propList: Array<{ name: string; firstAppearancePage: number; descriptionHints?: string }>;
+  ambiguityFlags: ComicForgeAmbiguityFlag[];
+  tone: string;
+  genre: string;
+  estimatedPanelCount: number;
+  dialogueDensityScore: number;
+  actionDensityScore: number;
+};
+
+export type ComicForgeBeat = {
+  beatId: string;
+  name: string;
+  type: 'setup' | 'conflict' | 'escalation' | 'twist' | 'climax' | 'resolution';
+  scenesInvolved: string[];
+};
+
+export type ComicForgePagePlanRow = {
+  pageNumber: number;
+  purpose: 'setup' | 'action' | 'dialogue' | 'twist' | 'payoff' | 'transition';
+  scenesOnThisPage: string[];
+  panelCountSuggestion: number;
+  cliffhanger: boolean;
+  pacingNote: string;
+  dialogueHeavy: boolean;
+  warnings: string[];
+};
+
+export type ComicForgeStoryArchitecture = {
+  beatSheet: ComicForgeBeat[];
+  suggestedPageCount: number;
+  pagePlan: ComicForgePagePlanRow[];
+  globalWarnings: string[];
+};
+
+export type ComicForgeStyleRecommendation = {
+  styleName: string;
+  rationale: string;
+  conflictWarnings: string[];
+  stylePromptSeed: string;
+};
+
+export type ComicForgeStyleBible = {
+  baseGenerationPromptFragment: string;
+  lineQuality: 'clean' | 'scratchy' | 'bold' | 'minimal';
+  shadingMode: 'flat' | 'cel' | 'painterly' | 'crosshatch' | 'none';
+  colorPalette: {
+    primary: string[];
+    accent: string[];
+    forbidden: string[];
+    moodRules: string;
+  };
+  backgroundDetail: 'full' | 'suggested' | 'minimal' | 'none';
+  cameraLanguage: 'cinematic' | 'flat' | 'dynamic' | 'manga-dynamic';
+  sfxTypographyStyle: string;
+  negativePromptFragment: string;
+  conflictWarnings: string[];
+};
+
+export type ComicForgeAssetCardType = 'character' | 'location' | 'prop' | 'vehicle' | 'sfx';
+
+export type ComicForgeAssetReference = {
+  angle: string;
+  imageId?: string;
+  imageUrl?: string;
+  label: 'canonical' | 'variant';
+};
+
+export type ComicForgeAssetCard = {
+  id: string;
+  cardType: ComicForgeAssetCardType;
+  name: string;
+  canonicalDescription: string;
+  doNotChange: string[];
+  negativeConstraints: string[];
+  allowedVariants: string[];
+  referenceImages: ComicForgeAssetReference[];
+  consistencyMethod: 'reference_injection' | 'lora';
+  hash?: string;
+  status: 'draft' | 'reference_generated' | 'locked';
+};
+
+export type ComicForgeBalloonZone = {
+  panelIdx: number;
+  zones: Array<{ xPct: number; yPct: number; wPct: number; hPct: number; purpose: 'balloon' | 'caption' | 'sfx' }>;
+};
+
+export type ComicForgeLayoutTemplate = {
+  id: string;
+  name: string;
+  panelCount: number;
+  gridDefinition: Array<{
+    colStart: number;
+    colEnd: number;
+    rowStart: number;
+    rowEnd: number;
+    aspectRatio?: number;
+  }>;
+  gutterPx: number;
+  captionStyle: 'box' | 'borderless';
+  balloonStyle: 'round' | 'spiky' | 'cloud' | 'rectangular';
+  sfxStyle: string;
+  source: 'preset' | 'user_upload' | 'extracted';
+  previewImageUrl?: string;
+};
+
+export type ComicForgeStoryboardValidation = {
+  pass: boolean;
+  pageLevelWarnings: string[];
+  panelLevelWarnings: Array<{ pageNumber: number; panelIndex: number; message: string }>;
+};
+
+export type ComicForgePreviewPack = {
+  totalPages: number;
+  totalPanels: number;
+  estimatedDialogueBalloons: number;
+  estimatedCosts: {
+    thumbnailsUsd: number;
+    draftUsd: number;
+    finalUsd: number;
+    exportUpscaleUsd: number;
+    totalUsd: number;
+  };
+  estimatedDurationSeconds: number;
+  pageBreakdown: Array<{
+    pageNumber: number;
+    title: string;
+    purpose: ComicForgePagePlanRow['purpose'];
+    panelCount: number;
+    warnings: string[];
+    estimatedPageCostUsd: number;
+  }>;
+  globalWarnings: string[];
+};
+
+export type ComicForgeQCFlag = {
+  panelId: string;
+  checkType: 'consistency' | 'continuity' | 'reading_order' | 'legibility' | 'print_safety';
+  severity: 'warn' | 'fail';
+  message: string;
+  suggestion?: string;
+};
+
+export type ComicForgeQCReport = {
+  pageId: string;
+  pagePassed: boolean;
+  panelFlags: ComicForgeQCFlag[];
+};
+
+export type ComicForgeExportPreset =
+  | 'webtoon_episode'
+  | 'tapas_episode'
+  | 'print_a4_300dpi'
+  | 'print_us_letter_300dpi'
+  | 'digital_pdf'
+  | 'social_cover_crop'
+  | 'character_card_export';
+
+export type ComicForgeJobSummary = {
+  id: string;
+  taskType: string;
+  status: 'queued' | 'running' | 'done' | 'failed';
+  progress?: number;
+  createdAt: number;
+  completedAt?: number;
+  errorMessage?: string;
+  result?: Record<string, unknown>;
+};
+
+export type ComicForgeCostTracker = {
+  currency: string;
+  estimatedUsd: number;
+  actualUsd: number;
+  byTaskType: Record<string, number>;
+};
+
+export type ComicForgeState = {
+  stage: ComicForgeStage;
+  maxStageReached: ComicForgeStage;
+  approvals: ComicForgeApprovalGate[];
+  lastJobId?: string;
+  formatSpec?: ComicForgeFormatSpec;
+  scriptInput?: string;
+  analysis?: ComicForgeStructuredScriptAnalysis;
+  architecture?: ComicForgeStoryArchitecture;
+  styleRecommendations?: ComicForgeStyleRecommendation[];
+  styleBible?: ComicForgeStyleBible;
+  assetCards?: ComicForgeAssetCard[];
+  layoutTemplate?: ComicForgeLayoutTemplate;
+  balloonZones?: ComicForgeBalloonZone[];
+  storyboardValidation?: ComicForgeStoryboardValidation;
+  previewPack?: ComicForgePreviewPack;
+  qcReports?: ComicForgeQCReport[];
+  selectedExportPreset?: ComicForgeExportPreset;
+  costTracker?: ComicForgeCostTracker;
+  updatedAt: number;
+};
+
+export const COMICFORGE_STAGE_ORDER: ComicForgeStage[] = [
+  ComicForgeStage.FORMAT_SETUP,
+  ComicForgeStage.SCRIPT_ANALYSIS,
+  ComicForgeStage.STORY_ARCHITECTURE,
+  ComicForgeStage.STYLE_SELECTION,
+  ComicForgeStage.ASSET_LIBRARY,
+  ComicForgeStage.LAYOUT_SYSTEM,
+  ComicForgeStage.STORYBOARD,
+  ComicForgeStage.PREVIEW_PACK,
+  ComicForgeStage.GENERATION,
+  ComicForgeStage.QC_REVIEW,
+  ComicForgeStage.EXPORT
+];
+
+export const createDefaultComicForgeState = (): ComicForgeState => ({
+  stage: ComicForgeStage.FORMAT_SETUP,
+  maxStageReached: ComicForgeStage.FORMAT_SETUP,
+  approvals: COMICFORGE_STAGE_ORDER.map((stage) => ({
+    stage,
+    approved: false
+  })),
+  updatedAt: Date.now()
+});
+
+export interface CharacterStructuredDetails {
+  role?: string;
+  ageBand?: string;
+  physicalTraits?: string;
+  outfit?: string;
+  colorPalette?: string;
+  personality?: string;
+  constraints?: string;
+}
+
+export interface ItemStructuredDetails {
+  itemType?: string;
+  material?: string;
+  condition?: string;
+  scale?: string;
+  visualMotif?: string;
+  constraints?: string;
+}
+
+export interface LocationStructuredDetails {
+  environmentType?: string;
+  eraMood?: string;
+  lighting?: string;
+  landmarks?: string;
+  palette?: string;
+  constraints?: string;
+}
+
 export interface Character {
   id: string;
   name: string;
   bio: string; // Backstory/Personality
   description: string; // Visual prompt
+  structured?: CharacterStructuredDetails;
   imageId?: string;
   imageUrl?: string;
   referenceImageIds: string[];
@@ -213,6 +571,7 @@ export interface Item {
   id: string;
   name: string;
   description: string;
+  structured?: ItemStructuredDetails;
   imageId?: string;
   imageUrl?: string;
   referenceImageIds: string[];
@@ -222,6 +581,7 @@ export interface Location {
   id: string;
   name: string;
   description: string;
+  structured?: LocationStructuredDetails;
   imageId?: string;
   imageUrl?: string;
   referenceImageIds: string[];
@@ -419,14 +779,17 @@ export interface Review {
 }
 
 export interface ComicState {
+  pipelineMode?: PipelineMode;
+  comicforge?: ComicForgeState;
   step: number;
   maxStepReached: number;
   flowVersion?: number;
   script: string;
+  storyPlanning?: StoryPlanningState;
   scriptHash?: string;
   sceneHash?: string;
   worldHash?: string;
-  lastResetSourceStage?: 'script_analysis' | 'style_confirm' | 'world_confirm' | 'layout_confirm';
+  lastResetSourceStage?: 'script_analysis' | 'story_planning_confirm' | 'style_confirm' | 'world_confirm' | 'layout_confirm';
   scriptChecklist?: {
     found: string[];
     missing: string[];
@@ -567,13 +930,14 @@ export interface MasterChatSession {
 
 export enum AppStep {
   SCRIPT_INPUT = 0,
-  STYLE_SELECTION = 1,
-  REFERENCE_BUILDER = 2,
-  COVER = 3,
-  LAYOUT_SELECTION = 4,
-  COMBINED_PREVIEW = 5,
-  FULL_GENERATION = 6,
-  REVIEW_EXPORT = 7
+  STORY_PLANNING = 1,
+  STYLE_SELECTION = 2,
+  REFERENCE_BUILDER = 3,
+  COVER = 4,
+  LAYOUT_SELECTION = 5,
+  COMBINED_PREVIEW = 6,
+  FULL_GENERATION = 7,
+  REVIEW_EXPORT = 8
 }
 
 export interface UserProfile {

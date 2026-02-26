@@ -11,9 +11,9 @@ import { groundWorldEntities } from "../services/worldGrounding";
 dotenv.config({ path: path.resolve(process.cwd(), ".env.local") });
 dotenv.config();
 
-const FLOW_VERSION = 3;
+const FLOW_VERSION = 4;
 const MIN_STEP = 0;
-const MAX_STEP = 7;
+const MAX_STEP = 8;
 
 const stableHash = (value: string) => {
   let hash = 2166136261;

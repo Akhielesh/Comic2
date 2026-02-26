@@ -34,6 +34,17 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
   const lines: string[] = [];
   const styleLine = clean(options.stylePrompt);
 
+  if (options.stage === "style") {
+    return [
+      "Style exploration board for comic production.",
+      "No named characters, no named items, no named locations, and no plot events.",
+      "Focus on line quality, brushwork, shading language, color palette, and atmospheric mood.",
+      "Single full-bleed frame, no panel borders, no text, no logos.",
+      styleLine ? `Art Style: ${styleLine}` : "",
+      clean(options.extraNotes) ? `Creative Direction: ${clean(options.extraNotes)}` : ""
+    ].filter(Boolean).join("\n");
+  }
+
   // USER REQUEST: STRICT FORMULA FOR WORLD BUILDING & COVER STAGES
   // 1. Characters: "Show the character in three poses: front, three-quarter, and back view" + Style + Description
   if (options.stage === "character_sheet") {
@@ -61,21 +72,24 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
 
   // 3. Cover: Template Design + Style
   if (options.stage === "cover") {
-    // sceneAction holds the template description in CoverDesigner.tsx
     return [
-      options.sceneAction ? `Cover Design: ${clean(options.sceneAction)}` : "Comic book cover illustration.",
+      "Professional comic-book cover design.",
+      "No text rendering required in-image; leave clean text-safe zones for title/subtitle overlays.",
+      "Strong silhouette hierarchy, readable at thumbnail size, and high-impact focal composition.",
+      "Avoid poster-like clutter and avoid multi-frame comic page layouts.",
+      options.sceneAction ? `Template Composition Rules: ${clean(options.sceneAction)}` : "Template Composition Rules: balanced dramatic cover composition.",
+      options.setting ? `World/Environment Cues: ${clean(options.setting)}` : "",
+      options.characters ? `Core Cast Presence: ${clean(options.characters)}` : "",
+      options.items ? `Key Props/Symbols: ${clean(options.items)}` : "",
       styleLine ? `Art Style: ${styleLine}` : "",
-      "High quality, full color cover art."
+      clean(options.extraNotes) ? `Creative Brief: ${clean(options.extraNotes)}` : "",
+      "High quality full-color illustration with intentional negative space for masthead."
     ].filter(Boolean).join(" ");
   }
 
   // 4. Panel Generation (Standard Rich Prompt)
   // Keeps the robust structured format for complex scenes
   switch (options.stage) {
-    case "style":
-      lines.push("Comic panel style preview.");
-      lines.push("Single full-bleed image, no panel borders or frames.");
-      break;
     case "panel":
       lines.push("Comic panel illustration.");
       lines.push("Single full-bleed image, no panel borders or frames.");
@@ -94,7 +108,11 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
 
   if (clean(options.projectTitle)) lines.push(`Project: ${clean(options.projectTitle)}.`);
   if (styleLine) lines.push(`IMPORTANT — Art style (match exactly): ${styleLine}.`);
-  if (options.stage === "style" && clean(options.layoutType)) {
+  if (
+    clean(options.layoutType)
+    && options.stage !== "panel"
+    && options.stage !== "panel_regen"
+  ) {
     lines.push(`Layout: ${clean(options.layoutType)}.`);
   }
   if (clean(options.subjectName)) lines.push(`Subject: ${clean(options.subjectName)}.`);

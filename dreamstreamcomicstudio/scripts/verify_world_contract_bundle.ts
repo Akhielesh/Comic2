@@ -53,4 +53,16 @@ if (!hasExtractWorldPayloadWithScript) {
   fail('Could not verify extract-world payload includes both scenes and script in the compiled bundle.');
 }
 
-console.log('[verify:world-contract] OK: found /api/system/version and extract-world payload with scenes+script.');
+const hasStoryPlanningSignals =
+  bundleText.includes('storyPlanning')
+  && (
+    bundleText.includes('Story Planning')
+    || bundleText.includes('Confirm Plan & Continue')
+    || bundleText.includes('STORY_PLANNING')
+  );
+
+if (!hasStoryPlanningSignals) {
+  fail('Could not verify Story Planning step assets in the compiled bundle.');
+}
+
+console.log('[verify:world-contract] OK: found /api/system/version, extract-world payload with scenes+script, and Story Planning assets.');

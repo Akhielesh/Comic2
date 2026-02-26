@@ -13,6 +13,7 @@ const AccountSettings = lazyImportWithRetry(() => import('./components/AccountSe
 const PrivacyPolicy = lazyImportWithRetry(() => import('./components/PrivacyPolicy').then(module => ({ default: module.PrivacyPolicy })));
 const TermsOfService = lazyImportWithRetry(() => import('./components/TermsOfService').then(module => ({ default: module.TermsOfService })));
 const SharedViewer = lazyImportWithRetry(() => import('./components/SharedViewer').then(module => ({ default: module.SharedViewer })));
+const ComicForgeStudio = lazyImportWithRetry(() => import('./components/comicforge/ComicForgeStudio').then(module => ({ default: module.ComicForgeStudio })));
 
 import { useProjectManager } from './hooks/useProjectManager';
 import { checkSystemDiagnostics, checkSystemStatus } from './services/geminiService';
@@ -44,6 +45,7 @@ type AppView =
   | 'privacy'
   | 'terms'
   | 'profile'
+  | 'comicforge'
   | 'shared';
 
 type SettingsTab = 'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin' | 'preferences' | 'security';
@@ -505,6 +507,7 @@ const App: React.FC = () => {
       view === 'test' ||
       view === 'learn' ||
       view === 'gallery' ||
+      view === 'comicforge' ||
       view === 'privacy' ||
       view === 'terms'
     ) {
@@ -519,14 +522,16 @@ const App: React.FC = () => {
     setCurrentView('editor');
   };
 
-  const handleOpenProject = (id: string) => {
+  const handleOpenProject = (id: string, expectedPipelineMode?: 'classic' | 'comicforge') => {
     setIsHydratingProject(true);
     hydrateProjectAssets(id).finally(() => {
       if (activeProjectId && !projects.find((project) => project.id === activeProjectId)) {
         setPublicProject(null);
       }
+      const project = projects.find((candidate) => candidate.id === id);
       setActiveProjectId(id);
-      setCurrentView('editor');
+      const pipelineMode = expectedPipelineMode || project?.state.pipelineMode;
+      setCurrentView(pipelineMode === 'comicforge' ? 'comicforge' : 'editor');
       setIsHydratingProject(false);
     });
   };
@@ -597,7 +602,7 @@ const App: React.FC = () => {
   }
 
   // Protection: studio and reader views require an authenticated user.
-  const isProtectedViewStrict = ['dashboard', 'editor', 'reader', 'test', 'learn', 'settings'].includes(currentView);
+  const isProtectedViewStrict = ['dashboard', 'editor', 'reader', 'test', 'learn', 'settings', 'comicforge'].includes(currentView);
   const effectiveView: AppView = !user && isProtectedViewStrict ? 'auth' : currentView;
 
   const activeProject = activeProjectId ? getProject(activeProjectId) : undefined;
@@ -614,6 +619,7 @@ const App: React.FC = () => {
             onGoHome={handleBackToHome}
             onViewComics={() => handleNavigate('gallery')}
             onEnterStudio={() => handleNavigate('dashboard')}
+            onEnterComicForge={() => handleNavigate('comicforge')}
             onSignIn={() => handleNavigate('auth')}
             onOpenProfile={() => {
               setSettingsTab('profile');
@@ -723,6 +729,17 @@ const App: React.FC = () => {
               onUpdate={(updates) => updateProject(activeProject.id, updates)}
               onStartGeneration={startGeneration}
               onStopGeneration={stopGeneration}
+              onBack={() => setCurrentView('dashboard')}
+            />
+          )}
+
+          {effectiveView === 'comicforge' && (
+            <ComicForgeStudio
+              projects={projects}
+              activeProject={activeProject}
+              onCreateProject={createProject}
+              onOpenProject={(id) => handleOpenProject(id, 'comicforge')}
+              onUpdateProject={updateProject}
               onBack={() => setCurrentView('dashboard')}
             />
           )}

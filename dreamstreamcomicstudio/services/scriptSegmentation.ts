@@ -16,6 +16,13 @@ const splitByParagraphs = (script: string): string[] => {
     .filter(Boolean);
 };
 
+const splitBySingleNewlines = (script: string): string[] => {
+  return script
+    .split(/\n/g)
+    .map(cleanSegment)
+    .filter(Boolean);
+};
+
 export const segmentScriptForReview = (script: string): string[] => {
   const normalized = (script || '').trim();
   if (!normalized) return [];
@@ -25,6 +32,9 @@ export const segmentScriptForReview = (script: string): string[] => {
 
   const byParagraphs = splitByParagraphs(normalized);
   if (byParagraphs.length > 0) return byParagraphs;
+
+  const bySingleNewline = splitBySingleNewlines(normalized);
+  if (bySingleNewline.length > 0) return bySingleNewline;
 
   return [normalized];
 };

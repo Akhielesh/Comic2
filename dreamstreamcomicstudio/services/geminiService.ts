@@ -59,6 +59,15 @@ const LEGACY_WORLD_CONTRACT_VERSION = 0;
 const SYSTEM_VERSION_CACHE_MS = 5 * 60_000;
 let systemVersionCache: { value: SystemVersionResponse; fetchedAt: number } | null = null;
 let legacyWorldContractWarningShown = false;
+const FRONTEND_GIT_SHA = String(import.meta.env.VITE_APP_GIT_SHA || '').trim() || 'unknown';
+
+export type DeploymentParityStatus = {
+  frontendGitSha: string;
+  backendGitSha: string;
+  contractVersion: number;
+  requiredContractVersion: number;
+  mismatch: boolean;
+};
 
 const buildUnknownSystemVersion = (): SystemVersionResponse => ({
   appVersion: 'unknown',
@@ -277,6 +286,24 @@ export const checkSystemDiagnostics = async (): Promise<SystemDiagnosticsRespons
 
 export const checkSystemVersion = async (): Promise<SystemVersionResponse> => {
   return getCachedSystemVersion();
+};
+
+export const checkDeploymentParity = async (): Promise<DeploymentParityStatus> => {
+  const version = await getCachedSystemVersion();
+  const backendGitSha = String(version.gitSha || 'unknown').trim() || 'unknown';
+  const mismatch = (
+    FRONTEND_GIT_SHA !== 'unknown'
+    && backendGitSha !== 'unknown'
+    && FRONTEND_GIT_SHA !== backendGitSha
+  );
+
+  return {
+    frontendGitSha: FRONTEND_GIT_SHA,
+    backendGitSha,
+    contractVersion: Number(version.worldExtractionContractVersion || 0),
+    requiredContractVersion: WORLD_EXTRACTION_CONTRACT_VERSION,
+    mismatch
+  };
 };
 
 export const queryUniversalAssistant = async (

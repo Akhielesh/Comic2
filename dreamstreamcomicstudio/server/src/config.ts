@@ -96,6 +96,21 @@ export const FLUX_MODEL_ID = process.env.FLUX_MODEL_ID || 'pixazo/flux-1-schnell
 
 export const STORAGE_BUCKET = process.env.STORAGE_BUCKET || 'comic-assets';
 export const IMAGE_INCLUDE_DATA_URL_LEGACY = (process.env.IMAGE_INCLUDE_DATA_URL_LEGACY || '').toLowerCase() === 'true';
+export const REDIS_URL = process.env.REDIS_URL || '';
+export const COMICFORGE_ENABLED = parseBooleanEnv(process.env.COMICFORGE_ENABLED, true);
+export const COMICFORGE_QUEUE_PREFIX = (process.env.COMICFORGE_QUEUE_PREFIX || 'comicforge').trim() || 'comicforge';
+export const COMICFORGE_WORKER_CONCURRENCY = parseIntegerEnv(
+  process.env.COMICFORGE_WORKER_CONCURRENCY,
+  4,
+  'COMICFORGE_WORKER_CONCURRENCY',
+  1
+);
+export const COMICFORGE_JOB_RETENTION_DAYS = parseIntegerEnv(
+  process.env.COMICFORGE_JOB_RETENTION_DAYS,
+  14,
+  'COMICFORGE_JOB_RETENTION_DAYS',
+  1
+);
 
 export const REQUIRED_RUNTIME_ENV_VARS = ['CORS_ORIGIN', 'VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY'] as const;
 type RequiredRuntimeEnv = (typeof REQUIRED_RUNTIME_ENV_VARS)[number];
@@ -141,5 +156,13 @@ export const validateRuntimeConfig = () => {
     if (missingBilling.length > 0) {
       throw new Error(`[CONFIG] Billing is enabled but Stripe variables are missing: ${missingBilling.join(', ')}.`);
     }
+  }
+
+  if (COMICFORGE_ENABLED && !REDIS_URL.trim()) {
+    const message = '[CONFIG] ComicForge is enabled but REDIS_URL is missing. ComicForge routes will return COMICFORGE_QUEUE_UNAVAILABLE.';
+    if (STRICT_ENV_VALIDATION) {
+      throw new Error(message);
+    }
+    console.warn(message);
   }
 };

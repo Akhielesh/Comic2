@@ -24,6 +24,14 @@
 `GIT_SHA=<commit_sha>`
 `BUILD_TIMESTAMP=<ISO8601_utc_timestamp>`
 
+## Deployment Order (Required)
+
+1. Deploy backend (Railway) first.
+2. Verify backend reports the target commit SHA via `/api/system/version`.
+3. Deploy frontend (Cloudflare Pages) second from the exact same commit SHA.
+4. Purge Cloudflare cache immediately after frontend deploy.
+5. Verify frontend and backend `gitSha` now match in runtime diagnostics.
+
 ## Frontend Deployment (Cloudflare Pages)
 
 1. Connect repo and select project root:
@@ -91,11 +99,15 @@
 3. Verify version endpoint:
 `curl -i https://api.yourdomain.com/api/system/version`
 3.1 Verify `worldExtractionContractVersion >= 3`.
+3.2 Verify `gitSha` equals the expected release commit.
 4. Verify frontend bundle contract before publish:
 `npm run build && npm run verify:world-contract`
+4.1 Confirm this check is run against the exact commit deployed to Railway.
 5. Verify `extract-world` rejects missing script:
 `curl -i -X POST https://api.yourdomain.com/api/text/extract-world -H 'Content-Type: application/json' -H 'Authorization: Bearer <token>' -d '{\"scenes\":[]}'`
 Expected: `400` with `SCRIPT_REQUIRED_FOR_WORLD_EXTRACTION`.
+6. Purge Cloudflare cache and hard-refresh `app.yourdomain.com`.
+6.1 Confirm browser network payload for `/api/text/extract-world` includes both `scenes` and `script`.
 6. Verify frontend loads and can call API.
 7. Verify auth login flow.
 8. Verify text generation and image generation success.
