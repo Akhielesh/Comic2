@@ -84,6 +84,33 @@ export const ComicForgeStudio: React.FC<ComicForgeStudioProps> = ({
     initializeFromProject(activeForgeProject);
   }, [activeForgeProject?.id]);
 
+  useEffect(() => {
+    if (!activeForgeProject || !lastJob) return;
+    if (lastJob.status !== 'queued' && lastJob.status !== 'running') return;
+
+    let cancelled = false;
+    const pollStatus = async () => {
+      try {
+        const response = await comicForgeApi.getJobStatus(lastJob.id);
+        if (!cancelled) {
+          setLastJob(response.data.job);
+        }
+      } catch {
+        // Non-blocking: keep current status and let user retry action.
+      }
+    };
+
+    void pollStatus();
+    const timer = window.setInterval(() => {
+      void pollStatus();
+    }, 2000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeForgeProject?.id, lastJob?.id, lastJob?.status, setLastJob]);
+
   const persistState = (project: Project, nextState: ComicForgeState) => {
     onUpdateProject(project.id, buildComicForgeProjectPatch(project, nextState));
   };
@@ -247,6 +274,7 @@ export const ComicForgeStudio: React.FC<ComicForgeStudioProps> = ({
                   ...prev,
                   scriptInput: rawScriptText,
                   analysis: response.data.analysis,
+                  assetCards: response.data.assetCards || prev.assetCards,
                   updatedAt: Date.now()
                 }));
               } catch (err) {

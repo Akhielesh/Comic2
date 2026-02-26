@@ -117,6 +117,56 @@ const buildLegacyFallbackPath = (imagePath: string): string | null => {
   return `u/${legacy.ownerId}/tmp/${filename}`;
 };
 
+const addPathWithExtensions = (target: Set<string>, basePath: string) => {
+  const trimmed = basePath.trim();
+  if (!trimmed) return;
+  const filename = trimmed.split('/').pop() || '';
+  if (filename.includes('.')) {
+    target.add(trimmed);
+    return;
+  }
+
+  target.add(trimmed);
+  target.add(`${trimmed}.webp`);
+  target.add(`${trimmed}.png`);
+  target.add(`${trimmed}.jpg`);
+  target.add(`${trimmed}.jpeg`);
+};
+
+const buildImagePathCandidates = (imagePath: string): string[] => {
+  const candidates = new Set<string>();
+  addPathWithExtensions(candidates, imagePath);
+
+  const legacyFallback = buildLegacyFallbackPath(imagePath);
+  if (legacyFallback) {
+    addPathWithExtensions(candidates, legacyFallback);
+  }
+
+  if (imagePath.startsWith('u/')) {
+    const withoutExt = imagePath.replace(/\.(webp|png|jpg|jpeg)$/i, '');
+    if (withoutExt !== imagePath) {
+      addPathWithExtensions(candidates, withoutExt);
+    }
+  }
+
+  return Array.from(candidates);
+};
+
+const isStorageMissingObjectError = (error: unknown): boolean => {
+  const message = String((error as { message?: string })?.message || '').toLowerCase();
+  const status = Number(
+    (error as { status?: number; statusCode?: number })?.status
+    || (error as { statusCode?: number })?.statusCode
+    || 0
+  );
+
+  return status === 404
+    || message.includes('not found')
+    || message.includes('no such file')
+    || message.includes('object not found')
+    || message.includes('does not exist');
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null;
 
@@ -325,36 +375,35 @@ systemRouter.get('/image-url', async (req, res, next) => {
     }
 
     const transform = parseImageTransform(req.query as Record<string, unknown>);
-    let finalPath = imagePath;
-    let { data, error } = await supabaseAdmin.storage
-      .from(STORAGE_BUCKET)
-      .createSignedUrl(finalPath, SIGNED_URL_TTL_SECONDS, transform ? { transform } : undefined);
+    const candidates = buildImagePathCandidates(imagePath);
+    let lastError: unknown = null;
 
-    if (error || !data?.signedUrl) {
-      const fallbackPath = buildLegacyFallbackPath(imagePath);
-      if (!fallbackPath) {
-        if (error) throw error;
-        return res.status(404).json({ error: { message: 'Image not found.' } });
+    for (const candidatePath of candidates) {
+      const result = await supabaseAdmin.storage
+        .from(STORAGE_BUCKET)
+        .createSignedUrl(candidatePath, SIGNED_URL_TTL_SECONDS, transform ? { transform } : undefined);
+
+      if (result.data?.signedUrl) {
+        return res.json({
+          url: result.data.signedUrl,
+          path: candidatePath,
+          expiresIn: SIGNED_URL_TTL_SECONDS
+        });
       }
 
-      finalPath = fallbackPath;
-      const fallbackResult = await supabaseAdmin.storage
-        .from(STORAGE_BUCKET)
-        .createSignedUrl(finalPath, SIGNED_URL_TTL_SECONDS, transform ? { transform } : undefined);
-      data = fallbackResult.data;
-      error = fallbackResult.error;
+      if (result.error) {
+        lastError = result.error;
+        if (!isStorageMissingObjectError(result.error)) {
+          throw result.error;
+        }
+      }
     }
 
-    if (error || !data?.signedUrl) {
-      if (error) throw error;
-      return res.status(404).json({ error: { message: 'Image not found.' } });
+    if (lastError && !isStorageMissingObjectError(lastError)) {
+      throw lastError;
     }
 
-    return res.json({
-      url: data.signedUrl,
-      path: finalPath,
-      expiresIn: SIGNED_URL_TTL_SECONDS
-    });
+    return res.status(404).json({ error: { message: 'Image not found.' } });
   } catch (error) {
     const maybeError = error as { publicCode?: string; status?: number; message?: string };
     if (maybeError?.publicCode === 'MISSING_SUPABASE_CONFIG') {

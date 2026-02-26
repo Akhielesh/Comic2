@@ -16,18 +16,18 @@ import {
 } from '../../../types.js';
 import {
   appendJobEvent,
-  createAssetCard,
+  createAssetCard as createAssetCardRecord,
   createGenerationJob,
   getGenerationJob,
   getProjectCostTracker,
-  listAssetCards,
+  listAssetCards as listAssetCardsForProject,
   listJobEvents,
   readComicForgeState,
   updateAssetCard,
   updateGenerationJob,
   writeComicForgeState
 } from './repositories.js';
-import { enqueueComicForgeJob, getComicForgeJobState } from './queue.js';
+import { enqueueComicForgeJob, getComicForgeJobState, isComicForgeQueueConfigured } from './queue.js';
 import { TaskType, assertNoTextPromptContract, buildNoTextPrompt, getModelPolicy } from './modelRouter.js';
 
 type ServiceContext = {
@@ -68,6 +68,153 @@ const extractCastNames = (rawScriptText: string): string[] => {
   const matches = rawScriptText.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b/g) || [];
   const denied = new Set(['Scene', 'The', 'A', 'An', 'And', 'With', 'At', 'In', 'On', 'To', 'From', 'By']);
   return Array.from(new Set(matches.filter((name) => !denied.has(name)))).slice(0, 24);
+};
+
+type SceneHeading = {
+  sceneId: string;
+  name: string;
+  location: string;
+  time: string;
+};
+
+const normalizeAssetName = (value: string): string =>
+  value.trim().replace(/\s+/g, ' ');
+
+const assetKey = (cardType: ComicForgeAssetCard['cardType'], name: string): string =>
+  `${cardType}:${normalizeAssetName(name).toLowerCase()}`;
+
+const extractSceneHeadings = (rawScriptText: string): SceneHeading[] => {
+  const matches = Array.from(rawScriptText.matchAll(/(?:^|\n)\s*SCENE\s+(\d+)\s*:\s*([^\n]+)/gi));
+  if (matches.length === 0) return [];
+
+  return matches.map((match, index) => {
+    const label = (match[2] || '').trim();
+    const [locationRaw, timeRaw] = label.split(/\s+-\s+/, 2);
+    const location = (locationRaw || 'unspecified').trim() || 'unspecified';
+    const time = (timeRaw || 'unspecified').trim() || 'unspecified';
+
+    return {
+      sceneId: `scene-${index + 1}`,
+      name: `Scene ${index + 1}: ${location}`,
+      location,
+      time
+    };
+  });
+};
+
+const extractPropNames = (rawScriptText: string, excludedNames: string[]): string[] => {
+  const excluded = new Set(excludedNames.map((name) => normalizeAssetName(name).toLowerCase()));
+  const stop = new Set([
+    'scene',
+    'location',
+    'detail',
+    'translation',
+    'the',
+    'a',
+    'an',
+    'and',
+    'for',
+    'from',
+    'with',
+    'there',
+    'this',
+    'that',
+    'dusk',
+    'night',
+    'day'
+  ]);
+
+  const values: string[] = [];
+  const pushUnique = (value: string) => {
+    const normalized = normalizeAssetName(value);
+    const key = normalized.toLowerCase();
+    if (!normalized || stop.has(key) || excluded.has(key)) return;
+    if (!values.some((entry) => entry.toLowerCase() === key)) {
+      values.push(normalized);
+    }
+  };
+
+  for (const match of rawScriptText.matchAll(/"([^"\n]{2,80})"/g)) {
+    pushUnique(match[1] || '');
+  }
+
+  for (const match of rawScriptText.matchAll(/\b([A-Z][A-Za-z0-9'-]*(?:\s+[A-Z][A-Za-z0-9'-]*){1,3})\b/g)) {
+    pushUnique(match[1] || '');
+  }
+
+  return values.slice(0, 24);
+};
+
+const inferredAssetDescription = (
+  cardType: ComicForgeAssetCard['cardType'],
+  name: string
+): string => {
+  if (cardType === 'character') {
+    return `Character grounded in script scenes: ${name}. Keep identity and continuity consistent with source text.`;
+  }
+  if (cardType === 'location') {
+    return `Story location from script scenes: ${name}. Preserve key environmental cues and mood across pages.`;
+  }
+  return `Story prop from script context: ${name}. Keep visual identity and function consistent across appearances.`;
+};
+
+const seedAssetCardsFromAnalysis = async (
+  projectId: string,
+  analysis: {
+    castList: Array<{ name: string }>;
+    sceneList: Array<{ location: string }>;
+    propList: Array<{ name: string }>;
+  }
+): Promise<ComicForgeAssetCard[]> => {
+  const existing = await listAssetCardsForProject(projectId);
+  const seen = new Set(existing.map((card) => assetKey(card.cardType, card.name)));
+  const seeded = [...existing];
+
+  const maybeCreate = async (cardType: ComicForgeAssetCard['cardType'], name: string) => {
+    const normalizedName = normalizeAssetName(name);
+    if (!normalizedName || normalizedName.toLowerCase() === 'unspecified') return;
+    const key = assetKey(cardType, normalizedName);
+    if (seen.has(key)) return;
+
+    const card: ComicForgeAssetCard = {
+      id: crypto.randomUUID(),
+      cardType,
+      name: normalizedName,
+      canonicalDescription: inferredAssetDescription(cardType, normalizedName),
+      doNotChange: [],
+      negativeConstraints: [],
+      allowedVariants: ['expressions and scene lighting can vary'],
+      referenceImages: [],
+      consistencyMethod: 'reference_injection',
+      hash: createAssetHash(`${cardType}:${normalizedName}`),
+      status: 'draft'
+    };
+
+    const created = await createAssetCardRecord(projectId, card);
+    seeded.push(created);
+    seen.add(key);
+  };
+
+  for (const character of analysis.castList) {
+    await maybeCreate('character', character.name);
+  }
+  for (const location of analysis.sceneList) {
+    await maybeCreate('location', location.location);
+  }
+  for (const prop of analysis.propList) {
+    await maybeCreate('prop', prop.name);
+  }
+
+  return seeded;
+};
+
+const isQueueUnavailableError = (error: unknown): boolean => {
+  const code = String((error as { publicCode?: string })?.publicCode || '').toUpperCase();
+  const message = String((error as { message?: string })?.message || '').toLowerCase();
+  return code === 'COMICFORGE_QUEUE_UNAVAILABLE'
+    || message.includes('queue is unavailable')
+    || message.includes('redis')
+    || message.includes('econnrefused');
 };
 
 const estimatePagePlanCount = (panelCount: number) => Math.max(1, Math.ceil(panelCount / 4));
@@ -156,15 +303,75 @@ const queueJobForTask = async (
     entityType: entity?.type
   });
 
-  await enqueueComicForgeJob(taskType, {
-    projectId,
+  const inlineResult = {
+    completed: true,
+    mode: 'inline',
+    reason: 'queue_unavailable',
     taskType,
-    ...payload
-  }, {
-    jobId: job.id
-  });
+    payload,
+    completedAt: Date.now()
+  };
 
-  return job;
+  if (!isComicForgeQueueConfigured()) {
+    await updateGenerationJob(job.id, {
+      status: 'done',
+      progress: 100,
+      completedAt: Date.now(),
+      outputPayload: inlineResult,
+      result: inlineResult
+    });
+    appendJobEvent(job.id, {
+      type: 'done',
+      message: 'Completed inline (queue unavailable)',
+      timestamp: Date.now(),
+      progress: 100,
+      payload: inlineResult
+    });
+    return {
+      ...job,
+      status: 'done',
+      progress: 100,
+      completedAt: Date.now(),
+      result: inlineResult
+    };
+  }
+
+  try {
+    await enqueueComicForgeJob(taskType, {
+      projectId,
+      taskType,
+      ...payload
+    }, {
+      jobId: job.id
+    });
+    return job;
+  } catch (error) {
+    if (!isQueueUnavailableError(error)) {
+      throw error;
+    }
+
+    await updateGenerationJob(job.id, {
+      status: 'done',
+      progress: 100,
+      completedAt: Date.now(),
+      outputPayload: inlineResult,
+      result: inlineResult
+    });
+    appendJobEvent(job.id, {
+      type: 'done',
+      message: 'Completed inline (queue unavailable)',
+      timestamp: Date.now(),
+      progress: 100,
+      payload: inlineResult
+    });
+    return {
+      ...job,
+      status: 'done',
+      progress: 100,
+      completedAt: Date.now(),
+      result: inlineResult
+    };
+  }
 };
 
 export const comicForgePipelineService = {
@@ -221,18 +428,29 @@ export const comicForgePipelineService = {
     const state = await readComicForgeState(ctx.projectId, ctx.userId);
     const policy = getModelPolicy(TaskType.STORY_ANALYSIS);
     const segments = parseSegments(input.rawScriptText);
+    const sceneHeadings = extractSceneHeadings(input.rawScriptText);
     const castList = extractCastNames(input.rawScriptText);
+    const propNames = extractPropNames(
+      input.rawScriptText,
+      [
+        ...castList,
+        ...sceneHeadings.map((scene) => scene.location)
+      ]
+    );
 
-    const panels = segments.map((segment, index) => ({
+    const panels = segments.map((segment, index) => {
+      const heading = sceneHeadings[Math.floor(index / 4)] || sceneHeadings[index] || null;
+      return ({
       panelIndex: index + 1,
       description: segment,
       dialogue: [],
       captions: [],
       sfx: [],
       cameraShotSuggestion: 'medium' as const,
-      timeOfDay: 'unspecified',
-      locationName: 'unspecified'
-    }));
+      timeOfDay: heading?.time || 'unspecified',
+      locationName: heading?.location || 'unspecified'
+    });
+    });
 
     const structuredScript = [] as Array<{
       page: number;
@@ -258,22 +476,36 @@ export const comicForgePipelineService = {
         resolved: false
       }));
 
+    const sceneList = sceneHeadings.length > 0
+      ? sceneHeadings.map((scene, index) => ({
+          sceneId: scene.sceneId || `scene-${index + 1}`,
+          name: scene.name || `Scene ${index + 1}`,
+          location: scene.location || 'unspecified',
+          time: scene.time || 'unspecified',
+          pagesInvolved: [index + 1]
+        }))
+      : structuredScript.map((entry) => ({
+          sceneId: `scene-${entry.page}`,
+          name: `Scene ${entry.page}`,
+          location: entry.panels[0]?.locationName || 'unspecified',
+          time: entry.panels[0]?.timeOfDay || 'unspecified',
+          pagesInvolved: [entry.page]
+        }));
+
     const analysis = {
       structuredScript,
-      sceneList: structuredScript.map((entry) => ({
-        sceneId: `scene-${entry.page}`,
-        name: `Scene ${entry.page}`,
-        location: entry.panels[0]?.locationName || 'unspecified',
-        time: entry.panels[0]?.timeOfDay || 'unspecified',
-        pagesInvolved: [entry.page]
-      })),
+      sceneList,
       castList: castList.map((name, index) => ({
         name,
         role: index === 0 ? 'protagonist' : 'support',
         firstAppearancePage: 1,
         descriptionHints: ''
       })),
-      propList: [],
+      propList: propNames.map((name) => ({
+        name,
+        firstAppearancePage: 1,
+        descriptionHints: ''
+      })),
       ambiguityFlags,
       tone: 'neutral',
       genre: 'unspecified',
@@ -282,10 +514,13 @@ export const comicForgePipelineService = {
       actionDensityScore: 0.5
     };
 
+    const seededAssetCards = await seedAssetCardsFromAnalysis(ctx.projectId, analysis);
+
     const nextState = markStageProgress({
       ...state,
       scriptInput: input.rawScriptText,
       analysis,
+      assetCards: seededAssetCards,
       costTracker: {
         currency: 'USD',
         estimatedUsd: Number(((state.costTracker?.estimatedUsd || 0) + policy.estimatedCostUsd).toFixed(6)),
@@ -302,7 +537,8 @@ export const comicForgePipelineService = {
     return {
       stage: ComicForgeStage.SCRIPT_ANALYSIS,
       analysis,
-      unresolvedFlags: ambiguityFlags.filter((flag) => !flag.resolved)
+      unresolvedFlags: ambiguityFlags.filter((flag) => !flag.resolved),
+      assetCards: seededAssetCards
     };
   },
 
@@ -460,7 +696,7 @@ export const comicForgePipelineService = {
   },
 
   async listAssetCards(ctx: ServiceContext) {
-    const cards = await listAssetCards(ctx.projectId);
+    const cards = await listAssetCardsForProject(ctx.projectId);
     const state = await readComicForgeState(ctx.projectId, ctx.userId);
     const nextState = markStageProgress({
       ...state,
@@ -496,7 +732,7 @@ export const comicForgePipelineService = {
       status: 'draft'
     };
 
-    const created = await createAssetCard(ctx.projectId, card);
+    const created = await createAssetCardRecord(ctx.projectId, card);
 
     return {
       stage: ComicForgeStage.ASSET_LIBRARY,

@@ -1,24 +1,8 @@
 import { Router } from 'express';
 import { comicForgePipelineService } from '../comicforge/pipelineService.js';
-import { assertComicForgeQueueAvailable } from '../comicforge/queue.js';
 import type { ComicForgeExportPreset } from '../../../types.js';
 
 export const comicForgeRouter = Router();
-
-const requireComicForgeQueue = (_req: { path?: string }, res: { status: (code: number) => { json: (payload: unknown) => void } }, next: (error?: unknown) => void) => {
-  try {
-    assertComicForgeQueueAvailable();
-    next();
-  } catch (error) {
-    const maybeError = error as { status?: number; publicCode?: string; message?: string };
-    res.status(maybeError.status || 503).json({
-      error: {
-        code: maybeError.publicCode || 'COMICFORGE_QUEUE_UNAVAILABLE',
-        message: maybeError.message || 'ComicForge queue is unavailable. Configure REDIS_URL.'
-      }
-    });
-  }
-};
 
 const requireUserId = (req: { user?: { id?: string } }) => {
   const userId = req.user?.id;
@@ -72,7 +56,8 @@ comicForgeRouter.post('/projects/:projectId/analyze-script', async (req, res, ne
     const result = await comicForgePipelineService.analyzeScript({ userId, projectId: req.params.projectId }, { rawScriptText });
     sendOk(res, result.stage, {
       analysis: result.analysis,
-      unresolvedFlags: result.unresolvedFlags
+      unresolvedFlags: result.unresolvedFlags,
+      assetCards: result.assetCards
     });
   } catch (error) {
     next(error);
@@ -263,7 +248,7 @@ comicForgeRouter.post('/pages/:pageId/balloon-zones', async (req, res, next) => 
   }
 });
 
-comicForgeRouter.post('/projects/:projectId/generate-thumbnails', requireComicForgeQueue, async (req, res, next) => {
+comicForgeRouter.post('/projects/:projectId/generate-thumbnails', async (req, res, next) => {
   try {
     const userId = requireUserId(req);
     const result = await comicForgePipelineService.generateThumbnails({ userId, projectId: req.params.projectId });
@@ -293,7 +278,7 @@ comicForgeRouter.get('/projects/:projectId/preview-pack', async (req, res, next)
   }
 });
 
-comicForgeRouter.post('/projects/:projectId/generate', requireComicForgeQueue, async (req, res, next) => {
+comicForgeRouter.post('/projects/:projectId/generate', async (req, res, next) => {
   try {
     const userId = requireUserId(req);
     const quality = req.body?.quality;
@@ -307,7 +292,7 @@ comicForgeRouter.post('/projects/:projectId/generate', requireComicForgeQueue, a
   }
 });
 
-comicForgeRouter.post('/panels/:panelId/regenerate', requireComicForgeQueue, async (req, res, next) => {
+comicForgeRouter.post('/panels/:panelId/regenerate', async (req, res, next) => {
   try {
     const userId = requireUserId(req);
     const projectId = typeof req.body?.projectId === 'string' ? req.body.projectId : '';
@@ -329,7 +314,7 @@ comicForgeRouter.post('/panels/:panelId/regenerate', requireComicForgeQueue, asy
   }
 });
 
-comicForgeRouter.post('/pages/:pageId/assemble', requireComicForgeQueue, async (req, res, next) => {
+comicForgeRouter.post('/pages/:pageId/assemble', async (req, res, next) => {
   try {
     const userId = requireUserId(req);
     const projectId = typeof req.body?.projectId === 'string' ? req.body.projectId : '';
@@ -343,7 +328,7 @@ comicForgeRouter.post('/pages/:pageId/assemble', requireComicForgeQueue, async (
   }
 });
 
-comicForgeRouter.post('/pages/:pageId/render-lettering', requireComicForgeQueue, async (req, res, next) => {
+comicForgeRouter.post('/pages/:pageId/render-lettering', async (req, res, next) => {
   try {
     const userId = requireUserId(req);
     const projectId = typeof req.body?.projectId === 'string' ? req.body.projectId : '';
@@ -389,7 +374,7 @@ comicForgeRouter.patch('/panel-lettering/:panelLetteringId', async (req, res, ne
   }
 });
 
-comicForgeRouter.post('/projects/:projectId/export', requireComicForgeQueue, async (req, res, next) => {
+comicForgeRouter.post('/projects/:projectId/export', async (req, res, next) => {
   try {
     const userId = requireUserId(req);
     const preset = req.body?.preset;
@@ -410,7 +395,7 @@ comicForgeRouter.post('/projects/:projectId/export', requireComicForgeQueue, asy
   }
 });
 
-comicForgeRouter.get('/jobs/:jobId/status', requireComicForgeQueue, async (req, res, next) => {
+comicForgeRouter.get('/jobs/:jobId/status', async (req, res, next) => {
   try {
     const userId = requireUserId(req);
     const projectId = typeof req.query?.projectId === 'string' ? req.query.projectId : '';
@@ -421,7 +406,7 @@ comicForgeRouter.get('/jobs/:jobId/status', requireComicForgeQueue, async (req, 
   }
 });
 
-comicForgeRouter.get('/jobs/:jobId/events', requireComicForgeQueue, async (req, res, next) => {
+comicForgeRouter.get('/jobs/:jobId/events', async (req, res, next) => {
   try {
     const userId = requireUserId(req);
     const projectId = typeof req.query?.projectId === 'string' ? req.query.projectId : '';

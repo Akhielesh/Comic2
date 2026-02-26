@@ -186,6 +186,7 @@ export type ComicForgeAnalyzeScriptRequest = {
 export type ComicForgeAnalyzeScriptResponse = ComicForgeApiEnvelope<{
   analysis: ComicForgeStructuredScriptAnalysis;
   unresolvedFlags: ComicForgeAmbiguityFlag[];
+  assetCards?: ComicForgeAssetCard[];
 }>;
 
 export type ComicForgeResolveAmbiguityRequest = {
