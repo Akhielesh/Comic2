@@ -9,6 +9,7 @@ import {
   reserveUsageTokens,
   settleReservation,
   updateAutoReloadSettings,
+  updateSpendCap,
   upsertPaymentProfile
 } from '../services/billingLedger.js';
 import { getPricingCatalog } from '../services/pricingCatalog.js';
@@ -369,6 +370,20 @@ billingRouter.post('/auto-reload', async (req, res, next) => {
       packUsd: undefined
     });
 
+    res.json(updated);
+  } catch (error) {
+    next(error);
+  }
+});
+
+billingRouter.post('/spend-cap', async (req, res, next) => {
+  try {
+    const user = requireAuthUser(req.user);
+    const capUsd = Number(req.body?.capUsd);
+    if (!Number.isFinite(capUsd) || capUsd < 0) {
+      return res.status(400).json({ error: { message: 'capUsd must be a non-negative number.' } });
+    }
+    const updated = await updateSpendCap({ userId: user.id, capUsd });
     res.json(updated);
   } catch (error) {
     next(error);

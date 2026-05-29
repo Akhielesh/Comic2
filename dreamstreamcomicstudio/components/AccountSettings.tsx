@@ -62,6 +62,7 @@ import {
     redeemCoupon,
     reactivateSubscription,
     setupPaymentMethod,
+    setSpendCap,
     updateAdminUserPlan,
     updateAdminUserRole,
     updateAutoReload
@@ -213,6 +214,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     const [billingLoading, setBillingLoading] = useState(false);
     const [billingActionMessage, setBillingActionMessage] = useState<MessageState>(null);
     const [billingBusy, setBillingBusy] = useState(false);
+    const [spendCapInput, setSpendCapInput] = useState<string>('');
     const [selectedBillingInterval, setSelectedBillingInterval] = useState<BillingIntervalOption>('month');
 
     const [adminCouponDefinitions, setAdminCouponDefinitions] = useState<AdminCouponDefinition[]>([]);
@@ -735,6 +737,26 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
             await refreshBillingSummary();
         } catch (err: any) {
             setBillingActionMessage({ type: 'error', text: err?.message || 'Unable to update auto-reload.' });
+        } finally {
+            setBillingBusy(false);
+        }
+    };
+
+    const handleUpdateSpendCap = async () => {
+        const capUsd = Number(spendCapInput);
+        if (!Number.isFinite(capUsd) || capUsd < 0) {
+            setBillingActionMessage({ type: 'error', text: 'Enter a valid spend cap in USD (0 or more).' });
+            return;
+        }
+        setBillingActionMessage(null);
+        setBillingBusy(true);
+        try {
+            await setSpendCap(capUsd);
+            setBillingActionMessage({ type: 'success', text: `Monthly spend cap set to $${capUsd.toFixed(2)}.` });
+            setSpendCapInput('');
+            await refreshBillingSummary();
+        } catch (err: any) {
+            setBillingActionMessage({ type: 'error', text: err?.message || 'Unable to update spend cap.' });
         } finally {
             setBillingBusy(false);
         }
@@ -1345,6 +1367,27 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                             <Button variant="outline" disabled={billingBusy} onClick={() => handleToggleAutoReload(false)}>Acknowledge</Button>
                         </div>
                         <div className="text-xs text-slate-500">Default overage hard cap: $100/month unless increased by support.</div>
+                    </div>
+
+                    <div className="border-2 border-black rounded-xl p-4 space-y-3">
+                        <h4 className="font-display text-xl">Monthly Spend Cap</h4>
+                        <div className="text-sm text-slate-700">
+                            Hard ceiling on overage spend per month — generation is blocked once it's reached. Current cap:{' '}
+                            <span className="font-bold">${(summary?.overageHardCapUsd ?? 0).toFixed(2)}</span>.
+                        </div>
+                        <div className="flex gap-2">
+                            <input
+                                type="number"
+                                min={0}
+                                step={1}
+                                value={spendCapInput}
+                                onChange={(e) => setSpendCapInput(e.target.value)}
+                                placeholder={`${(summary?.overageHardCapUsd ?? 0).toFixed(0)}`}
+                                className="w-32 border-2 border-black rounded px-3 py-2 text-sm"
+                            />
+                            <Button variant="outline" disabled={billingBusy || !spendCapInput.trim()} onClick={handleUpdateSpendCap}>Update cap</Button>
+                        </div>
+                        <div className="text-xs text-slate-500">Set to 0 to block all overage spend. You'll get an in-app alert at 80% and 100% of your daily limit or spend cap.</div>
                     </div>
                 </div>
 

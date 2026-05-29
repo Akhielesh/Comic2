@@ -4,6 +4,15 @@ import { useAuth } from '../contexts/AuthContext';
 import { getNotifications, markAllNotificationsRead, markNotificationRead } from '../services/db';
 import { AppNotification } from '../types';
 
+// Friendly text for usage-alert system notifications (entity_id: usage:<kind>:<pct>:<period>).
+const usageAlertText = (entityId?: string | null): string | null => {
+    if (!entityId || !entityId.startsWith('usage:')) return null;
+    const [, kind, pct] = entityId.split(':');
+    const scope = kind === 'spendcap' ? 'monthly spend cap' : 'daily usage limit';
+    if (pct === '100') return `You've reached your ${scope}.`;
+    return `You've used ${pct}% of your ${scope}.`;
+};
+
 interface NotificationBellProps {
     onNavigate: (view: string, id?: string) => void;
 }
@@ -120,6 +129,8 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ onNavigate }
                                         <p className="text-sm text-gray-900 dark:text-gray-100">
                                             {n.title ? (
                                                 <span className="font-semibold">{n.title}</span>
+                                            ) : n.type === 'system' ? (
+                                                <span className="font-semibold">{usageAlertText(n.entity_id) || 'System notification'}</span>
                                             ) : (
                                                 <>
                                                     <span className="font-semibold">{n.actor?.username || 'Someone'}</span>
@@ -127,11 +138,10 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ onNavigate }
                                                     {n.type === 'like' && 'liked your comic'}
                                                     {n.type === 'comment' && 'commented on your comic'}
                                                     {n.type === 'follow' && 'started following you'}
-                                                    {n.type === 'system' && 'System notification'}
                                                 </>
                                             )}
                                         </p>
-                                        {(n.message || n.type === 'generation' || n.type === 'system') && (
+                                        {(n.message || n.type === 'generation') && (
                                             <p className="text-xs text-gray-500 mt-1">
                                                 {n.message || 'Your latest generation is complete.'}
                                             </p>

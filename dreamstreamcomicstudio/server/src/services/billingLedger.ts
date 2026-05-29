@@ -1022,6 +1022,52 @@ export const releaseReservation = async (input: {
   });
 };
 
+// Usage alerts (best-effort): raise a deduped 'system' notification when a user
+// crosses a daily-usage or monthly spend-cap threshold. Never blocks settlement.
+const USAGE_ALERT_THRESHOLDS = [0.8, 1] as const;
+
+const maybeRaiseUsageAlert = async (userId: string, wallet: WalletRow) => {
+  try {
+    const pending: Array<{ entityId: string }> = [];
+
+    if (wallet.daily_limit_enabled && wallet.daily_guardrail_ct > 0) {
+      const fraction = wallet.used_daily_ct / wallet.daily_guardrail_ct;
+      for (const t of USAGE_ALERT_THRESHOLDS) {
+        if (fraction >= t) pending.push({ entityId: `usage:daily:${Math.round(t * 100)}:${wallet.daily_cycle_date}` });
+      }
+    }
+
+    if (wallet.overage_hard_cap_usd > 0 && wallet.pending_overage_usd > 0) {
+      const fraction = wallet.pending_overage_usd / wallet.overage_hard_cap_usd;
+      const monthKey = String(wallet.cycle_starts_at).slice(0, 7);
+      for (const t of USAGE_ALERT_THRESHOLDS) {
+        if (fraction >= t) pending.push({ entityId: `usage:spendcap:${Math.round(t * 100)}:${monthKey}` });
+      }
+    }
+
+    if (pending.length === 0) return;
+
+    const admin = getBillingAdmin();
+    for (const alert of pending) {
+      const { data: existing } = await admin
+        .from('notifications')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('entity_id', alert.entityId)
+        .limit(1);
+      if (Array.isArray(existing) && existing.length > 0) continue;
+      await admin.from('notifications').insert({
+        user_id: userId,
+        type: 'system',
+        entity_id: alert.entityId,
+        is_read: false
+      });
+    }
+  } catch (error) {
+    console.warn('[USAGE_ALERT] failed to evaluate/raise usage alert', error);
+  }
+};
+
 export const settleReservation = async (input: {
   userId: string;
   reservationId?: string;
@@ -1128,6 +1174,7 @@ export const settleReservation = async (input: {
   const overageCapture = await maybeCapturePendingOverage(input.userId, wallet);
   const autoReload = await maybeAutoReloadWallet(input.userId, wallet);
   const latestWallet = await ensureWallet(input.userId);
+  await maybeRaiseUsageAlert(input.userId, latestWallet);
 
   return {
     actualCt,
@@ -1262,6 +1309,18 @@ export const updateAutoReloadSettings = async (input: {
     thresholdCt: wallet.auto_reload_threshold_ct,
     packUsd: wallet.auto_reload_pack_usd
   };
+};
+
+// User-settable monthly spend cap (the hard ceiling on overage USD, already
+// enforced in reserveUsageTokens via OVERAGE_CAP_REACHED). 0 blocks all overage.
+export const updateSpendCap = async (input: { userId: string; capUsd: number }) => {
+  const wallet = await ensureWallet(input.userId);
+  if (typeof input.capUsd === 'number' && Number.isFinite(input.capUsd)) {
+    wallet.overage_hard_cap_usd = Math.min(100_000, Math.max(0, Number(input.capUsd.toFixed(2))));
+  }
+  wallet.updated_at = toIso(now());
+  await persistWallet(wallet);
+  return { overageHardCapUsd: wallet.overage_hard_cap_usd };
 };
 
 export const listUsageHistory = async (userId: string, limit = 100): Promise<BillingUsageHistoryItem[]> => {

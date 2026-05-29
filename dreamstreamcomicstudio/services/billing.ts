@@ -83,6 +83,9 @@ export const reactivateSubscription = async (): Promise<BillingSubscriptionStatu
 export const updateAutoReload = async (payload: { enabled: boolean; thresholdCt?: number; packUsd?: number }) =>
   post<typeof payload, { enabled: boolean; thresholdCt: number; packUsd: number }>('/api/billing/auto-reload', payload);
 
+export const setSpendCap = async (capUsd: number): Promise<{ overageHardCapUsd: number }> =>
+  post<{ capUsd: number }, { overageHardCapUsd: number }>('/api/billing/spend-cap', { capUsd });
+
 export const getUsageHistory = async (limit = 100) =>
   get<{ items: Array<Record<string, unknown>> }>(`/api/billing/usage-history?limit=${Math.max(1, Math.floor(limit))}`);
 
