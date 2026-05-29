@@ -31,7 +31,18 @@ const createOpenRouterTextClient = (apiKey: string) => ({
       // Use a real OpenRouter model id (contains a '/'); otherwise fall back to the default.
       const model = typeof req?.model === 'string' && req.model.includes('/') ? req.model : TEXT_FALLBACK;
       const cfg = req?.config || {};
-      const schema = cfg.responseSchema ? geminiSchemaToJsonSchema(cfg.responseSchema) : undefined;
+      let schema = cfg.responseSchema ? geminiSchemaToJsonSchema(cfg.responseSchema) : undefined;
+
+      // OpenAI-style structured outputs (which OpenRouter forwards to the upstream
+      // provider, e.g. Azure) require the ROOT json_schema to be an object. Gemini
+      // accepts a top-level array (e.g. analyzeScript, generatePanelBreakdown), so wrap
+      // such schemas as { items: [...] } here and unwrap the reply below — keeping
+      // callers, which expect a bare JSON array in `response.text`, unchanged.
+      const rootIsArray = Boolean(schema && schema.type === 'array');
+      if (rootIsArray) {
+        schema = { type: 'object', properties: { items: schema }, required: ['items'] };
+      }
+
       const result = await getProvider('openrouter').generateText(
         {
           model,
@@ -43,7 +54,15 @@ const createOpenRouterTextClient = (apiKey: string) => ({
         },
         resolveProviderContext(apiKey)
       );
-      return { text: result.text, usageMetadata: undefined };
+
+      let text = result.text;
+      if (rootIsArray) {
+        const wrapped = result.json as { items?: unknown } | null | undefined;
+        if (wrapped && typeof wrapped === 'object' && Array.isArray(wrapped.items)) {
+          text = JSON.stringify(wrapped.items);
+        }
+      }
+      return { text, usageMetadata: undefined };
     },
     generateImages: async () => {
       throw new Error('OpenRouter text client does not support image generation.');
