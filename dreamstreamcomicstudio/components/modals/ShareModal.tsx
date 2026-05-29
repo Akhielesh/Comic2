@@ -37,7 +37,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ projectId, onClose }) =>
 
     const loadShares = async () => {
         try {
-            const res = await get<{ shares: ShareRecord[] }>(`/shares/project/${projectId}`);
+            const res = await get<{ shares: ShareRecord[] }>(`/api/shares/project/${projectId}`);
             setShares(res.shares);
         } catch { /* ignore */ }
     };
@@ -60,7 +60,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ projectId, onClose }) =>
             if (expiresInHours) {
                 body.expiresInHours = Number(expiresInHours);
             }
-            await post('/shares', body);
+            await post('/api/shares', body);
             await loadShares();
             setTab('active');
         } catch (e: unknown) {
@@ -72,7 +72,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ projectId, onClose }) =>
 
     const handleRevoke = async (shareId: string) => {
         try {
-            await post(`/shares/${shareId}/revoke`, {});
+            await post(`/api/shares/${shareId}/revoke`, {});
             await loadShares();
         } catch { /* ignore */ }
     };

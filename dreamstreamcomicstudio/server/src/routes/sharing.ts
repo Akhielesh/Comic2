@@ -161,7 +161,27 @@ sharingRouter.get('/project/:projectId', async (req: Request, res: Response, nex
     }
 });
 
-// ---------- REVOKE SHARE ----------
+// ---------- REVOKE SHARE (POST — this is what the client calls) ----------
+sharingRouter.post('/:shareId/revoke', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+        const userId = req.user?.id;
+        if (!userId) return res.status(401).json({ error: { message: 'Authentication required' } });
+
+        const admin = getSupabaseAdmin();
+        const { error } = await admin
+            .from('comic_shares')
+            .update({ revoked_at: new Date().toISOString() })
+            .eq('id', req.params.shareId)
+            .eq('owner_id', userId);
+
+        if (error) throw error;
+        res.json({ success: true });
+    } catch (err) {
+        next(err);
+    }
+});
+
+// ---------- REVOKE SHARE (DELETE — kept for backward compatibility) ----------
 sharingRouter.delete('/:shareId', async (req: Request, res: Response, next: NextFunction) => {
     try {
         const userId = req.user?.id;

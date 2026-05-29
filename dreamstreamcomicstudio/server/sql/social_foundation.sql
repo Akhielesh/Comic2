@@ -6,6 +6,11 @@
 --
 -- Idempotent: safe to re-run. Apply via Supabase SQL Editor or the MCP
 -- apply_migration tool.
+--
+-- NOTE: On the existing "Comic" Supabase project most of these objects already
+-- existed; only the reviews table and decrement_project_like were missing. That
+-- delta was applied 2026-05-29 (see social_reviews_and_decrement.sql). This file
+-- remains the canonical greenfield schema for standing up a fresh environment.
 
 -- ============================================================
 -- 0. Project engagement counters (read by mapProjectRow)
