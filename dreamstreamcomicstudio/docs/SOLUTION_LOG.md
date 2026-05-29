@@ -13,6 +13,28 @@ Entry format:
 
 ---
 
+## 2026-05-29 — Model capability index + usage-hover/header fixes
+
+- **Problem:** (1) Usage pill hover showed appSettings defaults, not the chosen model;
+  (2) the studio stacked 3 headers (~30% of the screen); (3) no capability model to
+  drive per-model feature enable/disable.
+- **Solution:**
+  - Pill hover now reads `modelSelection` (getSelected*Model) + refreshes on
+    MODEL_SELECTION_CHANGED → "Use this model" reflects everywhere.
+  - Hid the global StaticSiteHeader on editor/comicforge (they have their own back/title
+    bars); StepIndicator → top-0, editor title bar → top-24. 3 headers → 2.
+  - New `services/modelCapabilities.ts`: derives a capability profile per model
+    (imageOutput/imageInput/multiImageRefs/imageEditing/structuredJson/toolUse/
+    longContext/free/premium) from the live catalog + curated overrides, with
+    `featureSupport()` (supported + reason) for gating. Surfaced as a "Studio features"
+    ✓/✗ list in the Model Library detail.
+- **Files:** `components/TokenAvailabilityPill.tsx`, `App.tsx`,
+  `components/StepIndicator.tsx`, `components/ComicEditor.tsx`,
+  `services/modelCapabilities.ts`, `components/ModelLibrary.tsx`.
+- **Next in this cluster:** wire feature gating into the editor controls (reference
+  images, image edit) using `featureSupport`; richer Default/Free/Specific selection;
+  cost telemetry/optimization; reader portrait/flip.
+
 ## 2026-05-29 — Onboarding readiness checklist
 
 - **Problem:** The app looked "ready" but users hit blockers mid-flow (no key, no model)

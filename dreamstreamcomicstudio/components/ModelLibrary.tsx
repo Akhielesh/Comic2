@@ -27,6 +27,7 @@ import {
   type ModelSlot,
   type ModelSelection
 } from '../services/modelSelection';
+import { getCapabilities, featureSupport, FEATURE_LABELS } from '../services/modelCapabilities';
 
 interface ModelLibraryProps {
   onBack: () => void;
@@ -176,6 +177,21 @@ const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; on
           <div className="border-2 border-black rounded-lg p-2"><div className="text-slate-400 uppercase font-bold">Input tokens</div><div className="font-mono">{perMillion(model.pricing.promptPerToken)}</div></div>
           <div className="border-2 border-black rounded-lg p-2"><div className="text-slate-400 uppercase font-bold">Output tokens</div><div className="font-mono">{perMillion(model.pricing.completionPerToken)}</div></div>
           <div className="border-2 border-black rounded-lg p-2"><div className="text-slate-400 uppercase font-bold">Per image</div><div className="font-mono">{model.pricing.imagePerImage > 0 ? `$${model.pricing.imagePerImage.toFixed(3)}` : '—'}</div></div>
+        </div>
+
+        <div>
+          <h3 className="text-xs font-bold uppercase mb-2">Studio features</h3>
+          <div className="grid sm:grid-cols-2 gap-1.5">
+            {FEATURE_LABELS.map(({ feature, label }) => {
+              const sup = featureSupport(getCapabilities(model), feature);
+              return (
+                <div key={feature} className={`text-xs flex items-start gap-1.5 ${sup.supported ? 'text-slate-700' : 'text-slate-400'}`} title={sup.reason || ''}>
+                  {sup.supported ? <Check className="w-3.5 h-3.5 text-green-600 shrink-0 mt-0.5" /> : <X className="w-3.5 h-3.5 text-slate-300 shrink-0 mt-0.5" />}
+                  <span>{label}</span>
+                </div>
+              );
+            })}
+          </div>
         </div>
 
         <div className="grid sm:grid-cols-2 gap-4">
