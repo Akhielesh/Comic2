@@ -57,12 +57,33 @@ const createOpenRouterTextClient = (apiKey: string) => ({
 
       let text = result.text;
       if (rootIsArray) {
-        const wrapped = result.json as { items?: unknown } | null | undefined;
-        if (wrapped && typeof wrapped === 'object' && Array.isArray(wrapped.items)) {
-          text = JSON.stringify(wrapped.items);
+        // The model should reply with our { items: [...] } wrapper, but tolerate a bare
+        // array or a differently-named single array property so minor shape drift from
+        // weaker models doesn't surface as a hard 500 downstream.
+        const j = result.json as any;
+        if (Array.isArray(j)) {
+          text = JSON.stringify(j);
+        } else if (j && typeof j === 'object') {
+          const arr = Array.isArray(j.items) ? j.items : Object.values(j).find((v) => Array.isArray(v));
+          if (Array.isArray(arr)) text = JSON.stringify(arr);
         }
       }
-      return { text, usageMetadata: undefined };
+
+      // Surface the provider's real usage (incl. cost) and the model actually used, so
+      // the text pipeline bills on exact OpenRouter cost instead of a token estimate.
+      // buildUsage reads the *TokenCount fields and costUsd; the Gemini SDK path keeps
+      // reporting its own usageMetadata unchanged.
+      const u = result.usage;
+      const usageMetadata =
+        u && (typeof u.costUsd === 'number' || typeof u.totalTokens === 'number' || typeof u.promptTokens === 'number')
+          ? {
+              promptTokenCount: u.promptTokens,
+              candidatesTokenCount: u.completionTokens,
+              totalTokenCount: u.totalTokens,
+              costUsd: u.costUsd
+            }
+          : undefined;
+      return { text, usageMetadata, model: result.model };
     },
     generateImages: async () => {
       throw new Error('OpenRouter text client does not support image generation.');

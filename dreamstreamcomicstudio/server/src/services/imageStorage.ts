@@ -59,7 +59,11 @@ const sanitizeSegment = (value: string) => value.replace(/[^a-zA-Z0-9_-]/g, '-')
 
 const buildStoragePath = (userId: string, imageId: string, projectId?: string) => {
   const userSegment = sanitizeSegment(userId);
-  if (projectId && projectId.trim()) {
+  // Only scope the path to a project when the id is a real UUID — the same gate used
+  // for the image_assets.project_id column below. Otherwise the path would claim a
+  // project (u/<u>/p/<x>/img/…) that the metadata row nulls out, which breaks the
+  // project-scoped access-control + public-sharing checks on read.
+  if (projectId && isUuid(projectId)) {
     return `u/${userSegment}/p/${sanitizeSegment(projectId)}/img/${imageId}.webp`;
   }
   return `u/${userSegment}/tmp/${imageId}.webp`;

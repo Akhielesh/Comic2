@@ -69,3 +69,59 @@ describe('createOpenRouterTextClient — response_format schema root', () => {
     expect(res.text).toBe('{"ok":true}');
   });
 });
+
+describe('createOpenRouterTextClient — array reply resilience', () => {
+  beforeEach(() => generateTextMock.mockReset());
+
+  const askForArray = (json: unknown, text: string) => {
+    generateTextMock.mockResolvedValue({ text, json });
+    const ai = createClient('sk-or-test-key') as any;
+    return ai.models.generateContent({
+      model: 'openai/gpt-4o-mini',
+      contents: 'analyze',
+      config: { responseSchema: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { id: { type: Type.INTEGER } } } } }
+    });
+  };
+
+  it('unwraps a differently-named single array property (e.g. {scenes:[...]})', async () => {
+    const scenes = [{ id: 1 }, { id: 2 }];
+    const res = await askForArray({ scenes }, JSON.stringify({ scenes }));
+    expect(JSON.parse(res.text)).toEqual(scenes);
+  });
+
+  it('unwraps a bare top-level array reply', async () => {
+    const arr = [{ id: 9 }];
+    const res = await askForArray(arr, JSON.stringify(arr));
+    expect(JSON.parse(res.text)).toEqual(arr);
+  });
+});
+
+describe('createOpenRouterTextClient — usage + model passthrough', () => {
+  beforeEach(() => generateTextMock.mockReset());
+
+  it('surfaces real provider cost, tokens, and model so billing settles on exact cost', async () => {
+    generateTextMock.mockResolvedValue({
+      text: 'hello',
+      json: undefined,
+      model: 'anthropic/claude-3.5-haiku',
+      usage: { promptTokens: 120, completionTokens: 80, totalTokens: 200, costUsd: 0.0123 }
+    });
+
+    const ai = createClient('sk-or-test-key') as any;
+    const res = await ai.models.generateContent({ model: 'openai/gpt-4o-mini', contents: 'hi' });
+
+    expect(res.usageMetadata).toBeDefined();
+    expect(res.usageMetadata.costUsd).toBe(0.0123);
+    expect(res.usageMetadata.promptTokenCount).toBe(120);
+    expect(res.usageMetadata.candidatesTokenCount).toBe(80);
+    expect(res.usageMetadata.totalTokenCount).toBe(200);
+    expect(res.model).toBe('anthropic/claude-3.5-haiku');
+  });
+
+  it('leaves usageMetadata undefined when the provider reports no usage (estimate fallback kicks in)', async () => {
+    generateTextMock.mockResolvedValue({ text: 'hello', json: undefined, model: 'x/y', usage: {} });
+    const ai = createClient('sk-or-test-key') as any;
+    const res = await ai.models.generateContent({ model: 'openai/gpt-4o-mini', contents: 'hi' });
+    expect(res.usageMetadata).toBeUndefined();
+  });
+});

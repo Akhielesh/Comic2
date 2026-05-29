@@ -59,6 +59,8 @@ export type ApiUsage = {
   totalTokens?: number;
   promptChars?: number;
   estimatedTokens?: number;
+  /** Real provider cost in USD when reported (e.g. OpenRouter usage.cost). Drives exact billing. */
+  providerCostUsd?: number;
 };
 
 export type ApiTimings = {

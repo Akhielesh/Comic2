@@ -16,7 +16,10 @@ export const buildUsage = (
       promptTokens: usageMetadata.promptTokenCount,
       candidatesTokens: usageMetadata.candidatesTokenCount,
       totalTokens: usageMetadata.totalTokenCount,
-      promptChars: prompt.length
+      promptChars: prompt.length,
+      // OpenRouter reports a real per-call cost (Gemini does not); pass it through so
+      // billing settles on the exact provider cost instead of a token estimate.
+      ...(typeof usageMetadata.costUsd === 'number' ? { providerCostUsd: usageMetadata.costUsd } : {})
     };
   }
   return {
