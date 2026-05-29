@@ -7,7 +7,6 @@ import { Button } from './Button';
 const ProjectInfoModal = React.lazy(() => import('./modals/ProjectInfoModal').then(module => ({ default: module.ProjectInfoModal })));
 import { DataRescue } from './DataRescue';
 import { getFluxKeyInfo } from '../services/appSettings';
-import { NotificationBell } from './NotificationBell';
 import { SmartImage } from './common/SmartImage';
 
 interface ProjectDashboardProps {
@@ -156,13 +155,6 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
               </div>
             </div>
             <div className="flex items-center gap-4">
-              <NotificationBell onNavigate={(view, id) => {
-                if (onNavigate) {
-                  onNavigate(view, id);
-                  return;
-                }
-                if (view === 'reader' && id) onReadProject(id);
-              }} />
               <Button onClick={() => setIsCreating(true)} icon={<Plus />}>New Comic</Button>
             </div>
           </div>

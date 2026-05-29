@@ -13,6 +13,18 @@ const usageAlertText = (entityId?: string | null): string | null => {
     return `You've used ${pct}% of your ${scope}.`;
 };
 
+const formatWhen = (iso: string): string => {
+    const diff = Date.now() - new Date(iso).getTime();
+    const m = Math.floor(diff / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    const d = Math.floor(h / 24);
+    if (d < 7) return `${d}d ago`;
+    return new Date(iso).toLocaleDateString();
+};
+
 interface NotificationBellProps {
     onNavigate: (view: string, id?: string) => void;
 }
@@ -75,22 +87,44 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ onNavigate }
 
     if (!user) return null;
 
+    const typeIcon = (n: AppNotification) => {
+        if (n.type === 'like') return <Heart className="w-4 h-4 text-brand-red fill-current" />;
+        if (n.type === 'comment') return <MessageSquare className="w-4 h-4 text-brand-blue fill-current" />;
+        if (n.type === 'follow') return <UserPlus className="w-4 h-4 text-green-600" />;
+        if (n.type === 'generation') return <Sparkles className="w-4 h-4 text-purple-600" />;
+        return <AlertTriangle className="w-4 h-4 text-amber-600" />;
+    };
+
+    const bodyText = (n: AppNotification): { title: string; sub?: string } => {
+        if (n.title) return { title: n.title, sub: n.message };
+        if (n.type === 'system') return { title: usageAlertText(n.entity_id) || 'System notification', sub: n.message };
+        const who = n.actor?.username || 'Someone';
+        if (n.type === 'like') return { title: `${who} liked your comic` };
+        if (n.type === 'comment') return { title: `${who} commented on your comic` };
+        if (n.type === 'follow') return { title: `${who} started following you` };
+        if (n.type === 'generation') return { title: n.message || 'Your latest generation is complete.' };
+        return { title: 'Notification', sub: n.message };
+    };
+
     return (
         <div className="relative" ref={dropdownRef}>
             <button
                 onClick={handleClick}
-                className="relative p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                aria-label="Notifications"
+                className="relative w-10 h-10 flex items-center justify-center bg-white border-2 border-black rounded-lg shadow-comic hover:bg-brand-yellow transition-colors"
             >
-                <Bell className="w-5 h-5 text-gray-600 dark:text-gray-300" />
+                <Bell className="w-5 h-5" />
                 {unreadCount > 0 && (
-                    <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white dark:border-gray-900" />
+                    <span className="absolute -top-2 -right-2 min-w-[20px] h-5 px-1 bg-brand-red text-white text-[11px] font-bold rounded-full border-2 border-black flex items-center justify-center">
+                        {unreadCount > 9 ? '9+' : unreadCount}
+                    </span>
                 )}
             </button>
 
             {isOpen && (
-                <div className="absolute right-0 mt-2 w-80 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl shadow-xl z-50 overflow-hidden">
-                    <div className="p-3 border-b border-gray-100 dark:border-gray-800 flex justify-between items-center">
-                        <h3 className="font-semibold text-sm">Notifications</h3>
+                <div className="absolute right-0 mt-3 w-[22rem] max-w-[90vw] bg-white border-2 border-black rounded-xl shadow-comic z-50 overflow-hidden">
+                    <div className="px-4 py-3 border-b-2 border-black flex justify-between items-center bg-brand-yellow/30">
+                        <h3 className="font-display text-lg leading-none">Notifications</h3>
                         {unreadCount > 0 && (
                             <button
                                 onClick={async (e) => {
@@ -99,62 +133,39 @@ export const NotificationBell: React.FC<NotificationBellProps> = ({ onNavigate }
                                     await markAllNotificationsRead(user.id);
                                     await loadNotifications();
                                 }}
-                                className="text-xs text-blue-500 hover:text-blue-600"
+                                className="text-xs font-bold text-brand-blue hover:underline"
                             >
                                 Mark all read
                             </button>
                         )}
                     </div>
 
-                    <div className="max-h-96 overflow-y-auto">
+                    <div className="max-h-96 overflow-y-auto divide-y divide-slate-200">
                         {notifications.length === 0 ? (
-                            <div className="p-8 text-center text-gray-500 text-sm">
-                                No notifications yet
+                            <div className="p-8 text-center text-slate-500 text-sm font-comic">
+                                You're all caught up.
                             </div>
                         ) : (
-                            notifications.map(n => (
-                                <div
-                                    key={n.id}
-                                    onClick={() => handleNotificationClick(n)}
-                                    className={`p-3 border-b border-gray-50 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer flex items-start gap-3 transition-colors ${!n.is_read ? 'bg-blue-50/30' : ''}`}
-                                >
-                                    <div className="mt-1">
-                                        {n.type === 'like' && <Heart className="w-4 h-4 text-red-500 fill-current" />}
-                                        {n.type === 'comment' && <MessageSquare className="w-4 h-4 text-blue-500 fill-current" />}
-                                        {n.type === 'follow' && <UserPlus className="w-4 h-4 text-green-500 fill-current" />}
-                                        {n.type === 'generation' && <Sparkles className="w-4 h-4 text-purple-500" />}
-                                        {n.type === 'system' && <AlertTriangle className="w-4 h-4 text-amber-500" />}
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                        <p className="text-sm text-gray-900 dark:text-gray-100">
-                                            {n.title ? (
-                                                <span className="font-semibold">{n.title}</span>
-                                            ) : n.type === 'system' ? (
-                                                <span className="font-semibold">{usageAlertText(n.entity_id) || 'System notification'}</span>
-                                            ) : (
-                                                <>
-                                                    <span className="font-semibold">{n.actor?.username || 'Someone'}</span>
-                                                    {' '}
-                                                    {n.type === 'like' && 'liked your comic'}
-                                                    {n.type === 'comment' && 'commented on your comic'}
-                                                    {n.type === 'follow' && 'started following you'}
-                                                </>
-                                            )}
-                                        </p>
-                                        {(n.message || n.type === 'generation') && (
-                                            <p className="text-xs text-gray-500 mt-1">
-                                                {n.message || 'Your latest generation is complete.'}
-                                            </p>
-                                        )}
-                                        <p className="text-xs text-gray-500 mt-1">
-                                            {new Date(n.created_at).toLocaleDateString()}
-                                        </p>
-                                    </div>
-                                    {!n.is_read && (
-                                        <div className="w-2 h-2 bg-blue-500 rounded-full flex-shrink-0 mt-2" />
-                                    )}
-                                </div>
-                            ))
+                            notifications.map(n => {
+                                const body = bodyText(n);
+                                return (
+                                    <button
+                                        key={n.id}
+                                        onClick={() => handleNotificationClick(n)}
+                                        className={`w-full text-left p-3 hover:bg-brand-yellow/15 cursor-pointer flex items-start gap-3 transition-colors ${!n.is_read ? 'bg-brand-blue/5' : ''}`}
+                                    >
+                                        <div className="mt-0.5 w-7 h-7 shrink-0 rounded-lg border-2 border-black bg-white flex items-center justify-center">
+                                            {typeIcon(n)}
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-sm text-slate-900 font-semibold leading-snug">{body.title}</p>
+                                            {body.sub && <p className="text-xs text-slate-600 mt-0.5 line-clamp-2">{body.sub}</p>}
+                                            <p className="text-[11px] text-slate-400 mt-1">{formatWhen(n.created_at)}</p>
+                                        </div>
+                                        {!n.is_read && <span className="w-2.5 h-2.5 bg-brand-red rounded-full shrink-0 mt-1.5" />}
+                                    </button>
+                                );
+                            })
                         )}
                     </div>
                 </div>
