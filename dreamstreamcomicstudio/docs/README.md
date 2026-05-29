@@ -1,0 +1,34 @@
+# DreamStream Comic Studio — Documentation
+
+This folder is the source of truth for how the system is built, why decisions
+were made, and how problems were solved. It exists so a human **or a future AI
+agent** can get oriented quickly and avoid re-deriving context.
+
+## How docs are organized
+
+| Path | What lives here | When to add/update |
+|------|-----------------|--------------------|
+| `ARCHITECTURE.md` | System overview: frontend, backend, data, AI gateway, billing, deploy. | When a major module or data flow changes. |
+| `decisions/` | **ADRs** (Architecture Decision Records) — one file per significant decision, numbered. | Whenever you make a non-obvious, hard-to-reverse, or cross-cutting choice. |
+| `SOLUTION_LOG.md` | Chronological **problem → root cause → fix** log, with files + commit. | Every time you fix a real bug or land a feature worth explaining later. |
+| `features/` | One doc per feature: what it does, key files, flows, gotchas. | When you ship or materially change a feature. |
+| `production/` | Runbooks, go-live checklist, alerting, scaling (pre-existing). | Ops changes. |
+| `OVERHAUL_PLAN.md` | The original product/tech overhaul strategy (historical context). | Read-only history. |
+| `ai_flow_documentation.md` | Deep dive on the AI generation pipeline. | When the pipeline changes. |
+| `RAILWAY_DEPLOY.md` / `OPENROUTER_TESTING.md` | Backend deploy + OpenRouter testing guides. | When deploy/testing steps change. |
+
+## Conventions
+
+- **ADRs** are immutable once `Accepted`. To change a decision, add a new ADR
+  that supersedes the old one (note it in both). See `decisions/README.md`.
+- **SOLUTION_LOG** entries are append-only and dated. Newest at the top.
+- Keep docs **close to the truth in code** — link to `file:line` where useful and
+  prefer updating a doc in the same change that alters the behavior.
+- Top-level `CHANGELOG.md` (in the app root) tracks user-facing changes per release.
+
+## Quick orientation for a new agent
+
+1. Read `ARCHITECTURE.md` for the lay of the land.
+2. Skim `decisions/` newest-first to learn *why* things are the way they are.
+3. Check `SOLUTION_LOG.md` for recent fixes and known sharp edges.
+4. For a specific feature, open its file under `features/`.

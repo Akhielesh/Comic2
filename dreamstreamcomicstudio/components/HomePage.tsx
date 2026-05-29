@@ -1,13 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Sparkles, ArrowRight, Zap, Users, BookOpen, Check, X, HelpCircle, Mail, Info, ChevronRight, Crown, Infinity } from 'lucide-react';
+import { Sparkles, ArrowRight, Zap, Users, BookOpen, Check, HelpCircle, Mail, Info, ChevronRight } from 'lucide-react';
 import { Button } from './Button';
 import { getStudioStats, StudioStats } from '../services/stats';
 import { useAuth } from '../contexts/AuthContext';
 import { UserAvatar } from './UserAvatar';
 import { NotificationBell } from './NotificationBell';
 import { TokenAvailabilityPill } from './TokenAvailabilityPill';
-import { getPricingCatalog } from '../services/billing';
-import type { BillingInterval, BillingPlanDefinition, BillingPlanPricing } from '../shared/types/billing';
 
 interface HomePageProps {
   onEnterStudio: () => void;
@@ -30,54 +28,17 @@ const PROCESS_STAGES = [
   { id: 8, title: "Polish", desc: "Add lettering, speech bubbles, and export." }
 ];
 
-export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics, onOpenProfile, onOpenPrivacy, onOpenTerms, onOpenUpgrade, onNavigate }) => {
+export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics, onOpenProfile, onOpenPrivacy, onOpenTerms, onNavigate }) => {
   const { user } = useAuth();
   const [activeStage, setActiveStage] = useState(1);
   const [faqOpen, setFaqOpen] = useState<number | null>(null);
   const [stats, setStats] = useState<StudioStats>({ userCount: 0, comicCount: 0 });
-  const [selectedBillingInterval, setSelectedBillingInterval] = useState<BillingInterval>('month');
-  const [planPricing, setPlanPricing] = useState<BillingPlanPricing[]>([]);
-  const [catalogPlans, setCatalogPlans] = useState<BillingPlanDefinition[]>([]);
 
   useEffect(() => {
     getStudioStats().then(setStats);
   }, []);
 
-  useEffect(() => {
-    let active = true;
-    const loadPricing = async () => {
-      try {
-        const catalog = await getPricingCatalog();
-        if (!active) return;
-        setPlanPricing(catalog.planPricing || []);
-        setCatalogPlans(catalog.plans || []);
-      } catch {
-        // Keep fallback values if pricing catalog cannot be loaded.
-      }
-    };
-    void loadPricing();
-    return () => {
-      active = false;
-    };
-  }, []);
-
   const toggleFaq = (index: number) => setFaqOpen(faqOpen === index ? null : index);
-  const formatCt = (value: number) => Math.max(0, Math.floor(value)).toLocaleString();
-  const formatUsd = (value: number) => Number(value).toFixed(value % 1 === 0 ? 0 : 2);
-  const openUpgrade = () => (onOpenUpgrade ? onOpenUpgrade() : onEnterStudio());
-
-  const planById = new Map<string, BillingPlanDefinition>(catalogPlans.map((plan) => [plan.id, plan]));
-  const freePlan = planById.get('free');
-  const creatorPlan = planById.get('creator');
-  const studioPlan = planById.get('studio');
-  const creatorPricing = planPricing.find((entry) => entry.planTier === 'creator' && entry.interval === selectedBillingInterval);
-  const studioPricing = planPricing.find((entry) => entry.planTier === 'studio' && entry.interval === selectedBillingInterval);
-  const creatorPrice = creatorPricing?.priceUsd ?? (selectedBillingInterval === 'year' ? 119.88 : 11.99);
-  const studioPrice = studioPricing?.priceUsd ?? (selectedBillingInterval === 'year' ? 419.88 : 39.99);
-  const creatorIncludedCt = creatorPricing?.includedMonthlyCt ?? creatorPlan?.monthlyIncludedCt ?? 120_000;
-  const studioIncludedCt = studioPricing?.includedMonthlyCt ?? studioPlan?.monthlyIncludedCt ?? 390_000;
-  const freeIncludedCt = freePlan?.monthlyIncludedCt ?? 10_000;
-  const freeDailyGuardrailCt = freePlan?.dailyGuardrailCt ?? 800;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
@@ -228,123 +189,6 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
         </div>
       </section>
 
-      {/* Pricing */}
-      <section className="py-24 px-6 bg-slate-50">
-        <div className="max-w-7xl mx-auto">
-          <div className="text-center mb-16">
-            <h2 className="text-4xl md:text-5xl font-display mb-4">Choose Your Plan</h2>
-            <p className="font-comic text-slate-600">All plans are token-metered with Comic Tokens (CT): 10,000 CT = $1.00.</p>
-            <div className="mt-5 inline-flex items-center gap-2 rounded-full border-2 border-black bg-white p-1">
-              <button
-                onClick={() => setSelectedBillingInterval('month')}
-                className={`px-3 py-1 rounded-full text-xs font-bold ${selectedBillingInterval === 'month' ? 'bg-black text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-              >
-                Monthly
-              </button>
-              <button
-                onClick={() => setSelectedBillingInterval('year')}
-                className={`px-3 py-1 rounded-full text-xs font-bold ${selectedBillingInterval === 'year' ? 'bg-black text-white' : 'text-slate-700 hover:bg-slate-100'}`}
-              >
-                Annual
-              </button>
-            </div>
-          </div>
-
-          <div className="grid md:grid-cols-3 gap-8 items-start">
-            {/* Free */}
-            <div className="bg-white border-4 border-black rounded-2xl p-8 shadow-comic hover:-translate-y-2 transition-transform duration-300">
-              <div className="font-display text-2xl mb-2">Free Starter</div>
-              <div className="text-4xl font-black mb-6">$0<span className="text-sm font-normal text-slate-500">/forever</span></div>
-              <ul className="space-y-4 mb-4 text-sm font-bold">
-                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> {formatCt(freeIncludedCt)} CT / month</li>
-                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> {formatCt(freeDailyGuardrailCt)} CT / day guardrail</li>
-                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> Per-action CT estimate shown</li>
-                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> Community Support</li>
-                <li className="flex items-center gap-2 text-slate-400"><X size={16} /> Overage without purchased credits</li>
-              </ul>
-              <div className="mt-6">
-                <Button onClick={onEnterStudio} variant="secondary" className="w-full">Start Free</Button>
-              </div>
-            </div>
-
-            {/* Creator */}
-            <div className="bg-white border-4 border-black rounded-2xl p-8 shadow-comic hover:-translate-y-2 transition-transform duration-300">
-              <div className="font-display text-2xl mb-2">Creator</div>
-              <div className="text-4xl font-black mb-6">
-                ${formatUsd(creatorPrice)}<span className="text-sm font-normal text-slate-500">{selectedBillingInterval === 'year' ? '/yr' : '/mo'}</span>
-              </div>
-              {selectedBillingInterval === 'year' && (
-                <div className="text-xs font-semibold text-slate-600 -mt-4 mb-4">
-                  ${formatUsd(creatorPrice / 12)} /mo equivalent
-                </div>
-              )}
-              <div className="text-xs font-bold mb-6 text-slate-800 bg-slate-100 border border-slate-300 rounded px-2 py-1 inline-block">
-                Monthly Included: {formatCt(creatorIncludedCt)} CT
-              </div>
-              <ul className="space-y-4 mb-4 text-sm font-bold">
-                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> No daily cap (monthly quota only)</li>
-                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> Card-on-file overage support</li>
-                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> Exact CT + USD usage tracking</li>
-                <li className="flex items-center gap-2"><Check size={16} className="text-green-600" /> Private Projects</li>
-              </ul>
-              <div className="mt-6">
-                <Button onClick={openUpgrade} variant="secondary" className="w-full">Upgrade</Button>
-              </div>
-            </div>
-
-            {/* Studio */}
-            <div className="bg-brand-red text-white border-4 border-black rounded-2xl p-8 shadow-comic transform scale-105 z-10 relative group hover:animate-shake hover:rotate-1 transition-all">
-              <style>{`
-                @keyframes shake {
-                  0% { transform: translate(1px, 1px) rotate(0deg) scale(1.05); }
-                  10% { transform: translate(-1px, -2px) rotate(-1deg) scale(1.05); }
-                  20% { transform: translate(-3px, 0px) rotate(1deg) scale(1.05); }
-                  30% { transform: translate(3px, 2px) rotate(0deg) scale(1.05); }
-                  40% { transform: translate(1px, -1px) rotate(1deg) scale(1.05); }
-                  50% { transform: translate(-1px, 2px) rotate(-1deg) scale(1.05); }
-                  60% { transform: translate(-3px, 1px) rotate(0deg) scale(1.05); }
-                  70% { transform: translate(3px, 1px) rotate(-1deg) scale(1.05); }
-                  80% { transform: translate(-1px, -1px) rotate(1deg) scale(1.05); }
-                  90% { transform: translate(1px, 2px) rotate(0deg) scale(1.05); }
-                  100% { transform: translate(1px, -2px) rotate(-1deg) scale(1.05); }
-                }
-                .hover\\:animate-shake:hover {
-                  animation: shake 0.5s;
-                  animation-iteration-count: infinite;
-                }
-              `}</style>
-              <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-black text-brand-yellow px-3 py-1 rounded-full text-xs font-bold uppercase tracking-widest border-2 border-brand-yellow shadow-sm flex items-center gap-2">
-                <Crown size={12} /> Ultimate
-              </div>
-              <div className="font-display text-3xl mb-2 text-white drop-shadow-md">Studio</div>
-              <div className="text-5xl font-black mb-6">
-                ${formatUsd(studioPrice)}<span className="text-lg font-normal text-white/80">{selectedBillingInterval === 'year' ? '/yr' : '/mo'}</span>
-              </div>
-              {selectedBillingInterval === 'year' && (
-                <div className="text-xs font-semibold text-white/90 -mt-4 mb-4">
-                  ${formatUsd(studioPrice / 12)} /mo equivalent
-                </div>
-              )}
-              <div className="text-xs font-bold mb-6 text-white bg-black/20 border border-white/20 rounded px-2 py-1 inline-block">
-                {formatCt(studioIncludedCt)} CT / month
-              </div>
-              <ul className="space-y-4 mb-4 text-sm font-bold">
-                <li className="flex items-center gap-2"><Infinity size={16} className="text-brand-yellow" /> No daily cap (monthly quota only)</li>
-                <li className="flex items-center gap-2"><Infinity size={16} className="text-brand-yellow" /> Team-scale token pool</li>
-                <li className="flex items-center gap-2"><Check size={16} className="text-brand-yellow" /> All AI Models Included</li>
-                <li className="flex items-center gap-2"><Check size={16} className="text-brand-yellow" /> Priority Support</li>
-              </ul>
-              <div className="mt-6">
-                <button onClick={openUpgrade} className="w-full bg-white text-black font-display text-xl py-3 rounded-xl border-4 border-black hover:bg-brand-yellow transition-colors shadow-lg">
-                  Upgrade
-                </button>
-              </div>
-            </div>
-
-          </div>
-        </div>
-      </section>
-
       {/* Footer */}
       <footer className="bg-black text-white pt-20 pb-10 px-6">
         <div className="max-w-7xl mx-auto grid md:grid-cols-4 gap-12 mb-16">
@@ -379,11 +223,11 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
           <h3 className="text-center font-display text-2xl mb-8">Frequently Asked Questions</h3>
           <div className="space-y-2">
             {[
-              { q: "Is it really free?", a: "Yes. Free Starter includes 10,000 CT monthly and 800 CT daily without a required card." },
-              { q: "Can I use my own API keys?", a: "Yes. BYOK usage is tracked for reporting but does not burn platform CT." },
+              { q: "Is it really free?", a: "Yes. You can start free and bring your own API keys, so generation runs on your own provider account." },
+              { q: "Can I use my own API keys?", a: "Yes. Add one or more provider keys (e.g. OpenRouter, Gemini) in Settings → API Configuration; generation runs on your keys." },
               { q: "Do I own the comics I create?", a: "Yes, you own full commercial rights to all comics generated on the platform, subject to the AI model's specific terms." },
-              { q: "How is cost shown?", a: "Each action shows estimated CT before run and actual CT after completion, with per-comic breakdown by stage and model." },
-              { q: "What happens at limits?", a: "If usage exceeds limits, you'll be prompted to upgrade, add credits, or wait for reset at the shown timestamp." }
+              { q: "How is cost shown?", a: "Each action shows an estimated cost before running and the actual cost after, with a per-comic breakdown by stage and model." },
+              { q: "What happens at limits?", a: "If you set a usage limit on a key, you'll be alerted as you approach it and stopped before exceeding it." }
             ].map((faq, i) => (
               <div key={i} className="border border-zinc-800 rounded-lg overflow-hidden">
                 <button
