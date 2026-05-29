@@ -13,6 +13,24 @@ Entry format:
 
 ---
 
+## 2026-05-29 — Richer model selection, reader fit, capability gating, cost analysis
+
+- **Richer selection:** ModelSelectionPanel (in API Configuration) — Default / Free /
+  Specific for image+text from the live catalog, with capability badges; reflected via
+  modelSelection. Kills the "default only" feel.
+- **Capability gating (v1):** selection panel warns when the chosen image model is weak
+  at character consistency (uses modelCapabilities.featureSupport). Deeper editor control
+  gating (disable reference upload, premium image-edit UI) is the next increment.
+- **Reader:** flip-mode pages now fit the viewport (max-h-[78vh] object-contain, wrapper
+  sized to the image so dialogue overlays stay aligned) — fixes portrait/flip overflow.
+- **Cost optimization:** ReviewExport now surfaces the per-stage and per-model cost
+  breakdown from the (already-captured) ledger data — the analysis input. Documented the
+  optimization levers (batch panels, trim context, right-size models) in
+  docs/features/cost-optimization.md; the pipeline flow changes are a separate tested
+  increment (not rushed to prod).
+- **Files:** components/ModelSelectionPanel.tsx, ApiConfiguration.tsx, ComicReader.tsx,
+  steps/ReviewExport.tsx, docs/features/cost-optimization.md.
+
 ## 2026-05-29 — Model capability index + usage-hover/header fixes
 
 - **Problem:** (1) Usage pill hover showed appSettings defaults, not the chosen model;

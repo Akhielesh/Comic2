@@ -74,7 +74,7 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
   const [regenError, setRegenError] = useState<string | null>(null);
   const [limitDetails, setLimitDetails] = useState<Record<string, unknown> | null>(null);
   const estimatedCt = costReport ? Math.ceil(costReport.cost_summary.totalCost / 0.0001) : null;
-  const [comicCost, setComicCost] = useState<{ totalActualCt: number; totalBillableUsd: number; totalProviderCostUsd: number } | null>(null);
+  const [comicCost, setComicCost] = useState<{ totalActualCt: number; totalBillableUsd: number; totalProviderCostUsd: number; byStage: Record<string, { ct: number; usd: number }>; byModel: Record<string, { ct: number; usd: number }> } | null>(null);
   const [showBubbleEditor, setShowBubbleEditor] = useState(false);
 
   const textLayout = state.textLayout || 'caption';
@@ -126,7 +126,9 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
         setComicCost({
           totalActualCt: cost.totalActualCt,
           totalBillableUsd: cost.totalBillableUsd,
-          totalProviderCostUsd: cost.totalProviderCostUsd
+          totalProviderCostUsd: cost.totalProviderCostUsd,
+          byStage: cost.byStage || {},
+          byModel: cost.byModel || {}
         });
       } catch {
         if (active) setComicCost(null);
@@ -585,6 +587,26 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
             </div>
           )}
         </div>
+
+        {comicCost && (Object.keys(comicCost.byStage).length > 0 || Object.keys(comicCost.byModel).length > 0) && (
+          <div className="bg-white border-2 border-black rounded-xl p-4 space-y-2">
+            <div className="text-xs font-bold uppercase text-slate-500">Cost breakdown — optimize the priciest</div>
+            <div className="grid sm:grid-cols-2 gap-4 text-xs">
+              <div>
+                <div className="font-bold mb-1">By stage</div>
+                {Object.entries(comicCost.byStage).sort((a, b) => b[1].usd - a[1].usd).slice(0, 6).map(([stage, v]) => (
+                  <div key={stage} className="flex justify-between gap-2"><span className="text-slate-600 truncate">{stage}</span><span className="font-mono shrink-0">${v.usd.toFixed(4)}</span></div>
+                ))}
+              </div>
+              <div>
+                <div className="font-bold mb-1">By model</div>
+                {Object.entries(comicCost.byModel).sort((a, b) => b[1].usd - a[1].usd).slice(0, 6).map(([model, v]) => (
+                  <div key={model} className="flex justify-between gap-2"><span className="text-slate-600 truncate">{model}</span><span className="font-mono shrink-0">${v.usd.toFixed(4)}</span></div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Model & Layout Info Bar */}
         <div className="bg-slate-50 border-2 border-slate-200 rounded-lg px-4 py-2 flex flex-wrap items-center gap-4 text-xs font-mono text-slate-600">
