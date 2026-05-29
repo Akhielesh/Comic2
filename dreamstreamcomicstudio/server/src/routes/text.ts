@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { requireGeminiKey } from '../middleware/keys.js';
+import { requireGeminiKey, requireOpenRouterKey } from '../middleware/keys.js';
 import {
   analyzeScript,
   generateStoryOutline,
@@ -11,7 +11,9 @@ import {
   continuityAudit,
   analyzeTestLabReport
 } from '../ai/text.js';
-import { TEXT_MODEL } from '../config.js';
+import { TEXT_MODEL, OPENROUTER_TEXT_MODEL } from '../config.js';
+import { getProvider, resolveProviderContext } from '../ai/gateway.js';
+import type { ChatMessage } from '../ai/providers/types.js';
 import {
   attachBillingToPayload,
   formatLimitErrorResponse,
@@ -592,6 +594,102 @@ textRouter.post('/testlab-report', async (req, res, next) => {
         provider: 'gemini',
         model: effectiveModel,
         projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
+        reason: (error as Error)?.message || 'text_request_failed',
+        metadata: { route: req.path, method: req.method }
+      });
+      throw error;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Unified OpenRouter text generation. Provider-agnostic passthrough used to
+// exercise the new API source directly (and the seam the pipeline routes can
+// migrate onto). Accepts either { prompt, system } or a full { messages } array;
+// set { jsonMode: true } to force a JSON object response. BYOK via X-OpenRouter-Key.
+textRouter.post('/generate', async (req, res, next) => {
+  try {
+    const apiKey = requireOpenRouterKey(req, res);
+    if (!apiKey) return;
+    const { prompt, messages, system, model, jsonMode, temperature, maxTokens, projectId } = req.body || {};
+
+    const chatMessages: ChatMessage[] = Array.isArray(messages) && messages.length > 0
+      ? messages
+      : [
+          ...(typeof system === 'string' && system.trim() ? [{ role: 'system' as const, content: system }] : []),
+          { role: 'user' as const, content: typeof prompt === 'string' ? prompt : '' }
+        ];
+
+    const hasContent = chatMessages.some((m) =>
+      typeof m?.content === 'string' ? m.content.trim().length > 0 : Array.isArray(m?.content) && m.content.length > 0
+    );
+    if (!hasContent) {
+      return res.status(400).json({ error: { message: 'prompt or messages is required' } });
+    }
+
+    const effectiveModel = typeof model === 'string' && model.trim() ? model.trim() : OPENROUTER_TEXT_MODEL;
+
+    const reserve = await reserveForOperation({
+      req,
+      operation: 'text.openrouter.generate',
+      fallbackModel: effectiveModel,
+      provider: 'openrouter',
+      projectId: typeof projectId === 'string' ? projectId : undefined,
+      comicId: typeof projectId === 'string' ? projectId : undefined,
+      stage: 'generate',
+      metadata: { route: req.path, method: req.method }
+    });
+    if ('details' in reserve) return res.status(402).json({ error: formatLimitErrorResponse(reserve.details) });
+
+    try {
+      const result = await getProvider('openrouter').generateText(
+        {
+          model: effectiveModel,
+          messages: chatMessages,
+          jsonMode: Boolean(jsonMode),
+          temperature: typeof temperature === 'number' ? temperature : undefined,
+          maxTokens: typeof maxTokens === 'number' ? maxTokens : undefined
+        },
+        resolveProviderContext(apiKey)
+      );
+
+      const usage = {
+        promptTokens: result.usage.promptTokens,
+        candidatesTokens: result.usage.completionTokens,
+        totalTokens: result.usage.totalTokens
+      };
+
+      const settled = await settleReservedOperation({
+        req,
+        operation: 'text.openrouter.generate',
+        provider: 'openrouter',
+        model: result.model || effectiveModel,
+        seed: {
+          provider: 'openrouter',
+          model: result.model || effectiveModel,
+          operation: 'text.openrouter.generate',
+          projectId: typeof projectId === 'string' ? projectId : undefined,
+          comicId: typeof projectId === 'string' ? projectId : undefined,
+          stage: 'generate',
+          byok: reserve.reservation.byokBypass
+        },
+        usage,
+        metadata: { route: req.path, method: req.method }
+      });
+
+      res.json(attachBillingToPayload(
+        { text: result.text, json: result.json, model: result.model, usage } as Record<string, unknown>,
+        reserve.reservation,
+        settled
+      ));
+    } catch (error) {
+      await releaseReservedOperation({
+        req,
+        operation: 'text.openrouter.generate',
+        provider: 'openrouter',
+        model: effectiveModel,
+        projectId: typeof projectId === 'string' ? projectId : undefined,
         reason: (error as Error)?.message || 'text_request_failed',
         metadata: { route: req.path, method: req.method }
       });

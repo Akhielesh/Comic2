@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest",
+    "openrouter:smoketest": "node scripts/openrouter-smoketest.mjs",
     "pricing:sync": "tsx server/src/jobs/dailyPricingSync.ts",
     "pricing:sync:check": "tsx server/src/jobs/dailyPricingSync.ts --check",
     "billing:reconcile": "tsx server/src/jobs/dailyBillingReconciliation.ts",

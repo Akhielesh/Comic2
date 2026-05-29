@@ -1,19 +1,36 @@
-// AI gateway façade.
+// AI gateway façade + provider registry.
 //
 // Routes call the gateway instead of a concrete provider so that the rest of the
-// server never imports a vendor SDK directly. Today there is a single provider
-// (OpenRouter); the `AI_PROVIDER` flag gates whether the unified path is active
-// so the legacy Gemini/Pixazo path can keep serving traffic until cutover.
+// server never imports a vendor SDK directly. OpenRouter is the first provider;
+// the `PROVIDERS` registry below is the single place to add more — each new
+// provider is a drop-in `AIProvider`, so adding another BYOK source later does
+// not touch any route code.
 
 import { AI_PROVIDER, OPENROUTER_API_KEY } from '../config.js';
 import { openRouterProvider } from './providers/openrouter.js';
 import type { AIProvider, ProviderContext } from './providers/types.js';
 
-/** True when the unified OpenRouter path should handle generation. */
+/** Registry of available providers, keyed by id. Add new providers here. */
+const PROVIDERS: Record<string, AIProvider> = {
+  openrouter: openRouterProvider
+};
+
+/** The provider id the platform runs by default (from AI_PROVIDER, fallback openrouter). */
+export const defaultProviderId = (): string =>
+  PROVIDERS[AI_PROVIDER] ? AI_PROVIDER : 'openrouter';
+
+/** True when the unified OpenRouter path should handle the default generation flow. */
 export const isOpenRouterEnabled = (): boolean => AI_PROVIDER === 'openrouter';
 
-/** The active provider. Single implementation today; the seam is intentional. */
-export const getProvider = (): AIProvider => openRouterProvider;
+/**
+ * Resolve a provider implementation.
+ *
+ * - Pass an explicit id to target a specific provider (e.g. a route that is
+ *   OpenRouter-only regardless of the AI_PROVIDER flag).
+ * - Omit the id to use the platform's active provider.
+ */
+export const getProvider = (id?: string): AIProvider =>
+  PROVIDERS[(id || defaultProviderId()).toLowerCase()] || openRouterProvider;
 
 /**
  * Resolve the provider context (key + BYOK flag) for a request.
