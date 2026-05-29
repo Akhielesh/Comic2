@@ -94,6 +94,24 @@ export const FLUX_FETCH_IMAGE_TIMEOUT_MS = parseIntegerEnv(
 export const PIXAZO_ENDPOINT = process.env.PIXAZO_ENDPOINT || 'https://gateway.pixazo.ai/flux-1-schnell/v1/getData';
 export const FLUX_MODEL_ID = process.env.FLUX_MODEL_ID || 'pixazo/flux-1-schnell';
 
+// --- OpenRouter (unified gateway: text + image, incl. Gemini-family models via OpenRouter) ---
+// AI_PROVIDER gates the unified path: 'gemini' = legacy Google SDK + Pixazo, 'openrouter' = gateway.
+export const AI_PROVIDER = (process.env.AI_PROVIDER || 'gemini').trim().toLowerCase();
+export const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
+export const OPENROUTER_BASE_URL = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
+export const OPENROUTER_APP_URL = process.env.OPENROUTER_APP_URL || 'https://dreamstream.studio';
+export const OPENROUTER_APP_TITLE = process.env.OPENROUTER_APP_TITLE || 'DreamStream Comic Studio';
+// Default model IDs (overridable). These intentionally route Gemini-family models THROUGH OpenRouter.
+export const OPENROUTER_TEXT_MODEL = process.env.OPENROUTER_TEXT_MODEL || 'google/gemini-2.5-flash';
+export const OPENROUTER_IMAGE_MODEL = process.env.OPENROUTER_IMAGE_MODEL || 'google/gemini-2.5-flash-image';
+export const OPENROUTER_FREE_TEXT_MODEL = process.env.OPENROUTER_FREE_TEXT_MODEL || 'google/gemini-2.0-flash-exp:free';
+export const OPENROUTER_REQUEST_TIMEOUT_MS = parseIntegerEnv(
+  process.env.OPENROUTER_REQUEST_TIMEOUT_MS,
+  120_000,
+  'OPENROUTER_REQUEST_TIMEOUT_MS',
+  1_000
+);
+
 export const STORAGE_BUCKET = process.env.STORAGE_BUCKET || 'comic-assets';
 export const IMAGE_INCLUDE_DATA_URL_LEGACY = (process.env.IMAGE_INCLUDE_DATA_URL_LEGACY || '').toLowerCase() === 'true';
 export const REDIS_URL = process.env.REDIS_URL || '';

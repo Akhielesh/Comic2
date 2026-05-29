@@ -35,6 +35,9 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
           <button onClick={onViewComics} className="hidden md:block text-sm font-bold hover:underline">
             View Comics
           </button>
+          <button onClick={() => onNavigate('models')} className="hidden md:block text-sm font-bold hover:underline">
+            Models
+          </button>
           {isAuthenticated ? (
             <>
               <TokenAvailabilityPill />

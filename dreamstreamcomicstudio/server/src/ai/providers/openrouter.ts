@@ -1,0 +1,271 @@
+// OpenRouter provider — the single upstream for text + image generation.
+//
+// Text:  POST /chat/completions (OpenAI-compatible).
+// Image: POST /chat/completions with `modalities: ["image","text"]`; generated
+//        images come back in choices[0].message.images[] as data URLs.
+// Models: GET /models (public catalog; auth optional).
+//
+// NOTE: This module is written against OpenRouter's documented API but cannot be
+// runtime-verified inside the build sandbox (no outbound network to openrouter.ai).
+// Validate end-to-end with a real OPENROUTER_API_KEY in a networked environment.
+
+import {
+  OPENROUTER_BASE_URL,
+  OPENROUTER_APP_URL,
+  OPENROUTER_APP_TITLE,
+  OPENROUTER_REQUEST_TIMEOUT_MS
+} from '../../config.js';
+import { withRetry } from '../utils.js';
+import { coerceJson, coerceJsonOrNull } from '../jsonCoerce.js';
+import type {
+  AIProvider,
+  CatalogModel,
+  GenerateImageRequest,
+  GenerateImageResult,
+  GenerateTextRequest,
+  GenerateTextResult,
+  MessagePart,
+  ProviderContext,
+  ProviderUsage
+} from './types.js';
+
+const JSON_REPAIR_INSTRUCTION =
+  'Your previous reply was not valid JSON. Reply again with ONLY valid, minified JSON that matches the requested structure — no prose, no explanation, no markdown code fences.';
+
+const buildHeaders = (ctx?: ProviderContext): Record<string, string> => {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'HTTP-Referer': OPENROUTER_APP_URL,
+    'X-Title': OPENROUTER_APP_TITLE
+  };
+  if (ctx?.apiKey) headers['Authorization'] = `Bearer ${ctx.apiKey}`;
+  return headers;
+};
+
+const openRouterFetch = async <T = any>(
+  path: string,
+  init: { method?: string; body?: string },
+  timeoutMs: number,
+  ctx?: ProviderContext
+): Promise<T> => {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${OPENROUTER_BASE_URL}${path}`, {
+      method: init.method || 'GET',
+      headers: buildHeaders(ctx),
+      body: init.body,
+      signal: controller.signal
+    });
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      throw new Error(`OpenRouter ${path} failed: ${res.status} ${res.statusText} ${errBody.slice(0, 500)}`);
+    }
+    return (await res.json()) as T;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+const parseUsage = (data: any): ProviderUsage => {
+  const usage = data?.usage || {};
+  return {
+    promptTokens: typeof usage.prompt_tokens === 'number' ? usage.prompt_tokens : undefined,
+    completionTokens: typeof usage.completion_tokens === 'number' ? usage.completion_tokens : undefined,
+    totalTokens: typeof usage.total_tokens === 'number' ? usage.total_tokens : undefined,
+    costUsd: typeof usage.cost === 'number' ? usage.cost : undefined
+  };
+};
+
+/** OpenRouter content can be a plain string or an array of parts. Flatten to text. */
+const extractText = (content: unknown): string => {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part: any) => (part && typeof part.text === 'string' ? part.text : ''))
+      .join('')
+      .trim();
+  }
+  return '';
+};
+
+/** Pull generated image data URLs from an OpenRouter chat response. */
+const extractImages = (data: any): string[] => {
+  const message = data?.choices?.[0]?.message;
+  const urls: string[] = [];
+  // Preferred: message.images[] = [{ type:'image_url', image_url:{ url } }]
+  const images = message?.images;
+  if (Array.isArray(images)) {
+    for (const img of images) {
+      const url = img?.image_url?.url || img?.url;
+      if (typeof url === 'string' && url) urls.push(url);
+    }
+  }
+  // Fallback: image parts embedded in message.content[]
+  if (urls.length === 0 && Array.isArray(message?.content)) {
+    for (const part of message.content) {
+      const url = part?.image_url?.url;
+      if (typeof url === 'string' && url) urls.push(url);
+    }
+  }
+  return urls;
+};
+
+const num = (value: unknown): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const normalizeCatalogModel = (raw: any): CatalogModel => {
+  const id: string = String(raw?.id || '');
+  const pricing = raw?.pricing || {};
+  const promptPerToken = num(pricing.prompt);
+  const completionPerToken = num(pricing.completion);
+  const imagePerImage = num(pricing.image);
+  const requestFlat = num(pricing.request);
+  const inputModalities: string[] = Array.isArray(raw?.architecture?.input_modalities)
+    ? raw.architecture.input_modalities
+    : [];
+  const outputModalities: string[] = Array.isArray(raw?.architecture?.output_modalities)
+    ? raw.architecture.output_modalities
+    : [];
+  const supportedParameters: string[] = Array.isArray(raw?.supported_parameters)
+    ? raw.supported_parameters
+    : [];
+  const isFree =
+    id.endsWith(':free') ||
+    (promptPerToken === 0 && completionPerToken === 0 && imagePerImage === 0 && requestFlat === 0);
+
+  return {
+    id,
+    name: String(raw?.name || id),
+    description: typeof raw?.description === 'string' ? raw.description : undefined,
+    contextLength: typeof raw?.context_length === 'number' ? raw.context_length : undefined,
+    inputModalities,
+    outputModalities,
+    supportedParameters,
+    pricing: { promptPerToken, completionPerToken, imagePerImage, requestFlat },
+    isFree,
+    supportsImageOutput: outputModalities.includes('image'),
+    supportsImageInput: inputModalities.includes('image'),
+    supportsJsonOutput:
+      supportedParameters.includes('response_format') || supportedParameters.includes('structured_outputs')
+  };
+};
+
+const generateText = async (
+  req: GenerateTextRequest,
+  ctx: ProviderContext
+): Promise<GenerateTextResult> => {
+  const wantsJson = Boolean(req.jsonSchema || req.jsonMode);
+  const timeoutMs = req.timeoutMs ?? OPENROUTER_REQUEST_TIMEOUT_MS;
+
+  const baseBody: Record<string, unknown> = {
+    model: req.model,
+    usage: { include: true }
+  };
+  if (typeof req.temperature === 'number') baseBody.temperature = req.temperature;
+  if (typeof req.maxTokens === 'number') baseBody.max_tokens = req.maxTokens;
+  if (req.jsonSchema) {
+    baseBody.response_format = {
+      type: 'json_schema',
+      json_schema: {
+        name: req.jsonSchema.name,
+        strict: req.jsonSchema.strict ?? true,
+        schema: req.jsonSchema.schema
+      }
+    };
+  } else if (req.jsonMode) {
+    baseBody.response_format = { type: 'json_object' };
+  }
+
+  const run = async (messages: GenerateTextRequest['messages']) => {
+    const data = await openRouterFetch<any>(
+      '/chat/completions',
+      { method: 'POST', body: JSON.stringify({ ...baseBody, messages }) },
+      timeoutMs,
+      ctx
+    );
+    return { data, text: extractText(data?.choices?.[0]?.message?.content) };
+  };
+
+  let { data, text } = await withRetry(() => run(req.messages), req.retries ?? 3, 1500, 'OpenRouter text');
+
+  let json: unknown | undefined;
+  if (wantsJson) {
+    json = coerceJsonOrNull(text);
+    if (json === null) {
+      // One corrective round-trip before giving up.
+      const repaired = await run([
+        ...req.messages,
+        { role: 'assistant', content: text },
+        { role: 'user', content: JSON_REPAIR_INSTRUCTION }
+      ]);
+      data = repaired.data;
+      text = repaired.text;
+      json = coerceJson(text); // throws if still invalid
+    }
+  }
+
+  return {
+    text,
+    json,
+    model: String(data?.model || req.model),
+    usage: parseUsage(data),
+    raw: data
+  };
+};
+
+const generateImage = async (
+  req: GenerateImageRequest,
+  ctx: ProviderContext
+): Promise<GenerateImageResult> => {
+  const timeoutMs = req.timeoutMs ?? OPENROUTER_REQUEST_TIMEOUT_MS;
+  const promptText = req.negativePrompt ? `${req.prompt}\n\n${req.negativePrompt}` : req.prompt;
+
+  const content: MessagePart[] = [{ type: 'text', text: promptText }];
+  for (const url of req.referenceImages || []) {
+    if (url) content.push({ type: 'image_url', image_url: { url } });
+  }
+
+  const body = {
+    model: req.model,
+    messages: [{ role: 'user', content }],
+    modalities: ['image', 'text'],
+    usage: { include: true }
+  };
+
+  const data = await withRetry(
+    () =>
+      openRouterFetch<any>('/chat/completions', { method: 'POST', body: JSON.stringify(body) }, timeoutMs, ctx),
+    req.retries ?? 2,
+    2000,
+    'OpenRouter image'
+  );
+
+  const images = extractImages(data);
+  if (images.length === 0) {
+    throw new Error('OpenRouter returned no image. Confirm the model supports image output.');
+  }
+
+  return {
+    imageDataUrl: images[0],
+    images,
+    model: String(data?.model || req.model),
+    usage: parseUsage(data),
+    raw: data
+  };
+};
+
+const listModels = async (ctx?: ProviderContext): Promise<CatalogModel[]> => {
+  const data = await openRouterFetch<any>('/models', { method: 'GET' }, OPENROUTER_REQUEST_TIMEOUT_MS, ctx);
+  const rows: any[] = Array.isArray(data?.data) ? data.data : [];
+  return rows.map(normalizeCatalogModel).filter((model) => Boolean(model.id));
+};
+
+export const openRouterProvider: AIProvider = {
+  id: 'openrouter',
+  generateText,
+  generateImage,
+  listModels
+};

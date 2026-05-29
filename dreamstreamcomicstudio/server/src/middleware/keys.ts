@@ -5,6 +5,10 @@ declare module 'express-serve-static-core' {
     apiKeys?: {
       geminiKey?: string | null;
       pixazoKey?: string | null;
+      /** Resolved OpenRouter key (BYOK header or platform env). */
+      openRouterKey?: string | null;
+      /** True when the OpenRouter key came from the end-user (BYOK), not the platform. */
+      openRouterByok?: boolean;
     };
   }
 }
@@ -17,8 +21,29 @@ export const attachKeys = (req: Request, _res: Response, next: NextFunction) => 
     || process.env.PIXAZO_SUBSCRIPTION_KEY
     || process.env.FLUX_API_KEY
     || null;
-  req.apiKeys = { geminiKey, pixazoKey };
+  const openRouterHeaderKey = req.header('X-OpenRouter-Key') || null;
+  const openRouterKey = openRouterHeaderKey || process.env.OPENROUTER_API_KEY || null;
+  req.apiKeys = {
+    geminiKey,
+    pixazoKey,
+    openRouterKey,
+    openRouterByok: Boolean(openRouterHeaderKey)
+  };
   next();
+};
+
+export const requireOpenRouterKey = (req: Request, res: Response): string | null => {
+  const openRouterKey = req.apiKeys?.openRouterKey;
+  if (!openRouterKey) {
+    res.status(401).json({
+      error: {
+        message: 'OpenRouter API key missing. Add your key in Settings (free tier) or configure OPENROUTER_API_KEY on the server.',
+        code: 'OPENROUTER_KEY_MISSING'
+      }
+    });
+    return null;
+  }
+  return openRouterKey;
 };
 
 export const requireGeminiKey = (req: Request, res: Response): string | null => {
