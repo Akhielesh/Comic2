@@ -119,6 +119,36 @@ export const getFluxKeySuffix = () => {
   return key ? key.slice(-4) : null;
 };
 
+// OpenRouter unified-gateway key (BYOK). Sent to the server as X-OpenRouter-Key,
+// which bypasses platform billing when present.
+const OPENROUTER_KEY_STORAGE = "dreamstream_openrouter_key";
+
+export const getOpenRouterKeyInfo = (): { key: string | null; source: KeySource } => {
+  const stored = getFromStorage(OPENROUTER_KEY_STORAGE);
+  if (stored) return { key: stored, source: "localStorage" };
+  return { key: null, source: "none" };
+};
+
+export const getOpenRouterKey = (): string | null => getOpenRouterKeyInfo().key;
+
+export const setOpenRouterKey = (key: string | null) => {
+  const normalized = typeof key === "string" ? key.trim() : "";
+  if (!normalized) {
+    removeFromStorage(OPENROUTER_KEY_STORAGE);
+    return;
+  }
+  setInStorage(OPENROUTER_KEY_STORAGE, normalized);
+};
+
+export const clearOpenRouterKey = () => {
+  removeFromStorage(OPENROUTER_KEY_STORAGE);
+};
+
+export const getOpenRouterKeySuffix = () => {
+  const key = getOpenRouterKey();
+  return key ? key.slice(-4) : null;
+};
+
 export const getSettingsState = (): {
   showGeminiKey?: boolean;
   showFluxKey?: boolean;

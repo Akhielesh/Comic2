@@ -5,6 +5,7 @@ import { X, Eye, EyeOff, Copy, ChevronDown, ChevronUp, AlertTriangle, CheckCircl
 import { Button } from "./Button";
 import { FluxKeyInput } from "./FluxKeyInput";
 import { KeyManager } from "./KeyManager";
+import { OpenRouterKeyInput } from "./OpenRouterKeyInput";
 import {
   IMAGE_MODELS,
   getAllowedImageModelsForPlan,
@@ -161,6 +162,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadP
                   <a href="/docs/setup_keys.md" target="_blank" className="text-[11px] font-bold text-blue-600 underline hover:text-blue-800">
                     Need help getting keys?
                   </a>
+                </div>
+
+                {/* OpenRouter unified-gateway key (BYOK) */}
+                <div className="pt-2">
+                  <OpenRouterKeyInput />
                 </div>
 
                 {/* New Key Manager for Model-Specific Keys */}
