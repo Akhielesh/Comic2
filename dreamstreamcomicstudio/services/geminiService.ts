@@ -36,6 +36,7 @@ import { cropImageToRatio } from './imageUtils';
 import { updateDebugState } from './debugStore';
 import { getAllModelKeys, getDefaultTextModel, getModelSpecificKey } from './appSettings';
 import { getActiveKeyForUse, recordKeyUsage } from './apiKeys';
+import { getSelectedImageModel } from './modelSelection';
 import { groundWorldEntities } from './worldGrounding';
 import { WORLD_EXTRACTION_CONTRACT_VERSION } from '../shared/contracts/worldExtraction';
 
@@ -613,7 +614,7 @@ export const generateImage = async (
       // The X-OpenRouter-Key header is attached automatically by apiClient.
       response = await post<ImageGenerateRequest, ImageGenerateResponse>(
         '/api/image/openrouter',
-        { ...requestBody, model: undefined },
+        { ...requestBody, model: getSelectedImageModel() || undefined },
         { signal: options?.abortSignal }
       );
       // Attribute the real provider cost to the active OpenRouter key (per-key usage).

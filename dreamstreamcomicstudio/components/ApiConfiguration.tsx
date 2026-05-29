@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Key, Plus, Trash2, Check, AlertTriangle, ExternalLink, Pencil, X } from 'lucide-react';
+import { Key, Plus, Trash2, Check, AlertTriangle, ExternalLink, Pencil, X, ChevronDown, ChevronRight } from 'lucide-react';
 import {
   ALL_PROVIDERS,
   PROVIDER_META,
@@ -144,47 +144,79 @@ const AddKeyForm: React.FC<{ provider: ApiKeyProvider; onChange: () => void }> =
   );
 };
 
+/** Compact usage chip shown in a collapsed provider header. */
+const HeaderUsage: React.FC<{ k: ManagedApiKey }> = ({ k }) => {
+  if (!k.limitUsd || k.limitUsd <= 0) return <span className="text-[11px] text-slate-500">${k.usedUsd.toFixed(2)}</span>;
+  const pct = Math.round(usageFraction(k) * 100);
+  const color = pct >= 100 ? 'text-brand-red' : pct >= 80 ? 'text-amber-600' : 'text-slate-600';
+  return <span className={`text-[11px] font-bold ${color}`}>{pct}%</span>;
+};
+
 export const ApiConfiguration: React.FC = () => {
   const [keys, setKeys] = useState<ManagedApiKey[]>(() => listKeys());
+  // Open the first provider that has no key yet, to nudge first-time setup.
+  const [open, setOpen] = useState<ApiKeyProvider | null>(() => {
+    const initial = listKeys();
+    return ALL_PROVIDERS.find((p) => !initial.some((k) => k.provider === p)) ?? null;
+  });
   const refresh = () => setKeys(listKeys());
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3">
       <div>
         <h3 className="font-display text-2xl">API Configuration</h3>
         <p className="text-sm text-slate-600 mt-1 max-w-2xl">
-          Bring your own keys. Add one or more keys per provider, pick which is{' '}
-          <span className="font-bold">active</span>, and set an optional monthly spend
-          limit per key — generation is blocked on a key once it hits its limit.
-          Keys are stored on this device.
+          Bring your own keys. Click a provider to add keys, pick the{' '}
+          <span className="font-bold">active</span> one, and set an optional monthly limit
+          (generation is blocked on a key once it hits its limit). Keys stay on this device.
         </p>
       </div>
 
       {ALL_PROVIDERS.map((provider) => {
         const meta = PROVIDER_META[provider];
         const providerKeys = keys.filter((k) => k.provider === provider);
+        const active = providerKeys.find((k) => k.active);
+        const isOpen = open === provider;
         return (
-          <section key={provider} className="bg-white border-2 border-black rounded-xl shadow-comic p-4 space-y-3">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h4 className="font-display text-lg flex items-center gap-2"><Key className="w-4 h-4" /> {meta.label}</h4>
-                <p className="text-[11px] text-slate-500">{meta.hint}</p>
+          <div key={provider} className="bg-white border-2 border-black rounded-xl shadow-comic overflow-hidden">
+            <button
+              onClick={() => setOpen(isOpen ? null : provider)}
+              className="w-full flex items-center justify-between gap-3 px-4 py-3 hover:bg-brand-yellow/10 transition-colors text-left"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                {isOpen ? <ChevronDown className="w-4 h-4 shrink-0" /> : <ChevronRight className="w-4 h-4 shrink-0" />}
+                <Key className="w-4 h-4 shrink-0" />
+                <span className="font-bold truncate">{meta.label}</span>
+                <span className="text-[10px] font-bold uppercase text-slate-500 bg-slate-100 border border-slate-300 rounded px-1.5 py-0.5 shrink-0">
+                  {providerKeys.length} key{providerKeys.length === 1 ? '' : 's'}
+                </span>
               </div>
-              <a href={meta.keysUrl} target="_blank" rel="noreferrer" className="text-[11px] font-bold text-brand-blue underline flex items-center gap-1 shrink-0">
-                Get a key <ExternalLink className="w-3 h-3" />
-              </a>
-            </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {active ? (
+                  <span className="hidden sm:flex items-center gap-1.5 text-[11px]">
+                    <span className="text-slate-400">active:</span>
+                    <span className="font-semibold max-w-[8rem] truncate">{active.label}</span>
+                    <HeaderUsage k={active} />
+                  </span>
+                ) : (
+                  <span className="text-[11px] text-slate-400">not configured</span>
+                )}
+              </div>
+            </button>
 
-            {providerKeys.length === 0 ? (
-              <div className="text-sm text-slate-400 italic">No {meta.label} keys yet.</div>
-            ) : (
-              <div className="space-y-2">
+            {isOpen && (
+              <div className="border-t-2 border-black p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[11px] text-slate-500">{meta.hint}</p>
+                  <a href={meta.keysUrl} target="_blank" rel="noreferrer" className="text-[11px] font-bold text-brand-blue underline flex items-center gap-1 shrink-0">
+                    Get a key <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
                 {providerKeys.map((k) => <KeyRow key={k.id} k={k} onChange={refresh} />)}
+                <AddKeyForm provider={provider} onChange={refresh} />
               </div>
             )}
-
-            <AddKeyForm provider={provider} onChange={refresh} />
-          </section>
+          </div>
         );
       })}
     </div>

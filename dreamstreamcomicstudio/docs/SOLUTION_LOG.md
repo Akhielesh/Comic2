@@ -13,6 +13,23 @@ Entry format:
 
 ---
 
+## 2026-05-29 — Model Library upgrades + compact API config + key-driven selection
+
+- **Problem:** API config panel too chunky; model options didn't react to keys; no way
+  to compare models or pick one; users couldn't see/choose live (incl. newly-free) models.
+- **Solution:** API Configuration is now a compact accordion (collapse per provider).
+  Model Library: live catalog, "Use this model" with quick confirm, and compare up to 5
+  (side-by-side table). New `services/modelSelection.ts` stores the chosen image/text
+  model; `geminiService` sends the selected image model to `/api/image/openrouter`. A
+  current-selection banner shows the active Image/Text models.
+- **Files:** `components/ApiConfiguration.tsx`, `components/ModelLibrary.tsx`,
+  `services/modelSelection.ts`, `services/geminiService.ts`,
+  `docs/features/models-and-api-configuration.md`.
+- **Commit/Decision:** ADR 0003.
+- **Pending in this cluster:** show/choose Default/Free/Specific directly in API config
+  (currently via the library + Free filter); text-model selection reaching the Gemini
+  pipeline (ADR 0001 follow-up).
+
 ## 2026-05-29 — Usage pill swap, billing tab removal, notifications redesign
 
 - **Problem:** Header showed CT credits; Settings had a billing tab; notifications

@@ -9,7 +9,9 @@ import {
   Check,
   Loader2,
   X,
-  Sparkles
+  Sparkles,
+  Scale,
+  Plus
 } from 'lucide-react';
 import {
   fetchModelCatalog,
@@ -18,6 +20,13 @@ import {
   type Band,
   type CatalogModel
 } from '../services/modelCatalog';
+import {
+  setSelectedModel,
+  getModelSelection,
+  MODEL_SELECTION_CHANGED,
+  type ModelSlot,
+  type ModelSelection
+} from '../services/modelSelection';
 
 interface ModelLibraryProps {
   onBack: () => void;
@@ -40,9 +49,15 @@ const BAND_COLOR: Record<Band, string> = {
   high: 'bg-brand-red text-white'
 };
 
+const MAX_COMPARE = 5;
+
 const Badge: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = '' }) => (
   <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border border-black ${className}`}>{children}</span>
 );
+
+const slotOf = (model: CatalogModel): ModelSlot => (model.supportsImageOutput ? 'image' : 'text');
+
+const perMillion = (perToken: number) => (perToken > 0 ? `$${(perToken * 1_000_000).toFixed(2)}/M` : '—');
 
 const matchesFilter = (model: CatalogModel, filter: FilterKey, query: string): boolean => {
   if (filter === 'free' && !model.isFree) return false;
@@ -57,10 +72,41 @@ const matchesFilter = (model: CatalogModel, filter: FilterKey, query: string): b
   return true;
 };
 
-const ModelCard: React.FC<{ model: CatalogModel; onOpen: () => void }> = ({ model, onOpen }) => (
-  <button
+const UseModelControl: React.FC<{ model: CatalogModel; selection: ModelSelection; onUse: (slot: ModelSlot) => void }> = ({ model, selection, onUse }) => {
+  const [confirming, setConfirming] = useState(false);
+  const slot = slotOf(model);
+  const isSelected = (slot === 'image' ? selection.imageModel : selection.textModel) === model.id;
+
+  if (isSelected) {
+    return <span className="text-[11px] font-bold text-green-700 flex items-center gap-1"><Check className="w-3.5 h-3.5" /> In use ({slot})</span>;
+  }
+  if (confirming) {
+    return (
+      <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+        <span className="text-[11px] text-slate-600">Use for {slot}?</span>
+        <button onClick={() => { onUse(slot); setConfirming(false); }} className="text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black bg-brand-blue text-white">Confirm</button>
+        <button onClick={() => setConfirming(false)} className="text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black bg-white">Cancel</button>
+      </div>
+    );
+  }
+  return (
+    <button onClick={(e) => { e.stopPropagation(); setConfirming(true); }} className="text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black bg-white hover:bg-brand-yellow">
+      Use this model
+    </button>
+  );
+};
+
+const ModelCard: React.FC<{
+  model: CatalogModel;
+  selection: ModelSelection;
+  compared: boolean;
+  onOpen: () => void;
+  onUse: (slot: ModelSlot) => void;
+  onToggleCompare: () => void;
+}> = ({ model, selection, compared, onOpen, onUse, onToggleCompare }) => (
+  <div
     onClick={onOpen}
-    className="text-left bg-white border-2 border-black rounded-lg p-4 shadow-comic hover:shadow-comic-hover hover:translate-x-[2px] hover:translate-y-[2px] transition-all flex flex-col gap-3"
+    className="cursor-pointer text-left bg-white border-2 border-black rounded-lg p-4 shadow-comic hover:shadow-comic-hover hover:translate-x-[2px] hover:translate-y-[2px] transition-all flex flex-col gap-3"
   >
     <div className="flex items-start justify-between gap-2">
       <div className="min-w-0">
@@ -73,119 +119,143 @@ const ModelCard: React.FC<{ model: CatalogModel; onOpen: () => void }> = ({ mode
     <div className="flex flex-wrap gap-1">
       {model.isFree && <Badge className="bg-green-500 text-white">Free</Badge>}
       {model.supportsImageOutput ? (
-        <Badge className="bg-brand-blue text-white">
-          <ImageIcon className="w-3 h-3 inline -mt-0.5 mr-0.5" />Image
-        </Badge>
+        <Badge className="bg-brand-blue text-white"><ImageIcon className="w-3 h-3 inline -mt-0.5 mr-0.5" />Image</Badge>
       ) : (
-        <Badge className="bg-slate-100 text-slate-700">
-          <TypeIcon className="w-3 h-3 inline -mt-0.5 mr-0.5" />Text
-        </Badge>
+        <Badge className="bg-slate-100 text-slate-700"><TypeIcon className="w-3 h-3 inline -mt-0.5 mr-0.5" />Text</Badge>
       )}
       {model.supportsImageInput && <Badge className="bg-brand-yellow text-black">Refs</Badge>}
       {model.supportsJsonOutput && <Badge className="bg-slate-100 text-slate-700">JSON</Badge>}
     </div>
 
-    {model.editorialNote && (
-      <p className="text-xs text-slate-600 line-clamp-3">{model.editorialNote}</p>
-    )}
+    {model.editorialNote && <p className="text-xs text-slate-600 line-clamp-2">{model.editorialNote}</p>}
 
-    <div className="mt-auto flex flex-wrap gap-1">
-      {model.roles.slice(0, 3).map((role) => (
-        <span key={role} className="text-[10px] font-bold uppercase text-slate-500">
-          #{role}
-        </span>
-      ))}
+    <div className="mt-auto flex items-center justify-between gap-2 pt-2 border-t border-dashed border-slate-200">
+      <UseModelControl model={model} selection={selection} onUse={onUse} />
+      <button
+        onClick={(e) => { e.stopPropagation(); onToggleCompare(); }}
+        className={`text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black flex items-center gap-1 ${compared ? 'bg-brand-blue text-white' : 'bg-white hover:bg-brand-yellow'}`}
+        title="Add to comparison"
+      >
+        <Scale className="w-3 h-3" /> {compared ? 'Comparing' : 'Compare'}
+      </button>
     </div>
-  </button>
+  </div>
 );
 
-const DetailModal: React.FC<{ model: CatalogModel; onClose: () => void }> = ({ model, onClose }) => (
+const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; onClose: () => void; onUse: (slot: ModelSlot) => void }> = ({ model, selection, onClose, onUse }) => (
   <div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
-    <div
-      className="bg-white border-4 border-black rounded-xl shadow-comic max-w-2xl w-full max-h-[85vh] overflow-y-auto"
-      onClick={(e) => e.stopPropagation()}
-    >
+    <div className="bg-white border-4 border-black rounded-xl shadow-comic max-w-2xl w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
       <div className="sticky top-0 bg-white border-b-2 border-black px-5 py-4 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-[10px] font-bold uppercase text-slate-500">{providerOrigin(model)}</div>
           <h2 className="text-xl font-display leading-tight">{model.name}</h2>
           <code className="text-[11px] text-slate-500 break-all">{model.id}</code>
         </div>
-        <button onClick={onClose} className="border-2 border-black rounded p-1 hover:bg-brand-yellow shrink-0">
-          <X className="w-4 h-4" />
-        </button>
+        <button onClick={onClose} className="border-2 border-black rounded p-1 hover:bg-brand-yellow shrink-0"><X className="w-4 h-4" /></button>
       </div>
 
       <div className="p-5 space-y-4">
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
           <Badge className={BAND_COLOR[model.costBand]}>{costLabel(model)}</Badge>
           {model.isFree && <Badge className="bg-green-500 text-white">Free</Badge>}
           {model.supportsImageOutput && <Badge className="bg-brand-blue text-white">Image output</Badge>}
           {model.supportsImageInput && <Badge className="bg-brand-yellow text-black">Reference images</Badge>}
           {model.supportsJsonOutput && <Badge className="bg-slate-100 text-slate-700">Structured JSON</Badge>}
-          {typeof model.contextLength === 'number' && (
-            <Badge className="bg-slate-100 text-slate-700">{Math.round(model.contextLength / 1000)}K ctx</Badge>
-          )}
+          {typeof model.contextLength === 'number' && <Badge className="bg-slate-100 text-slate-700">{Math.round(model.contextLength / 1000)}K ctx</Badge>}
+          <span className="ml-auto"><UseModelControl model={model} selection={selection} onUse={onUse} /></span>
         </div>
 
         {model.editorialNote && (
           <div className="bg-brand-yellow/30 border-2 border-black rounded-lg p-3 text-sm flex gap-2">
-            <Sparkles className="w-4 h-4 shrink-0 mt-0.5" />
-            <span>{model.editorialNote}</span>
+            <Sparkles className="w-4 h-4 shrink-0 mt-0.5" /><span>{model.editorialNote}</span>
           </div>
         )}
-
         {model.description && <p className="text-sm text-slate-600">{model.description}</p>}
+
+        <div className="grid sm:grid-cols-3 gap-3 text-[11px]">
+          <div className="border-2 border-black rounded-lg p-2"><div className="text-slate-400 uppercase font-bold">Input tokens</div><div className="font-mono">{perMillion(model.pricing.promptPerToken)}</div></div>
+          <div className="border-2 border-black rounded-lg p-2"><div className="text-slate-400 uppercase font-bold">Output tokens</div><div className="font-mono">{perMillion(model.pricing.completionPerToken)}</div></div>
+          <div className="border-2 border-black rounded-lg p-2"><div className="text-slate-400 uppercase font-bold">Per image</div><div className="font-mono">{model.pricing.imagePerImage > 0 ? `$${model.pricing.imagePerImage.toFixed(3)}` : '—'}</div></div>
+        </div>
 
         <div className="grid sm:grid-cols-2 gap-4">
           <div>
-            <h3 className="text-xs font-bold uppercase mb-2 flex items-center gap-1">
-              <Check className="w-4 h-4 text-green-600" /> What's possible
-            </h3>
+            <h3 className="text-xs font-bold uppercase mb-2 flex items-center gap-1"><Check className="w-4 h-4 text-green-600" /> What's possible</h3>
             <ul className="space-y-1.5">
-              {model.possibilities.length ? (
-                model.possibilities.map((item, i) => (
-                  <li key={i} className="text-xs text-slate-700 flex gap-1.5">
-                    <Check className="w-3.5 h-3.5 text-green-600 shrink-0 mt-0.5" />
-                    {item}
-                  </li>
-                ))
-              ) : (
-                <li className="text-xs text-slate-400">—</li>
-              )}
+              {model.possibilities.length ? model.possibilities.map((item, i) => (
+                <li key={i} className="text-xs text-slate-700 flex gap-1.5"><Check className="w-3.5 h-3.5 text-green-600 shrink-0 mt-0.5" />{item}</li>
+              )) : <li className="text-xs text-slate-400">—</li>}
             </ul>
           </div>
           <div>
-            <h3 className="text-xs font-bold uppercase mb-2 flex items-center gap-1">
-              <AlertTriangle className="w-4 h-4 text-amber-600" /> Drawbacks
-            </h3>
+            <h3 className="text-xs font-bold uppercase mb-2 flex items-center gap-1"><AlertTriangle className="w-4 h-4 text-amber-600" /> Drawbacks</h3>
             <ul className="space-y-1.5">
-              {model.drawbacks.length ? (
-                model.drawbacks.map((item, i) => (
-                  <li key={i} className="text-xs text-slate-700 flex gap-1.5">
-                    <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
-                    {item}
-                  </li>
-                ))
-              ) : (
-                <li className="text-xs text-slate-400">None noted</li>
-              )}
+              {model.drawbacks.length ? model.drawbacks.map((item, i) => (
+                <li key={i} className="text-xs text-slate-700 flex gap-1.5"><AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />{item}</li>
+              )) : <li className="text-xs text-slate-400">None noted</li>}
             </ul>
           </div>
         </div>
 
         <div className="flex flex-wrap gap-1.5 pt-2 border-t-2 border-dashed border-slate-200">
-          <span className="text-[10px] font-bold uppercase text-slate-500 mr-1 flex items-center gap-1">
-            <Layers className="w-3 h-3" /> Roles:
-          </span>
-          {model.roles.map((role) => (
-            <Badge key={role} className="bg-slate-100 text-slate-700">{role}</Badge>
-          ))}
+          <span className="text-[10px] font-bold uppercase text-slate-500 mr-1 flex items-center gap-1"><Layers className="w-3 h-3" /> Roles:</span>
+          {model.roles.map((role) => <Badge key={role} className="bg-slate-100 text-slate-700">{role}</Badge>)}
         </div>
       </div>
     </div>
   </div>
 );
+
+const CompareModal: React.FC<{ models: CatalogModel[]; selection: ModelSelection; onClose: () => void; onUse: (model: CatalogModel, slot: ModelSlot) => void }> = ({ models, selection, onClose, onUse }) => {
+  const rows: { label: string; render: (m: CatalogModel) => React.ReactNode }[] = [
+    { label: 'Cost', render: (m) => <Badge className={BAND_COLOR[m.costBand]}>{costLabel(m)}</Badge> },
+    { label: 'Free', render: (m) => (m.isFree ? '✅' : '—') },
+    { label: 'Output', render: (m) => (m.supportsImageOutput ? 'Image' : 'Text') },
+    { label: 'Reference images', render: (m) => (m.supportsImageInput ? '✅' : '—') },
+    { label: 'Structured JSON', render: (m) => (m.supportsJsonOutput ? '✅' : '—') },
+    { label: 'Context', render: (m) => (m.contextLength ? `${Math.round(m.contextLength / 1000)}K` : '—') },
+    { label: 'Input $/Mtok', render: (m) => perMillion(m.pricing.promptPerToken) },
+    { label: 'Output $/Mtok', render: (m) => perMillion(m.pricing.completionPerToken) },
+    { label: 'Per image', render: (m) => (m.pricing.imagePerImage > 0 ? `$${m.pricing.imagePerImage.toFixed(3)}` : '—') },
+    { label: 'Roles', render: (m) => m.roles.join(', ') || '—' },
+    { label: 'Best for', render: (m) => (m.possibilities[0] || '—') },
+    { label: 'Watch out', render: (m) => (m.drawbacks[0] || 'None noted') }
+  ];
+  return (
+    <div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white border-4 border-black rounded-xl shadow-comic max-w-5xl w-full max-h-[85vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="sticky top-0 bg-white border-b-2 border-black px-5 py-4 flex items-center justify-between">
+          <h2 className="text-xl font-display flex items-center gap-2"><Scale className="w-5 h-5" /> Compare {models.length} models</h2>
+          <button onClick={onClose} className="border-2 border-black rounded p-1 hover:bg-brand-yellow"><X className="w-4 h-4" /></button>
+        </div>
+        <div className="p-4 overflow-x-auto">
+          <table className="w-full border-collapse text-xs">
+            <thead>
+              <tr>
+                <th className="text-left p-2 sticky left-0 bg-white" />
+                {models.map((m) => (
+                  <th key={m.id} className="p-2 align-top text-left min-w-[10rem]">
+                    <div className="font-bold leading-tight">{m.name}</div>
+                    <div className="text-[10px] text-slate-400 font-mono break-all">{m.id}</div>
+                    <div className="mt-1"><UseModelControl model={m} selection={selection} onUse={(slot) => onUse(m, slot)} /></div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.label} className="border-t border-slate-200">
+                  <td className="p-2 font-bold text-slate-500 uppercase text-[10px] sticky left-0 bg-white whitespace-nowrap">{row.label}</td>
+                  {models.map((m) => <td key={m.id} className="p-2 align-top">{row.render(m)}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack }) => {
   const [models, setModels] = useState<CatalogModel[]>([]);
@@ -196,6 +266,15 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack }) => {
   const [filter, setFilter] = useState<FilterKey>('all');
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<CatalogModel | null>(null);
+  const [selection, setSelection] = useState<ModelSelection>(() => getModelSelection());
+  const [compareIds, setCompareIds] = useState<string[]>([]);
+  const [showCompare, setShowCompare] = useState(false);
+
+  useEffect(() => {
+    const onChange = () => setSelection(getModelSelection());
+    window.addEventListener(MODEL_SELECTION_CHANGED, onChange);
+    return () => window.removeEventListener(MODEL_SELECTION_CHANGED, onChange);
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -207,78 +286,66 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack }) => {
         setDegraded(res.degraded);
         setDegradedMessage(res.message);
       })
-      .catch((e) => {
-        if (!active) return;
-        setError(e?.message || 'Failed to load the model catalog.');
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
+      .catch((e) => { if (active) setError(e?.message || 'Failed to load the model catalog.'); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, []);
 
-  const visible = useMemo(
-    () => models.filter((model) => matchesFilter(model, filter, query)),
-    [models, filter, query]
-  );
+  const visible = useMemo(() => models.filter((model) => matchesFilter(model, filter, query)), [models, filter, query]);
+  const compareModels = useMemo(() => compareIds.map((id) => models.find((m) => m.id === id)).filter((m): m is CatalogModel => !!m), [compareIds, models]);
+
+  const useModel = (model: CatalogModel, slot: ModelSlot) => setSelectedModel(slot, model.id, 'specific');
+
+  const toggleCompare = (id: string) =>
+    setCompareIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : prev.length >= MAX_COMPARE ? prev : [...prev, id]));
+
+  const selectedImage = models.find((m) => m.id === selection.imageModel);
+  const selectedText = models.find((m) => m.id === selection.textModel);
 
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-slate-50 pb-24">
       <div className="max-w-7xl mx-auto px-6 py-8">
-        <button onClick={onBack} className="flex items-center gap-1 text-sm font-bold hover:underline mb-4">
-          <ArrowLeft className="w-4 h-4" /> Back
-        </button>
+        <button onClick={onBack} className="flex items-center gap-1 text-sm font-bold hover:underline mb-4"><ArrowLeft className="w-4 h-4" /> Back</button>
 
         <h1 className="text-4xl font-display">Model Library</h1>
         <p className="text-slate-600 max-w-2xl mt-1">
-          Every model is routed through OpenRouter and annotated for comics — what each is good for, what's
-          possible, and the honest drawbacks. Free models power the script &amp; planning brain; image models
-          (mostly paid) draw the panels. Reference-capable models hold characters consistent across pages.
+          Every model is live from OpenRouter and annotated for comics — what each is good for, what's
+          possible, the honest drawbacks, and real pricing. Pick models with <span className="font-bold">Use this model</span>,
+          or select up to {MAX_COMPARE} to compare.
         </p>
+
+        {/* Current selection */}
+        <div className="mt-4 flex flex-wrap gap-2 text-xs">
+          <span className="inline-flex items-center gap-1.5 border-2 border-black rounded-lg px-2 py-1 bg-white">
+            <ImageIcon className="w-3.5 h-3.5" /> Image: <span className="font-bold">{selectedImage?.name || (selection.imageModel || 'Default')}</span>
+          </span>
+          <span className="inline-flex items-center gap-1.5 border-2 border-black rounded-lg px-2 py-1 bg-white">
+            <TypeIcon className="w-3.5 h-3.5" /> Text: <span className="font-bold">{selectedText?.name || (selection.textModel || 'Default')}</span>
+          </span>
+        </div>
 
         {/* Controls */}
         <div className="mt-6 flex flex-col md:flex-row md:items-center gap-3">
           <div className="flex flex-wrap gap-2">
             {FILTERS.map((f) => (
-              <button
-                key={f.key}
-                onClick={() => setFilter(f.key)}
-                className={`text-xs font-bold uppercase px-3 py-1.5 rounded border-2 border-black transition-colors ${
-                  filter === f.key ? 'bg-brand-blue text-white' : 'bg-white hover:bg-brand-yellow/60'
-                }`}
-              >
-                {f.label}
-              </button>
+              <button key={f.key} onClick={() => setFilter(f.key)} className={`text-xs font-bold uppercase px-3 py-1.5 rounded border-2 border-black transition-colors ${filter === f.key ? 'bg-brand-blue text-white' : 'bg-white hover:bg-brand-yellow/60'}`}>{f.label}</button>
             ))}
           </div>
           <div className="md:ml-auto relative">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search models…"
-              className="pl-9 pr-3 py-2 border-2 border-black rounded-lg text-sm w-full md:w-64 focus:outline-none focus:bg-brand-yellow/10"
-            />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search models…" className="pl-9 pr-3 py-2 border-2 border-black rounded-lg text-sm w-full md:w-64 focus:outline-none focus:bg-brand-yellow/10" />
           </div>
         </div>
 
         {degraded && (
           <div className="mt-4 bg-amber-100 border-2 border-black rounded-lg p-3 text-sm flex gap-2">
             <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-            <span>
-              Live catalog unavailable{degradedMessage ? ` (${degradedMessage})` : ''}. Configure
-              {' '}<code>OPENROUTER_API_KEY</code> on the server to load the full model list.
-            </span>
+            <span>Live catalog unavailable{degradedMessage ? ` (${degradedMessage})` : ''}. Add an <code>OpenRouter</code> key (Settings → API Configuration) or set <code>OPENROUTER_API_KEY</code> on the server to load the full, live model list.</span>
           </div>
         )}
 
-        {/* Body */}
         {loading ? (
-          <div className="flex items-center justify-center py-24 text-slate-400">
-            <Loader2 className="w-8 h-8 animate-spin" />
-          </div>
+          <div className="flex items-center justify-center py-24 text-slate-400"><Loader2 className="w-8 h-8 animate-spin" /></div>
         ) : error ? (
           <div className="mt-8 bg-red-100 border-2 border-black rounded-lg p-4 text-sm">{error}</div>
         ) : visible.length === 0 ? (
@@ -288,14 +355,36 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack }) => {
             <div className="mt-4 text-xs font-bold uppercase text-slate-500">{visible.length} models</div>
             <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {visible.map((model) => (
-                <ModelCard key={model.id} model={model} onOpen={() => setSelected(model)} />
+                <ModelCard
+                  key={model.id}
+                  model={model}
+                  selection={selection}
+                  compared={compareIds.includes(model.id)}
+                  onOpen={() => setSelected(model)}
+                  onUse={(slot) => useModel(model, slot)}
+                  onToggleCompare={() => toggleCompare(model.id)}
+                />
               ))}
             </div>
           </>
         )}
       </div>
 
-      {selected && <DetailModal model={selected} onClose={() => setSelected(null)} />}
+      {selected && <DetailModal model={selected} selection={selection} onClose={() => setSelected(null)} onUse={(slot) => useModel(selected, slot)} />}
+      {showCompare && compareModels.length > 0 && <CompareModal models={compareModels} selection={selection} onClose={() => setShowCompare(false)} onUse={useModel} />}
+
+      {/* Compare tray */}
+      {compareIds.length > 0 && (
+        <div className="fixed bottom-0 left-0 right-0 z-40 bg-white border-t-4 border-black shadow-comic">
+          <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between gap-3">
+            <div className="text-sm font-bold flex items-center gap-2"><Scale className="w-4 h-4" /> {compareIds.length}/{MAX_COMPARE} selected to compare</div>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setCompareIds([])} className="text-xs font-bold px-3 py-1.5 rounded border-2 border-black bg-white hover:bg-slate-100">Clear</button>
+              <button onClick={() => setShowCompare(true)} disabled={compareIds.length < 2} className="text-xs font-bold px-3 py-1.5 rounded border-2 border-black bg-brand-blue text-white disabled:opacity-50 flex items-center gap-1"><Plus className="w-3 h-3" /> Compare</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
