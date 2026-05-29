@@ -13,6 +13,25 @@ Entry format:
 
 ---
 
+## 2026-05-29 — Text pipeline migrated to OpenRouter (analyze-script 400 fix)
+
+- **Problem:** analyze-script (and every text stage) returned 400 `API_KEY_INVALID` from
+  generativelanguage.googleapis.com — they still called **Gemini**, but users now run on an
+  **OpenRouter** key. (The console TF.js spam was an unrelated browser extension.)
+- **Root cause:** the ADR 0001 text-migration follow-up was never done; `ai/text.ts` used the
+  Gemini SDK and `routes/text.ts` required a Gemini key.
+- **Solution:** provider-aware `createClient` — given an OpenRouter key (`sk-or-`) it returns a
+  shim whose `models.generateContent` maps to the gateway, converting the Gemini
+  `responseSchema` → JSON Schema (`ai/schemaConvert.ts`). So analyze / world / panel /
+  continuity / story / testlab run on OpenRouter **unchanged** — the segmentation +
+  `normalizeScenes` grounding (which keeps scenes anchored to the script and avoids
+  invented detail) is untouched. `routes/text.ts` `resolveTextProvider` picks OpenRouter
+  (BYOK or platform) else Gemini; billing provider follows. Client sends `X-Text-Model` so the
+  selected text model is honored. Default OpenRouter text model is `google/gemini-2.5-flash`
+  (same model, via OpenRouter), so analysis quality is equivalent.
+- **Files:** `ai/schemaConvert.ts` (new), `ai/client.ts`, `routes/text.ts`, `services/apiClient.ts`.
+- **Verify:** server + frontend typecheck clean; 35 AI tests pass (parsing/grounding intact).
+
 ## 2026-05-29 — Richer model selection, reader fit, capability gating, cost analysis
 
 - **Richer selection:** ModelSelectionPanel (in API Configuration) — Default / Free /

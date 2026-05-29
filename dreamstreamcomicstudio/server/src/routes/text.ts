@@ -44,11 +44,36 @@ const assertTextModelAccess = async (
   return access.effectiveModel;
 };
 
+type TextProvider = { apiKey: string; model: string; provider: 'openrouter' | 'gemini' };
+
+// Text generation routes through OpenRouter when an OpenRouter key is present (BYOK or
+// platform OPENROUTER_API_KEY), otherwise the legacy Gemini path. Sends a 401 and
+// returns null when neither key is available.
+const resolveTextProvider = async (req: any, res: any): Promise<TextProvider | null> => {
+  const openRouterKey = req.apiKeys?.openRouterKey;
+  if (openRouterKey) {
+    const model = req.header('X-Text-Model')?.trim() || OPENROUTER_TEXT_MODEL;
+    return { apiKey: openRouterKey, model, provider: 'openrouter' };
+  }
+  const geminiKey = req.apiKeys?.geminiKey;
+  if (geminiKey) {
+    const model = await assertTextModelAccess(req, resolveRequestedModel(req.header('X-Gemini-Model')));
+    return { apiKey: geminiKey, model, provider: 'gemini' };
+  }
+  res.status(401).json({
+    error: {
+      message: 'No AI text key found. Add an OpenRouter key (recommended) or a Gemini key in Settings → API Configuration.',
+      code: 'TEXT_KEY_MISSING'
+    }
+  });
+  return null;
+};
+
 textRouter.post('/analyze-script', async (req, res, next) => {
   try {
-    const apiKey = requireGeminiKey(req, res);
-    if (!apiKey) return;
-    const effectiveModel = await assertTextModelAccess(req, resolveRequestedModel(req.header('X-Gemini-Model')));
+    const resolved = await resolveTextProvider(req, res);
+    if (!resolved) return;
+    const { apiKey, model: effectiveModel, provider } = resolved;
     const { script } = req.body || {};
     if (!script || typeof script !== 'string') {
       return res.status(400).json({ error: { message: 'script is required' } });
@@ -58,7 +83,7 @@ textRouter.post('/analyze-script', async (req, res, next) => {
       req,
       operation: 'text.analyze_script',
       fallbackModel: effectiveModel,
-      provider: 'gemini',
+      provider,
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: 'script',
@@ -74,10 +99,10 @@ textRouter.post('/analyze-script', async (req, res, next) => {
       const settled = await settleReservedOperation({
         req,
         operation: 'text.analyze_script',
-        provider: 'gemini',
+        provider,
         model: effectiveModel,
         seed: {
-          provider: 'gemini',
+          provider,
           model: effectiveModel,
           operation: 'text.analyze_script',
           projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
@@ -94,7 +119,7 @@ textRouter.post('/analyze-script', async (req, res, next) => {
       await releaseReservedOperation({
         req,
         operation: 'text.analyze_script',
-        provider: 'gemini',
+        provider,
         model: effectiveModel,
         projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
         reason: (error as Error)?.message || 'text_request_failed',
@@ -109,15 +134,15 @@ textRouter.post('/analyze-script', async (req, res, next) => {
 
 textRouter.post('/story-outline', async (req, res, next) => {
   try {
-    const apiKey = requireGeminiKey(req, res);
-    if (!apiKey) return;
-    const effectiveModel = await assertTextModelAccess(req, resolveRequestedModel(req.header('X-Gemini-Model')));
+    const resolved = await resolveTextProvider(req, res);
+    if (!resolved) return;
+    const { apiKey, model: effectiveModel, provider } = resolved;
 
     const reserve = await reserveForOperation({
       req,
       operation: 'text.story_outline',
       fallbackModel: effectiveModel,
-      provider: 'gemini',
+      provider,
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: 'story_outline',
@@ -130,10 +155,10 @@ textRouter.post('/story-outline', async (req, res, next) => {
       const settled = await settleReservedOperation({
         req,
         operation: 'text.story_outline',
-        provider: 'gemini',
+        provider,
         model: effectiveModel,
         seed: {
-          provider: 'gemini',
+          provider,
           model: effectiveModel,
           operation: 'text.story_outline',
           projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
@@ -149,7 +174,7 @@ textRouter.post('/story-outline', async (req, res, next) => {
       await releaseReservedOperation({
         req,
         operation: 'text.story_outline',
-        provider: 'gemini',
+        provider,
         model: effectiveModel,
         projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
         reason: (error as Error)?.message || 'text_request_failed',
@@ -164,15 +189,15 @@ textRouter.post('/story-outline', async (req, res, next) => {
 
 textRouter.post('/story-draft', async (req, res, next) => {
   try {
-    const apiKey = requireGeminiKey(req, res);
-    if (!apiKey) return;
-    const effectiveModel = await assertTextModelAccess(req, resolveRequestedModel(req.header('X-Gemini-Model')));
+    const resolved = await resolveTextProvider(req, res);
+    if (!resolved) return;
+    const { apiKey, model: effectiveModel, provider } = resolved;
 
     const reserve = await reserveForOperation({
       req,
       operation: 'text.story_draft',
       fallbackModel: effectiveModel,
-      provider: 'gemini',
+      provider,
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: 'story_draft',
@@ -185,10 +210,10 @@ textRouter.post('/story-draft', async (req, res, next) => {
       const settled = await settleReservedOperation({
         req,
         operation: 'text.story_draft',
-        provider: 'gemini',
+        provider,
         model: effectiveModel,
         seed: {
-          provider: 'gemini',
+          provider,
           model: effectiveModel,
           operation: 'text.story_draft',
           projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
@@ -204,7 +229,7 @@ textRouter.post('/story-draft', async (req, res, next) => {
       await releaseReservedOperation({
         req,
         operation: 'text.story_draft',
-        provider: 'gemini',
+        provider,
         model: effectiveModel,
         projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
         reason: (error as Error)?.message || 'text_request_failed',
@@ -219,9 +244,9 @@ textRouter.post('/story-draft', async (req, res, next) => {
 
 textRouter.post('/story-tool', async (req, res, next) => {
   try {
-    const apiKey = requireGeminiKey(req, res);
-    if (!apiKey) return;
-    const effectiveModel = await assertTextModelAccess(req, resolveRequestedModel(req.header('X-Gemini-Model')));
+    const resolved = await resolveTextProvider(req, res);
+    if (!resolved) return;
+    const { apiKey, model: effectiveModel, provider } = resolved;
     const { script, instruction, history } = req.body || {};
     if (!script || typeof script !== 'string' || !instruction || typeof instruction !== 'string') {
       return res.status(400).json({ error: { message: 'script and instruction are required' } });
@@ -231,7 +256,7 @@ textRouter.post('/story-tool', async (req, res, next) => {
       req,
       operation: 'text.story_tool',
       fallbackModel: effectiveModel,
-      provider: 'gemini',
+      provider,
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: 'story_tool',
@@ -244,10 +269,10 @@ textRouter.post('/story-tool', async (req, res, next) => {
       const settled = await settleReservedOperation({
         req,
         operation: 'text.story_tool',
-        provider: 'gemini',
+        provider,
         model: effectiveModel,
         seed: {
-          provider: 'gemini',
+          provider,
           model: effectiveModel,
           operation: 'text.story_tool',
           projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
@@ -263,7 +288,7 @@ textRouter.post('/story-tool', async (req, res, next) => {
       await releaseReservedOperation({
         req,
         operation: 'text.story_tool',
-        provider: 'gemini',
+        provider,
         model: effectiveModel,
         projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
         reason: (error as Error)?.message || 'text_request_failed',
@@ -278,9 +303,9 @@ textRouter.post('/story-tool', async (req, res, next) => {
 
 textRouter.post('/extract-world', async (req, res, next) => {
   try {
-    const apiKey = requireGeminiKey(req, res);
-    if (!apiKey) return;
-    const effectiveModel = await assertTextModelAccess(req, resolveRequestedModel(req.header('X-Gemini-Model')));
+    const resolved = await resolveTextProvider(req, res);
+    if (!resolved) return;
+    const { apiKey, model: effectiveModel, provider } = resolved;
     const validated = validateExtractWorldBody(req.body);
     if ('status' in validated) return res.status(validated.status).json({ error: validated.error });
     const { scenes, script } = validated;
@@ -289,7 +314,7 @@ textRouter.post('/extract-world', async (req, res, next) => {
       req,
       operation: 'text.extract_world',
       fallbackModel: effectiveModel,
-      provider: 'gemini',
+      provider,
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: 'world',
@@ -322,10 +347,10 @@ textRouter.post('/extract-world', async (req, res, next) => {
       const settled = await settleReservedOperation({
         req,
         operation: 'text.extract_world',
-        provider: 'gemini',
+        provider,
         model: effectiveModel,
         seed: {
-          provider: 'gemini',
+          provider,
           model: effectiveModel,
           operation: 'text.extract_world',
           projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
@@ -341,7 +366,7 @@ textRouter.post('/extract-world', async (req, res, next) => {
       await releaseReservedOperation({
         req,
         operation: 'text.extract_world',
-        provider: 'gemini',
+        provider,
         model: effectiveModel,
         projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
         reason: (error as Error)?.message || 'text_request_failed',
@@ -356,9 +381,9 @@ textRouter.post('/extract-world', async (req, res, next) => {
 
 textRouter.post('/panel-breakdown', async (req, res, next) => {
   try {
-    const apiKey = requireGeminiKey(req, res);
-    if (!apiKey) return;
-    const effectiveModel = await assertTextModelAccess(req, resolveRequestedModel(req.header('X-Gemini-Model')));
+    const resolved = await resolveTextProvider(req, res);
+    if (!resolved) return;
+    const { apiKey, model: effectiveModel, provider } = resolved;
     const { scene, style, layoutType, panelCount, continuityBible, sceneBindings, previousPanelContext } = req.body || {};
     const effectiveStyle = style || 'classic comic book style';
     const effectiveLayout = layoutType || 'classic';
@@ -371,7 +396,7 @@ textRouter.post('/panel-breakdown', async (req, res, next) => {
       req,
       operation: 'text.panel_breakdown',
       fallbackModel: effectiveModel,
-      provider: 'gemini',
+      provider,
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: typeof req.body?.stage === 'string' ? req.body.stage : 'preview',
@@ -395,10 +420,10 @@ textRouter.post('/panel-breakdown', async (req, res, next) => {
       const settled = await settleReservedOperation({
         req,
         operation: 'text.panel_breakdown',
-        provider: 'gemini',
+        provider,
         model: effectiveModel,
         seed: {
-          provider: 'gemini',
+          provider,
           model: effectiveModel,
           operation: 'text.panel_breakdown',
           projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
@@ -414,7 +439,7 @@ textRouter.post('/panel-breakdown', async (req, res, next) => {
       await releaseReservedOperation({
         req,
         operation: 'text.panel_breakdown',
-        provider: 'gemini',
+        provider,
         model: effectiveModel,
         projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
         reason: (error as Error)?.message || 'text_request_failed',
@@ -429,9 +454,9 @@ textRouter.post('/panel-breakdown', async (req, res, next) => {
 
 textRouter.post('/continuity-audit', async (req, res, next) => {
   try {
-    const apiKey = requireGeminiKey(req, res);
-    if (!apiKey) return;
-    const effectiveModel = await assertTextModelAccess(req, resolveRequestedModel(req.header('X-Gemini-Model')));
+    const resolved = await resolveTextProvider(req, res);
+    if (!resolved) return;
+    const { apiKey, model: effectiveModel, provider } = resolved;
     const { panels } = req.body || {};
     if (!Array.isArray(panels) || panels.length === 0) {
       return res.status(400).json({ error: { message: 'panels array is required' } });
@@ -441,7 +466,7 @@ textRouter.post('/continuity-audit', async (req, res, next) => {
       req,
       operation: 'text.continuity_audit',
       fallbackModel: effectiveModel,
-      provider: 'gemini',
+      provider,
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: 'continuity_audit',
@@ -454,10 +479,10 @@ textRouter.post('/continuity-audit', async (req, res, next) => {
       const settled = await settleReservedOperation({
         req,
         operation: 'text.continuity_audit',
-        provider: 'gemini',
+        provider,
         model: effectiveModel,
         seed: {
-          provider: 'gemini',
+          provider,
           model: effectiveModel,
           operation: 'text.continuity_audit',
           projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
@@ -473,7 +498,7 @@ textRouter.post('/continuity-audit', async (req, res, next) => {
       await releaseReservedOperation({
         req,
         operation: 'text.continuity_audit',
-        provider: 'gemini',
+        provider,
         model: effectiveModel,
         projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
         reason: (error as Error)?.message || 'text_request_failed',
@@ -488,9 +513,9 @@ textRouter.post('/continuity-audit', async (req, res, next) => {
 
 textRouter.post('/continuity-summary', async (req, res, next) => {
   try {
-    const apiKey = requireGeminiKey(req, res);
-    if (!apiKey) return;
-    const effectiveModel = await assertTextModelAccess(req, resolveRequestedModel(req.header('X-Gemini-Model')));
+    const resolved = await resolveTextProvider(req, res);
+    if (!resolved) return;
+    const { apiKey, model: effectiveModel, provider } = resolved;
     const { currentSummary, scene, panels } = req.body || {};
     if (!scene || !Array.isArray(panels)) {
       return res.status(400).json({ error: { message: 'scene and panels are required' } });
@@ -500,7 +525,7 @@ textRouter.post('/continuity-summary', async (req, res, next) => {
       req,
       operation: 'text.continuity_summary',
       fallbackModel: effectiveModel,
-      provider: 'gemini',
+      provider,
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: 'continuity_summary',
@@ -513,10 +538,10 @@ textRouter.post('/continuity-summary', async (req, res, next) => {
       const settled = await settleReservedOperation({
         req,
         operation: 'text.continuity_summary',
-        provider: 'gemini',
+        provider,
         model: effectiveModel,
         seed: {
-          provider: 'gemini',
+          provider,
           model: effectiveModel,
           operation: 'text.continuity_summary',
           projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
@@ -532,7 +557,7 @@ textRouter.post('/continuity-summary', async (req, res, next) => {
       await releaseReservedOperation({
         req,
         operation: 'text.continuity_summary',
-        provider: 'gemini',
+        provider,
         model: effectiveModel,
         projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
         reason: (error as Error)?.message || 'text_request_failed',
@@ -547,9 +572,9 @@ textRouter.post('/continuity-summary', async (req, res, next) => {
 
 textRouter.post('/testlab-report', async (req, res, next) => {
   try {
-    const apiKey = requireGeminiKey(req, res);
-    if (!apiKey) return;
-    const effectiveModel = await assertTextModelAccess(req, resolveRequestedModel(req.header('X-Gemini-Model')));
+    const resolved = await resolveTextProvider(req, res);
+    if (!resolved) return;
+    const { apiKey, model: effectiveModel, provider } = resolved;
     const { report } = req.body || {};
     if (!report) {
       return res.status(400).json({ error: { message: 'report is required' } });
@@ -559,7 +584,7 @@ textRouter.post('/testlab-report', async (req, res, next) => {
       req,
       operation: 'text.testlab_report',
       fallbackModel: effectiveModel,
-      provider: 'gemini',
+      provider,
       projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
       stage: 'testlab',
@@ -572,10 +597,10 @@ textRouter.post('/testlab-report', async (req, res, next) => {
       const settled = await settleReservedOperation({
         req,
         operation: 'text.testlab_report',
-        provider: 'gemini',
+        provider,
         model: effectiveModel,
         seed: {
-          provider: 'gemini',
+          provider,
           model: effectiveModel,
           operation: 'text.testlab_report',
           projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
@@ -591,7 +616,7 @@ textRouter.post('/testlab-report', async (req, res, next) => {
       await releaseReservedOperation({
         req,
         operation: 'text.testlab_report',
-        provider: 'gemini',
+        provider,
         model: effectiveModel,
         projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
         reason: (error as Error)?.message || 'text_request_failed',

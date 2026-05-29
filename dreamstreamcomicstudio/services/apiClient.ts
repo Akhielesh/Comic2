@@ -1,6 +1,7 @@
 import { buildApiUrl } from './clientConfig';
 import { getFluxKeyInfo, getOpenRouterKey } from './appSettings';
 import { getActiveKeyValue } from './apiKeys';
+import { getSelectedTextModel } from './modelSelection';
 import { supabase } from './supabase';
 
 let cachedAccessToken: string | undefined;
@@ -63,6 +64,7 @@ export const post = async <TReq, TRes>(path: string, body: TReq, options?: { sig
       ...(options?.apiKey ? { 'X-Gemini-Key': options.apiKey } : (geminiKey ? { 'X-Gemini-Key': geminiKey } : {})),
       ...(fluxKey ? { 'X-Pixazo-Key': fluxKey } : {}),
       ...(openRouterKey ? { 'X-OpenRouter-Key': openRouterKey } : {}),
+      ...(getSelectedTextModel() ? { 'X-Text-Model': getSelectedTextModel() as string } : {}),
       ...(options?.modelId ? { 'X-Gemini-Model': options.modelId } : {}),
       ...(token ? { 'Authorization': `Bearer ${token}` } : {})
     },
@@ -85,6 +87,7 @@ export const get = async <TRes>(path: string, options?: { modelId?: string }): P
       ...(geminiKey ? { 'X-Gemini-Key': geminiKey } : {}),
       ...(fluxKey ? { 'X-Pixazo-Key': fluxKey } : {}),
       ...(openRouterKey ? { 'X-OpenRouter-Key': openRouterKey } : {}),
+      ...(getSelectedTextModel() ? { 'X-Text-Model': getSelectedTextModel() as string } : {}),
       ...(options?.modelId ? { 'X-Gemini-Model': options.modelId } : {}),
       ...(token ? { 'Authorization': `Bearer ${token}` } : {})
     }
