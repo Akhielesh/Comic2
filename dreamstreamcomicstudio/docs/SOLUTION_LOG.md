@@ -13,6 +13,19 @@ Entry format:
 
 ---
 
+## 2026-05-29 — Universal Assistant → free OpenRouter model + accuracy guardrail
+
+- **Problem:** Assistant ran on Gemini (cost/keys); owner wants it truly free, fast, and
+  accurate (no fabricated data).
+- **Solution:** `ai/assistant.ts` now generates via the gateway on a free model
+  (`OPENROUTER_FREE_TEXT_MODEL`, a `:free` id → $0). Route key = user BYOK or platform
+  OpenRouter key; billing provider switched to `openrouter`. Added an explicit
+  anti-hallucination rule to the system prompt; kept existing off-topic blocking +
+  context sanitization + policy.
+- **Files:** `server/src/ai/assistant.ts`, `server/src/routes/assistant.ts`,
+  `docs/features/universal-assistant.md`.
+- **Verify:** server typecheck clean; 9 assistant policy tests pass.
+
 ## 2026-05-29 — Model Library upgrades + compact API config + key-driven selection
 
 - **Problem:** API config panel too chunky; model options didn't react to keys; no way

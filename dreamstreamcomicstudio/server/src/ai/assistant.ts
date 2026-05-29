@@ -1,14 +1,9 @@
 import type { AssistantMessage, UniversalAssistantContext } from '../../../apiTypes.js';
-import { ASSISTANT_REQUEST_TIMEOUT_MS, TEXT_MODEL } from '../config.js';
-import { createClient } from './client.js';
+import { ASSISTANT_REQUEST_TIMEOUT_MS, OPENROUTER_FREE_TEXT_MODEL } from '../config.js';
 import { buildPublicKnowledgeBlock } from './assistantKnowledge.js';
 import { buildUsage } from './usage.js';
-import { withRetry, withTimeout } from './utils.js';
-
-const resolveTextModel = (modelOverride?: string) => {
-  const candidate = modelOverride?.trim();
-  return candidate || TEXT_MODEL;
-};
+import { getProvider, resolveProviderContext } from './gateway.js';
+import type { ChatMessage } from './providers/types.js';
 
 const safeContextJson = (context: UniversalAssistantContext) => {
   try {
@@ -19,6 +14,9 @@ const safeContextJson = (context: UniversalAssistantContext) => {
   }
 };
 
+// The Universal Assistant runs on a FREE OpenRouter model through the gateway.
+// Guardrails: the system prompt below + route-level off-topic blocking and context
+// sanitization (see routes/assistant.ts and ai/assistantPolicy.ts).
 export const queryUniversalAssistant = async (
   apiKey: string,
   userMessage: string,
@@ -26,8 +24,7 @@ export const queryUniversalAssistant = async (
   context: UniversalAssistantContext,
   modelOverride?: string
 ): Promise<{ text: string; usage?: ReturnType<typeof buildUsage>; model: string }> => {
-  const ai = createClient(apiKey);
-  const model = resolveTextModel(modelOverride);
+  const model = modelOverride?.trim() || OPENROUTER_FREE_TEXT_MODEL;
   const knowledgeBase = buildPublicKnowledgeBlock();
 
   const systemPrompt = `
@@ -41,7 +38,10 @@ Hard safety rules:
 3. Never expose private/confidential user data, and never infer data outside the provided safe context.
 4. If context is missing, say what is unavailable and give safe next steps.
 5. For broad/unclear questions, ask a clarifying question and steer to app-relevant help.
-6. Keep responses concise and practical.
+6. Be accurate. If you are unsure or the answer is not in the platform knowledge or safe
+   context below, say you don't have that information rather than guessing. Never fabricate
+   features, prices, limits, or steps.
+7. Keep responses concise and practical.
 
 Public platform knowledge:
 ${knowledgeBase}
@@ -58,28 +58,30 @@ Use **bold** for labels, *italics* for emphasis, and <u>underline</u> very spari
 Keep it concise and avoid unnecessary sections.
   `;
 
-  const response = await withRetry(
-    () => withTimeout(
-      ai.models.generateContent({
-        model,
-        contents: [
-          { role: 'user', parts: [{ text: systemPrompt }] },
-          ...history.map((item) => ({ role: item.role, parts: [{ text: item.text }] })),
-          { role: 'user', parts: [{ text: userMessage }] }
-        ]
-      }),
-      ASSISTANT_REQUEST_TIMEOUT_MS,
-      'Universal assistant response'
-    ),
-    2,
-    1000,
-    'Universal Assistant Query'
+  const messages: ChatMessage[] = [
+    { role: 'system', content: systemPrompt },
+    ...history.map((item) => ({
+      role: item.role === 'user' ? ('user' as const) : ('assistant' as const),
+      content: item.text
+    })),
+    { role: 'user', content: userMessage }
+  ];
+
+  const result = await getProvider('openrouter').generateText(
+    {
+      model,
+      messages,
+      temperature: 0.3,
+      maxTokens: 1200,
+      timeoutMs: ASSISTANT_REQUEST_TIMEOUT_MS,
+      retries: 2
+    },
+    resolveProviderContext(apiKey)
   );
 
-  const responseText = response.text || '';
   return {
-    text: responseText,
-    usage: buildUsage(userMessage, responseText, response.usageMetadata),
-    model
+    text: result.text,
+    usage: buildUsage(userMessage, result.text, undefined),
+    model: result.model || model
   };
 };

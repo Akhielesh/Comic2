@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { AssistantAccountSummary, UniversalAssistantResponse } from '../../../apiTypes.js';
 import { queryUniversalAssistant } from '../ai/assistant.js';
-import { ASSISTANT_GEMINI_API_KEY, TEXT_MODEL } from '../config.js';
+import { OPENROUTER_FREE_TEXT_MODEL } from '../config.js';
 import {
   ASSISTANT_POLICY_SCOPE,
   buildOffTopicResponse,
@@ -77,11 +77,13 @@ const resolveSafeAccountSummary = async (
 
 assistantRouter.post('/chat', async (req, res, next) => {
   try {
-    const apiKey = ASSISTANT_GEMINI_API_KEY.trim();
+    // The assistant runs on a free OpenRouter model. Use the user's BYOK key or the
+    // platform OPENROUTER_API_KEY (both are free against a :free model).
+    const apiKey = (req.apiKeys?.openRouterKey || '').trim();
     if (!apiKey) {
       return res.status(503).json({
         error: {
-          message: 'Assistant provider key missing. Set ASSISTANT_GEMINI_API_KEY (or GEMINI_API_KEY).',
+          message: 'Assistant needs an OpenRouter key. Add one in Settings → API Configuration, or set OPENROUTER_API_KEY on the server.',
           code: 'MISSING_ASSISTANT_API_KEY'
         }
       });
@@ -113,19 +115,14 @@ assistantRouter.post('/chat', async (req, res, next) => {
       return res.json(blocked);
     }
 
-    const requestedModel = req.header('X-Gemini-Model')?.trim() || TEXT_MODEL;
-    const access = assertModelAllowedForTier({
-      scope: 'assistant',
-      planTier: context.account?.planTier || 'free',
-      requestedModel
-    });
-    const effectiveModel = access.effectiveModel;
+    // Free OpenRouter model — available to every tier at no cost.
+    const effectiveModel = OPENROUTER_FREE_TEXT_MODEL;
     const reserve = req.user?.id
       ? await reserveForOperation({
           req,
           operation: 'assistant.chat',
           fallbackModel: effectiveModel,
-          provider: 'gemini',
+          provider: 'openrouter',
           stage: 'assistant',
           metadata: {
             route: req.path,
@@ -144,10 +141,10 @@ assistantRouter.post('/chat', async (req, res, next) => {
         ? await settleReservedOperation({
             req,
             operation: 'assistant.chat',
-            provider: 'gemini',
+            provider: 'openrouter',
             model: effectiveModel,
             seed: {
-              provider: 'gemini',
+              provider: 'openrouter',
               model: effectiveModel,
               operation: 'assistant.chat',
               stage: 'assistant',
@@ -178,7 +175,7 @@ assistantRouter.post('/chat', async (req, res, next) => {
         await releaseReservedOperation({
           req,
           operation: 'assistant.chat',
-          provider: 'gemini',
+          provider: 'openrouter',
           model: effectiveModel,
           reason: (error as Error)?.message || 'assistant_request_failed',
           metadata: {
