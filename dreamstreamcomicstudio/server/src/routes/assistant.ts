@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { AssistantAccountSummary, UniversalAssistantResponse } from '../../../apiTypes.js';
 import { queryUniversalAssistant } from '../ai/assistant.js';
-import { OPENROUTER_FREE_TEXT_MODEL } from '../config.js';
+import { pickTextModel } from '../ai/autoRouter.js';
 import {
   ASSISTANT_POLICY_SCOPE,
   buildOffTopicResponse,
@@ -115,8 +115,8 @@ assistantRouter.post('/chat', async (req, res, next) => {
       return res.json(blocked);
     }
 
-    // Free OpenRouter model — available to every tier at no cost.
-    const effectiveModel = OPENROUTER_FREE_TEXT_MODEL;
+    // Auto-routed free model from the live catalog (no hardcoded/retired model id).
+    const effectiveModel = await pickTextModel({ preferFree: true });
     const reserve = req.user?.id
       ? await reserveForOperation({
           req,

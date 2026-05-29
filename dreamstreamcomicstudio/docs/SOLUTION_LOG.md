@@ -224,3 +224,19 @@ Entry format:
 - **Solution:** Documented in `RAILWAY_DEPLOY.md` / `ARCHITECTURE.md`. Set Cloudflare
   Pages production branch to `Dreamstrream-v1`; SPA needs `public/_redirects`
   (`/* /index.html 200`) to avoid deep-link 404s.
+
+## 2026-05-29 — Auto-router replaces hardcoded model defaults (assistant 404 + analyze 429)
+
+- **Problem:** assistant 500→404 (`google/gemini-2.0-flash-exp:free` retired → "No endpoints
+  found"); analyze-script 500→429 (a free text model rate-limited upstream). Hardcoded model
+  defaults are fragile.
+- **Solution:** `ai/autoRouter.ts` picks the best **currently-available** model from the live
+  catalog (free-first, under budget) — `pickTextModel` / `pickImageModel` — so retired models
+  are never chosen. Added `fallbackModel` to the OpenRouter provider: on 404/429 it retries on a
+  reliable fallback (`openai/gpt-4o-mini` for text). Wired into the assistant, text routes (+ the
+  createClient shim), and image route, replacing OPENROUTER_TEXT_MODEL / OPENROUTER_IMAGE_MODEL /
+  OPENROUTER_FREE_TEXT_MODEL. UI: model "Default" → "Auto".
+- **Files:** `ai/autoRouter.ts` (new), `ai/providers/{openrouter,types}.ts`, `ai/client.ts`,
+  `ai/assistant.ts`, `routes/{assistant,text,image}.ts`, `ModelSelectionPanel`/
+  `TokenAvailabilityPill`/`ModelLibrary`.
+- **Verify:** server + frontend typecheck clean; 35 AI tests pass.

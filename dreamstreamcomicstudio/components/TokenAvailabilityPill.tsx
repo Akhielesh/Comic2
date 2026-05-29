@@ -50,8 +50,8 @@ export const TokenAvailabilityPill: React.FC<TokenAvailabilityPillProps> = ({ cl
   const frac = usageFraction(active);
   const pct = Math.round(frac * 100);
   const hasLimit = !!active.limitUsd && active.limitUsd > 0;
-  const imageModel = getSelectedImageModel() || 'Default (auto)';
-  const textModel = getSelectedTextModel() || 'Default (auto)';
+  const imageModel = getSelectedImageModel() || 'Auto';
+  const textModel = getSelectedTextModel() || 'Auto';
 
   return (
     <div className={`relative group ${className}`}>

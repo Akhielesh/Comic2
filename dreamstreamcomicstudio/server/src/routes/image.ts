@@ -6,6 +6,7 @@ import { FLUX_MODEL_ID, IDEMPOTENCY_TTL_MS, IMAGE_INCLUDE_DATA_URL_LEGACY, IMAGE
 import { generateGeminiImage } from '../ai/image.js';
 import { generateFluxImage } from '../ai/flux.js';
 import { getProvider, resolveProviderContext } from '../ai/gateway.js';
+import { pickImageModel } from '../ai/autoRouter.js';
 import { persistGeneratedImage } from '../services/imageStorage.js';
 import {
   attachBillingToPayload,
@@ -500,7 +501,7 @@ imageRouter.post('/openrouter', async (req, res, next) => {
     }
 
     const payload = await withIdempotency(req, res, 'image:openrouter', async () => {
-      const effectiveModel = typeof model === 'string' && model.trim() ? model.trim() : OPENROUTER_IMAGE_MODEL;
+      const effectiveModel = typeof model === 'string' && model.trim() ? model.trim() : await pickImageModel({ preferFree: true });
       const effectiveResolution = resolution || '1024x1024';
 
       const reserve = await reserveForOperation({

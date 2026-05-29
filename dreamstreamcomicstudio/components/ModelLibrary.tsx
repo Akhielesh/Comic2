@@ -333,10 +333,10 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack }) => {
         {/* Current selection */}
         <div className="mt-4 flex flex-wrap gap-2 text-xs">
           <span className="inline-flex items-center gap-1.5 border-2 border-black rounded-lg px-2 py-1 bg-white">
-            <ImageIcon className="w-3.5 h-3.5" /> Image: <span className="font-bold">{selectedImage?.name || (selection.imageModel || 'Default')}</span>
+            <ImageIcon className="w-3.5 h-3.5" /> Image: <span className="font-bold">{selectedImage?.name || (selection.imageModel || 'Auto')}</span>
           </span>
           <span className="inline-flex items-center gap-1.5 border-2 border-black rounded-lg px-2 py-1 bg-white">
-            <TypeIcon className="w-3.5 h-3.5" /> Text: <span className="font-bold">{selectedText?.name || (selection.textModel || 'Default')}</span>
+            <TypeIcon className="w-3.5 h-3.5" /> Text: <span className="font-bold">{selectedText?.name || (selection.textModel || 'Auto')}</span>
           </span>
         </div>
 

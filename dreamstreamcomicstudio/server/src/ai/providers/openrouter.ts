@@ -153,7 +153,7 @@ const normalizeCatalogModel = (raw: any): CatalogModel => {
   };
 };
 
-const generateText = async (
+const generateTextOnce = async (
   req: GenerateTextRequest,
   ctx: ProviderContext
 ): Promise<GenerateTextResult> => {
@@ -214,6 +214,26 @@ const generateText = async (
     usage: parseUsage(data),
     raw: data
   };
+};
+
+/**
+ * Generate text, retrying on a reliable fallback model when the chosen model is
+ * unavailable (404 "No endpoints") or rate-limited (429) — common for free models.
+ */
+const generateText = async (
+  req: GenerateTextRequest,
+  ctx: ProviderContext
+): Promise<GenerateTextResult> => {
+  try {
+    return await generateTextOnce(req, ctx);
+  } catch (err) {
+    const msg = String((err as Error)?.message || '');
+    const retriable = /\b404\b|\b429\b|no endpoints|rate.?limit/i.test(msg);
+    if (req.fallbackModel && req.fallbackModel !== req.model && retriable) {
+      return await generateTextOnce({ ...req, model: req.fallbackModel, fallbackModel: undefined }, ctx);
+    }
+    throw err;
+  }
 };
 
 const generateImage = async (

@@ -47,7 +47,7 @@ const Slot: React.FC<{
         onChange={(e) => setSelectedModel(slot, e.target.value || null, e.target.value ? 'specific' : 'default')}
         className="w-full border-2 border-black rounded px-2 py-1.5 text-sm bg-white"
       >
-        <option value="">Default (app picks the best)</option>
+        <option value="">Auto — best model, free-first (recommended)</option>
         {freeModel && <option value={freeModel.id}>★ Free · {freeModel.name}</option>}
         <optgroup label={`${label} models`}>
           {models.map((m) => (

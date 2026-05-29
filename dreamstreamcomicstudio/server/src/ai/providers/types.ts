@@ -35,6 +35,8 @@ export type GenerateTextRequest = {
   maxTokens?: number;
   timeoutMs?: number;
   retries?: number;
+  /** Reliable model to retry on if `model` is unavailable (404) or rate-limited (429). */
+  fallbackModel?: string;
 };
 
 export type ProviderUsage = {

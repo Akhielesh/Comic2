@@ -11,7 +11,8 @@ import {
   continuityAudit,
   analyzeTestLabReport
 } from '../ai/text.js';
-import { TEXT_MODEL, OPENROUTER_TEXT_MODEL } from '../config.js';
+import { TEXT_MODEL } from '../config.js';
+import { pickTextModel } from '../ai/autoRouter.js';
 import { getProvider, resolveProviderContext } from '../ai/gateway.js';
 import type { ChatMessage } from '../ai/providers/types.js';
 import {
@@ -52,7 +53,7 @@ type TextProvider = { apiKey: string; model: string; provider: 'openrouter' | 'g
 const resolveTextProvider = async (req: any, res: any): Promise<TextProvider | null> => {
   const openRouterKey = req.apiKeys?.openRouterKey;
   if (openRouterKey) {
-    const model = req.header('X-Text-Model')?.trim() || OPENROUTER_TEXT_MODEL;
+    const model = req.header('X-Text-Model')?.trim() || (await pickTextModel({ preferFree: true }));
     return { apiKey: openRouterKey, model, provider: 'openrouter' };
   }
   const geminiKey = req.apiKeys?.geminiKey;
@@ -653,7 +654,7 @@ textRouter.post('/generate', async (req, res, next) => {
       return res.status(400).json({ error: { message: 'prompt or messages is required' } });
     }
 
-    const effectiveModel = typeof model === 'string' && model.trim() ? model.trim() : OPENROUTER_TEXT_MODEL;
+    const effectiveModel = typeof model === 'string' && model.trim() ? model.trim() : await pickTextModel({ preferFree: true });
 
     const reserve = await reserveForOperation({
       req,

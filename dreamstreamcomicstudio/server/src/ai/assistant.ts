@@ -1,5 +1,6 @@
 import type { AssistantMessage, UniversalAssistantContext } from '../../../apiTypes.js';
-import { ASSISTANT_REQUEST_TIMEOUT_MS, OPENROUTER_FREE_TEXT_MODEL } from '../config.js';
+import { ASSISTANT_REQUEST_TIMEOUT_MS } from '../config.js';
+import { pickTextModel, TEXT_FALLBACK } from './autoRouter.js';
 import { buildPublicKnowledgeBlock } from './assistantKnowledge.js';
 import { buildUsage } from './usage.js';
 import { getProvider, resolveProviderContext } from './gateway.js';
@@ -24,7 +25,7 @@ export const queryUniversalAssistant = async (
   context: UniversalAssistantContext,
   modelOverride?: string
 ): Promise<{ text: string; usage?: ReturnType<typeof buildUsage>; model: string }> => {
-  const model = modelOverride?.trim() || OPENROUTER_FREE_TEXT_MODEL;
+  const model = modelOverride?.trim() || (await pickTextModel({ preferFree: true }));
   const knowledgeBase = buildPublicKnowledgeBlock();
 
   const systemPrompt = `
@@ -74,7 +75,8 @@ Keep it concise and avoid unnecessary sections.
       temperature: 0.3,
       maxTokens: 1200,
       timeoutMs: ASSISTANT_REQUEST_TIMEOUT_MS,
-      retries: 2
+      retries: 2,
+      fallbackModel: TEXT_FALLBACK
     },
     resolveProviderContext(apiKey)
   );

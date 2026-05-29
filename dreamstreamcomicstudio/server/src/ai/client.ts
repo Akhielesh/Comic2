@@ -1,7 +1,8 @@
 import { GoogleGenAI } from '@google/genai';
-import { GEMINI_BASE_URL, OPENROUTER_TEXT_MODEL } from '../config.js';
+import { GEMINI_BASE_URL } from '../config.js';
 import { geminiSchemaToJsonSchema } from './schemaConvert.js';
 import { getProvider, resolveProviderContext } from './gateway.js';
+import { TEXT_FALLBACK } from './autoRouter.js';
 
 const isOpenRouterKey = (key: string) => key.startsWith('sk-or-');
 
@@ -28,7 +29,7 @@ const createOpenRouterTextClient = (apiKey: string) => ({
   models: {
     generateContent: async (req: any) => {
       // Use a real OpenRouter model id (contains a '/'); otherwise fall back to the default.
-      const model = typeof req?.model === 'string' && req.model.includes('/') ? req.model : OPENROUTER_TEXT_MODEL;
+      const model = typeof req?.model === 'string' && req.model.includes('/') ? req.model : TEXT_FALLBACK;
       const cfg = req?.config || {};
       const schema = cfg.responseSchema ? geminiSchemaToJsonSchema(cfg.responseSchema) : undefined;
       const result = await getProvider('openrouter').generateText(
@@ -37,7 +38,8 @@ const createOpenRouterTextClient = (apiKey: string) => ({
           messages: [{ role: 'user', content: flattenContents(req?.contents) }],
           jsonSchema: schema ? { name: 'response', schema, strict: false } : undefined,
           temperature: typeof cfg.temperature === 'number' ? cfg.temperature : undefined,
-          retries: 3
+          retries: 3,
+          fallbackModel: TEXT_FALLBACK
         },
         resolveProviderContext(apiKey)
       );
