@@ -74,7 +74,7 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
   const [regenError, setRegenError] = useState<string | null>(null);
   const [limitDetails, setLimitDetails] = useState<Record<string, unknown> | null>(null);
   const estimatedCt = costReport ? Math.ceil(costReport.cost_summary.totalCost / 0.0001) : null;
-  const [comicCost, setComicCost] = useState<{ totalActualCt: number; totalBillableUsd: number } | null>(null);
+  const [comicCost, setComicCost] = useState<{ totalActualCt: number; totalBillableUsd: number; totalProviderCostUsd: number } | null>(null);
   const [showBubbleEditor, setShowBubbleEditor] = useState(false);
 
   const textLayout = state.textLayout || 'caption';
@@ -125,7 +125,8 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
         if (!active) return;
         setComicCost({
           totalActualCt: cost.totalActualCt,
-          totalBillableUsd: cost.totalBillableUsd
+          totalBillableUsd: cost.totalBillableUsd,
+          totalProviderCostUsd: cost.totalProviderCostUsd
         });
       } catch {
         if (active) setComicCost(null);
@@ -557,7 +558,7 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
               {isCostLoading
                 ? "Updating..."
                 : comicCost
-                  ? `$${comicCost.totalBillableUsd.toFixed(4)}`
+                  ? `$${(comicCost.totalBillableUsd > 0 ? comicCost.totalBillableUsd : comicCost.totalProviderCostUsd).toFixed(4)}`
                   : costReport
                     ? `$${costReport.cost_summary.totalCost.toFixed(4)}`
                     : "n/a"}
@@ -578,6 +579,7 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
               <div>Estimated CT (artifact-based): {estimatedCt?.toLocaleString()}</div>
               {comicCost && <div>Actual CT (billing events): {comicCost.totalActualCt.toLocaleString()}</div>}
               {comicCost && <div>Actual USD (billing events): ${comicCost.totalBillableUsd.toFixed(4)}</div>}
+              {comicCost && comicCost.totalProviderCostUsd > 0 && <div>Actual API cost (provider): ${comicCost.totalProviderCostUsd.toFixed(4)}</div>}
               <div>Tokens: {costReport.ai_usage.totalTokens}</div>
               <div>Artifacts: {costReport.ai_usage.totalArtifacts}</div>
             </div>

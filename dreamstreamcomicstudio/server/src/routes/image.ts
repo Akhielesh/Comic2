@@ -540,7 +540,8 @@ imageRouter.post('/openrouter', async (req, res, next) => {
       const usage = {
         promptTokens: generated.usage.promptTokens,
         candidatesTokens: generated.usage.completionTokens,
-        totalTokens: generated.usage.totalTokens
+        totalTokens: generated.usage.totalTokens,
+        providerCostUsd: generated.usage.costUsd
       };
 
       let responsePayload: Record<string, unknown> = {

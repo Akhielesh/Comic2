@@ -162,6 +162,8 @@ export type UsagePayload = {
   candidatesTokens?: number;
   totalTokens?: number;
   estimatedTokens?: number;
+  /** Real provider cost in USD when reported (e.g. OpenRouter usage.cost). Overrides the token estimate. */
+  providerCostUsd?: number;
 };
 
 export const buildSettleEstimateFromUsage = async (
@@ -177,7 +179,7 @@ export const buildSettleEstimateFromUsage = async (
   const inputTokens = promptTokens || Math.ceil((totalTokens || estimatedTokens) * 0.4);
   const outputTokens = candidatesTokens || Math.max(0, (totalTokens || estimatedTokens) - inputTokens);
 
-  return estimateCharge(
+  const estimate = await estimateCharge(
     {
       ...seed,
       inputTokens,
@@ -186,4 +188,19 @@ export const buildSettleEstimateFromUsage = async (
     },
     options
   );
+
+  // When the provider reports a real cost (e.g. OpenRouter usage.cost), trust it
+  // over the token-derived estimate so the settled (and comic) cost is exact.
+  const realProviderCostUsd = resolveNumber(usage?.providerCostUsd, 0);
+  if (realProviderCostUsd > 0) {
+    const billableUsd = Number((realProviderCostUsd * estimate.markup).toFixed(6));
+    return {
+      ...estimate,
+      estimatedProviderCostUsd: Number(realProviderCostUsd.toFixed(6)),
+      estimatedBillableUsd: billableUsd,
+      estimatedCt: Math.max(0, Math.round(billableUsd * estimate.ctPerUsd))
+    };
+  }
+
+  return estimate;
 };

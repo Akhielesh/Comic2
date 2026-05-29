@@ -657,7 +657,8 @@ textRouter.post('/generate', async (req, res, next) => {
       const usage = {
         promptTokens: result.usage.promptTokens,
         candidatesTokens: result.usage.completionTokens,
-        totalTokens: result.usage.totalTokens
+        totalTokens: result.usage.totalTokens,
+        providerCostUsd: result.usage.costUsd
       };
 
       const settled = await settleReservedOperation({
