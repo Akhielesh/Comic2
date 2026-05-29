@@ -34,7 +34,7 @@ import { saveArtifact, saveImage, saveTestImage, getImageUrl, getTestImageUrl, g
 import { IMAGE_TEXT_BLOCKER, NO_TEXT_IN_IMAGE, TEXT_MODEL, IMAGE_MODEL } from './modelPolicy';
 import { cropImageToRatio } from './imageUtils';
 import { updateDebugState } from './debugStore';
-import { getAllModelKeys, getDefaultTextModel, getModelSpecificKey } from './appSettings';
+import { getAllModelKeys, getDefaultTextModel, getModelSpecificKey, getOpenRouterKey } from './appSettings';
 import { groundWorldEntities } from './worldGrounding';
 import { WORLD_EXTRACTION_CONTRACT_VERSION } from '../shared/contracts/worldExtraction';
 
@@ -594,23 +594,37 @@ export const generateImage = async (
       model: targetModel
     };
 
+    // Pipeline cutover: when the user has a BYOK OpenRouter key, route real panel/
+    // cover generation through the unified gateway (their key, their account).
+    // Falls back to the legacy Gemini path when no OpenRouter key is configured.
+    const useOpenRouter = Boolean(getOpenRouterKey());
     let response: ImageGenerateResponse;
-    try {
+    if (useOpenRouter) {
+      // Omit the Gemini model id; the server defaults to OPENROUTER_IMAGE_MODEL.
+      // The X-OpenRouter-Key header is attached automatically by apiClient.
       response = await post<ImageGenerateRequest, ImageGenerateResponse>(
-        '/api/image/gemini',
-        requestBody,
-        { signal: options?.abortSignal, apiKey: modelSpecificKey || undefined }
+        '/api/image/openrouter',
+        { ...requestBody, model: undefined },
+        { signal: options?.abortSignal }
       );
-    } catch (error) {
-      // If a model-specific key is invalid, retry with default Gemini key from local storage.
-      if (modelSpecificKey && isInvalidGeminiKeyError(error)) {
+    } else {
+      try {
         response = await post<ImageGenerateRequest, ImageGenerateResponse>(
           '/api/image/gemini',
           requestBody,
-          { signal: options?.abortSignal }
+          { signal: options?.abortSignal, apiKey: modelSpecificKey || undefined }
         );
-      } else {
-        throw error;
+      } catch (error) {
+        // If a model-specific key is invalid, retry with default Gemini key from local storage.
+        if (modelSpecificKey && isInvalidGeminiKeyError(error)) {
+          response = await post<ImageGenerateRequest, ImageGenerateResponse>(
+            '/api/image/gemini',
+            requestBody,
+            { signal: options?.abortSignal }
+          );
+        } else {
+          throw error;
+        }
       }
     }
 
