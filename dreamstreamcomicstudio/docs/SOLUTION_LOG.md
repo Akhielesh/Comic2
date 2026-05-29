@@ -13,6 +13,20 @@ Entry format:
 
 ---
 
+## 2026-05-29 — Usage pill swap, billing tab removal, notifications redesign
+
+- **Problem:** Header showed CT credits; Settings had a billing tab; notifications
+  were off-brand and duplicated on the dashboard.
+- **Solution:** `TokenAvailabilityPill` now shows the active key's usage with a hover
+  card (provider, spend/limit %, models) instead of CT. Billing tab removed from
+  `AccountSettings` (nav + render); its handlers/`renderBilling` remain dormant.
+  `AccountSettings` "API Configuration" tab and `SettingsModal` both render the new
+  `ApiConfiguration`. `NotificationBell` restyled on-brand; duplicate dashboard bell
+  removed (global header provides it).
+- **Files:** `components/TokenAvailabilityPill.tsx`, `components/AccountSettings.tsx`,
+  `components/NotificationBell.tsx`, `components/ProjectDashboard.tsx`.
+- **Commit/Decision:** ADR 0002 (billing dormant), ADR 0003 (per-key usage).
+
 ## 2026-05-29 — API Configuration: multiple keys per provider + per-key limits
 
 - **Problem:** One key per provider, a user-wide spend cap, and no per-key tracking.

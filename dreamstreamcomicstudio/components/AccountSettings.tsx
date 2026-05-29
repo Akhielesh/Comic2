@@ -12,7 +12,7 @@ import {
 } from '../services/db';
 import { getAllModelKeys, getSettingsState, setSettingsState as persistSettingsState } from '../services/appSettings';
 import { Button } from './Button';
-import { KeyManager } from './KeyManager';
+import { ApiConfiguration } from './ApiConfiguration';
 import { AlertTriangle, CheckCircle2, CreditCard, LogOut, Mail, Save, Settings, Shield, Upload, User as UserIcon, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useSearchParams } from 'react-router-dom';
@@ -1930,10 +1930,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
 
         return (
             <div className="space-y-6 animate-fade-in max-w-3xl">
-                <div>
-                    <h3 className="font-display text-xl mb-4">API Keys</h3>
-                    <KeyManager planTier={entitlements.planTier} />
-                </div>
+                <ApiConfiguration />
 
                 <div className="border-2 border-slate-200 rounded-xl p-4 bg-white space-y-4">
                     <div>
@@ -1996,7 +1993,6 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                     <NavButton icon={<Settings size={18} />} label="API Configuration" active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
                     <NavButton icon={<Mail size={18} />} label="Preferences" active={activeTab === 'preferences'} onClick={() => setActiveTab('preferences')} />
                     <NavButton icon={<Shield size={18} />} label="Security" active={activeTab === 'security'} onClick={() => setActiveTab('security')} />
-                    <NavButton icon={<CreditCard size={18} />} label="Billing" active={activeTab === 'billing'} onClick={() => setActiveTab('billing')} />
                     <NavButton icon={<Shield size={18} />} label="Legal" active={activeTab === 'legal'} onClick={() => setActiveTab('legal')} />
                     <NavButton icon={<Mail size={18} />} label="Contact" active={activeTab === 'contact'} onClick={() => setActiveTab('contact')} />
                     {(isAdmin || isModerator) && (
@@ -2026,7 +2022,6 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                             {activeTab === 'settings' && renderSettings()}
                             {activeTab === 'preferences' && renderPreferences()}
                             {activeTab === 'security' && renderSecurity()}
-                            {activeTab === 'billing' && renderBilling()}
                             {activeTab === 'legal' && renderLegal()}
                             {activeTab === 'contact' && <ContactSection />}
                             {activeTab === 'admin' && renderAdmin()}
