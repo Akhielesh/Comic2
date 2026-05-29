@@ -487,6 +487,7 @@ export const generatePanelBreakdown = async (
   options?: {
     stage?: string;
     abortSignal?: AbortSignal;
+    continuitySummary?: string;
     continuityBible?: ContinuityBible;
     sceneBindings?: SceneContinuityBinding[];
     previousPanelContext?: Array<{ panelId?: string; sceneId?: number; description: string; dialogue?: string }>;
@@ -504,6 +505,7 @@ export const generatePanelBreakdown = async (
         layoutType,
         panelCount,
         stage: options?.stage,
+        continuitySummary: options?.continuitySummary,
         continuityBible: options?.continuityBible,
         sceneBindings: options?.sceneBindings,
         previousPanelContext: options?.previousPanelContext

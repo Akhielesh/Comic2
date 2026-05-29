@@ -391,6 +391,8 @@ export type PanelBreakdownRequest = {
   layoutType: string;
   panelCount?: number;
   stage?: string;
+  /** Rolling "story so far" summary of earlier scenes, for narrative carryover. */
+  continuitySummary?: string;
   continuityBible?: ContinuityBible;
   sceneBindings?: SceneContinuityBinding[];
   previousPanelContext?: Array<{

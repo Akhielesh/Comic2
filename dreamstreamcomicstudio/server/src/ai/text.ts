@@ -987,7 +987,8 @@ export const generatePanelBreakdown = async (
   continuityBible?: ContinuityBible,
   sceneBindings?: SceneContinuityBinding[],
   previousPanelContext?: Array<{ panelId?: string; sceneId?: number; description: string; dialogue?: string }>,
-  modelOverride?: string
+  modelOverride?: string,
+  continuitySummary?: string
 ): Promise<PanelBreakdownResponse> => {
   const model = resolveTextModel(modelOverride);
   if (!scene || !scene.synopsis) {
@@ -1009,6 +1010,8 @@ export const generatePanelBreakdown = async (
       Scene Raw Excerpt: ${scene.rawText || ''}
       Scene Characters: ${(scene.characters || []).join(', ') || 'Unknown'}
       Scene Setting: ${scene.setting || 'Unknown'}
+      Story so far (summary of earlier scenes — keep this scene visually and narratively consistent with it):
+      ${continuitySummary?.trim() || 'This is the opening; there are no earlier scenes yet.'}
       Allowed continuity entities:
       ${continuityBible?.entities?.map((entity) => `- [${entity.kind}] ${entity.name}: ${entity.description}`).join('\n') || 'None provided'}
       Scene continuity bindings:

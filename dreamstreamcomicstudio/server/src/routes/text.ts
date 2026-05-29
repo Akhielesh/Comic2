@@ -394,7 +394,7 @@ textRouter.post('/panel-breakdown', async (req, res, next) => {
     const resolved = await resolveTextProvider(req, res, 'panel_breakdown');
     if (!resolved) return;
     const { apiKey, model: effectiveModel, provider } = resolved;
-    const { scene, style, layoutType, panelCount, continuityBible, sceneBindings, previousPanelContext } = req.body || {};
+    const { scene, style, layoutType, panelCount, continuityBible, sceneBindings, previousPanelContext, continuitySummary } = req.body || {};
     const effectiveStyle = style || 'classic comic book style';
     const effectiveLayout = layoutType || 'classic';
 
@@ -424,7 +424,8 @@ textRouter.post('/panel-breakdown', async (req, res, next) => {
         continuityBible,
         sceneBindings,
         previousPanelContext,
-        effectiveModel
+        effectiveModel,
+        typeof continuitySummary === 'string' ? continuitySummary : undefined
       );
 
       const settled = await settleReservedOperation({
