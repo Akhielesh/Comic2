@@ -333,7 +333,10 @@ systemRouter.get('/image-url', async (req, res, next) => {
     if (error || !data?.signedUrl) {
       const fallbackPath = buildLegacyFallbackPath(imagePath);
       if (!fallbackPath) {
-        if (error) throw error;
+        // A 4xx from storage means the object can't be signed (missing/inaccessible)
+        // — report that as 404, not the raw 400 Supabase returns. Only re-raise true
+        // server-side failures so they surface as 500.
+        if (error && Number((error as any).status ?? (error as any).statusCode) >= 500) throw error;
         return res.status(404).json({ error: { message: 'Image not found.' } });
       }
 
@@ -346,7 +349,7 @@ systemRouter.get('/image-url', async (req, res, next) => {
     }
 
     if (error || !data?.signedUrl) {
-      if (error) throw error;
+      if (error && Number((error as any).status ?? (error as any).statusCode) >= 500) throw error;
       return res.status(404).json({ error: { message: 'Image not found.' } });
     }
 
