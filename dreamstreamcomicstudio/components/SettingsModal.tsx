@@ -3,9 +3,7 @@ import { supabase } from "../services/supabase";
 import { encryptKey } from "../services/crypto";
 import { X, Eye, EyeOff, Copy, ChevronDown, ChevronUp, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { Button } from "./Button";
-import { FluxKeyInput } from "./FluxKeyInput";
-import { KeyManager } from "./KeyManager";
-import { OpenRouterKeyInput } from "./OpenRouterKeyInput";
+import { ApiConfiguration } from "./ApiConfiguration";
 import {
   IMAGE_MODELS,
   getAllowedImageModelsForPlan,
@@ -164,14 +162,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onReloadP
                   </a>
                 </div>
 
-                {/* OpenRouter unified-gateway key (BYOK) */}
                 <div className="pt-2">
-                  <OpenRouterKeyInput />
-                </div>
-
-                {/* New Key Manager for Model-Specific Keys */}
-                <div className="pt-2">
-                  <KeyManager planTier={planTier} />
+                  <ApiConfiguration />
                 </div>
               </div>
             )}

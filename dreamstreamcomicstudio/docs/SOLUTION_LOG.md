@@ -13,6 +13,26 @@ Entry format:
 
 ---
 
+## 2026-05-29 — API Configuration: multiple keys per provider + per-key limits
+
+- **Problem:** One key per provider, a user-wide spend cap, and no per-key tracking.
+  Owner wants multiple keys per provider, each with its own OpenRouter-style usage limit.
+- **Root cause:** `user_api_keys` was unique on `(user_id, provider)`; `apiClient` sent
+  a single key per provider; usage was aggregated at the wallet level.
+- **Solution:** New client-side multi-key store `services/apiKeys.ts` (list per provider,
+  one active key, per-key monthly limit + usage with monthly reset, legacy single-key
+  import). New `components/ApiConfiguration.tsx` (add / label / limit / activate / delete
+  with usage meters), wired into Settings (replaces the old single-key inputs).
+  `apiClient` now sends the **active** key per provider. The live image path blocks an
+  over-limit key and records the real provider cost against the active key.
+- **Files:** `services/apiKeys.ts`, `components/ApiConfiguration.tsx`,
+  `services/apiClient.ts`, `services/geminiService.ts`, `components/SettingsModal.tsx`.
+- **Commit/Decision:** ADR 0003 (block-at-limit; one active key/provider; CT UI hidden /
+  backend dormant).
+- **Pending (next increments):** replace the CT pill with a per-key usage view; remove
+  the billing tab from Account; notifications redesign + fix the duplicate Studio bell;
+  a server-authoritative per-key usage ledger (currently client-side).
+
 ## 2026-05-29 — Documentation architecture + remove home-page pricing
 
 - **Problem:** No documentation architecture (no ARCHITECTURE/ADR/changelog/issue

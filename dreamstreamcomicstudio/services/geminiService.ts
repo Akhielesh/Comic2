@@ -34,7 +34,8 @@ import { saveArtifact, saveImage, saveTestImage, getImageUrl, getTestImageUrl, g
 import { IMAGE_TEXT_BLOCKER, NO_TEXT_IN_IMAGE, TEXT_MODEL, IMAGE_MODEL } from './modelPolicy';
 import { cropImageToRatio } from './imageUtils';
 import { updateDebugState } from './debugStore';
-import { getAllModelKeys, getDefaultTextModel, getModelSpecificKey, getOpenRouterKey } from './appSettings';
+import { getAllModelKeys, getDefaultTextModel, getModelSpecificKey } from './appSettings';
+import { getActiveKeyForUse, recordKeyUsage } from './apiKeys';
 import { groundWorldEntities } from './worldGrounding';
 import { WORLD_EXTRACTION_CONTRACT_VERSION } from '../shared/contracts/worldExtraction';
 
@@ -597,7 +598,15 @@ export const generateImage = async (
     // Pipeline cutover: when the user has a BYOK OpenRouter key, route real panel/
     // cover generation through the unified gateway (their key, their account).
     // Falls back to the legacy Gemini path when no OpenRouter key is configured.
-    const useOpenRouter = Boolean(getOpenRouterKey());
+    const { key: activeOpenRouterKey, blocked: openRouterBlocked } = getActiveKeyForUse('openrouter');
+    if (openRouterBlocked) {
+      throw new Error(
+        `Your active OpenRouter key "${activeOpenRouterKey?.label}" has reached its monthly usage limit. ` +
+        'Switch to another key or raise the limit in Settings → API Configuration.'
+      );
+    }
+    // No OpenRouter key configured → fall back to the legacy Gemini path.
+    const useOpenRouter = Boolean(activeOpenRouterKey);
     let response: ImageGenerateResponse;
     if (useOpenRouter) {
       // Omit the Gemini model id; the server defaults to OPENROUTER_IMAGE_MODEL.
@@ -607,6 +616,12 @@ export const generateImage = async (
         { ...requestBody, model: undefined },
         { signal: options?.abortSignal }
       );
+      // Attribute the real provider cost to the active OpenRouter key (per-key usage).
+      const usedUsd =
+        (response as { billing?: { settled?: { providerCostUsd?: number } } }).billing?.settled?.providerCostUsd
+        ?? (response as { usage?: { providerCostUsd?: number } }).usage?.providerCostUsd
+        ?? 0;
+      if (usedUsd > 0) recordKeyUsage('openrouter', usedUsd);
     } else {
       try {
         response = await post<ImageGenerateRequest, ImageGenerateResponse>(

@@ -1,5 +1,6 @@
 import { buildApiUrl } from './clientConfig';
 import { getFluxKeyInfo, getOpenRouterKey } from './appSettings';
+import { getActiveKeyValue } from './apiKeys';
 import { supabase } from './supabase';
 
 let cachedAccessToken: string | undefined;
@@ -49,9 +50,10 @@ const getAuthToken = async (): Promise<string | undefined> => {
 };
 
 export const post = async <TReq, TRes>(path: string, body: TReq, options?: { signal?: AbortSignal; apiKey?: string; modelId?: string }): Promise<TRes> => {
-  const geminiKey = getGeminiKey();
-  const fluxInfo = getFluxKeyInfo();
-  const openRouterKey = getOpenRouterKey();
+  // Active key per provider (multi-key store), falling back to legacy single keys.
+  const geminiKey = getActiveKeyValue('gemini') || getGeminiKey();
+  const fluxKey = getActiveKeyValue('pixazo') || getFluxKeyInfo().key;
+  const openRouterKey = getActiveKeyValue('openrouter') || getOpenRouterKey();
   const token = await getAuthToken();
 
   const res = await fetch(buildApiUrl(path), {
@@ -59,7 +61,7 @@ export const post = async <TReq, TRes>(path: string, body: TReq, options?: { sig
     headers: {
       'Content-Type': 'application/json',
       ...(options?.apiKey ? { 'X-Gemini-Key': options.apiKey } : (geminiKey ? { 'X-Gemini-Key': geminiKey } : {})),
-      ...(fluxInfo.key ? { 'X-Pixazo-Key': fluxInfo.key } : {}),
+      ...(fluxKey ? { 'X-Pixazo-Key': fluxKey } : {}),
       ...(openRouterKey ? { 'X-OpenRouter-Key': openRouterKey } : {}),
       ...(options?.modelId ? { 'X-Gemini-Model': options.modelId } : {}),
       ...(token ? { 'Authorization': `Bearer ${token}` } : {})
@@ -73,15 +75,15 @@ export const post = async <TReq, TRes>(path: string, body: TReq, options?: { sig
 };
 
 export const get = async <TRes>(path: string, options?: { modelId?: string }): Promise<TRes> => {
-  const geminiKey = getGeminiKey();
-  const fluxInfo = getFluxKeyInfo();
-  const openRouterKey = getOpenRouterKey();
+  const geminiKey = getActiveKeyValue('gemini') || getGeminiKey();
+  const fluxKey = getActiveKeyValue('pixazo') || getFluxKeyInfo().key;
+  const openRouterKey = getActiveKeyValue('openrouter') || getOpenRouterKey();
   const token = await getAuthToken();
 
   const res = await fetch(buildApiUrl(path), {
     headers: {
       ...(geminiKey ? { 'X-Gemini-Key': geminiKey } : {}),
-      ...(fluxInfo.key ? { 'X-Pixazo-Key': fluxInfo.key } : {}),
+      ...(fluxKey ? { 'X-Pixazo-Key': fluxKey } : {}),
       ...(openRouterKey ? { 'X-OpenRouter-Key': openRouterKey } : {}),
       ...(options?.modelId ? { 'X-Gemini-Model': options.modelId } : {}),
       ...(token ? { 'Authorization': `Bearer ${token}` } : {})
