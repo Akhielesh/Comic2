@@ -1931,46 +1931,6 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         return (
             <div className="space-y-6 animate-fade-in max-w-3xl">
                 <ApiConfiguration />
-
-                <div className="border-2 border-slate-200 rounded-xl p-4 bg-white space-y-4">
-                    <div>
-                        <label className="text-xs font-bold uppercase text-slate-500">Default Image Model</label>
-                        <select
-                            value={selectedImageModel}
-                            onChange={(e) => saveSettings({ ...settingsState, defaultImageModel: e.target.value })}
-                            className="w-full mt-1 border-2 border-black rounded-lg px-3 py-2 text-sm bg-white"
-                        >
-                            {imageModelOptions.map((model) => (
-                                <option key={model.id} value={model.id}>
-                                    {model.label}{modelKeys[model.id] ? ' (your key)' : model.provider === 'flux' ? ' (system/free)' : ''}
-                                </option>
-                            ))}
-                        </select>
-                    </div>
-
-                    <div>
-                        <label className="text-xs font-bold uppercase text-slate-500">Default Text Model</label>
-                        <select
-                            value={selectedTextModel}
-                            onChange={(e) => saveSettings({
-                                ...settingsState,
-                                defaultTextModel: e.target.value,
-                                defaultTextModelKey: e.target.value
-                            })}
-                            className="w-full mt-1 border-2 border-black rounded-lg px-3 py-2 text-sm bg-white"
-                        >
-                            {textModelOptions.map((modelId) => (
-                                <option key={modelId} value={modelId}>
-                                    {(textModelLabelMap.get(modelId) || modelId)}
-                                    {modelKeys[modelId] ? ' (configured key)' : modelId === TEXT_MODEL ? ' (default)' : ''}
-                                </option>
-                            ))}
-                        </select>
-                    </div>
-                    <div className="text-xs text-slate-500">
-                        Plan tier <span className="font-bold uppercase">{entitlements.planTier}</span> controls visible model options and generation permissions.
-                    </div>
-                </div>
             </div>
         );
     };

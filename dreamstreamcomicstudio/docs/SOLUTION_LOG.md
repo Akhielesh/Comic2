@@ -240,3 +240,14 @@ Entry format:
   `ai/assistant.ts`, `routes/{assistant,text,image}.ts`, `ModelSelectionPanel`/
   `TokenAvailabilityPill`/`ModelLibrary`.
 - **Verify:** server + frontend typecheck clean; 35 AI tests pass.
+
+## 2026-05-29 — Remove leftover Gemini "default model" UI (Auto only)
+
+- **Problem:** Gemini still appeared as the default model option despite the auto-router.
+- **Root cause:** two legacy hardcoded Gemini/Flux surfaces remained — SettingsModal's
+  "Image Models" + "Model Routing" sections, and AccountSettings' "Default Image/Text Model"
+  selects (fed by services/imageModels.ts + modelPolicy.ts).
+- **Solution:** removed all three. Model choice is now exclusively the Auto-based
+  ModelSelectionPanel (live catalog, free-first) in API Configuration.
+- **Files:** components/SettingsModal.tsx, components/AccountSettings.tsx.
+- **Verify:** frontend typecheck clean.
