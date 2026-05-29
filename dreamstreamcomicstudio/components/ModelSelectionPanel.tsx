@@ -8,7 +8,7 @@ import {
   type ModelSlot
 } from '../services/modelSelection';
 import { getActiveKey } from '../services/apiKeys';
-import { getCapabilities } from '../services/modelCapabilities';
+import { getCapabilities, featureSupport } from '../services/modelCapabilities';
 
 const CapBadges: React.FC<{ model?: CatalogModel }> = ({ model }) => {
   if (!model) return null;
@@ -56,6 +56,12 @@ const Slot: React.FC<{
         </optgroup>
       </select>
       {selectedId ? <CapBadges model={selected} /> : <div className="text-[11px] text-slate-500 mt-1">Auto-selected (prefers free when available).</div>}
+      {selected && slot === 'image' && !getCapabilities(selected).multiImageRefs && (
+        <div className="text-[11px] text-amber-700 mt-1 flex items-start gap-1">
+          <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
+          {featureSupport(getCapabilities(selected), 'character-consistency').reason}
+        </div>
+      )}
     </div>
   );
 };

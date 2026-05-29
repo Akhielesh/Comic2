@@ -362,9 +362,9 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
                   </div>
                 )}
                 {pages.length > 0 ? (
-                  <div className={`relative bg-white ${flipDirection === 'next' ? 'animate-page-flip-next' : flipDirection === 'prev' ? 'animate-page-flip-prev' : ''}`}>
+                  <div className={`relative bg-white w-fit max-w-full mx-auto ${flipDirection === 'next' ? 'animate-page-flip-next' : flipDirection === 'prev' ? 'animate-page-flip-prev' : ''}`}>
                     {pages[pageIndex]?.imageUrl ? (
-                      <img src={pages[pageIndex].imageUrl} alt="Comic page" className="w-full h-auto" />
+                      <img src={pages[pageIndex].imageUrl} alt="Comic page" className="block max-h-[78vh] w-auto max-w-full mx-auto object-contain" />
                     ) : (
                       <div className="w-full min-h-[420px] flex items-center justify-center bg-amber-50 text-amber-800 text-sm font-bold border-b-2 border-black">
                         {pages[pageIndex]?.type === 'panel' ? 'Image missing for this panel' : 'Image missing for this page'}
