@@ -129,7 +129,9 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
 
     if (state.step === AppStep.REVIEW_EXPORT && state.panels.length > 0) {
       const imageSignature = state.panels.map((panel) => panel.imageId || '').join('|');
-      autoKey = `review:${state.panels.length}:${imageSignature}`;
+      // Include panelPlanVersion (as the preview key does) so a re-plan after an upstream
+      // edit/reset isn't deduped away when it lands on the same panel count + images.
+      autoKey = `review:${state.panelPlanVersion || 0}:${state.panels.length}:${imageSignature}`;
       nextVersionName = `Auto - Build Ready (${new Date().toLocaleTimeString()})`;
     }
 
@@ -227,7 +229,17 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
     );
     if (added.length === 0) return;
     updateState({ imageTags: tags, imageTagCounters: counters });
-  }, [state]);
+    // Recompute tags only when an image-bearing slice changes — collectStateImageEntries
+    // reads exactly these — rather than on every state mutation (e.g. each keystroke).
+  }, [
+    state.coverImageId,
+    state.coverTemplateImageId,
+    state.styleVariants,
+    state.characters,
+    state.items,
+    state.locations,
+    state.panels
+  ]);
 
   const saveVersion = () => {
     const name = prompt("Name this version:", `Version ${new Date().toLocaleTimeString()}`);
