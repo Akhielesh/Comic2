@@ -14,6 +14,7 @@ import {
   isOverLimit
 } from '../services/apiKeys';
 import { Button } from './Button';
+import { ModelSelectionPanel } from './ModelSelectionPanel';
 
 const mask = (key: string) => (key.length > 8 ? `${key.slice(0, 3)}••••${key.slice(-4)}` : '••••');
 
@@ -219,6 +220,8 @@ export const ApiConfiguration: React.FC = () => {
           </div>
         );
       })}
+
+      <ModelSelectionPanel />
     </div>
   );
 };
