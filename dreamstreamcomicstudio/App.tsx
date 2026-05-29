@@ -601,7 +601,9 @@ const App: React.FC = () => {
   const effectiveView: AppView = !user && isProtectedViewStrict ? 'auth' : currentView;
 
   const activeProject = activeProjectId ? getProject(activeProjectId) : undefined;
-  const showSharedHeader = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared';
+  // Editor and ComicForge are focused, full-screen workspaces with their own
+  // back/title bars, so we hide the global site header there (was a 3rd stacked header).
+  const showSharedHeader = !['home', 'reader', 'shared', 'editor', 'comicforge'].includes(effectiveView);
   const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared';
   const showUniversalAssistant = effectiveView !== 'auth-callback' && effectiveView !== 'shared';
 

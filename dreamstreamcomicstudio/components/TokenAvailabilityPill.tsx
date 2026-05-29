@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Zap, KeyRound } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { getActiveKey, usageFraction, PROVIDER_META, type ApiKeyProvider } from '../services/apiKeys';
-import { getDefaultImageModel, getDefaultTextModel } from '../services/appSettings';
+import { getSelectedImageModel, getSelectedTextModel, MODEL_SELECTION_CHANGED } from '../services/modelSelection';
 
 interface TokenAvailabilityPillProps {
   className?: string;
@@ -25,11 +25,13 @@ export const TokenAvailabilityPill: React.FC<TokenAvailabilityPillProps> = ({ cl
   const [, setTick] = useState(0);
   useEffect(() => {
     const id = window.setInterval(() => setTick((t) => t + 1), 5000);
-    const onFocus = () => setTick((t) => t + 1);
-    window.addEventListener('focus', onFocus);
+    const onChange = () => setTick((t) => t + 1);
+    window.addEventListener('focus', onChange);
+    window.addEventListener(MODEL_SELECTION_CHANGED, onChange);
     return () => {
       window.clearInterval(id);
-      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('focus', onChange);
+      window.removeEventListener(MODEL_SELECTION_CHANGED, onChange);
     };
   }, []);
 
@@ -48,8 +50,8 @@ export const TokenAvailabilityPill: React.FC<TokenAvailabilityPillProps> = ({ cl
   const frac = usageFraction(active);
   const pct = Math.round(frac * 100);
   const hasLimit = !!active.limitUsd && active.limitUsd > 0;
-  const imageModel = getDefaultImageModel();
-  const textModel = getDefaultTextModel();
+  const imageModel = getSelectedImageModel() || 'Default (auto)';
+  const textModel = getSelectedTextModel() || 'Default (auto)';
 
   return (
     <div className={`relative group ${className}`}>
