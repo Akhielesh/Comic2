@@ -209,6 +209,40 @@ export const FALLBACK_MODEL_PRICING: ModelPricing[] = [
     confidence: 0.5,
     status: 'ACTIVE',
     effectiveFrom: '2026-02-13T00:00:00.000Z'
+  },
+  // --- OpenRouter fallbacks (the daily pricing sync overwrites these from /models) ---
+  {
+    provider: 'openrouter',
+    model: 'google/gemini-2.5-flash',
+    inputPer1kUsd: 0.0003,
+    outputPer1kUsd: 0.0025,
+    imagePerOutputUsd: 0,
+    source: 'fallback/openrouter',
+    confidence: 0.4,
+    status: 'REVIEW_REQUIRED',
+    effectiveFrom: '2026-02-13T00:00:00.000Z'
+  },
+  {
+    provider: 'openrouter',
+    model: 'google/gemini-2.5-flash-image',
+    inputPer1kUsd: 0,
+    outputPer1kUsd: 0,
+    imagePerOutputUsd: 0.04,
+    source: 'fallback/openrouter',
+    confidence: 0.4,
+    status: 'REVIEW_REQUIRED',
+    effectiveFrom: '2026-02-13T00:00:00.000Z'
+  },
+  {
+    provider: 'openrouter',
+    model: 'google/gemini-2.0-flash-exp:free',
+    inputPer1kUsd: 0,
+    outputPer1kUsd: 0,
+    imagePerOutputUsd: 0,
+    source: 'fallback/openrouter',
+    confidence: 0.4,
+    status: 'REVIEW_REQUIRED',
+    effectiveFrom: '2026-02-13T00:00:00.000Z'
   }
 ];
 
