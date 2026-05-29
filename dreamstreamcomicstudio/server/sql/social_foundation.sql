@@ -227,7 +227,14 @@ create policy reviews_select_visible on public.reviews
 drop policy if exists reviews_insert_own on public.reviews;
 create policy reviews_insert_own on public.reviews
   for insert to authenticated
-  with check (auth.uid() = user_id);
+  with check (
+    auth.uid() = user_id
+    and exists (
+      select 1 from public.projects p
+      where p.id = reviews.project_id
+        and (p.is_public = true or p.user_id = auth.uid())
+    )
+  );
 
 drop policy if exists reviews_update_own on public.reviews;
 create policy reviews_update_own on public.reviews
@@ -269,7 +276,9 @@ language sql
 security definer
 set search_path = public
 as $$
-  update public.projects set likes_count = greatest(coalesce(likes_count, 0) - 1, 0) where id = p_id;
+  update public.projects
+  set likes_count = (select count(*) from public.project_likes where project_id = p_id)
+  where id = p_id;
 $$;
 
 revoke all on function public.increment_project_view(uuid) from public;
