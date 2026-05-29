@@ -32,18 +32,46 @@ const byCompletionPrice = (a: AnnotatedModel, b: AnnotatedModel) =>
 const byImagePrice = (a: AnnotatedModel, b: AnnotatedModel) =>
   (a.pricing?.imagePerImage || 0) - (b.pricing?.imagePerImage || 0);
 
+const byContextDesc = (a: AnnotatedModel, b: AnnotatedModel) =>
+  (b.contextLength || 0) - (a.contextLength || 0);
+
+/** Spend preference for auto-selection. `free` preserves today's free-first behavior. */
+export type CostPref = 'free' | 'cheap' | 'quality';
+
+type PickOpts = {
+  /** Back-compat: true ⇒ costPref 'free', false ⇒ 'cheap'. Ignored when costPref is set. */
+  preferFree?: boolean;
+  costPref?: CostPref;
+  /** Hard capability gate — only models passing this are eligible. */
+  filter?: (m: AnnotatedModel) => boolean;
+  /** Soft preference — when some eligible models pass, rank those first. */
+  prefer?: (m: AnnotatedModel) => boolean;
+};
+
+const resolveCostPref = (opts?: PickOpts): CostPref =>
+  opts?.costPref ?? (opts?.preferFree === false ? 'cheap' : 'free');
+
 /**
- * Best text model for the budget. `preferFree` (default true) picks a capable free
- * model from the live catalog; if none/empty it falls back to the cheapest text model.
+ * Best text model for the budget AND capabilities, chosen from the live catalog.
+ * `filter` gates by required capabilities (e.g. structured-JSON for analyze/panel
+ * stages) so an incapable model is never auto-selected; `costPref` controls free-first
+ * vs cheapest vs quality. Falls back to TEXT_FALLBACK when the catalog is empty/unreachable.
  */
-export const pickTextModel = async (opts?: { preferFree?: boolean }): Promise<string> => {
-  const preferFree = opts?.preferFree !== false;
+export const pickTextModel = async (opts?: PickOpts): Promise<string> => {
+  const costPref = resolveCostPref(opts);
+  const gate = opts?.filter ?? (() => true);
   try {
     const { models } = await getCatalog();
-    const text = models.filter(isTextModel);
-    if (text.length === 0) return preferFree ? TEXT_FALLBACK : TEXT_FALLBACK;
-
-    if (preferFree) {
+    let text = models.filter(isTextModel).filter(gate);
+    if (text.length === 0) return TEXT_FALLBACK;
+    if (opts?.prefer) {
+      const preferred = text.filter(opts.prefer);
+      if (preferred.length) text = preferred;
+    }
+    if (costPref === 'quality') {
+      return [...text].sort(byContextDesc)[0]?.id || TEXT_FALLBACK;
+    }
+    if (costPref === 'free') {
       const free = text.filter((m) => m.isFree);
       if (free.length) {
         for (const needle of FREE_TEXT_PRIORITY) {
@@ -53,21 +81,26 @@ export const pickTextModel = async (opts?: { preferFree?: boolean }): Promise<st
         return free[0].id;
       }
     }
-    // No free (or not preferred) → cheapest capable text model.
+    // 'cheap' (or 'free' with no free model available) → cheapest eligible text model.
     return [...text].sort(byCompletionPrice)[0]?.id || TEXT_FALLBACK;
   } catch {
     return TEXT_FALLBACK;
   }
 };
 
-/** Best image model for the budget: free image model if one exists, else cheapest per-image. */
-export const pickImageModel = async (opts?: { preferFree?: boolean }): Promise<string> => {
-  const preferFree = opts?.preferFree !== false;
+/** Best image model for the budget and capabilities (gate with `filter` for image output). */
+export const pickImageModel = async (opts?: PickOpts): Promise<string> => {
+  const costPref = resolveCostPref(opts);
+  const gate = opts?.filter ?? (() => true);
   try {
     const { models } = await getCatalog();
-    const image = models.filter(isImageModel);
+    let image = models.filter(isImageModel).filter(gate);
     if (image.length === 0) return IMAGE_FALLBACK;
-    if (preferFree) {
+    if (opts?.prefer) {
+      const preferred = image.filter(opts.prefer);
+      if (preferred.length) image = preferred;
+    }
+    if (costPref === 'free') {
       const free = image.filter((m) => m.isFree);
       if (free.length) return free[0].id;
     }

@@ -13,6 +13,7 @@ import {
 } from '../ai/text.js';
 import { TEXT_MODEL } from '../config.js';
 import { pickTextModel } from '../ai/autoRouter.js';
+import { resolveStageModel, type PipelineStage } from '../ai/stageModels.js';
 import { getProvider, resolveProviderContext } from '../ai/gateway.js';
 import type { ChatMessage } from '../ai/providers/types.js';
 import {
@@ -50,10 +51,18 @@ type TextProvider = { apiKey: string; model: string; provider: 'openrouter' | 'g
 // Text generation routes through OpenRouter when an OpenRouter key is present (BYOK or
 // platform OPENROUTER_API_KEY), otherwise the legacy Gemini path. Sends a 401 and
 // returns null when neither key is available.
-const resolveTextProvider = async (req: any, res: any): Promise<TextProvider | null> => {
+const resolveTextProvider = async (
+  req: any,
+  res: any,
+  stage: PipelineStage = 'generate'
+): Promise<TextProvider | null> => {
   const openRouterKey = req.apiKeys?.openRouterKey;
   if (openRouterKey) {
-    const model = req.header('X-Text-Model')?.trim() || (await pickTextModel({ preferFree: true }));
+    // Validate the requested model against the stage's required capabilities (e.g.
+    // structured-JSON for analyze/world/panel/audit) and downgrade to a capable model
+    // if needed, rather than letting an incapable model fail at request time.
+    const requested = req.header('X-Text-Model')?.trim();
+    const { model } = await resolveStageModel(stage, requested, { costPref: 'free' });
     return { apiKey: openRouterKey, model, provider: 'openrouter' };
   }
   const geminiKey = req.apiKeys?.geminiKey;
@@ -72,7 +81,7 @@ const resolveTextProvider = async (req: any, res: any): Promise<TextProvider | n
 
 textRouter.post('/analyze-script', async (req, res, next) => {
   try {
-    const resolved = await resolveTextProvider(req, res);
+    const resolved = await resolveTextProvider(req, res, 'analyze_script');
     if (!resolved) return;
     const { apiKey, model: effectiveModel, provider } = resolved;
     const { script } = req.body || {};
@@ -304,7 +313,7 @@ textRouter.post('/story-tool', async (req, res, next) => {
 
 textRouter.post('/extract-world', async (req, res, next) => {
   try {
-    const resolved = await resolveTextProvider(req, res);
+    const resolved = await resolveTextProvider(req, res, 'extract_world');
     if (!resolved) return;
     const { apiKey, model: effectiveModel, provider } = resolved;
     const validated = validateExtractWorldBody(req.body);
@@ -382,7 +391,7 @@ textRouter.post('/extract-world', async (req, res, next) => {
 
 textRouter.post('/panel-breakdown', async (req, res, next) => {
   try {
-    const resolved = await resolveTextProvider(req, res);
+    const resolved = await resolveTextProvider(req, res, 'panel_breakdown');
     if (!resolved) return;
     const { apiKey, model: effectiveModel, provider } = resolved;
     const { scene, style, layoutType, panelCount, continuityBible, sceneBindings, previousPanelContext } = req.body || {};
@@ -455,7 +464,7 @@ textRouter.post('/panel-breakdown', async (req, res, next) => {
 
 textRouter.post('/continuity-audit', async (req, res, next) => {
   try {
-    const resolved = await resolveTextProvider(req, res);
+    const resolved = await resolveTextProvider(req, res, 'continuity_audit');
     if (!resolved) return;
     const { apiKey, model: effectiveModel, provider } = resolved;
     const { panels } = req.body || {};
