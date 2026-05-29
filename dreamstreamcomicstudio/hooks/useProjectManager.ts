@@ -576,11 +576,12 @@ export const useProjectManager = () => {
 
   const getProject = (id: string) => projects.find(p => p.id === id);
 
-  const hydrateProjectAssets = async (projectId: string) => {
+  const hydrateProjectAssets = async (projectId: string): Promise<Project | undefined> => {
     const target = projects.find((p) => p.id === projectId);
-    if (!target) return;
+    if (!target) return undefined;
     const hydrated = await hydrateProject(target);
     setProjects((prev) => prev.map((p) => (p.id === projectId ? hydrated : p)));
+    return hydrated;
   };
 
   const startGeneration = (projectId: string) => {

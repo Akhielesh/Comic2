@@ -519,16 +519,24 @@ const App: React.FC = () => {
 
   const handleOpenProject = (id: string, expectedPipelineMode?: 'classic' | 'comicforge') => {
     setIsHydratingProject(true);
-    hydrateProjectAssets(id).finally(() => {
-      if (activeProjectId && !projects.find((project) => project.id === activeProjectId)) {
-        setPublicProject(null);
-      }
-      const project = projects.find((candidate) => candidate.id === id);
-      setActiveProjectId(id);
-      const pipelineMode = expectedPipelineMode || project?.state.pipelineMode;
-      setCurrentView(pipelineMode === 'comicforge' ? 'comicforge' : 'editor');
-      setIsHydratingProject(false);
-    });
+    const routeTo = (mode?: 'classic' | 'comicforge') =>
+      setCurrentView(mode === 'comicforge' ? 'comicforge' : 'editor');
+    hydrateProjectAssets(id)
+      .then((hydrated) => {
+        if (activeProjectId && !projects.find((project) => project.id === activeProjectId)) {
+          setPublicProject(null);
+        }
+        setActiveProjectId(id);
+        // Route off the freshly hydrated project (not the stale render-time snapshot),
+        // so a migrated/updated pipelineMode opens the correct workspace.
+        routeTo(expectedPipelineMode || hydrated?.state.pipelineMode);
+      })
+      .catch(() => {
+        // Hydration failed — still open the project, best-effort on the workspace.
+        setActiveProjectId(id);
+        routeTo(expectedPipelineMode || projects.find((candidate) => candidate.id === id)?.state.pipelineMode);
+      })
+      .finally(() => setIsHydratingProject(false));
   };
 
   const handleReadProject = (id: string) => {

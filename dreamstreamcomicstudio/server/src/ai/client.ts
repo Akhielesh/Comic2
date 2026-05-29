@@ -3,19 +3,42 @@ import { GEMINI_BASE_URL } from '../config.js';
 import { geminiSchemaToJsonSchema } from './schemaConvert.js';
 import { getProvider, resolveProviderContext } from './gateway.js';
 import { TEXT_FALLBACK } from './autoRouter.js';
+import type { ChatMessage } from './providers/types.js';
 
 const isOpenRouterKey = (key: string) => key.startsWith('sk-or-');
 
-/** Flatten Gemini `contents` (string | parts | array) to a single user message. */
-const flattenContents = (contents: any): string => {
-  if (typeof contents === 'string') return contents;
-  if (Array.isArray(contents)) {
-    return contents
-      .map((c) => (typeof c === 'string' ? c : (c?.parts || []).map((p: any) => p?.text || '').join('\n')))
-      .join('\n\n');
+const partsToText = (parts: any): string =>
+  Array.isArray(parts) ? parts.map((p: any) => p?.text || '').join('\n') : '';
+
+/**
+ * Map Gemini `contents` (string | {parts} | array of {role,parts}) to OpenRouter chat
+ * messages, preserving multi-turn roles (model → assistant) and an optional system
+ * instruction. The old behaviour flattened everything into one user turn, which lost
+ * the conversation structure that story-tool relies on for "follow instructions exactly".
+ */
+const buildMessages = (contents: any, systemInstruction?: string): ChatMessage[] => {
+  const messages: ChatMessage[] = [];
+  if (typeof systemInstruction === 'string' && systemInstruction.trim()) {
+    messages.push({ role: 'system', content: systemInstruction });
   }
-  if (contents?.parts) return contents.parts.map((p: any) => p?.text || '').join('\n');
-  return String(contents ?? '');
+  if (typeof contents === 'string') {
+    messages.push({ role: 'user', content: contents });
+  } else if (Array.isArray(contents)) {
+    for (const c of contents) {
+      if (typeof c === 'string') {
+        messages.push({ role: 'user', content: c });
+      } else {
+        const role: ChatMessage['role'] =
+          c?.role === 'model' ? 'assistant' : c?.role === 'system' ? 'system' : 'user';
+        messages.push({ role, content: partsToText(c?.parts) });
+      }
+    }
+  } else if (contents?.parts) {
+    messages.push({ role: 'user', content: partsToText(contents.parts) });
+  } else {
+    messages.push({ role: 'user', content: String(contents ?? '') });
+  }
+  return messages.length ? messages : [{ role: 'user', content: '' }];
 };
 
 /**
@@ -46,7 +69,7 @@ const createOpenRouterTextClient = (apiKey: string) => ({
       const result = await getProvider('openrouter').generateText(
         {
           model,
-          messages: [{ role: 'user', content: flattenContents(req?.contents) }],
+          messages: buildMessages(req?.contents, typeof cfg.systemInstruction === 'string' ? cfg.systemInstruction : undefined),
           jsonSchema: schema ? { name: 'response', schema, strict: false } : undefined,
           temperature: typeof cfg.temperature === 'number' ? cfg.temperature : undefined,
           retries: 3,

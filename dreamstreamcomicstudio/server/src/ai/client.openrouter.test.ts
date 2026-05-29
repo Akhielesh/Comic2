@@ -125,3 +125,36 @@ describe('createOpenRouterTextClient — usage + model passthrough', () => {
     expect(res.usageMetadata).toBeUndefined();
   });
 });
+
+describe('createOpenRouterTextClient — multi-turn role mapping', () => {
+  beforeEach(() => generateTextMock.mockReset());
+
+  it('preserves conversation roles (model→assistant) instead of flattening to one user turn', async () => {
+    generateTextMock.mockResolvedValue({ text: 'ok', json: undefined, model: 'x/y', usage: {} });
+    const ai = createClient('sk-or-test-key') as any;
+    await ai.models.generateContent({
+      model: 'openai/gpt-4o-mini',
+      contents: [
+        { role: 'user', parts: [{ text: 'rules' }] },
+        { role: 'model', parts: [{ text: 'prior answer' }] },
+        { role: 'user', parts: [{ text: 'next question' }] }
+      ]
+    });
+    const messages = generateTextMock.mock.calls[0][0].messages;
+    expect(messages.map((m: any) => m.role)).toEqual(['user', 'assistant', 'user']);
+    expect(messages[1].content).toBe('prior answer');
+  });
+
+  it('maps config.systemInstruction to a leading system message', async () => {
+    generateTextMock.mockResolvedValue({ text: 'ok', json: undefined, model: 'x/y', usage: {} });
+    const ai = createClient('sk-or-test-key') as any;
+    await ai.models.generateContent({
+      model: 'openai/gpt-4o-mini',
+      contents: 'hello',
+      config: { systemInstruction: 'be terse' }
+    });
+    const messages = generateTextMock.mock.calls[0][0].messages;
+    expect(messages[0]).toEqual({ role: 'system', content: 'be terse' });
+    expect(messages[1]).toEqual({ role: 'user', content: 'hello' });
+  });
+});
