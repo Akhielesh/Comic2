@@ -137,16 +137,8 @@ const App: React.FC = () => {
   };
 
   const navigateToReader = async (id: string, originView: AppView = currentView) => {
-    if (!user) {
-      setPendingReaderTarget((prev) => {
-        if (prev?.id === id && prev.returnView === originView) return prev;
-        return { id, returnView: originView };
-      });
-      setReturnView(originView);
-      setCurrentView('auth');
-      return;
-    }
-
+    // Comics are free to read for everyone — no login required. Owners load their
+    // local copy; everyone else loads the public copy (private comics stay private).
     setReturnView(originView);
 
     const local = projects.find((project) => project.id === id);
@@ -605,7 +597,7 @@ const App: React.FC = () => {
   }
 
   // Protection: studio and reader views require an authenticated user.
-  const isProtectedViewStrict = ['dashboard', 'editor', 'reader', 'test', 'learn', 'settings', 'comicforge'].includes(currentView);
+  const isProtectedViewStrict = ['dashboard', 'editor', 'test', 'learn', 'settings', 'comicforge'].includes(currentView);
   const effectiveView: AppView = !user && isProtectedViewStrict ? 'auth' : currentView;
 
   const activeProject = activeProjectId ? getProject(activeProjectId) : undefined;

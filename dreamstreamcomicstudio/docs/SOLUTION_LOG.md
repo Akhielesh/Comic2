@@ -13,6 +13,21 @@ Entry format:
 
 ---
 
+## 2026-05-29 — Free public comics (read without login; interactions gated)
+
+- **Problem:** Reading a comic forced login; owner wants comics free to read, with only
+  comment/like/follow requiring an account.
+- **Root cause:** `navigateToReader` redirected signed-out users to `auth`, and `reader`
+  was in `isProtectedViewStrict`. The public-read path (`getPublicProject`) already existed
+  behind that gate.
+- **Solution:** Removed the login gate in `navigateToReader` (signed-out users load the
+  public copy; private comics still return "not found/private") and removed `reader` from
+  the protected views. Interactions were already gated: `CommentSection` shows "log in to
+  comment" and disables the box for signed-out users; `PublicGallery` likes require login.
+- **Files:** `App.tsx` (interactions unchanged — already correct in `CommentSection.tsx` /
+  `PublicGallery.tsx`).
+- **Verify:** frontend typecheck clean.
+
 ## 2026-05-29 — Universal Assistant → free OpenRouter model + accuracy guardrail
 
 - **Problem:** Assistant ran on Gemini (cost/keys); owner wants it truly free, fast, and
