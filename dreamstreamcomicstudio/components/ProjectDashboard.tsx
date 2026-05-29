@@ -6,6 +6,7 @@ import { Button } from './Button';
 // Lazy load ProjectInfoModal
 const ProjectInfoModal = React.lazy(() => import('./modals/ProjectInfoModal').then(module => ({ default: module.ProjectInfoModal })));
 import { DataRescue } from './DataRescue';
+import { ReadinessChecklist } from './ReadinessChecklist';
 import { getFluxKeyInfo } from '../services/appSettings';
 import { SmartImage } from './common/SmartImage';
 
@@ -142,6 +143,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   return (
     <div className="max-w-7xl mx-auto p-8 animate-fade-in">
       <DataRescue />
+      <ReadinessChecklist onNavigate={(v) => onNavigate?.(v)} />
       {projects.length > 0 && (
         <>
           <div className="flex items-center justify-between mb-8">

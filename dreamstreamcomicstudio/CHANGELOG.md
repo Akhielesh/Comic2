@@ -6,8 +6,16 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- Model Library: live OpenRouter catalog, **compare up to 5** models, and
+  **"Use this model"** (quick confirm) to set your image/text model.
+- Universal Assistant runs on a **free** OpenRouter model with an anti-hallucination
+  guardrail.
+- **Free public comics** — anyone can read any comic without an account (commenting/
+  liking still require login).
+- **Onboarding readiness checklist** on the dashboard — flags missing account / API key /
+  model with one-click fixes; hides when ready.
 - Documentation architecture under `docs/` — `README.md` (index), `ARCHITECTURE.md`,
-  `decisions/` (ADRs 0001-0003), and `SOLUTION_LOG.md` (problem→solution history).
+  `decisions/` (ADRs 0001-0003), `features/`, and `SOLUTION_LOG.md`.
 - **Settings → API Configuration:** add multiple keys per provider, pick one active
   per provider, and set a per-key monthly limit with usage meters. Generation is
   blocked on a key once it reaches its limit (ADR 0003).

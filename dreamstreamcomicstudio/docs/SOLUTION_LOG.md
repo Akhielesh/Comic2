@@ -13,6 +13,17 @@ Entry format:
 
 ---
 
+## 2026-05-29 — Onboarding readiness checklist
+
+- **Problem:** The app looked "ready" but users hit blockers mid-flow (no key, no model)
+  with no guided way to resolve them.
+- **Solution:** `components/ReadinessChecklist.tsx` checks account, active API key (warns
+  if over limit), and image-model readiness, each with a one-click fix. Shown on the
+  dashboard; hides when all green; dismissible; re-checks on window focus.
+- **Files:** `components/ReadinessChecklist.tsx`, `components/ProjectDashboard.tsx`,
+  `docs/features/onboarding-readiness.md`.
+- **Verify:** frontend typecheck clean.
+
 ## 2026-05-29 — Free public comics (read without login; interactions gated)
 
 - **Problem:** Reading a comic forced login; owner wants comics free to read, with only
