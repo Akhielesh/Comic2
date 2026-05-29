@@ -14,6 +14,7 @@ const PrivacyPolicy = lazyImportWithRetry(() => import('./components/PrivacyPoli
 const TermsOfService = lazyImportWithRetry(() => import('./components/TermsOfService').then(module => ({ default: module.TermsOfService })));
 const SharedViewer = lazyImportWithRetry(() => import('./components/SharedViewer').then(module => ({ default: module.SharedViewer })));
 const ComicForgeStudio = lazyImportWithRetry(() => import('./components/comicforge/ComicForgeStudio').then(module => ({ default: module.ComicForgeStudio })));
+const ModelLibrary = lazyImportWithRetry(() => import('./components/ModelLibrary').then(module => ({ default: module.ModelLibrary })));
 
 import { useProjectManager } from './hooks/useProjectManager';
 import { checkSystemDiagnostics, checkSystemStatus } from './services/geminiService';
@@ -41,6 +42,7 @@ type AppView =
   | 'test'
   | 'learn'
   | 'gallery'
+  | 'models'
   | 'settings'
   | 'privacy'
   | 'terms'
@@ -507,6 +509,7 @@ const App: React.FC = () => {
       view === 'test' ||
       view === 'learn' ||
       view === 'gallery' ||
+      view === 'models' ||
       view === 'comicforge' ||
       view === 'privacy' ||
       view === 'terms'
@@ -685,6 +688,10 @@ const App: React.FC = () => {
                 void navigateToReader(id, 'gallery');
               }}
             />
+          )}
+
+          {effectiveView === 'models' && (
+            <ModelLibrary onBack={handleBackToHome} />
           )}
 
           {effectiveView === 'privacy' && (
