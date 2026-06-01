@@ -996,6 +996,15 @@ export const generatePanelBreakdown = async (
   }
 
   const ai = createClient(apiKey);
+  // Only this scene's binding is relevant to its panels; other scenes' bindings were pure
+  // bloat re-sent on every call (cross-scene narrative now comes from the continuity
+  // summary above). Fall back to all bindings if this scene can't be matched — no regression.
+  const formatBinding = (b: SceneContinuityBinding) =>
+    `- Scene ${b.sceneId}: required(${b.requiredEntityIds.join(', ') || 'none'}), location(${b.locationId || 'none'})`;
+  const sceneBinding = sceneBindings?.find((b) => b.sceneId === scene.id);
+  const sceneBindingLine = sceneBinding
+    ? formatBinding(sceneBinding)
+    : (sceneBindings && sceneBindings.length ? sceneBindings.map(formatBinding).join('\n') : 'None provided');
   const prompt = `
       Act as a comic book editor.
       Break this scene into exactly ${panelCount} distinct comic panels based on the synopsis.
@@ -1015,7 +1024,7 @@ export const generatePanelBreakdown = async (
       Allowed continuity entities:
       ${continuityBible?.entities?.map((entity) => `- [${entity.kind}] ${entity.name}: ${entity.description}`).join('\n') || 'None provided'}
       Scene continuity bindings:
-      ${sceneBindings?.map((binding) => `- Scene ${binding.sceneId}: required(${binding.requiredEntityIds.join(', ') || 'none'}), location(${binding.locationId || 'none'})`).join('\n') || 'None provided'}
+      ${sceneBindingLine}
       Previous panel context:
       ${previousPanelContext?.map((panel, idx) => `- Prev ${idx + 1}: ${panel.description} | ${panel.dialogue || ''}`).join('\n') || 'None provided'}
       
