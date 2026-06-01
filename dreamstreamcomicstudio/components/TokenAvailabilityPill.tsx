@@ -1,8 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { Zap, KeyRound } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { getActiveKey, usageFraction, PROVIDER_META, type ApiKeyProvider } from '../services/apiKeys';
-import { getSelectedImageModel, getSelectedTextModel, MODEL_SELECTION_CHANGED } from '../services/modelSelection';
+import { getActiveKey, usageFraction, PROVIDER_META, ALL_PROVIDERS, type ApiKeyProvider } from '../services/apiKeys';
+import {
+  getSelectedImageModel,
+  getSelectedTextModel,
+  getSelectedImageSource,
+  getSelectedTextSource,
+  MODEL_SELECTION_CHANGED
+} from '../services/modelSelection';
 
 interface TokenAvailabilityPillProps {
   className?: string;
@@ -52,6 +58,13 @@ export const TokenAvailabilityPill: React.FC<TokenAvailabilityPillProps> = ({ cl
   const hasLimit = !!active.limitUsd && active.limitUsd > 0;
   const imageModel = getSelectedImageModel() || 'Auto';
   const textModel = getSelectedTextModel() || 'Auto';
+  const imageSource = getSelectedImageSource();
+  const textSource = getSelectedTextSource();
+  // Every active source key, so a mixed setup (e.g. text via NVIDIA, image via OpenRouter)
+  // shows each source's own usage/limit.
+  const activeSourceKeys = ALL_PROVIDERS
+    .map((provider) => ({ provider, key: getActiveKey(provider) }))
+    .filter((entry): entry is { provider: ApiKeyProvider; key: NonNullable<typeof entry.key> } => Boolean(entry.key));
 
   return (
     <div className={`relative group ${className}`}>
@@ -91,9 +104,27 @@ export const TokenAvailabilityPill: React.FC<TokenAvailabilityPillProps> = ({ cl
             )}
           </div>
 
+          {activeSourceKeys.length > 1 && (
+            <div className="mt-2 pt-2 border-t border-dashed border-slate-200 text-[11px] text-slate-600 space-y-1">
+              <div className="text-[10px] font-bold uppercase text-slate-400">Per-source usage</div>
+              {activeSourceKeys.map(({ provider, key }) => {
+                const f = usageFraction(key);
+                const lim = !!key.limitUsd && key.limitUsd > 0;
+                return (
+                  <div key={provider} className="flex justify-between gap-2">
+                    <span className="truncate">{PROVIDER_META[provider].label}</span>
+                    <span className={lim ? usageColor(f) : 'text-slate-500'}>
+                      {lim ? `$${key.usedUsd.toFixed(2)} / $${key.limitUsd!.toFixed(2)}` : `$${key.usedUsd.toFixed(2)}`}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           <div className="mt-2 pt-2 border-t border-dashed border-slate-200 text-[11px] text-slate-600 space-y-0.5">
-            <div className="flex justify-between gap-2"><span className="text-slate-400">Image model</span><span className="font-mono truncate">{imageModel}</span></div>
-            <div className="flex justify-between gap-2"><span className="text-slate-400">Text model</span><span className="font-mono truncate">{textModel}</span></div>
+            <div className="flex justify-between gap-2"><span className="text-slate-400">Image model</span><span className="font-mono truncate">{imageModel}{imageSource ? ` · ${imageSource}` : ''}</span></div>
+            <div className="flex justify-between gap-2"><span className="text-slate-400">Text model</span><span className="font-mono truncate">{textModel}{textSource ? ` · ${textSource}` : ''}</span></div>
           </div>
         </div>
       </div>
