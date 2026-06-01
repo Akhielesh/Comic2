@@ -490,6 +490,73 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
   const getLayoutClass = () => sharedGetLayoutClass(state.layoutType);
   const getPanelClass = (idx: number) => sharedGetPanelClass(state.layoutType, idx);
 
+  // One panel card. `slotStyle` present = absolute slot placement (grid template);
+  // absent = normal flow placement (CSS layout). Shared by the paginated + flow renderers.
+  const renderPanelCard = (panel: ComicPanel, displayIdx: number, slotStyle?: React.CSSProperties) => (
+    <div
+      key={panel.id}
+      className={`relative group border-4 ${panel.failureReason ? 'border-red-400' : 'border-black'} rounded-lg overflow-hidden shadow-comic cursor-pointer ${slotStyle ? '' : getPanelClass(displayIdx)}`}
+      style={slotStyle}
+      onClick={() => setSelectedPanel(panel)}
+    >
+      {panel.imageUrl ? (
+        <img src={panel.imageUrl} alt={`Panel ${displayIdx + 1}`} className="w-full h-full object-cover" />
+      ) : (
+        <div className="w-full h-full min-h-[120px] flex flex-col items-center justify-center bg-slate-100 text-slate-400">
+          <RefreshCw size={24} className="mb-1" />
+          <span className="text-[10px] font-bold uppercase">Failed</span>
+        </div>
+      )}
+      <PanelDialogue panel={panel} layout={textLayout} />
+      {panel.failureReason && (
+        <div className="absolute left-2 top-2 px-2 py-1 text-[10px] font-bold rounded border bg-red-100 text-red-700 border-red-300 max-w-[80%] truncate">
+          ⚠ {panel.failureReason}
+        </div>
+      )}
+      {auditScoresByPanel[panel.id] && !panel.failureReason && (
+        <div className={`absolute left-2 top-2 px-2 py-1 text-[10px] font-bold rounded border ${auditScoresByPanel[panel.id].driftScore > 0.35
+          ? 'bg-red-100 text-red-700 border-red-300'
+          : 'bg-green-100 text-green-700 border-green-300'
+          }`}>
+          Drift {Math.round(auditScoresByPanel[panel.id].driftScore * 100)}%
+        </div>
+      )}
+      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+        <button className="bg-white p-2 rounded-full hover:bg-brand-yellow border-2 border-black" onClick={(e) => { e.stopPropagation(); setSelectedPanel(panel); setShowRegenModal(true); }} aria-label="Regenerate panel"><RefreshCw size={16} /></button>
+        <button className="bg-white p-2 rounded-full hover:bg-brand-yellow border-2 border-black" onClick={(e) => { e.stopPropagation(); setSelectedPanel(panel); setShowBubbleEditor(true); }} aria-label="Edit bubbles"><Edit2 size={16} /></button>
+      </div>
+      {selectedPanel?.id === panel.id && <div className="absolute inset-0 ring-4 ring-brand-yellow ring-offset-2 pointer-events-none" />}
+    </div>
+  );
+
+  // Paginate panels across template pages so panels beyond the slot count flow onto a new
+  // page (was: everything piled into one height-less box → overlap = the "glitch").
+  const renderTemplatePages = () => {
+    if (!gridTemplate) return null;
+    const slotCount = Math.max(1, gridTemplate.panelSlots.length);
+    const pageHeight = gridTemplate.panelSlots.reduce((max, s) => Math.max(max, s.y + s.height), 0) || 100;
+    const pages: ComicPanel[][] = [];
+    for (let i = 0; i < panels.length; i += slotCount) pages.push(panels.slice(i, i + slotCount));
+    return (
+      <div className="space-y-6">
+        {pages.map((pagePanels, pageIdx) => (
+          <div key={pageIdx} className="relative w-full" style={{ paddingBottom: `${pageHeight}%` }}>
+            {pagePanels.map((panel, localIdx) => {
+              const slot = gridTemplate.panelSlots[localIdx];
+              return renderPanelCard(panel, pageIdx * slotCount + localIdx, {
+                position: 'absolute',
+                left: `${slot.x}%`,
+                top: `${slot.y}%`,
+                width: `${slot.width}%`,
+                height: `${slot.height}%`
+              });
+            })}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   return (
     <div className="h-[calc(100vh-180px)] flex flex-col md:flex-row gap-6 animate-fade-in">
       {/* Main Editor Area */}
@@ -500,57 +567,11 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
               <img src={state.coverImageUrl} alt={`${projectName} cover`} className="w-full h-auto object-cover" />
             </div>
           )}
-          <div className={gridTemplate ? 'relative w-full' : getLayoutClass()}
-            style={gridTemplate ? { paddingBottom: `${gridTemplate.panelSlots.reduce((max, s) => Math.max(max, s.y + s.height), 0)}%` } : undefined}>
-            {panels.map((panel, idx) => {
-              const slot = gridTemplate?.panelSlots[idx];
-              return (
-                <div
-                  key={panel.id}
-                  className={`relative group border-4 ${panel.failureReason ? 'border-red-400' : 'border-black'} rounded-lg overflow-hidden shadow-comic cursor-pointer ${gridTemplate ? '' : getPanelClass(idx)}`}
-                  style={slot ? {
-                    position: 'absolute',
-                    left: `${slot.x}%`,
-                    top: `${slot.y}%`,
-                    width: `${slot.width}%`,
-                    height: `${slot.height}%`,
-                  } : undefined}
-                  onClick={() => setSelectedPanel(panel)}
-                >
-                  {panel.imageUrl ? (
-                    <img src={panel.imageUrl} alt={`Panel ${idx + 1}`} className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="w-full h-full min-h-[120px] flex flex-col items-center justify-center bg-slate-100 text-slate-400">
-                      <RefreshCw size={24} className="mb-1" />
-                      <span className="text-[10px] font-bold uppercase">Failed</span>
-                    </div>
-                  )}
-                  <PanelDialogue panel={panel} layout={textLayout} />
-                  {panel.failureReason && (
-                    <div className="absolute left-2 top-2 px-2 py-1 text-[10px] font-bold rounded border bg-red-100 text-red-700 border-red-300 max-w-[80%] truncate">
-                      ⚠ {panel.failureReason}
-                    </div>
-                  )}
-                  {auditScoresByPanel[panel.id] && !panel.failureReason && (
-                    <div className={`absolute left-2 top-2 px-2 py-1 text-[10px] font-bold rounded border ${auditScoresByPanel[panel.id].driftScore > 0.35
-                      ? 'bg-red-100 text-red-700 border-red-300'
-                      : 'bg-green-100 text-green-700 border-green-300'
-                      }`}>
-                      Drift {Math.round(auditScoresByPanel[panel.id].driftScore * 100)}%
-                    </div>
-                  )}
-
-                  {/* Hover Overlay */}
-                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                    <button className="bg-white p-2 rounded-full hover:bg-brand-yellow border-2 border-black" onClick={(e) => { e.stopPropagation(); setSelectedPanel(panel); setShowRegenModal(true); }} aria-label="Regenerate panel"><RefreshCw size={16} /></button>
-                    <button className="bg-white p-2 rounded-full hover:bg-brand-yellow border-2 border-black" onClick={(e) => { e.stopPropagation(); setSelectedPanel(panel); setShowBubbleEditor(true); }} aria-label="Edit bubbles"><Edit2 size={16} /></button>
-                  </div>
-
-                  {selectedPanel?.id === panel.id && <div className="absolute inset-0 ring-4 ring-brand-yellow ring-offset-2 pointer-events-none" />}
-                </div>
-              );
-            })}
-          </div>
+          {gridTemplate ? renderTemplatePages() : (
+            <div className={getLayoutClass()}>
+              {panels.map((panel, idx) => renderPanelCard(panel, idx))}
+            </div>
+          )}
         </div>
 
         <div className="bg-white border-4 border-black rounded-xl p-4 shadow-comic flex flex-col md:flex-row md:items-center md:justify-between gap-3">
