@@ -680,7 +680,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
         return;
       }
 
-      await runWithLimit(tasksToRun, 3, async ({ style, ratio, resolution, cacheKey, promptKey, placeholderId, cropRatio }) => {
+      await runWithLimit(tasksToRun, 4, async ({ style, ratio, resolution, cacheKey, promptKey, placeholderId, cropRatio }) => {
         setPendingPreviews((prev) =>
           prev.map((p) => (p.id === placeholderId ? { ...p, status: 'generating' } : p))
         );

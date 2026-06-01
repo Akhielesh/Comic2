@@ -116,7 +116,7 @@ export const generateGeminiImage = async (
         'Image generation'
       ),
       2,
-      5000,
+      2000,
       'Generate Image'
     );
 
@@ -165,7 +165,7 @@ export const generateGeminiImage = async (
         'Image generation'
       ),
       2,
-      5000,
+      2000,
       'Generate Image'
     );
   };

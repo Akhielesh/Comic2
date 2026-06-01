@@ -55,7 +55,7 @@ export const RATE_LIMIT_TEXT_MAX_REQUESTS = parseIntegerEnv(
 );
 export const RATE_LIMIT_IMAGE_MAX_REQUESTS = parseIntegerEnv(
   process.env.RATE_LIMIT_IMAGE_MAX_REQUESTS,
-  Math.max(10, Math.floor(RATE_LIMIT_MAX_REQUESTS / 3)),
+  Math.max(20, Math.floor(RATE_LIMIT_MAX_REQUESTS / 2)),
   'RATE_LIMIT_IMAGE_MAX_REQUESTS',
   1
 );
@@ -80,7 +80,7 @@ export const ASSISTANT_GEMINI_API_KEY = process.env.ASSISTANT_GEMINI_API_KEY || 
 export const GEMINI_BASE_URL = process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com';
 
 export const TEXT_REQUEST_TIMEOUT_MS = parseIntegerEnv(process.env.TEXT_REQUEST_TIMEOUT_MS, 60_000, 'TEXT_REQUEST_TIMEOUT_MS', 1_000);
-export const IMAGE_REQUEST_TIMEOUT_MS = parseIntegerEnv(process.env.IMAGE_REQUEST_TIMEOUT_MS, 120_000, 'IMAGE_REQUEST_TIMEOUT_MS', 1_000);
+export const IMAGE_REQUEST_TIMEOUT_MS = parseIntegerEnv(process.env.IMAGE_REQUEST_TIMEOUT_MS, 60_000, 'IMAGE_REQUEST_TIMEOUT_MS', 1_000);
 export const ASSISTANT_REQUEST_TIMEOUT_MS = parseIntegerEnv(process.env.ASSISTANT_REQUEST_TIMEOUT_MS, 30_000, 'ASSISTANT_REQUEST_TIMEOUT_MS', 1_000);
 
 export const FLUX_REQUEST_TIMEOUT_MS = parseIntegerEnv(process.env.FLUX_REQUEST_TIMEOUT_MS, 120_000, 'FLUX_REQUEST_TIMEOUT_MS', 1_000);
@@ -107,7 +107,7 @@ export const OPENROUTER_IMAGE_MODEL = process.env.OPENROUTER_IMAGE_MODEL || 'goo
 export const OPENROUTER_FREE_TEXT_MODEL = process.env.OPENROUTER_FREE_TEXT_MODEL || 'google/gemini-2.0-flash-exp:free';
 export const OPENROUTER_REQUEST_TIMEOUT_MS = parseIntegerEnv(
   process.env.OPENROUTER_REQUEST_TIMEOUT_MS,
-  120_000,
+  60_000,
   'OPENROUTER_REQUEST_TIMEOUT_MS',
   1_000
 );

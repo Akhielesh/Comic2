@@ -496,6 +496,8 @@ export type ImageGenerateResponse = {
   model: string;
   timings?: ApiTimings;
   billing?: ApiBillingInfo;
+  /** Present when the server overrode the requested model (e.g. it lacked image output). */
+  modelDowngrade?: { from: string; to: string; reason?: string };
 };
 
 export type FluxGenerateRequest = {
