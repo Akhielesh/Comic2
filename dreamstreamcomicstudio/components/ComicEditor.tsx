@@ -18,11 +18,36 @@ import {
   resetFromStyleConfirm,
   resetFromWorldConfirm
 } from '../services/pipelineReset';
-import { ArrowLeft, Save, History, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Save, History, AlertTriangle, ImageIcon } from 'lucide-react';
 import { VersionHistoryModal } from './modals/VersionHistoryModal';
 import { ProjectVersion } from '../types';
 import { checkDeploymentParity, DeploymentParityStatus } from '../services/geminiService';
 import { getFormFactorDefaultAspectRatio } from '../services/storyPlanning';
+import { TokenAvailabilityPill } from './TokenAvailabilityPill';
+import { getSelectedImageModel, MODEL_SELECTION_CHANGED } from '../services/modelSelection';
+
+// Always-visible chip showing the active image model, refreshed when the selection changes.
+const ActiveImageModelChip: React.FC = () => {
+  const [model, setModel] = useState<string>(() => getSelectedImageModel() || 'Auto (default)');
+  useEffect(() => {
+    const sync = () => setModel(getSelectedImageModel() || 'Auto (default)');
+    window.addEventListener(MODEL_SELECTION_CHANGED, sync);
+    window.addEventListener('focus', sync);
+    return () => {
+      window.removeEventListener(MODEL_SELECTION_CHANGED, sync);
+      window.removeEventListener('focus', sync);
+    };
+  }, []);
+  return (
+    <div
+      className="hidden lg:flex items-center gap-1 rounded-full border-2 border-black bg-white px-2.5 py-1 text-[11px] font-bold text-slate-700"
+      title={`Active image model: ${model}`}
+    >
+      <ImageIcon size={12} className="text-brand-blue" />
+      <span className="font-mono truncate max-w-[11rem]">{model}</span>
+    </div>
+  );
+};
 
 interface ComicEditorProps {
   project: Project;
@@ -450,11 +475,11 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   return (
     <div className="min-h-screen flex flex-col">
       <StepIndicator currentStep={state.step} maxStepReached={state.maxStepReached} onStepClick={goToStep} />
-      <div className="p-4 border-b border-slate-200 bg-white/50 backdrop-blur-sm sticky top-24 z-30 flex items-center">
-        <button onClick={onBack} className="flex items-center text-sm font-bold text-slate-500 hover:text-black transition-colors">
-          <ArrowLeft className="w-4 h-4 mr-1" /> Back to Dashboard
+      <div className="py-1.5 px-4 border-b border-slate-200 bg-white/60 backdrop-blur-sm sticky top-[50px] z-30 flex items-center gap-3">
+        <button onClick={onBack} title="Back to Dashboard" className="flex items-center shrink-0 text-xs font-bold text-slate-500 hover:text-black transition-colors">
+          <ArrowLeft className="w-4 h-4 sm:mr-1" /> <span className="hidden sm:inline">Dashboard</span>
         </button>
-        <span className="mx-4 text-slate-300">|</span>
+        <span className="text-slate-300 shrink-0">|</span>
         <input
           value={titleDraft}
           onChange={(e) => setTitleDraft(e.target.value)}
@@ -471,30 +496,34 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
               (e.target as HTMLInputElement).blur();
             }
           }}
-          className="font-display text-xl bg-transparent border-b-2 border-transparent focus:border-black outline-none"
+          className="font-display text-lg bg-transparent border-b-2 border-transparent focus:border-black outline-none min-w-0 flex-1 max-w-[16rem] truncate"
         />
+
         {state.generationStatus?.isActive && (
-          <div className="ml-auto flex items-center gap-2 px-3 py-1 bg-brand-yellow rounded-full border border-black text-xs font-bold mr-4">
-            <div className="w-2 h-2 bg-black rounded-full animate-pulse" /> Building in background...
+          <div className="hidden sm:flex items-center gap-2 px-2.5 py-1 bg-brand-yellow rounded-full border border-black text-[11px] font-bold shrink-0">
+            <div className="w-2 h-2 bg-black rounded-full animate-pulse" /> Building…
           </div>
         )}
 
-        <div className="ml-auto flex items-center gap-2">
+        {/* Active model + usage/limit, surfaced on the studio page */}
+        <div className="ml-auto flex items-center gap-2 shrink-0">
+          <ActiveImageModelChip />
+          <TokenAvailabilityPill />
           <button
             onClick={saveVersion}
-            className="p-2 hover:bg-slate-100 rounded-full text-slate-600 hover:text-black transition-colors"
+            className="p-1.5 hover:bg-slate-100 rounded-full text-slate-600 hover:text-black transition-colors"
             title="Save Version Snapshot"
           >
-            <Save size={20} />
+            <Save size={18} />
           </button>
           <button
             onClick={() => setShowVersions(true)}
-            className="p-2 hover:bg-slate-100 rounded-full text-slate-600 hover:text-black transition-colors relative"
+            className="p-1.5 hover:bg-slate-100 rounded-full text-slate-600 hover:text-black transition-colors relative"
             title="Version History"
           >
-            <History size={20} />
+            <History size={18} />
             {(state.versions?.length || 0) > 0 && (
-              <span className="absolute top-1 right-1 w-2 h-2 bg-brand-blue rounded-full" />
+              <span className="absolute top-0.5 right-0.5 w-2 h-2 bg-brand-blue rounded-full" />
             )}
           </button>
         </div>

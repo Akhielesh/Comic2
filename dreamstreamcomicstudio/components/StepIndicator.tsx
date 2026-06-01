@@ -22,41 +22,43 @@ const steps = [
 
 export const StepIndicator: React.FC<StepIndicatorProps> = ({ currentStep, maxStepReached, onStepClick }) => {
   return (
-    <div className="w-full py-6 sticky top-0 z-40 bg-brand-blue/90 backdrop-blur-sm border-b-4 border-black">
-      <div className="max-w-6xl mx-auto px-4">
+    <div className="w-full py-2.5 sticky top-0 z-40 bg-brand-blue/90 backdrop-blur-sm border-b-2 border-black">
+      <div className="max-w-5xl mx-auto px-4">
         <div className="flex items-center justify-between relative">
           {/* Connecting Line */}
-          <div className="absolute left-0 top-1/2 w-full h-2 bg-black/30 -z-10 rounded-full" />
-          
+          <div className="absolute left-0 top-1/2 w-full h-1 bg-black/30 -z-10 rounded-full" />
+
           {steps.map((step, index) => {
             const isCompleted = currentStep > step.id;
             const isCurrent = currentStep === step.id;
             const isReachable = step.id <= maxStepReached;
-            
+
             return (
-              <div 
-                key={step.id} 
-                className={`flex flex-col items-center relative group ${isReachable ? 'cursor-pointer' : 'cursor-not-allowed'}`}
+              <div
+                key={step.id}
+                className={`flex items-center gap-1.5 relative group ${isReachable ? 'cursor-pointer' : 'cursor-not-allowed'}`}
                 onClick={() => isReachable && onStepClick(step.id)}
+                title={step.label}
               >
-                <div 
+                <div
                   className={`
-                    w-10 h-10 rounded-full flex items-center justify-center border-2 border-black transition-all duration-300 z-10
-                    ${isCompleted ? 'bg-brand-yellow text-black shadow-comic' : 
-                      isCurrent ? 'bg-white text-black scale-125 shadow-comic' : 
+                    w-7 h-7 rounded-full flex items-center justify-center border-2 border-black transition-all duration-300 z-10
+                    ${isCompleted ? 'bg-brand-yellow text-black shadow-comic' :
+                      isCurrent ? 'bg-white text-black shadow-comic' :
                       'bg-slate-800 text-white/50 border-slate-600'}
                   `}
                 >
-                  {isCompleted ? <Check size={20} strokeWidth={4} /> : <span className="text-sm font-display">{index + 1}</span>}
+                  {isCompleted ? <Check size={15} strokeWidth={4} /> : <span className="text-xs font-display">{index + 1}</span>}
                 </div>
-                <div 
+                {/* Active step keeps its label inline; others reveal on hover (kept compact to save space). */}
+                <span
                   className={`
-                    absolute top-12 px-2 py-1 rounded border-2 border-black text-xs font-bold uppercase tracking-wider shadow-comic transition-all whitespace-nowrap
-                    ${isCurrent ? 'bg-brand-yellow text-black rotate-2 opacity-100' : (isReachable ? 'bg-white text-black -rotate-1 opacity-0 group-hover:opacity-100' : 'opacity-0')}
+                    text-xs font-bold uppercase tracking-wide whitespace-nowrap transition-all
+                    ${isCurrent ? 'text-white max-w-[5rem]' : 'text-white/0 max-w-0 overflow-hidden group-hover:text-white group-hover:max-w-[5rem]'}
                   `}
                 >
                   {step.label}
-                </div>
+                </span>
               </div>
             );
           })}
