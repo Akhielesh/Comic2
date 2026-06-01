@@ -382,12 +382,18 @@ export const buildPanelReferencePack = (
   const styleImageId = options?.styleImageId;
   const priorPanelImageId = options?.lastPanelImageId;
 
+  // Order matters: image models weight the FIRST reference most heavily. Lead with concrete
+  // story references (entities, then location, then the prior panel) so each panel depicts the
+  // RIGHT subject. The style preview is a look-and-feel anchor only — keep it LAST and include
+  // it ONLY when there are no entity references, so an off-topic style image can never override
+  // the story content (this was a cause of e.g. boats rendering as superheroes).
+  const hasEntityRefs = requiredEntityPrimaryImageIds.length > 0;
   const ordered = dedupe([
-    ...(styleImageId ? [styleImageId] : []),
     ...requiredEntityPrimaryImageIds,
     ...(locationImageId ? [locationImageId] : []),
     ...(priorPanelImageId ? [priorPanelImageId] : []),
-    ...fallbackEntityReferenceIds.slice(0, 2)
+    ...fallbackEntityReferenceIds.slice(0, 2),
+    ...(styleImageId && !hasEntityRefs ? [styleImageId] : [])
   ]).slice(0, maxReferences);
 
   return {

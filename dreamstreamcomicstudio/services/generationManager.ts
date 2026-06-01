@@ -3,6 +3,7 @@ import { generatePanelBreakdown, updateContinuitySummary } from "./geminiService
 import { generateImage } from "./imageService";
 import { buildImagePrompt } from "./imagePrompt";
 import { resolveAspectRatio } from "./imageUtils";
+import { getGridTemplate } from "./panelLayout";
 import { normalizePanelDialogue } from "./dialogueUtils";
 import { MAX_CONTINUITY_PANELS } from "./modelPolicy";
 import { createSystemNotification } from "./db";
@@ -142,7 +143,6 @@ export const startBackgroundGeneration = async (
   const initialStyleResolution = applyStyleLockResolution(state);
   state = initialStyleResolution.state;
   const strictMode = (state.continuity?.lockLevel || "strict") === "strict";
-  const ratioConfig = resolveAspectRatio(state, state.styleAspectRatio);
   const panelRunId = crypto.randomUUID();
   const configuredPanelModelId = getModelForTask("panel");
   const lockedPanelModelId = resolveLockedPanelModelId();
@@ -306,6 +306,10 @@ export const startBackgroundGeneration = async (
               sceneId: scene.id,
               description: sanitized.text,
               prompt: sanitized.text,
+              focalSubject: panel.focalSubject,
+              shotType: panel.shotType,
+              cameraAngle: panel.cameraAngle,
+              composition: panel.composition,
               dialogue: panel.dialogue || "",
               dialogueBlocks: panel.dialogueBlocks,
               imageIdHistory: [],
@@ -369,6 +373,20 @@ export const startBackgroundGeneration = async (
             : undefined;
           const panelScopedContext = buildPanelScopedContext(state, normalizedPanel);
 
+          // Per-panel aspect ratio: use THIS panel's layout-slot shape (cycling the
+          // template's slots per page) instead of forcing every panel to the single
+          // style-stage ratio. Falls back to the style ratio when no template is set.
+          const gridTemplate = state.gridTemplateId ? getGridTemplate(state.gridTemplateId) : null;
+          const slotCount = gridTemplate?.panelSlots.length || 0;
+          const panelSlot = slotCount > 0 ? gridTemplate!.panelSlots[panelIndex % slotCount] : null;
+          const panelRatioConfig = resolveAspectRatio(state, panelSlot?.effectiveRatio || state.styleAspectRatio);
+
+          // Story-grounding fields from the breakdown (keep the subject from drifting off-genre).
+          const panelFocalSubject = normalizedPanel.focalSubject;
+          const panelShotType = normalizedPanel.shotType;
+          const panelCameraAngle = normalizedPanel.cameraAngle;
+          const panelComposition = normalizedPanel.composition;
+
           const entityVisualContext = buildEntityTextContext(state, normalizedPanel);
           const lastPanelImageId = continuityImageIdsSnapshot[continuityImageIdsSnapshot.length - 1];
           const referencePack = buildPanelReferencePack(state, normalizedPanel, {
@@ -392,6 +410,11 @@ export const startBackgroundGeneration = async (
           const imagePrompt = buildImagePrompt({
             stage: "panel",
             stylePrompt: state.stylePrompt,
+            focalSubject: panelFocalSubject,
+            sceneSynopsis: scene.synopsis || undefined,
+            shotType: panelShotType,
+            cameraAngle: panelCameraAngle,
+            composition: panelComposition,
             characters: panelScopedContext.characters || undefined,
             items: panelScopedContext.items || undefined,
             locations: panelScopedContext.location || undefined,
@@ -411,14 +434,14 @@ export const startBackgroundGeneration = async (
           if (!generatedImageId || !generatedImageUrl) {
             const generated = await generateImage(
               imagePrompt,
-              ratioConfig.modelRatio,
+              panelRatioConfig.modelRatio,
               state.imageResolution,
               referencePack.imageIds,
               project.id,
               {
                 abortSignal: controller.signal,
                 stage: "panel",
-                cropToRatio: ratioConfig.cropRatio,
+                cropToRatio: panelRatioConfig.cropRatio,
                 continuitySensitive: true,
                 requiredReferences,
                 lockedModelId: lockedPanelModelId,
@@ -678,6 +701,11 @@ export const regenerateSinglePanel = async (
   const imagePrompt = buildImagePrompt({
     stage: "panel_regen",
     stylePrompt: state.stylePrompt,
+    sceneSynopsis: scene?.synopsis || undefined,
+    focalSubject: normalizedTargetPanel.focalSubject,
+    shotType: normalizedTargetPanel.shotType,
+    cameraAngle: normalizedTargetPanel.cameraAngle,
+    composition: normalizedTargetPanel.composition,
     characters: panelScopedContext.characters || undefined,
     items: panelScopedContext.items || undefined,
     locations: panelScopedContext.location || undefined,
@@ -689,8 +717,11 @@ export const regenerateSinglePanel = async (
     continuityLock: normalizedTargetPanel.continuity?.continuityNotes || (sceneBinding ? `Scene ${sceneBinding.sceneId} strict lock` : "strict")
   });
 
-  // 2. Generate Image
-  const ratioConfig = resolveAspectRatio(state, state.styleAspectRatio);
+  // 2. Generate Image — match this panel's layout-slot aspect ratio (same as the main run).
+  const regenGridTemplate = state.gridTemplateId ? getGridTemplate(state.gridTemplateId) : null;
+  const regenSlotCount = regenGridTemplate?.panelSlots.length || 0;
+  const regenSlot = regenSlotCount > 0 ? regenGridTemplate!.panelSlots[panelIndex % regenSlotCount] : null;
+  const ratioConfig = resolveAspectRatio(state, regenSlot?.effectiveRatio || state.styleAspectRatio);
   const lockedModelId = resolveLockedPanelModelId();
   const runId = crypto.randomUUID();
 

@@ -67,11 +67,22 @@ const PER_IMAGE_MEDIUM = 0.04;
 const costBandFor = (model: CatalogModel): Band => {
   if (model.isFree) return 'free';
   if (model.supportsImageOutput) {
-    const price = model.pricing.imagePerImage;
-    if (price === 0) return 'free';
-    if (price < PER_IMAGE_LOW) return 'low';
-    if (price < PER_IMAGE_MEDIUM) return 'medium';
-    return 'high';
+    const imagePrice = model.pricing.imagePerImage;
+    if (imagePrice > 0) {
+      if (imagePrice < PER_IMAGE_LOW) return 'low';
+      if (imagePrice < PER_IMAGE_MEDIUM) return 'medium';
+      return 'high';
+    }
+    // No per-image price does NOT mean free: image models like the Gemini family are
+    // billed per token on OpenRouter. Fall through to token pricing so we never paint a
+    // false "Free" badge on a model that actually bills the user's key per call.
+    const tokenPrice = model.pricing.completionPerToken || model.pricing.promptPerToken;
+    if (tokenPrice > 0) {
+      if (tokenPrice < PER_TOKEN_LOW) return 'low';
+      if (tokenPrice < PER_TOKEN_MEDIUM) return 'medium';
+      return 'high';
+    }
+    return 'free';
   }
   const price = model.pricing.completionPerToken;
   if (price === 0) return 'free';

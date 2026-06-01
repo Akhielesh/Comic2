@@ -28,6 +28,14 @@ export type ImagePromptOptions = {
   entityVisualRef?: string;
   /** Mood/atmosphere from the user's opening scene, used to ground style previews. */
   sceneContext?: string;
+  /** The concrete thing this panel is about (e.g. "a wooden fishing boat at the dock"). Leads the prompt. */
+  focalSubject?: string;
+  /** Raw scene synopsis, injected so the story subject survives even if the breakdown drifts. */
+  sceneSynopsis?: string;
+  /** Camera/shot direction for the panel. */
+  shotType?: string;
+  cameraAngle?: string;
+  composition?: string;
 };
 
 const clean = (value?: string) => (value || "").trim();
@@ -112,7 +120,11 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
   }
 
   if (clean(options.projectTitle)) lines.push(`Project: ${clean(options.projectTitle)}.`);
-  if (styleLine) lines.push(`IMPORTANT — Art style (match exactly): ${styleLine}.`);
+  // Subject and story lead, BEFORE style, so the rendering look can never override WHAT is
+  // depicted (this is what caused e.g. a boat story to render generic superheroes).
+  if (clean(options.focalSubject)) lines.push(`Primary subject — must be clearly and accurately depicted: ${clean(options.focalSubject)}.`);
+  if (clean(options.sceneSynopsis)) lines.push(`Story context to stay faithful to: ${clean(options.sceneSynopsis)}.`);
+  if (styleLine) lines.push(`Art style (rendering/look ONLY — do not change the subject, setting, or genre): ${styleLine}.`);
   if (
     clean(options.layoutType)
     && options.stage !== "panel"
@@ -128,6 +140,9 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
   }
   if (clean(options.sceneAction)) lines.push(`Scene: ${clean(options.sceneAction)}.`);
   if (clean(options.setting)) lines.push(`Setting: ${clean(options.setting)}.`);
+  if (clean(options.shotType)) lines.push(`Shot type: ${clean(options.shotType)}.`);
+  if (clean(options.cameraAngle)) lines.push(`Camera angle: ${clean(options.cameraAngle)}.`);
+  if (clean(options.composition)) lines.push(`Composition: ${clean(options.composition)}.`);
   if (clean(options.characters)) lines.push(`Characters: ${clean(options.characters)}.`);
   if (clean(options.items)) lines.push(`Items: ${clean(options.items)}.`);
   if (clean(options.locations)) lines.push(`Locations: ${clean(options.locations)}.`);

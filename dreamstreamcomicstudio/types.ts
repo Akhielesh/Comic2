@@ -663,6 +663,12 @@ export interface ComicPanel {
   isGenerating?: boolean;
   isPlanned?: boolean;
   continuity?: PanelContinuity;
+  /** Concrete subject of this panel (from the breakdown), so generation stays on-story. */
+  focalSubject?: string;
+  /** Camera/shot direction from the breakdown. */
+  shotType?: string;
+  cameraAngle?: string;
+  composition?: string;
   /** Set when a panel fails during generation — allows retry */
   failureReason?: string;
   /** Style override for Live Panel Remix (future feature) */
