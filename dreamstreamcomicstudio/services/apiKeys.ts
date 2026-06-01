@@ -7,7 +7,7 @@
 //
 // See docs/decisions/0003-multi-key-api-configuration-and-usage-limits.md
 
-export type ApiKeyProvider = 'openrouter' | 'gemini' | 'pixazo';
+export type ApiKeyProvider = 'openrouter' | 'nvidia' | 'gemini' | 'pixazo';
 
 export interface ManagedApiKey {
   id: string;
@@ -40,6 +40,12 @@ export const PROVIDER_META: Record<ApiKeyProvider, {
     keysUrl: 'https://openrouter.ai/keys',
     hint: 'Unified gateway for text + image models. Recommended.'
   },
+  nvidia: {
+    label: 'NVIDIA Build',
+    header: 'X-Nvidia-Key',
+    keysUrl: 'https://build.nvidia.com/settings/api-keys',
+    hint: 'Generous free tier for text/LLM models (nvapi- key). Image stays on OpenRouter/Flux.'
+  },
   gemini: {
     label: 'Google Gemini',
     header: 'X-Gemini-Key',
@@ -54,7 +60,7 @@ export const PROVIDER_META: Record<ApiKeyProvider, {
   }
 };
 
-export const ALL_PROVIDERS: ApiKeyProvider[] = ['openrouter', 'gemini', 'pixazo'];
+export const ALL_PROVIDERS: ApiKeyProvider[] = ['openrouter', 'nvidia', 'gemini', 'pixazo'];
 
 const STORAGE = 'dreamstream_api_keys_v2';
 const MIGRATED_FLAG = 'dreamstream_api_keys_migrated';
@@ -62,6 +68,7 @@ const MIGRATED_FLAG = 'dreamstream_api_keys_migrated';
 // Legacy single-key storage locations (kept for back-compat + one-time migration).
 const LEGACY_KEYS: Record<ApiKeyProvider, string> = {
   openrouter: 'dreamstream_openrouter_key',
+  nvidia: 'dreamstream_nvidia_key',
   gemini: 'dreamstream_api_key',
   pixazo: 'dreamstream_flux_key'
 };

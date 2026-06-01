@@ -36,7 +36,7 @@ import { cropImageToRatio } from './imageUtils';
 import { updateDebugState } from './debugStore';
 import { getAllModelKeys, getDefaultTextModel, getModelSpecificKey } from './appSettings';
 import { getActiveKeyForUse, recordKeyUsage } from './apiKeys';
-import { getSelectedImageModel } from './modelSelection';
+import { getSelectedImageModel, isTrulyFreeModelId } from './modelSelection';
 import { groundWorldEntities } from './worldGrounding';
 import { WORLD_EXTRACTION_CONTRACT_VERSION } from '../shared/contracts/worldExtraction';
 
@@ -602,10 +602,12 @@ export const generateImage = async (
     // cover generation through the unified gateway (their key, their account).
     // Falls back to the legacy Gemini path when no OpenRouter key is configured.
     const { key: activeOpenRouterKey, blocked: openRouterBlocked } = getActiveKeyForUse('openrouter');
-    if (openRouterBlocked) {
+    // Truly-free models ($0, ':free') are exempt from the per-key USD limit — they cost nothing.
+    const imageModelIsFree = isTrulyFreeModelId(getSelectedImageModel());
+    if (openRouterBlocked && !imageModelIsFree) {
       throw new Error(
         `Your active OpenRouter key "${activeOpenRouterKey?.label}" has reached its monthly usage limit. ` +
-        'Switch to another key or raise the limit in Settings → API Configuration.'
+        'Switch to another key, raise the limit in Settings → API Configuration, or pick a free (:free) model.'
       );
     }
     // No OpenRouter key configured → fall back to the legacy Gemini path.

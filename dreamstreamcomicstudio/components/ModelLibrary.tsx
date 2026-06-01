@@ -33,14 +33,16 @@ interface ModelLibraryProps {
   onBack: () => void;
 }
 
-type FilterKey = 'all' | 'free' | 'image' | 'text' | 'refs';
+type FilterKey = 'all' | 'free' | 'image' | 'text' | 'refs' | 'openrouter' | 'nvidia';
 
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'all', label: 'All' },
   { key: 'free', label: 'Free' },
   { key: 'image', label: 'Image' },
   { key: 'text', label: 'Text' },
-  { key: 'refs', label: 'Reference-capable' }
+  { key: 'refs', label: 'Reference-capable' },
+  { key: 'openrouter', label: 'Source: OpenRouter' },
+  { key: 'nvidia', label: 'Source: NVIDIA Build' }
 ];
 
 const BAND_COLOR: Record<Band, string> = {
@@ -65,6 +67,8 @@ const matchesFilter = (model: CatalogModel, filter: FilterKey, query: string): b
   if (filter === 'image' && !model.supportsImageOutput) return false;
   if (filter === 'text' && model.supportsImageOutput) return false;
   if (filter === 'refs' && !model.supportsImageInput) return false;
+  if (filter === 'openrouter' && model.source !== 'openrouter') return false;
+  if (filter === 'nvidia' && model.source !== 'nvidia') return false;
   const q = query.trim().toLowerCase();
   if (q) {
     const haystack = `${model.id} ${model.name} ${model.description || ''}`.toLowerCase();

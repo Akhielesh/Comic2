@@ -112,6 +112,18 @@ export const OPENROUTER_REQUEST_TIMEOUT_MS = parseIntegerEnv(
   1_000
 );
 
+// --- NVIDIA Build (NIM): OpenAI-compatible text/LLM source (https://integrate.api.nvidia.com/v1) ---
+// BYOK: users add their own `nvapi-...` key (free tier: ~1,000 credits, 40 req/min). A platform
+// key is optional and only used to populate the shared catalog when no user key is present.
+export const NVIDIA_API_KEY = process.env.NVIDIA_API_KEY || '';
+export const NVIDIA_BASE_URL = process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1';
+export const NVIDIA_REQUEST_TIMEOUT_MS = parseIntegerEnv(
+  process.env.NVIDIA_REQUEST_TIMEOUT_MS,
+  60_000,
+  'NVIDIA_REQUEST_TIMEOUT_MS',
+  1_000
+);
+
 export const STORAGE_BUCKET = process.env.STORAGE_BUCKET || 'comic-assets';
 export const IMAGE_INCLUDE_DATA_URL_LEGACY = (process.env.IMAGE_INCLUDE_DATA_URL_LEGACY || '').toLowerCase() === 'true';
 export const REDIS_URL = process.env.REDIS_URL || '';

@@ -9,7 +9,7 @@ interface TokenAvailabilityPillProps {
 }
 
 // Provider priority for the "headline" key shown in the pill.
-const PROVIDER_PRIORITY: ApiKeyProvider[] = ['openrouter', 'gemini', 'pixazo'];
+const PROVIDER_PRIORITY: ApiKeyProvider[] = ['openrouter', 'nvidia', 'gemini', 'pixazo'];
 
 const usageColor = (frac: number) =>
   frac >= 1 ? 'text-brand-red' : frac >= 0.8 ? 'text-amber-600' : 'text-slate-600';

@@ -139,6 +139,7 @@ const normalizeCatalogModel = (raw: any): CatalogModel => {
   return {
     id,
     name: String(raw?.name || id),
+    source: 'openrouter',
     description: typeof raw?.description === 'string' ? raw.description : undefined,
     contextLength: typeof raw?.context_length === 'number' ? raw.context_length : undefined,
     inputModalities,
@@ -275,6 +276,21 @@ const generateImage = async (
     usage: parseUsage(data),
     raw: data
   };
+};
+
+/**
+ * Live, authoritative key status from OpenRouter (GET /api/v1/key). Returns the real
+ * usage/limit/is_free_tier — the source of truth for the verification + usage display.
+ * Never throws: returns null on failure so the UI degrades gracefully.
+ */
+export const fetchOpenRouterKeyStatus = async (apiKey: string): Promise<Record<string, unknown> | null> => {
+  if (!apiKey) return null;
+  try {
+    const data = await openRouterFetch<any>('/key', { method: 'GET' }, OPENROUTER_REQUEST_TIMEOUT_MS, { apiKey, byok: true });
+    return (data && typeof data === 'object' && data.data) ? data.data : data ?? null;
+  } catch {
+    return null;
+  }
 };
 
 const listModels = async (ctx?: ProviderContext): Promise<CatalogModel[]> => {

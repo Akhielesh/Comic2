@@ -5,6 +5,7 @@ import type { CatalogModel } from './providers/types.js';
 const base = (over: Partial<CatalogModel>): CatalogModel => ({
   id: 'x/y',
   name: 'Y',
+  source: 'openrouter',
   inputModalities: ['text'],
   outputModalities: ['text'],
   supportedParameters: ['response_format'],
