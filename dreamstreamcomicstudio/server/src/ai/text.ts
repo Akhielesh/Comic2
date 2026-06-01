@@ -79,6 +79,28 @@ const readStructuredObject = (value: unknown, allowedKeys: string[]) => {
   return Object.keys(output).length > 0 ? output : undefined;
 };
 
+// Keep grounded, named entities alive when the model returns a thin description by
+// synthesizing one from the structured fields it did fill — otherwise the entity is
+// dropped for LOW_DESCRIPTION_QUALITY and disappears from the world (and "Generate All").
+const ensureEntityDescription = (
+  rawDescription: string,
+  structured: Record<string, string> | undefined,
+  name: string
+): string => {
+  const trimmed = rawDescription.trim();
+  if (trimmed.length >= 8) return trimmed;
+  if (structured) {
+    const parts = Object.values(structured)
+      .map((value) => String(value || '').trim())
+      .filter((value) => value && value.toLowerCase() !== 'unspecified');
+    if (parts.length > 0) {
+      const subject = name.trim() || 'Subject';
+      return `${subject} — ${parts.join(', ')}`;
+    }
+  }
+  return trimmed;
+};
+
 const normalizeForMatch = (value: string) =>
   value
     .toLowerCase()
@@ -457,13 +479,20 @@ You are extracting world entities for a comic production pipeline.
 Use ONLY the provided source excerpts. Do not use outside knowledge.
 
 Hard rules:
-- No invented characters, items, or locations.
-- No cross-story contamination.
-- Return canonical names and concise visual descriptions.
-- Ground every entity directly in the provided scenes.
+- No invented characters, items, or locations. No cross-story contamination.
+- Return EVERY named character, every key item, and every distinct location that appears in the scenes.
+- Ground every entity directly in the provided scenes. If it is not present in the excerpts, do not return it.
 - Do not add backstory, motivations, new plot beats, or future events.
-- Descriptions must be visual and present-tense only (appearance, materials, environment cues).
-- If an entity is not explicitly named in source excerpts, do not return it.
+- All text must be VISUAL and present-tense only (appearance, materials, environment cues).
+
+Fill EVERY field for each entity so an artist can draw it without guessing. Never leave a field blank:
+- name: the canonical name exactly as written in the script.
+- description: ONE rich visual sentence of at least 12 words (silhouette, key features, colors, mood).
+- Characters MUST include structured: role, ageBand, physicalTraits, outfit, colorPalette, personality, constraints.
+- Items MUST include structured: itemType, material, condition, scale, visualMotif, constraints.
+- Locations MUST include structured: environmentType, eraMood, lighting, landmarks, palette, constraints.
+- When a detail is not stated, infer the most likely concrete visual implied by the scene rather than leaving it empty; only use "unspecified" if the scenes truly give nothing.
+
 - Characters max: ${MAX_WORLD_CHARACTER_COUNT}
 - Items max: ${MAX_WORLD_ITEM_COUNT}
 - Locations max: ${MAX_WORLD_LOCATION_COUNT}
@@ -930,12 +959,9 @@ export const extractWorldDetails = async (
   const responseText = response.text || '';
   const data = extractJson(responseText) || {};
 
-  const extractedCharacters: Character[] = ensureArray<any>(data.characters).map((c) => ({
-    id: crypto.randomUUID(),
-    name: isString(c?.name) ? c.name.trim() : 'Unnamed',
-    bio: isString(c?.bio) ? c.bio.trim() : '',
-    description: isString(c?.description) ? c.description.trim() : '',
-    structured: readStructuredObject(c?.structured, [
+  const extractedCharacters: Character[] = ensureArray<any>(data.characters).map((c) => {
+    const name = isString(c?.name) ? c.name.trim() : 'Unnamed';
+    const structured = readStructuredObject(c?.structured, [
       'role',
       'ageBand',
       'physicalTraits',
@@ -943,39 +969,54 @@ export const extractWorldDetails = async (
       'colorPalette',
       'personality',
       'constraints'
-    ]),
-    referenceImageIds: []
-  }));
+    ]);
+    return {
+      id: crypto.randomUUID(),
+      name,
+      bio: isString(c?.bio) ? c.bio.trim() : '',
+      description: ensureEntityDescription(isString(c?.description) ? c.description : '', structured, name),
+      structured,
+      referenceImageIds: []
+    };
+  });
 
-  const extractedItems: Item[] = ensureArray<any>(data.items).map((i) => ({
-    id: crypto.randomUUID(),
-    name: isString(i?.name) ? i.name.trim() : 'Unnamed',
-    description: isString(i?.description) ? i.description.trim() : '',
-    structured: readStructuredObject(i?.structured, [
+  const extractedItems: Item[] = ensureArray<any>(data.items).map((i) => {
+    const name = isString(i?.name) ? i.name.trim() : 'Unnamed';
+    const structured = readStructuredObject(i?.structured, [
       'itemType',
       'material',
       'condition',
       'scale',
       'visualMotif',
       'constraints'
-    ]),
-    referenceImageIds: []
-  }));
+    ]);
+    return {
+      id: crypto.randomUUID(),
+      name,
+      description: ensureEntityDescription(isString(i?.description) ? i.description : '', structured, name),
+      structured,
+      referenceImageIds: []
+    };
+  });
 
-  const extractedLocations: Location[] = ensureArray<any>(data.locations).map((l) => ({
-    id: crypto.randomUUID(),
-    name: isString(l?.name) ? l.name.trim() : 'Unnamed',
-    description: isString(l?.description) ? l.description.trim() : '',
-    structured: readStructuredObject(l?.structured, [
+  const extractedLocations: Location[] = ensureArray<any>(data.locations).map((l) => {
+    const name = isString(l?.name) ? l.name.trim() : 'Unnamed';
+    const structured = readStructuredObject(l?.structured, [
       'environmentType',
       'eraMood',
       'lighting',
       'landmarks',
       'palette',
       'constraints'
-    ]),
-    referenceImageIds: []
-  }));
+    ]);
+    return {
+      id: crypto.randomUUID(),
+      name,
+      description: ensureEntityDescription(isString(l?.description) ? l.description : '', structured, name),
+      structured,
+      referenceImageIds: []
+    };
+  });
 
   const { characters, items, locations, diagnostics } = filterExtractedWorldData(scenes, {
     characters: extractedCharacters,
