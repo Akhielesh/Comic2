@@ -335,7 +335,11 @@ const normalizeScenes = (
   let plotDriftCorrections = 0;
 
   const staged = raw
-    .filter((scene) => scene && (isString(scene.synopsis) || isString(scene.setting) || isString(scene.rawText)))
+    .filter((scene) => scene && (
+      (isString(scene.synopsis) && scene.synopsis.trim().length > 0)
+      || (isString(scene.setting) && scene.setting.trim().length > 0)
+      || (isString(scene.rawText) && scene.rawText.trim().length > 0)
+    ))
     .map((scene, index) => {
       const segment = selectSegmentForScene(scene, index, scriptSegments, fullScript);
       const excerpt = deriveSceneRawExcerpt(scene, segment, fullScript);
@@ -393,7 +397,17 @@ const normalizeScenes = (
       id: index + 1
     }));
 
-  if (scenes.length === 0 && scriptSegments.length > 0) {
+  // A scene is only useful if it carries some grounded content. If the model returned
+  // nothing usable (or only contentless placeholders), rebuild literal scenes directly
+  // from the source segments instead of surfacing empty cards to the user.
+  const hasMeaningfulContent = (scene: Scene) => Boolean(
+    (scene.synopsis && scene.synopsis.trim())
+    || (scene.setting && scene.setting.trim())
+    || (scene.characters && scene.characters.length > 0)
+  );
+
+  if (scenes.filter(hasMeaningfulContent).length === 0 && scriptSegments.length > 0) {
+    scenes.length = 0;
     fallbackSceneCount += scriptSegments.length;
     for (const segment of scriptSegments) {
       const hinted = filterGroundedCharacterNames(extractSegmentCharacterHints(segment.rawText), segment.rawText);
@@ -591,6 +605,11 @@ export const analyzeScript = async (apiKey: string, script: string, modelOverrid
     - In synthesis and setting descriptions, focus on VISUAL CONTENT (place, lighting, mood) only.
     - DO NOT include art style, medium, or rendering terms (e.g. 'watercolor', 'noir style', '3d render').
     - Keep it style-neutral.
+
+    NON-EMPTY OUTPUT (required):
+    - Every scene MUST have a non-empty synopsis (>= 8 characters) and a non-empty setting drawn from its segment.
+    - NEVER return empty strings or placeholder tokens like "", "N/A", "TBD", or "Unknown".
+    - Emit exactly ONE scene per meaningful source segment. Do not split a single segment into multiple near-identical scenes, and do not emit a scene with no real action.
   `;
 
   const response = await withRetry(

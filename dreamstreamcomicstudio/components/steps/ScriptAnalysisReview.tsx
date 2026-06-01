@@ -57,6 +57,14 @@ const normalizeCharacters = (value: string[]) => {
 
 const toCharacterInput = (characters: string[]) => (characters || []).join(', ');
 
+// Guard against blank scene cards: only show scenes that carry some content.
+const isRenderableScene = (scene: Scene) => Boolean(
+  (scene.synopsis && scene.synopsis.trim())
+  || (scene.setting && scene.setting.trim())
+  || (scene.rawText && scene.rawText.trim())
+  || (scene.characters && scene.characters.length > 0)
+);
+
 export const ScriptAnalysisReview: React.FC<ScriptAnalysisReviewProps> = ({
   script,
   scenes,
@@ -65,15 +73,16 @@ export const ScriptAnalysisReview: React.FC<ScriptAnalysisReviewProps> = ({
   onReanalyze,
   onBackToScript
 }) => {
-  const [localScenes, setLocalScenes] = useState<Scene[]>(scenes);
+  const [localScenes, setLocalScenes] = useState<Scene[]>(() => (scenes || []).filter(isRenderableScene));
   const [characterInputs, setCharacterInputs] = useState<Record<number, string>>(() =>
-    Object.fromEntries((scenes || []).map((scene) => [scene.id, toCharacterInput(scene.characters || [])]))
+    Object.fromEntries((scenes || []).filter(isRenderableScene).map((scene) => [scene.id, toCharacterInput(scene.characters || [])]))
   );
   const [submitAttempted, setSubmitAttempted] = useState(false);
 
   useEffect(() => {
-    setLocalScenes(scenes);
-    setCharacterInputs(Object.fromEntries((scenes || []).map((scene) => [scene.id, toCharacterInput(scene.characters || [])])));
+    const cleaned = (scenes || []).filter(isRenderableScene);
+    setLocalScenes(cleaned);
+    setCharacterInputs(Object.fromEntries(cleaned.map((scene) => [scene.id, toCharacterInput(scene.characters || [])])));
     setSubmitAttempted(false);
   }, [scenes]);
 

@@ -795,100 +795,23 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
   };
 
   if (!firstScene) {
-    if (pendingScriptReview) {
-      return (
-        <ScriptAnalysisReview
-          script={pendingScriptReview.script}
-          scenes={pendingScriptReview.scenes}
-          diagnostics={pendingScriptReview.diagnostics}
-          onBackToScript={() => setPendingScriptReview(null)}
-          onReanalyze={() => {
-            const value = pendingScriptReview.script;
-            setPendingScriptReview(null);
-            setLocalScript(value);
-            void handleAnalyzeHere(value);
-          }}
-          onApprove={(approvedScenes) => {
-            if (onScriptUpdate && script !== pendingScriptReview.script) {
-              onScriptUpdate(pendingScriptReview.script);
-            }
-            onScenesGenerated(approvedScenes, pendingScriptReview.script);
-            setPendingScriptReview(null);
-          }}
-        />
-      );
-    }
-
+    // Script analysis happens once, in the Script step. If we reach Style without
+    // scenes, route back there instead of offering a second, duplicate analyzer.
     return (
-      <div className="max-w-7xl mx-auto p-8 text-center space-y-6 animate-fade-in flex flex-col items-center">
-        <div className="bg-red-50 border-4 border-red-500 text-red-700 p-8 rounded-xl shadow-comic inline-block transform -rotate-1 max-w-2xl w-full">
-          <div className="flex items-center justify-center gap-2 mb-4">
-            <AlertCircle className="w-10 h-10" />
-            <h2 className="text-3xl font-display">Missing Scene Data</h2>
+      <div className="max-w-2xl mx-auto p-8 text-center space-y-6 animate-fade-in">
+        <div className="bg-amber-50 border-4 border-black text-slate-800 p-8 rounded-xl shadow-comic">
+          <div className="flex items-center justify-center gap-2 mb-3">
+            <AlertCircle className="w-9 h-9 text-amber-600" />
+            <h2 className="text-3xl font-display">Analyze your script first</h2>
           </div>
-          <p className="font-comic text-xl font-bold mb-4">We couldn't find any scenes to generate styles from.</p>
-
-          <div className="text-sm bg-white/50 p-4 rounded border-2 border-red-200 mb-6 text-left">
-            <strong className="block mb-1">Why is this happening?</strong>
-            The AI needs to break your script down into Scenes before it can start drawing.
-          </div>
-
-          <div className="mb-6">
-            <label className="block text-left font-bold mb-2 text-black">Enter Script Here:</label>
-            <textarea
-              value={localScript}
-              onChange={(e) => setLocalScript(e.target.value)}
-              className="w-full h-32 p-3 rounded border-2 border-red-300 text-black text-sm"
-              placeholder="Type your story here..."
-            />
-          </div>
-
-          <div className="flex gap-4 justify-center">
-            {onBackToScript && (
-              <Button onClick={onBackToScript} variant="outline" className="border-red-700 text-red-700 hover:bg-red-100" icon={<ArrowLeft className="w-4 h-4" />}>
-                Back
-              </Button>
-            )}
-            <Button
-              onClick={() => { void handleAnalyzeHere(); }}
-              isLoading={isAnalyzing}
-              variant="danger"
-              icon={<Wand2 className="w-5 h-5" />}
-            >
-              Analyze Script Now
-            </Button>
-          </div>
-
-          {isAnalyzing && (
-            <div className="mt-4 p-4 bg-white border-4 border-black rounded-xl shadow-comic">
-              <div className="flex items-center justify-between text-xs font-bold uppercase">
-                <span>AI Thinking</span>
-                <span className="font-mono">
-                  {analysisEstimate !== null ? `~${analysisEstimate}s est` : "Estimating..."}
-                </span>
-              </div>
-              <div className="mt-1 text-[11px] font-mono text-slate-500">
-                Elapsed: {analysisElapsed}s {analysisEta !== null ? `• Remaining: ${analysisEta}s` : ""}
-              </div>
-              <div className="mt-2 h-2 bg-slate-100 border-2 border-black rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-brand-red transition-all"
-                  style={{ width: `${analysisProgress}%` }}
-                />
-              </div>
-              {analysisStatus && (
-                <div className="mt-2 text-xs font-comic text-slate-600">{analysisStatus}</div>
-              )}
-              <button
-                onClick={handleCancelAnalyze}
-                className="mt-3 text-xs font-bold underline decoration-2 underline-offset-2 text-slate-500 hover:text-brand-red"
-              >
-                Cancel analysis
-              </button>
-            </div>
-          )}
-
-          {error && <div className="mt-4 text-sm font-bold">{error}</div>}
+          <p className="font-comic text-lg font-bold mb-2">Style previews are rendered from your real opening scene.</p>
+          <p className="text-sm text-slate-600 mb-6">
+            Head back to the <strong>Script</strong> step to break your story into scenes, then return here to choose a style.
+          </p>
+          <Button onClick={() => onBackToScript?.()} icon={<ArrowLeft className="w-4 h-4" />}>
+            Go to Script step
+          </Button>
+          {error && <div className="mt-4 text-sm font-bold text-brand-red">{error}</div>}
         </div>
       </div>
     );
