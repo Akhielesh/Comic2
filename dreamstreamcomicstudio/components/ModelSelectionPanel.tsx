@@ -73,6 +73,12 @@ const Slot: React.FC<{
           {featureSupport(getCapabilities(selected), 'character-consistency').reason}
         </div>
       )}
+      {selected && slot === 'text' && !getCapabilities(selected).structuredJson && (
+        <div className="text-[11px] text-amber-700 mt-1 flex items-start gap-1">
+          <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
+          No structured-output mode — planning steps (script, world, panels, audit) will use a JSON-capable model instead.
+        </div>
+      )}
     </div>
   );
 };
