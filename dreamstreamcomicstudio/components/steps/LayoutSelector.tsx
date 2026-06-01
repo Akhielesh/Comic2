@@ -241,7 +241,7 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                     </div>
                     <div className="p-6 flex flex-col flex-1">
                         <h3 className="text-xl font-display text-black mb-2 uppercase">Custom Layout</h3>
-                        <p className="text-xs text-slate-600 font-comic mb-4 flex-1">Let Gemini analyze your favorite layouts.</p>
+                        <p className="text-xs text-slate-600 font-comic mb-4 flex-1">Let the AI analyze your favorite layouts.</p>
 
                         {customLayoutPrompt && (
                             <div className="mb-4 p-3 bg-brand-yellow/20 border-2 border-dashed border-black rounded-lg text-xs font-bold text-black">

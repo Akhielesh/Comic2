@@ -739,12 +739,12 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
                 <div className="text-right">Est. Total</div>
               </div>
               <div className="grid grid-cols-3 text-[11px] font-bold px-2 py-1">
-                <div>Gemini 2.5 Flash-Lite</div>
+                <div>Economy text model</div>
                 <div>{formatCurrency(FLASH_LITE_PRICING.inputPer1k)} / {formatCurrency(FLASH_LITE_PRICING.outputPer1k)}</div>
                 <div className="text-right">{formatCurrency(imageCostCurrent + textCostLite)}</div>
               </div>
               <div className="grid grid-cols-3 text-[11px] font-bold px-2 py-1">
-                <div>Gemini 2.5 Flash</div>
+                <div>Standard text model</div>
                 <div>{formatCurrency(FLASH_PRICING.inputPer1k)} / {formatCurrency(FLASH_PRICING.outputPer1k)}</div>
                 <div className="text-right">{formatCurrency(imageCostCurrent + textCostFlash)}</div>
               </div>

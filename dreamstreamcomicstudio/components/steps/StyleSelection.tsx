@@ -1172,7 +1172,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
                   {fluxDebug?.lastError && (
                     <div className="text-brand-red">Last error: {String(fluxDebug.lastError).slice(0, 140)}</div>
                   )}
-                  <div className="mt-2 font-bold">Gemini Debug</div>
+                  <div className="mt-2 font-bold">Text/Image API Debug</div>
                   <div>API key present: {apiDebug?.keyPresent ? 'yes' : 'no'}</div>
                   <div>Key source: {apiDebug?.keySource || 'n/a'}</div>
                   <div>Key suffix: {apiDebug?.keySuffix ? `••••${apiDebug.keySuffix}` : 'n/a'}</div>
