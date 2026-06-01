@@ -28,40 +28,41 @@ export const analyzeScriptChecklist = (script: string): ScriptChecklist => {
   const missing: string[] = [];
   const suggestions: string[] = [];
 
-  if (trimmed.length >= 50) {
-    found.push('Script length looks sufficient');
+  const wordCount = trimmed ? trimmed.split(/\s+/).filter(Boolean).length : 0;
+
+  // The ONLY hard requirement is enough story for the AI to work with. Everything else is
+  // optional — the analyzer segments free-form prose, so scene markers, dialogue lines and
+  // ALL-CAPS character names are nice-to-haves, never requirements.
+  if (wordCount >= 15) {
+    found.push('Story has enough detail to analyze');
   } else {
-    missing.push('Script is very short');
-    suggestions.push('Add a few more sentences to clarify the story flow.');
+    missing.push('Story is too short to analyze');
+    suggestions.push('Write a few sentences describing what happens — plain prose is fine, no special formatting needed.');
   }
 
   if (hasSceneMarkers(trimmed)) {
     found.push('Scene markers detected');
   } else {
-    missing.push('Scene markers missing');
-    suggestions.push('Add Scene headings like "Scene 1:" or INT./EXT. lines.');
+    suggestions.push('Optional: add scene headings like "Scene 1:" or INT./EXT. if you want to control pacing — the AI will split prose into scenes on its own.');
   }
 
   if (hasDialogueLines(trimmed)) {
     found.push('Dialogue lines detected');
   } else {
-    missing.push('Dialogue lines missing');
-    suggestions.push('Add dialogue lines like "NAME: ..." to guide the story.');
+    suggestions.push('Optional: write dialogue as "Name: ..." if you want specific spoken lines.');
   }
 
   const characterNames = extractCharacterNames(trimmed);
   if (characterNames.length > 0) {
     found.push(`Character cues found (${characterNames.length})`);
   } else {
-    missing.push('Character cues missing');
-    suggestions.push('Include at least one named character in ALL CAPS like "HERO:".');
+    suggestions.push('Optional: name a character or two for stronger consistency — the AI will still infer characters from your prose.');
   }
 
   if (hasSettingHints(trimmed)) {
     found.push('Setting cues detected');
   } else {
-    missing.push('Setting cues missing');
-    suggestions.push('Describe where/when the scene takes place (city, night, interior, etc.).');
+    suggestions.push('Optional: mention where or when a scene happens for richer backgrounds.');
   }
 
   return {

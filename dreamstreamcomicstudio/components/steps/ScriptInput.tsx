@@ -279,7 +279,7 @@ K: "I'm just looking for dinner."`;
     <div className="max-w-5xl mx-auto space-y-8 animate-fade-in">
       <div className="text-center space-y-2 bg-white p-6 rounded-xl border-4 border-black shadow-comic transform -rotate-1">
         <h2 className="text-4xl font-display text-black">The Story Begins!</h2>
-        <p className="text-slate-600 font-comic text-lg">Paste your script below. Gemini will break it down into scenes for you.</p>
+        <p className="text-slate-600 font-comic text-lg">Paste your story below — plain prose is perfect. The AI breaks it into scenes for you.</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -310,7 +310,7 @@ K: "I'm just looking for dinner."`;
                     AI Analysis
                 </h3>
                 <p className="text-sm text-slate-600 font-medium mb-4 leading-relaxed">
-                    Script analysis uses your selected Gemini text model (Gemini 2.5 Flash, 2.0 Flash, or 2.5 Flash Lite).
+                    Analysis runs on your selected text model. Free-form prose works — scene headings, dialogue, and character names are all optional.
                 </p>
                 {checklist && showChecklist && (
                   <div className="mb-4 bg-slate-50 border-2 border-black rounded-lg p-4 text-xs space-y-3">
@@ -325,16 +325,16 @@ K: "I'm just looking for dinner."`;
                       </div>
                     </div>
                     <div>
-                      <div className="text-[11px] font-bold text-brand-red mb-1">Missing</div>
+                      <div className="text-[11px] font-bold text-brand-red mb-1">Needs attention</div>
                       <div className="flex flex-wrap gap-2">
                         {checklist.missing.map((item) => (
                           <span key={item} className="px-2 py-1 bg-red-100 border border-red-300 rounded">{item}</span>
                         ))}
-                        {checklist.missing.length === 0 && <span className="text-slate-500">Nothing missing</span>}
+                        {checklist.missing.length === 0 && <span className="text-slate-500">Ready to analyze — nothing required</span>}
                       </div>
                     </div>
                     <div>
-                      <div className="text-[11px] font-bold text-slate-500 mb-1">Suggestions</div>
+                      <div className="text-[11px] font-bold text-slate-500 mb-1">Optional tips</div>
                       <ul className="list-disc list-inside space-y-1 text-slate-600">
                         {checklist.suggestions.map((item) => (
                           <li key={item}>{item}</li>
