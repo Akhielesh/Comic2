@@ -53,6 +53,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
             </div>
           </div>
           <div className="flex items-center gap-4">
+            <button onClick={() => onNavigate?.('how-it-works')} className="hidden md:block text-sm font-bold hover:underline">How It Works</button>
             <button onClick={onViewComics} className="hidden md:block text-sm font-bold hover:underline">View Comics</button>
             {user ? (
               <>
@@ -90,6 +91,12 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
                 className="px-8 py-4 border-4 border-black rounded-xl font-bold hover:bg-slate-100 transition-colors"
               >
                 View Comics
+              </button>
+              <button
+                onClick={() => onNavigate?.('how-it-works')}
+                className="px-8 py-4 border-4 border-black rounded-xl font-bold hover:bg-brand-yellow transition-colors"
+              >
+                How It Works
               </button>
             </div>
             <div className="flex items-center gap-6 text-sm font-bold text-slate-500">
