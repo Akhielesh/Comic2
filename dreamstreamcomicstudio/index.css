@@ -50,6 +50,45 @@
   transform-origin: left center;
 }
 
+/* ---- How It Works page motion ---- */
+@keyframes hiwGradientPan {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+@keyframes hiwFlowDash { to { stroke-dashoffset: -1000; } }
+@keyframes hiwPulseRing {
+  0% { transform: scale(0.85); opacity: 0.7; }
+  70% { transform: scale(1.6); opacity: 0; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+@keyframes hiwDrift {
+  0% { transform: translate(0,0) scale(1); }
+  50% { transform: translate(20px,-24px) scale(1.08); }
+  100% { transform: translate(0,0) scale(1); }
+}
+@keyframes hiwSheen { 0% { transform: translateX(-120%) skewX(-18deg); } 100% { transform: translateX(220%) skewX(-18deg); } }
+@keyframes hiwBounceArrow { 0%,100% { transform: translateY(0); } 50% { transform: translateY(8px); } }
+@keyframes hiwDotTravel { 0% { offset-distance: 0%; } 100% { offset-distance: 100%; } }
+
+.hiw-gradient-text {
+  background-image: linear-gradient(100deg,#2867ff,#ff3b3b,#f9c80e,#2867ff);
+  background-size: 300% 300%;
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: hiwGradientPan 8s ease infinite;
+}
+.hiw-flow-dash { stroke-dasharray: 10 14; animation: hiwFlowDash 18s linear infinite; }
+.hiw-pulse-ring { animation: hiwPulseRing 2.4s ease-out infinite; }
+.hiw-drift { animation: hiwDrift 12s ease-in-out infinite; }
+.hiw-sheen { animation: hiwSheen 2.8s ease-in-out infinite; }
+.hiw-bounce { animation: hiwBounceArrow 1.6s ease-in-out infinite; }
+.hiw-reveal { opacity: 0; transform: translateY(30px); transition: opacity .7s cubic-bezier(.2,.7,.2,1), transform .7s cubic-bezier(.2,.7,.2,1); }
+.hiw-reveal.is-visible { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .hiw-gradient-text,.hiw-flow-dash,.hiw-pulse-ring,.hiw-drift,.hiw-sheen,.hiw-bounce { animation: none; }
+  .hiw-reveal { opacity: 1; transform: none; transition: none; }
+}
+
 .message-body {
   line-height: 1.5;
 }
