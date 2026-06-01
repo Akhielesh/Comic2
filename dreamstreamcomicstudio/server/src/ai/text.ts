@@ -1113,13 +1113,13 @@ Script:
 ${payload.script || 'Not provided'}
 
 Continuity bible:
-${JSON.stringify(payload.continuityBible || {}, null, 2)}
+${JSON.stringify(payload.continuityBible || {})}
 
 Scene bindings:
-${JSON.stringify(payload.sceneBindings || [], null, 2)}
+${JSON.stringify(payload.sceneBindings || [])}
 
 Panels:
-${JSON.stringify(payload.panels || [], null, 2)}
+${JSON.stringify(payload.panels || [])}
   `;
 
   const response = await withRetry(
