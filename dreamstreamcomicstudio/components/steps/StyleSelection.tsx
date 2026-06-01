@@ -190,6 +190,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
   const analysisTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const analysisStartRef = useRef<number>(0);
   const analysisDurationRef = useRef<number>(0);
+  const analysisAbortRef = useRef<AbortController | null>(null);
   const analysisRequestIdRef = useRef(0);
   const generationStartRef = useRef<number>(0);
   const generationTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -344,6 +345,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
 
     analysisTimeoutRef.current = setTimeout(() => {
       if (analysisRequestIdRef.current !== requestId) return;
+      analysisAbortRef.current?.abort();
       stopAnalysisTimer();
       setIsAnalyzing(false);
       setError("Analysis is taking too long. Please try again.");
@@ -380,8 +382,10 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
     setIsAnalyzing(true);
     setError(null);
     startAnalysisTimer(scriptToAnalyze, requestId);
+    const controller = new AbortController();
+    analysisAbortRef.current = controller;
     try {
-      const result = await analyzeScriptDetailed(scriptToAnalyze, projectId);
+      const result = await analyzeScriptDetailed(scriptToAnalyze, projectId, controller.signal);
       if (analysisRequestIdRef.current !== requestId) return;
       if (result.scenes && result.scenes.length > 0 && result.scenes[0].synopsis) {
         setPendingScriptReview({

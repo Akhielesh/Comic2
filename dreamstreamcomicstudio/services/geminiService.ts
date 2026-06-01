@@ -333,7 +333,7 @@ export const analyzeScript = async (script: string, projectId?: string) => {
   return response.scenes;
 };
 
-export const analyzeScriptDetailed = async (script: string, projectId?: string) => {
+export const analyzeScriptDetailed = async (script: string, projectId?: string, signal?: AbortSignal) => {
   const response = await safeGeminiCall(
     'analyze_script',
     projectId,
@@ -341,7 +341,7 @@ export const analyzeScriptDetailed = async (script: string, projectId?: string) 
     'script',
     async () => withTextRetry(
       () => withTextKeyFallback((apiKey, modelId) =>
-        post<AnalyzeScriptRequest, AnalyzeScriptResponse>('/api/text/analyze-script', { script }, { apiKey, modelId, stage: 'analyze_script' })
+        post<AnalyzeScriptRequest, AnalyzeScriptResponse>('/api/text/analyze-script', { script }, { apiKey, modelId, stage: 'analyze_script', signal })
       ),
       { attempts: 2, delayMs: 350 }
     ),
