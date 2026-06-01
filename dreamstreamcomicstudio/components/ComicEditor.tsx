@@ -18,7 +18,7 @@ import {
   resetFromStyleConfirm,
   resetFromWorldConfirm
 } from '../services/pipelineReset';
-import { ArrowLeft, Save, History } from 'lucide-react';
+import { ArrowLeft, Save, History, AlertTriangle } from 'lucide-react';
 import { VersionHistoryModal } from './modals/VersionHistoryModal';
 import { ProjectVersion } from '../types';
 import { checkDeploymentParity, DeploymentParityStatus } from '../services/geminiService';
@@ -37,6 +37,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   const [titleDraft, setTitleDraft] = useState(project.name);
   const [showVersions, setShowVersions] = useState(false);
   const [deploymentParity, setDeploymentParity] = useState<DeploymentParityStatus | null>(null);
+  const [navError, setNavError] = useState<string | null>(null);
   const previousStepRef = useRef<AppStep>(state.step);
   const previousGenerationActiveRef = useRef<boolean>(!!state.generationStatus?.isActive);
   const lastAutoVersionKeyRef = useRef<string>('');
@@ -51,7 +52,30 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
     });
   };
 
+  // Hard prerequisites for leaving a step — keeps the pipeline from advancing into a
+  // state generation can't use (e.g. entering generation with no planned panels).
+  const advanceBlockReason = (s: Project['state']): string | null => {
+    switch (s.step) {
+      case AppStep.SCRIPT_INPUT:
+        return (s.scenes?.length || 0) > 0 ? null : 'Analyze the script into scenes first.';
+      case AppStep.STYLE_SELECTION:
+        return s.selectedStyleId || s.stylePrompt ? null : 'Choose a style first.';
+      case AppStep.LAYOUT_SELECTION:
+        return (s.scenes?.length || 0) > 0 ? null : 'Add scenes before planning panels.';
+      case AppStep.COMBINED_PREVIEW:
+        return (s.panels?.length || 0) > 0 ? null : 'Plan at least one panel before generating.';
+      default:
+        return null;
+    }
+  };
+
   const nextStep = () => {
+    const reason = advanceBlockReason(state);
+    if (reason) {
+      setNavError(reason);
+      return;
+    }
+    setNavError(null);
     const next = state.step + 1;
     updateState({
       step: next,
@@ -102,6 +126,20 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
       snapshotHash
     };
     return [...currentVersions, newVersion].slice(-20);
+  };
+
+  // Snapshot the pre-reset state before a destructive pipeline reset, so editing an
+  // upstream step doesn't silently discard downstream work — it stays restorable from
+  // Version History.
+  const applyReset = (
+    label: string,
+    producePatch: (prev: Project['state']) => Partial<Project['state']>
+  ) => {
+    setNavError(null);
+    updateState((prev) => ({
+      ...producePatch(prev),
+      versions: appendVersion(`Before ${label} (${new Date().toLocaleTimeString()})`, prev, 'reset')
+    }));
   };
 
   useEffect(() => {
@@ -283,7 +321,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           initialChecklist={state.scriptChecklist}
           onChecklistUpdate={(scriptChecklist) => updateState({ scriptChecklist })}
           onScenesGenerated={(script, scenes) => {
-            updateState((prev) => resetFromScriptAnalysis(prev, script, scenes));
+            applyReset('re-analyzing script', (prev) => resetFromScriptAnalysis(prev, script, scenes));
           }}
         />;
       case AppStep.STORY_PLANNING:
@@ -293,7 +331,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
             scenes={state.scenes}
             planning={state.storyPlanning}
             onPlanningChange={(storyPlanning) => updateState({ storyPlanning })}
-            onConfirm={() => updateState((prev) => resetFromStoryPlanningConfirm(prev))}
+            onConfirm={() => applyReset('confirming story planning', (prev) => resetFromStoryPlanningConfirm(prev))}
           />
         );
       case AppStep.STYLE_SELECTION:
@@ -302,7 +340,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           script={state.script}
           projectId={project.id}
           onScenesGenerated={(scenes, analyzedScript) => {
-            updateState((prev) => resetFromScriptAnalysis(prev, analyzedScript || prev.script, scenes));
+            applyReset('re-analyzing script', (prev) => resetFromScriptAnalysis(prev, analyzedScript || prev.script, scenes));
           }}
           onScriptUpdate={(script) => updateState({ script })}
           initialVariants={state.styleVariants}
@@ -313,7 +351,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           customAspectRatio={state.customAspectRatio}
           onCustomAspectRatioChange={(enabled, ratio) => updateState({ customAspectRatioEnabled: enabled, customAspectRatio: ratio })}
           onStyleConfirmed={(style) => {
-            updateState((prev) => resetFromStyleConfirm(prev, style));
+            applyReset('confirming style', (prev) => resetFromStyleConfirm(prev, style));
           }} />;
       case AppStep.REFERENCE_BUILDER:
         return <ReferenceBuilder
@@ -327,7 +365,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           initialLocations={state.locations || []}
           initialContinuity={state.continuity}
           onDataUpdate={(data) => updateState({ ...data })}
-          onConfirm={() => updateState((prev) => resetFromWorldConfirm(prev))} />;
+          onConfirm={() => applyReset('confirming characters', (prev) => resetFromWorldConfirm(prev))} />;
       case AppStep.COVER:
         return (
           <CoverDesigner
@@ -351,7 +389,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           currentDialogueStyle={state.universalDialogueStyle || 'speech'}
           onDialogueStyleChange={(universalDialogueStyle) => updateState({ universalDialogueStyle })}
           onLayoutConfirmed={(layoutType, customLayoutPrompt, gridTemplateId) => {
-            updateState((prev) => resetFromLayoutConfirm(prev, layoutType, customLayoutPrompt, gridTemplateId));
+            applyReset('confirming layout', (prev) => resetFromLayoutConfirm(prev, layoutType, customLayoutPrompt, gridTemplateId));
           }} />;
       case AppStep.COMBINED_PREVIEW:
         return (
@@ -466,6 +504,13 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           <div className="max-w-7xl mx-auto border-2 border-amber-500 bg-amber-50 rounded-lg p-3 text-xs font-bold text-amber-800">
             Deployment mismatch detected: frontend `{deploymentParity.frontendGitSha}` vs backend `{deploymentParity.backendGitSha}`.
             Some features may behave inconsistently until both deployments use the same commit.
+          </div>
+        )}
+        {navError && (
+          <div className="mx-4 mt-3 text-sm bg-amber-100 border-2 border-black rounded-lg p-2 flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span className="flex-1">{navError}</span>
+            <button onClick={() => setNavError(null)} className="font-bold text-slate-600 hover:text-black" aria-label="Dismiss">×</button>
           </div>
         )}
         {renderStep()}
