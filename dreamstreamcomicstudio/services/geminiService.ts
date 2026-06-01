@@ -341,7 +341,7 @@ export const analyzeScriptDetailed = async (script: string, projectId?: string) 
     'script',
     async () => withTextRetry(
       () => withTextKeyFallback((apiKey, modelId) =>
-        post<AnalyzeScriptRequest, AnalyzeScriptResponse>('/api/text/analyze-script', { script }, { apiKey, modelId })
+        post<AnalyzeScriptRequest, AnalyzeScriptResponse>('/api/text/analyze-script', { script }, { apiKey, modelId, stage: 'analyze_script' })
       ),
       { attempts: 2, delayMs: 350 }
     ),
@@ -416,7 +416,7 @@ export const extractWorldDetails = async (
     'text',
     'world',
     async () => withTextKeyFallback((apiKey, modelId) =>
-      post<ExtractWorldRequest, ExtractWorldResponse>('/api/text/extract-world', { scenes, script: script.trim() }, { apiKey, modelId })
+      post<ExtractWorldRequest, ExtractWorldResponse>('/api/text/extract-world', { scenes, script: script.trim() }, { apiKey, modelId, stage: 'extract_world' })
     ),
     scenes.map(s => s.synopsis || s.rawText).join('\n')
   );
@@ -509,7 +509,7 @@ export const generatePanelBreakdown = async (
         continuityBible: options?.continuityBible,
         sceneBindings: options?.sceneBindings,
         previousPanelContext: options?.previousPanelContext
-      }, { signal: options?.abortSignal, apiKey, modelId })
+      }, { signal: options?.abortSignal, apiKey, modelId, stage: 'panel_breakdown' })
     ),
     scene?.synopsis || scene?.rawText || ''
   );
@@ -529,7 +529,7 @@ export const runContinuityAudit = async (
       post<ContinuityAuditRequest, ContinuityAuditResponse>(
         '/api/text/continuity-audit',
         payload,
-        { apiKey, modelId }
+        { apiKey, modelId, stage: 'continuity_audit' }
       )
     ),
     JSON.stringify(payload.panels || [])
