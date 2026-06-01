@@ -35,3 +35,19 @@ export const buildStyleOnlyNotes = (input: {
   const scrubbed = stripEntityNamesFromStyleText(input.customNotes || '', names);
   return scrubbed;
 };
+
+/**
+ * Mood/atmosphere context for a style preview, derived from a real scene so the look
+ * reflects the user's actual story. Named characters are stripped — the preview stays a
+ * style study (environment, lighting, tone only), not a plot illustration.
+ */
+export const buildSceneContextForStyle = (scene?: Scene): string => {
+  if (!scene) return '';
+  const names = getSceneEntityNames([scene]);
+  const setting = stripEntityNamesFromStyleText(scene.setting || '', names);
+  const synopsis = stripEntityNamesFromStyleText(scene.synopsis || '', names);
+  const parts: string[] = [];
+  if (setting) parts.push(`Setting and atmosphere: ${setting}`);
+  if (synopsis) parts.push(`Opening moment: ${synopsis}`);
+  return parts.join('. ');
+};

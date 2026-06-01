@@ -12,7 +12,7 @@ import { DebugState, getDebugState, subscribeDebugState } from '../../services/d
 import { ApiError } from '../../services/apiClient';
 import { AnalyzeScriptResponse } from '../../apiTypes';
 import { ScriptAnalysisReview } from './ScriptAnalysisReview';
-import { buildStyleOnlyNotes } from '../../services/styleGrounding';
+import { buildStyleOnlyNotes, buildSceneContextForStyle } from '../../services/styleGrounding';
 
 interface StyleSelectionProps {
   firstScene?: Scene;
@@ -618,6 +618,9 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
       customNotes: customPrompt,
       scenes: firstScene ? [firstScene] : []
     });
+    // Ground every style preview in the user's real opening scene (mood/setting only),
+    // so the previews show their story's look instead of a generic study.
+    const sceneStyleContext = buildSceneContextForStyle(firstScene);
     let failedCount = 0;
     let lastFailureReason: string | null = null;
 
@@ -687,6 +690,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
         const fullPrompt = buildImagePrompt({
           stage: "style",
           stylePrompt: style.prompt,
+          sceneContext: sceneStyleContext,
           extraNotes: styleOnlyNotes || 'Linework and palette study only.'
         });
         try {
