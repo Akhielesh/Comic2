@@ -1,7 +1,7 @@
 import { buildApiUrl } from './clientConfig';
 import { getFluxKeyInfo, getOpenRouterKey } from './appSettings';
 import { getActiveKeyValue } from './apiKeys';
-import { getSelectedTextModel } from './modelSelection';
+import { getSelectedTextModel, getModelForStage } from './modelSelection';
 import { supabase } from './supabase';
 
 let cachedAccessToken: string | undefined;
@@ -50,12 +50,14 @@ const getAuthToken = async (): Promise<string | undefined> => {
   return session?.access_token;
 };
 
-export const post = async <TReq, TRes>(path: string, body: TReq, options?: { signal?: AbortSignal; apiKey?: string; modelId?: string }): Promise<TRes> => {
+export const post = async <TReq, TRes>(path: string, body: TReq, options?: { signal?: AbortSignal; apiKey?: string; modelId?: string; stage?: string }): Promise<TRes> => {
   // Active key per provider (multi-key store), falling back to legacy single keys.
   const geminiKey = getActiveKeyValue('gemini') || getGeminiKey();
   const fluxKey = getActiveKeyValue('pixazo') || getFluxKeyInfo().key;
   const openRouterKey = getActiveKeyValue('openrouter') || getOpenRouterKey();
   const token = await getAuthToken();
+  // Per-stage override when a stage is supplied, else the global text model.
+  const textModel = options?.stage ? getModelForStage(options.stage) : getSelectedTextModel();
 
   const res = await fetch(buildApiUrl(path), {
     method: 'POST',
@@ -64,7 +66,8 @@ export const post = async <TReq, TRes>(path: string, body: TReq, options?: { sig
       ...(options?.apiKey ? { 'X-Gemini-Key': options.apiKey } : (geminiKey ? { 'X-Gemini-Key': geminiKey } : {})),
       ...(fluxKey ? { 'X-Pixazo-Key': fluxKey } : {}),
       ...(openRouterKey ? { 'X-OpenRouter-Key': openRouterKey } : {}),
-      ...(getSelectedTextModel() ? { 'X-Text-Model': getSelectedTextModel() as string } : {}),
+      ...(textModel ? { 'X-Text-Model': textModel } : {}),
+      ...(options?.stage ? { 'X-Pipeline-Stage': options.stage } : {}),
       ...(options?.modelId ? { 'X-Gemini-Model': options.modelId } : {}),
       ...(token ? { 'Authorization': `Bearer ${token}` } : {})
     },

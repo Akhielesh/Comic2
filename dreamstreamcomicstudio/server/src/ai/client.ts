@@ -3,19 +3,42 @@ import { GEMINI_BASE_URL } from '../config.js';
 import { geminiSchemaToJsonSchema } from './schemaConvert.js';
 import { getProvider, resolveProviderContext } from './gateway.js';
 import { TEXT_FALLBACK } from './autoRouter.js';
+import type { ChatMessage } from './providers/types.js';
 
 const isOpenRouterKey = (key: string) => key.startsWith('sk-or-');
 
-/** Flatten Gemini `contents` (string | parts | array) to a single user message. */
-const flattenContents = (contents: any): string => {
-  if (typeof contents === 'string') return contents;
-  if (Array.isArray(contents)) {
-    return contents
-      .map((c) => (typeof c === 'string' ? c : (c?.parts || []).map((p: any) => p?.text || '').join('\n')))
-      .join('\n\n');
+const partsToText = (parts: any): string =>
+  Array.isArray(parts) ? parts.map((p: any) => p?.text || '').join('\n') : '';
+
+/**
+ * Map Gemini `contents` (string | {parts} | array of {role,parts}) to OpenRouter chat
+ * messages, preserving multi-turn roles (model → assistant) and an optional system
+ * instruction. The old behaviour flattened everything into one user turn, which lost
+ * the conversation structure that story-tool relies on for "follow instructions exactly".
+ */
+const buildMessages = (contents: any, systemInstruction?: string): ChatMessage[] => {
+  const messages: ChatMessage[] = [];
+  if (typeof systemInstruction === 'string' && systemInstruction.trim()) {
+    messages.push({ role: 'system', content: systemInstruction });
   }
-  if (contents?.parts) return contents.parts.map((p: any) => p?.text || '').join('\n');
-  return String(contents ?? '');
+  if (typeof contents === 'string') {
+    messages.push({ role: 'user', content: contents });
+  } else if (Array.isArray(contents)) {
+    for (const c of contents) {
+      if (typeof c === 'string') {
+        messages.push({ role: 'user', content: c });
+      } else {
+        const role: ChatMessage['role'] =
+          c?.role === 'model' ? 'assistant' : c?.role === 'system' ? 'system' : 'user';
+        messages.push({ role, content: partsToText(c?.parts) });
+      }
+    }
+  } else if (contents?.parts) {
+    messages.push({ role: 'user', content: partsToText(contents.parts) });
+  } else {
+    messages.push({ role: 'user', content: String(contents ?? '') });
+  }
+  return messages.length ? messages : [{ role: 'user', content: '' }];
 };
 
 /**
@@ -31,11 +54,22 @@ const createOpenRouterTextClient = (apiKey: string) => ({
       // Use a real OpenRouter model id (contains a '/'); otherwise fall back to the default.
       const model = typeof req?.model === 'string' && req.model.includes('/') ? req.model : TEXT_FALLBACK;
       const cfg = req?.config || {};
-      const schema = cfg.responseSchema ? geminiSchemaToJsonSchema(cfg.responseSchema) : undefined;
+      let schema = cfg.responseSchema ? geminiSchemaToJsonSchema(cfg.responseSchema) : undefined;
+
+      // OpenAI-style structured outputs (which OpenRouter forwards to the upstream
+      // provider, e.g. Azure) require the ROOT json_schema to be an object. Gemini
+      // accepts a top-level array (e.g. analyzeScript, generatePanelBreakdown), so wrap
+      // such schemas as { items: [...] } here and unwrap the reply below — keeping
+      // callers, which expect a bare JSON array in `response.text`, unchanged.
+      const rootIsArray = Boolean(schema && schema.type === 'array');
+      if (rootIsArray) {
+        schema = { type: 'object', properties: { items: schema }, required: ['items'] };
+      }
+
       const result = await getProvider('openrouter').generateText(
         {
           model,
-          messages: [{ role: 'user', content: flattenContents(req?.contents) }],
+          messages: buildMessages(req?.contents, typeof cfg.systemInstruction === 'string' ? cfg.systemInstruction : undefined),
           jsonSchema: schema ? { name: 'response', schema, strict: false } : undefined,
           temperature: typeof cfg.temperature === 'number' ? cfg.temperature : undefined,
           retries: 3,
@@ -43,7 +77,36 @@ const createOpenRouterTextClient = (apiKey: string) => ({
         },
         resolveProviderContext(apiKey)
       );
-      return { text: result.text, usageMetadata: undefined };
+
+      let text = result.text;
+      if (rootIsArray) {
+        // The model should reply with our { items: [...] } wrapper, but tolerate a bare
+        // array or a differently-named single array property so minor shape drift from
+        // weaker models doesn't surface as a hard 500 downstream.
+        const j = result.json as any;
+        if (Array.isArray(j)) {
+          text = JSON.stringify(j);
+        } else if (j && typeof j === 'object') {
+          const arr = Array.isArray(j.items) ? j.items : Object.values(j).find((v) => Array.isArray(v));
+          if (Array.isArray(arr)) text = JSON.stringify(arr);
+        }
+      }
+
+      // Surface the provider's real usage (incl. cost) and the model actually used, so
+      // the text pipeline bills on exact OpenRouter cost instead of a token estimate.
+      // buildUsage reads the *TokenCount fields and costUsd; the Gemini SDK path keeps
+      // reporting its own usageMetadata unchanged.
+      const u = result.usage;
+      const usageMetadata =
+        u && (typeof u.costUsd === 'number' || typeof u.totalTokens === 'number' || typeof u.promptTokens === 'number')
+          ? {
+              promptTokenCount: u.promptTokens,
+              candidatesTokenCount: u.completionTokens,
+              totalTokenCount: u.totalTokens,
+              costUsd: u.costUsd
+            }
+          : undefined;
+      return { text, usageMetadata, model: result.model };
     },
     generateImages: async () => {
       throw new Error('OpenRouter text client does not support image generation.');

@@ -13,6 +13,8 @@ export interface ModelSelection {
   mode: ModelMode;
   imageModel: string | null;
   textModel: string | null;
+  /** Sparse per-stage text-model overrides (advanced). Each falls back to textModel. */
+  byStage?: Record<string, string>;
 }
 
 const STORAGE = 'dreamstream_model_selection';
@@ -61,6 +63,25 @@ export const setSelectionMode = (mode: ModelMode) => {
   if (mode === 'default') {
     next.imageModel = null;
     next.textModel = null;
+    next.byStage = undefined;
   }
+  write(next);
+};
+
+export const getStageOverrides = (): Record<string, string> => ({ ...(read().byStage || {}) });
+
+/** Resolve the text model for a pipeline stage: a per-stage override if set, else the global text model. */
+export const getModelForStage = (stage?: string): string | null => {
+  const sel = read();
+  const override = stage && sel.byStage ? sel.byStage[stage] : undefined;
+  return typeof override === 'string' && override.trim() ? override : sel.textModel;
+};
+
+export const setStageModel = (stage: string, modelId: string | null) => {
+  const next = read();
+  const byStage = { ...(next.byStage || {}) };
+  if (modelId && modelId.trim()) byStage[stage] = modelId;
+  else delete byStage[stage];
+  next.byStage = Object.keys(byStage).length ? byStage : undefined;
   write(next);
 };

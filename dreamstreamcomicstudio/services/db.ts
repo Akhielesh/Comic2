@@ -93,6 +93,11 @@ const buildImagePathCandidates = (imagePath: string): string[] => {
   const filename = trimmed.split('/').pop() || '';
   const candidates: string[] = [];
   if (!filename.includes('.')) {
+    // Try the durable forms before the legacy tmp/ guesses. tmp/ is the ephemeral
+    // lane and almost never where a referenced image actually lives, so probing it
+    // first produced 400s for objects that don't exist and only delayed resolving
+    // the real path.
+    candidates.push(`${trimmed}.webp`, `${trimmed}.png`, `${trimmed}.jpg`, `${trimmed}.jpeg`, trimmed);
     const legacyMatch = trimmed.match(/^([0-9a-f-]{36})\/([^/]+)$/i);
     if (legacyMatch) {
       candidates.push(
@@ -102,7 +107,6 @@ const buildImagePathCandidates = (imagePath: string): string[] => {
         `u/${legacyMatch[1]}/tmp/${legacyMatch[2]}.jpeg`
       );
     }
-    candidates.push(`${trimmed}.webp`, `${trimmed}.png`, `${trimmed}.jpg`, `${trimmed}.jpeg`, trimmed);
   } else {
     candidates.push(trimmed);
     const legacyMatch = trimmed.match(/^([0-9a-f-]{36})\/([^/]+)$/i);
@@ -849,12 +853,19 @@ export const getImageUrl = async (
       writeCachedImageUrl(cacheKey, signedUrl);
       return signedUrl;
     }
+  }
 
+  // Last resort only after every candidate failed to sign. getPublicUrl() builds a
+  // URL string without checking existence, so doing it per-candidate (as before)
+  // returned a URL to the first — often non-existent — candidate and skipped later
+  // ones that are actually valid. Fall back to the primary candidate's public URL.
+  const primaryCandidate = candidatePaths[0];
+  if (primaryCandidate) {
     const { data } = supabase.storage
       .from(BUCKET_NAME)
-      .getPublicUrl(candidate, options?.transform ? { transform: options.transform as any } : undefined);
+      .getPublicUrl(primaryCandidate, options?.transform ? { transform: options.transform as any } : undefined);
     if (data?.publicUrl) {
-      writeCachedImageUrl(cacheKey, data.publicUrl);
+      writeCachedImageUrl(buildImageCacheKey(primaryCandidate, options), data.publicUrl);
       return data.publicUrl;
     }
   }

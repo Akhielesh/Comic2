@@ -58,6 +58,7 @@ export const ScriptInput: React.FC<ScriptInputProps> = ({ initialScript, project
   const analysisStartRef = useRef<number>(0);
   const analysisDurationRef = useRef<number>(0);
   const analysisRequestIdRef = useRef(0);
+  const analysisAbortRef = useRef<AbortController | null>(null);
   const [checklist, setChecklist] = useState<ScriptChecklist | null>(initialChecklist || null);
   const [showChecklist, setShowChecklist] = useState(false);
   const [awaitingConfirm, setAwaitingConfirm] = useState(false);
@@ -147,6 +148,7 @@ export const ScriptInput: React.FC<ScriptInputProps> = ({ initialScript, project
 
     analysisTimeoutRef.current = setTimeout(() => {
       if (analysisRequestIdRef.current !== requestId) return;
+      analysisAbortRef.current?.abort();
       stopAnalysisTimer();
       setIsAnalyzing(false);
       setError("Analysis is taking too long. Please try again.");
@@ -187,9 +189,11 @@ export const ScriptInput: React.FC<ScriptInputProps> = ({ initialScript, project
     setIsAnalyzing(true);
     setError(null);
     startAnalysisTimer(targetScript, requestId);
-    
+    const controller = new AbortController();
+    analysisAbortRef.current = controller;
+
     try {
-      const result = await analyzeScriptDetailed(targetScript, projectId);
+      const result = await analyzeScriptDetailed(targetScript, projectId, controller.signal);
       if (analysisRequestIdRef.current !== requestId) return;
       if (result.scenes && result.scenes.length > 0) {
         setPendingReview({

@@ -59,6 +59,8 @@ export type ApiUsage = {
   totalTokens?: number;
   promptChars?: number;
   estimatedTokens?: number;
+  /** Real provider cost in USD when reported (e.g. OpenRouter usage.cost). Drives exact billing. */
+  providerCostUsd?: number;
 };
 
 export type ApiTimings = {
@@ -389,6 +391,8 @@ export type PanelBreakdownRequest = {
   layoutType: string;
   panelCount?: number;
   stage?: string;
+  /** Rolling "story so far" summary of earlier scenes, for narrative carryover. */
+  continuitySummary?: string;
   continuityBible?: ContinuityBible;
   sceneBindings?: SceneContinuityBinding[];
   previousPanelContext?: Array<{

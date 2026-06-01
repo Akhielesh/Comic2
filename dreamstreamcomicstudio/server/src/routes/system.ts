@@ -163,7 +163,7 @@ const projectStateReferencesImagePath = (state: unknown, imagePath: string): boo
   return false;
 };
 
-const isLegacyPathReferencedByPublicProject = async (
+const isPathReferencedByPublicProject = async (
   supabaseAdmin: SupabaseClient,
   ownerId: string,
   imagePath: string
@@ -210,13 +210,17 @@ const canAccessImagePath = async (
 
   const tempScoped = parseTempPath(imagePath);
   if (tempScoped) {
+    if (requesterId && requesterId === tempScoped.ownerId) return { allowed: true };
+    // A tmp/ image can still be referenced by a published (public) project — allow any
+    // viewer in that case, mirroring the legacy-path branch below. Without this, panel
+    // images that fell back to the tmp lane 401/403 for everyone but the owner.
+    if (await isPathReferencedByPublicProject(supabaseAdmin, tempScoped.ownerId, imagePath)) {
+      return { allowed: true };
+    }
     if (!requesterId) {
       return { allowed: false, status: 401, message: 'Authentication required for this image.' };
     }
-    if (requesterId !== tempScoped.ownerId) {
-      return { allowed: false, status: 403, message: 'Image access denied.' };
-    }
-    return { allowed: true };
+    return { allowed: false, status: 403, message: 'Image access denied.' };
   }
 
   const legacyScoped = parseLegacyOwnerPath(imagePath);
@@ -227,7 +231,7 @@ const canAccessImagePath = async (
     if (!requesterId) {
       return { allowed: false, status: 401, message: 'Authentication required for this image.' };
     }
-    const referencedByPublicProject = await isLegacyPathReferencedByPublicProject(supabaseAdmin, legacyScoped.ownerId, imagePath);
+    const referencedByPublicProject = await isPathReferencedByPublicProject(supabaseAdmin, legacyScoped.ownerId, imagePath);
     if (referencedByPublicProject) {
       return { allowed: true };
     }
@@ -333,7 +337,10 @@ systemRouter.get('/image-url', async (req, res, next) => {
     if (error || !data?.signedUrl) {
       const fallbackPath = buildLegacyFallbackPath(imagePath);
       if (!fallbackPath) {
-        if (error) throw error;
+        // A 4xx from storage means the object can't be signed (missing/inaccessible)
+        // — report that as 404, not the raw 400 Supabase returns. Only re-raise true
+        // server-side failures so they surface as 500.
+        if (error && Number((error as any).status ?? (error as any).statusCode) >= 500) throw error;
         return res.status(404).json({ error: { message: 'Image not found.' } });
       }
 
@@ -346,7 +353,7 @@ systemRouter.get('/image-url', async (req, res, next) => {
     }
 
     if (error || !data?.signedUrl) {
-      if (error) throw error;
+      if (error && Number((error as any).status ?? (error as any).statusCode) >= 500) throw error;
       return res.status(404).json({ error: { message: 'Image not found.' } });
     }
 

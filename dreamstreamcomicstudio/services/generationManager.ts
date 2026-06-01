@@ -285,6 +285,7 @@ export const startBackgroundGeneration = async (
             {
               abortSignal: controller.signal,
               stage: "preview",
+              continuitySummary: continuitySummary || undefined,
               continuityBible: state.continuity?.bible,
               sceneBindings: state.continuity?.bible.sceneBindings,
               previousPanelContext: freshPanels

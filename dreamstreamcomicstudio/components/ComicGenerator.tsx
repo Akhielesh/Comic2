@@ -129,7 +129,7 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({ state, onStart, 
                   value={stopInput}
                   onChange={(e) => setStopInput(e.target.value)}
                   onKeyDown={handleStopKey}
-                  placeholder='Type \"stop\" + Enter'
+                  placeholder={'Type "stop" + Enter'}
                   className="border-2 border-black rounded px-3 py-2 text-xs font-mono"
                 />
                 <button
@@ -157,8 +157,8 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({ state, onStart, 
             <div className="mb-2 border-b border-white/20 pb-1 flex items-start text-white opacity-50">
                 <span>Current Step: {status.currentStepDescription}</span>
             </div>
-            {[...status.logs].reverse().map((log, i) => (
-                <div key={i} className="mb-2 border-b border-white/20 pb-1 flex items-start">
+            {[...status.logs].reverse().map((log) => (
+                <div key={`${log.timestamp}-${log.message}`} className="mb-2 border-b border-white/20 pb-1 flex items-start">
                     <span className="mr-2 text-brand-red">{'>'}</span> {log.message}
                 </div>
             ))}

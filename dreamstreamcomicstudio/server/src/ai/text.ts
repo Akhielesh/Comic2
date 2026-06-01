@@ -987,7 +987,8 @@ export const generatePanelBreakdown = async (
   continuityBible?: ContinuityBible,
   sceneBindings?: SceneContinuityBinding[],
   previousPanelContext?: Array<{ panelId?: string; sceneId?: number; description: string; dialogue?: string }>,
-  modelOverride?: string
+  modelOverride?: string,
+  continuitySummary?: string
 ): Promise<PanelBreakdownResponse> => {
   const model = resolveTextModel(modelOverride);
   if (!scene || !scene.synopsis) {
@@ -995,6 +996,15 @@ export const generatePanelBreakdown = async (
   }
 
   const ai = createClient(apiKey);
+  // Only this scene's binding is relevant to its panels; other scenes' bindings were pure
+  // bloat re-sent on every call (cross-scene narrative now comes from the continuity
+  // summary above). Fall back to all bindings if this scene can't be matched — no regression.
+  const formatBinding = (b: SceneContinuityBinding) =>
+    `- Scene ${b.sceneId}: required(${b.requiredEntityIds.join(', ') || 'none'}), location(${b.locationId || 'none'})`;
+  const sceneBinding = sceneBindings?.find((b) => b.sceneId === scene.id);
+  const sceneBindingLine = sceneBinding
+    ? formatBinding(sceneBinding)
+    : (sceneBindings && sceneBindings.length ? sceneBindings.map(formatBinding).join('\n') : 'None provided');
   const prompt = `
       Act as a comic book editor.
       Break this scene into exactly ${panelCount} distinct comic panels based on the synopsis.
@@ -1009,10 +1019,12 @@ export const generatePanelBreakdown = async (
       Scene Raw Excerpt: ${scene.rawText || ''}
       Scene Characters: ${(scene.characters || []).join(', ') || 'Unknown'}
       Scene Setting: ${scene.setting || 'Unknown'}
+      Story so far (summary of earlier scenes — keep this scene visually and narratively consistent with it):
+      ${continuitySummary?.trim() || 'This is the opening; there are no earlier scenes yet.'}
       Allowed continuity entities:
       ${continuityBible?.entities?.map((entity) => `- [${entity.kind}] ${entity.name}: ${entity.description}`).join('\n') || 'None provided'}
       Scene continuity bindings:
-      ${sceneBindings?.map((binding) => `- Scene ${binding.sceneId}: required(${binding.requiredEntityIds.join(', ') || 'none'}), location(${binding.locationId || 'none'})`).join('\n') || 'None provided'}
+      ${sceneBindingLine}
       Previous panel context:
       ${previousPanelContext?.map((panel, idx) => `- Prev ${idx + 1}: ${panel.description} | ${panel.dialogue || ''}`).join('\n') || 'None provided'}
       
@@ -1110,13 +1122,13 @@ Script:
 ${payload.script || 'Not provided'}
 
 Continuity bible:
-${JSON.stringify(payload.continuityBible || {}, null, 2)}
+${JSON.stringify(payload.continuityBible || {})}
 
 Scene bindings:
-${JSON.stringify(payload.sceneBindings || [], null, 2)}
+${JSON.stringify(payload.sceneBindings || [])}
 
 Panels:
-${JSON.stringify(payload.panels || [], null, 2)}
+${JSON.stringify(payload.panels || [])}
   `;
 
   const response = await withRetry(
