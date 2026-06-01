@@ -1,11 +1,14 @@
 import { GoogleGenAI } from '@google/genai';
-import { GEMINI_BASE_URL } from '../config.js';
+import { GEMINI_BASE_URL, NVIDIA_TEXT_MODEL } from '../config.js';
 import { geminiSchemaToJsonSchema } from './schemaConvert.js';
 import { getProvider, resolveProviderContext } from './gateway.js';
 import { TEXT_FALLBACK } from './autoRouter.js';
-import type { ChatMessage } from './providers/types.js';
+import type { AIProviderId, ChatMessage } from './providers/types.js';
 
 const isOpenRouterKey = (key: string) => key.startsWith('sk-or-');
+// NVIDIA Build keys are prefixed `nvapi-`. They route through the same OpenAI-compatible
+// gateway shim as OpenRouter, so every analyze/world/panel/continuity stage works unchanged.
+const isNvidiaKey = (key: string) => key.startsWith('nvapi-');
 
 const partsToText = (parts: any): string =>
   Array.isArray(parts) ? parts.map((p: any) => p?.text || '').join('\n') : '';
@@ -42,17 +45,18 @@ const buildMessages = (contents: any, systemInstruction?: string): ChatMessage[]
 };
 
 /**
- * Minimal OpenRouter-backed shim that matches the subset of the Gemini client our
- * text pipeline uses: `models.generateContent({ model, contents, config })` →
+ * Minimal gateway-backed shim that matches the subset of the Gemini client our text
+ * pipeline uses: `models.generateContent({ model, contents, config })` →
  * `{ text, usageMetadata }`. This lets the existing analyze/world/panel/continuity
- * functions run through OpenRouter unchanged (their parsing/grounding is untouched).
- * The Gemini `responseSchema` is converted to JSON Schema for json_schema output.
+ * functions run through ANY OpenAI-compatible provider (OpenRouter or NVIDIA Build)
+ * unchanged (their parsing/grounding is untouched). The Gemini `responseSchema` is
+ * converted to JSON Schema for json_schema output.
  */
-const createOpenRouterTextClient = (apiKey: string) => ({
+const createGatewayTextClient = (apiKey: string, providerId: AIProviderId, fallbackModel: string) => ({
   models: {
     generateContent: async (req: any) => {
-      // Use a real OpenRouter model id (contains a '/'); otherwise fall back to the default.
-      const model = typeof req?.model === 'string' && req.model.includes('/') ? req.model : TEXT_FALLBACK;
+      // Use a real provider model id (contains a '/'); otherwise fall back to the default.
+      const model = typeof req?.model === 'string' && req.model.includes('/') ? req.model : fallbackModel;
       const cfg = req?.config || {};
       let schema = cfg.responseSchema ? geminiSchemaToJsonSchema(cfg.responseSchema) : undefined;
 
@@ -66,16 +70,16 @@ const createOpenRouterTextClient = (apiKey: string) => ({
         schema = { type: 'object', properties: { items: schema }, required: ['items'] };
       }
 
-      const result = await getProvider('openrouter').generateText(
+      const result = await getProvider(providerId).generateText(
         {
           model,
           messages: buildMessages(req?.contents, typeof cfg.systemInstruction === 'string' ? cfg.systemInstruction : undefined),
           jsonSchema: schema ? { name: 'response', schema, strict: false } : undefined,
           temperature: typeof cfg.temperature === 'number' ? cfg.temperature : undefined,
           retries: 3,
-          fallbackModel: TEXT_FALLBACK
+          fallbackModel
         },
-        resolveProviderContext(apiKey)
+        resolveProviderContext(apiKey, providerId)
       );
 
       let text = result.text;
@@ -118,9 +122,12 @@ export const createClient = (apiKey: string) => {
   if (!apiKey) {
     throw new Error('AI API key not found.');
   }
-  // OpenRouter key → unified gateway shim (text). Gemini key → real Google SDK client.
+  // OpenRouter / NVIDIA key → unified gateway shim (text). Gemini key → real Google SDK client.
   if (isOpenRouterKey(apiKey)) {
-    return createOpenRouterTextClient(apiKey) as unknown as GoogleGenAI;
+    return createGatewayTextClient(apiKey, 'openrouter', TEXT_FALLBACK) as unknown as GoogleGenAI;
+  }
+  if (isNvidiaKey(apiKey)) {
+    return createGatewayTextClient(apiKey, 'nvidia', NVIDIA_TEXT_MODEL) as unknown as GoogleGenAI;
   }
   // @ts-ignore - The SDK might support baseUrl in options
   return new GoogleGenAI({ apiKey, baseUrl: GEMINI_BASE_URL });

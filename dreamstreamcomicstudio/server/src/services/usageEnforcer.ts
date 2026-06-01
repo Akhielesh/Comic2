@@ -20,7 +20,7 @@ declare module 'express-serve-static-core' {
   }
 }
 
-const resolveProviderFromOperation = (operation: string): 'gemini' | 'pixazo' | 'openrouter' | 'internal' => {
+const resolveProviderFromOperation = (operation: string): 'gemini' | 'pixazo' | 'openrouter' | 'nvidia' | 'internal' => {
   const normalized = operation.toLowerCase();
   if (normalized.includes('openrouter')) return 'openrouter';
   if (normalized.includes('flux') || normalized.includes('pixazo')) return 'pixazo';
@@ -36,10 +36,11 @@ const resolveModelFromRequest = (req: Request, fallbackModel: string) => {
   return fallbackModel;
 };
 
-export const hasByokForProvider = (req: Request, provider: 'gemini' | 'pixazo' | 'openrouter' | 'internal') => {
+export const hasByokForProvider = (req: Request, provider: 'gemini' | 'pixazo' | 'openrouter' | 'nvidia' | 'internal') => {
   if (provider === 'gemini') return Boolean(req.header('X-Gemini-Key'));
   if (provider === 'pixazo') return Boolean(req.header('X-Pixazo-Key') || req.header('X-Flux-Key'));
   if (provider === 'openrouter') return Boolean(req.header('X-OpenRouter-Key'));
+  if (provider === 'nvidia') return Boolean(req.header('X-Nvidia-Key'));
   return false;
 };
 
@@ -47,7 +48,7 @@ export const reserveForOperation = async (input: {
   req: Request;
   operation: string;
   fallbackModel: string;
-  provider?: 'gemini' | 'pixazo' | 'openrouter' | 'internal';
+  provider?: 'gemini' | 'pixazo' | 'openrouter' | 'nvidia' | 'internal';
   resolution?: TokenEstimateRequest['resolution'];
   imageUnits?: number;
   inputTokens?: number;
@@ -61,7 +62,7 @@ export const reserveForOperation = async (input: {
       allowed: true;
       reservation: ReservationState;
       seed: {
-        provider: 'gemini' | 'pixazo' | 'openrouter' | 'internal';
+        provider: 'gemini' | 'pixazo' | 'openrouter' | 'nvidia' | 'internal';
         model: string;
         operation: string;
         inputTokens?: number;
@@ -76,7 +77,7 @@ export const reserveForOperation = async (input: {
         byok?: boolean;
         metadata?: Record<string, unknown>;
       };
-      provider: 'gemini' | 'pixazo' | 'openrouter' | 'internal';
+      provider: 'gemini' | 'pixazo' | 'openrouter' | 'nvidia' | 'internal';
       model: string;
     }
   | { allowed: false; details: LimitExceededDetails }
@@ -159,7 +160,7 @@ export const settleReservedOperation = async (input: {
   provider: string;
   model: string;
   seed: {
-    provider: 'gemini' | 'pixazo' | 'openrouter' | 'internal';
+    provider: 'gemini' | 'pixazo' | 'openrouter' | 'nvidia' | 'internal';
     model: string;
     operation: string;
     inputTokens?: number;

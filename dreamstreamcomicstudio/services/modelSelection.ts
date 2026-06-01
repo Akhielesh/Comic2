@@ -8,11 +8,15 @@
 
 export type ModelMode = 'default' | 'free' | 'specific';
 export type ModelSlot = 'image' | 'text';
+export type ModelSourceId = 'openrouter' | 'nvidia';
 
 export interface ModelSelection {
   mode: ModelMode;
   imageModel: string | null;
   textModel: string | null;
+  /** Which source the selected models came from, so the server routes to the right provider. */
+  imageSource?: ModelSourceId | null;
+  textSource?: ModelSourceId | null;
   /** Sparse per-stage text-model overrides (advanced). Each falls back to textModel. */
   byStage?: Record<string, string>;
 }
@@ -20,7 +24,7 @@ export interface ModelSelection {
 const STORAGE = 'dreamstream_model_selection';
 export const MODEL_SELECTION_CHANGED = 'dreamstream:model-selection-changed';
 
-const DEFAULTS: ModelSelection = { mode: 'default', imageModel: null, textModel: null };
+const DEFAULTS: ModelSelection = { mode: 'default', imageModel: null, textModel: null, imageSource: null, textSource: null };
 
 const read = (): ModelSelection => {
   if (typeof window === 'undefined') return { ...DEFAULTS };
@@ -47,6 +51,8 @@ export const getModelSelection = (): ModelSelection => read();
 
 export const getSelectedImageModel = (): string | null => read().imageModel;
 export const getSelectedTextModel = (): string | null => read().textModel;
+export const getSelectedImageSource = (): ModelSourceId | null => read().imageSource ?? null;
+export const getSelectedTextSource = (): ModelSourceId | null => read().textSource ?? null;
 
 /**
  * A "truly free" model costs nothing to call (OpenRouter ':free' variant). Such models are
@@ -57,10 +63,20 @@ export const getSelectedTextModel = (): string | null => read().textModel;
 export const isTrulyFreeModelId = (modelId?: string | null): boolean =>
   Boolean(modelId && modelId.trim().toLowerCase().endsWith(':free'));
 
-export const setSelectedModel = (slot: ModelSlot, modelId: string | null, mode: ModelMode = 'specific') => {
+export const setSelectedModel = (
+  slot: ModelSlot,
+  modelId: string | null,
+  mode: ModelMode = 'specific',
+  source?: ModelSourceId | null
+) => {
   const next = read();
-  if (slot === 'image') next.imageModel = modelId;
-  else next.textModel = modelId;
+  if (slot === 'image') {
+    next.imageModel = modelId;
+    next.imageSource = modelId ? (source ?? null) : null;
+  } else {
+    next.textModel = modelId;
+    next.textSource = modelId ? (source ?? null) : null;
+  }
   next.mode = mode;
   write(next);
 };
@@ -72,6 +88,8 @@ export const setSelectionMode = (mode: ModelMode) => {
   if (mode === 'default') {
     next.imageModel = null;
     next.textModel = null;
+    next.imageSource = null;
+    next.textSource = null;
     next.byStage = undefined;
   }
   write(next);

@@ -11,7 +11,7 @@ import {
   continuityAudit,
   analyzeTestLabReport
 } from '../ai/text.js';
-import { TEXT_MODEL } from '../config.js';
+import { TEXT_MODEL, NVIDIA_TEXT_MODEL } from '../config.js';
 import { pickTextModel } from '../ai/autoRouter.js';
 import { resolveStageModel, type PipelineStage } from '../ai/stageModels.js';
 import { getProvider, resolveProviderContext } from '../ai/gateway.js';
@@ -46,25 +46,45 @@ const assertTextModelAccess = async (
   return access.effectiveModel;
 };
 
-type TextProvider = { apiKey: string; model: string; provider: 'openrouter' | 'gemini' };
+type TextProvider = { apiKey: string; model: string; provider: 'openrouter' | 'gemini' | 'nvidia' };
 
-// Text generation routes through OpenRouter when an OpenRouter key is present (BYOK or
-// platform OPENROUTER_API_KEY), otherwise the legacy Gemini path. Sends a 401 and
-// returns null when neither key is available.
+// Text generation routes through OpenRouter or NVIDIA Build (both OpenAI-compatible, via the
+// gateway shim in ai/client.ts) when their key is present, otherwise the legacy Gemini path.
+// An explicit `X-Text-Source` (set when the user picks a model from a given source) wins;
+// otherwise precedence is OpenRouter → NVIDIA → Gemini. Sends 401 when no key is available.
 const resolveTextProvider = async (
   req: any,
   res: any,
   stage: PipelineStage = 'generate'
 ): Promise<TextProvider | null> => {
+  const textSource = String(req.header('X-Text-Source') || '').trim().toLowerCase();
   const openRouterKey = req.apiKeys?.openRouterKey;
-  if (openRouterKey) {
+  const nvidiaKey = req.apiKeys?.nvidiaKey;
+  const requested = req.header('X-Text-Model')?.trim();
+
+  // NVIDIA uses its own (publisher/model) ids and a limited capability catalog, so we pass
+  // the requested model straight through (no OpenRouter-catalog stage downgrade) and default
+  // to NVIDIA_TEXT_MODEL when none/incompatible is supplied.
+  const nvidiaPick = (): TextProvider => ({
+    apiKey: nvidiaKey as string,
+    model: requested && requested.includes('/') ? requested : NVIDIA_TEXT_MODEL,
+    provider: 'nvidia'
+  });
+  const openRouterPick = async (): Promise<TextProvider> => {
     // Validate the requested model against the stage's required capabilities (e.g.
-    // structured-JSON for analyze/world/panel/audit) and downgrade to a capable model
-    // if needed, rather than letting an incapable model fail at request time.
-    const requested = req.header('X-Text-Model')?.trim();
+    // structured-JSON for analyze/world/panel/audit) and downgrade if needed.
     const { model } = await resolveStageModel(stage, requested, { costPref: 'free' });
-    return { apiKey: openRouterKey, model, provider: 'openrouter' };
-  }
+    return { apiKey: openRouterKey as string, model, provider: 'openrouter' };
+  };
+
+  // Explicit source selection wins (the user picked a model from this source).
+  if (textSource === 'nvidia' && nvidiaKey) return nvidiaPick();
+  if (textSource === 'openrouter' && openRouterKey) return openRouterPick();
+
+  // Fallback precedence.
+  if (openRouterKey) return openRouterPick();
+  if (nvidiaKey) return nvidiaPick();
+
   const geminiKey = req.apiKeys?.geminiKey;
   if (geminiKey) {
     const model = await assertTextModelAccess(req, resolveRequestedModel(req.header('X-Gemini-Model')));
@@ -72,7 +92,7 @@ const resolveTextProvider = async (
   }
   res.status(401).json({
     error: {
-      message: 'No AI text key found. Add an OpenRouter key (recommended) or a Gemini key in Settings → API Configuration.',
+      message: 'No AI text key found. Add an OpenRouter, NVIDIA Build, or Gemini key in Settings → API Configuration.',
       code: 'TEXT_KEY_MISSING'
     }
   });
