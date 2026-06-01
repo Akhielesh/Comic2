@@ -1,3 +1,20 @@
+// DEPRECATED MODEL ROUTING — ComicForge only (feature-flagged off via COMICFORGE_ENABLED).
+//
+// MODEL_ROUTING_TABLE below predates the OpenRouter migration: the ids are retired
+// Gemini/Pixazo models with provider 'gemini'|'pixazo' that would 404 against the current
+// OpenRouter gateway, and the per-task estimatedCostUsd values are hardcoded rather than
+// catalog-derived. It is consumed only by the dormant comicforge/pipelineService.ts.
+//
+// Before re-enabling ComicForge, migrate this to the live model system:
+//   - map TaskType -> PipelineStage and resolve via ai/stageModels.ts resolveStageModel()
+//     (capability-aware, with graceful fallback) instead of hardcoded ids;
+//   - derive cost from the annotated catalog (services/modelCatalog.ts) rather than the
+//     static estimatedCostUsd numbers here.
+// The classic (live) pipeline already uses that system; this is the only place still on the
+// legacy provider namespace. Do not treat this table as the source of truth.
+//
+// The prompt-contract helpers below (buildNoTextPrompt / assertNoTextPromptContract) are
+// provider-agnostic and remain valid.
 export enum TaskType {
   STORY_ANALYSIS = 'story_analysis',
   STYLE_SUGGESTION = 'style_suggestion',
