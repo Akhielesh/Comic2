@@ -370,7 +370,7 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
     };
 
     setIsBatchGenerating(true);
-    await runWithLimit(allTasks, 3, async (task) => {
+    await runWithLimit(allTasks, 4, async (task) => {
       await generateEntityImage(task.type, task.id);
     });
     setIsBatchGenerating(false);

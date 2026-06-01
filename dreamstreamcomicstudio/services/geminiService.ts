@@ -30,7 +30,7 @@ import {
   UniversalAssistantResponse
 } from '../apiTypes';
 import { GenerationArtifact, Character, Item, Location, ContinuityBible, SceneContinuityBinding } from '../types';
-import { saveArtifact, saveImage, saveTestImage, getImageUrl, getTestImageUrl, getImageDataUrl } from './db';
+import { saveArtifact, saveImage, saveTestImage, getImageUrl, getTestImageUrl, getImageDataUrl, createSystemNotification } from './db';
 import { IMAGE_TEXT_BLOCKER, NO_TEXT_IN_IMAGE, TEXT_MODEL, IMAGE_MODEL } from './modelPolicy';
 import { cropImageToRatio } from './imageUtils';
 import { updateDebugState } from './debugStore';
@@ -612,7 +612,8 @@ export const generateImage = async (
     const useOpenRouter = Boolean(activeOpenRouterKey);
     let response: ImageGenerateResponse;
     if (useOpenRouter) {
-      // Omit the Gemini model id; the server defaults to OPENROUTER_IMAGE_MODEL.
+      // Send the user's chosen OpenRouter image model. When none is selected, omit it and
+      // the server falls back to its configured default image model (NOT a free auto-pick).
       // The X-OpenRouter-Key header is attached automatically by apiClient.
       response = await post<ImageGenerateRequest, ImageGenerateResponse>(
         '/api/image/openrouter',
@@ -644,6 +645,15 @@ export const generateImage = async (
           throw error;
         }
       }
+    }
+
+    // Honor-strictly policy: if the server had to override the requested image model
+    // (e.g. the catalog says it can't output images), make that visible to the user.
+    if (response.modelDowngrade?.from && response.modelDowngrade.from !== response.modelDowngrade.to) {
+      void createSystemNotification(
+        `Image model "${response.modelDowngrade.from}" couldn't be used (${response.modelDowngrade.reason || 'unsupported for image output'}). Generated with "${response.modelDowngrade.to}" instead.`,
+        projectId ? { projectId, stage: options?.stage } : undefined
+      ).catch(() => { /* notification is best-effort */ });
     }
 
     let imageId = response.imageId;

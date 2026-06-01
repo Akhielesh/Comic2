@@ -249,7 +249,6 @@ imageRouter.post('/gemini', checkLimits('gemini'), async (req, res, next) => {
       const generated = await generateGeminiImage(apiKey, prompt, aspectRatio, resolution, referenceImages || [], effectiveModel);
       const apiMs = generated.timings?.apiMs || 0;
       let responsePayload: Record<string, unknown> = { ...generated };
-      let settledBilling: Awaited<ReturnType<typeof settleReservedOperation>> | null = null;
 
       try {
         if (storage !== 'test') {
@@ -280,7 +279,10 @@ imageRouter.post('/gemini', checkLimits('gemini'), async (req, res, next) => {
           });
         }
 
-        settledBilling = await settleReservedOperation({
+        // Settle billing in the background so the generated image returns immediately.
+        // The reservation is already recorded; the daily reconciliation job repairs any
+        // settle that fails here.
+        void settleReservedOperation({
           req,
           operation: 'image.gemini.generate',
           provider: 'gemini',
@@ -302,9 +304,11 @@ imageRouter.post('/gemini', checkLimits('gemini'), async (req, res, next) => {
             route: '/api/image/gemini',
             storage
           }
+        }).catch((settleError) => {
+          console.error('[BILLING] async settle failed (image.gemini.generate)', (settleError as Error)?.message || settleError);
         });
 
-        return attachBillingToPayload(responsePayload, reserve.reservation, settledBilling);
+        return attachBillingToPayload(responsePayload, reserve.reservation, null);
       } catch (error) {
         await releaseReservedOperation({
           req,
@@ -501,8 +505,15 @@ imageRouter.post('/openrouter', async (req, res, next) => {
     }
 
     const payload = await withIdempotency(req, res, 'image:openrouter', async () => {
-      const requestedImageModel = typeof model === 'string' && model.trim() ? model.trim() : undefined;
-      const { model: effectiveModel } = await resolveStageModel('image_generation', requestedImageModel, { costPref: 'free' });
+      // Honor the caller's model. When none is sent, use the configured default image
+      // model (a capable image model) — NOT a free auto-pick, which would silently
+      // swap the user onto an arbitrary (often slow) free model.
+      const requestedImageModel = typeof model === 'string' && model.trim() ? model.trim() : OPENROUTER_IMAGE_MODEL;
+      const { model: effectiveModel, downgradedFrom, reason: downgradeReason } =
+        await resolveStageModel('image_generation', requestedImageModel, { costPref: 'quality' });
+      if (downgradedFrom) {
+        console.warn('[IMAGE] model downgraded', { route: '/api/image/openrouter', downgradedFrom, to: effectiveModel, reason: downgradeReason });
+      }
       const effectiveResolution = resolution || '1024x1024';
 
       const reserve = await reserveForOperation({
@@ -552,9 +563,9 @@ imageRouter.post('/openrouter', async (req, res, next) => {
         prompt,
         model: generated.model,
         usage,
-        timings: buildTimings(apiMs)
+        timings: buildTimings(apiMs),
+        ...(downgradedFrom ? { modelDowngrade: { from: downgradedFrom, to: effectiveModel, reason: downgradeReason } } : {})
       };
-      let settledBilling: Awaited<ReturnType<typeof settleReservedOperation>> | null = null;
 
       try {
         if (storage !== 'test') {
@@ -585,7 +596,10 @@ imageRouter.post('/openrouter', async (req, res, next) => {
           });
         }
 
-        settledBilling = await settleReservedOperation({
+        // Settle billing in the background so the generated image returns immediately.
+        // The reservation is already recorded; the daily reconciliation job repairs any
+        // settle that fails here. Per-key cost attribution still works via usage.providerCostUsd.
+        void settleReservedOperation({
           req,
           operation: 'image.openrouter.generate',
           provider: 'openrouter',
@@ -604,9 +618,11 @@ imageRouter.post('/openrouter', async (req, res, next) => {
           usage,
           imageUnits: 1,
           metadata: { route: '/api/image/openrouter', storage }
+        }).catch((settleError) => {
+          console.error('[BILLING] async settle failed (image.openrouter.generate)', (settleError as Error)?.message || settleError);
         });
 
-        return attachBillingToPayload(responsePayload, reserve.reservation, settledBilling);
+        return attachBillingToPayload(responsePayload, reserve.reservation, null);
       } catch (error) {
         await releaseReservedOperation({
           req,

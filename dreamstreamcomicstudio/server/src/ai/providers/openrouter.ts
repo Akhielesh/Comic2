@@ -259,7 +259,7 @@ const generateImage = async (
     () =>
       openRouterFetch<any>('/chat/completions', { method: 'POST', body: JSON.stringify(body) }, timeoutMs, ctx),
     req.retries ?? 2,
-    2000,
+    1500,
     'OpenRouter image'
   );
 

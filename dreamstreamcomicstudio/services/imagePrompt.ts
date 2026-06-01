@@ -26,6 +26,8 @@ export type ImagePromptOptions = {
   continuityLock?: string;
   lockedLocation?: string;
   entityVisualRef?: string;
+  /** Mood/atmosphere from the user's opening scene, used to ground style previews. */
+  sceneContext?: string;
 };
 
 const clean = (value?: string) => (value || "").trim();
@@ -35,11 +37,14 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
   const styleLine = clean(options.stylePrompt);
 
   if (options.stage === "style") {
+    const sceneCtx = clean(options.sceneContext);
     return [
       "Style exploration board for comic production.",
-      "No named characters, no named items, no named locations, and no plot events.",
       "Focus on line quality, brushwork, shading language, color palette, and atmospheric mood.",
       "Single full-bleed frame, no panel borders, no text, no logos.",
+      sceneCtx
+        ? `Ground the look in this story's opening — match its environment, lighting and tone (no named characters, no readable text, no plot beats): ${sceneCtx}`
+        : "No named characters, no named items, no named locations, and no plot events.",
       styleLine ? `Art Style: ${styleLine}` : "",
       clean(options.extraNotes) ? `Creative Direction: ${clean(options.extraNotes)}` : ""
     ].filter(Boolean).join("\n");

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, CheckCircle2, BookOpen } from 'lucide-react';
+import { AlertCircle, CheckCircle2, BookOpen, Info } from 'lucide-react';
 import { Scene, StoryPlanningState } from '../../types';
 import { Button } from '../Button';
 import {
@@ -7,6 +7,20 @@ import {
   recommendStoryPlanning,
   getDefaultStoryPlanningState
 } from '../../services/storyPlanning';
+
+// Hover hint: a small info icon that reveals an explanation on hover/focus, so every
+// control on this stage explains what it means and how it affects the rest of the flow.
+const InfoHint: React.FC<{ text: string }> = ({ text }) => (
+  <span className="relative inline-flex group align-middle ml-1" tabIndex={0}>
+    <Info className="w-3.5 h-3.5 text-slate-400 cursor-help" />
+    <span
+      role="tooltip"
+      className="pointer-events-none absolute left-1/2 -translate-x-1/2 bottom-full mb-1 w-60 rounded border-2 border-black bg-black p-2 text-[11px] font-comic font-normal normal-case tracking-normal text-white opacity-0 shadow-comic transition-opacity duration-150 group-hover:opacity-100 group-focus:opacity-100 z-50"
+    >
+      {text}
+    </span>
+  </span>
+);
 
 interface StoryPlanningProps {
   script: string;
@@ -108,7 +122,9 @@ export const StoryPlanning: React.FC<StoryPlanningProps> = ({
       <div className="bg-white border-4 border-black rounded-xl shadow-comic p-6 space-y-2">
         <h2 className="text-3xl font-display text-black">Story Planning</h2>
         <p className="text-sm font-comic text-slate-600">
-          Confirm realistic page count and comic-book format before style and world generation.
+          Set the <strong>shape</strong> of your comic — its format and page count — before you choose a style and build the world.
+          These choices drive the cost estimate, how your scenes are spread across pages, and the layout density suggested later.
+          Nothing here is drawn yet; it's the blueprint the next stages follow.
         </p>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs font-bold">
           <div className="border-2 border-black rounded px-2 py-1 bg-slate-50">Scenes: {scenes.length}</div>
@@ -124,7 +140,10 @@ export const StoryPlanning: React.FC<StoryPlanningProps> = ({
 
       <div className="bg-white border-4 border-black rounded-xl shadow-comic p-6 space-y-5">
         <div className="space-y-2">
-          <label className="text-[11px] font-bold uppercase text-slate-500">Comic Form Factor</label>
+          <label className="text-[11px] font-bold uppercase text-slate-500">
+            Comic Form Factor
+            <InfoHint text="The book format you're making (US Comic, Manga, Webtoon, etc.). It sets the typical panels-per-page and reading rhythm — US Comic ≈ 4-6 panels/page, Manga ≈ 5-8 — which guides the layout suggestions in the Layout stage." />
+          </label>
           <select
             value={localPlanning.formFactor}
             onChange={(event) => {
@@ -158,7 +177,10 @@ export const StoryPlanning: React.FC<StoryPlanningProps> = ({
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div>
-            <label className="text-[11px] font-bold uppercase text-slate-500">Page Range Min</label>
+            <label className="text-[11px] font-bold uppercase text-slate-500">
+              Page Range Min
+              <InfoHint text="The fewest pages you'd accept. Defaults are estimated from your script length (~110 words/page) and scene count. Sets the lower bound for the page count below." />
+            </label>
             <input
               type="number"
               min={1}
@@ -173,7 +195,10 @@ export const StoryPlanning: React.FC<StoryPlanningProps> = ({
             />
           </div>
           <div>
-            <label className="text-[11px] font-bold uppercase text-slate-500">Page Range Max</label>
+            <label className="text-[11px] font-bold uppercase text-slate-500">
+              Page Range Max
+              <InfoHint text="The most pages you'd accept. The feasibility check below warns you if your story can't comfortably fit within this range." />
+            </label>
             <input
               type="number"
               min={1}
@@ -188,7 +213,10 @@ export const StoryPlanning: React.FC<StoryPlanningProps> = ({
             />
           </div>
           <div>
-            <label className="text-[11px] font-bold uppercase text-slate-500">Approved Page Count</label>
+            <label className="text-[11px] font-bold uppercase text-slate-500">
+              Approved Page Count
+              <InfoHint text="The exact number of pages locked for this comic. It drives the cost estimate and how your scenes are distributed across pages in later stages. Must sit within the min/max range." />
+            </label>
             <input
               type="number"
               min={localPlanning.userRange.min}
@@ -219,6 +247,7 @@ export const StoryPlanning: React.FC<StoryPlanningProps> = ({
             <div>{localPlanning.feasibility.reason}</div>
             <div className="text-xs mt-1">
               Estimated panels: {localPlanning.feasibility.estimatedPanels.min}-{localPlanning.feasibility.estimatedPanels.max}
+              <InfoHint text="Roughly how many panels your story needs, from scene count and pacing. If this can't fit your page range, you'll see a warning — raise the page count or tighten the script." />
             </div>
           </div>
         </div>
