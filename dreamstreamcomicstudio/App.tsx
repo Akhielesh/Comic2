@@ -502,6 +502,7 @@ const App: React.FC = () => {
       view === 'auth' ||
       view === 'test' ||
       view === 'learn' ||
+      view === 'how-it-works' ||
       view === 'gallery' ||
       view === 'models' ||
       view === 'comicforge' ||
