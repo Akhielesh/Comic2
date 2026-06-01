@@ -48,6 +48,15 @@ export const getModelSelection = (): ModelSelection => read();
 export const getSelectedImageModel = (): string | null => read().imageModel;
 export const getSelectedTextModel = (): string | null => read().textModel;
 
+/**
+ * A "truly free" model costs nothing to call (OpenRouter ':free' variant). Such models are
+ * exempt from the per-key USD spend limit — you can keep using them past a key's cap because
+ * they don't spend anything. Paid models still enforce the key's limit. (OpenRouter's own
+ * global free-request caps still apply upstream; those are not ours to bypass.)
+ */
+export const isTrulyFreeModelId = (modelId?: string | null): boolean =>
+  Boolean(modelId && modelId.trim().toLowerCase().endsWith(':free'));
+
 export const setSelectedModel = (slot: ModelSlot, modelId: string | null, mode: ModelMode = 'specific') => {
   const next = read();
   if (slot === 'image') next.imageModel = modelId;

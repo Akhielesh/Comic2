@@ -55,6 +55,7 @@ export const post = async <TReq, TRes>(path: string, body: TReq, options?: { sig
   const geminiKey = getActiveKeyValue('gemini') || getGeminiKey();
   const fluxKey = getActiveKeyValue('pixazo') || getFluxKeyInfo().key;
   const openRouterKey = getActiveKeyValue('openrouter') || getOpenRouterKey();
+  const nvidiaKey = getActiveKeyValue('nvidia');
   const token = await getAuthToken();
   // Per-stage override when a stage is supplied, else the global text model.
   const textModel = options?.stage ? getModelForStage(options.stage) : getSelectedTextModel();
@@ -66,6 +67,7 @@ export const post = async <TReq, TRes>(path: string, body: TReq, options?: { sig
       ...(options?.apiKey ? { 'X-Gemini-Key': options.apiKey } : (geminiKey ? { 'X-Gemini-Key': geminiKey } : {})),
       ...(fluxKey ? { 'X-Pixazo-Key': fluxKey } : {}),
       ...(openRouterKey ? { 'X-OpenRouter-Key': openRouterKey } : {}),
+      ...(nvidiaKey ? { 'X-Nvidia-Key': nvidiaKey } : {}),
       ...(textModel ? { 'X-Text-Model': textModel } : {}),
       ...(options?.stage ? { 'X-Pipeline-Stage': options.stage } : {}),
       ...(options?.modelId ? { 'X-Gemini-Model': options.modelId } : {}),
@@ -83,6 +85,7 @@ export const get = async <TRes>(path: string, options?: { modelId?: string }): P
   const geminiKey = getActiveKeyValue('gemini') || getGeminiKey();
   const fluxKey = getActiveKeyValue('pixazo') || getFluxKeyInfo().key;
   const openRouterKey = getActiveKeyValue('openrouter') || getOpenRouterKey();
+  const nvidiaKey = getActiveKeyValue('nvidia');
   const token = await getAuthToken();
 
   const res = await fetch(buildApiUrl(path), {
@@ -90,6 +93,7 @@ export const get = async <TRes>(path: string, options?: { modelId?: string }): P
       ...(geminiKey ? { 'X-Gemini-Key': geminiKey } : {}),
       ...(fluxKey ? { 'X-Pixazo-Key': fluxKey } : {}),
       ...(openRouterKey ? { 'X-OpenRouter-Key': openRouterKey } : {}),
+      ...(nvidiaKey ? { 'X-Nvidia-Key': nvidiaKey } : {}),
       ...(getSelectedTextModel() ? { 'X-Text-Model': getSelectedTextModel() as string } : {}),
       ...(options?.modelId ? { 'X-Gemini-Model': options.modelId } : {}),
       ...(token ? { 'Authorization': `Bearer ${token}` } : {})

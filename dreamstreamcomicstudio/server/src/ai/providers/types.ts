@@ -5,7 +5,7 @@
 // choice and pricing in one control plane and avoids re-coupling to a single
 // provider the way the legacy Gemini/Pixazo code did.
 
-export type AIProviderId = 'openrouter';
+export type AIProviderId = 'openrouter' | 'nvidia';
 
 export type ChatRole = 'system' | 'user' | 'assistant';
 
@@ -91,6 +91,8 @@ export type CatalogModelPricing = {
 export type CatalogModel = {
   id: string;
   name: string;
+  /** Which upstream source this model comes from (drives the Library "source" filter). */
+  source: AIProviderId;
   description?: string;
   contextLength?: number;
   inputModalities: string[];

@@ -7,6 +7,7 @@
 
 import { getProvider, resolveProviderContext } from '../ai/gateway.js';
 import { annotateModels, type AnnotatedModel } from '../ai/catalogAnnotations.js';
+import type { AIProviderId } from '../ai/providers/types.js';
 
 const CATALOG_TTL_MS = (() => {
   const raw = Number(process.env.MODEL_CATALOG_TTL_MS);
@@ -73,8 +74,23 @@ export type CatalogFilters = {
   modality?: 'image' | 'text';
   /** Only models that accept reference images (character consistency). */
   supportsRefs?: boolean;
+  /** Filter by upstream source (openrouter | nvidia). */
+  source?: AIProviderId;
   /** Substring search over id/name/description. */
   query?: string;
+};
+
+/** Fetch + annotate models from a specific provider (used to merge BYOK sources like NVIDIA). */
+export const getProviderModels = async (
+  providerId: AIProviderId,
+  apiKey?: string | null
+): Promise<AnnotatedModel[]> => {
+  try {
+    const raw = await getProvider(providerId).listModels(resolveProviderContext(apiKey, providerId));
+    return annotateModels(raw);
+  } catch {
+    return [];
+  }
 };
 
 export const filterCatalog = (models: AnnotatedModel[], filters: CatalogFilters): AnnotatedModel[] => {
@@ -84,6 +100,7 @@ export const filterCatalog = (models: AnnotatedModel[], filters: CatalogFilters)
     if (filters.modality === 'image' && !model.supportsImageOutput) return false;
     if (filters.modality === 'text' && model.supportsImageOutput) return false;
     if (filters.supportsRefs && !model.supportsImageInput) return false;
+    if (filters.source && model.source !== filters.source) return false;
     if (q) {
       const haystack = `${model.id} ${model.name} ${model.description || ''}`.toLowerCase();
       if (!haystack.includes(q)) return false;

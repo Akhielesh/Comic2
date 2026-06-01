@@ -14,6 +14,7 @@ import { AnalyzeScriptResponse } from '../../apiTypes';
 import { ScriptAnalysisReview } from './ScriptAnalysisReview';
 import { buildStyleOnlyNotes, buildSceneContextForStyle } from '../../services/styleGrounding';
 import { getActiveKeyForUse } from '../../services/apiKeys';
+import { getSelectedImageModel, isTrulyFreeModelId } from '../../services/modelSelection';
 
 interface StyleSelectionProps {
   firstScene?: Scene;
@@ -568,9 +569,10 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
     // blocked/over-limit key would otherwise make every tile fail and the old UI blamed
     // "too many selections" — there is no limit on how many styles you can generate.
     const { key: activeOpenRouterKey, blocked: openRouterBlocked } = getActiveKeyForUse('openrouter');
-    if (openRouterBlocked) {
+    // Truly-free (:free) models bypass the per-key USD cap — they cost nothing.
+    if (openRouterBlocked && !isTrulyFreeModelId(getSelectedImageModel())) {
       setError(
-        `Your OpenRouter key "${activeOpenRouterKey?.label || 'active key'}" has hit its monthly usage limit, so image generation is blocked — this is NOT a limit on how many styles you can generate. Raise the limit or switch keys in Settings → API Configuration, then try again.`
+        `Your OpenRouter key "${activeOpenRouterKey?.label || 'active key'}" has hit its monthly usage limit, so paid image generation is blocked — this is NOT a limit on how many styles you can generate. Raise the limit/switch keys in Settings → API Configuration, or pick a free (:free) model.`
       );
       setIsBatchGenerating(false);
       return;
