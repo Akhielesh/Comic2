@@ -404,7 +404,11 @@ export type PanelBreakdownRequest = {
 };
 export type PanelBreakdownResponse = {
   panels: Array<{
+    focalSubject?: string;
     description: string;
+    shotType?: string;
+    cameraAngle?: string;
+    composition?: string;
     dialogue: string;
     dialogueBlocks?: DialogueBlock[];
     requiredEntityIds?: string[];

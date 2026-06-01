@@ -13,6 +13,7 @@ import { ApiError } from '../../services/apiClient';
 import { AnalyzeScriptResponse } from '../../apiTypes';
 import { ScriptAnalysisReview } from './ScriptAnalysisReview';
 import { buildStyleOnlyNotes, buildSceneContextForStyle } from '../../services/styleGrounding';
+import { getActiveKeyForUse } from '../../services/apiKeys';
 
 interface StyleSelectionProps {
   firstScene?: Scene;
@@ -563,6 +564,18 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
       return;
     }
 
+    // Pre-flight the image credential ONCE. Every preview shares the same key, so a
+    // blocked/over-limit key would otherwise make every tile fail and the old UI blamed
+    // "too many selections" — there is no limit on how many styles you can generate.
+    const { key: activeOpenRouterKey, blocked: openRouterBlocked } = getActiveKeyForUse('openrouter');
+    if (openRouterBlocked) {
+      setError(
+        `Your OpenRouter key "${activeOpenRouterKey?.label || 'active key'}" has hit its monthly usage limit, so image generation is blocked — this is NOT a limit on how many styles you can generate. Raise the limit or switch keys in Settings → API Configuration, then try again.`
+      );
+      setIsBatchGenerating(false);
+      return;
+    }
+
     // Create a virtual preset for Custom Style if present
     if (customStyleInput.trim()) {
       const customPreset: StylePreset = {
@@ -792,8 +805,15 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
       setGenerationStats((prev) => ({ ...prev, isActive: false, eta: prev.eta ?? 0 }));
       setIsBatchGenerating(false);
       if (failedCount > 0) {
-        const detail = lastFailureReason ? ` Latest: ${lastFailureReason.slice(0, 140)}` : '';
-        setError(`${failedCount} preview${failedCount > 1 ? 's' : ''} failed or timed out. Try again or reduce selections.${detail}`);
+        const reason = lastFailureReason || '';
+        const isKeyOrConfigIssue = /usage limit|api[ _-]?key|unauthor|forbidden|no .*key|key .*limit|quota|not configured/i.test(reason);
+        if (isKeyOrConfigIssue) {
+          // Be honest about the real blocker instead of implying a cap on style count.
+          setError(`Image generation is blocked by your API key/configuration — not by how many styles you picked. ${reason.slice(0, 160)} Fix it in Settings → API Configuration, then regenerate.`);
+        } else {
+          const detail = reason ? ` Latest: ${reason.slice(0, 140)}` : '';
+          setError(`${failedCount} preview${failedCount > 1 ? 's' : ''} failed or timed out. Try again in a moment.${detail}`);
+        }
       }
     }
   };

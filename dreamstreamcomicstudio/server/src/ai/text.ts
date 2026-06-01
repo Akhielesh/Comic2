@@ -1089,13 +1089,18 @@ export const generatePanelBreakdown = async (
       ${previousPanelContext?.map((panel, idx) => `- Prev ${idx + 1}: ${panel.description} | ${panel.dialogue || ''}`).join('\n') || 'None provided'}
       
       Return JSON array of panels. Each panel must include:
-      - description: visual prompt for the artist (no text in image)
+      - focalSubject: the concrete subject of THIS panel, drawn from the synopsis/setting (e.g. "the weathered fishing trawler", "the harbour at dawn"). Never generic ("a hero", "a figure") and never off-genre. This is what the artist must actually draw.
+      - description: visual prompt for the artist describing exactly what is in frame (no text in image). It MUST depict the focalSubject and the scene's real content — do NOT substitute generic comic-book or superhero imagery.
+      - shotType: one of wide / establishing / medium / close-up / extreme close-up / over-the-shoulder.
+      - cameraAngle: one of eye-level / low-angle / high-angle / birds-eye / worms-eye / dutch.
+      - composition: a brief framing note (rule-of-thirds, centered, leading lines, foreground vs background, etc.).
       - dialogue: a short line of text or caption (must not be empty)
       - dialogueBlocks: optional array of dialogue objects (kind: speech/caption/narration, speaker optional, text, side optional left/right/center).
       - requiredEntityIds: array of entity IDs that must remain visible/consistent in this panel.
       - locationId: the locked location entity id for this panel.
       - continuityNotes: short note describing continuity constraints to preserve.
 
+      Vary shotType and cameraAngle across panels for visual rhythm (do not make every panel a medium eye-level shot).
       Every panel must include at least one dialogue or caption line. If unsure, add a short narration caption.
       Keep character identity visually consistent across all panels.
       Ensure each description can be generated as a single full-bleed image frame.
@@ -1113,7 +1118,11 @@ export const generatePanelBreakdown = async (
           items: {
             type: Type.OBJECT,
             properties: {
-              description: { type: Type.STRING, description: 'Visual prompt for the artist' },
+              focalSubject: { type: Type.STRING, description: 'Concrete subject of this panel, from the synopsis/setting; never generic or off-genre' },
+              description: { type: Type.STRING, description: 'Visual prompt for the artist; must depict the focalSubject and the real scene content' },
+              shotType: { type: Type.STRING, description: 'wide / establishing / medium / close-up / extreme close-up / over-the-shoulder' },
+              cameraAngle: { type: Type.STRING, description: 'eye-level / low-angle / high-angle / birds-eye / worms-eye / dutch' },
+              composition: { type: Type.STRING, description: 'Brief framing note' },
               dialogue: { type: Type.STRING, description: 'Speech bubble text or caption' },
               dialogueBlocks: {
                 type: Type.ARRAY,
@@ -1130,7 +1139,8 @@ export const generatePanelBreakdown = async (
               requiredEntityIds: { type: Type.ARRAY, items: { type: Type.STRING } },
               locationId: { type: Type.STRING },
               continuityNotes: { type: Type.STRING }
-            }
+            },
+            required: ['focalSubject', 'description']
           }
         }
       }

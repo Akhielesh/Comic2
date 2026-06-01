@@ -43,7 +43,7 @@ const makeState = (): ComicState => ({
 });
 
 describe("buildPanelReferencePack", () => {
-  it("builds deterministic pack order", () => {
+  it("leads with story refs and drops the style image when entity refs exist", () => {
     const state = makeState();
     const panel: ComicPanel = {
       id: "panel-1",
@@ -59,13 +59,35 @@ describe("buildPanelReferencePack", () => {
       maxReferences: 8
     });
 
+    // Concrete story references lead (image models weight the first reference most), and the
+    // style preview is intentionally excluded here so it can't override the panel's subject.
     expect(pack.imageIds).toEqual([
-      "style-img-1",
       "char-img-1",
       "loc-img-1",
       "prior-panel-img",
       "item-ref-1"
     ]);
+    expect(pack.imageIds).not.toContain("style-img-1");
+  });
+
+  it("falls back to the style image only when there are no entity references", () => {
+    const state = makeState();
+    // Strip the scene binding so no entities resolve for this panel.
+    state.continuity!.bible.sceneBindings[0].requiredEntityIds = [];
+    const panel: ComicPanel = {
+      id: "panel-no-entities",
+      sceneId: 1,
+      description: "Empty establishing shot",
+      dialogue: "",
+      imageIdHistory: []
+    };
+
+    const pack = buildPanelReferencePack(state, panel, {
+      styleImageId: "style-img-1",
+      maxReferences: 8
+    });
+
+    expect(pack.imageIds).toContain("style-img-1");
   });
 
   it("caps references at 8", () => {

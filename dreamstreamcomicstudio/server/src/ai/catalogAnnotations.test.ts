@@ -57,6 +57,24 @@ describe('annotateModel', () => {
     expect(a.drawbacks.join(' ')).toMatch(/rate limit/i);
   });
 
+  it('does NOT band a per-token-priced image model as free (no per-image price != free)', () => {
+    const a = annotateModel(
+      base({
+        id: 'google/nano-banana-2',
+        name: 'Nano Banana 2',
+        supportsImageOutput: true,
+        supportsImageInput: true,
+        outputModalities: ['image'],
+        inputModalities: ['text', 'image'],
+        isFree: false,
+        // Billed per token (like Gemini image models on OpenRouter); no per-image price.
+        pricing: { promptPerToken: 0.000002, completionPerToken: 0.000002, imagePerImage: 0, requestFlat: 0 }
+      })
+    );
+    expect(a.costBand).not.toBe('free');
+    expect(a.costBand).toBe('medium');
+  });
+
   it('applies the editorial override for Nano Banana', () => {
     const a = annotateModel(
       base({
