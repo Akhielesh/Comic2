@@ -86,6 +86,17 @@ const extractText = (content: unknown): string => {
 
 const VISION_HINT = /\b(vl|vlm|vila|neva|vision|llava)\b/i;
 
+// NVIDIA's /models returns mostly bare ids (e.g. "meta/llama-3.3-70b-instruct"). Turn that
+// into a readable label so the catalog doesn't look "basic".
+const prettifyId = (id: string): string => {
+  const tail = id.includes('/') ? id.slice(id.indexOf('/') + 1) : id;
+  return tail
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((w) => (/\d/.test(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(' ');
+};
+
 const generateTextOnce = async (
   req: GenerateTextRequest,
   ctx: ProviderContext
@@ -166,7 +177,7 @@ const normalizeCatalogModel = (raw: any): CatalogModel => {
   const isVision = VISION_HINT.test(id);
   return {
     id,
-    name: String(raw?.name || raw?.display_name || id),
+    name: String(raw?.name || raw?.display_name || prettifyId(id)),
     source: 'nvidia',
     description: typeof raw?.description === 'string' ? raw.description : undefined,
     contextLength: typeof raw?.context_length === 'number' ? raw.context_length : undefined,

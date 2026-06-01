@@ -27,13 +27,13 @@ import {
   type ModelSlot,
   type ModelSelection
 } from '../services/modelSelection';
-import { getCapabilities, featureSupport, FEATURE_LABELS } from '../services/modelCapabilities';
+import { getCapabilities, featureSupport, FEATURE_LABELS, capabilityBadges, QUERY_FACETS, type CapabilityTone } from '../services/modelCapabilities';
 
 interface ModelLibraryProps {
   onBack: () => void;
 }
 
-type FilterKey = 'all' | 'free' | 'image' | 'text' | 'refs' | 'openrouter' | 'nvidia';
+type FilterKey = 'all' | 'free' | 'image' | 'text' | 'refs' | 'editing' | 'reasoning' | 'openrouter' | 'nvidia';
 
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'all', label: 'All' },
@@ -41,9 +41,23 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: 'image', label: 'Image' },
   { key: 'text', label: 'Text' },
   { key: 'refs', label: 'Reference-capable' },
+  { key: 'editing', label: 'Image editing' },
+  { key: 'reasoning', label: 'Reasoning' },
   { key: 'openrouter', label: 'Source: OpenRouter' },
   { key: 'nvidia', label: 'Source: NVIDIA Build' }
 ];
+
+const TONE_CLASS: Record<CapabilityTone, string> = {
+  free: 'bg-green-500 text-white',
+  image: 'bg-brand-blue text-white',
+  text: 'bg-slate-100 text-slate-700',
+  vision: 'bg-brand-yellow text-black',
+  edit: 'bg-fuchsia-600 text-white',
+  reason: 'bg-indigo-600 text-white',
+  json: 'bg-slate-100 text-slate-700',
+  tools: 'bg-slate-100 text-slate-700',
+  context: 'bg-slate-100 text-slate-700'
+};
 
 const BAND_COLOR: Record<Band, string> = {
   free: 'bg-green-500 text-white',
@@ -63,16 +77,30 @@ const slotOf = (model: CatalogModel): ModelSlot => (model.supportsImageOutput ? 
 const perMillion = (perToken: number) => (perToken > 0 ? `$${(perToken * 1_000_000).toFixed(2)}/M` : '—');
 
 const matchesFilter = (model: CatalogModel, filter: FilterKey, query: string): boolean => {
+  const caps = getCapabilities(model);
   if (filter === 'free' && !model.isFree) return false;
   if (filter === 'image' && !model.supportsImageOutput) return false;
   if (filter === 'text' && model.supportsImageOutput) return false;
   if (filter === 'refs' && !model.supportsImageInput) return false;
+  if (filter === 'editing' && !caps.imageEditing) return false;
+  if (filter === 'reasoning' && !caps.reasoning) return false;
   if (filter === 'openrouter' && model.source !== 'openrouter') return false;
   if (filter === 'nvidia' && model.source !== 'nvidia') return false;
-  const q = query.trim().toLowerCase();
-  if (q) {
-    const haystack = `${model.id} ${model.name} ${model.description || ''}`.toLowerCase();
-    if (!haystack.includes(q)) return false;
+
+  // Smart search: each token is either a semantic facet ("free", "image", "vision",
+  // "reasoning", "editing", "nvidia"…) or a plain substring. ALL tokens must match — so
+  // typing "free image" auto-narrows to free image models without touching the chips.
+  const tokens = query.trim().toLowerCase().split(/[\s,]+/).filter(Boolean);
+  if (tokens.length) {
+    const haystack = `${model.id} ${model.name} ${model.description || ''} ${model.source}`.toLowerCase();
+    for (const tok of tokens) {
+      const facet = QUERY_FACETS.find((f) => f.keys.includes(tok));
+      if (facet) {
+        if (!facet.test(caps, model)) return false;
+      } else if (!haystack.includes(tok)) {
+        return false;
+      }
+    }
   }
   return true;
 };
@@ -122,14 +150,7 @@ const ModelCard: React.FC<{
     </div>
 
     <div className="flex flex-wrap gap-1">
-      {model.isFree && <Badge className="bg-green-500 text-white">Free</Badge>}
-      {model.supportsImageOutput ? (
-        <Badge className="bg-brand-blue text-white"><ImageIcon className="w-3 h-3 inline -mt-0.5 mr-0.5" />Image</Badge>
-      ) : (
-        <Badge className="bg-slate-100 text-slate-700"><TypeIcon className="w-3 h-3 inline -mt-0.5 mr-0.5" />Text</Badge>
-      )}
-      {model.supportsImageInput && <Badge className="bg-brand-yellow text-black">Refs</Badge>}
-      {model.supportsJsonOutput && <Badge className="bg-slate-100 text-slate-700">JSON</Badge>}
+      {capabilityBadges(model).map((b) => <Badge key={b.label} className={TONE_CLASS[b.tone]}>{b.label}</Badge>)}
     </div>
 
     {model.editorialNote && <p className="text-xs text-slate-600 line-clamp-2">{model.editorialNote}</p>}
@@ -163,8 +184,11 @@ const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; on
         <div className="flex flex-wrap items-center gap-1.5">
           <Badge className={BAND_COLOR[model.costBand]}>{costLabel(model)}</Badge>
           {model.isFree && <Badge className="bg-green-500 text-white">Free</Badge>}
-          {model.supportsImageOutput && <Badge className="bg-brand-blue text-white">Image output</Badge>}
-          {model.supportsImageInput && <Badge className="bg-brand-yellow text-black">Reference images</Badge>}
+          {model.supportsImageOutput && <Badge className="bg-brand-blue text-white">Text→Image</Badge>}
+          {getCapabilities(model).imageInput && !model.supportsImageOutput && <Badge className="bg-brand-yellow text-black">Image→Text (vision)</Badge>}
+          {model.supportsImageInput && model.supportsImageOutput && <Badge className="bg-brand-yellow text-black">Reference images</Badge>}
+          {getCapabilities(model).imageEditing && <Badge className="bg-fuchsia-600 text-white">Image editing</Badge>}
+          {getCapabilities(model).reasoning && <Badge className="bg-indigo-600 text-white">Reasoning</Badge>}
           {model.supportsJsonOutput && <Badge className="bg-slate-100 text-slate-700">Structured JSON</Badge>}
           {typeof model.contextLength === 'number' && <Badge className="bg-slate-100 text-slate-700">{Math.round(model.contextLength / 1000)}K ctx</Badge>}
           <span className="ml-auto"><UseModelControl model={model} selection={selection} onUse={onUse} /></span>
@@ -232,6 +256,8 @@ const CompareModal: React.FC<{ models: CatalogModel[]; selection: ModelSelection
     { label: 'Free', render: (m) => (m.isFree ? '✅' : '—') },
     { label: 'Output', render: (m) => (m.supportsImageOutput ? 'Image' : 'Text') },
     { label: 'Reference images', render: (m) => (m.supportsImageInput ? '✅' : '—') },
+    { label: 'Image editing', render: (m) => (getCapabilities(m).imageEditing ? '✅' : '—') },
+    { label: 'Reasoning', render: (m) => (getCapabilities(m).reasoning ? '✅' : '—') },
     { label: 'Structured JSON', render: (m) => (m.supportsJsonOutput ? '✅' : '—') },
     { label: 'Context', render: (m) => (m.contextLength ? `${Math.round(m.contextLength / 1000)}K` : '—') },
     { label: 'Input $/Mtok', render: (m) => perMillion(m.pricing.promptPerToken) },
