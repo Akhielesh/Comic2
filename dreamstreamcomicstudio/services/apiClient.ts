@@ -1,7 +1,7 @@
 import { buildApiUrl } from './clientConfig';
 import { getFluxKeyInfo, getOpenRouterKey } from './appSettings';
 import { getActiveKeyValue } from './apiKeys';
-import { getSelectedTextModel, getModelForStage } from './modelSelection';
+import { getSelectedTextModel, getModelForStage, getSelectedTextSource } from './modelSelection';
 import { supabase } from './supabase';
 
 let cachedAccessToken: string | undefined;
@@ -69,6 +69,7 @@ export const post = async <TReq, TRes>(path: string, body: TReq, options?: { sig
       ...(openRouterKey ? { 'X-OpenRouter-Key': openRouterKey } : {}),
       ...(nvidiaKey ? { 'X-Nvidia-Key': nvidiaKey } : {}),
       ...(textModel ? { 'X-Text-Model': textModel } : {}),
+      ...(getSelectedTextSource() ? { 'X-Text-Source': getSelectedTextSource() as string } : {}),
       ...(options?.stage ? { 'X-Pipeline-Stage': options.stage } : {}),
       ...(options?.modelId ? { 'X-Gemini-Model': options.modelId } : {}),
       ...(token ? { 'Authorization': `Bearer ${token}` } : {})
@@ -95,6 +96,7 @@ export const get = async <TRes>(path: string, options?: { modelId?: string }): P
       ...(openRouterKey ? { 'X-OpenRouter-Key': openRouterKey } : {}),
       ...(nvidiaKey ? { 'X-Nvidia-Key': nvidiaKey } : {}),
       ...(getSelectedTextModel() ? { 'X-Text-Model': getSelectedTextModel() as string } : {}),
+      ...(getSelectedTextSource() ? { 'X-Text-Source': getSelectedTextSource() as string } : {}),
       ...(options?.modelId ? { 'X-Gemini-Model': options.modelId } : {}),
       ...(token ? { 'Authorization': `Bearer ${token}` } : {})
     }
