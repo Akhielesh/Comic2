@@ -20,6 +20,7 @@ import { estimateTokensFromTextInput } from '../../services/reporting';
 import { IMAGE_MODEL, TEXT_MODEL } from '../../services/modelPolicy';
 import { getImageProvider } from '../../services/appSettings';
 import { getImageModelByProvider } from '../../services/imageModels';
+import { getGridTemplate } from '../../services/panelLayout';
 import { loadArtifactsForProject } from '../../services/db';
 import { buildProjectReport } from '../../services/reporting';
 import { ApiError } from '../../services/apiClient';
@@ -159,17 +160,21 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
   }, [state.pricingConfig, pricing, onStateUpdate]);
 
   useEffect(() => {
+    // Default panels-per-scene from the chosen layout template (so picking "Single Splash"
+    // vs "3x3 Grid" actually changes the plan), clamped to a sane range. Falls back to 3.
+    const template = getGridTemplate(state.gridTemplateId);
+    const defaultPerScene = template ? Math.min(9, Math.max(1, template.panelCount)) : 3;
     setPanelCounts(prev => {
       const nextCounts: Record<number, number> = { ...prev };
       state.scenes.forEach((scene) => {
         if (typeof nextCounts[scene.id] === 'undefined') {
           const existing = state.panels.filter(p => p.sceneId === scene.id);
-          nextCounts[scene.id] = existing.length > 0 ? existing.length : 3;
+          nextCounts[scene.id] = existing.length > 0 ? existing.length : defaultPerScene;
         }
       });
       return nextCounts;
     });
-  }, [state.scenes]);
+  }, [state.scenes, state.gridTemplateId]);
 
   useEffect(() => {
     const version = computePanelPlanVersion(state.scenes);
