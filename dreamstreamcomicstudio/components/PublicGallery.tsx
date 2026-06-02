@@ -235,7 +235,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
 
                 {!user && (
                     <div className="mb-6 border-2 border-black rounded-xl bg-white p-4 flex flex-wrap items-center gap-3 justify-between">
-                        <p className="text-sm font-bold text-slate-700">Log in to read comics, like, and comment.</p>
+                        <p className="text-sm font-bold text-slate-700">Reading is free — no account needed. Log in to like, comment, and share.</p>
                         <button
                             type="button"
                             onClick={onRequireAuth}
