@@ -245,7 +245,16 @@ export const startBackgroundGeneration = async (
 
     const existingPanels = state.panels.map(panelToPlan);
     const planByScene = groupPanelsByScene(existingPanels);
-    let totalPanelsEstimate = existingPanels.length > 0 ? existingPanels.length : state.scenes.length * 3;
+    // Seed the estimate per-scene: a scene with an existing plan contributes its real
+    // panel count; a scene still needing planning is assumed to be 3. This generalizes
+    // both the fresh run (scenes*3) and the resume case, so the later
+    // `-3 + breakdown.length` adjustment (which assumes a seeded 3) stays correct instead
+    // of skewing the total — previously a resume seeded `existingPanels.length` yet still
+    // subtracted 3 per replanned scene, corrupting the progress %/ETA.
+    let totalPanelsEstimate = state.scenes.reduce(
+      (sum, scene) => sum + (planByScene.get(scene.id)?.length || 3),
+      0
+    );
     let stepsCompleted = 0;
 
     const freshPanels: ComicPanel[] = [];
@@ -336,6 +345,7 @@ export const startBackgroundGeneration = async (
       // --- Batched parallel generation (GENERATION_BATCH_SIZE at a time) ---
       const GENERATION_BATCH_SIZE = 3;
       const sceneBinding = getSceneBinding(state, scene.id);
+      const sceneFreshStart = freshPanels.length;
 
       for (let batchStart = 0; batchStart < breakdown.length; batchStart += GENERATION_BATCH_SIZE) {
         if (isCanceled(project.id)) {
@@ -564,6 +574,15 @@ export const startBackgroundGeneration = async (
           stepsCompleted++;
         }
 
+        // Only the last MAX_CONTINUITY_PANELS entries are ever read (via slice(-N)), so
+        // cap these here to keep memory flat on long scripts instead of growing per panel.
+        if (recentPanelImageIds.length > MAX_CONTINUITY_PANELS) {
+          recentPanelImageIds.splice(0, recentPanelImageIds.length - MAX_CONTINUITY_PANELS);
+        }
+        if (recentPanelDescriptions.length > MAX_CONTINUITY_PANELS) {
+          recentPanelDescriptions.splice(0, recentPanelDescriptions.length - MAX_CONTINUITY_PANELS);
+        }
+
         // Update progress after batch
         const elapsedSeconds = (Date.now() - startTime) / 1000;
         const ratePerStep = stepsCompleted ? elapsedSeconds / stepsCompleted : 0;
@@ -595,10 +614,16 @@ export const startBackgroundGeneration = async (
         }
       }
 
+      // Summarize only the panels that actually rendered this scene — feeding failed
+      // (image-less) panels into the running continuity summary would describe panels
+      // that don't exist and poison downstream prompts.
+      const sceneGeneratedPanels = freshPanels
+        .slice(sceneFreshStart)
+        .filter((panel) => panel.imageId && !panel.failureReason);
       continuitySummary = await updateContinuitySummary(
         continuitySummary,
         scene,
-        breakdown.map((b) => ({ description: b.description, dialogue: b.dialogue })),
+        sceneGeneratedPanels.map((panel) => ({ description: panel.description, dialogue: panel.dialogue })),
         project.id
       );
       onUpdate(project.id, (prev) => ({

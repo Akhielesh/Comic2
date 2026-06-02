@@ -84,6 +84,40 @@ export const ComicForgeStudio: React.FC<ComicForgeStudioProps> = ({
     initializeFromProject(activeForgeProject);
   }, [activeForgeProject?.id]);
 
+  // Poll the active job until it reaches a terminal state. Without this the
+  // job-backed stages (Storyboard / Generation / Export) keep the status the
+  // server returned at enqueue time, so `done` is never observed and the
+  // stage's Approve button stays disabled — blocking the rest of the pipeline.
+  const jobId = lastJob?.id;
+  useEffect(() => {
+    if (!jobId) return;
+    let cancelled = false;
+    let consecutiveErrors = 0;
+    let attempts = 0;
+    const interval = setInterval(async () => {
+      attempts += 1;
+      try {
+        const response = await comicForgeApi.getJobStatus(jobId);
+        consecutiveErrors = 0;
+        if (cancelled) return;
+        const job = response.data.job;
+        setLastJob(job);
+        if (job.status === 'done' || job.status === 'failed') {
+          clearInterval(interval);
+        }
+      } catch {
+        // Queue unavailable (no REDIS_URL) or job evicted — stop after a few tries.
+        consecutiveErrors += 1;
+        if (consecutiveErrors >= 3) clearInterval(interval);
+      }
+      if (attempts >= 120) clearInterval(interval); // safety cap (~5 min)
+    }, 2500);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [jobId, setLastJob]);
+
   const persistState = (project: Project, nextState: ComicForgeState) => {
     onUpdateProject(project.id, buildComicForgeProjectPatch(project, nextState));
   };
@@ -465,7 +499,7 @@ export const ComicForgeStudio: React.FC<ComicForgeStudioProps> = ({
             onRunQc={async () => {
               setError(null);
               try {
-                const response = await comicForgeApi.runQc(firstPageId, { pageId: firstPageId });
+                const response = await comicForgeApi.runQc(firstPageId, { pageId: firstPageId, projectId: activeForgeProject.id });
                 applyState((prev) => ({
                   ...prev,
                   qcReports: [...(prev.qcReports || []), response.data.report],
