@@ -11,7 +11,11 @@ import {
   X,
   Sparkles,
   Scale,
-  Plus
+  Plus,
+  Wand2,
+  Zap,
+  ThumbsUp,
+  ThumbsDown
 } from 'lucide-react';
 import {
   fetchModelCatalog,
@@ -22,12 +26,15 @@ import {
 } from '../services/modelCatalog';
 import {
   setSelectedModel,
+  setStageModel,
   getModelSelection,
   MODEL_SELECTION_CHANGED,
   type ModelSlot,
   type ModelSelection
 } from '../services/modelSelection';
 import { getCapabilities, featureSupport, FEATURE_LABELS, capabilityBadges, QUERY_FACETS, type CapabilityTone } from '../services/modelCapabilities';
+import { buildSmartTeam, TASK_PROFILES, type SmartMode, type SmartTask, type SmartTeam } from '../services/smartModelSelection';
+import { recordModelFeedback, latestVote, MODEL_FEEDBACK_CHANGED, type FeedbackVote } from '../services/modelFeedback';
 
 interface ModelLibraryProps {
   onBack: () => void;
@@ -92,7 +99,12 @@ const matchesFilter = (model: CatalogModel, filter: FilterKey, query: string): b
   // typing "free image" auto-narrows to free image models without touching the chips.
   const tokens = query.trim().toLowerCase().split(/[\s,]+/).filter(Boolean);
   if (tokens.length) {
-    const haystack = `${model.id} ${model.name} ${model.description || ''} ${model.source}`.toLowerCase();
+    const capLabels = capabilityBadges(model).map((b) => b.label).join(' ');
+    const haystack = [
+      model.id, model.name, model.description, model.source,
+      model.roles?.join(' '), model.possibilities?.join(' '), model.drawbacks?.join(' '),
+      model.editorialNote, capLabels
+    ].filter(Boolean).join(' ').toLowerCase();
     for (const tok of tokens) {
       const facet = QUERY_FACETS.find((f) => f.keys.includes(tok));
       if (facet) {
@@ -129,6 +141,25 @@ const UseModelControl: React.FC<{ model: CatalogModel; selection: ModelSelection
   );
 };
 
+// 👍/👎 a model to teach Smart auto-pick. Dislike optionally asks why (never forced).
+const FeedbackButtons: React.FC<{ modelId: string; task?: string }> = ({ modelId, task }) => {
+  const [vote, setVote] = useState<FeedbackVote | null>(() => latestVote(modelId));
+  const cast = (v: FeedbackVote) => (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const note = v === 'dislike'
+      ? (window.prompt('Optional — what was off about this model? (leave blank to skip)') || undefined)
+      : undefined;
+    recordModelFeedback(modelId, v, { note, task });
+    setVote(v);
+  };
+  return (
+    <div className="flex items-center gap-1" title="Teach Smart auto-pick">
+      <button onClick={cast('like')} className={`p-1 rounded border-2 border-black ${vote === 'like' ? 'bg-green-500 text-white' : 'bg-white hover:bg-green-100'}`} aria-label="Like this model"><ThumbsUp className="w-3 h-3" /></button>
+      <button onClick={cast('dislike')} className={`p-1 rounded border-2 border-black ${vote === 'dislike' ? 'bg-brand-red text-white' : 'bg-white hover:bg-red-100'}`} aria-label="Dislike this model"><ThumbsDown className="w-3 h-3" /></button>
+    </div>
+  );
+};
+
 const ModelCard: React.FC<{
   model: CatalogModel;
   selection: ModelSelection;
@@ -157,13 +188,16 @@ const ModelCard: React.FC<{
 
     <div className="mt-auto flex items-center justify-between gap-2 pt-2 border-t border-dashed border-slate-200">
       <UseModelControl model={model} selection={selection} onUse={onUse} />
-      <button
-        onClick={(e) => { e.stopPropagation(); onToggleCompare(); }}
-        className={`text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black flex items-center gap-1 ${compared ? 'bg-brand-blue text-white' : 'bg-white hover:bg-brand-yellow'}`}
-        title="Add to comparison"
-      >
-        <Scale className="w-3 h-3" /> {compared ? 'Comparing' : 'Compare'}
-      </button>
+      <div className="flex items-center gap-1.5">
+        <FeedbackButtons modelId={model.id} />
+        <button
+          onClick={(e) => { e.stopPropagation(); onToggleCompare(); }}
+          className={`text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black flex items-center gap-1 ${compared ? 'bg-brand-blue text-white' : 'bg-white hover:bg-brand-yellow'}`}
+          title="Add to comparison"
+        >
+          <Scale className="w-3 h-3" /> {compared ? 'Comparing' : 'Compare'}
+        </button>
+      </div>
     </div>
   </div>
 );
@@ -315,6 +349,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack }) => {
   const [selection, setSelection] = useState<ModelSelection>(() => getModelSelection());
   const [compareIds, setCompareIds] = useState<string[]>([]);
   const [showCompare, setShowCompare] = useState(false);
+  const [smartTeam, setSmartTeam] = useState<SmartTeam | null>(null);
 
   useEffect(() => {
     const onChange = () => setSelection(getModelSelection());
@@ -342,6 +377,21 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack }) => {
 
   const useModel = (model: CatalogModel, slot: ModelSlot) => setSelectedModel(slot, model.id, 'specific', model.source);
 
+  // Smart auto-pick: score every model (all sources) per stage and assign the best team.
+  const applySmartTeam = (mode: SmartMode) => {
+    const team = buildSmartTeam(models, mode);
+    if (team.text) setSelectedModel('text', team.text.model.id, 'specific', team.text.model.source);
+    if (team.image) setSelectedModel('image', team.image.model.id, 'specific', team.image.model.source);
+    (Object.keys(TASK_PROFILES) as SmartTask[]).forEach((task) => {
+      const profile = TASK_PROFILES[task];
+      const pick = team.perTask[task];
+      if (profile.kind === 'text' && profile.stage && pick) {
+        setStageModel(profile.stage, pick.model.id, pick.model.source);
+      }
+    });
+    setSmartTeam(team);
+  };
+
   const toggleCompare = (id: string) =>
     setCompareIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : prev.length >= MAX_COMPARE ? prev : [...prev, id]));
 
@@ -368,6 +418,49 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack }) => {
           <span className="inline-flex items-center gap-1.5 border-2 border-black rounded-lg px-2 py-1 bg-white">
             <TypeIcon className="w-3.5 h-3.5" /> Text: <span className="font-bold">{selectedText?.name || (selection.textModel || 'Auto')}</span>
           </span>
+        </div>
+
+        {/* Smart auto-pick — the app's own reasoning picks the best model per stage. */}
+        <div className="mt-4 bg-gradient-to-r from-brand-blue/10 to-brand-yellow/10 border-2 border-black rounded-xl p-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="font-display text-lg flex items-center gap-2"><Wand2 className="w-5 h-5 text-brand-blue" /> Let the app pick</div>
+            <p className="text-xs text-slate-600 flex-1 min-w-[220px]">
+              Scores every model across all your sources for each stage — capabilities, drawbacks, and your 👍/👎 — and assigns the best team. It keeps improving as you give feedback.
+            </p>
+            <button onClick={() => applySmartTeam('best')} disabled={loading || models.length === 0} className="px-3 py-2 rounded-lg border-2 border-black bg-brand-blue text-white font-bold text-sm hover:translate-x-[1px] hover:translate-y-[1px] transition-transform disabled:opacity-50 flex items-center gap-1"><Wand2 className="w-4 h-4" /> Auto-pick best</button>
+            <button onClick={() => applySmartTeam('free')} disabled={loading || models.length === 0} className="px-3 py-2 rounded-lg border-2 border-black bg-green-600 text-white font-bold text-sm hover:translate-x-[1px] hover:translate-y-[1px] transition-transform disabled:opacity-50 flex items-center gap-1"><Zap className="w-4 h-4" /> Best free (any source)</button>
+          </div>
+          {smartTeam && (
+            <div className="mt-3 pt-3 border-t border-black/10 text-xs space-y-2">
+              <div className="font-bold uppercase text-slate-500">{smartTeam.mode === 'free' ? 'Best free team applied' : 'Best team applied'}</div>
+              <div className="grid sm:grid-cols-2 gap-2">
+                <div className="bg-white border-2 border-black rounded p-2">
+                  <div className="font-bold flex items-center gap-1"><TypeIcon className="w-3 h-3" /> Text: {smartTeam.text ? smartTeam.text.model.name : 'none eligible'}</div>
+                  {smartTeam.text && <div className="text-slate-500">{smartTeam.text.reasons.join(' · ')}</div>}
+                </div>
+                <div className="bg-white border-2 border-black rounded p-2">
+                  <div className="font-bold flex items-center gap-1"><ImageIcon className="w-3 h-3" /> Image: {smartTeam.image ? smartTeam.image.model.name : 'none eligible'}</div>
+                  {smartTeam.image
+                    ? <div className="text-slate-500">{smartTeam.image.reasons.join(' · ')}</div>
+                    : <div className="text-brand-red">No {smartTeam.mode === 'free' ? 'free ' : ''}image model found in your sources — add an image-capable key.</div>}
+                </div>
+              </div>
+              <details>
+                <summary className="cursor-pointer font-bold text-slate-500">Per-stage picks</summary>
+                <div className="mt-1 grid sm:grid-cols-2 gap-x-4 gap-y-0.5">
+                  {(Object.keys(TASK_PROFILES) as SmartTask[]).map((t) => {
+                    const pick = smartTeam.perTask[t];
+                    return (
+                      <div key={t} className="flex justify-between gap-2">
+                        <span className="text-slate-400">{TASK_PROFILES[t].label}</span>
+                        <span className="font-mono truncate">{pick ? pick.model.name : '—'}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </details>
+            </div>
+          )}
         </div>
 
         {/* Controls */}
