@@ -179,16 +179,16 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
-    // Check system config
+    // Surface backend/config problems to the console only — never block entry with a
+    // full-screen error. Admins still get actionable details via checkSystemDiagnostics.
     checkSystemStatus()
       .then((res) => {
         if (res.status === 'error') {
-          setSystemError(res.message || 'Unknown Error');
+          console.warn('System status check returned an error:', res.message || 'Unknown Error');
         }
       })
       .catch((err) => {
-        console.error('System status check failed:', err);
-        setSystemError(err?.message || 'Unable to reach server');
+        console.warn('System status check failed:', err?.message || err);
       });
   }, []);
 
@@ -347,7 +347,7 @@ const App: React.FC = () => {
     };
   }, [user]);
 
-  // Gate shared links (?view=read&id=...) behind auth and restore after login.
+  // Open shared links (?view=read&id=...) straight into the reader — no login required.
   useEffect(() => {
     if (authLoading || isCheckingKey) return;
 
@@ -412,13 +412,8 @@ const App: React.FC = () => {
     setCurrentView('dashboard');
   }, [user, currentView, pendingReaderTarget, isHydratingProject]);
 
-  // If a reader session becomes unauthenticated, gate it and remember intent.
-  useEffect(() => {
-    if (authLoading || isCheckingKey) return;
-    if (user || currentView !== 'reader' || !activeProjectId) return;
-    setPendingReaderTarget((prev) => prev || { id: activeProjectId, returnView: returnView || 'gallery' });
-    setCurrentView('auth');
-  }, [user, currentView, activeProjectId, returnView, authLoading, isCheckingKey]);
+  // Reading is free for everyone — a logged-out reader session is allowed to stay open.
+  // Login is only required for creating/saving and for social actions (like, comment, share).
 
   // Prompt existing users to complete DOB in profile settings (non-blocking).
   useEffect(() => {
@@ -576,10 +571,6 @@ const App: React.FC = () => {
         <div className="max-w-md p-6 bg-red-950/30 border border-red-500/50 rounded-lg text-center">
           <h2 className="text-xl font-bold text-red-400 mb-2">System Error</h2>
           <p className="mb-4">{systemError}</p>
-          <div className="text-sm text-zinc-400">
-            <p>Please check your server configuration:</p>
-            <code className="bg-black/50 p-1 rounded mt-2 block">GEMINI_API_KEY=... (server)</code>
-          </div>
           <div className="flex gap-2 justify-center mt-6">
             <button
               onClick={() => window.location.reload()}
@@ -607,7 +598,7 @@ const App: React.FC = () => {
     );
   }
 
-  // Protection: studio and reader views require an authenticated user.
+  // Protection: studio/creation views require an authenticated user. Reading stays open to all.
   const isProtectedViewStrict = ['dashboard', 'editor', 'test', 'learn', 'settings', 'comicforge'].includes(currentView);
   const effectiveView: AppView = !user && isProtectedViewStrict ? 'auth' : currentView;
 
