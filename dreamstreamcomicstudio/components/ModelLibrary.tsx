@@ -83,16 +83,25 @@ const slotOf = (model: CatalogModel): ModelSlot => (model.supportsImageOutput ? 
 
 const perMillion = (perToken: number) => (perToken > 0 ? `$${(perToken * 1_000_000).toFixed(2)}/M` : '—');
 
-const matchesFilter = (model: CatalogModel, filter: FilterKey, query: string): boolean => {
+// Each active filter chip must match (AND), so you can combine e.g. Free + Image + Reasoning.
+const FILTER_PREDICATES: Record<Exclude<FilterKey, 'all'>, (m: CatalogModel, c: ReturnType<typeof getCapabilities>) => boolean> = {
+  free: (m) => m.isFree,
+  image: (m) => m.supportsImageOutput,
+  text: (m) => !m.supportsImageOutput,
+  refs: (m) => m.supportsImageInput,
+  editing: (_m, c) => c.imageEditing,
+  reasoning: (_m, c) => c.reasoning,
+  openrouter: (m) => m.source === 'openrouter',
+  nvidia: (m) => m.source === 'nvidia'
+};
+
+const matchesFilter = (model: CatalogModel, filters: Set<FilterKey>, query: string): boolean => {
   const caps = getCapabilities(model);
-  if (filter === 'free' && !model.isFree) return false;
-  if (filter === 'image' && !model.supportsImageOutput) return false;
-  if (filter === 'text' && model.supportsImageOutput) return false;
-  if (filter === 'refs' && !model.supportsImageInput) return false;
-  if (filter === 'editing' && !caps.imageEditing) return false;
-  if (filter === 'reasoning' && !caps.reasoning) return false;
-  if (filter === 'openrouter' && model.source !== 'openrouter') return false;
-  if (filter === 'nvidia' && model.source !== 'nvidia') return false;
+  for (const f of filters) {
+    if (f === 'all') continue;
+    const predicate = FILTER_PREDICATES[f];
+    if (predicate && !predicate(model, caps)) return false;
+  }
 
   // Smart search: each token is either a semantic facet ("free", "image", "vision",
   // "reasoning", "editing", "nvidia"…) or a plain substring. ALL tokens must match — so
@@ -343,7 +352,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack }) => {
   const [degraded, setDegraded] = useState(false);
   const [degradedMessage, setDegradedMessage] = useState<string | undefined>();
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<FilterKey>('all');
+  const [filters, setFilters] = useState<Set<FilterKey>>(new Set());
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<CatalogModel | null>(null);
   const [selection, setSelection] = useState<ModelSelection>(() => getModelSelection());
@@ -372,7 +381,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack }) => {
     return () => { active = false; };
   }, []);
 
-  const visible = useMemo(() => models.filter((model) => matchesFilter(model, filter, query)), [models, filter, query]);
+  const visible = useMemo(() => models.filter((model) => matchesFilter(model, filters, query)), [models, filters, query]);
   const compareModels = useMemo(() => compareIds.map((id) => models.find((m) => m.id === id)).filter((m): m is CatalogModel => !!m), [compareIds, models]);
 
   const useModel = (model: CatalogModel, slot: ModelSlot) => setSelectedModel(slot, model.id, 'specific', model.source);
@@ -466,9 +475,18 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack }) => {
         {/* Controls */}
         <div className="mt-6 flex flex-col md:flex-row md:items-center gap-3">
           <div className="flex flex-wrap gap-2">
-            {FILTERS.map((f) => (
-              <button key={f.key} onClick={() => setFilter(f.key)} className={`text-xs font-bold uppercase px-3 py-1.5 rounded border-2 border-black transition-colors ${filter === f.key ? 'bg-brand-blue text-white' : 'bg-white hover:bg-brand-yellow/60'}`}>{f.label}</button>
-            ))}
+            {FILTERS.map((f) => {
+              const active = f.key === 'all' ? filters.size === 0 : filters.has(f.key);
+              const toggle = () => setFilters((prev) => {
+                if (f.key === 'all') return new Set<FilterKey>();
+                const next = new Set(prev);
+                if (next.has(f.key)) next.delete(f.key); else next.add(f.key);
+                return next;
+              });
+              return (
+                <button key={f.key} onClick={toggle} className={`text-xs font-bold uppercase px-3 py-1.5 rounded border-2 border-black transition-colors ${active ? 'bg-brand-blue text-white' : 'bg-white hover:bg-brand-yellow/60'}`}>{f.label}</button>
+              );
+            })}
           </div>
           <div className="md:ml-auto relative">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
