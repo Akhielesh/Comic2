@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { LayoutTemplate, UploadCloud, Wand2, Check, Grid } from 'lucide-react';
+import { LayoutTemplate, UploadCloud, Wand2, Check, Grid, ArrowRight } from 'lucide-react';
 import { ComicState, LayoutType, TextLayout, AspectRatio, Scene } from '../../types';
 import { analyzeLayoutFromImages } from '../../services/geminiService';
 import { Button } from '../Button';
@@ -108,6 +108,10 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
     const recommendedTemplateId = layoutRecommendations[0]?.templateId;
     const recommendedReason = layoutRecommendations[0]?.reason;
 
+    // Never let the grid be empty (which would make the stage feel like a dead-end if a
+    // form-factor ratio matched no template): fall back to all templates.
+    const displayTemplates = compatibleTemplates.length > 0 ? compatibleTemplates : GRID_TEMPLATES;
+
     // ---- Handlers ----------------------------------------------------------
 
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -132,12 +136,18 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
         }
     };
 
+    // One click = select AND advance. (Previously a "not recommended?" modal gated every
+    // non-top pick, which was friction and a place to get stuck. The recommendation is still
+    // shown as info text above.)
     const handleSelectTemplate = (template: GridTemplate) => {
-        if (recommendedTemplateId && template.id !== recommendedTemplateId) {
-            setPendingConfirmTemplate(template);
-            return;
-        }
         onLayoutConfirmed(template.id as LayoutType, undefined, template.id);
+    };
+
+    // Deterministic advance for the explicit "Continue" button.
+    const continueToPreview = () => {
+        const id = currentGridTemplateId || recommendedTemplateId || displayTemplates[0]?.id;
+        if (id) onLayoutConfirmed(id as LayoutType, undefined, id);
+        else onLayoutConfirmed('custom', customLayoutPrompt || undefined);
     };
 
     // ---- Render helpers ----------------------------------------------------
@@ -224,7 +234,7 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
 
             {/* Compatible templates */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                {compatibleTemplates.map(t => renderTemplateCard(t))}
+                {displayTemplates.map(t => renderTemplateCard(t))}
 
                 {/* Custom Layout Card */}
                 <div className={`group relative bg-white rounded-xl border-4 shadow-comic transition-all duration-300 flex flex-col overflow-hidden md:col-span-2 lg:col-span-1 ${currentLayoutType === 'custom' ? 'border-brand-blue ring-4 ring-brand-blue/30 scale-105 z-10' : 'border-black hover:-translate-y-2 hover:shadow-[8px_8px_0px_0px_#000]'}`}>
@@ -328,6 +338,14 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                         </div>
                     )}
                 </div>
+            </div>
+
+            {/* Explicit advance — always available so the stage can never feel stuck. */}
+            <div className="flex flex-col items-center gap-2 pt-2 pb-8">
+                <Button onClick={continueToPreview} icon={<ArrowRight className="w-5 h-5" />} className="text-lg px-10 py-4 shadow-comic">
+                    Continue to Preview
+                </Button>
+                <p className="text-xs text-slate-500 font-comic">Selecting a layout above advances automatically — or use this to continue with the current/recommended layout.</p>
             </div>
 
             {previewImage && <ImagePreviewModal imageUrl={previewImage} onClose={() => setPreviewImage(null)} />}
