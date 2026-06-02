@@ -508,9 +508,14 @@ imageRouter.post('/openrouter', async (req, res, next) => {
       // Honor the caller's model. When none is sent, use the configured default image
       // model (a capable image model) — NOT a free auto-pick, which would silently
       // swap the user onto an arbitrary (often slow) free model.
+      //
+      // Under free-only mode, force 'free-only': the stage either resolves to a
+      // genuinely-free model or throws NoFreeModelAvailableError (which surfaces as
+      // HTTP 402 NO_FREE_MODEL_AVAILABLE so the client can show the Block + explain UX).
       const requestedImageModel = typeof model === 'string' && model.trim() ? model.trim() : OPENROUTER_IMAGE_MODEL;
+      const costPref = req.freeOnly ? 'free-only' : 'quality';
       const { model: effectiveModel, downgradedFrom, reason: downgradeReason } =
-        await resolveStageModel('image_generation', requestedImageModel, { costPref: 'quality' });
+        await resolveStageModel('image_generation', requestedImageModel, { costPref });
       if (downgradedFrom) {
         console.warn('[IMAGE] model downgraded', { route: '/api/image/openrouter', downgradedFrom, to: effectiveModel, reason: downgradeReason });
       }

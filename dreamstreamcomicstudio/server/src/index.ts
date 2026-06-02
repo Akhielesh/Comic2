@@ -17,6 +17,7 @@ import {
   validateRuntimeConfig
 } from './config.js';
 import { attachKeys } from './middleware/keys.js';
+import { attachFreeOnly } from './middleware/freeOnly.js';
 import { errorHandler } from './middleware/errors.js';
 import { optionalAuth, requireAuth } from './middleware/auth.js';
 import { assistantLimits } from './middleware/assistantLimits.js';
@@ -74,6 +75,7 @@ app.use('/api/webhook', express.raw({ type: 'application/json' }), webhookRouter
 
 app.use(express.json({ limit: MAX_BODY_SIZE }));
 app.use(attachKeys);
+app.use(attachFreeOnly);
 
 const systemRateLimit = createRateLimit({
   scope: 'system',

@@ -68,6 +68,7 @@ import {
     updateAutoReload
 } from '../services/billing';
 import { buildModelEntitlements } from '../services/modelEntitlements';
+import { isFreeOnly, setFreeOnly, onFreeOnlyChanged } from '../services/freeOnlyMode';
 
 type SettingsTab = 'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin' | 'preferences' | 'security';
 
@@ -240,6 +241,8 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     const [dob, setDob] = useState('');
     const [emailPrefProductUpdates, setEmailPrefProductUpdates] = useState(true);
     const [emailPrefMarketing, setEmailPrefMarketing] = useState(false);
+    const [freeOnly, setFreeOnlyState] = useState<boolean>(() => isFreeOnly());
+    useEffect(() => onFreeOnlyChanged((on) => setFreeOnlyState(on)), []);
 
     const [isSavingProfile, setIsSavingProfile] = useState(false);
     const [isSavingPreferences, setIsSavingPreferences] = useState(false);
@@ -1120,6 +1123,28 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                 </div>
             )}
             {renderMessage(preferencesMessage)}
+
+            <div className="border-2 border-black rounded-xl p-5 space-y-4">
+                <h3 className="font-display text-2xl">Generation Cost</h3>
+                <p className="text-sm text-slate-600">
+                    When Free-Only mode is on, generation will never silently fall back to a paid model. If no genuinely-free
+                    model can serve a step, that step is blocked with a clear message — your provider key is never charged
+                    behind your back. <strong>Note:</strong> "$0 per image" models that bill per token (like Gemini "Nano
+                    Banana") are NOT considered free.
+                </p>
+                <label className="flex items-start gap-3 cursor-pointer">
+                    <input
+                        type="checkbox"
+                        checked={freeOnly}
+                        onChange={(e) => setFreeOnly(e.target.checked)}
+                        className="mt-1 accent-black"
+                    />
+                    <div>
+                        <p className="font-bold">Free-Only Mode {freeOnly && <span className="ml-2 text-xs uppercase bg-green-500 text-white px-2 py-0.5 rounded">On</span>}</p>
+                        <p className="text-sm text-slate-500">Block instead of paid fallback. Text uses :free models; images route to NVIDIA's free image tier when an nvapi- key is configured.</p>
+                    </div>
+                </label>
+            </div>
 
             <div className="border-2 border-black rounded-xl p-5 space-y-4">
                 <h3 className="font-display text-2xl">Email Preferences</h3>

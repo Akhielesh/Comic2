@@ -250,7 +250,10 @@ const generateText = async (
   } catch (err) {
     const msg = String((err as Error)?.message || '');
     const retriable = /\b404\b|\b429\b|no endpoints|rate.?limit/i.test(msg);
-    if (req.fallbackModel && req.fallbackModel !== req.model && retriable) {
+    // Under free-only mode we deliberately do NOT retry on a paid fallbackModel —
+    // that would defeat the whole point. Surface the error so the route can return
+    // a Block + explain response instead of charging the caller's key.
+    if (!req.freeOnly && req.fallbackModel && req.fallbackModel !== req.model && retriable) {
       return await generateTextOnce({ ...req, model: req.fallbackModel, fallbackModel: undefined }, ctx);
     }
     throw err;

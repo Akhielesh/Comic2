@@ -3,6 +3,7 @@ import { getFluxKeyInfo, getOpenRouterKey } from './appSettings';
 import { getActiveKeyValue } from './apiKeys';
 import { getSelectedTextModel, getModelForStage, getSelectedTextSource, getSourceForStage } from './modelSelection';
 import { supabase } from './supabase';
+import { isFreeOnly } from './freeOnlyMode';
 
 let cachedAccessToken: string | undefined;
 
@@ -73,7 +74,8 @@ export const post = async <TReq, TRes>(path: string, body: TReq, options?: { sig
       ...(textSource ? { 'X-Text-Source': textSource as string } : {}),
       ...(options?.stage ? { 'X-Pipeline-Stage': options.stage } : {}),
       ...(options?.modelId ? { 'X-Gemini-Model': options.modelId } : {}),
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      ...(isFreeOnly() ? { 'X-Free-Only': 'true' } : {})
     },
     body: JSON.stringify(body),
     signal: options?.signal
@@ -99,7 +101,8 @@ export const get = async <TRes>(path: string, options?: { modelId?: string }): P
       ...(getSelectedTextModel() ? { 'X-Text-Model': getSelectedTextModel() as string } : {}),
       ...(getSelectedTextSource() ? { 'X-Text-Source': getSelectedTextSource() as string } : {}),
       ...(options?.modelId ? { 'X-Gemini-Model': options.modelId } : {}),
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      ...(isFreeOnly() ? { 'X-Free-Only': 'true' } : {})
     }
   });
   if (!res.ok) throw await parseError(res);
