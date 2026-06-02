@@ -6,6 +6,7 @@ import { comicForgePipelineService } from './pipelineService.js';
 import { runAssemblyWorker } from './workers/assemblyWorker.js';
 import { runLetteringWorker } from './workers/letteringWorker.js';
 import { runQcWorker } from './workers/qcWorker.js';
+import { runExportWorker } from './workers/exportWorker.js';
 import { generateComicForgeImages } from './generation.js';
 
 const queueName = `${COMICFORGE_QUEUE_PREFIX}:jobs`;
@@ -53,12 +54,7 @@ const handleJob = async (job: { id?: string; name: string; data: Record<string, 
         onProgress: (progress, message) => comicForgePipelineService.notifyJobProgress(job.id!, progress, message)
       });
     } else if (job.name === 'panel_gen_export') {
-      result = {
-        exported: true,
-        downloadUrl: '',
-        payload: job.data,
-        completedAt: Date.now()
-      };
+      result = await runExportWorker(job.data);
     } else {
       result = {
         completed: true,

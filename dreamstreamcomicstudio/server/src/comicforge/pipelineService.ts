@@ -29,6 +29,12 @@ import {
 } from './repositories.js';
 import { enqueueComicForgeJob, getComicForgeJobState } from './queue.js';
 import { TaskType, assertNoTextPromptContract, buildNoTextPrompt, getModelPolicy } from './modelRouter.js';
+import {
+  enrichAnalysis,
+  enrichArchitecture,
+  enrichStyleBible,
+  enrichStyleRecommendations
+} from './textStages.js';
 
 type ServiceContext = {
   userId: string;
@@ -261,7 +267,7 @@ export const comicForgePipelineService = {
         resolved: false
       }));
 
-    const analysis = {
+    const heuristicAnalysis = {
       structuredScript,
       sceneList: structuredScript.map((entry) => ({
         sceneId: `scene-${entry.page}`,
@@ -284,6 +290,10 @@ export const comicForgePipelineService = {
       dialogueDensityScore: 0.4,
       actionDensityScore: 0.5
     };
+
+    // Upgrade the heuristic's semantic fields with a live model call when available;
+    // structural fields (pages/panels/scene list) are preserved by the enricher.
+    const analysis = await enrichAnalysis(input.rawScriptText, heuristicAnalysis);
 
     const nextState = markStageProgress({
       ...state,
@@ -372,12 +382,19 @@ export const comicForgePipelineService = {
       warnings: [] as string[]
     }));
 
-    const architecture = {
+    const heuristicArchitecture = {
       beatSheet,
       suggestedPageCount: pageCount,
       pagePlan,
       globalWarnings: [] as string[]
     };
+
+    const architecture = await enrichArchitecture(
+      state.analysis,
+      pageCount,
+      input.pacingPreference,
+      heuristicArchitecture
+    );
 
     const nextState = markStageProgress({
       ...state,
@@ -396,7 +413,7 @@ export const comicForgePipelineService = {
     const state = await readComicForgeState(ctx.projectId, ctx.userId);
     const recommendations = buildStyleRecommendations(state.analysis?.tone, state.analysis?.genre);
 
-    const refined = input.customStyleHint?.trim()
+    const heuristicRefined = input.customStyleHint?.trim()
       ? [
           {
             styleName: 'Custom Hybrid',
@@ -407,6 +424,13 @@ export const comicForgePipelineService = {
           ...recommendations
         ]
       : recommendations;
+
+    const refined = await enrichStyleRecommendations(
+      state.analysis?.tone || 'neutral',
+      state.analysis?.genre || 'unspecified',
+      input.customStyleHint?.trim() || undefined,
+      heuristicRefined
+    );
 
     const nextState = markStageProgress({
       ...state,
@@ -432,7 +456,7 @@ export const comicForgePipelineService = {
     );
     assertNoTextPromptContract(withGuard);
 
-    const styleBible = {
+    const heuristicStyleBible = {
       baseGenerationPromptFragment: withGuard,
       lineQuality: 'clean' as const,
       shadingMode: 'cel' as const,
@@ -448,6 +472,8 @@ export const comicForgePipelineService = {
       negativePromptFragment: 'no text artifacts, no logos, no speech bubbles, no watermarks',
       conflictWarnings: [] as string[]
     };
+
+    const styleBible = await enrichStyleBible(input.selectedStyle, promptSeed, heuristicStyleBible);
 
     const nextState = markStageProgress({
       ...state,
