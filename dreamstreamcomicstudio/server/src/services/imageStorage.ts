@@ -8,7 +8,7 @@ type PersistGeneratedImageArgs = {
   userId: string;
   projectId?: string;
   dataUrl: string;
-  source: 'gemini' | 'flux' | 'openrouter' | 'upload' | 'migration';
+  source: 'gemini' | 'flux' | 'openrouter' | 'nvidia' | 'upload' | 'migration';
   resolution?: ImageResolution | string;
   cropToRatio?: string;
   bucket?: string;

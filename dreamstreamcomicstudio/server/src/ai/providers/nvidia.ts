@@ -163,34 +163,54 @@ const generateText = async (
   }
 };
 
+// NVIDIA hosts free image models (FLUX, SDXL, …) via an OpenAI-compatible
+// /v1/images/generations endpoint (returns data[].b64_json; native FLUX returns
+// artifacts[].base64). We target the OpenAI-compatible shape with a base64 fallback.
 const generateImage = async (
-  _req: GenerateImageRequest,
-  _ctx: ProviderContext
+  req: GenerateImageRequest,
+  ctx: ProviderContext
 ): Promise<GenerateImageResult> => {
-  throw new Error(
-    'Image generation is not supported via the NVIDIA Build text source. Use OpenRouter, Gemini, or Flux for image generation.'
+  const timeoutMs = req.timeoutMs ?? NVIDIA_REQUEST_TIMEOUT_MS;
+  const prompt = req.negativePrompt ? `${req.prompt}\n\n${req.negativePrompt}` : req.prompt;
+  const body = { model: req.model, prompt, response_format: 'b64_json' };
+  const data = await withRetry(
+    () => nvidiaFetch<any>('/images/generations', { method: 'POST', body: JSON.stringify(body) }, timeoutMs, ctx),
+    req.retries ?? 1,
+    1500,
+    'NVIDIA image'
   );
+  const b64: string | undefined = data?.data?.[0]?.b64_json || data?.artifacts?.[0]?.base64 || data?.image;
+  if (!b64) {
+    throw new Error('NVIDIA returned no image. Confirm the model is an image-generation model.');
+  }
+  const url = b64.startsWith('data:') ? b64 : `data:image/png;base64,${b64}`;
+  return { imageDataUrl: url, images: [url], model: String(data?.model || req.model), usage: {}, raw: data };
 };
+
+const IMAGE_HINT = /\b(flux|sdxl|stable[-_]?diffusion|sd3|sd-3|sana|kandinsky|playground|consistency|imagen|stable[-_]?image|stablediffusion)\b/i;
+const IMAGE_EDIT_HINT = /\b(kontext|canny|depth|inpaint|redux|edit)\b/i;
 
 const normalizeCatalogModel = (raw: any): CatalogModel => {
   const id = String(raw?.id || '');
+  const isImage = IMAGE_HINT.test(id);
   const isVision = VISION_HINT.test(id);
+  const isEdit = isImage && IMAGE_EDIT_HINT.test(id);
   return {
     id,
     name: String(raw?.name || raw?.display_name || prettifyId(id)),
     source: 'nvidia',
     description: typeof raw?.description === 'string' ? raw.description : undefined,
     contextLength: typeof raw?.context_length === 'number' ? raw.context_length : undefined,
-    inputModalities: isVision ? ['text', 'image'] : ['text'],
-    outputModalities: ['text'],
-    supportedParameters: ['response_format'],
+    inputModalities: isImage ? (isEdit ? ['text', 'image'] : ['text']) : (isVision ? ['text', 'image'] : ['text']),
+    outputModalities: isImage ? ['image'] : ['text'],
+    supportedParameters: isImage ? [] : ['response_format'],
     // NVIDIA Build models are credit-based with no per-call pricing in the catalog.
     pricing: { promptPerToken: 0, completionPerToken: 0, imagePerImage: 0, requestFlat: 0 },
     // Free to call under the NVIDIA Build free tier (subject to its own credit/rate caps).
     isFree: true,
-    supportsImageOutput: false,
-    supportsImageInput: isVision,
-    supportsJsonOutput: true
+    supportsImageOutput: isImage,
+    supportsImageInput: isEdit || isVision,
+    supportsJsonOutput: !isImage
   };
 };
 

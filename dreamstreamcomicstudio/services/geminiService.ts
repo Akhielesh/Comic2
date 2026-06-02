@@ -36,7 +36,7 @@ import { cropImageToRatio } from './imageUtils';
 import { updateDebugState } from './debugStore';
 import { getAllModelKeys, getDefaultTextModel, getModelSpecificKey } from './appSettings';
 import { getActiveKeyForUse, recordKeyUsage } from './apiKeys';
-import { getSelectedImageModel, isTrulyFreeModelId } from './modelSelection';
+import { getSelectedImageModel, getSelectedImageSource, isTrulyFreeModelId } from './modelSelection';
 import { groundWorldEntities } from './worldGrounding';
 import { WORLD_EXTRACTION_CONTRACT_VERSION } from '../shared/contracts/worldExtraction';
 
@@ -615,8 +615,23 @@ export const generateImage = async (
     }
     // No OpenRouter key configured → fall back to the legacy Gemini path.
     const useOpenRouter = Boolean(activeOpenRouterKey);
+    // When the user picked an NVIDIA image model (free FLUX/SDXL etc.), route to NVIDIA's
+    // OpenAI-compatible image endpoint instead. X-Nvidia-Key is attached by apiClient.
+    const { key: activeNvidiaKey } = getActiveKeyForUse('nvidia');
+    const useNvidia = getSelectedImageSource() === 'nvidia' && Boolean(activeNvidiaKey);
     let response: ImageGenerateResponse;
-    if (useOpenRouter) {
+    if (useNvidia) {
+      response = await post<ImageGenerateRequest, ImageGenerateResponse>(
+        '/api/image/nvidia',
+        { ...requestBody, model: getSelectedImageModel() || undefined },
+        { signal: options?.abortSignal }
+      );
+      const nvUsd =
+        (response as { billing?: { settled?: { providerCostUsd?: number } } }).billing?.settled?.providerCostUsd
+        ?? (response as { usage?: { providerCostUsd?: number } }).usage?.providerCostUsd
+        ?? 0;
+      if (nvUsd > 0) recordKeyUsage('nvidia', nvUsd);
+    } else if (useOpenRouter) {
       // Send the user's chosen OpenRouter image model. When none is selected, omit it and
       // the server falls back to its configured default image model (NOT a free auto-pick).
       // The X-OpenRouter-Key header is attached automatically by apiClient.
