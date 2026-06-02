@@ -233,7 +233,77 @@ export interface StoryPlanningState {
   resumeStep?: number;
 }
 
-export type PipelineMode = 'classic' | 'comicforge';
+export type PipelineMode = 'classic' | 'comicforge' | 'pagestudio';
+
+/**
+ * PageStudio — the single-sheet generation engine.
+ *
+ * Instead of generating N panels and assembling them, PageStudio generates one
+ * full comic page (panels, gutters, lettering baked into a single high-res image)
+ * from a confirmed style + layout brief, then patches specific regions with
+ * image-editing models. This is the new default creation flow.
+ */
+export interface PageStudioStyle {
+  /** How the style was provided. */
+  source: 'image' | 'text';
+  /** User's raw text style prompt (when source === 'text' or as an addendum). */
+  prompt?: string;
+  /** Data URL of an uploaded style reference image (kept for re-use as a generation reference). */
+  referenceDataUrl?: string;
+  /** AI-understood style descriptor produced from the image/text — shown to the user to confirm. */
+  brief?: string;
+  /** Short descriptive tags extracted from the reference (palette, linework, era, medium…). */
+  tags?: string[];
+  /** Whether the user has confirmed this is the direction they want. */
+  confirmed?: boolean;
+  /** Optional sample image (data URL) generated to verify the direction before committing. */
+  sampleDataUrl?: string;
+}
+
+export interface PageStudioLayout {
+  /** How the layout was provided. */
+  source: 'reference' | 'preset' | 'auto';
+  /** Data URL of an uploaded comic-page layout reference. */
+  referenceDataUrl?: string;
+  /** AI-extracted layout/caption/font brief describing the page structure exactly. */
+  brief?: string;
+  /** Built-in preset id when source === 'preset'. */
+  presetId?: string;
+}
+
+export interface PageStudioEdit {
+  id: string;
+  instruction: string;
+  /** Resulting image after the edit (persisted url and/or data url). */
+  imageUrl?: string;
+  imageId?: string;
+  createdAt: number;
+}
+
+export interface PageStudioPage {
+  id: string;
+  /** The original full-page generation prompt. */
+  prompt: string;
+  /** Latest image for this page (after any edits). */
+  imageUrl?: string;
+  imageId?: string;
+  /** First-generation image, retained so edits can be undone back to the base. */
+  baseImageUrl?: string;
+  edits: PageStudioEdit[];
+  createdAt: number;
+}
+
+export interface PageStudioState {
+  brief: string;
+  style: PageStudioStyle;
+  layout: PageStudioLayout;
+  aspectRatio: AspectRatio;
+  resolution: ImageResolution;
+  pages: PageStudioPage[];
+  activePageId?: string;
+  /** Current high-level stage of the studio flow. */
+  stage?: 'brief' | 'style' | 'layout' | 'generate' | 'edit';
+}
 
 export enum ComicForgeStage {
   FORMAT_SETUP = 'format_setup',
@@ -864,6 +934,9 @@ export interface ComicState {
   assistantChat?: ChatMessage[];
   imageTags?: Record<string, ImageTag>;
   imageTagCounters?: Record<string, number>;
+
+  // PageStudio (single-sheet engine) — self-contained, independent of the classic panel fields.
+  pageStudio?: PageStudioState;
 
   // Final Output
   panels: ComicPanel[];

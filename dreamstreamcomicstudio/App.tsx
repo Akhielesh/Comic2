@@ -14,6 +14,7 @@ const PrivacyPolicy = lazyImportWithRetry(() => import('./components/PrivacyPoli
 const TermsOfService = lazyImportWithRetry(() => import('./components/TermsOfService').then(module => ({ default: module.TermsOfService })));
 const SharedViewer = lazyImportWithRetry(() => import('./components/SharedViewer').then(module => ({ default: module.SharedViewer })));
 const ComicForgeStudio = lazyImportWithRetry(() => import('./components/comicforge/ComicForgeStudio').then(module => ({ default: module.ComicForgeStudio })));
+const PageStudio = lazyImportWithRetry(() => import('./components/pagestudio/PageStudio').then(module => ({ default: module.PageStudio })));
 const ModelLibrary = lazyImportWithRetry(() => import('./components/ModelLibrary').then(module => ({ default: module.ModelLibrary })));
 const HowItWorks = lazyImportWithRetry(() => import('./components/HowItWorks').then(module => ({ default: module.HowItWorks })));
 
@@ -50,6 +51,7 @@ type AppView =
   | 'terms'
   | 'profile'
   | 'comicforge'
+  | 'pagestudio'
   | 'shared';
 
 type SettingsTab = 'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin' | 'preferences' | 'security';
@@ -511,14 +513,18 @@ const App: React.FC = () => {
 
   const handleCreateProject = (name: string) => {
     const newProject = createProject(name);
+    // New projects use the single-sheet PageStudio engine by default.
+    updateProject(newProject.id, (prev) => ({
+      state: { ...prev.state, pipelineMode: 'pagestudio' }
+    }));
     setActiveProjectId(newProject.id);
-    setCurrentView('editor');
+    setCurrentView('pagestudio');
   };
 
-  const handleOpenProject = (id: string, expectedPipelineMode?: 'classic' | 'comicforge') => {
+  const handleOpenProject = (id: string, expectedPipelineMode?: 'classic' | 'comicforge' | 'pagestudio') => {
     setIsHydratingProject(true);
-    const routeTo = (mode?: 'classic' | 'comicforge') =>
-      setCurrentView(mode === 'comicforge' ? 'comicforge' : 'editor');
+    const routeTo = (mode?: 'classic' | 'comicforge' | 'pagestudio') =>
+      setCurrentView(mode === 'comicforge' ? 'comicforge' : mode === 'pagestudio' ? 'pagestudio' : 'editor');
     hydrateProjectAssets(id)
       .then((hydrated) => {
         if (activeProjectId && !projects.find((project) => project.id === activeProjectId)) {
@@ -599,14 +605,14 @@ const App: React.FC = () => {
   }
 
   // Protection: studio/creation views require an authenticated user. Reading stays open to all.
-  const isProtectedViewStrict = ['dashboard', 'editor', 'test', 'learn', 'settings', 'comicforge'].includes(currentView);
+  const isProtectedViewStrict = ['dashboard', 'editor', 'test', 'learn', 'settings', 'comicforge', 'pagestudio'].includes(currentView);
   const effectiveView: AppView = !user && isProtectedViewStrict ? 'auth' : currentView;
 
   const activeProject = activeProjectId ? getProject(activeProjectId) : undefined;
   // Editor and ComicForge are focused, full-screen workspaces with their own
   // back/title bars, so we hide the global site header there (was a 3rd stacked header).
-  const showSharedHeader = !['home', 'reader', 'shared', 'editor', 'comicforge'].includes(effectiveView);
-  const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared';
+  const showSharedHeader = !['home', 'reader', 'shared', 'editor', 'comicforge', 'pagestudio'].includes(effectiveView);
+  const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio';
   const showUniversalAssistant = effectiveView !== 'auth-callback' && effectiveView !== 'shared';
 
   return (
@@ -739,6 +745,14 @@ const App: React.FC = () => {
               onUpdate={(updates) => updateProject(activeProject.id, updates)}
               onStartGeneration={startGeneration}
               onStopGeneration={stopGeneration}
+              onBack={() => setCurrentView('dashboard')}
+            />
+          )}
+
+          {effectiveView === 'pagestudio' && activeProject && (
+            <PageStudio
+              project={activeProject}
+              onUpdate={(updater) => updateProject(activeProject.id, updater)}
               onBack={() => setCurrentView('dashboard')}
             />
           )}

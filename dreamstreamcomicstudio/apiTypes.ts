@@ -482,6 +482,16 @@ export type LayoutAnalysisResponse = {
   billing?: ApiBillingInfo;
 };
 
+export type StyleAnalysisResponse = {
+  brief: string;
+  tags: string[];
+  prompt: string;
+  responseText?: string;
+  usage?: ApiUsage;
+  model: string;
+  billing?: ApiBillingInfo;
+};
+
 export type ImageGenerateRequest = {
   prompt: string;
   aspectRatio: AspectRatio;
