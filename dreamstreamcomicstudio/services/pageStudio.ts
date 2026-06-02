@@ -30,7 +30,7 @@ export type LayoutAnalysisInput = {
 };
 
 export const analyzeLayout = (input: LayoutAnalysisInput) =>
-  post<LayoutAnalysisInput, LayoutAnalysisResponse>('/api/vision/analyze-layout', {
+  post<LayoutAnalysisInput, LayoutAnalysisResponse>('/api/vision/page-layout', {
     images: input.images,
     projectId: input.projectId
   });
