@@ -1,7 +1,7 @@
 import { buildApiUrl } from './clientConfig';
 import { getFluxKeyInfo, getOpenRouterKey } from './appSettings';
 import { getActiveKeyValue } from './apiKeys';
-import { getSelectedTextModel, getModelForStage, getSelectedTextSource } from './modelSelection';
+import { getSelectedTextModel, getModelForStage, getSelectedTextSource, getSourceForStage } from './modelSelection';
 import { supabase } from './supabase';
 
 let cachedAccessToken: string | undefined;
@@ -57,8 +57,9 @@ export const post = async <TReq, TRes>(path: string, body: TReq, options?: { sig
   const openRouterKey = getActiveKeyValue('openrouter') || getOpenRouterKey();
   const nvidiaKey = getActiveKeyValue('nvidia');
   const token = await getAuthToken();
-  // Per-stage override when a stage is supplied, else the global text model.
+  // Per-stage override when a stage is supplied, else the global text model + its source.
   const textModel = options?.stage ? getModelForStage(options.stage) : getSelectedTextModel();
+  const textSource = options?.stage ? getSourceForStage(options.stage) : getSelectedTextSource();
 
   const res = await fetch(buildApiUrl(path), {
     method: 'POST',
@@ -69,7 +70,7 @@ export const post = async <TReq, TRes>(path: string, body: TReq, options?: { sig
       ...(openRouterKey ? { 'X-OpenRouter-Key': openRouterKey } : {}),
       ...(nvidiaKey ? { 'X-Nvidia-Key': nvidiaKey } : {}),
       ...(textModel ? { 'X-Text-Model': textModel } : {}),
-      ...(getSelectedTextSource() ? { 'X-Text-Source': getSelectedTextSource() as string } : {}),
+      ...(textSource ? { 'X-Text-Source': textSource as string } : {}),
       ...(options?.stage ? { 'X-Pipeline-Stage': options.stage } : {}),
       ...(options?.modelId ? { 'X-Gemini-Model': options.modelId } : {}),
       ...(token ? { 'Authorization': `Bearer ${token}` } : {})

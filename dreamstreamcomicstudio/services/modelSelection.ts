@@ -19,6 +19,8 @@ export interface ModelSelection {
   textSource?: ModelSourceId | null;
   /** Sparse per-stage text-model overrides (advanced). Each falls back to textModel. */
   byStage?: Record<string, string>;
+  /** Per-stage source overrides, paired with byStage, so per-stage picks route to the right provider. */
+  byStageSource?: Record<string, ModelSourceId>;
 }
 
 const STORAGE = 'dreamstream_model_selection';
@@ -91,6 +93,7 @@ export const setSelectionMode = (mode: ModelMode) => {
     next.imageSource = null;
     next.textSource = null;
     next.byStage = undefined;
+    next.byStageSource = undefined;
   }
   write(next);
 };
@@ -104,11 +107,25 @@ export const getModelForStage = (stage?: string): string | null => {
   return typeof override === 'string' && override.trim() ? override : sel.textModel;
 };
 
-export const setStageModel = (stage: string, modelId: string | null) => {
+/** Resolve the SOURCE for a stage: a per-stage source if set, else the global text source. */
+export const getSourceForStage = (stage?: string): ModelSourceId | null => {
+  const sel = read();
+  const override = stage && sel.byStageSource ? sel.byStageSource[stage] : undefined;
+  return override ?? sel.textSource ?? null;
+};
+
+export const setStageModel = (stage: string, modelId: string | null, source?: ModelSourceId | null) => {
   const next = read();
   const byStage = { ...(next.byStage || {}) };
-  if (modelId && modelId.trim()) byStage[stage] = modelId;
-  else delete byStage[stage];
+  const byStageSource = { ...(next.byStageSource || {}) };
+  if (modelId && modelId.trim()) {
+    byStage[stage] = modelId;
+    if (source) byStageSource[stage] = source; else delete byStageSource[stage];
+  } else {
+    delete byStage[stage];
+    delete byStageSource[stage];
+  }
   next.byStage = Object.keys(byStage).length ? byStage : undefined;
+  next.byStageSource = Object.keys(byStageSource).length ? byStageSource : undefined;
   write(next);
 };
