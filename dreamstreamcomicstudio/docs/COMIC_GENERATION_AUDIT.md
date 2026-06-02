@@ -124,14 +124,52 @@ This path works; the issues below are quality, not stage failures.
   approval.
 - `server/src/routes/comicforge.ts` — correct the SSE `done` frame newlines.
 
-## To actually make ComicForge generate comics (build-out, not done here)
+## Phase 2 — build-out applied in this change
 
-1. Provision `REDIS_URL` and run/colocate the worker (`comicforge:worker`), or
-   start it from `index.ts` when `COMICFORGE_ENABLED`.
-2. Replace worker/sub-worker stubs with real generation that calls the live
-   OpenRouter gateway via `ai/stageModels.ts` (`resolveStageModel`), reusing the
-   classic pipeline's image path instead of the deprecated `modelRouter` table.
-3. Make heuristic stages (`analyzeScript`, `buildArchitecture`, `suggestStyles`,
-   `buildStyleBible`) call real models, or reuse the classic services.
-4. Pick a single source of truth for ComicForge state and remove the dual write.
+Done (live image generation + worker wiring):
+
+1. **In-process worker** — `server/src/index.ts` now starts the ComicForge
+   worker when `COMICFORGE_ENABLED && REDIS_URL` (dynamic import, failures
+   logged, never crash the API). The standalone `comicforge:worker` process
+   still works for dedicated deployments.
+2. **Real generation via the live gateway** — new
+   `server/src/comicforge/generation.ts` drives the OpenRouter gateway with the
+   platform key (no `req` needed), resolves the model through the capability-aware
+   `resolveStageModel('image_generation', …)` (NOT the deprecated `modelRouter`
+   table), builds a NO-TEXT-guarded prompt per planned page from the style
+   bible + architecture, and persists each image via `persistGeneratedImage`.
+3. **Worker dispatch** — `worker.ts` routes `thumbnail_gen` / `panel_gen_draft`
+   / `panel_gen_final` (without an `operation`) to real generation with live
+   progress events; the stub fall-through remains only for the not-yet-built
+   assemble/lettering/export operations.
+4. **Job payload** — `queueJobForTask` now threads `userId` so the worker can
+   read project state and persist images under the owning user.
+
+Still TODO before GA:
+
+1. Replace the `assembly` / `lettering` / `export` sub-worker stubs with real
+   page composition + PDF/webtoon packaging.
+2. Make the heuristic *text* stages (`analyzeScript`, `buildArchitecture`,
+   `suggestStyles`, `buildStyleBible`) call real models, or reuse the classic
+   services, instead of returning deterministic placeholders.
+3. Meter worker generation through a job-level billing ledger (it currently
+   bypasses the per-request `usageEnforcer` — platform-funded, experimental).
+4. Pick a single source of truth for ComicForge state and remove the dual write
+   (client store vs. server `writeComicForgeState`).
 5. Persist jobs durably (Supabase `generation_jobs`) rather than in-memory.
+
+> Not runtime-verified here: this environment has no `REDIS_URL`, no
+> `OPENROUTER_API_KEY`, and no Supabase config, so the worker path typechecks
+> and is wired correctly but was not executed end-to-end. Validate with a real
+> queue + platform key + Supabase before enabling.
+
+## Phase 2 — classic pipeline fixes applied
+
+- **Progress estimate** (`generationManager.ts`) — seed `totalPanelsEstimate`
+  per-scene (real plan length, else 3) so the `-3 + breakdown.length`
+  adjustment stays correct on resume instead of skewing the %/ETA.
+- **Bounded memory** — cap `recentPanelImageIds` / `recentPanelDescriptions` to
+  the continuity window (`MAX_CONTINUITY_PANELS`) instead of growing per panel.
+- **Continuity summary** — summarize only panels that actually rendered for the
+  scene (exclude failed/image-less panels) so the running summary can't describe
+  panels that don't exist.

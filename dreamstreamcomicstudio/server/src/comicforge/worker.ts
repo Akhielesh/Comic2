@@ -6,8 +6,14 @@ import { comicForgePipelineService } from './pipelineService.js';
 import { runAssemblyWorker } from './workers/assemblyWorker.js';
 import { runLetteringWorker } from './workers/letteringWorker.js';
 import { runQcWorker } from './workers/qcWorker.js';
+import { generateComicForgeImages } from './generation.js';
 
 const queueName = `${COMICFORGE_QUEUE_PREFIX}:jobs`;
+
+const GENERATION_TASKS = new Set(['thumbnail_gen', 'panel_gen_draft', 'panel_gen_final']);
+
+const asString = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.trim() ? value.trim() : undefined;
 
 const handleJob = async (job: { id?: string; name: string; data: Record<string, unknown> }) => {
   if (!job.id) {
@@ -21,12 +27,31 @@ const handleJob = async (job: { id?: string; name: string; data: Record<string, 
 
     let result: Record<string, unknown>;
 
-    if (job.name === 'panel_gen_final' && job.data.operation === 'assemble_page') {
+    const operation = asString(job.data.operation);
+
+    if (job.name === 'panel_gen_final' && operation === 'assemble_page') {
       result = await runAssemblyWorker(job.data);
-    } else if (job.name === 'panel_gen_final' && job.data.operation === 'render_lettering') {
+    } else if (job.name === 'panel_gen_final' && operation === 'render_lettering') {
       result = await runLetteringWorker(job.data);
     } else if (job.name === 'qc_check') {
       result = await runQcWorker(job.data);
+    } else if (GENERATION_TASKS.has(job.name) && !operation) {
+      // Real image generation via the live OpenRouter gateway. Requires userId
+      // (threaded through the job payload) + a configured platform key.
+      const userId = asString(job.data.userId);
+      const projectId = asString(job.data.projectId);
+      if (!userId || !projectId) {
+        throw new Error('ComicForge generation job is missing userId/projectId.');
+      }
+      const quality = job.name === 'thumbnail_gen'
+        ? 'thumbnail'
+        : (asString(job.data.quality) === 'final' ? 'final' : 'draft');
+      result = await generateComicForgeImages({
+        userId,
+        projectId,
+        quality,
+        onProgress: (progress, message) => comicForgePipelineService.notifyJobProgress(job.id!, progress, message)
+      });
     } else if (job.name === 'panel_gen_export') {
       result = {
         exported: true,
@@ -43,7 +68,7 @@ const handleJob = async (job: { id?: string; name: string; data: Record<string, 
       };
     }
 
-    await comicForgePipelineService.notifyJobProgress(job.id, 80, 'Finalizing artifacts');
+    await comicForgePipelineService.notifyJobProgress(job.id, 95, 'Finalizing artifacts');
     await comicForgePipelineService.notifyJobDone(job.id, result);
     return result;
   } catch (error) {

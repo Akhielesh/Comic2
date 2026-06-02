@@ -140,14 +140,14 @@ const createAssetHash = (input: string) =>
   crypto.createHash('sha256').update(input).digest('hex');
 
 const queueJobForTask = async (
-  projectId: string,
+  ctx: ServiceContext,
   taskType: TaskType,
   payload: Record<string, unknown>,
   entity?: { id?: string; type?: string }
 ): Promise<ComicForgeJobSummary> => {
   const policy = getModelPolicy(taskType);
   const job = await createGenerationJob({
-    projectId,
+    projectId: ctx.projectId,
     taskType,
     modelUsed: policy.model,
     estimatedCostUsd: policy.estimatedCostUsd,
@@ -157,7 +157,10 @@ const queueJobForTask = async (
   });
 
   await enqueueComicForgeJob(taskType, {
-    projectId,
+    // userId is required by the worker so it can read project state and persist
+    // generated images under the owning user without an HTTP request context.
+    userId: ctx.userId,
+    projectId: ctx.projectId,
     taskType,
     ...payload
   }, {
@@ -599,7 +602,7 @@ export const comicForgePipelineService = {
   },
 
   async generateThumbnails(ctx: ServiceContext) {
-    const job = await queueJobForTask(ctx.projectId, TaskType.THUMBNAIL_GEN, {
+    const job = await queueJobForTask(ctx, TaskType.THUMBNAIL_GEN, {
       pipelineStage: ComicForgeStage.STORYBOARD
     }, {
       type: 'project',
@@ -683,7 +686,7 @@ export const comicForgePipelineService = {
 
   async generate(ctx: ServiceContext, input: { quality: 'draft' | 'final' }) {
     const taskType = input.quality === 'draft' ? TaskType.PANEL_GEN_DRAFT : TaskType.PANEL_GEN_FINAL;
-    const job = await queueJobForTask(ctx.projectId, taskType, {
+    const job = await queueJobForTask(ctx, taskType, {
       quality: input.quality,
       pipelineStage: ComicForgeStage.GENERATION
     }, {
@@ -699,7 +702,7 @@ export const comicForgePipelineService = {
 
   async regeneratePanel(ctx: ServiceContext, panelId: string, input: { quality: 'draft' | 'final'; reason?: string }) {
     const taskType = input.quality === 'draft' ? TaskType.PANEL_GEN_DRAFT : TaskType.PANEL_GEN_FINAL;
-    const job = await queueJobForTask(ctx.projectId, taskType, {
+    const job = await queueJobForTask(ctx, taskType, {
       quality: input.quality,
       reason: input.reason || null,
       panelId
@@ -715,7 +718,7 @@ export const comicForgePipelineService = {
   },
 
   async assemblePage(ctx: ServiceContext, pageId: string) {
-    const job = await queueJobForTask(ctx.projectId, TaskType.PANEL_GEN_FINAL, {
+    const job = await queueJobForTask(ctx, TaskType.PANEL_GEN_FINAL, {
       operation: 'assemble_page',
       pageId
     }, {
@@ -730,7 +733,7 @@ export const comicForgePipelineService = {
   },
 
   async renderLettering(ctx: ServiceContext, pageId: string) {
-    const job = await queueJobForTask(ctx.projectId, TaskType.PANEL_GEN_FINAL, {
+    const job = await queueJobForTask(ctx, TaskType.PANEL_GEN_FINAL, {
       operation: 'render_lettering',
       pageId
     }, {
@@ -790,7 +793,7 @@ export const comicForgePipelineService = {
   },
 
   async exportProject(ctx: ServiceContext, input: { preset: ComicForgeExportPreset; pageRange?: { from: number; to: number }; upscaleIfNeeded?: boolean }) {
-    const job = await queueJobForTask(ctx.projectId, TaskType.PANEL_GEN_EXPORT, {
+    const job = await queueJobForTask(ctx, TaskType.PANEL_GEN_EXPORT, {
       preset: input.preset,
       pageRange: input.pageRange || null,
       upscaleIfNeeded: Boolean(input.upscaleIfNeeded)

@@ -3,6 +3,7 @@ import express from 'express';
 import cors from 'cors';
 
 import {
+  COMICFORGE_ENABLED,
   CORS_ORIGINS,
   MAX_BODY_SIZE,
   PORT,
@@ -11,6 +12,7 @@ import {
   RATE_LIMIT_TEXT_MAX_REQUESTS,
   RATE_LIMIT_VISION_MAX_REQUESTS,
   RATE_LIMIT_WINDOW_MS,
+  REDIS_URL,
   TRUST_PROXY,
   validateRuntimeConfig
 } from './config.js';
@@ -138,3 +140,16 @@ app.use(errorHandler);
 app.listen(PORT, () => {
   console.log(`DreamStream API listening on :${PORT}`);
 });
+
+// Run the ComicForge worker in-process when the feature is enabled and a queue is
+// configured. Without this, enqueued generation jobs would sit `queued` forever unless
+// the standalone `comicforge:worker` process is deployed separately. Failures here must
+// never take down the API, so they are caught and logged.
+if (COMICFORGE_ENABLED && REDIS_URL.trim()) {
+  import('./comicforge/worker.js')
+    .then(({ startComicForgeWorker }) => startComicForgeWorker())
+    .then(() => console.log('[ComicForge] In-process worker started'))
+    .catch((error) => {
+      console.error('[ComicForge] Failed to start in-process worker', (error as Error)?.message || error);
+    });
+}
