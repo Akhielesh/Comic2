@@ -18,6 +18,7 @@ import {
 } from '../../config.js';
 import { withRetry } from '../utils.js';
 import { coerceJson, coerceJsonOrNull } from '../jsonCoerce.js';
+import { classifyModel } from '../../../../shared/pricing.js';
 import type {
   AIProvider,
   CatalogModel,
@@ -136,9 +137,17 @@ const normalizeCatalogModel = (raw: any): CatalogModel => {
   const supportedParameters: string[] = Array.isArray(raw?.supported_parameters)
     ? raw.supported_parameters
     : [];
-  const isFree =
-    id.endsWith(':free') ||
-    (promptPerToken === 0 && completionPerToken === 0 && imagePerImage === 0 && requestFlat === 0);
+  const supportsImageOutput = outputModalities.includes('image');
+  // `isFree` is the strict classification from shared/pricing: a model whose id
+  // ends `:free` OR whose four pricing axes are all zero. Token-billed image
+  // models (imagePerImage=0 but completionPerToken>0) are NOT free — those bill
+  // the caller's key per call. costClass exposes the full 4-way truth to the UI.
+  const cls = classifyModel({
+    modelId: id,
+    pricing: { promptPerToken, completionPerToken, imagePerImage, requestFlat },
+    supportsImageOutput
+  });
+  const isFree = cls === 'free_verified';
 
   return {
     id,
@@ -151,7 +160,8 @@ const normalizeCatalogModel = (raw: any): CatalogModel => {
     supportedParameters,
     pricing: { promptPerToken, completionPerToken, imagePerImage, requestFlat },
     isFree,
-    supportsImageOutput: outputModalities.includes('image'),
+    costClass: cls,
+    supportsImageOutput,
     supportsImageInput: inputModalities.includes('image'),
     supportsJsonOutput:
       supportedParameters.includes('response_format') || supportedParameters.includes('structured_outputs')

@@ -88,6 +88,17 @@ export type CatalogModelPricing = {
   requestFlat: number;
 };
 
+/**
+ * 4-way cost classification. Replaces the old single `isFree` boolean across
+ * the app. Lives in shared/pricing.ts so client + server agree on what "free"
+ * means relative to which axis applies (token-billed image models are NOT free).
+ */
+export type CostClass =
+  | 'free_verified'
+  | 'zero_priced_token_billed'
+  | 'per_image_only'
+  | 'paid';
+
 export type CatalogModel = {
   id: string;
   name: string;
@@ -99,8 +110,10 @@ export type CatalogModel = {
   outputModalities: string[];
   supportedParameters: string[];
   pricing: CatalogModelPricing;
-  /** True when the model costs nothing to call. */
+  /** True when the model costs nothing to call (cls === 'free_verified'). */
   isFree: boolean;
+  /** Multi-dimensional cost class — drives UI labels and free-only routing. */
+  costClass: CostClass;
   /** Can produce images (panel art / covers). */
   supportsImageOutput: boolean;
   /** Accepts input images (reference images => character consistency). */

@@ -208,6 +208,7 @@ const normalizeCatalogModel = (raw: any): CatalogModel => {
     pricing: { promptPerToken: 0, completionPerToken: 0, imagePerImage: 0, requestFlat: 0 },
     // Free to call under the NVIDIA Build free tier (subject to its own credit/rate caps).
     isFree: true,
+    costClass: 'free_verified',
     supportsImageOutput: isImage,
     supportsImageInput: isEdit || isVision,
     supportsJsonOutput: !isImage

@@ -7,6 +7,7 @@
 // a small overrides table adds hand-written notes for notable models.
 
 import type { CatalogModel } from './providers/types.js';
+import { classifyModel, type CostClass } from '../../../shared/pricing.js';
 
 export type DreamStreamRole = 'text-brain' | 'dialogue' | 'panel-art' | 'cover' | 'qc';
 export type Band = 'free' | 'low' | 'medium' | 'high';
@@ -22,6 +23,8 @@ export type AnnotatedModel = CatalogModel & {
   /** Optional hand-written editorial note for notable models. */
   editorialNote?: string;
 };
+
+export { costClassFor };
 
 type AnnotationOverride = {
   /** Substring matched against the model id (case-insensitive). */
@@ -64,8 +67,18 @@ const PER_TOKEN_MEDIUM = 0.000005; // < $5 / 1M tokens
 const PER_IMAGE_LOW = 0.01;
 const PER_IMAGE_MEDIUM = 0.04;
 
+const costClassFor = (model: CatalogModel): CostClass =>
+  model.costClass ?? classifyModel({
+    modelId: model.id,
+    pricing: model.pricing,
+    supportsImageOutput: model.supportsImageOutput
+  });
+
 const costBandFor = (model: CatalogModel): Band => {
-  if (model.isFree) return 'free';
+  const cls = costClassFor(model);
+  if (cls === 'free_verified') return 'free';
+  // For the "is this expensive?" display band we look at whichever non-zero axis
+  // actually applies — multi-dimensional, no false-free for token-billed image models.
   if (model.supportsImageOutput) {
     const imagePrice = model.pricing.imagePerImage;
     if (imagePrice > 0) {
@@ -73,19 +86,16 @@ const costBandFor = (model: CatalogModel): Band => {
       if (imagePrice < PER_IMAGE_MEDIUM) return 'medium';
       return 'high';
     }
-    // No per-image price does NOT mean free: image models like the Gemini family are
-    // billed per token on OpenRouter. Fall through to token pricing so we never paint a
-    // false "Free" badge on a model that actually bills the user's key per call.
     const tokenPrice = model.pricing.completionPerToken || model.pricing.promptPerToken;
     if (tokenPrice > 0) {
       if (tokenPrice < PER_TOKEN_LOW) return 'low';
       if (tokenPrice < PER_TOKEN_MEDIUM) return 'medium';
       return 'high';
     }
-    return 'free';
+    return 'low';
   }
   const price = model.pricing.completionPerToken;
-  if (price === 0) return 'free';
+  if (price === 0) return 'low';
   if (price < PER_TOKEN_LOW) return 'low';
   if (price < PER_TOKEN_MEDIUM) return 'medium';
   return 'high';
@@ -111,8 +121,13 @@ const deriveDrawbacks = (model: CatalogModel): string[] => {
   if (!model.supportsImageOutput && !model.supportsJsonOutput) {
     drawbacks.push('No structured-output mode: planning steps rely on JSON repair and are less reliable.');
   }
-  if (model.isFree) {
+  const cls = costClassFor(model);
+  if (cls === 'free_verified') {
     drawbacks.push('Free tier: subject to rate limits and may be slow, deprioritized, or temporarily unavailable.');
+  } else if (cls === 'zero_priced_token_billed') {
+    drawbacks.push("Labelled \"$0 per image\" but actually billed per token — your provider key is charged on every call.");
+  } else if (cls === 'per_image_only') {
+    drawbacks.push('Pay-per-image: flat per-image cost regardless of prompt length.');
   }
   if (costBandFor(model) === 'high') {
     drawbacks.push('Premium cost — use deliberately (covers, hero pages, final exports).');

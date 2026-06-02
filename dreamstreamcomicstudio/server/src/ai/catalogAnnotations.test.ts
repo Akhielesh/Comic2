@@ -11,6 +11,7 @@ const base = (over: Partial<CatalogModel>): CatalogModel => ({
   supportedParameters: ['response_format'],
   pricing: { promptPerToken: 0.000002, completionPerToken: 0.000002, imagePerImage: 0, requestFlat: 0 },
   isFree: false,
+  costClass: 'paid',
   supportsImageOutput: false,
   supportsImageInput: false,
   supportsJsonOutput: true,
@@ -52,7 +53,11 @@ describe('annotateModel', () => {
 
   it('bands free models and notes rate limits', () => {
     const a = annotateModel(
-      base({ isFree: true, pricing: { promptPerToken: 0, completionPerToken: 0, imagePerImage: 0, requestFlat: 0 } })
+      base({
+        isFree: true,
+        costClass: 'free_verified',
+        pricing: { promptPerToken: 0, completionPerToken: 0, imagePerImage: 0, requestFlat: 0 }
+      })
     );
     expect(a.costBand).toBe('free');
     expect(a.drawbacks.join(' ')).toMatch(/rate limit/i);

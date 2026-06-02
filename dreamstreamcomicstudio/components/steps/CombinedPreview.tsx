@@ -8,14 +8,9 @@ import { buildDefaultContinuityState, resolvePanelContinuity, validateContinuity
 import {
   DEFAULT_PRICING_CONFIG,
   normalizePricingConfig,
-  PRICING_AS_OF,
-  FLASH_IMAGE_BATCH,
-  FLASH_IMAGE_STANDARD,
-  BANANA_PRO_IMAGE_1K,
-  BANANA_PRO_IMAGE_4K,
-  FLASH_LITE_PRICING,
-  FLASH_PRICING
+  PRICING_AS_OF
 } from '../../services/pricingConfig';
+import { estimateUsd, fromLegacyPer1k } from '../../shared/pricing';
 import { estimateTokensFromTextInput } from '../../services/reporting';
 import { IMAGE_MODEL, TEXT_MODEL } from '../../services/modelPolicy';
 import { getImageProvider } from '../../services/appSettings';
@@ -107,14 +102,34 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
     );
   }, [state.panels]);
 
-  const textCostLite = ((FLASH_LITE_PRICING.inputPer1k + FLASH_LITE_PRICING.outputPer1k) * estimatedTokens) / 1000;
-  const textCostFlash = ((FLASH_PRICING.inputPer1k + FLASH_PRICING.outputPer1k) * estimatedTokens) / 1000;
+  // Cost estimates come from the live pricingConfig (which buildProjectReport also uses)
+  // routed through shared/pricing.ts. We split tokens roughly 1:3 input:output for a
+  // generation pass — the council/reconciliation check will tighten this with real ratios.
   const provider = getImageProvider();
   const activeImageModel = getImageModelByProvider(provider);
-  const imageCostCurrent = provider === 'flux' ? 0 : FLASH_IMAGE_STANDARD * plannedPanelCount;
-  const imageCostBatch = provider === 'flux' ? 0 : FLASH_IMAGE_BATCH * plannedPanelCount;
-  const bananaProRate = state.imageResolution === '4K' ? BANANA_PRO_IMAGE_4K : BANANA_PRO_IMAGE_1K;
-  const imageCostBananaPro = bananaProRate * plannedPanelCount;
+  const inputTokenSplit = Math.round(estimatedTokens * 0.25);
+  const outputTokenSplit = estimatedTokens - inputTokenSplit;
+  const estimateForModel = (modelKey: string, imageCount = 0): number => {
+    const legacy = pricing.models[modelKey];
+    if (!legacy) return 0;
+    return estimateUsd({
+      pricing: fromLegacyPer1k(legacy),
+      inputTokens: inputTokenSplit,
+      outputTokens: outputTokenSplit,
+      imageCount
+    });
+  };
+  const textCostLite = estimateForModel('gemini-2.5-flash-lite');
+  const textCostFlash = estimateForModel('gemini-2.5-flash');
+  const imageCostCurrent = provider === 'flux'
+    ? 0
+    : estimateForModel(IMAGE_MODEL, plannedPanelCount) - estimateForModel(IMAGE_MODEL, 0);
+  const imageCostBatch = imageCostCurrent / 2; // OpenRouter batch tier — half price (existing convention).
+  const imageCostBananaPro = (() => {
+    const legacy = pricing.models['gemini-3-pro-image-preview'];
+    if (!legacy) return 0;
+    return (legacy.imagePerOutput || 0) * plannedPanelCount;
+  })();
   const estimatedCt = Math.ceil(costSummary.totalProjected / 0.0001);
   const continuityValidation = useMemo(
     () => validateContinuityState(state),
@@ -703,20 +718,20 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
               </div>
               <div className="grid grid-cols-3 text-[11px] font-bold px-2 py-1">
                 <div>Nano Banana (Flash Image)</div>
-                <div>{formatCurrency(FLASH_IMAGE_STANDARD)} / img</div>
-                <div className="text-right">{formatCurrency(FLASH_IMAGE_STANDARD * plannedPanelCount + textCostLite)}</div>
+                <div>{formatCurrency(pricing.models[IMAGE_MODEL]?.imagePerOutput || 0)} / img</div>
+                <div className="text-right">{formatCurrency(imageCostCurrent + textCostLite)}</div>
               </div>
               <div className="grid grid-cols-3 text-[11px] font-bold px-2 py-1">
                 <div>Nano Banana Batch</div>
-                <div>{formatCurrency(FLASH_IMAGE_BATCH)} / img</div>
+                <div>{formatCurrency((pricing.models[IMAGE_MODEL]?.imagePerOutput || 0) / 2)} / img</div>
                 <div className="text-right">{formatCurrency(imageCostBatch + textCostLite)}</div>
               </div>
               <div className="grid grid-cols-3 text-[11px] font-bold px-2 py-1">
                 <div>Banana Pro (3 Pro Image)</div>
-                <div>{formatCurrency(bananaProRate)} / img</div>
+                <div>{formatCurrency(pricing.models['gemini-3-pro-image-preview']?.imagePerOutput || 0)} / img</div>
                 <div className="text-right">{formatCurrency(imageCostBananaPro + textCostLite)}</div>
               </div>
-              <div className="text-[10px] text-slate-500 font-mono">Banana Pro rate uses {state.imageResolution === '4K' ? '4K' : '1K/2K'} pricing.</div>
+              <div className="text-[10px] text-slate-500 font-mono">Rates pulled from the live pricing config. Cost is per-axis: tokens + per-image are independent.</div>
             </div>
 
             <div className="border-2 border-black rounded-lg p-3 space-y-2">
@@ -728,15 +743,15 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
               </div>
               <div className="grid grid-cols-3 text-[11px] font-bold px-2 py-1">
                 <div>Economy text model</div>
-                <div>{formatCurrency(FLASH_LITE_PRICING.inputPer1k)} / {formatCurrency(FLASH_LITE_PRICING.outputPer1k)}</div>
+                <div>{formatCurrency(pricing.models['gemini-2.5-flash-lite']?.inputPer1k || 0)} / {formatCurrency(pricing.models['gemini-2.5-flash-lite']?.outputPer1k || 0)} per 1K</div>
                 <div className="text-right">{formatCurrency(imageCostCurrent + textCostLite)}</div>
               </div>
               <div className="grid grid-cols-3 text-[11px] font-bold px-2 py-1">
                 <div>Standard text model</div>
-                <div>{formatCurrency(FLASH_PRICING.inputPer1k)} / {formatCurrency(FLASH_PRICING.outputPer1k)}</div>
+                <div>{formatCurrency(pricing.models['gemini-2.5-flash']?.inputPer1k || 0)} / {formatCurrency(pricing.models['gemini-2.5-flash']?.outputPer1k || 0)} per 1K</div>
                 <div className="text-right">{formatCurrency(imageCostCurrent + textCostFlash)}</div>
               </div>
-              <div className="text-[10px] text-slate-500 font-mono">Output tokens estimated to match input length.</div>
+              <div className="text-[10px] text-slate-500 font-mono">Costs are estimates: tokens use input/output rates, images use per-image rate. Each axis is independent.</div>
             </div>
           </div>
 
