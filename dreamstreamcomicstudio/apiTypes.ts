@@ -337,6 +337,7 @@ export type ComicForgeRenderLetteringResponse = ComicForgeApiEnvelope<{
 
 export type ComicForgeRunQcRequest = {
   pageId: string;
+  projectId: string;
 };
 
 export type ComicForgeRunQcResponse = ComicForgeApiEnvelope<{

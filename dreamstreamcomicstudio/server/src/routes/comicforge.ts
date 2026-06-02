@@ -444,7 +444,7 @@ comicForgeRouter.get('/jobs/:jobId/events', requireComicForgeQueue, async (req, 
       }
 
       if (!closed) {
-        res.write('event: done\\ndata: {}\\n\\n');
+        res.write('event: done\ndata: {}\n\n');
       }
       res.end();
       return;
