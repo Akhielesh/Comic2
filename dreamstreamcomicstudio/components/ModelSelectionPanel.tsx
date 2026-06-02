@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Image as ImageIcon, Type as TypeIcon, Loader2, AlertTriangle, Sparkles, Search, ChevronDown, Check } from 'lucide-react';
-import { fetchModelCatalog, type CatalogModel, type ModelSource } from '../services/modelCatalog';
+import { fetchModelCatalog, SOURCE_LABEL, type CatalogModel, type ModelSource } from '../services/modelCatalog';
 import {
   getModelSelection,
   setSelectedModel,
   setStageModel,
+  setPreferredSource,
   MODEL_SELECTION_CHANGED,
   type ModelSlot
 } from '../services/modelSelection';
@@ -20,11 +21,6 @@ const STRUCTURED_TEXT_STAGES: { stage: string; label: string }[] = [
   { stage: 'panel_breakdown', label: 'Panel breakdown' },
   { stage: 'continuity_audit', label: 'Continuity audit' }
 ];
-
-const SOURCE_LABEL: Record<ModelSource, string> = {
-  openrouter: 'OpenRouter',
-  nvidia: 'NVIDIA'
-};
 
 const SourceBadge: React.FC<{ source?: ModelSource }> = ({ source }) =>
   source ? (
@@ -226,25 +222,26 @@ export const ModelSelectionPanel: React.FC = () => {
         <div className="border-2 border-black rounded-lg bg-slate-50 p-2.5 text-xs space-y-1.5">
           <div className="text-[10px] font-bold uppercase text-slate-500">Active generation sources</div>
           {[
-            { slot: 'text' as const, label: 'Text', model: textModelObj, source: sel.textSource },
-            { slot: 'image' as const, label: 'Image', model: imageModelObj, source: sel.imageSource }
+            { slot: 'text' as const, label: 'Text', model: textModelObj, source: sel.textSource ?? sel.preferredTextSource },
+            { slot: 'image' as const, label: 'Image', model: imageModelObj, source: sel.imageSource ?? sel.preferredImageSource }
           ].map(({ slot, label, model, source }) => {
             const src = (source || null) as ModelSource | null;
+            const pinned = !!model;
             const key = src ? getActiveKey(src) : null;
             return (
               <div key={slot} className="flex items-center gap-1.5 flex-wrap">
                 <span className="font-bold w-12 shrink-0">{label}</span>
-                {!model ? (
+                {!src ? (
                   <span className="text-slate-500">Auto — server picks (free-first)</span>
                 ) : (
                   <>
-                    <SourceBadge source={src ?? undefined} />
-                    <span className="truncate max-w-[11rem]">{model.name}</span>
+                    <SourceBadge source={src} />
+                    <span className="truncate max-w-[11rem]">{pinned ? model!.name : 'Auto (default source)'}</span>
                     {key ? (
                       <span className="text-green-700 font-bold flex items-center gap-0.5"><Check className="w-3 h-3" /> {key.label}</span>
                     ) : (
                       <span className="text-amber-700 font-bold flex items-center gap-0.5">
-                        <AlertTriangle className="w-3 h-3" /> No {src ? SOURCE_LABEL[src] : ''} key — add one above
+                        <AlertTriangle className="w-3 h-3" /> No {SOURCE_LABEL[src]} key — add one above
                       </span>
                     )}
                   </>
@@ -252,6 +249,31 @@ export const ModelSelectionPanel: React.FC = () => {
               </div>
             );
           })}
+
+          <div className="pt-1.5 mt-0.5 border-t border-dashed border-slate-300">
+            <div className="text-[10px] font-bold uppercase text-slate-500 mb-1">
+              Preferred default source <span className="font-normal normal-case text-slate-400">— used for Auto, when no model is pinned</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {([
+                { slot: 'text' as ModelSlot, label: 'Text', value: sel.preferredTextSource },
+                { slot: 'image' as ModelSlot, label: 'Image', value: sel.preferredImageSource }
+              ]).map(({ slot, label, value }) => (
+                <label key={slot} className="flex flex-col gap-0.5">
+                  <span className="font-bold">{label}</span>
+                  <select
+                    value={value || ''}
+                    onChange={(e) => setPreferredSource(slot, (e.target.value || null) as ModelSource | null)}
+                    className="border-2 border-black rounded px-2 py-1 bg-white"
+                  >
+                    <option value="">Auto (server default)</option>
+                    <option value="openrouter">OpenRouter{hasOpenRouter ? '' : ' — no key'}</option>
+                    <option value="nvidia">NVIDIA{hasNvidia ? '' : ' — no key'}</option>
+                  </select>
+                </label>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 

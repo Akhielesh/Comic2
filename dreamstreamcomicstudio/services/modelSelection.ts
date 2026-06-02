@@ -17,6 +17,13 @@ export interface ModelSelection {
   /** Which source the selected models came from, so the server routes to the right provider. */
   imageSource?: ModelSourceId | null;
   textSource?: ModelSourceId | null;
+  /**
+   * Standing default source per slot, used when no specific model is pinned (Auto).
+   * Lets a user say "always prefer NVIDIA for text" without picking a model each time;
+   * an explicit model's source always wins over this default.
+   */
+  preferredImageSource?: ModelSourceId | null;
+  preferredTextSource?: ModelSourceId | null;
   /** Sparse per-stage text-model overrides (advanced). Each falls back to textModel. */
   byStage?: Record<string, string>;
   /** Per-stage source overrides, paired with byStage, so per-stage picks route to the right provider. */
@@ -26,7 +33,15 @@ export interface ModelSelection {
 const STORAGE = 'dreamstream_model_selection';
 export const MODEL_SELECTION_CHANGED = 'dreamstream:model-selection-changed';
 
-const DEFAULTS: ModelSelection = { mode: 'default', imageModel: null, textModel: null, imageSource: null, textSource: null };
+const DEFAULTS: ModelSelection = {
+  mode: 'default',
+  imageModel: null,
+  textModel: null,
+  imageSource: null,
+  textSource: null,
+  preferredImageSource: null,
+  preferredTextSource: null
+};
 
 const read = (): ModelSelection => {
   if (typeof window === 'undefined') return { ...DEFAULTS };
@@ -53,8 +68,26 @@ export const getModelSelection = (): ModelSelection => read();
 
 export const getSelectedImageModel = (): string | null => read().imageModel;
 export const getSelectedTextModel = (): string | null => read().textModel;
-export const getSelectedImageSource = (): ModelSourceId | null => read().imageSource ?? null;
-export const getSelectedTextSource = (): ModelSourceId | null => read().textSource ?? null;
+// An explicit model's source wins; otherwise fall back to the standing preferred default.
+export const getSelectedImageSource = (): ModelSourceId | null => {
+  const s = read();
+  return s.imageSource ?? s.preferredImageSource ?? null;
+};
+export const getSelectedTextSource = (): ModelSourceId | null => {
+  const s = read();
+  return s.textSource ?? s.preferredTextSource ?? null;
+};
+
+export const getPreferredSource = (slot: ModelSlot): ModelSourceId | null =>
+  slot === 'image' ? (read().preferredImageSource ?? null) : (read().preferredTextSource ?? null);
+
+/** Set the standing default source for a slot (Auto picks route here). null = no preference. */
+export const setPreferredSource = (slot: ModelSlot, source: ModelSourceId | null) => {
+  const next = read();
+  if (slot === 'image') next.preferredImageSource = source;
+  else next.preferredTextSource = source;
+  write(next);
+};
 
 /**
  * A "truly free" model costs nothing to call (OpenRouter ':free' variant). Such models are
@@ -107,11 +140,11 @@ export const getModelForStage = (stage?: string): string | null => {
   return typeof override === 'string' && override.trim() ? override : sel.textModel;
 };
 
-/** Resolve the SOURCE for a stage: a per-stage source if set, else the global text source. */
+/** Resolve the SOURCE for a stage: per-stage override → pinned text source → preferred default. */
 export const getSourceForStage = (stage?: string): ModelSourceId | null => {
   const sel = read();
   const override = stage && sel.byStageSource ? sel.byStageSource[stage] : undefined;
-  return override ?? sel.textSource ?? null;
+  return override ?? sel.textSource ?? sel.preferredTextSource ?? null;
 };
 
 export const setStageModel = (stage: string, modelId: string | null, source?: ModelSourceId | null) => {

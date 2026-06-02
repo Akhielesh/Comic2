@@ -100,6 +100,18 @@ export const costLabel = (model: CatalogModel): string => {
   return `$${perMillion.toFixed(2)}/M out`;
 };
 
+/** Friendly, display-ready source labels — used everywhere a source is shown. */
+export const SOURCE_LABEL: Record<ModelSource, string> = {
+  openrouter: 'OpenRouter',
+  nvidia: 'NVIDIA'
+};
+
+/** Map a source id (or any provider string) to its display label. Empty for null. */
+export const sourceLabel = (source?: ModelSource | string | null): string => {
+  if (!source) return '';
+  return SOURCE_LABEL[source as ModelSource] || String(source);
+};
+
 export const providerOrigin = (model: CatalogModel): string => {
   // Prefer the authoritative source from the server; fall back to the id prefix.
   if (model.source) return model.source;

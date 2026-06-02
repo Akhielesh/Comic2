@@ -9,6 +9,7 @@ import {
   getSelectedTextSource,
   MODEL_SELECTION_CHANGED
 } from '../services/modelSelection';
+import { sourceLabel } from '../services/modelCatalog';
 
 interface TokenAvailabilityPillProps {
   className?: string;
@@ -131,8 +132,8 @@ export const TokenAvailabilityPill: React.FC<TokenAvailabilityPillProps> = ({ cl
           )}
 
           <div className="mt-2 pt-2 border-t border-dashed border-slate-200 text-[11px] text-slate-600 space-y-0.5">
-            <div className="flex justify-between gap-2"><span className="text-slate-400">Image model</span><span className="font-mono truncate">{imageModel}{imageSource ? ` · ${imageSource}` : ''}</span></div>
-            <div className="flex justify-between gap-2"><span className="text-slate-400">Text model</span><span className="font-mono truncate">{textModel}{textSource ? ` · ${textSource}` : ''}</span></div>
+            <div className="flex justify-between gap-2"><span className="text-slate-400">Image model</span><span className="font-mono truncate">{imageModel}{imageSource ? ` · ${sourceLabel(imageSource)}` : ''}</span></div>
+            <div className="flex justify-between gap-2"><span className="text-slate-400">Text model</span><span className="font-mono truncate">{textModel}{textSource ? ` · ${sourceLabel(textSource)}` : ''}</span></div>
           </div>
         </div>
       </div>

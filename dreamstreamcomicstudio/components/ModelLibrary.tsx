@@ -15,14 +15,18 @@ import {
   Wand2,
   Zap,
   ThumbsUp,
-  ThumbsDown
+  ThumbsDown,
+  ShieldCheck
 } from 'lucide-react';
 import {
   fetchModelCatalog,
+  fetchModelVerification,
   costLabel,
   providerOrigin,
+  sourceLabel,
   type Band,
-  type CatalogModel
+  type CatalogModel,
+  type ModelVerification
 } from '../services/modelCatalog';
 import {
   setSelectedModel,
@@ -206,7 +210,7 @@ const ModelCard: React.FC<{
   >
     <div className="flex items-start justify-between gap-2">
       <div className="min-w-0">
-        <div className="text-[10px] font-bold uppercase text-slate-500">{providerOrigin(model)}</div>
+        <div className="text-[10px] font-bold uppercase text-slate-500">{sourceLabel(providerOrigin(model))}</div>
         <div className="font-bold leading-tight truncate">{model.name}</div>
       </div>
       <Badge className={COST_CLASS_COLOR[model.costClass]}>{COST_CLASS_LABEL[model.costClass] ?? classBadge(model.costClass)}</Badge>
@@ -241,7 +245,7 @@ const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; on
     <div className="bg-white border-4 border-black rounded-xl shadow-comic max-w-2xl w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
       <div className="sticky top-0 bg-white border-b-2 border-black px-5 py-4 flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-[10px] font-bold uppercase text-slate-500">{providerOrigin(model)}</div>
+          <div className="text-[10px] font-bold uppercase text-slate-500">{sourceLabel(providerOrigin(model))}</div>
           <h2 className="text-xl font-display leading-tight">{model.name}</h2>
           <code className="text-[11px] text-slate-500 break-all">{model.id}</code>
         </div>
@@ -375,6 +379,49 @@ const CompareModal: React.FC<{ models: CatalogModel[]; selection: ModelSelection
   );
 };
 
+// User-facing trust signal: shows that the catalog (and the Free/paid labels) are
+// reconciled against each source's LIVE API, not guessed. Backed by /api/models/verify.
+const VerifiedStrip: React.FC = () => {
+  const [data, setData] = useState<ModelVerification | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let active = true;
+    fetchModelVerification()
+      .then((r) => { if (active) setData(r); })
+      .catch(() => { if (active) setFailed(true); });
+    return () => { active = false; };
+  }, []);
+
+  if (failed) return null;
+  if (!data) {
+    return (
+      <div className="mt-4 border-2 border-black rounded-xl bg-slate-50 p-3 text-xs flex items-center gap-2 text-slate-500">
+        <Loader2 className="w-4 h-4 animate-spin" /> Verifying catalog against live sources…
+      </div>
+    );
+  }
+
+  const when = data.catalog.fetchedAt ? new Date(data.catalog.fetchedAt).toLocaleString() : 'just now';
+  const orUsage = data.sources.openrouter.liveKey?.usage;
+  return (
+    <div className="mt-4 border-2 border-black rounded-xl bg-green-50 p-3 text-xs flex flex-wrap items-center gap-x-4 gap-y-1 shadow-comic">
+      <span className="font-bold flex items-center gap-1.5 text-green-800"><ShieldCheck className="w-4 h-4" /> Verified live</span>
+      <span><span className="text-slate-500">Catalog:</span> {data.catalog.total} models · <span className="font-bold text-green-800">{data.catalog.freeCount} free</span></span>
+      <span>
+        <span className="text-slate-500">OpenRouter:</span>{' '}
+        {data.sources.openrouter.connected ? `connected (${data.sources.openrouter.modelCount})` : 'not connected'}
+        {typeof orUsage === 'number' ? ` · $${orUsage.toFixed(2)} used` : ''}
+      </span>
+      <span>
+        <span className="text-slate-500">NVIDIA:</span>{' '}
+        {data.sources.nvidia.connected ? `connected (${data.sources.nvidia.modelCount})` : 'not connected'}
+      </span>
+      <span className="text-slate-400 ml-auto">checked {when}</span>
+      <span className="basis-full text-slate-500">Free/paid and usage are reconciled against each source’s live API — labels aren’t guessed.</span>
+    </div>
+  );
+};
+
 export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack }) => {
   const [models, setModels] = useState<CatalogModel[]>([]);
   const [loading, setLoading] = useState(true);
@@ -457,6 +504,8 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack }) => {
             <TypeIcon className="w-3.5 h-3.5" /> Text: <span className="font-bold">{selectedText?.name || (selection.textModel || 'Auto')}</span>
           </span>
         </div>
+
+        <VerifiedStrip />
 
         {/* Smart auto-pick — the app's own reasoning picks the best model per stage. */}
         <div className="mt-4 bg-gradient-to-r from-brand-blue/10 to-brand-yellow/10 border-2 border-black rounded-xl p-4">
