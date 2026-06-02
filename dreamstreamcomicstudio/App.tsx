@@ -828,6 +828,9 @@ const App: React.FC = () => {
             currentView={effectiveView}
             activeProject={activeProject}
             projects={projects}
+            onSaveCreativeDirection={activeProject ? (text) => updateProject(activeProject.id, (prev) => ({
+              state: { ...prev.state, creativeDirection: [prev.state.creativeDirection, text].filter(Boolean).join('\n\n') }
+            })) : undefined}
           />
         )}
       </div>

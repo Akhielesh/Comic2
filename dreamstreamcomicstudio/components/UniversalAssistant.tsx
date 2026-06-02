@@ -21,6 +21,9 @@ type UniversalAssistantProps = {
   currentView: string;
   activeProject?: Project;
   projects: Project[];
+  /** When set, assistant replies show a "Save to story context" action that appends to the
+   *  active project's creativeDirection (so the user can talk through their story and capture it). */
+  onSaveCreativeDirection?: (text: string) => void;
 };
 
 const maskEmail = (email?: string | null) => {
@@ -72,13 +75,15 @@ const getArtifactSummary = (artifacts: Array<{ stage?: string; type?: string; mo
 export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
   currentView,
   activeProject,
-  projects
+  projects,
+  onSaveCreativeDirection
 }) => {
   const { user } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [input, setInput] = useState('');
+  const [savedMsgIds, setSavedMsgIds] = useState<Set<string>>(new Set());
   const [messages, setMessages] = useState<ChatItem[]>([
     {
       id: crypto.randomUUID(),
@@ -283,6 +288,14 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
                       </div>
                     )}
                     <MessageCard text={message.text} />
+                    {onSaveCreativeDirection && message.text.trim() && (
+                      <button
+                        onClick={() => { onSaveCreativeDirection(message.text); setSavedMsgIds((prev) => new Set(prev).add(message.id)); }}
+                        className="text-[10px] font-bold text-brand-blue hover:underline"
+                      >
+                        {savedMsgIds.has(message.id) ? '✓ Saved to story context' : '+ Save to story context'}
+                      </button>
+                    )}
                   </div>
                 )}
               </div>

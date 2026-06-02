@@ -29,6 +29,7 @@ const LoaderIcon = () => (
 interface ReferenceBuilderProps {
   scenes: Scene[];
   script?: string; // Add script prop
+  creativeDirection?: string;
   currentStyle: ComicState['stylePrompt'];
   styleImageId?: string;
   projectId: string;
@@ -79,7 +80,7 @@ const STRUCTURED_FIELDS: Record<Tab, Array<{ key: string; label: string; placeho
 };
 
 export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
-  scenes, script, currentStyle, styleImageId, projectId, initialCharacters, initialItems, initialLocations, initialContinuity, onDataUpdate, onConfirm
+  scenes, script, creativeDirection, currentStyle, styleImageId, projectId, initialCharacters, initialItems, initialLocations, initialContinuity, onDataUpdate, onConfirm
 }) => {
   const hasInitialWorldData = initialCharacters.length > 0 || initialItems.length > 0 || initialLocations.length > 0;
   const [activeTab, setActiveTab] = useState<Tab>('characters');
@@ -132,7 +133,7 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
 
     const fetchWorld = async () => {
       try {
-        const data = await extractWorldDetails(scenes, projectId, script);
+        const data = await extractWorldDetails(scenes, projectId, script, creativeDirection);
         commitWorldState(data.characters, data.items, data.locations);
         setWorldDiagnostics(data.diagnostics);
         setWorldDiagnosticsAcknowledged(false);

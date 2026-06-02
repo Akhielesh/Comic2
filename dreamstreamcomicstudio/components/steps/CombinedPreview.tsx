@@ -228,6 +228,7 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
       const count = panelCounts[sceneId] || 3;
       const result = await generatePanelBreakdown(scene, state.stylePrompt, state.layoutType, projectId, count, {
         stage: 'preview',
+        creativeDirection: state.creativeDirection,
         continuityBible: state.continuity?.bible,
         sceneBindings: state.continuity?.bible.sceneBindings,
         previousPanelContext: state.panels
@@ -294,6 +295,7 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
         const count = panelCounts[scene.id] || 3;
         const result = await generatePanelBreakdown(scene, state.stylePrompt, state.layoutType, projectId, count, {
           stage: 'preview',
+          creativeDirection: state.creativeDirection,
           continuityBible: state.continuity?.bible,
           sceneBindings: state.continuity?.bible.sceneBindings,
           previousPanelContext: allPanels

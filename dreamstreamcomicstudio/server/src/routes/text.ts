@@ -125,7 +125,8 @@ textRouter.post('/analyze-script', async (req, res, next) => {
     }
 
     try {
-      const result = await analyzeScript(apiKey, script, effectiveModel);
+      const creativeDirection = typeof req.body?.creativeDirection === 'string' ? req.body.creativeDirection : undefined;
+      const result = await analyzeScript(apiKey, script, effectiveModel, creativeDirection);
       const settled = await settleReservedOperation({
         req,
         operation: 'text.analyze_script',
@@ -357,7 +358,8 @@ textRouter.post('/extract-world', async (req, res, next) => {
         apiKey,
         scenes,
         script,
-        effectiveModel
+        effectiveModel,
+        typeof req.body?.creativeDirection === 'string' ? req.body.creativeDirection : undefined
       );
       const diagnostics = result.diagnostics || {
         input_scene_count: Array.isArray(scenes) ? scenes.length : 0,
@@ -445,7 +447,8 @@ textRouter.post('/panel-breakdown', async (req, res, next) => {
         sceneBindings,
         previousPanelContext,
         effectiveModel,
-        typeof continuitySummary === 'string' ? continuitySummary : undefined
+        typeof continuitySummary === 'string' ? continuitySummary : undefined,
+        typeof req.body?.creativeDirection === 'string' ? req.body.creativeDirection : undefined
       );
 
       const settled = await settleReservedOperation({

@@ -333,7 +333,7 @@ export const analyzeScript = async (script: string, projectId?: string) => {
   return response.scenes;
 };
 
-export const analyzeScriptDetailed = async (script: string, projectId?: string, signal?: AbortSignal) => {
+export const analyzeScriptDetailed = async (script: string, projectId?: string, signal?: AbortSignal, creativeDirection?: string) => {
   const response = await safeGeminiCall(
     'analyze_script',
     projectId,
@@ -341,7 +341,7 @@ export const analyzeScriptDetailed = async (script: string, projectId?: string, 
     'script',
     async () => withTextRetry(
       () => withTextKeyFallback((apiKey, modelId) =>
-        post<AnalyzeScriptRequest, AnalyzeScriptResponse>('/api/text/analyze-script', { script }, { apiKey, modelId, stage: 'analyze_script', signal })
+        post<AnalyzeScriptRequest, AnalyzeScriptResponse>('/api/text/analyze-script', { script, creativeDirection }, { apiKey, modelId, stage: 'analyze_script', signal })
       ),
       { attempts: 2, delayMs: 350 }
     ),
@@ -381,7 +381,8 @@ export const generateScriptDraft = async (inputs: StoryDraftRequest, projectId?:
 export const extractWorldDetails = async (
   scenes: ExtractWorldRequest['scenes'],
   projectId?: string,
-  script?: string
+  script?: string,
+  creativeDirection?: string
 ) => {
   if (!scenes || scenes.length === 0) {
     return {
@@ -416,7 +417,7 @@ export const extractWorldDetails = async (
     'text',
     'world',
     async () => withTextKeyFallback((apiKey, modelId) =>
-      post<ExtractWorldRequest, ExtractWorldResponse>('/api/text/extract-world', { scenes, script: script.trim() }, { apiKey, modelId, stage: 'extract_world' })
+      post<ExtractWorldRequest, ExtractWorldResponse>('/api/text/extract-world', { scenes, script: script.trim(), creativeDirection }, { apiKey, modelId, stage: 'extract_world' })
     ),
     scenes.map(s => s.synopsis || s.rawText).join('\n')
   );
@@ -491,6 +492,7 @@ export const generatePanelBreakdown = async (
     continuityBible?: ContinuityBible;
     sceneBindings?: SceneContinuityBinding[];
     previousPanelContext?: Array<{ panelId?: string; sceneId?: number; description: string; dialogue?: string }>;
+    creativeDirection?: string;
   }
 ) => {
   const response = await safeGeminiCall(
@@ -508,7 +510,8 @@ export const generatePanelBreakdown = async (
         continuitySummary: options?.continuitySummary,
         continuityBible: options?.continuityBible,
         sceneBindings: options?.sceneBindings,
-        previousPanelContext: options?.previousPanelContext
+        previousPanelContext: options?.previousPanelContext,
+        creativeDirection: options?.creativeDirection
       }, { signal: options?.abortSignal, apiKey, modelId, stage: 'panel_breakdown' })
     ),
     scene?.synopsis || scene?.rawText || ''

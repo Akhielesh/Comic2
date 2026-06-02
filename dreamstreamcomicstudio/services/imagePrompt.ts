@@ -32,6 +32,8 @@ export type ImagePromptOptions = {
   focalSubject?: string;
   /** Raw scene synopsis, injected so the story subject survives even if the breakdown drifts. */
   sceneSynopsis?: string;
+  /** Author's creative direction / story intent — honoured across stages. */
+  creativeDirection?: string;
   /** Camera/shot direction for the panel. */
   shotType?: string;
   cameraAngle?: string;
@@ -54,6 +56,7 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
         ? `Ground the look in this story's opening — match its environment, lighting and tone (no named characters, no readable text, no plot beats): ${sceneCtx}`
         : "No named characters, no named items, no named locations, and no plot events.",
       styleLine ? `Art Style: ${styleLine}` : "",
+      clean(options.creativeDirection) ? `Author's creative direction (tone/mood only): ${clean(options.creativeDirection)}` : "",
       clean(options.extraNotes) ? `Creative Direction: ${clean(options.extraNotes)}` : ""
     ].filter(Boolean).join("\n");
   }
@@ -95,6 +98,7 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
       options.characters ? `Core Cast Presence: ${clean(options.characters)}` : "",
       options.items ? `Key Props/Symbols: ${clean(options.items)}` : "",
       styleLine ? `Art Style: ${styleLine}` : "",
+      clean(options.creativeDirection) ? `Author's creative direction: ${clean(options.creativeDirection)}` : "",
       clean(options.extraNotes) ? `Creative Brief: ${clean(options.extraNotes)}` : "",
       "High quality full-color illustration with intentional negative space for masthead."
     ].filter(Boolean).join(" ");
@@ -124,6 +128,7 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
   // depicted (this is what caused e.g. a boat story to render generic superheroes).
   if (clean(options.focalSubject)) lines.push(`Primary subject — must be clearly and accurately depicted: ${clean(options.focalSubject)}.`);
   if (clean(options.sceneSynopsis)) lines.push(`Story context to stay faithful to: ${clean(options.sceneSynopsis)}.`);
+  if (clean(options.creativeDirection)) lines.push(`Author's creative direction (honour this tone/intent): ${clean(options.creativeDirection)}.`);
   if (styleLine) lines.push(`Art style (rendering/look ONLY — do not change the subject, setting, or genre): ${styleLine}.`);
   if (
     clean(options.layoutType)
