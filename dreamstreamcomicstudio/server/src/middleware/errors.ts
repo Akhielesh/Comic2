@@ -43,6 +43,20 @@ const getClientMessage = (status: number, err: ErrorLike): string => {
 };
 
 export const errorHandler = (err: ErrorLike, req: Request, res: Response, _next: NextFunction) => {
+  // Map the typed free-only block error to HTTP 402 with a clear payload so the
+  // client can surface "Block + explain" UX (no silent paid fallback under free-only).
+  if (err && (err.code === 'NO_FREE_MODEL_AVAILABLE' || err.name === 'NoFreeModelAvailableError')) {
+    res.status(402).json({
+      error: {
+        code: 'NO_FREE_MODEL_AVAILABLE',
+        message: err.message || 'No genuinely-free model is currently available. Free-only mode is on, so the request was blocked.',
+        details: err.details,
+        requestId: req.requestId
+      }
+    });
+    return;
+  }
+
   const status = Number.isInteger(err?.status) ? Number(err.status) : 500;
   const code = getPublicErrorCode(status, err);
 

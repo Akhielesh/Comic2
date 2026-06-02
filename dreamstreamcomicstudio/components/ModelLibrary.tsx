@@ -35,6 +35,7 @@ import {
 import { getCapabilities, featureSupport, FEATURE_LABELS, capabilityBadges, QUERY_FACETS, type CapabilityTone } from '../services/modelCapabilities';
 import { buildSmartTeam, TASK_PROFILES, type SmartMode, type SmartTask, type SmartTeam } from '../services/smartModelSelection';
 import { recordModelFeedback, latestVote, MODEL_FEEDBACK_CHANGED, type FeedbackVote } from '../services/modelFeedback';
+import { describeCost, classBadge } from '../shared/pricing';
 
 interface ModelLibraryProps {
   onBack: () => void;
@@ -82,6 +83,28 @@ const Badge: React.FC<{ children: React.ReactNode; className?: string }> = ({ ch
 const slotOf = (model: CatalogModel): ModelSlot => (model.supportsImageOutput ? 'image' : 'text');
 
 const perMillion = (perToken: number) => (perToken > 0 ? `$${(perToken * 1_000_000).toFixed(2)}/M` : '—');
+
+// Plain-language, multi-dimensional cost line for a model. Routes through shared/pricing
+// so client + server use the exact same wording and never collapse to "free/paid".
+const costStatement = (model: CatalogModel): string =>
+  describeCost({
+    modelId: model.id,
+    pricing: model.pricing,
+    supportsImageOutput: model.supportsImageOutput
+  });
+
+const COST_CLASS_COLOR: Record<string, string> = {
+  free_verified: 'bg-green-500 text-white',
+  zero_priced_token_billed: 'bg-amber-500 text-black',
+  per_image_only: 'bg-brand-blue text-white',
+  paid: 'bg-slate-200 text-slate-700'
+};
+const COST_CLASS_LABEL: Record<string, string> = {
+  free_verified: 'Free',
+  zero_priced_token_billed: 'Token-billed (NOT free)',
+  per_image_only: 'Per image',
+  paid: 'Paid'
+};
 
 // Each active filter chip must match (AND), so you can combine e.g. Free + Image + Reasoning.
 const FILTER_PREDICATES: Record<Exclude<FilterKey, 'all'>, (m: CatalogModel, c: ReturnType<typeof getCapabilities>) => boolean> = {
@@ -186,12 +209,14 @@ const ModelCard: React.FC<{
         <div className="text-[10px] font-bold uppercase text-slate-500">{providerOrigin(model)}</div>
         <div className="font-bold leading-tight truncate">{model.name}</div>
       </div>
-      <Badge className={BAND_COLOR[model.costBand]}>{costLabel(model)}</Badge>
+      <Badge className={COST_CLASS_COLOR[model.costClass]}>{COST_CLASS_LABEL[model.costClass] ?? classBadge(model.costClass)}</Badge>
     </div>
 
     <div className="flex flex-wrap gap-1">
       {capabilityBadges(model).map((b) => <Badge key={b.label} className={TONE_CLASS[b.tone]}>{b.label}</Badge>)}
     </div>
+
+    <p className="text-[11px] text-slate-700 leading-snug" title="Cost varies per axis (input tokens, output tokens, per-image, per-request).">{costStatement(model)}</p>
 
     {model.editorialNote && <p className="text-xs text-slate-600 line-clamp-2">{model.editorialNote}</p>}
 
@@ -225,8 +250,7 @@ const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; on
 
       <div className="p-5 space-y-4">
         <div className="flex flex-wrap items-center gap-1.5">
-          <Badge className={BAND_COLOR[model.costBand]}>{costLabel(model)}</Badge>
-          {model.isFree && <Badge className="bg-green-500 text-white">Free</Badge>}
+          <Badge className={COST_CLASS_COLOR[model.costClass]}>{COST_CLASS_LABEL[model.costClass] ?? classBadge(model.costClass)}</Badge>
           {model.supportsImageOutput && <Badge className="bg-brand-blue text-white">Text→Image</Badge>}
           {getCapabilities(model).imageInput && !model.supportsImageOutput && <Badge className="bg-brand-yellow text-black">Image→Text (vision)</Badge>}
           {model.supportsImageInput && model.supportsImageOutput && <Badge className="bg-brand-yellow text-black">Reference images</Badge>}
@@ -244,10 +268,15 @@ const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; on
         )}
         {model.description && <p className="text-sm text-slate-600">{model.description}</p>}
 
-        <div className="grid sm:grid-cols-3 gap-3 text-[11px]">
+        <div className="grid sm:grid-cols-4 gap-3 text-[11px]">
           <div className="border-2 border-black rounded-lg p-2"><div className="text-slate-400 uppercase font-bold">Input tokens</div><div className="font-mono">{perMillion(model.pricing.promptPerToken)}</div></div>
           <div className="border-2 border-black rounded-lg p-2"><div className="text-slate-400 uppercase font-bold">Output tokens</div><div className="font-mono">{perMillion(model.pricing.completionPerToken)}</div></div>
           <div className="border-2 border-black rounded-lg p-2"><div className="text-slate-400 uppercase font-bold">Per image</div><div className="font-mono">{model.pricing.imagePerImage > 0 ? `$${model.pricing.imagePerImage.toFixed(3)}` : '—'}</div></div>
+          <div className="border-2 border-black rounded-lg p-2"><div className="text-slate-400 uppercase font-bold">Per request</div><div className="font-mono">{model.pricing.requestFlat > 0 ? `$${model.pricing.requestFlat.toFixed(4)}` : '—'}</div></div>
+        </div>
+        <div className="bg-slate-50 border-2 border-black rounded-lg p-3 text-[12px] text-slate-700 leading-snug">
+          <div className="text-[10px] uppercase font-bold text-slate-500 mb-1">Cost (each axis is independent)</div>
+          {costStatement(model)}
         </div>
 
         <div>

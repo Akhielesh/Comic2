@@ -9,6 +9,7 @@
 // See docs/decisions/0003 and docs/features/models-and-api-configuration.md
 
 import type { CatalogModel } from './modelCatalog';
+import type { CostClass } from '../shared/pricing';
 
 export interface ModelCapabilities {
   id: string;
@@ -26,7 +27,10 @@ export interface ModelCapabilities {
   reasoning: boolean;
   longContext: boolean;
   contextLength: number;
+  /** True only when the strict shared classification is free_verified. */
   isFree: boolean;
+  /** Full multi-dimensional class — never collapse to free/paid in UI. */
+  costClass: CostClass;
   isPremium: boolean;
 }
 
@@ -74,7 +78,11 @@ export const getCapabilities = (model: CatalogModel): ModelCapabilities => {
       params.includes('reasoning') || params.includes('include_reasoning') || params.includes('reasoning_effort') || REASONING_RE.test(id),
     longContext: contextLength >= 200_000,
     contextLength,
-    isFree: model.isFree || model.costBand === 'free',
+    // Strict: free only when the server classified the model as free_verified.
+    // Do NOT fall back to costBand === 'free' here — that conflated zero-priced
+    // token-billed image models with truly-free ones.
+    isFree: model.costClass === 'free_verified',
+    costClass: model.costClass,
     isPremium: model.costBand === 'high' || includesAny(id, PREMIUM_HINTS)
   };
 };

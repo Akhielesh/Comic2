@@ -81,7 +81,23 @@ export const MODEL_ROUTING_TABLE: Record<TaskType, ModelPolicy> = {
   }
 };
 
-export const getModelPolicy = (taskType: TaskType): ModelPolicy => MODEL_ROUTING_TABLE[taskType];
+let DEPRECATION_WARNED = false;
+export const getModelPolicy = (taskType: TaskType): ModelPolicy => {
+  // Loud once-per-process warning: this returns stale, hardcoded prices and retired model
+  // ids. The verification system (Phase 1) flags drift between this table and the live
+  // catalog; the long-term fix is to migrate pipelineService.ts onto resolveStageModel +
+  // resolveModelPricing.
+  if (!DEPRECATION_WARNED && process.env.NODE_ENV !== 'test') {
+    DEPRECATION_WARNED = true;
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[comicforge] getModelPolicy() is consulting the DEPRECATED hardcoded MODEL_ROUTING_TABLE. ' +
+        'Estimated costs and model ids here predate the OpenRouter migration and will be wrong. ' +
+        'Migrate to ai/stageModels.resolveStageModel + services/pricingCatalog.resolveModelPricing.'
+    );
+  }
+  return MODEL_ROUTING_TABLE[taskType];
+};
 
 const NO_TEXT_GUARD = 'NO TEXT, NO LETTERS, NO WORDS, NO NUMBERS anywhere in the image. NO speech bubbles. NO caption boxes.';
 

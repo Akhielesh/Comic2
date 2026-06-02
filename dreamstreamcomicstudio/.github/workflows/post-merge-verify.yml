@@ -1,0 +1,66 @@
+name: post-merge-verify
+
+# After a fix PR is merged to the default branch, re-run the full verification suite
+# on the merged commit. On regression (any deterministic check fails OR the
+# originally-failing check still fires), AUTO-REVERT the merge — the spec calls this
+# out as the safety net for full auto-merge.
+
+on:
+  push:
+    branches:
+      - Dreamstrream-v1
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  reverify:
+    runs-on: ubuntu-latest
+    if: contains(github.event.head_commit.message, 'verification-fix')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: dreamstreamcomicstudio/package-lock.json
+
+      - name: Install + typecheck + tests
+        working-directory: dreamstreamcomicstudio
+        run: |
+          npm ci
+          npm run typecheck
+          npx tsc -p server/tsconfig.json --noEmit
+          npm test -- --run
+
+      - name: Re-run all enabled verification checks
+        id: reverify
+        working-directory: dreamstreamcomicstudio
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          set +e
+          npm run verify:run:check
+          STATUS=$?
+          set -e
+          echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
+          if [ "$STATUS" -ne 0 ]; then
+            echo "Verification regressed after merge"
+          fi
+
+      - name: Auto-revert the merge on regression
+        if: steps.reverify.outputs.status != '0' && vars.AUTO_FIX_DISABLED != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.email "verification-bot@users.noreply.github.com"
+          git config user.name  "verification-bot"
+          git revert -m 1 --no-edit ${{ github.sha }} || git revert --no-edit ${{ github.sha }}
+          git push origin HEAD:Dreamstrream-v1
+          echo "Auto-reverted merge ${{ github.sha }} due to verification regression."

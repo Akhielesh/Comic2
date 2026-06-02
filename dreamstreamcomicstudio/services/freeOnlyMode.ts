@@ -1,0 +1,52 @@
+// Free-only mode — client-side setting.
+//
+// When on, every /api/* call attaches `X-Free-Only: true`. The server's autoRouter
+// then refuses to fall back to a paid model and returns HTTP 402 NO_FREE_MODEL_AVAILABLE
+// instead. UI surfaces (model pickers, generation buttons, background generation status)
+// must consume this and show a "Block + explain" message when free-only blocks a stage.
+//
+// Persistence: localStorage today (per-browser). Phase 1's verification system migration
+// will add a server-side profile flag so the setting follows the user across devices.
+
+const KEY = 'dreamstream:freeOnly';
+const EVENT = 'dreamstream:freeOnly:changed';
+
+export const isFreeOnly = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+
+export const setFreeOnly = (on: boolean): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    if (on) window.localStorage.setItem(KEY, '1');
+    else window.localStorage.removeItem(KEY);
+    window.dispatchEvent(new CustomEvent(EVENT, { detail: { on } }));
+  } catch {
+    /* best-effort; storage may be blocked */
+  }
+};
+
+/** Subscribe to changes. Returns an unsubscribe function. */
+export const onFreeOnlyChanged = (handler: (on: boolean) => void): (() => void) => {
+  if (typeof window === 'undefined') return () => undefined;
+  const wrapped = (event: Event) => {
+    const detail = (event as CustomEvent).detail;
+    handler(Boolean(detail?.on));
+  };
+  window.addEventListener(EVENT, wrapped as EventListener);
+  return () => window.removeEventListener(EVENT, wrapped as EventListener);
+};
+
+/** Recognises the typed server error so callers can render Block + explain. */
+export const isNoFreeModelError = (err: unknown): boolean => {
+  if (!err || typeof err !== 'object') return false;
+  const candidate = err as { status?: number; details?: { code?: string }; message?: string };
+  if (candidate.status === 402) return true;
+  const code = candidate.details?.code;
+  return code === 'NO_FREE_MODEL_AVAILABLE';
+};

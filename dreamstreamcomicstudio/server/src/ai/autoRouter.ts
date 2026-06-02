@@ -5,13 +5,16 @@
 //
 // Pair with the provider's fallbackModel (see ai/providers/openrouter.ts): if a
 // free model is rate-limited (429) or unavailable (404), generation retries on a
-// reliable fallback so the flow never hard-fails.
+// reliable fallback so the flow never hard-fails — EXCEPT under 'free-only' mode,
+// where we deliberately surface NoFreeModelAvailableError instead of silently
+// charging the caller's key.
 
 import { getCatalog } from '../services/modelCatalog.js';
 import type { AnnotatedModel } from './catalogAnnotations.js';
 
 // Last-resort fallbacks if the live catalog can't be reached. Kept to current,
 // widely-available, low-cost models (not the retired Gemini free experiment).
+// NOTE: these are PAID — never used under 'free-only' mode.
 export const TEXT_FALLBACK = 'openai/gpt-4o-mini';
 export const IMAGE_FALLBACK = 'google/gemini-2.5-flash-image';
 
@@ -26,6 +29,9 @@ const isTextModel = (m: AnnotatedModel) =>
 
 const isImageModel = (m: AnnotatedModel) => m.supportsImageOutput;
 
+const isFreeVerified = (m: AnnotatedModel) =>
+  m.costClass === 'free_verified' || m.id.toLowerCase().endsWith(':free');
+
 const byCompletionPrice = (a: AnnotatedModel, b: AnnotatedModel) =>
   (a.pricing?.completionPerToken || 0) - (b.pricing?.completionPerToken || 0);
 
@@ -35,8 +41,32 @@ const byImagePrice = (a: AnnotatedModel, b: AnnotatedModel) =>
 const byContextDesc = (a: AnnotatedModel, b: AnnotatedModel) =>
   (b.contextLength || 0) - (a.contextLength || 0);
 
-/** Spend preference for auto-selection. `free` preserves today's free-first behavior. */
-export type CostPref = 'free' | 'cheap' | 'quality';
+/**
+ * Spend preference for auto-selection.
+ *  - 'free'      free-first; falls back to cheapest paid when no free model exists.
+ *  - 'cheap'     cheapest eligible model.
+ *  - 'quality'   best-fit model regardless of cost.
+ *  - 'free-only' STRICT free-only — never returns a paid id. Throws
+ *                NoFreeModelAvailableError if no genuinely-free model passes the gate.
+ */
+export type CostPref = 'free' | 'cheap' | 'quality' | 'free-only';
+
+/** Thrown by pickTextModel / pickImageModel under 'free-only' when no truly-free model exists. */
+export class NoFreeModelAvailableError extends Error {
+  readonly code = 'NO_FREE_MODEL_AVAILABLE' as const;
+  readonly kind: 'text' | 'image';
+  readonly stageHint?: string;
+  constructor(kind: 'text' | 'image', stageHint?: string) {
+    super(
+      `No genuinely-free ${kind} model is currently available in the catalog` +
+        (stageHint ? ` for ${stageHint}` : '') +
+        '. Free-only mode is on, so the request is blocked rather than charging your key.'
+    );
+    this.name = 'NoFreeModelAvailableError';
+    this.kind = kind;
+    this.stageHint = stageHint;
+  }
+}
 
 type PickOpts = {
   /** Back-compat: true ⇒ costPref 'free', false ⇒ 'cheap'. Ignored when costPref is set. */
@@ -46,6 +76,8 @@ type PickOpts = {
   filter?: (m: AnnotatedModel) => boolean;
   /** Soft preference — when some eligible models pass, rank those first. */
   prefer?: (m: AnnotatedModel) => boolean;
+  /** Optional stage hint for the error message under 'free-only'. */
+  stageHint?: string;
 };
 
 const resolveCostPref = (opts?: PickOpts): CostPref =>
@@ -55,11 +87,29 @@ const resolveCostPref = (opts?: PickOpts): CostPref =>
  * Best text model for the budget AND capabilities, chosen from the live catalog.
  * `filter` gates by required capabilities (e.g. structured-JSON for analyze/panel
  * stages) so an incapable model is never auto-selected; `costPref` controls free-first
- * vs cheapest vs quality. Falls back to TEXT_FALLBACK when the catalog is empty/unreachable.
+ * vs cheapest vs quality vs free-only. Throws NoFreeModelAvailableError under 'free-only'
+ * when no truly-free model passes the gate.
  */
 export const pickTextModel = async (opts?: PickOpts): Promise<string> => {
   const costPref = resolveCostPref(opts);
   const gate = opts?.filter ?? (() => true);
+  if (costPref === 'free-only') {
+    // Strict: only free_verified models; no catalog → block (we can't prove it's free).
+    let models: AnnotatedModel[];
+    try {
+      ({ models } = await getCatalog());
+    } catch {
+      throw new NoFreeModelAvailableError('text', opts?.stageHint);
+    }
+    const text = models.filter(isTextModel).filter(gate).filter(isFreeVerified);
+    if (text.length === 0) throw new NoFreeModelAvailableError('text', opts?.stageHint);
+    const ranked = opts?.prefer ? [...text.filter(opts.prefer), ...text.filter((m) => !opts.prefer!(m))] : text;
+    for (const needle of FREE_TEXT_PRIORITY) {
+      const hit = ranked.find((m) => m.id.toLowerCase().includes(needle));
+      if (hit) return hit.id;
+    }
+    return ranked[0].id;
+  }
   try {
     const { models } = await getCatalog();
     let text = models.filter(isTextModel).filter(gate);
@@ -72,7 +122,7 @@ export const pickTextModel = async (opts?: PickOpts): Promise<string> => {
       return [...text].sort(byContextDesc)[0]?.id || TEXT_FALLBACK;
     }
     if (costPref === 'free') {
-      const free = text.filter((m) => m.isFree);
+      const free = text.filter(isFreeVerified);
       if (free.length) {
         for (const needle of FREE_TEXT_PRIORITY) {
           const hit = free.find((m) => m.id.toLowerCase().includes(needle));
@@ -88,10 +138,30 @@ export const pickTextModel = async (opts?: PickOpts): Promise<string> => {
   }
 };
 
-/** Best image model for the budget and capabilities (gate with `filter` for image output). */
+/**
+ * Best image model. Under 'free-only', prefers NVIDIA's free-tier image models
+ * (billing-bypassed via /api/image/nvidia, the genuinely-free image path) over
+ * OpenRouter :free image models. Throws NoFreeModelAvailableError when none exist.
+ */
 export const pickImageModel = async (opts?: PickOpts): Promise<string> => {
   const costPref = resolveCostPref(opts);
   const gate = opts?.filter ?? (() => true);
+  if (costPref === 'free-only') {
+    let models: AnnotatedModel[];
+    try {
+      ({ models } = await getCatalog());
+    } catch {
+      throw new NoFreeModelAvailableError('image', opts?.stageHint);
+    }
+    const candidates = models.filter(isImageModel).filter(gate).filter(isFreeVerified);
+    if (candidates.length === 0) throw new NoFreeModelAvailableError('image', opts?.stageHint);
+    // NVIDIA free-tier image models are billing-bypassed in /api/image/nvidia, so they
+    // are the cleanest genuinely-free path. Prefer them when both an NVIDIA and an
+    // OpenRouter :free image model are present.
+    const nvidia = candidates.filter((m) => m.source === 'nvidia');
+    const ranked = nvidia.length ? nvidia : candidates;
+    return (opts?.prefer ? ranked.find(opts.prefer) || ranked[0] : ranked[0]).id;
+  }
   try {
     const { models } = await getCatalog();
     let image = models.filter(isImageModel).filter(gate);
@@ -101,7 +171,7 @@ export const pickImageModel = async (opts?: PickOpts): Promise<string> => {
       if (preferred.length) image = preferred;
     }
     if (costPref === 'free') {
-      const free = image.filter((m) => m.isFree);
+      const free = image.filter(isFreeVerified);
       if (free.length) return free[0].id;
     }
     return [...image].sort(byImagePrice)[0]?.id || IMAGE_FALLBACK;

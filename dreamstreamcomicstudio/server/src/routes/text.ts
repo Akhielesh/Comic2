@@ -73,7 +73,10 @@ const resolveTextProvider = async (
   const openRouterPick = async (): Promise<TextProvider> => {
     // Validate the requested model against the stage's required capabilities (e.g.
     // structured-JSON for analyze/world/panel/audit) and downgrade if needed.
-    const { model } = await resolveStageModel(stage, requested, { costPref: 'free' });
+    // When the user has free-only mode on (X-Free-Only header), pass 'free-only'
+    // — that surface throws NoFreeModelAvailableError instead of falling back to paid.
+    const costPref = req.freeOnly ? 'free-only' : 'free';
+    const { model } = await resolveStageModel(stage, requested, { costPref });
     return { apiKey: openRouterKey as string, model, provider: 'openrouter' };
   };
 

@@ -17,6 +17,8 @@
     "pricing:sync:check": "tsx server/src/jobs/dailyPricingSync.ts --check",
     "billing:reconcile": "tsx server/src/jobs/dailyBillingReconciliation.ts",
     "billing:reconcile:check": "tsx server/src/jobs/dailyBillingReconciliation.ts --check",
+    "verify:run": "tsx server/src/jobs/runVerification.ts",
+    "verify:run:check": "tsx server/src/jobs/runVerification.ts --check",
     "comicforge:worker": "tsx server/src/comicforge/worker.ts",
     "consistency:repair": "tsx scripts/repair_project_consistency.ts",
     "consistency:repair:apply": "tsx scripts/repair_project_consistency.ts --apply",

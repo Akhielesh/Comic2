@@ -17,6 +17,7 @@ import {
   validateRuntimeConfig
 } from './config.js';
 import { attachKeys } from './middleware/keys.js';
+import { attachFreeOnly } from './middleware/freeOnly.js';
 import { errorHandler } from './middleware/errors.js';
 import { optionalAuth, requireAuth } from './middleware/auth.js';
 import { assistantLimits } from './middleware/assistantLimits.js';
@@ -31,6 +32,7 @@ import { systemRouter } from './routes/system.js';
 import webhookRouter from './routes/webhook.js';
 import { billingRouter } from './routes/billing.js';
 import { adminRouter } from './routes/admin.js';
+import { verificationRouter } from './routes/verification.js';
 import { moderationRouter } from './routes/moderation.js';
 import { sharingRouter } from './routes/sharing.js';
 import { comicForgeRouter } from './routes/comicforge.js';
@@ -74,6 +76,7 @@ app.use('/api/webhook', express.raw({ type: 'application/json' }), webhookRouter
 
 app.use(express.json({ limit: MAX_BODY_SIZE }));
 app.use(attachKeys);
+app.use(attachFreeOnly);
 
 const systemRateLimit = createRateLimit({
   scope: 'system',
@@ -128,6 +131,7 @@ app.use('/api/shares/token', optionalAuth, systemRateLimit, sharingRouter);
 app.use('/api', requireAuth);
 
 app.use('/api/admin', adminRateLimit, adminRouter);
+app.use('/api/admin/verification', adminRateLimit, verificationRouter);
 app.use('/api/moderation', moderationRateLimit, moderationRouter);
 app.use('/api/text', textRateLimit, textRouter);
 app.use('/api/image', imageRateLimit, imageRouter);

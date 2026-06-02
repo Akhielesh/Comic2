@@ -1,4 +1,5 @@
 import { get } from './apiClient';
+import type { CostClass } from '../shared/pricing';
 
 export type Band = 'free' | 'low' | 'medium' | 'high';
 export type DreamStreamRole = 'text-brain' | 'dialogue' | 'panel-art' | 'cover' | 'qc';
@@ -21,7 +22,10 @@ export interface CatalogModel {
     imagePerImage: number;
     requestFlat: number;
   };
+  /** True only when costClass === 'free_verified' (id ends ':free' or all 4 axes are 0). */
   isFree: boolean;
+  /** Multi-dimensional cost class — see shared/pricing.ts. */
+  costClass: CostClass;
   supportsImageOutput: boolean;
   supportsImageInput: boolean;
   supportsJsonOutput: boolean;
