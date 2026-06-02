@@ -9,6 +9,8 @@ import { requireAdmin } from '../middleware/requireAdmin.js';
 import { getSupabaseAdmin } from '../services/supabase.js';
 import { listBuiltins } from '../verification/registry.js';
 import { runCheck } from '../verification/runner.js';
+import { fileFindingIssue } from '../verification/githubIssueFiler.js';
+import type { VerificationFinding } from '../verification/findingsTypes.js';
 import type { CheckRecord, CheckKind, Severity, TargetFeature } from '../verification/types.js';
 
 export const verificationRouter = Router();
@@ -189,6 +191,8 @@ verificationRouter.get('/findings', async (req: Request, res: Response, next) =>
 });
 
 // Update a finding's status (Confirm / Dismiss / Won't-fix / Resolved).
+// On a Confirm of an auto_fix_enabled check's finding, we additionally file a
+// labelled GitHub issue (`auto-fix`) so the Claude Code Action picks it up.
 verificationRouter.patch('/findings/:id', async (req: Request, res: Response, next) => {
   try {
     const status = String(req.body?.status || '');
@@ -200,14 +204,42 @@ verificationRouter.patch('/findings/:id', async (req: Request, res: Response, ne
     if (status === 'resolved' || status === 'wontfix' || status === 'dismissed') {
       patch.resolved_at = new Date().toISOString();
     }
-    const { data, error } = await admin
+    const { data: updated, error } = await admin
       .from('verification_findings')
       .update(patch)
       .eq('id', req.params.id)
       .select('*')
       .single();
     if (error) throw error;
-    res.json({ finding: data });
+    const finding = updated as unknown as VerificationFinding;
+
+    // Confirm → file GitHub issue when the parent check has auto_fix_enabled and the
+    // finding is at or above the severity floor and doesn't already have an issue.
+    let issueDispatched: { number: number; url: string } | null = null;
+    let issueError: string | undefined;
+    if (status === 'confirmed' && !finding.github_issue_number) {
+      const { data: check } = await admin
+        .from('verification_checks')
+        .select('id, name, auto_fix_enabled, severity_floor')
+        .eq('id', finding.check_id)
+        .single();
+      const checkRow = check as unknown as { id: string; name: string; auto_fix_enabled: boolean; severity_floor: Severity } | null;
+      if (checkRow?.auto_fix_enabled) {
+        try {
+          issueDispatched = await fileFindingIssue(finding, checkRow.name, { dispatchAutoFix: true });
+          if (issueDispatched) {
+            await admin
+              .from('verification_findings')
+              .update({ github_issue_number: issueDispatched.number, status: 'fixing' })
+              .eq('id', finding.id);
+          }
+        } catch (filerErr) {
+          issueError = (filerErr as Error).message;
+        }
+      }
+    }
+
+    res.json({ finding: updated, issueDispatched, issueError });
   } catch (err) {
     next(err);
   }

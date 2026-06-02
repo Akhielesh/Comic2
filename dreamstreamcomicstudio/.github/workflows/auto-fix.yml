@@ -1,0 +1,158 @@
+name: auto-fix
+
+# When a verification finding is confirmed with auto-fix enabled, the server files a
+# GitHub issue labelled `auto-fix`. This workflow:
+#   1) Verifies the label was applied by an authorized actor (anti-injection guard).
+#   2) Dispatches the Claude Code Action to read the issue and open a PR.
+#
+# The `auto-merge` job watches the PR Claude opens. When CI is green AND the
+# originally-failing verification check passes again AND the PR is confined to safe
+# paths (no billing/auth/migrations/workflows) AND the diff is under the cap,
+# auto-merge is enabled. Post-merge verification + auto-revert lives in
+# post-merge-verify.yml so a bad fix that passed checks can still be unwound.
+#
+# Kill switches:
+#   - Repo variable AUTO_FIX_DISABLED = "true"  → all auto-fix runs become no-ops.
+#   - Repo label `automerge-disabled` on a PR   → that PR is skipped by auto-merge.
+
+on:
+  issues:
+    types: [labeled]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+env:
+  PROTECTED_PATH_REGEX: '(server/src/services/billing|stripe|auth|middleware|services/billingLedger|services/stripe|docs/migrations|\\.github/workflows)'
+  MAX_DIFF_LINES: 600
+
+jobs:
+  guards:
+    # Common pre-flight: kill switch + authorised labeller.
+    if: github.event_name == 'issues' && github.event.label.name == 'auto-fix'
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.gate.outputs.proceed }}
+    steps:
+      - id: gate
+        env:
+          DISABLED: ${{ vars.AUTO_FIX_DISABLED }}
+          LABEL_ACTOR: ${{ github.event.sender.login }}
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          if [ "${DISABLED}" = "true" ]; then
+            echo "Kill switch AUTO_FIX_DISABLED=true; skipping."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Only the repo owner or the verification system bot may apply auto-fix
+          # (prevents an attacker who can comment on the repo from forcing fixes).
+          if [ "${LABEL_ACTOR}" != "${REPO_OWNER}" ] && [ "${LABEL_ACTOR}" != "verification-bot[bot]" ] && [ "${LABEL_ACTOR}" != "github-actions[bot]" ]; then
+            echo "Label was applied by an unauthorized actor (${LABEL_ACTOR}); skipping."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+  claude-code:
+    needs: guards
+    if: needs.guards.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # The Claude Code Action reads the labelled issue body verbatim and opens a PR
+      # that references it. ANTHROPIC_API_KEY is held only by the Action; the app
+      # never calls the Anthropic API.
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Trigger on issue events; the action figures out the rest from the label.
+          mode: issue_to_pr
+
+  auto-merge:
+    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'verification-fix')
+    runs-on: ubuntu-latest
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: dreamstreamcomicstudio/package-lock.json
+
+      - name: Kill switch
+        env:
+          DISABLED: ${{ vars.AUTO_FIX_DISABLED }}
+        run: |
+          if [ "${DISABLED}" = "true" ]; then
+            echo "Kill switch AUTO_FIX_DISABLED=true; refusing auto-merge."; exit 78
+          fi
+
+      - name: PR-level kill switch
+        if: contains(github.event.pull_request.labels.*.name, 'automerge-disabled')
+        run: |
+          echo "PR carries automerge-disabled label; refusing auto-merge."; exit 78
+
+      - name: Diff-size cap
+        run: |
+          ADDED=$(git diff --shortstat origin/${{ github.event.pull_request.base.ref }}...$PR_HEAD_SHA | awk '{print $4+$6}')
+          if [ -z "$ADDED" ]; then ADDED=0; fi
+          echo "PR changes ${ADDED} lines"
+          if [ "$ADDED" -gt "${{ env.MAX_DIFF_LINES }}" ]; then
+            echo "Diff exceeds ${{ env.MAX_DIFF_LINES }} lines; refusing auto-merge."; exit 78
+          fi
+
+      - name: Protected-paths guard
+        run: |
+          CHANGED=$(git diff --name-only origin/${{ github.event.pull_request.base.ref }}...$PR_HEAD_SHA)
+          echo "Changed files:"; echo "$CHANGED"
+          if echo "$CHANGED" | grep -E "${{ env.PROTECTED_PATH_REGEX }}" >/dev/null; then
+            echo "PR touches protected paths; refusing auto-merge."; exit 78
+          fi
+
+      - name: Install + typecheck + tests
+        working-directory: dreamstreamcomicstudio
+        run: |
+          npm ci
+          npm run typecheck
+          npx tsc -p server/tsconfig.json --noEmit
+          npm test -- --run
+
+      - name: Re-run originally-failing verification check
+        # The fixing-PR body includes the check id as `verification-check-id:<uuid>`.
+        # When present, run only that check; otherwise run all (slower but safe).
+        working-directory: dreamstreamcomicstudio
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          ID=$(printf "%s" "$PR_BODY" | grep -oE 'verification-check-id:[a-f0-9-]+' | head -1 | sed 's/verification-check-id://')
+          if [ -n "$ID" ]; then
+            echo "Re-running check id $ID"
+            npx tsx server/src/jobs/runVerification.ts --check --id "$ID"
+          else
+            echo "No check id in PR body; running all enabled checks"
+            npm run verify:run:check
+          fi
+
+      - name: Enable auto-merge on the PR
+        uses: peter-evans/enable-pull-request-automerge@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          pull-request-number: ${{ env.PR_NUMBER }}
+          merge-method: squash
