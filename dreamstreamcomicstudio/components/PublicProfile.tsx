@@ -4,8 +4,20 @@ import { getImageUrl, getProfileByUsername, getPublicProjectsByUser, isFollowing
 import { UserAvatar } from './UserAvatar';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from './Button';
-import { UserPlus, UserCheck, Grid, Heart, Eye } from 'lucide-react';
+import { UserPlus, UserCheck, Grid, Heart, Eye, BookOpen } from 'lucide-react';
 import { IMAGE_TRANSFORMS } from '../services/projectStorage';
+import { SmartImage } from './common/SmartImage';
+
+/** Cover candidates: stored cover → first rendered page → first style board. */
+const coverCandidates = (project: Project): string[] => {
+    const out: string[] = [];
+    const push = (url?: string | null) => { if (typeof url === 'string' && url.trim()) out.push(url); };
+    push(project.coverImage);
+    push(project.state?.coverImageUrl);
+    push(project.state?.panels?.find((p) => p.imageUrl)?.imageUrl);
+    push(project.state?.styleVariants?.find((v) => v.imageUrl)?.imageUrl);
+    return Array.from(new Set(out));
+};
 
 
 interface PublicProfileProps {
@@ -181,13 +193,7 @@ export const PublicProfile: React.FC<PublicProfileProps> = ({ username, onNaviga
                     ) : (
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                             {projects.map(project => {
-                                let imgSrc = project.coverImage || project.state?.coverImageUrl;
-                                if (!imgSrc && project.state?.panels?.some(p => p.imageUrl)) {
-                                    imgSrc = project.state.panels.find(p => p.imageUrl)?.imageUrl;
-                                }
-                                if (!imgSrc && project.state?.styleVariants?.length > 0) {
-                                    imgSrc = project.state.styleVariants[0].imageUrl;
-                                }
+                                const covers = coverCandidates(project);
                                 return (
                                     <div
                                         key={project.id}
@@ -195,11 +201,14 @@ export const PublicProfile: React.FC<PublicProfileProps> = ({ username, onNaviga
                                         className="bg-white border-4 border-black rounded-xl overflow-hidden shadow-comic hover:scale-[1.02] transition-transform cursor-pointer group"
                                     >
                                         <div className="aspect-[2/3] bg-slate-200 relative overflow-hidden text-center">
-                                            {imgSrc ? (
-                                                <img src={imgSrc} className="w-full h-full object-cover" />
-                                            ) : (
-                                                <div className="w-full h-full flex items-center justify-center text-slate-400 font-display text-lg">No Cover</div>
-                                            )}
+                                            <SmartImage
+                                                src={covers[0]}
+                                                fallbackSources={covers.slice(1)}
+                                                alt={project.name}
+                                                className="w-full h-full object-cover"
+                                                containerClassName="w-full h-full"
+                                                fallbackIcon={<BookOpen size={32} className="text-slate-400" />}
+                                            />
                                             {/* Hover Overlay */}
                                             <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                                                 <span className="bg-white text-black font-bold px-4 py-2 rounded-full border-2 border-black transform -rotate-3 text-sm">

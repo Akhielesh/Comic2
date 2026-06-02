@@ -1,5 +1,6 @@
 import type { TokenEstimateRequest, TokenEstimateResponse, TokenBreakdownLine } from '../../../shared/types/billing.js';
 import { CT_USD, DEFAULT_MARKUP, resolveModelPricing } from './pricingCatalog.js';
+import { hasFreeSuffix } from '../../../shared/pricing.js';
 
 const NANO_BANANA_PRO_MODEL_ID = 'gemini-3-pro-image-preview';
 const IMAGE_RESOLUTION_MULTIPLIER: Record<'1K' | '2K' | '4K', number> = {
@@ -104,6 +105,37 @@ export const estimateCharge = async (
   const markup = Number.isFinite(options?.markup) ? Number(options?.markup) : DEFAULT_MARKUP;
   const pricing = await resolveModelPricing(request.provider, request.model);
 
+  // Hard guarantee behind the "Free" label: a verified-free model is NEVER billed.
+  // That means a `:free` variant (free on the provider's side), or a model that is
+  // $0 on every pricing axis. We short-circuit to a zero charge regardless of what
+  // the pricing snapshot table happens to contain, so a stale/wrong snapshot can't
+  // charge a user for a model the catalog advertises as free.
+  const verifiedFree =
+    hasFreeSuffix(request.model) ||
+    (pricing.inputPer1kUsd === 0 && pricing.outputPer1kUsd === 0 && (pricing.imagePerOutputUsd ?? 0) === 0);
+  if (verifiedFree) {
+    return {
+      currency: 'USD',
+      ctPerUsd: Math.round(1 / CT_USD),
+      markup,
+      estimatedProviderCostUsd: 0,
+      estimatedBillableUsd: 0,
+      estimatedCt: 0,
+      lines: [],
+      modelPricing: {
+        provider: pricing.provider,
+        model: pricing.model,
+        inputPer1kUsd: pricing.inputPer1kUsd,
+        outputPer1kUsd: pricing.outputPer1kUsd,
+        imagePerOutputUsd: pricing.imagePerOutputUsd,
+        source: pricing.source,
+        confidence: pricing.confidence,
+        status: pricing.status,
+        effectiveFrom: pricing.effectiveFrom
+      }
+    };
+  }
+
   const inputTokens = resolveNumber(request.inputTokens, 0);
   const outputTokens = resolveNumber(request.outputTokens, 0);
   const imageUnits = resolveNumber(request.imageUnits, 0);
@@ -191,8 +223,9 @@ export const buildSettleEstimateFromUsage = async (
 
   // When the provider reports a real cost (e.g. OpenRouter usage.cost), trust it
   // over the token-derived estimate so the settled (and comic) cost is exact.
+  // A `:free` model is exempt: it must settle to $0 even if a cost is reported.
   const realProviderCostUsd = resolveNumber(usage?.providerCostUsd, 0);
-  if (realProviderCostUsd > 0) {
+  if (realProviderCostUsd > 0 && !hasFreeSuffix(seed.model)) {
     const billableUsd = Number((realProviderCostUsd * estimate.markup).toFixed(6));
     return {
       ...estimate,

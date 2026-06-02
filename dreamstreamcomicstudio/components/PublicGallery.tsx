@@ -5,6 +5,23 @@ import { Project } from '../types';
 import { getImageUrl, getProjectLikeMap, toggleProjectLike } from '../services/db';
 import { useAuth } from '../contexts/AuthContext';
 import { IMAGE_TRANSFORMS } from '../services/projectStorage';
+import { SmartImage } from './common/SmartImage';
+
+/**
+ * Ordered cover candidates for a comic: the stored cover first, then the first
+ * rendered page, then the first style board. SmartImage walks this list so a
+ * missing OR broken cover URL falls back to the first page rather than a
+ * "no image" icon — the icon only appears when a comic truly has no art yet.
+ */
+const coverCandidates = (project: Project): string[] => {
+    const out: string[] = [];
+    const push = (url?: string | null) => { if (typeof url === 'string' && url.trim()) out.push(url); };
+    push(project.coverImage);
+    push(project.state?.coverImageUrl);
+    push(project.state?.panels?.find((p) => p.imageUrl)?.imageUrl);
+    push(project.state?.styleVariants?.find((v) => v.imageUrl)?.imageUrl);
+    return Array.from(new Set(out));
+};
 
 interface PublicGalleryProps {
     onReadComic: (projectId: string) => void;
@@ -261,14 +278,7 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                         {filteredProjects.map((project) => {
-                            let imgSrc = project.coverImage;
-                            // Fallback to first panel or style variant if no cover
-                            if (!imgSrc && project.state?.panels?.some((p: any) => p.imageUrl)) {
-                                imgSrc = project.state.panels.find((p: any) => p.imageUrl)?.imageUrl;
-                            }
-                            if (!imgSrc && project.state?.styleVariants?.length > 0) {
-                                imgSrc = project.state.styleVariants[0].imageUrl;
-                            }
+                            const covers = coverCandidates(project);
 
                             return (
                                 <div
@@ -278,13 +288,14 @@ export const PublicGallery: React.FC<PublicGalleryProps> = ({ onReadComic, onBac
                                 >
                                     {/* Cover Aspect Ratio 2:3 */}
                                     <div className="aspect-[2/3] bg-slate-100 relative overflow-hidden">
-                                        {imgSrc ? (
-                                            <img src={imgSrc} alt={project.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                                        ) : (
-                                            <div className="w-full h-full flex items-center justify-center text-slate-300">
-                                                <BookOpen size={40} />
-                                            </div>
-                                        )}
+                                        <SmartImage
+                                            src={covers[0]}
+                                            fallbackSources={covers.slice(1)}
+                                            alt={project.name}
+                                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                                            containerClassName="w-full h-full"
+                                            fallbackIcon={<BookOpen size={40} className="text-slate-300" />}
+                                        />
 
                                         {/* Overlay info */}
                                         <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-black/80 to-transparent p-4 text-white pt-10">

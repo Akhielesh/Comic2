@@ -10,32 +10,56 @@ interface HowItWorksProps {
   onGetStarted?: () => void;
 }
 
-/** Scroll-reveal: adds `is-visible` to elements with `.hiw-reveal` as they enter the viewport. */
-const useRevealRoot = () => {
+/**
+ * Scroll-reveal: marks `[data-reveal]` blocks visible as they enter the viewport.
+ *
+ * The reveal flag lives in React state (keyed by each block's `data-reveal` id)
+ * rather than an imperatively-added class. That matters because the page
+ * re-renders whenever `activeStage` changes (on scroll/hover) — and React owns
+ * each element's `className`, so a class added via `classList.add` would be
+ * wiped on the next render, making already-revealed stages vanish. Driving the
+ * `is-visible` class from state keeps revealed blocks revealed.
+ */
+const useReveal = () => {
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const [revealed, setRevealed] = useState<Set<string>>(() => new Set());
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
-    const els = Array.from(root.querySelectorAll<HTMLElement>('.hiw-reveal'));
+    const els = Array.from(root.querySelectorAll<HTMLElement>('[data-reveal]'));
+    const ids = els.map((el) => el.dataset.reveal).filter((id): id is string => !!id);
     if (!('IntersectionObserver' in window)) {
-      els.forEach((el) => el.classList.add('is-visible'));
+      setRevealed(new Set(ids));
       return;
     }
     const io = new IntersectionObserver(
       (entries) => {
+        const newly: string[] = [];
         for (const entry of entries) {
           if (entry.isIntersecting) {
-            entry.target.classList.add('is-visible');
+            const id = (entry.target as HTMLElement).dataset.reveal;
+            if (id) newly.push(id);
             io.unobserve(entry.target);
           }
         }
+        if (newly.length) {
+          setRevealed((prev) => {
+            const next = new Set(prev);
+            newly.forEach((id) => next.add(id));
+            return next;
+          });
+        }
       },
-      { threshold: 0.18, rootMargin: '0px 0px -8% 0px' }
+      { threshold: 0.12, rootMargin: '0px 0px -5% 0px' }
     );
     els.forEach((el) => io.observe(el));
     return () => io.disconnect();
   }, []);
-  return rootRef;
+  const revealClass = useCallback(
+    (id: string) => `hiw-reveal${revealed.has(id) ? ' is-visible' : ''}`,
+    [revealed]
+  );
+  return { rootRef, revealClass };
 };
 
 type Stage = {
@@ -132,7 +156,7 @@ const Chip: React.FC<{ children: React.ReactNode; className?: string }> = ({ chi
 );
 
 export const HowItWorks: React.FC<HowItWorksProps> = ({ onBack, onGetStarted }) => {
-  const rootRef = useRevealRoot();
+  const { rootRef, revealClass } = useReveal();
   const [activeStage, setActiveStage] = useState<string>('script');
 
   const scrollToStage = useCallback((key: string) => {
@@ -161,7 +185,7 @@ export const HowItWorks: React.FC<HowItWorksProps> = ({ onBack, onGetStarted }) 
 
       {/* HERO */}
       <section className="max-w-5xl mx-auto px-4 pt-16 pb-10 text-center">
-        <div className="hiw-reveal">
+        <div data-reveal="hero" className={revealClass('hero')}>
           <Chip className="bg-brand-yellow text-black inline-flex items-center gap-1"><Sparkles className="w-3.5 h-3.5" /> The full pipeline, explained</Chip>
           <h1 className="mt-4 text-5xl md:text-7xl font-display leading-[1.05]">
             From a <span className="hiw-gradient-text">paragraph</span><br />to a finished <span className="hiw-gradient-text">comic</span>.
@@ -185,7 +209,7 @@ export const HowItWorks: React.FC<HowItWorksProps> = ({ onBack, onGetStarted }) 
 
       {/* PIPELINE OVERVIEW */}
       <section className="max-w-6xl mx-auto px-4 py-8">
-        <div className="hiw-reveal bg-white/80 border-4 border-black rounded-2xl shadow-comic p-6">
+        <div data-reveal="overview" className={`${revealClass('overview')} bg-white/80 border-4 border-black rounded-2xl shadow-comic p-6`}>
           <div className="text-center mb-6">
             <h2 className="font-display text-2xl">The pipeline at a glance</h2>
             <p className="text-sm text-slate-500 font-comic">Content flows left → right. Tap a stage to jump to it.</p>
@@ -229,7 +253,8 @@ export const HowItWorks: React.FC<HowItWorksProps> = ({ onBack, onGetStarted }) 
           <div
             key={s.key}
             id={`hiw-stage-${s.key}`}
-            className={`hiw-reveal grid md:grid-cols-[auto,1fr] gap-5 bg-white border-4 border-black rounded-2xl shadow-comic p-6 ${activeStage === s.key ? 'ring-4 ring-brand-yellow' : ''}`}
+            data-reveal={`stage-${s.key}`}
+            className={`${revealClass(`stage-${s.key}`)} grid md:grid-cols-[auto,1fr] gap-5 bg-white border-4 border-black rounded-2xl shadow-comic p-6 ${activeStage === s.key ? 'ring-4 ring-brand-yellow' : ''}`}
             onMouseEnter={() => setActiveStage(s.key)}
             style={{ transitionDelay: `${(i % 3) * 60}ms` }}
           >
@@ -278,7 +303,7 @@ export const HowItWorks: React.FC<HowItWorksProps> = ({ onBack, onGetStarted }) 
 
       {/* CONTENT THREAD */}
       <section className="max-w-5xl mx-auto px-4 py-10">
-        <div className="hiw-reveal bg-black text-white rounded-2xl border-4 border-black shadow-comic p-7 overflow-hidden relative">
+        <div data-reveal="thread" className={`${revealClass('thread')} bg-black text-white rounded-2xl border-4 border-black shadow-comic p-7 overflow-hidden relative`}>
           <div className="hiw-sheen pointer-events-none absolute inset-y-0 -left-1/3 w-1/3 bg-white/10 blur-xl" />
           <h2 className="font-display text-2xl flex items-center gap-2"><GitBranch className="w-6 h-6 text-brand-yellow" /> How your content threads through</h2>
           <p className="mt-1 text-slate-300 font-comic text-sm">One continuous thread of meaning — never re-invented between stages.</p>
@@ -298,7 +323,7 @@ export const HowItWorks: React.FC<HowItWorksProps> = ({ onBack, onGetStarted }) 
 
       {/* MODEL LAYER */}
       <section className="max-w-5xl mx-auto px-4 py-10">
-        <div className="hiw-reveal bg-white border-4 border-black rounded-2xl shadow-comic p-7">
+        <div data-reveal="models" className={`${revealClass('models')} bg-white border-4 border-black rounded-2xl shadow-comic p-7`}>
           <h2 className="font-display text-2xl flex items-center gap-2"><Cpu className="w-6 h-6 text-brand-blue" /> The model layer — your keys, your sources</h2>
           <p className="mt-1 font-comic text-slate-600 text-sm">
             Every generation runs on <span className="font-bold">your own API keys</span> (BYOK). You choose which model from which source powers text and image — independently.
@@ -347,7 +372,7 @@ export const HowItWorks: React.FC<HowItWorksProps> = ({ onBack, onGetStarted }) 
 
       {/* CTA */}
       <section className="max-w-4xl mx-auto px-4 py-14 text-center">
-        <div className="hiw-reveal">
+        <div data-reveal="cta" className={revealClass('cta')}>
           <h2 className="font-display text-4xl">Ready to draw your story?</h2>
           <p className="mt-2 font-comic text-slate-600">You bring the words. The pipeline brings the panels.</p>
           <div className="mt-6 flex items-center justify-center gap-3">

@@ -43,7 +43,17 @@ export const TokenAvailabilityPill: React.FC<TokenAvailabilityPillProps> = ({ cl
 
   if (!user) return null;
 
-  const active = PROVIDER_PRIORITY.map((p) => getActiveKey(p)).find(Boolean) || null;
+  const imageSource = getSelectedImageSource();
+  const textSource = getSelectedTextSource();
+  // The source(s) the user actually picked for generation lead the priority, so the
+  // headline key reflects the source in use (e.g. NVIDIA) instead of defaulting to
+  // OpenRouter just because an OpenRouter key also happens to exist.
+  const preferred: ApiKeyProvider[] = [];
+  for (const source of [textSource, imageSource]) {
+    if (source && !preferred.includes(source)) preferred.push(source);
+  }
+  const priority = [...preferred, ...PROVIDER_PRIORITY.filter((p) => !preferred.includes(p))];
+  const active = priority.map((p) => getActiveKey(p)).find(Boolean) || null;
 
   if (!active) {
     return (
@@ -58,8 +68,6 @@ export const TokenAvailabilityPill: React.FC<TokenAvailabilityPillProps> = ({ cl
   const hasLimit = !!active.limitUsd && active.limitUsd > 0;
   const imageModel = getSelectedImageModel() || 'Auto';
   const textModel = getSelectedTextModel() || 'Auto';
-  const imageSource = getSelectedImageSource();
-  const textSource = getSelectedTextSource();
   // Every active source key, so a mixed setup (e.g. text via NVIDIA, image via OpenRouter)
   // shows each source's own usage/limit.
   const activeSourceKeys = ALL_PROVIDERS

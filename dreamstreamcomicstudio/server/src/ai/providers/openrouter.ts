@@ -18,7 +18,7 @@ import {
 } from '../../config.js';
 import { withRetry } from '../utils.js';
 import { coerceJson, coerceJsonOrNull } from '../jsonCoerce.js';
-import { classifyModel } from '../../../../shared/pricing.js';
+import { classifyModel, hasFreeSuffix } from '../../../../shared/pricing.js';
 import type {
   AIProvider,
   CatalogModel,
@@ -138,15 +138,27 @@ const normalizeCatalogModel = (raw: any): CatalogModel => {
     ? raw.supported_parameters
     : [];
   const supportsImageOutput = outputModalities.includes('image');
+  // Did the upstream actually report pricing? `num()` coerces missing fields to 0,
+  // which would otherwise read as "all axes free" → a false "Free" label. We only
+  // trust an all-zero classification when at least one pricing field was present.
+  const pricingReported = ['prompt', 'completion', 'image', 'request'].some(
+    (k) => pricing[k] !== undefined && pricing[k] !== null && pricing[k] !== ''
+  );
   // `isFree` is the strict classification from shared/pricing: a model whose id
   // ends `:free` OR whose four pricing axes are all zero. Token-billed image
   // models (imagePerImage=0 but completionPerToken>0) are NOT free — those bill
   // the caller's key per call. costClass exposes the full 4-way truth to the UI.
-  const cls = classifyModel({
+  let cls = classifyModel({
     modelId: id,
     pricing: { promptPerToken, completionPerToken, imagePerImage, requestFlat },
     supportsImageOutput
   });
+  // Conservative guard: never advertise a model as free purely because its pricing
+  // is unknown. Without reported pricing (and absent a `:free` id) treat it as paid,
+  // so users are never billed under a wrong "Free" label.
+  if (cls === 'free_verified' && !pricingReported && !hasFreeSuffix(id)) {
+    cls = 'paid';
+  }
   const isFree = cls === 'free_verified';
 
   return {

@@ -119,8 +119,8 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
                     <Users size={20} />
                   </div>
                   <div>
-                    <div className="text-2xl font-display">{stats.userCount > 0 ? stats.userCount.toLocaleString() : "1,240+"}</div>
-                    <div className="text-xs font-bold text-slate-500 uppercase">Active Users</div>
+                    <div className="text-2xl font-display">{stats.userCount.toLocaleString()}</div>
+                    <div className="text-xs font-bold text-slate-500 uppercase">Creators</div>
                   </div>
                 </div>
               </div>
@@ -130,8 +130,8 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
                     <BookOpen size={20} />
                   </div>
                   <div>
-                    <div className="text-2xl font-display">{stats.comicCount > 0 ? stats.comicCount.toLocaleString() : "5,800+"}</div>
-                    <div className="text-xs font-bold text-slate-500 uppercase">Comics Made</div>
+                    <div className="text-2xl font-display">{stats.comicCount.toLocaleString()}</div>
+                    <div className="text-xs font-bold text-slate-500 uppercase">Public Comics</div>
                   </div>
                 </div>
               </div>

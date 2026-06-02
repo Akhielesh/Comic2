@@ -630,7 +630,8 @@ export const generateImage = async (
         (response as { billing?: { settled?: { providerCostUsd?: number } } }).billing?.settled?.providerCostUsd
         ?? (response as { usage?: { providerCostUsd?: number } }).usage?.providerCostUsd
         ?? 0;
-      if (nvUsd > 0) recordKeyUsage('nvidia', nvUsd);
+      // Never charge a key's spend counter for a truly-free model, even if a cost slips through.
+      if (nvUsd > 0 && !imageModelIsFree) recordKeyUsage('nvidia', nvUsd);
     } else if (useOpenRouter) {
       // Send the user's chosen OpenRouter image model. When none is selected, omit it and
       // the server falls back to its configured default image model (NOT a free auto-pick).
@@ -645,7 +646,8 @@ export const generateImage = async (
         (response as { billing?: { settled?: { providerCostUsd?: number } } }).billing?.settled?.providerCostUsd
         ?? (response as { usage?: { providerCostUsd?: number } }).usage?.providerCostUsd
         ?? 0;
-      if (usedUsd > 0) recordKeyUsage('openrouter', usedUsd);
+      // Truly-free models ($0 / ':free') never count against the key's spend limit.
+      if (usedUsd > 0 && !imageModelIsFree) recordKeyUsage('openrouter', usedUsd);
     } else {
       try {
         response = await post<ImageGenerateRequest, ImageGenerateResponse>(
