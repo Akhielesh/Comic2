@@ -13,7 +13,8 @@ import {
   OPENROUTER_BASE_URL,
   OPENROUTER_APP_URL,
   OPENROUTER_APP_TITLE,
-  OPENROUTER_REQUEST_TIMEOUT_MS
+  OPENROUTER_REQUEST_TIMEOUT_MS,
+  REASONING_EFFORT
 } from '../../config.js';
 import { withRetry } from '../utils.js';
 import { coerceJson, coerceJsonOrNull } from '../jsonCoerce.js';
@@ -31,6 +32,9 @@ import type {
 
 const JSON_REPAIR_INSTRUCTION =
   'Your previous reply was not valid JSON. Reply again with ONLY valid, minified JSON that matches the requested structure — no prose, no explanation, no markdown code fences.';
+
+// Reasoning/thinking model families (id-based), kept in sync with the client capability index.
+const REASONING_MODEL_RE = /(?:^|[/:_-])(?:o1|o3|o4-mini|r1|qwq|deepseek-r1?|magistral|phi-4-reasoning|grok-3-mini)(?:[:_-]|$)|reasoning|thinking/i;
 
 const buildHeaders = (ctx?: ProviderContext): Record<string, string> => {
   const headers: Record<string, string> = {
@@ -178,6 +182,12 @@ const generateTextOnce = async (
     };
   } else if (req.jsonMode) {
     baseBody.response_format = { type: 'json_object' };
+  }
+
+  // Engage step-by-step reasoning on reasoning-capable models (tuned by REASONING_EFFORT).
+  // Other models ignore the param; reasoning models benefit most on structured/planning calls.
+  if (REASONING_EFFORT !== 'off' && REASONING_MODEL_RE.test(req.model)) {
+    baseBody.reasoning = { effort: REASONING_EFFORT };
   }
 
   const run = async (messages: GenerateTextRequest['messages']) => {

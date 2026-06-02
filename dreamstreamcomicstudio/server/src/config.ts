@@ -111,6 +111,12 @@ export const OPENROUTER_REQUEST_TIMEOUT_MS = parseIntegerEnv(
   'OPENROUTER_REQUEST_TIMEOUT_MS',
   1_000
 );
+// Reasoning effort applied to reasoning-capable models on the OpenRouter path.
+// 'off' disables; otherwise 'low' | 'medium' | 'high'. Non-reasoning models ignore it.
+export const REASONING_EFFORT = ((): 'off' | 'low' | 'medium' | 'high' => {
+  const raw = (process.env.REASONING_EFFORT || 'medium').trim().toLowerCase();
+  return raw === 'off' || raw === 'low' || raw === 'high' ? raw : 'medium';
+})();
 
 // --- NVIDIA Build (NIM): OpenAI-compatible text/LLM source (https://integrate.api.nvidia.com/v1) ---
 // BYOK: users add their own `nvapi-...` key (free tier: ~1,000 credits, 40 req/min). A platform
