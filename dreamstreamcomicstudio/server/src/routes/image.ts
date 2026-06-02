@@ -1,8 +1,8 @@
 import { Request, Response, Router } from 'express';
 import crypto from 'node:crypto';
-import { requireGeminiKey, requirePixazoKey, requireOpenRouterKey } from '../middleware/keys.js';
+import { requireGeminiKey, requirePixazoKey, requireOpenRouterKey, requireNvidiaKey } from '../middleware/keys.js';
 import { checkLimits } from '../middleware/limits.js';
-import { FLUX_MODEL_ID, IDEMPOTENCY_TTL_MS, IMAGE_INCLUDE_DATA_URL_LEGACY, IMAGE_MODEL, OPENROUTER_IMAGE_MODEL } from '../config.js';
+import { FLUX_MODEL_ID, IDEMPOTENCY_TTL_MS, IMAGE_INCLUDE_DATA_URL_LEGACY, IMAGE_MODEL, OPENROUTER_IMAGE_MODEL, NVIDIA_IMAGE_MODEL } from '../config.js';
 import { generateGeminiImage } from '../ai/image.js';
 import { generateFluxImage } from '../ai/flux.js';
 import { getProvider, resolveProviderContext } from '../ai/gateway.js';
@@ -632,6 +632,160 @@ imageRouter.post('/openrouter', async (req, res, next) => {
           projectId: typeof projectId === 'string' ? projectId : undefined,
           reason: (error as Error)?.message || 'generation_failed',
           metadata: { route: '/api/image/openrouter', storage }
+        });
+        throw error;
+      }
+    });
+
+    res.json(payload);
+  } catch (err) {
+    if (isMissingServiceRoleKeyError(err)) {
+      const publicCode = (err as { publicCode?: string })?.publicCode || 'MISSING_SERVICE_ROLE_KEY';
+      return res.status(503).json({
+        error: {
+          code: publicCode,
+          message: publicCode === 'MISSING_SUPABASE_CONFIG'
+            ? 'Server storage persistence is unavailable. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.'
+            : 'Server storage persistence is unavailable. Please set SUPABASE_SERVICE_ROLE_KEY.'
+        }
+      });
+    }
+    next(err);
+  }
+});
+
+// NVIDIA Build image generation (free tier) via the OpenAI-compatible /images/generations
+// endpoint. BYOK (X-Nvidia-Key) bypasses platform billing. NOTE: written against NVIDIA's
+// documented OpenAI-compatible image API but not runtime-verified in the sandbox — validate
+// end-to-end with a real nvapi- key in a networked environment.
+imageRouter.post('/nvidia', async (req, res, next) => {
+  try {
+    const apiKey = requireNvidiaKey(req, res);
+    if (!apiKey) return;
+    const {
+      prompt,
+      aspectRatio,
+      resolution,
+      negativePrompt,
+      referenceImages,
+      model,
+      projectId,
+      storage = 'project',
+      cropToRatio
+    } = req.body || {};
+    if (!prompt || typeof prompt !== 'string') {
+      return res.status(400).json({ error: { message: 'prompt is required' } });
+    }
+    if (storage !== 'test' && !req.user?.id) {
+      return res.status(401).json({ error: { message: 'User not authenticated for image persistence' } });
+    }
+
+    const payload = await withIdempotency(req, res, 'image:nvidia', async () => {
+      const effectiveModel = typeof model === 'string' && model.trim() ? model.trim() : NVIDIA_IMAGE_MODEL;
+      const effectiveResolution = resolution || '1024x1024';
+
+      const reserve = await reserveForOperation({
+        req,
+        operation: 'image.nvidia.generate',
+        fallbackModel: effectiveModel,
+        provider: 'nvidia',
+        resolution: effectiveResolution,
+        imageUnits: 1,
+        projectId: typeof projectId === 'string' ? projectId : undefined,
+        comicId: typeof projectId === 'string' ? projectId : undefined,
+        stage: typeof req.body?.stage === 'string' ? req.body.stage : 'generation',
+        metadata: { route: '/api/image/nvidia', storage }
+      });
+      if ('details' in reserve) {
+        throw toBillingLimitError(formatLimitErrorResponse(reserve.details));
+      }
+
+      const apiStart = Date.now();
+      const promptWithHint = typeof aspectRatio === 'string' && aspectRatio.trim()
+        ? `${prompt}\n\n(Aspect ratio: ${aspectRatio.trim()})`
+        : prompt;
+      const generated = await getProvider('nvidia').generateImage(
+        {
+          model: effectiveModel,
+          prompt: promptWithHint,
+          referenceImages: Array.isArray(referenceImages) ? referenceImages : [],
+          negativePrompt: typeof negativePrompt === 'string' ? negativePrompt : undefined
+        },
+        resolveProviderContext(apiKey, 'nvidia')
+      );
+      const apiMs = Date.now() - apiStart;
+
+      const dataUrl = generated.imageDataUrl;
+      const mimeType = /^data:(.*?);base64,/.exec(dataUrl)?.[1] || 'image/png';
+      const usage = {
+        promptTokens: generated.usage.promptTokens,
+        candidatesTokens: generated.usage.completionTokens,
+        totalTokens: generated.usage.totalTokens,
+        providerCostUsd: generated.usage.costUsd
+      };
+
+      let responsePayload: Record<string, unknown> = {
+        dataUrl,
+        mimeType,
+        prompt,
+        model: generated.model,
+        usage,
+        timings: buildTimings(apiMs)
+      };
+
+      try {
+        if (storage !== 'test') {
+          const saved = await persistGeneratedImage({
+            userId: req.user!.id,
+            projectId,
+            dataUrl,
+            source: 'nvidia',
+            resolution: effectiveResolution,
+            cropToRatio
+          });
+          responsePayload = {
+            ...responsePayload,
+            imageId: saved.imageId,
+            imageUrl: saved.imageUrl,
+            mimeType: saved.mimeType,
+            timings: buildTimings(apiMs, saved.saveMs),
+            dataUrl: IMAGE_INCLUDE_DATA_URL_LEGACY ? dataUrl : undefined
+          };
+        }
+
+        void settleReservedOperation({
+          req,
+          operation: 'image.nvidia.generate',
+          provider: 'nvidia',
+          model: generated.model || effectiveModel,
+          seed: {
+            provider: 'nvidia',
+            model: generated.model || effectiveModel,
+            operation: 'image.nvidia.generate',
+            imageUnits: 1,
+            resolution: effectiveResolution,
+            projectId: typeof projectId === 'string' ? projectId : undefined,
+            comicId: typeof projectId === 'string' ? projectId : undefined,
+            stage: typeof req.body?.stage === 'string' ? req.body.stage : 'generation',
+            byok: reserve.reservation.byokBypass
+          },
+          usage,
+          imageUnits: 1,
+          metadata: { route: '/api/image/nvidia', storage }
+        }).catch((settleError) => {
+          console.error('[BILLING] async settle failed (image.nvidia.generate)', (settleError as Error)?.message || settleError);
+        });
+
+        return attachBillingToPayload(responsePayload, reserve.reservation, null);
+      } catch (error) {
+        await releaseReservedOperation({
+          req,
+          operation: 'image.nvidia.generate',
+          provider: 'nvidia',
+          model: generated.model || effectiveModel,
+          projectId: typeof projectId === 'string' ? projectId : undefined,
+          reason: (error as Error)?.message || 'generation_failed',
+          metadata: { route: '/api/image/nvidia', storage }
         });
         throw error;
       }

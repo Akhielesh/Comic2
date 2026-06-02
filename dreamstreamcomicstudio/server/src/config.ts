@@ -125,6 +125,8 @@ export const NVIDIA_API_KEY = process.env.NVIDIA_API_KEY || '';
 export const NVIDIA_BASE_URL = process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1';
 // Default NVIDIA NIM text model used when a request doesn't name a concrete NVIDIA model.
 export const NVIDIA_TEXT_MODEL = process.env.NVIDIA_TEXT_MODEL || 'meta/llama-3.3-70b-instruct';
+// Default NVIDIA NIM image model (free tier) for the OpenAI-compatible /images/generations path.
+export const NVIDIA_IMAGE_MODEL = process.env.NVIDIA_IMAGE_MODEL || 'black-forest-labs/flux.1-schnell';
 export const NVIDIA_REQUEST_TIMEOUT_MS = parseIntegerEnv(
   process.env.NVIDIA_REQUEST_TIMEOUT_MS,
   60_000,
