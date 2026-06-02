@@ -205,6 +205,9 @@ export const ModelSelectionPanel: React.FC = () => {
   const hasOpenRouter = !!getActiveKey('openrouter');
   const hasNvidia = !!getActiveKey('nvidia');
 
+  const textModelObj = useMemo(() => catalog.find((m) => m.id === sel.textModel) || null, [catalog, sel.textModel]);
+  const imageModelObj = useMemo(() => catalog.find((m) => m.id === sel.imageModel) || null, [catalog, sel.imageModel]);
+
   return (
     <div className="bg-white border-2 border-black rounded-xl shadow-comic p-4 space-y-3">
       <div>
@@ -216,6 +219,39 @@ export const ModelSelectionPanel: React.FC = () => {
         <div className="text-[11px] bg-amber-100 border-2 border-black rounded-lg p-2 flex gap-1.5">
           <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
           Add an OpenRouter or NVIDIA key above to use these models for generation.
+        </div>
+      )}
+
+      {!loading && !degraded && (
+        <div className="border-2 border-black rounded-lg bg-slate-50 p-2.5 text-xs space-y-1.5">
+          <div className="text-[10px] font-bold uppercase text-slate-500">Active generation sources</div>
+          {[
+            { slot: 'text' as const, label: 'Text', model: textModelObj, source: sel.textSource },
+            { slot: 'image' as const, label: 'Image', model: imageModelObj, source: sel.imageSource }
+          ].map(({ slot, label, model, source }) => {
+            const src = (source || null) as ModelSource | null;
+            const key = src ? getActiveKey(src) : null;
+            return (
+              <div key={slot} className="flex items-center gap-1.5 flex-wrap">
+                <span className="font-bold w-12 shrink-0">{label}</span>
+                {!model ? (
+                  <span className="text-slate-500">Auto — server picks (free-first)</span>
+                ) : (
+                  <>
+                    <SourceBadge source={src ?? undefined} />
+                    <span className="truncate max-w-[11rem]">{model.name}</span>
+                    {key ? (
+                      <span className="text-green-700 font-bold flex items-center gap-0.5"><Check className="w-3 h-3" /> {key.label}</span>
+                    ) : (
+                      <span className="text-amber-700 font-bold flex items-center gap-0.5">
+                        <AlertTriangle className="w-3 h-3" /> No {src ? SOURCE_LABEL[src] : ''} key — add one above
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
