@@ -145,14 +145,28 @@ Done (live image generation + worker wiring):
 4. **Job payload** — `queueJobForTask` now threads `userId` so the worker can
    read project state and persist images under the owning user.
 
+### Phase 3 — assemble/lettering/export + real text stages (follow-up branch)
+
+Done:
+
+1. **Real text stages** (`server/src/comicforge/textStages.ts`) — `analyzeScript`,
+   `buildArchitecture`, `suggestStyles`, `buildStyleBible` now call the live
+   gateway (platform key, model via `resolveStageModel`, JSON-schema output) and
+   **fall back to the existing heuristic** when no key is set or a call fails, so
+   the stages still work offline. `analyzeScript` preserves structural fields and
+   only upgrades the semantic ones.
+2. **Real sub-workers** — `assemblyWorker` resolves a project's generated page
+   images into an ordered page set; `letteringWorker` composites caption/dialogue
+   boxes onto a page via sharp + an SVG overlay (correct no-content pass when no
+   dialogue exists yet); `exportWorker` packages pages into a downloadable ZIP +
+   manifest uploaded to storage. Shared reads via `workers/pageAssets.ts`.
+
 Still TODO before GA:
 
-1. Replace the `assembly` / `lettering` / `export` sub-worker stubs with real
-   page composition + PDF/webtoon packaging.
-2. Make the heuristic *text* stages (`analyzeScript`, `buildArchitecture`,
-   `suggestStyles`, `buildStyleBible`) call real models, or reuse the classic
-   services, instead of returning deterministic placeholders.
-3. Meter worker generation through a job-level billing ledger (it currently
+1. Per-panel grid composition (generation currently emits full-page images, so
+   "assembly" is page-level); populate real dialogue/balloon zones so lettering
+   renders actual text; add PDF / webtoon vertical-stitch export presets.
+2. Meter worker generation through a job-level billing ledger (it currently
    bypasses the per-request `usageEnforcer` — platform-funded, experimental).
 4. Pick a single source of truth for ComicForge state and remove the dual write
    (client store vs. server `writeComicForgeState`).
