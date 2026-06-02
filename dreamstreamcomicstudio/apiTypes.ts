@@ -69,7 +69,7 @@ export type ApiTimings = {
   totalMs?: number;
 };
 
-export type AnalyzeScriptRequest = { script: string };
+export type AnalyzeScriptRequest = { script: string; creativeDirection?: string };
 export type AnalyzeScriptResponse = {
   scenes: Scene[];
   diagnostics?: {
@@ -137,7 +137,7 @@ export type StoryToolResponse = {
   billing?: ApiBillingInfo;
 };
 
-export type ExtractWorldRequest = { scenes: Scene[]; script: string };
+export type ExtractWorldRequest = { scenes: Scene[]; script: string; creativeDirection?: string };
 export type ExtractWorldResponse = {
   characters: Character[];
   items: Item[];
@@ -391,6 +391,8 @@ export type PanelBreakdownRequest = {
   layoutType: string;
   panelCount?: number;
   stage?: string;
+  /** Author's creative direction — honour tone/genre/intent without inventing plot. */
+  creativeDirection?: string;
   /** Rolling "story so far" summary of earlier scenes, for narrative carryover. */
   continuitySummary?: string;
   continuityBible?: ContinuityBible;

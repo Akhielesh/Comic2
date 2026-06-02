@@ -285,6 +285,7 @@ export const startBackgroundGeneration = async (
             {
               abortSignal: controller.signal,
               stage: "preview",
+              creativeDirection: state.creativeDirection,
               continuitySummary: continuitySummary || undefined,
               continuityBible: state.continuity?.bible,
               sceneBindings: state.continuity?.bible.sceneBindings,
@@ -412,6 +413,7 @@ export const startBackgroundGeneration = async (
             stylePrompt: state.stylePrompt,
             focalSubject: panelFocalSubject,
             sceneSynopsis: scene.synopsis || undefined,
+            creativeDirection: state.creativeDirection || undefined,
             shotType: panelShotType,
             cameraAngle: panelCameraAngle,
             composition: panelComposition,
@@ -702,6 +704,7 @@ export const regenerateSinglePanel = async (
     stage: "panel_regen",
     stylePrompt: state.stylePrompt,
     sceneSynopsis: scene?.synopsis || undefined,
+    creativeDirection: state.creativeDirection || undefined,
     focalSubject: normalizedTargetPanel.focalSubject,
     shotType: normalizedTargetPanel.shotType,
     cameraAngle: normalizedTargetPanel.cameraAngle,

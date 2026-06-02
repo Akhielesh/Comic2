@@ -791,6 +791,10 @@ export interface ComicState {
   maxStepReached: number;
   flowVersion?: number;
   script: string;
+  /** The author's free-form story intent / creative direction — what they MEAN by the story.
+   *  Captured directly or via the Universal Assistant; injected into analysis, panel, and
+   *  image prompts so generation honours the user's voice. */
+  creativeDirection?: string;
   storyPlanning?: StoryPlanningState;
   scriptHash?: string;
   sceneHash?: string;

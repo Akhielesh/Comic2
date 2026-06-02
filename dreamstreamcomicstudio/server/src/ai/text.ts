@@ -603,7 +603,7 @@ export const filterExtractedWorldData = (
   return { characters, items, locations, diagnostics };
 };
 
-export const analyzeScript = async (apiKey: string, script: string, modelOverride?: string): Promise<AnalyzeScriptResponse> => {
+export const analyzeScript = async (apiKey: string, script: string, modelOverride?: string, creativeDirection?: string): Promise<AnalyzeScriptResponse> => {
   const ai = createClient(apiKey);
   const model = resolveTextModel(modelOverride);
   const segments = segmentScript(script);
@@ -624,7 +624,10 @@ export const analyzeScript = async (apiKey: string, script: string, modelOverrid
     
     Source Segments:
     ${segmentContext}
-
+${creativeDirection && creativeDirection.trim() ? `
+    AUTHOR'S CREATIVE DIRECTION (interpret the story's tone, genre and intent through this lens; do NOT add events, characters, or details that are not in the script):
+    ${creativeDirection.trim()}
+` : ''}
     CRITICAL:
     - Use ONLY information present in the provided script.
     - Keep chronological order exactly as written using segment order.
@@ -837,7 +840,8 @@ export const extractWorldDetails = async (
   apiKey: string,
   scenes: Scene[],
   script?: string,
-  modelOverride?: string
+  modelOverride?: string,
+  creativeDirection?: string
 ): Promise<ExtractWorldResponse> => {
   const model = resolveTextModel(modelOverride);
   if (!scenes || scenes.length === 0) {
@@ -863,7 +867,10 @@ export const extractWorldDetails = async (
     `Raw Script Excerpt: ${scene.rawText || ''}`,
     `Known Scene Characters: ${(scene.characters || []).join(', ') || 'None listed'}`
   ].join('\n')).join('\n\n');
-  const prompt = buildWorldExtractionPrompt(sceneContext);
+  const directionNote = creativeDirection && creativeDirection.trim()
+    ? `\nAuthor's creative direction (bias entity descriptions toward this tone/intent; do not invent entities absent from the scenes):\n${creativeDirection.trim()}\n`
+    : '';
+  const prompt = buildWorldExtractionPrompt(sceneContext) + directionNote;
 
   const response = await withRetry(
     () => ai.models.generateContent({
@@ -1048,7 +1055,8 @@ export const generatePanelBreakdown = async (
   sceneBindings?: SceneContinuityBinding[],
   previousPanelContext?: Array<{ panelId?: string; sceneId?: number; description: string; dialogue?: string }>,
   modelOverride?: string,
-  continuitySummary?: string
+  continuitySummary?: string,
+  creativeDirection?: string
 ): Promise<PanelBreakdownResponse> => {
   const model = resolveTextModel(modelOverride);
   if (!scene || !scene.synopsis) {
@@ -1070,6 +1078,7 @@ export const generatePanelBreakdown = async (
       Break this scene into exactly ${panelCount} distinct comic panels based on the synopsis.
       Style: ${style}.
       Layout: ${layoutType}.
+      ${creativeDirection && creativeDirection.trim() ? `Author's creative direction (honour this tone/genre/intent when framing panels; do NOT invent plot beyond the synopsis): ${creativeDirection.trim()}` : ''}
       Continuity mode is strict. Do not introduce new characters, props, or settings unless explicitly listed in allowed continuity entities.
       Every output entry must describe exactly one single frame.
       Never describe split panels, two-part layouts, montages, top-half/bottom-half compositions, or triptychs.

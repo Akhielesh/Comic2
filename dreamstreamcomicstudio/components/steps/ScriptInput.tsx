@@ -15,6 +15,8 @@ interface ScriptInputProps {
   projectId: string;
   onScenesGenerated: (script: string, scenes: Scene[]) => void;
   onScriptChange: (script: string) => void;
+  initialCreativeDirection?: string;
+  onCreativeDirectionChange?: (value: string) => void;
   initialChecklist?: ScriptChecklist;
   onChecklistUpdate?: (checklist: ScriptChecklist) => void;
   initialStoryBuilder?: StoryBuilderState;
@@ -44,8 +46,9 @@ const getAnalyzeErrorMessage = (error: unknown): string => {
   return 'Failed to analyze script. Please retry.';
 };
 
-export const ScriptInput: React.FC<ScriptInputProps> = ({ initialScript, projectId, onScenesGenerated, onScriptChange, initialChecklist, onChecklistUpdate, initialStoryBuilder, onStoryBuilderUpdate }) => {
+export const ScriptInput: React.FC<ScriptInputProps> = ({ initialScript, projectId, onScenesGenerated, onScriptChange, initialChecklist, onChecklistUpdate, initialStoryBuilder, onStoryBuilderUpdate, initialCreativeDirection, onCreativeDirectionChange }) => {
   const [script, setScript] = useState(initialScript);
+  const [creativeDirection, setCreativeDirection] = useState(initialCreativeDirection || '');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [analysisStatus, setAnalysisStatus] = useState<string | null>(null);
@@ -193,7 +196,7 @@ export const ScriptInput: React.FC<ScriptInputProps> = ({ initialScript, project
     analysisAbortRef.current = controller;
 
     try {
-      const result = await analyzeScriptDetailed(targetScript, projectId, controller.signal);
+      const result = await analyzeScriptDetailed(targetScript, projectId, controller.signal, creativeDirection.trim() || undefined);
       if (analysisRequestIdRef.current !== requestId) return;
       if (result.scenes && result.scenes.length > 0) {
         setPendingReview({
@@ -299,6 +302,19 @@ K: "I'm just looking for dinner."`;
                         Load Sample
                      </button>
                 </div>
+            </div>
+            <div className="bg-white p-4 rounded-xl border-4 border-black shadow-comic">
+                <label className="text-sm font-display flex items-center gap-2 mb-2">
+                    <Sparkles className="w-4 h-4 text-brand-blue" /> Creative direction
+                    <span className="text-xs font-normal text-slate-400">(optional — speak your mind about the story)</span>
+                </label>
+                <textarea
+                    value={creativeDirection}
+                    onChange={(e) => { setCreativeDirection(e.target.value); onCreativeDirectionChange?.(e.target.value); }}
+                    placeholder="e.g. 'Melancholic, rain-soaked noir; the boat is the real main character; keep it quiet and tense, not action-heavy.'"
+                    className="w-full h-24 bg-white border-2 border-black rounded-lg p-3 text-sm resize-none focus:border-brand-blue"
+                />
+                <p className="mt-1 text-[11px] text-slate-500">The AI uses this to interpret your story's tone &amp; intent across analysis, panels, and art — without inventing plot.</p>
             </div>
         </div>
 

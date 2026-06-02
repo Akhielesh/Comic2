@@ -341,6 +341,8 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           initialScript={state.script}
           projectId={project.id}
           onScriptChange={(script) => updateState({ script })}
+          initialCreativeDirection={state.creativeDirection}
+          onCreativeDirectionChange={(creativeDirection) => updateState({ creativeDirection })}
           initialStoryBuilder={state.storyBuilder}
           onStoryBuilderUpdate={(storyBuilder) => updateState({ storyBuilder })}
           initialChecklist={state.scriptChecklist}
@@ -382,6 +384,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
         return <ReferenceBuilder
           scenes={state.scenes}
           script={state.script}
+          creativeDirection={state.creativeDirection}
           currentStyle={state.stylePrompt}
           styleImageId={state.styleImageId}
           projectId={project.id}
