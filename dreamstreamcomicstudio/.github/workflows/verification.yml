@@ -1,0 +1,54 @@
+name: verification
+
+# Runs the verification system nightly. Files findings into the database; the
+# Phase 3 auto-fix workflow will pick them up and dispatch Claude Code on issues.
+#
+# Can be triggered manually with workflow_dispatch and an optional builtin id
+# (e.g. "free_label_integrity") to smoke-run one check without the DB.
+
+on:
+  schedule:
+    - cron: '15 3 * * *'    # 03:15 UTC nightly (after pricing + billing checks)
+  workflow_dispatch:
+    inputs:
+      builtin:
+        description: 'Smoke-run a single built-in by id (skips DB persistence)'
+        required: false
+        default: ''
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dreamstreamcomicstudio
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: dreamstreamcomicstudio/package-lock.json
+      - run: npm ci
+      - name: Typecheck (server + frontend)
+        run: |
+          npm run typecheck
+          npx tsc -p server/tsconfig.json --noEmit
+      - name: Tests
+        run: npm test -- --run
+      - name: Run verification (smoke built-in if dispatched)
+        if: ${{ inputs.builtin != '' }}
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: npx tsx server/src/jobs/runVerification.ts --check --builtin "${{ inputs.builtin }}"
+      - name: Run verification (all enabled checks)
+        if: ${{ inputs.builtin == '' }}
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: npx tsx server/src/jobs/runVerification.ts --check
