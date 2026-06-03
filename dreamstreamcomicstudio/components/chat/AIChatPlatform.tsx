@@ -35,6 +35,7 @@ import {
   saveChatProject,
   saveChatSession,
   setChatMemory,
+  syncFromCloud,
   type ChatAttachment,
   type ChatProject,
   type ChatSession,
@@ -160,6 +161,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   useEffect(() => {
     let active = true;
     (async () => {
+      // Best-effort cloud sync first (no-op until the chat_sync table exists / signed out).
+      await syncFromCloud().catch(() => {});
       const [stored, storedProjects] = await Promise.all([listChatSessions(), listChatProjects()]);
       if (!active) return;
       setMemory(getChatMemory(user?.id));

@@ -7,6 +7,7 @@
 
 import type { ChatReasoningLevel, ChatToolEvent, ChatToolImage, ChatArtifact } from '../apiTypes';
 import type { ModelSourceId } from './modelSelection';
+import { pullAll, pushSession, pushProject, removeRemote } from './chatSync';
 
 const DB_NAME = 'dreamstream_chat';
 const DB_VERSION = 2;
@@ -163,6 +164,7 @@ export const saveChatSession = async (session: ChatSession): Promise<void> => {
   } catch {
     /* best-effort persistence */
   }
+  void pushSession(session).catch(() => {});
 };
 
 export const deleteChatSession = async (id: string): Promise<void> => {
@@ -171,6 +173,7 @@ export const deleteChatSession = async (id: string): Promise<void> => {
   } catch {
     /* ignore */
   }
+  void removeRemote('session', id).catch(() => {});
 };
 
 // --- Projects (folders) ------------------------------------------------------
@@ -190,6 +193,7 @@ export const saveChatProject = async (project: ChatProject): Promise<void> => {
   } catch {
     /* ignore */
   }
+  void pushProject(project).catch(() => {});
 };
 
 export const createChatProject = (name: string, icon: string, color: string): ChatProject => {
@@ -209,6 +213,45 @@ export const deleteChatProject = async (id: string): Promise<void> => {
     );
   } catch {
     /* ignore */
+  }
+  void removeRemote('project', id).catch(() => {});
+};
+
+/**
+ * Two-way last-write-wins sync with Supabase (no-op until the chat_sync table exists
+ * or while signed out). Call on startup before listing.
+ */
+export const syncFromCloud = async (): Promise<void> => {
+  const remote = await pullAll();
+  if (!remote) return;
+  const [localSessions, localProjects] = await Promise.all([listChatSessions(), listChatProjects()]);
+  const localS = new Map(localSessions.map((s) => [s.id, s]));
+  const localP = new Map(localProjects.map((p) => [p.id, p]));
+
+  // Remote → local: write newer remote rows into IndexedDB (without re-pushing).
+  for (const rs of remote.sessions) {
+    const l = localS.get(rs.id);
+    if (!l || (rs.updatedAt || 0) > (l.updatedAt || 0)) {
+      try { await runTransaction('readwrite', (store) => store.put(rs)); } catch { /* ignore */ }
+    }
+  }
+  for (const rp of remote.projects) {
+    const l = localP.get(rp.id);
+    if (!l || (rp.updatedAt || 0) > (l.updatedAt || 0)) {
+      try { await runTransaction('readwrite', (store) => store.put(rp), PROJECTS_STORE); } catch { /* ignore */ }
+    }
+  }
+
+  // Local → remote: push newer local rows up.
+  const remoteS = new Map(remote.sessions.map((s) => [s.id, s]));
+  const remoteP = new Map(remote.projects.map((p) => [p.id, p]));
+  for (const ls of localSessions) {
+    const r = remoteS.get(ls.id);
+    if (!r || (ls.updatedAt || 0) > (r.updatedAt || 0)) void pushSession(ls).catch(() => {});
+  }
+  for (const lp of localProjects) {
+    const r = remoteP.get(lp.id);
+    if (!r || (lp.updatedAt || 0) > (r.updatedAt || 0)) void pushProject(lp).catch(() => {});
   }
 };
 
