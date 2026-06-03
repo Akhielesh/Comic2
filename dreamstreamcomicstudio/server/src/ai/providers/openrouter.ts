@@ -206,10 +206,20 @@ const generateTextOnce = async (
     baseBody.response_format = { type: 'json_object' };
   }
 
-  // Engage step-by-step reasoning on reasoning-capable models (tuned by REASONING_EFFORT).
+  // Engage step-by-step reasoning on reasoning-capable models. A per-request
+  // `reasoningEffort` (set by the chat platform's reasoning control) wins; otherwise
+  // fall back to the global REASONING_EFFORT default for known reasoning families.
   // Other models ignore the param; reasoning models benefit most on structured/planning calls.
-  if (REASONING_EFFORT !== 'off' && REASONING_MODEL_RE.test(req.model)) {
+  if (req.reasoningEffort) {
+    baseBody.reasoning = { effort: req.reasoningEffort };
+  } else if (REASONING_EFFORT !== 'off' && REASONING_MODEL_RE.test(req.model)) {
     baseBody.reasoning = { effort: REASONING_EFFORT };
+  }
+
+  // Live web search: OpenRouter's `web` plugin grounds the answer in current internet
+  // results for any model. Citations come back inline in the response text.
+  if (req.webSearch) {
+    baseBody.plugins = [{ id: 'web', max_results: 5 }];
   }
 
   const run = async (messages: GenerateTextRequest['messages']) => {

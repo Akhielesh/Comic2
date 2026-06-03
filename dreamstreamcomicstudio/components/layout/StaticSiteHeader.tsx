@@ -38,6 +38,9 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
           <button onClick={() => onNavigate('models')} className="hidden md:block text-sm font-bold hover:underline">
             Models
           </button>
+          <button onClick={() => onNavigate('chat')} className="hidden md:block text-sm font-bold hover:underline">
+            AI Chat
+          </button>
           {isAuthenticated ? (
             <>
               <TokenAvailabilityPill />
