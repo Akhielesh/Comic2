@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Send, Paperclip, X, Globe, Brain, Square, Loader2 } from 'lucide-react';
+import { Send, Paperclip, X, Globe, Brain, Square, Loader2, LayoutGrid } from 'lucide-react';
 import type { ChatReasoningLevel } from '../../apiTypes';
 import type { ChatAttachment } from '../../services/chatStorage';
 import { REASONING_LEVELS, type ChatModelFeatures } from '../../services/chatFeatures';
@@ -9,8 +9,10 @@ interface ChatComposerProps {
   features: ChatModelFeatures;
   reasoningLevel: ChatReasoningLevel;
   webSearch: boolean;
+  dreamstreamAccess: boolean;
   onReasoningChange: (level: ChatReasoningLevel) => void;
   onWebToggle: (on: boolean) => void;
+  onDreamstreamToggle: (on: boolean) => void;
   onSend: (text: string, attachments: ChatAttachment[]) => void;
   onStop: () => void;
 }
@@ -36,8 +38,10 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   features,
   reasoningLevel,
   webSearch,
+  dreamstreamAccess,
   onReasoningChange,
   onWebToggle,
+  onDreamstreamToggle,
   onSend,
   onStop
 }) => {
@@ -110,6 +114,13 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
             <Globe className="w-3.5 h-3.5" /> Web {webSearch ? 'on' : 'off'}
           </button>
         )}
+        <button
+          onClick={() => onDreamstreamToggle(!dreamstreamAccess)}
+          className={`flex items-center gap-1.5 text-[11px] font-bold border-2 border-black rounded-full px-2.5 py-1 ${dreamstreamAccess ? 'bg-brand-yellow' : 'bg-white hover:bg-slate-100'}`}
+          title="DreamStream connector: let this chat see your own projects, account and usage (read-only, sanitized). Off by default."
+        >
+          <LayoutGrid className="w-3.5 h-3.5" /> DreamStream {dreamstreamAccess ? 'on' : 'off'}
+        </button>
       </div>
 
       {/* Attachment previews */}

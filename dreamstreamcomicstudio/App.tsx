@@ -708,7 +708,7 @@ const App: React.FC = () => {
           )}
 
           {effectiveView === 'chat' && (
-            <AIChatPlatform onBack={() => setCurrentView(user ? 'dashboard' : 'home')} />
+            <AIChatPlatform projects={projects} onBack={() => setCurrentView(user ? 'dashboard' : 'home')} />
           )}
 
           {effectiveView === 'how-it-works' && (

@@ -27,7 +27,28 @@ export interface RunChatParams {
   webSearch?: boolean;
   fallbackModel?: string;
   timeoutMs?: number;
+  /**
+   * Pre-sanitized DreamStream workspace context (JSON string). Present only when the
+   * user enabled the DreamStream connector for the session. Injected as a guardrailed
+   * block so the model can help with the user's own projects but can't act or leak.
+   */
+  dreamstreamContextJson?: string;
 }
+
+// Guardrail framing for the DreamStream connector. The context is read-only and
+// already allowlist-sanitized server-side; the model may discuss/assist with it but
+// has no tools to modify the workspace and must never expose secrets or other users' data.
+const dreamstreamBlock = (json: string): string => `
+
+DreamStream workspace access is ENABLED for this conversation. You are operating inside the DreamStream Comic Studio product and may use the sanitized context below to help the user with their own projects, account and usage.
+Guardrails:
+- Only reference the user's own data shown in the context. Never claim access to other users' data.
+- Never reveal or request secrets (API keys, tokens, passwords).
+- This access is read-only — you cannot create, edit, generate or delete anything; if the user asks you to act, explain how to do it in the app instead.
+- If something isn't present in the context, say you don't have it rather than guessing or fabricating project details.
+
+Sanitized DreamStream context (JSON):
+${json}`;
 
 // Default persona. Heavy emphasis on well-structured, component-friendly Markdown so
 // the client's rich renderer can surface tables, code, links, images and lists cleanly.
@@ -63,7 +84,10 @@ export const runChat = async (
   // A custom persona / durable user memory augments the rich-format base prompt
   // rather than replacing it, so structured-Markdown rules always hold.
   const extra = params.systemPrompt?.trim();
-  const systemContent = extra ? `${CHAT_SYSTEM_PROMPT}\n\nAdditional instructions:\n${extra}` : CHAT_SYSTEM_PROMPT;
+  let systemContent = extra ? `${CHAT_SYSTEM_PROMPT}\n\nAdditional instructions:\n${extra}` : CHAT_SYSTEM_PROMPT;
+  if (params.dreamstreamContextJson) {
+    systemContent += dreamstreamBlock(params.dreamstreamContextJson);
+  }
 
   const messages: ChatMessage[] = [
     { role: 'system', content: systemContent },
