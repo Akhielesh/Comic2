@@ -170,6 +170,16 @@ export type ProviderContext = {
 export interface AIProvider {
   id: AIProviderId;
   generateText(req: GenerateTextRequest, ctx: ProviderContext): Promise<GenerateTextResult>;
+  /**
+   * Streaming text generation. Calls `onDelta` with incremental content/reasoning as it
+   * arrives and resolves with the fully-assembled result (text, toolCalls, usage…).
+   * Optional — callers must fall back to generateText when absent.
+   */
+  generateTextStream?(
+    req: GenerateTextRequest,
+    ctx: ProviderContext,
+    onDelta: (delta: { content?: string; reasoning?: string }) => void
+  ): Promise<GenerateTextResult>;
   generateImage(req: GenerateImageRequest, ctx: ProviderContext): Promise<GenerateImageResult>;
   /** Lists models from the provider. Auth is optional for OpenRouter's public catalog. */
   listModels(ctx?: ProviderContext): Promise<CatalogModel[]>;

@@ -52,41 +52,58 @@ const getAuthToken = async (): Promise<string | undefined> => {
   return session?.access_token;
 };
 
-export const post = async <TReq, TRes>(path: string, body: TReq, options?: { signal?: AbortSignal; apiKey?: string; modelId?: string; stage?: string }): Promise<TRes> => {
-  // Active key per provider (multi-key store), falling back to legacy single keys.
-  // Source governance: a disabled provider's key is never attached (defense-in-depth;
-  // the server also enforces via X-Allowed-Sources for platform keys).
+// Build the common request headers (provider keys honoring governance, auth token,
+// model/source selection, free-only, allowed-sources). Shared by post + postStream.
+const buildRequestHeaders = async (options?: { apiKey?: string; modelId?: string; stage?: string }): Promise<Record<string, string>> => {
   const geminiKey = isProviderEnabled('gemini') ? (getActiveKeyValue('gemini') || getGeminiKey()) : null;
   const fluxKey = isProviderEnabled('pixazo') ? (getActiveKeyValue('pixazo') || getFluxKeyInfo().key) : null;
   const openRouterKey = isProviderEnabled('openrouter') ? (getActiveKeyValue('openrouter') || getOpenRouterKey()) : null;
   const nvidiaKey = isProviderEnabled('nvidia') ? getActiveKeyValue('nvidia') : null;
   const token = await getAuthToken();
-  // Per-stage override when a stage is supplied, else the global text model + its source.
   const textModel = options?.stage ? getModelForStage(options.stage) : getSelectedTextModel();
   const textSource = options?.stage ? getSourceForStage(options.stage) : getSelectedTextSource();
 
+  return {
+    'Content-Type': 'application/json',
+    ...(options?.apiKey ? { 'X-Gemini-Key': options.apiKey } : (geminiKey ? { 'X-Gemini-Key': geminiKey } : {})),
+    ...(fluxKey ? { 'X-Pixazo-Key': fluxKey } : {}),
+    ...(openRouterKey ? { 'X-OpenRouter-Key': openRouterKey } : {}),
+    ...(nvidiaKey ? { 'X-Nvidia-Key': nvidiaKey } : {}),
+    ...(textModel ? { 'X-Text-Model': textModel } : {}),
+    ...(textSource ? { 'X-Text-Source': textSource as string } : {}),
+    ...(options?.stage ? { 'X-Pipeline-Stage': options.stage } : {}),
+    ...(options?.modelId ? { 'X-Gemini-Model': options.modelId } : {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(isFreeOnly() ? { 'X-Free-Only': 'true' } : {}),
+    'X-Allowed-Sources': allowedSourcesHeader()
+  };
+};
+
+export const post = async <TReq, TRes>(path: string, body: TReq, options?: { signal?: AbortSignal; apiKey?: string; modelId?: string; stage?: string }): Promise<TRes> => {
+  const headers = await buildRequestHeaders(options);
   const res = await fetch(buildApiUrl(path), {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options?.apiKey ? { 'X-Gemini-Key': options.apiKey } : (geminiKey ? { 'X-Gemini-Key': geminiKey } : {})),
-      ...(fluxKey ? { 'X-Pixazo-Key': fluxKey } : {}),
-      ...(openRouterKey ? { 'X-OpenRouter-Key': openRouterKey } : {}),
-      ...(nvidiaKey ? { 'X-Nvidia-Key': nvidiaKey } : {}),
-      ...(textModel ? { 'X-Text-Model': textModel } : {}),
-      ...(textSource ? { 'X-Text-Source': textSource as string } : {}),
-      ...(options?.stage ? { 'X-Pipeline-Stage': options.stage } : {}),
-      ...(options?.modelId ? { 'X-Gemini-Model': options.modelId } : {}),
-      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-      ...(isFreeOnly() ? { 'X-Free-Only': 'true' } : {}),
-      'X-Allowed-Sources': allowedSourcesHeader()
-    },
+    headers,
     body: JSON.stringify(body),
     signal: options?.signal
   });
 
   if (!res.ok) throw await parseError(res);
   return res.json() as Promise<TRes>;
+};
+
+/** POST that returns the raw Response for streaming (SSE) reads. Throws ApiError on non-OK. */
+export const postStream = async <TReq>(path: string, body: TReq, options?: { signal?: AbortSignal }): Promise<Response> => {
+  const headers = await buildRequestHeaders();
+  headers.Accept = 'text/event-stream';
+  const res = await fetch(buildApiUrl(path), {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+    signal: options?.signal
+  });
+  if (!res.ok) throw await parseError(res);
+  return res;
 };
 
 export const get = async <TRes>(path: string, options?: { modelId?: string }): Promise<TRes> => {
