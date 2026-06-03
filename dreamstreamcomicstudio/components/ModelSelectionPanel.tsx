@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Image as ImageIcon, Type as TypeIcon, Loader2, AlertTriangle, Sparkles, Search, ChevronDown, Check, Lock } from 'lucide-react';
+import { Image as ImageIcon, Type as TypeIcon, Loader2, AlertTriangle, Sparkles, Search, ChevronDown, Check, Lock, Layers } from 'lucide-react';
+import { groupModelsBySource, axisDisplay, DIFF_AXIS_LABEL, SOURCE_HOSTING } from '../services/modelGrouping';
 import { fetchModelCatalog, SOURCE_LABEL, type CatalogModel, type ModelSource } from '../services/modelCatalog';
 import {
   getModelSelection,
@@ -80,11 +81,18 @@ const Slot: React.FC<{
     });
   }, [models, query]);
 
+  // Group variants of the same underlying model across sources, so identical offerings dedupe
+  // (pick a source) and differing ones split with the real technical diff shown.
+  const groups = useMemo(() => groupModelsBySource(filtered), [filtered]);
+
   const choose = (model: CatalogModel | null) => {
     setSelectedModel(slot, model ? model.id : null, model ? 'specific' : 'default', model?.source ?? null);
     setOpen(false);
     setQuery('');
   };
+
+  const rowClass = (id: string) =>
+    `w-full text-left px-2 py-1.5 text-sm hover:bg-brand-yellow/20 border-b border-slate-100 flex items-center gap-1.5 flex-wrap ${id === selectedId ? 'bg-brand-blue/10' : ''}`;
 
   return (
     <div className="border-2 border-black rounded-lg p-3 bg-white">
@@ -129,22 +137,54 @@ const Slot: React.FC<{
             >
               Auto — best model, free-first
             </button>
-            {filtered.length === 0 ? (
+            {groups.length === 0 ? (
               <div className="px-2 py-3 text-xs text-slate-400">No models match “{query}”.</div>
             ) : (
-              filtered.map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  onClick={() => choose(m)}
-                  className={`w-full text-left px-2 py-1.5 text-sm hover:bg-brand-yellow/20 border-b border-slate-100 flex items-center gap-1.5 ${m.id === selectedId ? 'bg-brand-blue/10' : ''}`}
-                >
-                  <SourceBadge source={m.source} />
-                  <span className="truncate flex-1">{m.name}</span>
-                  {m.isFree && <span className="text-[10px] font-bold text-green-700">free</span>}
-                  {m.id === selectedId && <Check className="w-3.5 h-3.5 text-brand-blue shrink-0" />}
-                </button>
-              ))
+              groups.map((g) => {
+                // Single offering → one plain row.
+                if (g.variants.length === 1) {
+                  const m = g.variants[0];
+                  return (
+                    <button key={m.id} type="button" onClick={() => choose(m)} title={SOURCE_HOSTING[m.source]} className={rowClass(m.id)}>
+                      <SourceBadge source={m.source} />
+                      <span className="truncate flex-1 min-w-0">{m.name}</span>
+                      {m.isFree && <span className="text-[10px] font-bold text-green-700">free</span>}
+                      {m.id === selectedId && <Check className="w-3.5 h-3.5 text-brand-blue shrink-0" />}
+                    </button>
+                  );
+                }
+                // Same model from multiple offerings → grouped: header + one row per source.
+                return (
+                  <div key={g.key} className="border-b border-slate-100 bg-slate-50/40">
+                    <div className="px-2 pt-1.5 pb-0.5 flex items-center gap-1.5">
+                      <Layers className="w-3 h-3 text-slate-500 shrink-0" />
+                      <span className="font-bold text-[12px] truncate flex-1 min-w-0">{g.name}</span>
+                      <span className="text-[9px] font-bold uppercase px-1 py-0.5 rounded border border-slate-300 bg-white text-slate-500 shrink-0">
+                        {g.variants.length} {g.multiSource ? 'sources' : 'variants'} · {g.identical ? 'identical' : 'differ'}
+                      </span>
+                    </div>
+                    {g.identical ? (
+                      <div className="px-2 pb-1 text-[10px] text-slate-400">Same specs — just pick a source (hosting differs).</div>
+                    ) : (
+                      <div className="px-2 pb-1 text-[10px] text-slate-400">Differs by: {g.differences.map((d) => DIFF_AXIS_LABEL[d]).join(', ')}</div>
+                    )}
+                    {g.variants.map((m) => (
+                      <button key={m.id} type="button" onClick={() => choose(m)} title={SOURCE_HOSTING[m.source]} className={`${rowClass(m.id)} pl-6`}>
+                        <SourceBadge source={m.source} />
+                        <span className="font-semibold shrink-0">{SOURCE_LABEL[m.source]}</span>
+                        {m.isFree && <span className="text-[10px] font-bold text-green-700">free</span>}
+                        {/* The actual technical difference, per source. */}
+                        {g.differences.map((axis) => (
+                          <span key={axis} className="text-[9px] px-1 py-0.5 rounded border border-slate-300 bg-white text-slate-600">
+                            {axisDisplay(m, axis)}
+                          </span>
+                        ))}
+                        {m.id === selectedId && <Check className="w-3.5 h-3.5 text-brand-blue shrink-0 ml-auto" />}
+                      </button>
+                    ))}
+                  </div>
+                );
+              })
             )}
           </div>
         </div>
