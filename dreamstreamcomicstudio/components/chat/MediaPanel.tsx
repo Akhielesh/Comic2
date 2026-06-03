@@ -5,6 +5,8 @@ export interface MediaPanelData {
   kind: 'image' | 'pdf' | 'video';
   url: string;
   title?: string;
+  /** Original page URL (for "open original") when `url` is an embed/player URL. */
+  sourceUrl?: string;
 }
 
 // Side-panel viewer for images (zoom/pan), PDFs (native iframe) and embeddable video.
@@ -22,10 +24,22 @@ export const MediaPanel: React.FC<{ data: MediaPanelData }> = ({ data }) => {
   if (data.kind === 'video') {
     return (
       <div className="w-full h-full flex flex-col bg-black">
+        <div className="flex items-center gap-1 px-2 py-1 border-b-2 border-black bg-white">
+          {data.title && <span className="text-[11px] font-bold text-slate-600 truncate mr-auto">{data.title}</span>}
+          <a
+            href={data.sourceUrl || data.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={`p-1.5 border-2 border-black rounded hover:bg-brand-yellow ${data.title ? '' : 'ml-auto'}`}
+            title="Open original"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+          </a>
+        </div>
         <iframe
           title={data.title || 'Video'}
           src={data.url}
-          allow="accelerator; autoplay; encrypted-media; picture-in-picture"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
           allowFullScreen
           className="flex-1 w-full border-0"
         />
