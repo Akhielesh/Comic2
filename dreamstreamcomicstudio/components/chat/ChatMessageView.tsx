@@ -6,6 +6,8 @@ import {
 import JSZip from 'jszip';
 import { ChatMarkdown } from './ChatMarkdown';
 import { MessageBody } from '../MessageBody';
+import { ChatArtifacts } from './artifacts/ChatArtifacts';
+import { SourceCard } from './SourceCard';
 import type { ChatTurn } from '../../services/chatStorage';
 import { extractCodeBlocks, codeBlockFilename, downloadTextFile, triggerDownload } from '../../services/chatUtils';
 
@@ -88,6 +90,8 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, onBranch
             <ChatMarkdown text={turn.content || '…'} className="text-sm" />
           )}
 
+          {!isUser && <ChatArtifacts artifacts={turn.artifacts} />}
+
           {!isUser && turn.images && turn.images.length > 0 && (
             <div className="mt-2 grid grid-cols-3 gap-2">
               {turn.images.map((img, i) => (
@@ -103,6 +107,14 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, onBranch
             </div>
           )}
         </div>
+
+        {/* Model-switch transparency: shown when the answer came from a different model. */}
+        {!isUser && !turn.error && turn.requestedModel && turn.model && turn.requestedModel !== turn.model && (
+          <div className="mt-1 flex items-start gap-1 text-[10px] text-amber-700 bg-amber-50 border border-amber-300 rounded px-2 py-1 max-w-full">
+            <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
+            <span><span className="font-bold">{turn.requestedModel}</span> was unavailable or rate-limited, so this was answered by <span className="font-bold">{turn.model}</span>.</span>
+          </div>
+        )}
 
         {/* Structured "thinking & sources" dropdown */}
         {!isUser && !turn.error && hasDetails && (
@@ -140,18 +152,12 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, onBranch
                 )}
                 {turn.citations && turn.citations.length > 0 && (
                   <div>
-                    <div className="text-[11px] font-bold uppercase text-sky-700 flex items-center gap-1 mb-1"><Globe className="w-3.5 h-3.5" /> Web sources ({turn.citations.length})</div>
-                    <ul className="space-y-1">
+                    <div className="text-[11px] font-bold uppercase text-sky-700 flex items-center gap-1 mb-1.5"><Globe className="w-3.5 h-3.5" /> Web sources ({turn.citations.length})</div>
+                    <div className="grid gap-1.5">
                       {turn.citations.map((c, i) => (
-                        <li key={`${c.url}-${i}`} className="text-[11px] flex items-start gap-1">
-                          <span className="text-slate-400">{i + 1}.</span>
-                          <a href={c.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 font-semibold hover:underline break-all flex items-center gap-1">
-                            {c.title || c.url}
-                            <ExternalLink className="w-3 h-3 shrink-0" />
-                          </a>
-                        </li>
+                        <SourceCard key={`${c.url}-${i}`} index={i + 1} url={c.url} title={c.title} />
                       ))}
-                    </ul>
+                    </div>
                   </div>
                 )}
               </div>

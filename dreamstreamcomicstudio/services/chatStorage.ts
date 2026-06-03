@@ -5,7 +5,7 @@
 // requiring a Supabase migration. Per-user "memory" (durable facts the user wants
 // the AI to remember across chats) is kept in localStorage, keyed by user id.
 
-import type { ChatReasoningLevel, ChatToolEvent, ChatToolImage } from '../apiTypes';
+import type { ChatReasoningLevel, ChatToolEvent, ChatToolImage, ChatArtifact } from '../apiTypes';
 import type { ModelSourceId } from './modelSelection';
 
 const DB_NAME = 'dreamstream_chat';
@@ -42,6 +42,10 @@ export interface ChatTurn {
   attachments?: ChatAttachment[];
   /** Model that produced an assistant turn (for the "answered by" label). */
   model?: string;
+  /** Model the user/app asked for; shown when it differs from `model` (coercion/fallback). */
+  requestedModel?: string;
+  /** Typed rich-output artifacts (weather, etc.) rendered as components. */
+  artifacts?: ChatArtifact[];
   reasoningLevel?: ChatReasoningLevel;
   webSearch?: boolean;
   /** Step-by-step reasoning trace, shown in the "thinking" dropdown. */

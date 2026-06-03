@@ -696,11 +696,41 @@ export type ChatRequest = {
 export type ChatToolEvent = { tool: string; query?: string; ok: boolean; summary?: string };
 export type ChatToolImage = { url: string; title?: string; thumbnail?: string; source?: string };
 
+// --- Rich output artifacts (generative UI) ---
+// Tools can emit typed artifacts that the client renders as real components
+// (weather cards, maps, video grids…) instead of plain text. `type` keys the
+// client-side renderer; new artifact types are added without touching the loop.
+export type ChatArtifact = { type: string; data: unknown };
+
+export interface WeatherDaily {
+  date: string;
+  minC: number;
+  maxC: number;
+  code: number;
+  description: string;
+}
+export interface WeatherArtifact {
+  location: string;
+  current: {
+    tempC: number;
+    tempF: number;
+    code: number;
+    description: string;
+    windKph: number;
+    humidity?: number;
+    isDay: boolean;
+  };
+  daily: WeatherDaily[];
+}
+
 export type ChatCitation = { url: string; title?: string };
 
 export type ChatResponse = {
   text: string;
+  /** The actual model that produced the answer (may differ from requested — see requestedModel). */
   model: string;
+  /** The model the user/app asked for, before any plan coercion or rate-limit fallback. */
+  requestedModel?: string;
   source: 'openrouter' | 'nvidia';
   reasoningLevel: ChatReasoningLevel;
   webSearch: boolean;
@@ -712,6 +742,8 @@ export type ChatResponse = {
   toolEvents?: ChatToolEvent[];
   /** Images surfaced by an image-search tool. */
   images?: ChatToolImage[];
+  /** Typed rich-output artifacts (weather, etc.) for the component renderer. */
+  artifacts?: ChatArtifact[];
   usage?: ApiUsage;
   billing?: ApiBillingInfo;
 };

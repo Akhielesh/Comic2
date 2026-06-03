@@ -7,6 +7,7 @@
 // flow through one control plane.
 
 import type { ChatMessage } from './providers/types.js';
+import type { ChatArtifact } from '../../../apiTypes.js';
 import { getProvider, resolveProviderContext } from './gateway.js';
 import { buildUsage } from './usage.js';
 import type { AIProviderId } from './providers/types.js';
@@ -122,6 +123,7 @@ export const runChat = async (
   citations?: { url: string; title?: string }[];
   toolEvents?: ChatToolEvent[];
   images?: ChatToolImage[];
+  artifacts?: ChatArtifact[];
 }> => {
   // A custom persona / durable user memory augments the rich-format base prompt
   // rather than replacing it, so structured-Markdown rules always hold.
@@ -129,6 +131,16 @@ export const runChat = async (
   let systemContent = extra ? `${CHAT_SYSTEM_PROMPT}\n\nAdditional instructions:\n${extra}` : CHAT_SYSTEM_PROMPT;
   if (params.dreamstreamContextJson) {
     systemContent += dreamstreamBlock(params.dreamstreamContextJson);
+  }
+  // When tools are available this turn, make it explicit the model HAS live web access —
+  // otherwise weak models default to "I can't browse" even while results are fetched.
+  const hasTools = params.provider === 'openrouter' && (params.tools?.length || 0) > 0;
+  if (hasTools) {
+    const names = (params.tools || []).map((t) => t.name).join(', ');
+    systemContent += `\n\nLIVE TOOLS ARE ENABLED this turn (${names}). You DO have internet access through them.
+- NEVER say you can't browse, access the internet, or fetch real-time/current data — instead CALL the relevant tool.
+- For anything current, factual, news, prices, weather, or that you're unsure of, call a tool FIRST, then answer from the returned results and cite sources.
+- When a tool returns a card/artifact (e.g. weather, images), keep your prose short and let the component carry the detail.`;
   }
 
   const messages: ChatMessage[] = [{ role: 'system', content: systemContent }, ...params.messages];
@@ -155,6 +167,7 @@ export const runChat = async (
   const toolEvents: ChatToolEvent[] = [];
   const images: ChatToolImage[] = [];
   const citations: { url: string; title?: string }[] = [];
+  const artifacts: ChatArtifact[] = [];
 
   // Agentic loop: call the model, run any tools it asks for, feed results back, repeat.
   // A single call (no tools enabled) collapses to one iteration with no tool round-trips.
@@ -197,6 +210,7 @@ export const runChat = async (
         const out = await tool.execute(parsed, params.signal);
         if (out.images) images.push(...out.images);
         if (out.citations) citations.push(...out.citations);
+        if (out.artifacts) artifacts.push(...out.artifacts);
         toolEvents.push({ tool: call.name, query, ok: true, summary: out.content.slice(0, 160) });
         messages.push({ role: 'tool', tool_call_id: call.id, content: out.content });
       } catch (err) {
@@ -235,6 +249,7 @@ export const runChat = async (
     reasoning: result.reasoning,
     citations: mergedCitations.length ? mergedCitations : undefined,
     toolEvents: toolEvents.length ? toolEvents : undefined,
-    images: images.length ? images : undefined
+    images: images.length ? images : undefined,
+    artifacts: artifacts.length ? artifacts : undefined
   };
 };

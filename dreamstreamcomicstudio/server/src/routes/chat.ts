@@ -209,12 +209,14 @@ chatRouter.post('/', async (req, res, next) => {
         text: result.text,
         model: result.model,
         source: resolved.provider,
+        requestedModel: requestedModel || result.model,
         reasoningLevel,
         webSearch,
         reasoning: result.reasoning,
         citations: result.citations,
         toolEvents: result.toolEvents,
         images: result.images,
+        artifacts: result.artifacts,
         usage: result.usage
       };
 

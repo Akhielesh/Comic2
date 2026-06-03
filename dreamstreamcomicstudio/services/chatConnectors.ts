@@ -14,10 +14,10 @@ export interface ChatConnector {
 
 export const CHAT_CONNECTORS: ChatConnector[] = [
   {
-    id: 'duckduckgo',
-    label: 'DuckDuckGo',
-    description: 'Free, keyless web + image search. The model searches the live web and can show images.',
-    toolNames: ['web_search', 'image_search']
+    id: 'web',
+    label: 'Web search',
+    description: 'Free, keyless live web + image search (DuckDuckGo) and weather (Open-Meteo). The model searches the web, shows images, and renders weather cards.',
+    toolNames: ['web_search', 'image_search', 'get_weather']
   }
 ];
 

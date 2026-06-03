@@ -112,15 +112,6 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
             </select>
           </label>
         )}
-        {features.webSearch && (
-          <button
-            onClick={() => onWebToggle(!webSearch)}
-            className={`flex items-center gap-1.5 text-[11px] font-bold border-2 border-black rounded-full px-2.5 py-1 ${webSearch ? 'bg-sky-300' : 'bg-white hover:bg-slate-100'}`}
-            title="Search the live web while answering"
-          >
-            <Globe className="w-3.5 h-3.5" /> Web {webSearch ? 'on' : 'off'}
-          </button>
-        )}
         <button
           onClick={() => onDreamstreamToggle(!dreamstreamAccess)}
           className={`flex items-center gap-1.5 text-[11px] font-bold border-2 border-black rounded-full px-2.5 py-1 ${dreamstreamAccess ? 'bg-brand-yellow' : 'bg-white hover:bg-slate-100'}`}

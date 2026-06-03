@@ -325,12 +325,14 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         role: 'assistant',
         content: res.text || '(no response)',
         model: res.model,
+        requestedModel: res.requestedModel,
         reasoningLevel: res.reasoningLevel,
         webSearch: res.webSearch,
         reasoning: res.reasoning,
         citations: res.citations,
         toolEvents: res.toolEvents,
         images: res.images,
+        artifacts: res.artifacts,
         createdAt: Date.now()
       };
       updateSession(sessionId, (s) => ({ ...s, turns: [...s.turns, aiTurn], updatedAt: Date.now() }));
@@ -352,14 +354,14 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
 
   if (!initialized || !activeSession) {
     return (
-      <div className="h-[calc(100vh-73px)] flex items-center justify-center bg-slate-50">
+      <div className="h-[100dvh] flex items-center justify-center bg-slate-50">
         <Loader2 className="w-8 h-8 animate-spin text-brand-blue" />
       </div>
     );
   }
 
   return (
-    <div className="h-[calc(100vh-73px)] flex overflow-hidden bg-white">
+    <div className="h-[100dvh] flex overflow-hidden bg-white">
       {sidebarOpen && (
         <ChatSidebar
           sessions={sessions}
