@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Search, X, Loader2, Check, Sparkles, Globe, Eye, Brain } from 'lucide-react';
+import { Search, X, Loader2, Check, Sparkles, Globe, Eye, Brain, AlertTriangle, EyeOff } from 'lucide-react';
 import { ModalPortal } from '../modals/ModalPortal';
 import {
   fetchModelCatalog,
@@ -12,6 +12,10 @@ import { getCapabilities } from '../../services/modelCapabilities';
 
 interface ChatModelPickerProps {
   selectedModelId: string | null;
+  /** True when the current conversation already has messages (switching mid-chat). */
+  hasMessages?: boolean;
+  /** True when the conversation contains image attachments (needs a vision model). */
+  conversationHasImages?: boolean;
   onSelect: (model: CatalogModel) => void;
   onClose: () => void;
 }
@@ -47,7 +51,7 @@ const CapabilityChips: React.FC<{ model: CatalogModel }> = ({ model }) => {
   );
 };
 
-export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelId, onSelect, onClose }) => {
+export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelId, hasMessages, conversationHasImages, onSelect, onClose }) => {
   const [models, setModels] = useState<CatalogModel[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -129,6 +133,16 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
             </div>
           </div>
 
+          {hasMessages && (
+            <div className="mx-4 mt-3 -mb-1 flex items-start gap-2 text-[11px] bg-amber-50 border-2 border-black rounded-lg px-3 py-2">
+              <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
+              <span>
+                <span className="font-bold">Switching model mid-chat.</span> The new model picks up this same conversation, but tone, style and capabilities can change — and reasoning/web/vision options adjust to what it supports.
+                {conversationHasImages && ' Models without vision are disabled here because this chat contains images they can’t read.'}
+              </span>
+            </div>
+          )}
+
           <div className="flex-1 overflow-y-auto p-4">
             {loading ? (
               <div className="flex items-center justify-center py-16 text-slate-500"><Loader2 className="w-6 h-6 animate-spin" /></div>
@@ -141,11 +155,20 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
                   <div className="grid gap-2">
                     {filtered.map((model) => {
                       const isSelected = model.id === selectedModelId;
+                      const incompatible = Boolean(conversationHasImages) && !getCapabilities(model).imageInput;
                       return (
                         <button
                           key={`${model.source}:${model.id}`}
-                          onClick={() => onSelect(model)}
-                          className={`text-left border-2 border-black rounded-lg p-3 transition-all hover:translate-x-[1px] hover:translate-y-[1px] ${isSelected ? 'bg-brand-yellow/40 shadow-comic-hover' : 'bg-white shadow-comic hover:bg-slate-50'}`}
+                          onClick={() => !incompatible && onSelect(model)}
+                          disabled={incompatible}
+                          className={`text-left border-2 border-black rounded-lg p-3 transition-all ${
+                            incompatible
+                              ? 'bg-slate-100 opacity-60 cursor-not-allowed'
+                              : isSelected
+                                ? 'bg-brand-yellow/40 shadow-comic-hover'
+                                : 'bg-white shadow-comic hover:bg-slate-50 hover:translate-x-[1px] hover:translate-y-[1px]'
+                          }`}
+                          title={incompatible ? 'This model can’t read the images already in this chat' : undefined}
                         >
                           <div className="flex items-start justify-between gap-2">
                             <div className="min-w-0">
@@ -162,6 +185,9 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
                           </div>
                           {model.description && (
                             <p className="text-[11px] text-slate-600 mt-1.5 line-clamp-2">{model.description}</p>
+                          )}
+                          {incompatible && (
+                            <p className="text-[11px] font-bold text-brand-red mt-1.5 flex items-center gap-1"><EyeOff className="w-3 h-3" /> No vision — can’t read this chat’s images</p>
                           )}
                         </button>
                       );

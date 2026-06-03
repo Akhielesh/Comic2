@@ -10,6 +10,7 @@ import { fetchModelCatalog, type CatalogModel } from '../../services/modelCatalo
 import type { ChatReasoningLevel, ChatRequestMessage, ChatMessagePart, UniversalAssistantContext } from '../../apiTypes';
 import type { Project } from '../../types';
 import { sendChatMessage } from '../../services/chatApi';
+import { toggleConnector, type ChatConnector } from '../../services/chatConnectors';
 import {
   branchSession,
   consumePendingChatModel,
@@ -160,7 +161,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
             modelName: activeSession.modelName,
             source: activeSession.source,
             reasoningLevel: activeSession.reasoningLevel,
-            webSearch: activeSession.webSearch
+            webSearch: activeSession.webSearch,
+            tools: [...activeSession.tools]
           }
         : {}
     );
@@ -204,12 +206,14 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     setShowModelPicker(false);
   };
 
-  const handleBranch = (turnId: string) => {
+  const handleBranch = (turnId: string, chooseNewModel: boolean) => {
     if (!activeSession) return;
     const branched = branchSession(activeSession, turnId);
     void saveChatSession(branched);
     setSessions((prev) => [branched, ...prev]);
     setActiveId(branched.id);
+    // "Branch + new model" opens the picker on the freshly-branched session.
+    if (chooseNewModel) setShowModelPicker(true);
   };
 
   const handleEditMemory = () => {
@@ -265,6 +269,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           reasoningLevel: activeSession.reasoningLevel,
           webSearch: activeSession.webSearch,
           systemPrompt: composeSystemPrompt(getChatMemory(user?.id), activeSession.systemPrompt),
+          ...(activeSession.tools.length ? { tools: activeSession.tools } : {}),
           ...(activeSession.dreamstreamAccess ? { dreamstreamContext: buildDreamStreamContext(projects) } : {})
         },
         { signal: controller.signal }
@@ -277,6 +282,10 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         model: res.model,
         reasoningLevel: res.reasoningLevel,
         webSearch: res.webSearch,
+        reasoning: res.reasoning,
+        citations: res.citations,
+        toolEvents: res.toolEvents,
+        images: res.images,
         createdAt: Date.now()
       };
       updateSession(sessionId, (s) => ({ ...s, turns: [...s.turns, aiTurn], updatedAt: Date.now() }));
@@ -339,11 +348,17 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         onDreamstreamToggle={(on) =>
           activeId && updateSession(activeId, (s) => ({ ...s, dreamstreamAccess: on, updatedAt: Date.now() }))
         }
+        onToggleConnector={(connector: ChatConnector, on: boolean) =>
+          activeId && updateSession(activeId, (s) => ({ ...s, tools: toggleConnector(connector, s.tools, on), updatedAt: Date.now() }))
+        }
+        onRenameTitle={(title) => activeId && handleRename(activeId, title)}
       />
 
       {showModelPicker && (
         <ChatModelPicker
           selectedModelId={activeSession.modelId}
+          hasMessages={activeSession.turns.length > 0}
+          conversationHasImages={activeSession.turns.some((t) => (t.attachments?.length || 0) > 0)}
           onSelect={handleSelectModel}
           onClose={() => setShowModelPicker(false)}
         />

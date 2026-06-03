@@ -1,0 +1,36 @@
+// Client-side catalogue of chat connectors (agentic tools).
+//
+// Each connector maps to one or more backend tool names. This is intentionally a
+// simple, data-driven list so new open-source connectors (and, later, custom MCP
+// servers) are added here without touching the chat UI.
+
+export interface ChatConnector {
+  id: string;
+  label: string;
+  description: string;
+  /** Backend tool names this connector enables. */
+  toolNames: string[];
+}
+
+export const CHAT_CONNECTORS: ChatConnector[] = [
+  {
+    id: 'duckduckgo',
+    label: 'DuckDuckGo',
+    description: 'Free, keyless web + image search. The model searches the live web and can show images.',
+    toolNames: ['web_search', 'image_search']
+  }
+];
+
+/** True when every tool the connector needs is currently enabled. */
+export const isConnectorEnabled = (connector: ChatConnector, enabledTools: string[]): boolean =>
+  connector.toolNames.every((name) => enabledTools.includes(name));
+
+/** Return the next enabled-tool list with the connector toggled on/off. */
+export const toggleConnector = (connector: ChatConnector, enabledTools: string[], on: boolean): string[] => {
+  const set = new Set(enabledTools);
+  for (const name of connector.toolNames) {
+    if (on) set.add(name);
+    else set.delete(name);
+  }
+  return Array.from(set);
+};

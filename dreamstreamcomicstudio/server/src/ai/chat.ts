@@ -10,8 +10,26 @@ import type { ChatMessage } from './providers/types.js';
 import { getProvider, resolveProviderContext } from './gateway.js';
 import { buildUsage } from './usage.js';
 import type { AIProviderId } from './providers/types.js';
+import { toToolSpec, type ChatTool } from './tools/registry.js';
 
 export type ChatReasoningLevel = 'none' | 'low' | 'medium' | 'high';
+
+export interface ChatToolEvent {
+  tool: string;
+  query?: string;
+  ok: boolean;
+  summary?: string;
+}
+
+export interface ChatToolImage {
+  url: string;
+  title?: string;
+  thumbnail?: string;
+  source?: string;
+}
+
+/** Max model⇄tool round-trips before we force a final answer. */
+const MAX_TOOL_ITERATIONS = 4;
 
 export interface RunChatParams {
   provider: AIProviderId;
@@ -33,6 +51,10 @@ export interface RunChatParams {
    * block so the model can help with the user's own projects but can't act or leak.
    */
   dreamstreamContextJson?: string;
+  /** Agentic tools the model may call (DuckDuckGo, etc.). OpenRouter only. */
+  tools?: ChatTool[];
+  /** Abort signal for in-flight tool calls. */
+  signal?: AbortSignal;
 }
 
 // Guardrail framing for the DreamStream connector. The context is read-only and
@@ -60,6 +82,7 @@ Always reply in well-structured GitHub-Flavored Markdown so the answer renders r
 - Use **headings**, short paragraphs, and bullet/numbered lists to organize information.
 - Use Markdown **tables** whenever you compare options, list structured data, or present multiple attributes.
 - Use fenced code blocks with a language tag for any code, config, or commands.
+- When you output code or files, give each file its own fenced block and start it with a comment naming the file (e.g. \`// src/app.ts\` or \`# main.py\`) so it can be saved/zipped correctly. Use a separate block per file.
 - Use Markdown links [label](url) when you cite sources or point to resources.
 - Use Markdown images ![alt](url) only when you have a real, valid image URL.
 - Use blockquotes for callouts and \`inline code\` for identifiers, filenames and values.
@@ -78,9 +101,28 @@ const reasoningMaxTokens = (level?: ChatReasoningLevel): number => {
   }
 };
 
+const dedupeCitations = (citations: { url: string; title?: string }[]) => {
+  const seen = new Set<string>();
+  const out: { url: string; title?: string }[] = [];
+  for (const c of citations) {
+    if (!c.url || seen.has(c.url)) continue;
+    seen.add(c.url);
+    out.push(c);
+  }
+  return out;
+};
+
 export const runChat = async (
   params: RunChatParams
-): Promise<{ text: string; usage: ReturnType<typeof buildUsage>; model: string }> => {
+): Promise<{
+  text: string;
+  usage: ReturnType<typeof buildUsage>;
+  model: string;
+  reasoning?: string;
+  citations?: { url: string; title?: string }[];
+  toolEvents?: ChatToolEvent[];
+  images?: ChatToolImage[];
+}> => {
   // A custom persona / durable user memory augments the rich-format base prompt
   // rather than replacing it, so structured-Markdown rules always hold.
   const extra = params.systemPrompt?.trim();
@@ -89,35 +131,94 @@ export const runChat = async (
     systemContent += dreamstreamBlock(params.dreamstreamContextJson);
   }
 
-  const messages: ChatMessage[] = [
-    { role: 'system', content: systemContent },
-    ...params.messages
-  ];
+  const messages: ChatMessage[] = [{ role: 'system', content: systemContent }, ...params.messages];
 
   const useReasoning =
     params.provider === 'openrouter' && params.reasoningLevel && params.reasoningLevel !== 'none';
   const useWeb = params.provider === 'openrouter' && Boolean(params.webSearch);
+  // Agentic tools are OpenRouter-only (function-calling + tool_calls parsing).
+  const tools = params.provider === 'openrouter' ? params.tools || [] : [];
+  const toolSpecs = tools.length ? tools.map(toToolSpec) : undefined;
 
-  const result = await getProvider(params.provider).generateText(
-    {
-      model: params.model,
-      messages,
-      temperature: typeof params.temperature === 'number' ? params.temperature : 0.7,
-      maxTokens: params.maxTokens ?? reasoningMaxTokens(params.reasoningLevel),
-      timeoutMs: params.timeoutMs,
-      retries: 2,
-      fallbackModel: params.fallbackModel,
-      ...(useReasoning ? { reasoningEffort: params.reasoningLevel as 'low' | 'medium' | 'high' } : {}),
-      ...(useWeb ? { webSearch: true } : {})
-    },
-    resolveProviderContext(params.apiKey, params.provider)
+  const ctx = resolveProviderContext(params.apiKey, params.provider);
+  const baseReq = {
+    model: params.model,
+    temperature: typeof params.temperature === 'number' ? params.temperature : 0.7,
+    maxTokens: params.maxTokens ?? reasoningMaxTokens(params.reasoningLevel),
+    timeoutMs: params.timeoutMs,
+    retries: 2,
+    fallbackModel: params.fallbackModel,
+    ...(useReasoning ? { reasoningEffort: params.reasoningLevel as 'low' | 'medium' | 'high' } : {}),
+    ...(useWeb ? { webSearch: true } : {})
+  };
+
+  const toolEvents: ChatToolEvent[] = [];
+  const images: ChatToolImage[] = [];
+  const citations: { url: string; title?: string }[] = [];
+
+  // Agentic loop: call the model, run any tools it asks for, feed results back, repeat.
+  // A single call (no tools enabled) collapses to one iteration with no tool round-trips.
+  let result = await getProvider(params.provider).generateText(
+    { ...baseReq, messages, ...(toolSpecs ? { tools: toolSpecs } : {}) },
+    ctx
   );
 
-  // Build a usage record from the last user turn's text + response, mirroring the
-  // assistant path (provider usage is attached separately by the route's settlement).
-  const lastUserText = [...params.messages]
-    .reverse()
-    .find((m) => m.role === 'user');
+  let iterations = 0;
+  while (result.toolCalls && result.toolCalls.length && iterations < MAX_TOOL_ITERATIONS) {
+    iterations += 1;
+    if (result.citations) citations.push(...result.citations);
+
+    messages.push({
+      role: 'assistant',
+      content: result.text || '',
+      tool_calls: result.toolCalls.map((c) => ({
+        id: c.id,
+        type: 'function' as const,
+        function: { name: c.name, arguments: c.arguments }
+      }))
+    });
+
+    for (const call of result.toolCalls) {
+      const tool = tools.find((t) => t.name === call.name);
+      let parsed: Record<string, unknown> = {};
+      try {
+        parsed = call.arguments ? JSON.parse(call.arguments) : {};
+      } catch {
+        parsed = {};
+      }
+      const query = typeof parsed.query === 'string' ? parsed.query : undefined;
+
+      if (!tool) {
+        toolEvents.push({ tool: call.name, query, ok: false, summary: 'Unknown tool' });
+        messages.push({ role: 'tool', tool_call_id: call.id, content: `Unknown tool: ${call.name}` });
+        continue;
+      }
+      try {
+        const out = await tool.execute(parsed, params.signal);
+        if (out.images) images.push(...out.images);
+        if (out.citations) citations.push(...out.citations);
+        toolEvents.push({ tool: call.name, query, ok: true, summary: out.content.slice(0, 160) });
+        messages.push({ role: 'tool', tool_call_id: call.id, content: out.content });
+      } catch (err) {
+        const message = (err as Error)?.message || 'tool failed';
+        toolEvents.push({ tool: call.name, query, ok: false, summary: message });
+        messages.push({ role: 'tool', tool_call_id: call.id, content: `Error: ${message}` });
+      }
+    }
+
+    // Next turn. On the final allowed iteration, drop tools to force a written answer.
+    const allowMoreTools = iterations < MAX_TOOL_ITERATIONS;
+    result = await getProvider(params.provider).generateText(
+      { ...baseReq, messages, ...(toolSpecs && allowMoreTools ? { tools: toolSpecs } : {}) },
+      ctx
+    );
+  }
+
+  if (result.citations) citations.push(...result.citations);
+
+  // Build a usage record from the last user turn's text + final response (provider usage
+  // is attached separately by the route's settlement).
+  const lastUserText = [...params.messages].reverse().find((m) => m.role === 'user');
   const promptSeed =
     typeof lastUserText?.content === 'string'
       ? lastUserText.content
@@ -125,9 +226,15 @@ export const runChat = async (
         ? lastUserText!.content.map((p) => ('text' in p ? p.text : '')).join(' ')
         : '';
 
+  const mergedCitations = dedupeCitations(citations);
+
   return {
     text: result.text,
     usage: buildUsage(promptSeed, result.text, undefined),
-    model: result.model || params.model
+    model: result.model || params.model,
+    reasoning: result.reasoning,
+    citations: mergedCitations.length ? mergedCitations : undefined,
+    toolEvents: toolEvents.length ? toolEvents : undefined,
+    images: images.length ? images : undefined
   };
 };

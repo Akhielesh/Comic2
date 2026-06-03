@@ -6,6 +6,7 @@ import { NVIDIA_TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS } from '../config.js';
 import type { AIProviderId, ChatMessage, MessagePart } from '../ai/providers/types.js';
 import { assertModelAllowedForUser } from '../services/modelAccessPolicy.js';
 import { sanitizeAssistantContext } from '../ai/assistantPolicy.js';
+import { resolveTools, KNOWN_TOOL_NAMES } from '../ai/tools/registry.js';
 import {
   attachBillingToPayload,
   formatLimitErrorResponse,
@@ -149,6 +150,12 @@ chatRouter.post('/', async (req, res, next) => {
       dreamstreamContextJson = raw.length > 12_000 ? `${raw.slice(0, 12_000)}…` : raw;
     }
 
+    // Agentic tools (DuckDuckGo etc.) — allowlisted, OpenRouter only.
+    const requestedToolNames = Array.isArray(body.tools)
+      ? body.tools.filter((t): t is string => typeof t === 'string' && KNOWN_TOOL_NAMES.includes(t))
+      : [];
+    const tools = resolved.provider === 'openrouter' ? resolveTools(requestedToolNames) : [];
+
     const reserve = req.user?.id
       ? await reserveForOperation({
           req,
@@ -174,6 +181,7 @@ chatRouter.post('/', async (req, res, next) => {
         reasoningLevel,
         webSearch,
         dreamstreamContextJson,
+        tools,
         fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
         timeoutMs: TEXT_REQUEST_TIMEOUT_MS
       });
@@ -203,6 +211,10 @@ chatRouter.post('/', async (req, res, next) => {
         source: resolved.provider,
         reasoningLevel,
         webSearch,
+        reasoning: result.reasoning,
+        citations: result.citations,
+        toolEvents: result.toolEvents,
+        images: result.images,
         usage: result.usage
       };
 
