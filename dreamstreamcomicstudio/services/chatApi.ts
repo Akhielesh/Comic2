@@ -40,6 +40,22 @@ export const sendChatMessage = (
 export const enhancePrompt = (text: string, options?: { signal?: AbortSignal }): Promise<{ enhanced: string; model?: string }> =>
   post<{ text: string }, { enhanced: string; model?: string }>('/api/chat/enhance', { text }, options);
 
+/**
+ * Distill durable facts about the user from a recent exchange and merge them into
+ * their long-term memory. Returns the updated memory (or the existing one if there
+ * was nothing new / no key configured). Best-effort — callers ignore failures.
+ */
+export const updateChatMemory = (
+  messages: ChatRequest['messages'],
+  memory: string,
+  options?: { signal?: AbortSignal }
+): Promise<{ memory: string }> =>
+  post<{ messages: ChatRequest['messages']; memory: string }, { memory: string }>(
+    '/api/chat/memory',
+    { messages, memory },
+    options
+  );
+
 export interface ChatStreamHandlers {
   /** Incremental answer text. */
   onDelta?: (content: string) => void;

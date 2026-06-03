@@ -17,7 +17,7 @@ import { getCapabilities } from '../../services/modelCapabilities';
 import { fetchModelCatalog, type CatalogModel } from '../../services/modelCatalog';
 import type { ChatReasoningLevel, ChatRequestMessage, ChatMessagePart, UniversalAssistantContext } from '../../apiTypes';
 import type { Project } from '../../types';
-import { sendChatMessageStream } from '../../services/chatApi';
+import { sendChatMessageStream, updateChatMemory } from '../../services/chatApi';
 import { gatherClientContext } from '../../services/clientContext';
 import { toggleConnector, type ChatConnector } from '../../services/chatConnectors';
 import { recommendModels, detectTools } from '../../services/chatSuggest';
@@ -388,6 +388,32 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     return { reqModel, reqSource, reqTools };
   };
 
+  // Auto-memory: after some exchanges, distill durable facts about the user and
+  // merge them into their long-term memory in the background (logged-in users only).
+  // Throttled to every other exchange to keep it cheap and non-intrusive.
+  const memoryCounterRef = useRef(0);
+  const updateMemoryInBackground = (priorTurns: ChatTurn[], answerText: string) => {
+    if (!user?.id || !answerText.trim()) return;
+    memoryCounterRef.current += 1;
+    if (memoryCounterRef.current % 2 !== 0) return;
+    const recent: ChatRequestMessage[] = priorTurns
+      .filter((t) => !t.error)
+      .slice(-5)
+      .map(toRequestMessage);
+    recent.push({ role: 'assistant', content: answerText });
+    const current = getChatMemory(user.id);
+    void updateChatMemory(recent, current)
+      .then(({ memory: updated }) => {
+        if (updated && updated.trim() && updated.trim() !== current.trim()) {
+          setChatMemory(updated, user.id);
+          setMemory(updated);
+        }
+      })
+      .catch(() => {
+        /* memory is best-effort */
+      });
+  };
+
   // Core streaming generation, shared by first-send, regenerate and edit-resend.
   // `regenerateTurnId` reuses (and archives the prior answer of) an existing
   // assistant turn; otherwise a fresh assistant turn is appended.
@@ -482,6 +508,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       }));
       const mapArtifact = res.artifacts?.find((a) => a.type === 'map');
       if (mapArtifact) setPanel(mapArtifact);
+      // Learn durable facts about the user from this exchange (background, throttled).
+      updateMemoryInBackground(baseTurns, res.text || '');
     } catch (err) {
       if (controller.signal.aborted) {
         updateSession(sessionId, (s) => ({ ...s, updatedAt: Date.now() }));

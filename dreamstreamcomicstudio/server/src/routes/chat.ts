@@ -293,6 +293,68 @@ chatRouter.post('/enhance', async (req, res, next) => {
   }
 });
 
+// Auto-memory: distill durable facts about the user from a recent exchange and
+// merge them into their long-term memory, so future chats are personalized without
+// the user hand-writing notes. Conservative by design — facts only, no transient
+// chatter, no sensitive data unless clearly volunteered.
+const MEMORY_SYSTEM_PROMPT = `You maintain a concise long-term memory of durable facts about a user, used to personalize an AI assistant across chats. You are given the EXISTING MEMORY and a RECENT CONVERSATION. Output the UPDATED memory.
+
+Rules:
+- Keep only durable, reusable facts: name, location/timezone, language, occupation, ongoing projects, stable preferences (tools, formats, topics/interests they follow), recurring goals, constraints.
+- EXCLUDE one-off questions, the assistant's answers, and anything sensitive (health, finances, credentials, beliefs) UNLESS the user explicitly asks to be remembered for it.
+- Merge new facts into the existing memory; drop anything contradicted or clearly outdated; deduplicate.
+- Be brief: a flat list of short bullet lines starting with "- ", at most 12 bullets.
+- If the conversation reveals nothing new and durable, return the existing memory unchanged.
+- Return ONLY the memory bullet lines. No preamble, no headings, no explanation.`;
+
+const MAX_MEMORY_CHARS = 1500;
+
+chatRouter.post('/memory', async (req, res, next) => {
+  try {
+    const body = (req.body || {}) as { messages?: unknown; memory?: string; source?: string };
+    const existing = typeof body.memory === 'string' ? body.memory.trim().slice(0, MAX_MEMORY_CHARS) : '';
+    const incoming = Array.isArray(body.messages) ? body.messages : [];
+    const turns = incoming
+      .map(sanitizeMessage)
+      .filter((m): m is ChatMessage => m !== null)
+      .slice(-8);
+    if (turns.length === 0) return res.json({ memory: existing });
+
+    const resolved = resolveChatProvider(req, body.source);
+    if (!resolved) return res.json({ memory: existing }); // silent no-op without a key
+
+    const transcript = turns
+      .map((t) => {
+        const text = typeof t.content === 'string'
+          ? t.content
+          : Array.isArray(t.content)
+            ? t.content.map((p) => ('text' in p ? p.text : '')).join(' ')
+            : '';
+        return `${t.role === 'user' ? 'User' : 'Assistant'}: ${text}`;
+      })
+      .join('\n')
+      .slice(0, 6000);
+
+    const model =
+      resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : await pickTextModel({ preferFree: true });
+    const result = await runChat({
+      provider: resolved.provider,
+      apiKey: resolved.apiKey,
+      model,
+      messages: [{ role: 'user', content: `EXISTING MEMORY:\n${existing || '(none)'}\n\nRECENT CONVERSATION:\n${transcript}` }],
+      systemOverride: MEMORY_SYSTEM_PROMPT,
+      temperature: 0.2,
+      maxTokens: 500,
+      fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+      timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+    });
+    const updated = (result.text || '').trim().slice(0, MAX_MEMORY_CHARS);
+    res.json({ memory: updated || existing });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Link unfurl for source hover-cards (OG/meta preview). SSRF-guarded + cached.
 chatRouter.get('/unfurl', async (req, res) => {
   const url = String(req.query.url || '');
