@@ -123,3 +123,101 @@
   text-decoration-thickness: 2px;
   text-underline-offset: 2px;
 }
+
+/* ---- Rich chat rendering (links, tables, code, quotes, headings, images) ---- */
+.message-body h1,
+.message-body h2,
+.message-body h3,
+.message-body h4 {
+  font-weight: 800;
+  line-height: 1.25;
+  margin: 0.85rem 0 0.4rem;
+}
+.message-body h1 { font-size: 1.35rem; }
+.message-body h2 { font-size: 1.18rem; }
+.message-body h3 { font-size: 1.05rem; }
+.message-body h4 { font-size: 0.95rem; }
+.message-body h1:first-child,
+.message-body h2:first-child,
+.message-body h3:first-child { margin-top: 0; }
+
+.message-body a {
+  color: #2563eb;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  word-break: break-word;
+}
+.message-body a:hover { color: #1d4ed8; }
+
+.message-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 0.05rem 0.3rem;
+}
+.message-body pre {
+  background: #18181b;
+  color: #f8fafc;
+  border: 2px solid #000;
+  border-radius: 0.6rem;
+  padding: 0.85rem 1rem;
+  overflow-x: auto;
+  margin: 0.6rem 0;
+}
+.message-body pre code {
+  background: transparent;
+  border: none;
+  color: inherit;
+  padding: 0;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.message-body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.6rem 0;
+  font-size: 0.85rem;
+  display: block;
+  overflow-x: auto;
+}
+.message-body th,
+.message-body td {
+  border: 2px solid #18181b;
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+}
+.message-body th {
+  background: #facc15;
+  font-weight: 800;
+}
+.message-body tr:nth-child(even) td {
+  background: #f8fafc;
+}
+
+.message-body blockquote {
+  border-left: 4px solid #3b82f6;
+  background: #eff6ff;
+  margin: 0.6rem 0;
+  padding: 0.4rem 0.85rem;
+  border-radius: 0 0.4rem 0.4rem 0;
+  color: #1e3a5f;
+}
+
+.message-body img {
+  max-width: 100%;
+  height: auto;
+  border: 2px solid #18181b;
+  border-radius: 0.5rem;
+  margin: 0.5rem 0;
+}
+
+.message-body hr {
+  border: none;
+  border-top: 2px dashed #cbd5e1;
+  margin: 0.85rem 0;
+}

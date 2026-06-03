@@ -17,7 +17,8 @@ import {
   ThumbsUp,
   ThumbsDown,
   ShieldCheck,
-  ExternalLink
+  ExternalLink,
+  MessageSquare
 } from 'lucide-react';
 import {
   fetchModelCatalog,
@@ -47,7 +48,12 @@ import type { ModelSource } from '../services/modelCatalog';
 
 interface ModelLibraryProps {
   onBack: () => void;
+  /** Launch the AI Chat Platform pre-loaded with this model. */
+  onStartChat?: (model: { id: string; name: string; source: 'openrouter' | 'nvidia' }) => void;
 }
+
+/** A model can be tried in chat when it outputs text (i.e. not a pure image generator). */
+const canChatWith = (model: CatalogModel): boolean => !model.supportsImageOutput;
 
 type FilterKey = 'all' | 'free' | 'image' | 'text' | 'refs' | 'editing' | 'reasoning' | 'openrouter' | 'nvidia';
 
@@ -207,7 +213,8 @@ const ModelCard: React.FC<{
   onOpen: () => void;
   onUse: (slot: ModelSlot) => void;
   onToggleCompare: () => void;
-}> = ({ model, selection, compared, onOpen, onUse, onToggleCompare }) => (
+  onStartChat?: (model: { id: string; name: string; source: 'openrouter' | 'nvidia' }) => void;
+}> = ({ model, selection, compared, onOpen, onUse, onToggleCompare, onStartChat }) => (
   <div
     onClick={onOpen}
     className="cursor-pointer text-left bg-white border-2 border-black rounded-lg p-4 shadow-comic hover:shadow-comic-hover hover:translate-x-[2px] hover:translate-y-[2px] transition-all flex flex-col gap-3"
@@ -229,7 +236,18 @@ const ModelCard: React.FC<{
     {model.editorialNote && <p className="text-xs text-slate-600 line-clamp-2">{model.editorialNote}</p>}
 
     <div className="mt-auto flex items-center justify-between gap-2 pt-2 border-t border-dashed border-slate-200">
-      <UseModelControl model={model} selection={selection} onUse={onUse} />
+      <div className="flex items-center gap-1.5">
+        <UseModelControl model={model} selection={selection} onUse={onUse} />
+        {onStartChat && canChatWith(model) && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onStartChat({ id: model.id, name: model.name, source: providerOrigin(model) as 'openrouter' | 'nvidia' }); }}
+            className="text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black bg-brand-blue text-white hover:bg-blue-600 flex items-center gap-1"
+            title="Try this model in the AI Chat Platform"
+          >
+            <MessageSquare className="w-3 h-3" /> Chat
+          </button>
+        )}
+      </div>
       <div className="flex items-center gap-1.5">
         <FeedbackButtons modelId={model.id} />
         <button
@@ -244,7 +262,7 @@ const ModelCard: React.FC<{
   </div>
 );
 
-const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; onClose: () => void; onUse: (slot: ModelSlot) => void }> = ({ model, selection, onClose, onUse }) => (
+const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; onClose: () => void; onUse: (slot: ModelSlot) => void; onStartChat?: (model: { id: string; name: string; source: 'openrouter' | 'nvidia' }) => void }> = ({ model, selection, onClose, onUse, onStartChat }) => (
   <div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
     <div className="bg-white border-4 border-black rounded-xl shadow-comic max-w-2xl w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
       <div className="sticky top-0 bg-white border-b-2 border-black px-5 py-4 flex items-start justify-between gap-3">
@@ -266,7 +284,17 @@ const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; on
           {getCapabilities(model).reasoning && <Badge className="bg-indigo-600 text-white">Reasoning</Badge>}
           {model.supportsJsonOutput && <Badge className="bg-slate-100 text-slate-700">Structured JSON</Badge>}
           {typeof model.contextLength === 'number' && <Badge className="bg-slate-100 text-slate-700">{Math.round(model.contextLength / 1000)}K ctx</Badge>}
-          <span className="ml-auto"><UseModelControl model={model} selection={selection} onUse={onUse} /></span>
+          <span className="ml-auto flex items-center gap-2">
+            {onStartChat && canChatWith(model) && (
+              <button
+                onClick={() => onStartChat({ id: model.id, name: model.name, source: providerOrigin(model) as 'openrouter' | 'nvidia' })}
+                className="text-[11px] font-bold px-2.5 py-1 rounded border-2 border-black bg-brand-blue text-white hover:bg-blue-600 flex items-center gap-1"
+              >
+                <MessageSquare className="w-3.5 h-3.5" /> Chat with this model
+              </button>
+            )}
+            <UseModelControl model={model} selection={selection} onUse={onUse} />
+          </span>
         </div>
 
         {model.editorialNote && (
@@ -443,7 +471,7 @@ const VerifiedStrip: React.FC = () => {
   );
 };
 
-export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack }) => {
+export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat }) => {
   const [models, setModels] = useState<CatalogModel[]>([]);
   const [loading, setLoading] = useState(true);
   const [degraded, setDegraded] = useState(false);
@@ -619,6 +647,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack }) => {
                   onOpen={() => setSelected(model)}
                   onUse={(slot) => useModel(model, slot)}
                   onToggleCompare={() => toggleCompare(model.id)}
+                  onStartChat={onStartChat}
                 />
               ))}
             </div>
@@ -626,7 +655,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack }) => {
         )}
       </div>
 
-      {selected && <DetailModal model={selected} selection={selection} onClose={() => setSelected(null)} onUse={(slot) => useModel(selected, slot)} />}
+      {selected && <DetailModal model={selected} selection={selection} onClose={() => setSelected(null)} onUse={(slot) => useModel(selected, slot)} onStartChat={onStartChat} />}
       {showCompare && compareModels.length > 0 && <CompareModal models={compareModels} selection={selection} onClose={() => setShowCompare(false)} onUse={useModel} />}
 
       {/* Compare tray */}

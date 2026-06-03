@@ -661,6 +661,46 @@ export type MasterAssistantContext = UniversalAssistantContext;
 export type MasterAssistantRequest = UniversalAssistantRequest;
 export type MasterAssistantResponse = UniversalAssistantResponse;
 
+// --- AI Chat Platform ---
+export type ChatReasoningLevel = 'none' | 'low' | 'medium' | 'high';
+export type ChatTextPart = { type: 'text'; text: string };
+export type ChatImagePart = { type: 'image_url'; image_url: { url: string } };
+export type ChatMessagePart = ChatTextPart | ChatImagePart;
+
+export type ChatRequestMessage = {
+  role: 'user' | 'assistant';
+  content: string | ChatMessagePart[];
+};
+
+export type ChatRequest = {
+  messages: ChatRequestMessage[];
+  /** Explicit catalog model id; falls back to the X-Text-Model header, then an auto pick. */
+  model?: string;
+  /** Provider for the chosen model. Falls back to the X-Text-Source header, then OpenRouter. */
+  source?: 'openrouter' | 'nvidia';
+  reasoningLevel?: ChatReasoningLevel;
+  webSearch?: boolean;
+  /** Optional custom persona/system prompt for this conversation. */
+  systemPrompt?: string;
+  /**
+   * Sanitized DreamStream workspace context, sent ONLY when the user enables the
+   * "DreamStream" connector toggle for the session. The server re-sanitizes it
+   * through the same allowlist as the in-app assistant before the model sees it.
+   * Omitted (and ignored) when the toggle is off, so chat has no app reach by default.
+   */
+  dreamstreamContext?: UniversalAssistantContext;
+};
+
+export type ChatResponse = {
+  text: string;
+  model: string;
+  source: 'openrouter' | 'nvidia';
+  reasoningLevel: ChatReasoningLevel;
+  webSearch: boolean;
+  usage?: ApiUsage;
+  billing?: ApiBillingInfo;
+};
+
 export type TestLabReportRequest = { report: Record<string, unknown> };
 export type TestLabReportResponse = {
   text: string;

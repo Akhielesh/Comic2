@@ -17,6 +17,7 @@ const ComicForgeStudio = lazyImportWithRetry(() => import('./components/comicfor
 const PageStudio = lazyImportWithRetry(() => import('./components/pagestudio/PageStudio').then(module => ({ default: module.PageStudio })));
 const ModelLibrary = lazyImportWithRetry(() => import('./components/ModelLibrary').then(module => ({ default: module.ModelLibrary })));
 const HowItWorks = lazyImportWithRetry(() => import('./components/HowItWorks').then(module => ({ default: module.HowItWorks })));
+const AIChatPlatform = lazyImportWithRetry(() => import('./components/chat/AIChatPlatform').then(module => ({ default: module.AIChatPlatform })));
 
 import { useProjectManager } from './hooks/useProjectManager';
 import { checkSystemDiagnostics, checkSystemStatus } from './services/geminiService';
@@ -26,6 +27,7 @@ import { AuthPage } from './components/AuthPage';
 import { AuthCallbackPage } from './components/AuthCallbackPage';
 import { supabase } from './services/supabase';
 import { getPrivateProfile, getPublicProject, incrementViewCount } from './services/db';
+import { setPendingChatModel } from './services/chatStorage';
 import { Project } from './types';
 import { Loader2 } from 'lucide-react';
 import { SystemDiagnosticsResponse } from './apiTypes';
@@ -46,6 +48,7 @@ type AppView =
   | 'how-it-works'
   | 'gallery'
   | 'models'
+  | 'chat'
   | 'settings'
   | 'privacy'
   | 'terms'
@@ -505,6 +508,7 @@ const App: React.FC = () => {
       view === 'how-it-works' ||
       view === 'gallery' ||
       view === 'models' ||
+      view === 'chat' ||
       view === 'comicforge' ||
       view === 'privacy' ||
       view === 'terms'
@@ -518,6 +522,12 @@ const App: React.FC = () => {
         window.history.pushState({}, '', url);
       } catch { /* history unavailable; navigation still works via state */ }
     }
+  };
+
+  const handleStartChatWithModel = (model: { id: string; name: string; source: 'openrouter' | 'nvidia' }) => {
+    setPendingChatModel(model);
+    clearReaderUrlParams();
+    setCurrentView('chat');
   };
 
   const handleCreateProject = (name: string) => {
@@ -614,15 +624,16 @@ const App: React.FC = () => {
   }
 
   // Protection: studio/creation views require an authenticated user. Reading stays open to all.
-  const isProtectedViewStrict = ['dashboard', 'editor', 'test', 'learn', 'settings', 'comicforge', 'pagestudio'].includes(currentView);
+  const isProtectedViewStrict = ['dashboard', 'editor', 'test', 'learn', 'settings', 'comicforge', 'pagestudio', 'chat'].includes(currentView);
   const effectiveView: AppView = !user && isProtectedViewStrict ? 'auth' : currentView;
 
   const activeProject = activeProjectId ? getProject(activeProjectId) : undefined;
   // Editor and ComicForge are focused, full-screen workspaces with their own
   // back/title bars, so we hide the global site header there (was a 3rd stacked header).
   const showSharedHeader = !['home', 'reader', 'shared', 'editor', 'comicforge', 'pagestudio'].includes(effectiveView);
-  const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio';
-  const showUniversalAssistant = effectiveView !== 'auth-callback' && effectiveView !== 'shared';
+  const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'chat';
+  // Hide the floating Universal Assistant on the full-screen chat product to avoid two stacked chat surfaces.
+  const showUniversalAssistant = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat';
 
   return (
     <ErrorBoundary>
@@ -702,7 +713,11 @@ const App: React.FC = () => {
           )}
 
           {effectiveView === 'models' && (
-            <ModelLibrary onBack={handleBackToHome} />
+            <ModelLibrary onBack={handleBackToHome} onStartChat={handleStartChatWithModel} />
+          )}
+
+          {effectiveView === 'chat' && (
+            <AIChatPlatform projects={projects} onBack={() => setCurrentView(user ? 'dashboard' : 'home')} />
           )}
 
           {effectiveView === 'how-it-works' && (
