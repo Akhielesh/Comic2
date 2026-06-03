@@ -864,8 +864,12 @@ export interface PlaceResult {
   openingHours?: string;
   website?: string;
   phone?: string;
-  /** Best-effort photo (OpenGraph image from the place's website). */
+  /** Photo (Foursquare when available, else best-effort OpenGraph from the website). */
   image?: string;
+  /** Rating normalized to a 0–5 scale (Foursquare only). */
+  rating?: number;
+  /** Price level 1–4 ($–$$$$) (Foursquare only). */
+  price?: number;
   /** A maps/directions link for this place. */
   mapUrl?: string;
 }

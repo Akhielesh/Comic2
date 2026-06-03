@@ -11,7 +11,8 @@ import { getWeather } from './weather.js';
 import { geocodePlaces } from './maps.js';
 import { fetchNews } from './news.js';
 import { getStockQuote } from './stocks.js';
-import { findPlaces } from './places.js';
+import { findPlaces, osmFilters } from './places.js';
+import { foursquareEnabled, findPlacesFoursquare } from './foursquare.js';
 
 /**
  * Per-request situational context made available to tools that benefit from it
@@ -291,7 +292,23 @@ const makePlacesTool = (ctx?: ToolContext): ChatTool => ({
         : undefined;
     if (!query) return { content: 'No place type was provided to search for.' };
     try {
-      const data = await findPlaces({ query, near: near || undefined, userLocation }, signal);
+      // Prefer Foursquare (rich: ratings, price, photos) when configured; fall back
+      // to keyless OpenStreetMap on absence or any Foursquare failure.
+      let data;
+      if (foursquareEnabled()) {
+        try {
+          data = await findPlacesFoursquare(
+            { query, near: near || undefined, userLocation, label: osmFilters(query).label },
+            signal
+          );
+          if (!data.results.length) data = undefined; // fall through to OSM
+        } catch {
+          data = undefined;
+        }
+      }
+      if (!data) {
+        data = await findPlaces({ query, near: near || undefined, userLocation }, signal);
+      }
       if (!data.results.length) {
         return { content: `No ${data.query} found near ${data.near}.` };
       }

@@ -74,6 +74,12 @@ export const RATE_LIMIT_VISION_MAX_REQUESTS = parseIntegerEnv(
 
 export const IDEMPOTENCY_TTL_MS = parseIntegerEnv(process.env.IDEMPOTENCY_TTL_MS, 15 * 60_000, 'IDEMPOTENCY_TTL_MS', 1_000);
 
+// Foursquare Places API (optional). When set, find_places uses Foursquare for rich
+// local results (ratings, price, photos); otherwise it falls back to keyless OSM.
+export const FOURSQUARE_API_KEY = process.env.FOURSQUARE_API_KEY || '';
+// API version date for the current Foursquare Places API (overridable if it changes).
+export const FOURSQUARE_API_VERSION = process.env.FOURSQUARE_API_VERSION || '2025-06-17';
+
 export const TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-2.5-flash';
 export const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-2.5-flash-image';
 export const ASSISTANT_GEMINI_API_KEY = process.env.ASSISTANT_GEMINI_API_KEY || process.env.GEMINI_API_KEY || '';

@@ -40,6 +40,9 @@ PIXAZO_API_KEY=<...>          # only if using the legacy Pixazo image path
 ASSISTANT_GEMINI_API_KEY=<...>
 REDIS_URL=<redis url>         # OR set COMICFORGE_ENABLED=false if you have no Redis
 COMICFORGE_ENABLED=false      # disable the ComicForge worker when REDIS_URL is unset
+FOURSQUARE_API_KEY=<key>      # enables rich local search (ratings/price/photos) in chat;
+                              # without it, find_places falls back to keyless OpenStreetMap
+FOURSQUARE_API_VERSION=2025-06-17  # only if Foursquare changes the required version date
 ```
 
 The server boots in **degraded mode** if these are missing (it logs warnings and

@@ -1,5 +1,5 @@
 import React from 'react';
-import { MapPin, Map as MapIcon, Clock, Globe, Navigation, Utensils } from 'lucide-react';
+import { MapPin, Map as MapIcon, Clock, Globe, Navigation, Utensils, Star } from 'lucide-react';
 import type { PlacesResultsArtifact, PlaceResult } from '../../../apiTypes';
 import { useChatPanel } from '../panelContext';
 
@@ -71,6 +71,14 @@ const PlaceRow: React.FC<{ place: PlaceResult; index: number }> = ({ place, inde
           <span className="text-[13px] font-bold leading-snug truncate">{place.name}</span>
         </div>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-500 mt-0.5">
+          {typeof place.rating === 'number' && (
+            <span className="flex items-center gap-0.5 font-bold text-amber-600">
+              <Star className="w-3 h-3 fill-amber-500 text-amber-500" />{place.rating.toFixed(1)}
+            </span>
+          )}
+          {typeof place.price === 'number' && place.price > 0 && (
+            <span className="font-bold text-emerald-700">{'$'.repeat(Math.min(4, place.price))}</span>
+          )}
           {dist && <span className="flex items-center gap-0.5 font-bold text-sky-700"><Navigation className="w-3 h-3" />{dist}</span>}
           {place.cuisine && <span className="capitalize">{place.cuisine}</span>}
           {place.category && !place.cuisine && <span className="capitalize">{place.category.replace(/_/g, ' ')}</span>}
