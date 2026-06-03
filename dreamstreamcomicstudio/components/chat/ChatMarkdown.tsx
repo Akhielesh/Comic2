@@ -3,6 +3,7 @@ import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import { CodeBlock } from './CodeBlock';
+import { MarkdownTable } from './MarkdownTable';
 
 // Same sanitize policy as MessageBody, plus <u>.
 const sanitizeSchema = {
@@ -26,6 +27,10 @@ const components: Components = {
   // CodeBlock renders its own container, so don't wrap it in another <pre>.
   pre({ children }) {
     return <>{children}</>;
+  },
+  // Replace static GFM tables with an interactive (sortable + searchable) table.
+  table({ node, children }) {
+    return <MarkdownTable node={node} children={children} />;
   },
   // Open links in a new tab.
   a({ href, children }) {

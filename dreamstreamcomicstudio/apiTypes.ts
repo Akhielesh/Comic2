@@ -854,6 +854,30 @@ export interface MapArtifact {
   route?: { lat: number; lng: number }[];
 }
 
+export interface StockPoint {
+  /** ISO date (YYYY-MM-DD). */
+  date: string;
+  close: number;
+}
+export interface StockQuoteArtifact {
+  symbol: string;
+  name?: string;
+  price: number;
+  /** Absolute change vs. previous close. */
+  change: number;
+  /** Percent change vs. previous close. */
+  changePercent: number;
+  open?: number;
+  high?: number;
+  low?: number;
+  volume?: number;
+  previousClose?: number;
+  /** Quote date (as reported by the source). */
+  asOf?: string;
+  /** ~30 sessions of closing prices for a sparkline. */
+  series?: StockPoint[];
+}
+
 export type ChatCitation = { url: string; title?: string };
 
 export type ChatResponse = {

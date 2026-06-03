@@ -10,6 +10,7 @@ import { ddgWebSearch, ddgImageSearch, ddgVideoSearch, type ImageResult } from '
 import { getWeather } from './weather.js';
 import { geocodePlaces } from './maps.js';
 import { fetchNews } from './news.js';
+import { getStockQuote } from './stocks.js';
 
 /**
  * Per-request situational context made available to tools that benefit from it
@@ -241,13 +242,39 @@ const makeNewsTool = (ctx?: ToolContext): ChatTool => ({
   }
 });
 
+const stockTool: ChatTool = {
+  name: 'get_stock',
+  description:
+    'Get a live stock, ETF or index quote with a recent price history. Use whenever the user asks about a stock price, ticker, market, or how a company/index is doing. Pass a ticker symbol (e.g. "AAPL", "MSFT", "^SPX"). Returns a quote card with price, daily change and a chart shown to the user — keep prose brief and let the card carry the detail.',
+  parameters: {
+    type: 'object',
+    properties: {
+      symbol: { type: 'string', description: 'Ticker symbol, e.g. "AAPL", "TSLA", or an index like "^SPX".' }
+    },
+    required: ['symbol']
+  },
+  execute: async (args, signal) => {
+    const symbol = String(args?.symbol || '').trim();
+    if (!symbol) return { content: 'No ticker symbol was provided.' };
+    try {
+      const q = await getStockQuote(symbol, signal);
+      const dir = q.change > 0 ? '▲' : q.change < 0 ? '▼' : '■';
+      const content = `${q.name || q.symbol} (${q.symbol}): ${q.price.toFixed(2)} ${dir} ${q.change >= 0 ? '+' : ''}${q.change.toFixed(2)} (${q.changePercent >= 0 ? '+' : ''}${q.changePercent.toFixed(2)}%)${q.asOf ? ` as of ${q.asOf}` : ''}. A quote card with a chart is shown to the user.`;
+      return { content, artifacts: [{ type: 'stock_quote', data: q }] };
+    } catch (err) {
+      return { content: `Stock lookup failed: ${(err as Error)?.message || 'unknown error'}.` };
+    }
+  }
+};
+
 /** All context-free built-in tools, keyed by the name the model/clients reference. */
 const STATIC_TOOLS: Record<string, ChatTool> = {
   web_search: webSearchTool,
   image_search: imageSearchTool,
   video_search: videoSearchTool,
   get_weather: weatherTool,
-  show_map: mapTool
+  show_map: mapTool,
+  get_stock: stockTool
 };
 
 /** Names of tools that are built per-request with situational context. */
