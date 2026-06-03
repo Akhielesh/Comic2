@@ -39,6 +39,30 @@ export const analyzeGoal = (text: string): GoalNeeds => ({
   free: KW.free.test(text)
 });
 
+const TOOL_KW = {
+  get_weather: /\b(weather|temperature|forecast|how (hot|cold)|will it rain|humidity|wind)\b/i,
+  show_map: /\b(map|where is|directions?|route|navigate|how (far|to get)|located|location of|near me|nearby)\b/i,
+  video_search: /\b(video|youtube|watch|tutorial|how to|show me how|clip)\b/i,
+  image_search: /\b(image|photo|picture|show me (a |an )?(pic|image|photo)|what does .* look like)\b/i
+};
+
+/**
+ * Auto mode: which tools a message likely needs. Web search is the default backstop
+ * for anything current/factual; specialized tools are added when clearly relevant.
+ */
+export const detectTools = (text: string): string[] => {
+  const tools = new Set<string>();
+  if (TOOL_KW.get_weather.test(text)) tools.add('get_weather');
+  if (TOOL_KW.show_map.test(text)) tools.add('show_map');
+  if (TOOL_KW.video_search.test(text)) tools.add('video_search');
+  if (TOOL_KW.image_search.test(text)) tools.add('image_search');
+  // Web search backstop when the message looks like it needs current/factual info.
+  if (tools.size > 0 || KW.web.test(text) || /\b(who|what|when|where|latest|how much|price|news)\b/i.test(text)) {
+    tools.add('web_search');
+  }
+  return Array.from(tools);
+};
+
 export const recommendModels = (
   text: string,
   models: CatalogModel[],

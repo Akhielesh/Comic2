@@ -17,6 +17,8 @@ import type { ChatReasoningLevel, ChatRequestMessage, ChatMessagePart, Universal
 import type { Project } from '../../types';
 import { sendChatMessage } from '../../services/chatApi';
 import { toggleConnector, type ChatConnector } from '../../services/chatConnectors';
+import { recommendModels, detectTools } from '../../services/chatSuggest';
+import { isProviderEnabled } from '../../services/sourceGovernance';
 import {
   branchSession,
   consumePendingChatModel,
@@ -262,11 +264,27 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     if (activeId) {
       updateSession(activeId, (s) => ({
         ...s,
+        autoMode: false,
         modelId: model.id,
         modelName: model.name,
         source: model.source,
         webSearch: model.source === 'openrouter' ? s.webSearch : false,
         reasoningLevel: supportsReasoning ? s.reasoningLevel : ('none' as ChatReasoningLevel),
+        updatedAt: Date.now()
+      }));
+    }
+    setShowModelPicker(false);
+  };
+
+  const handleSelectAuto = (lockedSource: 'openrouter' | 'nvidia' | null) => {
+    if (activeId) {
+      updateSession(activeId, (s) => ({
+        ...s,
+        autoMode: true,
+        lockedSource,
+        modelId: null,
+        modelName: lockedSource ? `Auto · ${lockedSource === 'openrouter' ? 'OpenRouter' : 'NVIDIA'}` : 'Auto',
+        source: null,
         updatedAt: Date.now()
       }));
     }
@@ -313,8 +331,24 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
 
     const sessionId = activeSession.id;
     // A suggester-chosen model is used for THIS request without waiting for state to flush.
-    const reqModel = overrideModel ? overrideModel.id : activeSession.modelId || undefined;
-    const reqSource = overrideModel ? overrideModel.source : activeSession.source || undefined;
+    let reqModel = overrideModel ? overrideModel.id : activeSession.modelId || undefined;
+    let reqSource = overrideModel ? overrideModel.source : activeSession.source || undefined;
+    let reqTools = activeSession.tools;
+
+    // Auto mode: pick the best model + the right tools for THIS message.
+    if (activeSession.autoMode && !overrideModel) {
+      const candidates = Array.from(catalog.values()).filter((m) => {
+        if (activeSession.lockedSource && m.source !== activeSession.lockedSource) return false;
+        return isProviderEnabled(m.source);
+      });
+      const best = recommendModels(text || 'general question', candidates, 1)[0]?.model;
+      if (best) {
+        reqModel = best.id;
+        reqSource = best.source;
+      }
+      // Tools are OpenRouter-only; auto-enable the relevant ones.
+      reqTools = reqSource === 'openrouter' ? detectTools(text) : [];
+    }
     const userTurn: ChatTurn = {
       id: crypto.randomUUID(),
       role: 'user',
@@ -346,7 +380,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           reasoningLevel: activeSession.reasoningLevel,
           webSearch: activeSession.webSearch,
           systemPrompt: composeSystemPrompt(getChatMemory(user?.id), activeSession.systemPrompt),
-          ...(activeSession.tools.length ? { tools: activeSession.tools } : {}),
+          ...(reqTools.length ? { tools: reqTools } : {}),
           ...(activeSession.dreamstreamAccess ? { dreamstreamContext: buildDreamStreamContext(projects) } : {})
         },
         { signal: controller.signal }
@@ -486,7 +520,10 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           selectedModelId={activeSession.modelId}
           hasMessages={activeSession.turns.length > 0}
           conversationHasImages={activeSession.turns.some((t) => (t.attachments?.length || 0) > 0)}
+          autoMode={activeSession.autoMode}
+          lockedSource={activeSession.lockedSource}
           onSelect={handleSelectModel}
+          onSelectAuto={handleSelectAuto}
           onClose={() => setShowModelPicker(false)}
         />
       )}
