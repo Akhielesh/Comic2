@@ -512,8 +512,12 @@ imageRouter.post('/openrouter', async (req, res, next) => {
       // Under free-only mode, force 'free-only': the stage either resolves to a
       // genuinely-free model or throws NoFreeModelAvailableError (which surfaces as
       // HTTP 402 NO_FREE_MODEL_AVAILABLE so the client can show the Block + explain UX).
+      //
+      // When free-only is OFF (the user explicitly opted into paid), image Auto is
+      // free-FIRST — not 'quality' — so we never silently bill for a paid image model
+      // when a free one exists; paid is used only as a last resort.
       const requestedImageModel = typeof model === 'string' && model.trim() ? model.trim() : OPENROUTER_IMAGE_MODEL;
-      const costPref = req.freeOnly ? 'free-only' : 'quality';
+      const costPref = req.freeOnly ? 'free-only' : 'free';
       const { model: effectiveModel, downgradedFrom, reason: downgradeReason } =
         await resolveStageModel('image_generation', requestedImageModel, { costPref });
       if (downgradedFrom) {

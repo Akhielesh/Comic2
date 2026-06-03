@@ -1142,7 +1142,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                     />
                     <div>
                         <p className="font-bold">Free-Only Mode {freeOnly && <span className="ml-2 text-xs uppercase bg-green-500 text-white px-2 py-0.5 rounded">On</span>}</p>
-                        <p className="text-sm text-slate-500">Block instead of paid fallback. Text uses :free models; images route to NVIDIA's free image tier when an nvapi- key is configured.</p>
+                        <p className="text-sm text-slate-500">On by default — "free" means free. Blocks (with an explanation) instead of silently using a paid model. Turn this off to opt into paid fallback. Text uses :free models; images route to NVIDIA's free image tier when an nvapi- key is configured.</p>
                     </div>
                 </label>
             </div>
