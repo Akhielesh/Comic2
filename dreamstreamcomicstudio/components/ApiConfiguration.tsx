@@ -16,8 +16,69 @@ import {
 } from '../services/apiKeys';
 import { isProviderEnabled, setProviderEnabled } from '../services/sourceGovernance';
 import { validateApiKey } from '../services/keyValidation';
+import { listMcpServers, addMcpServer, removeMcpServer } from '../services/mcpServers';
+import { Server } from 'lucide-react';
+import type { McpServerConfig } from '../apiTypes';
 import { Button } from './Button';
 import { ModelSelectionPanel } from './ModelSelectionPanel';
+
+// Manage custom remote MCP servers (their tools appear as connectors in the chat).
+const McpServersPanel: React.FC = () => {
+  const [servers, setServers] = useState<McpServerConfig[]>(() => listMcpServers());
+  const [name, setName] = useState('');
+  const [url, setUrl] = useState('');
+  const [auth, setAuth] = useState('');
+  const refresh = () => setServers(listMcpServers());
+
+  const add = () => {
+    if (!url.trim()) return;
+    addMcpServer({ name: name.trim() || 'MCP server', url: url.trim(), authorization: auth.trim() || undefined });
+    setName('');
+    setUrl('');
+    setAuth('');
+    refresh();
+  };
+
+  const urlValid = !url.trim() || /^https:\/\//i.test(url.trim());
+
+  return (
+    <div className="bg-white border-2 border-black rounded-xl shadow-comic p-4">
+      <div className="flex items-center gap-2">
+        <Server className="w-4 h-4" />
+        <h4 className="font-bold">Custom MCP servers</h4>
+      </div>
+      <p className="text-[11px] text-slate-500 mt-1 mb-3">
+        Add your own remote MCP servers (https). Their tools appear as connectors in the chat composer
+        and the model can call them. Stored on this device.
+      </p>
+
+      {servers.length > 0 && (
+        <div className="space-y-1.5 mb-3">
+          {servers.map((s) => (
+            <div key={s.id} className="flex items-center gap-2 border-2 border-black rounded-lg px-2.5 py-1.5">
+              <Server className="w-3.5 h-3.5 shrink-0 text-violet-600" />
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-bold truncate">{s.name}</span>
+                <span className="block text-[10px] text-slate-500 truncate">{s.url}{s.headers?.Authorization ? ' · auth' : ''}</span>
+              </span>
+              <button onClick={() => { removeMcpServer(s.id); refresh(); }} className="p-1.5 border-2 border-black rounded hover:bg-red-100 text-red-600" title="Remove"><Trash2 className="w-3.5 h-3.5" /></button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="grid sm:grid-cols-2 gap-2">
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name (e.g. My Tools)" className="border-2 border-black rounded px-2 py-1.5 text-sm" />
+        <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://server.example.com/mcp" className={`border-2 rounded px-2 py-1.5 text-sm font-mono ${urlValid ? 'border-black' : 'border-brand-red'}`} />
+        <input value={auth} onChange={(e) => setAuth(e.target.value)} placeholder="Authorization header (optional, e.g. Bearer …)" className="border-2 border-black rounded px-2 py-1.5 text-sm font-mono sm:col-span-2" />
+      </div>
+      {!urlValid && <p className="text-[11px] text-brand-red font-bold mt-1">MCP server URL must start with https://</p>}
+      <div className="flex justify-end mt-2">
+        <Button onClick={add} size="sm" disabled={!url.trim() || !urlValid} icon={<Plus size={14} />}>Add server</Button>
+      </div>
+    </div>
+  );
+};
 
 // Re-validate a key if we've never checked it or the last check is older than this.
 const VALIDATION_STALE_MS = 10 * 60 * 1000; // 10 minutes
@@ -339,6 +400,8 @@ export const ApiConfiguration: React.FC = () => {
           </div>
         );
       })}
+
+      <McpServersPanel />
 
       <ModelSelectionPanel />
     </div>

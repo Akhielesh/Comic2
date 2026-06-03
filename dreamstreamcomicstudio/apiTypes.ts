@@ -672,6 +672,16 @@ export type ChatRequestMessage = {
   content: string | ChatMessagePart[];
 };
 
+/** A user-configured remote MCP server (Streamable HTTP / JSON-RPC). */
+export type McpServerConfig = {
+  id: string;
+  name: string;
+  /** Endpoint URL (https). */
+  url: string;
+  /** Optional auth/extra headers (e.g. { Authorization: 'Bearer …' }). */
+  headers?: Record<string, string>;
+};
+
 export type ChatRequest = {
   messages: ChatRequestMessage[];
   /** Explicit catalog model id; falls back to the X-Text-Model header, then an auto pick. */
@@ -691,6 +701,8 @@ export type ChatRequest = {
   dreamstreamContext?: UniversalAssistantContext;
   /** Enabled agentic tool names (e.g. 'web_search', 'image_search'). OpenRouter models only. */
   tools?: string[];
+  /** Enabled custom MCP servers whose tools the model may call (OpenRouter only). */
+  mcpServers?: McpServerConfig[];
 };
 
 export type ChatToolEvent = { tool: string; query?: string; ok: boolean; summary?: string };

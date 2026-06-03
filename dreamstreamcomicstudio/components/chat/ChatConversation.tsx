@@ -5,6 +5,7 @@ import type { ChatReasoningLevel } from '../../apiTypes';
 import type { ChatModelFeatures } from '../../services/chatFeatures';
 import type { ChatConnector } from '../../services/chatConnectors';
 import type { CatalogModel } from '../../services/modelCatalog';
+import type { McpServerConfig } from '../../apiTypes';
 import { estimateTokens } from '../../services/chatUtils';
 import { ChatMessageView } from './ChatMessageView';
 import { ChatComposer } from './ChatComposer';
@@ -25,6 +26,8 @@ interface ChatConversationProps {
   onWebToggle: (on: boolean) => void;
   onDreamstreamToggle: (on: boolean) => void;
   onToggleConnector: (connector: ChatConnector, on: boolean) => void;
+  mcpServers: McpServerConfig[];
+  onToggleMcpServer: (id: string, on: boolean) => void;
   onRenameTitle: (title: string) => void;
   /** Catalog (text models) for the "help me pick" suggester in the empty state. */
   suggestModels: CatalogModel[];
@@ -52,6 +55,8 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
   onWebToggle,
   onDreamstreamToggle,
   onToggleConnector,
+  mcpServers,
+  onToggleMcpServer,
   onRenameTitle,
   suggestModels,
   onStartWithModel
@@ -187,10 +192,13 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
         dreamstreamAccess={session.dreamstreamAccess}
         enabledTools={session.tools}
         toolsSupported={session.source !== 'nvidia'}
+        mcpServers={mcpServers}
+        enabledMcpServers={session.mcpServers || []}
         onReasoningChange={onReasoningChange}
         onWebToggle={onWebToggle}
         onDreamstreamToggle={onDreamstreamToggle}
         onToggleConnector={onToggleConnector}
+        onToggleMcpServer={onToggleMcpServer}
         onSend={onSend}
         onStop={onStop}
       />
