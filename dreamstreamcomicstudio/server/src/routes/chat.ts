@@ -79,147 +79,148 @@ const resolveChatProvider = (req: any, requestedSource?: string): ResolvedProvid
   return null;
 };
 
+type PreparedChat = {
+  resolved: ResolvedProvider;
+  messages: ChatMessage[];
+  model: string;
+  requestedModel: string;
+  reasoningLevel: ChatReasoningLevel;
+  webSearch: boolean;
+  systemPrompt?: string;
+  dreamstreamContextJson?: string;
+  tools: ReturnType<typeof resolveTools>;
+};
+
+type PrepResult = { error: { status: number; body: unknown } } | { prepared: PreparedChat };
+
+// Shared request validation + resolution for both the JSON and streaming handlers.
+const prepareChat = async (req: any): Promise<PrepResult> => {
+  const body = (req.body || {}) as Partial<ChatRequest> & { source?: string };
+
+  const resolved = resolveChatProvider(req, body.source);
+  if (!resolved) {
+    return {
+      error: {
+        status: 503,
+        body: {
+          error: {
+            message:
+              'Chat needs an OpenRouter or NVIDIA key. Add one in Settings → API Configuration, or configure a platform key on the server.',
+            code: 'MISSING_CHAT_API_KEY'
+          }
+        }
+      }
+    };
+  }
+
+  const incoming = Array.isArray(body.messages) ? body.messages : [];
+  const messages = incoming.map(sanitizeMessage).filter((m): m is ChatMessage => m !== null).slice(-MAX_HISTORY);
+
+  if (messages.length === 0) {
+    return { error: { status: 400, body: { error: { message: 'At least one message is required.' } } } };
+  }
+  if (messages[messages.length - 1].role !== 'user') {
+    return { error: { status: 400, body: { error: { message: 'The last message must be from the user.' } } } };
+  }
+
+  const requestedModel = (typeof body.model === 'string' ? body.model.trim() : '') || (req.header('X-Text-Model') || '').trim();
+  let model = requestedModel || (resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : await pickTextModel({ preferFree: true }));
+  if (resolved.provider === 'nvidia' && !model.includes('/')) model = NVIDIA_TEXT_MODEL;
+
+  if (resolved.provider === 'openrouter' && req.user?.id) {
+    try {
+      const access = await assertModelAllowedForUser({ userId: req.user.id, scope: 'text', requestedModel: model });
+      if (access?.effectiveModel) model = access.effectiveModel;
+    } catch {
+      /* keep requested model */
+    }
+  }
+
+  const reasoningLevel = isReasoningLevel(body.reasoningLevel) ? body.reasoningLevel : 'none';
+  const webSearch = Boolean(body.webSearch) && resolved.provider === 'openrouter';
+  const systemPrompt =
+    typeof body.systemPrompt === 'string' && body.systemPrompt.trim() ? body.systemPrompt.trim().slice(0, 8000) : undefined;
+
+  let dreamstreamContextJson: string | undefined;
+  if (body.dreamstreamContext && req.user?.id) {
+    const safe = sanitizeAssistantContext(body.dreamstreamContext, { isAuthenticated: true });
+    const raw = JSON.stringify(safe);
+    dreamstreamContextJson = raw.length > 12_000 ? `${raw.slice(0, 12_000)}…` : raw;
+  }
+
+  const requestedToolNames = Array.isArray(body.tools)
+    ? body.tools.filter((t): t is string => typeof t === 'string' && KNOWN_TOOL_NAMES.includes(t))
+    : [];
+  const tools = resolved.provider === 'openrouter' ? resolveTools(requestedToolNames) : [];
+
+  return { prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, systemPrompt, dreamstreamContextJson, tools } };
+};
+
+const buildPayload = (p: PreparedChat, result: Awaited<ReturnType<typeof runChat>>): ChatResponse => ({
+  text: result.text,
+  model: result.model,
+  source: p.resolved.provider,
+  requestedModel: p.requestedModel || result.model,
+  reasoningLevel: p.reasoningLevel,
+  webSearch: p.webSearch,
+  reasoning: result.reasoning,
+  citations: result.citations,
+  toolEvents: result.toolEvents,
+  images: result.images,
+  artifacts: result.artifacts,
+  usage: result.usage
+});
+
+const runChatParams = (p: PreparedChat) => ({
+  provider: p.resolved.provider,
+  apiKey: p.resolved.apiKey,
+  model: p.model,
+  messages: p.messages,
+  systemPrompt: p.systemPrompt,
+  reasoningLevel: p.reasoningLevel,
+  webSearch: p.webSearch,
+  dreamstreamContextJson: p.dreamstreamContextJson,
+  tools: p.tools,
+  fallbackModel: p.resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+  timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+});
+
 chatRouter.post('/', async (req, res, next) => {
   try {
-    const body = (req.body || {}) as Partial<ChatRequest> & { source?: string };
-
-    const resolved = resolveChatProvider(req, body.source);
-    if (!resolved) {
-      return res.status(503).json({
-        error: {
-          message:
-            'Chat needs an OpenRouter or NVIDIA key. Add one in Settings → API Configuration, or configure a platform key on the server.',
-          code: 'MISSING_CHAT_API_KEY'
-        }
-      });
-    }
-
-    const incoming = Array.isArray(body.messages) ? body.messages : [];
-    const messages = incoming
-      .map(sanitizeMessage)
-      .filter((m): m is ChatMessage => m !== null)
-      .slice(-MAX_HISTORY);
-
-    if (messages.length === 0) {
-      return res.status(400).json({ error: { message: 'At least one message is required.' } });
-    }
-    if (messages[messages.length - 1].role !== 'user') {
-      return res.status(400).json({ error: { message: 'The last message must be from the user.' } });
-    }
-
-    // Resolve the model: explicit body/header pick wins; otherwise an auto-picked free model
-    // (OpenRouter) or the NVIDIA default. Store-the-library means the client may send any id.
-    const requestedModel = (typeof body.model === 'string' ? body.model.trim() : '') || (req.header('X-Text-Model') || '').trim();
-    let model =
-      requestedModel ||
-      (resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : await pickTextModel({ preferFree: true }));
-
-    if (resolved.provider === 'nvidia' && !model.includes('/')) {
-      model = NVIDIA_TEXT_MODEL;
-    }
-
-    // Respect plan-tier model access for the platform (OpenRouter) path. Never hard-fail
-    // chat over access policy — fall back to the requested id if the check errors.
-    if (resolved.provider === 'openrouter' && req.user?.id) {
-      try {
-        const access = await assertModelAllowedForUser({
-          userId: req.user.id,
-          scope: 'text',
-          requestedModel: model
-        });
-        if (access?.effectiveModel) model = access.effectiveModel;
-      } catch {
-        /* keep requested model */
-      }
-    }
-
-    const reasoningLevel = isReasoningLevel(body.reasoningLevel) ? body.reasoningLevel : 'none';
-    const webSearch = Boolean(body.webSearch) && resolved.provider === 'openrouter';
-    const systemPrompt =
-      typeof body.systemPrompt === 'string' && body.systemPrompt.trim()
-        ? body.systemPrompt.trim().slice(0, 8000)
-        : undefined;
-
-    // DreamStream connector: only honoured when the client sent context (toggle on) AND the
-    // request is authenticated. Re-sanitized through the assistant allowlist so nothing
-    // beyond the safe, user-owned fields can reach the model.
-    let dreamstreamContextJson: string | undefined;
-    if (body.dreamstreamContext && req.user?.id) {
-      const safe = sanitizeAssistantContext(body.dreamstreamContext, { isAuthenticated: true });
-      const raw = JSON.stringify(safe);
-      dreamstreamContextJson = raw.length > 12_000 ? `${raw.slice(0, 12_000)}…` : raw;
-    }
-
-    // Agentic tools (DuckDuckGo etc.) — allowlisted, OpenRouter only.
-    const requestedToolNames = Array.isArray(body.tools)
-      ? body.tools.filter((t): t is string => typeof t === 'string' && KNOWN_TOOL_NAMES.includes(t))
-      : [];
-    const tools = resolved.provider === 'openrouter' ? resolveTools(requestedToolNames) : [];
+    const prep = await prepareChat(req);
+    if ('error' in prep) return res.status(prep.error.status).json(prep.error.body);
+    const p = prep.prepared;
 
     const reserve = req.user?.id
       ? await reserveForOperation({
           req,
           operation: 'chat.completion',
-          fallbackModel: model,
-          provider: resolved.provider,
+          fallbackModel: p.model,
+          provider: p.resolved.provider,
           stage: 'chat',
-          metadata: { route: req.path, historyLength: messages.length, model }
+          metadata: { route: req.path, historyLength: p.messages.length, model: p.model }
         })
       : null;
-
     if (reserve && 'details' in reserve) {
       return res.status(402).json({ error: formatLimitErrorResponse(reserve.details) });
     }
 
     try {
-      const result = await runChat({
-        provider: resolved.provider,
-        apiKey: resolved.apiKey,
-        model,
-        messages,
-        systemPrompt,
-        reasoningLevel,
-        webSearch,
-        dreamstreamContextJson,
-        tools,
-        fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
-        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
-      });
-
+      const result = await runChat(runChatParams(p));
       const settled =
         reserve && reserve.allowed
           ? await settleReservedOperation({
               req,
               operation: 'chat.completion',
-              provider: resolved.provider,
+              provider: p.resolved.provider,
               model: result.model,
-              seed: {
-                provider: resolved.provider,
-                model: result.model,
-                operation: 'chat.completion',
-                stage: 'chat',
-                byok: reserve.reservation.byokBypass
-              },
+              seed: { provider: p.resolved.provider, model: result.model, operation: 'chat.completion', stage: 'chat', byok: reserve.reservation.byokBypass },
               usage: result.usage,
-              metadata: { route: req.path, historyLength: messages.length }
+              metadata: { route: req.path, historyLength: p.messages.length }
             })
           : null;
 
-      const payload: ChatResponse = {
-        text: result.text,
-        model: result.model,
-        source: resolved.provider,
-        requestedModel: requestedModel || result.model,
-        reasoningLevel,
-        webSearch,
-        reasoning: result.reasoning,
-        citations: result.citations,
-        toolEvents: result.toolEvents,
-        images: result.images,
-        artifacts: result.artifacts,
-        usage: result.usage
-      };
-
+      const payload = buildPayload(p, result);
       res.json(
         reserve && reserve.allowed
           ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled)
@@ -230,15 +231,92 @@ chatRouter.post('/', async (req, res, next) => {
         await releaseReservedOperation({
           req,
           operation: 'chat.completion',
-          provider: resolved.provider,
-          model,
+          provider: p.resolved.provider,
+          model: p.model,
           reason: (error as Error)?.message || 'chat_request_failed',
-          metadata: { route: req.path, historyLength: messages.length }
+          metadata: { route: req.path, historyLength: p.messages.length }
         });
       }
       throw error;
     }
   } catch (err) {
     next(err);
+  }
+});
+
+// Streaming variant — Server-Sent Events. Emits `meta`, `delta`/`reasoning`,
+// then a `final` event carrying the full ChatResponse (with billing), or `error`.
+chatRouter.post('/stream', async (req, res) => {
+  const prep = await prepareChat(req);
+  if ('error' in prep) return res.status(prep.error.status).json(prep.error.body);
+  const p = prep.prepared;
+
+  const reserve = req.user?.id
+    ? await reserveForOperation({
+        req,
+        operation: 'chat.completion',
+        fallbackModel: p.model,
+        provider: p.resolved.provider,
+        stage: 'chat',
+        metadata: { route: req.path, historyLength: p.messages.length, model: p.model }
+      })
+    : null;
+  if (reserve && 'details' in reserve) {
+    return res.status(402).json({ error: formatLimitErrorResponse(reserve.details) });
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+  const send = (event: string, data: unknown) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+  send('meta', { model: p.model, requestedModel: p.requestedModel || p.model, source: p.resolved.provider });
+
+  try {
+    const result = await runChat({
+      ...runChatParams(p),
+      onDelta: (d) => {
+        if (d.content) send('delta', { content: d.content });
+        else if (d.reasoning) send('reasoning', { reasoning: d.reasoning });
+      }
+    });
+
+    const settled =
+      reserve && reserve.allowed
+        ? await settleReservedOperation({
+            req,
+            operation: 'chat.completion',
+            provider: p.resolved.provider,
+            model: result.model,
+            seed: { provider: p.resolved.provider, model: result.model, operation: 'chat.completion', stage: 'chat', byok: reserve.reservation.byokBypass },
+            usage: result.usage,
+            metadata: { route: req.path, historyLength: p.messages.length }
+          })
+        : null;
+
+    const payload = buildPayload(p, result);
+    const finalPayload =
+      reserve && reserve.allowed
+        ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled)
+        : payload;
+    send('final', finalPayload);
+    res.end();
+  } catch (error) {
+    if (reserve && reserve.allowed) {
+      await releaseReservedOperation({
+        req,
+        operation: 'chat.completion',
+        provider: p.resolved.provider,
+        model: p.model,
+        reason: (error as Error)?.message || 'chat_request_failed',
+        metadata: { route: req.path, historyLength: p.messages.length }
+      });
+    }
+    send('error', { message: (error as Error)?.message || 'The request failed.' });
+    res.end();
   }
 });

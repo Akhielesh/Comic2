@@ -177,18 +177,6 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
           ))
         )}
 
-        {busy && (
-          <div className="flex gap-3">
-            <div className="shrink-0 w-9 h-9 rounded-full border-2 border-black bg-brand-yellow flex items-center justify-center">
-              <Sparkles className="w-4 h-4" />
-            </div>
-            <div className="border-2 border-black rounded-xl px-4 py-3 shadow-comic bg-slate-50 flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: '0ms' }} />
-              <span className="w-2 h-2 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: '150ms' }} />
-              <span className="w-2 h-2 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: '300ms' }} />
-            </div>
-          </div>
-        )}
       </div>
 
       <ChatComposer

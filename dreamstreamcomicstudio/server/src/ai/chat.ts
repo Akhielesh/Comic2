@@ -56,6 +56,8 @@ export interface RunChatParams {
   tools?: ChatTool[];
   /** Abort signal for in-flight tool calls. */
   signal?: AbortSignal;
+  /** When set, stream content/reasoning deltas as they arrive (SSE). */
+  onDelta?: (delta: { content?: string; reasoning?: string }) => void;
 }
 
 // Guardrail framing for the DreamStream connector. The context is read-only and
@@ -169,12 +171,20 @@ export const runChat = async (
   const citations: { url: string; title?: string }[] = [];
   const artifacts: ChatArtifact[] = [];
 
+  // One model call — streamed when a delta callback is provided and the provider
+  // supports it (intermediate tool-call turns emit no content, so streaming the final
+  // answer "just works"); otherwise a normal request.
+  const provider = getProvider(params.provider);
+  const callModel = (msgs: ChatMessage[], withTools: boolean) => {
+    const r = { ...baseReq, messages: msgs, ...(withTools && toolSpecs ? { tools: toolSpecs } : {}) };
+    return params.onDelta && provider.generateTextStream
+      ? provider.generateTextStream(r, ctx, params.onDelta)
+      : provider.generateText(r, ctx);
+  };
+
   // Agentic loop: call the model, run any tools it asks for, feed results back, repeat.
   // A single call (no tools enabled) collapses to one iteration with no tool round-trips.
-  let result = await getProvider(params.provider).generateText(
-    { ...baseReq, messages, ...(toolSpecs ? { tools: toolSpecs } : {}) },
-    ctx
-  );
+  let result = await callModel(messages, true);
 
   let iterations = 0;
   while (result.toolCalls && result.toolCalls.length && iterations < MAX_TOOL_ITERATIONS) {
@@ -222,10 +232,7 @@ export const runChat = async (
 
     // Next turn. On the final allowed iteration, drop tools to force a written answer.
     const allowMoreTools = iterations < MAX_TOOL_ITERATIONS;
-    result = await getProvider(params.provider).generateText(
-      { ...baseReq, messages, ...(toolSpecs && allowMoreTools ? { tools: toolSpecs } : {}) },
-      ctx
-    );
+    result = await callModel(messages, allowMoreTools);
   }
 
   if (result.citations) citations.push(...result.citations);

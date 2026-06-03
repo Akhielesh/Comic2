@@ -15,7 +15,7 @@ import { getCapabilities } from '../../services/modelCapabilities';
 import { fetchModelCatalog, type CatalogModel } from '../../services/modelCatalog';
 import type { ChatReasoningLevel, ChatRequestMessage, ChatMessagePart, UniversalAssistantContext } from '../../apiTypes';
 import type { Project } from '../../types';
-import { sendChatMessage } from '../../services/chatApi';
+import { sendChatMessageStream } from '../../services/chatApi';
 import { toggleConnector, type ChatConnector } from '../../services/chatConnectors';
 import { recommendModels, detectTools } from '../../services/chatSuggest';
 import { isProviderEnabled } from '../../services/sourceGovernance';
@@ -370,9 +370,20 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     const controller = new AbortController();
     abortRef.current = controller;
 
+    // Placeholder assistant turn we stream into. Delta updates touch React state only
+    // (no IndexedDB write per token); we persist once on finalize/error.
+    const aiTurnId = crypto.randomUUID();
+    const setSessionState = (updater: (s: ChatSession) => ChatSession) =>
+      setSessions((prev) => prev.map((s) => (s.id === sessionId ? updater(s) : s)));
+
+    setSessionState((s) => ({
+      ...s,
+      turns: [...s.turns, { id: aiTurnId, role: 'assistant', content: '', createdAt: Date.now() }]
+    }));
+
     try {
       const reqMessages = baseTurns.filter((t) => !t.error).map(toRequestMessage);
-      const res = await sendChatMessage(
+      const res = await sendChatMessageStream(
         {
           messages: reqMessages,
           model: reqModel,
@@ -383,38 +394,55 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           ...(reqTools.length ? { tools: reqTools } : {}),
           ...(activeSession.dreamstreamAccess ? { dreamstreamContext: buildDreamStreamContext(projects) } : {})
         },
-        { signal: controller.signal }
+        {
+          signal: controller.signal,
+          onDelta: (chunk) =>
+            setSessionState((s) => ({
+              ...s,
+              turns: s.turns.map((t) => (t.id === aiTurnId ? { ...t, content: t.content + chunk } : t))
+            }))
+        }
       );
 
-      const aiTurn: ChatTurn = {
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: res.text || '(no response)',
-        model: res.model,
-        requestedModel: res.requestedModel,
-        reasoningLevel: res.reasoningLevel,
-        webSearch: res.webSearch,
-        reasoning: res.reasoning,
-        citations: res.citations,
-        toolEvents: res.toolEvents,
-        images: res.images,
-        artifacts: res.artifacts,
-        createdAt: Date.now()
-      };
-      updateSession(sessionId, (s) => ({ ...s, turns: [...s.turns, aiTurn], updatedAt: Date.now() }));
-      // A map auto-opens the side panel.
+      // Finalize the turn with full metadata + persist.
+      updateSession(sessionId, (s) => ({
+        ...s,
+        turns: s.turns.map((t) =>
+          t.id === aiTurnId
+            ? {
+                ...t,
+                content: res.text || t.content || '(no response)',
+                model: res.model,
+                requestedModel: res.requestedModel,
+                reasoningLevel: res.reasoningLevel,
+                webSearch: res.webSearch,
+                reasoning: res.reasoning,
+                citations: res.citations,
+                toolEvents: res.toolEvents,
+                images: res.images,
+                artifacts: res.artifacts
+              }
+            : t
+        ),
+        updatedAt: Date.now()
+      }));
       const mapArtifact = res.artifacts?.find((a) => a.type === 'map');
       if (mapArtifact) setPanel(mapArtifact);
     } catch (err) {
-      if (controller.signal.aborted) return;
-      const errTurn: ChatTurn = {
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: `**Couldn't complete that.** ${(err as Error)?.message || 'The request failed. Check your API key in Settings → API Configuration and try again.'}`,
-        error: true,
-        createdAt: Date.now()
-      };
-      updateSession(sessionId, (s) => ({ ...s, turns: [...s.turns, errTurn], updatedAt: Date.now() }));
+      if (controller.signal.aborted) {
+        // Keep whatever streamed; persist it as-is.
+        updateSession(sessionId, (s) => ({ ...s, updatedAt: Date.now() }));
+        return;
+      }
+      updateSession(sessionId, (s) => ({
+        ...s,
+        turns: s.turns.map((t) =>
+          t.id === aiTurnId
+            ? { ...t, content: `**Couldn't complete that.** ${(err as Error)?.message || 'The request failed. Check your API key in Settings → API Configuration and try again.'}`, error: true }
+            : t
+        ),
+        updatedAt: Date.now()
+      }));
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
       setBusy(false);

@@ -232,13 +232,7 @@ const normalizeCatalogModel = (raw: any): CatalogModel => {
   };
 };
 
-const generateTextOnce = async (
-  req: GenerateTextRequest,
-  ctx: ProviderContext
-): Promise<GenerateTextResult> => {
-  const wantsJson = Boolean(req.jsonSchema || req.jsonMode);
-  const timeoutMs = req.timeoutMs ?? OPENROUTER_REQUEST_TIMEOUT_MS;
-
+const buildBaseBody = (req: GenerateTextRequest): Record<string, unknown> => {
   const baseBody: Record<string, unknown> = {
     model: req.model,
     usage: { include: true }
@@ -261,15 +255,13 @@ const generateTextOnce = async (
   // Engage step-by-step reasoning on reasoning-capable models. A per-request
   // `reasoningEffort` (set by the chat platform's reasoning control) wins; otherwise
   // fall back to the global REASONING_EFFORT default for known reasoning families.
-  // Other models ignore the param; reasoning models benefit most on structured/planning calls.
   if (req.reasoningEffort) {
     baseBody.reasoning = { effort: req.reasoningEffort };
   } else if (REASONING_EFFORT !== 'off' && REASONING_MODEL_RE.test(req.model)) {
     baseBody.reasoning = { effort: REASONING_EFFORT };
   }
 
-  // Live web search: OpenRouter's `web` plugin grounds the answer in current internet
-  // results for any model. Citations come back inline in the response text.
+  // Live web search: OpenRouter's `web` plugin grounds the answer in current results.
   if (req.webSearch) {
     baseBody.plugins = [{ id: 'web', max_results: 5 }];
   }
@@ -279,6 +271,18 @@ const generateTextOnce = async (
     baseBody.tools = req.tools;
     baseBody.tool_choice = 'auto';
   }
+
+  return baseBody;
+};
+
+const generateTextOnce = async (
+  req: GenerateTextRequest,
+  ctx: ProviderContext
+): Promise<GenerateTextResult> => {
+  const wantsJson = Boolean(req.jsonSchema || req.jsonMode);
+  const timeoutMs = req.timeoutMs ?? OPENROUTER_REQUEST_TIMEOUT_MS;
+
+  const baseBody = buildBaseBody(req);
 
   const run = async (messages: GenerateTextRequest['messages']) => {
     const data = await openRouterFetch<any>(
@@ -338,6 +342,116 @@ const generateText = async (
     // a Block + explain response instead of charging the caller's key.
     if (!req.freeOnly && req.fallbackModel && req.fallbackModel !== req.model && retriable) {
       return await generateTextOnce({ ...req, model: req.fallbackModel, fallbackModel: undefined }, ctx);
+    }
+    throw err;
+  }
+};
+
+/** Parse the SSE event stream from a streaming /chat/completions call. */
+const streamOnce = async (
+  req: GenerateTextRequest,
+  ctx: ProviderContext,
+  onDelta: (delta: { content?: string; reasoning?: string }) => void
+): Promise<GenerateTextResult> => {
+  const timeoutMs = req.timeoutMs ?? OPENROUTER_REQUEST_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: buildHeaders(ctx),
+      body: JSON.stringify({ ...buildBaseBody(req), messages: req.messages, stream: true, stream_options: { include_usage: true } }),
+      signal: controller.signal
+    });
+    if (!res.ok || !res.body) {
+      const errBody = await res.text().catch(() => '');
+      throw new Error(`OpenRouter stream failed: ${res.status} ${res.statusText} ${errBody.slice(0, 300)}`);
+    }
+
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let text = '';
+    let reasoning = '';
+    let model = req.model;
+    let usage: ProviderUsage = {};
+    let citations: { url: string; title?: string }[] | undefined;
+    let raw: any = null;
+    const toolAcc = new Map<number, { id: string; name: string; args: string }>();
+
+    const handle = (payload: string) => {
+      if (!payload || payload === '[DONE]') return;
+      let chunk: any;
+      try { chunk = JSON.parse(payload); } catch { return; }
+      raw = chunk;
+      if (chunk.model) model = chunk.model;
+      if (chunk.usage) usage = parseUsage(chunk);
+      const choice = chunk.choices?.[0];
+      const delta = choice?.delta;
+      if (delta?.content) { text += delta.content; onDelta({ content: delta.content }); }
+      if (typeof delta?.reasoning === 'string' && delta.reasoning) { reasoning += delta.reasoning; onDelta({ reasoning: delta.reasoning }); }
+      if (Array.isArray(delta?.tool_calls)) {
+        for (const tc of delta.tool_calls) {
+          const idx = typeof tc.index === 'number' ? tc.index : 0;
+          const cur = toolAcc.get(idx) || { id: '', name: '', args: '' };
+          if (tc.id) cur.id = tc.id;
+          if (tc.function?.name) cur.name = tc.function.name;
+          if (typeof tc.function?.arguments === 'string') cur.args += tc.function.arguments;
+          toolAcc.set(idx, cur);
+        }
+      }
+      const ann = delta?.annotations || choice?.message?.annotations;
+      if (Array.isArray(ann)) {
+        const cites = extractCitations({ choices: [{ message: { annotations: ann } }] });
+        if (cites) citations = cites;
+      }
+    };
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        const t = line.trim();
+        if (t.startsWith('data:')) handle(t.slice(5).trim());
+      }
+    }
+    const tail = buffer.trim();
+    if (tail.startsWith('data:')) handle(tail.slice(5).trim());
+
+    const toolCalls = Array.from(toolAcc.values())
+      .filter((t) => t.name)
+      .map((t) => ({ id: t.id || `call_${t.name}`, name: t.name, arguments: t.args || '{}' }));
+
+    return {
+      text,
+      model: String(model || req.model),
+      usage,
+      reasoning: reasoning || undefined,
+      citations,
+      toolCalls: toolCalls.length ? toolCalls : undefined,
+      raw
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+const generateTextStream = async (
+  req: GenerateTextRequest,
+  ctx: ProviderContext,
+  onDelta: (delta: { content?: string; reasoning?: string }) => void
+): Promise<GenerateTextResult> => {
+  try {
+    return await streamOnce(req, ctx, onDelta);
+  } catch (err) {
+    const msg = String((err as Error)?.message || '');
+    const retriable = /\b404\b|\b429\b|no endpoints|rate.?limit/i.test(msg);
+    if (!req.freeOnly && req.fallbackModel && req.fallbackModel !== req.model && retriable) {
+      return await streamOnce({ ...req, model: req.fallbackModel, fallbackModel: undefined }, ctx, onDelta);
     }
     throw err;
   }
@@ -408,6 +522,7 @@ const listModels = async (ctx?: ProviderContext): Promise<CatalogModel[]> => {
 export const openRouterProvider: AIProvider = {
   id: 'openrouter',
   generateText,
+  generateTextStream,
   generateImage,
   listModels
 };

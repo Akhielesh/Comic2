@@ -108,8 +108,14 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, onBranch
             <p className="whitespace-pre-wrap break-words text-sm">{turn.content}</p>
           ) : turn.error ? (
             <MessageBody text={turn.content || '…'} className="text-sm" />
+          ) : turn.content ? (
+            <ChatMarkdown text={turn.content} className="text-sm" />
           ) : (
-            <ChatMarkdown text={turn.content || '…'} className="text-sm" />
+            <span className="flex items-center gap-1.5 py-1">
+              <span className="w-2 h-2 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: '0ms' }} />
+              <span className="w-2 h-2 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: '150ms' }} />
+              <span className="w-2 h-2 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+            </span>
           )}
 
           {!isUser && <ChatArtifacts artifacts={turn.artifacts} />}
