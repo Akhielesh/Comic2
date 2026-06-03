@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { ChatRequest, ChatResponse, ChatClientContext } from '../../../apiTypes.js';
 import { runChat, type ChatReasoningLevel } from '../ai/chat.js';
 import { runSwarm } from '../ai/agents/orchestrator.js';
+import { makeSwarmTool, SWARM_TOOL_NAME } from '../ai/agents/swarmTool.js';
 import { pickTextModel, TEXT_FALLBACK } from '../ai/autoRouter.js';
 import { NVIDIA_TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS } from '../config.js';
 import type { AIProviderId, ChatMessage, MessagePart } from '../ai/providers/types.js';
@@ -204,6 +205,22 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
   const builtinTools =
     resolved.provider === 'openrouter' ? resolveTools(requestedToolNames, toolContext) : [];
 
+  // The agent-swarm meta-tool needs provider credentials, so it's built here (not in
+  // resolveTools) and appended when the client enabled it. OpenRouter only.
+  const metaTools: ChatTool[] =
+    resolved.provider === 'openrouter' && requestedToolNames.includes(SWARM_TOOL_NAME)
+      ? [
+          makeSwarmTool({
+            provider: resolved.provider,
+            apiKey: resolved.apiKey,
+            model,
+            clientContext,
+            fallbackModel: TEXT_FALLBACK,
+            timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+          })
+        ]
+      : [];
+
   // Custom MCP servers (OpenRouter only): list their tools and wrap them. Best-effort —
   // a broken/blocked server is skipped rather than failing the chat.
   let mcpTools: ChatTool[] = [];
@@ -215,7 +232,7 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
   }
 
   return {
-    prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, systemPrompt, dreamstreamContextJson, tools: [...builtinTools, ...mcpTools], clientContext }
+    prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, systemPrompt, dreamstreamContextJson, tools: [...builtinTools, ...metaTools, ...mcpTools], clientContext }
   };
 };
 
