@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Copy, Check, GitBranch, AlertTriangle, Sparkles, User, Globe, Brain,
-  Download, FileArchive, ChevronDown, ChevronUp, ExternalLink, Search, Cpu, Play
+  Download, FileArchive, ChevronDown, ChevronUp, ExternalLink, Search, Cpu, Play,
+  RefreshCw, Pencil, ChevronLeft, ChevronRight, X
 } from 'lucide-react';
 import JSZip from 'jszip';
 import { FileText } from 'lucide-react';
@@ -15,17 +16,35 @@ import { extractCodeBlocks, codeBlockFilename, downloadTextFile, triggerDownload
 
 interface ChatMessageViewProps {
   turn: ChatTurn;
+  /** True while a generation is in flight (disables regenerate/edit). */
+  busy?: boolean;
+  /** Whether this is the last turn in the conversation. */
+  isLast?: boolean;
   /** Branch a new conversation from this assistant turn. `chooseNewModel` opens the model picker. */
   onBranch?: (chooseNewModel: boolean) => void;
+  /** Regenerate this assistant turn (keeps prior answers as versions). */
+  onRegenerate?: () => void;
+  /** Edit + resend a user message. */
+  onEdit?: (newText: string) => void;
+  /** Switch which regenerated version is shown. */
+  onSelectVariant?: (index: number) => void;
 }
 
-export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, onBranch }) => {
+export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, busy, isLast, onBranch, onRegenerate, onEdit, onSelectVariant }) => {
   const [copied, setCopied] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [branchOpen, setBranchOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editDraft, setEditDraft] = useState(turn.content);
   const branchRef = useRef<HTMLDivElement>(null);
   const openPanel = useChatPanel();
   const isUser = turn.role === 'user';
+
+  // Version navigation (regenerate history) for assistant turns.
+  const variantCount = turn.variants?.length || 0;
+  const activeVariant = typeof turn.activeVariant === 'number' ? turn.activeVariant : variantCount - 1;
+  // Live reasoning: streaming reasoning while the answer text hasn't started yet.
+  const streamingThinking = !isUser && busy && isLast && !turn.content && Boolean(turn.reasoning);
 
   useEffect(() => {
     if (!branchOpen) return;
@@ -53,6 +72,14 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, onBranch
     }
   };
 
+  const startEdit = () => { setEditDraft(turn.content); setEditing(true); };
+  const cancelEdit = () => { setEditing(false); setEditDraft(turn.content); };
+  const commitEdit = () => {
+    const next = editDraft.trim();
+    setEditing(false);
+    if (next && next !== turn.content) onEdit?.(next);
+  };
+
   const downloadMarkdown = () => downloadTextFile('dreamstream-answer.md', turn.content, 'text/markdown');
 
   const downloadZip = async () => {
@@ -63,7 +90,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, onBranch
   };
 
   return (
-    <div className={`flex gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
+    <div className={`group flex gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
       <div
         className={`shrink-0 w-9 h-9 rounded-full border-2 border-black flex items-center justify-center ${
           isUser ? 'bg-brand-blue text-white' : turn.error ? 'bg-red-100' : 'bg-brand-yellow'
@@ -104,12 +131,37 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, onBranch
               )}
             </div>
           )}
-          {isUser ? (
+          {isUser && editing ? (
+            <div className="w-full">
+              <textarea
+                autoFocus
+                value={editDraft}
+                onChange={(e) => setEditDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); commitEdit(); }
+                  if (e.key === 'Escape') cancelEdit();
+                }}
+                rows={Math.min(10, Math.max(2, editDraft.split('\n').length))}
+                className="w-full text-sm border-2 border-black rounded-lg p-2 outline-none focus:ring-2 focus:ring-brand-blue/40 resize-y"
+              />
+              <div className="flex items-center justify-end gap-2 mt-1.5">
+                <button onClick={cancelEdit} className="flex items-center gap-1 text-[11px] font-bold text-slate-500 hover:text-black"><X className="w-3.5 h-3.5" /> Cancel</button>
+                <button onClick={commitEdit} className="flex items-center gap-1 text-[11px] font-bold border-2 border-black rounded-full px-2.5 py-0.5 bg-brand-yellow hover:translate-y-[1px]"><Check className="w-3.5 h-3.5" /> Save & send</button>
+              </div>
+            </div>
+          ) : isUser ? (
             <p className="whitespace-pre-wrap break-words text-sm">{turn.content}</p>
           ) : turn.error ? (
             <MessageBody text={turn.content || '…'} className="text-sm" />
           ) : turn.content ? (
             <ChatMarkdown text={turn.content} className="text-sm" />
+          ) : streamingThinking ? (
+            <div className="py-1">
+              <div className="flex items-center gap-1.5 text-[11px] font-bold text-indigo-600 mb-1">
+                <Brain className="w-3.5 h-3.5 animate-pulse" /> Thinking…
+              </div>
+              <pre className="text-[11px] whitespace-pre-wrap break-words text-slate-500 max-h-32 overflow-y-auto font-sans">{turn.reasoning}</pre>
+            </div>
           ) : (
             <span className="flex items-center gap-1.5 py-1">
               <span className="w-2 h-2 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: '0ms' }} />
@@ -140,6 +192,30 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, onBranch
             </div>
           )}
         </div>
+
+        {/* User message actions: copy + edit & resend. */}
+        {isUser && !editing && (
+          <div className="flex items-center gap-2 mt-1 px-1 text-[11px] text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button onClick={handleCopy} className="flex items-center gap-0.5 hover:text-black font-bold" title="Copy message">
+              {copied ? <Check className="w-3 h-3 text-green-600" /> : <Copy className="w-3 h-3" />}
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+            {onEdit && (
+              <button onClick={startEdit} disabled={busy} className="flex items-center gap-0.5 hover:text-black font-bold disabled:opacity-40" title="Edit & resend">
+                <Pencil className="w-3 h-3" /> Edit
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Retry for a failed assistant turn. */}
+        {!isUser && turn.error && onRegenerate && (
+          <div className="flex items-center gap-2 mt-1 px-1">
+            <button onClick={onRegenerate} disabled={busy} className="flex items-center gap-0.5 text-[11px] font-bold text-brand-red hover:text-black disabled:opacity-40" title="Try again">
+              <RefreshCw className="w-3 h-3" /> Try again
+            </button>
+          </div>
+        )}
 
         {/* Model-switch transparency: shown when the answer came from a different model. */}
         {!isUser && !turn.error && turn.requestedModel && turn.model && turn.requestedModel !== turn.model && (
@@ -205,6 +281,29 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, onBranch
               <span className="flex items-center gap-0.5"><Brain className="w-3 h-3" /> {turn.reasoningLevel}</span>
             )}
             {turn.webSearch && <span className="flex items-center gap-0.5"><Globe className="w-3 h-3" /> web</span>}
+            {/* Version navigation across regenerated answers. */}
+            {variantCount > 1 && (
+              <span className="flex items-center gap-0.5 font-bold">
+                <button
+                  onClick={() => onSelectVariant?.(activeVariant - 1)}
+                  disabled={activeVariant <= 0}
+                  className="hover:text-black disabled:opacity-30"
+                  title="Previous version"
+                ><ChevronLeft className="w-3.5 h-3.5" /></button>
+                <span className="tabular-nums">{activeVariant + 1}/{variantCount}</span>
+                <button
+                  onClick={() => onSelectVariant?.(activeVariant + 1)}
+                  disabled={activeVariant >= variantCount - 1}
+                  className="hover:text-black disabled:opacity-30"
+                  title="Next version"
+                ><ChevronRight className="w-3.5 h-3.5" /></button>
+              </span>
+            )}
+            {onRegenerate && (
+              <button onClick={onRegenerate} disabled={busy} className="flex items-center gap-0.5 hover:text-black font-bold disabled:opacity-40" title="Regenerate answer">
+                <RefreshCw className="w-3 h-3" /> Retry
+              </button>
+            )}
             <button onClick={handleCopy} className="flex items-center gap-0.5 hover:text-black font-bold" title="Copy answer">
               {copied ? <Check className="w-3 h-3 text-green-600" /> : <Copy className="w-3 h-3" />}
               {copied ? 'Copied' : 'Copy'}

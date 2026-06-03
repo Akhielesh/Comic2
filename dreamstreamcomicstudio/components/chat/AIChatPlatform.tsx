@@ -22,6 +22,7 @@ import { gatherClientContext } from '../../services/clientContext';
 import { toggleConnector, type ChatConnector } from '../../services/chatConnectors';
 import { recommendModels, detectTools } from '../../services/chatSuggest';
 import { isProviderEnabled } from '../../services/sourceGovernance';
+import type { ModelSourceId } from '../../services/modelSelection';
 import { listMcpServers, getMcpServersByIds, onMcpServersChanged } from '../../services/mcpServers';
 import type { McpServerConfig } from '../../apiTypes';
 import {
@@ -42,7 +43,8 @@ import {
   type ChatAttachment,
   type ChatProject,
   type ChatSession,
-  type ChatTurn
+  type ChatTurn,
+  type ChatTurnVariant
 } from '../../services/chatStorage';
 
 interface AIChatPlatformProps {
@@ -84,6 +86,23 @@ const toRequestMessage = (turn: ChatTurn): ChatRequestMessage => {
   }
   return { role: turn.role, content: turn.content };
 };
+
+// Project a stored variant's fields onto the visible assistant turn (used when
+// finalizing a new answer and when the user flips between regenerated versions).
+const applyVariant = (turn: ChatTurn, v: ChatTurnVariant): ChatTurn => ({
+  ...turn,
+  content: v.content,
+  model: v.model,
+  requestedModel: v.requestedModel,
+  reasoningLevel: v.reasoningLevel,
+  webSearch: v.webSearch,
+  reasoning: v.reasoning,
+  citations: v.citations,
+  toolEvents: v.toolEvents,
+  images: v.images,
+  artifacts: v.artifacts,
+  error: v.error
+});
 
 const composeSystemPrompt = (memory: string, persona?: string): string | undefined => {
   const parts: string[] = [];
@@ -344,18 +363,17 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     setBusy(false);
   };
 
-  const handleSend = async (text: string, attachments: ChatAttachment[], overrideModel?: CatalogModel) => {
-    if (!activeSession || busy) return;
-    if (!text && attachments.length === 0) return;
-
-    const sessionId = activeSession.id;
-    // A suggester-chosen model is used for THIS request without waiting for state to flush.
-    let reqModel = overrideModel ? overrideModel.id : activeSession.modelId || undefined;
-    let reqSource = overrideModel ? overrideModel.source : activeSession.source || undefined;
-    let reqTools = activeSession.tools;
-
-    // Auto mode: pick the best model + the right tools for THIS message.
-    if (activeSession.autoMode && !overrideModel) {
+  // Resolve which model/source/tools to use for a message. In Auto mode the app
+  // picks the best model + the right tools per message; otherwise it uses the
+  // session's pinned model (or a suggester override).
+  const resolveRequest = (
+    text: string,
+    overrideModel?: CatalogModel
+  ): { reqModel?: string; reqSource?: ModelSourceId; reqTools: string[] } => {
+    let reqModel = overrideModel ? overrideModel.id : activeSession?.modelId || undefined;
+    let reqSource: ModelSourceId | undefined = overrideModel ? overrideModel.source : activeSession?.source || undefined;
+    let reqTools = activeSession?.tools || [];
+    if (activeSession?.autoMode && !overrideModel) {
       const candidates = Array.from(catalog.values()).filter((m) => {
         if (activeSession.lockedSource && m.source !== activeSession.lockedSource) return false;
         return isProviderEnabled(m.source);
@@ -365,40 +383,45 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         reqModel = best.id;
         reqSource = best.source;
       }
-      // Tools are OpenRouter-only; auto-enable the relevant ones.
       reqTools = reqSource === 'openrouter' ? detectTools(text) : [];
     }
-    const userTurn: ChatTurn = {
-      id: crypto.randomUUID(),
-      role: 'user',
-      content: text,
-      attachments: attachments.length ? attachments : undefined,
-      createdAt: Date.now()
-    };
-    const isFirst = activeSession.turns.length === 0;
-    const baseTurns = [...activeSession.turns, userTurn];
+    return { reqModel, reqSource, reqTools };
+  };
 
-    updateSession(sessionId, (s) => ({
-      ...s,
-      turns: baseTurns,
-      title: isFirst && text ? deriveSessionTitle(text) : s.title,
-      updatedAt: Date.now()
-    }));
+  // Core streaming generation, shared by first-send, regenerate and edit-resend.
+  // `regenerateTurnId` reuses (and archives the prior answer of) an existing
+  // assistant turn; otherwise a fresh assistant turn is appended.
+  const runGeneration = async (opts: {
+    sessionId: string;
+    baseTurns: ChatTurn[];
+    reqModel?: string;
+    reqSource?: ModelSourceId;
+    reqTools: string[];
+    regenerateTurnId?: string;
+  }) => {
+    const { sessionId, baseTurns, reqModel, reqSource, reqTools, regenerateTurnId } = opts;
+    if (!activeSession) return;
 
     setBusy(true);
     const controller = new AbortController();
     abortRef.current = controller;
 
-    // Placeholder assistant turn we stream into. Delta updates touch React state only
-    // (no IndexedDB write per token); we persist once on finalize/error.
-    const aiTurnId = crypto.randomUUID();
     const setSessionState = (updater: (s: ChatSession) => ChatSession) =>
       setSessions((prev) => prev.map((s) => (s.id === sessionId ? updater(s) : s)));
 
-    setSessionState((s) => ({
-      ...s,
-      turns: [...s.turns, { id: aiTurnId, role: 'assistant', content: '', createdAt: Date.now() }]
-    }));
+    // Reuse the existing assistant turn (regenerate) or append a fresh placeholder.
+    const aiTurnId = regenerateTurnId || crypto.randomUUID();
+    if (regenerateTurnId) {
+      setSessionState((s) => ({
+        ...s,
+        turns: s.turns.map((t) => (t.id === aiTurnId ? { ...t, content: '', reasoning: undefined, error: false } : t))
+      }));
+    } else {
+      setSessionState((s) => ({
+        ...s,
+        turns: [...s.turns, { id: aiTurnId, role: 'assistant', content: '', createdAt: Date.now() }]
+      }));
+    }
 
     try {
       const reqMessages = baseTurns.filter((t) => !t.error).map(toRequestMessage);
@@ -424,37 +447,43 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
             setSessionState((s) => ({
               ...s,
               turns: s.turns.map((t) => (t.id === aiTurnId ? { ...t, content: t.content + chunk } : t))
+            })),
+          // Stream the reasoning trace live so the user sees the model "thinking".
+          onReasoning: (chunk) =>
+            setSessionState((s) => ({
+              ...s,
+              turns: s.turns.map((t) => (t.id === aiTurnId ? { ...t, reasoning: (t.reasoning || '') + chunk } : t))
             }))
         }
       );
 
-      // Finalize the turn with full metadata + persist.
+      // Finalize: snapshot this answer as a variant and show it as the active one.
       updateSession(sessionId, (s) => ({
         ...s,
-        turns: s.turns.map((t) =>
-          t.id === aiTurnId
-            ? {
-                ...t,
-                content: res.text || t.content || '(no response)',
-                model: res.model,
-                requestedModel: res.requestedModel,
-                reasoningLevel: res.reasoningLevel,
-                webSearch: res.webSearch,
-                reasoning: res.reasoning,
-                citations: res.citations,
-                toolEvents: res.toolEvents,
-                images: res.images,
-                artifacts: res.artifacts
-              }
-            : t
-        ),
+        turns: s.turns.map((t) => {
+          if (t.id !== aiTurnId) return t;
+          const variant: ChatTurnVariant = {
+            content: res.text || t.content || '(no response)',
+            model: res.model,
+            requestedModel: res.requestedModel,
+            reasoningLevel: res.reasoningLevel,
+            webSearch: res.webSearch,
+            reasoning: res.reasoning,
+            citations: res.citations,
+            toolEvents: res.toolEvents,
+            images: res.images,
+            artifacts: res.artifacts,
+            createdAt: Date.now()
+          };
+          const variants = [...(t.variants || []), variant];
+          return { ...applyVariant(t, variant), variants, activeVariant: variants.length - 1 };
+        }),
         updatedAt: Date.now()
       }));
       const mapArtifact = res.artifacts?.find((a) => a.type === 'map');
       if (mapArtifact) setPanel(mapArtifact);
     } catch (err) {
       if (controller.signal.aborted) {
-        // Keep whatever streamed; persist it as-is.
         updateSession(sessionId, (s) => ({ ...s, updatedAt: Date.now() }));
         return;
       }
@@ -471,6 +500,104 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       if (abortRef.current === controller) abortRef.current = null;
       setBusy(false);
     }
+  };
+
+  const handleSend = async (text: string, attachments: ChatAttachment[], overrideModel?: CatalogModel) => {
+    if (!activeSession || busy) return;
+    if (!text && attachments.length === 0) return;
+
+    const sessionId = activeSession.id;
+    const { reqModel, reqSource, reqTools } = resolveRequest(text, overrideModel);
+
+    const userTurn: ChatTurn = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: text,
+      attachments: attachments.length ? attachments : undefined,
+      createdAt: Date.now()
+    };
+    const isFirst = activeSession.turns.length === 0;
+    const baseTurns = [...activeSession.turns, userTurn];
+
+    updateSession(sessionId, (s) => ({
+      ...s,
+      turns: baseTurns,
+      title: isFirst && text ? deriveSessionTitle(text) : s.title,
+      updatedAt: Date.now()
+    }));
+
+    await runGeneration({ sessionId, baseTurns, reqModel, reqSource, reqTools });
+  };
+
+  // Regenerate an assistant turn: re-run the prompt that produced it, keeping the
+  // prior answer(s) as selectable versions.
+  const handleRegenerate = async (turnId: string) => {
+    if (!activeSession || busy) return;
+    const turns = activeSession.turns;
+    const idx = turns.findIndex((t) => t.id === turnId);
+    if (idx < 0 || turns[idx].role !== 'assistant') return;
+
+    // Preserve the existing answer as version 1 if it isn't already tracked (older
+    // turns predate variant history), so regenerating never discards it.
+    const target = turns[idx];
+    if (!target.variants || target.variants.length === 0) {
+      const seed: ChatTurnVariant = {
+        content: target.content,
+        model: target.model,
+        requestedModel: target.requestedModel,
+        reasoningLevel: target.reasoningLevel,
+        webSearch: target.webSearch,
+        reasoning: target.reasoning,
+        citations: target.citations,
+        toolEvents: target.toolEvents,
+        images: target.images,
+        artifacts: target.artifacts,
+        createdAt: target.createdAt,
+        error: target.error
+      };
+      updateSession(activeSession.id, (s) => ({
+        ...s,
+        turns: s.turns.map((t) => (t.id === turnId ? { ...t, variants: [seed], activeVariant: 0 } : t))
+      }));
+    }
+
+    // The conversation up to (but excluding) this assistant turn is the prompt context.
+    const baseTurns = turns.slice(0, idx);
+    const lastUser = [...baseTurns].reverse().find((t) => t.role === 'user');
+    const { reqModel, reqSource, reqTools } = resolveRequest(lastUser?.content || '');
+    await runGeneration({ sessionId: activeSession.id, baseTurns, reqModel, reqSource, reqTools, regenerateTurnId: turnId });
+  };
+
+  // Edit a user message and resend: replace its text, drop everything after it, and
+  // generate a fresh answer.
+  const handleEditUserMessage = async (turnId: string, newText: string) => {
+    if (!activeSession || busy) return;
+    const text = newText.trim();
+    if (!text) return;
+    const turns = activeSession.turns;
+    const idx = turns.findIndex((t) => t.id === turnId);
+    if (idx < 0 || turns[idx].role !== 'user') return;
+
+    const sessionId = activeSession.id;
+    const editedTurn: ChatTurn = { ...turns[idx], content: text };
+    const baseTurns = [...turns.slice(0, idx), editedTurn];
+    updateSession(sessionId, (s) => ({ ...s, turns: baseTurns, updatedAt: Date.now() }));
+
+    const { reqModel, reqSource, reqTools } = resolveRequest(text);
+    await runGeneration({ sessionId, baseTurns, reqModel, reqSource, reqTools });
+  };
+
+  // Switch which regenerated version of an assistant turn is shown.
+  const handleSelectVariant = (turnId: string, index: number) => {
+    if (!activeSession) return;
+    updateSession(activeSession.id, (s) => ({
+      ...s,
+      turns: s.turns.map((t) => {
+        if (t.id !== turnId || !t.variants || !t.variants[index]) return t;
+        return { ...applyVariant(t, t.variants[index]), variants: t.variants, activeVariant: index };
+      }),
+      updatedAt: Date.now()
+    }));
   };
 
   if (!initialized || !activeSession) {
@@ -536,6 +663,9 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         onSend={handleSend}
         onStop={handleStop}
         onBranch={handleBranch}
+        onRegenerate={handleRegenerate}
+        onEditUserMessage={handleEditUserMessage}
+        onSelectVariant={handleSelectVariant}
         onReasoningChange={(level) =>
           activeId && updateSession(activeId, (s) => ({ ...s, reasoningLevel: level, updatedAt: Date.now() }))
         }

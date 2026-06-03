@@ -38,11 +38,34 @@ export interface ChatAttachment {
   dataUrl: string;
 }
 
+/**
+ * A snapshot of one generated assistant answer. Regenerating keeps prior answers
+ * here so the user can flip between versions (‹ 1/3 ›) without losing any.
+ */
+export interface ChatTurnVariant {
+  content: string;
+  model?: string;
+  requestedModel?: string;
+  reasoningLevel?: ChatReasoningLevel;
+  webSearch?: boolean;
+  reasoning?: string;
+  citations?: { url: string; title?: string }[];
+  toolEvents?: ChatToolEvent[];
+  images?: ChatToolImage[];
+  artifacts?: ChatArtifact[];
+  createdAt: number;
+  error?: boolean;
+}
+
 export interface ChatTurn {
   id: string;
   role: ChatRole;
   content: string;
   attachments?: ChatAttachment[];
+  /** All generated answers for this assistant turn (regenerate history). */
+  variants?: ChatTurnVariant[];
+  /** Index of the variant currently shown (defaults to the last). */
+  activeVariant?: number;
   /** Model that produced an assistant turn (for the "answered by" label). */
   model?: string;
   /** Model the user/app asked for; shown when it differs from `model` (coercion/fallback). */

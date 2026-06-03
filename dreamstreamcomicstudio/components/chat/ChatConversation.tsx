@@ -22,6 +22,9 @@ interface ChatConversationProps {
   onSend: (text: string, attachments: ChatAttachment[]) => void;
   onStop: () => void;
   onBranch: (turnId: string, chooseNewModel: boolean) => void;
+  onRegenerate: (turnId: string) => void;
+  onEditUserMessage: (turnId: string, newText: string) => void;
+  onSelectVariant: (turnId: string, index: number) => void;
   onReasoningChange: (level: ChatReasoningLevel) => void;
   onWebToggle: (on: boolean) => void;
   onDreamstreamToggle: (on: boolean) => void;
@@ -51,6 +54,9 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
   onSend,
   onStop,
   onBranch,
+  onRegenerate,
+  onEditUserMessage,
+  onSelectVariant,
   onReasoningChange,
   onWebToggle,
   onDreamstreamToggle,
@@ -64,11 +70,33 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
   const scrollRef = useRef<HTMLDivElement>(null);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState(session.title);
+  const [atBottom, setAtBottom] = useState(true);
 
+  // Consider "at bottom" when within 120px of the end, so we don't yank the view
+  // up while the user is reading scrollback.
+  const isNearBottom = (el: HTMLDivElement) => el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+
+  const scrollToBottom = (behavior: ScrollBehavior = 'smooth') => {
+    const el = scrollRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior });
+  };
+
+  // Track scroll position to toggle the "jump to latest" button.
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
-  }, [session.turns.length, busy]);
+    if (!el) return;
+    const onScroll = () => setAtBottom(isNearBottom(el));
+    el.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // Auto-scroll on new content only when the user is already near the bottom.
+  const lastTurnContent = session.turns[session.turns.length - 1]?.content;
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el && isNearBottom(el)) scrollToBottom();
+  }, [session.turns.length, lastTurnContent, busy]);
 
   const modelLabel = session.modelName || session.modelId || 'Auto (free)';
 
@@ -145,7 +173,8 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
       </div>
 
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-5 space-y-5 bg-slate-50">
+      <div className="flex-1 relative min-h-0">
+      <div ref={scrollRef} className="absolute inset-0 overflow-y-auto px-4 py-5 space-y-5 bg-slate-50">
         {session.turns.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto">
             <div className="w-16 h-16 rounded-2xl border-4 border-black bg-brand-yellow flex items-center justify-center shadow-comic mb-4">
@@ -173,15 +202,32 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
             </div>
           </div>
         ) : (
-          session.turns.map((turn) => (
+          session.turns.map((turn, i) => (
             <ChatMessageView
               key={turn.id}
               turn={turn}
+              busy={busy}
               onBranch={turn.role === 'assistant' && !turn.error ? (chooseNew) => onBranch(turn.id, chooseNew) : undefined}
+              onRegenerate={turn.role === 'assistant' ? () => onRegenerate(turn.id) : undefined}
+              onEdit={turn.role === 'user' ? (text) => onEditUserMessage(turn.id, text) : undefined}
+              onSelectVariant={(index) => onSelectVariant(turn.id, index)}
+              isLast={i === session.turns.length - 1}
             />
           ))
         )}
 
+      </div>
+
+      {/* Jump-to-latest button — appears when scrolled away from the bottom. */}
+      {!atBottom && session.turns.length > 0 && (
+        <button
+          onClick={() => scrollToBottom()}
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 border-2 border-black rounded-full bg-white shadow-comic px-3 py-1.5 text-xs font-bold hover:bg-brand-yellow animate-fade-in"
+          title="Jump to latest"
+        >
+          <ChevronDown className="w-4 h-4" /> Latest
+        </button>
+      )}
       </div>
 
       <ChatComposer
