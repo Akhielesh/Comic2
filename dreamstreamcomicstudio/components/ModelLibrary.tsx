@@ -23,6 +23,7 @@ import {
 import {
   fetchModelCatalog,
   fetchModelVerification,
+  loadCachedCatalog,
   costLabel,
   providerOrigin,
   sourceLabel,
@@ -509,8 +510,12 @@ const VerifiedStrip: React.FC = () => {
 };
 
 export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat }) => {
-  const [models, setModels] = useState<CatalogModel[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Paint instantly from the last-good catalog (localStorage) while we refresh in the background,
+  // so the page is never a blank spinner — even on a slow/cold backend.
+  const cachedInitial = useMemo(() => loadCachedCatalog(), []);
+  const [models, setModels] = useState<CatalogModel[]>(cachedInitial?.models ?? []);
+  const [loading, setLoading] = useState(!cachedInitial);
+  const [refreshing, setRefreshing] = useState(false);
   const [degraded, setDegraded] = useState(false);
   const [degradedMessage, setDegradedMessage] = useState<string | undefined>();
   const [error, setError] = useState<string | null>(null);
@@ -530,9 +535,14 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
     return () => window.removeEventListener(MODEL_SELECTION_CHANGED, onChange);
   }, []);
 
+  const [reloadKey, setReloadKey] = useState(0);
+  const retry = () => setReloadKey((k) => k + 1);
+
   useEffect(() => {
     let active = true;
-    setLoading(true);
+    const hadModels = models.length > 0;
+    if (hadModels) setRefreshing(true); else setLoading(true);
+    setError(null);
     fetchModelCatalog()
       .then((res) => {
         if (!active) return;
@@ -540,10 +550,16 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
         setDegraded(res.degraded);
         setDegradedMessage(res.message);
       })
-      .catch((e) => { if (active) setError(e?.message || 'Failed to load the model catalog.'); })
-      .finally(() => { if (active) setLoading(false); });
+      .catch((e) => {
+        if (!active) return;
+        // Keep showing cached models if we have them; only hard-error when there's nothing to show.
+        if (!hadModels) setError(e?.message || 'Failed to load the model catalog.');
+        else { setDegraded(true); setDegradedMessage('Showing the last cached list — couldn’t reach the live catalog.'); }
+      })
+      .finally(() => { if (active) { setLoading(false); setRefreshing(false); } });
     return () => { active = false; };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadKey]);
 
   const visible = useMemo(() => models.filter((model) => matchesFilter(model, filters, domainFilters, query)), [models, filters, domainFilters, query]);
   const compareModels = useMemo(() => compareIds.map((id) => models.find((m) => m.id === id)).filter((m): m is CatalogModel => !!m), [compareIds, models]);
@@ -729,12 +745,21 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
         {loading ? (
           <div className="flex items-center justify-center py-24 text-slate-400"><Loader2 className="w-8 h-8 animate-spin" /></div>
         ) : error ? (
-          <div className="mt-8 bg-red-100 border-2 border-black rounded-lg p-4 text-sm">{error}</div>
+          <div className="mt-8 bg-red-100 border-2 border-black rounded-lg p-4 text-sm flex flex-col sm:flex-row sm:items-center gap-3">
+            <AlertTriangle className="w-5 h-5 shrink-0" />
+            <span className="flex-1">Couldn’t load the model catalog: {error}. The server may be waking up — try again in a moment.</span>
+            <button onClick={retry} className="self-start font-bold px-3 py-1.5 rounded border-2 border-black bg-white hover:bg-brand-yellow flex items-center gap-1">
+              <Loader2 className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} /> Retry
+            </button>
+          </div>
         ) : visible.length === 0 ? (
           <div className="mt-8 text-center text-slate-500 py-16">No models match your filters.</div>
         ) : (
           <>
-            <div className="mt-4 text-xs font-bold uppercase text-slate-500">{visible.length} models</div>
+            <div className="mt-4 text-xs font-bold uppercase text-slate-500 flex items-center gap-2">
+              {visible.length} models
+              {refreshing && <span className="flex items-center gap-1 text-slate-400 normal-case font-normal"><Loader2 className="w-3 h-3 animate-spin" /> refreshing…</span>}
+            </div>
             <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {visible.map((model) => (
                 <ModelCard
