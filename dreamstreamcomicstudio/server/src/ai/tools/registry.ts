@@ -8,6 +8,7 @@ import type { ToolSpec } from '../providers/types.js';
 import type { ChatArtifact } from '../../../../apiTypes.js';
 import { ddgWebSearch, ddgImageSearch, ddgVideoSearch, type ImageResult } from './duckduckgo.js';
 import { getWeather } from './weather.js';
+import { geocodePlaces } from './maps.js';
 
 export interface ToolExecResult {
   /** Text fed back to the model as the tool result. */
@@ -132,12 +133,48 @@ const videoSearchTool: ChatTool = {
   }
 };
 
+const mapTool: ChatTool = {
+  name: 'show_map',
+  description:
+    'Show an interactive map. Use whenever the user asks about a location, place, directions/route between places, "where is…", or wants to see somewhere on a map. Pass the place names; they are geocoded and shown as markers (in order) in a side panel. Keep your text brief and let the map carry it.',
+  parameters: {
+    type: 'object',
+    properties: {
+      places: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Place names / addresses to show, in order (e.g. ["Eiffel Tower", "Louvre"]).'
+      },
+      title: { type: 'string', description: 'Optional title for the map.' },
+      route: { type: 'boolean', description: 'Set true to draw a path connecting the places in order.' }
+    },
+    required: ['places']
+  },
+  execute: async (args, signal) => {
+    const places = Array.isArray(args?.places) ? (args.places as unknown[]).map((p) => String(p)).filter(Boolean) : [];
+    if (!places.length) return { content: 'No places were provided for the map.' };
+    try {
+      const markers = await geocodePlaces(places, signal);
+      if (!markers.length) return { content: `Couldn't locate any of: ${places.join(', ')}.` };
+      const route = args?.route && markers.length > 1 ? markers.map((m) => ({ lat: m.lat, lng: m.lng })) : undefined;
+      const content = `Showing a map with ${markers.length} location(s): ${markers.map((m) => m.label).join(', ')}. The interactive map is shown to the user.`;
+      return {
+        content,
+        artifacts: [{ type: 'map', data: { title: typeof args?.title === 'string' ? args.title : undefined, markers, route } }]
+      };
+    } catch (err) {
+      return { content: `Map lookup failed: ${(err as Error)?.message || 'unknown error'}.` };
+    }
+  }
+};
+
 /** All built-in tools, keyed by the name the model/clients reference. */
 export const BUILTIN_TOOLS: Record<string, ChatTool> = {
   web_search: webSearchTool,
   image_search: imageSearchTool,
   video_search: videoSearchTool,
-  get_weather: weatherTool
+  get_weather: weatherTool,
+  show_map: mapTool
 };
 
 /** The set of tool names a client is allowed to enable (allowlist). */
