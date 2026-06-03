@@ -40,6 +40,7 @@ import { getCapabilities, featureSupport, FEATURE_LABELS, capabilityBadges, QUER
 import { buildSmartTeam, TASK_PROFILES, type SmartMode, type SmartTask, type SmartTeam } from '../services/smartModelSelection';
 import { recordModelFeedback, latestVote, MODEL_FEEDBACK_CHANGED, type FeedbackVote } from '../services/modelFeedback';
 import { describeCost, classBadge } from '../shared/pricing';
+import { useAuth } from '../contexts/AuthContext';
 
 interface ModelLibraryProps {
   onBack: () => void;
@@ -382,17 +383,21 @@ const CompareModal: React.FC<{ models: CatalogModel[]; selection: ModelSelection
 // User-facing trust signal: shows that the catalog (and the Free/paid labels) are
 // reconciled against each source's LIVE API, not guessed. Backed by /api/models/verify.
 const VerifiedStrip: React.FC = () => {
+  const { user } = useAuth();
   const [data, setData] = useState<ModelVerification | null>(null);
   const [failed, setFailed] = useState(false);
   useEffect(() => {
+    // SECURITY: the verify strip exposes per-key connection status + live spend ("$X used").
+    // Only fetch/show it for an authenticated user — never to a logged-out/anonymous session.
+    if (!user) return;
     let active = true;
     fetchModelVerification()
       .then((r) => { if (active) setData(r); })
       .catch(() => { if (active) setFailed(true); });
     return () => { active = false; };
-  }, []);
+  }, [user]);
 
-  if (failed) return null;
+  if (!user || failed) return null;
   if (!data) {
     return (
       <div className="mt-4 border-2 border-black rounded-xl bg-slate-50 p-3 text-xs flex items-center gap-2 text-slate-500">
