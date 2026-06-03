@@ -206,12 +206,14 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     setShowModelPicker(false);
   };
 
-  const handleBranch = (turnId: string) => {
+  const handleBranch = (turnId: string, chooseNewModel: boolean) => {
     if (!activeSession) return;
     const branched = branchSession(activeSession, turnId);
     void saveChatSession(branched);
     setSessions((prev) => [branched, ...prev]);
     setActiveId(branched.id);
+    // "Branch + new model" opens the picker on the freshly-branched session.
+    if (chooseNewModel) setShowModelPicker(true);
   };
 
   const handleEditMemory = () => {

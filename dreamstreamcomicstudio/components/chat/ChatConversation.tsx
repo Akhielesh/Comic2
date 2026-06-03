@@ -18,7 +18,7 @@ interface ChatConversationProps {
   onOpenModelPicker: () => void;
   onSend: (text: string, attachments: ChatAttachment[]) => void;
   onStop: () => void;
-  onBranch: (turnId: string) => void;
+  onBranch: (turnId: string, chooseNewModel: boolean) => void;
   onReasoningChange: (level: ChatReasoningLevel) => void;
   onWebToggle: (on: boolean) => void;
   onDreamstreamToggle: (on: boolean) => void;
@@ -161,7 +161,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
             <ChatMessageView
               key={turn.id}
               turn={turn}
-              onBranch={turn.role === 'assistant' && !turn.error ? () => onBranch(turn.id) : undefined}
+              onBranch={turn.role === 'assistant' && !turn.error ? (chooseNew) => onBranch(turn.id, chooseNew) : undefined}
             />
           ))
         )}

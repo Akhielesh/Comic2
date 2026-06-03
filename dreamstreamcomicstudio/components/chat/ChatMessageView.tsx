@@ -1,7 +1,7 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Copy, Check, GitBranch, AlertTriangle, Sparkles, User, Globe, Brain,
-  Download, FileArchive, ChevronDown, ChevronUp, ExternalLink, Search
+  Download, FileArchive, ChevronDown, ChevronUp, ExternalLink, Search, Cpu
 } from 'lucide-react';
 import JSZip from 'jszip';
 import { ChatMarkdown } from './ChatMarkdown';
@@ -11,14 +11,25 @@ import { extractCodeBlocks, codeBlockFilename, downloadTextFile, triggerDownload
 
 interface ChatMessageViewProps {
   turn: ChatTurn;
-  /** Branch a new conversation from this assistant turn. */
-  onBranch?: () => void;
+  /** Branch a new conversation from this assistant turn. `chooseNewModel` opens the model picker. */
+  onBranch?: (chooseNewModel: boolean) => void;
 }
 
 export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, onBranch }) => {
   const [copied, setCopied] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+  const [branchOpen, setBranchOpen] = useState(false);
+  const branchRef = useRef<HTMLDivElement>(null);
   const isUser = turn.role === 'user';
+
+  useEffect(() => {
+    if (!branchOpen) return;
+    const onClick = (e: MouseEvent) => {
+      if (branchRef.current && !branchRef.current.contains(e.target as Node)) setBranchOpen(false);
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [branchOpen]);
 
   const codeBlocks = useMemo(() => (isUser ? [] : extractCodeBlocks(turn.content)), [isUser, turn.content]);
   const hasDetails = Boolean(
@@ -168,9 +179,27 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, onBranch
               </button>
             )}
             {onBranch && (
-              <button onClick={onBranch} className="flex items-center gap-0.5 hover:text-black font-bold" title="Branch a new chat from here">
-                <GitBranch className="w-3 h-3" /> Branch
-              </button>
+              <div ref={branchRef} className="relative">
+                <button onClick={() => setBranchOpen((v) => !v)} className="flex items-center gap-0.5 hover:text-black font-bold" title="Branch a new chat from here">
+                  <GitBranch className="w-3 h-3" /> Branch
+                </button>
+                {branchOpen && (
+                  <div className="absolute left-0 bottom-6 z-20 w-44 bg-white border-2 border-black rounded-lg shadow-comic py-1">
+                    <button
+                      onClick={() => { setBranchOpen(false); onBranch(false); }}
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-[11px] hover:bg-slate-100 text-left"
+                    >
+                      <GitBranch className="w-3.5 h-3.5" /> Same model
+                    </button>
+                    <button
+                      onClick={() => { setBranchOpen(false); onBranch(true); }}
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-[11px] hover:bg-slate-100 text-left"
+                    >
+                      <Cpu className="w-3.5 h-3.5" /> Pick a new model…
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         )}
