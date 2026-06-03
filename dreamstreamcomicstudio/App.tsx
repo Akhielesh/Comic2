@@ -638,22 +638,37 @@ const App: React.FC = () => {
   return (
     <ErrorBoundary>
       <div className="min-h-screen font-sans relative bg-slate-50">
-        {showSharedHeader && (
-          <StaticSiteHeader
-            isAuthenticated={!!user}
-            onGoHome={handleBackToHome}
-            onViewComics={() => handleNavigate('gallery')}
-            onEnterStudio={() => handleNavigate('dashboard')}
-            onEnterComicForge={() => handleNavigate('comicforge')}
-            onSignIn={() => handleNavigate('auth')}
-            onOpenProfile={() => {
-              setSettingsTab('profile');
-              setSettingsReturnView(currentView);
-              setCurrentView('settings');
-            }}
-            onNavigate={handleNavigate}
-          />
-        )}
+        {showSharedHeader && (() => {
+          const header = (
+            <StaticSiteHeader
+              isAuthenticated={!!user}
+              onGoHome={handleBackToHome}
+              onViewComics={() => handleNavigate('gallery')}
+              onEnterStudio={() => handleNavigate('dashboard')}
+              onEnterComicForge={() => handleNavigate('comicforge')}
+              onSignIn={() => handleNavigate('auth')}
+              onOpenProfile={() => {
+                setSettingsTab('profile');
+                setSettingsReturnView(currentView);
+                setCurrentView('settings');
+              }}
+              onNavigate={handleNavigate}
+            />
+          );
+          // On the full-screen chat product, the global header auto-hides to reclaim
+          // space and slides back down when the cursor reaches the top edge.
+          if (effectiveView === 'chat') {
+            return (
+              <div className="group sticky top-0 z-50 h-0">
+                <div className="absolute inset-x-0 top-0 h-3" />
+                <div className="absolute inset-x-0 top-0 -translate-y-full group-hover:translate-y-0 focus-within:translate-y-0 transition-transform duration-200 ease-out shadow-lg">
+                  {header}
+                </div>
+              </div>
+            );
+          }
+          return header;
+        })()}
 
         <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-brand-blue"><Loader2 className="w-12 h-12 text-white animate-spin" /></div>}>
           {/* Views */}

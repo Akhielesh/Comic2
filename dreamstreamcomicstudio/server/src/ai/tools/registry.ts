@@ -5,7 +5,9 @@
 // uniform interface, so adding a connector never touches the loop or the routes.
 
 import type { ToolSpec } from '../providers/types.js';
+import type { ChatArtifact } from '../../../../apiTypes.js';
 import { ddgWebSearch, ddgImageSearch, type ImageResult } from './duckduckgo.js';
+import { getWeather } from './weather.js';
 
 export interface ToolExecResult {
   /** Text fed back to the model as the tool result. */
@@ -14,6 +16,8 @@ export interface ToolExecResult {
   images?: { url: string; title?: string; thumbnail?: string; source?: string }[];
   /** Web citations to surface in the "sources" panel. */
   citations?: { url: string; title?: string }[];
+  /** Typed rich-output artifacts (weather, etc.) rendered as components. */
+  artifacts?: ChatArtifact[];
 }
 
 export interface ChatTool {
@@ -77,10 +81,35 @@ const imageSearchTool: ChatTool = {
   }
 };
 
+const weatherTool: ChatTool = {
+  name: 'get_weather',
+  description:
+    'Get current weather and a short forecast for a place. Use whenever the user asks about weather, temperature, rain, or forecast. Returns a weather card shown to the user — keep your text brief and let the card carry the detail.',
+  parameters: {
+    type: 'object',
+    properties: {
+      location: { type: 'string', description: 'City or place name, e.g. "Tokyo" or "Austin, TX".' }
+    },
+    required: ['location']
+  },
+  execute: async (args, signal) => {
+    const location = String(args?.location || '').trim();
+    if (!location) return { content: 'No location was provided.' };
+    try {
+      const weather = await getWeather(location, signal);
+      const content = `Weather for ${weather.location}: ${weather.current.tempC}°C (${weather.current.tempF}°F), ${weather.current.description}, wind ${weather.current.windKph} km/h. A weather card with the 5-day forecast is shown to the user.`;
+      return { content, artifacts: [{ type: 'weather', data: weather }] };
+    } catch (err) {
+      return { content: `Weather lookup failed: ${(err as Error)?.message || 'unknown error'}.` };
+    }
+  }
+};
+
 /** All built-in tools, keyed by the name the model/clients reference. */
 export const BUILTIN_TOOLS: Record<string, ChatTool> = {
   web_search: webSearchTool,
-  image_search: imageSearchTool
+  image_search: imageSearchTool,
+  get_weather: weatherTool
 };
 
 /** The set of tool names a client is allowed to enable (allowlist). */
