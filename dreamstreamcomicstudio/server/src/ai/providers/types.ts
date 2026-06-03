@@ -145,6 +145,8 @@ export type CatalogModel = {
   source: AIProviderId;
   description?: string;
   contextLength?: number;
+  /** Unix seconds the model was published upstream (OpenRouter `created`), for "newest" sorting. */
+  createdAt?: number;
   inputModalities: string[];
   outputModalities: string[];
   supportedParameters: string[];

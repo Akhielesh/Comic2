@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { getCatalog, filterCatalog, getProviderModels, type CatalogFilters } from '../services/modelCatalog.js';
-import { fetchOpenRouterKeyStatus } from '../ai/providers/openrouter.js';
+import { fetchOpenRouterKeyStatus, fetchOpenRouterCredits } from '../ai/providers/openrouter.js';
 import { persistHarvestedModels, loadPersistedModels } from '../services/modelCatalogStore.js';
 import type { AnnotatedModel } from '../ai/catalogAnnotations.js';
 
@@ -72,8 +72,11 @@ modelsRouter.get('/verify', async (req: Request, res: Response) => {
   const result = await getCatalog(true); // force live refresh of the OpenRouter catalog
   const allModels = await withNvidiaModels(req, result.models);
 
-  // Live, authoritative OpenRouter key status (real usage vs. limit).
-  const openRouterKeyStatus = openRouterKey ? await fetchOpenRouterKeyStatus(openRouterKey) : null;
+  // Live, authoritative OpenRouter data: per-KEY status (/key) AND account CREDITS (/credits).
+  // These can differ — a key may carry its own spend cap distinct from account credits remaining.
+  const [openRouterKeyStatus, openRouterCredits] = openRouterKey
+    ? await Promise.all([fetchOpenRouterKeyStatus(openRouterKey), fetchOpenRouterCredits(openRouterKey)])
+    : [null, null];
 
   res.json({
     verifiedAt: Date.now(),
@@ -88,8 +91,10 @@ modelsRouter.get('/verify', async (req: Request, res: Response) => {
       openrouter: {
         connected: Boolean(openRouterKey),
         modelCount: allModels.filter((m) => m.source === 'openrouter').length,
-        // Real OpenRouter account data (label/usage/limit/limit_remaining/is_free_tier/...).
-        liveKey: openRouterKeyStatus
+        // Real OpenRouter key data (label/usage/limit/limit_remaining/is_free_tier/rate_limit/...).
+        liveKey: openRouterKeyStatus,
+        // Account-level credits (total/usage/remaining), independent of the per-key limit above.
+        credits: openRouterCredits
       },
       nvidia: {
         connected: Boolean(nvidiaKey),
