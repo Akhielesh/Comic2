@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Key, Plus, Trash2, Check, AlertTriangle, ExternalLink, Pencil, X, ChevronDown, ChevronRight, Loader2, ShieldCheck, ShieldX, ShieldQuestion, RefreshCw } from 'lucide-react';
+import { Key, Plus, Trash2, Check, AlertTriangle, ExternalLink, Pencil, X, ChevronDown, ChevronRight, Shield, Power, Loader2, ShieldCheck, ShieldX, ShieldQuestion, RefreshCw } from 'lucide-react';
 import {
   ALL_PROVIDERS,
   PROVIDER_META,
@@ -14,6 +14,7 @@ import {
   usageFraction,
   isOverLimit
 } from '../services/apiKeys';
+import { isProviderEnabled, setProviderEnabled } from '../services/sourceGovernance';
 import { validateApiKey } from '../services/keyValidation';
 import { Button } from './Button';
 import { ModelSelectionPanel } from './ModelSelectionPanel';
@@ -211,8 +212,48 @@ const HeaderUsage: React.FC<{ k: ManagedApiKey }> = ({ k }) => {
   return <span className={`text-[11px] font-bold ${color}`}>{pct}%</span>;
 };
 
+// Central "allowed sources" governance — turn a source off and its keys (yours AND
+// the platform's) are ignored everywhere, so nothing uses it by accident.
+const SourceGovernancePanel: React.FC<{ onChange: () => void }> = ({ onChange }) => {
+  const enabledCount = ALL_PROVIDERS.filter(isProviderEnabled).length;
+  return (
+    <div className="bg-white border-2 border-black rounded-xl shadow-comic p-4">
+      <div className="flex items-center gap-2">
+        <Shield className="w-4 h-4" />
+        <h4 className="font-bold">Allowed sources</h4>
+      </div>
+      <p className="text-[11px] text-slate-500 mt-1 mb-3">
+        Turn a source off to be sure neither you nor the app uses it — its keys (yours and the
+        platform's) are ignored across the whole app.{' '}
+        {enabledCount === 0 && <span className="text-brand-red font-bold">All sources are off — AI features won't work.</span>}
+      </p>
+      <div className="grid sm:grid-cols-2 gap-2">
+        {ALL_PROVIDERS.map((provider) => {
+          const on = isProviderEnabled(provider);
+          return (
+            <button
+              key={provider}
+              onClick={() => { setProviderEnabled(provider, !on); onChange(); }}
+              className={`flex items-center justify-between gap-2 border-2 border-black rounded-lg px-3 py-2 transition-colors ${on ? 'bg-green-50 hover:bg-green-100' : 'bg-slate-100 hover:bg-slate-200'}`}
+            >
+              <span className="flex items-center gap-2 min-w-0">
+                <Power className={`w-3.5 h-3.5 shrink-0 ${on ? 'text-green-600' : 'text-slate-400'}`} />
+                <span className="font-bold text-sm truncate">{PROVIDER_META[provider].label}</span>
+              </span>
+              <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border-2 border-black shrink-0 ${on ? 'bg-green-300' : 'bg-white text-slate-500'}`}>
+                {on ? 'On' : 'Off'}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 export const ApiConfiguration: React.FC = () => {
   const [keys, setKeys] = useState<ManagedApiKey[]>(() => listKeys());
+  const [, setGovVersion] = useState(0);
   // Open the first provider that has no key yet, to nudge first-time setup.
   const [open, setOpen] = useState<ApiKeyProvider | null>(() => {
     const initial = listKeys();
@@ -243,11 +284,14 @@ export const ApiConfiguration: React.FC = () => {
         </p>
       </div>
 
+      <SourceGovernancePanel onChange={() => setGovVersion((v) => v + 1)} />
+
       {ALL_PROVIDERS.map((provider) => {
         const meta = PROVIDER_META[provider];
         const providerKeys = keys.filter((k) => k.provider === provider);
         const active = providerKeys.find((k) => k.active);
         const isOpen = open === provider;
+        const sourceOff = !isProviderEnabled(provider);
         return (
           <div key={provider} className="bg-white border-2 border-black rounded-xl shadow-comic overflow-hidden">
             <button
@@ -261,6 +305,11 @@ export const ApiConfiguration: React.FC = () => {
                 <span className="text-[10px] font-bold uppercase text-slate-500 bg-slate-100 border border-slate-300 rounded px-1.5 py-0.5 shrink-0">
                   {providerKeys.length} key{providerKeys.length === 1 ? '' : 's'}
                 </span>
+                {sourceOff && (
+                  <span className="text-[10px] font-bold uppercase text-slate-600 bg-slate-200 border border-slate-400 rounded px-1.5 py-0.5 shrink-0">
+                    Source off
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 {active ? (

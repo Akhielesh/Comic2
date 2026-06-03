@@ -4,6 +4,7 @@ import { getActiveKeyValue } from './apiKeys';
 import { getSelectedTextModel, getModelForStage, getSelectedTextSource, getSourceForStage } from './modelSelection';
 import { supabase } from './supabase';
 import { isFreeOnly } from './freeOnlyMode';
+import { isProviderEnabled, allowedSourcesHeader } from './sourceGovernance';
 
 let cachedAccessToken: string | undefined;
 
@@ -53,10 +54,12 @@ const getAuthToken = async (): Promise<string | undefined> => {
 
 export const post = async <TReq, TRes>(path: string, body: TReq, options?: { signal?: AbortSignal; apiKey?: string; modelId?: string; stage?: string }): Promise<TRes> => {
   // Active key per provider (multi-key store), falling back to legacy single keys.
-  const geminiKey = getActiveKeyValue('gemini') || getGeminiKey();
-  const fluxKey = getActiveKeyValue('pixazo') || getFluxKeyInfo().key;
-  const openRouterKey = getActiveKeyValue('openrouter') || getOpenRouterKey();
-  const nvidiaKey = getActiveKeyValue('nvidia');
+  // Source governance: a disabled provider's key is never attached (defense-in-depth;
+  // the server also enforces via X-Allowed-Sources for platform keys).
+  const geminiKey = isProviderEnabled('gemini') ? (getActiveKeyValue('gemini') || getGeminiKey()) : null;
+  const fluxKey = isProviderEnabled('pixazo') ? (getActiveKeyValue('pixazo') || getFluxKeyInfo().key) : null;
+  const openRouterKey = isProviderEnabled('openrouter') ? (getActiveKeyValue('openrouter') || getOpenRouterKey()) : null;
+  const nvidiaKey = isProviderEnabled('nvidia') ? getActiveKeyValue('nvidia') : null;
   const token = await getAuthToken();
   // Per-stage override when a stage is supplied, else the global text model + its source.
   const textModel = options?.stage ? getModelForStage(options.stage) : getSelectedTextModel();
@@ -75,7 +78,8 @@ export const post = async <TReq, TRes>(path: string, body: TReq, options?: { sig
       ...(options?.stage ? { 'X-Pipeline-Stage': options.stage } : {}),
       ...(options?.modelId ? { 'X-Gemini-Model': options.modelId } : {}),
       ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-      ...(isFreeOnly() ? { 'X-Free-Only': 'true' } : {})
+      ...(isFreeOnly() ? { 'X-Free-Only': 'true' } : {}),
+      'X-Allowed-Sources': allowedSourcesHeader()
     },
     body: JSON.stringify(body),
     signal: options?.signal
@@ -86,10 +90,10 @@ export const post = async <TReq, TRes>(path: string, body: TReq, options?: { sig
 };
 
 export const get = async <TRes>(path: string, options?: { modelId?: string }): Promise<TRes> => {
-  const geminiKey = getActiveKeyValue('gemini') || getGeminiKey();
-  const fluxKey = getActiveKeyValue('pixazo') || getFluxKeyInfo().key;
-  const openRouterKey = getActiveKeyValue('openrouter') || getOpenRouterKey();
-  const nvidiaKey = getActiveKeyValue('nvidia');
+  const geminiKey = isProviderEnabled('gemini') ? (getActiveKeyValue('gemini') || getGeminiKey()) : null;
+  const fluxKey = isProviderEnabled('pixazo') ? (getActiveKeyValue('pixazo') || getFluxKeyInfo().key) : null;
+  const openRouterKey = isProviderEnabled('openrouter') ? (getActiveKeyValue('openrouter') || getOpenRouterKey()) : null;
+  const nvidiaKey = isProviderEnabled('nvidia') ? getActiveKeyValue('nvidia') : null;
   const token = await getAuthToken();
 
   const res = await fetch(buildApiUrl(path), {
@@ -102,7 +106,8 @@ export const get = async <TRes>(path: string, options?: { modelId?: string }): P
       ...(getSelectedTextSource() ? { 'X-Text-Source': getSelectedTextSource() as string } : {}),
       ...(options?.modelId ? { 'X-Gemini-Model': options.modelId } : {}),
       ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-      ...(isFreeOnly() ? { 'X-Free-Only': 'true' } : {})
+      ...(isFreeOnly() ? { 'X-Free-Only': 'true' } : {}),
+      'X-Allowed-Sources': allowedSourcesHeader()
     }
   });
   if (!res.ok) throw await parseError(res);
