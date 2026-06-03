@@ -31,7 +31,9 @@ export interface ChatAttachment {
   id: string;
   name: string;
   mimeType: string;
-  /** data:...;base64,... — sent to vision models as an image_url part. */
+  /** 'image' is sent to vision models; 'document' (e.g. PDF) is viewer-only. */
+  kind?: 'image' | 'document';
+  /** data:...;base64,... — images go to vision models; documents open in the viewer. */
   dataUrl: string;
 }
 
