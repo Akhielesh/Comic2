@@ -15,9 +15,9 @@ export interface ChatConnector {
 export const CHAT_CONNECTORS: ChatConnector[] = [
   {
     id: 'web',
-    label: 'Web search',
-    description: 'Free, keyless live web, image and video search (DuckDuckGo) plus weather (Open-Meteo). The model searches the web, shows images and videos, and renders weather cards.',
-    toolNames: ['web_search', 'image_search', 'video_search', 'get_weather']
+    label: 'Web & tools',
+    description: 'Free, keyless live tools: web/image/video search (DuckDuckGo), weather (Open-Meteo) and interactive maps (OpenStreetMap). The model searches, shows media, renders weather cards and opens maps.',
+    toolNames: ['web_search', 'image_search', 'video_search', 'get_weather', 'show_map']
   }
 ];
 

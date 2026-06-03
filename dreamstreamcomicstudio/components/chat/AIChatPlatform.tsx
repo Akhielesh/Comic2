@@ -1,10 +1,14 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { Loader2, Map as MapIcon, X } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { ChatSidebar } from './ChatSidebar';
 import { ChatConversation } from './ChatConversation';
 import { ChatModelPicker } from './ChatModelPicker';
 import { ChatProjectModal } from './ChatProjectModal';
+import { ChatPanelContext } from './panelContext';
+import type { ChatArtifact, MapArtifact } from '../../apiTypes';
+
+const MapPanel = lazy(() => import('./MapPanel'));
 import { deriveModelFeatures } from '../../services/chatFeatures';
 import { getCapabilities } from '../../services/modelCapabilities';
 import { fetchModelCatalog, type CatalogModel } from '../../services/modelCatalog';
@@ -89,7 +93,32 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const [memory, setMemory] = useState('');
+  const [panel, setPanel] = useState<ChatArtifact | null>(null);
+  const [panelWidth, setPanelWidth] = useState(440);
+  const [isDesktop, setIsDesktop] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches
+  );
   const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 768px)');
+    const onChange = () => setIsDesktop(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
+  const startResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = panelWidth;
+    const onMove = (ev: MouseEvent) => setPanelWidth(Math.min(760, Math.max(320, startW + (startX - ev.clientX))));
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
 
   // Load catalog (best-effort) for model-feature derivation + display names.
   useEffect(() => {
@@ -336,6 +365,9 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         createdAt: Date.now()
       };
       updateSession(sessionId, (s) => ({ ...s, turns: [...s.turns, aiTurn], updatedAt: Date.now() }));
+      // A map auto-opens the side panel.
+      const mapArtifact = res.artifacts?.find((a) => a.type === 'map');
+      if (mapArtifact) setPanel(mapArtifact);
     } catch (err) {
       if (controller.signal.aborted) return;
       const errTurn: ChatTurn = {
@@ -360,7 +392,25 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     );
   }
 
+  const panelContent = panel && (
+    <>
+      <div className="flex items-center justify-between px-3 py-2 border-b-2 border-black bg-sky-100 shrink-0">
+        <span className="font-bold text-sm flex items-center gap-1.5 min-w-0">
+          <MapIcon className="w-4 h-4 shrink-0" />
+          <span className="truncate">{(panel.data as MapArtifact)?.title || 'Map'}</span>
+        </span>
+        <button onClick={() => setPanel(null)} className="border-2 border-black rounded p-1 bg-white hover:bg-brand-yellow"><X className="w-4 h-4" /></button>
+      </div>
+      <div className="flex-1 min-h-0 bg-slate-100">
+        <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-6 h-6 animate-spin text-brand-blue" /></div>}>
+          {panel.type === 'map' && <MapPanel data={panel.data as MapArtifact} />}
+        </Suspense>
+      </div>
+    </>
+  );
+
   return (
+    <ChatPanelContext.Provider value={setPanel}>
     <div className="h-[100dvh] flex overflow-hidden bg-white">
       {sidebarOpen && (
         <ChatSidebar
@@ -408,6 +458,21 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         onStartWithModel={handleStartWithModel}
       />
 
+      {/* Resizable side panel (maps, etc.) — sibling on desktop, full-screen on mobile. */}
+      {panel && isDesktop && (
+        <>
+          <div onMouseDown={startResize} className="w-1.5 cursor-col-resize bg-black/10 hover:bg-brand-blue shrink-0" title="Drag to resize" />
+          <div className="flex flex-col shrink-0 border-l-4 border-black bg-white" style={{ width: panelWidth }}>
+            {panelContent}
+          </div>
+        </>
+      )}
+      {panel && !isDesktop && (
+        <div className="fixed inset-0 z-50 flex flex-col bg-white">
+          {panelContent}
+        </div>
+      )}
+
       {showModelPicker && (
         <ChatModelPicker
           selectedModelId={activeSession.modelId}
@@ -426,5 +491,6 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         />
       )}
     </div>
+    </ChatPanelContext.Provider>
   );
 };

@@ -736,6 +736,19 @@ export interface VideoResultsArtifact {
   results: VideoResult[];
 }
 
+export interface MapMarker {
+  lat: number;
+  lng: number;
+  label: string;
+  description?: string;
+}
+export interface MapArtifact {
+  title?: string;
+  markers: MapMarker[];
+  /** Ordered points for a drawn route/path between places, if any. */
+  route?: { lat: number; lng: number }[];
+}
+
 export type ChatCitation = { url: string; title?: string };
 
 export type ChatResponse = {

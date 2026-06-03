@@ -1,7 +1,8 @@
 import React from 'react';
-import type { ChatArtifact, WeatherArtifact, VideoResultsArtifact } from '../../../apiTypes';
+import type { ChatArtifact, WeatherArtifact, VideoResultsArtifact, MapArtifact } from '../../../apiTypes';
 import { WeatherCard } from './WeatherCard';
 import { VideoResults } from './VideoResults';
+import { MapArtifactCard } from './MapArtifactCard';
 
 // Renderer registry for typed rich-output artifacts. Adding a new rich component
 // (maps, video grids, PDF viewers…) is a single `case` here — the chat loop and
@@ -12,6 +13,8 @@ const renderArtifact = (artifact: ChatArtifact, key: number): React.ReactNode =>
       return <WeatherCard key={key} data={artifact.data as WeatherArtifact} />;
     case 'video_results':
       return <VideoResults key={key} data={artifact.data as VideoResultsArtifact} />;
+    case 'map':
+      return <MapArtifactCard key={key} data={artifact.data as MapArtifact} />;
     default:
       return null;
   }
