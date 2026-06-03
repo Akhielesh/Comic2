@@ -75,6 +75,8 @@ export interface ChatSession {
   dreamstreamAccess: boolean;
   /** Enabled agentic tool names (DuckDuckGo etc.). Empty = no tools. */
   tools: string[];
+  /** Enabled custom MCP server ids (configs resolved from the local registry at send). */
+  mcpServers?: string[];
   /** Auto mode: the app picks the best model + tools per message. */
   autoMode?: boolean;
   /** In Auto mode, restrict picks to this source (null = any allowed source). */
@@ -133,6 +135,7 @@ const normalizeSession = (s: ChatSession): ChatSession => ({
   webSearch: Boolean(s.webSearch),
   dreamstreamAccess: Boolean(s.dreamstreamAccess),
   tools: Array.isArray(s.tools) ? s.tools : [],
+  mcpServers: Array.isArray(s.mcpServers) ? s.mcpServers : [],
   turns: Array.isArray(s.turns) ? s.turns : []
 });
 

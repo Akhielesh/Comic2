@@ -19,6 +19,8 @@ import { sendChatMessageStream } from '../../services/chatApi';
 import { toggleConnector, type ChatConnector } from '../../services/chatConnectors';
 import { recommendModels, detectTools } from '../../services/chatSuggest';
 import { isProviderEnabled } from '../../services/sourceGovernance';
+import { listMcpServers, getMcpServersByIds, onMcpServersChanged } from '../../services/mcpServers';
+import type { McpServerConfig } from '../../apiTypes';
 import {
   branchSession,
   consumePendingChatModel,
@@ -98,6 +100,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const [memory, setMemory] = useState('');
+  const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(() => listMcpServers());
   const [panel, setPanel] = useState<ChatArtifact | null>(null);
   const [panelWidth, setPanelWidth] = useState(440);
   const [isDesktop, setIsDesktop] = useState(
@@ -111,6 +114,16 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     mq.addEventListener('change', onChange);
     return () => mq.removeEventListener('change', onChange);
   }, []);
+
+  useEffect(() => onMcpServersChanged(() => setMcpServers(listMcpServers())), []);
+
+  const handleToggleMcpServer = (id: string, on: boolean) => {
+    if (!activeId) return;
+    updateSession(activeId, (s) => {
+      const current = s.mcpServers || [];
+      return { ...s, mcpServers: on ? Array.from(new Set([...current, id])) : current.filter((x) => x !== id), updatedAt: Date.now() };
+    });
+  };
 
   const startResize = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -392,6 +405,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           webSearch: activeSession.webSearch,
           systemPrompt: composeSystemPrompt(getChatMemory(user?.id), activeSession.systemPrompt),
           ...(reqTools.length ? { tools: reqTools } : {}),
+          ...((activeSession.mcpServers || []).length ? { mcpServers: getMcpServersByIds(activeSession.mcpServers || []) } : {}),
           ...(activeSession.dreamstreamAccess ? { dreamstreamContext: buildDreamStreamContext(projects) } : {})
         },
         {
@@ -523,6 +537,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         onToggleConnector={(connector: ChatConnector, on: boolean) =>
           activeId && updateSession(activeId, (s) => ({ ...s, tools: toggleConnector(connector, s.tools, on), updatedAt: Date.now() }))
         }
+        mcpServers={mcpServers}
+        onToggleMcpServer={handleToggleMcpServer}
         onRenameTitle={(title) => activeId && handleRename(activeId, title)}
         suggestModels={suggestModels}
         onStartWithModel={handleStartWithModel}

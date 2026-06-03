@@ -4,6 +4,8 @@ import type { ChatReasoningLevel } from '../../apiTypes';
 import type { ChatAttachment } from '../../services/chatStorage';
 import { REASONING_LEVELS, type ChatModelFeatures } from '../../services/chatFeatures';
 import { CHAT_CONNECTORS, isConnectorEnabled, type ChatConnector } from '../../services/chatConnectors';
+import { Server } from 'lucide-react';
+import type { McpServerConfig } from '../../apiTypes';
 
 interface ChatComposerProps {
   busy: boolean;
@@ -13,10 +15,13 @@ interface ChatComposerProps {
   dreamstreamAccess: boolean;
   enabledTools: string[];
   toolsSupported: boolean;
+  mcpServers: McpServerConfig[];
+  enabledMcpServers: string[];
   onReasoningChange: (level: ChatReasoningLevel) => void;
   onWebToggle: (on: boolean) => void;
   onDreamstreamToggle: (on: boolean) => void;
   onToggleConnector: (connector: ChatConnector, on: boolean) => void;
+  onToggleMcpServer: (id: string, on: boolean) => void;
   onSend: (text: string, attachments: ChatAttachment[]) => void;
   onStop: () => void;
 }
@@ -46,10 +51,13 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   dreamstreamAccess,
   enabledTools,
   toolsSupported,
+  mcpServers,
+  enabledMcpServers,
   onReasoningChange,
   onWebToggle,
   onDreamstreamToggle,
   onToggleConnector,
+  onToggleMcpServer,
   onSend,
   onStop
 }) => {
@@ -135,6 +143,20 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                 title={connector.description}
               >
                 <Search className="w-3.5 h-3.5" /> {connector.label} {on ? 'on' : 'off'}
+              </button>
+            );
+          })}
+        {toolsSupported &&
+          mcpServers.map((server) => {
+            const on = enabledMcpServers.includes(server.id);
+            return (
+              <button
+                key={server.id}
+                onClick={() => onToggleMcpServer(server.id, !on)}
+                className={`flex items-center gap-1.5 text-[11px] font-bold border-2 border-black rounded-full px-2.5 py-1 ${on ? 'bg-violet-300' : 'bg-white hover:bg-slate-100'}`}
+                title={`Custom MCP server: ${server.url}`}
+              >
+                <Server className="w-3.5 h-3.5" /> {server.name} {on ? 'on' : 'off'}
               </button>
             );
           })}

@@ -6,7 +6,8 @@ import { NVIDIA_TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS } from '../config.js';
 import type { AIProviderId, ChatMessage, MessagePart } from '../ai/providers/types.js';
 import { assertModelAllowedForUser } from '../services/modelAccessPolicy.js';
 import { sanitizeAssistantContext } from '../ai/assistantPolicy.js';
-import { resolveTools, KNOWN_TOOL_NAMES } from '../ai/tools/registry.js';
+import { resolveTools, KNOWN_TOOL_NAMES, type ChatTool } from '../ai/tools/registry.js';
+import { buildMcpTools } from '../ai/tools/mcpClient.js';
 import {
   attachBillingToPayload,
   formatLimitErrorResponse,
@@ -88,7 +89,7 @@ type PreparedChat = {
   webSearch: boolean;
   systemPrompt?: string;
   dreamstreamContextJson?: string;
-  tools: ReturnType<typeof resolveTools>;
+  tools: ChatTool[];
 };
 
 type PrepResult = { error: { status: number; body: unknown } } | { prepared: PreparedChat };
@@ -151,9 +152,21 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
   const requestedToolNames = Array.isArray(body.tools)
     ? body.tools.filter((t): t is string => typeof t === 'string' && KNOWN_TOOL_NAMES.includes(t))
     : [];
-  const tools = resolved.provider === 'openrouter' ? resolveTools(requestedToolNames) : [];
+  const builtinTools = resolved.provider === 'openrouter' ? resolveTools(requestedToolNames) : [];
 
-  return { prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, systemPrompt, dreamstreamContextJson, tools } };
+  // Custom MCP servers (OpenRouter only): list their tools and wrap them. Best-effort —
+  // a broken/blocked server is skipped rather than failing the chat.
+  let mcpTools: ChatTool[] = [];
+  if (resolved.provider === 'openrouter' && Array.isArray(body.mcpServers) && body.mcpServers.length) {
+    const servers = body.mcpServers
+      .filter((s) => s && typeof s.url === 'string' && typeof s.id === 'string')
+      .slice(0, 6);
+    mcpTools = await buildMcpTools(servers);
+  }
+
+  return {
+    prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, systemPrompt, dreamstreamContextJson, tools: [...builtinTools, ...mcpTools] }
+  };
 };
 
 const buildPayload = (p: PreparedChat, result: Awaited<ReturnType<typeof runChat>>): ChatResponse => ({
