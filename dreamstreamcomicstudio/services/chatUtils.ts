@@ -66,3 +66,43 @@ export const triggerDownload = (filename: string, blob: Blob): void => {
 /** Default file name for a code block based on its language + index. */
 export const codeBlockFilename = (block: ExtractedCodeBlock, index: number): string =>
   block.filename || `snippet-${index + 1}.${languageToExt(block.lang)}`;
+
+export type SandpackTemplate = 'react' | 'react-ts' | 'vanilla' | 'vanilla-ts';
+
+/** Build a Sandpack files map + template from a message's code blocks (multi-file playground). */
+export const buildPlaygroundFiles = (
+  blocks: ExtractedCodeBlock[]
+): { files: Record<string, string>; template: SandpackTemplate } => {
+  const files: Record<string, string> = {};
+  let hasTs = false;
+  let hasReact = false;
+
+  blocks.forEach((b, i) => {
+    const name = codeBlockFilename(b, i);
+    const path = name.startsWith('/') ? name : `/${name}`;
+    files[path] = b.code;
+    const l = (b.lang || '').toLowerCase();
+    if (l === 'tsx' || l === 'ts' || l === 'typescript') hasTs = true;
+    if (l === 'tsx' || l === 'jsx' || /from\s+['"]react['"]|import\s+React/.test(b.code)) hasReact = true;
+  });
+
+  const template: SandpackTemplate = hasReact ? (hasTs ? 'react-ts' : 'react') : hasTs ? 'vanilla-ts' : 'vanilla';
+
+  // React templates render /App.(js|tsx). If the model didn't name one, promote the first
+  // React-looking file so the preview has an entry.
+  if (hasReact) {
+    const appPath = hasTs ? '/App.tsx' : '/App.js';
+    const hasApp = Object.keys(files).some((p) => /\/App\.(jsx?|tsx?)$/.test(p));
+    if (!hasApp) {
+      const firstReact =
+        Object.keys(files).find((p) => /from\s+['"]react['"]|export\s+default/.test(files[p])) ||
+        Object.keys(files)[0];
+      if (firstReact) {
+        files[appPath] = files[firstReact];
+        if (firstReact !== appPath) delete files[firstReact];
+      }
+    }
+  }
+
+  return { files, template };
+};

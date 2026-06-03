@@ -7,9 +7,11 @@ import { ChatModelPicker } from './ChatModelPicker';
 import { ChatProjectModal } from './ChatProjectModal';
 import { ChatPanelContext } from './panelContext';
 import { MediaPanel, type MediaPanelData } from './MediaPanel';
+import type { PlaygroundData } from './MultiFilePlayground';
 import type { ChatArtifact, MapArtifact } from '../../apiTypes';
 
 const MapPanel = lazy(() => import('./MapPanel'));
+const MultiFilePlayground = lazy(() => import('./MultiFilePlayground'));
 import { deriveModelFeatures } from '../../services/chatFeatures';
 import { getCapabilities } from '../../services/modelCapabilities';
 import { fetchModelCatalog, type CatalogModel } from '../../services/modelCatalog';
@@ -490,6 +492,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         ) : (
           <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-6 h-6 animate-spin text-brand-blue" /></div>}>
             {panel.type === 'map' && <MapPanel data={panel.data as MapArtifact} />}
+            {panel.type === 'playground' && <MultiFilePlayground data={panel.data as PlaygroundData} />}
           </Suspense>
         )}
       </div>

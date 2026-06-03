@@ -8,6 +8,7 @@ import { assertModelAllowedForUser } from '../services/modelAccessPolicy.js';
 import { sanitizeAssistantContext } from '../ai/assistantPolicy.js';
 import { resolveTools, KNOWN_TOOL_NAMES, type ChatTool } from '../ai/tools/registry.js';
 import { buildMcpTools } from '../ai/tools/mcpClient.js';
+import { unfurlUrl } from '../ai/tools/unfurl.js';
 import {
   attachBillingToPayload,
   formatLimitErrorResponse,
@@ -196,6 +197,18 @@ const runChatParams = (p: PreparedChat) => ({
   tools: p.tools,
   fallbackModel: p.resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
   timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+});
+
+// Link unfurl for source hover-cards (OG/meta preview). SSRF-guarded + cached.
+chatRouter.get('/unfurl', async (req, res) => {
+  const url = String(req.query.url || '');
+  if (!url) return res.status(400).json({ error: { message: 'url is required' } });
+  try {
+    const data = await unfurlUrl(url);
+    res.json(data);
+  } catch (err) {
+    res.status(200).json({ url, error: (err as Error)?.message || 'unfurl failed' });
+  }
 });
 
 chatRouter.post('/', async (req, res, next) => {
