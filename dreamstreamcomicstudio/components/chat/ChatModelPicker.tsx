@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Search, X, Loader2, Check, Sparkles, Globe, Eye, Brain, AlertTriangle, EyeOff } from 'lucide-react';
+import { Search, X, Loader2, Check, Sparkles, Globe, Eye, Brain, AlertTriangle, EyeOff, Wand2 } from 'lucide-react';
 import { ModalPortal } from '../modals/ModalPortal';
 import {
   fetchModelCatalog,
@@ -11,13 +11,18 @@ import {
 import { getCapabilities } from '../../services/modelCapabilities';
 import { isProviderEnabled } from '../../services/sourceGovernance';
 
+type LockSource = 'openrouter' | 'nvidia' | null;
+
 interface ChatModelPickerProps {
   selectedModelId: string | null;
   /** True when the current conversation already has messages (switching mid-chat). */
   hasMessages?: boolean;
   /** True when the conversation contains image attachments (needs a vision model). */
   conversationHasImages?: boolean;
+  autoMode?: boolean;
+  lockedSource?: LockSource;
   onSelect: (model: CatalogModel) => void;
+  onSelectAuto: (lockedSource: LockSource) => void;
   onClose: () => void;
 }
 
@@ -52,7 +57,7 @@ const CapabilityChips: React.FC<{ model: CatalogModel }> = ({ model }) => {
   );
 };
 
-export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelId, hasMessages, conversationHasImages, onSelect, onClose }) => {
+export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelId, hasMessages, conversationHasImages, autoMode, lockedSource, onSelect, onSelectAuto, onClose }) => {
   const [models, setModels] = useState<CatalogModel[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -143,6 +148,38 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
               </span>
             </div>
           )}
+
+          {/* Auto mode */}
+          <div className="mx-4 mt-3 border-2 border-black rounded-lg p-3 bg-indigo-50">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <Wand2 className="w-4 h-4 shrink-0" />
+                <div className="min-w-0">
+                  <div className="font-bold text-sm flex items-center gap-1.5">Auto {autoMode && <Check className="w-3.5 h-3.5 text-green-600" />}</div>
+                  <div className="text-[11px] text-slate-600">Best model + tools chosen per message.</div>
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 mt-2">
+              <span className="text-[10px] font-bold uppercase text-slate-500">Lock source:</span>
+              {([
+                { key: null, label: 'Any' },
+                { key: 'openrouter', label: 'OpenRouter' },
+                { key: 'nvidia', label: 'NVIDIA' }
+              ] as { key: LockSource; label: string }[]).map((opt) => {
+                const active = autoMode && (lockedSource ?? null) === opt.key;
+                return (
+                  <button
+                    key={String(opt.key)}
+                    onClick={() => onSelectAuto(opt.key)}
+                    className={`text-[11px] font-bold px-2 py-0.5 rounded-full border-2 border-black ${active ? 'bg-indigo-300' : 'bg-white hover:bg-slate-100'}`}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
           <div className="flex-1 overflow-y-auto p-4">
             {loading ? (

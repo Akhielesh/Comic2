@@ -75,6 +75,10 @@ export interface ChatSession {
   dreamstreamAccess: boolean;
   /** Enabled agentic tool names (DuckDuckGo etc.). Empty = no tools. */
   tools: string[];
+  /** Auto mode: the app picks the best model + tools per message. */
+  autoMode?: boolean;
+  /** In Auto mode, restrict picks to this source (null = any allowed source). */
+  lockedSource?: ModelSourceId | null;
   systemPrompt?: string;
   turns: ChatTurn[];
   createdAt: number;
