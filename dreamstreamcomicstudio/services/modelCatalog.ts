@@ -13,6 +13,8 @@ export interface CatalogModel {
   source: ModelSource;
   description?: string;
   contextLength?: number;
+  /** Unix seconds the model was published upstream (for "newest" sorting). */
+  createdAt?: number;
   inputModalities: string[];
   outputModalities: string[];
   supportedParameters: string[];
@@ -131,7 +133,11 @@ export interface ModelVerification {
         is_free_tier?: boolean;
         usage_monthly?: number;
         byok_usage_monthly?: number;
+        /** Per-key rate limit, when the source reports one. */
+        rate_limit?: { requests?: number; interval?: string } | null;
       };
+      /** Account-level credits (distinct from the per-key limit above). */
+      credits?: { total: number; usage: number; remaining: number } | null;
     };
     nvidia: { connected: boolean; modelCount: number; note?: string };
   };

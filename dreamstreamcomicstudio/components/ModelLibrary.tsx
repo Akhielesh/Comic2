@@ -11,14 +11,16 @@ import {
   X,
   Sparkles,
   Scale,
-  Plus,
   Wand2,
   Zap,
   ThumbsUp,
   ThumbsDown,
   ShieldCheck,
   ExternalLink,
-  MessageSquare
+  MessageSquare,
+  SlidersHorizontal,
+  ArrowUpDown,
+  RotateCcw
 } from 'lucide-react';
 import {
   fetchModelCatalog,
@@ -43,6 +45,7 @@ import { getCapabilities, featureSupport, FEATURE_LABELS, capabilityBadges, QUER
 import { buildSmartTeam, TASK_PROFILES, pickBestForDomain, type SmartMode, type SmartTask, type SmartTeam } from '../services/smartModelSelection';
 import { recordModelFeedback, latestVote, feedbackSummary, MODEL_FEEDBACK_CHANGED, type FeedbackVote } from '../services/modelFeedback';
 import { topDomains, domainStrength, DOMAIN_META, FILTERABLE_DOMAINS, type DomainId } from '../services/modelDomains';
+import { getModelBenchmarks, BENCHMARK_METRICS, formatScore, type BenchmarkMetricId } from '../services/modelBenchmarks';
 import { DomainTags, ModelInsightsPanel } from './models/ModelInsights';
 import { InfoDot } from './common/InfoTooltip';
 import type { GLOSSARY } from '../services/modelGlossary';
@@ -179,6 +182,37 @@ const matchesFilter = (model: CatalogModel, filters: Set<FilterKey>, domains: Se
   return true;
 };
 
+// ── Sorting ──────────────────────────────────────────────────────────────────
+type SortKey = 'relevance' | 'context_desc' | 'context_asc' | 'newest' | 'cheapest' | 'benchmark' | 'name';
+const SORT_OPTIONS: { key: SortKey; label: string }[] = [
+  { key: 'relevance', label: 'Best match' },
+  { key: 'benchmark', label: 'Top benchmark (Arena Elo)' },
+  { key: 'context_desc', label: 'Context: high → low' },
+  { key: 'context_asc', label: 'Context: low → high' },
+  { key: 'newest', label: 'Newest first' },
+  { key: 'cheapest', label: 'Cheapest first' },
+  { key: 'name', label: 'Name (A–Z)' }
+];
+
+const arenaElo = (m: CatalogModel): number => getModelBenchmarks(m.id)?.scores.arena_elo ?? 0;
+// Cheapest yardstick: per-image price for image models, per-output-token for text; free sorts first.
+const priceOf = (m: CatalogModel): number =>
+  m.supportsImageOutput ? (m.pricing.imagePerImage || Number.POSITIVE_INFINITY) : (m.pricing.completionPerToken || Number.POSITIVE_INFINITY);
+
+const sortModels = (list: CatalogModel[], sortBy: SortKey): CatalogModel[] => {
+  if (sortBy === 'relevance') return list;
+  const out = [...list];
+  switch (sortBy) {
+    case 'context_desc': out.sort((a, b) => (b.contextLength || 0) - (a.contextLength || 0)); break;
+    case 'context_asc': out.sort((a, b) => (a.contextLength || 0) - (b.contextLength || 0)); break;
+    case 'newest': out.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)); break;
+    case 'cheapest': out.sort((a, b) => priceOf(a) - priceOf(b)); break;
+    case 'benchmark': out.sort((a, b) => arenaElo(b) - arenaElo(a)); break;
+    case 'name': out.sort((a, b) => a.name.localeCompare(b.name)); break;
+  }
+  return out;
+};
+
 const UseModelControl: React.FC<{ model: CatalogModel; selection: ModelSelection; onUse: (slot: ModelSlot) => void }> = ({ model, selection, onUse }) => {
   const [confirming, setConfirming] = useState(false);
   const slot = slotOf(model);
@@ -292,13 +326,13 @@ const ModelCard: React.FC<{
 const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; onClose: () => void; onUse: (slot: ModelSlot) => void; onStartChat?: (model: { id: string; name: string; source: 'openrouter' | 'nvidia' }) => void }> = ({ model, selection, onClose, onUse, onStartChat }) => (
   <div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
     <div className="bg-white border-4 border-black rounded-xl shadow-comic max-w-2xl w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-      <div className="sticky top-0 bg-white border-b-2 border-black px-5 py-4 flex items-start justify-between gap-3">
+      <div className="sticky top-0 z-10 bg-white rounded-t-lg border-b-2 border-black px-5 py-4 flex items-start justify-between gap-3 shadow-[0_2px_0_0_rgba(0,0,0,0.06)]">
         <div className="min-w-0">
           <div className="text-[10px] font-bold uppercase text-slate-500">{sourceLabel(providerOrigin(model))}</div>
-          <h2 className="text-xl font-display leading-tight">{model.name}</h2>
+          <h2 className="text-xl font-display leading-tight truncate">{model.name}</h2>
           <code className="text-[11px] text-slate-500 break-all">{model.id}</code>
         </div>
-        <button onClick={onClose} className="border-2 border-black rounded p-1 hover:bg-brand-yellow shrink-0"><X className="w-4 h-4" /></button>
+        <button onClick={onClose} className="border-2 border-black rounded p-1 hover:bg-brand-yellow shrink-0" aria-label="Close"><X className="w-4 h-4" /></button>
       </div>
 
       <div className="p-5 space-y-4">
@@ -406,53 +440,100 @@ const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; on
   </div>
 );
 
+// Benchmark order shown in the compare table.
+const COMPARE_BENCH_ORDER: BenchmarkMetricId[] = ['arena_elo', 'mmlu', 'gpqa', 'humaneval', 'swebench', 'math'];
+const benchCell = (m: CatalogModel, metric: BenchmarkMetricId): React.ReactNode => {
+  const v = getModelBenchmarks(m.id)?.scores[metric];
+  return v != null ? <span className="font-mono">{formatScore(metric, v)}</span> : <span className="text-slate-300">—</span>;
+};
+
+type CompareRow = { label: string; info?: keyof typeof GLOSSARY; render: (m: CatalogModel) => React.ReactNode };
+
 const CompareModal: React.FC<{ models: CatalogModel[]; selection: ModelSelection; onClose: () => void; onUse: (model: CatalogModel, slot: ModelSlot) => void }> = ({ models, selection, onClose, onUse }) => {
-  const rows: { label: string; render: (m: CatalogModel) => React.ReactNode }[] = [
-    { label: 'Cost', render: (m) => <Badge className={BAND_COLOR[m.costBand]}>{costLabel(m)}</Badge> },
-    { label: 'Free', render: (m) => (m.isFree ? '✅' : '—') },
-    { label: 'Output', render: (m) => (m.supportsImageOutput ? 'Image' : 'Text') },
-    { label: 'Reference images', render: (m) => (m.supportsImageInput ? '✅' : '—') },
-    { label: 'Image editing', render: (m) => (getCapabilities(m).imageEditing ? '✅' : '—') },
-    { label: 'Reasoning', render: (m) => (getCapabilities(m).reasoning ? '✅' : '—') },
-    { label: 'Structured JSON', render: (m) => (m.supportsJsonOutput ? '✅' : '—') },
-    { label: 'Context', render: (m) => (m.contextLength ? `${Math.round(m.contextLength / 1000)}K` : '—') },
-    { label: 'Best at', render: (m) => { const d = topDomains(m, 3, 55); return d.length ? d.map((x) => DOMAIN_META[x.id].label).join(', ') : '—'; } },
-    { label: 'Coding', render: (m) => { const s = domainStrength(m, 'coding'); return s ? `${s}/100` : '—'; } },
-    { label: 'Science', render: (m) => { const s = domainStrength(m, 'science'); return s ? `${s}/100` : '—'; } },
-    { label: 'Input $/Mtok', render: (m) => perMillion(m.pricing.promptPerToken) },
-    { label: 'Output $/Mtok', render: (m) => perMillion(m.pricing.completionPerToken) },
-    { label: 'Per image', render: (m) => (m.pricing.imagePerImage > 0 ? `$${m.pricing.imagePerImage.toFixed(3)}` : '—') },
-    { label: 'Roles', render: (m) => m.roles.join(', ') || '—' },
-    { label: 'Best for', render: (m) => (m.possibilities[0] || '—') },
-    { label: 'Watch out', render: (m) => (m.drawbacks[0] || 'None noted') }
+  const inUse = (m: CatalogModel) => selection.textModel === m.id || selection.imageModel === m.id;
+
+  const sections: { title: string; rows: CompareRow[] }[] = [
+    {
+      title: 'Overview',
+      rows: [
+        { label: 'Cost', render: (m) => <Badge className={BAND_COLOR[m.costBand]}>{costLabel(m)}</Badge> },
+        { label: 'Output', render: (m) => (m.supportsImageOutput ? 'Image' : 'Text') },
+        { label: 'Context', info: 'context_length', render: (m) => (m.contextLength ? `${Math.round(m.contextLength / 1000)}K` : '—') },
+        { label: 'Best at', render: (m) => { const d = topDomains(m, 3, 55); return d.length ? d.map((x) => DOMAIN_META[x.id].label).join(', ') : <span className="text-slate-300">—</span>; } }
+      ]
+    },
+    {
+      title: 'Benchmarks',
+      rows: COMPARE_BENCH_ORDER.map((metric) => ({
+        label: BENCHMARK_METRICS[metric].label,
+        info: BENCHMARK_METRICS[metric].glossary,
+        render: (m: CatalogModel) => benchCell(m, metric)
+      }))
+    },
+    {
+      title: 'Capabilities',
+      rows: [
+        { label: 'Reference images', render: (m) => (m.supportsImageInput ? <Check className="w-4 h-4 text-green-600" /> : <span className="text-slate-300">—</span>) },
+        { label: 'Image editing', render: (m) => (getCapabilities(m).imageEditing ? <Check className="w-4 h-4 text-green-600" /> : <span className="text-slate-300">—</span>) },
+        { label: 'Reasoning', info: 'reasoning', render: (m) => (getCapabilities(m).reasoning ? <Check className="w-4 h-4 text-green-600" /> : <span className="text-slate-300">—</span>) },
+        { label: 'Structured JSON', info: 'structured_json', render: (m) => (m.supportsJsonOutput ? <Check className="w-4 h-4 text-green-600" /> : <span className="text-slate-300">—</span>) }
+      ]
+    },
+    {
+      title: 'Pricing',
+      rows: [
+        { label: 'Input / 1M tok', info: 'token', render: (m) => perMillion(m.pricing.promptPerToken) },
+        { label: 'Output / 1M tok', info: 'token', render: (m) => perMillion(m.pricing.completionPerToken) },
+        { label: 'Per image', render: (m) => (m.pricing.imagePerImage > 0 ? `$${m.pricing.imagePerImage.toFixed(3)}` : <span className="text-slate-300">—</span>) }
+      ]
+    },
+    {
+      title: 'In practice',
+      rows: [
+        { label: 'Best for', render: (m) => (m.possibilities[0] || <span className="text-slate-300">—</span>) },
+        { label: 'Watch out', render: (m) => (m.drawbacks[0] || <span className="text-slate-400">None noted</span>) }
+      ]
+    }
   ];
+
   return (
     <div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-white border-4 border-black rounded-xl shadow-comic max-w-5xl w-full max-h-[85vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="sticky top-0 bg-white border-b-2 border-black px-5 py-4 flex items-center justify-between">
-          <h2 className="text-xl font-display flex items-center gap-2"><Scale className="w-5 h-5" /> Compare {models.length} models</h2>
+        <div className="sticky top-0 z-10 bg-white border-b-2 border-black px-5 py-4 flex items-center justify-between">
+          <h2 className="text-xl font-display flex items-center gap-2"><Scale className="w-5 h-5" /> Comparing {models.length} models</h2>
           <button onClick={onClose} className="border-2 border-black rounded p-1 hover:bg-brand-yellow"><X className="w-4 h-4" /></button>
         </div>
         <div className="p-4 overflow-x-auto">
           <table className="w-full border-collapse text-xs">
             <thead>
               <tr>
-                <th className="text-left p-2 sticky left-0 bg-white" />
+                <th className="text-left p-2 sticky left-0 z-10 bg-white" />
                 {models.map((m) => (
-                  <th key={m.id} className="p-2 align-top text-left min-w-[10rem]">
+                  <th key={m.id} className={`p-2 align-top text-left min-w-[11rem] border-b-2 border-black ${inUse(m) ? 'bg-brand-yellow/30' : ''}`}>
+                    <div className="text-[10px] font-bold uppercase text-slate-500">{sourceLabel(providerOrigin(m))}</div>
                     <div className="font-bold leading-tight">{m.name}</div>
                     <div className="text-[10px] text-slate-400 font-mono break-all">{m.id}</div>
+                    {inUse(m) && <div className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-bold text-green-700"><Check className="w-3 h-3" /> In use</div>}
                     <div className="mt-1"><UseModelControl model={m} selection={selection} onUse={(slot) => onUse(m, slot)} /></div>
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
-                <tr key={row.label} className="border-t border-slate-200">
-                  <td className="p-2 font-bold text-slate-500 uppercase text-[10px] sticky left-0 bg-white whitespace-nowrap">{row.label}</td>
-                  {models.map((m) => <td key={m.id} className="p-2 align-top">{row.render(m)}</td>)}
-                </tr>
+              {sections.map((section) => (
+                <React.Fragment key={section.title}>
+                  <tr>
+                    <td colSpan={models.length + 1} className="sticky left-0 bg-slate-100 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-slate-500 border-y border-slate-200">{section.title}</td>
+                  </tr>
+                  {section.rows.map((row) => (
+                    <tr key={section.title + row.label} className="border-t border-slate-100">
+                      <td className="p-2 font-bold text-slate-600 text-[11px] sticky left-0 bg-white whitespace-nowrap">
+                        <span className="inline-flex items-center gap-1">{row.label}{row.info && <InfoDot term={row.info} />}</span>
+                      </td>
+                      {models.map((m) => <td key={m.id} className={`p-2 align-top ${inUse(m) ? 'bg-brand-yellow/10' : ''}`}>{row.render(m)}</td>)}
+                    </tr>
+                  ))}
+                </React.Fragment>
               ))}
             </tbody>
           </table>
@@ -489,22 +570,74 @@ const VerifiedStrip: React.FC = () => {
   }
 
   const when = data.catalog.fetchedAt ? new Date(data.catalog.fetchedAt).toLocaleString() : 'just now';
-  const orUsage = data.sources.openrouter.liveKey?.usage;
+  const or = data.sources.openrouter;
+  const nvidia = data.sources.nvidia;
+  const credits = or.credits;
+  const key = or.liveKey;
+  const usd = (n: number) => `$${n.toFixed(2)}`;
+  const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const keyLimit = num(key?.limit);
+  const keyUsage = num(key?.usage) ?? 0;
+  const keyRemaining = num(key?.limit_remaining);
+
   return (
-    <div className="mt-4 border-2 border-black rounded-xl bg-green-50 p-3 text-xs flex flex-wrap items-center gap-x-4 gap-y-1 shadow-comic">
-      <span className="font-bold flex items-center gap-1.5 text-green-800"><ShieldCheck className="w-4 h-4" /> Verified live</span>
-      <span><span className="text-slate-500">Catalog:</span> {data.catalog.total} models · <span className="font-bold text-green-800">{data.catalog.freeCount} free</span></span>
-      <span>
-        <span className="text-slate-500">OpenRouter:</span>{' '}
-        {data.sources.openrouter.connected ? `connected (${data.sources.openrouter.modelCount})` : 'not connected'}
-        {typeof orUsage === 'number' ? ` · $${orUsage.toFixed(2)} used` : ''}
-      </span>
-      <span>
-        <span className="text-slate-500">NVIDIA:</span>{' '}
-        {data.sources.nvidia.connected ? `connected (${data.sources.nvidia.modelCount})` : 'not connected'}
-      </span>
-      <span className="text-slate-400 ml-auto">checked {when}</span>
-      <span className="basis-full text-slate-500">Free/paid and usage are reconciled against each source’s live API — labels aren’t guessed.</span>
+    <div className="mt-4 border-2 border-black rounded-xl bg-green-50 p-3 shadow-comic text-xs space-y-2">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <span className="font-bold flex items-center gap-1.5 text-green-800"><ShieldCheck className="w-4 h-4" /> Verified live</span>
+        <span><span className="text-slate-500">Catalog:</span> <b>{data.catalog.total}</b> models · <span className="font-bold text-green-800">{data.catalog.freeCount} free</span></span>
+        <span className="text-slate-400 ml-auto">checked {when}</span>
+      </div>
+
+      <div className="grid sm:grid-cols-2 gap-2">
+        {/* OpenRouter — account credits AND the per-key cap are shown separately, since they differ. */}
+        <div className="bg-white border-2 border-black rounded-lg p-2.5">
+          <div className="flex items-center justify-between">
+            <span className="font-bold">OpenRouter</span>
+            <span className={or.connected ? 'text-green-700 font-bold' : 'text-slate-400'}>{or.connected ? `connected · ${or.modelCount} models` : 'not connected'}</span>
+          </div>
+          {or.connected && (
+            <div className="mt-1.5 space-y-1 text-[11px]">
+              {credits ? (
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-slate-500 flex items-center gap-1">Account credits <InfoDot content={{ title: 'Account credits', body: 'Your OpenRouter account-wide balance (GET /credits), shared across every key on the account.' }} /></span>
+                  <span className="font-mono font-bold text-green-800">{usd(credits.remaining)} <span className="font-normal text-slate-400">left of {usd(credits.total)}</span></span>
+                </div>
+              ) : null}
+              {key ? (
+                keyLimit != null ? (
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-slate-500 flex items-center gap-1">This key’s cap <InfoDot content={{ title: 'Per-key limit', body: 'A spend cap set on THIS specific API key in OpenRouter. It can be higher or lower than your account credits — whichever runs out first stops you.' }} /></span>
+                    <span className="font-mono">{usd(keyUsage)} used{keyRemaining != null ? ` · ${usd(keyRemaining)} left` : ''} <span className="text-slate-400">of {usd(keyLimit)}</span></span>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-slate-500 flex items-center gap-1">This key’s cap <InfoDot content={{ title: 'Per-key limit', body: 'No per-key spend cap is set, so this key draws on your full account credits.' }} /></span>
+                    <span className="font-mono text-slate-400">no cap — uses account credits</span>
+                  </div>
+                )
+              ) : null}
+              {key?.rate_limit && (key.rate_limit.requests != null || key.rate_limit.interval != null) && (
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-slate-500 flex items-center gap-1">Rate limit <InfoDot content={{ title: 'Rate limit', body: 'How many requests this key may make per time window before OpenRouter throttles it.' }} /></span>
+                  <span className="font-mono">{key.rate_limit.requests ?? '—'} req / {key.rate_limit.interval ?? '—'}</span>
+                </div>
+              )}
+              {key?.is_free_tier && <div className="text-amber-600 font-bold">Free-tier key</div>}
+            </div>
+          )}
+        </div>
+
+        {/* NVIDIA */}
+        <div className="bg-white border-2 border-black rounded-lg p-2.5">
+          <div className="flex items-center justify-between">
+            <span className="font-bold">NVIDIA Build</span>
+            <span className={nvidia.connected ? 'text-green-700 font-bold' : 'text-slate-400'}>{nvidia.connected ? `connected · ${nvidia.modelCount} models` : 'not connected'}</span>
+          </div>
+          {nvidia.connected && nvidia.note && <div className="mt-1.5 text-[11px] text-slate-500 leading-snug">{nvidia.note}</div>}
+        </div>
+      </div>
+
+      <div className="text-slate-500">Free/paid, credits and limits are reconciled against each source’s live API — not guessed.</div>
     </div>
   );
 };
@@ -521,6 +654,9 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState<Set<FilterKey>>(new Set());
   const [domainFilters, setDomainFilters] = useState<Set<DomainId>>(new Set());
+  const [minContextK, setMinContextK] = useState(0); // context-length slider, in thousands of tokens
+  const [sortBy, setSortBy] = useState<SortKey>('relevance');
+  const [showFilters, setShowFilters] = useState(false);
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<CatalogModel | null>(null);
   const [selection, setSelection] = useState<ModelSelection>(() => getModelSelection());
@@ -561,8 +697,15 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reloadKey]);
 
-  const visible = useMemo(() => models.filter((model) => matchesFilter(model, filters, domainFilters, query)), [models, filters, domainFilters, query]);
+  const visible = useMemo(() => {
+    let list = models.filter((model) => matchesFilter(model, filters, domainFilters, query));
+    if (minContextK > 0) list = list.filter((m) => (m.contextLength || 0) >= minContextK * 1000);
+    return sortModels(list, sortBy);
+  }, [models, filters, domainFilters, query, minContextK, sortBy]);
   const compareModels = useMemo(() => compareIds.map((id) => models.find((m) => m.id === id)).filter((m): m is CatalogModel => !!m), [compareIds, models]);
+
+  const activeFilterCount = filters.size + domainFilters.size + (minContextK > 0 ? 1 : 0);
+  const resetFilters = () => { setFilters(new Set()); setDomainFilters(new Set()); setMinContextK(0); };
 
   const useModel = (model: CatalogModel, slot: ModelSlot) => setSelectedModel(slot, model.id, 'specific', model.source);
 
@@ -690,50 +833,87 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
           )}
         </div>
 
-        {/* Controls */}
-        <div className="mt-6 flex flex-col md:flex-row md:items-center gap-3">
-          <div className="flex flex-wrap gap-2">
-            {FILTERS.map((f) => {
-              const active = f.key === 'all' ? filters.size === 0 : filters.has(f.key);
-              const toggle = () => setFilters((prev) => {
-                if (f.key === 'all') return new Set<FilterKey>();
-                const next = new Set(prev);
-                if (next.has(f.key)) next.delete(f.key); else next.add(f.key);
-                return next;
-              });
-              return (
-                <button key={f.key} onClick={toggle} className={`text-xs font-bold uppercase px-3 py-1.5 rounded border-2 border-black transition-colors ${active ? 'bg-brand-blue text-white' : 'bg-white hover:bg-brand-yellow/60'}`}>{f.label}</button>
-              );
-            })}
-          </div>
-          <div className="md:ml-auto relative">
+        {/* Search · Sort · Filters toggle */}
+        <div className="mt-6 flex flex-col sm:flex-row sm:items-center gap-3">
+          <div className="relative flex-1">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search models…" className="pl-9 pr-3 py-2 border-2 border-black rounded-lg text-sm w-full md:w-64 focus:outline-none focus:bg-brand-yellow/10" />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search models, capabilities, domains…" className="pl-9 pr-3 py-2 border-2 border-black rounded-lg text-sm w-full focus:outline-none focus:bg-brand-yellow/10" />
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="flex items-center gap-1.5 border-2 border-black rounded-lg px-2.5 py-2 bg-white text-sm font-bold cursor-pointer">
+              <ArrowUpDown className="w-4 h-4 text-slate-500" />
+              <span className="sr-only">Sort by</span>
+              <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortKey)} className="bg-transparent focus:outline-none cursor-pointer pr-1">
+                {SORT_OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+              </select>
+            </label>
+            <button
+              onClick={() => setShowFilters((v) => !v)}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border-2 border-black text-sm font-bold transition-colors ${showFilters || activeFilterCount > 0 ? 'bg-brand-blue text-white' : 'bg-white hover:bg-brand-yellow/60'}`}
+            >
+              <SlidersHorizontal className="w-4 h-4" /> Filters
+              {activeFilterCount > 0 && <span className="ml-0.5 rounded-full bg-white text-brand-blue text-[10px] font-bold w-4 h-4 flex items-center justify-center border border-black">{activeFilterCount}</span>}
+            </button>
           </div>
         </div>
 
-        {/* Domain filters — benchmark-backed "good at" filters (Coding, Science, …). */}
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <span className="text-[10px] font-bold uppercase text-slate-500 flex items-center gap-1">
-            Good at <InfoDot content={{ title: 'Domain filters', body: 'Filters to models that are at least "Capable" (benchmark strength ≥ 55/100) in this area. Combine with the filters above — e.g. Coding + Free.' }} />
-          </span>
-          {FILTERABLE_DOMAINS.map((d) => {
-            const active = domainFilters.has(d);
-            const meta = DOMAIN_META[d];
-            return (
-              <button
-                key={d}
-                onClick={() => setDomainFilters((prev) => { const next = new Set(prev); next.has(d) ? next.delete(d) : next.add(d); return next; })}
-                className={`text-[11px] font-bold px-2.5 py-1 rounded border-2 border-black transition-colors ${active ? `${meta.tone}` : 'bg-white hover:bg-slate-100'}`}
-              >
-                {meta.label}
-              </button>
-            );
-          })}
-          {domainFilters.size > 0 && (
-            <button onClick={() => setDomainFilters(new Set())} className="text-[11px] font-bold text-slate-500 underline">clear</button>
-          )}
-        </div>
+        {/* Collapsible filter panel */}
+        {showFilters && (
+          <div className="mt-3 border-2 border-black rounded-xl bg-white p-4 shadow-comic space-y-4">
+            <div>
+              <div className="text-[10px] font-bold uppercase text-slate-500 mb-1.5">Type &amp; capabilities</div>
+              <div className="flex flex-wrap gap-2">
+                {FILTERS.map((f) => {
+                  const active = f.key === 'all' ? filters.size === 0 : filters.has(f.key);
+                  const toggle = () => setFilters((prev) => {
+                    if (f.key === 'all') return new Set<FilterKey>();
+                    const next = new Set(prev);
+                    if (next.has(f.key)) next.delete(f.key); else next.add(f.key);
+                    return next;
+                  });
+                  return (
+                    <button key={f.key} onClick={toggle} className={`text-[11px] font-bold uppercase px-2.5 py-1 rounded border-2 border-black transition-colors ${active ? 'bg-brand-blue text-white' : 'bg-white hover:bg-brand-yellow/60'}`}>{f.label}</button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <div className="text-[10px] font-bold uppercase text-slate-500 mb-1.5 flex items-center gap-1">
+                Good at (benchmark-backed) <InfoDot content={{ title: 'Domain filters', body: 'Keeps models that are at least "Capable" (benchmark strength ≥ 55/100) in this area. ANDs with the rest — e.g. Coding + Free.' }} />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {FILTERABLE_DOMAINS.map((d) => {
+                  const active = domainFilters.has(d);
+                  const meta = DOMAIN_META[d];
+                  return (
+                    <button
+                      key={d}
+                      onClick={() => setDomainFilters((prev) => { const next = new Set(prev); next.has(d) ? next.delete(d) : next.add(d); return next; })}
+                      className={`text-[11px] font-bold px-2.5 py-1 rounded border-2 border-black transition-colors ${active ? meta.tone : 'bg-white hover:bg-slate-100'}`}
+                    >
+                      {meta.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div>
+              <div className="text-[10px] font-bold uppercase text-slate-500 mb-1.5 flex items-center gap-1">
+                Minimum context window <InfoDot term="context_length" />
+                <span className="ml-auto font-mono text-[11px] font-bold text-slate-700">{minContextK === 0 ? 'Any' : `≥ ${minContextK}K`}</span>
+              </div>
+              <input type="range" min={0} max={1000} step={4} value={minContextK} onChange={(e) => setMinContextK(Number(e.target.value))} className="w-full accent-brand-blue cursor-pointer" />
+              <div className="flex justify-between text-[9px] font-bold text-slate-400"><span>Any</span><span>200K</span><span>500K</span><span>1M+</span></div>
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t border-dashed border-slate-200">
+              <span className="text-[11px] font-bold text-slate-500">{visible.length} match{visible.length === 1 ? '' : 'es'}</span>
+              <button onClick={resetFilters} disabled={activeFilterCount === 0} className="text-[11px] font-bold px-2.5 py-1 rounded border-2 border-black bg-white hover:bg-slate-100 disabled:opacity-40 flex items-center gap-1"><RotateCcw className="w-3 h-3" /> Reset filters</button>
+            </div>
+          </div>
+        )}
 
         {degraded && (
           <div className="mt-4 bg-amber-100 border-2 border-black rounded-lg p-3 text-sm flex gap-2">
@@ -781,14 +961,24 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
       {selected && <DetailModal model={selected} selection={selection} onClose={() => setSelected(null)} onUse={(slot) => useModel(selected, slot)} onStartChat={onStartChat} />}
       {showCompare && compareModels.length > 0 && <CompareModal models={compareModels} selection={selection} onClose={() => setShowCompare(false)} onUse={useModel} />}
 
-      {/* Compare tray */}
+      {/* Compare tray — shows the actual models picked (as removable chips), not just a count. */}
       {compareIds.length > 0 && (
         <div className="fixed bottom-0 left-0 right-0 z-40 bg-white border-t-4 border-black shadow-comic">
-          <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between gap-3">
-            <div className="text-sm font-bold flex items-center gap-2"><Scale className="w-4 h-4" /> {compareIds.length}/{MAX_COMPARE} selected to compare</div>
-            <div className="flex items-center gap-2">
+          <div className="max-w-7xl mx-auto px-6 py-3 flex items-center gap-3">
+            <div className="text-sm font-bold flex items-center gap-1.5 shrink-0">
+              <Scale className="w-4 h-4" /> Compare <span className="font-normal text-slate-400">{compareIds.length}/{MAX_COMPARE}</span>
+            </div>
+            <div className="flex items-center gap-1.5 flex-1 overflow-x-auto py-0.5">
+              {compareModels.map((m) => (
+                <span key={m.id} className="flex items-center gap-1 shrink-0 text-[11px] font-bold border-2 border-black rounded-full pl-2 pr-1 py-0.5 bg-brand-yellow/40 max-w-[14rem]">
+                  <span className="truncate">{m.name}</span>
+                  <button onClick={() => toggleCompare(m.id)} className="rounded-full hover:bg-black/10 p-0.5 shrink-0" aria-label={`Remove ${m.name} from comparison`}><X className="w-3 h-3" /></button>
+                </span>
+              ))}
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
               <button onClick={() => setCompareIds([])} className="text-xs font-bold px-3 py-1.5 rounded border-2 border-black bg-white hover:bg-slate-100">Clear</button>
-              <button onClick={() => setShowCompare(true)} disabled={compareIds.length < 2} className="text-xs font-bold px-3 py-1.5 rounded border-2 border-black bg-brand-blue text-white disabled:opacity-50 flex items-center gap-1"><Plus className="w-3 h-3" /> Compare</button>
+              <button onClick={() => setShowCompare(true)} disabled={compareIds.length < 2} className="text-xs font-bold px-3 py-1.5 rounded border-2 border-black bg-brand-blue text-white disabled:opacity-50 flex items-center gap-1"><Scale className="w-3 h-3" /> Compare {compareIds.length}</button>
             </div>
           </div>
         </div>
