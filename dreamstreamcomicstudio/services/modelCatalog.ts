@@ -54,7 +54,39 @@ export interface CatalogQuery {
   q?: string;
 }
 
-export const fetchModelCatalog = (query: CatalogQuery = {}): Promise<CatalogResponse> => {
+// Last-good catalog kept in localStorage so the Library paints instantly on revisit/refresh and
+// survives a backend hiccup (e.g. a cold start that times out) instead of showing a blank spinner.
+const CATALOG_CACHE_KEY = 'dreamstream_model_catalog_v1';
+const CATALOG_CACHE_TTL_MS = 24 * 60 * 60_000; // a day; it's only a fast-paint fallback
+
+export const loadCachedCatalog = (): CatalogResponse | null => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(CATALOG_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { at: number; data: CatalogResponse };
+    if (!parsed?.data?.models?.length) return null;
+    if (Date.now() - parsed.at > CATALOG_CACHE_TTL_MS) return null;
+    return parsed.data;
+  } catch {
+    return null;
+  }
+};
+
+const saveCachedCatalog = (data: CatalogResponse) => {
+  if (typeof window === 'undefined' || !data?.models?.length) return;
+  try {
+    window.localStorage.setItem(CATALOG_CACHE_KEY, JSON.stringify({ at: Date.now(), data }));
+  } catch {
+    /* ignore quota errors */
+  }
+};
+
+/**
+ * Fetch the catalog with a hard timeout and one retry, so the UI never hangs forever on a stalled
+ * request (the HTTP/2 reset we saw on cold starts). On success the result is cached locally.
+ */
+export const fetchModelCatalog = async (query: CatalogQuery = {}, opts?: { timeoutMs?: number; retries?: number }): Promise<CatalogResponse> => {
   const params = new URLSearchParams();
   if (query.free) params.set('free', 'true');
   if (query.modality) params.set('modality', query.modality);
@@ -62,7 +94,25 @@ export const fetchModelCatalog = (query: CatalogQuery = {}): Promise<CatalogResp
   if (query.source) params.set('source', query.source);
   if (query.q) params.set('q', query.q);
   const qs = params.toString();
-  return get<CatalogResponse>(`/api/models/catalog${qs ? `?${qs}` : ''}`);
+  const path = `/api/models/catalog${qs ? `?${qs}` : ''}`;
+  const timeoutMs = opts?.timeoutMs ?? 15_000;
+  const retries = opts?.retries ?? 1;
+
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const data = await get<CatalogResponse>(path, { signal: controller.signal });
+      saveCachedCatalog(data);
+      return data;
+    } catch (err) {
+      lastErr = err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('Failed to load the model catalog.');
 };
 
 /** Live verification: what we SHOW reconciled against each source's real API data. */

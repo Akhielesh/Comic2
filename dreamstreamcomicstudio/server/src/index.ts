@@ -1,6 +1,7 @@
 import 'dotenv/config'; // Load env vars before anything else
 import express from 'express';
 import cors from 'cors';
+import compression from 'compression';
 
 import {
   COMICFORGE_ENABLED,
@@ -38,6 +39,7 @@ import { moderationRouter } from './routes/moderation.js';
 import { sharingRouter } from './routes/sharing.js';
 import { comicForgeRouter } from './routes/comicforge.js';
 import { modelsRouter } from './routes/models.js';
+import { prewarmCatalog, startCatalogRefreshLoop } from './services/modelCatalog.js';
 import { keysRouter } from './routes/keys.js';
 
 validateRuntimeConfig();
@@ -53,6 +55,17 @@ const allowedOrigins = new Set(CORS_ORIGINS);
 app.use(attachRequestContext);
 app.use(requestLogger);
 app.use(applySecurityHeaders);
+// Gzip responses — the model catalog is a large JSON payload (~440KB uncompressed); compressing it
+// to a fraction of that prevents slow transfers and the intermittent HTTP/2 stream resets they cause.
+// Explicitly skip Server-Sent Event streams (chat/generation), where buffering would stall delivery.
+app.use(
+  compression({
+    filter: (req, res) => {
+      if (res.getHeader('Content-Type')?.toString().includes('text/event-stream')) return false;
+      return compression.filter(req, res);
+    }
+  })
+);
 app.use(
   cors({
     origin: (origin, callback) => {
@@ -148,6 +161,10 @@ app.use(errorHandler);
 
 app.listen(PORT, () => {
   console.log(`DreamStream API listening on :${PORT}`);
+  // Warm the model catalog from the durable index immediately so the first /api/models/catalog
+  // request is instant (no slow live fetch on a cold start), then keep it warm in the background.
+  void prewarmCatalog();
+  startCatalogRefreshLoop();
 });
 
 // Run the ComicForge worker in-process when the feature is enabled and a queue is
