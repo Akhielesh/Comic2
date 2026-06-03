@@ -106,7 +106,7 @@ export const postStream = async <TReq>(path: string, body: TReq, options?: { sig
   return res;
 };
 
-export const get = async <TRes>(path: string, options?: { modelId?: string }): Promise<TRes> => {
+export const get = async <TRes>(path: string, options?: { modelId?: string; signal?: AbortSignal }): Promise<TRes> => {
   const geminiKey = isProviderEnabled('gemini') ? (getActiveKeyValue('gemini') || getGeminiKey()) : null;
   const fluxKey = isProviderEnabled('pixazo') ? (getActiveKeyValue('pixazo') || getFluxKeyInfo().key) : null;
   const openRouterKey = isProviderEnabled('openrouter') ? (getActiveKeyValue('openrouter') || getOpenRouterKey()) : null;
@@ -114,6 +114,7 @@ export const get = async <TRes>(path: string, options?: { modelId?: string }): P
   const token = await getAuthToken();
 
   const res = await fetch(buildApiUrl(path), {
+    signal: options?.signal,
     headers: {
       ...(geminiKey ? { 'X-Gemini-Key': geminiKey } : {}),
       ...(fluxKey ? { 'X-Pixazo-Key': fluxKey } : {}),

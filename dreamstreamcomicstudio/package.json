@@ -36,6 +36,7 @@
     "@supabase/supabase-js": "^2.95.3",
     "@types/dotenv": "^6.1.1",
     "bullmq": "^5.58.0",
+    "compression": "^1.8.1",
     "cors": "^2.8.5",
     "dotenv": "^17.2.4",
     "express": "^4.19.2",
@@ -56,6 +57,7 @@
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
+    "@types/compression": "^1.8.1",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/leaflet": "^1.9.21",

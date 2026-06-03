@@ -7,6 +7,7 @@
 
 import { getProvider, resolveProviderContext } from '../ai/gateway.js';
 import { annotateModels, type AnnotatedModel } from '../ai/catalogAnnotations.js';
+import { persistHarvestedModels, loadPersistedModels } from './modelCatalogStore.js';
 import type { AIProviderId } from '../ai/providers/types.js';
 
 const CATALOG_TTL_MS = (() => {
@@ -34,26 +35,58 @@ const refresh = async (): Promise<AnnotatedModel[]> => {
   const raw = await provider.listModels(resolveProviderContext());
   const models = annotateModels(raw);
   cache = { models, fetchedAt: Date.now() };
+  // Durable index: mirror the live OpenRouter catalog into Supabase so cold starts can serve it
+  // instantly (stale-while-revalidate) instead of doing a slow live fetch on the request path.
+  // Fire-and-forget; never blocks or throws into the request.
+  void persistHarvestedModels('openrouter', models);
   return models;
 };
 
+/** Kick a live refresh without awaiting it; swallows errors so callers stay responsive. */
+const refreshInBackground = (): void => {
+  if (!inflight) {
+    inflight = refresh().finally(() => { inflight = null; });
+  }
+  inflight.catch(() => { /* logged elsewhere; stale data already served */ });
+};
+
 /**
- * Returns the annotated catalog. Uses cache within the TTL; refreshes otherwise.
- * Never throws — on failure it returns the last good snapshot (or empty) with
- * `degraded: true` so the Library page degrades gracefully.
+ * Returns the annotated catalog with a stale-while-revalidate strategy so the Model Library is
+ * always fast and never blank:
+ *   1. Fresh in-memory snapshot → serve instantly.
+ *   2. Stale in-memory snapshot → serve instantly, refresh in the background.
+ *   3. Cold start (no memory) → serve the durable Supabase index instantly, refresh in background.
+ *   4. Nothing cached anywhere (or forced) → await a live fetch.
+ * Never throws — on total failure it returns the last snapshot (or empty) flagged `degraded`.
  */
 export const getCatalog = async (force = false): Promise<CatalogResult> => {
   const fresh = cache && Date.now() - cache.fetchedAt < CATALOG_TTL_MS;
+
+  // 1. Fresh memory cache.
   if (cache && fresh && !force) {
     return { models: cache.models, fetchedAt: cache.fetchedAt, degraded: false };
   }
 
-  if (!inflight) {
-    inflight = refresh().finally(() => {
-      inflight = null;
-    });
+  // 2. Stale memory cache → serve now, revalidate in background.
+  if (cache && !force) {
+    refreshInBackground();
+    return { models: cache.models, fetchedAt: cache.fetchedAt, degraded: false };
   }
 
+  // 3. Cold start → hydrate from the durable index and serve immediately, revalidate in background.
+  if (!cache && !force) {
+    const persisted = await loadPersistedModels('openrouter');
+    if (persisted.length) {
+      cache = { models: persisted, fetchedAt: 0 }; // fetchedAt 0 = treat as stale so it revalidates
+      refreshInBackground();
+      return { models: persisted, fetchedAt: null, degraded: false };
+    }
+  }
+
+  // 4. Nothing to serve (or a forced refresh): we must await a live fetch.
+  if (!inflight) {
+    inflight = refresh().finally(() => { inflight = null; });
+  }
   try {
     const models = await inflight;
     return { models, fetchedAt: cache?.fetchedAt ?? Date.now(), degraded: false };
@@ -66,6 +99,29 @@ export const getCatalog = async (force = false): Promise<CatalogResult> => {
       message
     };
   }
+};
+
+/**
+ * Warm the in-memory catalog at server boot so the very first request is instant. Tries the durable
+ * index first (fast), then kicks a background live refresh. Safe to call unconditionally; never throws.
+ */
+export const prewarmCatalog = async (): Promise<void> => {
+  try {
+    if (!cache) {
+      const persisted = await loadPersistedModels('openrouter');
+      if (persisted.length) cache = { models: persisted, fetchedAt: 0 };
+    }
+    refreshInBackground();
+  } catch {
+    /* boot must never fail because the catalog couldn't warm */
+  }
+};
+
+/** Start a periodic in-process refresh so the catalog stays warm without depending on traffic. */
+export const startCatalogRefreshLoop = (intervalMs = CATALOG_TTL_MS): NodeJS.Timeout => {
+  const timer = setInterval(() => refreshInBackground(), Math.max(60_000, intervalMs));
+  timer.unref?.(); // don't keep the process alive solely for this
+  return timer;
 };
 
 export type CatalogFilters = {
