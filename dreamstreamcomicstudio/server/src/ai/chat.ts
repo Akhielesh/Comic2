@@ -40,6 +40,11 @@ export interface RunChatParams {
   /** Already-mapped conversation turns (user/assistant), most recent last. */
   messages: ChatMessage[];
   systemPrompt?: string;
+  /**
+   * Replace the default DreamStream persona entirely (e.g. utility calls like the
+   * prompt enhancer that must return raw text, not richly-formatted Markdown).
+   */
+  systemOverride?: string;
   temperature?: number;
   maxTokens?: number;
   reasoningLevel?: ChatReasoningLevel;
@@ -160,8 +165,9 @@ export const runChat = async (
 }> => {
   // A custom persona / durable user memory augments the rich-format base prompt
   // rather than replacing it, so structured-Markdown rules always hold.
+  const base = params.systemOverride ?? CHAT_SYSTEM_PROMPT;
   const extra = params.systemPrompt?.trim();
-  let systemContent = extra ? `${CHAT_SYSTEM_PROMPT}\n\nAdditional instructions:\n${extra}` : CHAT_SYSTEM_PROMPT;
+  let systemContent = extra ? `${base}\n\nAdditional instructions:\n${extra}` : base;
   systemContent += buildContextBlock(params.clientContext);
   if (params.dreamstreamContextJson) {
     systemContent += dreamstreamBlock(params.dreamstreamContextJson);

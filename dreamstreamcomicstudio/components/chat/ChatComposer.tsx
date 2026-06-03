@@ -1,7 +1,8 @@
 import React, { useRef, useState } from 'react';
-import { Send, Paperclip, X, Globe, Brain, Square, Loader2, LayoutGrid, Search, FileText } from 'lucide-react';
+import { Send, Paperclip, X, Globe, Brain, Square, Loader2, LayoutGrid, Search, FileText, Wand2, Undo2 } from 'lucide-react';
 import type { ChatReasoningLevel } from '../../apiTypes';
 import type { ChatAttachment } from '../../services/chatStorage';
+import { enhancePrompt } from '../../services/chatApi';
 import { REASONING_LEVELS, type ChatModelFeatures } from '../../services/chatFeatures';
 import { CHAT_CONNECTORS, isConnectorEnabled, type ChatConnector } from '../../services/chatConnectors';
 import { Server } from 'lucide-react';
@@ -63,16 +64,47 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
 }) => {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const [enhancing, setEnhancing] = useState(false);
+  // Holds the pre-enhancement draft so the user can undo a suggestion they dislike.
+  const [beforeEnhance, setBeforeEnhance] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const canSend = (text.trim().length > 0 || attachments.length > 0) && !busy;
+  const canEnhance = text.trim().length > 2 && !busy && !enhancing;
+
+  // Improve the draft prompt in place (intent preserved); keeps the original for undo.
+  const handleEnhance = async () => {
+    if (!canEnhance) return;
+    const prev = text;
+    setEnhancing(true);
+    try {
+      const { enhanced } = await enhancePrompt(prev);
+      if (enhanced && enhanced.trim() && enhanced.trim() !== prev.trim()) {
+        setText(enhanced.trim());
+        setBeforeEnhance(prev);
+        requestAnimationFrame(() => textareaRef.current && autoGrow(textareaRef.current));
+      }
+    } catch {
+      /* leave the draft untouched on failure */
+    } finally {
+      setEnhancing(false);
+    }
+  };
+
+  const undoEnhance = () => {
+    if (beforeEnhance === null) return;
+    setText(beforeEnhance);
+    setBeforeEnhance(null);
+    requestAnimationFrame(() => textareaRef.current && autoGrow(textareaRef.current));
+  };
 
   const submit = () => {
     if (!canSend) return;
     onSend(text.trim(), attachments);
     setText('');
     setAttachments([]);
+    setBeforeEnhance(null);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
   };
 
@@ -186,6 +218,17 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
         </div>
       )}
 
+      {beforeEnhance !== null && (
+        <div className="flex items-center gap-1.5 mb-1.5 text-[11px] text-violet-700">
+          <Wand2 className="w-3.5 h-3.5" />
+          <span className="font-bold">Prompt enhanced.</span>
+          <span className="text-slate-500">Review it, then send — or</span>
+          <button onClick={undoEnhance} className="flex items-center gap-0.5 font-bold hover:text-black underline">
+            <Undo2 className="w-3 h-3" /> undo
+          </button>
+        </div>
+      )}
+
       <div className="flex items-end gap-2">
         {(
           <>
@@ -205,6 +248,14 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
             >
               <Paperclip className="w-4 h-4" />
             </button>
+            <button
+              onClick={handleEnhance}
+              disabled={!canEnhance}
+              className="shrink-0 border-2 border-black rounded-lg p-2.5 bg-white hover:bg-violet-200 disabled:opacity-40"
+              title="Improve my prompt (keeps your intent — review before sending)"
+            >
+              {enhancing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
+            </button>
           </>
         )}
 
@@ -213,6 +264,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
           value={text}
           onChange={(e) => {
             setText(e.target.value);
+            if (beforeEnhance !== null) setBeforeEnhance(null);
             autoGrow(e.target);
           }}
           onKeyDown={handleKeyDown}

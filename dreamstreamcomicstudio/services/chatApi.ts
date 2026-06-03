@@ -33,6 +33,13 @@ export const sendChatMessage = (
   options?: { signal?: AbortSignal }
 ): Promise<ChatResponse> => post<ChatRequest, ChatResponse>('/api/chat', req, options);
 
+/**
+ * Improve a rough prompt draft without changing the user's intent. Returns the
+ * enhanced text for the user to accept or discard — it never auto-sends.
+ */
+export const enhancePrompt = (text: string, options?: { signal?: AbortSignal }): Promise<{ enhanced: string; model?: string }> =>
+  post<{ text: string }, { enhanced: string; model?: string }>('/api/chat/enhance', { text }, options);
+
 export interface ChatStreamHandlers {
   /** Incremental answer text. */
   onDelta?: (content: string) => void;

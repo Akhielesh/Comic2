@@ -248,6 +248,51 @@ const runChatParams = (p: PreparedChat) => ({
   timeoutMs: TEXT_REQUEST_TIMEOUT_MS
 });
 
+// Prompt enhancer: rewrite a user's rough draft into a clearer, more specific
+// prompt WITHOUT changing their intent. Returns the improved text for the user to
+// accept or discard — it never auto-sends. Uses a fast free model and no tools.
+const ENHANCE_SYSTEM_PROMPT = `You are a prompt-improvement assistant. The user gives you a rough draft of a message they want to send to an AI assistant. Rewrite it so the AI understands exactly what they want.
+
+Rules:
+- PRESERVE the user's original intent and meaning. Do NOT add new requirements, constraints, or facts they didn't imply.
+- Make it clearer and more specific: clarify the goal, the desired output/format, and any obvious missing context, but only where it genuinely helps.
+- Keep it concise and natural — a better-phrased request, not an essay. Match the user's language.
+- If the draft is already clear, make only minimal improvements.
+- Return ONLY the improved prompt text. No preamble, no quotes, no explanation, no markdown headings.`;
+
+chatRouter.post('/enhance', async (req, res, next) => {
+  try {
+    const body = (req.body || {}) as { text?: string; source?: string };
+    const text = typeof body.text === 'string' ? body.text.trim().slice(0, 4000) : '';
+    if (!text) return res.status(400).json({ error: { message: 'text is required' } });
+
+    const resolved = resolveChatProvider(req, body.source);
+    if (!resolved) {
+      return res.status(503).json({
+        error: { message: 'Enhancing needs an OpenRouter or NVIDIA key.', code: 'MISSING_CHAT_API_KEY' }
+      });
+    }
+    const model =
+      resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : await pickTextModel({ preferFree: true });
+
+    const result = await runChat({
+      provider: resolved.provider,
+      apiKey: resolved.apiKey,
+      model,
+      messages: [{ role: 'user', content: `Improve this prompt:\n\n${text}` }],
+      systemOverride: ENHANCE_SYSTEM_PROMPT,
+      temperature: 0.4,
+      maxTokens: 600,
+      fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+      timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+    });
+    const enhanced = (result.text || '').trim();
+    res.json({ enhanced: enhanced || text, model: result.model });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Link unfurl for source hover-cards (OG/meta preview). SSRF-guarded + cached.
 chatRouter.get('/unfurl', async (req, res) => {
   const url = String(req.query.url || '');
