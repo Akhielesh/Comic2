@@ -9,6 +9,7 @@ import {
   type CatalogModel
 } from '../../services/modelCatalog';
 import { getCapabilities } from '../../services/modelCapabilities';
+import { isProviderEnabled } from '../../services/sourceGovernance';
 
 interface ChatModelPickerProps {
   selectedModelId: string | null;
@@ -155,7 +156,9 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
                   <div className="grid gap-2">
                     {filtered.map((model) => {
                       const isSelected = model.id === selectedModelId;
-                      const incompatible = Boolean(conversationHasImages) && !getCapabilities(model).imageInput;
+                      const visionIncompatible = Boolean(conversationHasImages) && !getCapabilities(model).imageInput;
+                      const sourceOff = !isProviderEnabled(model.source);
+                      const incompatible = visionIncompatible || sourceOff;
                       return (
                         <button
                           key={`${model.source}:${model.id}`}
@@ -168,7 +171,7 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
                                 ? 'bg-brand-yellow/40 shadow-comic-hover'
                                 : 'bg-white shadow-comic hover:bg-slate-50 hover:translate-x-[1px] hover:translate-y-[1px]'
                           }`}
-                          title={incompatible ? 'This model can’t read the images already in this chat' : undefined}
+                          title={sourceOff ? `${sourceLabel(providerOrigin(model))} is turned off in Settings → API Configuration` : visionIncompatible ? 'This model can’t read the images already in this chat' : undefined}
                         >
                           <div className="flex items-start justify-between gap-2">
                             <div className="min-w-0">
@@ -186,7 +189,9 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
                           {model.description && (
                             <p className="text-[11px] text-slate-600 mt-1.5 line-clamp-2">{model.description}</p>
                           )}
-                          {incompatible && (
+                          {sourceOff ? (
+                            <p className="text-[11px] font-bold text-slate-500 mt-1.5 flex items-center gap-1"><EyeOff className="w-3 h-3" /> {sourceLabel(providerOrigin(model))} is turned off in Settings</p>
+                          ) : visionIncompatible && (
                             <p className="text-[11px] font-bold text-brand-red mt-1.5 flex items-center gap-1"><EyeOff className="w-3 h-3" /> No vision — can’t read this chat’s images</p>
                           )}
                         </button>
