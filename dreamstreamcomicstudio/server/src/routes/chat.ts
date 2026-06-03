@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import type { ChatRequest, ChatResponse } from '../../../apiTypes.js';
+import type { ChatRequest, ChatResponse, ChatClientContext } from '../../../apiTypes.js';
 import { runChat, type ChatReasoningLevel } from '../ai/chat.js';
 import { pickTextModel, TEXT_FALLBACK } from '../ai/autoRouter.js';
 import { NVIDIA_TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS } from '../config.js';
@@ -67,6 +67,42 @@ const sanitizeMessage = (raw: unknown): ChatMessage | null => {
   return null;
 };
 
+// Validate + clamp the client-supplied runtime context. Everything is optional and
+// bounded; coordinates are coarsened to ~1km so we never store/forward precise
+// location, and strings are length-capped to keep the system prompt tidy.
+const sanitizeClientContext = (raw: unknown): ChatClientContext | undefined => {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const str = (v: unknown, max: number): string | undefined =>
+    typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined;
+  const ctx: ChatClientContext = {};
+  if (typeof r.now === 'string' && !Number.isNaN(Date.parse(r.now))) ctx.now = new Date(r.now).toISOString();
+  ctx.timezone = str(r.timezone, 64);
+  ctx.locale = str(r.locale, 32);
+  if (r.units === 'metric' || r.units === 'imperial') ctx.units = r.units;
+  if (r.location && typeof r.location === 'object') {
+    const l = r.location as Record<string, unknown>;
+    const num = (v: unknown): number | undefined =>
+      typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+    const lat = num(l.lat);
+    const lng = num(l.lng);
+    const location: NonNullable<ChatClientContext['location']> = {
+      city: str(l.city, 80),
+      region: str(l.region, 80),
+      country: str(l.country, 4)?.toUpperCase(),
+      // Coarsen to 2 decimals (~1.1km) — enough for weather/news, never precise.
+      lat: typeof lat === 'number' ? Math.round(lat * 100) / 100 : undefined,
+      lng: typeof lng === 'number' ? Math.round(lng * 100) / 100 : undefined,
+      approximate: true
+    };
+    if (location.city || location.region || location.country || typeof location.lat === 'number') {
+      ctx.location = location;
+    }
+  }
+  const hasAny = Object.values(ctx).some((v) => v !== undefined);
+  return hasAny ? ctx : undefined;
+};
+
 type ResolvedProvider = { provider: AIProviderId; apiKey: string };
 
 const resolveChatProvider = (req: any, requestedSource?: string): ResolvedProvider | null => {
@@ -91,6 +127,7 @@ type PreparedChat = {
   systemPrompt?: string;
   dreamstreamContextJson?: string;
   tools: ChatTool[];
+  clientContext?: ChatClientContext;
 };
 
 type PrepResult = { error: { status: number; body: unknown } } | { prepared: PreparedChat };
@@ -150,10 +187,21 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
     dreamstreamContextJson = raw.length > 12_000 ? `${raw.slice(0, 12_000)}…` : raw;
   }
 
+  const clientContext = sanitizeClientContext(body.clientContext);
+
   const requestedToolNames = Array.isArray(body.tools)
     ? body.tools.filter((t): t is string => typeof t === 'string' && KNOWN_TOOL_NAMES.includes(t))
     : [];
-  const builtinTools = resolved.provider === 'openrouter' ? resolveTools(requestedToolNames) : [];
+  const toolContext = clientContext
+    ? {
+        timezone: clientContext.timezone,
+        locale: clientContext.locale,
+        units: clientContext.units,
+        location: clientContext.location
+      }
+    : undefined;
+  const builtinTools =
+    resolved.provider === 'openrouter' ? resolveTools(requestedToolNames, toolContext) : [];
 
   // Custom MCP servers (OpenRouter only): list their tools and wrap them. Best-effort —
   // a broken/blocked server is skipped rather than failing the chat.
@@ -166,7 +214,7 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
   }
 
   return {
-    prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, systemPrompt, dreamstreamContextJson, tools: [...builtinTools, ...mcpTools] }
+    prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, systemPrompt, dreamstreamContextJson, tools: [...builtinTools, ...mcpTools], clientContext }
   };
 };
 
@@ -195,6 +243,7 @@ const runChatParams = (p: PreparedChat) => ({
   webSearch: p.webSearch,
   dreamstreamContextJson: p.dreamstreamContextJson,
   tools: p.tools,
+  clientContext: p.clientContext,
   fallbackModel: p.resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
   timeoutMs: TEXT_REQUEST_TIMEOUT_MS
 });

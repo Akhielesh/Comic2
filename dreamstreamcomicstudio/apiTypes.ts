@@ -682,6 +682,37 @@ export type McpServerConfig = {
   headers?: Record<string, string>;
 };
 
+/**
+ * Lightweight, privacy-conscious runtime context about the user's situation,
+ * gathered client-side and sent every turn so the model has basic situational
+ * awareness (date, timezone, locale, units, optional coarse location). Without
+ * this, "today", "latest news", "weather", and "near me" have no anchor.
+ *
+ * Location is only ever populated when the browser already has geolocation
+ * permission — it never triggers a prompt — and is treated as approximate.
+ */
+export type ChatClientContext = {
+  /** Client wall-clock time as an ISO string (authoritative for "now"/"today"). */
+  now?: string;
+  /** IANA timezone, e.g. "America/New_York". */
+  timezone?: string;
+  /** BCP-47 locale, e.g. "en-US". */
+  locale?: string;
+  /** Preferred measurement system, derived from locale (US/LR/MM ⇒ imperial). */
+  units?: 'metric' | 'imperial';
+  /** Coarse, opt-in location. Present only when geolocation is already granted. */
+  location?: {
+    city?: string;
+    region?: string;
+    /** ISO country code, e.g. "US". */
+    country?: string;
+    lat?: number;
+    lng?: number;
+    /** Always true today — coordinates are coarse, never exact street level. */
+    approximate?: boolean;
+  };
+};
+
 export type ChatRequest = {
   messages: ChatRequestMessage[];
   /** Explicit catalog model id; falls back to the X-Text-Model header, then an auto pick. */
@@ -703,6 +734,8 @@ export type ChatRequest = {
   tools?: string[];
   /** Enabled custom MCP servers whose tools the model may call (OpenRouter only). */
   mcpServers?: McpServerConfig[];
+  /** Runtime situational context (date/timezone/locale/units/location). */
+  clientContext?: ChatClientContext;
 };
 
 export type ChatToolEvent = { tool: string; query?: string; ok: boolean; summary?: string };
@@ -746,6 +779,23 @@ export interface VideoResult {
 export interface VideoResultsArtifact {
   query: string;
   results: VideoResult[];
+}
+
+export interface NewsItem {
+  title: string;
+  url: string;
+  /** Publication / outlet name, when known. */
+  source?: string;
+  /** ISO timestamp of publication, when known. */
+  publishedAt?: string;
+  snippet?: string;
+}
+export interface NewsResultsArtifact {
+  /** The query used (empty for a topical/top-headlines feed). */
+  query: string;
+  /** Topical section when not a free-text query (e.g. "world", "technology"). */
+  topic?: string;
+  items: NewsItem[];
 }
 
 export interface MapMarker {

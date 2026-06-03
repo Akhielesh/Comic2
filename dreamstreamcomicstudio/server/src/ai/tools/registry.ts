@@ -9,6 +9,30 @@ import type { ChatArtifact } from '../../../../apiTypes.js';
 import { ddgWebSearch, ddgImageSearch, ddgVideoSearch, type ImageResult } from './duckduckgo.js';
 import { getWeather } from './weather.js';
 import { geocodePlaces } from './maps.js';
+import { fetchNews } from './news.js';
+
+/**
+ * Per-request situational context made available to tools that benefit from it
+ * (news region/language, "near me" geocoding, unit defaults). Threaded in from
+ * the validated ChatClientContext so tools default sensibly when the model
+ * doesn't specify a region/location explicitly.
+ */
+export interface ToolContext {
+  timezone?: string;
+  locale?: string;
+  units?: 'metric' | 'imperial';
+  location?: { city?: string; region?: string; country?: string; lat?: number; lng?: number };
+}
+
+// Derive Google-News-style region/language from the user's context: prefer an
+// explicit country, else the country segment of the locale (e.g. "en-US" ⇒ US).
+const regionLangFromCtx = (ctx?: ToolContext): { region?: string; lang?: string } => {
+  const locale = ctx?.locale || '';
+  const parts = locale.split('-');
+  const lang = parts[0] || undefined;
+  const region = ctx?.location?.country || (parts[1] ? parts[1].toUpperCase() : undefined);
+  return { region, lang };
+};
 
 export interface ToolExecResult {
   /** Text fed back to the model as the tool result. */
@@ -168,8 +192,57 @@ const mapTool: ChatTool = {
   }
 };
 
-/** All built-in tools, keyed by the name the model/clients reference. */
-export const BUILTIN_TOOLS: Record<string, ChatTool> = {
+// News is context-aware (region/language default from the user's locale), so it's
+// built per-request via a factory rather than held as a static singleton.
+const makeNewsTool = (ctx?: ToolContext): ChatTool => ({
+  name: 'get_news',
+  description:
+    'Get the latest news headlines from real news outlets (via Google News). Use this — NOT web_search — whenever the user asks for news, headlines, "latest", "what\'s happening", or news on a topic/place. Provide a `query` for a topic ("Apple Vision Pro", "Bitcoin") OR a `topic` section for general feeds. Returns a news card with sourced, dated headlines shown to the user; summarize the top items briefly and cite them.',
+  parameters: {
+    type: 'object',
+    properties: {
+      query: {
+        type: 'string',
+        description: 'Topic/keywords to search news for. Omit for general/top headlines.'
+      },
+      topic: {
+        type: 'string',
+        enum: ['top', 'world', 'business', 'technology', 'entertainment', 'sports', 'science', 'health', 'politics'],
+        description: 'A general news section when there is no specific query.'
+      }
+    }
+  },
+  execute: async (args, signal) => {
+    const query = typeof args?.query === 'string' ? args.query.trim() : '';
+    const topic = typeof args?.topic === 'string' ? args.topic.trim() : '';
+    const { region, lang } = regionLangFromCtx(ctx);
+    try {
+      const data = await fetchNews({ query, topic, region, lang }, signal);
+      if (!data.items.length) {
+        return { content: `No news found for "${query || topic || 'top headlines'}".` };
+      }
+      const label = query || (topic ? `${topic} news` : 'top headlines');
+      const content = `Latest ${label}${region ? ` (${region})` : ''}:\n${data.items
+        .map(
+          (n, i) =>
+            `[${i + 1}] ${n.title}${n.source ? ` — ${n.source}` : ''}${
+              n.publishedAt ? ` (${n.publishedAt.slice(0, 10)})` : ''
+            }\n${n.url}`
+        )
+        .join('\n\n')}`;
+      return {
+        content,
+        citations: data.items.map((n) => ({ url: n.url, title: n.title })),
+        artifacts: [{ type: 'news_results', data }]
+      };
+    } catch (err) {
+      return { content: `News lookup failed: ${(err as Error)?.message || 'unknown error'}.` };
+    }
+  }
+});
+
+/** All context-free built-in tools, keyed by the name the model/clients reference. */
+const STATIC_TOOLS: Record<string, ChatTool> = {
   web_search: webSearchTool,
   image_search: imageSearchTool,
   video_search: videoSearchTool,
@@ -177,21 +250,26 @@ export const BUILTIN_TOOLS: Record<string, ChatTool> = {
   show_map: mapTool
 };
 
+/** Names of tools that are built per-request with situational context. */
+const CONTEXTUAL_TOOL_NAMES = ['get_news'] as const;
+
 /** The set of tool names a client is allowed to enable (allowlist). */
-export const KNOWN_TOOL_NAMES = Object.keys(BUILTIN_TOOLS);
+export const KNOWN_TOOL_NAMES = [...Object.keys(STATIC_TOOLS), ...CONTEXTUAL_TOOL_NAMES];
 
 /** Resolve an allowlisted set of tool names to their implementations. */
-export const resolveTools = (names: string[] | undefined): ChatTool[] => {
+export const resolveTools = (names: string[] | undefined, ctx?: ToolContext): ChatTool[] => {
   if (!Array.isArray(names)) return [];
   const seen = new Set<string>();
   const tools: ChatTool[] = [];
   for (const name of names) {
     if (seen.has(name)) continue;
-    const tool = BUILTIN_TOOLS[name];
-    if (tool) {
-      tools.push(tool);
-      seen.add(name);
+    seen.add(name);
+    if (name === 'get_news') {
+      tools.push(makeNewsTool(ctx));
+      continue;
     }
+    const tool = STATIC_TOOLS[name];
+    if (tool) tools.push(tool);
   }
   return tools;
 };

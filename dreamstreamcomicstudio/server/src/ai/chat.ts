@@ -7,7 +7,7 @@
 // flow through one control plane.
 
 import type { ChatMessage } from './providers/types.js';
-import type { ChatArtifact } from '../../../apiTypes.js';
+import type { ChatArtifact, ChatClientContext } from '../../../apiTypes.js';
 import { getProvider, resolveProviderContext } from './gateway.js';
 import { buildUsage } from './usage.js';
 import type { AIProviderId } from './providers/types.js';
@@ -54,6 +54,8 @@ export interface RunChatParams {
   dreamstreamContextJson?: string;
   /** Agentic tools the model may call (DuckDuckGo, etc.). OpenRouter only. */
   tools?: ChatTool[];
+  /** Runtime situational context (date/timezone/locale/units/location). */
+  clientContext?: ChatClientContext;
   /** Abort signal for in-flight tool calls. */
   signal?: AbortSignal;
   /** When set, stream content/reasoning deltas as they arrive (SSE). */
@@ -93,6 +95,35 @@ Always reply in well-structured GitHub-Flavored Markdown so the answer renders r
 
 Keep responses focused and skimmable. Prefer structure over long walls of text.`;
 
+// Render the user's runtime context as a compact, authoritative block so the model
+// stops being "situationally blind": it knows the real current date/time, the
+// timezone, the locale, the unit system, and (when granted) the coarse location.
+// This is what makes "today", "latest news", "weather", and "near me" resolve
+// correctly instead of guessing or defaulting to stale/foreign assumptions.
+export const buildContextBlock = (ctx?: ChatClientContext): string => {
+  if (!ctx) return '';
+  const lines: string[] = [];
+  // Always anchor "now" — prefer the client's wall clock, fall back to server time.
+  const now = ctx.now && !Number.isNaN(Date.parse(ctx.now)) ? new Date(ctx.now) : new Date();
+  lines.push(`- Current date & time: ${now.toUTCString()} (UTC)`);
+  if (ctx.timezone) lines.push(`- User timezone: ${ctx.timezone}`);
+  if (ctx.locale) lines.push(`- User locale: ${ctx.locale}`);
+  if (ctx.units) lines.push(`- Preferred units: ${ctx.units} (use ${ctx.units === 'imperial' ? '°F, miles' : '°C, km'} by default)`);
+  if (ctx.location) {
+    const loc = [ctx.location.city, ctx.location.region, ctx.location.country].filter(Boolean).join(', ');
+    const coords =
+      typeof ctx.location.lat === 'number' && typeof ctx.location.lng === 'number'
+        ? ` (~${ctx.location.lat.toFixed(2)}, ${ctx.location.lng.toFixed(2)})`
+        : '';
+    if (loc || coords) lines.push(`- Approximate user location: ${loc}${coords}`);
+  }
+  if (!lines.length) return '';
+  return `\n\nUSER CONTEXT (authoritative — use it, do not ask for what's already here):
+${lines.join('\n')}
+- When the user says "today", "now", "latest", "near me", "my area", or omits a place/date, resolve it from this context.
+- Report measurements in the user's preferred units. Do not claim you don't know the date or the user's general location — it is given above.`;
+};
+
 const reasoningMaxTokens = (level?: ChatReasoningLevel): number => {
   switch (level) {
     case 'high':
@@ -131,6 +162,7 @@ export const runChat = async (
   // rather than replacing it, so structured-Markdown rules always hold.
   const extra = params.systemPrompt?.trim();
   let systemContent = extra ? `${CHAT_SYSTEM_PROMPT}\n\nAdditional instructions:\n${extra}` : CHAT_SYSTEM_PROMPT;
+  systemContent += buildContextBlock(params.clientContext);
   if (params.dreamstreamContextJson) {
     systemContent += dreamstreamBlock(params.dreamstreamContextJson);
   }
@@ -142,7 +174,10 @@ export const runChat = async (
     systemContent += `\n\nLIVE TOOLS ARE ENABLED this turn (${names}). You DO have internet access through them.
 - NEVER say you can't browse, access the internet, or fetch real-time/current data — instead CALL the relevant tool.
 - For anything current, factual, news, prices, weather, or that you're unsure of, call a tool FIRST, then answer from the returned results and cite sources.
-- When a tool returns a card/artifact (e.g. weather, images), keep your prose short and let the component carry the detail.`;
+- Pick the RIGHT tool: use get_news for news/headlines/"latest", get_weather for weather, show_map for places/directions, video_search for videos to watch, image_search only when the user wants pictures. Use web_search for everything else.
+- CRITICAL: If a tool OR web search returned ANY results, snippets, or sources, you MUST synthesize an answer from them. NEVER reply that you "couldn't retrieve" or "found nothing" when results/citations are present — read them and answer.
+- If one tool returns empty, try a different tool or a refined query before giving up, then answer with what you have.
+- When a tool returns a card/artifact (e.g. weather, news, map, images), keep your prose short and let the component carry the detail.`;
   }
 
   const messages: ChatMessage[] = [{ role: 'system', content: systemContent }, ...params.messages];

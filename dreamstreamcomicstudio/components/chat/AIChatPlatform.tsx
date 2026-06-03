@@ -18,6 +18,7 @@ import { fetchModelCatalog, type CatalogModel } from '../../services/modelCatalo
 import type { ChatReasoningLevel, ChatRequestMessage, ChatMessagePart, UniversalAssistantContext } from '../../apiTypes';
 import type { Project } from '../../types';
 import { sendChatMessageStream } from '../../services/chatApi';
+import { gatherClientContext } from '../../services/clientContext';
 import { toggleConnector, type ChatConnector } from '../../services/chatConnectors';
 import { recommendModels, detectTools } from '../../services/chatSuggest';
 import { isProviderEnabled } from '../../services/sourceGovernance';
@@ -401,6 +402,9 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
 
     try {
       const reqMessages = baseTurns.filter((t) => !t.error).map(toRequestMessage);
+      // Situational context (date/timezone/locale/units/coarse location) so the model
+      // isn't flying blind on "today"/"latest"/"near me". Never prompts for permission.
+      const clientContext = await gatherClientContext().catch(() => undefined);
       const res = await sendChatMessageStream(
         {
           messages: reqMessages,
@@ -409,6 +413,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           reasoningLevel: activeSession.reasoningLevel,
           webSearch: activeSession.webSearch,
           systemPrompt: composeSystemPrompt(getChatMemory(user?.id), activeSession.systemPrompt),
+          ...(clientContext ? { clientContext } : {}),
           ...(reqTools.length ? { tools: reqTools } : {}),
           ...((activeSession.mcpServers || []).length ? { mcpServers: getMcpServersByIds(activeSession.mcpServers || []) } : {}),
           ...(activeSession.dreamstreamAccess ? { dreamstreamContext: buildDreamStreamContext(projects) } : {})

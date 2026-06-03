@@ -16,8 +16,8 @@ export const CHAT_CONNECTORS: ChatConnector[] = [
   {
     id: 'web',
     label: 'Web & tools',
-    description: 'Free, keyless live tools: web/image/video search (DuckDuckGo), weather (Open-Meteo) and interactive maps (OpenStreetMap). The model searches, shows media, renders weather cards and opens maps.',
-    toolNames: ['web_search', 'image_search', 'video_search', 'get_weather', 'show_map']
+    description: 'Free, keyless live tools: web/image/video search (DuckDuckGo), live news headlines (Google News), weather (Open-Meteo) and interactive maps (OpenStreetMap). The model searches, shows media, renders news/weather cards and opens maps.',
+    toolNames: ['web_search', 'image_search', 'video_search', 'get_news', 'get_weather', 'show_map']
   }
 ];
 
