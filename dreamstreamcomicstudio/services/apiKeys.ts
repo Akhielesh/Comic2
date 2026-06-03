@@ -9,6 +9,9 @@
 
 export type ApiKeyProvider = 'openrouter' | 'nvidia' | 'gemini' | 'pixazo';
 
+/** Result of the last live validity check for a key (see services/keyValidation.ts). */
+export type KeyValidationState = 'unknown' | 'valid' | 'invalid' | 'unsupported';
+
 export interface ManagedApiKey {
   id: string;
   provider: ApiKeyProvider;
@@ -24,6 +27,12 @@ export interface ManagedApiKey {
   /** ISO timestamp of the current usage window start (monthly rolling). */
   periodStart: string;
   createdAt: string;
+  /** Last live validity verdict ('unknown' until first checked). */
+  validation?: KeyValidationState;
+  /** Epoch ms of the last validity check (drives "is this stale?" re-checks). */
+  validatedAt?: number;
+  /** Human-readable detail from the last check (e.g. "Valid — 84 models reachable."). */
+  validationMessage?: string;
 }
 
 export const PROVIDER_META: Record<ApiKeyProvider, {
@@ -246,5 +255,14 @@ export const recordKeyUsage = (provider: ApiKeyProvider, usd: number) => {
   if (!active) return;
   writeAll(keys.map((k) =>
     k.id === active.id ? { ...k, usedUsd: Number((k.usedUsd + usd).toFixed(6)) } : k
+  ));
+};
+
+/** Persist the outcome of a live validity check for a key (badge + staleness tracking). */
+export const setKeyValidation = (id: string, state: KeyValidationState, message?: string) => {
+  const keys = readAll();
+  if (!keys.some((k) => k.id === id)) return;
+  writeAll(keys.map((k) =>
+    k.id === id ? { ...k, validation: state, validatedAt: Date.now(), validationMessage: message } : k
   ));
 };

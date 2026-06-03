@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Key, Plus, Trash2, Check, AlertTriangle, ExternalLink, Pencil, X, ChevronDown, ChevronRight } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Key, Plus, Trash2, Check, AlertTriangle, ExternalLink, Pencil, X, ChevronDown, ChevronRight, Loader2, ShieldCheck, ShieldX, ShieldQuestion, RefreshCw } from 'lucide-react';
 import {
   ALL_PROVIDERS,
   PROVIDER_META,
@@ -10,11 +10,45 @@ import {
   updateKey,
   deleteKey,
   setActiveKey,
+  setKeyValidation,
   usageFraction,
   isOverLimit
 } from '../services/apiKeys';
+import { validateApiKey } from '../services/keyValidation';
 import { Button } from './Button';
 import { ModelSelectionPanel } from './ModelSelectionPanel';
+
+// Re-validate a key if we've never checked it or the last check is older than this.
+const VALIDATION_STALE_MS = 10 * 60 * 1000; // 10 minutes
+
+/** Validate one stored key against its provider and persist the verdict. */
+const runValidation = async (k: ManagedApiKey): Promise<void> => {
+  const r = await validateApiKey(k.provider, k.key);
+  const state = r.status === 'missing' ? 'invalid' : r.status;
+  setKeyValidation(k.id, state, r.message);
+};
+
+const ValidationBadge: React.FC<{ k: ManagedApiKey; checking: boolean }> = ({ k, checking }) => {
+  if (checking) {
+    return (
+      <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border border-black bg-slate-100 text-slate-600 flex items-center gap-1">
+        <Loader2 className="w-3 h-3 animate-spin" /> Checking
+      </span>
+    );
+  }
+  const state = k.validation ?? 'unknown';
+  const title = k.validationMessage || '';
+  if (state === 'valid') {
+    return <span title={title} className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border border-black bg-green-100 text-green-800 flex items-center gap-1"><ShieldCheck className="w-3 h-3" /> Valid</span>;
+  }
+  if (state === 'invalid') {
+    return <span title={title} className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border border-black bg-brand-red text-white flex items-center gap-1"><ShieldX className="w-3 h-3" /> Invalid</span>;
+  }
+  if (state === 'unsupported') {
+    return <span title={title} className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border border-black bg-slate-100 text-slate-500 flex items-center gap-1"><ShieldQuestion className="w-3 h-3" /> Not verifiable</span>;
+  }
+  return <span title={title} className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border border-black bg-slate-100 text-slate-500 flex items-center gap-1"><ShieldQuestion className="w-3 h-3" /> Unchecked</span>;
+};
 
 const mask = (key: string) => (key.length > 8 ? `${key.slice(0, 3)}••••${key.slice(-4)}` : '••••');
 
@@ -46,6 +80,23 @@ const KeyRow: React.FC<{ k: ManagedApiKey; onChange: () => void }> = ({ k, onCha
   const [editing, setEditing] = useState(false);
   const [label, setLabel] = useState(k.label);
   const [limit, setLimit] = useState(k.limitUsd != null ? String(k.limitUsd) : '');
+  const [checking, setChecking] = useState(false);
+
+  const verify = async () => {
+    if (checking) return;
+    setChecking(true);
+    await runValidation(k);
+    setChecking(false);
+    onChange();
+  };
+
+  // Validate on mount when we've never checked this key, or the last check is stale.
+  useEffect(() => {
+    const stale = !k.validatedAt || Date.now() - k.validatedAt > VALIDATION_STALE_MS;
+    if (stale) void verify();
+    // Re-run only when the key value changes (a new/edited secret needs a fresh check).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [k.id, k.key]);
 
   const save = () => {
     updateKey(k.id, { label, limitUsd: limit.trim() ? Number(limit) : null });
@@ -76,10 +127,16 @@ const KeyRow: React.FC<{ k: ManagedApiKey; onChange: () => void }> = ({ k, onCha
             <div className="flex items-center gap-2 flex-wrap">
               <span className="font-bold text-sm truncate">{k.label}</span>
               {k.active && <span className="text-[10px] font-bold uppercase bg-brand-blue text-white px-1.5 py-0.5 rounded border border-black">Active</span>}
+              <ValidationBadge k={k} checking={checking} />
               {isOverLimit(k) && <span className="text-[10px] font-bold uppercase bg-brand-red text-white px-1.5 py-0.5 rounded border border-black flex items-center gap-1"><AlertTriangle className="w-3 h-3" />Limit reached</span>}
             </div>
           )}
           <div className="text-[11px] font-mono text-slate-500 mt-0.5">{mask(k.key)}</div>
+          {!editing && !checking && k.validation === 'invalid' && k.validationMessage && (
+            <div className="text-[11px] text-brand-red font-semibold mt-0.5 flex items-start gap-1">
+              <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />{k.validationMessage}
+            </div>
+          )}
 
           <div className="mt-2">
             {editing ? (
@@ -109,6 +166,7 @@ const KeyRow: React.FC<{ k: ManagedApiKey; onChange: () => void }> = ({ k, onCha
             </>
           ) : (
             <>
+              <button onClick={verify} disabled={checking} title="Verify key is valid" className="p-1.5 border-2 border-black rounded hover:bg-brand-yellow disabled:opacity-40"><RefreshCw className={`w-3.5 h-3.5 ${checking ? 'animate-spin' : ''}`} /></button>
               <button onClick={() => setEditing(true)} title="Edit label / limit" className="p-1.5 border-2 border-black rounded hover:bg-brand-yellow"><Pencil className="w-3.5 h-3.5" /></button>
               <button onClick={() => { if (confirm(`Delete "${k.label}"?`)) { deleteKey(k.id); onChange(); } }} title="Delete key" className="p-1.5 border-2 border-black rounded hover:bg-red-100 text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
             </>
@@ -161,6 +219,18 @@ export const ApiConfiguration: React.FC = () => {
     return ALL_PROVIDERS.find((p) => !initial.some((k) => k.provider === p)) ?? null;
   });
   const refresh = () => setKeys(listKeys());
+
+  // Periodic re-validation while the panel is open: a key can be revoked or run out of
+  // credits at any time, so we don't trust a one-time check. Each KeyRow validates itself
+  // on mount; this keeps verdicts fresh on a rolling interval thereafter.
+  useEffect(() => {
+    const id = setInterval(async () => {
+      const current = listKeys();
+      await Promise.all(current.map((k) => runValidation(k)));
+      setKeys(listKeys());
+    }, VALIDATION_STALE_MS);
+    return () => clearInterval(id);
+  }, []);
 
   return (
     <div className="space-y-3">

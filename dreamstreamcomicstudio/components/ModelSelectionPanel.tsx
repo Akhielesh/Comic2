@@ -1,13 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Image as ImageIcon, Type as TypeIcon, Loader2, AlertTriangle, Sparkles, Search, ChevronDown, Check } from 'lucide-react';
+import { Image as ImageIcon, Type as TypeIcon, Loader2, AlertTriangle, Sparkles, Search, ChevronDown, Check, Lock } from 'lucide-react';
 import { fetchModelCatalog, SOURCE_LABEL, type CatalogModel, type ModelSource } from '../services/modelCatalog';
 import {
   getModelSelection,
   setSelectedModel,
   setStageModel,
   setPreferredSource,
+  setLockedSource,
   MODEL_SELECTION_CHANGED,
-  type ModelSlot
+  type ModelSlot,
+  type ModelSourceId
 } from '../services/modelSelection';
 import { getActiveKey } from '../services/apiKeys';
 import { getCapabilities, featureSupport } from '../services/modelCapabilities';
@@ -196,8 +198,11 @@ export const ModelSelectionPanel: React.FC = () => {
     return () => window.removeEventListener(MODEL_SELECTION_CHANGED, h);
   }, []);
 
-  const imageModels = useMemo(() => catalog.filter((m) => m.supportsImageOutput), [catalog]);
-  const textModels = useMemo(() => catalog.filter((m) => !m.supportsImageOutput), [catalog]);
+  // A hard lock restricts the entire library (and all routing) to one source.
+  const locked = (sel.lockedSource ?? null) as ModelSourceId | null;
+  const inScope = (m: CatalogModel) => !locked || m.source === locked;
+  const imageModels = useMemo(() => catalog.filter((m) => m.supportsImageOutput && inScope(m)), [catalog, locked]);
+  const textModels = useMemo(() => catalog.filter((m) => !m.supportsImageOutput && inScope(m)), [catalog, locked]);
   const hasOpenRouter = !!getActiveKey('openrouter');
   const hasNvidia = !!getActiveKey('nvidia');
 
@@ -209,6 +214,31 @@ export const ModelSelectionPanel: React.FC = () => {
       <div>
         <h4 className="font-display text-lg flex items-center gap-2"><Sparkles className="w-4 h-4" /> Models</h4>
         <p className="text-[11px] text-slate-500">Search and pick the image and text models, or leave on Auto. Each model shows its source (OpenRouter / NVIDIA) — the source you pick is the one billed and used.</p>
+      </div>
+
+      {/* Hard source lock — restrict the whole library AND all routing to one source. */}
+      <div className={`border-2 rounded-lg p-2.5 ${locked ? 'border-black bg-brand-blue/10' : 'border-slate-300 bg-white'}`}>
+        <label className="flex items-center gap-2 text-xs font-bold">
+          <Lock className="w-3.5 h-3.5 shrink-0" />
+          Lock to one source
+          <select
+            value={locked || ''}
+            onChange={(e) => setLockedSource((e.target.value || null) as ModelSourceId | null)}
+            className="ml-auto border-2 border-black rounded px-2 py-1 bg-white font-normal"
+          >
+            <option value="">Off — use any source</option>
+            <option value="nvidia">NVIDIA Build only{hasNvidia ? '' : ' — no key'}</option>
+            <option value="openrouter">OpenRouter only{hasOpenRouter ? '' : ' — no key'}</option>
+          </select>
+        </label>
+        {locked && (
+          <p className="text-[11px] text-slate-600 mt-1.5">
+            Only <span className="font-bold">{SOURCE_LABEL[locked]}</span> models are shown and used — every image,
+            text, and per-stage call routes to {SOURCE_LABEL[locked]} with no fallback to other providers.
+            {locked === 'nvidia' && !hasNvidia && ' Add an NVIDIA key above to generate.'}
+            {locked === 'openrouter' && !hasOpenRouter && ' Add an OpenRouter key above to generate.'}
+          </p>
+        )}
       </div>
 
       {!hasOpenRouter && !hasNvidia && (
@@ -252,19 +282,22 @@ export const ModelSelectionPanel: React.FC = () => {
 
           <div className="pt-1.5 mt-0.5 border-t border-dashed border-slate-300">
             <div className="text-[10px] font-bold uppercase text-slate-500 mb-1">
-              Preferred default source <span className="font-normal normal-case text-slate-400">— used for Auto, when no model is pinned</span>
+              Preferred default source <span className="font-normal normal-case text-slate-400">
+                {locked ? `— overridden while locked to ${SOURCE_LABEL[locked]}` : '— used for Auto, when no model is pinned'}
+              </span>
             </div>
             <div className="grid grid-cols-2 gap-2">
               {([
                 { slot: 'text' as ModelSlot, label: 'Text', value: sel.preferredTextSource },
                 { slot: 'image' as ModelSlot, label: 'Image', value: sel.preferredImageSource }
               ]).map(({ slot, label, value }) => (
-                <label key={slot} className="flex flex-col gap-0.5">
+                <label key={slot} className={`flex flex-col gap-0.5 ${locked ? 'opacity-50' : ''}`}>
                   <span className="font-bold">{label}</span>
                   <select
-                    value={value || ''}
+                    value={locked ? '' : (value || '')}
+                    disabled={!!locked}
                     onChange={(e) => setPreferredSource(slot, (e.target.value || null) as ModelSource | null)}
-                    className="border-2 border-black rounded px-2 py-1 bg-white"
+                    className="border-2 border-black rounded px-2 py-1 bg-white disabled:bg-slate-100"
                   >
                     <option value="">Auto (server default)</option>
                     <option value="openrouter">OpenRouter{hasOpenRouter ? '' : ' — no key'}</option>

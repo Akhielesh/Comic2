@@ -187,7 +187,9 @@ const generateImage = async (
   return { imageDataUrl: url, images: [url], model: String(data?.model || req.model), usage: {}, raw: data };
 };
 
-const IMAGE_HINT = /\b(flux|sdxl|stable[-_]?diffusion|sd3|sd-3|sana|kandinsky|playground|consistency|imagen|stable[-_]?image|stablediffusion)\b/i;
+// `qwen[-_]?image` is matched explicitly so Qwen-Image is classified as an image model,
+// without sweeping in Qwen's text/vision LLMs (qwen2.5, qwen2.5-vl, …).
+const IMAGE_HINT = /\b(flux|sdxl|stable[-_]?diffusion|sd3|sd-3|sana|kandinsky|playground|consistency|imagen|stable[-_]?image|stablediffusion|qwen[-_]?image)\b/i;
 const IMAGE_EDIT_HINT = /\b(kontext|canny|depth|inpaint|redux|edit)\b/i;
 
 const normalizeCatalogModel = (raw: any): CatalogModel => {
