@@ -242,33 +242,40 @@ export const runChat = async (
       }))
     });
 
-    for (const call of result.toolCalls) {
-      const tool = tools.find((t) => t.name === call.name);
-      let parsed: Record<string, unknown> = {};
-      try {
-        parsed = call.arguments ? JSON.parse(call.arguments) : {};
-      } catch {
-        parsed = {};
-      }
-      const query = typeof parsed.query === 'string' ? parsed.query : undefined;
+    // Run all tool calls for this turn concurrently (they're independent), then
+    // append their results in the original call order. This cuts latency sharply
+    // when the model requests several tools at once (e.g. news + weather + map).
+    const settled = await Promise.all(
+      result.toolCalls.map(async (call) => {
+        const tool = tools.find((t) => t.name === call.name);
+        let parsed: Record<string, unknown> = {};
+        try {
+          parsed = call.arguments ? JSON.parse(call.arguments) : {};
+        } catch {
+          parsed = {};
+        }
+        const query = typeof parsed.query === 'string' ? parsed.query : undefined;
+        if (!tool) {
+          return { call, query, ok: false as const, content: `Unknown tool: ${call.name}`, summary: 'Unknown tool' };
+        }
+        try {
+          const out = await tool.execute(parsed, params.signal);
+          return { call, query, ok: true as const, out, content: out.content, summary: out.content.slice(0, 160) };
+        } catch (err) {
+          const message = (err as Error)?.message || 'tool failed';
+          return { call, query, ok: false as const, content: `Error: ${message}`, summary: message };
+        }
+      })
+    );
 
-      if (!tool) {
-        toolEvents.push({ tool: call.name, query, ok: false, summary: 'Unknown tool' });
-        messages.push({ role: 'tool', tool_call_id: call.id, content: `Unknown tool: ${call.name}` });
-        continue;
+    for (const r of settled) {
+      if (r.ok && r.out) {
+        if (r.out.images) images.push(...r.out.images);
+        if (r.out.citations) citations.push(...r.out.citations);
+        if (r.out.artifacts) artifacts.push(...r.out.artifacts);
       }
-      try {
-        const out = await tool.execute(parsed, params.signal);
-        if (out.images) images.push(...out.images);
-        if (out.citations) citations.push(...out.citations);
-        if (out.artifacts) artifacts.push(...out.artifacts);
-        toolEvents.push({ tool: call.name, query, ok: true, summary: out.content.slice(0, 160) });
-        messages.push({ role: 'tool', tool_call_id: call.id, content: out.content });
-      } catch (err) {
-        const message = (err as Error)?.message || 'tool failed';
-        toolEvents.push({ tool: call.name, query, ok: false, summary: message });
-        messages.push({ role: 'tool', tool_call_id: call.id, content: `Error: ${message}` });
-      }
+      toolEvents.push({ tool: r.call.name, query: r.query, ok: r.ok, summary: r.summary });
+      messages.push({ role: 'tool', tool_call_id: r.call.id, content: r.content });
     }
 
     // Next turn. On the final allowed iteration, drop tools to force a written answer.
