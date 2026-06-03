@@ -9,10 +9,23 @@ import type { ChatReasoningLevel, ChatToolEvent, ChatToolImage } from '../apiTyp
 import type { ModelSourceId } from './modelSelection';
 
 const DB_NAME = 'dreamstream_chat';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const SESSIONS_STORE = 'sessions';
+const PROJECTS_STORE = 'projects';
 
 export type ChatRole = 'user' | 'assistant';
+
+/** A folder that groups chat sessions. */
+export interface ChatProject {
+  id: string;
+  name: string;
+  /** Lucide icon name (see chatProjectStyle.ts). */
+  icon: string;
+  /** Color token key (see chatProjectStyle.ts). */
+  color: string;
+  createdAt: number;
+  updatedAt: number;
+}
 
 export interface ChatAttachment {
   id: string;
@@ -62,6 +75,8 @@ export interface ChatSession {
   updatedAt: number;
   /** Set when this session was branched from another conversation. */
   parentSessionId?: string;
+  /** Project (folder) this chat belongs to; null/undefined = unfiled. */
+  projectId?: string | null;
 }
 
 const openDb = (): Promise<IDBDatabase> =>
@@ -73,6 +88,9 @@ const openDb = (): Promise<IDBDatabase> =>
         const store = db.createObjectStore(SESSIONS_STORE, { keyPath: 'id' });
         store.createIndex('updatedAt', 'updatedAt', { unique: false });
       }
+      if (!db.objectStoreNames.contains(PROJECTS_STORE)) {
+        db.createObjectStore(PROJECTS_STORE, { keyPath: 'id' });
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -80,12 +98,13 @@ const openDb = (): Promise<IDBDatabase> =>
 
 const runTransaction = async <T>(
   mode: IDBTransactionMode,
-  fn: (store: IDBObjectStore) => IDBRequest<T>
+  fn: (store: IDBObjectStore) => IDBRequest<T>,
+  storeName: string = SESSIONS_STORE
 ): Promise<T> => {
   const db = await openDb();
   return new Promise<T>((resolve, reject) => {
-    const tx = db.transaction(SESSIONS_STORE, mode);
-    const store = tx.objectStore(SESSIONS_STORE);
+    const tx = db.transaction(storeName, mode);
+    const store = tx.objectStore(storeName);
     const request = fn(store);
     let result: T;
     request.onsuccess = () => {
@@ -136,6 +155,45 @@ export const saveChatSession = async (session: ChatSession): Promise<void> => {
 export const deleteChatSession = async (id: string): Promise<void> => {
   try {
     await runTransaction('readwrite', (store) => store.delete(id));
+  } catch {
+    /* ignore */
+  }
+};
+
+// --- Projects (folders) ------------------------------------------------------
+
+export const listChatProjects = async (): Promise<ChatProject[]> => {
+  try {
+    const all = await runTransaction<ChatProject[]>('readonly', (store) => store.getAll(), PROJECTS_STORE);
+    return (all || []).sort((a, b) => a.createdAt - b.createdAt);
+  } catch {
+    return [];
+  }
+};
+
+export const saveChatProject = async (project: ChatProject): Promise<void> => {
+  try {
+    await runTransaction('readwrite', (store) => store.put(project), PROJECTS_STORE);
+  } catch {
+    /* ignore */
+  }
+};
+
+export const createChatProject = (name: string, icon: string, color: string): ChatProject => {
+  const now = Date.now();
+  return { id: crypto.randomUUID(), name: name.trim() || 'New project', icon, color, createdAt: now, updatedAt: now };
+};
+
+/** Delete a project. Its chats are reassigned to "unfiled" (projectId = null). */
+export const deleteChatProject = async (id: string): Promise<void> => {
+  try {
+    await runTransaction('readwrite', (store) => store.delete(id), PROJECTS_STORE);
+    const sessions = await listChatSessions();
+    await Promise.all(
+      sessions
+        .filter((s) => s.projectId === id)
+        .map((s) => saveChatSession({ ...s, projectId: null, updatedAt: Date.now() }))
+    );
   } catch {
     /* ignore */
   }

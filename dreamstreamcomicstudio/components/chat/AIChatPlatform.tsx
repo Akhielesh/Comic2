@@ -4,6 +4,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { ChatSidebar } from './ChatSidebar';
 import { ChatConversation } from './ChatConversation';
 import { ChatModelPicker } from './ChatModelPicker';
+import { ChatProjectModal } from './ChatProjectModal';
 import { deriveModelFeatures } from '../../services/chatFeatures';
 import { getCapabilities } from '../../services/modelCapabilities';
 import { fetchModelCatalog, type CatalogModel } from '../../services/modelCatalog';
@@ -14,14 +15,19 @@ import { toggleConnector, type ChatConnector } from '../../services/chatConnecto
 import {
   branchSession,
   consumePendingChatModel,
+  createChatProject,
   createEmptySession,
+  deleteChatProject,
   deleteChatSession,
   deriveSessionTitle,
   getChatMemory,
+  listChatProjects,
   listChatSessions,
+  saveChatProject,
   saveChatSession,
   setChatMemory,
   type ChatAttachment,
+  type ChatProject,
   type ChatSession,
   type ChatTurn
 } from '../../services/chatStorage';
@@ -74,6 +80,8 @@ const composeSystemPrompt = (memory: string, persona?: string): string | undefin
 export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects }) => {
   const { user } = useAuth();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [projectsList, setProjectsList] = useState<ChatProject[]>([]);
+  const [projectModal, setProjectModal] = useState<{ editing: ChatProject | null } | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<Map<string, CatalogModel>>(new Map());
   const [busy, setBusy] = useState(false);
@@ -105,9 +113,10 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   useEffect(() => {
     let active = true;
     (async () => {
-      const stored = await listChatSessions();
+      const [stored, storedProjects] = await Promise.all([listChatSessions(), listChatProjects()]);
       if (!active) return;
       setMemory(getChatMemory(user?.id));
+      setProjectsList(storedProjects);
 
       const pending = consumePendingChatModel();
       if (pending) {
@@ -187,6 +196,31 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
 
   const handleRename = (id: string, title: string) => {
     updateSession(id, (s) => ({ ...s, title, updatedAt: Date.now() }));
+  };
+
+  const handleMoveToProject = (sessionId: string, projectId: string | null) => {
+    updateSession(sessionId, (s) => ({ ...s, projectId, updatedAt: Date.now() }));
+  };
+
+  const handleSaveProject = (name: string, icon: string, color: string) => {
+    const editing = projectModal?.editing;
+    if (editing) {
+      const updated: ChatProject = { ...editing, name, icon, color, updatedAt: Date.now() };
+      void saveChatProject(updated);
+      setProjectsList((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+    } else {
+      const project = createChatProject(name, icon, color);
+      void saveChatProject(project);
+      setProjectsList((prev) => [...prev, project]);
+    }
+    setProjectModal(null);
+  };
+
+  const handleDeleteProject = (projectId: string) => {
+    void deleteChatProject(projectId);
+    setProjectsList((prev) => prev.filter((p) => p.id !== projectId));
+    // Reflect the unfiling locally (storage does the same).
+    setSessions((prev) => prev.map((s) => (s.projectId === projectId ? { ...s, projectId: null } : s)));
   };
 
   const handleSelectModel = (model: CatalogModel) => {
@@ -318,12 +352,17 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       {sidebarOpen && (
         <ChatSidebar
           sessions={sessions}
+          projects={projectsList}
           activeId={activeId}
           hasMemory={Boolean(memory.trim())}
           onSelect={setActiveId}
           onNew={handleNew}
           onDelete={handleDelete}
           onRename={handleRename}
+          onMoveToProject={handleMoveToProject}
+          onNewProject={() => setProjectModal({ editing: null })}
+          onEditProject={(project) => setProjectModal({ editing: project })}
+          onDeleteProject={handleDeleteProject}
           onEditMemory={handleEditMemory}
           onBack={onBack}
         />
@@ -361,6 +400,14 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           conversationHasImages={activeSession.turns.some((t) => (t.attachments?.length || 0) > 0)}
           onSelect={handleSelectModel}
           onClose={() => setShowModelPicker(false)}
+        />
+      )}
+
+      {projectModal && (
+        <ChatProjectModal
+          project={projectModal.editing}
+          onSave={handleSaveProject}
+          onClose={() => setProjectModal(null)}
         />
       )}
     </div>
