@@ -219,6 +219,7 @@ const normalizeCatalogModel = (raw: any): CatalogModel => {
     source: 'openrouter',
     description: typeof raw?.description === 'string' ? raw.description : undefined,
     contextLength: typeof raw?.context_length === 'number' ? raw.context_length : undefined,
+    createdAt: typeof raw?.created === 'number' ? raw.created : undefined,
     inputModalities,
     outputModalities,
     supportedParameters,
@@ -508,6 +509,29 @@ export const fetchOpenRouterKeyStatus = async (apiKey: string): Promise<Record<s
   try {
     const data = await openRouterFetch<any>('/key', { method: 'GET' }, OPENROUTER_REQUEST_TIMEOUT_MS, { apiKey, byok: true });
     return (data && typeof data === 'object' && data.data) ? data.data : data ?? null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Live ACCOUNT credits from OpenRouter (GET /api/v1/credits) — distinct from the per-KEY limit
+ * reported by /key. A key can carry its own spend cap (e.g. $15) that differs from the account's
+ * remaining credits (e.g. $10), so we surface both. Never throws.
+ */
+export const fetchOpenRouterCredits = async (
+  apiKey: string
+): Promise<{ total: number; usage: number; remaining: number } | null> => {
+  if (!apiKey) return null;
+  try {
+    const data = await openRouterFetch<any>('/credits', { method: 'GET' }, OPENROUTER_REQUEST_TIMEOUT_MS, { apiKey, byok: true });
+    const d = (data && typeof data === 'object' && data.data) ? data.data : data;
+    const total = Number(d?.total_credits);
+    const usage = Number(d?.total_usage);
+    if (!Number.isFinite(total) && !Number.isFinite(usage)) return null;
+    const t = Number.isFinite(total) ? total : 0;
+    const u = Number.isFinite(usage) ? usage : 0;
+    return { total: t, usage: u, remaining: Math.max(0, t - u) };
   } catch {
     return null;
   }
