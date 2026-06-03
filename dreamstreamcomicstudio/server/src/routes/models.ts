@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { getCatalog, filterCatalog, getProviderModels, type CatalogFilters } from '../services/modelCatalog.js';
 import { fetchOpenRouterKeyStatus } from '../ai/providers/openrouter.js';
+import { persistHarvestedModels, loadPersistedModels } from '../services/modelCatalogStore.js';
 import type { AnnotatedModel } from '../ai/catalogAnnotations.js';
 
 export const modelsRouter = Router();
@@ -10,13 +11,23 @@ const parseBool = (value: unknown): boolean => value === 'true' || value === '1'
 const parseSource = (value: unknown): CatalogFilters['source'] =>
   value === 'nvidia' ? 'nvidia' : value === 'openrouter' ? 'openrouter' : undefined;
 
-// NVIDIA's catalog needs a key (unlike OpenRouter's public list). Merge the caller's NVIDIA
-// models (BYOK via X-Nvidia-Key, or a platform NVIDIA_API_KEY) on top of the cached catalog.
+// NVIDIA's catalog needs an authenticated /models call (unlike OpenRouter's public list).
+// With a key (BYOK X-Nvidia-Key or a platform NVIDIA_API_KEY) we fetch live AND harvest the
+// public metadata into the cache. Without a key — i.e. a logged-out/anonymous visitor on the
+// public models page — we serve the cached NVIDIA catalog so it's still populated. We never
+// store the key; only the public model list (the same data on build.nvidia.com) is cached.
 const withNvidiaModels = async (req: Request, base: AnnotatedModel[]): Promise<AnnotatedModel[]> => {
   const nvidiaKey = req.header('X-Nvidia-Key') || process.env.NVIDIA_API_KEY || null;
-  if (!nvidiaKey) return base;
-  const nvidia = await getProviderModels('nvidia', nvidiaKey);
-  return nvidia.length ? [...base, ...nvidia] : base;
+  if (nvidiaKey) {
+    const nvidia = await getProviderModels('nvidia', nvidiaKey);
+    if (nvidia.length) {
+      void persistHarvestedModels('nvidia', nvidia); // fire-and-forget cache top-up
+      return [...base, ...nvidia];
+    }
+  }
+  // No key or the live fetch failed → fall back to the harvested cache.
+  const cached = await loadPersistedModels('nvidia');
+  return cached.length ? [...base, ...cached] : base;
 };
 
 // GET /api/models/catalog

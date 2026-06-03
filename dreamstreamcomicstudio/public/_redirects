@@ -1,0 +1,3 @@
+# SPA fallback for Cloudflare Pages: serve index.html for client-routed paths
+# (e.g. /models, /share/:token) so deep links and refreshes don't 404.
+/*    /index.html   200

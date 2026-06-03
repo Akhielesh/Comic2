@@ -17,6 +17,7 @@ import {
   ThumbsUp,
   ThumbsDown,
   ShieldCheck,
+  ExternalLink,
   MessageSquare
 } from 'lucide-react';
 import {
@@ -42,6 +43,8 @@ import { buildSmartTeam, TASK_PROFILES, type SmartMode, type SmartTask, type Sma
 import { recordModelFeedback, latestVote, MODEL_FEEDBACK_CHANGED, type FeedbackVote } from '../services/modelFeedback';
 import { describeCost, classBadge } from '../shared/pricing';
 import { useAuth } from '../contexts/AuthContext';
+import { modelLinks, SOURCE_HOSTING_NOTE } from '../services/modelLinks';
+import type { ModelSource } from '../services/modelCatalog';
 
 interface ModelLibraryProps {
   onBack: () => void;
@@ -300,6 +303,19 @@ const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; on
           </div>
         )}
         {model.description && <p className="text-sm text-slate-600">{model.description}</p>}
+
+        <div className="border-2 border-black rounded-lg p-3 space-y-1.5">
+          <div className="text-[10px] uppercase font-bold text-slate-500">Where it's hosted &amp; sourced</div>
+          <p className="text-[12px] text-slate-600">{SOURCE_HOSTING_NOTE[model.source as ModelSource]}</p>
+          <div className="flex flex-wrap gap-2 pt-0.5">
+            {modelLinks(model).map((link) => (
+              <a key={link.url} href={link.url} target="_blank" rel="noreferrer"
+                 className="text-[11px] font-bold text-brand-blue underline flex items-center gap-1">
+                {link.label} <ExternalLink className="w-3 h-3" />
+              </a>
+            ))}
+          </div>
+        </div>
 
         <div className="grid sm:grid-cols-4 gap-3 text-[11px]">
           <div className="border-2 border-black rounded-lg p-2"><div className="text-slate-400 uppercase font-bold">Input tokens</div><div className="font-mono">{perMillion(model.pricing.promptPerToken)}</div></div>
