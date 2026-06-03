@@ -1,0 +1,37 @@
+name: Refresh Model Catalog
+
+# Keeps the PUBLIC model catalog fresh with zero user traffic: fetches each source's model
+# list with the platform key and harvests the public metadata into model_catalog_cache, so
+# the logged-out /models page stays current (esp. NVIDIA, which needs an authenticated call).
+# Requires repo secrets: VITE_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and (optional but
+# recommended) NVIDIA_API_KEY / OPENROUTER_API_KEY for the platform-key sources.
+
+on:
+  schedule:
+    - cron: '30 * * * *' # hourly, offset from other jobs
+  workflow_dispatch:
+
+jobs:
+  refresh-catalog:
+    runs-on: ubuntu-latest
+    env:
+      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Refresh public model catalog
+        run: npm run catalog:refresh

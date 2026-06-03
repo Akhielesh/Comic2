@@ -5,6 +5,10 @@
 // instead. UI surfaces (model pickers, generation buttons, background generation status)
 // must consume this and show a "Block + explain" message when free-only blocks a stage.
 //
+// DEFAULT: ON. "Free" should mean free — so unless the user has explicitly opted into paid
+// (persisted as '0'), every request is free-only and the server blocks rather than silently
+// charging a paid fallback. Absence of the flag = on; only an explicit '0' turns it off.
+//
 // Persistence: localStorage today (per-browser). Phase 1's verification system migration
 // will add a server-side profile flag so the setting follows the user across devices.
 
@@ -14,17 +18,18 @@ const EVENT = 'dreamstream:freeOnly:changed';
 export const isFreeOnly = (): boolean => {
   if (typeof window === 'undefined') return false;
   try {
-    return window.localStorage.getItem(KEY) === '1';
+    // Default ON: only an explicit opt-into-paid ('0') disables it.
+    return window.localStorage.getItem(KEY) !== '0';
   } catch {
-    return false;
+    return true;
   }
 };
 
 export const setFreeOnly = (on: boolean): void => {
   if (typeof window === 'undefined') return;
   try {
-    if (on) window.localStorage.setItem(KEY, '1');
-    else window.localStorage.removeItem(KEY);
+    // Persist the OFF choice explicitly ('0') so opting into paid survives the default-on.
+    window.localStorage.setItem(KEY, on ? '1' : '0');
     window.dispatchEvent(new CustomEvent(EVENT, { detail: { on } }));
   } catch {
     /* best-effort; storage may be blocked */

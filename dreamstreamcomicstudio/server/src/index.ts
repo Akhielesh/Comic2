@@ -38,6 +38,7 @@ import { moderationRouter } from './routes/moderation.js';
 import { sharingRouter } from './routes/sharing.js';
 import { comicForgeRouter } from './routes/comicforge.js';
 import { modelsRouter } from './routes/models.js';
+import { keysRouter } from './routes/keys.js';
 
 validateRuntimeConfig();
 
@@ -122,6 +123,8 @@ app.get('/api/health', (_req, res) => {
 // Public routes
 app.use('/api/system', systemRateLimit, systemRouter);
 app.use('/api/models', systemRateLimit, modelsRouter);
+// BYOK key validation — read-only provider checks, no app login required.
+app.use('/api/keys', systemRateLimit, keysRouter);
 app.use('/api/assistant', optionalAuth, assistantLimits, assistantRouter);
 app.use('/api/billing', systemRateLimit, optionalAuth, billingRouter);
 

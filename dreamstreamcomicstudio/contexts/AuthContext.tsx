@@ -4,6 +4,7 @@ import { User, Session } from '@supabase/supabase-js';
 import { getAuthRedirectUrl, supabase } from '../services/supabase';
 import { decryptKey } from '../services/crypto';
 import { clearFluxKey, setFluxKey } from '../services/appSettings';
+import { clearAllKeys } from '../services/apiKeys';
 
 type AuthContextType = {
     user: User | null;
@@ -63,6 +64,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             // ignore storage access issues
         }
         clearFluxKey();
+        // SECURITY: purge ALL BYOK keys + usage from the multi-key store so a shared device
+        // never leaks the previous user's secrets, usage, or live provider balance after sign-out.
+        clearAllKeys();
     };
 
     const signOut = async () => {
