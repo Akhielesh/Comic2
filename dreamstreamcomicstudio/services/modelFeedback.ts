@@ -69,6 +69,31 @@ export const latestVote = (modelId: string): FeedbackVote | null => {
   return entries && entries.length ? entries[entries.length - 1].vote : null;
 };
 
+/** Aggregate like/dislike counts for a model — for showing community-style signal in the UI. */
+export const feedbackSummary = (modelId: string): { likes: number; dislikes: number; net: number; total: number } => {
+  const entries = read()[modelId] || [];
+  const likes = entries.filter((e) => e.vote === 'like').length;
+  const dislikes = entries.filter((e) => e.vote === 'dislike').length;
+  return { likes, dislikes, net: likes - dislikes, total: entries.length };
+};
+
+/**
+ * Flat, DB-ready export of all feedback — one row per vote, keyed by model. This is the shape we
+ * would sync to a Supabase `model_feedback` table for cross-user analysis later; for now it stays
+ * client-side. Pure read, safe to call anytime (e.g. a future "sync my feedback" action).
+ */
+export interface FeedbackRecord extends ModelFeedbackEntry {
+  modelId: string;
+}
+export const exportFeedback = (): FeedbackRecord[] => {
+  const store = read();
+  const rows: FeedbackRecord[] = [];
+  for (const [modelId, entries] of Object.entries(store)) {
+    for (const e of entries) rows.push({ modelId, ...e });
+  }
+  return rows.sort((a, b) => a.at - b.at);
+};
+
 /**
  * Net feedback signal for a model, optionally weighted toward a specific task. Likes are +1,
  * dislikes −1; entries that match the task in question count 1.5×; more recent entries count

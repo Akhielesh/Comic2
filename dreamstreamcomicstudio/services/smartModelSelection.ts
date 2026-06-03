@@ -11,6 +11,7 @@
 import type { CatalogModel } from './modelCatalog';
 import { getCapabilities, type ModelCapabilities } from './modelCapabilities';
 import { feedbackScore } from './modelFeedback';
+import { getModelDomains, domainStrength, DOMAIN_META, type DomainId } from './modelDomains';
 
 export type SmartTask =
   | 'script_analysis'
@@ -33,6 +34,8 @@ export interface TaskProfile {
   gate: (c: ModelCapabilities) => boolean;
   /** Capability-fit bonus for this scenario. */
   fit: (c: ModelCapabilities, m: CatalogModel) => number;
+  /** Real-world domains that matter for this task — benchmark strength here boosts the score. */
+  domains?: DomainId[];
   why: string;
 }
 
@@ -41,30 +44,35 @@ export const TASK_PROFILES: Record<SmartTask, TaskProfile> = {
     label: 'Script analysis', kind: 'text', stage: 'analyze_script',
     gate: (c) => c.textOutput,
     fit: (c) => (c.structuredJson ? 30 : 0) + (c.longContext ? 18 : c.contextLength >= 64000 ? 8 : 0) + (c.reasoning ? 6 : 0),
+    domains: ['reasoning', 'knowledge'],
     why: 'Needs reliable structured JSON and enough context to read the whole script.'
   },
   world_extraction: {
     label: 'World extraction', kind: 'text', stage: 'extract_world',
     gate: (c) => c.textOutput,
     fit: (c) => (c.structuredJson ? 32 : 0) + (c.reasoning ? 10 : 0) + (c.longContext ? 8 : 0),
+    domains: ['reasoning', 'knowledge'],
     why: 'Structured extraction of characters/items/locations; reasoning helps fill details.'
   },
   panel_breakdown: {
     label: 'Panel breakdown', kind: 'text', stage: 'panel_breakdown',
     gate: (c) => c.textOutput,
     fit: (c) => (c.structuredJson ? 30 : 0) + (c.reasoning ? 16 : 0),
+    domains: ['reasoning'],
     why: 'Plans shot/angle/composition into JSON — benefits most from reasoning + structure.'
   },
   dialogue: {
     label: 'Dialogue', kind: 'text', stage: 'dialogue',
     gate: (c) => c.textOutput,
     fit: (c) => (c.structuredJson ? 10 : 0) + (c.reasoning ? 4 : 0),
+    domains: ['writing'],
     why: 'Short, in-character lines — most capable text models do well.'
   },
   continuity_audit: {
     label: 'Continuity audit', kind: 'text', stage: 'continuity_audit',
     gate: (c) => c.textOutput,
     fit: (c) => (c.structuredJson ? 28 : 0) + (c.reasoning ? 14 : 0),
+    domains: ['reasoning'],
     why: 'Cross-checks panels for drift — structured + reasoning.'
   },
   panel_art: {
@@ -134,6 +142,17 @@ export const scoreModelForTask = (model: CatalogModel, task: SmartTask, mode: Sm
   const fit = profile.fit(caps, model);
   if (fit > 0) { score += fit; reasons.push('strong fit for this task'); }
 
+  // Domain-aware quality: reward proven benchmark strength in the domains this task needs
+  // (e.g. reasoning for planning, writing for dialogue). Up to ~22 pts, so it tunes the order
+  // without overriding hard capability fit. THIS is what makes "pick a model for X" actually good.
+  if (profile.domains?.length) {
+    const avg = profile.domains.reduce((s, d) => s + domainStrength(model, d), 0) / profile.domains.length;
+    if (avg > 0) {
+      score += Math.round(avg * 0.22);
+      if (avg >= 70) reasons.push(`benchmark-strong at ${profile.domains.map((d) => DOMAIN_META[d].label.toLowerCase()).join(' & ')}`);
+    }
+  }
+
   const cost = costScore(model, mode, isFree);
   score += cost.score;
   if (cost.reason) reasons.push(cost.reason);
@@ -189,3 +208,45 @@ export const buildSmartTeam = (models: CatalogModel[], mode: SmartMode): SmartTe
   const image = perTask.panel_art || perTask.cover || perTask.style || null;
   return { mode, text, image, perTask };
 };
+
+// ── Domain-first picking ───────────────────────────────────────────────────────
+// For callers that think in domains rather than comic stages ("give me the best CODING model",
+// "the best for science"). Ranks purely by benchmark strength in the domain, blended with cost,
+// known drawbacks, family prior and your feedback — so it's explainable and keeps improving.
+
+export interface DomainPick extends ScoredModel { strength: number; }
+
+export const rankModelsForDomain = (models: CatalogModel[], domain: DomainId, mode: SmartMode = 'best'): DomainPick[] =>
+  models
+    .map((model): DomainPick | null => {
+      const caps = getCapabilities(model);
+      const isFree = caps.isFree;
+      if (mode === 'free' && !isFree) return null;
+      const strength = domainStrength(model, domain);
+      if (strength <= 0) return null;
+
+      const reasons: string[] = [`${DOMAIN_META[domain].label}: ${strength}/100`];
+      let score = strength; // 0–100 from benchmarks/capabilities is the backbone
+
+      const cost = costScore(model, mode, isFree);
+      score += cost.score;
+      if (cost.reason) reasons.push(cost.reason);
+
+      const drawbacks = model.drawbacks?.length || 0;
+      if (drawbacks > 0) score -= drawbacks * 3;
+
+      const prior = familyPrior(model.id);
+      if (prior > 0) score += prior;
+
+      const fb = feedbackScore(model.id, `domain:${domain}`);
+      if (fb !== 0) {
+        score += Math.max(-25, Math.min(25, fb * 8));
+        reasons.push(fb > 0 ? 'you liked this before' : 'you disliked this before');
+      }
+      return { model, score: Math.round(score), reasons, strength };
+    })
+    .filter((x): x is DomainPick => x !== null)
+    .sort((a, b) => b.score - a.score);
+
+export const pickBestForDomain = (models: CatalogModel[], domain: DomainId, mode: SmartMode = 'best'): DomainPick | null =>
+  rankModelsForDomain(models, domain, mode)[0] || null;

@@ -39,8 +39,12 @@ import {
   type ModelSelection
 } from '../services/modelSelection';
 import { getCapabilities, featureSupport, FEATURE_LABELS, capabilityBadges, QUERY_FACETS, type CapabilityTone } from '../services/modelCapabilities';
-import { buildSmartTeam, TASK_PROFILES, type SmartMode, type SmartTask, type SmartTeam } from '../services/smartModelSelection';
-import { recordModelFeedback, latestVote, MODEL_FEEDBACK_CHANGED, type FeedbackVote } from '../services/modelFeedback';
+import { buildSmartTeam, TASK_PROFILES, pickBestForDomain, type SmartMode, type SmartTask, type SmartTeam } from '../services/smartModelSelection';
+import { recordModelFeedback, latestVote, feedbackSummary, MODEL_FEEDBACK_CHANGED, type FeedbackVote } from '../services/modelFeedback';
+import { topDomains, domainStrength, DOMAIN_META, FILTERABLE_DOMAINS, type DomainId } from '../services/modelDomains';
+import { DomainTags, ModelInsightsPanel } from './models/ModelInsights';
+import { InfoDot } from './common/InfoTooltip';
+import type { GLOSSARY } from '../services/modelGlossary';
 import { describeCost, classBadge } from '../shared/pricing';
 import { useAuth } from '../contexts/AuthContext';
 import { modelLinks, SOURCE_HOSTING_NOTE } from '../services/modelLinks';
@@ -119,6 +123,11 @@ const COST_CLASS_LABEL: Record<string, string> = {
   per_image_only: 'Per image',
   paid: 'Paid'
 };
+// Cost classes that have a glossary explanation (the surprising ones worth a hover).
+const COST_CLASS_GLOSSARY: Record<string, keyof typeof GLOSSARY> = {
+  free_verified: 'free_verified',
+  zero_priced_token_billed: 'token_billed'
+};
 
 // Each active filter chip must match (AND), so you can combine e.g. Free + Image + Reasoning.
 const FILTER_PREDICATES: Record<Exclude<FilterKey, 'all'>, (m: CatalogModel, c: ReturnType<typeof getCapabilities>) => boolean> = {
@@ -132,12 +141,18 @@ const FILTER_PREDICATES: Record<Exclude<FilterKey, 'all'>, (m: CatalogModel, c: 
   nvidia: (m) => m.source === 'nvidia'
 };
 
-const matchesFilter = (model: CatalogModel, filters: Set<FilterKey>, query: string): boolean => {
+const matchesFilter = (model: CatalogModel, filters: Set<FilterKey>, domains: Set<DomainId>, query: string): boolean => {
   const caps = getCapabilities(model);
   for (const f of filters) {
     if (f === 'all') continue;
     const predicate = FILTER_PREDICATES[f];
     if (predicate && !predicate(model, caps)) return false;
+  }
+
+  // Domain filters (benchmark-backed): a model must be at least "Capable" (≥55) in each selected
+  // domain. ANDs with everything else, so "Coding" + "Free" finds free models that can actually code.
+  for (const d of domains) {
+    if (domainStrength(model, d) < 55) return false;
   }
 
   // Smart search: each token is either a semantic facet ("free", "image", "vision",
@@ -187,9 +202,12 @@ const UseModelControl: React.FC<{ model: CatalogModel; selection: ModelSelection
   );
 };
 
-// 👍/👎 a model to teach Smart auto-pick. Dislike optionally asks why (never forced).
-const FeedbackButtons: React.FC<{ modelId: string; task?: string }> = ({ modelId, task }) => {
+// 👍/👎 a model to teach Smart auto-pick. Always optional; dislike may ask why (never forced).
+// Shows running counts so feedback feels like it accumulates into something — and the data is kept
+// in an analysis-ready shape (see modelFeedback.exportFeedback) for future cross-session insight.
+const FeedbackButtons: React.FC<{ modelId: string; task?: string; showCounts?: boolean }> = ({ modelId, task, showCounts }) => {
   const [vote, setVote] = useState<FeedbackVote | null>(() => latestVote(modelId));
+  const [summary, setSummary] = useState(() => feedbackSummary(modelId));
   const cast = (v: FeedbackVote) => (e: React.MouseEvent) => {
     e.stopPropagation();
     const note = v === 'dislike'
@@ -197,11 +215,16 @@ const FeedbackButtons: React.FC<{ modelId: string; task?: string }> = ({ modelId
       : undefined;
     recordModelFeedback(modelId, v, { note, task });
     setVote(v);
+    setSummary(feedbackSummary(modelId));
   };
   return (
-    <div className="flex items-center gap-1" title="Teach Smart auto-pick">
-      <button onClick={cast('like')} className={`p-1 rounded border-2 border-black ${vote === 'like' ? 'bg-green-500 text-white' : 'bg-white hover:bg-green-100'}`} aria-label="Like this model"><ThumbsUp className="w-3 h-3" /></button>
-      <button onClick={cast('dislike')} className={`p-1 rounded border-2 border-black ${vote === 'dislike' ? 'bg-brand-red text-white' : 'bg-white hover:bg-red-100'}`} aria-label="Dislike this model"><ThumbsDown className="w-3 h-3" /></button>
+    <div className="flex items-center gap-1" title="Optional — teach Smart auto-pick what works for you">
+      <button onClick={cast('like')} className={`flex items-center gap-0.5 p-1 rounded border-2 border-black ${vote === 'like' ? 'bg-green-500 text-white' : 'bg-white hover:bg-green-100'}`} aria-label="Like this model">
+        <ThumbsUp className="w-3 h-3" />{showCounts && summary.likes > 0 && <span className="text-[10px] font-bold">{summary.likes}</span>}
+      </button>
+      <button onClick={cast('dislike')} className={`flex items-center gap-0.5 p-1 rounded border-2 border-black ${vote === 'dislike' ? 'bg-brand-red text-white' : 'bg-white hover:bg-red-100'}`} aria-label="Dislike this model">
+        <ThumbsDown className="w-3 h-3" />{showCounts && summary.dislikes > 0 && <span className="text-[10px] font-bold">{summary.dislikes}</span>}
+      </button>
     </div>
   );
 };
@@ -230,6 +253,9 @@ const ModelCard: React.FC<{
     <div className="flex flex-wrap gap-1">
       {capabilityBadges(model).map((b) => <Badge key={b.label} className={TONE_CLASS[b.tone]}>{b.label}</Badge>)}
     </div>
+
+    {/* What it's actually good at — benchmark-backed domain tags. */}
+    <DomainTags model={model} />
 
     <p className="text-[11px] text-slate-700 leading-snug" title="Cost varies per axis (input tokens, output tokens, per-image, per-request).">{costStatement(model)}</p>
 
@@ -276,15 +302,19 @@ const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; on
 
       <div className="p-5 space-y-4">
         <div className="flex flex-wrap items-center gap-1.5">
-          <Badge className={COST_CLASS_COLOR[model.costClass]}>{COST_CLASS_LABEL[model.costClass] ?? classBadge(model.costClass)}</Badge>
+          <span className="inline-flex items-center gap-0.5">
+            <Badge className={COST_CLASS_COLOR[model.costClass]}>{COST_CLASS_LABEL[model.costClass] ?? classBadge(model.costClass)}</Badge>
+            {COST_CLASS_GLOSSARY[model.costClass] && <InfoDot term={COST_CLASS_GLOSSARY[model.costClass]} />}
+          </span>
           {model.supportsImageOutput && <Badge className="bg-brand-blue text-white">Text→Image</Badge>}
           {getCapabilities(model).imageInput && !model.supportsImageOutput && <Badge className="bg-brand-yellow text-black">Image→Text (vision)</Badge>}
           {model.supportsImageInput && model.supportsImageOutput && <Badge className="bg-brand-yellow text-black">Reference images</Badge>}
           {getCapabilities(model).imageEditing && <Badge className="bg-fuchsia-600 text-white">Image editing</Badge>}
-          {getCapabilities(model).reasoning && <Badge className="bg-indigo-600 text-white">Reasoning</Badge>}
-          {model.supportsJsonOutput && <Badge className="bg-slate-100 text-slate-700">Structured JSON</Badge>}
-          {typeof model.contextLength === 'number' && <Badge className="bg-slate-100 text-slate-700">{Math.round(model.contextLength / 1000)}K ctx</Badge>}
+          {getCapabilities(model).reasoning && <span className="inline-flex items-center gap-0.5"><Badge className="bg-indigo-600 text-white">Reasoning</Badge><InfoDot term="reasoning" /></span>}
+          {model.supportsJsonOutput && <span className="inline-flex items-center gap-0.5"><Badge className="bg-slate-100 text-slate-700">Structured JSON</Badge><InfoDot term="structured_json" /></span>}
+          {typeof model.contextLength === 'number' && <span className="inline-flex items-center gap-0.5"><Badge className="bg-slate-100 text-slate-700">{Math.round(model.contextLength / 1000)}K ctx</Badge><InfoDot term="context_length" /></span>}
           <span className="ml-auto flex items-center gap-2">
+            <FeedbackButtons modelId={model.id} showCounts />
             {onStartChat && canChatWith(model) && (
               <button
                 onClick={() => onStartChat({ id: model.id, name: model.name, source: providerOrigin(model) as 'openrouter' | 'nvidia' })}
@@ -296,6 +326,10 @@ const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; on
             <UseModelControl model={model} selection={selection} onUse={onUse} />
           </span>
         </div>
+
+        {/* What it's good at + the numbers behind it. */}
+        <DomainTags model={model} limit={6} threshold={45} />
+        <ModelInsightsPanel model={model} />
 
         {model.editorialNote && (
           <div className="bg-brand-yellow/30 border-2 border-black rounded-lg p-3 text-sm flex gap-2">
@@ -381,6 +415,9 @@ const CompareModal: React.FC<{ models: CatalogModel[]; selection: ModelSelection
     { label: 'Reasoning', render: (m) => (getCapabilities(m).reasoning ? '✅' : '—') },
     { label: 'Structured JSON', render: (m) => (m.supportsJsonOutput ? '✅' : '—') },
     { label: 'Context', render: (m) => (m.contextLength ? `${Math.round(m.contextLength / 1000)}K` : '—') },
+    { label: 'Best at', render: (m) => { const d = topDomains(m, 3, 55); return d.length ? d.map((x) => DOMAIN_META[x.id].label).join(', ') : '—'; } },
+    { label: 'Coding', render: (m) => { const s = domainStrength(m, 'coding'); return s ? `${s}/100` : '—'; } },
+    { label: 'Science', render: (m) => { const s = domainStrength(m, 'science'); return s ? `${s}/100` : '—'; } },
     { label: 'Input $/Mtok', render: (m) => perMillion(m.pricing.promptPerToken) },
     { label: 'Output $/Mtok', render: (m) => perMillion(m.pricing.completionPerToken) },
     { label: 'Per image', render: (m) => (m.pricing.imagePerImage > 0 ? `$${m.pricing.imagePerImage.toFixed(3)}` : '—') },
@@ -478,12 +515,14 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
   const [degradedMessage, setDegradedMessage] = useState<string | undefined>();
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState<Set<FilterKey>>(new Set());
+  const [domainFilters, setDomainFilters] = useState<Set<DomainId>>(new Set());
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<CatalogModel | null>(null);
   const [selection, setSelection] = useState<ModelSelection>(() => getModelSelection());
   const [compareIds, setCompareIds] = useState<string[]>([]);
   const [showCompare, setShowCompare] = useState(false);
   const [smartTeam, setSmartTeam] = useState<SmartTeam | null>(null);
+  const [domainPick, setDomainPick] = useState<{ domain: DomainId; best: ReturnType<typeof pickBestForDomain>; mode: SmartMode } | null>(null);
 
   useEffect(() => {
     const onChange = () => setSelection(getModelSelection());
@@ -506,7 +545,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
     return () => { active = false; };
   }, []);
 
-  const visible = useMemo(() => models.filter((model) => matchesFilter(model, filters, query)), [models, filters, query]);
+  const visible = useMemo(() => models.filter((model) => matchesFilter(model, filters, domainFilters, query)), [models, filters, domainFilters, query]);
   const compareModels = useMemo(() => compareIds.map((id) => models.find((m) => m.id === id)).filter((m): m is CatalogModel => !!m), [compareIds, models]);
 
   const useModel = (model: CatalogModel, slot: ModelSlot) => setSelectedModel(slot, model.id, 'specific', model.source);
@@ -526,6 +565,9 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
     setSmartTeam(team);
   };
 
+  // Domain-aware single pick: "what's the best model for coding / science / …" across all sources.
+  const runDomainPick = (domain: DomainId, mode: SmartMode) => setDomainPick({ domain, best: pickBestForDomain(models, domain, mode), mode });
+
   const toggleCompare = (id: string) =>
     setCompareIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : prev.length >= MAX_COMPARE ? prev : [...prev, id]));
 
@@ -539,9 +581,9 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
 
         <h1 className="text-4xl font-display">Model Library</h1>
         <p className="text-slate-600 max-w-2xl mt-1">
-          Every model is live from OpenRouter and annotated for comics — what each is good for, what's
-          possible, the honest drawbacks, and real pricing. Pick models with <span className="font-bold">Use this model</span>,
-          or select up to {MAX_COMPARE} to compare.
+          Every model is live from your sources, tagged by what it's actually good at — <span className="font-bold">coding, science, math, reasoning, writing</span> and more — with
+          real benchmark numbers, honest drawbacks and pricing. Hover any term to learn what it means.
+          Pick with <span className="font-bold">Use this model</span>, or compare up to {MAX_COMPARE}.
         </p>
 
         {/* Current selection */}
@@ -599,6 +641,39 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
           )}
         </div>
 
+        {/* Domain-aware single pick — "best model for a specific job", across all your sources. */}
+        <div className="mt-4 border-2 border-black rounded-xl p-4 bg-white">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="font-display text-lg flex items-center gap-2"><Sparkles className="w-5 h-5 text-brand-blue" /> Best model for…</div>
+            <p className="text-xs text-slate-600 flex-1 min-w-[200px]">Ranked by real benchmarks in that domain — not a guess. Pick a job and we'll name the strongest model (and the strongest free one).</p>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {(['coding', 'science', 'math', 'reasoning', 'writing'] as DomainId[]).map((d) => (
+              <button key={d} onClick={() => runDomainPick(d, 'best')} disabled={loading || models.length === 0}
+                className={`text-xs font-bold px-3 py-1.5 rounded border-2 border-black disabled:opacity-50 ${domainPick?.domain === d ? `${DOMAIN_META[d].tone}` : 'bg-white hover:bg-brand-yellow/60'}`}>
+                {DOMAIN_META[d].label}
+              </button>
+            ))}
+          </div>
+          {domainPick && (
+            <div className="mt-3 pt-3 border-t border-black/10 text-xs">
+              {domainPick.best ? (
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span className="font-bold uppercase text-slate-500">Best for {DOMAIN_META[domainPick.domain].label}:</span>
+                  <button onClick={() => setSelected(domainPick.best!.model)} className="font-bold underline">{domainPick.best.model.name}</button>
+                  <span className="text-slate-500">{domainPick.best.reasons.join(' · ')}</span>
+                  <button onClick={() => useModel(domainPick.best!.model, slotOf(domainPick.best!.model))} className="ml-auto text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black bg-brand-blue text-white">Use it</button>
+                  {(() => { const free = pickBestForDomain(models, domainPick.domain, 'free'); return free && free.model.id !== domainPick.best!.model.id
+                    ? <span className="basis-full text-slate-500">Best <span className="font-bold text-green-700">free</span>: <button onClick={() => setSelected(free.model)} className="font-bold underline">{free.model.name}</button> ({free.strength}/100)</span>
+                    : null; })()}
+                </div>
+              ) : (
+                <span className="text-brand-red">No model with benchmark data for {DOMAIN_META[domainPick.domain].label} in your sources yet.</span>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Controls */}
         <div className="mt-6 flex flex-col md:flex-row md:items-center gap-3">
           <div className="flex flex-wrap gap-2">
@@ -619,6 +694,29 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search models…" className="pl-9 pr-3 py-2 border-2 border-black rounded-lg text-sm w-full md:w-64 focus:outline-none focus:bg-brand-yellow/10" />
           </div>
+        </div>
+
+        {/* Domain filters — benchmark-backed "good at" filters (Coding, Science, …). */}
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="text-[10px] font-bold uppercase text-slate-500 flex items-center gap-1">
+            Good at <InfoDot content={{ title: 'Domain filters', body: 'Filters to models that are at least "Capable" (benchmark strength ≥ 55/100) in this area. Combine with the filters above — e.g. Coding + Free.' }} />
+          </span>
+          {FILTERABLE_DOMAINS.map((d) => {
+            const active = domainFilters.has(d);
+            const meta = DOMAIN_META[d];
+            return (
+              <button
+                key={d}
+                onClick={() => setDomainFilters((prev) => { const next = new Set(prev); next.has(d) ? next.delete(d) : next.add(d); return next; })}
+                className={`text-[11px] font-bold px-2.5 py-1 rounded border-2 border-black transition-colors ${active ? `${meta.tone}` : 'bg-white hover:bg-slate-100'}`}
+              >
+                {meta.label}
+              </button>
+            );
+          })}
+          {domainFilters.size > 0 && (
+            <button onClick={() => setDomainFilters(new Set())} className="text-[11px] font-bold text-slate-500 underline">clear</button>
+          )}
         </div>
 
         {degraded && (
