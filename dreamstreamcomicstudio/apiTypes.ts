@@ -753,19 +753,62 @@ export interface WeatherDaily {
   maxC: number;
   code: number;
   description: string;
+  /** Max UV index for the day. */
+  uvMax?: number;
+  /** Chance of precipitation (%). */
+  precipProb?: number;
+  /** ISO sunrise/sunset times. */
+  sunrise?: string;
+  sunset?: string;
+}
+/** One hour of the short-range forecast. */
+export interface WeatherHourly {
+  /** ISO timestamp. */
+  time: string;
+  tempC: number;
+  code: number;
+  /** Chance of precipitation (%). */
+  precipProb?: number;
+  isDay?: boolean;
+}
+/** Air quality snapshot (Open-Meteo CAMS). */
+export interface WeatherAirQuality {
+  usAqi?: number;
+  euAqi?: number;
+  pm25?: number;
+  /** Human band derived from US AQI, e.g. "Good", "Moderate". */
+  category?: string;
+}
+/** Pollen levels (grains/m³, Europe coverage). Bucketed for display. */
+export interface WeatherPollen {
+  grass?: number;
+  tree?: number;
+  weed?: number;
+  /** Overall band, e.g. "Low", "Moderate", "High". */
+  level?: string;
 }
 export interface WeatherArtifact {
   location: string;
   current: {
     tempC: number;
     tempF: number;
+    /** Apparent ("feels like") temperature in Celsius. */
+    feelsLikeC?: number;
     code: number;
     description: string;
     windKph: number;
     humidity?: number;
+    /** Current UV index. */
+    uvIndex?: number;
+    /** Current chance of precipitation (%). */
+    precipProb?: number;
     isDay: boolean;
   };
+  /** Next ~24 hours, hour by hour. */
+  hourly?: WeatherHourly[];
   daily: WeatherDaily[];
+  airQuality?: WeatherAirQuality;
+  pollen?: WeatherPollen;
 }
 
 export interface VideoResult {
