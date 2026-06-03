@@ -71,6 +71,10 @@ export type GenerateTextResult = {
   json?: unknown;
   model: string;
   usage: ProviderUsage;
+  /** Step-by-step reasoning trace, when the model exposes it (reasoning models). */
+  reasoning?: string;
+  /** Web citations gathered when web search was enabled (OpenRouter `web` plugin annotations). */
+  citations?: { url: string; title?: string }[];
   raw?: unknown;
 };
 

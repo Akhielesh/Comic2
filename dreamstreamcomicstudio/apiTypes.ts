@@ -691,12 +691,18 @@ export type ChatRequest = {
   dreamstreamContext?: UniversalAssistantContext;
 };
 
+export type ChatCitation = { url: string; title?: string };
+
 export type ChatResponse = {
   text: string;
   model: string;
   source: 'openrouter' | 'nvidia';
   reasoningLevel: ChatReasoningLevel;
   webSearch: boolean;
+  /** Step-by-step reasoning trace, when the model exposed one. */
+  reasoning?: string;
+  /** Web citations gathered when web search was enabled. */
+  citations?: ChatCitation[];
   usage?: ApiUsage;
   billing?: ApiBillingInfo;
 };

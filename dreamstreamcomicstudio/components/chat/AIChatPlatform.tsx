@@ -277,6 +277,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         model: res.model,
         reasoningLevel: res.reasoningLevel,
         webSearch: res.webSearch,
+        reasoning: res.reasoning,
+        citations: res.citations,
         createdAt: Date.now()
       };
       updateSession(sessionId, (s) => ({ ...s, turns: [...s.turns, aiTurn], updatedAt: Date.now() }));
@@ -339,11 +341,14 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         onDreamstreamToggle={(on) =>
           activeId && updateSession(activeId, (s) => ({ ...s, dreamstreamAccess: on, updatedAt: Date.now() }))
         }
+        onRenameTitle={(title) => activeId && handleRename(activeId, title)}
       />
 
       {showModelPicker && (
         <ChatModelPicker
           selectedModelId={activeSession.modelId}
+          hasMessages={activeSession.turns.length > 0}
+          conversationHasImages={activeSession.turns.some((t) => (t.attachments?.length || 0) > 0)}
           onSelect={handleSelectModel}
           onClose={() => setShowModelPicker(false)}
         />

@@ -1,10 +1,12 @@
-import React, { useEffect, useRef } from 'react';
-import { PanelLeftOpen, PanelLeftClose, ChevronDown, Sparkles, Cpu } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { PanelLeftOpen, PanelLeftClose, ChevronDown, Sparkles, Cpu, Pencil, Check, X } from 'lucide-react';
 import type { ChatSession, ChatAttachment } from '../../services/chatStorage';
 import type { ChatReasoningLevel } from '../../apiTypes';
 import type { ChatModelFeatures } from '../../services/chatFeatures';
+import { estimateTokens } from '../../services/chatUtils';
 import { ChatMessageView } from './ChatMessageView';
 import { ChatComposer } from './ChatComposer';
+import { ChatContextMeter } from './ChatContextMeter';
 
 interface ChatConversationProps {
   session: ChatSession;
@@ -19,6 +21,7 @@ interface ChatConversationProps {
   onReasoningChange: (level: ChatReasoningLevel) => void;
   onWebToggle: (on: boolean) => void;
   onDreamstreamToggle: (on: boolean) => void;
+  onRenameTitle: (title: string) => void;
 }
 
 const SUGGESTIONS = [
@@ -40,9 +43,12 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
   onBranch,
   onReasoningChange,
   onWebToggle,
-  onDreamstreamToggle
+  onDreamstreamToggle,
+  onRenameTitle
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState(session.title);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -50,6 +56,17 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
   }, [session.turns.length, busy]);
 
   const modelLabel = session.modelName || session.modelId || 'Auto (free)';
+
+  const usedTokens = useMemo(
+    () => session.turns.reduce((sum, t) => sum + estimateTokens(t.content) + (t.attachments?.length || 0) * 800, 0),
+    [session.turns]
+  );
+
+  const commitTitle = () => {
+    const next = titleDraft.trim();
+    if (next && next !== session.title) onRenameTitle(next);
+    setEditingTitle(false);
+  };
 
   return (
     <div className="flex-1 flex flex-col min-w-0 h-full">
@@ -65,19 +82,50 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
 
         <button
           onClick={onOpenModelPicker}
-          className="flex items-center gap-2 border-2 border-black rounded-lg px-3 py-1.5 bg-white hover:bg-slate-50 min-w-0"
+          className="flex items-center gap-2 border-2 border-black rounded-lg px-3 py-1.5 bg-white hover:bg-slate-50 min-w-0 shrink-0"
           title="Switch model"
         >
           <Cpu className="w-4 h-4 shrink-0 text-brand-blue" />
-          <span className="font-bold text-sm truncate max-w-[200px]">{modelLabel}</span>
+          <span className="font-bold text-sm truncate max-w-[180px]">{modelLabel}</span>
           <ChevronDown className="w-4 h-4 shrink-0 text-slate-500" />
         </button>
 
-        <div className="ml-auto hidden sm:flex items-center gap-1.5 text-[11px] text-slate-500">
-          {session.dreamstreamAccess && <span className="px-1.5 py-0.5 rounded border-2 border-black bg-brand-yellow font-bold text-black">DreamStream</span>}
-          {features.vision && <span className="px-1.5 py-0.5 rounded border border-slate-300">Vision</span>}
-          {features.reasoning && <span className="px-1.5 py-0.5 rounded border border-slate-300">Reasoning</span>}
-          {features.longContext && <span className="px-1.5 py-0.5 rounded border border-slate-300">Long ctx</span>}
+        {/* Editable session title */}
+        <div className="flex-1 min-w-0 hidden sm:flex items-center">
+          {editingTitle ? (
+            <div className="flex items-center gap-1 w-full max-w-sm">
+              <input
+                autoFocus
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') commitTitle();
+                  if (e.key === 'Escape') setEditingTitle(false);
+                }}
+                className="flex-1 min-w-0 text-sm font-bold border-2 border-black rounded px-2 py-1 outline-none"
+              />
+              <button onClick={commitTitle} className="text-green-600 hover:scale-110"><Check className="w-4 h-4" /></button>
+              <button onClick={() => setEditingTitle(false)} className="text-slate-500 hover:scale-110"><X className="w-4 h-4" /></button>
+            </div>
+          ) : (
+            <button
+              onClick={() => { setTitleDraft(session.title); setEditingTitle(true); }}
+              className="group flex items-center gap-1.5 min-w-0 text-slate-700 hover:text-black"
+              title="Rename this chat"
+            >
+              <span className="font-bold text-sm truncate">{session.title}</span>
+              <Pencil className="w-3.5 h-3.5 shrink-0 opacity-0 group-hover:opacity-100" />
+            </button>
+          )}
+        </div>
+
+        <div className="ml-auto flex items-center gap-2 shrink-0">
+          <ChatContextMeter usedTokens={usedTokens} contextLength={features.contextLength} features={features} />
+          <div className="hidden lg:flex items-center gap-1.5 text-[11px] text-slate-500">
+            {session.dreamstreamAccess && <span className="px-1.5 py-0.5 rounded border-2 border-black bg-brand-yellow font-bold text-black">DreamStream</span>}
+            {features.vision && <span className="px-1.5 py-0.5 rounded border border-slate-300">Vision</span>}
+            {features.reasoning && <span className="px-1.5 py-0.5 rounded border border-slate-300">Reasoning</span>}
+          </div>
         </div>
       </div>
 

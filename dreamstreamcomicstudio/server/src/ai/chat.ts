@@ -60,6 +60,7 @@ Always reply in well-structured GitHub-Flavored Markdown so the answer renders r
 - Use **headings**, short paragraphs, and bullet/numbered lists to organize information.
 - Use Markdown **tables** whenever you compare options, list structured data, or present multiple attributes.
 - Use fenced code blocks with a language tag for any code, config, or commands.
+- When you output code or files, give each file its own fenced block and start it with a comment naming the file (e.g. \`// src/app.ts\` or \`# main.py\`) so it can be saved/zipped correctly. Use a separate block per file.
 - Use Markdown links [label](url) when you cite sources or point to resources.
 - Use Markdown images ![alt](url) only when you have a real, valid image URL.
 - Use blockquotes for callouts and \`inline code\` for identifiers, filenames and values.
@@ -80,7 +81,13 @@ const reasoningMaxTokens = (level?: ChatReasoningLevel): number => {
 
 export const runChat = async (
   params: RunChatParams
-): Promise<{ text: string; usage: ReturnType<typeof buildUsage>; model: string }> => {
+): Promise<{
+  text: string;
+  usage: ReturnType<typeof buildUsage>;
+  model: string;
+  reasoning?: string;
+  citations?: { url: string; title?: string }[];
+}> => {
   // A custom persona / durable user memory augments the rich-format base prompt
   // rather than replacing it, so structured-Markdown rules always hold.
   const extra = params.systemPrompt?.trim();
@@ -128,6 +135,8 @@ export const runChat = async (
   return {
     text: result.text,
     usage: buildUsage(promptSeed, result.text, undefined),
-    model: result.model || params.model
+    model: result.model || params.model,
+    reasoning: result.reasoning,
+    citations: result.citations
   };
 };

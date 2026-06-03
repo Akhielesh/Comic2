@@ -94,6 +94,41 @@ const extractText = (content: unknown): string => {
   return '';
 };
 
+/** Extract the reasoning/thinking trace from a chat message, if the model exposed one. */
+const extractReasoning = (data: any): string | undefined => {
+  const message = data?.choices?.[0]?.message;
+  const reasoning = message?.reasoning;
+  if (typeof reasoning === 'string' && reasoning.trim()) return reasoning.trim();
+  // Some models return structured reasoning_details[] with `text` fields.
+  const details = message?.reasoning_details;
+  if (Array.isArray(details)) {
+    const joined = details
+      .map((d: any) => (d && typeof d.text === 'string' ? d.text : ''))
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+    if (joined) return joined;
+  }
+  return undefined;
+};
+
+/** Pull web-search citations (OpenRouter `web` plugin annotations) from a chat message. */
+const extractCitations = (data: any): { url: string; title?: string }[] | undefined => {
+  const annotations = data?.choices?.[0]?.message?.annotations;
+  if (!Array.isArray(annotations)) return undefined;
+  const out: { url: string; title?: string }[] = [];
+  const seen = new Set<string>();
+  for (const ann of annotations) {
+    const cite = ann?.url_citation || (ann?.type === 'url_citation' ? ann : undefined);
+    const url = cite?.url;
+    if (typeof url === 'string' && url && !seen.has(url)) {
+      seen.add(url);
+      out.push({ url, title: typeof cite?.title === 'string' ? cite.title : undefined });
+    }
+  }
+  return out.length ? out : undefined;
+};
+
 /** Pull generated image data URLs from an OpenRouter chat response. */
 const extractImages = (data: any): string[] => {
   const message = data?.choices?.[0]?.message;
@@ -255,6 +290,8 @@ const generateTextOnce = async (
     json,
     model: String(data?.model || req.model),
     usage: parseUsage(data),
+    reasoning: extractReasoning(data),
+    citations: extractCitations(data),
     raw: data
   };
 };

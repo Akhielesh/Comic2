@@ -31,6 +31,10 @@ export interface ChatTurn {
   model?: string;
   reasoningLevel?: ChatReasoningLevel;
   webSearch?: boolean;
+  /** Step-by-step reasoning trace, shown in the "thinking" dropdown. */
+  reasoning?: string;
+  /** Web sources cited when web search was on. */
+  citations?: { url: string; title?: string }[];
   createdAt: number;
   /** True when this assistant turn is an error placeholder. */
   error?: boolean;

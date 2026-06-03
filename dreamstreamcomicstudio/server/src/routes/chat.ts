@@ -203,6 +203,8 @@ chatRouter.post('/', async (req, res, next) => {
         source: resolved.provider,
         reasoningLevel,
         webSearch,
+        reasoning: result.reasoning,
+        citations: result.citations,
         usage: result.usage
       };
 
