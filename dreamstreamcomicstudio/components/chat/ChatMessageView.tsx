@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   Copy, Check, GitBranch, AlertTriangle, Sparkles, User, Globe, Brain,
-  Download, FileArchive, ChevronDown, ChevronUp, ExternalLink
+  Download, FileArchive, ChevronDown, ChevronUp, ExternalLink, Search
 } from 'lucide-react';
 import JSZip from 'jszip';
 import { ChatMarkdown } from './ChatMarkdown';
@@ -21,7 +21,11 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, onBranch
   const isUser = turn.role === 'user';
 
   const codeBlocks = useMemo(() => (isUser ? [] : extractCodeBlocks(turn.content)), [isUser, turn.content]);
-  const hasDetails = Boolean(turn.reasoning || (turn.citations && turn.citations.length));
+  const hasDetails = Boolean(
+    turn.reasoning ||
+    (turn.citations && turn.citations.length) ||
+    (turn.toolEvents && turn.toolEvents.length)
+  );
 
   const handleCopy = async () => {
     try {
@@ -72,6 +76,21 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, onBranch
           ) : (
             <ChatMarkdown text={turn.content || '…'} className="text-sm" />
           )}
+
+          {!isUser && turn.images && turn.images.length > 0 && (
+            <div className="mt-2 grid grid-cols-3 gap-2">
+              {turn.images.map((img, i) => (
+                <a key={`${img.url}-${i}`} href={img.source || img.url} target="_blank" rel="noopener noreferrer" title={img.title} className="block">
+                  <img
+                    src={img.thumbnail || img.url}
+                    alt={img.title || 'image result'}
+                    loading="lazy"
+                    className="w-full h-24 object-cover rounded-lg border-2 border-black hover:opacity-90"
+                  />
+                </a>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Structured "thinking & sources" dropdown */}
@@ -83,11 +102,25 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, onBranch
             >
               {showDetails ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
               How it answered
+              {turn.toolEvents && turn.toolEvents.length > 0 && <Search className="w-3 h-3" />}
               {turn.reasoning && <Brain className="w-3 h-3" />}
               {turn.citations && turn.citations.length > 0 && <Globe className="w-3 h-3" />}
             </button>
             {showDetails && (
               <div className="mt-1.5 border-2 border-black rounded-lg bg-white p-3 space-y-3">
+                {turn.toolEvents && turn.toolEvents.length > 0 && (
+                  <div>
+                    <div className="text-[11px] font-bold uppercase text-emerald-700 flex items-center gap-1 mb-1"><Search className="w-3.5 h-3.5" /> Tools used</div>
+                    <ul className="space-y-1">
+                      {turn.toolEvents.map((ev, i) => (
+                        <li key={i} className="text-[11px] flex items-start gap-1.5">
+                          <span className={`mt-0.5 w-1.5 h-1.5 rounded-full shrink-0 ${ev.ok ? 'bg-emerald-500' : 'bg-brand-red'}`} />
+                          <span><span className="font-bold">{ev.tool}</span>{ev.query ? `: “${ev.query}”` : ''}{!ev.ok && ev.summary ? ` — ${ev.summary}` : ''}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 {turn.reasoning && (
                   <div>
                     <div className="text-[11px] font-bold uppercase text-indigo-600 flex items-center gap-1 mb-1"><Brain className="w-3.5 h-3.5" /> Reasoning</div>

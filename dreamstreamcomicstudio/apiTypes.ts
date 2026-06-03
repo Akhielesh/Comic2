@@ -689,7 +689,12 @@ export type ChatRequest = {
    * Omitted (and ignored) when the toggle is off, so chat has no app reach by default.
    */
   dreamstreamContext?: UniversalAssistantContext;
+  /** Enabled agentic tool names (e.g. 'web_search', 'image_search'). OpenRouter models only. */
+  tools?: string[];
 };
+
+export type ChatToolEvent = { tool: string; query?: string; ok: boolean; summary?: string };
+export type ChatToolImage = { url: string; title?: string; thumbnail?: string; source?: string };
 
 export type ChatCitation = { url: string; title?: string };
 
@@ -701,8 +706,12 @@ export type ChatResponse = {
   webSearch: boolean;
   /** Step-by-step reasoning trace, when the model exposed one. */
   reasoning?: string;
-  /** Web citations gathered when web search was enabled. */
+  /** Web citations gathered when web search or DuckDuckGo search ran. */
   citations?: ChatCitation[];
+  /** Tools the agent ran this turn (DuckDuckGo etc.). */
+  toolEvents?: ChatToolEvent[];
+  /** Images surfaced by an image-search tool. */
+  images?: ChatToolImage[];
   usage?: ApiUsage;
   billing?: ApiBillingInfo;
 };

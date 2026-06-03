@@ -94,6 +94,23 @@ const extractText = (content: unknown): string => {
   return '';
 };
 
+/** Extract tool calls the model requested (OpenAI `message.tool_calls`). */
+const extractToolCalls = (data: any) => {
+  const calls = data?.choices?.[0]?.message?.tool_calls;
+  if (!Array.isArray(calls) || calls.length === 0) return undefined;
+  const out = calls
+    .map((c: any) => ({
+      id: String(c?.id || ''),
+      name: String(c?.function?.name || ''),
+      arguments:
+        typeof c?.function?.arguments === 'string'
+          ? c.function.arguments
+          : JSON.stringify(c?.function?.arguments || {})
+    }))
+    .filter((c: { name: string }) => Boolean(c.name));
+  return out.length ? out : undefined;
+};
+
 /** Extract the reasoning/thinking trace from a chat message, if the model exposed one. */
 const extractReasoning = (data: any): string | undefined => {
   const message = data?.choices?.[0]?.message;
@@ -257,6 +274,12 @@ const generateTextOnce = async (
     baseBody.plugins = [{ id: 'web', max_results: 5 }];
   }
 
+  // Agentic tools: let the model call our registered functions (DuckDuckGo, etc.).
+  if (req.tools && req.tools.length) {
+    baseBody.tools = req.tools;
+    baseBody.tool_choice = 'auto';
+  }
+
   const run = async (messages: GenerateTextRequest['messages']) => {
     const data = await openRouterFetch<any>(
       '/chat/completions',
@@ -292,6 +315,7 @@ const generateTextOnce = async (
     usage: parseUsage(data),
     reasoning: extractReasoning(data),
     citations: extractCitations(data),
+    toolCalls: extractToolCalls(data),
     raw: data
   };
 };

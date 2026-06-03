@@ -10,6 +10,7 @@ import { fetchModelCatalog, type CatalogModel } from '../../services/modelCatalo
 import type { ChatReasoningLevel, ChatRequestMessage, ChatMessagePart, UniversalAssistantContext } from '../../apiTypes';
 import type { Project } from '../../types';
 import { sendChatMessage } from '../../services/chatApi';
+import { toggleConnector, type ChatConnector } from '../../services/chatConnectors';
 import {
   branchSession,
   consumePendingChatModel,
@@ -160,7 +161,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
             modelName: activeSession.modelName,
             source: activeSession.source,
             reasoningLevel: activeSession.reasoningLevel,
-            webSearch: activeSession.webSearch
+            webSearch: activeSession.webSearch,
+            tools: [...activeSession.tools]
           }
         : {}
     );
@@ -265,6 +267,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           reasoningLevel: activeSession.reasoningLevel,
           webSearch: activeSession.webSearch,
           systemPrompt: composeSystemPrompt(getChatMemory(user?.id), activeSession.systemPrompt),
+          ...(activeSession.tools.length ? { tools: activeSession.tools } : {}),
           ...(activeSession.dreamstreamAccess ? { dreamstreamContext: buildDreamStreamContext(projects) } : {})
         },
         { signal: controller.signal }
@@ -279,6 +282,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         webSearch: res.webSearch,
         reasoning: res.reasoning,
         citations: res.citations,
+        toolEvents: res.toolEvents,
+        images: res.images,
         createdAt: Date.now()
       };
       updateSession(sessionId, (s) => ({ ...s, turns: [...s.turns, aiTurn], updatedAt: Date.now() }));
@@ -340,6 +345,9 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         }
         onDreamstreamToggle={(on) =>
           activeId && updateSession(activeId, (s) => ({ ...s, dreamstreamAccess: on, updatedAt: Date.now() }))
+        }
+        onToggleConnector={(connector: ChatConnector, on: boolean) =>
+          activeId && updateSession(activeId, (s) => ({ ...s, tools: toggleConnector(connector, s.tools, on), updatedAt: Date.now() }))
         }
         onRenameTitle={(title) => activeId && handleRename(activeId, title)}
       />

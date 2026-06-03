@@ -5,7 +5,7 @@
 // requiring a Supabase migration. Per-user "memory" (durable facts the user wants
 // the AI to remember across chats) is kept in localStorage, keyed by user id.
 
-import type { ChatReasoningLevel } from '../apiTypes';
+import type { ChatReasoningLevel, ChatToolEvent, ChatToolImage } from '../apiTypes';
 import type { ModelSourceId } from './modelSelection';
 
 const DB_NAME = 'dreamstream_chat';
@@ -35,6 +35,10 @@ export interface ChatTurn {
   reasoning?: string;
   /** Web sources cited when web search was on. */
   citations?: { url: string; title?: string }[];
+  /** Tools the agent ran (DuckDuckGo etc.). */
+  toolEvents?: ChatToolEvent[];
+  /** Images surfaced by an image-search tool. */
+  images?: ChatToolImage[];
   createdAt: number;
   /** True when this assistant turn is an error placeholder. */
   error?: boolean;
@@ -50,6 +54,8 @@ export interface ChatSession {
   webSearch: boolean;
   /** When on, the chat may use the user's sanitized DreamStream workspace context. Off by default. */
   dreamstreamAccess: boolean;
+  /** Enabled agentic tool names (DuckDuckGo etc.). Empty = no tools. */
+  tools: string[];
   systemPrompt?: string;
   turns: ChatTurn[];
   createdAt: number;
@@ -91,10 +97,20 @@ const runTransaction = async <T>(
   });
 };
 
+// Backfill defaults for sessions saved before newer fields existed.
+const normalizeSession = (s: ChatSession): ChatSession => ({
+  ...s,
+  reasoningLevel: s.reasoningLevel || 'none',
+  webSearch: Boolean(s.webSearch),
+  dreamstreamAccess: Boolean(s.dreamstreamAccess),
+  tools: Array.isArray(s.tools) ? s.tools : [],
+  turns: Array.isArray(s.turns) ? s.turns : []
+});
+
 export const listChatSessions = async (): Promise<ChatSession[]> => {
   try {
     const all = await runTransaction<ChatSession[]>('readonly', (store) => store.getAll());
-    return (all || []).sort((a, b) => b.updatedAt - a.updatedAt);
+    return (all || []).map(normalizeSession).sort((a, b) => b.updatedAt - a.updatedAt);
   } catch {
     return [];
   }
@@ -102,7 +118,8 @@ export const listChatSessions = async (): Promise<ChatSession[]> => {
 
 export const getChatSession = async (id: string): Promise<ChatSession | undefined> => {
   try {
-    return await runTransaction<ChatSession | undefined>('readonly', (store) => store.get(id));
+    const s = await runTransaction<ChatSession | undefined>('readonly', (store) => store.get(id));
+    return s ? normalizeSession(s) : undefined;
   } catch {
     return undefined;
   }
@@ -135,6 +152,7 @@ export const createEmptySession = (overrides: Partial<ChatSession> = {}): ChatSe
     reasoningLevel: 'none',
     webSearch: false,
     dreamstreamAccess: false,
+    tools: [],
     turns: [],
     createdAt: now,
     updatedAt: now,
@@ -168,6 +186,7 @@ export const branchSession = (source: ChatSession, throughTurnId: string): ChatS
     reasoningLevel: source.reasoningLevel,
     webSearch: source.webSearch,
     dreamstreamAccess: source.dreamstreamAccess,
+    tools: [...source.tools],
     systemPrompt: source.systemPrompt,
     turns,
     parentSessionId: source.id,

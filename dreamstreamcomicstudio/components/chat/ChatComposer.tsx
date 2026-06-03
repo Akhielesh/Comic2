@@ -1,8 +1,9 @@
 import React, { useRef, useState } from 'react';
-import { Send, Paperclip, X, Globe, Brain, Square, Loader2, LayoutGrid } from 'lucide-react';
+import { Send, Paperclip, X, Globe, Brain, Square, Loader2, LayoutGrid, Search } from 'lucide-react';
 import type { ChatReasoningLevel } from '../../apiTypes';
 import type { ChatAttachment } from '../../services/chatStorage';
 import { REASONING_LEVELS, type ChatModelFeatures } from '../../services/chatFeatures';
+import { CHAT_CONNECTORS, isConnectorEnabled, type ChatConnector } from '../../services/chatConnectors';
 
 interface ChatComposerProps {
   busy: boolean;
@@ -10,9 +11,12 @@ interface ChatComposerProps {
   reasoningLevel: ChatReasoningLevel;
   webSearch: boolean;
   dreamstreamAccess: boolean;
+  enabledTools: string[];
+  toolsSupported: boolean;
   onReasoningChange: (level: ChatReasoningLevel) => void;
   onWebToggle: (on: boolean) => void;
   onDreamstreamToggle: (on: boolean) => void;
+  onToggleConnector: (connector: ChatConnector, on: boolean) => void;
   onSend: (text: string, attachments: ChatAttachment[]) => void;
   onStop: () => void;
 }
@@ -39,9 +43,12 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   reasoningLevel,
   webSearch,
   dreamstreamAccess,
+  enabledTools,
+  toolsSupported,
   onReasoningChange,
   onWebToggle,
   onDreamstreamToggle,
+  onToggleConnector,
   onSend,
   onStop
 }) => {
@@ -121,6 +128,21 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
         >
           <LayoutGrid className="w-3.5 h-3.5" /> DreamStream {dreamstreamAccess ? 'on' : 'off'}
         </button>
+
+        {toolsSupported &&
+          CHAT_CONNECTORS.map((connector) => {
+            const on = isConnectorEnabled(connector, enabledTools);
+            return (
+              <button
+                key={connector.id}
+                onClick={() => onToggleConnector(connector, !on)}
+                className={`flex items-center gap-1.5 text-[11px] font-bold border-2 border-black rounded-full px-2.5 py-1 ${on ? 'bg-emerald-300' : 'bg-white hover:bg-slate-100'}`}
+                title={connector.description}
+              >
+                <Search className="w-3.5 h-3.5" /> {connector.label} {on ? 'on' : 'off'}
+              </button>
+            );
+          })}
       </div>
 
       {/* Attachment previews */}

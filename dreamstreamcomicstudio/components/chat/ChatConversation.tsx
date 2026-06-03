@@ -3,6 +3,7 @@ import { PanelLeftOpen, PanelLeftClose, ChevronDown, Sparkles, Cpu, Pencil, Chec
 import type { ChatSession, ChatAttachment } from '../../services/chatStorage';
 import type { ChatReasoningLevel } from '../../apiTypes';
 import type { ChatModelFeatures } from '../../services/chatFeatures';
+import type { ChatConnector } from '../../services/chatConnectors';
 import { estimateTokens } from '../../services/chatUtils';
 import { ChatMessageView } from './ChatMessageView';
 import { ChatComposer } from './ChatComposer';
@@ -21,6 +22,7 @@ interface ChatConversationProps {
   onReasoningChange: (level: ChatReasoningLevel) => void;
   onWebToggle: (on: boolean) => void;
   onDreamstreamToggle: (on: boolean) => void;
+  onToggleConnector: (connector: ChatConnector, on: boolean) => void;
   onRenameTitle: (title: string) => void;
 }
 
@@ -44,6 +46,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
   onReasoningChange,
   onWebToggle,
   onDreamstreamToggle,
+  onToggleConnector,
   onRenameTitle
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -183,9 +186,12 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
         reasoningLevel={session.reasoningLevel}
         webSearch={session.webSearch}
         dreamstreamAccess={session.dreamstreamAccess}
+        enabledTools={session.tools}
+        toolsSupported={session.source !== 'nvidia'}
         onReasoningChange={onReasoningChange}
         onWebToggle={onWebToggle}
         onDreamstreamToggle={onDreamstreamToggle}
+        onToggleConnector={onToggleConnector}
         onSend={onSend}
         onStop={onStop}
       />

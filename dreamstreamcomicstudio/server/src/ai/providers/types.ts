@@ -7,15 +7,28 @@
 
 export type AIProviderId = 'openrouter' | 'nvidia';
 
-export type ChatRole = 'system' | 'user' | 'assistant';
+export type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
 
 export type TextPart = { type: 'text'; text: string };
 export type ImagePart = { type: 'image_url'; image_url: { url: string } };
 export type MessagePart = TextPart | ImagePart;
 
+/** OpenAI-compatible function-tool spec (what the model is told it can call). */
+export type ToolSpec = {
+  type: 'function';
+  function: { name: string; description: string; parameters: Record<string, unknown> };
+};
+
+/** A tool the model decided to call, returned in the completion. */
+export type ToolCall = { id: string; name: string; arguments: string };
+
 export type ChatMessage = {
   role: ChatRole;
   content: string | MessagePart[];
+  /** Present on an assistant turn that requested tools (passed straight through to the API). */
+  tool_calls?: { id: string; type: 'function'; function: { name: string; arguments: string } }[];
+  /** Present on a tool-result message, linking it back to the assistant's tool_call. */
+  tool_call_id?: string;
 };
 
 export type JsonSchemaSpec = {
@@ -55,6 +68,8 @@ export type GenerateTextRequest = {
    * that don't support it.
    */
   webSearch?: boolean;
+  /** Function tools the model may call (agentic loop). Provider returns `toolCalls` when used. */
+  tools?: ToolSpec[];
 };
 
 export type ProviderUsage = {
@@ -75,6 +90,8 @@ export type GenerateTextResult = {
   reasoning?: string;
   /** Web citations gathered when web search was enabled (OpenRouter `web` plugin annotations). */
   citations?: { url: string; title?: string }[];
+  /** Tool calls the model requested this turn (drives the agentic loop). */
+  toolCalls?: ToolCall[];
   raw?: unknown;
 };
 
