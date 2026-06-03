@@ -723,6 +723,19 @@ export interface WeatherArtifact {
   daily: WeatherDaily[];
 }
 
+export interface VideoResult {
+  title: string;
+  url: string;
+  thumbnail?: string;
+  duration?: string;
+  publisher?: string;
+  views?: string;
+}
+export interface VideoResultsArtifact {
+  query: string;
+  results: VideoResult[];
+}
+
 export type ChatCitation = { url: string; title?: string };
 
 export type ChatResponse = {

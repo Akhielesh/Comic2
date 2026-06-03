@@ -6,7 +6,7 @@
 
 import type { ToolSpec } from '../providers/types.js';
 import type { ChatArtifact } from '../../../../apiTypes.js';
-import { ddgWebSearch, ddgImageSearch, type ImageResult } from './duckduckgo.js';
+import { ddgWebSearch, ddgImageSearch, ddgVideoSearch, type ImageResult } from './duckduckgo.js';
 import { getWeather } from './weather.js';
 
 export interface ToolExecResult {
@@ -105,10 +105,38 @@ const weatherTool: ChatTool = {
   }
 };
 
+const videoSearchTool: ChatTool = {
+  name: 'video_search',
+  description:
+    'Find videos (tutorials, how-tos, reviews, clips) via DuckDuckGo. Use whenever the user wants to watch or see how to do something (e.g. "how to make X"), or asks for videos/tutorials — alongside a normal web_search for text. Returns video cards shown to the user.',
+  parameters: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'What videos to find.' }
+    },
+    required: ['query']
+  },
+  execute: async (args, signal) => {
+    const query = String(args?.query || '').trim();
+    if (!query) return { content: 'No video query was provided.' };
+    try {
+      const results = await ddgVideoSearch(query, signal);
+      if (!results.length) return { content: `No videos found for "${query}".` };
+      const content = `Found ${results.length} videos for "${query}":\n${results
+        .map((r, i) => `[${i + 1}] ${r.title}${r.publisher ? ` — ${r.publisher}` : ''} (${r.url})`)
+        .join('\n')}`;
+      return { content, artifacts: [{ type: 'video_results', data: { query, results } }] };
+    } catch (err) {
+      return { content: `Video search failed: ${(err as Error)?.message || 'unknown error'}.` };
+    }
+  }
+};
+
 /** All built-in tools, keyed by the name the model/clients reference. */
 export const BUILTIN_TOOLS: Record<string, ChatTool> = {
   web_search: webSearchTool,
   image_search: imageSearchTool,
+  video_search: videoSearchTool,
   get_weather: weatherTool
 };
 
