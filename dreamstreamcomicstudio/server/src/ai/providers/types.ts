@@ -43,6 +43,18 @@ export type GenerateTextRequest = {
    * so the route can return a Block + explain response (HTTP 402 NO_FREE_MODEL_AVAILABLE).
    */
   freeOnly?: boolean;
+  /**
+   * Per-request reasoning effort for reasoning-capable models. Overrides the global
+   * REASONING_EFFORT default so the chat platform can expose a per-conversation control.
+   * Ignored by providers/models that don't support step-by-step reasoning.
+   */
+  reasoningEffort?: 'low' | 'medium' | 'high';
+  /**
+   * When true, enable the provider's live web-search augmentation (OpenRouter `web` plugin)
+   * so the model can ground answers in current internet results. Ignored by providers
+   * that don't support it.
+   */
+  webSearch?: boolean;
 };
 
 export type ProviderUsage = {
