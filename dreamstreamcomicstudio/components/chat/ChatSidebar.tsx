@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Plus, MoreVertical, Trash2, Pencil, MessageSquare, ArrowLeft, GitBranch, Check, X, Brain,
-  FolderPlus, ChevronDown, ChevronRight, FolderInput
+  Plus, MoreVertical, Trash2, Pencil, MessageSquare, ArrowLeft, GitBranch, Check, X,
+  FolderPlus, ChevronDown, ChevronRight, FolderInput, SlidersHorizontal
 } from 'lucide-react';
 import type { ChatSession, ChatProject } from '../../services/chatStorage';
 import { iconByName, colorByKey } from '../../services/chatProjectStyle';
@@ -286,8 +286,8 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
       </div>
 
       <div className="p-3 border-t-2 border-black space-y-2">
-        <button onClick={onEditMemory} className={`w-full flex items-center gap-2 border-2 border-black rounded-lg px-3 py-1.5 text-sm font-bold ${hasMemory ? 'bg-indigo-100' : 'bg-white hover:bg-slate-100'}`} title="Durable facts the AI remembers across every chat">
-          <Brain className="w-4 h-4" /> Memory {hasMemory ? '· on' : ''}
+        <button onClick={onEditMemory} className={`w-full flex items-center gap-2 border-2 border-black rounded-lg px-3 py-1.5 text-sm font-bold ${hasMemory ? 'bg-indigo-100' : 'bg-white hover:bg-slate-100'}`} title="Memory, agents and tools">
+          <SlidersHorizontal className="w-4 h-4" /> Settings {hasMemory ? '· memory on' : ''}
         </button>
         <p className="text-[10px] text-slate-500 leading-tight">
           Drag a chat onto a project to file it, or use its ⋮ menu. Chats are stored on this device.

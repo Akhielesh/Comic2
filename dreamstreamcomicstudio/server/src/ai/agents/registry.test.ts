@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizePlan, selectAgentsHeuristic, getAgent, AGENTS } from './registry.js';
+import { sanitizePlan, selectAgentsHeuristic, getAgent, AGENTS, sanitizeCustomAgents } from './registry.js';
 import { KNOWN_TOOL_NAMES } from '../tools/registry.js';
 
 describe('agent registry integrity', () => {
@@ -86,5 +86,50 @@ describe('getAgent', () => {
   it('resolves known ids and rejects unknown', () => {
     expect(getAgent('news')?.name).toBe('News Analyst');
     expect(getAgent('ghost')).toBeUndefined();
+  });
+});
+
+describe('sanitizeCustomAgents', () => {
+  it('namespaces ids, caps fields, and filters tools to the allowlist (minus swarm)', () => {
+    const agents = sanitizeCustomAgents([
+      {
+        name: 'Apple / Mac News',
+        description: 'Apple, Mac and iPhone news',
+        systemPrompt: 'You track Apple news.',
+        toolNames: ['get_news', 'web_search', 'run_agent_swarm', 'not_a_tool']
+      }
+    ]);
+    expect(agents).toHaveLength(1);
+    expect(agents[0].id).toBe('custom_apple_mac_news');
+    expect(agents[0].toolNames).toEqual(['get_news', 'web_search']); // swarm + bogus dropped
+  });
+
+  it('drops entries without a name or system prompt', () => {
+    expect(sanitizeCustomAgents([{ name: 'x' }, { systemPrompt: 'y' }, {}])).toEqual([]);
+  });
+
+  it('never collides with built-in ids and dedupes', () => {
+    const agents = sanitizeCustomAgents([
+      { name: 'news', systemPrompt: 'a' },
+      { name: 'news', systemPrompt: 'b' }
+    ]);
+    expect(agents).toHaveLength(2);
+    expect(agents[0].id).not.toBe('news'); // built-in id protected
+    expect(agents[0].id).not.toBe(agents[1].id);
+  });
+
+  it('returns [] for non-array input', () => {
+    expect(sanitizeCustomAgents('nope')).toEqual([]);
+  });
+});
+
+describe('sanitizePlan with a custom pool', () => {
+  it('accepts a custom agent present in the pool', () => {
+    const pool = { ...AGENTS, custom_x: { id: 'custom_x', name: 'X', description: 'd', systemPrompt: 's', toolNames: ['web_search'] } };
+    const plan = sanitizePlan([{ agent: 'custom_x', task: 't' }], 'g', pool);
+    expect(plan).toEqual([{ agent: 'custom_x', task: 't' }]);
+  });
+  it('rejects a custom agent absent from the default pool', () => {
+    expect(sanitizePlan([{ agent: 'custom_x', task: 't' }], 'g')).toEqual([]);
   });
 });

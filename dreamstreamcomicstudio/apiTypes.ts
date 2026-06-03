@@ -713,6 +713,16 @@ export type ChatClientContext = {
   };
 };
 
+/** A user-defined specialized agent the swarm can deploy (stored client-side). */
+export type CustomAgentDef = {
+  id: string;
+  name: string;
+  description: string;
+  systemPrompt: string;
+  /** Tool names this agent may use (validated against the server allowlist). */
+  toolNames: string[];
+};
+
 export type ChatRequest = {
   messages: ChatRequestMessage[];
   /** Explicit catalog model id; falls back to the X-Text-Model header, then an auto pick. */
@@ -742,6 +752,8 @@ export type ChatRequest = {
    * synthesizes the result. OpenRouter only.
    */
   swarm?: boolean;
+  /** User-defined agents the swarm may deploy in addition to the built-ins. */
+  customAgents?: CustomAgentDef[];
 };
 
 export type ChatToolEvent = { tool: string; query?: string; ok: boolean; summary?: string };

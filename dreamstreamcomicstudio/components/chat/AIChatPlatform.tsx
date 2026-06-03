@@ -5,6 +5,8 @@ import { ChatSidebar } from './ChatSidebar';
 import { ChatConversation } from './ChatConversation';
 import { ChatModelPicker } from './ChatModelPicker';
 import { ChatProjectModal } from './ChatProjectModal';
+import { ChatSettingsModal } from './ChatSettingsModal';
+import { listCustomAgents } from '../../services/chatAgents';
 import { ChatPanelContext } from './panelContext';
 import { MediaPanel, type MediaPanelData } from './MediaPanel';
 import type { PlaygroundData } from './MultiFilePlayground';
@@ -123,6 +125,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const [memory, setMemory] = useState('');
+  const [settingsTab, setSettingsTab] = useState<'memory' | 'agents' | 'tools' | null>(null);
+  const [customAgents, setCustomAgents] = useState(() => listCustomAgents());
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(() => listMcpServers());
   const [panel, setPanel] = useState<ChatArtifact | null>(null);
   const [panelWidth, setPanelWidth] = useState(440);
@@ -188,6 +192,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       const [stored, storedProjects] = await Promise.all([listChatSessions(), listChatProjects()]);
       if (!active) return;
       setMemory(getChatMemory(user?.id));
+      setCustomAgents(listCustomAgents(user?.id));
       setProjectsList(storedProjects);
 
       const pending = consumePendingChatModel();
@@ -349,16 +354,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     if (chooseNewModel) setShowModelPicker(true);
   };
 
-  const handleEditMemory = () => {
-    const next = window.prompt(
-      'Memory — durable facts the AI should remember in every chat (e.g. your name, preferences, projects):',
-      memory
-    );
-    if (next !== null) {
-      setChatMemory(next, user?.id);
-      setMemory(next);
-    }
-  };
+  // Open the full settings panel (Memory / Agents / Tools) on the Memory tab.
+  const handleEditMemory = () => setSettingsTab('memory');
 
   const handleStop = () => {
     abortRef.current?.abort();
@@ -469,6 +466,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         systemPrompt: composeSystemPrompt(getChatMemory(user?.id), activeSession.systemPrompt),
         ...(clientContext ? { clientContext } : {}),
         ...(reqTools.length ? { tools: reqTools } : {}),
+        // Custom agents only matter to the swarm (mode or tool); send them only then.
+        ...((activeSession.swarm || reqTools.includes('run_agent_swarm')) && customAgents.length ? { customAgents } : {}),
         ...((activeSession.mcpServers || []).length ? { mcpServers: getMcpServersByIds(activeSession.mcpServers || []) } : {}),
         ...(activeSession.dreamstreamAccess ? { dreamstreamContext: buildDreamStreamContext(projects) } : {})
       };
@@ -771,6 +770,16 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           project={projectModal.editing}
           onSave={handleSaveProject}
           onClose={() => setProjectModal(null)}
+        />
+      )}
+
+      {settingsTab && (
+        <ChatSettingsModal
+          userId={user?.id}
+          initialTab={settingsTab}
+          onMemoryChange={setMemory}
+          onAgentsChange={setCustomAgents}
+          onClose={() => setSettingsTab(null)}
         />
       )}
     </div>

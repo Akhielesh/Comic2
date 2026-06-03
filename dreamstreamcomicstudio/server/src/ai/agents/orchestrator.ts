@@ -14,10 +14,11 @@ import { pickTextModel, TEXT_FALLBACK } from '../autoRouter.js';
 import { coerceJsonOrNull } from '../jsonCoerce.js';
 import { buildUsage } from '../usage.js';
 import {
-  getAgent,
+  AGENTS,
   agentCatalogForPlanner,
   sanitizePlan,
-  selectAgentsHeuristic
+  selectAgentsHeuristic,
+  type AgentDefinition
 } from './registry.js';
 import type {
   ChatArtifact,
@@ -58,6 +59,8 @@ export interface RunSwarmParams {
   fallbackModel?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  /** User-defined agents to add to the deployable pool for this run. */
+  extraAgents?: AgentDefinition[];
   /** Stream the final synthesized answer. */
   onDelta?: (delta: { content?: string; reasoning?: string }) => void;
   /** Report plan/agent progress so the UI can render a live trace. */
@@ -133,6 +136,10 @@ export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> 
     signal: params.signal
   };
 
+  // Deployable pool = built-in agents + any user-defined custom agents for this run.
+  const pool: Record<string, AgentDefinition> = { ...AGENTS };
+  for (const a of params.extraAgents || []) pool[a.id] = a;
+
   // Planner + agents run on a free model by default (the swarm is meant to run on
   // open/free models); synthesis uses the user's chosen model.
   const workerModel = await pickTextModel({ preferFree: true }).catch(() => TEXT_FALLBACK);
@@ -145,12 +152,12 @@ export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> 
       ...baseReq,
       model: workerModel,
       messages: [{ role: 'user', content: `Goal: ${goal}` }],
-      systemOverride: PLANNER_PROMPT.replace('{catalog}', agentCatalogForPlanner()),
+      systemOverride: PLANNER_PROMPT.replace('{catalog}', agentCatalogForPlanner(pool)),
       temperature: 0.2,
       maxTokens: 500
     });
     usageParts.push(planRes.usage);
-    plan = sanitizePlan(coerceJsonOrNull(planRes.text), goal);
+    plan = sanitizePlan(coerceJsonOrNull(planRes.text), goal, pool);
   } catch {
     /* fall back to heuristic below */
   }
@@ -158,7 +165,7 @@ export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> 
   plan = plan.slice(0, MAX_AGENTS);
 
   const agents: SwarmAgentRun[] = plan.map((p) => {
-    const def = getAgent(p.agent)!;
+    const def = pool[p.agent];
     return { id: def.id, name: def.name, task: p.task, status: 'pending' as const };
   });
   const trace: SwarmTraceArtifact = { goal, agents };
@@ -173,7 +180,7 @@ export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> 
 
   const findings = await Promise.all(
     plan.map(async (p, i) => {
-      const def = getAgent(p.agent)!;
+      const def = pool[p.agent];
       agents[i].status = 'running';
       emit();
       try {

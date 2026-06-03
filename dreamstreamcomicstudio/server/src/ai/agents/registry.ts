@@ -78,10 +78,44 @@ export const getAgent = (id: string): AgentDefinition | undefined => AGENTS[id];
 export const ALL_AGENT_IDS = Object.keys(AGENTS);
 
 /** Agents, minus their internal prompts, for the planner to choose from. */
-export const agentCatalogForPlanner = (): string =>
-  Object.values(AGENTS)
+export const agentCatalogForPlanner = (pool: Record<string, AgentDefinition> = AGENTS): string =>
+  Object.values(pool)
     .map((a) => `- ${a.id}: ${a.description}`)
     .join('\n');
+
+// Validate user-defined agents from a request into safe AgentDefinitions. Tool
+// names are filtered to the allowlist (minus the swarm tool itself, to prevent a
+// custom agent from recursively spawning swarms), strings are length-capped, and
+// ids are slugged + namespaced so they can't collide with or shadow built-ins.
+export const sanitizeCustomAgents = (raw: unknown): AgentDefinition[] => {
+  if (!Array.isArray(raw)) return [];
+  const out: AgentDefinition[] = [];
+  const seen = new Set<string>(Object.keys(AGENTS));
+  for (const item of raw.slice(0, 12)) {
+    if (!item || typeof item !== 'object') continue;
+    const r = item as Record<string, unknown>;
+    const name = typeof r.name === 'string' ? r.name.trim().slice(0, 60) : '';
+    const description = typeof r.description === 'string' ? r.description.trim().slice(0, 200) : '';
+    const systemPrompt = typeof r.systemPrompt === 'string' ? r.systemPrompt.trim().slice(0, 2000) : '';
+    if (!name || !systemPrompt) continue;
+    const baseId = (typeof r.id === 'string' && r.id.trim() ? r.id : name)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 40) || 'agent';
+    let id = `custom_${baseId}`;
+    let n = 2;
+    while (seen.has(id)) id = `custom_${baseId}_${n++}`;
+    seen.add(id);
+    const toolNames = Array.isArray(r.toolNames)
+      ? r.toolNames.filter(
+          (t): t is string => typeof t === 'string' && KNOWN_TOOL_NAMES.includes(t) && t !== 'run_agent_swarm'
+        )
+      : [];
+    out.push({ id, name, description: description || name, systemPrompt, toolNames });
+  }
+  return out;
+};
 
 // Keyword fallback when the planner can't be reached or returns nothing usable —
 // keeps the swarm functional without an extra model round-trip.
@@ -104,7 +138,8 @@ export const selectAgentsHeuristic = (goal: string): { agent: string; task: stri
 /** Validate a planner-proposed plan against the registry + tool allowlist. */
 export const sanitizePlan = (
   raw: unknown,
-  goal: string
+  goal: string,
+  pool: Record<string, AgentDefinition> = AGENTS
 ): { agent: string; task: string }[] => {
   if (!Array.isArray(raw)) return [];
   const out: { agent: string; task: string }[] = [];
@@ -114,7 +149,7 @@ export const sanitizePlan = (
     const r = item as Record<string, unknown>;
     const agent = typeof r.agent === 'string' ? r.agent.trim().toLowerCase() : '';
     const task = typeof r.task === 'string' ? r.task.trim() : '';
-    const def = AGENTS[agent];
+    const def = pool[agent];
     if (!def || seen.has(agent)) continue;
     // Defense in depth: drop any tool the agent shouldn't have (registry mismatch).
     if (def.toolNames.some((t) => !KNOWN_TOOL_NAMES.includes(t))) continue;

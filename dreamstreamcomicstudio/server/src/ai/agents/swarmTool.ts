@@ -12,6 +12,7 @@ import type { ChatTool } from '../tools/registry.js';
 import type { AIProviderId } from '../providers/types.js';
 import type { ChatClientContext } from '../../../../apiTypes.js';
 import { runSwarm } from './orchestrator.js';
+import type { AgentDefinition } from './registry.js';
 
 export interface SwarmToolContext {
   provider: AIProviderId;
@@ -19,6 +20,8 @@ export interface SwarmToolContext {
   /** Model used for the swarm's final synthesis (the caller's model). */
   model: string;
   clientContext?: ChatClientContext;
+  /** User-defined agents to add to the deployable pool. */
+  extraAgents?: AgentDefinition[];
   fallbackModel?: string;
   timeoutMs?: number;
 }
@@ -46,6 +49,7 @@ export const makeSwarmTool = (ctx: SwarmToolContext): ChatTool => ({
         model: ctx.model,
         messages: [{ role: 'user', content: goal }],
         clientContext: ctx.clientContext,
+        extraAgents: ctx.extraAgents,
         fallbackModel: ctx.fallbackModel,
         timeoutMs: ctx.timeoutMs,
         signal

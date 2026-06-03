@@ -3,6 +3,8 @@ import type { ChatRequest, ChatResponse, ChatClientContext } from '../../../apiT
 import { runChat, type ChatReasoningLevel } from '../ai/chat.js';
 import { runSwarm } from '../ai/agents/orchestrator.js';
 import { makeSwarmTool, SWARM_TOOL_NAME } from '../ai/agents/swarmTool.js';
+import { sanitizeCustomAgents } from '../ai/agents/registry.js';
+import type { AgentDefinition } from '../ai/agents/registry.js';
 import { pickTextModel, TEXT_FALLBACK } from '../ai/autoRouter.js';
 import { NVIDIA_TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS } from '../config.js';
 import type { AIProviderId, ChatMessage, MessagePart } from '../ai/providers/types.js';
@@ -130,6 +132,7 @@ type PreparedChat = {
   dreamstreamContextJson?: string;
   tools: ChatTool[];
   clientContext?: ChatClientContext;
+  customAgents: AgentDefinition[];
 };
 
 type PrepResult = { error: { status: number; body: unknown } } | { prepared: PreparedChat };
@@ -190,6 +193,7 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
   }
 
   const clientContext = sanitizeClientContext(body.clientContext);
+  const customAgents = sanitizeCustomAgents(body.customAgents);
 
   const requestedToolNames = Array.isArray(body.tools)
     ? body.tools.filter((t): t is string => typeof t === 'string' && KNOWN_TOOL_NAMES.includes(t))
@@ -215,6 +219,7 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
             apiKey: resolved.apiKey,
             model,
             clientContext,
+            extraAgents: customAgents,
             fallbackModel: TEXT_FALLBACK,
             timeoutMs: TEXT_REQUEST_TIMEOUT_MS
           })
@@ -232,7 +237,7 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
   }
 
   return {
-    prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, systemPrompt, dreamstreamContextJson, tools: [...builtinTools, ...metaTools, ...mcpTools], clientContext }
+    prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, systemPrompt, dreamstreamContextJson, tools: [...builtinTools, ...metaTools, ...mcpTools], clientContext, customAgents }
   };
 };
 
@@ -568,6 +573,7 @@ chatRouter.post('/swarm', async (req, res) => {
       messages: p.messages,
       systemPrompt: p.systemPrompt,
       clientContext: p.clientContext,
+      extraAgents: p.customAgents,
       fallbackModel: TEXT_FALLBACK,
       timeoutMs: TEXT_REQUEST_TIMEOUT_MS,
       onDelta: (d) => {
