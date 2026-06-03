@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Send, Paperclip, X, Globe, Brain, Square, Loader2, LayoutGrid, Search, FileText, Wand2, Undo2 } from 'lucide-react';
+import { Send, Paperclip, X, Globe, Brain, Square, Loader2, LayoutGrid, Search, FileText, Wand2, Undo2, Network } from 'lucide-react';
 import type { ChatReasoningLevel } from '../../apiTypes';
 import type { ChatAttachment } from '../../services/chatStorage';
 import { enhancePrompt } from '../../services/chatApi';
@@ -13,6 +13,8 @@ interface ChatComposerProps {
   features: ChatModelFeatures;
   reasoningLevel: ChatReasoningLevel;
   webSearch: boolean;
+  swarm: boolean;
+  swarmSupported: boolean;
   dreamstreamAccess: boolean;
   enabledTools: string[];
   toolsSupported: boolean;
@@ -20,6 +22,7 @@ interface ChatComposerProps {
   enabledMcpServers: string[];
   onReasoningChange: (level: ChatReasoningLevel) => void;
   onWebToggle: (on: boolean) => void;
+  onSwarmToggle: (on: boolean) => void;
   onDreamstreamToggle: (on: boolean) => void;
   onToggleConnector: (connector: ChatConnector, on: boolean) => void;
   onToggleMcpServer: (id: string, on: boolean) => void;
@@ -49,6 +52,8 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   features,
   reasoningLevel,
   webSearch,
+  swarm,
+  swarmSupported,
   dreamstreamAccess,
   enabledTools,
   toolsSupported,
@@ -56,6 +61,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   enabledMcpServers,
   onReasoningChange,
   onWebToggle,
+  onSwarmToggle,
   onDreamstreamToggle,
   onToggleConnector,
   onToggleMcpServer,
@@ -155,6 +161,15 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
               ))}
             </select>
           </label>
+        )}
+        {swarmSupported && (
+          <button
+            onClick={() => onSwarmToggle(!swarm)}
+            className={`flex items-center gap-1.5 text-[11px] font-bold border-2 border-black rounded-full px-2.5 py-1 ${swarm ? 'bg-fuchsia-300' : 'bg-white hover:bg-slate-100'}`}
+            title="Agent swarm: a planner splits your goal across specialized agents (news, finance, weather, research…) that work in parallel, then a lead agent synthesizes the answer."
+          >
+            <Network className="w-3.5 h-3.5" /> Swarm {swarm ? 'on' : 'off'}
+          </button>
         )}
         <button
           onClick={() => onDreamstreamToggle(!dreamstreamAccess)}

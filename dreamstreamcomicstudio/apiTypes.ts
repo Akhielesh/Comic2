@@ -736,6 +736,12 @@ export type ChatRequest = {
   mcpServers?: McpServerConfig[];
   /** Runtime situational context (date/timezone/locale/units/location). */
   clientContext?: ChatClientContext;
+  /**
+   * Route this turn through the multi-agent swarm orchestrator: a planner
+   * decomposes the goal, specialized agents work in parallel, and a lead agent
+   * synthesizes the result. OpenRouter only.
+   */
+  swarm?: boolean;
 };
 
 export type ChatToolEvent = { tool: string; query?: string; ok: boolean; summary?: string };
@@ -876,6 +882,27 @@ export interface StockQuoteArtifact {
   asOf?: string;
   /** ~30 sessions of closing prices for a sparkline. */
   series?: StockPoint[];
+}
+
+// --- Agent swarm ---
+// One specialized agent's run within a swarm. Streamed to the client so the user
+// watches the plan execute (which agents, doing what, with what status).
+export type SwarmAgentStatus = 'pending' | 'running' | 'done' | 'error';
+export interface SwarmAgentRun {
+  /** Agent id from the registry (e.g. "news", "finance"). */
+  id: string;
+  name: string;
+  /** The specific subtask assigned to this agent. */
+  task: string;
+  status: SwarmAgentStatus;
+  /** Short summary of what the agent found (filled when done). */
+  summary?: string;
+  /** Tools the agent ran. */
+  toolEvents?: ChatToolEvent[];
+}
+export interface SwarmTraceArtifact {
+  goal: string;
+  agents: SwarmAgentRun[];
 }
 
 export type ChatCitation = { url: string; title?: string };

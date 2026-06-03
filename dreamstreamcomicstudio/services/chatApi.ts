@@ -1,5 +1,5 @@
 import { get, post, postStream } from './apiClient';
-import type { ChatRequest, ChatResponse } from '../apiTypes';
+import type { ChatRequest, ChatResponse, SwarmTraceArtifact } from '../apiTypes';
 
 export interface UnfurlResult {
   url: string;
@@ -64,24 +64,16 @@ export interface ChatStreamHandlers {
   signal?: AbortSignal;
 }
 
-/**
- * Stream a chat completion via SSE. Calls handlers as deltas arrive and resolves
- * with the final ChatResponse (full text, citations, artifacts, usage, billing).
- */
-export const sendChatMessageStream = async (
-  req: ChatRequest,
-  handlers: ChatStreamHandlers = {}
-): Promise<ChatResponse> => {
-  const res = await postStream('/api/chat/stream', req, { signal: handlers.signal });
+/** Consume an SSE stream, dispatching each parsed record to `onRecord`. */
+const consumeEventStream = async (
+  res: Response,
+  onRecord: (event: string, parsed: any) => void
+): Promise<void> => {
   if (!res.body) throw new Error('Streaming is not supported by this response.');
-
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
-  let final: ChatResponse | null = null;
-  let streamError: string | null = null;
 
-  // Parse one SSE record ("event: x\ndata: {...}").
   const handleRecord = (record: string) => {
     const lines = record.split('\n');
     let event = 'message';
@@ -93,10 +85,7 @@ export const sendChatMessageStream = async (
     if (!data) return;
     let parsed: any;
     try { parsed = JSON.parse(data); } catch { return; }
-    if (event === 'delta' && typeof parsed.content === 'string') handlers.onDelta?.(parsed.content);
-    else if (event === 'reasoning' && typeof parsed.reasoning === 'string') handlers.onReasoning?.(parsed.reasoning);
-    else if (event === 'final') final = parsed as ChatResponse;
-    else if (event === 'error') streamError = String(parsed.message || 'The request failed.');
+    onRecord(event, parsed);
   };
 
   // eslint-disable-next-line no-constant-condition
@@ -109,8 +98,55 @@ export const sendChatMessageStream = async (
     for (const record of records) handleRecord(record);
   }
   if (buffer.trim()) handleRecord(buffer);
+};
 
+/**
+ * Stream a chat completion via SSE. Calls handlers as deltas arrive and resolves
+ * with the final ChatResponse (full text, citations, artifacts, usage, billing).
+ */
+export const sendChatMessageStream = async (
+  req: ChatRequest,
+  handlers: ChatStreamHandlers = {}
+): Promise<ChatResponse> => {
+  const res = await postStream('/api/chat/stream', req, { signal: handlers.signal });
+  let final: ChatResponse | null = null;
+  let streamError: string | null = null;
+  await consumeEventStream(res, (event, parsed) => {
+    if (event === 'delta' && typeof parsed.content === 'string') handlers.onDelta?.(parsed.content);
+    else if (event === 'reasoning' && typeof parsed.reasoning === 'string') handlers.onReasoning?.(parsed.reasoning);
+    else if (event === 'final') final = parsed as ChatResponse;
+    else if (event === 'error') streamError = String(parsed.message || 'The request failed.');
+  });
   if (streamError) throw new Error(streamError);
   if (!final) throw new Error('The model returned no response.');
+  return final;
+};
+
+export interface SwarmStreamHandlers extends ChatStreamHandlers {
+  /** Live plan/agent progress trace for the swarm UI. */
+  onTrace?: (trace: SwarmTraceArtifact) => void;
+}
+
+/**
+ * Run a turn through the agent swarm via SSE. Streams the synthesized answer
+ * (onDelta) and the live plan/agent trace (onTrace); resolves with the final
+ * ChatResponse (answer + swarm_trace and agent artifacts + usage + billing).
+ */
+export const runSwarmStream = async (
+  req: ChatRequest,
+  handlers: SwarmStreamHandlers = {}
+): Promise<ChatResponse> => {
+  const res = await postStream('/api/chat/swarm', { ...req, swarm: true }, { signal: handlers.signal });
+  let final: ChatResponse | null = null;
+  let streamError: string | null = null;
+  await consumeEventStream(res, (event, parsed) => {
+    if (event === 'delta' && typeof parsed.content === 'string') handlers.onDelta?.(parsed.content);
+    else if (event === 'reasoning' && typeof parsed.reasoning === 'string') handlers.onReasoning?.(parsed.reasoning);
+    else if (event === 'trace') handlers.onTrace?.(parsed as SwarmTraceArtifact);
+    else if (event === 'final') final = parsed as ChatResponse;
+    else if (event === 'error') streamError = String(parsed.message || 'The swarm failed.');
+  });
+  if (streamError) throw new Error(streamError);
+  if (!final) throw new Error('The swarm returned no response.');
   return final;
 };

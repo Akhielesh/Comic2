@@ -95,6 +95,8 @@ export interface ChatSession {
   source: ModelSourceId | null;
   reasoningLevel: ChatReasoningLevel;
   webSearch: boolean;
+  /** When on, turns are routed through the multi-agent swarm orchestrator. Off by default. */
+  swarm?: boolean;
   /** When on, the chat may use the user's sanitized DreamStream workspace context. Off by default. */
   dreamstreamAccess: boolean;
   /** Enabled agentic tool names (DuckDuckGo etc.). Empty = no tools. */
@@ -157,6 +159,7 @@ const normalizeSession = (s: ChatSession): ChatSession => ({
   ...s,
   reasoningLevel: s.reasoningLevel || 'none',
   webSearch: Boolean(s.webSearch),
+  swarm: Boolean(s.swarm),
   dreamstreamAccess: Boolean(s.dreamstreamAccess),
   tools: Array.isArray(s.tools) ? s.tools : [],
   mcpServers: Array.isArray(s.mcpServers) ? s.mcpServers : [],
@@ -288,6 +291,7 @@ export const createEmptySession = (overrides: Partial<ChatSession> = {}): ChatSe
     source: null,
     reasoningLevel: 'none',
     webSearch: false,
+    swarm: false,
     dreamstreamAccess: false,
     tools: [],
     turns: [],

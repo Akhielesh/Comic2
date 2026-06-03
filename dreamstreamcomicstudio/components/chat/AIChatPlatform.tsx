@@ -17,7 +17,7 @@ import { getCapabilities } from '../../services/modelCapabilities';
 import { fetchModelCatalog, type CatalogModel } from '../../services/modelCatalog';
 import type { ChatReasoningLevel, ChatRequestMessage, ChatMessagePart, UniversalAssistantContext } from '../../apiTypes';
 import type { Project } from '../../types';
-import { sendChatMessageStream, updateChatMemory } from '../../services/chatApi';
+import { sendChatMessageStream, runSwarmStream, updateChatMemory } from '../../services/chatApi';
 import { gatherClientContext } from '../../services/clientContext';
 import { toggleConnector, type ChatConnector } from '../../services/chatConnectors';
 import { recommendModels, detectTools } from '../../services/chatSuggest';
@@ -454,34 +454,50 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       // Situational context (date/timezone/locale/units/coarse location) so the model
       // isn't flying blind on "today"/"latest"/"near me". Never prompts for permission.
       const clientContext = await gatherClientContext().catch(() => undefined);
-      const res = await sendChatMessageStream(
-        {
-          messages: reqMessages,
-          model: reqModel,
-          source: reqSource,
-          reasoningLevel: activeSession.reasoningLevel,
-          webSearch: activeSession.webSearch,
-          systemPrompt: composeSystemPrompt(getChatMemory(user?.id), activeSession.systemPrompt),
-          ...(clientContext ? { clientContext } : {}),
-          ...(reqTools.length ? { tools: reqTools } : {}),
-          ...((activeSession.mcpServers || []).length ? { mcpServers: getMcpServersByIds(activeSession.mcpServers || []) } : {}),
-          ...(activeSession.dreamstreamAccess ? { dreamstreamContext: buildDreamStreamContext(projects) } : {})
-        },
-        {
-          signal: controller.signal,
-          onDelta: (chunk) =>
-            setSessionState((s) => ({
-              ...s,
-              turns: s.turns.map((t) => (t.id === aiTurnId ? { ...t, content: t.content + chunk } : t))
-            })),
-          // Stream the reasoning trace live so the user sees the model "thinking".
-          onReasoning: (chunk) =>
-            setSessionState((s) => ({
-              ...s,
-              turns: s.turns.map((t) => (t.id === aiTurnId ? { ...t, reasoning: (t.reasoning || '') + chunk } : t))
-            }))
-        }
-      );
+      const reqBody = {
+        messages: reqMessages,
+        model: reqModel,
+        source: reqSource,
+        reasoningLevel: activeSession.reasoningLevel,
+        webSearch: activeSession.webSearch,
+        systemPrompt: composeSystemPrompt(getChatMemory(user?.id), activeSession.systemPrompt),
+        ...(clientContext ? { clientContext } : {}),
+        ...(reqTools.length ? { tools: reqTools } : {}),
+        ...((activeSession.mcpServers || []).length ? { mcpServers: getMcpServersByIds(activeSession.mcpServers || []) } : {}),
+        ...(activeSession.dreamstreamAccess ? { dreamstreamContext: buildDreamStreamContext(projects) } : {})
+      };
+      const onDelta = (chunk: string) =>
+        setSessionState((s) => ({
+          ...s,
+          turns: s.turns.map((t) => (t.id === aiTurnId ? { ...t, content: t.content + chunk } : t))
+        }));
+      // Stream the reasoning trace live so the user sees the model "thinking".
+      const onReasoning = (chunk: string) =>
+        setSessionState((s) => ({
+          ...s,
+          turns: s.turns.map((t) => (t.id === aiTurnId ? { ...t, reasoning: (t.reasoning || '') + chunk } : t))
+        }));
+
+      // Route through the agent swarm when enabled (OpenRouter only); otherwise the
+      // normal single-model stream. The swarm streams a live plan/agent trace.
+      const useSwarm = Boolean(activeSession.swarm) && reqSource === 'openrouter';
+      const res = useSwarm
+        ? await runSwarmStream(reqBody, {
+            signal: controller.signal,
+            onDelta,
+            onReasoning,
+            // Surface the live plan/agent trace as a swarm_trace artifact on the turn.
+            onTrace: (trace) =>
+              setSessionState((s) => ({
+                ...s,
+                turns: s.turns.map((t) =>
+                  t.id === aiTurnId
+                    ? { ...t, artifacts: [{ type: 'swarm_trace', data: trace }, ...((t.artifacts || []).filter((a) => a.type !== 'swarm_trace'))] }
+                    : t
+                )
+              }))
+          })
+        : await sendChatMessageStream(reqBody, { signal: controller.signal, onDelta, onReasoning });
 
       // Finalize: snapshot this answer as a variant and show it as the active one.
       updateSession(sessionId, (s) => ({
@@ -699,6 +715,9 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         }
         onWebToggle={(on) =>
           activeId && updateSession(activeId, (s) => ({ ...s, webSearch: on, updatedAt: Date.now() }))
+        }
+        onSwarmToggle={(on) =>
+          activeId && updateSession(activeId, (s) => ({ ...s, swarm: on, updatedAt: Date.now() }))
         }
         onDreamstreamToggle={(on) =>
           activeId && updateSession(activeId, (s) => ({ ...s, dreamstreamAccess: on, updatedAt: Date.now() }))

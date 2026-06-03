@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { ChatRequest, ChatResponse, ChatClientContext } from '../../../apiTypes.js';
 import { runChat, type ChatReasoningLevel } from '../ai/chat.js';
+import { runSwarm } from '../ai/agents/orchestrator.js';
 import { pickTextModel, TEXT_FALLBACK } from '../ai/autoRouter.js';
 import { NVIDIA_TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS } from '../config.js';
 import type { AIProviderId, ChatMessage, MessagePart } from '../ai/providers/types.js';
@@ -499,6 +500,111 @@ chatRouter.post('/stream', async (req, res) => {
       });
     }
     send('error', { message: (error as Error)?.message || 'The request failed.' });
+    res.end();
+  }
+});
+
+// Agent swarm (SSE). Plans → runs specialized agents in parallel → synthesizes.
+// Mirrors /stream for billing + transport, but emits `trace` events so the client
+// can render the plan executing live. OpenRouter-only (agents need tool calling).
+chatRouter.post('/swarm', async (req, res) => {
+  const prep = await prepareChat(req);
+  if ('error' in prep) return res.status(prep.error.status).json(prep.error.body);
+  const p = prep.prepared;
+
+  if (p.resolved.provider !== 'openrouter') {
+    return res.status(400).json({
+      error: { message: 'The agent swarm requires an OpenRouter key (agents use tool calling).', code: 'SWARM_REQUIRES_OPENROUTER' }
+    });
+  }
+
+  const reserve = req.user?.id
+    ? await reserveForOperation({
+        req,
+        operation: 'chat.completion',
+        fallbackModel: p.model,
+        provider: p.resolved.provider,
+        stage: 'chat',
+        metadata: { route: req.path, historyLength: p.messages.length, model: p.model, swarm: true }
+      })
+    : null;
+  if (reserve && 'details' in reserve) {
+    return res.status(402).json({ error: formatLimitErrorResponse(reserve.details) });
+  }
+
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no'
+  });
+  const send = (event: string, data: unknown) => {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+  send('meta', { model: p.model, requestedModel: p.requestedModel || p.model, source: p.resolved.provider });
+
+  try {
+    const result = await runSwarm({
+      provider: p.resolved.provider,
+      apiKey: p.resolved.apiKey,
+      model: p.model,
+      messages: p.messages,
+      systemPrompt: p.systemPrompt,
+      clientContext: p.clientContext,
+      fallbackModel: TEXT_FALLBACK,
+      timeoutMs: TEXT_REQUEST_TIMEOUT_MS,
+      onDelta: (d) => {
+        if (d.content) send('delta', { content: d.content });
+        else if (d.reasoning) send('reasoning', { reasoning: d.reasoning });
+      },
+      onProgress: (trace) => send('trace', trace)
+    });
+
+    const settled =
+      reserve && reserve.allowed
+        ? await settleReservedOperation({
+            req,
+            operation: 'chat.completion',
+            provider: p.resolved.provider,
+            model: result.model,
+            seed: { provider: p.resolved.provider, model: result.model, operation: 'chat.completion', stage: 'chat', byok: reserve.reservation.byokBypass },
+            usage: result.usage,
+            metadata: { route: req.path, historyLength: p.messages.length, swarm: true }
+          })
+        : null;
+
+    const payload: ChatResponse = {
+      text: result.text,
+      model: result.model,
+      source: p.resolved.provider,
+      requestedModel: p.requestedModel || result.model,
+      reasoningLevel: p.reasoningLevel,
+      webSearch: p.webSearch,
+      reasoning: result.reasoning,
+      citations: result.citations,
+      toolEvents: result.toolEvents,
+      images: result.images,
+      artifacts: result.artifacts,
+      usage: result.usage
+    };
+    const finalPayload =
+      reserve && reserve.allowed
+        ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled)
+        : payload;
+    send('final', finalPayload);
+    res.end();
+  } catch (error) {
+    if (reserve && reserve.allowed) {
+      await releaseReservedOperation({
+        req,
+        operation: 'chat.completion',
+        provider: p.resolved.provider,
+        model: p.model,
+        reason: (error as Error)?.message || 'swarm_request_failed',
+        metadata: { route: req.path, historyLength: p.messages.length, swarm: true }
+      });
+    }
+    send('error', { message: (error as Error)?.message || 'The swarm failed.' });
     res.end();
   }
 });

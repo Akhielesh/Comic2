@@ -27,6 +27,7 @@ interface ChatConversationProps {
   onSelectVariant: (turnId: string, index: number) => void;
   onReasoningChange: (level: ChatReasoningLevel) => void;
   onWebToggle: (on: boolean) => void;
+  onSwarmToggle: (on: boolean) => void;
   onDreamstreamToggle: (on: boolean) => void;
   onToggleConnector: (connector: ChatConnector, on: boolean) => void;
   mcpServers: McpServerConfig[];
@@ -59,6 +60,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
   onSelectVariant,
   onReasoningChange,
   onWebToggle,
+  onSwarmToggle,
   onDreamstreamToggle,
   onToggleConnector,
   mcpServers,
@@ -235,6 +237,8 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
         features={features}
         reasoningLevel={session.reasoningLevel}
         webSearch={session.webSearch}
+        swarm={Boolean(session.swarm)}
+        swarmSupported={session.source !== 'nvidia'}
         dreamstreamAccess={session.dreamstreamAccess}
         enabledTools={session.tools}
         toolsSupported={session.source !== 'nvidia'}
@@ -242,6 +246,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
         enabledMcpServers={session.mcpServers || []}
         onReasoningChange={onReasoningChange}
         onWebToggle={onWebToggle}
+        onSwarmToggle={onSwarmToggle}
         onDreamstreamToggle={onDreamstreamToggle}
         onToggleConnector={onToggleConnector}
         onToggleMcpServer={onToggleMcpServer}
