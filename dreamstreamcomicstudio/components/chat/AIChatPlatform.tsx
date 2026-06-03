@@ -152,6 +152,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
 
   const resolvedModel = activeSession?.modelId ? catalog.get(activeSession.modelId) || null : null;
   const features = useMemo(() => deriveModelFeatures(resolvedModel), [resolvedModel]);
+  const suggestModels = useMemo(() => Array.from(catalog.values()), [catalog]);
 
   const updateSession = (id: string, updater: (s: ChatSession) => ChatSession) => {
     setSessions((prev) => {
@@ -240,6 +241,13 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     setShowModelPicker(false);
   };
 
+  // Suggester: set the chosen model on the session and immediately send the goal as
+  // the first message (override avoids a state-flush race).
+  const handleStartWithModel = (model: CatalogModel, goal: string) => {
+    handleSelectModel(model);
+    if (goal) void handleSend(goal, [], model);
+  };
+
   const handleBranch = (turnId: string, chooseNewModel: boolean) => {
     if (!activeSession) return;
     const branched = branchSession(activeSession, turnId);
@@ -267,11 +275,14 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     setBusy(false);
   };
 
-  const handleSend = async (text: string, attachments: ChatAttachment[]) => {
+  const handleSend = async (text: string, attachments: ChatAttachment[], overrideModel?: CatalogModel) => {
     if (!activeSession || busy) return;
     if (!text && attachments.length === 0) return;
 
     const sessionId = activeSession.id;
+    // A suggester-chosen model is used for THIS request without waiting for state to flush.
+    const reqModel = overrideModel ? overrideModel.id : activeSession.modelId || undefined;
+    const reqSource = overrideModel ? overrideModel.source : activeSession.source || undefined;
     const userTurn: ChatTurn = {
       id: crypto.randomUUID(),
       role: 'user',
@@ -298,8 +309,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       const res = await sendChatMessage(
         {
           messages: reqMessages,
-          model: activeSession.modelId || undefined,
-          source: activeSession.source || undefined,
+          model: reqModel,
+          source: reqSource,
           reasoningLevel: activeSession.reasoningLevel,
           webSearch: activeSession.webSearch,
           systemPrompt: composeSystemPrompt(getChatMemory(user?.id), activeSession.systemPrompt),
@@ -391,6 +402,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           activeId && updateSession(activeId, (s) => ({ ...s, tools: toggleConnector(connector, s.tools, on), updatedAt: Date.now() }))
         }
         onRenameTitle={(title) => activeId && handleRename(activeId, title)}
+        suggestModels={suggestModels}
+        onStartWithModel={handleStartWithModel}
       />
 
       {showModelPicker && (

@@ -4,10 +4,12 @@ import type { ChatSession, ChatAttachment } from '../../services/chatStorage';
 import type { ChatReasoningLevel } from '../../apiTypes';
 import type { ChatModelFeatures } from '../../services/chatFeatures';
 import type { ChatConnector } from '../../services/chatConnectors';
+import type { CatalogModel } from '../../services/modelCatalog';
 import { estimateTokens } from '../../services/chatUtils';
 import { ChatMessageView } from './ChatMessageView';
 import { ChatComposer } from './ChatComposer';
 import { ChatContextMeter } from './ChatContextMeter';
+import { ChatModelSuggester } from './ChatModelSuggester';
 
 interface ChatConversationProps {
   session: ChatSession;
@@ -24,6 +26,9 @@ interface ChatConversationProps {
   onDreamstreamToggle: (on: boolean) => void;
   onToggleConnector: (connector: ChatConnector, on: boolean) => void;
   onRenameTitle: (title: string) => void;
+  /** Catalog (text models) for the "help me pick" suggester in the empty state. */
+  suggestModels: CatalogModel[];
+  onStartWithModel: (model: CatalogModel, goal: string) => void;
 }
 
 const SUGGESTIONS = [
@@ -47,7 +52,9 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
   onWebToggle,
   onDreamstreamToggle,
   onToggleConnector,
-  onRenameTitle
+  onRenameTitle,
+  suggestModels,
+  onStartWithModel
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -154,6 +161,10 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
                   {s}
                 </button>
               ))}
+            </div>
+
+            <div className="w-full mt-4 flex flex-col items-center">
+              <ChatModelSuggester models={suggestModels} onStart={onStartWithModel} />
             </div>
           </div>
         ) : (
