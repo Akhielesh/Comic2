@@ -18,6 +18,7 @@ interface ChatConversationProps {
   onBranch: (turnId: string) => void;
   onReasoningChange: (level: ChatReasoningLevel) => void;
   onWebToggle: (on: boolean) => void;
+  onDreamstreamToggle: (on: boolean) => void;
 }
 
 const SUGGESTIONS = [
@@ -38,7 +39,8 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
   onStop,
   onBranch,
   onReasoningChange,
-  onWebToggle
+  onWebToggle,
+  onDreamstreamToggle
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -72,6 +74,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
         </button>
 
         <div className="ml-auto hidden sm:flex items-center gap-1.5 text-[11px] text-slate-500">
+          {session.dreamstreamAccess && <span className="px-1.5 py-0.5 rounded border-2 border-black bg-brand-yellow font-bold text-black">DreamStream</span>}
           {features.vision && <span className="px-1.5 py-0.5 rounded border border-slate-300">Vision</span>}
           {features.reasoning && <span className="px-1.5 py-0.5 rounded border border-slate-300">Reasoning</span>}
           {features.longContext && <span className="px-1.5 py-0.5 rounded border border-slate-300">Long ctx</span>}
@@ -131,8 +134,10 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
         features={features}
         reasoningLevel={session.reasoningLevel}
         webSearch={session.webSearch}
+        dreamstreamAccess={session.dreamstreamAccess}
         onReasoningChange={onReasoningChange}
         onWebToggle={onWebToggle}
+        onDreamstreamToggle={onDreamstreamToggle}
         onSend={onSend}
         onStop={onStop}
       />

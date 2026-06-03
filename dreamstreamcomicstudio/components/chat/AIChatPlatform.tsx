@@ -7,7 +7,8 @@ import { ChatModelPicker } from './ChatModelPicker';
 import { deriveModelFeatures } from '../../services/chatFeatures';
 import { getCapabilities } from '../../services/modelCapabilities';
 import { fetchModelCatalog, type CatalogModel } from '../../services/modelCatalog';
-import type { ChatReasoningLevel, ChatRequestMessage, ChatMessagePart } from '../../apiTypes';
+import type { ChatReasoningLevel, ChatRequestMessage, ChatMessagePart, UniversalAssistantContext } from '../../apiTypes';
+import type { Project } from '../../types';
 import { sendChatMessage } from '../../services/chatApi';
 import {
   branchSession,
@@ -26,7 +27,31 @@ import {
 
 interface AIChatPlatformProps {
   onBack: () => void;
+  /** The user's projects — used to build sanitized DreamStream context when the connector is on. */
+  projects: Project[];
 }
+
+// Lightweight, read-only DreamStream workspace context. Sent only when the connector
+// toggle is on; the server re-sanitizes it through the assistant allowlist.
+const buildDreamStreamContext = (projects: Project[]): UniversalAssistantContext => ({
+  view: 'chat',
+  allProjectsSummary: projects.slice(0, 30).map((p) => ({
+    id: p.id,
+    name: p.name,
+    step: p.state.step,
+    scenes: p.state.scenes.length,
+    panels: p.state.panels.length,
+    updatedAt: p.updatedAt,
+    isGenerating: !!p.state.generationStatus?.isActive
+  })) as UniversalAssistantContext['allProjectsSummary'],
+  appSnapshot: {
+    view: 'chat',
+    totalProjects: projects.length,
+    lastUpdatedProject: projects[0]
+      ? { id: projects[0].id, name: projects[0].name, updatedAt: projects[0].updatedAt }
+      : undefined
+  } as UniversalAssistantContext['appSnapshot']
+});
 
 const toRequestMessage = (turn: ChatTurn): ChatRequestMessage => {
   if (turn.attachments && turn.attachments.length > 0) {
@@ -45,7 +70,7 @@ const composeSystemPrompt = (memory: string, persona?: string): string | undefin
   return parts.length ? parts.join('\n\n') : undefined;
 };
 
-export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack }) => {
+export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects }) => {
   const { user } = useAuth();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -239,7 +264,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack }) => {
           source: activeSession.source || undefined,
           reasoningLevel: activeSession.reasoningLevel,
           webSearch: activeSession.webSearch,
-          systemPrompt: composeSystemPrompt(getChatMemory(user?.id), activeSession.systemPrompt)
+          systemPrompt: composeSystemPrompt(getChatMemory(user?.id), activeSession.systemPrompt),
+          ...(activeSession.dreamstreamAccess ? { dreamstreamContext: buildDreamStreamContext(projects) } : {})
         },
         { signal: controller.signal }
       );
@@ -309,6 +335,9 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack }) => {
         }
         onWebToggle={(on) =>
           activeId && updateSession(activeId, (s) => ({ ...s, webSearch: on, updatedAt: Date.now() }))
+        }
+        onDreamstreamToggle={(on) =>
+          activeId && updateSession(activeId, (s) => ({ ...s, dreamstreamAccess: on, updatedAt: Date.now() }))
         }
       />
 

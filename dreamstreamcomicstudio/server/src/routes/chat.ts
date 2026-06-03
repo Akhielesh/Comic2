@@ -5,6 +5,7 @@ import { pickTextModel, TEXT_FALLBACK } from '../ai/autoRouter.js';
 import { NVIDIA_TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS } from '../config.js';
 import type { AIProviderId, ChatMessage, MessagePart } from '../ai/providers/types.js';
 import { assertModelAllowedForUser } from '../services/modelAccessPolicy.js';
+import { sanitizeAssistantContext } from '../ai/assistantPolicy.js';
 import {
   attachBillingToPayload,
   formatLimitErrorResponse,
@@ -138,6 +139,16 @@ chatRouter.post('/', async (req, res, next) => {
         ? body.systemPrompt.trim().slice(0, 8000)
         : undefined;
 
+    // DreamStream connector: only honoured when the client sent context (toggle on) AND the
+    // request is authenticated. Re-sanitized through the assistant allowlist so nothing
+    // beyond the safe, user-owned fields can reach the model.
+    let dreamstreamContextJson: string | undefined;
+    if (body.dreamstreamContext && req.user?.id) {
+      const safe = sanitizeAssistantContext(body.dreamstreamContext, { isAuthenticated: true });
+      const raw = JSON.stringify(safe);
+      dreamstreamContextJson = raw.length > 12_000 ? `${raw.slice(0, 12_000)}…` : raw;
+    }
+
     const reserve = req.user?.id
       ? await reserveForOperation({
           req,
@@ -162,6 +173,7 @@ chatRouter.post('/', async (req, res, next) => {
         systemPrompt,
         reasoningLevel,
         webSearch,
+        dreamstreamContextJson,
         fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
         timeoutMs: TEXT_REQUEST_TIMEOUT_MS
       });

@@ -44,6 +44,8 @@ export interface ChatSession {
   source: ModelSourceId | null;
   reasoningLevel: ChatReasoningLevel;
   webSearch: boolean;
+  /** When on, the chat may use the user's sanitized DreamStream workspace context. Off by default. */
+  dreamstreamAccess: boolean;
   systemPrompt?: string;
   turns: ChatTurn[];
   createdAt: number;
@@ -128,6 +130,7 @@ export const createEmptySession = (overrides: Partial<ChatSession> = {}): ChatSe
     source: null,
     reasoningLevel: 'none',
     webSearch: false,
+    dreamstreamAccess: false,
     turns: [],
     createdAt: now,
     updatedAt: now,
@@ -160,6 +163,7 @@ export const branchSession = (source: ChatSession, throughTurnId: string): ChatS
     source: source.source,
     reasoningLevel: source.reasoningLevel,
     webSearch: source.webSearch,
+    dreamstreamAccess: source.dreamstreamAccess,
     systemPrompt: source.systemPrompt,
     turns,
     parentSessionId: source.id,

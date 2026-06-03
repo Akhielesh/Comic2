@@ -682,6 +682,13 @@ export type ChatRequest = {
   webSearch?: boolean;
   /** Optional custom persona/system prompt for this conversation. */
   systemPrompt?: string;
+  /**
+   * Sanitized DreamStream workspace context, sent ONLY when the user enables the
+   * "DreamStream" connector toggle for the session. The server re-sanitizes it
+   * through the same allowlist as the in-app assistant before the model sees it.
+   * Omitted (and ignored) when the toggle is off, so chat has no app reach by default.
+   */
+  dreamstreamContext?: UniversalAssistantContext;
 };
 
 export type ChatResponse = {
