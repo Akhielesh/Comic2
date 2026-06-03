@@ -160,3 +160,57 @@ export const ddgImageSearch = async (
     t.done();
   }
 };
+
+export interface VideoSearchResult {
+  title: string;
+  url: string;
+  thumbnail?: string;
+  duration?: string;
+  publisher?: string;
+  views?: string;
+}
+
+const formatViews = (n: unknown): string | undefined => {
+  const v = Number(n);
+  if (!Number.isFinite(v) || v <= 0) return undefined;
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M views`;
+  if (v >= 1_000) return `${(v / 1_000).toFixed(1)}K views`;
+  return `${v} views`;
+};
+
+export const ddgVideoSearch = async (
+  query: string,
+  signal?: AbortSignal,
+  limit = 6
+): Promise<VideoSearchResult[]> => {
+  const t = withTimeout(signal, DEFAULT_TIMEOUT_MS);
+  try {
+    const vqd = await getVqd(query, t.signal);
+    if (!vqd) throw new Error('Could not initialize DuckDuckGo video search (no token).');
+
+    const res = await fetch(
+      `https://duckduckgo.com/v.js?l=us-en&o=json&q=${encodeURIComponent(query)}&vqd=${vqd}&f=,,,,,&p=1`,
+      {
+        headers: { 'User-Agent': UA, Accept: 'application/json', Referer: 'https://duckduckgo.com/' },
+        signal: t.signal
+      }
+    );
+    if (!res.ok) throw new Error(`DuckDuckGo videos returned ${res.status}`);
+    const json = (await res.json()) as { results?: any[] };
+    const rows = Array.isArray(json.results) ? json.results : [];
+    return rows
+      .slice(0, limit)
+      .map((r) => ({
+        title: String(r?.title || ''),
+        url: String(r?.content || ''),
+        thumbnail:
+          (r?.images && (r.images.medium || r.images.large || r.images.small)) || undefined,
+        duration: typeof r?.duration === 'string' ? r.duration : undefined,
+        publisher: typeof r?.uploader === 'string' ? r.uploader : (typeof r?.publisher === 'string' ? r.publisher : undefined),
+        views: formatViews(r?.statistics?.viewCount)
+      }))
+      .filter((r) => r.url && r.title);
+  } finally {
+    t.done();
+  }
+};
