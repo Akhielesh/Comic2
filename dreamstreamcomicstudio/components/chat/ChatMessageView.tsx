@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Copy, Check, GitBranch, AlertTriangle, Sparkles, User, Globe, Brain,
-  Download, FileArchive, ChevronDown, ChevronUp, ExternalLink, Search, Cpu
+  Download, FileArchive, ChevronDown, ChevronUp, ExternalLink, Search, Cpu, Play
 } from 'lucide-react';
 import JSZip from 'jszip';
 import { FileText } from 'lucide-react';
@@ -11,7 +11,7 @@ import { ChatArtifacts } from './artifacts/ChatArtifacts';
 import { SourceCard } from './SourceCard';
 import { useChatPanel } from './panelContext';
 import type { ChatTurn } from '../../services/chatStorage';
-import { extractCodeBlocks, codeBlockFilename, downloadTextFile, triggerDownload } from '../../services/chatUtils';
+import { extractCodeBlocks, codeBlockFilename, downloadTextFile, triggerDownload, buildPlaygroundFiles } from '../../services/chatUtils';
 
 interface ChatMessageViewProps {
   turn: ChatTurn;
@@ -215,6 +215,18 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, onBranch
             {codeBlocks.length > 1 && (
               <button onClick={downloadZip} className="flex items-center gap-0.5 hover:text-black font-bold" title={`Download ${codeBlocks.length} files as a .zip`}>
                 <FileArchive className="w-3 h-3" /> .zip ({codeBlocks.length})
+              </button>
+            )}
+            {codeBlocks.length > 1 && openPanel && (
+              <button
+                onClick={() => {
+                  const { files, template } = buildPlaygroundFiles(codeBlocks);
+                  openPanel({ type: 'playground', data: { files, template, title: 'Playground' } });
+                }}
+                className="flex items-center gap-0.5 hover:text-black font-bold"
+                title="Open all files in a runnable playground"
+              >
+                <Play className="w-3 h-3" /> Playground
               </button>
             )}
             {onBranch && (

@@ -1,5 +1,25 @@
-import { post, postStream } from './apiClient';
+import { get, post, postStream } from './apiClient';
 import type { ChatRequest, ChatResponse } from '../apiTypes';
+
+export interface UnfurlResult {
+  url: string;
+  title?: string;
+  description?: string;
+  image?: string;
+  siteName?: string;
+  error?: string;
+}
+
+const unfurlCache = new Map<string, Promise<UnfurlResult>>();
+
+/** Fetch OG/meta preview for a link (cached per URL). */
+export const unfurlLink = (url: string): Promise<UnfurlResult> => {
+  const cached = unfurlCache.get(url);
+  if (cached) return cached;
+  const p = get<UnfurlResult>(`/api/chat/unfurl?url=${encodeURIComponent(url)}`).catch((): UnfurlResult => ({ url }));
+  unfurlCache.set(url, p);
+  return p;
+};
 
 /**
  * Send a chat completion request to the AI Chat Platform backend (non-streaming).
