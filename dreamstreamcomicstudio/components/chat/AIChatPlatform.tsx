@@ -6,6 +6,7 @@ import { ChatConversation } from './ChatConversation';
 import { ChatModelPicker } from './ChatModelPicker';
 import { ChatProjectModal } from './ChatProjectModal';
 import { ChatPanelContext } from './panelContext';
+import { MediaPanel, type MediaPanelData } from './MediaPanel';
 import type { ChatArtifact, MapArtifact } from '../../apiTypes';
 
 const MapPanel = lazy(() => import('./MapPanel'));
@@ -65,10 +66,12 @@ const buildDreamStreamContext = (projects: Project[]): UniversalAssistantContext
 });
 
 const toRequestMessage = (turn: ChatTurn): ChatRequestMessage => {
-  if (turn.attachments && turn.attachments.length > 0) {
+  // Only image attachments go to the model; documents (PDFs) are viewer-only.
+  const imageAtts = (turn.attachments || []).filter((a) => a.kind !== 'document');
+  if (imageAtts.length > 0) {
     const parts: ChatMessagePart[] = [];
     if (turn.content) parts.push({ type: 'text', text: turn.content });
-    for (const att of turn.attachments) parts.push({ type: 'image_url', image_url: { url: att.dataUrl } });
+    for (const att of imageAtts) parts.push({ type: 'image_url', image_url: { url: att.dataUrl } });
     return { role: turn.role, content: parts };
   }
   return { role: turn.role, content: turn.content };
@@ -392,19 +395,24 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     );
   }
 
+  const panelTitle = (panel?.data as { title?: string } | undefined)?.title || (panel?.type === 'map' ? 'Map' : 'Preview');
   const panelContent = panel && (
     <>
       <div className="flex items-center justify-between px-3 py-2 border-b-2 border-black bg-sky-100 shrink-0">
         <span className="font-bold text-sm flex items-center gap-1.5 min-w-0">
           <MapIcon className="w-4 h-4 shrink-0" />
-          <span className="truncate">{(panel.data as MapArtifact)?.title || 'Map'}</span>
+          <span className="truncate">{panelTitle}</span>
         </span>
         <button onClick={() => setPanel(null)} className="border-2 border-black rounded p-1 bg-white hover:bg-brand-yellow"><X className="w-4 h-4" /></button>
       </div>
       <div className="flex-1 min-h-0 bg-slate-100">
-        <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-6 h-6 animate-spin text-brand-blue" /></div>}>
-          {panel.type === 'map' && <MapPanel data={panel.data as MapArtifact} />}
-        </Suspense>
+        {panel.type === 'media' ? (
+          <MediaPanel data={panel.data as MediaPanelData} />
+        ) : (
+          <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-6 h-6 animate-spin text-brand-blue" /></div>}>
+            {panel.type === 'map' && <MapPanel data={panel.data as MapArtifact} />}
+          </Suspense>
+        )}
       </div>
     </>
   );

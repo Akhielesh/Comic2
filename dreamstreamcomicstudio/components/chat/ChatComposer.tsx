@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Send, Paperclip, X, Globe, Brain, Square, Loader2, LayoutGrid, Search } from 'lucide-react';
+import { Send, Paperclip, X, Globe, Brain, Square, Loader2, LayoutGrid, Search, FileText } from 'lucide-react';
 import type { ChatReasoningLevel } from '../../apiTypes';
 import type { ChatAttachment } from '../../services/chatStorage';
 import { REASONING_LEVELS, type ChatModelFeatures } from '../../services/chatFeatures';
@@ -31,6 +31,7 @@ const fileToAttachment = (file: File): Promise<ChatAttachment> =>
         id: crypto.randomUUID(),
         name: file.name,
         mimeType: file.type,
+        kind: file.type.startsWith('image/') ? 'image' : 'document',
         dataUrl: reader.result as string
       });
     reader.onerror = reject;
@@ -76,9 +77,12 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
 
   const handleFiles = async (files: FileList | null) => {
     if (!files) return;
-    const images = Array.from(files).filter((f) => f.type.startsWith('image/'));
+    // Images need a vision model; PDFs are always accepted (viewer-only).
+    const accepted = Array.from(files).filter(
+      (f) => (features.vision && f.type.startsWith('image/')) || f.type === 'application/pdf'
+    );
     const next: ChatAttachment[] = [];
-    for (const file of images.slice(0, MAX_ATTACHMENTS - attachments.length)) {
+    for (const file of accepted.slice(0, MAX_ATTACHMENTS - attachments.length)) {
       try {
         next.push(await fileToAttachment(file));
       } catch {
@@ -141,7 +145,14 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
         <div className="flex flex-wrap gap-2 mb-2">
           {attachments.map((att) => (
             <div key={att.id} className="relative">
-              <img src={att.dataUrl} alt={att.name} className="w-14 h-14 object-cover rounded-lg border-2 border-black" />
+              {att.kind === 'document' ? (
+                <div className="w-14 h-14 rounded-lg border-2 border-black bg-slate-100 flex flex-col items-center justify-center p-1">
+                  <FileText className="w-5 h-5 text-brand-red" />
+                  <span className="text-[8px] font-bold text-slate-500 truncate w-full text-center mt-0.5">{att.name}</span>
+                </div>
+              ) : (
+                <img src={att.dataUrl} alt={att.name} className="w-14 h-14 object-cover rounded-lg border-2 border-black" />
+              )}
               <button
                 onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
                 className="absolute -top-1.5 -right-1.5 bg-brand-red text-white rounded-full border-2 border-black w-5 h-5 flex items-center justify-center"
@@ -154,12 +165,12 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
       )}
 
       <div className="flex items-end gap-2">
-        {features.vision && (
+        {(
           <>
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*"
+              accept={features.vision ? 'image/*,application/pdf' : 'application/pdf'}
               multiple
               className="hidden"
               onChange={(e) => handleFiles(e.target.files)}
@@ -168,7 +179,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
               onClick={() => fileInputRef.current?.click()}
               disabled={attachments.length >= MAX_ATTACHMENTS}
               className="shrink-0 border-2 border-black rounded-lg p-2.5 bg-white hover:bg-brand-yellow disabled:opacity-40"
-              title="Attach images"
+              title={features.vision ? 'Attach images or PDFs' : 'Attach a PDF'}
             >
               <Paperclip className="w-4 h-4" />
             </button>

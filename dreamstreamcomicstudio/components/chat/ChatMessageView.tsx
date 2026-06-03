@@ -4,10 +4,12 @@ import {
   Download, FileArchive, ChevronDown, ChevronUp, ExternalLink, Search, Cpu
 } from 'lucide-react';
 import JSZip from 'jszip';
+import { FileText } from 'lucide-react';
 import { ChatMarkdown } from './ChatMarkdown';
 import { MessageBody } from '../MessageBody';
 import { ChatArtifacts } from './artifacts/ChatArtifacts';
 import { SourceCard } from './SourceCard';
+import { useChatPanel } from './panelContext';
 import type { ChatTurn } from '../../services/chatStorage';
 import { extractCodeBlocks, codeBlockFilename, downloadTextFile, triggerDownload } from '../../services/chatUtils';
 
@@ -22,6 +24,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, onBranch
   const [showDetails, setShowDetails] = useState(false);
   const [branchOpen, setBranchOpen] = useState(false);
   const branchRef = useRef<HTMLDivElement>(null);
+  const openPanel = useChatPanel();
   const isUser = turn.role === 'user';
 
   useEffect(() => {
@@ -77,9 +80,28 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, onBranch
         >
           {turn.attachments && turn.attachments.length > 0 && (
             <div className="flex flex-wrap gap-2 mb-2">
-              {turn.attachments.map((att) => (
-                <img key={att.id} src={att.dataUrl} alt={att.name} className="w-20 h-20 object-cover rounded-lg border-2 border-black" />
-              ))}
+              {turn.attachments.map((att) =>
+                att.kind === 'document' ? (
+                  <button
+                    key={att.id}
+                    onClick={() => openPanel?.({ type: 'media', data: { kind: 'pdf', url: att.dataUrl, title: att.name } })}
+                    className="w-28 h-20 rounded-lg border-2 border-black bg-white flex flex-col items-center justify-center p-1 hover:bg-slate-50"
+                    title="Open document"
+                  >
+                    <FileText className="w-6 h-6 text-brand-red" />
+                    <span className="text-[9px] font-bold text-slate-600 truncate w-full text-center mt-1">{att.name}</span>
+                  </button>
+                ) : (
+                  <button
+                    key={att.id}
+                    onClick={() => openPanel?.({ type: 'media', data: { kind: 'image', url: att.dataUrl, title: att.name } })}
+                    className="block"
+                    title="Open image"
+                  >
+                    <img src={att.dataUrl} alt={att.name} className="w-20 h-20 object-cover rounded-lg border-2 border-black hover:opacity-90" />
+                  </button>
+                )
+              )}
             </div>
           )}
           {isUser ? (
@@ -95,14 +117,19 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, onBranch
           {!isUser && turn.images && turn.images.length > 0 && (
             <div className="mt-2 grid grid-cols-3 gap-2">
               {turn.images.map((img, i) => (
-                <a key={`${img.url}-${i}`} href={img.source || img.url} target="_blank" rel="noopener noreferrer" title={img.title} className="block">
+                <button
+                  key={`${img.url}-${i}`}
+                  onClick={() => openPanel?.({ type: 'media', data: { kind: 'image', url: img.url, title: img.title } })}
+                  title={img.title || 'Open image'}
+                  className="block"
+                >
                   <img
                     src={img.thumbnail || img.url}
                     alt={img.title || 'image result'}
                     loading="lazy"
                     className="w-full h-24 object-cover rounded-lg border-2 border-black hover:opacity-90"
                   />
-                </a>
+                </button>
               ))}
             </div>
           )}
