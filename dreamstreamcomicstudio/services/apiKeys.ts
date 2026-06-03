@@ -90,6 +90,22 @@ const write = (k: string, v: string) => {
   if (typeof window === 'undefined') return;
   try { window.localStorage.setItem(k, v); } catch { /* ignore */ }
 };
+const remove = (k: string) => {
+  if (typeof window === 'undefined') return;
+  try { window.localStorage.removeItem(k); } catch { /* ignore */ }
+};
+
+/**
+ * SECURITY: wipe every locally-stored API key + usage record. Called on sign-out so a
+ * shared device never leaks the previous user's BYOK secrets, usage meters, or (via the
+ * key being sent to /verify) their live provider balance. Clears the multi-key store, the
+ * migration flag, and all legacy single-key slots.
+ */
+export const clearAllKeys = (): void => {
+  remove(STORAGE);
+  remove(MIGRATED_FLAG);
+  for (const provider of ALL_PROVIDERS) remove(LEGACY_KEYS[provider]);
+};
 
 const uuid = () =>
   (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
