@@ -244,6 +244,9 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
             source: activeSession.source,
             reasoningLevel: activeSession.reasoningLevel,
             webSearch: activeSession.webSearch,
+            // Preserve the Auto-vs-pinned choice so a new chat behaves like the last.
+            autoMode: activeSession.autoMode,
+            lockedSource: activeSession.lockedSource,
             tools: [...activeSession.tools]
           }
         : {}
@@ -383,7 +386,10 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         reqModel = best.id;
         reqSource = best.source;
       }
-      reqTools = reqSource === 'openrouter' ? detectTools(text) : [];
+      // Auto-enable the relevant tools. We attach them whenever the request isn't
+      // pinned to NVIDIA (which can't tool-call); the server only honors them for
+      // OpenRouter, so this is safe even when the source resolves server-side.
+      reqTools = reqSource === 'nvidia' ? [] : detectTools(text);
     }
     return { reqModel, reqSource, reqTools };
   };

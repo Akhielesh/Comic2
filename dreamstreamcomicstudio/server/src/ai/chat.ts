@@ -180,7 +180,7 @@ export const runChat = async (
     systemContent += `\n\nLIVE TOOLS ARE ENABLED this turn (${names}). You DO have internet access through them.
 - NEVER say you can't browse, access the internet, or fetch real-time/current data — instead CALL the relevant tool.
 - For anything current, factual, news, prices, weather, or that you're unsure of, call a tool FIRST, then answer from the returned results and cite sources.
-- Pick the RIGHT tool: use get_news for news/headlines/"latest", get_weather for weather, show_map for places/directions, video_search for videos to watch, image_search only when the user wants pictures. Use web_search for everything else.
+- Pick the RIGHT tool: get_news for news/headlines/"latest"; get_weather for weather; find_places to DISCOVER nearby places (restaurants, cafes, hotels, shops, "near me", "where can I…") — it returns distance, hours and a map; show_map only to display a SPECIFIC known place/route; get_stock for prices/tickers; video_search for videos to watch; image_search only when the user wants pictures. Use web_search for everything else.
 - CRITICAL: If a tool OR web search returned ANY results, snippets, or sources, you MUST synthesize an answer from them. NEVER reply that you "couldn't retrieve" or "found nothing" when results/citations are present — read them and answer.
 - If one tool returns empty, try a different tool or a refined query before giving up, then answer with what you have.
 - When a tool returns a card/artifact (e.g. weather, news, map, images), keep your prose short and let the component carry the detail.`;

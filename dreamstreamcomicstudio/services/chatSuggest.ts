@@ -40,8 +40,13 @@ export const analyzeGoal = (text: string): GoalNeeds => ({
 });
 
 const TOOL_KW = {
-  get_weather: /\b(weather|temperature|forecast|how (hot|cold)|will it rain|humidity|wind)\b/i,
-  show_map: /\b(map|where is|directions?|route|navigate|how (far|to get)|located|location of|near me|nearby)\b/i,
+  get_weather: /\b(weather|temperature|forecast|how (hot|cold)|will it rain|humidity|wind|uv|air quality|pollen)\b/i,
+  // Discovering places (restaurants, coffee, hotels…) → the rich local-search tool.
+  find_places: /\b(restaurant|food|eat|dinner|lunch|breakfast|cafe|coffee|bar|pub|hotel|motel|hostel|pharmacy|atm|bank|gym|museum|park|grocery|supermarket|gas station|near me|nearby|near my|around me|places? to|where (can|should) i)\b/i,
+  // Asking to see a known place/route on a map → the map tool.
+  show_map: /\b(map|where is|directions?|route|navigate|how (far|to get)|located|location of)\b/i,
+  get_news: /\b(news|headline|breaking|happening|latest on|updates? on)\b/i,
+  get_stock: /\b(stock|share price|ticker|stock market|nasdaq|s&p|dow|crypto|bitcoin|ethereum|price of [A-Z]{1,5}\b)\b/i,
   video_search: /\b(video|youtube|watch|tutorial|how to|show me how|clip)\b/i,
   image_search: /\b(image|photo|picture|show me (a |an )?(pic|image|photo)|what does .* look like)\b/i
 };
@@ -53,7 +58,11 @@ const TOOL_KW = {
 export const detectTools = (text: string): string[] => {
   const tools = new Set<string>();
   if (TOOL_KW.get_weather.test(text)) tools.add('get_weather');
+  // Places (discovery) takes precedence over a bare map for "near me"/"restaurants".
+  if (TOOL_KW.find_places.test(text)) tools.add('find_places');
   if (TOOL_KW.show_map.test(text)) tools.add('show_map');
+  if (TOOL_KW.get_news.test(text)) tools.add('get_news');
+  if (TOOL_KW.get_stock.test(text)) tools.add('get_stock');
   if (TOOL_KW.video_search.test(text)) tools.add('video_search');
   if (TOOL_KW.image_search.test(text)) tools.add('image_search');
   // Web search backstop when the message looks like it needs current/factual info.

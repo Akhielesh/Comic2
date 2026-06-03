@@ -11,6 +11,7 @@ import { getWeather } from './weather.js';
 import { geocodePlaces } from './maps.js';
 import { fetchNews } from './news.js';
 import { getStockQuote } from './stocks.js';
+import { findPlaces } from './places.js';
 
 /**
  * Per-request situational context made available to tools that benefit from it
@@ -267,6 +268,50 @@ const stockTool: ChatTool = {
   }
 };
 
+// Local/places search is context-aware ("near me" + distances use the user's
+// location), so it's built per-request via a factory.
+const makePlacesTool = (ctx?: ToolContext): ChatTool => ({
+  name: 'find_places',
+  description:
+    'Find real nearby places / points of interest (restaurants, cafes, bars, hotels, pharmacies, ATMs, shops, attractions, etc.) with distance, address, hours, website and a map. Use this — NOT show_map or web_search — whenever the user wants to find/discover places, "near me", "restaurants in X", "coffee near Y", "where can I…". Provide what to find as `query`; pass `near` only when the user names a place to search around (omit it for "near me"). Returns a rich local results card shown to the user; keep prose brief and reference the top options.',
+  parameters: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'What to find, e.g. "restaurants", "italian food", "coffee", "hotels".' },
+      near: { type: 'string', description: 'Optional place to search around (e.g. "Eiffel Tower", "downtown Austin"). Omit for the user\'s current location.' }
+    },
+    required: ['query']
+  },
+  execute: async (args, signal) => {
+    const query = String(args?.query || '').trim();
+    const near = typeof args?.near === 'string' ? args.near.trim() : '';
+    const userLocation =
+      ctx?.location && typeof ctx.location.lat === 'number' && typeof ctx.location.lng === 'number'
+        ? { lat: ctx.location.lat, lng: ctx.location.lng }
+        : undefined;
+    if (!query) return { content: 'No place type was provided to search for.' };
+    try {
+      const data = await findPlaces({ query, near: near || undefined, userLocation }, signal);
+      if (!data.results.length) {
+        return { content: `No ${data.query} found near ${data.near}.` };
+      }
+      const lines = data.results
+        .slice(0, 8)
+        .map(
+          (p, i) =>
+            `[${i + 1}] ${p.name}${p.distanceKm != null ? ` — ${p.distanceKm} km` : ''}${
+              p.cuisine ? ` · ${p.cuisine}` : ''
+            }${p.openingHours ? ` · ${p.openingHours}` : ''}${p.website ? ` · ${p.website}` : ''}`
+        )
+        .join('\n');
+      const content = `Found ${data.results.length} ${data.query} near ${data.near}:\n${lines}\nA rich local results card with a map is shown to the user.`;
+      return { content, artifacts: [{ type: 'places_results', data }] };
+    } catch (err) {
+      return { content: `Places lookup failed: ${(err as Error)?.message || 'unknown error'}.` };
+    }
+  }
+});
+
 /** All context-free built-in tools, keyed by the name the model/clients reference. */
 const STATIC_TOOLS: Record<string, ChatTool> = {
   web_search: webSearchTool,
@@ -278,7 +323,7 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
 };
 
 /** Names of tools that are built per-request with situational context. */
-const CONTEXTUAL_TOOL_NAMES = ['get_news'] as const;
+const CONTEXTUAL_TOOL_NAMES = ['get_news', 'find_places'] as const;
 
 // Meta-tools built outside resolveTools (they need provider creds), but still part
 // of the client allowlist. `run_agent_swarm` is wired in by the chat route.
@@ -297,6 +342,10 @@ export const resolveTools = (names: string[] | undefined, ctx?: ToolContext): Ch
     seen.add(name);
     if (name === 'get_news') {
       tools.push(makeNewsTool(ctx));
+      continue;
+    }
+    if (name === 'find_places') {
+      tools.push(makePlacesTool(ctx));
       continue;
     }
     const tool = STATIC_TOOLS[name];

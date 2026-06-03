@@ -1,11 +1,12 @@
 import React from 'react';
-import type { ChatArtifact, WeatherArtifact, VideoResultsArtifact, MapArtifact, NewsResultsArtifact, StockQuoteArtifact, SwarmTraceArtifact } from '../../../apiTypes';
+import type { ChatArtifact, WeatherArtifact, VideoResultsArtifact, MapArtifact, NewsResultsArtifact, StockQuoteArtifact, SwarmTraceArtifact, PlacesResultsArtifact } from '../../../apiTypes';
 import { WeatherCard } from './WeatherCard';
 import { VideoResults } from './VideoResults';
 import { MapArtifactCard } from './MapArtifactCard';
 import { NewsCard } from './NewsCard';
 import { StockCard } from './StockCard';
 import { SwarmTraceCard } from './SwarmTraceCard';
+import { PlacesResults } from './PlacesResults';
 
 // Renderer registry for typed rich-output artifacts. Adding a new rich component
 // (maps, video grids, PDF viewers…) is a single `case` here — the chat loop and
@@ -20,6 +21,8 @@ const renderArtifact = (artifact: ChatArtifact, key: number): React.ReactNode =>
       return <MapArtifactCard key={key} data={artifact.data as MapArtifact} />;
     case 'news_results':
       return <NewsCard key={key} data={artifact.data as NewsResultsArtifact} />;
+    case 'places_results':
+      return <PlacesResults key={key} data={artifact.data as PlacesResultsArtifact} />;
     case 'stock_quote':
       return <StockCard key={key} data={artifact.data as StockQuoteArtifact} />;
     case 'swarm_trace':

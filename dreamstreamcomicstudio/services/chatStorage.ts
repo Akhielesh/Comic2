@@ -287,13 +287,17 @@ export const createEmptySession = (overrides: Partial<ChatSession> = {}): ChatSe
     id: crypto.randomUUID(),
     title: 'New chat',
     modelId: null,
-    modelName: undefined,
     source: null,
     reasoningLevel: 'none',
     webSearch: false,
     swarm: false,
     dreamstreamAccess: false,
     tools: [],
+    // Auto mode ON by default: the app picks a model AND auto-enables the right live
+    // tools (web/news/weather/places/maps/stocks) per message — so a fresh chat
+    // actually searches and shows rich results instead of answering from memory.
+    autoMode: true,
+    modelName: 'Auto',
     turns: [],
     createdAt: now,
     updatedAt: now,

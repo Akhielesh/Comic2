@@ -847,6 +847,38 @@ export interface NewsResultsArtifact {
   items: NewsItem[];
 }
 
+// A nearby place / point of interest (local search). Sourced from OpenStreetMap
+// (keyless), enriched best-effort with a photo from the place's website.
+export interface PlaceResult {
+  name: string;
+  /** OSM category, e.g. "restaurant", "cafe", "hotel". */
+  category?: string;
+  /** Cuisine/type tag when present, e.g. "italian; pizza". */
+  cuisine?: string;
+  lat: number;
+  lng: number;
+  /** Straight-line distance from the search anchor, in km. */
+  distanceKm?: number;
+  address?: string;
+  /** Raw opening-hours string (OSM format). */
+  openingHours?: string;
+  website?: string;
+  phone?: string;
+  /** Best-effort photo (OpenGraph image from the place's website). */
+  image?: string;
+  /** A maps/directions link for this place. */
+  mapUrl?: string;
+}
+export interface PlacesResultsArtifact {
+  /** What was searched, e.g. "restaurants" / "coffee". */
+  query: string;
+  /** Human label for the anchor, e.g. "your location" or "Eiffel Tower". */
+  near: string;
+  /** Anchor coordinates used for distances + the map. */
+  anchor?: { lat: number; lng: number };
+  results: PlaceResult[];
+}
+
 export interface MapMarker {
   lat: number;
   lng: number;
