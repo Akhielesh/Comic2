@@ -202,6 +202,9 @@ const App: React.FC = () => {
     if (shareMatch && shareMatch[1]) {
       setShareToken(shareMatch[1]);
       setCurrentView('shared');
+    } else if (path === '/models') {
+      // Public, shareable model catalog — reachable logged-out (no auth gate on 'models').
+      setCurrentView('models');
     }
   }, []);
 
@@ -508,6 +511,12 @@ const App: React.FC = () => {
     ) {
       clearReaderUrlParams();
       setCurrentView(view as AppView);
+      // Give the public catalog a real, shareable URL; other views stay at '/'.
+      try {
+        const url = new URL(window.location.href);
+        url.pathname = view === 'models' ? '/models' : '/';
+        window.history.pushState({}, '', url);
+      } catch { /* history unavailable; navigation still works via state */ }
     }
   };
 
