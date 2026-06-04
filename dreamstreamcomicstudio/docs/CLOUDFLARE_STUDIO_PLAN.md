@@ -277,6 +277,51 @@ Replit Agent class) also needs:
 Recommendation: **Cloudflare** for cost-at-scale (zone + Pages already here); E2B /
 CodeSandbox reach a professional MVP faster if time-to-market beats unit cost.
 
+## 10b. Real usage baseline (from the `Comic` Supabase, Feb 13 – Jun 4 2026)
+
+Pulled from `token_ledger_entries` (aggregates only):
+- **2 distinct users**, 16 projects, 1,438 AI ops in ~4 months → **pre-launch scale**.
+- Total provider cost **$26.27** over 4 months; **last 30 days $7.30**.
+- **99.3% BYOK** (1,428 / 1,438 rows) → the platform's own out-of-pocket is ~$0.
+- **Cost is ~99% image generation**: `image.gemini` $18.80 + `image.openrouter` $7.22 =
+  $26.02. **All text/chat combined < $0.30.** Code/compute is not where the money is.
+
+**Implication:** the live-sandbox feature adds ~**$5–8/mo** at today's scale (mostly the
+Cloudflare Workers base fee). The cloud-provider choice is a rounding error until
+thousands of users. The real cost levers are (1) keep **BYOK default** (already 99%),
+(2) watch **image** spend, (3) gate frontier text models to credits/BYOK.
+
+## 10c. Cloud cost comparison (per ~10-min live session, 2 vCPU / 4 GiB, then sleep)
+
+| Provider | ~ / session | base/mo | scale-to-zero | ops | notes |
+|---|---|---|---|---|---|
+| **Fly Machines** | ~0.5–1¢ | $0 | yes (per-sec) | med | cheapest; full VMs, any language |
+| **Cloudflare** (plan) | ~1–1.5¢ | $5 | yes (sleep) | low | purpose-built Sandbox SDK; already here |
+| **AWS Fargate** | ~1.6¢ **+ heavy ops** | $0 | partial | **high** | bills full vCPU; slow cold start; build it all |
+| **Vercel Sandbox** | ~1.7¢ | $20 (Pro) | yes (active-CPU) | low | good DX; pricier memory; needs Pro |
+| **Railway** | always-on only | ~$5+ | **no** per-session | high to retrofit | great for the always-on backend, wrong shape for throwaway sandboxes |
+| **E2B** | ~3–6¢ | $150 (Pro) | yes | lowest | managed, AI-native, priciest |
+| **CodeSandbox SDK** | ~2–4¢ | $9 | yes | low | snapshot / fork |
+
+Rates: [Vercel Sandbox](https://vercel.com/docs/sandbox/pricing) ($0.128/active-CPU-hr,
+$0.0212/GB-hr, $0.60/1M creations) · [Fly](https://fly.io/docs/about/pricing/) (per-second,
+scale-to-zero) · [AWS Fargate](https://aws.amazon.com/fargate/pricing/) ($0.04048/vCPU-hr +
+$0.004445/GB-hr) · [Cloudflare](https://developers.cloudflare.com/containers/pricing/).
+
+### Scale examples (compute only; tokens are separate and BYOK ≈ $0 to platform)
+| Scenario | sessions/mo | Cloudflare | Fly | Vercel |
+|---|---|---|---|---|
+| Today (2 users) | ~few hundred | ~$5 (base) | ~$2 | ~$20 (Pro) |
+| Soft launch (100 users) | ~1,000 | ~$20 | ~$10 | ~$37 |
+| Growth (2,000 users) | ~40,000 | ~$600 | ~$350 | ~$700 |
+
+**Verdict:** Cloudflare is within a hair of the cheapest (**Fly** edges it on raw price),
+is **purpose-built** for code sandboxes, and adds **no new vendor** — so it's the right
+call. Fly is the credible alternative if you want full-VM flexibility/any language. AWS
+only pays off at large scale with a platform team. Managed (E2B/CodeSandbox) only if
+shipping speed beats unit cost. **At every scale the token bill dwarfs compute — your
+99%-BYOK posture already neutralizes the biggest cost.**
+
 ---
 
 ## 11. Phased delivery
