@@ -759,6 +759,23 @@ export type ChatRequest = {
 export type ChatToolEvent = { tool: string; query?: string; ok: boolean; summary?: string };
 export type ChatToolImage = { url: string; title?: string; thumbnail?: string; source?: string };
 
+/**
+ * A capability gap surfaced to the user/dashboard: something the AI tried to do but
+ * couldn't fully deliver — a tool failed, returned nothing, ran in a degraded mode
+ * (e.g. open-data fallback because a key is missing), or wasn't enabled. This is how
+ * the platform is honest about *why* an answer was thin.
+ */
+export type CapabilityNotice = {
+  /** Tool/capability id this is about, e.g. "find_places". */
+  tool?: string;
+  level: 'info' | 'warn' | 'error';
+  message: string;
+  /** Optional hint on how to fix it (e.g. "Set FOURSQUARE_API_KEY"). */
+  fix?: string;
+  /** ISO timestamp (set server-side when logged). */
+  at?: string;
+};
+
 // --- Rich output artifacts (generative UI) ---
 // Tools can emit typed artifacts that the client renders as real components
 // (weather cards, maps, video grids…) instead of plain text. `type` keys the
@@ -974,8 +991,25 @@ export type ChatResponse = {
   images?: ChatToolImage[];
   /** Typed rich-output artifacts (weather, etc.) for the component renderer. */
   artifacts?: ChatArtifact[];
+  /** Capability gaps this turn (degraded/failed/missing tools or data). */
+  notices?: CapabilityNotice[];
   usage?: ApiUsage;
   billing?: ApiBillingInfo;
+};
+
+/** A platform capability and its current status (for the system dashboard). */
+export type CapabilityStatus = {
+  id: string;
+  label: string;
+  status: 'ok' | 'degraded' | 'unavailable';
+  detail: string;
+  /** Env var that would enable/upgrade it, when applicable. */
+  envVar?: string;
+};
+export type CapabilityReport = {
+  capabilities: CapabilityStatus[];
+  /** Most recent capability-gap notices observed at runtime. */
+  recentNotices: CapabilityNotice[];
 };
 
 export type TestLabReportRequest = { report: Record<string, unknown> };

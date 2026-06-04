@@ -103,6 +103,7 @@ const applyVariant = (turn: ChatTurn, v: ChatTurnVariant): ChatTurn => ({
   toolEvents: v.toolEvents,
   images: v.images,
   artifacts: v.artifacts,
+  notices: v.notices,
   error: v.error
 });
 
@@ -520,6 +521,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
             toolEvents: res.toolEvents,
             images: res.images,
             artifacts: res.artifacts,
+            notices: res.notices,
             createdAt: Date.now()
           };
           const variants = [...(t.variants || []), variant];

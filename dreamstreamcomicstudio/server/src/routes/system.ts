@@ -7,6 +7,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { requireAdmin } from '../middleware/requireAdmin.js';
 import { checkSupabaseReachability, getSupabaseAdmin, getSupabaseCapabilityStatus, supabase } from '../services/supabase.js';
 import { WORLD_EXTRACTION_CONTRACT_VERSION } from '../../../shared/contracts/worldExtraction.js';
+import { capabilityReport } from '../ai/capabilities.js';
 
 export const systemRouter = Router();
 const SIGNED_URL_TTL_SECONDS = 60 * 30;
@@ -279,6 +280,13 @@ systemRouter.get('/status', (_req, res) => {
     status: 'ok',
     ...capabilities
   });
+});
+
+// Capability report for the admin dashboard: which providers/tools are OK,
+// degraded, or unavailable (from real config), plus recent runtime capability
+// gaps. Admin-only — it reveals which keys are configured (booleans, not values).
+systemRouter.get('/capabilities', requireAuth, requireAdmin, (_req, res) => {
+  res.json(capabilityReport());
 });
 
 systemRouter.get('/version', (_req, res) => {

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Copy, Check, GitBranch, AlertTriangle, Sparkles, User, Globe, Brain,
   Download, FileArchive, ChevronDown, ChevronUp, ExternalLink, Search, Cpu, Play,
-  RefreshCw, Pencil, ChevronLeft, ChevronRight, X
+  RefreshCw, Pencil, ChevronLeft, ChevronRight, X, Info
 } from 'lucide-react';
 import JSZip from 'jszip';
 import { FileText } from 'lucide-react';
@@ -214,6 +214,23 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, busy, is
             <button onClick={onRegenerate} disabled={busy} className="flex items-center gap-0.5 text-[11px] font-bold text-brand-red hover:text-black disabled:opacity-40" title="Try again">
               <RefreshCw className="w-3 h-3" /> Try again
             </button>
+          </div>
+        )}
+
+        {/* Capability gaps: honest flags about what the AI couldn't fully deliver. */}
+        {!isUser && turn.notices && turn.notices.length > 0 && (
+          <div className="w-full mt-1 space-y-1">
+            {turn.notices.map((n, i) => (
+              <div
+                key={i}
+                className={`flex items-start gap-1.5 text-[11px] rounded px-2 py-1 border ${
+                  n.level === 'error' ? 'bg-red-50 border-red-300 text-red-700' : 'bg-amber-50 border-amber-300 text-amber-800'
+                }`}
+              >
+                {n.level === 'error' ? <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" /> : <Info className="w-3 h-3 shrink-0 mt-0.5" />}
+                <span>{n.message}{n.fix ? <span className="font-bold"> ({n.fix})</span> : ''}</span>
+              </div>
+            ))}
           </div>
         )}
 

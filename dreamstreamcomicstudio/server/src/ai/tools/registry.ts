@@ -46,6 +46,8 @@ export interface ToolExecResult {
   citations?: { url: string; title?: string }[];
   /** Typed rich-output artifacts (weather, etc.) rendered as components. */
   artifacts?: ChatArtifact[];
+  /** A capability gap to surface (degraded mode, missing key, empty result). */
+  notice?: { level: 'info' | 'warn' | 'error'; message: string; fix?: string };
 }
 
 export interface ChatTool {
@@ -295,13 +297,16 @@ const makePlacesTool = (ctx?: ToolContext): ChatTool => ({
       // Prefer Foursquare (rich: ratings, price, photos) when configured; fall back
       // to keyless OpenStreetMap on absence or any Foursquare failure.
       let data;
-      if (foursquareEnabled()) {
+      const fsqOn = foursquareEnabled();
+      let usedFsq = false;
+      if (fsqOn) {
         try {
           data = await findPlacesFoursquare(
             { query, near: near || undefined, userLocation, label: osmFilters(query).label },
             signal
           );
           if (!data.results.length) data = undefined; // fall through to OSM
+          else usedFsq = true;
         } catch {
           data = undefined;
         }
@@ -309,6 +314,16 @@ const makePlacesTool = (ctx?: ToolContext): ChatTool => ({
       if (!data) {
         data = await findPlaces({ query, near: near || undefined, userLocation }, signal);
       }
+      // Be honest about degraded mode (open data ⇒ no ratings/photos/menus).
+      const notice = !usedFsq
+        ? {
+            level: 'info' as const,
+            message: fsqOn
+              ? 'Foursquare returned nothing here, so these are OpenStreetMap results (no ratings/photos).'
+              : 'Showing OpenStreetMap results — ratings, photos and price need a Foursquare key.',
+            fix: fsqOn ? undefined : 'Set FOURSQUARE_API_KEY'
+          }
+        : undefined;
       if (!data.results.length) {
         return { content: `No ${data.query} found near ${data.near}.` };
       }
@@ -322,7 +337,7 @@ const makePlacesTool = (ctx?: ToolContext): ChatTool => ({
         )
         .join('\n');
       const content = `Found ${data.results.length} ${data.query} near ${data.near}:\n${lines}\nA rich local results card with a map is shown to the user.`;
-      return { content, artifacts: [{ type: 'places_results', data }] };
+      return { content, artifacts: [{ type: 'places_results', data }], notice };
     } catch (err) {
       return { content: `Places lookup failed: ${(err as Error)?.message || 'unknown error'}.` };
     }

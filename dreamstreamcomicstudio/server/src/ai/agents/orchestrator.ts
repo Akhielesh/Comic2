@@ -26,6 +26,7 @@ import type {
   ChatCitation,
   ChatToolEvent,
   ChatToolImage,
+  CapabilityNotice,
   SwarmTraceArtifact,
   SwarmAgentRun,
   ApiUsage
@@ -75,6 +76,7 @@ export interface RunSwarmResult {
   toolEvents?: ChatToolEvent[];
   images?: ChatToolImage[];
   artifacts: ChatArtifact[];
+  notices?: CapabilityNotice[];
   usage: ApiUsage;
   trace: SwarmTraceArtifact;
 }
@@ -177,6 +179,7 @@ export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> 
   const citations: ChatCitation[] = [];
   const toolEvents: ChatToolEvent[] = [];
   const images: ChatToolImage[] = [];
+  const notices: CapabilityNotice[] = [];
 
   const findings = await Promise.all(
     plan.map(async (p, i) => {
@@ -198,6 +201,7 @@ export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> 
         if (r.artifacts) agentArtifacts.push(...r.artifacts);
         if (r.citations) citations.push(...r.citations);
         if (r.toolEvents) toolEvents.push(...r.toolEvents);
+        if (r.notices) notices.push(...r.notices);
         if (r.images) images.push(...r.images);
         agents[i] = {
           ...agents[i],
@@ -238,6 +242,7 @@ export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> 
   });
   usageParts.push(synthRes.usage);
   if (synthRes.citations) citations.push(...synthRes.citations);
+  if (synthRes.notices) notices.push(...synthRes.notices);
 
   const finalTrace: SwarmTraceArtifact = { goal, agents: agents.map((a) => ({ ...a })) };
   const mergedCitations = dedupeCitations(citations);
@@ -250,6 +255,7 @@ export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> 
     toolEvents: toolEvents.length ? toolEvents : undefined,
     images: images.length ? images : undefined,
     artifacts: [{ type: 'swarm_trace', data: finalTrace }, ...agentArtifacts],
+    notices: notices.length ? notices : undefined,
     usage: mergeUsage(usageParts),
     trace: finalTrace
   };

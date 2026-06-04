@@ -7,7 +7,8 @@
 // flow through one control plane.
 
 import type { ChatMessage } from './providers/types.js';
-import type { ChatArtifact, ChatClientContext } from '../../../apiTypes.js';
+import type { ChatArtifact, ChatClientContext, CapabilityNotice } from '../../../apiTypes.js';
+import { logCapabilityNotice } from './capabilities.js';
 import { getProvider, resolveProviderContext } from './gateway.js';
 import { buildUsage } from './usage.js';
 import type { AIProviderId } from './providers/types.js';
@@ -162,6 +163,7 @@ export const runChat = async (
   toolEvents?: ChatToolEvent[];
   images?: ChatToolImage[];
   artifacts?: ChatArtifact[];
+  notices?: CapabilityNotice[];
 }> => {
   // A custom persona / durable user memory augments the rich-format base prompt
   // rather than replacing it, so structured-Markdown rules always hold.
@@ -211,6 +213,11 @@ export const runChat = async (
   const images: ChatToolImage[] = [];
   const citations: { url: string; title?: string }[] = [];
   const artifacts: ChatArtifact[] = [];
+  const notices: CapabilityNotice[] = [];
+  const addNotice = (n: CapabilityNotice) => {
+    notices.push(n);
+    logCapabilityNotice(n);
+  };
 
   // One model call — streamed when a delta callback is provided and the provider
   // supports it (intermediate tool-call turns emit no content, so streaming the final
@@ -273,6 +280,11 @@ export const runChat = async (
         if (r.out.images) images.push(...r.out.images);
         if (r.out.citations) citations.push(...r.out.citations);
         if (r.out.artifacts) artifacts.push(...r.out.artifacts);
+        // A tool can flag a degraded/missing-data situation it wants surfaced.
+        if (r.out.notice) addNotice({ tool: r.call.name, ...r.out.notice });
+      } else if (!r.ok) {
+        // A tool that errored is itself a capability gap worth recording.
+        addNotice({ tool: r.call.name, level: 'error', message: r.summary || 'Tool failed.' });
       }
       toolEvents.push({ tool: r.call.name, query: r.query, ok: r.ok, summary: r.summary });
       messages.push({ role: 'tool', tool_call_id: r.call.id, content: r.content });
@@ -305,6 +317,7 @@ export const runChat = async (
     citations: mergedCitations.length ? mergedCitations : undefined,
     toolEvents: toolEvents.length ? toolEvents : undefined,
     images: images.length ? images : undefined,
-    artifacts: artifacts.length ? artifacts : undefined
+    artifacts: artifacts.length ? artifacts : undefined,
+    notices: notices.length ? notices : undefined
   };
 };

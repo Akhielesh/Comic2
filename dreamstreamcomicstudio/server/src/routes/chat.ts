@@ -253,6 +253,7 @@ const buildPayload = (p: PreparedChat, result: Awaited<ReturnType<typeof runChat
   toolEvents: result.toolEvents,
   images: result.images,
   artifacts: result.artifacts,
+  notices: result.notices,
   usage: result.usage
 });
 
@@ -608,6 +609,7 @@ chatRouter.post('/swarm', async (req, res) => {
       toolEvents: result.toolEvents,
       images: result.images,
       artifacts: result.artifacts,
+      notices: result.notices,
       usage: result.usage
     };
     const finalPayload =

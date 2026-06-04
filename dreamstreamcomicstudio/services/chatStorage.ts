@@ -5,7 +5,7 @@
 // requiring a Supabase migration. Per-user "memory" (durable facts the user wants
 // the AI to remember across chats) is kept in localStorage, keyed by user id.
 
-import type { ChatReasoningLevel, ChatToolEvent, ChatToolImage, ChatArtifact } from '../apiTypes';
+import type { ChatReasoningLevel, ChatToolEvent, ChatToolImage, ChatArtifact, CapabilityNotice } from '../apiTypes';
 import type { ModelSourceId } from './modelSelection';
 import { pullAll, pushSession, pushProject, removeRemote } from './chatSync';
 
@@ -53,6 +53,7 @@ export interface ChatTurnVariant {
   toolEvents?: ChatToolEvent[];
   images?: ChatToolImage[];
   artifacts?: ChatArtifact[];
+  notices?: CapabilityNotice[];
   createdAt: number;
   error?: boolean;
 }
@@ -82,6 +83,8 @@ export interface ChatTurn {
   toolEvents?: ChatToolEvent[];
   /** Images surfaced by an image-search tool. */
   images?: ChatToolImage[];
+  /** Capability gaps surfaced this turn (degraded/failed/missing tools). */
+  notices?: CapabilityNotice[];
   createdAt: number;
   /** True when this assistant turn is an error placeholder. */
   error?: boolean;
