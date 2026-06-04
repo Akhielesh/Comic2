@@ -5,6 +5,7 @@
 
 import type { CatalogModel } from './modelCatalog';
 import { getCapabilities } from './modelCapabilities';
+import { scoreTools } from '../toolCatalog';
 
 export interface GoalNeeds {
   code: boolean;
@@ -48,25 +49,27 @@ const TOOL_KW = {
   get_news: /\b(news|headline|breaking|happening|latest on|updates? on)\b/i,
   get_stock: /\b(stock|share price|ticker|stock market|nasdaq|s&p|dow|crypto|bitcoin|ethereum|price of [A-Z]{1,5}\b)\b/i,
   video_search: /\b(video|youtube|watch|tutorial|how to|show me how|clip)\b/i,
-  image_search: /\b(image|photo|picture|show me (a |an )?(pic|image|photo)|what does .* look like)\b/i,
-  render_chart: /\b(chart|graph|plot|visuali[sz]e|bar chart|line chart|pie chart|donut|scatter|trend (over|line)|breakdown of)\b/i,
-  show_metrics: /\b(dashboard|kpis?|metrics?|scorecard|stat ?board|at a glance|summary of (the )?(stats|numbers|metrics))\b/i
+  image_search: /\b(image|photo|picture|show me (a |an )?(pic|image|photo)|what does .* look like)\b/i
 };
 
 /**
- * Auto mode: which tools a message likely needs. Web search is the default backstop
- * for anything current/factual; specialized tools are added when clearly relevant.
+ * Auto mode: which tools a message likely needs. Combines the curated high-signal
+ * regexes (kept for precedence rules like places-over-map) with the shared tool
+ * catalogue's keyword scorer, so the full free-API library is reachable in Auto
+ * mode. Web search is the default backstop for anything current/factual.
  */
 export const detectTools = (text: string): string[] => {
   const tools = new Set<string>();
+  // Curated, high-signal intents (these encode precedence the generic scorer can't).
   if (TOOL_KW.get_weather.test(text)) tools.add('get_weather');
-  // Places (discovery) takes precedence over a bare map for "near me"/"restaurants".
   if (TOOL_KW.find_places.test(text)) tools.add('find_places');
   if (TOOL_KW.show_map.test(text)) tools.add('show_map');
   if (TOOL_KW.get_news.test(text)) tools.add('get_news');
   if (TOOL_KW.get_stock.test(text)) tools.add('get_stock');
   if (TOOL_KW.video_search.test(text)) tools.add('video_search');
   if (TOOL_KW.image_search.test(text)) tools.add('image_search');
+  // Catalogue scorer: add the top keyword-matched free-API tools (capped).
+  for (const { name } of scoreTools(text).slice(0, 6)) tools.add(name);
   // Web search backstop when the message looks like it needs current/factual info.
   if (tools.size > 0 || KW.web.test(text) || /\b(who|what|when|where|latest|how much|price|news)\b/i.test(text)) {
     tools.add('web_search');
