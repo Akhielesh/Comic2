@@ -81,9 +81,9 @@ export const CATEGORY_META: CategoryMeta[] = [
 export const TOOL_CATALOG: ToolMeta[] = [
   // ---------------------------------------------------------------- search ------
   {
-    name: 'web_search', label: 'Web search', category: 'search', kind: 'builtin', provider: 'DuckDuckGo',
+    name: 'web_search', label: 'Web search', category: 'search', kind: 'builtin', provider: 'Tavily/Brave/Google (if keyed) → DuckDuckGo → Bing → Wikipedia',
     description: 'Search the live web for current, factual or post-training information with ranked results and citations.',
-    auth: 'none', rateLimit: 'Fair use (HTML endpoint, no key)',
+    auth: 'optional', authEnv: 'TAVILY_API_KEY', rateLimit: 'Keyless scrapers are fair-use and often blocked from datacenters; set TAVILY_API_KEY or BRAVE_API_KEY (free tiers) for reliable results',
     dataShape: 'Ranked results: title, URL, snippet + citations.', docsUrl: 'https://duckduckgo.com',
     // Deliberately distinctive keywords only — web_search is also a guaranteed
     // backstop in routing/fallback, so it shouldn't win ties on generic words.

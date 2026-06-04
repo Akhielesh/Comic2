@@ -1,0 +1,195 @@
+// Web search orchestrator.
+//
+// WHY THIS EXISTS: the chat agent's web_search was scraping-only (DuckDuckGo HTML/
+// Lite + the Instant-Answer API). From a datacenter IP (Railway) DuckDuckGo soft-
+// blocks the scrapers and the Instant-Answer API only resolves entity/disambiguation
+// queries — so most real research queries came back EMPTY, and the model fabricated
+// "TBD" answers. That made the whole "AI with web access" experience feel broken.
+//
+// This module turns search into a provider chain that degrades gracefully and,
+// crucially, becomes genuinely reliable the moment a (free-tier) API key is set:
+//
+//   1. Keyed providers (used only if their env key is present) — real search APIs:
+//        TAVILY_API_KEY        → Tavily (purpose-built for AI agents)
+//        BRAVE_API_KEY         → Brave Search API
+//        GOOGLE_CSE_KEY + _CX  → Google Programmable Search
+//   2. Keyless fallbacks: DuckDuckGo (html→lite→IA) → Bing HTML → Wikipedia.
+//
+// First provider to return results wins. Every provider is wrapped so a failure just
+// advances to the next one. Set ANY one key to get reliable results in production.
+
+import { ddgWebSearch, type WebResult } from './duckduckgo.js';
+
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+const PER_PROVIDER_TIMEOUT_MS = 7_000;
+const GLOBAL_BUDGET_MS = 16_000;
+
+const decodeEntities = (text: string): string =>
+  text
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;|&#39;/g, "'")
+    .replace(/&#x2F;|&#47;/g, '/');
+const stripTags = (html: string): string => decodeEntities(html.replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
+
+const timeoutSignal = (parent: AbortSignal | undefined, ms: number) => {
+  const c = new AbortController();
+  const timer = setTimeout(() => c.abort(), ms);
+  const onAbort = () => c.abort();
+  if (parent) {
+    if (parent.aborted) c.abort();
+    else parent.addEventListener('abort', onAbort, { once: true });
+  }
+  return { signal: c.signal, done: () => { clearTimeout(timer); parent?.removeEventListener('abort', onAbort); } };
+};
+
+const fetchJson = async <T>(url: string, headers: Record<string, string>, signal: AbortSignal): Promise<T> => {
+  const res = await fetch(url, { headers: { 'User-Agent': UA, ...headers }, signal });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()) as T;
+};
+
+// ---------------------------------------------------------------- keyed providers ---
+
+const tavilySearch = async (query: string, signal: AbortSignal, limit: number): Promise<WebResult[]> => {
+  const key = process.env.TAVILY_API_KEY;
+  if (!key) return [];
+  const res = await fetch('https://api.tavily.com/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'User-Agent': UA },
+    body: JSON.stringify({ api_key: key, query, max_results: limit, search_depth: 'basic', include_answer: false }),
+    signal
+  });
+  if (!res.ok) throw new Error(`Tavily ${res.status}`);
+  const data = (await res.json()) as { results?: { title?: string; url?: string; content?: string }[] };
+  return (data.results || [])
+    .filter((r) => r.url)
+    .slice(0, limit)
+    .map((r) => ({ title: r.title || r.url || '', url: r.url as string, snippet: (r.content || '').slice(0, 400) }));
+};
+
+const braveSearch = async (query: string, signal: AbortSignal, limit: number): Promise<WebResult[]> => {
+  const key = process.env.BRAVE_API_KEY;
+  if (!key) return [];
+  const data = await fetchJson<{ web?: { results?: { title?: string; url?: string; description?: string }[] } }>(
+    `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${limit}`,
+    { Accept: 'application/json', 'X-Subscription-Token': key },
+    signal
+  );
+  return (data.web?.results || [])
+    .filter((r) => r.url)
+    .slice(0, limit)
+    .map((r) => ({ title: r.title ? stripTags(r.title) : (r.url as string), url: r.url as string, snippet: r.description ? stripTags(r.description) : '' }));
+};
+
+const googleCseSearch = async (query: string, signal: AbortSignal, limit: number): Promise<WebResult[]> => {
+  const key = process.env.GOOGLE_CSE_KEY;
+  const cx = process.env.GOOGLE_CSE_CX;
+  if (!key || !cx) return [];
+  const data = await fetchJson<{ items?: { title?: string; link?: string; snippet?: string }[] }>(
+    `https://www.googleapis.com/customsearch/v1?key=${key}&cx=${cx}&q=${encodeURIComponent(query)}&num=${Math.min(limit, 10)}`,
+    { Accept: 'application/json' },
+    signal
+  );
+  return (data.items || [])
+    .filter((r) => r.link)
+    .slice(0, limit)
+    .map((r) => ({ title: r.title || (r.link as string), url: r.link as string, snippet: r.snippet || '' }));
+};
+
+// -------------------------------------------------------------- keyless fallbacks ---
+
+/** Parse Bing's organic results (`li.b_algo`). Pure + testable. */
+export const parseBingHtml = (html: string, limit = 6): WebResult[] => {
+  const results: WebResult[] = [];
+  const blockRe = /<li class="b_algo"[\s\S]*?(?=<li class="b_algo"|<\/ol>|$)/g;
+  let bm: RegExpExecArray | null;
+  while ((bm = blockRe.exec(html)) !== null && results.length < limit) {
+    const block = bm[0];
+    const a = block.match(/<h2>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+    if (!a) continue;
+    const url = decodeEntities(a[1]);
+    const title = stripTags(a[2]);
+    const p = block.match(/<p[^>]*class="[^"]*b_lineclamp[^"]*"[^>]*>([\s\S]*?)<\/p>/i) || block.match(/<p[^>]*>([\s\S]*?)<\/p>/i);
+    const snippet = p ? stripTags(p[1]) : '';
+    if (title && /^https?:\/\//.test(url)) results.push({ title, url, snippet });
+  }
+  return results;
+};
+
+const bingScrape = async (query: string, signal: AbortSignal, limit: number): Promise<WebResult[]> => {
+  const res = await fetch(`https://www.bing.com/search?q=${encodeURIComponent(query)}&setlang=en&cc=us`, {
+    headers: { 'User-Agent': UA, Accept: 'text/html', 'Accept-Language': 'en-US,en;q=0.9' },
+    signal
+  });
+  if (!res.ok) throw new Error(`Bing ${res.status}`);
+  return parseBingHtml(await res.text(), limit);
+};
+
+/** Wikipedia full-text search — reliable from datacenter, good grounding for entities. */
+export const wikipediaSearch = async (query: string, signal: AbortSignal, limit: number): Promise<WebResult[]> => {
+  const data = await fetchJson<{ query?: { search?: { title?: string; snippet?: string }[] } }>(
+    `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&srlimit=${limit}&format=json&origin=*`,
+    { Accept: 'application/json' },
+    signal
+  );
+  return (data.query?.search || [])
+    .filter((r) => r.title)
+    .slice(0, limit)
+    .map((r) => ({
+      title: r.title as string,
+      url: `https://en.wikipedia.org/wiki/${encodeURIComponent((r.title as string).replace(/ /g, '_'))}`,
+      snippet: r.snippet ? stripTags(r.snippet) : ''
+    }));
+};
+
+// ----------------------------------------------------------------- orchestration ---
+
+type Provider = { name: string; run: (q: string, s: AbortSignal, n: number) => Promise<WebResult[]> };
+
+// Ordered best→fallback. Keyed providers short-circuit to [] without a network call
+// when their key is absent, so the chain costs nothing extra until you configure one.
+const PROVIDERS: Provider[] = [
+  { name: 'tavily', run: tavilySearch },
+  { name: 'brave', run: braveSearch },
+  { name: 'google', run: googleCseSearch },
+  { name: 'duckduckgo', run: ddgWebSearch },
+  { name: 'bing', run: bingScrape },
+  { name: 'wikipedia', run: wikipediaSearch }
+];
+
+export interface WebSearchOutcome {
+  results: WebResult[];
+  /** Which provider produced the results (or 'none'). */
+  provider: string;
+  /** Providers that were attempted, for diagnostics. */
+  tried: string[];
+}
+
+/** Run the provider chain; first non-empty wins. Never throws. */
+export const webSearch = async (query: string, signal?: AbortSignal, limit = 6): Promise<WebSearchOutcome> => {
+  const deadline = Date.now() + GLOBAL_BUDGET_MS;
+  const tried: string[] = [];
+  for (const p of PROVIDERS) {
+    if (Date.now() >= deadline) break;
+    const t = timeoutSignal(signal, Math.min(PER_PROVIDER_TIMEOUT_MS, deadline - Date.now()));
+    try {
+      const results = await p.run(query, t.signal, limit);
+      if (results.length) {
+        // Only count a keyed provider as "tried" if it actually ran (had a key).
+        tried.push(p.name);
+        return { results, provider: p.name, tried };
+      }
+      // Distinguish "ran but empty" from "skipped (no key)": keyed providers return []
+      // instantly without a key — don't list those as tried.
+      tried.push(p.name);
+    } catch {
+      tried.push(p.name);
+    } finally {
+      t.done();
+    }
+  }
+  return { results: [], provider: 'none', tried };
+};

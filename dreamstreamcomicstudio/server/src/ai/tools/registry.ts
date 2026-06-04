@@ -5,7 +5,8 @@
 // uniform interface, so adding a connector never touches the loop or the routes.
 
 import type { ToolSpec } from '../providers/types.js';
-import { ddgWebSearch, ddgImageSearch, ddgVideoSearch, type ImageResult } from './duckduckgo.js';
+import { ddgImageSearch, ddgVideoSearch, type ImageResult } from './duckduckgo.js';
+import { webSearch } from './search.js';
 import { getWeather } from './weather.js';
 import { geocodePlaces } from './maps.js';
 import { fetchNews } from './news.js';
@@ -49,16 +50,22 @@ const webSearchTool: ChatTool = {
     const query = String(args?.query || '').trim();
     if (!query) return { content: 'No search query was provided.' };
     try {
-      const results = await ddgWebSearch(query, signal);
+      const { results, provider } = await webSearch(query, signal);
       if (!results.length) {
         return {
-          content: `No web results found for "${query}". Try a different tool (e.g. wiki_lookup, get_news) or a refined query.`,
-          notice: { level: 'warn', message: `Web search returned no results for "${query}".` }
+          // Be explicit so the model PIVOTS instead of re-querying web_search (which is
+          // what produced the "8 empty searches then a fabricated TBD table" failure).
+          content: `No results were found for "${query}" from any available search provider. Do NOT retry web_search with reworded variations — it will keep returning nothing. Instead: use a more specific tool if one fits (wiki_lookup for background/definitions, get_news for recent events), OR answer from your own knowledge while CLEARLY stating it is not from a live search and may be out of date. NEVER fabricate facts, prices, or specs, and never fill a table with "TBD"/placeholder values.`,
+          notice: {
+            level: 'warn',
+            message: `Web search returned no results for "${query}".`,
+            fix: provider === 'none' ? 'Set TAVILY_API_KEY or BRAVE_API_KEY (free tiers) for reliable web search' : undefined
+          }
         };
       }
-      const content = results
-        .map((r, i) => `[${i + 1}] ${r.title}\nURL: ${r.url}\n${r.snippet}`)
-        .join('\n\n');
+      const content =
+        results.map((r, i) => `[${i + 1}] ${r.title}\nURL: ${r.url}\n${r.snippet}`).join('\n\n') +
+        `\n\n(${results.length} result${results.length === 1 ? '' : 's'} via ${provider})`;
       return { content, citations: results.map((r) => ({ url: r.url, title: r.title })) };
     } catch (err) {
       return {
