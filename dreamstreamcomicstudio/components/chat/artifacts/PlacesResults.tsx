@@ -1,7 +1,7 @@
 import React from 'react';
-import { MapPin, Map as MapIcon, Clock, Globe, Navigation, Utensils, Star } from 'lucide-react';
-import type { PlacesResultsArtifact, PlaceResult } from '../../../apiTypes';
-import { useChatPanel } from '../panelContext';
+import { MapPin, Clock, Globe, Navigation, Utensils, Star } from 'lucide-react';
+import type { PlacesResultsArtifact, PlaceResult, MapArtifact } from '../../../apiTypes';
+import { InlineMap } from './InlineMap';
 
 const distanceLabel = (km?: number): string | undefined => {
   if (typeof km !== 'number') return undefined;
@@ -12,22 +12,16 @@ const distanceLabel = (km?: number): string | undefined => {
 // Rich local-results card: a Google-local-pack-style list (photo, distance, hours,
 // website, directions) plus a one-tap map of all results in the side panel.
 export const PlacesResults: React.FC<{ data: PlacesResultsArtifact }> = ({ data }) => {
-  const openPanel = useChatPanel();
   if (!data?.results?.length) return null;
 
-  const openMap = () => {
-    openPanel?.({
-      type: 'map',
-      data: {
-        title: `${data.query} near ${data.near}`,
-        markers: data.results.map((p) => ({
-          lat: p.lat,
-          lng: p.lng,
-          label: p.name,
-          description: [distanceLabel(p.distanceKm), p.cuisine, p.address].filter(Boolean).join(' · ')
-        }))
-      }
-    });
+  const mapData: MapArtifact = {
+    title: `${data.query} near ${data.near}`,
+    markers: data.results.map((p) => ({
+      lat: p.lat,
+      lng: p.lng,
+      label: p.name,
+      description: [distanceLabel(p.distanceKm), p.cuisine, p.address].filter(Boolean).join(' · ')
+    }))
   };
 
   return (
@@ -36,13 +30,9 @@ export const PlacesResults: React.FC<{ data: PlacesResultsArtifact }> = ({ data 
         <MapPin className="w-4 h-4" />
         <span className="text-[12px] font-extrabold capitalize">{data.query}</span>
         <span className="text-[11px] text-slate-500 font-semibold truncate">near {data.near}</span>
-        <button
-          onClick={openMap}
-          className="ml-auto shrink-0 flex items-center gap-1 text-[11px] font-bold border-2 border-black rounded-full px-2 py-0.5 bg-white hover:bg-brand-yellow"
-          title="Show all on a map"
-        >
-          <MapIcon className="w-3.5 h-3.5" /> Map
-        </button>
+      </div>
+      <div className="p-2 border-b-2 border-black/10">
+        <InlineMap data={mapData} height={200} />
       </div>
       <ul className="divide-y divide-slate-100">
         {data.results.map((p, i) => (
