@@ -53,9 +53,9 @@ const fetchJson = async <T>(url: string, headers: Record<string, string>, signal
 
 // ---------------------------------------------------------------- keyed providers ---
 
-const tavilySearch = async (query: string, signal: AbortSignal, limit: number): Promise<WebResult[]> => {
+const tavilySearch = async (query: string, signal: AbortSignal, limit: number): Promise<WebResult[] | null> => {
   const key = process.env.TAVILY_API_KEY;
-  if (!key) return [];
+  if (!key) return null; // skipped: no key — not a failed attempt
   const res = await fetch('https://api.tavily.com/search', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'User-Agent': UA },
@@ -70,9 +70,9 @@ const tavilySearch = async (query: string, signal: AbortSignal, limit: number): 
     .map((r) => ({ title: r.title || r.url || '', url: r.url as string, snippet: (r.content || '').slice(0, 400) }));
 };
 
-const braveSearch = async (query: string, signal: AbortSignal, limit: number): Promise<WebResult[]> => {
+const braveSearch = async (query: string, signal: AbortSignal, limit: number): Promise<WebResult[] | null> => {
   const key = process.env.BRAVE_API_KEY;
-  if (!key) return [];
+  if (!key) return null; // skipped: no key — not a failed attempt
   const data = await fetchJson<{ web?: { results?: { title?: string; url?: string; description?: string }[] } }>(
     `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${limit}`,
     { Accept: 'application/json', 'X-Subscription-Token': key },
@@ -84,10 +84,10 @@ const braveSearch = async (query: string, signal: AbortSignal, limit: number): P
     .map((r) => ({ title: r.title ? stripTags(r.title) : (r.url as string), url: r.url as string, snippet: r.description ? stripTags(r.description) : '' }));
 };
 
-const googleCseSearch = async (query: string, signal: AbortSignal, limit: number): Promise<WebResult[]> => {
+const googleCseSearch = async (query: string, signal: AbortSignal, limit: number): Promise<WebResult[] | null> => {
   const key = process.env.GOOGLE_CSE_KEY;
   const cx = process.env.GOOGLE_CSE_CX;
-  if (!key || !cx) return [];
+  if (!key || !cx) return null; // skipped: no key — not a failed attempt
   const data = await fetchJson<{ items?: { title?: string; link?: string; snippet?: string }[] }>(
     `https://www.googleapis.com/customsearch/v1?key=${key}&cx=${cx}&q=${encodeURIComponent(query)}&num=${Math.min(limit, 10)}`,
     { Accept: 'application/json' },
@@ -182,7 +182,7 @@ const searxngSearch = async (query: string, signal: AbortSignal, limit: number):
   return [];
 };
 
-type Provider = { name: string; run: (q: string, s: AbortSignal, n: number) => Promise<WebResult[]> };
+type Provider = { name: string; run: (q: string, s: AbortSignal, n: number) => Promise<WebResult[] | null> };
 
 // Ordered best→fallback. Keyed providers short-circuit to [] without a network call
 // when their key is absent, so the keyless chain (SearXNG → DuckDuckGo → Bing →
@@ -219,19 +219,18 @@ export const webSearch = async (query: string, signal?: AbortSignal, limit = 6):
   const deadline = Date.now() + GLOBAL_BUDGET_MS;
   const tried: string[] = [];
   let errorCount = 0;
+  let cleanCompletions = 0; // providers that actually RAN and returned (no throw, no skip)
   for (const p of PROVIDERS) {
     if (Date.now() >= deadline) break;
     const t = timeoutSignal(signal, Math.min(PER_PROVIDER_TIMEOUT_MS, deadline - Date.now()));
     try {
       const results = await p.run(query, t.signal, limit);
-      if (results.length) {
-        // Only count a keyed provider as "tried" if it actually ran (had a key).
-        tried.push(p.name);
-        return { results, provider: p.name, tried, status: 'ok' };
-      }
-      // Distinguish "ran but empty" from "skipped (no key)": keyed providers return []
-      // instantly without a key — don't list those as tried.
+      // null = the provider skipped (e.g. a keyed provider with no key). A skip is NOT an
+      // attempt — don't list it as tried, and don't let it mask a genuine outage.
+      if (results === null) continue;
       tried.push(p.name);
+      if (results.length) return { results, provider: p.name, tried, status: 'ok' };
+      cleanCompletions += 1; // ran fine, just found nothing
     } catch {
       tried.push(p.name);
       errorCount += 1;
@@ -239,7 +238,10 @@ export const webSearch = async (query: string, signal?: AbortSignal, limit = 6):
       t.done();
     }
   }
-  // If every attempt threw (and none returned), the search FAILED rather than found
-  // nothing — surface that so the model can say "live search is unavailable".
-  return { results: [], provider: 'none', tried, status: errorCount > 0 ? 'error' : 'empty' };
+  // Only call it an outage ('error') when providers actually FAILED and NONE completed
+  // cleanly. A partial success — some provider ran and simply found nothing — is 'empty',
+  // not a live-search outage, so the model gets the right guidance.
+  const status: WebSearchOutcome['status'] =
+    errorCount > 0 && cleanCompletions === 0 ? 'error' : 'empty';
+  return { results: [], provider: 'none', tried, status };
 };
