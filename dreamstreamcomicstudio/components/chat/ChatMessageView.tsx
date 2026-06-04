@@ -279,7 +279,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, busy, is
                 {turn.citations && turn.citations.length > 0 && (
                   <div>
                     <div className="text-[11px] font-bold uppercase text-sky-700 flex items-center gap-1 mb-1.5"><Globe className="w-3.5 h-3.5" /> Web sources ({turn.citations.length})</div>
-                    <div className="grid gap-1.5">
+                    <div className="grid gap-1.5 sm:grid-cols-2">
                       {turn.citations.map((c, i) => (
                         <SourceCard key={`${c.url}-${i}`} index={i + 1} url={c.url} title={c.title} />
                       ))}

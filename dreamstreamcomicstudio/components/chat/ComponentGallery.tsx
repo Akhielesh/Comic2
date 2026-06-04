@@ -173,7 +173,7 @@ export interface GalleryDemo {
 export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Weather station (animated · gauges · map)', type: 'weather', node: <WeatherStation data={weather} /> },
   { title: 'Market card (hover · range timeline · candlesticks)', type: 'stock_quote', node: <MarketCard data={stock} /> },
-  { title: 'News digest (lead · source filter · favicons)', type: 'news_results', node: <NewsDigest data={news} /> },
+  { title: 'News digest (compact · source-branded · snippets)', type: 'news_results', node: <NewsDigest data={news} /> },
   { title: 'Places (local) card', type: 'places_results', node: <PlacesResults data={places} /> },
   { title: 'Map (markers · route)', type: 'map', node: <MapArtifactCard data={mapArtifact} /> },
   { title: 'Video results', type: 'video_results', node: <VideoResults data={videos} /> },
