@@ -959,7 +959,7 @@ export interface StockCandle {
   close: number;
 }
 /** Selectable history windows for the MarketCard range timeline. */
-export type StockRange = '1D' | '1W' | '1M' | '3M' | '1Y' | '5Y' | 'MAX';
+export type StockRange = '1D' | '5D' | '1M' | '6M' | '1Y' | '5Y' | 'MAX';
 /** Whether the listing venue is currently trading. */
 export type MarketState = 'open' | 'closed' | 'pre' | 'after';
 /** Fundamentals shown in the expanded MarketCard. All optional/best-effort. */
@@ -978,6 +978,14 @@ export interface StockStats {
   eps?: number;
   /** Beta vs. the market. */
   beta?: number;
+}
+/** A related/peer company shown beside the quote (like a "Related" panel). */
+export interface StockPeer {
+  symbol: string;
+  name?: string;
+  price?: number;
+  changePercent?: number;
+  currency?: string;
 }
 export interface StockQuoteArtifact {
   symbol: string;
@@ -1010,6 +1018,8 @@ export interface StockQuoteArtifact {
   stats?: StockStats;
   /** A few recent headlines about this ticker for the expanded view. */
   headlines?: NewsItem[];
+  /** Related / peer companies with their own quotes. */
+  related?: StockPeer[];
 }
 
 // --- Generic data visualization ---

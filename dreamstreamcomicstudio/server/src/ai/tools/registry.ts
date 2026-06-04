@@ -226,7 +226,7 @@ const makeNewsTool = (ctx?: ToolContext): ChatTool => ({
 const stockTool: ChatTool = {
   name: 'get_stock',
   description:
-    'Get a live stock, ETF or index quote with a recent price history. Use whenever the user asks about a stock price, ticker, market, or how a company/index is doing. Pass a ticker symbol (e.g. "AAPL", "MSFT", "^SPX"). Returns a quote card with price, daily change and a chart shown to the user — keep prose brief and let the card carry the detail.',
+    'Get a live stock, ETF or index quote. Use whenever the user asks about a stock price, ticker, market, or how a company/index is doing. Pass a ticker symbol (e.g. "AAPL", "MSFT", "^GSPC"). Returns a RICH interactive card — live price, an intraday→multi-year range timeline, 52-week range, market cap, P/E, dividend, volume, related peer companies and recent headlines. The card carries the raw numbers, so DON\'T just restate them: add a short, insightful read — where the price sits in its 52-week range, today\'s/recent momentum, valuation context (P/E), and anything notable from the headlines or peers. 2-4 crisp sentences.',
   parameters: {
     type: 'object',
     properties: {
@@ -240,7 +240,26 @@ const stockTool: ChatTool = {
     try {
       const q = await getStockQuote(symbol, signal);
       const dir = q.change > 0 ? '▲' : q.change < 0 ? '▼' : '■';
-      const content = `${q.name || q.symbol} (${q.symbol}): ${q.price.toFixed(2)} ${dir} ${q.change >= 0 ? '+' : ''}${q.change.toFixed(2)} (${q.changePercent >= 0 ? '+' : ''}${q.changePercent.toFixed(2)}%)${q.asOf ? ` as of ${q.asOf}` : ''}. A quote card with a chart is shown to the user.`;
+      const pct = (n?: number) => (typeof n === 'number' ? `${n >= 0 ? '+' : ''}${n.toFixed(2)}%` : '—');
+      const big = (n?: number) =>
+        typeof n !== 'number' ? undefined : n >= 1e12 ? `${(n / 1e12).toFixed(2)}T` : n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : String(n);
+      const s = q.stats;
+      // 52-week position as a 0–100% band, so the model can comment on where it sits.
+      const pos52 =
+        s && typeof s.week52Low === 'number' && typeof s.week52High === 'number' && s.week52High > s.week52Low
+          ? Math.round(((q.price - s.week52Low) / (s.week52High - s.week52Low)) * 100)
+          : undefined;
+      const facts = [
+        `${q.name || q.symbol} (${q.symbol}${q.exchange ? `, ${q.exchange}` : ''}): ${q.price.toFixed(2)}${q.currency ? ` ${q.currency}` : ''} ${dir} ${q.change >= 0 ? '+' : ''}${q.change.toFixed(2)} (${pct(q.changePercent)})${q.asOf ? ` as of ${q.asOf}` : ''}${q.marketState ? ` [${q.marketState}]` : ''}.`,
+        s?.week52Low != null && s?.week52High != null ? `52-week range ${s.week52Low.toFixed(2)}–${s.week52High.toFixed(2)}${pos52 != null ? ` (now ~${pos52}% of range)` : ''}.` : '',
+        s?.marketCap != null ? `Market cap ${big(s.marketCap)}.` : '',
+        s?.peRatio != null ? `P/E ${s.peRatio.toFixed(1)}.` : '',
+        s?.dividendYield != null ? `Dividend yield ${s.dividendYield.toFixed(2)}%.` : '',
+        q.volume != null ? `Volume ${big(q.volume)}.` : '',
+        q.related?.length ? `Related: ${q.related.map((p) => `${p.symbol} ${pct(p.changePercent)}`).join(', ')}.` : '',
+        q.headlines?.length ? `Recent headlines: ${q.headlines.slice(0, 3).map((h) => `"${h.title}"`).join('; ')}.` : ''
+      ].filter(Boolean);
+      const content = `${facts.join(' ')}\nA rich interactive quote card is shown to the user. Add a brief, insightful read (52-week position, momentum, valuation, notable news/peers) — do not just restate these numbers.`;
       return { content, artifacts: [{ type: 'stock_quote', data: q }] };
     } catch (err) {
       return { content: `Stock lookup failed: ${(err as Error)?.message || 'unknown error'}.` };

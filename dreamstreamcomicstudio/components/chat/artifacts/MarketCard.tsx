@@ -22,10 +22,15 @@ import type { ChartVariant, ChartPoint } from './kit';
 // toggle, a key-stats grid, and an expandable fundamentals + headlines drawer.
 // Built entirely from the shared kit so it stays on-style and dependency-free.
 
-const RANGE_ORDER: StockRange[] = ['1D', '1W', '1M', '3M', '1Y', '5Y', 'MAX'];
+const RANGE_ORDER: StockRange[] = ['1D', '5D', '1M', '6M', '1Y', '5Y', 'MAX'];
 // How many trailing sessions each range approximates when we have to derive it
 // from a single `series` (≈ trading days).
-const DERIVE: Record<StockRange, number> = { '1D': 2, '1W': 5, '1M': 22, '3M': 66, '1Y': 252, '5Y': 1260, MAX: Infinity };
+const DERIVE: Record<StockRange, number> = { '1D': 2, '5D': 5, '1M': 22, '6M': 126, '1Y': 252, '5Y': 1260, MAX: Infinity };
+
+// Intraday points carry a full ISO timestamp → label with the time; daily points
+// carry a YYYY-MM-DD date → label with a short date.
+const pointLabel = (value: string): string =>
+  /T\d\d:/.test(value) ? new Date(value).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : shortDate(value);
 
 const MARKET_BADGE: Record<MarketState, { label: string; color: string }> = {
   open: { label: 'Market open', color: '#059669' },
@@ -60,7 +65,7 @@ const buildRanges = (data: StockQuoteArtifact): { available: StockRange[]; point
 };
 
 const toChartPoints = (series: StockPoint[]): ChartPoint[] =>
-  series.map((p) => ({ label: shortDate(p.date), value: p.close }));
+  series.map((p) => ({ label: pointLabel(p.date), value: p.close }));
 
 const Stat: React.FC<{ label: string; value?: string }> = ({ label, value }) =>
   value ? (
@@ -74,7 +79,7 @@ export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => 
   const currency = data.currency ?? 'USD';
 
   const { available, points } = useMemo(() => buildRanges(data), [data]);
-  const defaultRange: StockRange = available.includes('1M') ? '1M' : available[available.length - 1] ?? 'MAX';
+  const defaultRange: StockRange = available.includes('1D') ? '1D' : available.includes('1M') ? '1M' : available[available.length - 1] ?? 'MAX';
   const [range, setRange] = useState<StockRange>(defaultRange);
   const activeRange = available.includes(range) ? range : defaultRange;
 
@@ -175,8 +180,8 @@ export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => 
         />
       )}
 
-      {/* Expanded fundamentals + headlines */}
-      {(stats || (data.headlines && data.headlines.length > 0)) && (
+      {/* Expanded fundamentals + headlines + peers */}
+      {(stats || (data.headlines && data.headlines.length > 0) || (data.related && data.related.length > 0)) && (
         <Expandable>
           <div className="space-y-3 p-3">
             {stats && (
@@ -225,6 +230,31 @@ export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => 
                     )}
                   </a>
                 ))}
+              </div>
+            )}
+
+            {data.related && data.related.length > 0 && (
+              <div className="space-y-1">
+                <div className="text-[10px] font-bold uppercase text-slate-400">Related</div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {data.related.slice(0, 4).map((p) => {
+                    const pos = (p.changePercent ?? 0) >= 0;
+                    return (
+                      <div key={p.symbol} className="flex items-center justify-between gap-2 rounded-lg border border-black/5 bg-slate-50 px-2 py-1">
+                        <div className="min-w-0">
+                          <div className="truncate text-[11px] font-bold">{p.name || p.symbol}</div>
+                          <div className="text-[10px] text-slate-400">{p.symbol}</div>
+                        </div>
+                        <div className="shrink-0 text-right">
+                          <div className="text-[11px] font-bold">{p.price != null ? formatPrice(p.price, p.currency || currency) : '—'}</div>
+                          {p.changePercent != null && (
+                            <div className={`text-[10px] font-bold ${pos ? 'text-emerald-600' : 'text-red-600'}`}>{formatPercent(p.changePercent)}</div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>

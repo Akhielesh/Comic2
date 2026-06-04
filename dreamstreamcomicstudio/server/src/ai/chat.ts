@@ -185,7 +185,8 @@ export const runChat = async (
 - Pick the RIGHT tool: get_news for news/headlines/"latest"; get_weather for weather; find_places to DISCOVER nearby places (restaurants, cafes, hotels, shops, "near me", "where can I…") — it returns distance, hours and a map; show_map only to display a SPECIFIC known place/route; get_stock for prices/tickers; video_search for videos to watch; image_search only when the user wants pictures. Use web_search for everything else.
 - CRITICAL: If a tool OR web search returned ANY results, snippets, or sources, you MUST synthesize an answer from them. NEVER reply that you "couldn't retrieve" or "found nothing" when results/citations are present — read them and answer.
 - If one tool returns empty, try a different tool or a refined query before giving up, then answer with what you have.
-- When a tool returns a card/artifact (e.g. weather, news, map, images), keep your prose short and let the component carry the detail.`;
+- When a tool returns a card/artifact (e.g. stock, weather, news, map), the card already shows the raw numbers — so DON'T just restate them. Add a brief, genuinely useful READ of what they mean: for a stock, where the price sits in its 52-week range, recent momentum, valuation (P/E) and anything notable from the headlines or peers; for weather, what to actually expect/plan. Aim for 2-4 crisp, insightful sentences — not a data dump, and never just a one-liner.
+- Feel free to CHAIN tools for a fuller answer when it helps (e.g. a company quote plus its recent news). Use render_chart / show_metrics to visualize any data you gather or compute.`;
   }
 
   const messages: ChatMessage[] = [{ role: 'system', content: systemContent }, ...params.messages];

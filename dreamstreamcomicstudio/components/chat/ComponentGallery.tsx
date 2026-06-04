@@ -52,6 +52,9 @@ const toSeries = (vals: number[]): { date: string; close: number }[] =>
   vals.map((close, i) => ({ date: dateOffset(vals.length - i), close }));
 const maxVals = walk(260, 150, 0.22, 5);
 const candleVals = maxVals.slice(-40);
+// Intraday 1D walk (78 5-min bars across a trading session).
+const intradayVals = walk(78, 202, 0.03, 1.1);
+const intraday = intradayVals.map((close, i) => ({ date: new Date(Date.now() - (intradayVals.length - i) * 5 * 60_000).toISOString(), close }));
 
 const stock: StockQuoteArtifact = {
   symbol: 'AAPL', name: 'Apple Inc.', exchange: 'NASDAQ', currency: 'USD', marketState: 'open',
@@ -59,9 +62,10 @@ const stock: StockQuoteArtifact = {
   volume: 51_000_000, previousClose: 201.4, asOf: '2026-06-03',
   series: toSeries(maxVals.slice(-30)),
   ranges: {
-    '1W': toSeries(maxVals.slice(-5)),
+    '1D': intraday,
+    '5D': toSeries(maxVals.slice(-5)),
     '1M': toSeries(maxVals.slice(-22)),
-    '3M': toSeries(maxVals.slice(-66)),
+    '6M': toSeries(maxVals.slice(-126)),
     '1Y': toSeries(maxVals.slice(-252)),
     MAX: toSeries(maxVals)
   },
@@ -75,6 +79,12 @@ const stock: StockQuoteArtifact = {
   headlines: [
     { title: 'Apple unveils on-device model toolkit at WWDC', url: 'https://example.com/a', source: 'TechDaily', publishedAt: new Date(Date.now() - 5400_000).toISOString() },
     { title: 'Analysts raise price targets ahead of earnings', url: 'https://example.com/b', source: 'MarketWire', publishedAt: new Date(Date.now() - 3 * 86400_000).toISOString() }
+  ],
+  related: [
+    { symbol: 'MSFT', name: 'Microsoft Corp', price: 429.46, changePercent: 0.5, currency: 'USD' },
+    { symbol: 'NVDA', name: 'NVIDIA Corp', price: 214.12, changePercent: -0.09, currency: 'USD' },
+    { symbol: 'AMZN', name: 'Amazon.com Inc', price: 253.92, changePercent: 1.56, currency: 'USD' },
+    { symbol: 'GOOGL', name: 'Alphabet Inc', price: 182.4, changePercent: 0.83, currency: 'USD' }
   ]
 };
 
