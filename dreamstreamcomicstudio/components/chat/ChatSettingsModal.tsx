@@ -3,6 +3,7 @@ import { X, Brain, Network, Wrench, Plus, Trash2, Check, Pencil, Bot, Sparkles, 
 import { ModalPortal } from '../modals/ModalPortal';
 import { SystemDashboard } from './SystemDashboard';
 import { ComponentGallery } from './ComponentGallery';
+import { ToolsDashboard } from './ToolsDashboard';
 import type { CustomAgentDef } from '../../apiTypes';
 import { getChatMemory, setChatMemory } from '../../services/chatStorage';
 import {
@@ -29,7 +30,7 @@ export const ChatSettingsModal: React.FC<ChatSettingsModalProps> = ({
   return (
     <ModalPortal>
       <div className="fixed inset-0 z-[70] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
-        <div className="bg-white border-4 border-black rounded-2xl shadow-comic w-full max-w-2xl max-h-[88vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="bg-white border-4 border-black rounded-2xl shadow-comic w-full max-w-5xl max-h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-between px-5 py-3 border-b-4 border-black bg-brand-blue text-white rounded-t-xl shrink-0">
             <h2 className="font-display text-xl flex items-center gap-2"><Sparkles className="w-5 h-5" /> Chat settings</h2>
             <button onClick={onClose} className="border-2 border-black rounded p-1 bg-white text-black hover:bg-brand-yellow"><X className="w-4 h-4" /></button>
@@ -57,7 +58,7 @@ export const ChatSettingsModal: React.FC<ChatSettingsModalProps> = ({
           <div className="flex-1 min-h-0 overflow-y-auto p-5">
             {tab === 'memory' && <MemoryTab userId={userId} onMemoryChange={onMemoryChange} />}
             {tab === 'agents' && <AgentsTab userId={userId} onAgentsChange={onAgentsChange} />}
-            {tab === 'tools' && <ToolsTab />}
+            {tab === 'tools' && <ToolsDashboard />}
             {tab === 'system' && <SystemDashboard />}
             {tab === 'gallery' && <ComponentGallery />}
           </div>
@@ -244,33 +245,3 @@ const AgentEditor: React.FC<{ agent: CustomAgentDef; onSave: (a: CustomAgentDef)
   );
 };
 
-// --- Tools: the honest inventory of what every agent/model can access ---
-const ToolsTab: React.FC = () => (
-  <div className="space-y-3">
-    <p className="text-sm text-slate-600">
-      The live tools available to the chat models and every agent. All are free and keyless except where noted.
-    </p>
-    <ul className="space-y-1.5">
-      {[
-        ['Web search', 'DuckDuckGo — current/factual lookups', 'free'],
-        ['News', 'Google News RSS — headlines by topic/region', 'free'],
-        ['Weather', 'Open-Meteo — current, hourly, UV, air quality', 'free'],
-        ['Stocks', 'Stooq — quotes + price history charts', 'free'],
-        ['Places / local', 'OpenStreetMap, or Foursquare for ratings/photos', 'key optional'],
-        ['Maps', 'OpenStreetMap (Leaflet) — markers & routes', 'free'],
-        ['Video search', 'DuckDuckGo — plays inline in the panel', 'free'],
-        ['Image search', 'DuckDuckGo — image results', 'free'],
-        ['Agent swarm', 'Delegate complex tasks to specialized agents', 'free']
-      ].map(([label, desc, tag]) => (
-        <li key={label as string} className="flex items-center gap-2 border-2 border-black rounded-lg px-3 py-2 bg-white">
-          <Wrench className="w-4 h-4 text-slate-500 shrink-0" />
-          <div className="min-w-0 flex-1">
-            <div className="font-bold text-sm">{label}</div>
-            <div className="text-[11px] text-slate-500">{desc}</div>
-          </div>
-          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${tag === 'free' ? 'border-emerald-300 text-emerald-700' : 'border-amber-300 text-amber-700'}`}>{tag}</span>
-        </li>
-      ))}
-    </ul>
-  </div>
-);
