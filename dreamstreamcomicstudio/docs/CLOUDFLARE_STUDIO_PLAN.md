@@ -322,6 +322,35 @@ only pays off at large scale with a platform team. Managed (E2B/CodeSandbox) onl
 shipping speed beats unit cost. **At every scale the token bill dwarfs compute — your
 99%-BYOK posture already neutralizes the biggest cost.**
 
+## 10d. Chat-driven sandbox sizing (deep dive, from data)
+
+The sandbox is triggered **from chat** (the `generate_app` tool fires mid-conversation),
+so chat volume sizes it. From `token_ledger_entries` + `chat_sync`:
+
+- **Chat is a recent solo burst:** 224 chat ops / 4 mo, but **194 (87%) on Jun 3–4**, 1
+  user, peak ~108/day. Conversations are short (avg **3.3** turns, max 13).
+- **Dirt cheap + BYOK:** ~$0.0006/chat, **96% BYOK**, all-time chat token cost **$0.06**.
+- **Heavy swarm use:** **29%** of chats invoked the agent swarm (57/194) — that multi-call
+  path is the real token multiplier, not the sandbox.
+- **The smoking gun:** of 36 saved chats, **13 contained code** but only **2 fired the
+  `code_studio` tool** (3 mention `generate_app`). So the studio opened in **~15%** of the
+  chats that produced code — the exact "AI won't use the tools / only single-file preview"
+  bug, now quantified. PR #75 (always-offer `generate_app` + Markdown→Studio fallback)
+  closes this gap so all 13 would now get a "Build in Studio" path.
+
+**Cost if the sandbox is driven by chat:**
+| Scenario | code-chats/day → launches | compute/mo | tokens to platform |
+|---|---|---|---|
+| Today (solo heavy dev, ~100 chats/day, ~30% code) | ~30 | ~$15–20 (incl. $5 base) | ~$0 (BYOK) |
+| 100 real users (~10 chats/day, ~30% code) | ~300 | ~$135 | ~$0 (BYOK) / credits |
+| 1,000 users | ~3,000 | ~$1.3k | BYOK ≈ $0 / credits |
+
+**Conclusion:** chat-driven sandbox compute is **never your cost constraint** at the scale
+you're near. The data's real signals are (1) the tool-firing bug (fixed), (2) chat routes
+to a rotating cast of ~23 mostly-free models, **many of which can't tool-call** (so they
+can't open the studio — fixed by tool-capable routing), and (3) **swarm** is the token
+multiplier worth gating to BYOK/credits.
+
 ---
 
 ## 11. Phased delivery
