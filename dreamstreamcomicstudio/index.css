@@ -32,6 +32,13 @@
   animation: fadeIn 0.6s ease-out both;
 }
 
+/* ---- Rich-output Primitive Kit motion ---- */
+@keyframes kitDrawLine { from { stroke-dashoffset: 1000; } to { stroke-dashoffset: 0; } }
+.kit-draw-line { stroke-dasharray: 1000; animation: kitDrawLine 0.9s ease-out both; }
+@media (prefers-reduced-motion: reduce) {
+  .kit-draw-line { animation: none; stroke-dasharray: none; }
+}
+
 .animate-float-slow {
   animation: floatSlow 6s ease-in-out infinite;
 }

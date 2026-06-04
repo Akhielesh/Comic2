@@ -4,7 +4,7 @@ import { WeatherCard } from './WeatherCard';
 import { VideoResults } from './VideoResults';
 import { MapArtifactCard } from './MapArtifactCard';
 import { NewsCard } from './NewsCard';
-import { StockCard } from './StockCard';
+import { MarketCard } from './MarketCard';
 import { SwarmTraceCard } from './SwarmTraceCard';
 import { PlacesResults } from './PlacesResults';
 
@@ -24,7 +24,7 @@ const renderArtifact = (artifact: ChatArtifact, key: number): React.ReactNode =>
     case 'places_results':
       return <PlacesResults key={key} data={artifact.data as PlacesResultsArtifact} />;
     case 'stock_quote':
-      return <StockCard key={key} data={artifact.data as StockQuoteArtifact} />;
+      return <MarketCard key={key} data={artifact.data as StockQuoteArtifact} />;
     case 'swarm_trace':
       return <SwarmTraceCard key={key} data={artifact.data as SwarmTraceArtifact} />;
     default:

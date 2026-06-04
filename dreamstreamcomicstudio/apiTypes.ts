@@ -926,9 +926,38 @@ export interface MapArtifact {
 }
 
 export interface StockPoint {
-  /** ISO date (YYYY-MM-DD). */
+  /** ISO date (YYYY-MM-DD) or intraday timestamp. */
   date: string;
   close: number;
+}
+/** One OHLC session for candlestick rendering. */
+export interface StockCandle {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+/** Selectable history windows for the MarketCard range timeline. */
+export type StockRange = '1D' | '1W' | '1M' | '3M' | '1Y' | '5Y' | 'MAX';
+/** Whether the listing venue is currently trading. */
+export type MarketState = 'open' | 'closed' | 'pre' | 'after';
+/** Fundamentals shown in the expanded MarketCard. All optional/best-effort. */
+export interface StockStats {
+  /** Market capitalization (absolute, e.g. 3.1e12). */
+  marketCap?: number;
+  peRatio?: number;
+  /** Trailing 52-week high/low for the range track. */
+  week52High?: number;
+  week52Low?: number;
+  /** Dividend yield as a percent (e.g. 0.52 for 0.52%). */
+  dividendYield?: number;
+  /** Average daily volume. */
+  avgVolume?: number;
+  /** Earnings-per-share (trailing). */
+  eps?: number;
+  /** Beta vs. the market. */
+  beta?: number;
 }
 export interface StockQuoteArtifact {
   symbol: string;
@@ -945,8 +974,22 @@ export interface StockQuoteArtifact {
   previousClose?: number;
   /** Quote date (as reported by the source). */
   asOf?: string;
-  /** ~30 sessions of closing prices for a sparkline. */
+  /** ISO 4217 currency the price is quoted in (default USD). */
+  currency?: string;
+  /** Trading venue label, e.g. "NASDAQ". */
+  exchange?: string;
+  /** Current trading session state for the status pill. */
+  marketState?: MarketState;
+  /** ~30 sessions of closing prices for the default sparkline / fallback chart. */
   series?: StockPoint[];
+  /** Pre-bucketed history per range. When present the timeline switches between them; otherwise sub-ranges are derived from `series`. */
+  ranges?: Partial<Record<StockRange, StockPoint[]>>;
+  /** OHLC sessions enabling the candlestick chart variant. */
+  candles?: StockCandle[];
+  /** Fundamentals for the expanded view. */
+  stats?: StockStats;
+  /** A few recent headlines about this ticker for the expanded view. */
+  headlines?: NewsItem[];
 }
 
 // --- Agent swarm ---

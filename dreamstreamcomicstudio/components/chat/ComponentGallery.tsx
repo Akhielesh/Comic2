@@ -2,7 +2,7 @@ import React from 'react';
 import { ChatMarkdown } from './ChatMarkdown';
 import { WeatherCard } from './artifacts/WeatherCard';
 import { NewsCard } from './artifacts/NewsCard';
-import { StockCard } from './artifacts/StockCard';
+import { MarketCard } from './artifacts/MarketCard';
 import { VideoResults } from './artifacts/VideoResults';
 import { PlacesResults } from './artifacts/PlacesResults';
 import { SwarmTraceCard } from './artifacts/SwarmTraceCard';
@@ -30,9 +30,46 @@ const news: NewsResultsArtifact = {
   ]
 };
 
+// Build a synthetic price walk and bucket it into ranges + candles so the gallery
+// exercises the timeline selector and candlestick toggle.
+const walk = (n: number, start: number, drift: number, vol: number): number[] => {
+  const out: number[] = [];
+  let v = start;
+  for (let i = 0; i < n; i++) {
+    v += drift + Math.sin(i / 4) * vol + (Math.cos(i / 9) * vol) / 2;
+    out.push(Number(v.toFixed(2)));
+  }
+  return out;
+};
+const dateOffset = (daysAgo: number): string => new Date(Date.now() - daysAgo * 86400_000).toISOString().slice(0, 10);
+const toSeries = (vals: number[]): { date: string; close: number }[] =>
+  vals.map((close, i) => ({ date: dateOffset(vals.length - i), close }));
+const maxVals = walk(260, 150, 0.22, 5);
+const candleVals = maxVals.slice(-40);
+
 const stock: StockQuoteArtifact = {
-  symbol: 'AAPL', name: 'Apple Inc.', price: 204.2, change: 2.8, changePercent: 1.39, open: 201.5, high: 205.1, low: 199.8, volume: 51_000_000, previousClose: 201.4, asOf: '2026-06-03',
-  series: Array.from({ length: 30 }, (_, i) => ({ date: `d${i}`, close: 190 + Math.sin(i / 3) * 6 + i * 0.4 }))
+  symbol: 'AAPL', name: 'Apple Inc.', exchange: 'NASDAQ', currency: 'USD', marketState: 'open',
+  price: 204.2, change: 2.8, changePercent: 1.39, open: 201.5, high: 205.1, low: 199.8,
+  volume: 51_000_000, previousClose: 201.4, asOf: '2026-06-03',
+  series: toSeries(maxVals.slice(-30)),
+  ranges: {
+    '1W': toSeries(maxVals.slice(-5)),
+    '1M': toSeries(maxVals.slice(-22)),
+    '3M': toSeries(maxVals.slice(-66)),
+    '1Y': toSeries(maxVals.slice(-252)),
+    MAX: toSeries(maxVals)
+  },
+  candles: candleVals.map((close, i) => {
+    const open = i === 0 ? close - 1 : candleVals[i - 1];
+    const high = Math.max(open, close) + Math.abs(Math.sin(i)) * 2;
+    const low = Math.min(open, close) - Math.abs(Math.cos(i)) * 2;
+    return { date: dateOffset(candleVals.length - i), open, high, low, close };
+  }),
+  stats: { marketCap: 3.12e12, peRatio: 31.4, eps: 6.5, dividendYield: 0.52, avgVolume: 58_000_000, beta: 1.21, week52Low: 164.1, week52High: 237.2 },
+  headlines: [
+    { title: 'Apple unveils on-device model toolkit at WWDC', url: 'https://example.com/a', source: 'TechDaily', publishedAt: new Date(Date.now() - 5400_000).toISOString() },
+    { title: 'Analysts raise price targets ahead of earnings', url: 'https://example.com/b', source: 'MarketWire', publishedAt: new Date(Date.now() - 3 * 86400_000).toISOString() }
+  ]
 };
 
 const videos: VideoResultsArtifact = {
@@ -75,7 +112,7 @@ export const ComponentGallery: React.FC = () => (
   <div className="space-y-4">
     <p className="text-sm text-slate-600">Every rich-output component rendered with sample data — the live UI library.</p>
     <Item title="Weather card"><WeatherCard data={weather} /></Item>
-    <Item title="Stock card"><StockCard data={stock} /></Item>
+    <Item title="Market card (hover · range timeline · candlesticks)"><MarketCard data={stock} /></Item>
     <Item title="News card"><NewsCard data={news} /></Item>
     <Item title="Places (local) card"><PlacesResults data={places} /></Item>
     <Item title="Video results"><VideoResults data={videos} /></Item>
