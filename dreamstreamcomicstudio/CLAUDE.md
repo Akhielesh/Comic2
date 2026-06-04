@@ -48,3 +48,14 @@ no charting libraries.
 Production is the **`Dreamstrream-v1`** branch (Cloudflare Pages builds frontend from it;
 Railway builds the backend). Publishing = fast-forward/merge the feature branch into
 `Dreamstrream-v1` and push. It often diverges between sessions, so fetch and merge first.
+
+**STANDING RULE — always ship to production.** The user wants every completed change
+pushed straight to production (`Dreamstrream-v1`), NOT left on a preview/review branch.
+So after committing + verifying (typecheck, tests, build), automatically:
+1. push the feature branch, then
+2. fetch `Dreamstrream-v1`; if it diverged, merge it in and resolve conflicts faithfully
+   (keep both sides' features; honor the user's explicit intent on semantic conflicts);
+3. fast-forward/merge the work into `Dreamstrream-v1` and push it.
+Do this without waiting to be asked. Never force-push production; if the merge is
+genuinely ambiguous or risky, pause and ask. (The auto-mode classifier may still prompt
+for the production push — that's fine, proceed once allowed.)
