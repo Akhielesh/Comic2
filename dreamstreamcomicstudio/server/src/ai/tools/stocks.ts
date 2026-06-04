@@ -456,7 +456,10 @@ export interface LightQuote {
 export const getLightQuote = async (rawSymbol: string, signal?: AbortSignal): Promise<LightQuote> => {
   const trimmed = rawSymbol?.trim();
   if (!trimmed) throw new Error('No ticker symbol was provided.');
-  const symbol = yahooSymbol(trimmed);
+  // Map "gold"/"oil"/"the S&P"/"EURUSD" → a real Yahoo symbol, same as get_stock.
+  const resolved = resolveMarketSymbol(trimmed);
+  const symbol = yahooSymbol(resolved);
+  const friendly = FRIENDLY_NAMES[resolved];
   try {
     const [intradayR, monthR] = await Promise.allSettled([
       yfChart(symbol, '1d', '5m', signal),
@@ -473,16 +476,17 @@ export const getLightQuote = async (rawSymbol: string, signal?: AbortSignal): Pr
     const change = prev !== undefined ? price - prev : 0;
     const changePercent = prev ? (change / prev) * 100 : 0;
     const name =
+      friendly ||
       (typeof meta.shortName === 'string' && meta.shortName) ||
       (typeof meta.longName === 'string' ? (meta.longName as string) : undefined) ||
       symbol;
     const spark = (month?.points ?? intraday?.points ?? []).map((p) => p.close).slice(-30);
     return { symbol, name, price, change, changePercent, currency: typeof meta.currency === 'string' ? meta.currency : undefined, spark: spark.length > 1 ? spark : undefined };
   } catch {
-    const q = await getStooqQuote(trimmed, signal);
+    const q = await getStooqQuote(resolved, signal);
     return {
       symbol: q.symbol,
-      name: q.name,
+      name: friendly || q.name,
       price: q.price,
       change: q.change,
       changePercent: q.changePercent,

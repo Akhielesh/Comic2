@@ -78,7 +78,7 @@ const normalizeCell = (raw: unknown): DataTableRowCell => {
 const tableTool: ChatTool = {
   name: 'render_table',
   description:
-    'Render a polished, SORTABLE data table from rows YOU provide — the right tool for any tabular/financial data: watchlists, holdings, fundamentals grids, screeners, side-by-side comparisons, schedules. Each column declares how its cells render: text, number, currency, percent, delta (signed +/- green/red), deltaPercent (signed % green/red), spark (an inline sparkline from an array of numbers), or badge (a colored chip). Rows are arrays of cells aligned to the columns; a cell is a bare value OR an object {value, spark, color, sub, href}. The user sees a clean, sortable table — keep prose brief.',
+    'Render a polished, SORTABLE table from data you have ALREADY gathered (from another tool this turn) or that the user explicitly provided — for comparisons, schedules, fundamentals grids, screeners, lists. Each column declares how its cells render: text, number, currency, percent, delta (signed +/- green/red), deltaPercent (signed % green/red), spark (inline sparkline from an array of numbers), or badge (a colored chip). Rows are arrays of cells aligned to the columns; a cell is a bare value OR an object {value, spark, color, sub, href}. CRITICAL: this tool does NOT fetch anything — it only draws the numbers you pass. NEVER type in stock/crypto prices, %s, market caps or any live market figure from memory; those MUST come from get_stock / crypto_price / build_finance_terminal first (build_finance_terminal already produces the watchlist table for you). A clean table of invented numbers is worse than no table. Keep prose brief.',
   parameters: {
     type: 'object',
     properties: {
@@ -158,7 +158,7 @@ const normalizeHeatCells = (raw: unknown[]): HeatmapCell[] =>
 const heatmapTool: ChatTool = {
   name: 'render_heatmap',
   description:
-    'Render a market HEATMAP — a grid of tiles colored green→red by their value (a change %, by default). Use it to show breadth at a glance: a sector map, an index\'s movers, a watchlist\'s day. Provide either flat `cells` or `groups` (e.g. one group per sector), each cell = {label, value (the % that colors it), sub (price/cap), weight (optional, sizes the tile by e.g. market cap)}. The user sees a market map — keep prose brief.',
+    'Render a market HEATMAP — a grid of tiles colored green→red by their value (a change %, by default) — from data you have ALREADY fetched. Use it to show breadth at a glance: a sector map, an index\'s movers, a watchlist\'s day. Provide either flat `cells` or `groups` (e.g. one group per sector), each cell = {label, value (the % that colors it), sub (price/cap), weight (optional, sizes the tile by e.g. market cap)}. CRITICAL: this tool does NOT fetch anything. NEVER invent the change %s — they MUST come from real quotes (get_stock / build_finance_terminal, which already builds a movers heatmap for you). Keep prose brief.',
   parameters: {
     type: 'object',
     properties: {
@@ -231,7 +231,7 @@ const lightRow = (q: LightQuote): DataTableRowCell[] => [
 const buildTerminalTool: ChatTool = {
   name: 'build_finance_terminal',
   description:
-    'Assemble a LIVE finance terminal panel in one call: a focus quote, an index/KPI ribbon, a watchlist table, a sector/market heatmap and a news rail — all from real quotes. Use whenever the user wants a market dashboard, overview, "terminal", watchlist, or to track several tickers at once. Pass `focus` (one ticker for the featured interactive chart), `symbols` (the watchlist), and optionally `indices` (for the top ribbon, e.g. ["^GSPC","^IXIC","^DJI"]). The composite terminal carries the numbers — add a short, insightful read of breadth, leaders/laggards and what\'s notable.',
+    'Assemble a LIVE finance terminal panel in one call: a focus quote, an index/KPI ribbon, a watchlist table, a sector/market heatmap and a news rail — all from REAL, freshly-fetched quotes (this is the source of truth for any market figures; never type prices yourself). Use whenever the user wants a market dashboard, overview, "terminal", watchlist, or to track several tickers at once. Pass `focus` (one ticker for the featured chart), `symbols` (the watchlist), and optionally `indices` (e.g. ["^GSPC","^IXIC","^DJI"]). ONLY use the tickers the user actually named or that are clearly implied — do NOT pad the list with default/example stocks (Apple, Tesla, Microsoft, …) the user didn\'t ask about. If the user wants a dashboard but named no tickers, ask which ones first. The composite carries the numbers — add a short, insightful read of breadth, leaders/laggards and what\'s notable.',
   parameters: {
     type: 'object',
     properties: {
@@ -258,12 +258,21 @@ const buildTerminalTool: ChatTool = {
     ]);
 
     const focus = focusR as StockQuoteArtifact | undefined;
-    const watch = (watchR as PromiseSettledResult<LightQuote>[])
+    const watchSettled = watchR as PromiseSettledResult<LightQuote>[];
+    const idxSettled = idxR as PromiseSettledResult<LightQuote>[];
+    const watch = watchSettled
       .filter((r): r is PromiseFulfilledResult<LightQuote> => r.status === 'fulfilled')
       .map((r) => r.value);
-    const idx = (idxR as PromiseSettledResult<LightQuote>[])
+    const idx = idxSettled
       .filter((r): r is PromiseFulfilledResult<LightQuote> => r.status === 'fulfilled')
       .map((r) => r.value);
+    // Be honest about what couldn't be fetched, so the model reports gaps instead of
+    // silently filling them in from memory.
+    const failed = [
+      ...(focusSym && !focus ? [focusSym] : []),
+      ...symbols.filter((_, i) => watchSettled[i]?.status === 'rejected'),
+      ...indices.filter((_, i) => idxSettled[i]?.status === 'rejected')
+    ];
 
     if (!focus && !watch.length && !idx.length) {
       return { content: `Couldn't fetch live quotes for ${[focusSym, ...symbols, ...indices].filter(Boolean).join(', ')}. The market data sources may be temporarily unavailable.`, notice: { level: 'warn', message: 'No live market data could be fetched for the terminal.' } };
@@ -335,9 +344,15 @@ const buildTerminalTool: ChatTool = {
       const up = watch.filter((q) => q.changePercent > 0).length;
       lines.push(`Watchlist (${watch.length}): ${up} up / ${watch.length - up} down. Leader ${top.symbol} ${pct(top.changePercent)}, laggard ${bottom.symbol} ${pct(bottom.changePercent)}.`);
     }
-    lines.push('A live finance terminal panel is shown to the user. Add a brief, insightful read of breadth, leaders/laggards and anything notable — do not just restate these numbers.');
+    if (failed.length) lines.push(`NOTE: no live quote could be fetched for ${failed.join(', ')} — these are OMITTED from the panel. Tell the user they couldn't be retrieved; do NOT fill in prices for them from memory.`);
+    lines.push('A live finance terminal panel is shown to the user. Add a brief, insightful read of breadth, leaders/laggards and anything notable — do not just restate these numbers, and never add figures that are not in the panel above.');
 
-    return { content: lines.join(' '), artifacts: [{ type: 'finance_terminal', data }], citations: focus?.headlines?.slice(0, 3).map((h) => ({ url: h.url, title: h.title })) };
+    return {
+      content: lines.join(' '),
+      artifacts: [{ type: 'finance_terminal', data }],
+      citations: focus?.headlines?.slice(0, 3).map((h) => ({ url: h.url, title: h.title })),
+      ...(failed.length ? { notice: { level: 'warn' as const, message: `Couldn't fetch live quotes for ${failed.join(', ')}; they were left out of the terminal.` } } : {})
+    };
   }
 };
 
