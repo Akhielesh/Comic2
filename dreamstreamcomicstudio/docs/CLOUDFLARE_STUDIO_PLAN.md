@@ -202,17 +202,84 @@ cap to bound spend.
 
 ## 8. Cost model (verified pricing)
 
-- CPU: **$0.000020 / vCPU-second**; Memory: **$0.0000025 / GiB-second**; Disk: ~$0.00000007/GB-s.
+- CPU: **$0.000020 / vCPU-second**, billed on **active usage only** (1 vCPU at 20%
+  utilization for an hour = $0.0144, not the full provisioned rate).
+- Memory: **$0.0000025 / GiB-second**, billed on **provisioned** size while **awake**.
+  Disk: ~$0.00000007 / GB-second.
 - Workers Paid includes **375 vCPU-min + 25 GiB-hr + 200 GB-hr** free monthly.
-- **Sleeping containers stop CPU billing** (memory/disk while provisioned only). Billing
-  is in 10ms increments, starting on first request/start.
-- Rough estimate: a `standard-2` (2 vCPU / ~6 GiB) doing a 30s `npm install` + 2 min of
-  active testing ≈ a few cents per session. The cost driver is **idle live servers** →
+- **Billing stops when the container sleeps** → idle-awake memory is the cost driver;
   aggressive `sleepAfter` + concurrency caps are essential.
+
+### Instance types
+| type | vCPU | memory | disk |
+|---|---|---|---|
+| lite | 1/16 | 256 MiB | 2 GB |
+| basic | 1/4 | 1 GiB | 4 GB |
+| standard-1 | 1/2 | 4 GiB | 8 GB |
+| standard-2 | 1 | 6 GiB | 12 GB |
+| **standard-3** (recommended) | **2** | **8 GiB** | **16 GB** |
+| standard-4 | 4 | 12 GiB | 20 GB |
+
+### Per-session compute (standard-3, ~10 min awake incl. 5-min idle-to-sleep)
+| component | math | cost |
+|---|---|---|
+| active CPU | ~78 vCPU-s × $0.00002 | $0.0016 |
+| memory | 8 GiB × 630 s × $0.0000025 | $0.0126 |
+| disk | 16 GB × 630 s × $0.00000007 | $0.0007 |
+| **total** | | **≈ $0.015 (1.5¢) / session** |
+
+- standard-2 ≈ 1.2¢ · standard-4 ≈ 2¢. Idle-awake ≈ **3.6¢/hour** (8 GiB).
+- Free allotment ≈ **~18 sessions/month** before any charge (memory-bound).
+- **Scale (compute only):** 1,000 DAU × 5 sessions/day ≈ **$2.25k/mo**; 10,000 DAU ≈ **$22.5k/mo**.
+
+### The real cost driver: LLM tokens, not compute
+A serious multi-file build with an **agentic loop** (generate → run → read errors → fix;
+~3–8 model calls, 50–150k tokens) costs per build:
+| model tier | ~cost/build | quality |
+|---|---|---|
+| Frontier (Claude Sonnet / GPT-class) | **$0.10 – $1.50** | best multi-file results |
+| Strong open (DeepSeek/Qwen/GLM) | $0.01 – $0.15 | good, big savings |
+| Free models | $0 | poor multi-file quality |
+
+**Tokens cost 10–100× the compute.** The cost question is *who pays for tokens*, not the sandbox.
+
+### Who pays — recommended
+1. **BYOK (already supported):** user's OpenRouter/Anthropic key → tokens on them; platform
+   pays only ~1.5¢/session compute (absorbable).
+2. **Managed credits / subscription:** platform fronts tokens + compute, sells credits via
+   the existing Stripe + `usageEnforcer`. A ~$20/mo Pro tier covers typical usage when
+   defaulting to strong-open models; frontier models are credit-metered or BYOK-only.
+
+## 9. Professional-readiness gap (what "runs code" is missing)
+
+Executing code is **one layer**. A current-gen AI app builder (bolt.new / v0 / Lovable /
+Replit Agent class) also needs:
+
+| Layer | Today | Needed for professional |
+|---|---|---|
+| Universal execution | desktop WebContainer / Sandpack | ✅ Cloudflare container (this plan) |
+| Capable coding model | free-first (weak for code) | strong-model routing + BYOK |
+| **Agentic iterate loop** (run → read errors → self-fix) | one-shot "Debug with AI" | autonomous multi-step loop ← **biggest gap** |
+| Project persistence & versioning | ephemeral chat artifact | Supabase-backed projects, file tree, history |
+| Real editor | `<textarea>` | Monaco/CodeMirror, diffs, inline AI edits |
+| One-click deploy / GitHub export | none | deploy to CF Pages/Vercel + push to GitHub |
+| Live streaming preview / HMR | partial | stream files into the running sandbox |
+| Billing/credits for compute + tokens | partial (Stripe/usageEnforcer) | extend to the studio |
+| Templates / DB / env vars | minimal | framework templates, per-project DB, secrets |
+
+## 10. Build vs buy (sandbox provider)
+| Provider | Per-unit cost | Strengths | Trade-off |
+|---|---|---|---|
+| **Cloudflare Containers** (this plan) | ~1.5¢/session | cheapest at scale; you're already on Cloudflare | newer; more wiring |
+| **E2B** | $150/mo Pro + usage | most AI-native, ~150ms Firecracker starts | priciest |
+| **CodeSandbox SDK** | 1 credit=$0.015; free 40 hr/mo; Pro $9/mo | snapshot/fork/hibernate; built by Sandpack authors | VM-credit model |
+
+Recommendation: **Cloudflare** for cost-at-scale (zone + Pages already here); E2B /
+CodeSandbox reach a professional MVP faster if time-to-market beats unit cost.
 
 ---
 
-## 9. Phased delivery
+## 11. Phased delivery
 
 - **Phase 0 — Infra (owner):** Workers Paid, `*.studio.dreamstream.app` wildcard DNS,
   Worker skeleton deploys, Docker builds.
@@ -231,7 +298,7 @@ to 2 coherent tiers.
 
 ---
 
-## 10. Decisions
+## 12. Decisions
 
 **Decided:**
 - **Egress:** allowed (apps can reach external APIs; our secrets never enter the container).
