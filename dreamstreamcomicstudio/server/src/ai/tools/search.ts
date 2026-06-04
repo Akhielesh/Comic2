@@ -203,12 +203,22 @@ export interface WebSearchOutcome {
   provider: string;
   /** Providers that were attempted, for diagnostics. */
   tried: string[];
+  /**
+   * Outcome quality, so callers can be HONEST with the user instead of treating a
+   * blocked/failed search the same as a genuinely empty one:
+   *   'ok'    — a provider returned results.
+   *   'empty' — providers ran cleanly but found nothing for this query.
+   *   'error' — every attempt failed/threw (e.g. datacenter soft-block, timeouts);
+   *             the absence of results is unreliable, NOT evidence that nothing exists.
+   */
+  status: 'ok' | 'empty' | 'error';
 }
 
 /** Run the provider chain; first non-empty wins. Never throws. */
 export const webSearch = async (query: string, signal?: AbortSignal, limit = 6): Promise<WebSearchOutcome> => {
   const deadline = Date.now() + GLOBAL_BUDGET_MS;
   const tried: string[] = [];
+  let errorCount = 0;
   for (const p of PROVIDERS) {
     if (Date.now() >= deadline) break;
     const t = timeoutSignal(signal, Math.min(PER_PROVIDER_TIMEOUT_MS, deadline - Date.now()));
@@ -217,16 +227,19 @@ export const webSearch = async (query: string, signal?: AbortSignal, limit = 6):
       if (results.length) {
         // Only count a keyed provider as "tried" if it actually ran (had a key).
         tried.push(p.name);
-        return { results, provider: p.name, tried };
+        return { results, provider: p.name, tried, status: 'ok' };
       }
       // Distinguish "ran but empty" from "skipped (no key)": keyed providers return []
       // instantly without a key — don't list those as tried.
       tried.push(p.name);
     } catch {
       tried.push(p.name);
+      errorCount += 1;
     } finally {
       t.done();
     }
   }
-  return { results: [], provider: 'none', tried };
+  // If every attempt threw (and none returned), the search FAILED rather than found
+  // nothing — surface that so the model can say "live search is unavailable".
+  return { results: [], provider: 'none', tried, status: errorCount > 0 ? 'error' : 'empty' };
 };
