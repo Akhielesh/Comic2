@@ -9,10 +9,15 @@ import { SwarmTraceCard } from './artifacts/SwarmTraceCard';
 import { ChartCard } from './artifacts/ChartCard';
 import { MetricBoard } from './artifacts/MetricBoard';
 import { MapArtifactCard } from './artifacts/MapArtifactCard';
+import { DataTableCard } from './artifacts/DataTableCard';
+import { HeatmapCard } from './artifacts/HeatmapCard';
+import { FinanceTerminal } from './artifacts/FinanceTerminal';
+import { CodeStudioCard } from './artifacts/CodeStudioCard';
 import type {
   WeatherArtifact, NewsResultsArtifact, StockQuoteArtifact,
   VideoResultsArtifact, PlacesResultsArtifact, SwarmTraceArtifact,
-  ChartArtifact, MetricBoardArtifact, MapArtifact
+  ChartArtifact, MetricBoardArtifact, MapArtifact,
+  DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact
 } from '../../apiTypes';
 
 // A living gallery of the chat's rich-output components, each with sample data, so
@@ -145,6 +150,75 @@ const tableMd = `| Model | Params (B) | MMLU | Cost ($/M) |
 | GPT-4o mini | 8 | 82.0 | 0.15 |
 | Mixtral 8x7B | 47 | 70.6 | 0.24 |`;
 
+const dataTable: DataTableArtifact = {
+  title: 'Watchlist · Megacap tech',
+  subtitle: '15-min delayed · USD',
+  palette: 'ocean',
+  sort: { column: 3, dir: 'desc' },
+  caption: 'Source: composite feed · illustrative data',
+  columns: [
+    { label: 'Symbol', kind: 'badge' },
+    { label: 'Company', kind: 'text' },
+    { label: 'Price', kind: 'currency', currency: 'USD' },
+    { label: 'Chg %', kind: 'deltaPercent' },
+    { label: '5d', kind: 'spark' },
+    { label: 'Mkt cap', kind: 'number' }
+  ],
+  rows: [
+    [{ value: 'AAPL', color: '#2563eb' }, { value: 'Apple Inc.', sub: 'NASDAQ' }, 204.2, 1.39, { spark: [198, 199, 201, 200, 203, 204] }, 3.12e12],
+    [{ value: 'MSFT', color: '#2563eb' }, { value: 'Microsoft Corp', sub: 'NASDAQ' }, 429.46, 0.5, { spark: [421, 423, 425, 424, 428, 429] }, 3.19e12],
+    [{ value: 'NVDA', color: '#16a34a' }, { value: 'NVIDIA Corp', sub: 'NASDAQ' }, 214.12, -0.09, { spark: [220, 218, 216, 217, 215, 214] }, 5.28e12],
+    [{ value: 'AMZN', color: '#ea580c' }, { value: 'Amazon.com Inc', sub: 'NASDAQ' }, 253.92, 1.56, { spark: [244, 246, 249, 248, 252, 254] }, 2.64e12],
+    [{ value: 'GOOGL', color: '#dc2626' }, { value: 'Alphabet Inc', sub: 'NASDAQ' }, 182.4, 0.83, { spark: [178, 179, 181, 180, 182, 182] }, 2.24e12]
+  ]
+};
+
+const heatmap: HeatmapArtifact = {
+  title: 'Sector heatmap', subtitle: 'Today · % change', unit: '%',
+  caption: 'Tile size ∝ market cap · illustrative data',
+  groups: [
+    { name: 'Technology', cells: [
+      { label: 'AAPL', value: 1.39, sub: '$3.1T', weight: 5 },
+      { label: 'MSFT', value: 0.5, sub: '$3.2T', weight: 5 },
+      { label: 'NVDA', value: -0.09, sub: '$5.3T', weight: 6 },
+      { label: 'AVGO', value: 2.1, sub: '$1.1T', weight: 3 }
+    ] },
+    { name: 'Financials', cells: [
+      { label: 'JPM', value: -1.2, sub: '$680B', weight: 3 },
+      { label: 'BAC', value: -2.4, sub: '$320B', weight: 2 },
+      { label: 'V', value: 0.7, sub: '$560B', weight: 2 }
+    ] },
+    { name: 'Energy', cells: [
+      { label: 'XOM', value: 3.6, sub: '$520B', weight: 3 },
+      { label: 'CVX', value: 2.9, sub: '$280B', weight: 2 }
+    ] }
+  ]
+};
+
+const terminal: FinanceTerminalArtifact = {
+  title: 'Markets Terminal', subtitle: 'US equities · session snapshot', asOf: '2026-06-03', palette: 'mono',
+  metrics: {
+    title: undefined, columns: 4,
+    tiles: [
+      { label: 'S&P 500', value: '5,431', delta: 18, deltaPercent: 0.34, status: 'good', spark: [5400, 5410, 5405, 5420, 5431] },
+      { label: 'Nasdaq', value: '17,612', delta: 92, deltaPercent: 0.52, status: 'good', spark: [17500, 17540, 17520, 17580, 17612] },
+      { label: 'VIX', value: 13.8, delta: -0.6, deltaPercent: -4.2, status: 'good' },
+      { label: 'US 10Y', value: '4.28%', delta: 0.03, deltaPercent: 0.7, status: 'neutral' }
+    ]
+  },
+  focus: stock,
+  table: dataTable,
+  heatmap,
+  charts: [
+    { variant: 'donut', title: 'Portfolio allocation', palette: 'violet',
+      series: [{ points: [{ x: 'Equities', y: 58 }, { x: 'Bonds', y: 22 }, { x: 'Cash', y: 12 }, { x: 'Alt', y: 8 }] }] }
+  ],
+  news: [
+    { title: 'Megacap tech leads broad rally as yields ease', url: 'https://example.com/x', source: 'MarketWire', publishedAt: new Date(Date.now() - 3600_000).toISOString() },
+    { title: 'Energy outperforms on supply concerns', url: 'https://example.com/y', source: 'Reuters', publishedAt: new Date(Date.now() - 4 * 3600_000).toISOString() }
+  ]
+};
+
 const mapArtifact: MapArtifact = {
   title: 'A short walk in Paris',
   markers: [
@@ -170,6 +244,30 @@ export interface GalleryDemo {
   node: React.ReactNode;
 }
 
+const codeStudioDemo: CodeStudioArtifact = {
+  title: 'Counter App',
+  description: 'A simple React counter with increment, decrement, and reset.',
+  template: 'react-ts',
+  files: [
+    {
+      path: '/App.tsx',
+      content: `import { useState } from 'react';
+export default function App() {
+  const [count, setCount] = useState(0);
+  return (
+    <div style={{ fontFamily: 'sans-serif', textAlign: 'center', padding: '2rem' }}>
+      <h1>Counter: {count}</h1>
+      <button onClick={() => setCount(c => c - 1)}>−</button>
+      <button onClick={() => setCount(0)} style={{ margin: '0 0.5rem' }}>Reset</button>
+      <button onClick={() => setCount(c => c + 1)}>+</button>
+    </div>
+  );
+}`,
+      language: 'typescript'
+    }
+  ]
+};
+
 export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Weather station (animated · gauges · map)', type: 'weather', node: <WeatherStation data={weather} /> },
   { title: 'Market card (hover · range timeline · candlesticks)', type: 'stock_quote', node: <MarketCard data={stock} /> },
@@ -181,7 +279,11 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Chart — grouped bars (legend · hover)', type: 'chart', node: <ChartCard data={barChart} /> },
   { title: 'Chart — donut', node: <ChartCard data={donutChart} /> },
   { title: 'Metric board (KPIs · sparklines · rings)', type: 'metric_board', node: <MetricBoard data={board} /> },
-  { title: 'Interactive data table', node: <ChatMarkdown text={tableMd} /> }
+  { title: 'Data table (typed cells · sortable · sparklines)', type: 'data_table', node: <DataTableCard data={dataTable} /> },
+  { title: 'Market heatmap (sectors · cap-weighted tiles)', type: 'market_heatmap', node: <HeatmapCard data={heatmap} /> },
+  { title: 'Finance Terminal (composite: quote · KPIs · table · heatmap · news)', type: 'finance_terminal', node: <FinanceTerminal data={terminal} /> },
+  { title: 'Code Studio card (multi-file app · live preview)', type: 'code_studio', node: <CodeStudioCard data={codeStudioDemo} /> },
+  { title: 'Markdown table (inline)', node: <ChatMarkdown text={tableMd} /> }
 ];
 
 /** Artifact types that have a live demo in the gallery (used by the coverage test). */

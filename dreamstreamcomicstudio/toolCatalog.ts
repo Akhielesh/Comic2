@@ -24,6 +24,7 @@ export type ToolCategory =
   | 'entertainment'
   | 'dev'
   | 'dataviz'
+  | 'codegen'
   | 'agents';
 
 export type ToolAuth = 'none' | 'optional' | 'required';
@@ -75,15 +76,16 @@ export const CATEGORY_META: CategoryMeta[] = [
   { id: 'entertainment', label: 'Entertainment & fun', icon: 'Gamepad2', blurb: 'TV, anime, games, trivia, jokes.' },
   { id: 'dev', label: 'Developer & utility', icon: 'Code2', blurb: 'GitHub, packages, QR codes, demographics.' },
   { id: 'dataviz', label: 'Data & charts', icon: 'BarChart3', blurb: 'Turn data into charts and KPI boards.' },
+  { id: 'codegen', label: 'App builder', icon: 'AppWindow', blurb: 'Generate full multi-file apps with a live preview.' },
   { id: 'agents', label: 'Agents', icon: 'Network', blurb: 'Delegate complex tasks to a swarm.' }
 ];
 
 export const TOOL_CATALOG: ToolMeta[] = [
   // ---------------------------------------------------------------- search ------
   {
-    name: 'web_search', label: 'Web search', category: 'search', kind: 'builtin', provider: 'Tavily/Brave/Google (if keyed) → DuckDuckGo → Bing → Wikipedia',
+    name: 'web_search', label: 'Web search', category: 'search', kind: 'builtin', provider: 'SearXNG → DuckDuckGo → Bing → Wikipedia (free, keyless) · Tavily/Brave/Google if keyed',
     description: 'Search the live web for current, factual or post-training information with ranked results and citations.',
-    auth: 'optional', authEnv: 'TAVILY_API_KEY', rateLimit: 'Keyless scrapers are fair-use and often blocked from datacenters; set TAVILY_API_KEY or BRAVE_API_KEY (free tiers) for reliable results',
+    auth: 'optional', authEnv: 'SEARXNG_URL', rateLimit: 'Free keyless sources by default (open-source SearXNG + scrapers); self-host SearXNG via SEARXNG_URL, or add a free TAVILY_API_KEY/BRAVE_API_KEY, for higher reliability',
     dataShape: 'Ranked results: title, URL, snippet + citations.', docsUrl: 'https://duckduckgo.com',
     // Deliberately distinctive keywords only — web_search is also a guaranteed
     // backstop in routing/fallback, so it shouldn't win ties on generic words.
@@ -140,6 +142,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
     auth: 'none', rateLimit: 'Unlimited fair use (no key)',
     dataShape: 'Text: converted amount(s) + rate date.', docsUrl: 'https://www.frankfurter.app',
     keywords: ['currency', 'exchange', 'convert', 'usd', 'eur', 'gbp', 'forex', 'rate', 'money']
+  },
+  {
+    name: 'build_finance_terminal', label: 'Finance terminal', category: 'finance', kind: 'builtin', provider: 'DreamStream (Yahoo/Stooq)',
+    description: 'Assemble a live finance terminal — focus quote, index/KPI ribbon, watchlist table, sector heatmap and news — for a dashboard/overview of multiple tickers at once.',
+    auth: 'none', rateLimit: 'Fair use (keyless quotes)',
+    dataShape: 'Composite terminal: quote + KPIs + table + heatmap + news.', docsUrl: 'https://dreamstream.app',
+    keywords: ['terminal', 'dashboard', 'watchlist', 'portfolio', 'markets today', 'market overview', 'track stocks', 'movers', 'indices', 'my stocks', 'finance dashboard']
   },
   // ----------------------------------------------------------------- places -----
   {
@@ -408,6 +417,28 @@ export const TOOL_CATALOG: ToolMeta[] = [
     auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
     dataShape: 'KPI board: tiles with deltas, sparklines, rings.', docsUrl: 'https://dreamstream.app',
     keywords: ['dashboard', 'kpi', 'kpis', 'metrics', 'scorecard', 'stat board', 'at a glance', 'summary stats', 'overview']
+  },
+  {
+    name: 'render_table', label: 'Data table', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app)',
+    description: 'Render a sortable, typed data table from rows the model provides — currency, percent, signed-delta, sparkline and badge cells. For watchlists, holdings, fundamentals grids, screeners and comparisons.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Sortable table with typed/colored cells + sparklines.', docsUrl: 'https://dreamstream.app',
+    keywords: ['table', 'data table', 'tabular', 'rows', 'columns', 'spreadsheet', 'grid', 'compare side by side', 'holdings', 'screener', 'list of stocks']
+  },
+  {
+    name: 'render_heatmap', label: 'Heatmap', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app)',
+    description: 'Render a market/sector heatmap — a grid of tiles colored green→red by their change, optionally sized by market cap. For breadth at a glance: sector maps, movers, watchlist days.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Colored tile grid (treemap-style) by value.', docsUrl: 'https://dreamstream.app',
+    keywords: ['heatmap', 'heat map', 'market map', 'sector map', 'treemap', 'breadth', 'gainers and losers', 'sector performance', 'movers map']
+  },
+  // --------------------------------------------------------------- codegen ------
+  {
+    name: 'generate_app', label: 'App builder', category: 'codegen', kind: 'builtin', provider: 'DreamStream Code Studio',
+    description: 'Build a complete multi-file app (React, vanilla JS, HTML/CSS) and open it in the live Code Studio panel with a real-time preview the user can edit and run.',
+    auth: 'none', rateLimit: 'Unlimited (runs in-browser, no API)',
+    dataShape: 'code_studio artifact: file tree + live Sandpack preview.', docsUrl: 'https://dreamstream.app',
+    keywords: ['build an app', 'create an app', 'make an app', 'build a game', 'create a game', 'landing page', 'todo app', 'react app', 'write code', 'generate code', 'implement', 'scaffold', 'create a component', 'build a tool']
   },
   // ----------------------------------------------------------------- agents -----
   {

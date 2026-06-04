@@ -1,5 +1,5 @@
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, Map as MapIcon, X } from 'lucide-react';
+import { Code2, ExternalLink, Loader2, Map as MapIcon, Maximize2, Minimize2, X } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { ChatSidebar } from './ChatSidebar';
 import { ChatConversation } from './ChatConversation';
@@ -10,10 +10,11 @@ import { listCustomAgents } from '../../services/chatAgents';
 import { ChatPanelContext } from './panelContext';
 import { MediaPanel, type MediaPanelData } from './MediaPanel';
 import type { PlaygroundData } from './MultiFilePlayground';
-import type { ChatArtifact, MapArtifact } from '../../apiTypes';
+import type { ChatArtifact, CodeStudioArtifact, MapArtifact } from '../../apiTypes';
 
 const MapPanel = lazy(() => import('./MapPanel'));
 const MultiFilePlayground = lazy(() => import('./MultiFilePlayground'));
+const CodeStudioPanel = lazy(() => import('./CodeStudioPanel'));
 import { deriveModelFeatures } from '../../services/chatFeatures';
 import { getCapabilities } from '../../services/modelCapabilities';
 import { fetchModelCatalog, type CatalogModel } from '../../services/modelCatalog';
@@ -134,6 +135,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   const [customAgents, setCustomAgents] = useState(() => listCustomAgents());
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(() => listMcpServers());
   const [panel, setPanel] = useState<ChatArtifact | null>(null);
+  const [panelFullscreen, setPanelFullscreen] = useState(false);
   const [panelWidth, setPanelWidth] = useState(440);
   const [isDesktop, setIsDesktop] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches
@@ -565,6 +567,11 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       // chat finishing shouldn't yank a map open over the chat you're reading.
       const mapArtifact = res.artifacts?.find((a) => a.type === 'map');
       if (mapArtifact && sessionId === activeIdRef.current) setPanel(mapArtifact);
+      const codeArtifact = res.artifacts?.find((a) => a.type === 'code_studio');
+      if (codeArtifact && sessionId === activeIdRef.current) {
+        setPanel(codeArtifact);
+        setPanelFullscreen(false);
+      }
       // Learn durable facts about the user from this exchange (background, throttled).
       updateMemoryInBackground(baseTurns, res.text || '');
     } catch (err) {
@@ -693,15 +700,111 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     );
   }
 
-  const panelTitle = (panel?.data as { title?: string } | undefined)?.title || (panel?.type === 'map' ? 'Map' : 'Preview');
+  const isCodeStudio = panel?.type === 'code_studio';
+  const panelTitle = (panel?.data as { title?: string } | undefined)?.title
+    || (panel?.type === 'map' ? 'Map' : 'Preview');
+
+  // Open the current code_studio app in a new browser tab. For vanilla/static
+  // apps the main HTML file is opened as a blob URL. React apps use a CDN
+  // bootstrap so the preview opens without a build step.
+  const handleOpenNewTab = () => {
+    if (!panel || panel.type !== 'code_studio') return;
+    const artifact = panel.data as CodeStudioArtifact;
+    const cssFiles = artifact.files.filter((f) => f.path.endsWith('.css'));
+    const cssContent = cssFiles.map((f) => f.content).join('\n');
+    const htmlFile = artifact.files.find((f) => f.path.endsWith('.html'));
+    const appFile = artifact.files.find((f) => /\/App\.(tsx?|jsx?)$/.test(f.path));
+
+    let html = '';
+    if (htmlFile) {
+      html = htmlFile.content;
+    } else if (appFile && (artifact.template === 'react' || artifact.template === 'react-ts')) {
+      html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><title>${artifact.title}</title>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>body{margin:0}${cssContent}</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react,typescript">
+${appFile.content}
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(React.createElement(typeof App !== 'undefined' ? App : () => React.createElement('p', null, 'Component not found')));
+</script>
+</body>
+</html>`;
+    } else {
+      const jsFile = artifact.files.find((f) => f.path.endsWith('.js') || f.path.endsWith('.ts'));
+      html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><title>${artifact.title}</title>
+<style>body{margin:0}${cssContent}</style>
+</head>
+<body>
+${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file found.</p>'}
+</body>
+</html>`;
+    }
+
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  };
+
+  const closePanel = () => {
+    setPanel(null);
+    setPanelFullscreen(false);
+  };
+
+  // editorHeight is responsive to fullscreen: fill more of the viewport when expanded.
+  const codeEditorHeight = panelFullscreen
+    ? Math.max(480, Math.round(window.innerHeight * 0.75))
+    : 520;
+
   const panelContent = panel && (
     <>
-      <div className="flex items-center justify-between px-3 py-2 border-b-2 border-black bg-sky-100 shrink-0">
+      <div
+        className={`flex items-center justify-between px-3 py-2 border-b-2 border-black shrink-0 ${
+          isCodeStudio ? 'bg-lime-100' : 'bg-sky-100'
+        }`}
+      >
         <span className="font-bold text-sm flex items-center gap-1.5 min-w-0">
-          <MapIcon className="w-4 h-4 shrink-0" />
+          {isCodeStudio
+            ? <Code2 className="w-4 h-4 shrink-0 text-lime-700" />
+            : <MapIcon className="w-4 h-4 shrink-0" />}
           <span className="truncate">{panelTitle}</span>
         </span>
-        <button onClick={() => setPanel(null)} className="border-2 border-black rounded p-1 bg-white hover:bg-brand-yellow"><X className="w-4 h-4" /></button>
+        <div className="flex items-center gap-1 shrink-0">
+          {isCodeStudio && (
+            <>
+              <button
+                onClick={handleOpenNewTab}
+                title="Open preview in new tab"
+                className="border-2 border-black rounded p-1 bg-white hover:bg-lime-200"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => setPanelFullscreen((v) => !v)}
+                title={panelFullscreen ? 'Exit full screen' : 'Full screen'}
+                className="border-2 border-black rounded p-1 bg-white hover:bg-lime-200"
+              >
+                {panelFullscreen
+                  ? <Minimize2 className="w-3.5 h-3.5" />
+                  : <Maximize2 className="w-3.5 h-3.5" />}
+              </button>
+            </>
+          )}
+          <button onClick={closePanel} className="border-2 border-black rounded p-1 bg-white hover:bg-brand-yellow">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       </div>
       <div className="flex-1 min-h-0 bg-slate-100">
         {panel.type === 'media' ? (
@@ -710,6 +813,12 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-6 h-6 animate-spin text-brand-blue" /></div>}>
             {panel.type === 'map' && <MapPanel data={panel.data as MapArtifact} />}
             {panel.type === 'playground' && <MultiFilePlayground data={panel.data as PlaygroundData} />}
+            {panel.type === 'code_studio' && (
+              <CodeStudioPanel
+                data={panel.data as CodeStudioArtifact}
+                editorHeight={codeEditorHeight}
+              />
+            )}
           </Suspense>
         )}
       </div>
@@ -774,8 +883,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         onStartWithModel={handleStartWithModel}
       />
 
-      {/* Resizable side panel (maps, etc.) — sibling on desktop, full-screen on mobile. */}
-      {panel && isDesktop && (
+      {/* Resizable side panel — sibling on desktop (unless fullscreen), overlay on mobile. */}
+      {panel && isDesktop && !panelFullscreen && (
         <>
           <div onMouseDown={startResize} className="w-1.5 cursor-col-resize bg-black/10 hover:bg-brand-blue shrink-0" title="Drag to resize" />
           <div className="flex flex-col shrink-0 border-l-4 border-black bg-white" style={{ width: panelWidth }}>
@@ -783,7 +892,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           </div>
         </>
       )}
-      {panel && !isDesktop && (
+      {panel && (!isDesktop || panelFullscreen) && (
         <div className="fixed inset-0 z-50 flex flex-col bg-white">
           {panelContent}
         </div>

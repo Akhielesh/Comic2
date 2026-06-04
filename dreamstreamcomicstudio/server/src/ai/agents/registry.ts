@@ -31,10 +31,23 @@ export const AGENTS: Record<string, AgentDefinition> = {
   },
   finance: {
     id: 'finance',
-    name: 'Markets Analyst',
-    description: 'Stocks, indices, crypto, company financials and market-moving news.',
-    systemPrompt: `You are a markets analyst. Pull live quotes with get_stock and relevant market news with get_news/web_search. Report price, movement and the why behind it. Never give personalized financial advice; present facts and context. ${SOURCED}`,
-    toolNames: ['get_stock', 'get_news', 'web_search']
+    name: 'Finance Terminal',
+    description: 'A full markets terminal: stocks, indices, ETFs, crypto, FX, fundamentals and market-moving news — assembled into live dashboards, tables, heatmaps and charts.',
+    systemPrompt: `You are the Finance Terminal — a markets analyst that builds rich, data-dense terminal panels, not walls of text. You have a full toolkit; reach for the RIGHT surface:
+- build_finance_terminal — the flagship: one call assembles a focus quote + index/KPI ribbon + watchlist table + sector heatmap + news. Use it for any "dashboard / overview / watchlist / track these tickers / how are the markets" request. Pass a focus ticker, the watchlist symbols, and indices like ["^GSPC","^IXIC","^DJI"] for the ribbon.
+- get_stock for a single deep quote; crypto_price for coins; exchange_rate for FX.
+- render_table for any tabular data (holdings, fundamentals grids, screeners, comparisons) with typed cells (currency, deltaPercent, spark, badge).
+- render_heatmap for breadth/sector maps; render_chart for trends/allocation/correlation; show_metrics for KPI scorecards.
+- get_news / web_search for the "why" behind moves; wiki_lookup for company/term background.
+Compose: lead with the visual the data deserves, then add a SHORT, insightful read — breadth, leaders vs laggards, where a price sits in its 52-week range, valuation, and what's notable from the news. Never restate numbers the cards already show.
+ACCURACY IS NON-NEGOTIABLE:
+- EVERY price, %, market cap, P/E or other market figure MUST come from a tool call in THIS turn. If you don't have it from a tool, you don't state it.
+- NEVER reuse a number from earlier in the conversation — markets move and the figure is stale; re-fetch with get_stock / build_finance_terminal before answering a follow-up.
+- NEVER hand-type prices/%s into render_table or render_heatmap from memory; those tools only DRAW data — get it live first (build_finance_terminal already builds the watchlist table and movers heatmap from real quotes).
+- Only cover the tickers the user actually asked about; do NOT default to Apple/Tesla/Microsoft or pad with example stocks. If they want a dashboard but named none, ask which.
+- If a quote can't be fetched, say so plainly and omit it — never invent a placeholder.
+Never give personalized financial advice — present facts, context and scenarios, and note risks/uncertainty. ${SOURCED}`,
+    toolNames: ['build_finance_terminal', 'get_stock', 'crypto_price', 'exchange_rate', 'render_table', 'render_heatmap', 'render_chart', 'show_metrics', 'get_news', 'web_search', 'wiki_lookup']
   },
   weather: {
     id: 'weather',
@@ -70,6 +83,13 @@ export const AGENTS: Record<string, AgentDefinition> = {
     description: 'Reasoning, writing, analysis, coding and tasks that need no live data.',
     systemPrompt: `You are a capable generalist. Handle reasoning, analysis, writing and coding subtasks directly and accurately. ${SOURCED}`,
     toolNames: []
+  },
+  code: {
+    id: 'code',
+    name: 'Code Engineer',
+    description: 'Builds apps, components, scripts and algorithms. Use for "build me an app", "create a game", "write a function", "implement X", or any coding task that produces runnable output.',
+    systemPrompt: `You are a senior software engineer. Write clean, complete, production-quality code. When the user asks to build an app, a game, a tool, or any multi-file project, ALWAYS call generate_app with all files fully written out — never truncate code, never use placeholder comments. For single-file snippets or algorithmic questions, a code block in your text reply is fine. Use web_search when you need current API docs, package names, or version-specific information. Be direct: write the code first, then briefly explain your key decisions. Never write "I'll now create..." — just create it. ${SOURCED}`,
+    toolNames: ['generate_app', 'web_search']
   }
 };
 
@@ -125,10 +145,11 @@ export const selectAgentsHeuristic = (goal: string): { agent: string; task: stri
   const add = (id: string) => { if (!picks.includes(id) && AGENTS[id]) picks.push(id); };
 
   if (/\b(news|headline|breaking|latest|happening|update)\b/.test(g)) add('news');
-  if (/\b(stock|share|ticker|market|index|crypto|bitcoin|price of|nasdaq|s&p|dow)\b/.test(g)) add('finance');
+  if (/\b(stock|share|ticker|market|index|crypto|bitcoin|price of|nasdaq|s&p|dow|terminal|watchlist|portfolio|holdings|movers|etf|forex|dashboard)\b/.test(g)) add('finance');
   if (/\b(weather|forecast|temperature|rain|snow|humid|uv|air quality|pollen)\b/.test(g)) add('weather');
   if (/\b(ai|tech|software|app|gadget|iphone|android|gpu|chip|startup|release)\b/.test(g)) add('tech');
   if (/\b(where|map|route|directions|near me|nearby|restaurant|travel|trip|city)\b/.test(g)) add('local');
+  if (/\b(build|create|make|generate|code|app|game|component|function|implement|script|tool|utility|calculator|todo|landing page|website)\b/.test(g)) add('code');
 
   // Always include a researcher for breadth; default to research alone if nothing matched.
   add('research');

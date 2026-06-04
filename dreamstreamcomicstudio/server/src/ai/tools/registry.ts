@@ -22,6 +22,8 @@ import { GEO_TOOLS } from './geo.js';
 import { SPACE_TOOLS } from './space.js';
 import { CULTURE_TOOLS } from './culture.js';
 import { DEV_TOOLS } from './dev.js';
+import { FINANCE_TERMINAL_TOOLS } from './financeTerminal.js';
+import { generateAppTool } from './codeStudio.js';
 
 export type { ChatTool, ToolExecResult, ToolContext } from './types.js';
 
@@ -59,7 +61,7 @@ const webSearchTool: ChatTool = {
           notice: {
             level: 'warn',
             message: `Web search returned no results for "${query}".`,
-            fix: provider === 'none' ? 'Set TAVILY_API_KEY or BRAVE_API_KEY (free tiers) for reliable web search' : undefined
+            fix: provider === 'none' ? 'Web search is on free/keyless sources right now; self-host SearXNG and set SEARXNG_URL (or add a free TAVILY_API_KEY/BRAVE_API_KEY) for reliable results' : undefined
           }
         };
       }
@@ -493,6 +495,7 @@ const metricsTool: ChatTool = {
 const FREE_API_TOOLS: ChatTool[] = [
   ...KNOWLEDGE_TOOLS,
   ...FINANCE2_TOOLS,
+  ...FINANCE_TERMINAL_TOOLS,
   ...GEO_TOOLS,
   ...SPACE_TOOLS,
   ...CULTURE_TOOLS,
@@ -509,6 +512,7 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   get_stock: stockTool,
   render_chart: chartTool,
   show_metrics: metricsTool,
+  generate_app: generateAppTool,
   ...Object.fromEntries(FREE_API_TOOLS.map((t) => [t.name, t]))
 };
 

@@ -436,3 +436,62 @@ export const getStockQuote = async (rawSymbol: string, signal?: AbortSignal): Pr
     return await getStooqQuote(symbol, signal);
   }
 };
+
+/** A trimmed quote for building watchlists/heatmaps where the full enrichment
+ * (fundamentals, peers, headlines) would be too slow across many symbols. */
+export interface LightQuote {
+  symbol: string;
+  name?: string;
+  price: number;
+  change: number;
+  changePercent: number;
+  currency?: string;
+  /** ~20–30 recent closes for a sparkline. */
+  spark?: number[];
+}
+
+// Fast quote: one intraday window (live tick + meta) + one month of daily closes
+// for a spark. Degrades to the Stooq quote if Yahoo is blocked. Never throws on a
+// recoverable gap — callers Promise.allSettled across a watchlist.
+export const getLightQuote = async (rawSymbol: string, signal?: AbortSignal): Promise<LightQuote> => {
+  const trimmed = rawSymbol?.trim();
+  if (!trimmed) throw new Error('No ticker symbol was provided.');
+  // Map "gold"/"oil"/"the S&P"/"EURUSD" → a real Yahoo symbol, same as get_stock.
+  const resolved = resolveMarketSymbol(trimmed);
+  const symbol = yahooSymbol(resolved);
+  const friendly = FRIENDLY_NAMES[resolved];
+  try {
+    const [intradayR, monthR] = await Promise.allSettled([
+      yfChart(symbol, '1d', '5m', signal),
+      yfChart(symbol, '1mo', '1d', signal)
+    ]);
+    const intraday = intradayR.status === 'fulfilled' ? intradayR.value : undefined;
+    const month = monthR.status === 'fulfilled' ? monthR.value : undefined;
+    const primary = intraday || month;
+    if (!primary) throw new Error('No chart data');
+    const meta = primary.meta;
+    const price = num(meta.regularMarketPrice) ?? month?.points.at(-1)?.close ?? intraday?.points.at(-1)?.close;
+    if (price === undefined) throw new Error('No price');
+    const prev = num(meta.chartPreviousClose) ?? num(meta.previousClose) ?? month?.points.at(-2)?.close;
+    const change = prev !== undefined ? price - prev : 0;
+    const changePercent = prev ? (change / prev) * 100 : 0;
+    const name =
+      friendly ||
+      (typeof meta.shortName === 'string' && meta.shortName) ||
+      (typeof meta.longName === 'string' ? (meta.longName as string) : undefined) ||
+      symbol;
+    const spark = (month?.points ?? intraday?.points ?? []).map((p) => p.close).slice(-30);
+    return { symbol, name, price, change, changePercent, currency: typeof meta.currency === 'string' ? meta.currency : undefined, spark: spark.length > 1 ? spark : undefined };
+  } catch {
+    const q = await getStooqQuote(resolved, signal);
+    return {
+      symbol: q.symbol,
+      name: friendly || q.name,
+      price: q.price,
+      change: q.change,
+      changePercent: q.changePercent,
+      currency: q.currency,
+      spark: q.series && q.series.length > 1 ? q.series.map((p) => p.close) : undefined
+    };
+  }
+};
