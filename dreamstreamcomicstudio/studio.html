@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DreamStream Code Studio</title>
+    <!-- No cross-origin CDN scripts here on purpose: this page is cross-origin
+         isolated (COOP/COEP) so WebContainers can run, and isolation would block
+         cross-origin subresources that lack CORP headers. All assets are bundled. -->
+  </head>
+  <body>
+    <div id="studio-root"></div>
+    <script type="module" src="/studio/main.tsx"></script>
+  </body>
+</html>

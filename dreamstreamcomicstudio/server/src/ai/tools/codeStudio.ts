@@ -44,7 +44,7 @@ export const generateAppTool: ChatTool = {
       },
       files: {
         type: 'array',
-        description: 'Every file that makes up the application. Include complete, working code in each file — no truncation, no TODOs, no placeholders. For React apps include at minimum /App.tsx (or /App.jsx) and the entry. For vanilla apps include /index.html.',
+        description: 'Every file that makes up the application. Include complete, working code in each file — no truncation, no TODOs, no placeholders. For a simple React app, just provide /App.tsx (the Studio scaffolds Vite around it). If the app needs extra npm packages, instead provide a full Vite project including a /package.json listing those dependencies (the Studio runs npm install in a real sandbox). For vanilla apps include /index.html.',
         items: {
           type: 'object',
           properties: {
