@@ -13,8 +13,9 @@ import {
 import { getAllModelKeys, getSettingsState, setSettingsState as persistSettingsState } from '../services/appSettings';
 import { Button } from './Button';
 import { ApiConfiguration } from './ApiConfiguration';
-import { AlertTriangle, CheckCircle2, CreditCard, LogOut, Mail, Save, Settings, Shield, Upload, User as UserIcon, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, CreditCard, LogOut, Mail, Monitor, Save, Settings, Shield, Trash2, Upload, User as UserIcon, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { listDevices, removeDevice, currentDeviceId, type UserDevice } from '../services/deviceSessions';
 import { useSearchParams } from 'react-router-dom';
 import {
     getAllowedImageModelsForPlan,
@@ -193,7 +194,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     onPasswordResetHandled,
     onNavigate
 }) => {
-    const { user, signOut, signOutAll, resendVerificationEmail, changePassword } = useAuth();
+    const { user, signOut, signOutAll, signOutOthers, resendVerificationEmail, changePassword } = useAuth();
     const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
     const [searchParams] = useSearchParams();
     const [previewAvatar, setPreviewAvatar] = useState<string | null>(null);
@@ -251,6 +252,11 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     const [preferencesMessage, setPreferencesMessage] = useState<MessageState>(null);
     const [securityMessage, setSecurityMessage] = useState<MessageState>(null);
     const [securityBusy, setSecurityBusy] = useState(false);
+    const [devices, setDevices] = useState<UserDevice[]>([]);
+    const [devicesLoading, setDevicesLoading] = useState(false);
+    const [devicesError, setDevicesError] = useState<string | null>(null);
+    const [sessionActionMsg, setSessionActionMsg] = useState<MessageState>(null);
+    const [sessionBusy, setSessionBusy] = useState(false);
     const [newPassword, setNewPassword] = useState('');
     const [confirmNewPassword, setConfirmNewPassword] = useState('');
 
@@ -986,10 +992,49 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     };
 
     const handleSignOutAll = async () => {
-        const confirmed = window.confirm('Sign out from all devices? This will end every active session.');
-        if (!confirmed) return;
-        await signOutAll();
-        onSignedOut?.();
+        if (!window.confirm('Sign out from ALL devices including this one? You will be logged out immediately.')) return;
+        setSessionBusy(true);
+        try {
+            await signOutAll();
+            onSignedOut?.();
+        } catch (err: any) {
+            setSessionActionMsg({ type: 'error', text: err?.message || 'Sign out failed.' });
+        } finally {
+            setSessionBusy(false);
+        }
+    };
+
+    const handleSignOutOthers = async () => {
+        if (!window.confirm('Sign out all other devices? You will stay logged in on this device.')) return;
+        setSessionBusy(true);
+        setSessionActionMsg(null);
+        try {
+            const result = await signOutOthers();
+            setSessionActionMsg({ type: result.success ? 'success' : 'error', text: result.message });
+            if (result.success) void loadDevices();
+        } catch (err: any) {
+            setSessionActionMsg({ type: 'error', text: err?.message || 'Sign out failed.' });
+        } finally {
+            setSessionBusy(false);
+        }
+    };
+
+    const loadDevices = async () => {
+        setDevicesLoading(true);
+        setDevicesError(null);
+        try {
+            const list = await listDevices();
+            setDevices(list);
+        } catch (err: any) {
+            setDevicesError(err?.message || 'Could not load devices.');
+        } finally {
+            setDevicesLoading(false);
+        }
+    };
+
+    const handleRemoveDevice = async (id: string) => {
+        await removeDevice(id);
+        setDevices((prev) => prev.filter((d) => d.id !== id));
     };
 
     const renderMessage = (message: MessageState) => {
@@ -1191,6 +1236,25 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
 
     const renderSecurity = () => {
         const isVerified = Boolean(user?.email_confirmed_at);
+        const thisDeviceId = currentDeviceId();
+
+        // Load devices when this tab first renders
+        if (activeTab === 'security' && !devicesLoading && devices.length === 0 && !devicesError) {
+            void loadDevices();
+        }
+
+        const formatLastSeen = (iso: string) => {
+            const d = new Date(iso);
+            const now = Date.now();
+            const diffMs = now - d.getTime();
+            const mins = Math.floor(diffMs / 60000);
+            if (mins < 2) return 'Just now';
+            if (mins < 60) return `${mins}m ago`;
+            const hrs = Math.floor(mins / 60);
+            if (hrs < 24) return `${hrs}h ago`;
+            return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+        };
+
         return (
             <div className="space-y-6 animate-fade-in max-w-2xl">
                 {renderMessage(securityMessage)}
@@ -1239,12 +1303,104 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                     </form>
                 </div>
 
-                <div className="border-2 border-red-400 bg-red-50 rounded-xl p-5 space-y-3">
+                {/* Device / Session list */}
+                <div className="border-2 border-black rounded-xl p-5 space-y-4">
+                    <div className="flex items-center justify-between">
+                        <h3 className="font-display text-2xl flex items-center gap-2">
+                            <Monitor size={20} /> Active Devices
+                        </h3>
+                        <button onClick={() => void loadDevices()} disabled={devicesLoading} className="text-xs font-bold text-brand-blue hover:underline disabled:opacity-40">
+                            {devicesLoading ? 'Loading…' : 'Refresh'}
+                        </button>
+                    </div>
+                    <p className="text-xs text-slate-500">Every browser or device that has signed into your account.</p>
+
+                    {devicesError && (
+                        <div className="text-sm text-red-600 font-semibold border-2 border-red-300 bg-red-50 rounded-lg px-3 py-2">
+                            {devicesError}
+                        </div>
+                    )}
+
+                    {devicesLoading && (
+                        <div className="text-sm text-slate-500 font-mono animate-pulse">Loading devices…</div>
+                    )}
+
+                    {!devicesLoading && devices.length === 0 && !devicesError && (
+                        <div className="text-sm text-slate-400 font-mono">No devices recorded yet — they appear here after signing in.</div>
+                    )}
+
+                    <div className="space-y-2">
+                        {devices.map((device) => {
+                            const isCurrent = device.device_id === thisDeviceId;
+                            return (
+                                <div key={device.id} className={`flex items-center gap-3 border-2 rounded-xl px-4 py-3 ${isCurrent ? 'border-brand-blue bg-brand-blue/5' : 'border-black bg-white'}`}>
+                                    <Monitor size={18} className={isCurrent ? 'text-brand-blue' : 'text-slate-400'} />
+                                    <div className="flex-1 min-w-0">
+                                        <div className="font-bold text-sm flex items-center gap-2">
+                                            {device.device_name}
+                                            {isCurrent && (
+                                                <span className="text-[10px] font-bold uppercase bg-brand-blue text-white px-1.5 py-0.5 rounded border border-black">
+                                                    This device
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div className="text-[11px] text-slate-500 font-mono">
+                                            Last seen {formatLastSeen(device.last_seen)} · First seen {new Date(device.created_at).toLocaleDateString()}
+                                        </div>
+                                    </div>
+                                    {!isCurrent && (
+                                        <button
+                                            onClick={() => void handleRemoveDevice(device.id)}
+                                            title="Remove from list"
+                                            className="p-1.5 border-2 border-black rounded hover:bg-red-100 text-red-500"
+                                        >
+                                            <Trash2 size={14} />
+                                        </button>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                {/* Session Control */}
+                <div className="border-2 border-red-400 bg-red-50 rounded-xl p-5 space-y-4">
                     <h3 className="font-display text-2xl text-red-700">Session Control</h3>
-                    <p className="text-sm text-red-700">Sign out all active sessions across devices.</p>
-                    <Button onClick={handleSignOutAll} className="bg-red-600 hover:bg-red-700 text-white border-red-800" icon={<LogOut size={16} />}>
-                        Sign Out All Sessions
-                    </Button>
+
+                    {sessionActionMsg && (
+                        <div className={`border-2 rounded-lg px-3 py-2 text-sm font-semibold flex items-center gap-2 ${sessionActionMsg.type === 'success' ? 'border-green-500 bg-green-50 text-green-700' : 'border-red-500 bg-red-50 text-red-700'}`}>
+                            {sessionActionMsg.type === 'success' ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+                            {sessionActionMsg.text}
+                        </div>
+                    )}
+
+                    <div className="space-y-3">
+                        <div className="bg-white border-2 border-red-200 rounded-xl p-4 space-y-2">
+                            <p className="font-bold text-sm text-slate-800">Sign out other devices</p>
+                            <p className="text-xs text-slate-500">Invalidates all sessions except this one. You stay logged in.</p>
+                            <Button
+                                onClick={() => void handleSignOutOthers()}
+                                disabled={sessionBusy}
+                                variant="secondary"
+                                icon={<LogOut size={16} />}
+                            >
+                                {sessionBusy ? 'Working…' : 'Sign Out Other Devices'}
+                            </Button>
+                        </div>
+
+                        <div className="bg-white border-2 border-red-300 rounded-xl p-4 space-y-2">
+                            <p className="font-bold text-sm text-red-700">Sign out everywhere</p>
+                            <p className="text-xs text-slate-500">Invalidates ALL sessions including this one. You will be logged out now.</p>
+                            <Button
+                                onClick={() => void handleSignOutAll()}
+                                disabled={sessionBusy}
+                                className="bg-red-600 hover:bg-red-700 text-white border-red-800"
+                                icon={<LogOut size={16} />}
+                            >
+                                {sessionBusy ? 'Signing out…' : 'Sign Out Everywhere'}
+                            </Button>
+                        </div>
+                    </div>
                 </div>
             </div>
         );

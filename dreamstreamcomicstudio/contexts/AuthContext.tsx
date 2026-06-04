@@ -5,6 +5,7 @@ import { getAuthRedirectUrl, supabase } from '../services/supabase';
 import { decryptKey, encryptKey } from '../services/crypto';
 import { clearFluxKey, setFluxKey, setOpenRouterKey } from '../services/appSettings';
 import { clearAllKeys, addKey, listKeysByProvider, PROVIDER_META, type ApiKeyProvider } from '../services/apiKeys';
+import { registerDevice } from '../services/deviceSessions';
 
 type AuthContextType = {
     user: User | null;
@@ -12,6 +13,7 @@ type AuthContextType = {
     loading: boolean;
     signOut: () => Promise<void>;
     signOutAll: () => Promise<void>;
+    signOutOthers: () => Promise<{ success: boolean; message: string }>;
     resendVerificationEmail: () => Promise<{ success: boolean; message: string }>;
     changePassword: (newPassword: string) => Promise<{ success: boolean; message: string }>;
 };
@@ -22,6 +24,7 @@ const AuthContext = createContext<AuthContextType>({
     loading: true,
     signOut: async () => { },
     signOutAll: async () => { },
+    signOutOthers: async () => ({ success: false, message: 'Unavailable' }),
     resendVerificationEmail: async () => ({ success: false, message: 'Unavailable' }),
     changePassword: async () => ({ success: false, message: 'Unavailable' })
 });
@@ -39,16 +42,18 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             setLoading(false);
             if (session?.user) {
                 void syncKeys(session.user.id);
+                void registerDevice(session.user.id);
             }
         });
 
         // Listen for changes (login, logout, refresh)
-        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
             setSession(session);
             setUser(session?.user ?? null);
             setLoading(false);
-            if (session?.user) {
+            if (session?.user && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED')) {
                 void syncKeys(session.user.id);
+                void registerDevice(session.user.id);
             }
         });
 
@@ -77,6 +82,17 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const signOutAll = async () => {
         clearLocalAuthState();
         await supabase.auth.signOut({ scope: 'global' });
+    };
+
+    /** Sign out every session EXCEPT the current device — you stay logged in. */
+    const signOutOthers = async (): Promise<{ success: boolean; message: string }> => {
+        try {
+            const { error } = await supabase.auth.signOut({ scope: 'others' });
+            if (error) throw error;
+            return { success: true, message: 'All other sessions have been signed out.' };
+        } catch (err: any) {
+            return { success: false, message: err?.message || 'Failed to sign out other sessions.' };
+        }
     };
 
     const resendVerificationEmail = async (): Promise<{ success: boolean; message: string }> => {
@@ -138,7 +154,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     };
 
     return (
-        <AuthContext.Provider value={{ user, session, loading, signOut, signOutAll, resendVerificationEmail, changePassword }}>
+        <AuthContext.Provider value={{ user, session, loading, signOut, signOutAll, signOutOthers, resendVerificationEmail, changePassword }}>
             {children}
         </AuthContext.Provider>
     );
