@@ -7,7 +7,7 @@
 //
 // See docs/decisions/0003-multi-key-api-configuration-and-usage-limits.md
 
-export type ApiKeyProvider = 'openrouter' | 'nvidia' | 'gemini' | 'pixazo';
+export type ApiKeyProvider = 'openrouter' | 'nvidia' | 'gemini' | 'pixazo' | 'ideogram';
 
 /** Result of the last live validity check for a key (see services/keyValidation.ts). */
 export type KeyValidationState = 'unknown' | 'valid' | 'invalid' | 'unsupported';
@@ -66,10 +66,16 @@ export const PROVIDER_META: Record<ApiKeyProvider, {
     header: 'X-Pixazo-Key',
     keysUrl: 'https://pixazo.ai',
     hint: 'Legacy Flux image generation.'
+  },
+  ideogram: {
+    label: 'Ideogram',
+    header: 'X-Ideogram-Key',
+    keysUrl: 'https://ideogram.ai/manage-api',
+    hint: 'Ideogram image generation (typography-strong art). BYOK image models.'
   }
 };
 
-export const ALL_PROVIDERS: ApiKeyProvider[] = ['openrouter', 'nvidia', 'gemini', 'pixazo'];
+export const ALL_PROVIDERS: ApiKeyProvider[] = ['openrouter', 'nvidia', 'gemini', 'pixazo', 'ideogram'];
 
 const STORAGE = 'dreamstream_api_keys_v2';
 const MIGRATED_FLAG = 'dreamstream_api_keys_migrated';
@@ -79,7 +85,8 @@ const LEGACY_KEYS: Record<ApiKeyProvider, string> = {
   openrouter: 'dreamstream_openrouter_key',
   nvidia: 'dreamstream_nvidia_key',
   gemini: 'dreamstream_api_key',
-  pixazo: 'dreamstream_flux_key'
+  pixazo: 'dreamstream_flux_key',
+  ideogram: 'dreamstream_ideogram_key'
 };
 
 const read = (k: string): string | null => {

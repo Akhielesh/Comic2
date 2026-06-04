@@ -59,6 +59,7 @@ const buildRequestHeaders = async (options?: { apiKey?: string; modelId?: string
   const fluxKey = isProviderEnabled('pixazo') ? (getActiveKeyValue('pixazo') || getFluxKeyInfo().key) : null;
   const openRouterKey = isProviderEnabled('openrouter') ? (getActiveKeyValue('openrouter') || getOpenRouterKey()) : null;
   const nvidiaKey = isProviderEnabled('nvidia') ? getActiveKeyValue('nvidia') : null;
+  const ideogramKey = isProviderEnabled('ideogram') ? getActiveKeyValue('ideogram') : null;
   const token = await getAuthToken();
   const textModel = options?.stage ? getModelForStage(options.stage) : getSelectedTextModel();
   const textSource = options?.stage ? getSourceForStage(options.stage) : getSelectedTextSource();
@@ -69,6 +70,7 @@ const buildRequestHeaders = async (options?: { apiKey?: string; modelId?: string
     ...(fluxKey ? { 'X-Pixazo-Key': fluxKey } : {}),
     ...(openRouterKey ? { 'X-OpenRouter-Key': openRouterKey } : {}),
     ...(nvidiaKey ? { 'X-Nvidia-Key': nvidiaKey } : {}),
+    ...(ideogramKey ? { 'X-Ideogram-Key': ideogramKey } : {}),
     ...(textModel ? { 'X-Text-Model': textModel } : {}),
     ...(textSource ? { 'X-Text-Source': textSource as string } : {}),
     ...(options?.stage ? { 'X-Pipeline-Stage': options.stage } : {}),
@@ -111,6 +113,7 @@ export const get = async <TRes>(path: string, options?: { modelId?: string; sign
   const fluxKey = isProviderEnabled('pixazo') ? (getActiveKeyValue('pixazo') || getFluxKeyInfo().key) : null;
   const openRouterKey = isProviderEnabled('openrouter') ? (getActiveKeyValue('openrouter') || getOpenRouterKey()) : null;
   const nvidiaKey = isProviderEnabled('nvidia') ? getActiveKeyValue('nvidia') : null;
+  const ideogramKey = isProviderEnabled('ideogram') ? getActiveKeyValue('ideogram') : null;
   const token = await getAuthToken();
 
   const res = await fetch(buildApiUrl(path), {
@@ -120,6 +123,7 @@ export const get = async <TRes>(path: string, options?: { modelId?: string; sign
       ...(fluxKey ? { 'X-Pixazo-Key': fluxKey } : {}),
       ...(openRouterKey ? { 'X-OpenRouter-Key': openRouterKey } : {}),
       ...(nvidiaKey ? { 'X-Nvidia-Key': nvidiaKey } : {}),
+      ...(ideogramKey ? { 'X-Ideogram-Key': ideogramKey } : {}),
       ...(getSelectedTextModel() ? { 'X-Text-Model': getSelectedTextModel() as string } : {}),
       ...(getSelectedTextSource() ? { 'X-Text-Source': getSelectedTextSource() as string } : {}),
       ...(options?.modelId ? { 'X-Gemini-Model': options.modelId } : {}),

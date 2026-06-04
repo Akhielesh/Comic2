@@ -1,10 +1,11 @@
 import { Request, Response, Router } from 'express';
 import crypto from 'node:crypto';
-import { requireGeminiKey, requirePixazoKey, requireOpenRouterKey, requireNvidiaKey } from '../middleware/keys.js';
+import { requireGeminiKey, requirePixazoKey, requireOpenRouterKey, requireNvidiaKey, requireIdeogramKey } from '../middleware/keys.js';
 import { checkLimits } from '../middleware/limits.js';
-import { FLUX_MODEL_ID, IDEMPOTENCY_TTL_MS, IMAGE_INCLUDE_DATA_URL_LEGACY, IMAGE_MODEL, OPENROUTER_IMAGE_MODEL, NVIDIA_IMAGE_MODEL } from '../config.js';
+import { FLUX_MODEL_ID, IDEMPOTENCY_TTL_MS, IMAGE_INCLUDE_DATA_URL_LEGACY, IMAGE_MODEL, OPENROUTER_IMAGE_MODEL, NVIDIA_IMAGE_MODEL, IDEOGRAM_MODEL_ID } from '../config.js';
 import { generateGeminiImage } from '../ai/image.js';
 import { generateFluxImage } from '../ai/flux.js';
+import { generateIdeogramImage } from '../ai/ideogram.js';
 import { getProvider, resolveProviderContext } from '../ai/gateway.js';
 import { resolveStageModel } from '../ai/stageModels.js';
 import { persistGeneratedImage } from '../services/imageStorage.js';
@@ -455,6 +456,146 @@ imageRouter.post('/flux', checkLimits('pixazo'), async (req, res, next) => {
           reason: (error as Error)?.message || 'generation_failed',
           metadata: {
             route: '/api/image/flux',
+            storage
+          }
+        });
+        throw error;
+      }
+    });
+
+    res.json(payload);
+  } catch (err) {
+    if (isMissingServiceRoleKeyError(err)) {
+      const publicCode = (err as { publicCode?: string })?.publicCode || 'MISSING_SERVICE_ROLE_KEY';
+      return res.status(503).json({
+        error: {
+          code: publicCode,
+          message: publicCode === 'MISSING_SUPABASE_CONFIG'
+            ? 'Server storage persistence is unavailable. Please set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.'
+            : 'Server storage persistence is unavailable. Please set SUPABASE_SERVICE_ROLE_KEY.'
+        }
+      });
+    }
+    next(err);
+  }
+});
+
+// Ideogram image generation (BYOK). Mirrors the Flux route: reserve credits,
+// generate, persist, then settle. A BYOK X-Ideogram-Key bypasses platform billing.
+imageRouter.post('/ideogram', checkLimits('ideogram'), async (req, res, next) => {
+  try {
+    const apiKey = requireIdeogramKey(req, res);
+    if (!apiKey) return;
+    const {
+      prompt,
+      aspectRatio,
+      resolution,
+      negativePrompt,
+      seed,
+      modelId,
+      projectId,
+      storage = 'project',
+      cropToRatio
+    } = req.body || {};
+    if (!prompt || !aspectRatio || !resolution) {
+      return res.status(400).json({ error: { message: 'prompt, aspectRatio, resolution are required' } });
+    }
+    if (storage !== 'test' && !req.user?.id) {
+      return res.status(401).json({ error: { message: 'User not authenticated for image persistence' } });
+    }
+
+    const resolvedModel = typeof modelId === 'string' && modelId.trim() ? modelId.trim() : IDEOGRAM_MODEL_ID;
+
+    const payload = await withIdempotency(req, res, 'image:ideogram', async () => {
+      const reserve = await reserveForOperation({
+        req,
+        operation: 'image.ideogram.generate',
+        fallbackModel: resolvedModel,
+        provider: 'ideogram',
+        resolution,
+        imageUnits: 1,
+        projectId: typeof projectId === 'string' ? projectId : undefined,
+        comicId: typeof projectId === 'string' ? projectId : undefined,
+        stage: typeof req.body?.stage === 'string' ? req.body.stage : 'generation',
+        metadata: {
+          route: '/api/image/ideogram',
+          storage
+        }
+      });
+
+      if ('details' in reserve) {
+        throw toBillingLimitError(formatLimitErrorResponse(reserve.details));
+      }
+
+      const generated = await generateIdeogramImage(apiKey, { prompt, aspectRatio, resolution, negativePrompt, seed, modelId: resolvedModel });
+      const apiMs = generated.timings?.apiMs || 0;
+      let responsePayload: Record<string, unknown> = { ...generated };
+      let settledBilling: Awaited<ReturnType<typeof settleReservedOperation>> | null = null;
+
+      try {
+        if (storage !== 'test') {
+          const saved = await persistGeneratedImage({
+            userId: req.user!.id,
+            projectId,
+            dataUrl: generated.dataUrl,
+            source: 'ideogram',
+            resolution,
+            cropToRatio
+          });
+
+          responsePayload = {
+            ...generated,
+            imageId: saved.imageId,
+            imageUrl: saved.imageUrl,
+            mimeType: saved.mimeType,
+            timings: buildTimings(apiMs, saved.saveMs),
+            dataUrl: IMAGE_INCLUDE_DATA_URL_LEGACY ? generated.dataUrl : undefined
+          };
+
+          console.info('[METRICS] image_pipeline', {
+            provider: 'ideogram',
+            upload_bytes_original: saved.originalBytes,
+            upload_bytes_stored: saved.storedBytes,
+            compression_ratio: Number(saved.compressionRatio.toFixed(4)),
+            image_save_ms: saved.saveMs
+          });
+        }
+
+        settledBilling = await settleReservedOperation({
+          req,
+          operation: 'image.ideogram.generate',
+          provider: 'ideogram',
+          model: generated.model || resolvedModel,
+          seed: {
+            provider: 'ideogram',
+            model: generated.model || resolvedModel,
+            operation: 'image.ideogram.generate',
+            imageUnits: 1,
+            resolution,
+            projectId: typeof projectId === 'string' ? projectId : undefined,
+            comicId: typeof projectId === 'string' ? projectId : undefined,
+            stage: typeof req.body?.stage === 'string' ? req.body.stage : 'generation',
+            byok: reserve.reservation.byokBypass
+          },
+          usage: (generated as { usage?: { promptTokens?: number; candidatesTokens?: number; totalTokens?: number; estimatedTokens?: number } }).usage,
+          imageUnits: 1,
+          metadata: {
+            route: '/api/image/ideogram',
+            storage
+          }
+        });
+
+        return attachBillingToPayload(responsePayload, reserve.reservation, settledBilling);
+      } catch (error) {
+        await releaseReservedOperation({
+          req,
+          operation: 'image.ideogram.generate',
+          provider: 'ideogram',
+          model: generated.model || resolvedModel,
+          projectId: typeof projectId === 'string' ? projectId : undefined,
+          reason: (error as Error)?.message || 'generation_failed',
+          metadata: {
+            route: '/api/image/ideogram',
             storage
           }
         });

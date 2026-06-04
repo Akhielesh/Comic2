@@ -100,6 +100,24 @@ export const FLUX_FETCH_IMAGE_TIMEOUT_MS = parseIntegerEnv(
 export const PIXAZO_ENDPOINT = process.env.PIXAZO_ENDPOINT || 'https://gateway.pixazo.ai/flux-1-schnell/v1/getData';
 export const FLUX_MODEL_ID = process.env.FLUX_MODEL_ID || 'pixazo/flux-1-schnell';
 
+// --- Ideogram (BYOK image generation; users add their own Ideogram API key) ---
+export const IDEOGRAM_ENDPOINT = process.env.IDEOGRAM_ENDPOINT || 'https://api.ideogram.ai/generate';
+export const IDEOGRAM_MODEL_ID = process.env.IDEOGRAM_MODEL_ID || 'ideogram/ideogram-v2';
+// Default Ideogram model version sent to the API when a request doesn't name a concrete variant.
+export const IDEOGRAM_MODEL_VERSION = process.env.IDEOGRAM_MODEL_VERSION || 'V_2';
+export const IDEOGRAM_REQUEST_TIMEOUT_MS = parseIntegerEnv(
+  process.env.IDEOGRAM_REQUEST_TIMEOUT_MS,
+  120_000,
+  'IDEOGRAM_REQUEST_TIMEOUT_MS',
+  1_000
+);
+export const IDEOGRAM_FETCH_IMAGE_TIMEOUT_MS = parseIntegerEnv(
+  process.env.IDEOGRAM_FETCH_IMAGE_TIMEOUT_MS,
+  30_000,
+  'IDEOGRAM_FETCH_IMAGE_TIMEOUT_MS',
+  1_000
+);
+
 // --- OpenRouter (unified gateway: text + image, incl. Gemini-family models via OpenRouter) ---
 // AI_PROVIDER gates the unified path: 'gemini' = legacy Google SDK + Pixazo, 'openrouter' = gateway.
 export const AI_PROVIDER = (process.env.AI_PROVIDER || 'gemini').trim().toLowerCase();

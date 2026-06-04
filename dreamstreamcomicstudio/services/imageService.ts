@@ -11,6 +11,7 @@ import {
 } from "./imageModels";
 import { emitBillingSummaryRefresh } from "./billing";
 import { generateFluxImage } from "./fluxService";
+import { generateIdeogramImage } from "./ideogramService";
 import { generateImage as generateGeminiImage } from "./geminiService";
 import { ApiError } from "./apiClient";
 
@@ -104,7 +105,7 @@ export const generateImage = async (
 
   const runModel = async (
     modelId: string,
-    provider: "flux" | "gemini",
+    provider: "flux" | "gemini" | "ideogram",
     runtimeMeta?: {
       fallbackOccurred?: boolean;
       fallbackFromModel?: string;
@@ -125,6 +126,24 @@ export const generateImage = async (
         aspectRatio,
         resolution,
         negativePrompt: IMAGE_TEXT_BLOCKER,
+        projectId,
+        stage: options?.stage,
+        cropToRatio: options?.cropToRatio,
+        abortSignal: options?.abortSignal,
+        storage: options?.storage,
+        meta: {
+          ...meta,
+          modelId
+        }
+      });
+    }
+    if (provider === "ideogram") {
+      return generateIdeogramImage({
+        prompt,
+        aspectRatio,
+        resolution,
+        negativePrompt: IMAGE_TEXT_BLOCKER,
+        modelId,
         projectId,
         stage: options?.stage,
         cropToRatio: options?.cropToRatio,
