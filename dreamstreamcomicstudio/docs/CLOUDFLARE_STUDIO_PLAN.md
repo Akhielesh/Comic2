@@ -92,11 +92,13 @@ A standalone Cloudflare Worker, deployed separately from the Vite frontend.
 }
 ```
 
-**`studio-worker/Dockerfile`** — bundles the runtimes we support. Node always; add
-Python/etc. later (bigger image = slower cold start, so keep it lean to start):
+**`studio-worker/Dockerfile`** — **Node-only to start** (decided): smallest image,
+fastest cold start, and it already covers React/Vite/Next/Express/static — the vast
+majority of what the AI builds. Python/others can be added later when needed.
 ```dockerfile
 FROM docker.io/cloudflare/sandbox:0.x
-# Node + npm already present in the sandbox base; add extra toolchains here if needed.
+# Node + npm are present in the sandbox base. Node-only for now; add extra
+# toolchains (python3, etc.) here later if we broaden runtime support.
 EXPOSE 3001
 ```
 
@@ -191,8 +193,9 @@ cap to bound spend.
   Railway authenticates the user first. Preview URLs carry an unguessable token.
 - **Resource caps**: `instance_type` (start `standard-2`), `max_instances`, idle
   **sleep timeout** (charges stop on sleep), max session length, per-user concurrency.
-- **Egress**: AI code can make outbound calls. Decide whether to allow it; restrict via
-  the Worker/container config if needed. Never inject our secrets into the container.
+- **Egress (decided: allowed):** AI-built apps may make outbound calls — most real
+  apps need to reach an external API/CDN. We **never inject our own secrets** into the
+  container, and a deny/allowlist policy can be layered on later if abuse appears.
 - **Cleanup**: a scheduled job stops/evicts sandboxes past max lifetime.
 
 ---
@@ -228,10 +231,18 @@ to 2 coherent tiers.
 
 ---
 
-## 10. Open decisions needed before coding Phase 1
+## 10. Decisions
 
-1. **Domain** for preview URLs (e.g. `studio.dreamstream.app`)? Confirm the zone.
+**Decided:**
+- **Egress:** allowed (apps can reach external APIs; our secrets never enter the container).
+- **Runtimes:** Node-only to start (add Python/others later).
+
+**Still open — needed before coding Phase 1:**
+1. **Domain** for preview URLs (e.g. `studio.dreamstream.app`)? Confirm the zone + that
+   we can add `*.studio.dreamstream.app` wildcard DNS.
 2. **Workers Paid** plan approval (this costs money per run).
-3. **Spend caps**: max concurrent live sandboxes/user, idle-sleep timeout, max session.
-4. **Egress**: allow AI apps to call the internet, or lock down?
-5. **Languages**: Node-only at first, or also Python/others in the image?
+3. **Spend caps** — proposed defaults, override as you like:
+   - ≤ **2** concurrent live sandboxes per user
+   - idle **sleep after 5 min** of no requests (stops CPU billing)
+   - hard **max session 30 min**, then auto-stop
+   - daily per-user build-minute cap (e.g. 60 min) tied into `usageEnforcer`
