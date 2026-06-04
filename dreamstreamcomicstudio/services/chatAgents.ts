@@ -19,7 +19,7 @@ export interface BuiltinAgentMeta {
 /** Mirrors server/src/ai/agents/registry.ts (display only). */
 export const BUILTIN_AGENTS: BuiltinAgentMeta[] = [
   { id: 'news', name: 'News Analyst', description: 'Latest news & current events on any topic or place.', toolNames: ['get_news', 'web_search'] },
-  { id: 'finance', name: 'Markets Analyst', description: 'Stocks, indices, crypto and market-moving news.', toolNames: ['get_stock', 'get_news', 'web_search'] },
+  { id: 'finance', name: 'Finance Terminal', description: 'Live markets terminal: quotes, watchlists, heatmaps, tables, charts and news.', toolNames: ['build_finance_terminal', 'get_stock', 'crypto_price', 'exchange_rate', 'render_table', 'render_heatmap', 'render_chart', 'show_metrics', 'get_news', 'web_search', 'wiki_lookup'] },
   { id: 'weather', name: 'Weather Specialist', description: 'Conditions, forecasts, air quality and planning.', toolNames: ['get_weather', 'web_search'] },
   { id: 'tech', name: 'Tech Reporter', description: 'Technology, products, AI, gadgets and releases.', toolNames: ['get_news', 'web_search', 'video_search'] },
   { id: 'research', name: 'Web Researcher', description: 'Deep research: facts, comparisons, how-tos, docs.', toolNames: ['web_search', 'video_search', 'image_search'] },
@@ -38,7 +38,12 @@ export const AGENT_TOOLS: { name: string; label: string }[] = [
   { name: 'video_search', label: 'Video search' },
   { name: 'image_search', label: 'Image search' },
   { name: 'render_chart', label: 'Charts' },
-  { name: 'show_metrics', label: 'Metric board' }
+  { name: 'show_metrics', label: 'Metric board' },
+  { name: 'render_table', label: 'Data table' },
+  { name: 'render_heatmap', label: 'Heatmap' },
+  { name: 'build_finance_terminal', label: 'Finance terminal' },
+  { name: 'crypto_price', label: 'Crypto prices' },
+  { name: 'exchange_rate', label: 'Currency exchange' }
 ];
 
 export const TOOL_LABEL: Record<string, string> = Object.fromEntries(

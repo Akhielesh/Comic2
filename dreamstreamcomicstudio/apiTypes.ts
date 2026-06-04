@@ -1100,6 +1100,122 @@ export interface MetricBoardArtifact {
   tiles: MetricTile[];
 }
 
+// --- Generic data table ---
+// A schema-driven, sortable, typed table — the workhorse for any tabular/financial
+// data (watchlists, holdings, fundamentals, comparisons, screeners). Each column
+// declares how its cells render (currency, percent, signed delta, sparkline, badge),
+// so the same artifact powers everything from a peer comparison to a portfolio book.
+export type DataTableCellKind =
+  | 'text'
+  | 'number'
+  | 'currency'
+  | 'percent'
+  | 'delta'
+  | 'deltaPercent'
+  | 'spark'
+  | 'badge';
+export interface DataTableColumn {
+  /** Header label. */
+  label: string;
+  /** How cells in this column render. Defaults to 'text'. */
+  kind?: DataTableCellKind;
+  align?: 'left' | 'right' | 'center';
+  /** ISO 4217 currency for 'currency' cells (column default; a cell may override). */
+  currency?: string;
+  /** Whether this column can be sorted (defaults true for numeric kinds). */
+  sortable?: boolean;
+}
+/** A single primitive value, or a richer cell with adornments. */
+export type DataTableValue = string | number | null;
+export interface DataTableCell {
+  value?: DataTableValue;
+  /** Recent values for a 'spark' cell (inline sparkline). */
+  spark?: number[];
+  /** Explicit color (badge background / text tint), overrides the kind default. */
+  color?: string;
+  /** A small secondary line under the value (e.g. a ticker under a name). */
+  sub?: string;
+  /** Make the cell a link. */
+  href?: string;
+  /** Per-cell currency override for 'currency' kind. */
+  currency?: string;
+}
+/** One row: an array of cells aligned to `columns` (primitive or rich cell). */
+export type DataTableRowCell = DataTableValue | DataTableCell;
+export interface DataTableArtifact {
+  title?: string;
+  subtitle?: string;
+  columns: DataTableColumn[];
+  rows: DataTableRowCell[][];
+  /** Initial sort. */
+  sort?: { column: number; dir: 'asc' | 'desc' };
+  /** A named kit palette for the accent strip. */
+  palette?: string;
+  /** A footnote under the table (source, as-of, methodology). */
+  caption?: string;
+}
+
+// --- Market heatmap ---
+// A colored grid of tickers/sectors, tinted green→red by their change. Optional
+// `weight` (e.g. market cap) sizes the tiles, giving a treemap-like market map.
+export interface HeatmapCell {
+  label: string;
+  /** Value that drives the color (a change %, by default). */
+  value?: number;
+  /** Secondary text (price, market cap, etc.). */
+  sub?: string;
+  /** Relative tile size (e.g. market cap). */
+  weight?: number;
+  href?: string;
+}
+export interface HeatmapGroup {
+  name?: string;
+  cells: HeatmapCell[];
+}
+export interface HeatmapArtifact {
+  title?: string;
+  subtitle?: string;
+  /** Grouped tiles (e.g. by sector). Use this OR `cells`. */
+  groups?: HeatmapGroup[];
+  /** Flat tiles when no grouping is needed. */
+  cells?: HeatmapCell[];
+  /** Unit appended to the value in tiles (default '%'). */
+  unit?: string;
+  caption?: string;
+}
+
+// --- Finance terminal ---
+// The flagship composite: a single artifact that assembles a focus quote, a KPI
+// ribbon, a watchlist/movers table, a sector heatmap, supporting charts and a news
+// rail into one Bloomberg-style terminal panel. Every section is optional and reuses
+// the existing artifact shapes, so the model can compose a partial terminal cheaply.
+export interface TerminalNewsItem {
+  title: string;
+  url?: string;
+  source?: string;
+  publishedAt?: string;
+}
+export interface FinanceTerminalArtifact {
+  title?: string;
+  subtitle?: string;
+  /** As-of label for the whole panel. */
+  asOf?: string;
+  /** A named kit palette for the terminal accent. */
+  palette?: string;
+  /** The featured instrument — renders the full interactive MarketCard. */
+  focus?: StockQuoteArtifact;
+  /** A KPI ribbon (indices, breadth, totals). */
+  metrics?: MetricBoardArtifact;
+  /** Watchlist / movers / holdings as a typed table. */
+  table?: DataTableArtifact;
+  /** Sector / market heatmap. */
+  heatmap?: HeatmapArtifact;
+  /** Supporting charts (allocation, performance, correlation, …). */
+  charts?: ChartArtifact[];
+  /** A compact news rail relevant to the terminal's focus. */
+  news?: TerminalNewsItem[];
+}
+
 // --- Agent swarm ---
 // One specialized agent's run within a swarm. Streamed to the client so the user
 // watches the plan execute (which agents, doing what, with what status).

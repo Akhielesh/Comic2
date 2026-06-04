@@ -22,6 +22,7 @@ import { GEO_TOOLS } from './geo.js';
 import { SPACE_TOOLS } from './space.js';
 import { CULTURE_TOOLS } from './culture.js';
 import { DEV_TOOLS } from './dev.js';
+import { FINANCE_TERMINAL_TOOLS } from './financeTerminal.js';
 
 export type { ChatTool, ToolExecResult, ToolContext } from './types.js';
 
@@ -493,6 +494,7 @@ const metricsTool: ChatTool = {
 const FREE_API_TOOLS: ChatTool[] = [
   ...KNOWLEDGE_TOOLS,
   ...FINANCE2_TOOLS,
+  ...FINANCE_TERMINAL_TOOLS,
   ...GEO_TOOLS,
   ...SPACE_TOOLS,
   ...CULTURE_TOOLS,
