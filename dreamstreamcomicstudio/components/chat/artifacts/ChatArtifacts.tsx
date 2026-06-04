@@ -3,7 +3,7 @@ import type { ChatArtifact, WeatherArtifact, VideoResultsArtifact, MapArtifact, 
 import { WeatherStation } from './WeatherStation';
 import { VideoResults } from './VideoResults';
 import { MapArtifactCard } from './MapArtifactCard';
-import { NewsCard } from './NewsCard';
+import { NewsDigest } from './NewsDigest';
 import { MarketCard } from './MarketCard';
 import { SwarmTraceCard } from './SwarmTraceCard';
 import { PlacesResults } from './PlacesResults';
@@ -20,7 +20,7 @@ const renderArtifact = (artifact: ChatArtifact, key: number): React.ReactNode =>
     case 'map':
       return <MapArtifactCard key={key} data={artifact.data as MapArtifact} />;
     case 'news_results':
-      return <NewsCard key={key} data={artifact.data as NewsResultsArtifact} />;
+      return <NewsDigest key={key} data={artifact.data as NewsResultsArtifact} />;
     case 'places_results':
       return <PlacesResults key={key} data={artifact.data as PlacesResultsArtifact} />;
     case 'stock_quote':

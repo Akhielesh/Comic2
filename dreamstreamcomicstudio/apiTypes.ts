@@ -881,6 +881,12 @@ export interface NewsItem {
   /** ISO timestamp of publication, when known. */
   publishedAt?: string;
   snippet?: string;
+  /** Lead image / thumbnail, when available (best-effort). */
+  image?: string;
+  /** Coarse sentiment for an optional badge. */
+  sentiment?: 'positive' | 'neutral' | 'negative';
+  /** Estimated read time in minutes. */
+  readMinutes?: number;
 }
 export interface NewsResultsArtifact {
   /** The query used (empty for a topical/top-headlines feed). */

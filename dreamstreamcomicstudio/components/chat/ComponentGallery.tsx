@@ -1,7 +1,7 @@
 import React from 'react';
 import { ChatMarkdown } from './ChatMarkdown';
 import { WeatherStation } from './artifacts/WeatherStation';
-import { NewsCard } from './artifacts/NewsCard';
+import { NewsDigest } from './artifacts/NewsDigest';
 import { MarketCard } from './artifacts/MarketCard';
 import { VideoResults } from './artifacts/VideoResults';
 import { PlacesResults } from './artifacts/PlacesResults';
@@ -26,8 +26,10 @@ const weather: WeatherArtifact = {
 
 const news: NewsResultsArtifact = {
   query: 'AI', items: [
-    { title: 'A breakthrough model ships with agentic tools', url: 'https://example.com/1', source: 'TechDaily', publishedAt: new Date(Date.now() - 3600_000).toISOString(), snippet: 'The release adds parallel tool use and…' },
-    { title: 'Open models close the gap on closed ones', url: 'https://example.com/2', source: 'Wire', publishedAt: new Date(Date.now() - 7200_000).toISOString() }
+    { title: 'A breakthrough model ships with agentic tools and parallel execution', url: 'https://techdaily.com/1', source: 'TechDaily', publishedAt: new Date(Date.now() - 3600_000).toISOString(), snippet: 'The release adds parallel tool use, a larger context window, and on-device inference, marking a notable step for agentic workflows across the industry.', sentiment: 'positive', readMinutes: 4 },
+    { title: 'Open models close the gap on closed ones', url: 'https://reuters.com/2', source: 'Reuters', publishedAt: new Date(Date.now() - 7200_000).toISOString(), snippet: 'Benchmarks show open-weight models trailing flagship systems by a narrowing margin.' },
+    { title: 'Chipmakers race to meet inference demand', url: 'https://bloomberg.com/3', source: 'Bloomberg', publishedAt: new Date(Date.now() - 5 * 3600_000).toISOString(), snippet: 'Capacity constraints push prices higher as data-center buildout accelerates.', sentiment: 'neutral', readMinutes: 6 },
+    { title: 'Regulators weigh new disclosure rules for AI systems', url: 'https://theverge.com/4', source: 'The Verge', publishedAt: new Date(Date.now() - 9 * 3600_000).toISOString(), sentiment: 'negative' }
   ]
 };
 
@@ -116,7 +118,7 @@ export const ComponentGallery: React.FC = () => (
     <p className="text-sm text-slate-600">Every rich-output component rendered with sample data — the live UI library.</p>
     <Item title="Weather station (animated · gauges · map)"><WeatherStation data={weather} /></Item>
     <Item title="Market card (hover · range timeline · candlesticks)"><MarketCard data={stock} /></Item>
-    <Item title="News card"><NewsCard data={news} /></Item>
+    <Item title="News digest (lead · source filter · favicons)"><NewsDigest data={news} /></Item>
     <Item title="Places (local) card"><PlacesResults data={places} /></Item>
     <Item title="Video results"><VideoResults data={videos} /></Item>
     <Item title="Agent swarm trace"><SwarmTraceCard data={swarm} /></Item>
