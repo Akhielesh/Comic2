@@ -344,6 +344,134 @@ const makePlacesTool = (ctx?: ToolContext): ChatTool => ({
   }
 });
 
+// Render an interactive chart from model-provided data. Pure (no network) — it
+// validates + normalizes the structure into a `chart` artifact the client draws.
+const chartTool: ChatTool = {
+  name: 'render_chart',
+  description:
+    'Render an interactive chart (line, area, bar, grouped-bar, stacked-bar, pie, donut or scatter) from data YOU provide. Use this to visualize any quantitative data you have gathered or computed — trends over time, category comparisons, breakdowns/parts-of-a-whole, distributions, benchmarks, poll results. Provide one or more named series of {x, y} points (for pie/donut, a single series whose points are the slices). A polished chart card with a legend and hover tooltips is shown to the user; keep prose brief and let the chart carry the detail.',
+  parameters: {
+    type: 'object',
+    properties: {
+      variant: {
+        type: 'string',
+        enum: ['line', 'area', 'bar', 'grouped-bar', 'stacked-bar', 'pie', 'donut', 'scatter'],
+        description: 'bar/grouped-bar for category comparisons, line/area for trends over time, pie/donut for parts of a whole, scatter for correlation.'
+      },
+      title: { type: 'string' },
+      subtitle: { type: 'string' },
+      unit: { type: 'string', description: 'Optional unit suffix for values, e.g. "%", "ms", "$".' },
+      xLabel: { type: 'string' },
+      yLabel: { type: 'string' },
+      palette: { type: 'string', enum: ['brand', 'ocean', 'sunset', 'violet', 'bull', 'bear', 'mono'], description: 'Optional color theme.' },
+      series: {
+        type: 'array',
+        description: 'One or more data series. For pie/donut, provide exactly one series whose points are the slices.',
+        items: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Series name (shown in the legend).' },
+            color: { type: 'string', description: 'Optional hex color override, e.g. "#3B82F6".' },
+            points: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  x: { type: 'string', description: 'Category label, or a number/date written as a string.' },
+                  y: { type: 'number' }
+                },
+                required: ['x', 'y']
+              }
+            }
+          },
+          required: ['points']
+        }
+      }
+    },
+    required: ['variant', 'series']
+  },
+  execute: async (args) => {
+    const variant = String(args?.variant || 'bar');
+    const rawSeries = Array.isArray(args?.series) ? (args!.series as unknown[]) : [];
+    const series = rawSeries
+      .map((s) => {
+        const so = s as Record<string, unknown>;
+        const points = Array.isArray(so?.points)
+          ? (so.points as unknown[])
+              .map((p) => {
+                const po = p as Record<string, unknown>;
+                const y = Number(po?.y);
+                return { x: typeof po?.x === 'number' ? po.x : String(po?.x ?? ''), y: Number.isFinite(y) ? y : 0 };
+              })
+              .filter((p) => p.x !== '')
+          : [];
+        return { name: typeof so?.name === 'string' ? so.name : undefined, color: typeof so?.color === 'string' ? so.color : undefined, points };
+      })
+      .filter((s) => s.points.length > 0);
+    if (!series.length) return { content: 'No usable chart data was provided (need at least one series with points).' };
+    const str = (k: string) => (typeof args?.[k] === 'string' ? (args[k] as string) : undefined);
+    const data = { variant, title: str('title'), subtitle: str('subtitle'), unit: str('unit'), xLabel: str('xLabel'), yLabel: str('yLabel'), palette: str('palette'), series };
+    return { content: `Rendered a ${variant} chart${data.title ? ` ("${data.title}")` : ''} with ${series.length} series. A chart card is shown to the user.`, artifacts: [{ type: 'chart', data }] };
+  }
+};
+
+// Render a board of KPI tiles from model-provided metrics.
+const metricsTool: ChatTool = {
+  name: 'show_metrics',
+  description:
+    'Show a board of KPI / stat tiles from data YOU provide — totals, rates, scores, deltas. Each tile has a label and value, plus an optional change (delta), a sparkline trend, a progress ring, and a status (good/warn/bad). Use for at-a-glance dashboards, summaries, before/after comparisons or scorecards. A polished metric board is shown to the user.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      columns: { type: 'number', description: 'Grid columns 1–4 (optional).' },
+      tiles: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            label: { type: 'string' },
+            value: { type: 'string', description: 'The headline value (a number or a preformatted string like "$72").' },
+            unit: { type: 'string' },
+            delta: { type: 'number', description: 'Absolute change vs. a baseline (drives a green/red trend pill).' },
+            deltaPercent: { type: 'number' },
+            spark: { type: 'array', items: { type: 'number' }, description: 'Recent values for an inline sparkline.' },
+            progress: { type: 'object', properties: { value: { type: 'number' }, max: { type: 'number' } }, description: 'Renders a progress ring.' },
+            status: { type: 'string', enum: ['good', 'warn', 'bad', 'neutral'] }
+          },
+          required: ['label', 'value']
+        }
+      }
+    },
+    required: ['tiles']
+  },
+  execute: async (args) => {
+    const rawTiles = Array.isArray(args?.tiles) ? (args!.tiles as unknown[]) : [];
+    const tiles = rawTiles
+      .map((t) => {
+        const to = t as Record<string, unknown>;
+        if (typeof to?.label !== 'string' || (typeof to?.value !== 'string' && typeof to?.value !== 'number')) return null;
+        const num = (k: string) => (typeof to?.[k] === 'number' ? (to[k] as number) : undefined);
+        const prog = to?.progress as Record<string, unknown> | undefined;
+        return {
+          label: to.label as string,
+          value: to.value as string | number,
+          unit: typeof to?.unit === 'string' ? to.unit : undefined,
+          delta: num('delta'),
+          deltaPercent: num('deltaPercent'),
+          spark: Array.isArray(to?.spark) ? (to.spark as unknown[]).map(Number).filter(Number.isFinite) : undefined,
+          progress: prog && typeof prog.value === 'number' && typeof prog.max === 'number' ? { value: prog.value, max: prog.max } : undefined,
+          status: ['good', 'warn', 'bad', 'neutral'].includes(String(to?.status)) ? (to.status as 'good' | 'warn' | 'bad' | 'neutral') : undefined
+        };
+      })
+      .filter((t): t is NonNullable<typeof t> => t !== null);
+    if (!tiles.length) return { content: 'No usable metric tiles were provided (each needs a label and value).' };
+    const columns = typeof args?.columns === 'number' ? Math.max(1, Math.min(4, Math.round(args.columns))) : undefined;
+    const data = { title: typeof args?.title === 'string' ? args.title : undefined, columns, tiles };
+    return { content: `Rendered a metric board with ${tiles.length} tiles. A KPI board is shown to the user.`, artifacts: [{ type: 'metric_board', data }] };
+  }
+};
+
 /** All context-free built-in tools, keyed by the name the model/clients reference. */
 const STATIC_TOOLS: Record<string, ChatTool> = {
   web_search: webSearchTool,
@@ -351,7 +479,9 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   video_search: videoSearchTool,
   get_weather: weatherTool,
   show_map: mapTool,
-  get_stock: stockTool
+  get_stock: stockTool,
+  render_chart: chartTool,
+  show_metrics: metricsTool
 };
 
 /** Names of tools that are built per-request with situational context. */

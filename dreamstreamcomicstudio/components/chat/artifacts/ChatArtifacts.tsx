@@ -1,5 +1,5 @@
 import React from 'react';
-import type { ChatArtifact, WeatherArtifact, VideoResultsArtifact, MapArtifact, NewsResultsArtifact, StockQuoteArtifact, SwarmTraceArtifact, PlacesResultsArtifact } from '../../../apiTypes';
+import type { ChatArtifact, WeatherArtifact, VideoResultsArtifact, MapArtifact, NewsResultsArtifact, StockQuoteArtifact, SwarmTraceArtifact, PlacesResultsArtifact, ChartArtifact, MetricBoardArtifact } from '../../../apiTypes';
 import { WeatherStation } from './WeatherStation';
 import { VideoResults } from './VideoResults';
 import { MapArtifactCard } from './MapArtifactCard';
@@ -7,6 +7,8 @@ import { NewsDigest } from './NewsDigest';
 import { MarketCard } from './MarketCard';
 import { SwarmTraceCard } from './SwarmTraceCard';
 import { PlacesResults } from './PlacesResults';
+import { ChartCard } from './ChartCard';
+import { MetricBoard } from './MetricBoard';
 
 // Renderer registry for typed rich-output artifacts. Adding a new rich component
 // (maps, video grids, PDF viewers…) is a single `case` here — the chat loop and
@@ -27,6 +29,10 @@ const renderArtifact = (artifact: ChatArtifact, key: number): React.ReactNode =>
       return <MarketCard key={key} data={artifact.data as StockQuoteArtifact} />;
     case 'swarm_trace':
       return <SwarmTraceCard key={key} data={artifact.data as SwarmTraceArtifact} />;
+    case 'chart':
+      return <ChartCard key={key} data={artifact.data as ChartArtifact} />;
+    case 'metric_board':
+      return <MetricBoard key={key} data={artifact.data as MetricBoardArtifact} />;
     default:
       return null;
   }

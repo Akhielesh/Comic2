@@ -36,7 +36,9 @@ export const AGENT_TOOLS: { name: string; label: string }[] = [
   { name: 'find_places', label: 'Places / local' },
   { name: 'show_map', label: 'Maps' },
   { name: 'video_search', label: 'Video search' },
-  { name: 'image_search', label: 'Image search' }
+  { name: 'image_search', label: 'Image search' },
+  { name: 'render_chart', label: 'Charts' },
+  { name: 'show_metrics', label: 'Metric board' }
 ];
 
 export const TOOL_LABEL: Record<string, string> = Object.fromEntries(

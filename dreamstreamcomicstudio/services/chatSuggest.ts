@@ -48,7 +48,9 @@ const TOOL_KW = {
   get_news: /\b(news|headline|breaking|happening|latest on|updates? on)\b/i,
   get_stock: /\b(stock|share price|ticker|stock market|nasdaq|s&p|dow|crypto|bitcoin|ethereum|price of [A-Z]{1,5}\b)\b/i,
   video_search: /\b(video|youtube|watch|tutorial|how to|show me how|clip)\b/i,
-  image_search: /\b(image|photo|picture|show me (a |an )?(pic|image|photo)|what does .* look like)\b/i
+  image_search: /\b(image|photo|picture|show me (a |an )?(pic|image|photo)|what does .* look like)\b/i,
+  render_chart: /\b(chart|graph|plot|visuali[sz]e|bar chart|line chart|pie chart|donut|scatter|trend (over|line)|breakdown of)\b/i,
+  show_metrics: /\b(dashboard|kpis?|metrics?|scorecard|stat ?board|at a glance|summary of (the )?(stats|numbers|metrics))\b/i
 };
 
 /**

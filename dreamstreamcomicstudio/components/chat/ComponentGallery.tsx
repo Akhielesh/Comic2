@@ -6,9 +6,12 @@ import { MarketCard } from './artifacts/MarketCard';
 import { VideoResults } from './artifacts/VideoResults';
 import { PlacesResults } from './artifacts/PlacesResults';
 import { SwarmTraceCard } from './artifacts/SwarmTraceCard';
+import { ChartCard } from './artifacts/ChartCard';
+import { MetricBoard } from './artifacts/MetricBoard';
 import type {
   WeatherArtifact, NewsResultsArtifact, StockQuoteArtifact,
-  VideoResultsArtifact, PlacesResultsArtifact, SwarmTraceArtifact
+  VideoResultsArtifact, PlacesResultsArtifact, SwarmTraceArtifact,
+  ChartArtifact, MetricBoardArtifact
 } from '../../apiTypes';
 
 // A living gallery of the chat's rich-output components, each with sample data, so
@@ -98,6 +101,31 @@ const swarm: SwarmTraceArtifact = {
   ]
 };
 
+const barChart: ChartArtifact = {
+  variant: 'grouped-bar', title: 'Quarterly revenue by region', subtitle: '$M, FY26', palette: 'ocean', unit: 'M',
+  xLabel: 'Quarter', yLabel: '$M',
+  series: [
+    { name: 'Americas', points: [{ x: 'Q1', y: 120 }, { x: 'Q2', y: 145 }, { x: 'Q3', y: 138 }, { x: 'Q4', y: 162 }] },
+    { name: 'EMEA', points: [{ x: 'Q1', y: 88 }, { x: 'Q2', y: 96 }, { x: 'Q3', y: 110 }, { x: 'Q4', y: 121 }] },
+    { name: 'APAC', points: [{ x: 'Q1', y: 64 }, { x: 'Q2', y: 78 }, { x: 'Q3', y: 92 }, { x: 'Q4', y: 105 }] }
+  ]
+};
+
+const donutChart: ChartArtifact = {
+  variant: 'donut', title: 'Traffic by source', palette: 'sunset',
+  series: [{ points: [{ x: 'Organic', y: 42 }, { x: 'Direct', y: 26 }, { x: 'Social', y: 18 }, { x: 'Referral', y: 14 }] }]
+};
+
+const board: MetricBoardArtifact = {
+  title: 'Site KPIs · last 30 days', columns: 4,
+  tiles: [
+    { label: 'Visitors', value: 84230, delta: 5120, deltaPercent: 6.5, spark: [60, 62, 65, 63, 70, 74, 78], status: 'good' },
+    { label: 'Bounce rate', value: 38, unit: '%', delta: -2.1, deltaPercent: -5.2, status: 'good', progress: { value: 38, max: 100 } },
+    { label: 'Avg. order', value: '$72', delta: 3, deltaPercent: 4.3, spark: [64, 66, 65, 68, 70, 71, 72] },
+    { label: 'Errors', value: 12, delta: 4, deltaPercent: 50, status: 'bad', spark: [4, 6, 5, 8, 7, 10, 12] }
+  ]
+};
+
 const tableMd = `| Model | Params (B) | MMLU | Cost ($/M) |
 |---|---|---|---|
 | Sonnet 4.6 | 175 | 88.7 | 3.00 |
@@ -122,6 +150,9 @@ export const ComponentGallery: React.FC = () => (
     <Item title="Places (local) card"><PlacesResults data={places} /></Item>
     <Item title="Video results"><VideoResults data={videos} /></Item>
     <Item title="Agent swarm trace"><SwarmTraceCard data={swarm} /></Item>
-    <Item title="Interactive table (sort + search)"><ChatMarkdown text={tableMd} /></Item>
+    <Item title="Chart — grouped bars (legend · hover)"><ChartCard data={barChart} /></Item>
+    <Item title="Chart — donut"><ChartCard data={donutChart} /></Item>
+    <Item title="Metric board (KPIs · sparklines · rings)"><MetricBoard data={board} /></Item>
+    <Item title="Interactive data table"><ChatMarkdown text={tableMd} /></Item>
   </div>
 );

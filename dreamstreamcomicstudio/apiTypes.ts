@@ -1012,6 +1012,60 @@ export interface StockQuoteArtifact {
   headlines?: NewsItem[];
 }
 
+// --- Generic data visualization ---
+// A schema-driven chart the model can populate with arbitrary data, so it isn't
+// tied to one domain (markets, polls, metrics, comparisons all flow through this).
+export type DataChartVariant = 'line' | 'area' | 'bar' | 'grouped-bar' | 'stacked-bar' | 'pie' | 'donut' | 'scatter';
+export interface DataChartPoint {
+  /** Category (bar/pie) or numeric/temporal x (line/scatter). */
+  x: number | string;
+  y: number;
+}
+export interface DataChartSeries {
+  name?: string;
+  /** Explicit color override; otherwise drawn from the palette ramp. */
+  color?: string;
+  points: DataChartPoint[];
+}
+export interface ChartArtifact {
+  variant: DataChartVariant;
+  title?: string;
+  subtitle?: string;
+  series: DataChartSeries[];
+  xLabel?: string;
+  yLabel?: string;
+  /** Unit suffix appended to values in tooltips/axis (e.g. "%", "ms", "$"). */
+  unit?: string;
+  /** A named kit palette ("brand" | "ocean" | "sunset" | "violet" | "bull" | "bear" | "mono"). */
+  palette?: string;
+}
+
+// A board of KPI tiles (stat + delta + sparkline/progress). The "at a glance"
+// surface; tiles can also embed a full ChartArtifact.
+export interface MetricTile {
+  label: string;
+  value: string | number;
+  unit?: string;
+  /** Signed change for a trend pill (absolute). */
+  delta?: number;
+  /** Percent change for the trend pill. */
+  deltaPercent?: number;
+  /** Inline sparkline values. */
+  spark?: number[];
+  /** Progress ring as value/max. */
+  progress?: { value: number; max: number };
+  /** Status accent: tints the tile. */
+  status?: 'good' | 'warn' | 'bad' | 'neutral';
+  /** A full chart embedded in the tile. */
+  chart?: ChartArtifact;
+}
+export interface MetricBoardArtifact {
+  title?: string;
+  /** Grid columns (1–4); defaults to an automatic fit. */
+  columns?: 1 | 2 | 3 | 4;
+  tiles: MetricTile[];
+}
+
 // --- Agent swarm ---
 // One specialized agent's run within a swarm. Streamed to the client so the user
 // watches the plan execute (which agents, doing what, with what status).
