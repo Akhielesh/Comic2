@@ -1,18 +1,19 @@
 import type { BillingPlanTier } from '../../../shared/types/billing.js';
 import { getBillingSummary } from './billingLedger.js';
 import { getSupabaseAdmin } from './supabase.js';
+import {
+  FREE_TEXT_ROLLOVER_AT_MS,
+  FREE_TEXT_COMPAT_MODELS as SHARED_FREE_TEXT_COMPAT_MODELS,
+  resolveFreeTextModel
+} from '../../../shared/freeModelPolicy.js';
 
 export type ModelAccessScope = 'text' | 'vision' | 'assistant' | 'image';
 
 type EffectiveModelTier = 'free' | 'pro';
 
-const FREE_TEXT_PRE_SUNSET_MODEL = 'gemini-2.0-flash';
-const FREE_TEXT_POST_SUNSET_MODEL = 'gemini-2.5-flash';
-const FREE_TEXT_SUNSET_SWITCH_AT = Date.parse('2026-03-31T00:00:00.000Z');
-const FREE_TEXT_COMPAT_MODELS = new Set([
-  FREE_TEXT_PRE_SUNSET_MODEL,
-  FREE_TEXT_POST_SUNSET_MODEL
-]);
+// Free-tier rollover ids/date live in shared/freeModelPolicy (single source of truth
+// shared with the client) — see resolveFreeTextModel / FREE_TEXT_ROLLOVER_AT_MS.
+const FREE_TEXT_COMPAT_MODELS = new Set(SHARED_FREE_TEXT_COMPAT_MODELS);
 
 export const FREE_NANO_BANANA_MODEL = 'gemini-2.5-flash-image';
 export const FREE_NANO_BANANA_DAILY_CAP = 5;
@@ -71,11 +72,6 @@ const utcDate = (at: number) => {
   return `${year}-${month}-${day}`;
 };
 
-const resolveFreeTextModel = (atMs: number) =>
-  atMs >= FREE_TEXT_SUNSET_SWITCH_AT
-    ? FREE_TEXT_POST_SUNSET_MODEL
-    : FREE_TEXT_PRE_SUNSET_MODEL;
-
 export const resolveAllowedModels = (
   scope: ModelAccessScope,
   planTier: BillingPlanTier | string | undefined,
@@ -113,7 +109,7 @@ const createModelNotAllowedError = (input: {
     requestedModel: input.requestedModel,
     allowedModels: input.allowedModels,
     effectiveFreeTextModel: resolveFreeTextModel(input.atMs || Date.now()),
-    freeTextModelSunsetAt: new Date(FREE_TEXT_SUNSET_SWITCH_AT).toISOString()
+    freeTextModelSunsetAt: new Date(FREE_TEXT_ROLLOVER_AT_MS).toISOString()
   };
   return error;
 };

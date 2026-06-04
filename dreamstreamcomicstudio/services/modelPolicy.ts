@@ -1,9 +1,18 @@
 import type { BillingPlanTier } from '../shared/types/billing';
+import {
+  FREE_TEXT_PRE_ROLLOVER_MODEL,
+  FREE_TEXT_POST_ROLLOVER_MODEL,
+  FREE_TEXT_ROLLOVER_AT_ISO,
+  resolveFreeTextModel
+} from '../shared/freeModelPolicy';
 
-export const FREE_TEXT_PRE_ROLLOVER_MODEL = 'gemini-2.0-flash';
-export const FREE_TEXT_POST_ROLLOVER_MODEL = 'gemini-2.5-flash';
-export const FREE_TEXT_ROLLOVER_AT_ISO = '2026-03-31T00:00:00.000Z';
-const FREE_TEXT_ROLLOVER_AT_MS = Date.parse(FREE_TEXT_ROLLOVER_AT_ISO);
+// Canonical free-tier rollover constants live in shared/freeModelPolicy (single source
+// of truth, shared with the server) — re-exported here for existing client callers.
+export {
+  FREE_TEXT_PRE_ROLLOVER_MODEL,
+  FREE_TEXT_POST_ROLLOVER_MODEL,
+  FREE_TEXT_ROLLOVER_AT_ISO
+};
 
 export const PRO_PLAN_TIERS: BillingPlanTier[] = ['pro', 'studio', 'admin'];
 
@@ -13,10 +22,7 @@ export type TextModelDefinition = {
   minimumPlanTier?: 'pro';
 };
 
-export const TEXT_MODEL =
-  Date.now() >= FREE_TEXT_ROLLOVER_AT_MS
-    ? FREE_TEXT_POST_ROLLOVER_MODEL
-    : FREE_TEXT_PRE_ROLLOVER_MODEL;
+export const TEXT_MODEL = resolveFreeTextModel();
 
 export const TEXT_MODELS: TextModelDefinition[] = [
   { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
@@ -47,9 +53,7 @@ export const isProPlanTier = (planTier?: string | null) =>
   PRO_PLAN_TIERS.includes(resolveEffectivePlanTier(planTier));
 
 export const resolveFreeTextModelForDate = (at: Date = new Date()) =>
-  at.getTime() >= FREE_TEXT_ROLLOVER_AT_MS
-    ? FREE_TEXT_POST_ROLLOVER_MODEL
-    : FREE_TEXT_PRE_ROLLOVER_MODEL;
+  resolveFreeTextModel(at.getTime());
 
 export const getAllowedTextModelIdsForPlan = (
   planTier?: string | null,
