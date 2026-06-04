@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Sparkles, ArrowRight, Zap, Users, BookOpen, Check, HelpCircle, Mail, Info, ChevronRight } from 'lucide-react';
+import { Sparkles, ArrowRight, Zap, Users, BookOpen, Check, HelpCircle, Mail, Info, ChevronRight, MessageSquare, Bot, Shield, Cpu } from 'lucide-react';
 import { Button } from './Button';
 import { getStudioStats, StudioStats } from '../services/stats';
 import { useAuth } from '../contexts/AuthContext';
@@ -28,6 +28,19 @@ const PROCESS_STAGES = [
   { id: 8, title: "Polish", desc: "Add lettering, speech bubbles, and export." }
 ];
 
+const CHAT_FEATURES = [
+  { icon: <Cpu size={16} />, text: "100+ models — Claude, Gemini, GPT & more" },
+  { icon: <Sparkles size={16} />, text: "Real-time streaming responses" },
+  { icon: <Shield size={16} />, text: "Rich outputs: charts, maps, weather & more" },
+  { icon: <BookOpen size={16} />, text: "Persistent conversations you can revisit" },
+];
+
+const MOCK_MESSAGES = [
+  { role: 'user', text: "Give me a villain for my sci-fi comic" },
+  { role: 'model', title: "Dr. Elara Voss — The Architect", text: "A terraforming engineer whose life's work was weaponized. Now she rewrites planetary code to 'fix' humanity on her terms..." },
+  { role: 'user', text: "Perfect. What's her tragic backstory?" },
+];
+
 export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics, onOpenProfile, onOpenPrivacy, onOpenTerms, onNavigate }) => {
   const { user } = useAuth();
   const [activeStage, setActiveStage] = useState(1);
@@ -42,29 +55,91 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
+
+      {/* Announcement Banner */}
+      <div className="bg-brand-yellow border-b-2 border-black py-1.5 px-4 text-center text-xs font-bold text-black tracking-wide">
+        <span className="inline-flex items-center gap-2">
+          <Sparkles size={11} /> AI Chat is live — converse with Claude, Gemini &amp; 100+ models
+          <button
+            onClick={() => onNavigate?.('chat')}
+            className="underline hover:no-underline ml-1"
+          >
+            Try it free →
+          </button>
+        </span>
+      </div>
+
       {/* Header */}
-      <header className="sticky top-0 z-50 bg-white/90 backdrop-blur border-b-4 border-black">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-brand-yellow border-2 border-black rounded-lg flex items-center justify-center text-black font-display text-2xl shadow-comic transform -rotate-3">D</div>
-            <div className="flex flex-col">
-              <span className="font-display text-2xl tracking-tight text-black leading-none">DreamStream</span>
-              <span className="font-comic font-bold text-brand-blue text-xs leading-none">Comic Studio</span>
+      <header className="sticky top-0 z-50 bg-white/95 backdrop-blur-md border-b-4 border-black">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6">
+          <div className="flex items-center justify-between h-16">
+
+            {/* Logo */}
+            <div className="flex items-center gap-3 shrink-0">
+              <div className="w-10 h-10 bg-brand-yellow border-2 border-black rounded-xl flex items-center justify-center text-black font-display text-xl shadow-[3px_3px_0px_0px_rgba(0,0,0,0.8)] transform -rotate-2">
+                D
+              </div>
+              <div className="leading-none">
+                <div className="font-display text-xl text-slate-900">DreamStream</div>
+                <div className="text-[10px] font-bold text-brand-blue uppercase tracking-widest mt-0.5">Comic Studio</div>
+              </div>
             </div>
-          </div>
-          <div className="flex items-center gap-4">
-            <button onClick={() => onNavigate?.('how-it-works')} className="hidden md:block text-sm font-bold hover:underline">How It Works</button>
-            <button onClick={onViewComics} className="hidden md:block text-sm font-bold hover:underline">View Comics</button>
-            {user ? (
-              <>
-                <TokenAvailabilityPill />
-                <Button onClick={onEnterStudio} size="sm" icon={<ArrowRight size={16} />}>Studio</Button>
-                {onNavigate && <NotificationBell onNavigate={onNavigate} />}
-                <UserAvatar onClick={onOpenProfile} />
-              </>
-            ) : (
-              <Button onClick={onEnterStudio} size="sm" icon={<ArrowRight size={16} />}>Sign In</Button>
-            )}
+
+            {/* Center nav — desktop only */}
+            <nav className="hidden lg:flex items-center gap-1 bg-slate-100 border-2 border-black rounded-full px-2 py-1">
+              <button
+                onClick={() => onNavigate?.('how-it-works')}
+                className="px-4 py-1.5 text-sm font-bold text-slate-600 hover:bg-white hover:text-black rounded-full transition-all"
+              >
+                How It Works
+              </button>
+              <button
+                onClick={onViewComics}
+                className="px-4 py-1.5 text-sm font-bold text-slate-600 hover:bg-white hover:text-black rounded-full transition-all"
+              >
+                Gallery
+              </button>
+              <button
+                onClick={() => onNavigate?.('models')}
+                className="px-4 py-1.5 text-sm font-bold text-slate-600 hover:bg-white hover:text-black rounded-full transition-all"
+              >
+                Models
+              </button>
+              <button
+                onClick={() => onNavigate?.('chat')}
+                className="px-4 py-1.5 text-sm font-bold text-brand-blue hover:bg-brand-blue hover:text-white rounded-full transition-all flex items-center gap-1.5"
+              >
+                <Bot size={13} /> AI Chat
+              </button>
+            </nav>
+
+            {/* Right auth controls */}
+            <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+              {user ? (
+                <>
+                  <div className="hidden sm:block">
+                    <TokenAvailabilityPill />
+                  </div>
+                  {onNavigate && <NotificationBell onNavigate={onNavigate} />}
+                  <Button onClick={onEnterStudio} size="sm" icon={<ArrowRight size={14} />}>
+                    Studio
+                  </Button>
+                  <UserAvatar onClick={onOpenProfile} />
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={onEnterStudio}
+                    className="hidden sm:block px-3 py-1.5 text-sm font-bold text-slate-600 hover:text-black transition-colors"
+                  >
+                    Sign In
+                  </button>
+                  <Button onClick={onEnterStudio} size="sm" icon={<Zap size={14} />}>
+                    Start Free
+                  </Button>
+                </>
+              )}
+            </div>
           </div>
         </div>
       </header>
@@ -109,7 +184,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
             </div>
           </div>
 
-          {/* Active User Cards */}
+          {/* Stats Cards */}
           <div className="relative">
             <div className="absolute inset-0 bg-brand-yellow/20 rounded-full blur-3xl transform translate-x-10 translate-y-10" />
             <div className="relative grid grid-cols-2 gap-4">
@@ -147,8 +222,127 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
         </div>
       </section>
 
+      {/* AI Chat Feature Section */}
+      <section className="py-20 px-6 bg-white border-y-4 border-black">
+        <div className="max-w-7xl mx-auto">
+          <div className="grid lg:grid-cols-2 gap-16 items-center">
+
+            {/* Left: Description */}
+            <div className="space-y-7">
+              <div className="inline-flex items-center gap-2 bg-brand-blue text-white px-4 py-2 rounded-full font-mono text-xs font-bold uppercase tracking-widest">
+                <Bot size={14} /> AI Chat Platform
+              </div>
+              <h2 className="text-4xl md:text-5xl font-display leading-tight">
+                Talk to AI. Build better comics.
+              </h2>
+              <p className="text-lg font-comic text-slate-600 leading-relaxed">
+                Brainstorm story ideas, develop characters, and explore creative possibilities through conversation. Powered by 100+ models — no extra API key required to start.
+              </p>
+              <ul className="space-y-3">
+                {CHAT_FEATURES.map((feature, i) => (
+                  <li key={i} className="flex items-center gap-3 text-sm font-bold text-slate-700">
+                    <span className="w-8 h-8 bg-brand-yellow border-2 border-black rounded-lg flex items-center justify-center shrink-0">
+                      {feature.icon}
+                    </span>
+                    {feature.text}
+                  </li>
+                ))}
+              </ul>
+              <div className="flex flex-wrap gap-3 pt-2">
+                <Button
+                  onClick={() => onNavigate?.('chat')}
+                  icon={<MessageSquare size={16} />}
+                  className="shadow-comic hover:shadow-none transition-all"
+                >
+                  {user ? 'Open AI Chat' : 'Try AI Chat'}
+                </Button>
+                {!user && (
+                  <button
+                    onClick={onEnterStudio}
+                    className="px-6 py-3 border-4 border-black rounded-xl font-bold hover:bg-slate-100 transition-colors text-sm"
+                  >
+                    Sign In First
+                  </button>
+                )}
+              </div>
+              {!user && (
+                <p className="text-xs font-mono text-slate-400">
+                  * AI Chat requires a free account. Takes 30 seconds.
+                </p>
+              )}
+            </div>
+
+            {/* Right: Mock chat preview */}
+            <div className="bg-white border-4 border-black rounded-2xl shadow-comic overflow-hidden">
+              {/* Chat header bar */}
+              <div className="bg-black text-white px-4 py-3 flex items-center gap-3">
+                <div className="flex gap-1.5">
+                  <div className="w-3 h-3 rounded-full bg-red-500" />
+                  <div className="w-3 h-3 rounded-full bg-yellow-400" />
+                  <div className="w-3 h-3 rounded-full bg-green-500" />
+                </div>
+                <div className="flex items-center gap-2 text-sm font-bold">
+                  <Bot size={14} className="text-brand-yellow" />
+                  AI Chat Platform
+                </div>
+                <span className="ml-auto text-xs bg-brand-yellow/20 text-brand-yellow px-2 py-0.5 rounded font-mono border border-brand-yellow/30">
+                  claude-3.5-sonnet
+                </span>
+              </div>
+
+              {/* Mock messages */}
+              <div className="p-4 space-y-4 bg-slate-50 min-h-[280px]">
+                {MOCK_MESSAGES.map((msg, i) => (
+                  <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    {msg.role === 'user' ? (
+                      <div className="max-w-[80%] bg-white border-2 border-black rounded-xl rounded-tr-sm px-3 py-2 text-sm font-medium shadow-[2px_2px_0px_rgba(0,0,0,0.15)]">
+                        {msg.text}
+                      </div>
+                    ) : (
+                      <div className="max-w-[88%] bg-black text-white border-2 border-black rounded-xl rounded-tl-sm px-4 py-3 text-sm shadow-[2px_2px_0px_rgba(0,0,0,0.3)]">
+                        {msg.title && (
+                          <div className="text-brand-yellow font-display text-base mb-1">{msg.title}</div>
+                        )}
+                        <div className="text-zinc-300 font-mono text-xs leading-relaxed">{msg.text}</div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+                {/* Typing indicator */}
+                <div className="flex justify-start">
+                  <div className="inline-flex items-center gap-2 bg-white border-2 border-black rounded-xl px-3 py-2 text-xs font-mono text-slate-400">
+                    <div className="flex gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-brand-blue animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <span className="w-1.5 h-1.5 rounded-full bg-brand-blue animate-bounce" style={{ animationDelay: '150ms' }} />
+                      <span className="w-1.5 h-1.5 rounded-full bg-brand-blue animate-bounce" style={{ animationDelay: '300ms' }} />
+                    </div>
+                    AI is writing...
+                  </div>
+                </div>
+              </div>
+
+              {/* Composer bar */}
+              <div className="border-t-4 border-black p-3 bg-white">
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 border-2 border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-400 bg-slate-50 font-comic">
+                    Ask anything about your story...
+                  </div>
+                  <button
+                    onClick={() => onNavigate?.('chat')}
+                    className="w-10 h-10 bg-brand-yellow border-2 border-black rounded-lg flex items-center justify-center hover:bg-black hover:text-brand-yellow transition-colors shrink-0"
+                  >
+                    <ArrowRight size={16} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* 8-Stage Process */}
-      <section className="py-20 bg-white border-y-4 border-black">
+      <section className="py-20 bg-slate-50 border-b-4 border-black">
         <div className="max-w-7xl mx-auto px-6">
           <div className="text-center mb-16">
             <h2 className="text-4xl md:text-5xl font-display mb-4">The Studio Workflow</h2>
@@ -225,7 +419,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
           </div>
         </div>
 
-        {/* FAQs Accordion (Simple) */}
+        {/* FAQs Accordion */}
         <div id="home-faq" className="max-w-3xl mx-auto border-t border-zinc-800 pt-10">
           <h3 className="text-center font-display text-2xl mb-8">Frequently Asked Questions</h3>
           <div className="space-y-2">

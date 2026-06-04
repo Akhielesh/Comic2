@@ -35,6 +35,7 @@ import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { StaticSiteHeader } from './components/layout/StaticSiteHeader';
 import { LegalMicroLinks } from './components/layout/LegalMicroLinks';
 import { UniversalAssistant } from './components/UniversalAssistant';
+import { GlobalChatFAB } from './components/GlobalChatFAB';
 
 type AppView =
   | 'home'
@@ -634,6 +635,8 @@ const App: React.FC = () => {
   const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'chat';
   // Hide the floating Universal Assistant on the full-screen chat product to avoid two stacked chat surfaces.
   const showUniversalAssistant = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat';
+  // Show the global AI Chat FAB on every view except the chat page itself.
+  const showGlobalChatFAB = effectiveView !== 'chat' && effectiveView !== 'auth-callback' && effectiveView !== 'shared';
 
   return (
     <ErrorBoundary>
@@ -875,6 +878,14 @@ const App: React.FC = () => {
             onSaveCreativeDirection={activeProject ? (text) => updateProject(activeProject.id, (prev) => ({
               state: { ...prev.state, creativeDirection: [prev.state.creativeDirection, text].filter(Boolean).join('\n\n') }
             })) : undefined}
+          />
+        )}
+
+        {showGlobalChatFAB && (
+          <GlobalChatFAB
+            isAuthenticated={!!user}
+            onOpenChat={() => handleNavigate('chat')}
+            onSignIn={() => handleNavigate('auth')}
           />
         )}
       </div>
