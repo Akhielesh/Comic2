@@ -59,7 +59,7 @@ const webSearchTool: ChatTool = {
           notice: {
             level: 'warn',
             message: `Web search returned no results for "${query}".`,
-            fix: provider === 'none' ? 'Set TAVILY_API_KEY or BRAVE_API_KEY (free tiers) for reliable web search' : undefined
+            fix: provider === 'none' ? 'Web search is on free/keyless sources right now; self-host SearXNG and set SEARXNG_URL (or add a free TAVILY_API_KEY/BRAVE_API_KEY) for reliable results' : undefined
           }
         };
       }

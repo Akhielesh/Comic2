@@ -81,9 +81,9 @@ export const CATEGORY_META: CategoryMeta[] = [
 export const TOOL_CATALOG: ToolMeta[] = [
   // ---------------------------------------------------------------- search ------
   {
-    name: 'web_search', label: 'Web search', category: 'search', kind: 'builtin', provider: 'Tavily/Brave/Google (if keyed) → DuckDuckGo → Bing → Wikipedia',
+    name: 'web_search', label: 'Web search', category: 'search', kind: 'builtin', provider: 'SearXNG → DuckDuckGo → Bing → Wikipedia (free, keyless) · Tavily/Brave/Google if keyed',
     description: 'Search the live web for current, factual or post-training information with ranked results and citations.',
-    auth: 'optional', authEnv: 'TAVILY_API_KEY', rateLimit: 'Keyless scrapers are fair-use and often blocked from datacenters; set TAVILY_API_KEY or BRAVE_API_KEY (free tiers) for reliable results',
+    auth: 'optional', authEnv: 'SEARXNG_URL', rateLimit: 'Free keyless sources by default (open-source SearXNG + scrapers); self-host SearXNG via SEARXNG_URL, or add a free TAVILY_API_KEY/BRAVE_API_KEY, for higher reliability',
     dataShape: 'Ranked results: title, URL, snippet + citations.', docsUrl: 'https://duckduckgo.com',
     // Deliberately distinctive keywords only — web_search is also a guaranteed
     // backstop in routing/fallback, so it shouldn't win ties on generic words.

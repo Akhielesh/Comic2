@@ -22,7 +22,7 @@ import { ddgWebSearch, type WebResult } from './duckduckgo.js';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 const PER_PROVIDER_TIMEOUT_MS = 7_000;
-const GLOBAL_BUDGET_MS = 16_000;
+const GLOBAL_BUDGET_MS = 20_000;
 
 const decodeEntities = (text: string): string =>
   text
@@ -147,14 +147,51 @@ export const wikipediaSearch = async (query: string, signal: AbortSignal, limit:
 
 // ----------------------------------------------------------------- orchestration ---
 
+// SearXNG — open-source metasearch (aggregates Google/Bing/DDG/etc.) with a keyless
+// JSON API. This is the strongest FREE web-search option. Set SEARXNG_URL to your own
+// self-hosted instance for unlimited, private, no-key search; otherwise we try a few
+// public instances (best-effort — public instances rotate/rate-limit).
+const PUBLIC_SEARXNG = ['https://searx.be', 'https://searx.tiekoetter.com', 'https://search.bus-hit.me', 'https://priv.au'];
+
+export interface SearxResult {
+  title?: string;
+  url?: string;
+  content?: string;
+}
+export const parseSearxngJson = (data: { results?: SearxResult[] }, limit: number): WebResult[] =>
+  (data.results || [])
+    .filter((r) => r.url && r.title)
+    .slice(0, limit)
+    .map((r) => ({ title: r.title as string, url: r.url as string, snippet: (r.content || '').slice(0, 400) }));
+
+const searxngSearch = async (query: string, signal: AbortSignal, limit: number): Promise<WebResult[]> => {
+  const bases = [process.env.SEARXNG_URL, ...PUBLIC_SEARXNG].filter(Boolean) as string[];
+  for (const base of bases.slice(0, 5)) {
+    const t = timeoutSignal(signal, 3500); // bound each instance so one slow host can't eat the budget
+    try {
+      const url = `${base.replace(/\/$/, '')}/search?q=${encodeURIComponent(query)}&format=json&language=en&safesearch=0`;
+      const data = await fetchJson<{ results?: SearxResult[] }>(url, { Accept: 'application/json' }, t.signal);
+      const out = parseSearxngJson(data, limit);
+      if (out.length) return out;
+    } catch {
+      /* try the next instance */
+    } finally {
+      t.done();
+    }
+  }
+  return [];
+};
+
 type Provider = { name: string; run: (q: string, s: AbortSignal, n: number) => Promise<WebResult[]> };
 
 // Ordered best→fallback. Keyed providers short-circuit to [] without a network call
-// when their key is absent, so the chain costs nothing extra until you configure one.
+// when their key is absent, so the keyless chain (SearXNG → DuckDuckGo → Bing →
+// Wikipedia) is what runs by default — entirely free, no API keys required.
 const PROVIDERS: Provider[] = [
   { name: 'tavily', run: tavilySearch },
   { name: 'brave', run: braveSearch },
   { name: 'google', run: googleCseSearch },
+  { name: 'searxng', run: searxngSearch },
   { name: 'duckduckgo', run: ddgWebSearch },
   { name: 'bing', run: bingScrape },
   { name: 'wikipedia', run: wikipediaSearch }

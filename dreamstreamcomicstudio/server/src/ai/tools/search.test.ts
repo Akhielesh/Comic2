@@ -1,5 +1,27 @@
 import { describe, it, expect } from 'vitest';
-import { parseBingHtml } from './search.js';
+import { parseBingHtml, parseSearxngJson } from './search.js';
+
+describe('parseSearxngJson', () => {
+  const DATA = {
+    results: [
+      { title: 'First', url: 'https://a.com', content: 'snippet a' },
+      { title: 'Second', url: 'https://b.com', content: 'snippet b' },
+      { title: 'No url', content: 'ignored' },
+      { url: 'https://c.com', content: 'no title, ignored' }
+    ]
+  };
+  it('maps valid SearXNG results and drops ones without title+url', () => {
+    const out = parseSearxngJson(DATA, 6);
+    expect(out).toHaveLength(2);
+    expect(out[0]).toEqual({ title: 'First', url: 'https://a.com', snippet: 'snippet a' });
+  });
+  it('respects the limit', () => {
+    expect(parseSearxngJson(DATA, 1)).toHaveLength(1);
+  });
+  it('handles an empty/blocked response', () => {
+    expect(parseSearxngJson({}, 6)).toEqual([]);
+  });
+});
 
 // Pure parser tests — the network providers can't be runtime-verified in the sandbox,
 // but the HTML parser that turns Bing's results page into structured results can.
