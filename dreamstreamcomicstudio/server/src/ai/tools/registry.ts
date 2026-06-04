@@ -242,11 +242,11 @@ const makeNewsTool = (ctx?: ToolContext): ChatTool => ({
 const stockTool: ChatTool = {
   name: 'get_stock',
   description:
-    'Get a live stock, ETF or index quote. Use whenever the user asks about a stock price, ticker, market, or how a company/index is doing. Pass a ticker symbol (e.g. "AAPL", "MSFT", "^GSPC"). Returns a RICH interactive card — live price, an intraday→multi-year range timeline, 52-week range, market cap, P/E, dividend, volume, related peer companies and recent headlines. The card carries the raw numbers, so DON\'T just restate them: add a short, insightful read — where the price sits in its 52-week range, today\'s/recent momentum, valuation context (P/E), and anything notable from the headlines or peers. 2-4 crisp sentences.',
+    'Get a live market quote for almost ANY asset — stocks, ETFs, indices, commodities (gold, oil, silver, copper, natural gas…), FX pairs and crypto. Pass a ticker OR a plain name ("gold", "crude oil", "the S&P 500", "EURUSD", "bitcoin"). Returns a RICH interactive card — live price, an intraday→multi-year range timeline, 52-week range, key stats, related peers and recent headlines. Use it for ANY "price of X / how is X doing / X trend" question, across asset classes (the same card explains metals, oil, indices and FX, not just stocks). The card carries the numbers, so add a short insightful read (range position, momentum, what is driving it), not a restatement. For comparisons or baskets, call this ONCE PER ASSET in the SAME turn — the cards then lay out side by side in a grid.',
   parameters: {
     type: 'object',
     properties: {
-      symbol: { type: 'string', description: 'Ticker symbol, e.g. "AAPL", "TSLA", or an index like "^SPX".' }
+      symbol: { type: 'string', description: 'Ticker or asset name, e.g. "AAPL", "^GSPC", "gold", "crude oil", "EURUSD", "BTC-USD".' }
     },
     required: ['symbol']
   },
@@ -278,7 +278,12 @@ const stockTool: ChatTool = {
       const content = `${facts.join(' ')}\nA rich interactive quote card is shown to the user. Add a brief, insightful read (52-week position, momentum, valuation, notable news/peers) — do not just restate these numbers.`;
       return { content, artifacts: [{ type: 'stock_quote', data: q }] };
     } catch (err) {
-      return { content: `Stock lookup failed: ${(err as Error)?.message || 'unknown error'}.` };
+      // Be explicit that this FAILED (no card was shown) so the model doesn't claim a
+      // price was "retrieved" or invent one / deflect the user to another website.
+      return {
+        content: `Could not fetch a live quote for "${symbol}" right now (${(err as Error)?.message || 'unknown error'}). No card was shown. Tell the user the market data is temporarily unavailable and do NOT invent a price or tell them to check another site.`,
+        notice: { level: 'error', message: `Market quote unavailable for "${symbol}".` }
+      };
     }
   }
 };

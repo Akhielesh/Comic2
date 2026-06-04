@@ -47,7 +47,7 @@ const TOOL_KW = {
   // Asking to see a known place/route on a map → the map tool.
   show_map: /\b(map|where is|directions?|route|navigate|how (far|to get)|located|location of)\b/i,
   get_news: /\b(news|headline|breaking|happening|latest on|updates? on)\b/i,
-  get_stock: /\b(stock|share price|ticker|stock market|nasdaq|s&p|dow|crypto|bitcoin|ethereum|price of [A-Z]{1,5}\b)\b/i,
+  get_stock: /\b(stock|share price|ticker|stock market|nasdaq|s&p|dow|crypto|bitcoin|ethereum|gold|silver|platinum|copper|oil|crude|brent|commodit|metals|natural gas|futures|price of [a-z]{1,6}\b)\b/i,
   video_search: /\b(video|youtube|watch|tutorial|how to|show me how|clip)\b/i,
   image_search: /\b(image|photo|picture|show me (a |an )?(pic|image|photo)|what does .* look like)\b/i
 };

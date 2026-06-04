@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Plus, MoreVertical, Trash2, Pencil, MessageSquare, ArrowLeft, GitBranch, Check, X,
-  FolderPlus, ChevronDown, ChevronRight, FolderInput, SlidersHorizontal
+  FolderPlus, ChevronDown, ChevronRight, FolderInput, SlidersHorizontal, Loader2
 } from 'lucide-react';
 import type { ChatSession, ChatProject } from '../../services/chatStorage';
 import { iconByName, colorByKey } from '../../services/chatProjectStyle';
@@ -10,6 +10,8 @@ interface ChatSidebarProps {
   sessions: ChatSession[];
   projects: ChatProject[];
   activeId: string | null;
+  /** Ids of chats currently generating an answer (shows a spinner). */
+  generatingIds?: Set<string>;
   hasMemory: boolean;
   onSelect: (id: string) => void;
   onNew: () => void;
@@ -27,11 +29,12 @@ const SessionRow: React.FC<{
   session: ChatSession;
   projects: ChatProject[];
   active: boolean;
+  generating?: boolean;
   onSelect: () => void;
   onDelete: () => void;
   onRename: (title: string) => void;
   onMoveToProject: (projectId: string | null) => void;
-}> = ({ session, projects, active, onSelect, onDelete, onRename, onMoveToProject }) => {
+}> = ({ session, projects, active, generating, onSelect, onDelete, onRename, onMoveToProject }) => {
   const [menuOpen, setMenuOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(session.title);
@@ -77,8 +80,11 @@ const SessionRow: React.FC<{
       }`}
       onClick={onSelect}
     >
-      {session.parentSessionId ? <GitBranch className="w-4 h-4 shrink-0 text-slate-500" /> : <MessageSquare className="w-4 h-4 shrink-0 text-slate-500" />}
+      {generating
+        ? <Loader2 className="w-4 h-4 shrink-0 text-brand-blue animate-spin" />
+        : session.parentSessionId ? <GitBranch className="w-4 h-4 shrink-0 text-slate-500" /> : <MessageSquare className="w-4 h-4 shrink-0 text-slate-500" />}
       <span className="flex-1 min-w-0 truncate text-sm font-semibold">{session.title}</span>
+      {generating && <span className="shrink-0 text-[9px] font-bold uppercase tracking-wide text-brand-blue">···</span>}
 
       <div ref={menuRef} className="relative">
         <button
@@ -181,7 +187,7 @@ const ProjectGroup: React.FC<{
 };
 
 export const ChatSidebar: React.FC<ChatSidebarProps> = ({
-  sessions, projects, activeId, hasMemory,
+  sessions, projects, activeId, generatingIds, hasMemory,
   onSelect, onNew, onDelete, onRename, onMoveToProject,
   onNewProject, onEditProject, onDeleteProject, onEditMemory, onBack
 }) => {
@@ -223,6 +229,7 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
       session={s}
       projects={projects}
       active={s.id === activeId}
+      generating={generatingIds?.has(s.id)}
       onSelect={() => onSelect(s.id)}
       onDelete={() => onDelete(s.id)}
       onRename={(title) => onRename(s.id, title)}

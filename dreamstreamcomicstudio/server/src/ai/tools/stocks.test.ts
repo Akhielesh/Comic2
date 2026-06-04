@@ -1,5 +1,23 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeSymbol, parseStooqQuoteCsv, parseStooqHistoryCsv } from './stocks.js';
+import { normalizeSymbol, parseStooqQuoteCsv, parseStooqHistoryCsv, resolveMarketSymbol } from './stocks.js';
+
+describe('resolveMarketSymbol', () => {
+  it('maps commodity / index / fx names to Yahoo symbols', () => {
+    expect(resolveMarketSymbol('gold')).toBe('GC=F');
+    expect(resolveMarketSymbol('Crude Oil')).toBe('CL=F');
+    expect(resolveMarketSymbol('brent')).toBe('BZ=F');
+    expect(resolveMarketSymbol('the S&P 500')).toBe('^GSPC');
+    expect(resolveMarketSymbol('EURUSD')).toBe('EURUSD=X');
+  });
+  it('strips filler words like "price of"', () => {
+    expect(resolveMarketSymbol('price of gold')).toBe('GC=F');
+    expect(resolveMarketSymbol('oil price')).toBe('CL=F');
+  });
+  it('passes through real tickers unchanged', () => {
+    expect(resolveMarketSymbol('AAPL')).toBe('AAPL');
+    expect(resolveMarketSymbol('^GSPC')).toBe('^GSPC');
+  });
+});
 
 describe('normalizeSymbol', () => {
   it('appends .us to plain US tickers', () => {

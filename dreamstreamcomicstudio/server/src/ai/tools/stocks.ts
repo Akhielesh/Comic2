@@ -101,6 +101,44 @@ export const parseStooqHistoryCsv = (csv: string, limit = 30): StockPoint[] => {
 const yyyymmdd = (d: Date): string =>
   `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}`;
 
+// Common-name → Yahoo symbol so the model (and users) can ask for "gold", "oil",
+// "the S&P", "EURUSD" etc. and get the SAME rich market card as a stock. The card is
+// asset-class agnostic, so this turns it into a universal price/trend visual.
+const MARKET_ALIASES: Record<string, string> = {
+  // metals & commodities (COMEX/NYMEX futures)
+  gold: 'GC=F', xau: 'XAUUSD=X', silver: 'SI=F', xag: 'XAGUSD=X', platinum: 'PL=F', palladium: 'PA=F', copper: 'HG=F',
+  oil: 'CL=F', crude: 'CL=F', wti: 'CL=F', 'crude oil': 'CL=F', brent: 'BZ=F', 'natural gas': 'NG=F', natgas: 'NG=F',
+  gasoline: 'RB=F', corn: 'ZC=F', wheat: 'ZW=F', soybeans: 'ZS=F', coffee: 'KC=F', sugar: 'SB=F', cocoa: 'CC=F', cotton: 'CT=F',
+  // indices
+  's&p': '^GSPC', 's&p 500': '^GSPC', 'sp500': '^GSPC', spx: '^GSPC', dow: '^DJI', 'dow jones': '^DJI', djia: '^DJI',
+  nasdaq: '^IXIC', 'nasdaq composite': '^IXIC', ndx: '^NDX', 'russell 2000': '^RUT', vix: '^VIX',
+  ftse: '^FTSE', 'ftse 100': '^FTSE', dax: '^GDAXI', nikkei: '^N225', 'hang seng': '^HSI',
+  // crypto (Yahoo supports these too)
+  bitcoin: 'BTC-USD', btc: 'BTC-USD', ethereum: 'ETH-USD', eth: 'ETH-USD', solana: 'SOL-USD', dogecoin: 'DOGE-USD',
+  // FX
+  eurusd: 'EURUSD=X', euro: 'EURUSD=X', gbpusd: 'GBPUSD=X', usdjpy: 'JPY=X', 'dollar index': 'DX-Y.NYB', dxy: 'DX-Y.NYB'
+};
+
+// Clean display names for futures/indices (Yahoo names carry contract months, e.g.
+// "Gold Aug 26" — not what a user wants to see).
+const FRIENDLY_NAMES: Record<string, string> = {
+  'GC=F': 'Gold', 'SI=F': 'Silver', 'PL=F': 'Platinum', 'PA=F': 'Palladium', 'HG=F': 'Copper',
+  'CL=F': 'Crude Oil (WTI)', 'BZ=F': 'Brent Crude', 'NG=F': 'Natural Gas', 'RB=F': 'Gasoline',
+  'ZC=F': 'Corn', 'ZW=F': 'Wheat', 'ZS=F': 'Soybeans', 'KC=F': 'Coffee', 'SB=F': 'Sugar', 'CC=F': 'Cocoa', 'CT=F': 'Cotton',
+  '^GSPC': 'S&P 500', '^DJI': 'Dow Jones', '^IXIC': 'Nasdaq Composite', '^NDX': 'Nasdaq 100', '^RUT': 'Russell 2000',
+  '^VIX': 'VIX', '^FTSE': 'FTSE 100', '^GDAXI': 'DAX', '^N225': 'Nikkei 225', '^HSI': 'Hang Seng',
+  'DX-Y.NYB': 'US Dollar Index'
+};
+
+// Resolve a free-text asset name or ticker to a quotable symbol.
+export const resolveMarketSymbol = (raw: string): string => {
+  const k = raw.trim().toLowerCase();
+  if (MARKET_ALIASES[k]) return MARKET_ALIASES[k];
+  const cleaned = k.replace(/\b(price|prices|quote|spot|futures?|stock|index|today|current|the|of|for|show|me)\b/g, '').replace(/\s+/g, ' ').trim();
+  if (MARKET_ALIASES[cleaned]) return MARKET_ALIASES[cleaned];
+  return raw.trim();
+};
+
 // Yahoo uses raw tickers (AAPL, ^GSPC). Strip any Stooq ".us" suffix; keep ^/dots.
 const yahooSymbol = (raw: string): string => raw.trim().replace(/\.us$/i, '').toUpperCase();
 
@@ -300,6 +338,7 @@ const getYahooQuote = async (rawSymbol: string, signal?: AbortSignal): Promise<S
   };
 
   const name =
+    FRIENDLY_NAMES[symbol] ||
     (typeof meta.longName === 'string' && meta.longName) ||
     (typeof meta.shortName === 'string' ? (meta.shortName as string) : undefined) ||
     symbol;
@@ -388,11 +427,13 @@ const getStooqQuote = async (rawSymbol: string, signal?: AbortSignal): Promise<S
 export const getStockQuote = async (rawSymbol: string, signal?: AbortSignal): Promise<StockQuoteArtifact> => {
   const trimmed = rawSymbol?.trim();
   if (!trimmed) throw new Error('No ticker symbol was provided.');
+  // Map "gold"/"oil"/"the S&P"/"EURUSD" → a real Yahoo symbol before quoting.
+  const symbol = resolveMarketSymbol(trimmed);
   try {
-    return await getYahooQuote(trimmed, signal);
+    return await getYahooQuote(symbol, signal);
   } catch {
     // Yahoo blocked/unavailable — fall back to the keyless Stooq quote.
-    return await getStooqQuote(trimmed, signal);
+    return await getStooqQuote(symbol, signal);
   }
 };
 

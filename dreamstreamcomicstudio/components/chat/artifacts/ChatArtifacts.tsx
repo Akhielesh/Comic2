@@ -41,7 +41,22 @@ export const ARTIFACT_TYPES: string[] = Object.keys(ARTIFACT_RENDERERS);
 const renderArtifact = (artifact: ChatArtifact, key: number): React.ReactNode =>
   ARTIFACT_RENDERERS[artifact.type]?.(artifact.data, key) ?? null;
 
+// Large/interactive artifacts span the full width; compact cards (market quotes,
+// charts, KPI boards, news) pack two-up so the model can aggregate several data
+// sources side by side — e.g. "compare gold, oil and the S&P" → three quote cards
+// laid out in a grid instead of a tall stack.
+const FULL_WIDTH = new Set(['weather', 'map', 'places_results', 'video_results', 'swarm_trace']);
+
 export const ChatArtifacts: React.FC<{ artifacts?: ChatArtifact[] }> = ({ artifacts }) => {
   if (!artifacts || artifacts.length === 0) return null;
-  return <>{artifacts.map((a, i) => renderArtifact(a, i))}</>;
+  if (artifacts.length === 1) return <>{renderArtifact(artifacts[0], 0)}</>;
+  return (
+    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+      {artifacts.map((a, i) => (
+        <div key={i} className={FULL_WIDTH.has(a.type) ? 'sm:col-span-2' : 'min-w-0'}>
+          {renderArtifact(a, i)}
+        </div>
+      ))}
+    </div>
+  );
 };
