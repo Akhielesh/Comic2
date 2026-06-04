@@ -806,6 +806,26 @@ export type CapabilityNotice = {
 // client-side renderer; new artifact types are added without touching the loop.
 export type ChatArtifact = { type: string; data: unknown };
 
+// --- Code Studio artifact ---
+// Emitted by the `generate_app` tool. Carries a complete multi-file project
+// that the client renders in the live, editable Code Studio side panel.
+export type CodeStudioTemplate = 'react-ts' | 'react' | 'vanilla-ts' | 'vanilla' | 'static';
+
+export interface CodeStudioFile {
+  /** Absolute path from project root, e.g. "/App.tsx" or "/styles/main.css". */
+  path: string;
+  content: string;
+  /** Language hint for the editor (typescript, javascript, html, css, …). */
+  language?: string;
+}
+
+export interface CodeStudioArtifact {
+  title: string;
+  description?: string;
+  files: CodeStudioFile[];
+  template: CodeStudioTemplate;
+}
+
 export interface WeatherDaily {
   date: string;
   minC: number;
