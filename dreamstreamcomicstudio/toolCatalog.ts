@@ -24,6 +24,7 @@ export type ToolCategory =
   | 'entertainment'
   | 'dev'
   | 'dataviz'
+  | 'codegen'
   | 'agents';
 
 export type ToolAuth = 'none' | 'optional' | 'required';
@@ -75,6 +76,7 @@ export const CATEGORY_META: CategoryMeta[] = [
   { id: 'entertainment', label: 'Entertainment & fun', icon: 'Gamepad2', blurb: 'TV, anime, games, trivia, jokes.' },
   { id: 'dev', label: 'Developer & utility', icon: 'Code2', blurb: 'GitHub, packages, QR codes, demographics.' },
   { id: 'dataviz', label: 'Data & charts', icon: 'BarChart3', blurb: 'Turn data into charts and KPI boards.' },
+  { id: 'codegen', label: 'App builder', icon: 'AppWindow', blurb: 'Generate full multi-file apps with a live preview.' },
   { id: 'agents', label: 'Agents', icon: 'Network', blurb: 'Delegate complex tasks to a swarm.' }
 ];
 
@@ -429,6 +431,14 @@ export const TOOL_CATALOG: ToolMeta[] = [
     auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
     dataShape: 'Colored tile grid (treemap-style) by value.', docsUrl: 'https://dreamstream.app',
     keywords: ['heatmap', 'heat map', 'market map', 'sector map', 'treemap', 'breadth', 'gainers and losers', 'sector performance', 'movers map']
+  },
+  // --------------------------------------------------------------- codegen ------
+  {
+    name: 'generate_app', label: 'App builder', category: 'codegen', kind: 'builtin', provider: 'DreamStream Code Studio',
+    description: 'Build a complete multi-file app (React, vanilla JS, HTML/CSS) and open it in the live Code Studio panel with a real-time preview the user can edit and run.',
+    auth: 'none', rateLimit: 'Unlimited (runs in-browser, no API)',
+    dataShape: 'code_studio artifact: file tree + live Sandpack preview.', docsUrl: 'https://dreamstream.app',
+    keywords: ['build an app', 'create an app', 'make an app', 'build a game', 'create a game', 'landing page', 'todo app', 'react app', 'write code', 'generate code', 'implement', 'scaffold', 'create a component', 'build a tool']
   },
   // ----------------------------------------------------------------- agents -----
   {

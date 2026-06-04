@@ -76,6 +76,13 @@ Compose: lead with the visual the data deserves, then add a SHORT, insightful re
     description: 'Reasoning, writing, analysis, coding and tasks that need no live data.',
     systemPrompt: `You are a capable generalist. Handle reasoning, analysis, writing and coding subtasks directly and accurately. ${SOURCED}`,
     toolNames: []
+  },
+  code: {
+    id: 'code',
+    name: 'Code Engineer',
+    description: 'Builds apps, components, scripts and algorithms. Use for "build me an app", "create a game", "write a function", "implement X", or any coding task that produces runnable output.',
+    systemPrompt: `You are a senior software engineer. Write clean, complete, production-quality code. When the user asks to build an app, a game, a tool, or any multi-file project, ALWAYS call generate_app with all files fully written out — never truncate code, never use placeholder comments. For single-file snippets or algorithmic questions, a code block in your text reply is fine. Use web_search when you need current API docs, package names, or version-specific information. Be direct: write the code first, then briefly explain your key decisions. Never write "I'll now create..." — just create it. ${SOURCED}`,
+    toolNames: ['generate_app', 'web_search']
   }
 };
 
@@ -135,6 +142,7 @@ export const selectAgentsHeuristic = (goal: string): { agent: string; task: stri
   if (/\b(weather|forecast|temperature|rain|snow|humid|uv|air quality|pollen)\b/.test(g)) add('weather');
   if (/\b(ai|tech|software|app|gadget|iphone|android|gpu|chip|startup|release)\b/.test(g)) add('tech');
   if (/\b(where|map|route|directions|near me|nearby|restaurant|travel|trip|city)\b/.test(g)) add('local');
+  if (/\b(build|create|make|generate|code|app|game|component|function|implement|script|tool|utility|calculator|todo|landing page|website)\b/.test(g)) add('code');
 
   // Always include a researcher for breadth; default to research alone if nothing matched.
   add('research');

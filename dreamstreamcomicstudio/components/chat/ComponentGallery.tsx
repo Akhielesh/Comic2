@@ -12,11 +12,12 @@ import { MapArtifactCard } from './artifacts/MapArtifactCard';
 import { DataTableCard } from './artifacts/DataTableCard';
 import { HeatmapCard } from './artifacts/HeatmapCard';
 import { FinanceTerminal } from './artifacts/FinanceTerminal';
+import { CodeStudioCard } from './artifacts/CodeStudioCard';
 import type {
   WeatherArtifact, NewsResultsArtifact, StockQuoteArtifact,
   VideoResultsArtifact, PlacesResultsArtifact, SwarmTraceArtifact,
   ChartArtifact, MetricBoardArtifact, MapArtifact,
-  DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact
+  DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact
 } from '../../apiTypes';
 
 // A living gallery of the chat's rich-output components, each with sample data, so
@@ -243,6 +244,30 @@ export interface GalleryDemo {
   node: React.ReactNode;
 }
 
+const codeStudioDemo: CodeStudioArtifact = {
+  title: 'Counter App',
+  description: 'A simple React counter with increment, decrement, and reset.',
+  template: 'react-ts',
+  files: [
+    {
+      path: '/App.tsx',
+      content: `import { useState } from 'react';
+export default function App() {
+  const [count, setCount] = useState(0);
+  return (
+    <div style={{ fontFamily: 'sans-serif', textAlign: 'center', padding: '2rem' }}>
+      <h1>Counter: {count}</h1>
+      <button onClick={() => setCount(c => c - 1)}>−</button>
+      <button onClick={() => setCount(0)} style={{ margin: '0 0.5rem' }}>Reset</button>
+      <button onClick={() => setCount(c => c + 1)}>+</button>
+    </div>
+  );
+}`,
+      language: 'typescript'
+    }
+  ]
+};
+
 export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Weather station (animated · gauges · map)', type: 'weather', node: <WeatherStation data={weather} /> },
   { title: 'Market card (hover · range timeline · candlesticks)', type: 'stock_quote', node: <MarketCard data={stock} /> },
@@ -257,6 +282,7 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Data table (typed cells · sortable · sparklines)', type: 'data_table', node: <DataTableCard data={dataTable} /> },
   { title: 'Market heatmap (sectors · cap-weighted tiles)', type: 'market_heatmap', node: <HeatmapCard data={heatmap} /> },
   { title: 'Finance Terminal (composite: quote · KPIs · table · heatmap · news)', type: 'finance_terminal', node: <FinanceTerminal data={terminal} /> },
+  { title: 'Code Studio card (multi-file app · live preview)', type: 'code_studio', node: <CodeStudioCard data={codeStudioDemo} /> },
   { title: 'Markdown table (inline)', node: <ChatMarkdown text={tableMd} /> }
 ];
 

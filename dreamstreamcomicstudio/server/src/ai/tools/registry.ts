@@ -23,6 +23,7 @@ import { SPACE_TOOLS } from './space.js';
 import { CULTURE_TOOLS } from './culture.js';
 import { DEV_TOOLS } from './dev.js';
 import { FINANCE_TERMINAL_TOOLS } from './financeTerminal.js';
+import { generateAppTool } from './codeStudio.js';
 
 export type { ChatTool, ToolExecResult, ToolContext } from './types.js';
 
@@ -511,6 +512,7 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   get_stock: stockTool,
   render_chart: chartTool,
   show_metrics: metricsTool,
+  generate_app: generateAppTool,
   ...Object.fromEntries(FREE_API_TOOLS.map((t) => [t.name, t]))
 };
 
