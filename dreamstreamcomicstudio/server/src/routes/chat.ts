@@ -245,6 +245,8 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
             provider: resolved.provider,
             apiKey: resolved.apiKey,
             model,
+            messages,
+            systemPrompt,
             clientContext,
             extraAgents: customAgents,
             fallbackModel: TEXT_FALLBACK,

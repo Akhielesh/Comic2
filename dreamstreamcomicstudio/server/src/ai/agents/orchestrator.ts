@@ -129,6 +129,12 @@ const toolCtxFrom = (ctx?: ChatClientContext): ToolContext | undefined =>
 
 export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> => {
   const goal = lastUserText(params.messages).trim();
+  // Prior conversation (everything before the current goal). Passing this to the planner
+  // and to each agent is what stops the swarm being "context-blind" on follow-ups like
+  // "compare that to last week" — previously agents saw only their one-line task and
+  // nothing of the conversation or the user's memory/persona.
+  const priorMessages = params.messages.slice(0, -1);
+  const userMemory = params.systemPrompt?.trim();
   const toolCtx = toolCtxFrom(params.clientContext);
   const baseReq = {
     provider: params.provider,
@@ -153,7 +159,7 @@ export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> 
     const planRes = await runChat({
       ...baseReq,
       model: workerModel,
-      messages: [{ role: 'user', content: `Goal: ${goal}` }],
+      messages: [...priorMessages, { role: 'user', content: `Goal: ${goal}` }],
       systemOverride: PLANNER_PROMPT.replace('{catalog}', agentCatalogForPlanner(pool)),
       temperature: 0.2,
       maxTokens: 500
@@ -190,8 +196,11 @@ export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> 
         const r = await runChat({
           ...baseReq,
           model: workerModel,
-          messages: [{ role: 'user', content: p.task }],
-          systemOverride: def.systemPrompt,
+          messages: [...priorMessages, { role: 'user', content: p.task }],
+          // Agent persona + the user's durable memory/persona, so agents share the same
+          // context the synthesizer and normal chat get (was persona-only — agents never
+          // saw who the user is or what they'd said earlier).
+          systemOverride: userMemory ? `${def.systemPrompt}\n\nUser context / preferences:\n${userMemory}` : def.systemPrompt,
           clientContext: params.clientContext,
           tools: resolveTools(def.toolNames, toolCtx),
           temperature: 0.4,
@@ -210,18 +219,27 @@ export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> 
           toolEvents: r.toolEvents
         };
         emit();
-        return { name: def.name, task: p.task, text: r.text || '' };
+        return { name: def.name, task: p.task, text: r.text || '', citations: r.citations || [] };
       } catch (err) {
         agents[i] = { ...agents[i], status: 'error', summary: (err as Error)?.message || 'agent failed' };
         emit();
-        return { name: def.name, task: p.task, text: '' };
+        return { name: def.name, task: p.task, text: '', citations: [] as ChatCitation[] };
       }
     })
   );
 
   // 3) SYNTHESIZE — merge all findings into one streamed answer.
   const findingsBlock = findings
-    .map((f) => `### ${f.name} — task: ${f.task}\n${f.text || '(no result)'}`)
+    .map((f) => {
+      // Hand the synthesizer each agent's ACTUAL gathered sources (not just its prose)
+      // so it can cite real URLs instead of losing them in the summary (telephone game).
+      const sources = (f.citations || [])
+        .slice(0, 8)
+        .map((c, i) => `  [${i + 1}] ${c.title ? `${c.title} — ` : ''}${c.url}`)
+        .join('\n');
+      return `### ${f.name} — task: ${f.task}\n${f.text || '(no result)'}` +
+        (sources ? `\nSources gathered:\n${sources}` : '');
+    })
     .join('\n\n');
   const synthInput = `User goal: ${goal}\n\nFindings from the specialized agents:\n\n${findingsBlock}\n\nNow write the single best answer for the user.`;
   const synthMessages: ChatMessage[] = [
