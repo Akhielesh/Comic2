@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { getBillingSummary } from '../services/billingLedger.js';
 
-type ProviderKey = 'gemini' | 'pixazo';
+type ProviderKey = 'gemini' | 'pixazo' | 'ideogram';
 
 const providerKeyConfig: Record<ProviderKey, { headers: string[]; label: string }> = {
   gemini: {
@@ -11,6 +11,10 @@ const providerKeyConfig: Record<ProviderKey, { headers: string[]; label: string 
   pixazo: {
     headers: ['X-Pixazo-Key', 'X-Flux-Key'],
     label: 'X-Pixazo-Key'
+  },
+  ideogram: {
+    headers: ['X-Ideogram-Key'],
+    label: 'X-Ideogram-Key'
   }
 };
 

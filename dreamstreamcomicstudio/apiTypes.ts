@@ -541,6 +541,30 @@ export type FluxGenerateResponse = {
   billing?: ApiBillingInfo;
 };
 
+export type IdeogramGenerateRequest = {
+  prompt: string;
+  aspectRatio: AspectRatio;
+  resolution: ImageResolution;
+  negativePrompt?: string;
+  seed?: number;
+  modelId?: string;
+  stage?: string;
+  projectId?: string;
+  storage?: 'project' | 'test';
+  cropToRatio?: string;
+};
+export type IdeogramGenerateResponse = {
+  imageId?: string;
+  imageUrl?: string;
+  dataUrl?: string;
+  mimeType: string;
+  prompt: string;
+  usage?: ApiUsage;
+  timings?: ApiTimings;
+  model: string;
+  billing?: ApiBillingInfo;
+};
+
 export type AssistantMessage = { role: 'user' | 'model'; text: string };
 
 export type AssistantMap = Record<string, unknown>;

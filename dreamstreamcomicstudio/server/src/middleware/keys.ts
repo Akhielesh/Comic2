@@ -14,6 +14,10 @@ declare module 'express-serve-static-core' {
       nvidiaKey?: string | null;
       /** True when the NVIDIA key came from the end-user (BYOK), not the platform. */
       nvidiaByok?: boolean;
+      /** Resolved Ideogram key (BYOK header or platform env). */
+      ideogramKey?: string | null;
+      /** True when the Ideogram key came from the end-user (BYOK), not the platform. */
+      ideogramByok?: boolean;
     };
   }
 }
@@ -43,13 +47,17 @@ export const attachKeys = (req: Request, _res: Response, next: NextFunction) => 
   const openRouterKey = allow('openrouter') ? (openRouterHeaderKey || process.env.OPENROUTER_API_KEY || null) : null;
   const nvidiaHeaderKey = allow('nvidia') ? (req.header('X-Nvidia-Key') || null) : null;
   const nvidiaKey = allow('nvidia') ? (nvidiaHeaderKey || process.env.NVIDIA_API_KEY || null) : null;
+  const ideogramHeaderKey = allow('ideogram') ? (req.header('X-Ideogram-Key') || null) : null;
+  const ideogramKey = allow('ideogram') ? (ideogramHeaderKey || process.env.IDEOGRAM_API_KEY || null) : null;
   req.apiKeys = {
     geminiKey,
     pixazoKey,
     openRouterKey,
     openRouterByok: Boolean(openRouterHeaderKey),
     nvidiaKey,
-    nvidiaByok: Boolean(nvidiaHeaderKey)
+    nvidiaByok: Boolean(nvidiaHeaderKey),
+    ideogramKey,
+    ideogramByok: Boolean(ideogramHeaderKey)
   };
   next();
 };
@@ -98,4 +106,18 @@ export const requirePixazoKey = (req: Request, res: Response): string | null => 
     return null;
   }
   return pixazoKey;
+};
+
+export const requireIdeogramKey = (req: Request, res: Response): string | null => {
+  const ideogramKey = req.apiKeys?.ideogramKey;
+  if (!ideogramKey) {
+    res.status(401).json({
+      error: {
+        message: 'Ideogram API key missing. Add your key in Settings → API Configuration (manage keys at ideogram.ai/manage-api).',
+        code: 'IDEOGRAM_KEY_MISSING'
+      }
+    });
+    return null;
+  }
+  return ideogramKey;
 };
