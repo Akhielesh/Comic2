@@ -48,7 +48,7 @@ const Group: React.FC<{ group: HeatmapGroup; unit: string }> = ({ group, unit })
   </div>
 );
 
-export const HeatmapCard: React.FC<{ data: HeatmapArtifact }> = ({ data }) => {
+export const HeatmapCard: React.FC<{ data: HeatmapArtifact; embedded?: boolean }> = ({ data, embedded }) => {
   const unit = data.unit ?? '%';
   const groups: HeatmapGroup[] = data.groups?.length
     ? data.groups
@@ -59,6 +59,7 @@ export const HeatmapCard: React.FC<{ data: HeatmapArtifact }> = ({ data }) => {
 
   return (
     <Surface
+      embedded={embedded}
       accent="#0ea5e9"
       header={data.title ? (
         <div>
