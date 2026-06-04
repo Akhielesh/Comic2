@@ -193,9 +193,9 @@ export const ToolsDashboard: React.FC = () => {
 
       <p className="text-[11px] text-slate-500 flex items-start gap-1.5">
         <Zap className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
-        The agent doesn’t call every tool at once — it <span className="font-bold">smart-routes</span> to the few most
-        relevant to each message (by category &amp; keywords), so you can keep many categories enabled. Usage analytics
-        below are recorded locally on this device.
+        These are <span className="font-bold">automatic backend tools</span> — the AI always has them and picks the right
+        ones for each message (it <span className="font-bold">smart-routes</span> by relevance instead of calling everything).
+        You don’t need to enable anything; this view is just for transparency. Usage analytics below are recorded locally on this device.
       </p>
 
       {/* Controls */}

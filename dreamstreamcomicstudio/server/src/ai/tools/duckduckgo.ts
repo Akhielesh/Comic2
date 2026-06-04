@@ -88,6 +88,85 @@ export const parseDdgHtml = (html: string, limit = 6): WebResult[] => {
   return results;
 };
 
+/** Parse DuckDuckGo's Lite results page (simpler, more block-tolerant markup). */
+export const parseDdgLite = (html: string, limit = 6): WebResult[] => {
+  const results: WebResult[] = [];
+  const linkRe = /<a[^>]+class="[^"]*result-link[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+  const snippetRe = /<td[^>]*class="[^"]*result-snippet[^"]*"[^>]*>([\s\S]*?)<\/td>/g;
+  const snippets: string[] = [];
+  let sm: RegExpExecArray | null;
+  while ((sm = snippetRe.exec(html)) !== null) snippets.push(stripTags(sm[1]));
+  let m: RegExpExecArray | null;
+  let idx = 0;
+  while ((m = linkRe.exec(html)) !== null && results.length < limit) {
+    const url = resolveDdgUrl(m[1]);
+    const title = stripTags(m[2]);
+    if (title && url) results.push({ title, url, snippet: snippets[idx] || '' });
+    idx += 1;
+  }
+  return results;
+};
+
+const ddgHtmlSearch = async (query: string, signal: AbortSignal, limit: number): Promise<WebResult[]> => {
+  const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
+    method: 'POST',
+    headers: { 'User-Agent': UA, 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'text/html' },
+    body: `q=${encodeURIComponent(query)}`,
+    signal
+  });
+  if (!res.ok) throw new Error(`DuckDuckGo returned ${res.status}`);
+  return parseDdgHtml(await res.text(), limit);
+};
+
+const ddgLiteSearch = async (query: string, signal: AbortSignal, limit: number): Promise<WebResult[]> => {
+  const res = await fetch('https://lite.duckduckgo.com/lite/', {
+    method: 'POST',
+    headers: { 'User-Agent': UA, 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'text/html' },
+    body: `q=${encodeURIComponent(query)}`,
+    signal
+  });
+  if (!res.ok) throw new Error(`DuckDuckGo Lite returned ${res.status}`);
+  return parseDdgLite(await res.text(), limit);
+};
+
+// DuckDuckGo's Instant Answer JSON API — a different host that returns structured
+// data (abstract + related topics) even when the scraping endpoints are soft-blocked
+// from datacenter IPs. Not full web results, but reliable grounding when the HTML
+// endpoints yield nothing.
+interface DdgIaTopic { Text?: string; FirstURL?: string; Topics?: DdgIaTopic[] }
+const flattenIaTopics = (topics: DdgIaTopic[]): { Text?: string; FirstURL?: string }[] => {
+  const out: { Text?: string; FirstURL?: string }[] = [];
+  for (const t of topics) {
+    if (t.Topics) out.push(...flattenIaTopics(t.Topics));
+    else if (t.FirstURL && t.Text) out.push({ Text: t.Text, FirstURL: t.FirstURL });
+  }
+  return out;
+};
+const ddgInstantAnswer = async (query: string, signal: AbortSignal, limit: number): Promise<WebResult[]> => {
+  const res = await fetch(
+    `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1&t=dreamstream`,
+    { headers: { 'User-Agent': UA, Accept: 'application/json' }, signal }
+  );
+  // The IA API can answer with a 202 yet still return a valid JSON body.
+  const data = (await res.json().catch(() => ({}))) as {
+    Heading?: string; AbstractText?: string; AbstractURL?: string;
+    RelatedTopics?: DdgIaTopic[]; Results?: DdgIaTopic[];
+  };
+  const results: WebResult[] = [];
+  if (data.AbstractText && data.AbstractURL) {
+    results.push({ title: data.Heading || query, url: data.AbstractURL, snippet: data.AbstractText });
+  }
+  for (const r of [...(data.Results || []), ...flattenIaTopics(data.RelatedTopics || [])]) {
+    if (results.length >= limit) break;
+    if (r.FirstURL && r.Text) results.push({ title: r.Text.split(' - ')[0], url: r.FirstURL, snippet: r.Text });
+  }
+  return results.slice(0, limit);
+};
+
+// DuckDuckGo HTML scraping is flaky (frequent empty/blocked responses), so we try
+// the main HTML endpoint first and fall back to the Lite endpoint — and surface the
+// failure to the caller (which converts an empty result into a clear notice) rather
+// than silently returning nothing.
 export const ddgWebSearch = async (
   query: string,
   signal?: AbortSignal,
@@ -95,19 +174,18 @@ export const ddgWebSearch = async (
 ): Promise<WebResult[]> => {
   const t = withTimeout(signal, DEFAULT_TIMEOUT_MS);
   try {
-    const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
-      method: 'POST',
-      headers: {
-        'User-Agent': UA,
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Accept: 'text/html'
-      },
-      body: `q=${encodeURIComponent(query)}`,
-      signal: t.signal
-    });
-    if (!res.ok) throw new Error(`DuckDuckGo returned ${res.status}`);
-    const html = await res.text();
-    return parseDdgHtml(html, limit);
+    // HTML scraper → Lite scraper → Instant Answer API. The scrapers give the richest
+    // results but are often soft-blocked from datacenter IPs; the IA API is the
+    // reliable backstop. First non-empty wins.
+    for (const attempt of [ddgHtmlSearch, ddgLiteSearch, ddgInstantAnswer]) {
+      try {
+        const results = await attempt(query, t.signal, limit);
+        if (results.length) return results;
+      } catch {
+        /* try the next source */
+      }
+    }
+    return [];
   } finally {
     t.done();
   }

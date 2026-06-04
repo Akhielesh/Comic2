@@ -50,13 +50,21 @@ const webSearchTool: ChatTool = {
     if (!query) return { content: 'No search query was provided.' };
     try {
       const results = await ddgWebSearch(query, signal);
-      if (!results.length) return { content: `No web results found for "${query}".` };
+      if (!results.length) {
+        return {
+          content: `No web results found for "${query}". Try a different tool (e.g. wiki_lookup, get_news) or a refined query.`,
+          notice: { level: 'warn', message: `Web search returned no results for "${query}".` }
+        };
+      }
       const content = results
         .map((r, i) => `[${i + 1}] ${r.title}\nURL: ${r.url}\n${r.snippet}`)
         .join('\n\n');
       return { content, citations: results.map((r) => ({ url: r.url, title: r.title })) };
     } catch (err) {
-      return { content: `Web search failed: ${(err as Error)?.message || 'unknown error'}.` };
+      return {
+        content: `Web search failed: ${(err as Error)?.message || 'unknown error'}.`,
+        notice: { level: 'error', message: 'Web search is temporarily unavailable.' }
+      };
     }
   }
 };

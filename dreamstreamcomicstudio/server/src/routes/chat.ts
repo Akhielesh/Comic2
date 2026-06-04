@@ -10,8 +10,8 @@ import { NVIDIA_TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS } from '../config.js';
 import type { AIProviderId, ChatMessage, MessagePart } from '../ai/providers/types.js';
 import { assertModelAllowedForUser } from '../services/modelAccessPolicy.js';
 import { sanitizeAssistantContext } from '../ai/assistantPolicy.js';
-import { resolveTools, KNOWN_TOOL_NAMES, type ChatTool } from '../ai/tools/registry.js';
-import { selectRelevantTools } from '../../../toolCatalog.js';
+import { resolveTools, type ChatTool } from '../ai/tools/registry.js';
+import { selectRelevantTools, ROUTABLE_TOOL_NAMES } from '../../../toolCatalog.js';
 import { buildMcpTools } from '../ai/tools/mcpClient.js';
 import { unfurlUrl } from '../ai/tools/unfurl.js';
 import {
@@ -182,7 +182,9 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
   }
 
   const reasoningLevel = isReasoningLevel(body.reasoningLevel) ? body.reasoningLevel : 'none';
-  const webSearch = Boolean(body.webSearch) && resolved.provider === 'openrouter';
+  // Internet access is a backend default, not a user toggle: every OpenRouter chat
+  // gets live web grounding (the model must source from the internet).
+  const webSearch = resolved.provider === 'openrouter';
   const systemPrompt =
     typeof body.systemPrompt === 'string' && body.systemPrompt.trim() ? body.systemPrompt.trim().slice(0, 8000) : undefined;
 
@@ -196,9 +198,6 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
   const clientContext = sanitizeClientContext(body.clientContext);
   const customAgents = sanitizeCustomAgents(body.customAgents);
 
-  const requestedToolNames = Array.isArray(body.tools)
-    ? body.tools.filter((t): t is string => typeof t === 'string' && KNOWN_TOOL_NAMES.includes(t))
-    : [];
   const toolContext = clientContext
     ? {
         timezone: clientContext.timezone,
@@ -208,10 +207,11 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
       }
     : undefined;
 
-  // Smart tool routing: with the large free-API catalogue a user can enable many
-  // tools at once. Rather than overwhelm the model (and bloat the prompt) with every
-  // spec, narrow the enabled set to the handful most relevant to THIS message by
-  // keyword scoring. Small enabled sets pass through unchanged.
+  // Tools are a BACKEND DEFAULT, not a user setting: the model always has the full
+  // free-API tool suite available (OpenRouter only — NVIDIA can't tool-call). The
+  // user never enables/sees individual tools. To avoid handing the model dozens of
+  // specs at once, smart-route to the handful most relevant to THIS message by
+  // keyword scoring; web_search is always retained as the internet backstop.
   const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
   const lastUserText =
     typeof lastUserMessage?.content === 'string'
@@ -219,15 +219,20 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
       : Array.isArray(lastUserMessage?.content)
         ? lastUserMessage!.content.map((p) => ('text' in p ? p.text : '')).join(' ')
         : '';
-  const MAX_MODEL_TOOLS = 10;
-  const routedToolNames = selectRelevantTools(lastUserText, requestedToolNames, MAX_MODEL_TOOLS);
+  const MAX_MODEL_TOOLS = 12;
+  const routedToolNames =
+    resolved.provider === 'openrouter'
+      ? selectRelevantTools(lastUserText, ROUTABLE_TOOL_NAMES, MAX_MODEL_TOOLS)
+      : [];
   const builtinTools =
     resolved.provider === 'openrouter' ? resolveTools(routedToolNames, toolContext) : [];
 
   // The agent-swarm meta-tool needs provider credentials, so it's built here (not in
-  // resolveTools) and appended when the client enabled it. OpenRouter only.
+  // resolveTools) and appended when the user enabled the Swarm toggle. OpenRouter only.
+  const swarmRequested =
+    Array.isArray(body.tools) && body.tools.some((t) => t === SWARM_TOOL_NAME);
   const metaTools: ChatTool[] =
-    resolved.provider === 'openrouter' && requestedToolNames.includes(SWARM_TOOL_NAME)
+    resolved.provider === 'openrouter' && swarmRequested
       ? [
           makeSwarmTool({
             provider: resolved.provider,
