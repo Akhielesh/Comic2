@@ -25,13 +25,42 @@ export interface CodeStudioPanelProps {
   editorHeight?: number;
 }
 
+// Build-only tooling that Sandpack supplies itself (it bundles in-browser, it does
+// not run Vite/TS). Including these as "dependencies" would make Sandpack try to
+// install a bundler it doesn't use, so we strip them.
+const BUILD_ONLY_DEPS = new Set([
+  'vite', '@vitejs/plugin-react', '@vitejs/plugin-react-swc', 'typescript',
+  'react-scripts', 'webpack', 'esbuild', 'parcel', '@types/react', '@types/react-dom'
+]);
+
+/** Pull runtime npm dependencies out of the project's package.json, if it ships one. */
+const extractDependencies = (data: CodeStudioArtifact): Record<string, string> | undefined => {
+  const pkg = data.files.find((f) => f.path.replace(/^\/+/, '') === 'package.json');
+  if (!pkg) return undefined;
+  try {
+    const parsed = JSON.parse(pkg.content) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+    const merged = { ...(parsed.dependencies || {}), ...(parsed.devDependencies || {}) };
+    const deps: Record<string, string> = {};
+    for (const [name, version] of Object.entries(merged)) {
+      if (!BUILD_ONLY_DEPS.has(name)) deps[name] = version;
+    }
+    return Object.keys(deps).length ? deps : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 const CodeStudioPanel: React.FC<CodeStudioPanelProps> = ({ data, editorHeight = 520 }) => {
   const files: Record<string, string> = {};
   for (const f of data.files) {
+    // package.json is consumed via customSetup.dependencies below; passing it as a
+    // file too would clash with Sandpack's own template package.json.
+    if (f.path.replace(/^\/+/, '') === 'package.json') continue;
     files[f.path] = f.content;
   }
 
   const template = SANDPACK_TEMPLATE(data.template);
+  const dependencies = extractDependencies(data);
 
   return (
     <div className="h-full overflow-auto bg-[#151515]">
@@ -39,6 +68,7 @@ const CodeStudioPanel: React.FC<CodeStudioPanelProps> = ({ data, editorHeight = 
         template={template}
         theme="dark"
         files={files}
+        customSetup={dependencies ? { dependencies } : undefined}
         options={{
           editorHeight,
           showTabs: true,
