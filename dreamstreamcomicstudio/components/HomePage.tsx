@@ -1,19 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Sparkles, ArrowRight, Zap, Users, BookOpen, Check, HelpCircle, Mail, Info, ChevronRight, MessageSquare, Bot, Shield, Cpu } from 'lucide-react';
+import { Sparkles, Zap, Users, BookOpen, Check, HelpCircle, Mail, Info, ChevronRight, MessageSquare, Bot, Shield, Cpu, ArrowRight } from 'lucide-react';
 import { Button } from './Button';
 import { getStudioStats, StudioStats } from '../services/stats';
 import { useAuth } from '../contexts/AuthContext';
-import { UserAvatar } from './UserAvatar';
-import { NotificationBell } from './NotificationBell';
-import { TokenAvailabilityPill } from './TokenAvailabilityPill';
 
 interface HomePageProps {
   onEnterStudio: () => void;
   onViewComics: () => void;
-  onOpenProfile?: () => void;
   onOpenPrivacy: () => void;
   onOpenTerms: () => void;
-  onOpenUpgrade?: () => void;
   onNavigate?: (view: string, id?: string) => void;
 }
 
@@ -41,7 +36,7 @@ const MOCK_MESSAGES = [
   { role: 'user', text: "Perfect. What's her tragic backstory?" },
 ];
 
-export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics, onOpenProfile, onOpenPrivacy, onOpenTerms, onNavigate }) => {
+export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics, onOpenPrivacy, onOpenTerms, onNavigate }) => {
   const { user } = useAuth();
   const [activeStage, setActiveStage] = useState(1);
   const [faqOpen, setFaqOpen] = useState<number | null>(null);
@@ -55,94 +50,6 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
-
-      {/* Announcement Banner */}
-      <div className="bg-brand-yellow border-b-2 border-black py-1.5 px-4 text-center text-xs font-bold text-black tracking-wide">
-        <span className="inline-flex items-center gap-2">
-          <Sparkles size={11} /> AI Chat is live — converse with Claude, Gemini &amp; 100+ models
-          <button
-            onClick={() => onNavigate?.('chat')}
-            className="underline hover:no-underline ml-1"
-          >
-            Try it free →
-          </button>
-        </span>
-      </div>
-
-      {/* Header */}
-      <header className="sticky top-0 z-50 bg-white/95 backdrop-blur-md border-b-4 border-black">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6">
-          <div className="flex items-center justify-between h-16">
-
-            {/* Logo */}
-            <div className="flex items-center gap-3 shrink-0">
-              <div className="w-10 h-10 bg-brand-yellow border-2 border-black rounded-xl flex items-center justify-center text-black font-display text-xl shadow-[3px_3px_0px_0px_rgba(0,0,0,0.8)] transform -rotate-2">
-                D
-              </div>
-              <div className="leading-none">
-                <div className="font-display text-xl text-slate-900">DreamStream</div>
-                <div className="text-[10px] font-bold text-brand-blue uppercase tracking-widest mt-0.5">Comic Studio</div>
-              </div>
-            </div>
-
-            {/* Center nav — desktop only */}
-            <nav className="hidden lg:flex items-center gap-1 bg-slate-100 border-2 border-black rounded-full px-2 py-1">
-              <button
-                onClick={() => onNavigate?.('how-it-works')}
-                className="px-4 py-1.5 text-sm font-bold text-slate-600 hover:bg-white hover:text-black rounded-full transition-all"
-              >
-                How It Works
-              </button>
-              <button
-                onClick={onViewComics}
-                className="px-4 py-1.5 text-sm font-bold text-slate-600 hover:bg-white hover:text-black rounded-full transition-all"
-              >
-                Gallery
-              </button>
-              <button
-                onClick={() => onNavigate?.('models')}
-                className="px-4 py-1.5 text-sm font-bold text-slate-600 hover:bg-white hover:text-black rounded-full transition-all"
-              >
-                Models
-              </button>
-              <button
-                onClick={() => onNavigate?.('chat')}
-                className="px-4 py-1.5 text-sm font-bold text-brand-blue hover:bg-brand-blue hover:text-white rounded-full transition-all flex items-center gap-1.5"
-              >
-                <Bot size={13} /> AI Chat
-              </button>
-            </nav>
-
-            {/* Right auth controls */}
-            <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-              {user ? (
-                <>
-                  <div className="hidden sm:block">
-                    <TokenAvailabilityPill />
-                  </div>
-                  {onNavigate && <NotificationBell onNavigate={onNavigate} />}
-                  <Button onClick={onEnterStudio} size="sm" icon={<ArrowRight size={14} />}>
-                    Studio
-                  </Button>
-                  <UserAvatar onClick={onOpenProfile} />
-                </>
-              ) : (
-                <>
-                  <button
-                    onClick={onEnterStudio}
-                    className="hidden sm:block px-3 py-1.5 text-sm font-bold text-slate-600 hover:text-black transition-colors"
-                  >
-                    Sign In
-                  </button>
-                  <Button onClick={onEnterStudio} size="sm" icon={<Zap size={14} />}>
-                    Start Free
-                  </Button>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      </header>
 
       {/* Hero Section */}
       <section className="relative overflow-hidden py-24 px-6">

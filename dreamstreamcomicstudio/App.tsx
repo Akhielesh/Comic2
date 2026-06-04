@@ -631,7 +631,7 @@ const App: React.FC = () => {
   const activeProject = activeProjectId ? getProject(activeProjectId) : undefined;
   // Editor and ComicForge are focused, full-screen workspaces with their own
   // back/title bars, so we hide the global site header there (was a 3rd stacked header).
-  const showSharedHeader = !['home', 'reader', 'shared', 'editor', 'comicforge', 'pagestudio'].includes(effectiveView);
+  const showSharedHeader = !['reader', 'shared', 'editor', 'comicforge', 'pagestudio'].includes(effectiveView);
   const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'chat';
   // Hide the floating Universal Assistant on the full-screen chat product to avoid two stacked chat surfaces.
   const showUniversalAssistant = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat';
@@ -645,6 +645,7 @@ const App: React.FC = () => {
           const header = (
             <StaticSiteHeader
               isAuthenticated={!!user}
+              currentView={effectiveView}
               onGoHome={handleBackToHome}
               onViewComics={() => handleNavigate('gallery')}
               onEnterStudio={() => handleNavigate('dashboard')}
@@ -679,18 +680,8 @@ const App: React.FC = () => {
             <HomePage
               onEnterStudio={() => (user ? setCurrentView('dashboard') : setCurrentView('auth'))}
               onViewComics={() => setCurrentView('gallery')}
-              onOpenProfile={() => {
-                setSettingsTab('profile');
-                setSettingsReturnView('home');
-                setCurrentView('settings');
-              }}
               onOpenPrivacy={() => setCurrentView('privacy')}
               onOpenTerms={() => setCurrentView('terms')}
-              onOpenUpgrade={() => {
-                setSettingsTab('billing');
-                setSettingsReturnView('home');
-                setCurrentView('settings');
-              }}
               onNavigate={handleNavigate}
             />
           )}
