@@ -141,6 +141,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
     dataShape: 'Text: converted amount(s) + rate date.', docsUrl: 'https://www.frankfurter.app',
     keywords: ['currency', 'exchange', 'convert', 'usd', 'eur', 'gbp', 'forex', 'rate', 'money']
   },
+  {
+    name: 'build_finance_terminal', label: 'Finance terminal', category: 'finance', kind: 'builtin', provider: 'DreamStream (Yahoo/Stooq)',
+    description: 'Assemble a live finance terminal — focus quote, index/KPI ribbon, watchlist table, sector heatmap and news — for a dashboard/overview of multiple tickers at once.',
+    auth: 'none', rateLimit: 'Fair use (keyless quotes)',
+    dataShape: 'Composite terminal: quote + KPIs + table + heatmap + news.', docsUrl: 'https://dreamstream.app',
+    keywords: ['terminal', 'dashboard', 'watchlist', 'portfolio', 'markets today', 'market overview', 'track stocks', 'movers', 'indices', 'my stocks', 'finance dashboard']
+  },
   // ----------------------------------------------------------------- places -----
   {
     name: 'find_places', label: 'Places / local', category: 'places', kind: 'builtin', provider: 'OpenStreetMap / Foursquare',
@@ -408,6 +415,20 @@ export const TOOL_CATALOG: ToolMeta[] = [
     auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
     dataShape: 'KPI board: tiles with deltas, sparklines, rings.', docsUrl: 'https://dreamstream.app',
     keywords: ['dashboard', 'kpi', 'kpis', 'metrics', 'scorecard', 'stat board', 'at a glance', 'summary stats', 'overview']
+  },
+  {
+    name: 'render_table', label: 'Data table', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app)',
+    description: 'Render a sortable, typed data table from rows the model provides — currency, percent, signed-delta, sparkline and badge cells. For watchlists, holdings, fundamentals grids, screeners and comparisons.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Sortable table with typed/colored cells + sparklines.', docsUrl: 'https://dreamstream.app',
+    keywords: ['table', 'data table', 'tabular', 'rows', 'columns', 'spreadsheet', 'grid', 'compare side by side', 'holdings', 'screener', 'list of stocks']
+  },
+  {
+    name: 'render_heatmap', label: 'Heatmap', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app)',
+    description: 'Render a market/sector heatmap — a grid of tiles colored green→red by their change, optionally sized by market cap. For breadth at a glance: sector maps, movers, watchlist days.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Colored tile grid (treemap-style) by value.', docsUrl: 'https://dreamstream.app',
+    keywords: ['heatmap', 'heat map', 'market map', 'sector map', 'treemap', 'breadth', 'gainers and losers', 'sector performance', 'movers map']
   },
   // ----------------------------------------------------------------- agents -----
   {
