@@ -131,7 +131,7 @@ export const TOOL_CATALOG: ToolMeta[] = [
     name: 'crypto_price', label: 'Crypto prices', category: 'finance', kind: 'api', provider: 'CoinGecko',
     description: 'Current price, market cap and 24h change of a cryptocurrency.',
     auth: 'none', rateLimit: '~10-30 calls/min (public demo tier)',
-    dataShape: 'Text: price, 24h %, market cap, rank + link.', docsUrl: 'https://www.coingecko.com/en/api',
+    dataShape: 'Interactive price card (chart) + 24h %, market cap, rank.', docsUrl: 'https://www.coingecko.com/en/api',
     keywords: ['crypto', 'bitcoin', 'btc', 'ethereum', 'eth', 'coin', 'token', 'solana', 'dogecoin', 'altcoin']
   },
   {

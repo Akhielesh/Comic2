@@ -38,12 +38,51 @@ export const cryptoPriceTool: ChatTool = {
       const change = row[`${vs}_24h_change`];
       const mcap = row[`${vs}_market_cap`];
       const dir = typeof change === 'number' ? (change >= 0 ? '▲' : '▼') : '';
+      const changePercent = typeof change === 'number' ? change : 0;
+      const changeAbs = changePercent ? value - value / (1 + changePercent / 100) : 0;
+
+      // Best-effort 7-day price series → render as the interactive MarketCard.
+      let series: { date: string; close: number }[] | undefined;
+      try {
+        const chart = await fetchJson<{ prices?: [number, number][] }>(
+          `https://api.coingecko.com/api/v3/coins/${encodeURIComponent(top.id)}/market_chart?vs_currency=${encodeURIComponent(vs)}&days=7&interval=hourly`,
+          { signal }
+        );
+        const pts = chart.prices || [];
+        if (pts.length) {
+          const step = Math.max(1, Math.floor(pts.length / 40)); // downsample to ~40 points
+          series = pts.filter((_, i) => i % step === 0).map(([ms, p]) => ({ date: new Date(ms).toISOString(), close: p }));
+        }
+      } catch {
+        /* sparkline optional */
+      }
+
       const content =
         `${top.name} (${top.symbol.toUpperCase()}): ${value.toLocaleString(undefined, { maximumFractionDigits: value < 1 ? 6 : 2 })} ${vs.toUpperCase()} ` +
         `${dir}${typeof change === 'number' ? ` ${change >= 0 ? '+' : ''}${change.toFixed(2)}% (24h)` : ''}` +
         `${typeof mcap === 'number' ? ` · market cap ${Math.round(mcap).toLocaleString()} ${vs.toUpperCase()}` : ''}` +
-        `${top.market_cap_rank ? ` · rank #${top.market_cap_rank}` : ''}`;
-      return { content, citations: [{ url: `https://www.coingecko.com/en/coins/${top.id}`, title: `${top.name} on CoinGecko` }] };
+        `${top.market_cap_rank ? ` · rank #${top.market_cap_rank}` : ''}. A live price card is shown to the user.`;
+      return {
+        content,
+        artifacts: [
+          {
+            type: 'stock_quote',
+            data: {
+              symbol: top.symbol.toUpperCase(),
+              name: top.name,
+              price: value,
+              change: changeAbs,
+              changePercent,
+              currency: vs.toUpperCase(),
+              exchange: 'CoinGecko',
+              marketState: 'open' as const,
+              ...(series ? { series } : {}),
+              ...(typeof mcap === 'number' ? { stats: { marketCap: mcap } } : {})
+            }
+          }
+        ],
+        citations: [{ url: `https://www.coingecko.com/en/coins/${top.id}`, title: `${top.name} on CoinGecko` }]
+      };
     } catch (err) {
       return { content: `Crypto price lookup failed: ${(err as Error)?.message || 'unknown error'}.` };
     }
