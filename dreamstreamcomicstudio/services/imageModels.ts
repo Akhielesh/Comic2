@@ -4,6 +4,8 @@ import { IMAGE_MODEL, isProPlanTier } from './modelPolicy';
 export const FLUX_SCHNELL_MODEL_ID = 'pixazo/flux-1-schnell';
 export const GEMINI_IMAGE_MODEL_ID = IMAGE_MODEL;
 export const NANO_BANANA_PRO_MODEL_ID = 'gemini-3-pro-image-preview';
+export const IDEOGRAM_V2_MODEL_ID = 'ideogram/ideogram-v2';
+export const IDEOGRAM_V2_TURBO_MODEL_ID = 'ideogram/ideogram-v2-turbo';
 
 export const IMAGE_PROVIDER_LOCK: ImageProviderId | null = null;
 export const DEFAULT_IMAGE_PROVIDER: ImageProviderId = 'flux';
@@ -34,6 +36,22 @@ export const IMAGE_MODELS: ImageModelDefinition[] = [
     supportsAspectRatio: true,
     defaultSteps: 1,
     minimumPlanTier: 'pro'
+  },
+  {
+    id: IDEOGRAM_V2_MODEL_ID,
+    label: 'Ideogram 2.0',
+    provider: 'ideogram',
+    supportsReferences: false,
+    supportsAspectRatio: true,
+    defaultSteps: 1
+  },
+  {
+    id: IDEOGRAM_V2_TURBO_MODEL_ID,
+    label: 'Ideogram 2.0 Turbo',
+    provider: 'ideogram',
+    supportsReferences: false,
+    supportsAspectRatio: true,
+    defaultSteps: 1
   }
 ];
 

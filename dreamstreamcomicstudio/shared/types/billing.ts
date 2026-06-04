@@ -60,7 +60,7 @@ export type TokenBreakdownLine = {
 };
 
 export type TokenEstimateRequest = {
-  provider: 'gemini' | 'pixazo' | 'openrouter' | 'nvidia' | 'internal';
+  provider: 'gemini' | 'pixazo' | 'openrouter' | 'nvidia' | 'ideogram' | 'internal';
   model: string;
   operation: string;
   inputTokens?: number;

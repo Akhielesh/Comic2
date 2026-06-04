@@ -210,6 +210,28 @@ export const FALLBACK_MODEL_PRICING: ModelPricing[] = [
     status: 'ACTIVE',
     effectiveFrom: '2026-02-13T00:00:00.000Z'
   },
+  {
+    provider: 'ideogram',
+    model: 'ideogram/ideogram-v2',
+    inputPer1kUsd: 0,
+    outputPer1kUsd: 0,
+    imagePerOutputUsd: 0.08,
+    source: 'fallback/default',
+    confidence: 0.5,
+    status: 'ACTIVE',
+    effectiveFrom: '2026-02-13T00:00:00.000Z'
+  },
+  {
+    provider: 'ideogram',
+    model: 'ideogram/ideogram-v2-turbo',
+    inputPer1kUsd: 0,
+    outputPer1kUsd: 0,
+    imagePerOutputUsd: 0.05,
+    source: 'fallback/default',
+    confidence: 0.5,
+    status: 'ACTIVE',
+    effectiveFrom: '2026-02-13T00:00:00.000Z'
+  },
   // --- OpenRouter fallbacks (the daily pricing sync overwrites these from /models) ---
   {
     provider: 'openrouter',
