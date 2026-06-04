@@ -121,11 +121,11 @@ export const TOOL_CATALOG: ToolMeta[] = [
   },
   // ---------------------------------------------------------------- finance -----
   {
-    name: 'get_stock', label: 'Stocks & indices', category: 'finance', kind: 'builtin', provider: 'Stooq',
-    description: 'Live stock, ETF or index quote with recent price history.',
-    auth: 'none', rateLimit: 'Fair use (CSV, no key)',
-    dataShape: 'Quote card: price, change %, ~30-session sparkline.', docsUrl: 'https://stooq.com',
-    keywords: ['stock', 'share', 'ticker', 'nasdaq', 's&p', 'dow', 'index', 'equity', 'market']
+    name: 'get_stock', label: 'Markets (stocks, commodities, FX)', category: 'finance', kind: 'builtin', provider: 'Yahoo Finance (Stooq fallback)',
+    description: 'Live quote for stocks, ETFs, indices, commodities (gold, oil, metals), FX pairs and crypto — with an intraday→multi-year range timeline, 52-week range, stats, peers and headlines.',
+    auth: 'none', rateLimit: 'Fair use (keyless)',
+    dataShape: 'Rich market card: price, range timeline, 52-wk, peers, news.', docsUrl: 'https://finance.yahoo.com',
+    keywords: ['stock', 'share', 'ticker', 'nasdaq', 's&p', 'dow', 'index', 'equity', 'market', 'gold', 'silver', 'platinum', 'copper', 'oil', 'crude', 'brent', 'commodity', 'commodities', 'metals', 'natural gas', 'futures']
   },
   {
     name: 'crypto_price', label: 'Crypto prices', category: 'finance', kind: 'api', provider: 'CoinGecko',
