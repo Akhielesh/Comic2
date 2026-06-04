@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { PanelLeftOpen, PanelLeftClose, ChevronDown, Sparkles, Cpu, Pencil, Check, X } from 'lucide-react';
+import { PanelLeftOpen, PanelLeftClose, ChevronDown, Sparkles, Cpu, Pencil, Check, X, Bug, Hash, Braces, Copy } from 'lucide-react';
 import type { ChatSession, ChatAttachment } from '../../services/chatStorage';
+import { serializeDebugBundle } from '../../services/chatDebug';
 import type { ChatReasoningLevel } from '../../apiTypes';
 import type { ChatModelFeatures } from '../../services/chatFeatures';
 import type { ChatConnector } from '../../services/chatConnectors';
@@ -44,6 +45,63 @@ const SUGGESTIONS = [
   'Draft a plan with numbered steps',
   'Summarize the latest on a topic (turn on Web)'
 ];
+
+// "Copy debug" menu: hand a chat off for analysis without copying the whole
+// transcript. "Copy chat ID" copies the short id (resolvable from chat_sync);
+// "Copy debug bundle" copies structured JSON of what happened each turn (model
+// used vs. requested, tool runs, notices/errors, artifacts).
+const ChatDebugMenu: React.FC<{ session: ChatSession }> = ({ session }) => {
+  const [open, setOpen] = useState(false);
+  const [done, setDone] = useState<'id' | 'bundle' | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  const copy = async (kind: 'id' | 'bundle') => {
+    try {
+      await navigator.clipboard.writeText(kind === 'id' ? session.id : serializeDebugBundle(session));
+      setDone(kind);
+      setTimeout(() => setDone(null), 1500);
+    } catch {
+      /* clipboard unavailable */
+    }
+    setOpen(false);
+  };
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        title="Copy chat ID / debug bundle"
+        aria-label="Copy debug info"
+        className="flex items-center gap-1 rounded-lg border-2 border-black/15 px-1.5 py-1 text-slate-500 transition-colors hover:border-black/40 hover:text-black"
+      >
+        {done ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Bug className="h-3.5 w-3.5" />}
+      </button>
+      {open && (
+        <div className="absolute right-0 z-30 mt-1 w-52 overflow-hidden rounded-lg border-2 border-black bg-white shadow-comic animate-fade-in">
+          <button onClick={() => copy('id')} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-bold hover:bg-brand-yellow/30">
+            <Hash className="h-3.5 w-3.5 shrink-0" /> Copy chat ID
+          </button>
+          <button onClick={() => copy('bundle')} className="flex w-full items-center gap-2 border-t border-black/10 px-3 py-2 text-left text-xs font-bold hover:bg-brand-yellow/30">
+            <Braces className="h-3.5 w-3.5 shrink-0" /> Copy debug bundle
+            <span className="ml-auto"><Copy className="h-3 w-3 text-slate-400" /></span>
+          </button>
+          <div className="border-t border-black/10 bg-slate-50 px-3 py-1.5 text-[10px] leading-snug text-slate-500">
+            Paste either into a dev chat to analyze what happened.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 export const ChatConversation: React.FC<ChatConversationProps> = ({
   session,
@@ -165,6 +223,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
         </div>
 
         <div className="ml-auto flex items-center gap-2 shrink-0">
+          <ChatDebugMenu session={session} />
           <ChatContextMeter usedTokens={usedTokens} contextLength={features.contextLength} features={features} />
           <div className="hidden lg:flex items-center gap-1.5 text-[11px] text-slate-500">
             {session.dreamstreamAccess && <span className="px-1.5 py-0.5 rounded border-2 border-black bg-brand-yellow font-bold text-black">DreamStream</span>}
