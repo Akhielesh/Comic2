@@ -500,31 +500,58 @@ export const scoreTools = (
 };
 
 /**
- * Smart selection: from the set of *enabled* tool names, pick the subset most
- * relevant to the message so the model isn't handed dozens of tools at once.
+ * Tools the model should ALWAYS be offered (when enabled), regardless of whether the
+ * user's wording matched a keyword. These are the freeform visualization tools plus the
+ * universal grounding tools — so the model can DECIDE to chart/tabulate/look-up from
+ * intent (the way ChatGPT does), instead of only when the message literally contains
+ * "chart"/"table"/etc. web_search leads as the universal internet backstop.
+ */
+export const CORE_ALWAYS_TOOLS: string[] = [
+  'web_search',
+  'render_chart',
+  'render_table',
+  'show_metrics',
+  'render_heatmap',
+  'get_news',
+  'wiki_lookup'
+];
+
+/**
+ * Smart selection: from the set of *enabled* tool names, pick the subset to hand the
+ * model so it isn't given dozens of specs at once.
  *
- * - Always keeps web_search as a backstop when present (general fallback).
- * - Adds the top keyword-matched tools up to `max`.
- * - If nothing matches and the message looks information-seeking, keeps web_search.
- * - Never returns more than `max` tools; preserves the swarm tool if enabled.
+ * Order of precedence (each fills remaining slots up to `max`):
+ *   1. the swarm meta-tool, if enabled (decision is preserved);
+ *   2. keyword-matched tools — so a clearly-invoked domain tool is never crowded out;
+ *   3. the always-on core tools (visualization + grounding) — so the model can choose
+ *      to visualize/ground even with no keyword hit;
+ *   4. web_search backstop, then a web/news/wiki fallback if nothing else applied.
+ *
+ * Never returns more than `max` tools.
  */
 export const selectRelevantTools = (
   text: string,
   enabledNames: string[],
-  max = 10
+  max = 20
 ): string[] => {
   if (enabledNames.length <= max) return enabledNames;
   const enabled = new Set(enabledNames);
   const keep = new Set<string>();
-  // Always preserve the swarm meta-tool decision and the universal web backstop.
+  // 1. Always preserve the swarm meta-tool decision.
   if (enabled.has('run_agent_swarm')) keep.add('run_agent_swarm');
+  // 2. Keyword-matched tools first, so an explicitly-invoked domain tool always survives.
   const ranked = scoreTools(text, enabledNames.filter((n) => n !== 'run_agent_swarm'));
   for (const { name } of ranked) {
     if (keep.size >= max) break;
     keep.add(name);
   }
+  // 3. Always-on core (visualization + grounding) fills the remaining slots.
+  for (const core of CORE_ALWAYS_TOOLS) {
+    if (keep.size >= max) break;
+    if (enabled.has(core)) keep.add(core);
+  }
+  // 4. Backstops.
   if (keep.size < max && enabled.has('web_search')) keep.add('web_search');
-  // If still nothing relevant, fall back to web/news/wiki when enabled.
   if (keep.size === 0) {
     for (const fallback of ['web_search', 'get_news', 'wiki_lookup']) {
       if (enabled.has(fallback)) keep.add(fallback);
