@@ -2,10 +2,12 @@
 module.exports = {
   content: [
     "./index.html",
+    "./studio.html",
     "./App.tsx",
     "./components/**/*.{ts,tsx}",
     "./hooks/**/*.{ts,tsx}",
     "./services/**/*.{ts,tsx}",
+    "./studio/**/*.{ts,tsx}",
     "./public/**/*.html"
   ],
   theme: {
