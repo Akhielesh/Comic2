@@ -202,6 +202,12 @@ cap to bound spend.
 
 ## 8. Cost model (verified pricing)
 
+> **Verified verbatim against the live [Cloudflare Containers pricing](https://developers.cloudflare.com/containers/pricing/)
+> + [limits](https://developers.cloudflare.com/containers/platform-details/limits/) pages on 2026-06-04** —
+> all per-unit rates, included allotments, instance specs, sleep behaviour and egress
+> tiers below match the official pages exactly. Free-tier coverage is memory-bound
+> (25 GiB-hr/mo): ~18 sessions/mo on standard-3 (8 GiB), ~90 on a lean standard-1 (4 GiB).
+
 - CPU: **$0.000020 / vCPU-second**, billed on **active usage only** (1 vCPU at 20%
   utilization for an hour = $0.0144, not the full provisioned rate).
 - Memory: **$0.0000025 / GiB-second**, billed on **provisioned** size while **awake**.
