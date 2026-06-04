@@ -1,0 +1,6 @@
+# Cross-origin isolation for the dedicated Code Studio page ONLY, so WebContainers
+# can boot there. Scoped to /studio.html so the main app is NOT isolated (keeps OSM
+# map tiles, image-search results and cross-origin embeds working everywhere else).
+/studio.html
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
