@@ -531,14 +531,16 @@ const App: React.FC = () => {
     setCurrentView('chat');
   };
 
-  const handleCreateProject = (name: string) => {
+  const handleCreateProject = (name: string, pipelineMode: 'classic' | 'pagestudio' = 'classic') => {
     const newProject = createProject(name);
-    // New projects use the single-sheet PageStudio engine by default.
+    // The user explicitly picks the engine at creation (Full comic = Classic, which
+    // keeps characters consistent across panels; Quick = single-sheet PageStudio).
+    // Default to Classic so multi-panel comics get continuity unless Quick is chosen.
     updateProject(newProject.id, (prev) => ({
-      state: { ...prev.state, pipelineMode: 'pagestudio' }
+      state: { ...prev.state, pipelineMode }
     }));
     setActiveProjectId(newProject.id);
-    setCurrentView('pagestudio');
+    setCurrentView(pipelineMode === 'pagestudio' ? 'pagestudio' : 'editor');
   };
 
   const handleOpenProject = (id: string, expectedPipelineMode?: 'classic' | 'comicforge' | 'pagestudio') => {

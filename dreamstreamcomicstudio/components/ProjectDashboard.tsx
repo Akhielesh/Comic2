@@ -12,7 +12,7 @@ import { SmartImage } from './common/SmartImage';
 
 interface ProjectDashboardProps {
   projects: Project[];
-  onCreateProject: (name: string) => void;
+  onCreateProject: (name: string, pipelineMode: 'classic' | 'pagestudio') => void;
   onOpenProject: (id: string) => void;
   onDeleteProject: (id: string) => void;
   onDuplicateProject: (id: string) => void;
@@ -28,6 +28,9 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
 }) => {
   const [isCreating, setIsCreating] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
+  // Engine the new comic uses. Default to 'classic' (multi-panel with character
+  // continuity); 'pagestudio' is the quick single-page alternative.
+  const [createMode, setCreateMode] = useState<'classic' | 'pagestudio'>('classic');
   const [infoProjectId, setInfoProjectId] = useState<string | null>(null);
   const infoProject = infoProjectId ? projects.find((p) => p.id === infoProjectId) : undefined;
   const [searchTerm, setSearchTerm] = useState('');
@@ -121,7 +124,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
 
   const handleCreate = () => {
     if (newProjectName.trim()) {
-      onCreateProject(newProjectName);
+      onCreateProject(newProjectName, createMode);
       setNewProjectName('');
       setIsCreating(false);
     }
@@ -165,18 +168,41 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
       )}
 
       {isCreating && (
-        <div className="mb-12 mx-auto bg-white p-6 rounded-xl border-4 border-black shadow-comic max-w-xl relative z-50">
+        <div className="mb-12 mx-auto bg-white p-6 rounded-xl border-4 border-black shadow-comic max-w-2xl relative z-50">
           <label className="block text-lg font-display mb-2 text-black">Comic Title</label>
-          <div className="flex gap-4">
-            <input
-              autoFocus
-              type="text"
-              value={newProjectName}
-              onChange={(e) => setNewProjectName(e.target.value)}
-              placeholder="The Amazing Adventures of..."
-              className="flex-1 border-2 border-black bg-white text-black rounded-lg px-4 py-2 font-comic text-lg focus:shadow-comic outline-none transition-all placeholder-slate-400"
-              onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
-            />
+          <input
+            autoFocus
+            type="text"
+            value={newProjectName}
+            onChange={(e) => setNewProjectName(e.target.value)}
+            placeholder="The Amazing Adventures of..."
+            className="w-full border-2 border-black bg-white text-black rounded-lg px-4 py-2 font-comic text-lg focus:shadow-comic outline-none transition-all placeholder-slate-400"
+            onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
+          />
+
+          <label className="block text-lg font-display mt-5 mb-2 text-black">How do you want to build it?</label>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => setCreateMode('classic')}
+              aria-pressed={createMode === 'classic'}
+              className={`text-left p-4 border-2 border-black rounded-lg transition-all ${createMode === 'classic' ? 'bg-brand-yellow shadow-comic' : 'bg-white hover:bg-slate-50'}`}
+            >
+              <div className="flex items-center gap-2 font-display text-black"><BookOpen className="w-5 h-5" /> Full comic</div>
+              <p className="mt-1 text-xs font-comic text-slate-600">Multi-panel pages from a script. Keeps characters, outfits and locations consistent across panels. Best for real comics.</p>
+            </button>
+            <button
+              type="button"
+              onClick={() => setCreateMode('pagestudio')}
+              aria-pressed={createMode === 'pagestudio'}
+              className={`text-left p-4 border-2 border-black rounded-lg transition-all ${createMode === 'pagestudio' ? 'bg-brand-yellow shadow-comic' : 'bg-white hover:bg-slate-50'}`}
+            >
+              <div className="flex items-center gap-2 font-display text-black"><Zap className="w-5 h-5" /> Quick single page</div>
+              <p className="mt-1 text-xs font-comic text-slate-600">One full-page image you can refine with edits. Fastest, but does not maintain character consistency across panels.</p>
+            </button>
+          </div>
+
+          <div className="flex gap-4 mt-5">
             <Button onClick={handleCreate}>Create</Button>
             <Button variant="secondary" onClick={() => setIsCreating(false)}>Cancel</Button>
           </div>
