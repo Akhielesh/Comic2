@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "dev": "concurrently --kill-others-on-fail \"npm run dev:server\" \"vite\"",
     "dev:server": "tsx watch server/src/index.ts",
