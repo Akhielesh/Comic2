@@ -187,7 +187,7 @@ export const runChat = async (
 - CRITICAL: if a tool or web search returned ANY results/snippets/sources, you MUST synthesize an answer from them and cite the sources. NEVER reply "I couldn't retrieve" or "found nothing" when results/citations are present.
 - If a tool returns empty, do NOT call the SAME tool again with a slightly reworded query (it will keep returning nothing) — switch to a DIFFERENT tool (e.g. wiki_lookup, get_news) or answer from your own knowledge with a clear caveat. A couple of empty searches is enough; pivot rather than looping.
 - When a tool result renders as a CARD (stock, weather, news, crypto, map, places), the card already shows the raw numbers — so DON'T restate them. Instead add a brief but genuinely insightful READ: for a stock, where the price sits in its 52-week range, recent momentum, valuation (P/E) and anything notable from the headlines or peers; for weather, what to actually expect/plan. Aim for 2-4 crisp, insightful sentences — never a bare one-liner, and never a long data dump.
-- Use render_chart / show_metrics to visualize any data you gather or compute.`;
+- Use render_chart / show_metrics / render_table / render_heatmap to visualize any data you gather or compute, and build_finance_terminal for a live markets dashboard (focus quote + indices + watchlist + heatmap + news) when the user wants an overview/watchlist/multiple tickers.`;
   }
 
   const messages: ChatMessage[] = [{ role: 'system', content: systemContent }, ...params.messages];

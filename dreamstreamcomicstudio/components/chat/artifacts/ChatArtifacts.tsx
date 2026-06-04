@@ -1,5 +1,5 @@
 import React from 'react';
-import type { ChatArtifact, WeatherArtifact, VideoResultsArtifact, MapArtifact, NewsResultsArtifact, StockQuoteArtifact, SwarmTraceArtifact, PlacesResultsArtifact, ChartArtifact, MetricBoardArtifact } from '../../../apiTypes';
+import type { ChatArtifact, WeatherArtifact, VideoResultsArtifact, MapArtifact, NewsResultsArtifact, StockQuoteArtifact, SwarmTraceArtifact, PlacesResultsArtifact, ChartArtifact, MetricBoardArtifact, DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact } from '../../../apiTypes';
 import { WeatherStation } from './WeatherStation';
 import { VideoResults } from './VideoResults';
 import { MapArtifactCard } from './MapArtifactCard';
@@ -9,6 +9,9 @@ import { SwarmTraceCard } from './SwarmTraceCard';
 import { PlacesResults } from './PlacesResults';
 import { ChartCard } from './ChartCard';
 import { MetricBoard } from './MetricBoard';
+import { DataTableCard } from './DataTableCard';
+import { HeatmapCard } from './HeatmapCard';
+import { FinanceTerminal } from './FinanceTerminal';
 
 // Renderer registry for typed rich-output artifacts. Adding a new rich component is
 // a single entry here — the chat loop and storage never change.
@@ -26,7 +29,10 @@ const ARTIFACT_RENDERERS: Record<string, (data: unknown, key: number) => React.R
   stock_quote: (d, k) => <MarketCard key={k} data={d as StockQuoteArtifact} />,
   swarm_trace: (d, k) => <SwarmTraceCard key={k} data={d as SwarmTraceArtifact} />,
   chart: (d, k) => <ChartCard key={k} data={d as ChartArtifact} />,
-  metric_board: (d, k) => <MetricBoard key={k} data={d as MetricBoardArtifact} />
+  metric_board: (d, k) => <MetricBoard key={k} data={d as MetricBoardArtifact} />,
+  data_table: (d, k) => <DataTableCard key={k} data={d as DataTableArtifact} />,
+  market_heatmap: (d, k) => <HeatmapCard key={k} data={d as HeatmapArtifact} />,
+  finance_terminal: (d, k) => <FinanceTerminal key={k} data={d as FinanceTerminalArtifact} />
 };
 
 /** Every artifact type the renderer can display. Cross-checked against the gallery. */
