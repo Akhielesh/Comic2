@@ -122,7 +122,10 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   const [projectModal, setProjectModal] = useState<{ editing: ChatProject | null } | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<Map<string, CatalogModel>>(new Map());
-  const [busy, setBusy] = useState(false);
+  // Per-session generation state, so several chats can stream at the same time and a
+  // busy chat never blocks (or gets stopped by) another. `busyIds` = sessions whose
+  // answer is currently generating.
+  const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [initialized, setInitialized] = useState(false);
@@ -135,7 +138,15 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   const [isDesktop, setIsDesktop] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches
   );
-  const abortRef = useRef<AbortController | null>(null);
+  // One AbortController per in-flight session, so stopping one chat doesn't cancel another.
+  const abortMap = useRef<Map<string, AbortController>>(new Map());
+  const markBusy = (id: string, on: boolean) =>
+    setBusyIds((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
 
   useEffect(() => {
     const mq = window.matchMedia('(min-width: 768px)');
@@ -228,6 +239,15 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     () => sessions.find((s) => s.id === activeId) || null,
     [sessions, activeId]
   );
+  // Whether the CURRENTLY VIEWED chat is generating (drives the composer/stop UI).
+  // Other chats may still be generating in the background.
+  const busy = activeId ? busyIds.has(activeId) : false;
+  // Latest active id, readable from inside async generation closures (which capture a
+  // stale activeId) so a background chat doesn't hijack the shared side panel.
+  const activeIdRef = useRef(activeId);
+  useEffect(() => {
+    activeIdRef.current = activeId;
+  }, [activeId]);
 
   const resolvedModel = activeSession?.modelId ? catalog.get(activeSession.modelId) || null : null;
   const features = useMemo(() => deriveModelFeatures(resolvedModel), [resolvedModel]);
@@ -264,6 +284,10 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   };
 
   const handleDelete = (id: string) => {
+    // Stop any in-flight generation for the chat being removed.
+    abortMap.current.get(id)?.abort();
+    abortMap.current.delete(id);
+    markBusy(id, false);
     void deleteChatSession(id);
     const next = sessions.filter((s) => s.id !== id);
     if (next.length === 0) {
@@ -360,9 +384,10 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   const handleEditMemory = () => setSettingsTab('memory');
 
   const handleStop = () => {
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setBusy(false);
+    if (!activeId) return;
+    abortMap.current.get(activeId)?.abort();
+    abortMap.current.delete(activeId);
+    markBusy(activeId, false);
   };
 
   // Resolve which model/source/tools to use for a message. In Auto mode the app
@@ -431,11 +456,15 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     regenerateTurnId?: string;
   }) => {
     const { sessionId, baseTurns, reqModel, reqSource, reqTools, regenerateTurnId } = opts;
-    if (!activeSession) return;
+    // Bind to the TARGET session (captured at send time), not whatever chat happens to
+    // be active when an async tick resolves — so switching/creating chats mid-stream
+    // never crosses settings or output between conversations.
+    const session = sessions.find((s) => s.id === sessionId);
+    if (!session) return;
 
-    setBusy(true);
+    markBusy(sessionId, true);
     const controller = new AbortController();
-    abortRef.current = controller;
+    abortMap.current.set(sessionId, controller);
 
     const setSessionState = (updater: (s: ChatSession) => ChatSession) =>
       setSessions((prev) => prev.map((s) => (s.id === sessionId ? updater(s) : s)));
@@ -463,15 +492,15 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         messages: reqMessages,
         model: reqModel,
         source: reqSource,
-        reasoningLevel: activeSession.reasoningLevel,
-        webSearch: activeSession.webSearch,
-        systemPrompt: composeSystemPrompt(getChatMemory(user?.id), activeSession.systemPrompt),
+        reasoningLevel: session.reasoningLevel,
+        webSearch: session.webSearch,
+        systemPrompt: composeSystemPrompt(getChatMemory(user?.id), session.systemPrompt),
         ...(clientContext ? { clientContext } : {}),
         ...(reqTools.length ? { tools: reqTools } : {}),
         // Custom agents only matter to the swarm (mode or tool); send them only then.
-        ...((activeSession.swarm || reqTools.includes('run_agent_swarm')) && customAgents.length ? { customAgents } : {}),
-        ...((activeSession.mcpServers || []).length ? { mcpServers: getMcpServersByIds(activeSession.mcpServers || []) } : {}),
-        ...(activeSession.dreamstreamAccess ? { dreamstreamContext: buildDreamStreamContext(projects) } : {})
+        ...((session.swarm || reqTools.includes('run_agent_swarm')) && customAgents.length ? { customAgents } : {}),
+        ...((session.mcpServers || []).length ? { mcpServers: getMcpServersByIds(session.mcpServers || []) } : {}),
+        ...(session.dreamstreamAccess ? { dreamstreamContext: buildDreamStreamContext(projects) } : {})
       };
       const onDelta = (chunk: string) =>
         setSessionState((s) => ({
@@ -487,7 +516,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
 
       // Route through the agent swarm when enabled (OpenRouter only); otherwise the
       // normal single-model stream. The swarm streams a live plan/agent trace.
-      const useSwarm = Boolean(activeSession.swarm) && reqSource === 'openrouter';
+      const useSwarm = Boolean(session.swarm) && reqSource === 'openrouter';
       const res = useSwarm
         ? await runSwarmStream(reqBody, {
             signal: controller.signal,
@@ -532,8 +561,10 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       }));
       // Fold the tools that ran into local usage analytics (Settings → Tools).
       recordToolEvents(res.toolEvents);
+      // Only pop the side panel if this chat is the one being viewed — a background
+      // chat finishing shouldn't yank a map open over the chat you're reading.
       const mapArtifact = res.artifacts?.find((a) => a.type === 'map');
-      if (mapArtifact) setPanel(mapArtifact);
+      if (mapArtifact && sessionId === activeIdRef.current) setPanel(mapArtifact);
       // Learn durable facts about the user from this exchange (background, throttled).
       updateMemoryInBackground(baseTurns, res.text || '');
     } catch (err) {
@@ -551,8 +582,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         updatedAt: Date.now()
       }));
     } finally {
-      if (abortRef.current === controller) abortRef.current = null;
-      setBusy(false);
+      if (abortMap.current.get(sessionId) === controller) abortMap.current.delete(sessionId);
+      markBusy(sessionId, false);
     }
   };
 
@@ -693,6 +724,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           sessions={sessions}
           projects={projectsList}
           activeId={activeId}
+          generatingIds={busyIds}
           hasMemory={Boolean(memory.trim())}
           onSelect={setActiveId}
           onNew={handleNew}
