@@ -8,10 +8,11 @@ import { PlacesResults } from './artifacts/PlacesResults';
 import { SwarmTraceCard } from './artifacts/SwarmTraceCard';
 import { ChartCard } from './artifacts/ChartCard';
 import { MetricBoard } from './artifacts/MetricBoard';
+import { MapArtifactCard } from './artifacts/MapArtifactCard';
 import type {
   WeatherArtifact, NewsResultsArtifact, StockQuoteArtifact,
   VideoResultsArtifact, PlacesResultsArtifact, SwarmTraceArtifact,
-  ChartArtifact, MetricBoardArtifact
+  ChartArtifact, MetricBoardArtifact, MapArtifact
 } from '../../apiTypes';
 
 // A living gallery of the chat's rich-output components, each with sample data, so
@@ -144,25 +145,56 @@ const tableMd = `| Model | Params (B) | MMLU | Cost ($/M) |
 | GPT-4o mini | 8 | 82.0 | 0.15 |
 | Mixtral 8x7B | 47 | 70.6 | 0.24 |`;
 
-const Item: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
-  <div>
-    <div className="text-[11px] font-bold uppercase text-slate-500 mb-1">{title}</div>
-    {children}
-  </div>
-);
+const mapArtifact: MapArtifact = {
+  title: 'A short walk in Paris',
+  markers: [
+    { lat: 48.8584, lng: 2.2945, label: 'Eiffel Tower', description: 'Start' },
+    { lat: 48.8606, lng: 2.3376, label: 'Louvre', description: 'Finish' }
+  ],
+  route: [
+    { lat: 48.8584, lng: 2.2945 },
+    { lat: 48.8606, lng: 2.3376 }
+  ]
+};
+
+// The single source of truth for the gallery. Each entry that renders a typed
+// artifact carries its `type`; gallery.coverage.test.ts asserts every artifact type
+// the renderer supports appears here, so a new component can't ship without a demo.
+//
+// RULE: whenever you add a new artifact component/visual, add a demo entry here
+// (with its `type`). The coverage test will fail until you do.
+export interface GalleryDemo {
+  title: string;
+  /** The ChatArtifact `type` this demo covers, when it renders a typed artifact. */
+  type?: string;
+  node: React.ReactNode;
+}
+
+export const GALLERY_DEMOS: GalleryDemo[] = [
+  { title: 'Weather station (animated · gauges · map)', type: 'weather', node: <WeatherStation data={weather} /> },
+  { title: 'Market card (hover · range timeline · candlesticks)', type: 'stock_quote', node: <MarketCard data={stock} /> },
+  { title: 'News digest (lead · source filter · favicons)', type: 'news_results', node: <NewsDigest data={news} /> },
+  { title: 'Places (local) card', type: 'places_results', node: <PlacesResults data={places} /> },
+  { title: 'Map (markers · route)', type: 'map', node: <MapArtifactCard data={mapArtifact} /> },
+  { title: 'Video results', type: 'video_results', node: <VideoResults data={videos} /> },
+  { title: 'Agent swarm trace', type: 'swarm_trace', node: <SwarmTraceCard data={swarm} /> },
+  { title: 'Chart — grouped bars (legend · hover)', type: 'chart', node: <ChartCard data={barChart} /> },
+  { title: 'Chart — donut', node: <ChartCard data={donutChart} /> },
+  { title: 'Metric board (KPIs · sparklines · rings)', type: 'metric_board', node: <MetricBoard data={board} /> },
+  { title: 'Interactive data table', node: <ChatMarkdown text={tableMd} /> }
+];
+
+/** Artifact types that have a live demo in the gallery (used by the coverage test). */
+export const GALLERY_DEMO_TYPES: string[] = GALLERY_DEMOS.filter((d) => d.type).map((d) => d.type as string);
 
 export const ComponentGallery: React.FC = () => (
   <div className="space-y-4">
     <p className="text-sm text-slate-600">Every rich-output component rendered with sample data — the live UI library.</p>
-    <Item title="Weather station (animated · gauges · map)"><WeatherStation data={weather} /></Item>
-    <Item title="Market card (hover · range timeline · candlesticks)"><MarketCard data={stock} /></Item>
-    <Item title="News digest (lead · source filter · favicons)"><NewsDigest data={news} /></Item>
-    <Item title="Places (local) card"><PlacesResults data={places} /></Item>
-    <Item title="Video results"><VideoResults data={videos} /></Item>
-    <Item title="Agent swarm trace"><SwarmTraceCard data={swarm} /></Item>
-    <Item title="Chart — grouped bars (legend · hover)"><ChartCard data={barChart} /></Item>
-    <Item title="Chart — donut"><ChartCard data={donutChart} /></Item>
-    <Item title="Metric board (KPIs · sparklines · rings)"><MetricBoard data={board} /></Item>
-    <Item title="Interactive data table"><ChatMarkdown text={tableMd} /></Item>
+    {GALLERY_DEMOS.map((d) => (
+      <div key={d.title}>
+        <div className="text-[11px] font-bold uppercase text-slate-500 mb-1">{d.title}</div>
+        {d.node}
+      </div>
+    ))}
   </div>
 );

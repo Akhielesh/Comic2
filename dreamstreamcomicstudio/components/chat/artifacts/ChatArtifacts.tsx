@@ -10,33 +10,30 @@ import { PlacesResults } from './PlacesResults';
 import { ChartCard } from './ChartCard';
 import { MetricBoard } from './MetricBoard';
 
-// Renderer registry for typed rich-output artifacts. Adding a new rich component
-// (maps, video grids, PDF viewers…) is a single `case` here — the chat loop and
-// storage never change.
-const renderArtifact = (artifact: ChatArtifact, key: number): React.ReactNode => {
-  switch (artifact.type) {
-    case 'weather':
-      return <WeatherStation key={key} data={artifact.data as WeatherArtifact} />;
-    case 'video_results':
-      return <VideoResults key={key} data={artifact.data as VideoResultsArtifact} />;
-    case 'map':
-      return <MapArtifactCard key={key} data={artifact.data as MapArtifact} />;
-    case 'news_results':
-      return <NewsDigest key={key} data={artifact.data as NewsResultsArtifact} />;
-    case 'places_results':
-      return <PlacesResults key={key} data={artifact.data as PlacesResultsArtifact} />;
-    case 'stock_quote':
-      return <MarketCard key={key} data={artifact.data as StockQuoteArtifact} />;
-    case 'swarm_trace':
-      return <SwarmTraceCard key={key} data={artifact.data as SwarmTraceArtifact} />;
-    case 'chart':
-      return <ChartCard key={key} data={artifact.data as ChartArtifact} />;
-    case 'metric_board':
-      return <MetricBoard key={key} data={artifact.data as MetricBoardArtifact} />;
-    default:
-      return null;
-  }
+// Renderer registry for typed rich-output artifacts. Adding a new rich component is
+// a single entry here — the chat loop and storage never change.
+//
+// CONVENTION (enforced by gallery.coverage.test.ts): every artifact type registered
+// here MUST also have a live demo in ComponentGallery.tsx. If you add a renderer
+// without a gallery demo, the coverage test fails. See ComponentGallery for the
+// other half of the contract.
+const ARTIFACT_RENDERERS: Record<string, (data: unknown, key: number) => React.ReactNode> = {
+  weather: (d, k) => <WeatherStation key={k} data={d as WeatherArtifact} />,
+  video_results: (d, k) => <VideoResults key={k} data={d as VideoResultsArtifact} />,
+  map: (d, k) => <MapArtifactCard key={k} data={d as MapArtifact} />,
+  news_results: (d, k) => <NewsDigest key={k} data={d as NewsResultsArtifact} />,
+  places_results: (d, k) => <PlacesResults key={k} data={d as PlacesResultsArtifact} />,
+  stock_quote: (d, k) => <MarketCard key={k} data={d as StockQuoteArtifact} />,
+  swarm_trace: (d, k) => <SwarmTraceCard key={k} data={d as SwarmTraceArtifact} />,
+  chart: (d, k) => <ChartCard key={k} data={d as ChartArtifact} />,
+  metric_board: (d, k) => <MetricBoard key={k} data={d as MetricBoardArtifact} />
 };
+
+/** Every artifact type the renderer can display. Cross-checked against the gallery. */
+export const ARTIFACT_TYPES: string[] = Object.keys(ARTIFACT_RENDERERS);
+
+const renderArtifact = (artifact: ChatArtifact, key: number): React.ReactNode =>
+  ARTIFACT_RENDERERS[artifact.type]?.(artifact.data, key) ?? null;
 
 export const ChatArtifacts: React.FC<{ artifacts?: ChatArtifact[] }> = ({ artifacts }) => {
   if (!artifacts || artifacts.length === 0) return null;
