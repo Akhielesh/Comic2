@@ -1,5 +1,8 @@
 import { get, post, postStream } from './apiClient';
-import type { ChatRequest, ChatResponse, SwarmTraceArtifact } from '../apiTypes';
+import type { ChatRequest, ChatResponse, SwarmTraceArtifact, SystemDashboard } from '../apiTypes';
+
+/** Admin-only: live system dashboard (capabilities, tool health, limits, gaps). */
+export const getSystemDashboard = (): Promise<SystemDashboard> => get<SystemDashboard>('/api/system/dashboard');
 
 export interface UnfurlResult {
   url: string;

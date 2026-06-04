@@ -1012,6 +1012,41 @@ export type CapabilityReport = {
   recentNotices: CapabilityNotice[];
 };
 
+// --- System dashboard (admin) ---
+/** Live health of an upstream tool API. */
+export type ToolHealth = {
+  id: string;
+  label: string;
+  ok: boolean;
+  /** Round-trip latency in ms (when reachable). */
+  latencyMs?: number;
+  status?: number;
+  error?: string;
+};
+/** A platform dependency, its documented free-tier limit, and live status when known. */
+export type DependencyInfo = {
+  id: string;
+  label: string;
+  /** Human description of the free-tier / documented limit. */
+  freeTier: string;
+  /** True when we have a token/config to read live usage from this vendor. */
+  connected: boolean;
+  /** Env var that connects live metrics, when applicable. */
+  envVar?: string;
+  /** Live usage summary when connected (else undefined). */
+  live?: { label: string; used?: number; limit?: number; detail?: string };
+  docsUrl?: string;
+};
+export type SystemDashboard = {
+  generatedAt: string;
+  version: { appVersion: string; gitSha: string; buildTimestamp: string };
+  capabilities: CapabilityStatus[];
+  recentNotices: CapabilityNotice[];
+  toolHealth: ToolHealth[];
+  dependencies: DependencyInfo[];
+  rateLimits: { scope: string; perWindow: number; windowMs: number }[];
+};
+
 export type TestLabReportRequest = { report: Record<string, unknown> };
 export type TestLabReportResponse = {
   text: string;

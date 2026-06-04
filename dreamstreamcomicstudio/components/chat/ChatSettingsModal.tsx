@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import { X, Brain, Network, Wrench, Plus, Trash2, Check, Pencil, Bot, Sparkles } from 'lucide-react';
+import { X, Brain, Network, Wrench, Plus, Trash2, Check, Pencil, Bot, Sparkles, Activity, LayoutGrid } from 'lucide-react';
 import { ModalPortal } from '../modals/ModalPortal';
+import { SystemDashboard } from './SystemDashboard';
+import { ComponentGallery } from './ComponentGallery';
 import type { CustomAgentDef } from '../../apiTypes';
 import { getChatMemory, setChatMemory } from '../../services/chatStorage';
 import {
@@ -9,7 +11,7 @@ import {
   parseMemoryItems, formatMemoryItems
 } from '../../services/chatAgents';
 
-type Tab = 'memory' | 'agents' | 'tools';
+type Tab = 'memory' | 'agents' | 'tools' | 'system' | 'gallery';
 
 interface ChatSettingsModalProps {
   userId?: string;
@@ -38,7 +40,9 @@ export const ChatSettingsModal: React.FC<ChatSettingsModalProps> = ({
             {([
               ['memory', 'Memory', Brain],
               ['agents', 'Agents', Network],
-              ['tools', 'Tools', Wrench]
+              ['tools', 'Tools', Wrench],
+              ['system', 'System', Activity],
+              ['gallery', 'Gallery', LayoutGrid]
             ] as const).map(([id, label, Icon]) => (
               <button
                 key={id}
@@ -54,6 +58,8 @@ export const ChatSettingsModal: React.FC<ChatSettingsModalProps> = ({
             {tab === 'memory' && <MemoryTab userId={userId} onMemoryChange={onMemoryChange} />}
             {tab === 'agents' && <AgentsTab userId={userId} onAgentsChange={onAgentsChange} />}
             {tab === 'tools' && <ToolsTab />}
+            {tab === 'system' && <SystemDashboard />}
+            {tab === 'gallery' && <ComponentGallery />}
           </div>
         </div>
       </div>

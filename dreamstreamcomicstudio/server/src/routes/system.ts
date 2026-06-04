@@ -8,6 +8,7 @@ import { requireAdmin } from '../middleware/requireAdmin.js';
 import { checkSupabaseReachability, getSupabaseAdmin, getSupabaseCapabilityStatus, supabase } from '../services/supabase.js';
 import { WORLD_EXTRACTION_CONTRACT_VERSION } from '../../../shared/contracts/worldExtraction.js';
 import { capabilityReport } from '../ai/capabilities.js';
+import { pingTools, dependencyInfo, rateLimitSummary } from '../services/systemDashboard.js';
 
 export const systemRouter = Router();
 const SIGNED_URL_TTL_SECONDS = 60 * 30;
@@ -287,6 +288,26 @@ systemRouter.get('/status', (_req, res) => {
 // gaps. Admin-only — it reveals which keys are configured (booleans, not values).
 systemRouter.get('/capabilities', requireAuth, requireAdmin, (_req, res) => {
   res.json(capabilityReport());
+});
+
+// Consolidated admin dashboard: capabilities + live tool-API health + documented
+// dependency limits (with live-metric connection status) + rate limits + version.
+systemRouter.get('/dashboard', requireAuth, requireAdmin, async (_req, res, next) => {
+  try {
+    const report = capabilityReport();
+    const toolHealth = await pingTools();
+    res.json({
+      generatedAt: new Date().toISOString(),
+      version: { appVersion: APP_VERSION, gitSha: GIT_SHA, buildTimestamp: BUILD_TIMESTAMP },
+      capabilities: report.capabilities,
+      recentNotices: report.recentNotices,
+      toolHealth,
+      dependencies: dependencyInfo(),
+      rateLimits: rateLimitSummary()
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
 systemRouter.get('/version', (_req, res) => {
