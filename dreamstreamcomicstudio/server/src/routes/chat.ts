@@ -169,7 +169,13 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
   }
 
   const requestedModel = (typeof body.model === 'string' ? body.model.trim() : '') || (req.header('X-Text-Model') || '').trim();
-  let model = requestedModel || (resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : await pickTextModel({ preferFree: true }));
+  // Auto-pick: on OpenRouter the whole chat is tool-grounded (web search, app builder,
+  // charts…), so a model that can't function-call is useless here. Softly PREFER a free
+  // model that advertises `tools` support — otherwise auto-mode could land on a free
+  // model with no function-calling and silently lose every tool (incl. generate_app).
+  let model = requestedModel || (resolved.provider === 'nvidia'
+    ? NVIDIA_TEXT_MODEL
+    : await pickTextModel({ preferFree: true, prefer: (m) => (m.supportedParameters || []).includes('tools') }));
   if (resolved.provider === 'nvidia' && !model.includes('/')) model = NVIDIA_TEXT_MODEL;
 
   if (resolved.provider === 'openrouter' && req.user?.id) {

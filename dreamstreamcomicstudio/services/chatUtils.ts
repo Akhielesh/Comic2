@@ -1,6 +1,8 @@
 // Small helpers for the chat UI: rough context-token estimation, code-block
 // extraction (for download / zip), and client-side file downloads.
 
+import type { CodeStudioArtifact, CodeStudioFile, CodeStudioTemplate } from '../apiTypes';
+
 export interface ExtractedCodeBlock {
   lang: string;
   code: string;
@@ -105,4 +107,77 @@ export const buildPlaygroundFiles = (
   }
 
   return { files, template };
+};
+
+// Web-runnable code that the live Studio (WebContainer/Sandpack) can actually build.
+const WEB_RUNNABLE_LANGS = new Set([
+  'js', 'jsx', 'ts', 'tsx', 'javascript', 'typescript', 'html', 'htm', 'css'
+]);
+
+const langToStudioLanguage = (lang: string): string => {
+  const l = (lang || '').toLowerCase();
+  if (l === 'tsx' || l === 'ts' || l === 'typescript') return 'typescript';
+  if (l === 'jsx' || l === 'js' || l === 'javascript') return 'javascript';
+  if (l === 'htm' || l === 'html') return 'html';
+  if (l === 'css' || l === 'scss' || l === 'less') return 'css';
+  return l || 'text';
+};
+
+const looksLikeHtmlDoc = (block: ExtractedCodeBlock): boolean =>
+  /^(html|htm)$/.test((block.lang || '').toLowerCase()) || /^\s*<(?:!doctype|html)/i.test(block.code);
+
+/**
+ * Build a runnable CodeStudio project from a message's fenced code blocks.
+ *
+ * This is the fallback path for when a model writes an app as Markdown code blocks
+ * instead of calling the `generate_app` tool — which is the common case for NVIDIA
+ * and the many free models that can't function-call. It lets the chat surface the
+ * SAME "Build in Studio / Quick preview / .zip" affordances regardless of whether the
+ * tool fired, so the full Code Studio is reachable from every model.
+ *
+ * Returns null when the blocks don't constitute a web-runnable app (e.g. a lone bash
+ * or Python snippet), so we never offer a misleading "Build in Studio" CTA.
+ */
+export const buildStudioArtifact = (
+  blocks: ExtractedCodeBlock[],
+  title = 'Generated app'
+): CodeStudioArtifact | null => {
+  const web = blocks.filter((b) => WEB_RUNNABLE_LANGS.has((b.lang || '').toLowerCase()) || looksLikeHtmlDoc(b));
+  if (!web.length) return null;
+
+  // Require something that actually looks like an app, not a throwaway 3-line snippet,
+  // so the CTA only appears when building it is genuinely useful.
+  const totalLen = web.reduce((n, b) => n + b.code.length, 0);
+  const looksLikeApp =
+    web.length > 1 ||
+    totalLen >= 200 ||
+    web.some((b) => /export\s+default|createRoot|ReactDOM|<[A-Za-z][^>]*>/.test(b.code));
+  if (!looksLikeApp) return null;
+
+  // A self-contained HTML document → a static site whose index.html is the entry.
+  const htmlBlock = web.find(looksLikeHtmlDoc);
+  if (htmlBlock) {
+    const files: CodeStudioFile[] = [{ path: '/index.html', content: htmlBlock.code, language: 'html' }];
+    web
+      .filter((b) => b !== htmlBlock && !looksLikeHtmlDoc(b))
+      .forEach((b, i) => {
+        const name = codeBlockFilename(b, i);
+        files.push({
+          path: name.startsWith('/') ? name : `/${name}`,
+          content: b.code,
+          language: langToStudioLanguage(b.lang)
+        });
+      });
+    return { title, files, template: 'static' };
+  }
+
+  // Otherwise reuse the playground packer (it promotes a React entry to /App.tsx) and
+  // map the resulting files into the CodeStudio shape.
+  const { files, template } = buildPlaygroundFiles(web);
+  const studioFiles: CodeStudioFile[] = Object.entries(files).map(([path, content]) => ({
+    path,
+    content,
+    language: langToStudioLanguage(path.split('.').pop() || '')
+  }));
+  return { title, files: studioFiles, template: template as CodeStudioTemplate };
 };

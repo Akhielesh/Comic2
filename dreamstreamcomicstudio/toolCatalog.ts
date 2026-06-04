@@ -438,7 +438,7 @@ export const TOOL_CATALOG: ToolMeta[] = [
     description: 'Build a complete multi-file app (React, vanilla JS, HTML/CSS) and open it in the live Code Studio panel with a real-time preview the user can edit and run.',
     auth: 'none', rateLimit: 'Unlimited (runs in-browser, no API)',
     dataShape: 'code_studio artifact: file tree + live Sandpack preview.', docsUrl: 'https://dreamstream.app',
-    keywords: ['build an app', 'create an app', 'make an app', 'build a game', 'create a game', 'landing page', 'todo app', 'react app', 'write code', 'generate code', 'implement', 'scaffold', 'create a component', 'build a tool']
+    keywords: ['build an app', 'create an app', 'make an app', 'build a game', 'create a game', 'landing page', 'todo app', 'react app', 'web app', 'webapp', 'website', 'web page', 'webpage', 'build me', 'make me', 'write code', 'generate code', 'implement', 'scaffold', 'prototype', 'mockup', 'clone', 'create a component', 'build a tool', 'game', 'dashboard', 'calculator', 'simulator', 'visualizer']
   },
   // ----------------------------------------------------------------- agents -----
   {
@@ -513,7 +513,12 @@ export const CORE_ALWAYS_TOOLS: string[] = [
   'show_metrics',
   'render_heatmap',
   'get_news',
-  'wiki_lookup'
+  'wiki_lookup',
+  // The app builder must ALWAYS be on the table: "build me X" is phrased a thousand
+  // ways and keyword-matching alone routed it out far too often, so the model would
+  // dump a Markdown code block instead of opening the live Code Studio. Keeping it in
+  // the core set means the model can always CHOOSE to build a runnable app from intent.
+  'generate_app'
 ];
 
 /**
