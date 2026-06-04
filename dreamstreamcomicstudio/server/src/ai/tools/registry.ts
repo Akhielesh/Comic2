@@ -5,7 +5,6 @@
 // uniform interface, so adding a connector never touches the loop or the routes.
 
 import type { ToolSpec } from '../providers/types.js';
-import type { ChatArtifact } from '../../../../apiTypes.js';
 import { ddgWebSearch, ddgImageSearch, ddgVideoSearch, type ImageResult } from './duckduckgo.js';
 import { getWeather } from './weather.js';
 import { geocodePlaces } from './maps.js';
@@ -13,19 +12,17 @@ import { fetchNews } from './news.js';
 import { getStockQuote } from './stocks.js';
 import { findPlaces, osmFilters } from './places.js';
 import { foursquareEnabled, findPlacesFoursquare } from './foursquare.js';
+import type { ChatTool, ToolExecResult, ToolContext } from './types.js';
+// Free-API tool packs (see services/toolCatalog metadata). Each is a list of
+// keyless (or key-optional) public-API ChatTools grouped by domain.
+import { KNOWLEDGE_TOOLS } from './knowledge.js';
+import { FINANCE2_TOOLS } from './finance2.js';
+import { GEO_TOOLS } from './geo.js';
+import { SPACE_TOOLS } from './space.js';
+import { CULTURE_TOOLS } from './culture.js';
+import { DEV_TOOLS } from './dev.js';
 
-/**
- * Per-request situational context made available to tools that benefit from it
- * (news region/language, "near me" geocoding, unit defaults). Threaded in from
- * the validated ChatClientContext so tools default sensibly when the model
- * doesn't specify a region/location explicitly.
- */
-export interface ToolContext {
-  timezone?: string;
-  locale?: string;
-  units?: 'metric' | 'imperial';
-  location?: { city?: string; region?: string; country?: string; lat?: number; lng?: number };
-}
+export type { ChatTool, ToolExecResult, ToolContext } from './types.js';
 
 // Derive Google-News-style region/language from the user's context: prefer an
 // explicit country, else the country segment of the locale (e.g. "en-US" ⇒ US).
@@ -36,26 +33,6 @@ const regionLangFromCtx = (ctx?: ToolContext): { region?: string; lang?: string 
   const region = ctx?.location?.country || (parts[1] ? parts[1].toUpperCase() : undefined);
   return { region, lang };
 };
-
-export interface ToolExecResult {
-  /** Text fed back to the model as the tool result. */
-  content: string;
-  /** Images to surface in the UI (image search). */
-  images?: { url: string; title?: string; thumbnail?: string; source?: string }[];
-  /** Web citations to surface in the "sources" panel. */
-  citations?: { url: string; title?: string }[];
-  /** Typed rich-output artifacts (weather, etc.) rendered as components. */
-  artifacts?: ChatArtifact[];
-  /** A capability gap to surface (degraded mode, missing key, empty result). */
-  notice?: { level: 'info' | 'warn' | 'error'; message: string; fix?: string };
-}
-
-export interface ChatTool {
-  name: string;
-  description: string;
-  parameters: Record<string, unknown>;
-  execute: (args: Record<string, unknown>, signal?: AbortSignal) => Promise<ToolExecResult>;
-}
 
 const webSearchTool: ChatTool = {
   name: 'web_search',
@@ -344,6 +321,17 @@ const makePlacesTool = (ctx?: ToolContext): ChatTool => ({
   }
 });
 
+// Flatten the free-API tool packs into a name→tool map. These are all context-free
+// (they take explicit args), so they live alongside the original built-ins.
+const FREE_API_TOOLS: ChatTool[] = [
+  ...KNOWLEDGE_TOOLS,
+  ...FINANCE2_TOOLS,
+  ...GEO_TOOLS,
+  ...SPACE_TOOLS,
+  ...CULTURE_TOOLS,
+  ...DEV_TOOLS
+];
+
 /** All context-free built-in tools, keyed by the name the model/clients reference. */
 const STATIC_TOOLS: Record<string, ChatTool> = {
   web_search: webSearchTool,
@@ -351,7 +339,8 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   video_search: videoSearchTool,
   get_weather: weatherTool,
   show_map: mapTool,
-  get_stock: stockTool
+  get_stock: stockTool,
+  ...Object.fromEntries(FREE_API_TOOLS.map((t) => [t.name, t]))
 };
 
 /** Names of tools that are built per-request with situational context. */

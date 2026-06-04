@@ -26,6 +26,7 @@ import { recommendModels, detectTools } from '../../services/chatSuggest';
 import { isProviderEnabled } from '../../services/sourceGovernance';
 import type { ModelSourceId } from '../../services/modelSelection';
 import { listMcpServers, getMcpServersByIds, onMcpServersChanged } from '../../services/mcpServers';
+import { recordToolEvents } from '../../services/toolAnalytics';
 import type { McpServerConfig } from '../../apiTypes';
 import {
   branchSession,
@@ -529,6 +530,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         }),
         updatedAt: Date.now()
       }));
+      // Fold the tools that ran into local usage analytics (Settings → Tools).
+      recordToolEvents(res.toolEvents);
       const mapArtifact = res.artifacts?.find((a) => a.type === 'map');
       if (mapArtifact) setPanel(mapArtifact);
       // Learn durable facts about the user from this exchange (background, throttled).

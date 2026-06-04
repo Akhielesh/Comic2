@@ -1,12 +1,22 @@
 import React, { useRef, useState } from 'react';
-import { Send, Paperclip, X, Globe, Brain, Square, Loader2, LayoutGrid, Search, FileText, Wand2, Undo2, Network } from 'lucide-react';
+import {
+  Send, Paperclip, X, Globe, Brain, Square, Loader2, LayoutGrid, Search, FileText, Wand2, Undo2, Network,
+  Newspaper, CloudSun, LineChart, MapPin, BookOpen, Type, Rocket, UtensilsCrossed, Gamepad2, Code2, Wrench
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import type { ChatReasoningLevel } from '../../apiTypes';
 import type { ChatAttachment } from '../../services/chatStorage';
 import { enhancePrompt } from '../../services/chatApi';
 import { REASONING_LEVELS, type ChatModelFeatures } from '../../services/chatFeatures';
-import { CHAT_CONNECTORS, isConnectorEnabled, type ChatConnector } from '../../services/chatConnectors';
+import { CHAT_CONNECTORS, isConnectorEnabled, isConnectorPartial, type ChatConnector } from '../../services/chatConnectors';
 import { Server } from 'lucide-react';
 import type { McpServerConfig } from '../../apiTypes';
+
+// Resolve a category icon name (from the tool catalogue) to a lucide component.
+const CONNECTOR_ICONS: Record<string, LucideIcon> = {
+  Search, Newspaper, CloudSun, LineChart, MapPin, BookOpen, Type, Globe, Rocket,
+  UtensilsCrossed, Gamepad2, Code2, Network
+};
 
 interface ChatComposerProps {
   busy: boolean;
@@ -73,8 +83,14 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   const [enhancing, setEnhancing] = useState(false);
   // Holds the pre-enhancement draft so the user can undo a suggestion they dislike.
   const [beforeEnhance, setBeforeEnhance] = useState<string | null>(null);
+  const [showTools, setShowTools] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // How many tool categories are at least partly enabled (for the collapsed chip).
+  const activeConnectorCount = CHAT_CONNECTORS.filter(
+    (c) => isConnectorEnabled(c, enabledTools) || isConnectorPartial(c, enabledTools)
+  ).length;
 
   const canSend = (text.trim().length > 0 || attachments.length > 0) && !busy;
   const canEnhance = text.trim().length > 2 && !busy && !enhancing;
@@ -179,20 +195,15 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
           <LayoutGrid className="w-3.5 h-3.5" /> DreamStream {dreamstreamAccess ? 'on' : 'off'}
         </button>
 
-        {toolsSupported &&
-          CHAT_CONNECTORS.map((connector) => {
-            const on = isConnectorEnabled(connector, enabledTools);
-            return (
-              <button
-                key={connector.id}
-                onClick={() => onToggleConnector(connector, !on)}
-                className={`flex items-center gap-1.5 text-[11px] font-bold border-2 border-black rounded-full px-2.5 py-1 ${on ? 'bg-emerald-300' : 'bg-white hover:bg-slate-100'}`}
-                title={connector.description}
-              >
-                <Search className="w-3.5 h-3.5" /> {connector.label} {on ? 'on' : 'off'}
-              </button>
-            );
-          })}
+        {toolsSupported && (
+          <button
+            onClick={() => setShowTools((v) => !v)}
+            className={`flex items-center gap-1.5 text-[11px] font-bold border-2 border-black rounded-full px-2.5 py-1 ${activeConnectorCount > 0 ? 'bg-emerald-300' : 'bg-white hover:bg-slate-100'}`}
+            title="Live tools, by category. Enable categories — the agent smart-routes to the most relevant tools per message."
+          >
+            <Wrench className="w-3.5 h-3.5" /> Tools{activeConnectorCount > 0 ? ` · ${activeConnectorCount}` : ''} {showTools ? '▲' : '▼'}
+          </button>
+        )}
         {toolsSupported &&
           mcpServers.map((server) => {
             const on = enabledMcpServers.includes(server.id);
@@ -208,6 +219,33 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
             );
           })}
       </div>
+
+      {/* Tool categories — expandable. Each chip enables all tools in a category;
+          the server smart-routes to the most relevant ones per message. */}
+      {toolsSupported && showTools && (
+        <div className="mb-2 border-2 border-black rounded-lg bg-slate-50 p-2">
+          <div className="flex flex-wrap gap-1.5">
+            {CHAT_CONNECTORS.map((connector) => {
+              const on = isConnectorEnabled(connector, enabledTools);
+              const partial = !on && isConnectorPartial(connector, enabledTools);
+              const Icon = CONNECTOR_ICONS[connector.icon] || Search;
+              return (
+                <button
+                  key={connector.id}
+                  onClick={() => onToggleConnector(connector, !on)}
+                  className={`flex items-center gap-1.5 text-[11px] font-bold border-2 border-black rounded-full px-2.5 py-1 ${on ? 'bg-emerald-300' : partial ? 'bg-amber-200' : 'bg-white hover:bg-slate-100'}`}
+                  title={connector.description}
+                >
+                  <Icon className="w-3.5 h-3.5" /> {connector.label}
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-[10px] text-slate-500 mt-1.5">
+            The agent calls only the tools relevant to each message — open <span className="font-bold">Settings → Tools</span> for limits, data shapes and usage.
+          </p>
+        </div>
+      )}
 
       {/* Attachment previews */}
       {attachments.length > 0 && (

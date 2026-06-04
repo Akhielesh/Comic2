@@ -11,6 +11,7 @@ import type { AIProviderId, ChatMessage, MessagePart } from '../ai/providers/typ
 import { assertModelAllowedForUser } from '../services/modelAccessPolicy.js';
 import { sanitizeAssistantContext } from '../ai/assistantPolicy.js';
 import { resolveTools, KNOWN_TOOL_NAMES, type ChatTool } from '../ai/tools/registry.js';
+import { selectRelevantTools } from '../../../toolCatalog.js';
 import { buildMcpTools } from '../ai/tools/mcpClient.js';
 import { unfurlUrl } from '../ai/tools/unfurl.js';
 import {
@@ -206,8 +207,22 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
         location: clientContext.location
       }
     : undefined;
+
+  // Smart tool routing: with the large free-API catalogue a user can enable many
+  // tools at once. Rather than overwhelm the model (and bloat the prompt) with every
+  // spec, narrow the enabled set to the handful most relevant to THIS message by
+  // keyword scoring. Small enabled sets pass through unchanged.
+  const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
+  const lastUserText =
+    typeof lastUserMessage?.content === 'string'
+      ? lastUserMessage.content
+      : Array.isArray(lastUserMessage?.content)
+        ? lastUserMessage!.content.map((p) => ('text' in p ? p.text : '')).join(' ')
+        : '';
+  const MAX_MODEL_TOOLS = 10;
+  const routedToolNames = selectRelevantTools(lastUserText, requestedToolNames, MAX_MODEL_TOOLS);
   const builtinTools =
-    resolved.provider === 'openrouter' ? resolveTools(requestedToolNames, toolContext) : [];
+    resolved.provider === 'openrouter' ? resolveTools(routedToolNames, toolContext) : [];
 
   // The agent-swarm meta-tool needs provider credentials, so it's built here (not in
   // resolveTools) and appended when the client enabled it. OpenRouter only.
