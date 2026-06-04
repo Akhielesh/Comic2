@@ -6,6 +6,7 @@ export { Surface, Expandable } from './Surface';
 export { Chart } from './Chart';
 export type { ChartPoint, Candle, ChartVariant } from './Chart';
 export { Sparkline } from './Sparkline';
+export { RadialGauge, LinearGauge, Compass, SunArc } from './Gauges';
 export { RangeTabs } from './RangeTabs';
 export { TrendPill, Badge, Chip } from './Pills';
 export { resolveTheme, withAlpha, PALETTES, BULL, BEAR, NEUTRAL } from './theme';

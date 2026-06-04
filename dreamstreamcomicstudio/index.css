@@ -35,8 +35,24 @@
 /* ---- Rich-output Primitive Kit motion ---- */
 @keyframes kitDrawLine { from { stroke-dashoffset: 1000; } to { stroke-dashoffset: 0; } }
 .kit-draw-line { stroke-dasharray: 1000; animation: kitDrawLine 0.9s ease-out both; }
+
+/* ---- Weather card sky scene ---- */
+@keyframes wxDrift { 0% { transform: translateX(0); } 50% { transform: translateX(9px); } 100% { transform: translateX(0); } }
+@keyframes wxDrift2 { 0% { transform: translateX(0); } 50% { transform: translateX(-7px); } 100% { transform: translateX(0); } }
+@keyframes wxSpin { to { transform: rotate(360deg); } }
+@keyframes wxFall { 0% { transform: translateY(-5px); opacity: 0; } 25% { opacity: 1; } 100% { transform: translateY(16px); opacity: 0; } }
+@keyframes wxTwinkle { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+@keyframes wxFlash { 0%, 90%, 100% { opacity: 0; } 93%, 97% { opacity: 0.9; } }
+.wx-drift { animation: wxDrift 7s ease-in-out infinite; }
+.wx-drift2 { animation: wxDrift2 9s ease-in-out infinite; }
+.wx-spin { animation: wxSpin 38s linear infinite; transform-origin: center; transform-box: fill-box; }
+.wx-fall { animation: wxFall 1.1s linear infinite; }
+.wx-twinkle { animation: wxTwinkle 3s ease-in-out infinite; }
+.wx-flash { animation: wxFlash 5s ease-in-out infinite; }
+
 @media (prefers-reduced-motion: reduce) {
   .kit-draw-line { animation: none; stroke-dasharray: none; }
+  .wx-drift, .wx-drift2, .wx-spin, .wx-fall, .wx-twinkle, .wx-flash { animation: none; }
 }
 
 .animate-float-slow {

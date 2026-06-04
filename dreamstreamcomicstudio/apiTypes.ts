@@ -824,6 +824,8 @@ export interface WeatherPollen {
 }
 export interface WeatherArtifact {
   location: string;
+  /** Coordinates for the inline map view. */
+  coords?: { lat: number; lng: number };
   current: {
     tempC: number;
     tempF: number;
@@ -832,11 +834,23 @@ export interface WeatherArtifact {
     code: number;
     description: string;
     windKph: number;
+    /** Wind direction in meteorological degrees (0 = from N). */
+    windDir?: number;
+    /** Wind gust speed (km/h). */
+    windGustKph?: number;
     humidity?: number;
     /** Current UV index. */
     uvIndex?: number;
     /** Current chance of precipitation (%). */
     precipProb?: number;
+    /** Surface pressure (hPa). */
+    pressureHpa?: number;
+    /** Dew point (°C). */
+    dewPointC?: number;
+    /** Horizontal visibility (km). */
+    visibilityKm?: number;
+    /** Cloud cover (%). */
+    cloudCover?: number;
     isDay: boolean;
   };
   /** Next ~24 hours, hour by hour. */

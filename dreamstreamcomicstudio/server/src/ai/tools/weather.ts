@@ -148,7 +148,7 @@ export const getWeather = async (
   const params = new URLSearchParams({
     latitude: String(hit.latitude),
     longitude: String(hit.longitude),
-    current: 'temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,is_day,precipitation_probability,uv_index',
+    current: 'temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,is_day,precipitation_probability,uv_index,surface_pressure,dew_point_2m,visibility,cloud_cover',
     hourly: 'temperature_2m,weather_code,precipitation_probability,is_day',
     daily: 'weather_code,temperature_2m_max,temperature_2m_min,uv_index_max,precipitation_probability_max,sunrise,sunset',
     forecast_days: '7',
@@ -175,6 +175,7 @@ export const getWeather = async (
 
   return {
     location: label,
+    coords: { lat: Number(hit.latitude), lng: Number(hit.longitude) },
     current: {
       tempC,
       tempF: Math.round((tempC * 9) / 5 + 32),
@@ -182,9 +183,15 @@ export const getWeather = async (
       code: Number(c.weather_code ?? 0),
       description: describeWeatherCode(Number(c.weather_code ?? 0)),
       windKph: Number(c.wind_speed_10m ?? 0),
+      windDir: num(c.wind_direction_10m),
+      windGustKph: num(c.wind_gusts_10m),
       humidity: num(c.relative_humidity_2m),
       uvIndex: num(c.uv_index),
       precipProb: num(c.precipitation_probability),
+      pressureHpa: num(c.surface_pressure),
+      dewPointC: num(c.dew_point_2m),
+      visibilityKm: typeof c.visibility === 'number' ? Math.round(c.visibility / 100) / 10 : undefined,
+      cloudCover: num(c.cloud_cover),
       isDay: Number(c.is_day ?? 1) === 1
     },
     hourly: sliceHourly(fc.hourly),

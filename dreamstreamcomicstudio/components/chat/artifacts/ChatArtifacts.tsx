@@ -1,6 +1,6 @@
 import React from 'react';
 import type { ChatArtifact, WeatherArtifact, VideoResultsArtifact, MapArtifact, NewsResultsArtifact, StockQuoteArtifact, SwarmTraceArtifact, PlacesResultsArtifact } from '../../../apiTypes';
-import { WeatherCard } from './WeatherCard';
+import { WeatherStation } from './WeatherStation';
 import { VideoResults } from './VideoResults';
 import { MapArtifactCard } from './MapArtifactCard';
 import { NewsCard } from './NewsCard';
@@ -14,7 +14,7 @@ import { PlacesResults } from './PlacesResults';
 const renderArtifact = (artifact: ChatArtifact, key: number): React.ReactNode => {
   switch (artifact.type) {
     case 'weather':
-      return <WeatherCard key={key} data={artifact.data as WeatherArtifact} />;
+      return <WeatherStation key={key} data={artifact.data as WeatherArtifact} />;
     case 'video_results':
       return <VideoResults key={key} data={artifact.data as VideoResultsArtifact} />;
     case 'map':

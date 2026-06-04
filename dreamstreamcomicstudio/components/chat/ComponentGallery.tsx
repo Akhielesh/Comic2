@@ -1,6 +1,6 @@
 import React from 'react';
 import { ChatMarkdown } from './ChatMarkdown';
-import { WeatherCard } from './artifacts/WeatherCard';
+import { WeatherStation } from './artifacts/WeatherStation';
 import { NewsCard } from './artifacts/NewsCard';
 import { MarketCard } from './artifacts/MarketCard';
 import { VideoResults } from './artifacts/VideoResults';
@@ -16,7 +16,8 @@ import type {
 
 const weather: WeatherArtifact = {
   location: 'New York, NY',
-  current: { tempC: 22, tempF: 72, feelsLikeC: 23, code: 2, description: 'Partly cloudy', windKph: 12, humidity: 54, uvIndex: 5, precipProb: 10, isDay: true },
+  coords: { lat: 40.7128, lng: -74.006 },
+  current: { tempC: 22, tempF: 72, feelsLikeC: 23, code: 2, description: 'Partly cloudy', windKph: 12, windDir: 230, windGustKph: 28, humidity: 54, uvIndex: 5, precipProb: 10, pressureHpa: 1014, dewPointC: 12, visibilityKm: 16, cloudCover: 40, isDay: true },
   hourly: Array.from({ length: 12 }, (_, i) => ({ time: new Date(Date.now() + i * 3600_000).toISOString(), tempC: 22 - i * 0.4, code: i % 3, precipProb: i * 4 })),
   daily: Array.from({ length: 5 }, (_, i) => ({ date: new Date(Date.now() + i * 86400_000).toISOString(), minC: 14 + i, maxC: 24 + i, code: [0, 2, 61, 3, 1][i], description: 'Sample', precipProb: i * 10, uvMax: 6, sunrise: new Date().toISOString(), sunset: new Date().toISOString() })),
   airQuality: { usAqi: 42, pm25: 9, category: 'Good' },
@@ -111,7 +112,7 @@ const Item: React.FC<{ title: string; children: React.ReactNode }> = ({ title, c
 export const ComponentGallery: React.FC = () => (
   <div className="space-y-4">
     <p className="text-sm text-slate-600">Every rich-output component rendered with sample data — the live UI library.</p>
-    <Item title="Weather card"><WeatherCard data={weather} /></Item>
+    <Item title="Weather station (animated · gauges · map)"><WeatherStation data={weather} /></Item>
     <Item title="Market card (hover · range timeline · candlesticks)"><MarketCard data={stock} /></Item>
     <Item title="News card"><NewsCard data={news} /></Item>
     <Item title="Places (local) card"><PlacesResults data={places} /></Item>
