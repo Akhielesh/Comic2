@@ -21,6 +21,9 @@ import { Server } from 'lucide-react';
 import type { McpServerConfig } from '../apiTypes';
 import { Button } from './Button';
 import { ModelSelectionPanel } from './ModelSelectionPanel';
+import { useAuth } from '../contexts/AuthContext';
+import { supabase } from '../services/supabase';
+import { encryptKey } from '../services/crypto';
 
 // Manage custom remote MCP servers (their tools appear as connectors in the chat).
 const McpServersPanel: React.FC = () => {
@@ -240,13 +243,28 @@ const KeyRow: React.FC<{ k: ManagedApiKey; onChange: () => void }> = ({ k, onCha
 };
 
 const AddKeyForm: React.FC<{ provider: ApiKeyProvider; onChange: () => void }> = ({ provider, onChange }) => {
+  const { user } = useAuth();
   const [label, setLabel] = useState('');
   const [key, setKey] = useState('');
   const [limit, setLimit] = useState('');
 
-  const add = () => {
+  const add = async () => {
     if (!key.trim()) return;
     addKey({ provider, label, key, limitUsd: limit.trim() ? Number(limit) : null });
+
+    // Sync to Supabase so the key survives sign-out → sign-in cycles.
+    if (user) {
+      try {
+        const { encrypted, iv } = await encryptKey(key.trim());
+        await supabase.from('user_api_keys').upsert(
+          { user_id: user.id, provider, encrypted_key: encrypted, iv },
+          { onConflict: 'user_id,provider' }
+        );
+      } catch (e) {
+        console.error('Failed to sync key to cloud', e);
+      }
+    }
+
     setLabel(''); setKey(''); setLimit('');
     onChange();
   };
@@ -259,7 +277,7 @@ const AddKeyForm: React.FC<{ provider: ApiKeyProvider; onChange: () => void }> =
       </div>
       <div className="flex gap-2">
         <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={`Paste ${PROVIDER_META[provider].label} API key`} className="flex-1 border-2 border-black rounded px-2 py-1.5 text-sm font-mono" />
-        <Button size="sm" onClick={add} icon={<Plus size={14} />} disabled={!key.trim()}>Add</Button>
+        <Button size="sm" onClick={() => void add()} icon={<Plus size={14} />} disabled={!key.trim()}>Add</Button>
       </div>
     </div>
   );

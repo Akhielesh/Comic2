@@ -2,9 +2,9 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { getAuthRedirectUrl, supabase } from '../services/supabase';
-import { decryptKey } from '../services/crypto';
-import { clearFluxKey, setFluxKey } from '../services/appSettings';
-import { clearAllKeys } from '../services/apiKeys';
+import { decryptKey, encryptKey } from '../services/crypto';
+import { clearFluxKey, setFluxKey, setOpenRouterKey } from '../services/appSettings';
+import { clearAllKeys, addKey, listKeysByProvider, PROVIDER_META, type ApiKeyProvider } from '../services/apiKeys';
 
 type AuthContextType = {
     user: User | null;
@@ -109,12 +109,27 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         for (const row of data) {
             try {
                 const decrypted = await decryptKey(row.encrypted_key, row.iv);
-                if (decrypted) {
-                    if (row.provider === 'gemini') {
-                        localStorage.setItem('dreamstream_api_key', decrypted);
-                    } else if (row.provider === 'flux') {
-                        setFluxKey(decrypted);
-                    }
+                if (!decrypted) continue;
+
+                const provider = row.provider as ApiKeyProvider;
+
+                // Restore legacy single-key slots so existing code paths keep working.
+                if (provider === 'gemini') {
+                    localStorage.setItem('dreamstream_api_key', decrypted);
+                } else if (provider === 'pixazo') {
+                    setFluxKey(decrypted);
+                } else if (provider === 'openrouter') {
+                    setOpenRouterKey(decrypted);
+                }
+
+                // Restore to the multi-key store (dreamstream_api_keys_v2) if this
+                // provider has no entry there yet — prevents duplicates on repeated logins.
+                if (provider in PROVIDER_META && listKeysByProvider(provider).length === 0) {
+                    addKey({
+                        provider,
+                        key: decrypted,
+                        label: `${PROVIDER_META[provider as ApiKeyProvider]?.label ?? provider} key`
+                    });
                 }
             } catch (err) {
                 console.error("Failed to decrypt key for", row.provider, err);
