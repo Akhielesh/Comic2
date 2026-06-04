@@ -9,7 +9,7 @@
 // tool registry to resolve each agent's tools).
 
 import type { ChatTool } from '../tools/registry.js';
-import type { AIProviderId } from '../providers/types.js';
+import type { AIProviderId, ChatMessage } from '../providers/types.js';
 import type { ChatClientContext } from '../../../../apiTypes.js';
 import { runSwarm } from './orchestrator.js';
 import type { AgentDefinition } from './registry.js';
@@ -19,6 +19,10 @@ export interface SwarmToolContext {
   apiKey: string;
   /** Model used for the swarm's final synthesis (the caller's model). */
   model: string;
+  /** Conversation so far, so the swarm's agents aren't context-blind on follow-ups. */
+  messages?: ChatMessage[];
+  /** The user's durable memory/persona, passed through to the agents + synthesis. */
+  systemPrompt?: string;
   clientContext?: ChatClientContext;
   /** User-defined agents to add to the deployable pool. */
   extraAgents?: AgentDefinition[];
@@ -47,7 +51,10 @@ export const makeSwarmTool = (ctx: SwarmToolContext): ChatTool => ({
         provider: ctx.provider,
         apiKey: ctx.apiKey,
         model: ctx.model,
-        messages: [{ role: 'user', content: goal }],
+        // Hand the swarm the real conversation + the model's distilled goal, so its
+        // agents see prior turns and the user's memory (was goal-only — fully context-blind).
+        messages: [...(ctx.messages ?? []), { role: 'user', content: goal }],
+        systemPrompt: ctx.systemPrompt,
         clientContext: ctx.clientContext,
         extraAgents: ctx.extraAgents,
         fallbackModel: ctx.fallbackModel,

@@ -52,15 +52,23 @@ const webSearchTool: ChatTool = {
     const query = String(args?.query || '').trim();
     if (!query) return { content: 'No search query was provided.' };
     try {
-      const { results, provider } = await webSearch(query, signal);
+      const { results, provider, status } = await webSearch(query, signal);
       if (!results.length) {
+        // Be HONEST about WHY there's nothing: a failed/blocked search ('error') is not
+        // the same as a genuinely empty one ('empty'). Telling the model the difference
+        // stops it from confidently answering from stale memory as if it had checked.
+        const unavailable = status === 'error';
         return {
           // Be explicit so the model PIVOTS instead of re-querying web_search (which is
           // what produced the "8 empty searches then a fabricated TBD table" failure).
-          content: `No results were found for "${query}" from any available search provider. Do NOT retry web_search with reworded variations — it will keep returning nothing. Instead: use a more specific tool if one fits (wiki_lookup for background/definitions, get_news for recent events), OR answer from your own knowledge while CLEARLY stating it is not from a live search and may be out of date. NEVER fabricate facts, prices, or specs, and never fill a table with "TBD"/placeholder values.`,
+          content: unavailable
+            ? `Live web search is currently UNAVAILABLE for "${query}" — every search provider failed or was blocked. This is an outage on our side, NOT evidence that nothing exists. Do NOT retry web_search. Tell the user plainly that you could not reach live sources right now. You may answer from your own knowledge ONLY with an explicit caveat that it is not from a live source and may be outdated; NEVER fabricate facts, prices, or specs, and never present a guess as verified.`
+            : `No results were found for "${query}" from any available search provider. Do NOT retry web_search with reworded variations — it will keep returning nothing. Instead: use a more specific tool if one fits (wiki_lookup for background/definitions, get_news for recent events), OR answer from your own knowledge while CLEARLY stating it is not from a live search and may be out of date. NEVER fabricate facts, prices, or specs, and never fill a table with "TBD"/placeholder values.`,
           notice: {
-            level: 'warn',
-            message: `Web search returned no results for "${query}".`,
+            level: unavailable ? 'error' : 'warn',
+            message: unavailable
+              ? `Live web search is temporarily unavailable (every provider failed or was blocked) for "${query}".`
+              : `Web search returned no results for "${query}".`,
             fix: provider === 'none' ? 'Web search is on free/keyless sources right now; self-host SearXNG and set SEARXNG_URL (or add a free TAVILY_API_KEY/BRAVE_API_KEY) for reliable results' : undefined
           }
         };

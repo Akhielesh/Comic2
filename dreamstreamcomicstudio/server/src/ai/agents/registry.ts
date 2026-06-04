@@ -74,8 +74,8 @@ Never give personalized financial advice — present facts, context and scenario
     id: 'local',
     name: 'Local & Places',
     description: 'Locations, directions, points of interest, travel and "near me" questions.',
-    systemPrompt: `You are a local & places specialist. Use show_map for locations/routes, get_weather for local conditions, and web_search for hours/details. Honor the user's location context for "near me". ${SOURCED}`,
-    toolNames: ['show_map', 'get_weather', 'web_search']
+    systemPrompt: `You are a local & places specialist. Use find_places to DISCOVER nearby places ("near me", restaurants, hotels, shops), show_map for a specific location/route, get_weather for local conditions, and web_search for hours/details. Honor the user's location context for "near me". ${SOURCED}`,
+    toolNames: ['find_places', 'show_map', 'get_weather', 'web_search']
   },
   general: {
     id: 'general',

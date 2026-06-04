@@ -175,7 +175,14 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
   if (resolved.provider === 'openrouter' && req.user?.id) {
     try {
       const access = await assertModelAllowedForUser({ userId: req.user.id, scope: 'text', requestedModel: model });
-      if (access?.effectiveModel) model = access.effectiveModel;
+      // Only adopt the policy's effective model if it's a provider-valid (namespaced)
+      // OpenRouter id. The legacy plan policy can emit BARE Gemini ids (e.g.
+      // 'gemini-2.5-flash') which 404 on OpenRouter and then silently fall back to
+      // gpt-4o-mini — so the user never runs the model they think they picked. Never
+      // coerce onto a bare id here. (Unifying the model decider is a separate workstream.)
+      if (access?.effectiveModel && access.effectiveModel.includes('/')) {
+        model = access.effectiveModel;
+      }
     } catch {
       /* keep requested model */
     }
@@ -219,7 +226,7 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
       : Array.isArray(lastUserMessage?.content)
         ? lastUserMessage!.content.map((p) => ('text' in p ? p.text : '')).join(' ')
         : '';
-  const MAX_MODEL_TOOLS = 12;
+  const MAX_MODEL_TOOLS = 20;
   const routedToolNames =
     resolved.provider === 'openrouter'
       ? selectRelevantTools(lastUserText, ROUTABLE_TOOL_NAMES, MAX_MODEL_TOOLS)
@@ -238,6 +245,8 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
             provider: resolved.provider,
             apiKey: resolved.apiKey,
             model,
+            messages,
+            systemPrompt,
             clientContext,
             extraAgents: customAgents,
             fallbackModel: TEXT_FALLBACK,

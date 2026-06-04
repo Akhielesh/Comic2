@@ -24,7 +24,8 @@ export const BUILTIN_AGENTS: BuiltinAgentMeta[] = [
   { id: 'tech', name: 'Tech Reporter', description: 'Technology, products, AI, gadgets and releases.', toolNames: ['get_news', 'web_search', 'video_search'] },
   { id: 'research', name: 'Web Researcher', description: 'Deep research: facts, comparisons, how-tos, docs.', toolNames: ['web_search', 'video_search', 'image_search'] },
   { id: 'local', name: 'Local & Places', description: 'Nearby places, directions, travel and "near me".', toolNames: ['find_places', 'show_map', 'get_weather', 'web_search'] },
-  { id: 'general', name: 'Generalist', description: 'Reasoning, writing, analysis and coding — no live data.', toolNames: [] }
+  { id: 'general', name: 'Generalist', description: 'Reasoning, writing, analysis and coding — no live data.', toolNames: [] },
+  { id: 'code', name: 'Code Engineer', description: 'Builds apps, components, scripts and algorithms from a description.', toolNames: ['generate_app', 'web_search'] }
 ];
 
 /** Tools a custom agent may use (the swarm tool itself is intentionally excluded). */
@@ -43,7 +44,8 @@ export const AGENT_TOOLS: { name: string; label: string }[] = [
   { name: 'render_heatmap', label: 'Heatmap' },
   { name: 'build_finance_terminal', label: 'Finance terminal' },
   { name: 'crypto_price', label: 'Crypto prices' },
-  { name: 'exchange_rate', label: 'Currency exchange' }
+  { name: 'exchange_rate', label: 'Currency exchange' },
+  { name: 'generate_app', label: 'App / code generator' }
 ];
 
 export const TOOL_LABEL: Record<string, string> = Object.fromEntries(

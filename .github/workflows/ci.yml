@@ -1,0 +1,50 @@
+# Minimal, READ-ONLY pull-request CI for the dreamstreamcomicstudio app.
+#
+# Why this exists: the repo's other workflows live in
+# dreamstreamcomicstudio/.github/workflows/ — a SUBDIRECTORY GitHub Actions never
+# scans — so no CI ran on PRs. Those workflows are also a scheduled verification +
+# auto-fix + auto-merge/auto-revert system that needs secrets and has write access;
+# they are intentionally NOT activated here. This file only validates that the app
+# typechecks, builds, and passes its unit tests on every PR. No secrets, no write
+# permissions, no auto-merge.
+#
+# The Supabase env values below are FAKE placeholders (not secrets): the client in
+# services/supabase.ts throws at import if the URL is empty, so a syntactically valid
+# dummy URL lets the test suite load. The tests never contact Supabase.
+
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [Dreamstrream-v1]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dreamstreamcomicstudio
+    env:
+      VITE_SUPABASE_URL: https://placeholder.supabase.co
+      VITE_SUPABASE_ANON_KEY: placeholder-anon-key
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: dreamstreamcomicstudio/package-lock.json
+      - run: npm ci
+      - name: Typecheck (client + server)
+        run: |
+          npm run typecheck
+          npm run build:server
+      - name: Build (frontend)
+        run: npm run build
+      - name: Unit tests
+        run: npm test -- --run
