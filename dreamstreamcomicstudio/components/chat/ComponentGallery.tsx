@@ -96,11 +96,13 @@ const swarm: SwarmTraceArtifact = {
   ]
 };
 
-const tableMd = `| Model | Context | Free |
-|---|---|---|
-| Sonnet 4.6 | 200K | No |
-| Llama 3.1 8B | 128K | Yes |
-| Gemini Flash | 1M | Partial |`;
+const tableMd = `| Model | Params (B) | MMLU | Cost ($/M) |
+|---|---|---|---|
+| Sonnet 4.6 | 175 | 88.7 | 3.00 |
+| Llama 3.1 8B | 8 | 73.0 | 0.06 |
+| Gemini Flash | 32 | 78.9 | 0.15 |
+| GPT-4o mini | 8 | 82.0 | 0.15 |
+| Mixtral 8x7B | 47 | 70.6 | 0.24 |`;
 
 const Item: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
   <div>

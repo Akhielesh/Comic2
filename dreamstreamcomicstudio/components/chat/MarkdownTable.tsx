@@ -1,18 +1,17 @@
 import React, { useMemo, useState } from 'react';
-import { ArrowUpDown, ArrowUp, ArrowDown, Search } from 'lucide-react';
+import { ArrowUpDown, ArrowUp, ArrowDown, Search, Copy, Check, BarChart3 } from 'lucide-react';
 
 // react-markdown hands component renderers the underlying hast `node`. We pull the
-// table's headers and rows out of it so we can render an interactive table (column
-// sort + free-text filter) instead of a static one. Inline emphasis is flattened to
-// text for sort/search, but links are preserved for display — which covers the data
-// tables models actually produce.
+// table's headers and rows out of it so we can render an interactive data grid —
+// column sort, free-text filter, numeric-aware alignment + in-cell magnitude bars,
+// CSV copy, and pagination — instead of a static table. Inline emphasis is flattened
+// to text for sort/search; links are preserved for display.
 
 interface Cell {
   text: string;
   href?: string;
 }
 
-// Recursively collect visible text from a hast node.
 const nodeText = (node: any): string => {
   if (!node) return '';
   if (node.type === 'text') return node.value || '';
@@ -20,7 +19,6 @@ const nodeText = (node: any): string => {
   return '';
 };
 
-// Find the first descendant <a href> in a hast node.
 const findHref = (node: any): string | undefined => {
   if (!node || typeof node !== 'object') return undefined;
   if (node.tagName === 'a' && node.properties?.href) return String(node.properties.href);
@@ -60,10 +58,41 @@ const compare = (a: string, b: string): number => {
   return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
 };
 
+const DEFAULT_VISIBLE = 12;
+
 export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }> = ({ node, children }) => {
   const { headers, rows } = useMemo(() => extractTable(node), [node]);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<{ col: number; dir: 'asc' | 'desc' } | null>(null);
+  const [showAll, setShowAll] = useState(false);
+  const [showBars, setShowBars] = useState(true);
+  const [copied, setCopied] = useState(false);
+
+  // Per-column numeric profile: a column is "numeric" if most non-empty cells parse
+  // as numbers; we keep min/max to scale in-cell magnitude bars.
+  const colStats = useMemo(() => {
+    return headers.map((_, ci) => {
+      let numeric = 0;
+      let total = 0;
+      let min = Infinity;
+      let max = -Infinity;
+      for (const r of rows) {
+        const txt = r[ci]?.text ?? '';
+        if (!txt) continue;
+        total++;
+        const n = asNumber(txt);
+        if (n !== null) {
+          numeric++;
+          if (n < min) min = n;
+          if (n > max) max = n;
+        }
+      }
+      const isNumeric = total > 0 && numeric / total >= 0.6;
+      return { isNumeric, min, max: max === min ? min + 1 : max };
+    });
+  }, [headers, rows]);
+
+  const hasNumericCol = colStats.some((s) => s.isNumeric);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -73,50 +102,91 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
     return sort.dir === 'desc' ? sorted.reverse() : sorted;
   }, [rows, query, sort]);
 
+  const visible = showAll ? filtered : filtered.slice(0, DEFAULT_VISIBLE);
+
   // Fall back to the default-rendered table if extraction yielded nothing usable.
   if (!headers.length || !rows.length) {
     return <table>{children}</table>;
   }
 
   const toggleSort = (col: number) =>
-    setSort((prev) =>
-      prev?.col === col ? (prev.dir === 'asc' ? { col, dir: 'desc' } : null) : { col, dir: 'asc' }
-    );
+    setSort((prev) => (prev?.col === col ? (prev.dir === 'asc' ? { col, dir: 'desc' } : null) : { col, dir: 'asc' }));
+
+  const copyCsv = async () => {
+    const esc = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
+    const csv = [headers.map(esc).join(','), ...filtered.map((r) => headers.map((_, ci) => esc(r[ci]?.text ?? '')).join(','))].join('\n');
+    try {
+      await navigator.clipboard.writeText(csv);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard may be blocked; no-op */
+    }
+  };
 
   const showSearch = rows.length > 5;
 
   return (
     <div className="my-2 not-prose">
-      {showSearch && (
-        <div className="flex items-center gap-2 mb-1.5">
-          <div className="relative flex-1 max-w-xs">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={`Filter ${rows.length} rows…`}
-              className="w-full pl-7 pr-2 py-1 text-xs border-2 border-black rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-brand-blue/40"
-            />
+      {(showSearch || hasNumericCol) && (
+        <div className="mb-1.5 flex flex-wrap items-center gap-2">
+          {showSearch && (
+            <div className="relative max-w-xs flex-1">
+              <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={`Filter ${rows.length} rows…`}
+                className="w-full rounded-lg border-2 border-black bg-white py-1 pl-7 pr-2 text-xs focus:outline-none focus:ring-2 focus:ring-brand-blue/40"
+              />
+            </div>
+          )}
+          <span className="text-[11px] font-semibold text-slate-500">
+            {query ? `${filtered.length} of ${rows.length}` : `${rows.length} rows`}
+          </span>
+          <div className="ml-auto flex items-center gap-1">
+            {hasNumericCol && (
+              <button
+                onClick={() => setShowBars((v) => !v)}
+                aria-pressed={showBars}
+                title="Toggle magnitude bars"
+                className={`flex items-center gap-1 rounded-md border-2 px-1.5 py-0.5 text-[11px] font-bold transition-colors ${
+                  showBars ? 'border-black bg-slate-900 text-white' : 'border-black/15 text-slate-500 hover:border-black/40'
+                }`}
+              >
+                <BarChart3 className="h-3 w-3" />
+              </button>
+            )}
+            <button
+              onClick={copyCsv}
+              title="Copy as CSV"
+              className="flex items-center gap-1 rounded-md border-2 border-black/15 px-1.5 py-0.5 text-[11px] font-bold text-slate-500 transition-colors hover:border-black/40"
+            >
+              {copied ? <Check className="h-3 w-3 text-emerald-600" /> : <Copy className="h-3 w-3" />}
+              {copied ? 'Copied' : 'CSV'}
+            </button>
           </div>
-          {query && <span className="text-[11px] text-slate-500">{filtered.length} match{filtered.length === 1 ? '' : 'es'}</span>}
         </div>
       )}
-      <div className="overflow-x-auto border-2 border-black rounded-lg">
-        <table className="w-full text-sm border-collapse">
-          <thead>
-            <tr className="bg-slate-100">
+
+      <div className="max-h-[420px] overflow-auto rounded-lg border-2 border-black shadow-comic">
+        <table className="w-full border-collapse text-sm">
+          <thead className="sticky top-0 z-10">
+            <tr>
               {headers.map((h, i) => {
                 const active = sort?.col === i;
                 const Icon = !active ? ArrowUpDown : sort!.dir === 'asc' ? ArrowUp : ArrowDown;
                 return (
-                  <th key={i} className="text-left p-0 border-b-2 border-black">
+                  <th key={i} className="border-b-2 border-black bg-brand-yellow p-0">
                     <button
                       onClick={() => toggleSort(i)}
-                      className="w-full flex items-center gap-1 px-2.5 py-1.5 font-bold hover:bg-slate-200 transition-colors"
+                      className={`flex w-full items-center gap-1 px-2.5 py-1.5 font-extrabold transition-colors hover:bg-amber-300 ${
+                        colStats[i].isNumeric ? 'justify-end text-right' : 'text-left'
+                      }`}
                       title="Sort"
                     >
                       <span className="truncate">{h}</span>
-                      <Icon className={`w-3 h-3 shrink-0 ${active ? 'text-brand-blue' : 'text-slate-400'}`} />
+                      <Icon className={`h-3 w-3 shrink-0 ${active ? 'text-black' : 'text-black/40'}`} />
                     </button>
                   </th>
                 );
@@ -124,24 +194,51 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
             </tr>
           </thead>
           <tbody>
-            {filtered.map((row, ri) => (
-              <tr key={ri} className="odd:bg-white even:bg-slate-50/60 hover:bg-brand-yellow/20">
-                {row.map((cell, ci) => (
-                  <td key={ci} className="px-2.5 py-1.5 border-b border-slate-200 align-top">
-                    {cell.href ? (
-                      <a href={cell.href} target="_blank" rel="noopener noreferrer" className="text-brand-blue underline">
-                        {cell.text}
-                      </a>
-                    ) : (
-                      cell.text
-                    )}
-                  </td>
-                ))}
+            {visible.map((row, ri) => (
+              <tr key={ri} className="odd:bg-white even:bg-slate-50/70 hover:bg-brand-yellow/20">
+                {headers.map((_, ci) => {
+                  const cell = row[ci];
+                  const stat = colStats[ci];
+                  const n = stat.isNumeric ? asNumber(cell?.text ?? '') : null;
+                  const pct = n !== null ? Math.max(0, Math.min(1, (n - stat.min) / (stat.max - stat.min))) : 0;
+                  return (
+                    <td
+                      key={ci}
+                      className={`relative border-b border-slate-200 px-2.5 py-1.5 align-top ${stat.isNumeric ? 'text-right font-semibold tabular-nums' : ''}`}
+                    >
+                      {showBars && n !== null && (
+                        <span
+                          className="pointer-events-none absolute inset-y-1 left-1 rounded-sm bg-brand-blue/15"
+                          style={{ width: `calc(${pct * 100}% - 4px)` }}
+                          aria-hidden
+                        />
+                      )}
+                      <span className="relative">
+                        {cell?.href ? (
+                          <a href={cell.href} target="_blank" rel="noopener noreferrer" className="text-brand-blue underline">
+                            {cell.text}
+                          </a>
+                        ) : (
+                          cell?.text ?? ''
+                        )}
+                      </span>
+                    </td>
+                  );
+                })}
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {filtered.length > DEFAULT_VISIBLE && (
+        <button
+          onClick={() => setShowAll((v) => !v)}
+          className="mt-1.5 w-full rounded-lg border-2 border-black/10 bg-slate-50 py-1 text-[11px] font-bold text-slate-600 transition-colors hover:bg-slate-100"
+        >
+          {showAll ? 'Show less' : `Show all ${filtered.length} rows`}
+        </button>
+      )}
     </div>
   );
 };
