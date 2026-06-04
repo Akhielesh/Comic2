@@ -172,7 +172,23 @@ const readAll = (): ManagedApiKey[] => {
   return keys;
 };
 
-const writeAll = (keys: ManagedApiKey[]) => write(STORAGE, JSON.stringify(keys));
+// Cloud-sync hook: AuthContext registers a listener so every mutation to the key
+// store is mirrored up to the user's account. `suspended` prevents a feedback loop
+// while we're applying keys that were just pulled FROM the cloud.
+let keysChangeListener: (() => void) | null = null;
+let syncSuspended = false;
+export const setKeysChangeListener = (fn: (() => void) | null) => { keysChangeListener = fn; };
+export const suspendKeysSync = (value: boolean) => { syncSuspended = value; };
+
+const writeAll = (keys: ManagedApiKey[]) => {
+  write(STORAGE, JSON.stringify(keys));
+  if (keysChangeListener && !syncSuspended) {
+    try { keysChangeListener(); } catch { /* listener errors must not break local writes */ }
+  }
+};
+
+/** Replace the entire key store at once (used when applying a cloud snapshot). */
+export const replaceAllKeys = (keys: ManagedApiKey[]) => writeAll(keys);
 
 // ----- Public API -------------------------------------------------------------
 

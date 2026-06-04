@@ -1,11 +1,11 @@
 
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { getAuthRedirectUrl, supabase } from '../services/supabase';
-import { decryptKey, encryptKey } from '../services/crypto';
-import { clearFluxKey, setFluxKey, setOpenRouterKey } from '../services/appSettings';
-import { clearAllKeys, addKey, listKeysByProvider, PROVIDER_META, type ApiKeyProvider } from '../services/apiKeys';
+import { clearFluxKey, setSettingsChangeListener } from '../services/appSettings';
+import { clearAllKeys, setKeysChangeListener } from '../services/apiKeys';
 import { registerDevice } from '../services/deviceSessions';
+import { syncOnLogin, schedulePush } from '../services/cloudSync';
 
 type AuthContextType = {
     user: User | null;
@@ -33,17 +33,33 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const [user, setUser] = useState<User | null>(null);
     const [session, setSession] = useState<Session | null>(null);
     const [loading, setLoading] = useState(true);
+    const userIdRef = useRef<string | null>(null);
+    const syncedUserRef = useRef<string | null>(null);
 
     useEffect(() => {
+        // Mirror every local key/setting change up to the signed-in user's account.
+        const pushIfSignedIn = () => {
+            if (userIdRef.current) schedulePush(userIdRef.current);
+        };
+        setKeysChangeListener(pushIfSignedIn);
+        setSettingsChangeListener(pushIfSignedIn);
+
+        // Reconcile cloud <-> local exactly once per signed-in user.
+        const onSignedIn = (userId: string) => {
+            userIdRef.current = userId;
+            void registerDevice(userId);
+            if (syncedUserRef.current !== userId) {
+                syncedUserRef.current = userId;
+                void syncOnLogin(userId);
+            }
+        };
+
         // Check active session
         supabase.auth.getSession().then(({ data: { session } }) => {
             setSession(session);
             setUser(session?.user ?? null);
             setLoading(false);
-            if (session?.user) {
-                void syncKeys(session.user.id);
-                void registerDevice(session.user.id);
-            }
+            if (session?.user) onSignedIn(session.user.id);
         });
 
         // Listen for changes (login, logout, refresh)
@@ -51,13 +67,20 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             setSession(session);
             setUser(session?.user ?? null);
             setLoading(false);
-            if (session?.user && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED')) {
-                void syncKeys(session.user.id);
-                void registerDevice(session.user.id);
+            if (session?.user && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED')) {
+                onSignedIn(session.user.id);
+            }
+            if (event === 'SIGNED_OUT') {
+                userIdRef.current = null;
+                syncedUserRef.current = null;
             }
         });
 
-        return () => subscription.unsubscribe();
+        return () => {
+            subscription.unsubscribe();
+            setKeysChangeListener(null);
+            setSettingsChangeListener(null);
+        };
     }, []);
 
     const clearLocalAuthState = () => {
@@ -116,41 +139,6 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         const { error } = await supabase.auth.updateUser({ password: newPassword });
         if (error) return { success: false, message: error.message || 'Failed to update password.' };
         return { success: true, message: 'Password updated successfully.' };
-    };
-
-    const syncKeys = async (userId: string) => {
-        const { data } = await supabase.from('user_api_keys').select('*').eq('user_id', userId);
-        if (!data) return;
-
-        for (const row of data) {
-            try {
-                const decrypted = await decryptKey(row.encrypted_key, row.iv);
-                if (!decrypted) continue;
-
-                const provider = row.provider as ApiKeyProvider;
-
-                // Restore legacy single-key slots so existing code paths keep working.
-                if (provider === 'gemini') {
-                    localStorage.setItem('dreamstream_api_key', decrypted);
-                } else if (provider === 'pixazo') {
-                    setFluxKey(decrypted);
-                } else if (provider === 'openrouter') {
-                    setOpenRouterKey(decrypted);
-                }
-
-                // Restore to the multi-key store (dreamstream_api_keys_v2) if this
-                // provider has no entry there yet — prevents duplicates on repeated logins.
-                if (provider in PROVIDER_META && listKeysByProvider(provider).length === 0) {
-                    addKey({
-                        provider,
-                        key: decrypted,
-                        label: `${PROVIDER_META[provider as ApiKeyProvider]?.label ?? provider} key`
-                    });
-                }
-            } catch (err) {
-                console.error("Failed to decrypt key for", row.provider, err);
-            }
-        }
     };
 
     return (

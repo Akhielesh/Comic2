@@ -35,6 +35,18 @@ const removeFromStorage = (key: string) => {
   }
 };
 
+// Cloud-sync hook: AuthContext registers a listener so settings/model changes are
+// mirrored to the user's account. `suspended` avoids a loop while applying a cloud pull.
+let settingsChangeListener: (() => void) | null = null;
+let settingsSyncSuspended = false;
+export const setSettingsChangeListener = (fn: (() => void) | null) => { settingsChangeListener = fn; };
+export const suspendSettingsSync = (value: boolean) => { settingsSyncSuspended = value; };
+const notifySettingsChanged = () => {
+  if (settingsChangeListener && !settingsSyncSuspended) {
+    try { settingsChangeListener(); } catch { /* never break local writes */ }
+  }
+};
+
 export const getLockedImageProvider = () => IMAGE_PROVIDER_LOCK;
 
 const IMAGE_MODEL_KEY = "dreamstream_image_model_id";
@@ -57,6 +69,7 @@ export const getImageModelId = (): string | null => {
 
 export const setImageModelId = (modelId: string) => {
   setInStorage(IMAGE_MODEL_KEY, modelId);
+  notifySettingsChanged();
 };
 
 // Model-Specific Key Management
@@ -85,12 +98,19 @@ export const setModelSpecificKey = (modelId: string, key: string) => {
     delete keys[modelId];
   }
   setInStorage(MODEL_KEYS_STORAGE, JSON.stringify(keys));
+  notifySettingsChanged();
 };
 
 export const deleteModelKey = (modelId: string) => {
   const keys = getAllModelKeys();
   delete keys[modelId];
   setInStorage(MODEL_KEYS_STORAGE, JSON.stringify(keys));
+  notifySettingsChanged();
+};
+
+/** Replace the whole model-keys map at once (used when applying a cloud snapshot). */
+export const setAllModelKeys = (keys: Record<string, string>) => {
+  setInStorage(MODEL_KEYS_STORAGE, JSON.stringify(keys || {}));
 };
 
 export const getFluxKeyInfo = (): { key: string | null; source: KeySource } => {
@@ -175,6 +195,7 @@ export const setSettingsState = (next: {
   defaultTextModelKey?: string;
 }) => {
   setInStorage(SETTINGS_KEY, JSON.stringify(next));
+  notifySettingsChanged();
 };
 
 export const getDefaultImageModel = (): string => {
