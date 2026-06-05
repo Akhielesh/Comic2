@@ -4,9 +4,8 @@ A standalone **Cloudflare Worker** that runs AI-built apps inside per-user
 [Cloudflare Containers](https://developers.cloudflare.com/containers/) (via the
 [Sandbox SDK](https://developers.cloudflare.com/sandbox/)) and returns a tokenized
 **live preview URL** the user opens in a new tab. This is the foundation of DreamStream
-Studio v2 — see [`../docs/CLOUDFLARE_STUDIO_PLAN.md`](../docs/CLOUDFLARE_STUDIO_PLAN.md)
-(architecture, cost) and [`../docs/PRODUCT_BLUEPRINT.md`](../docs/PRODUCT_BLUEPRINT.md)
-(product).
+Studio v2 — see the full docs at [`../docs/studio/`](../docs/studio/) (start at
+[`README.md`](../docs/studio/README.md) / [`00-STATUS.md`](../docs/studio/00-STATUS.md)).
 
 > **This is a deploy-ready scaffold, not yet validated end-to-end.** It can't run in the
 > app's CI (it needs a Cloudflare account, Workers Paid, Docker, and a wildcard domain).
