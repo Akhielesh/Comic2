@@ -6,6 +6,19 @@ pick up cold. Format: `## YYYY-MM-DD · author — summary`, then *what changed*
 
 ---
 
+## 2026-06-05 · Claude — Wireframes for the full flow (pre-code review)
+
+- Added `docs/comic/wireframes/` — 11 low-fidelity wireframes covering every stage:
+  flow map, the quick path (connect-key → dashboard → create → generating → reader),
+  and the deep editor (shell → bubbles → region/circle-edit → regen+variations →
+  layers). Each screen carries a numbered "Notes / interactions" legend.
+- Generated from a single committed script (`wireframes/generate.mjs`, pure SVG → PNG
+  via the existing `sharp` dep); both `.svg` (editable) and `.png` (viewable) committed,
+  plus `wireframes/README.md`.
+- Purpose: let the owner review the screen-by-screen UX **before any code**. Keep these
+  in sync with `04-CANVAS-EDITOR-SPEC.md` and the sprint files.
+- **Follow-up / NEXT:** owner reviews wireframes → adjust as needed → then start Sprint 0.
+
 ## 2026-06-05 · Claude — Establish the comic-product plan + doc system
 
 Discovery + planning session. No product code changed; this is the foundation the

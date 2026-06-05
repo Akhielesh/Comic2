@@ -6,10 +6,11 @@
 
 **Last updated:** 2026-06-05 · **Updated by:** Claude · **Branch:** `claude/practical-planck-aug7s`
 
-> Latest: **Plan established.** The four strategic decisions are locked (comic-only,
-> page-first hybrid, BYOK-personal-first, layer-canvas editor). This `docs/comic/`
-> system is the new home for the comic product. **No product code has changed yet** —
-> Sprint 0 is the first build sprint and has not started.
+> Latest: **Plan + wireframes ready for review.** The four strategic decisions are locked
+> (comic-only, page-first hybrid, BYOK-personal-first, layer-canvas editor). This
+> `docs/comic/` system is the new home for the comic product, and `docs/comic/wireframes/`
+> now has 11 page-by-page wireframes of the whole flow. **No product code has changed yet** —
+> awaiting owner sign-off on the wireframes before Sprint 0 begins.
 
 ---
 
