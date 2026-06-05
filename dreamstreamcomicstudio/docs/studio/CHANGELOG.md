@@ -5,6 +5,24 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude (session 012Drsxr…) — PHASE 5 (persistence backend) + SELF-AUDIT
+Built the durable project model so AI-built apps survive sleep/reload (container
+disposable, project durable). Domain logged as **deferred (not a blocker — tunnels)**.
+- New: `server/sql/studio_projects.sql` (projects/files/versions/deployments + RLS),
+  `services/studioFiles.ts` (pure helpers + tests), `services/studioRepository.ts`
+  (ownership-guarded CRUD), `/api/studio/projects` (list/get/delete) routes, and
+  **save-on-launch** (every build upserts the project + replaces files + snapshots a version).
+  Client `studioApi.launchLiveStudio` now sends title+template for the project name.
+- Verified: client + server typecheck, **278 tests (+4)**, production build — all pass.
+- **SELF-AUDIT:** ✅ persistence backend complete (schema, RLS, repository, CRUD,
+  save-on-launch, ownership guard against projectId hijack), pure helpers unit-tested ·
+  🔀 **re-scoped:** the Monaco **editor UI / version-restore / diff** are deferred to the
+  live studio shell (editing a not-yet-runnable project is low-value; pairs with the
+  deployed worker) · ⚠️ not live-validated (needs the new migration applied + worker
+  deployed; dormant + safe until then — endpoints unused, save-on-launch behind the 503) ·
+  🛡️ RLS + per-user query scoping + ownership guard; repository is DB-bound so unit tests
+  cover the pure helpers, not the DB calls.
+
 ## 2026-06-05 · Claude (session 012Drsxr…) — Phase 2 + 3-core SHIPPED TO PROD + workflow change
 - Merged **#77 to production** (`Dreamstrream-v1`): Phase 2 control plane + Phase 3a
   Run-live wiring. CI green; flag-gated so prod behavior is unchanged until O8.

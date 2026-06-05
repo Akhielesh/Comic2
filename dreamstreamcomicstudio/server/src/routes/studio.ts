@@ -19,6 +19,8 @@ import {
 import { getSupabaseAdmin } from '../services/supabase.js';
 import { signStudioBody } from '../services/studioSign.js';
 import { evaluateLaunchAllowed } from '../services/studioCaps.js';
+import { sanitizeFiles, deriveProjectName } from '../services/studioFiles.js';
+import { saveProject, listProjects, getProjectWithFiles, deleteProject } from '../services/studioRepository.js';
 
 export const studioRouter = Router();
 
@@ -83,17 +85,15 @@ studioRouter.post('/launch', async (req, res, next) => {
     const userId = req.user!.id;
     const body = (req.body || {}) as {
       projectId?: string;
-      files?: { path?: unknown; content?: unknown }[];
+      title?: string;
+      template?: string;
+      files?: unknown;
       install?: string;
       dev?: string;
       port?: number;
     };
 
-    const files = Array.isArray(body.files)
-      ? body.files
-          .filter((f) => f && typeof f.path === 'string' && typeof f.content === 'string')
-          .slice(0, 200)
-      : [];
+    const files = sanitizeFiles(body.files);
     if (!files.length) {
       return res.status(400).json({ error: { message: 'files[] (with path + content) is required.' } });
     }
@@ -141,6 +141,21 @@ studioRouter.post('/launch', async (req, res, next) => {
       runId = data?.id;
     } catch (err) {
       console.warn('[studio] run record skipped:', (err as Error)?.message);
+    }
+
+    // Persist the project (best-effort) so it survives sleep/reload and is versioned.
+    try {
+      await saveProject({
+        userId,
+        projectId,
+        name: deriveProjectName(body.title, files),
+        template: typeof body.template === 'string' ? body.template : 'react-ts',
+        files,
+        versionLabel: 'live build',
+        createdBy: 'agent'
+      });
+    } catch (err) {
+      console.warn('[studio] project save skipped:', (err as Error)?.message);
     }
 
     return res.json({ previewUrl, sandboxId, projectId, runId });
@@ -191,4 +206,37 @@ studioRouter.get('/:id/logs', (_req, res) => {
   res.status(501).json({
     error: { message: 'Live log streaming arrives with the Phase 1 Worker logs action.', code: 'STUDIO_LOGS_PENDING' }
   });
+});
+
+// --- Saved projects (Phase 5 persistence) -----------------------------------------
+
+// GET /api/studio/projects — the user's saved projects (most recent first).
+studioRouter.get('/projects', async (req, res, next) => {
+  try {
+    res.json({ projects: await listProjects(req.user!.id) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/studio/projects/:id — a project with its current file tree.
+studioRouter.get('/projects/:id', async (req, res, next) => {
+  try {
+    const data = await getProjectWithFiles(req.user!.id, req.params.id);
+    if (!data) return res.status(404).json({ error: { message: 'Project not found.' } });
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/studio/projects/:id
+studioRouter.delete('/projects/:id', async (req, res, next) => {
+  try {
+    const ok = await deleteProject(req.user!.id, req.params.id);
+    if (!ok) return res.status(404).json({ error: { message: 'Project not found.' } });
+    res.json({ deleted: true });
+  } catch (err) {
+    next(err);
+  }
 });

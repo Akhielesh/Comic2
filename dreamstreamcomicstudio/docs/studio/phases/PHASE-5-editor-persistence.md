@@ -1,6 +1,6 @@
 # Phase 5 — Editor + persistence
 
-**Status:** 📋 planned · **Depends on:** Phase 3 · **Effort:** 3–5 days · **See:** [06-DATA-MODEL.md](../06-DATA-MODEL.md)
+**Status:** 🟢 **persistence backend shipped** (2026-06-05) — schema/RLS/repository/CRUD/save-on-launch done; **editor UI, version-restore, diff DEFERRED** to the live studio shell · **Depends on:** Phase 3 · **See:** [06-DATA-MODEL.md](../06-DATA-MODEL.md)
 
 ## Goal
 "Dive into the code": a real editor + file tree, and durable, versioned projects so

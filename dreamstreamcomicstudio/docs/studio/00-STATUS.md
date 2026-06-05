@@ -37,7 +37,7 @@ Worker still needs the owner to deploy it before the live path can be validated.
 | 2 | [Railway control plane](./phases/PHASE-2-control-plane.md) | ✅ **shipped to prod** (#77) — `/api/studio/*`, HMAC, caps, runs | — |
 | 3 | [Studio UI shell](./phases/PHASE-3-studio-ui.md) | 🟡 **core shipped** (#77) — "Run live → new tab" (flag-gated); in-app log/status pieces **deferred** until the Worker's logs action | needs infra to validate |
 | 4 | [Agentic build loop](./phases/PHASE-4-agentic-loop.md) | 📋 planned | Phases 1–3 |
-| 5 | [Editor + persistence](./phases/PHASE-5-editor-persistence.md) | 📋 planned | Phase 3 |
+| 5 | [Editor + persistence](./phases/PHASE-5-editor-persistence.md) | 🟢 **persistence backend shipped** — projects/files/versions + CRUD + save-on-launch + RLS; **editor UI deferred** to the live studio shell | — |
 | 6 | [GitHub + deploy](./phases/PHASE-6-github-deploy.md) | 📋 planned | Phase 5 |
 | 7 | [Per-project backend, polish, mobile](./phases/PHASE-7-backend-polish-mobile.md) | 📋 planned | Phase 6 |
 | 8 | [Consolidate runtimes](./phases/PHASE-8-consolidate-runtimes.md) | 📋 planned | Phase 3 |
