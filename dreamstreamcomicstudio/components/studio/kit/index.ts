@@ -20,6 +20,9 @@ export type { StatusPulseProps, RunStatus } from './StatusPulse';
 export { Confetti } from './Confetti';
 export type { ConfettiProps } from './Confetti';
 
+export { EmptyState } from './EmptyState';
+export type { EmptyStateProps } from './EmptyState';
+
 export {
   usePrefersReducedMotion,
   springSoft,

@@ -4,9 +4,17 @@ import React from 'react';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, act as rtlAct } from '@testing-library/react';
 import { useStudioBuild } from './buildStore';
-import { BuildTrace } from './BuildTrace';
+import { BuildTrace, friendlyReason } from './BuildTrace';
 
 beforeEach(() => useStudioBuild.getState().reset());
+
+describe('friendlyReason', () => {
+  it('maps stuck / iteration-cap / other to friendly text', () => {
+    expect(friendlyReason('stuck').title).toMatch(/stuck/i);
+    expect(friendlyReason('iteration-cap').title).toMatch(/fix limit/i);
+    expect(friendlyReason('boom').title).toMatch(/stopped: boom/i);
+  });
+});
 
 describe('build store', () => {
   it('tracks the trace lifecycle', () => {
@@ -49,5 +57,15 @@ describe('BuildTrace', () => {
       useStudioBuild.getState().finish({ ok: true, reason: 'clean', iterations: 2, previewUrl: 'https://x.dev' });
     });
     expect(screen.getByText(/built & running/i)).toBeInTheDocument();
+  });
+
+  it('shows an "over to you" nudge when the build gets stuck', () => {
+    render(<BuildTrace />);
+    rtlAct(() => {
+      useStudioBuild.getState().begin();
+      useStudioBuild.getState().finish({ ok: false, reason: 'stuck', iterations: 3 });
+    });
+    expect(screen.getByText(/over to you/i)).toBeInTheDocument();
+    expect(screen.getByText(/got stuck/i)).toBeInTheDocument();
   });
 });

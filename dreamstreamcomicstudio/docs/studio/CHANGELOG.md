@@ -5,6 +5,18 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Sprint 2: illustrated empty states (S2.5) + stuck-loop UX (S2.4)
+- **`kit/EmptyState.tsx`** + **`assets/illustrations.tsx`** (`EmptyProjectsArt`, `BuildErrorArt`,
+  on-brand inline SVG using currentColor) — `StudioStart`'s empty state is now illustrated.
+- **`BuildTrace`** — a failed/stuck build now shows a friendly **"over to you"** nudge with an
+  actionable hint (edit + Build again / refine by prompt) instead of a raw guard reason; pure
+  `friendlyReason()` helper, unit-tested.
+- Tests: `emptyState.test.tsx`, `friendlyReason` + stuck-footer render. 46 studio tests; typecheck
+  + build green.
+- **Sprint 2 is substantially complete** (agentic build, BuildTrace, celebration, stuck UX,
+  illustrated states). Deferred: prompt→generate (S2.1) + model-routing surface (S2.3) — both want
+  a small backend endpoint, best landed with a signed-in validation.
+
 ## 2026-06-05 · Claude — Sprint 2: success celebration (S2.7) + tech logos via 21st.dev MCP
 - **`kit/Confetti.tsx`** — a one-shot framer-motion celebration burst (reduced-motion safe,
   self-removing). Fires over the workspace on a **green build** (`result.ok`).

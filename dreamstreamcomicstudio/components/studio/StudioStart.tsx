@@ -3,9 +3,10 @@
 // project hydrates its files into the workspace store; the 3-pane workspace then takes over.
 
 import React, { useEffect, useState } from 'react';
-import { FolderOpen, Trash2, Loader2, Plus, MessageSquarePlus, RefreshCw } from 'lucide-react';
-import { Reveal, Stagger, StaggerItem, Skeleton, Lift, useStudioTheme } from './kit';
+import { FolderOpen, Trash2, Loader2, MessageSquarePlus, RefreshCw } from 'lucide-react';
+import { Reveal, Stagger, StaggerItem, Skeleton, Lift, EmptyState, useStudioTheme } from './kit';
 import { TemplateLogo } from './assets/techLogos';
+import { EmptyProjectsArt } from './assets/illustrations';
 import { useStudioWorkspace } from './workspace';
 import {
   listStudioProjects, getStudioProject, deleteStudioProject, type StudioProjectSummary,
@@ -104,18 +105,19 @@ export const StudioStart: React.FC<StudioStartProps> = ({ onNavigate }) => {
 
           {/* Empty */}
           {projects !== null && projects.length === 0 && !error && (
-            <div className={`mt-8 rounded-2xl border ${t.edge} ${t.panel} p-10 text-center`}>
-              <div className={`mx-auto h-14 w-14 rounded-2xl border ${t.edge} ${t.panelAlt} flex items-center justify-center`}>
-                <Plus className={`w-7 h-7 ${t.textFaint}`} />
-              </div>
-              <p className={`mt-4 text-sm font-semibold ${t.textDim}`}>No saved projects yet.</p>
-              <p className={`mt-1 text-sm ${t.textFaint}`}>Describe an app in chat and open it here — it saves automatically when you run it.</p>
-              <button
-                onClick={() => onNavigate('chat')}
-                className={`mt-5 inline-flex items-center gap-1.5 text-sm font-bold rounded-full px-4 py-2 ${t.accentText} ${t.accentBg} ${t.accentBgHover} ${t.focusRing}`}
+            <div className={`mt-8 rounded-2xl border ${t.edge} ${t.panel}`}>
+              <EmptyState
+                art={<EmptyProjectsArt />}
+                title="No saved projects yet"
+                description="Describe an app in chat and open it here — it saves automatically when you run it."
               >
-                <MessageSquarePlus className="w-4 h-4" /> Build from chat
-              </button>
+                <button
+                  onClick={() => onNavigate('chat')}
+                  className={`inline-flex items-center gap-1.5 text-sm font-bold rounded-full px-4 py-2 ${t.accentText} ${t.accentBg} ${t.accentBgHover} ${t.focusRing}`}
+                >
+                  <MessageSquarePlus className="w-4 h-4" /> Build from chat
+                </button>
+              </EmptyState>
             </div>
           )}
 
