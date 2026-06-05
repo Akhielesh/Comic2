@@ -5,6 +5,23 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Sprint 2 (start): agentic build + BuildTrace (S2.2/S2.6/S2.7)
+The "Lovable moment" — the primary action is now an **agentic Build** that streams the loop.
+- **`services/sse.ts`** — a dependency-free SSE reader (`parseSSEBlock` + `readSSEStream`),
+  pure + unit-tested. **`services/studioBuildApi.ts`** — `streamStudioBuild()` POSTs to
+  `/api/studio/build` and dispatches typed `BuildEvent`s (start/plan/run/observe/fix/done/result/
+  error), mirroring the server contract. Added a `del` helper earlier; reused `postStream`.
+- **`workspace/buildStore.ts`** (zustand) — the live trace state. **`workspace/BuildTrace.tsx`** —
+  an **animated timeline** (each stage springs in, the active stage pulses, observation summaries
+  surface, a success/stopped footer with a flourish). Replaces the static placeholder.
+- **`CodeStudioView`** — the hero button is now **Build** (`Wand2`): streams plan→run→observe→fix→
+  done, feeding BuildTrace + the logs console + run status; the final preview URL boots the live
+  pane. Save-on-build (S2.6) is handled by the route. Success flourish (S2.7) in the footer.
+- Tests: `sse.test.ts` (parser + chunked stream), `buildTrace.test.tsx` (store lifecycle +
+  trace render). 45 studio/sse tests. Typecheck + build green.
+- Remaining Sprint 2: prompt→generate (S2.1), model routing surfaced (S2.3), stuck UX (S2.4),
+  illustrated error/empty states (S2.5), fuller celebration (S2.7 Lottie).
+
 ## 2026-06-05 · Claude — Sprint 1 COMPLETE: load saved projects (S1.7) + start screen
 - **`services/studioApi.ts`** — `listStudioProjects` / `getStudioProject` / `deleteStudioProject`
   (Phase 5 `/api/studio/projects*`); added a `del` helper to `apiClient`.

@@ -9,17 +9,19 @@
 
 import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import {
-  ArrowLeft, Play, Square, Share2, Download, FileCode, Cloud,
+  ArrowLeft, Wand2, Square, Share2, Download, FileCode, Cloud,
   Sparkles, Cpu, Lock, Mail, Loader2,
 } from 'lucide-react';
 import type { CodeStudioArtifact } from '../../apiTypes';
 import { Reveal, Skeleton, StatusPulse, Lift, ThemeSwitcher, ResizableSplit, useIsWide, useStudioTheme } from './kit';
 import type { RunStatus } from './kit';
 import {
-  CodeWorkspace, LogsConsole, PreviewFrame, useStudioWorkspace, useStudioLogs, isPathDirty, workspaceCurrentArtifact,
+  CodeWorkspace, LogsConsole, PreviewFrame, BuildTrace, useStudioBuild,
+  useStudioWorkspace, useStudioLogs, isPathDirty, workspaceCurrentArtifact,
 } from './workspace';
 import { StudioStart } from './StudioStart';
-import { launchLiveStudio, stopLiveStudio } from '../../services/studioApi';
+import { stopLiveStudio } from '../../services/studioApi';
+import { streamStudioBuild, type BuildStage } from '../../services/studioBuildApi';
 import { isLiveStudioEnabled } from '../../services/studioFlags';
 import { downloadArtifactZip } from '../../services/studioLauncher';
 
@@ -83,27 +85,45 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const runLive = async () => {
+  // Agentic build: stream plan → run → observe → fix → done, self-healing errors. The final
+  // preview URL is the live app. Drives the BuildTrace + logs + run status.
+  const stageLevel = (stage: BuildStage) =>
+    stage === 'done' ? 'success' : stage === 'stopped' || stage === 'observe' ? 'warn' : 'info' as const;
+
+  const runBuild = async () => {
     if (!hasFiles) return;
     setStatus('starting');
     setError(null);
     setPreviewUrl(null);
-    appendLog('system', `Launching live container for "${currentArtifact.title}"…`);
+    useStudioBuild.getState().begin();
+    appendLog('system', `Building "${currentArtifact.title}" with self-healing…`);
     try {
-      const res = await launchLiveStudio(currentArtifact);
-      setRunId(res.runId ?? null);
-      if (res.previewUrl) {
-        setPreviewUrl(res.previewUrl);
-        setStatus('live');
-        appendLog('success', `Preview ready → ${res.previewUrl}`);
-        window.open(res.previewUrl, '_blank', 'noopener');
-      } else {
-        setStatus('error');
-        setError('The live preview started but returned no URL yet.');
-        appendLog('warn', 'Container started but no preview URL was returned yet.');
-      }
+      await streamStudioBuild(
+        { title: currentArtifact.title, template: currentArtifact.template, files: currentArtifact.files },
+        {
+          onStart: (d) => setRunId(d.runId ?? null),
+          onEvent: (e) => {
+            useStudioBuild.getState().pushEvent(e);
+            appendLog(stageLevel(e.stage), `[${e.stage}] ${e.message}`);
+            if (e.observation?.summary) appendLog('warn', e.observation.summary);
+            if (e.previewUrl) setPreviewUrl(e.previewUrl);
+          },
+          onResult: (r) => {
+            useStudioBuild.getState().finish(r);
+            if (r.previewUrl) { setPreviewUrl(r.previewUrl); setStatus('live'); }
+            else setStatus(r.ok ? 'idle' : 'error');
+            appendLog(r.ok ? 'success' : 'warn',
+              r.ok ? `Build succeeded in ${r.iterations} iteration(s).` : `Build stopped: ${r.reason}`);
+          },
+          onError: (msg) => {
+            useStudioBuild.getState().fail(msg);
+            setStatus('error'); setError(msg); appendLog('error', msg);
+          },
+        }
+      );
     } catch (err) {
-      const msg = (err as Error)?.message || 'Live Studio is unavailable right now.';
+      const msg = (err as Error)?.message || 'Build failed.';
+      useStudioBuild.getState().fail(msg);
       setStatus('error');
       setError(msg);
       appendLog('error', msg);
@@ -135,16 +155,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
             <span className="ml-1 text-[10px] uppercase tracking-wide">(Sprint 2)</span>
           </div>
         </div>
-        <div className="space-y-2">
-          <p className={`text-[11px] font-semibold uppercase tracking-wide ${t.textFaint}`}>Build trace</p>
-          {['Plan', 'Run', 'Observe', 'Fix'].map((step) => (
-            <div key={step} className={`flex items-center gap-2 rounded-md border ${t.edge} px-2.5 py-2`}>
-              <StatusPulse status="idle" hideLabel />
-              <span className={`text-xs ${t.textDim}`}>{step}</span>
-              <Skeleton className="ml-auto h-2 w-16" />
-            </div>
-          ))}
-        </div>
+        <BuildTrace />
       </div>
     </PaneFrame>
   );
@@ -229,13 +240,13 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
             ) : (
               <Lift>
                 <button
-                  onClick={runLive}
+                  onClick={runBuild}
                   disabled={!enabled || !hasFiles || status === 'starting'}
-                  title={enabled ? 'Run this app on a live cloud container' : 'Code Studio is in private preview'}
+                  title={enabled ? 'Build & run this app live, self-healing errors' : 'Code Studio is in private preview'}
                   className={`flex items-center gap-1.5 text-sm font-bold rounded-full px-3.5 py-1.5 ${t.accentText} ${t.accentBg} ${t.accentBgHover} disabled:opacity-50 disabled:cursor-not-allowed ${t.focusRing}`}
                 >
-                  {status === 'starting' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
-                  {status === 'starting' ? 'Starting…' : 'Run live'}
+                  {status === 'starting' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
+                  {status === 'starting' ? 'Building…' : 'Build'}
                 </button>
               </Lift>
             )}

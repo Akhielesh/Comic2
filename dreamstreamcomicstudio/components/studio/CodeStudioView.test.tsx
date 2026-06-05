@@ -18,6 +18,9 @@ vi.mock('../../services/studioApi', () => ({
 vi.mock('../../services/studioLauncher', () => ({
   downloadArtifactZip: vi.fn(async () => {}),
 }));
+vi.mock('../../services/studioBuildApi', () => ({
+  streamStudioBuild: vi.fn(async () => {}),
+}));
 // Monaco loads from a CDN at runtime — stub it so the editor renders synchronously in jsdom.
 vi.mock('@monaco-editor/react', () => ({
   __esModule: true,
@@ -52,20 +55,20 @@ describe('CodeStudioView', () => {
     expect(screen.getAllByText('App.tsx').length).toBeGreaterThan(0);
     expect(screen.getByText('index.tsx')).toBeInTheDocument();
     // Run live is available to admins and not gated
-    expect(screen.getByRole('button', { name: /run live/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^build$/i })).toBeEnabled();
     expect(screen.queryByText(/private preview/i)).not.toBeInTheDocument();
   });
 
   it('gates non-admins behind a private-preview notice with Run live disabled', () => {
     render(<CodeStudioView artifact={null} isAdmin={false} onBack={vi.fn()} onNavigate={vi.fn()} />);
     expect(screen.getByText(/private preview/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /run live/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^build$/i })).toBeDisabled();
   });
 
   it('shows the projects start screen when nothing is loaded (Run live disabled)', () => {
     render(<CodeStudioView artifact={null} isAdmin onBack={vi.fn()} onNavigate={vi.fn()} />);
     expect(screen.getByText('Your projects')).toBeInTheDocument();
     // Run live is disabled until an app is loaded
-    expect(screen.getByRole('button', { name: /run live/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^build$/i })).toBeDisabled();
   });
 });
