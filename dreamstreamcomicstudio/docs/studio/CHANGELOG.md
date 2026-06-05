@@ -5,6 +5,17 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Phase 4 guardrails: FIX-output safety + path-traversal hardening
+Safety rails for the autonomous build loop (and a security win for the existing launch path):
+- `services/studioFiles.ts` — `isSafeStudioPath` (rejects `..` traversal, NUL/backslash,
+  `~`, over-long) + `canonicalStudioPath` + `MAX_STUDIO_FILE_BYTES` (1 MiB/file).
+- Hardened `sanitizeFiles` (launch path) to drop traversal/oversized entries.
+- `sanitizeFixFiles(record, opts)` — guards each FIX iteration: rejects unsafe paths,
+  caps per-file + total bytes + file count (default 40), canonicalizes keys so merges
+  overwrite (fixes a latent duplicate-key bug between `studioFix` and `sanitizeFiles`), and
+  reports what it dropped (for the trace).
+- Tests: traversal/oversize/cap/canonicalization. Suite 372 green.
+
 ## 2026-06-05 · Claude — Phase 4: live RUN capability (worker launch→logs→probe)
 - `server/src/services/studioBuildService.ts` — `createWorkerRun` builds the `run(files)`
   dep for `runBuildAgent`: (re)launch the container, fetch dev logs, probe the preview's
