@@ -15,4 +15,5 @@ export {
   isPathDirty,
   dirtyPaths,
   workspaceToArtifact,
+  workspaceCurrentArtifact,
 } from './workspaceStore';

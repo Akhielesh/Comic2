@@ -19,6 +19,10 @@ const pickEntry = (paths: string[]): string | null => {
 interface WorkspaceState {
   /** Loaded artifact id-ish (title) so we only reload on a genuinely new app. */
   loadedKey: string | null;
+  /** Project name of the loaded app. */
+  title: string;
+  /** Template of the loaded app (drives the runtime). */
+  template: CodeStudioArtifact['template'];
   /** Working copy: path → current content. */
   files: Record<string, string>;
   /** Baseline content per path (for dirty detection). */
@@ -48,6 +52,8 @@ interface WorkspaceState {
 
 export const useStudioWorkspace = create<WorkspaceState>((set, get) => ({
   loadedKey: null,
+  title: '',
+  template: 'react-ts',
   files: {},
   baseline: {},
   paths: [],
@@ -67,6 +73,8 @@ export const useStudioWorkspace = create<WorkspaceState>((set, get) => ({
     const entry = pickEntry(paths);
     set({
       loadedKey: key,
+      title: artifact.title,
+      template: artifact.template,
       files,
       baseline: { ...files },
       paths,
@@ -98,7 +106,7 @@ export const useStudioWorkspace = create<WorkspaceState>((set, get) => ({
     files: { ...s.files, [path]: s.baseline[path] ?? s.files[path] },
   })),
 
-  reset: () => set({ loadedKey: null, files: {}, baseline: {}, paths: [], openPaths: [], activePath: null }),
+  reset: () => set({ loadedKey: null, title: '', template: 'react-ts', files: {}, baseline: {}, paths: [], openPaths: [], activePath: null }),
 }));
 
 // ---- Pure selectors / helpers (unit-testable without React) ----------------------------
@@ -115,5 +123,14 @@ export const workspaceToArtifact = (
   s: Pick<WorkspaceState, 'files' | 'paths'>
 ): CodeStudioArtifact => ({
   ...base,
+  files: s.paths.map((path) => ({ path, content: s.files[path] ?? '' })),
+});
+
+/** Build a runnable artifact purely from the store (title/template + working copy). */
+export const workspaceCurrentArtifact = (
+  s: Pick<WorkspaceState, 'title' | 'template' | 'files' | 'paths'>
+): CodeStudioArtifact => ({
+  title: s.title || 'Untitled project',
+  template: s.template,
   files: s.paths.map((path) => ({ path, content: s.files[path] ?? '' })),
 });

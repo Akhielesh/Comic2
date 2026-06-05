@@ -5,6 +5,21 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Sprint 1 COMPLETE: load saved projects (S1.7) + start screen
+- **`services/studioApi.ts`** — `listStudioProjects` / `getStudioProject` / `deleteStudioProject`
+  (Phase 5 `/api/studio/projects*`); added a `del` helper to `apiClient`.
+- **`components/studio/StudioStart.tsx`** — the Code Studio home: a gallery of saved projects
+  (open / delete, relative times, template chips, animated cards) shown when nothing is loaded.
+  Opening hydrates the project's files into the workspace store → the 3-pane workspace takes over.
+- **Workspace store** now keeps `title` + `template` and a `workspaceCurrentArtifact()` builder,
+  so **Run live / .zip work for projects opened from the start screen** (not just chat hand-offs).
+  `CodeStudioView` reads the runnable app from the store throughout.
+- Tests: `StudioStart.test.tsx` (list / open-into-workspace / empty) + view test updated. Studio
+  suite green; typecheck + build green.
+- **Sprint 1 is complete** — workspace shell, Monaco editor, file tree, tabs, dirty tracking,
+  resizable panes, streaming logs, live-preview device frames, load saved projects, responsive,
+  plus the three-theme design system. Shipping to production.
+
 ## 2026-06-05 · Claude — Sprint 1 (cont.): live-preview device frames + boot reveal (S1.4)
 - **`workspace/PreviewFrame.tsx`** — the live-preview surface: a device-size toggle
   (desktop/tablet/mobile with a device frame), **refresh**, **open-in-new-tab**, the preview

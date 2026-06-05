@@ -113,18 +113,18 @@ Each story has grouped task checklists (**BE** backend · **UI** front-end · **
 - 🟡 **S0.6 Live round-trip validation** — [QA/E2E] owner-side: set a real `STUDIO_WORKER_URL`, then a signed-in admin launches a counter → `studio_runs` row + preview serves + logs stream. The Run live button is the hook.
 - **Demo:** admin opens Code Studio (animated shell) → "Run live" works.
 
-### Sprint 1 — Studio shell (the workspace)
+### Sprint 1 — Studio shell (the workspace) — ✅ COMPLETE (shipped to prod)
 **Goal:** a real, beautiful workspace that loads + previews a project.
-- **S1.1 Layout** — [UI] resizable 3-pane (prompt | editor | preview) + bottom logs; persist sizes. [DM] spring-resize, pane focus spotlight.
-- **S1.2 File tree** — [UI] tree from project files; active-file highlight. [DM] stagger-in, expand/collapse spring, hover lift.
-- **S1.3 Code editor** — [UI] Monaco (`@monaco-editor/react`), dark theme, tabs, dirty-state dot. [DM] animated tab switch (layout animation), cursor/save feedback.
-- **S1.4 Live preview** — [UI] iframe → container preview URL; device-size toggle; refresh. [DM] "boot" reveal (skeleton shimmer → fade-in), refresh pulse.
-- **S1.5 Logs panel** — [UI] stream `/logs` (install/dev/runtime), severity colors, autoscroll. [DM] new-line slide-in, error shake.
-- **S1.6 Run/Stop** — [UI] controls + run status chip. [DM] StatusPulse (starting/live/error), magnetic primary button.
-- **S1.7 Load saved project** — [BE/UI] projects CRUD list + open. [DM] card grid stagger, open transition.
-- **S1.8 Responsive** — [UI] tablet/mobile read+preview layout.
-- **QA:** open project → files render → edit (local) → preview shows container → logs stream → Stop ends run + meters. Reduced-motion calm. Lighthouse/interaction smoke.
-- **Demo:** open a project, edit code, live preview, all animated.
+- ✅ **S1.1 Layout** — `ResizableSplit` (draggable gutters, sizes persisted to localStorage); wide = 3-column workspace over the logs console, small = stacked.
+- ✅ **S1.2 File tree** — nested folder tree, expand/collapse, active highlight, dirty dots, stagger-in.
+- ✅ **S1.3 Code editor** — Monaco (`@monaco-editor/react`), per-file models, tabs with dirty dot + active underline, theme-aware.
+- ✅ **S1.4 Live preview** — `PreviewFrame`: device-size toggle (desktop/tablet/mobile frame), refresh, open-in-tab, boot reveal (shimmer → fade-in).
+- ✅ **S1.5 Logs panel** — `LogsConsole` (severity colours, monospace, autoscroll + clear); Run live streams lifecycle lines (worker `/logs` stream wires in Sprint 2+).
+- ✅ **S1.6 Run/Stop** — controls + `StatusPulse` (idle/starting/live/error); Run runs the working copy.
+- ✅ **S1.7 Load saved project** — `StudioStart` gallery (list/open/delete via `/api/studio/projects*`); open hydrates the workspace.
+- ✅ **S1.8 Responsive** — stacked, scrollable layout under `lg`.
+- ➕ **Bonus:** three-theme design system (Black / White / DreamStream), Code-Studio-only.
+- **QA:** ~57 studio unit tests (kit, theme, workspace store, file tree, tabs, logs, preview, split math, start screen) + typecheck + production build green.
 
 ### Sprint 2 — The agentic build (the Lovable moment)
 **Goal:** prompt → built, running app, self-fixes — beautifully visualized.

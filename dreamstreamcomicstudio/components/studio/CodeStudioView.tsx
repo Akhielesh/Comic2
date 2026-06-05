@@ -16,8 +16,9 @@ import type { CodeStudioArtifact } from '../../apiTypes';
 import { Reveal, Skeleton, StatusPulse, Lift, ThemeSwitcher, ResizableSplit, useIsWide, useStudioTheme } from './kit';
 import type { RunStatus } from './kit';
 import {
-  CodeWorkspace, LogsConsole, PreviewFrame, useStudioWorkspace, useStudioLogs, isPathDirty, workspaceToArtifact,
+  CodeWorkspace, LogsConsole, PreviewFrame, useStudioWorkspace, useStudioLogs, isPathDirty, workspaceCurrentArtifact,
 } from './workspace';
+import { StudioStart } from './StudioStart';
 import { launchLiveStudio, stopLiveStudio } from '../../services/studioApi';
 import { isLiveStudioEnabled } from '../../services/studioFlags';
 import { downloadArtifactZip } from '../../services/studioLauncher';
@@ -52,6 +53,8 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const wide = useIsWide();
   const enabled = isAdmin || isLiveStudioEnabled();
   const loadArtifact = useStudioWorkspace((s) => s.loadArtifact);
+  const wsTitle = useStudioWorkspace((s) => s.title);
+  const wsTemplate = useStudioWorkspace((s) => s.template);
   const wsFiles = useStudioWorkspace((s) => s.files);
   const wsBaseline = useStudioWorkspace((s) => s.baseline);
   const wsPaths = useStudioWorkspace((s) => s.paths);
@@ -60,6 +63,12 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const dirtyCount = useMemo(
     () => wsPaths.filter((p) => isPathDirty({ files: wsFiles, baseline: wsBaseline }, p)).length,
     [wsPaths, wsFiles, wsBaseline]
+  );
+  // The runnable app, built purely from the workspace store (works for chat hand-offs AND
+  // projects opened from the start screen — read the working copy so edits boot).
+  const currentArtifact = useMemo(
+    () => workspaceCurrentArtifact({ title: wsTitle, template: wsTemplate, files: wsFiles, paths: wsPaths }),
+    [wsTitle, wsTemplate, wsFiles, wsPaths]
   );
 
   // Load the handed-off app into the editor workspace.
@@ -75,15 +84,13 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const [error, setError] = useState<string | null>(null);
 
   const runLive = async () => {
-    if (!artifact) return;
+    if (!hasFiles) return;
     setStatus('starting');
     setError(null);
     setPreviewUrl(null);
-    appendLog('system', `Launching live container for "${artifact.title}"…`);
+    appendLog('system', `Launching live container for "${currentArtifact.title}"…`);
     try {
-      // Run the working copy (so live edits are what boots), not just the original hand-off.
-      const live = workspaceToArtifact(artifact, { files: wsFiles, paths: wsPaths });
-      const res = await launchLiveStudio(live);
+      const res = await launchLiveStudio(currentArtifact);
       setRunId(res.runId ?? null);
       if (res.previewUrl) {
         setPreviewUrl(res.previewUrl);
@@ -111,7 +118,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     appendLog('system', 'Run stopped.');
   };
 
-  const projectName = artifact?.title || 'Untitled project';
+  const projectName = wsTitle || 'Untitled project';
 
   // ---- Panes (defined once, placed into the resizable or stacked layout) ----
   const promptPane = (
@@ -158,10 +165,10 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     <PaneFrame title="Live preview" icon={<Cloud className="w-4 h-4" />}>
       {previewUrl ? (
         <PreviewFrame url={previewUrl} />
-      ) : !enabled && artifact ? (
+      ) : !enabled && hasFiles ? (
         // Non-admin: instant in-browser peek so the CTA never dead-ends (decision D3).
         <Suspense fallback={<div className="p-3"><Skeleton className="h-full min-h-[12rem] w-full" /></div>}>
-          <CodeStudioPanel data={artifact} editorHeight={420} />
+          <CodeStudioPanel data={currentArtifact} editorHeight={420} />
         </Suspense>
       ) : (
         <div className="h-full min-h-[14rem] flex flex-col items-center justify-center gap-3 p-6 text-center">
@@ -169,7 +176,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
             <Cloud className={`w-7 h-7 ${t.textFaint}`} />
           </div>
           <p className={`text-sm font-semibold ${t.textDim}`}>
-            {artifact ? 'Press Run live to boot this app in a cloud container.' : 'Your live app will appear here.'}
+            Press Run live to boot this app in a cloud container.
           </p>
           {status === 'starting' && (
             <div className="w-full max-w-xs space-y-2"><Skeleton className="h-3 w-full" /><Skeleton className="h-3 w-2/3" /></div>
@@ -223,7 +230,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
               <Lift>
                 <button
                   onClick={runLive}
-                  disabled={!enabled || !artifact || status === 'starting'}
+                  disabled={!enabled || !hasFiles || status === 'starting'}
                   title={enabled ? 'Run this app on a live cloud container' : 'Code Studio is in private preview'}
                   className={`flex items-center gap-1.5 text-sm font-bold rounded-full px-3.5 py-1.5 ${t.accentText} ${t.accentBg} ${t.accentBgHover} disabled:opacity-50 disabled:cursor-not-allowed ${t.focusRing}`}
                 >
@@ -239,9 +246,9 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
             >
               <Share2 className="w-3.5 h-3.5" /> Share
             </button>
-            {artifact && (
+            {hasFiles && (
               <button
-                onClick={() => void downloadArtifactZip(artifact)}
+                onClick={() => void downloadArtifactZip(currentArtifact)}
                 title="Download all files as a .zip"
                 className={`flex items-center gap-1.5 text-sm font-semibold rounded-full border ${t.edge} px-3 py-1.5 ${t.textDim} ${t.hover} ${t.focusRing}`}
               >
@@ -273,8 +280,10 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
         </div>
       )}
 
-      {/* Workspace: resizable on wide screens, stacked on small ones */}
-      {wide ? (
+      {/* No app loaded → the projects start screen (S1.7). Otherwise the workspace. */}
+      {!hasFiles ? (
+        <StudioStart onNavigate={onNavigate} />
+      ) : wide ? (
         <div className="flex-1 min-h-0 p-3">
           <ResizableSplit direction="vertical" storageKey="studio.split.v" initial={[3.2, 1]} minPx={110}>
             <ResizableSplit direction="horizontal" storageKey="studio.split.h" initial={[2.4, 3.4, 3.2]} minPx={220}>

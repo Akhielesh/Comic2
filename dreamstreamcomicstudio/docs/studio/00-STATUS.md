@@ -20,7 +20,7 @@
 
 ```
 Foundation  ██████████████████░░  ~90%   (infra LIVE: worker + DNS + DB migrations + CORS fix; control plane + persistence + GitHub sync shipped)
-Experience  ████████░░░░░░░░░░░░  ~40%   (Code Studio route skeleton + Motion Kit + one-CTA hand-off shipped (Sprint 0 FE); Run-live wired; platform AI 9/10/11 backends shipped, client UIs partial)
+Experience  ███████████░░░░░░░░░  ~55%   (Sprint 0 + Sprint 1 SHIPPED: full Code Studio workspace — Monaco editor, file tree, tabs, resizable panes, logs console, device-frame preview, load-saved-projects, 3 themes; Sprint 2 agentic build next)
 ```
 
 **Where we are:** infra is **live** (Cloudflare Worker deployed, wildcard preview DNS up,

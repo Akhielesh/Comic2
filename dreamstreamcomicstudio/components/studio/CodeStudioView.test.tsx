@@ -7,10 +7,13 @@ import { render, screen } from '@testing-library/react';
 import type { CodeStudioArtifact } from '../../apiTypes';
 
 // Isolate the view from the API client (which constructs a Supabase client at import time
-// and throws when env is unset). We only need the launch/stop signatures here.
+// and throws when env is unset). We only need the launch/stop + projects signatures here.
 vi.mock('../../services/studioApi', () => ({
   launchLiveStudio: vi.fn(async () => ({ sandboxId: 's', projectId: 'p' })),
   stopLiveStudio: vi.fn(async () => ({ status: 'stopped' })),
+  listStudioProjects: vi.fn(async () => []),
+  getStudioProject: vi.fn(async () => ({ id: 'p', title: 'P', template: 'react-ts', files: [] })),
+  deleteStudioProject: vi.fn(async () => {}),
 }));
 vi.mock('../../services/studioLauncher', () => ({
   downloadArtifactZip: vi.fn(async () => {}),
@@ -59,10 +62,10 @@ describe('CodeStudioView', () => {
     expect(screen.getByRole('button', { name: /run live/i })).toBeDisabled();
   });
 
-  it('still renders the shell when no app has been handed off (admin empty state)', () => {
+  it('shows the projects start screen when nothing is loaded (Run live disabled)', () => {
     render(<CodeStudioView artifact={null} isAdmin onBack={vi.fn()} onNavigate={vi.fn()} />);
-    expect(screen.getByText(/your live app will appear here/i)).toBeInTheDocument();
-    // Run live is disabled until there is an app to run
+    expect(screen.getByText('Your projects')).toBeInTheDocument();
+    // Run live is disabled until an app is loaded
     expect(screen.getByRole('button', { name: /run live/i })).toBeDisabled();
   });
 });

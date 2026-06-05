@@ -108,6 +108,14 @@ export const postStream = async <TReq>(path: string, body: TReq, options?: { sig
   return res;
 };
 
+/** DELETE that returns parsed JSON. Throws ApiError on non-OK. */
+export const del = async <TRes>(path: string, options?: { signal?: AbortSignal }): Promise<TRes> => {
+  const headers = await buildRequestHeaders();
+  const res = await fetch(buildApiUrl(path), { method: 'DELETE', headers, signal: options?.signal });
+  if (!res.ok) throw await parseError(res);
+  return res.json() as Promise<TRes>;
+};
+
 export const get = async <TRes>(path: string, options?: { modelId?: string; signal?: AbortSignal }): Promise<TRes> => {
   const geminiKey = isProviderEnabled('gemini') ? (getActiveKeyValue('gemini') || getGeminiKey()) : null;
   const fluxKey = isProviderEnabled('pixazo') ? (getActiveKeyValue('pixazo') || getFluxKeyInfo().key) : null;
