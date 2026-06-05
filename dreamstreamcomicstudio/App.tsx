@@ -23,6 +23,7 @@ import { useProjectManager } from './hooks/useProjectManager';
 import { checkSystemDiagnostics, checkSystemStatus } from './services/geminiService';
 import { getFluxKeyInfo } from './services/appSettings';
 import { useAuth } from './contexts/AuthContext';
+import { useIsAdmin } from './hooks/useIsAdmin';
 import { AuthPage } from './components/AuthPage';
 import { AuthCallbackPage } from './components/AuthCallbackPage';
 import { supabase } from './services/supabase';
@@ -70,6 +71,7 @@ type PendingReaderTarget = {
 
 const App: React.FC = () => {
   const { user, loading: authLoading } = useAuth();
+  const isAdmin = useIsAdmin();
   const { projects, createProject, updateProject, deleteProject, duplicateProject, getProject, startGeneration, stopGeneration, hydrateProjectAssets } = useProjectManager();
 
   const [isCheckingKey, setIsCheckingKey] = useState(true);
@@ -87,6 +89,9 @@ const App: React.FC = () => {
 
   // Simple routing state
   const [currentView, setCurrentView] = useState<AppView>('home');
+  // Which tab the auth page opens on: existing users sign in; everyone else can
+  // request early access while new signups are invite-only.
+  const [authInitialMode, setAuthInitialMode] = useState<'signin' | 'request-access'>('signin');
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [publicProject, setPublicProject] = useState<Project | null>(null);
   const [viewedProfile, setViewedProfile] = useState<string | null>(null); // username
@@ -525,6 +530,11 @@ const App: React.FC = () => {
     }
   };
 
+  const goToAuth = (mode: 'signin' | 'request-access' = 'signin') => {
+    setAuthInitialMode(mode);
+    handleNavigate('auth');
+  };
+
   const handleStartChatWithModel = (model: { id: string; name: string; source: 'openrouter' | 'nvidia' }) => {
     setPendingChatModel(model);
     clearReaderUrlParams();
@@ -638,7 +648,15 @@ const App: React.FC = () => {
   // Hide the floating Universal Assistant on the full-screen chat product to avoid two stacked chat surfaces.
   const showUniversalAssistant = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat';
   // Show the global AI Chat FAB on every view except the chat page itself.
-  const showGlobalChatFAB = effectiveView !== 'chat' && effectiveView !== 'auth-callback' && effectiveView !== 'shared';
+  // The marketing home page already has prominent AI Chat entry points, so the
+  // floating "Open AI Chat" button is suppressed there to keep the landing clean.
+  const showGlobalChatFAB = effectiveView !== 'chat' && effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'home';
+
+  const goToStayUpdated = () => {
+    setCurrentView('home');
+    // Wait for the home view to mount before scrolling to the capture form.
+    setTimeout(() => document.getElementById('stay-updated')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 150);
+  };
 
   return (
     <ErrorBoundary>
@@ -647,12 +665,15 @@ const App: React.FC = () => {
           const header = (
             <StaticSiteHeader
               isAuthenticated={!!user}
+              isAdmin={isAdmin}
               currentView={effectiveView}
               onGoHome={handleBackToHome}
               onViewComics={() => handleNavigate('gallery')}
               onEnterStudio={() => handleNavigate('dashboard')}
               onEnterComicForge={() => handleNavigate('comicforge')}
-              onSignIn={() => handleNavigate('auth')}
+              onSignIn={() => goToAuth('signin')}
+              onRequestAccess={() => goToAuth('request-access')}
+              onNotify={goToStayUpdated}
               onOpenProfile={() => {
                 setSettingsTab('profile');
                 setSettingsReturnView(currentView);
@@ -690,6 +711,7 @@ const App: React.FC = () => {
 
           {effectiveView === 'auth' && (
             <AuthPage
+              initialMode={authInitialMode}
               onLoginSuccess={() => {
                 if (pendingReaderTarget) {
                   const target = pendingReaderTarget;

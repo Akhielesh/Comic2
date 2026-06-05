@@ -138,6 +138,35 @@ export const pickTextModel = async (opts?: PickOpts): Promise<string> => {
   }
 };
 
+// Strong coding-model families, best-first — used by the Studio agentic build loop's FIX
+// stage, where code quality matters most. Free-first still applies (strong-open default;
+// frontier coders via BYOK), but among eligible models these are preferred.
+export const CODING_MODEL_PRIORITY = [
+  'deepseek-coder', 'qwen-2.5-coder', 'qwen-coder', 'codestral', 'codellama', 'code-llama',
+  'deepseek-v3', 'deepseek-chat', 'deepseek', 'qwen-2.5', 'qwen', 'llama-3.3',
+  'gpt-4o', 'claude', 'gemini-2.0-flash', 'gemini'
+];
+
+/** True when a model id looks like a strong coding model. */
+export const prefersCodingModel = (m: AnnotatedModel): boolean => {
+  const id = m.id.toLowerCase();
+  return CODING_MODEL_PRIORITY.some((needle) => id.includes(needle));
+};
+
+/**
+ * Best model for code generation / fixing (the Studio build loop's FIX stage). Prefers
+ * strong coding families; free-first by default — pass `costPref:'quality'` for BYOK/credit
+ * users who want the strongest available coder. Falls back gracefully (via pickTextModel)
+ * when no coding-specific model is in the catalog.
+ */
+export const pickCodingModel = async (opts?: PickOpts): Promise<string> => {
+  const userPrefer = opts?.prefer;
+  const prefer = userPrefer
+    ? (m: AnnotatedModel) => prefersCodingModel(m) || userPrefer(m)
+    : prefersCodingModel;
+  return pickTextModel({ ...opts, prefer });
+};
+
 /**
  * Best image model. Under 'free-only', prefers NVIDIA's free-tier image models
  * (billing-bypassed via /api/image/nvidia, the genuinely-free image path) over

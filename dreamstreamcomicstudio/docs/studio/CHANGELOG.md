@@ -5,6 +5,103 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Admins are never feature-gated (Code Studio + Run live)
+Fix: admins couldn't see Code Studio or the live "Run live" button — both were gated by a
+build flag / a hardcoded "Soon", with no admin bypass.
+- `hooks/useIsAdmin.ts` — cached client admin signal (backed by `/api/admin/me`).
+- `CodeStudioCard.tsx` — "Run live" now shows when `isLiveStudioEnabled() || isAdmin`.
+- `StaticSiteHeader.tsx` — admins get a real **Open Code Studio** nav entry (→ chat) instead
+  of the "Soon" coming-soon capture; `App.tsx` passes `isAdmin`.
+- Confirmed `akhieleshsrirangam@gmail.com` has role `admin`, so this unblocks the owner to
+  exercise the live container path. Server still needs `STUDIO_WORKER_URL` set for a launch
+  to succeed (else a clear "not configured" error).
+- Findings logged: the in-chat preview is **Sandpack** (in-browser, no Vite) which mis-renders
+  Vite-style projects as "Hello world"; the Cloudflare container ("Run live") is the correct
+  engine. Making it the canonical Code Studio preview + improving generate_app model routing
+  are the next product steps.
+
+## 2026-06-05 · Claude — Phase 4: guard-railed FIX dep (createStudioFix)
+- `services/studioBuildService.ts` — `createStudioFix(complete, opts)` composes
+  `requestStudioFix` (observation-driven minimal-diff model call) with `sanitizeFixFiles`
+  (the guardrails) into the `fix(files, observation)` dep `runBuildAgent` expects. The
+  injected `complete` is the request-scoped model call (runChat + pickCodingModel).
+- Tests: drops unsafe paths from model output; passes the observation prompt through.
+- **Phase 4 backend is now complete + fully tested.** The only remaining piece is the
+  `/api/studio/build` SSE route (compose createWorkerRun + createStudioFix + an auth-scoped
+  `complete`, stream the trace) — best landed alongside a signed-in live validation — and
+  the `BuildTrace` client.
+
+## 2026-06-05 · Claude — Phase 4 guardrails: FIX-output safety + path-traversal hardening
+Safety rails for the autonomous build loop (and a security win for the existing launch path):
+- `services/studioFiles.ts` — `isSafeStudioPath` (rejects `..` traversal, NUL/backslash,
+  `~`, over-long) + `canonicalStudioPath` + `MAX_STUDIO_FILE_BYTES` (1 MiB/file).
+- Hardened `sanitizeFiles` (launch path) to drop traversal/oversized entries.
+- `sanitizeFixFiles(record, opts)` — guards each FIX iteration: rejects unsafe paths,
+  caps per-file + total bytes + file count (default 40), canonicalizes keys so merges
+  overwrite (fixes a latent duplicate-key bug between `studioFix` and `sanitizeFiles`), and
+  reports what it dropped (for the trace).
+- Tests: traversal/oversize/cap/canonicalization. Suite 372 green.
+
+## 2026-06-05 · Claude — Phase 4: live RUN capability (worker launch→logs→probe)
+- `server/src/services/studioBuildService.ts` — `createWorkerRun` builds the `run(files)`
+  dep for `runBuildAgent`: (re)launch the container, fetch dev logs, probe the preview's
+  HTTP status, normalize via `toRunResult`. Worker call + HTTP probe are injectable.
+  Plus `filesRecordToArray` (orchestrator map → worker file array) and `probePreview`.
+- Tests: `studioBuildService.test.ts` incl. an end-to-end `runBuildAgent` drive (missing
+  dep → injected fix → clean) using a mocked worker. Suite 368 green.
+- Remaining for the live loop: the `/api/studio/build` SSE route composing `createWorkerRun`
+  (run) + a request-scoped AI `complete` (fix, via runChat + pickCodingModel), then `BuildTrace`.
+
+## 2026-06-05 · Claude — Phase 4: shared Studio Worker client + run-result bridge
+- `server/src/services/studioWorker.ts` — single signed worker client (`callStudioWorker`,
+  `studioConfigured`) + a pure `toRunResult` mapping the worker's launch/logs/preview-probe
+  signals into the `RunResult` the observation parser consumes.
+- Refactored `routes/studio.ts` to use it — removed the duplicated `callWorker`/`notConfigured`
+  (DRY; one place owns HMAC signing + timeout).
+- Tests: `studioWorker.test.ts` (mapping + end-to-end into `buildObservation`). Suite 361 green.
+- Next: the `/api/studio/build` SSE route composing `runBuildAgent` with `callStudioWorker`
+  (run) + the platform AI client (fix), then the `BuildTrace` client.
+
+## 2026-06-05 · Claude — Phase 4 agentic build loop: deterministic core + coding router
+Built the logic-heavy half of the agentic build loop, fully unit-tested ahead of the live
+route (so it ships safely with zero behavior change — nothing calls it yet):
+- `server/src/ai/studio/observation.ts` — raw container signals (install stderr, Vite/TS
+  compile output, runtime console errors, preview HTTP status) → structured
+  `BuildObservation` (classified errors, unresolved module + `file:line:col`, stable
+  signature). Priority install → dev → runtime → http.
+- `buildGuards.ts` — loop termination: clean / iteration-cap / **stuck → ask the user**.
+- `buildAgent.ts` — `runBuildAgent` PLAN→RUN→OBSERVE→FIX orchestrator (DI'd run+fix, stage
+  event trace for the live panel).
+- `studioFix.ts` — server-side FIX: observation-driven minimal-diff prompt + tolerant JSON
+  parse (injected model call).
+- `autoRouter.ts` — `pickCodingModel` + `prefersCodingModel` route the FIX stage to strong
+  coding models (free-first; `quality` for BYOK).
+- Tests: observation/guards/buildAgent/studioFix/coding-router — **39 new cases, all green.**
+- **Next (live slice):** a `/api/studio/build` SSE route supplying real `run` (worker) +
+  `complete` (AI client), validated with a signed-in launch against the deployed worker.
+
+## 2026-06-05 · Claude — INFRA LIVE: deploy worker, fix CORS, apply DB migrations
+Brought the Cloudflare/Studio infra up end-to-end and unblocked the live site.
+- **Diagnosed the live site being broken:** the frontend served at `dreamstreamstudio.ai`
+  but every API call 403'd — the Railway backend's `CORS_ORIGIN` didn't include the new
+  domain. **Fix:** added `isAllowedOrigin()` in `server/src/config.ts` that always trusts
+  the brand domains + their subdomains over HTTPS (apex, www, `*.dreamstreamstudio.ai`
+  preview hosts), with look-alike/HTTP rejection + unit tests (`config.cors.test.ts`).
+  Wired into the CORS middleware (`server/src/index.ts`). **Merged to prod (PR #79) and
+  verified live** — `https://dreamstreamstudio.ai` now gets `access-control-allow-origin`.
+- **Studio Worker deployed:** `dreamstream-studio` is live on Cloudflare (owner ran
+  `wrangler deploy`; container image built + pushed after a Docker CLI update). Wildcard
+  preview DNS (`A * → 192.0.2.0`, proxied) added — `*.dreamstreamstudio.ai` now resolves
+  and routes to the worker. HMAC secret set on the worker + Railway.
+- **DB migrations applied** to the `Comic` project (`bdjfmxfmhqhzvgrhbbzm`): `studio_runs`,
+  `studio_projects` (+ files/versions/deployments), `custom_agents`, `mcp_servers` — 7
+  tables, all RLS-enabled; security advisors clean (only the standard GraphQL-visibility
+  WARNs shared by every table).
+- **Docs:** `00-STATUS.md` (Phase 0 ✅, Phase 1 deployed, new NEXT STEP), `OWNER-ACTIONS.md`
+  (live-state table + statuses) updated.
+- **Follow-ups:** confirm `VITE_STUDIO_LIVE_ENABLED=true` (Pages) + `STUDIO_WORKER_URL`
+  (Railway); run a signed-in launch round-trip to validate Phase 1 live; then Phase 4.
+
 ## 2026-06-05 · Claude — Wire the real domains (dreamstreamstudio.ai primary, .com → .ai)
 Owner bought `dreamstreamstudio.ai` + `dreamstreamstudio.com`. Wired them in:
 - Worker preview domain is now **configurable** (`STUDIO_PREVIEW_DOMAIN`) and **decoupled

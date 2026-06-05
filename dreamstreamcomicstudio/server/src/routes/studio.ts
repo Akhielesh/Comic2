@@ -9,15 +9,12 @@
 import { Router } from 'express';
 import crypto from 'crypto';
 import {
-  STUDIO_WORKER_URL,
-  STUDIO_HMAC_SECRET,
   STUDIO_MAX_CONCURRENT_PER_USER,
   STUDIO_DAILY_BUILD_MINUTES,
-  STUDIO_REQUEST_TIMEOUT_MS,
   STUDIO_COST_PER_AWAKE_SEC
 } from '../config.js';
 import { getSupabaseAdmin } from '../services/supabase.js';
-import { signStudioBody } from '../services/studioSign.js';
+import { callStudioWorker, studioConfigured } from '../services/studioWorker.js';
 import { evaluateLaunchAllowed } from '../services/studioCaps.js';
 import { sanitizeFiles, deriveProjectName } from '../services/studioFiles.js';
 import { saveProject, listProjects, getProjectWithFiles, deleteProject } from '../services/studioRepository.js';
@@ -28,41 +25,12 @@ export const studioRouter = Router();
 // GitHub two-way sync (Phase 6) — /api/studio/github/{repos,push,pull}.
 studioRouter.use('/github', studioGithubRouter);
 
-const notConfigured = (): boolean => !STUDIO_WORKER_URL || !STUDIO_HMAC_SECRET;
+const notConfigured = (): boolean => !studioConfigured();
 
 const notConfiguredResponse = {
   error: {
     message: 'Live Studio is not configured on this server yet (set STUDIO_WORKER_URL and STUDIO_HMAC_SECRET).',
     code: 'STUDIO_NOT_CONFIGURED'
-  }
-};
-
-/** Signed POST to the Studio Worker. */
-const callWorker = async (
-  payload: Record<string, unknown>
-): Promise<{ ok: boolean; status: number; json: any }> => {
-  const raw = JSON.stringify(payload);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), STUDIO_REQUEST_TIMEOUT_MS);
-  try {
-    const res = await fetch(STUDIO_WORKER_URL, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-studio-signature': signStudioBody(raw, STUDIO_HMAC_SECRET)
-      },
-      body: raw,
-      signal: controller.signal
-    });
-    let json: any = null;
-    try {
-      json = await res.json();
-    } catch {
-      /* non-JSON body */
-    }
-    return { ok: res.ok, status: res.status, json };
-  } finally {
-    clearTimeout(timer);
   }
 };
 
@@ -122,7 +90,7 @@ studioRouter.post('/launch', async (req, res, next) => {
     }
 
     const sandboxId = `u_${userId}_${projectId}`;
-    const worker = await callWorker({ action: 'launch', sandboxId, files, install: body.install, dev: body.dev, port });
+    const worker = await callStudioWorker({ action: 'launch', sandboxId, files, install: body.install, dev: body.dev, port });
     if (!worker.ok || worker.json?.status === 'error') {
       return res.status(502).json({
         error: {
@@ -183,7 +151,7 @@ studioRouter.post('/:id/stop', async (req, res, next) => {
       .single();
     if (!run) return res.status(404).json({ error: { message: 'Run not found.' } });
 
-    await callWorker({ action: 'stop', sandboxId: run.sandbox_id }).catch(() => null);
+    await callStudioWorker({ action: 'stop', sandboxId: run.sandbox_id }).catch(() => null);
 
     const awakeSeconds = run.ended_at
       ? run.awake_seconds || 0
@@ -219,7 +187,7 @@ studioRouter.get('/:id/logs', async (req, res, next) => {
       .single();
     if (!run?.sandbox_id) return res.status(404).json({ error: { message: 'Run not found.' } });
 
-    const worker = await callWorker({ action: 'logs', sandboxId: run.sandbox_id });
+    const worker = await callStudioWorker({ action: 'logs', sandboxId: run.sandbox_id });
     if (!worker.ok || worker.json?.status === 'error') {
       return res.status(502).json({
         error: { message: worker.json?.message || `Studio worker logs failed (HTTP ${worker.status}).`, code: 'STUDIO_WORKER_ERROR' }
