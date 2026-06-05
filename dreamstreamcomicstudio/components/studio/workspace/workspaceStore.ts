@@ -19,6 +19,8 @@ const pickEntry = (paths: string[]): string | null => {
 interface WorkspaceState {
   /** Loaded artifact id-ish (title) so we only reload on a genuinely new app. */
   loadedKey: string | null;
+  /** Persisted project id (set when opening a saved project or after a Build). */
+  projectId: string | null;
   /** Project name of the loaded app. */
   title: string;
   /** Template of the loaded app (drives the runtime). */
@@ -52,6 +54,10 @@ interface WorkspaceState {
   deleteFile: (path: string) => void;
   /** Rename a file, preserving content + dirty state. No-op if the target exists. */
   renameFile: (from: string, to: string) => void;
+  /** Set the persisted project id (e.g. from a Build's start event). */
+  setProjectId: (id: string | null) => void;
+  /** Replace the whole file set as a fresh clean baseline (e.g. restoring a version). */
+  replaceFiles: (files: { path: string; content: string }[]) => void;
   /** Clear everything. */
   reset: () => void;
 }
@@ -75,6 +81,7 @@ export const renameInDir = (path: string, newName: string): string => {
 
 export const useStudioWorkspace = create<WorkspaceState>((set, get) => ({
   loadedKey: null,
+  projectId: null,
   title: '',
   template: 'react-ts',
   files: {},
@@ -96,6 +103,7 @@ export const useStudioWorkspace = create<WorkspaceState>((set, get) => ({
     const entry = pickEntry(paths);
     set({
       loadedKey: key,
+      projectId: (artifact as { id?: string }).id ?? null,
       title: artifact.title,
       template: artifact.template,
       files,
@@ -166,7 +174,25 @@ export const useStudioWorkspace = create<WorkspaceState>((set, get) => ({
     };
   }),
 
-  reset: () => set({ loadedKey: null, title: '', template: 'react-ts', files: {}, baseline: {}, paths: [], openPaths: [], activePath: null }),
+  setProjectId: (id) => set({ projectId: id }),
+
+  replaceFiles: (fileArr) => set((s) => {
+    const files: Record<string, string> = {};
+    const paths: string[] = [];
+    for (const f of fileArr) { files[f.path] = f.content; paths.push(f.path); }
+    paths.sort((a, b) => a.localeCompare(b));
+    const entry = pickEntry(paths);
+    return {
+      files,
+      baseline: { ...files },
+      paths,
+      openPaths: entry ? [entry] : [],
+      activePath: entry,
+      loadedKey: `${s.title}::restore::${Date.now()}`,
+    };
+  }),
+
+  reset: () => set({ loadedKey: null, projectId: null, title: '', template: 'react-ts', files: {}, baseline: {}, paths: [], openPaths: [], activePath: null }),
 }));
 
 // ---- Pure selectors / helpers (unit-testable without React) ----------------------------

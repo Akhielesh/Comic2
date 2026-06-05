@@ -151,3 +151,29 @@ describe('file ops', () => {
     expect(s.files['/index.tsx']).toBe('I');
   });
 });
+
+describe('project id + restore', () => {
+  beforeEach(() => useStudioWorkspace.getState().reset());
+
+  it('loadArtifact picks up an id when present', () => {
+    useStudioWorkspace.getState().loadArtifact({ ...artifact, id: 'proj-1' } as CodeStudioArtifact & { id: string });
+    expect(useStudioWorkspace.getState().projectId).toBe('proj-1');
+  });
+
+  it('setProjectId updates the id', () => {
+    useStudioWorkspace.getState().setProjectId('proj-2');
+    expect(useStudioWorkspace.getState().projectId).toBe('proj-2');
+  });
+
+  it('replaceFiles swaps the file set as a clean baseline', () => {
+    const ws = useStudioWorkspace.getState();
+    ws.loadArtifact(artifact);
+    ws.updateContent('/index.tsx', 'edited');
+    ws.replaceFiles([{ path: '/only.tsx', content: 'X' }]);
+    const s = useStudioWorkspace.getState();
+    expect(s.paths).toEqual(['/only.tsx']);
+    expect(s.files['/only.tsx']).toBe('X');
+    expect(dirtyPaths(s)).toEqual([]); // restored = clean
+    expect(s.activePath).toBe('/only.tsx');
+  });
+});

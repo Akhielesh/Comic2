@@ -19,7 +19,7 @@ import {
 } from './kit';
 import type { RunStatus, Command } from './kit';
 import {
-  CodeWorkspace, LogsConsole, PreviewFrame, BuildTrace, ChangesPanel, useStudioBuild,
+  CodeWorkspace, LogsConsole, PreviewFrame, BuildTrace, ChangesPanel, HistoryPanel, useStudioBuild,
   useStudioWorkspace, useStudioLogs, isPathDirty, workspaceCurrentArtifact,
 } from './workspace';
 import { StudioStart } from './StudioStart';
@@ -63,6 +63,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const wsFiles = useStudioWorkspace((s) => s.files);
   const wsBaseline = useStudioWorkspace((s) => s.baseline);
   const wsPaths = useStudioWorkspace((s) => s.paths);
+  const wsProjectId = useStudioWorkspace((s) => s.projectId);
   const appendLog = useStudioLogs((s) => s.append);
   const revertFile = useStudioWorkspace((s) => s.revertFile);
   const setTheme = useStudioThemeStore((s) => s.setTheme);
@@ -124,9 +125,9 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     appendLog('system', `Building "${currentArtifact.title}" with self-healing…`);
     try {
       await streamStudioBuild(
-        { title: currentArtifact.title, template: currentArtifact.template, files: currentArtifact.files },
+        { projectId: wsProjectId ?? undefined, title: currentArtifact.title, template: currentArtifact.template, files: currentArtifact.files },
         {
-          onStart: (d) => setRunId(d.runId ?? null),
+          onStart: (d) => { setRunId(d.runId ?? null); if (d.projectId) useStudioWorkspace.getState().setProjectId(d.projectId); },
           onEvent: (e) => {
             useStudioBuild.getState().pushEvent(e);
             appendLog(stageLevel(e.stage), `[${e.stage}] ${e.message}`);
@@ -211,6 +212,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
         </div>
         <ChangesPanel />
         <BuildTrace />
+        <HistoryPanel />
       </div>
     </PaneFrame>
   );

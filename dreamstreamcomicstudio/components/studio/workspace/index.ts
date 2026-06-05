@@ -10,6 +10,7 @@ export { useStudioBuild } from './buildStore';
 export { ChangesPanel } from './ChangesPanel';
 export { DiffView } from './DiffView';
 export { diffLines, diffStat } from './diff';
+export { HistoryPanel } from './HistoryPanel';
 export { useStudioLogs, MAX_LOG_ENTRIES } from './logsStore';
 export type { LogEntry, LogLevel } from './logsStore';
 export { MonacoEditor } from './MonacoEditor';

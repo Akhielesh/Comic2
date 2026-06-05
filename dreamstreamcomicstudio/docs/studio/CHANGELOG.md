@@ -5,6 +5,22 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Sprint 3: version history + restore (S3.3, full)
+Additive, read-only backend + UI (no change to existing behaviour):
+- **Backend** — `studioRepository.listVersions` / `getVersionFiles` (ownership-scoped) + routes
+  **`GET /api/studio/projects/:id/versions`** and **`.../versions/:vid`**. Server typechecks.
+- **Build now persists to a stable project** — the client sends the workspace `projectId` and
+  adopts the one the route returns (`onStart`), so rebuilds update the same project and
+  accumulate versions (instead of spawning a new project each time).
+- **Workspace store** — `projectId` (+ `setProjectId`), and `replaceFiles` (restore a version as
+  a fresh clean baseline; non-destructive — building snapshots a new version).
+- **`workspace/HistoryPanel.tsx`** — a collapsible **History** list in the Prompt/Build pane:
+  per-version label, author (agent/user), relative time, and **Restore**.
+- Client `listStudioVersions` / `getStudioVersionFiles`. Tests: store (projectId/replaceFiles) +
+  `historyPanel.test.tsx` (list + restore). 70 studio tests; client + server typecheck + build green.
+- ⚠️ The new routes are DB-bound (unit tests cover the pure store/UI, not the Supabase calls);
+  wants a signed-in validation against the live DB.
+
 ## 2026-06-05 · Claude — Sprint 4: keyboard-shortcuts help overlay (S4.2)
 - **`kit/ShortcutsHelp.tsx`** — a themed, portaled modal listing the studio shortcuts (⌘K, ⌘B,
   ⌘↵, ⌘S, Esc). Opened from a top-bar **?** button + a **Keyboard shortcuts** palette command.

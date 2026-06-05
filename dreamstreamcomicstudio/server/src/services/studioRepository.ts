@@ -117,6 +117,57 @@ export const getProjectWithFiles = async (
   return { project, files: files || [] };
 };
 
+export interface StudioVersionSummary {
+  id: string;
+  label: string | null;
+  createdBy: string;
+  createdAt: string;
+}
+
+/** List a project's versions (most recent first). Returns null if the project isn't the user's. */
+export const listVersions = async (userId: string, projectId: string): Promise<StudioVersionSummary[] | null> => {
+  const admin = getSupabaseAdmin();
+  const { data: project } = await admin
+    .from('studio_projects')
+    .select('id')
+    .eq('id', projectId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (!project) return null;
+  const { data } = await admin
+    .from('studio_versions')
+    .select('id, label, created_by, created_at')
+    .eq('project_id', projectId)
+    .order('created_at', { ascending: false })
+    .limit(50);
+  return (data || []).map((v) => ({ id: v.id, label: v.label, createdBy: v.created_by, createdAt: v.created_at }));
+};
+
+/** Fetch a version's file tree. Returns null if the project/version isn't the user's. */
+export const getVersionFiles = async (
+  userId: string,
+  projectId: string,
+  versionId: string
+): Promise<{ path: string; content: string }[] | null> => {
+  const admin = getSupabaseAdmin();
+  const { data: project } = await admin
+    .from('studio_projects')
+    .select('id')
+    .eq('id', projectId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (!project) return null;
+  const { data: version } = await admin
+    .from('studio_versions')
+    .select('files')
+    .eq('id', versionId)
+    .eq('project_id', projectId)
+    .maybeSingle();
+  if (!version) return null;
+  const map = (version.files || {}) as Record<string, string>;
+  return Object.entries(map).map(([path, content]) => ({ path, content: String(content) }));
+};
+
 export const deleteProject = async (userId: string, projectId: string): Promise<boolean> => {
   const admin = getSupabaseAdmin();
   const { data } = await admin

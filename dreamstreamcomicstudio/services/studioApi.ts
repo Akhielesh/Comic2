@@ -67,3 +67,18 @@ export const getStudioProject = async (id: string): Promise<CodeStudioArtifact &
 export const deleteStudioProject = async (id: string): Promise<void> => {
   await del<{ deleted: boolean }>(`/api/studio/projects/${encodeURIComponent(id)}`);
 };
+
+export interface StudioVersionSummary {
+  id: string;
+  label: string | null;
+  createdBy: string;
+  createdAt: string;
+}
+
+/** A project's version history (most recent first). */
+export const listStudioVersions = async (projectId: string): Promise<StudioVersionSummary[]> =>
+  (await get<{ versions: StudioVersionSummary[] }>(`/api/studio/projects/${encodeURIComponent(projectId)}/versions`)).versions;
+
+/** A version's file tree (for restore). */
+export const getStudioVersionFiles = async (projectId: string, versionId: string): Promise<{ path: string; content: string }[]> =>
+  (await get<{ files: { path: string; content: string }[] }>(`/api/studio/projects/${encodeURIComponent(projectId)}/versions/${encodeURIComponent(versionId)}`)).files;

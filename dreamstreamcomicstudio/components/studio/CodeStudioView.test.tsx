@@ -14,6 +14,8 @@ vi.mock('../../services/studioApi', () => ({
   listStudioProjects: vi.fn(async () => []),
   getStudioProject: vi.fn(async () => ({ id: 'p', title: 'P', template: 'react-ts', files: [] })),
   deleteStudioProject: vi.fn(async () => {}),
+  listStudioVersions: vi.fn(async () => []),
+  getStudioVersionFiles: vi.fn(async () => []),
 }));
 vi.mock('../../services/studioLauncher', () => ({
   downloadArtifactZip: vi.fn(async () => {}),

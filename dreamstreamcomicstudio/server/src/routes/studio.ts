@@ -19,7 +19,7 @@ import { callStudioWorker, studioConfigured } from '../services/studioWorker.js'
 import { createWorkerRun, createStudioFix } from '../services/studioBuildService.js';
 import { evaluateLaunchAllowed } from '../services/studioCaps.js';
 import { sanitizeFiles, deriveProjectName } from '../services/studioFiles.js';
-import { saveProject, listProjects, getProjectWithFiles, deleteProject } from '../services/studioRepository.js';
+import { saveProject, listProjects, getProjectWithFiles, deleteProject, listVersions, getVersionFiles } from '../services/studioRepository.js';
 import { runBuildAgent } from '../ai/studio/buildAgent.js';
 import { pickCodingModel, TEXT_FALLBACK } from '../ai/autoRouter.js';
 import { runChat } from '../ai/chat.js';
@@ -384,6 +384,28 @@ studioRouter.get('/projects/:id', async (req, res, next) => {
     const data = await getProjectWithFiles(req.user!.id, req.params.id);
     if (!data) return res.status(404).json({ error: { message: 'Project not found.' } });
     res.json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/studio/projects/:id/versions — version history (most recent first).
+studioRouter.get('/projects/:id/versions', async (req, res, next) => {
+  try {
+    const versions = await listVersions(req.user!.id, req.params.id);
+    if (versions === null) return res.status(404).json({ error: { message: 'Project not found.' } });
+    res.json({ versions });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/studio/projects/:id/versions/:versionId — a version's file tree (for restore).
+studioRouter.get('/projects/:id/versions/:versionId', async (req, res, next) => {
+  try {
+    const files = await getVersionFiles(req.user!.id, req.params.id, req.params.versionId);
+    if (files === null) return res.status(404).json({ error: { message: 'Version not found.' } });
+    res.json({ files });
   } catch (err) {
     next(err);
   }
