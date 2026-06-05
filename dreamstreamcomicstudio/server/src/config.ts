@@ -176,6 +176,34 @@ export const COMICFORGE_JOB_RETENTION_DAYS = parseIntegerEnv(
   1
 );
 
+// --- Studio v2 (Cloudflare container live previews) ---
+// The control plane (/api/studio/*) brokers signed requests to the Studio Worker. Both
+// values must be set for live Studio to work; otherwise /api/studio returns 503.
+export const STUDIO_WORKER_URL = process.env.STUDIO_WORKER_URL || '';
+export const STUDIO_HMAC_SECRET = process.env.STUDIO_HMAC_SECRET || '';
+// Per-user cost-safety caps.
+export const STUDIO_MAX_CONCURRENT_PER_USER = parseIntegerEnv(
+  process.env.STUDIO_MAX_CONCURRENT_PER_USER,
+  2,
+  'STUDIO_MAX_CONCURRENT_PER_USER',
+  1
+);
+export const STUDIO_DAILY_BUILD_MINUTES = parseIntegerEnv(
+  process.env.STUDIO_DAILY_BUILD_MINUTES,
+  120,
+  'STUDIO_DAILY_BUILD_MINUTES',
+  1
+);
+export const STUDIO_REQUEST_TIMEOUT_MS = parseIntegerEnv(
+  process.env.STUDIO_REQUEST_TIMEOUT_MS,
+  120_000,
+  'STUDIO_REQUEST_TIMEOUT_MS',
+  1_000
+);
+// Advisory $/awake-second for cost display (≈ standard-3: memory+CPU ≈ $0.1/hr). Keep in
+// sync with docs/studio/CLOUDFLARE_STUDIO_PLAN.md.
+export const STUDIO_COST_PER_AWAKE_SEC = Number(process.env.STUDIO_COST_PER_AWAKE_SEC || '0.00003');
+
 export const REQUIRED_RUNTIME_ENV_VARS = ['CORS_ORIGIN', 'VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY'] as const;
 type RequiredRuntimeEnv = (typeof REQUIRED_RUNTIME_ENV_VARS)[number];
 export const REQUIRED_BILLING_ENV_VARS = [

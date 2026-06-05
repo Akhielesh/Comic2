@@ -5,9 +5,10 @@ touching anything. These docs are written so you can start cold and continue cor
 
 ## 1. Orient yourself (in this order)
 1. [`00-STATUS.md`](./00-STATUS.md) — what's done, the current phase, the next step, blockers.
-2. [`CHANGELOG.md`](./CHANGELOG.md) — what previous agents did (newest first).
-3. [`01-VISION.md`](./01-VISION.md) + [`02-CURRENT-STATE.md`](./02-CURRENT-STATE.md) — the goal and the honest gap.
-4. The **current phase doc** in [`phases/`](./phases/) — your task list + acceptance criteria.
+2. [`OWNER-ACTIONS.md`](./OWNER-ACTIONS.md) — what's waiting on the owner + what's built-but-not-validated.
+3. [`CHANGELOG.md`](./CHANGELOG.md) — what previous agents did (newest first).
+4. [`01-VISION.md`](./01-VISION.md) + [`02-CURRENT-STATE.md`](./02-CURRENT-STATE.md) — the goal and the honest gap.
+5. The **current phase doc** in [`phases/`](./phases/) — your task list + acceptance criteria.
 
 ## 2. The repo (where things live)
 - App root: `dreamstreamcomicstudio/` (the git repo root is its parent, `Comic2/`).
@@ -22,7 +23,9 @@ touching anything. These docs are written so you can start cold and continue cor
 ## 3. MANDATORY after any change
 1. **Update [`00-STATUS.md`](./00-STATUS.md)** — phase status, next step, blockers, "last updated".
 2. **Append to [`CHANGELOG.md`](./CHANGELOG.md)** — date, what you did, files touched, follow-ups.
-3. If you changed a design, update the relevant phase/spec doc so docs never drift from code.
+3. **Update [`OWNER-ACTIONS.md`](./OWNER-ACTIONS.md)** whenever a new owner action, deferred
+   validation, open decision, or PR appears (or one is resolved) — this is the owner's resume anchor.
+4. If you changed a design, update the relevant phase/spec doc so docs never drift from code.
 
 > The whole point of this system is that the owner only has to check `00-STATUS.md`.
 > If you leave it stale, you've broken the system.

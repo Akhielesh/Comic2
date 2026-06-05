@@ -1,6 +1,6 @@
 # Phase 3 — Studio UI shell
 
-**Status:** 📋 planned — **buildable now** · **Depends on:** Phase 2 for live wiring · **Effort:** 3–5 days
+**Status:** 🟡 **in progress** — 3a (client "Run live" wiring, flag-gated) done 2026-06-05; 3b (shell/editor/preview/logs) next · **Depends on:** Phase 2 for live wiring · **Effort:** 3–5 days
 
 ## Goal
 The studio interface: chat that builds, a live preview, and a "Run live" path that opens

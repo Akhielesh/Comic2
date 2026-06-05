@@ -1,6 +1,6 @@
 # Phase 2 — Railway control plane (`/api/studio/*`)
 
-**Status:** 📋 planned — **buildable & testable in-repo now** · **Depends on:** Phase 1 to wire live · **Effort:** 2–3 days
+**Status:** 🟢 **built + verified — in review** (2026-06-05; see CHANGELOG audit) · **Depends on:** Phase 1 to wire live · **Effort:** 2–3 days
 
 ## Goal
 A backend control plane that authenticates the user, meters usage, enforces caps, and
