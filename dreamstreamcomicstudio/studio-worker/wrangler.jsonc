@@ -23,6 +23,10 @@
   "migrations": [{ "new_sqlite_classes": ["Sandbox"], "tag": "v1" }],
 
   // Preview URLs need a custom domain with WILDCARD DNS — *.workers.dev will NOT work.
-  // Replace dreamstream.app with your real zone.
-  "routes": [{ "pattern": "*.studio.dreamstream.app/*", "zone_name": "dreamstream.app" }]
+  // Two routes: the control host (Railway → launch/stop) AND the wildcard (preview URLs
+  // like 3001-<sandbox>-<token>.studio.<domain>). Replace dreamstream.app with your zone.
+  "routes": [
+    { "pattern": "studio.dreamstream.app/*", "zone_name": "dreamstream.app" },
+    { "pattern": "*.studio.dreamstream.app/*", "zone_name": "dreamstream.app" }
+  ]
 }

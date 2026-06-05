@@ -10,7 +10,7 @@
 // `wrangler deploy` (method names/return shapes may need minor tweaks per SDK version).
 // See README.md for setup, and ../docs/CLOUDFLARE_STUDIO_PLAN.md for the full design.
 
-import { getSandbox } from '@cloudflare/sandbox';
+import { getSandbox, proxyToSandbox } from '@cloudflare/sandbox';
 export { Sandbox } from '@cloudflare/sandbox';
 
 export interface Env {
@@ -60,6 +60,12 @@ async function verifyHmac(req: Request, rawBody: string, secret: string): Promis
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
+    // 1) Preview-URL requests (browser → the running app) get proxied to the right
+    //    container. proxyToSandbox returns a Response for preview hosts, else falsy.
+    const proxied = await proxyToSandbox(req, env);
+    if (proxied) return proxied;
+
+    // 2) Control-plane requests (from Railway only, HMAC-signed): launch / stop.
     if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
 
     const rawBody = await req.text();
