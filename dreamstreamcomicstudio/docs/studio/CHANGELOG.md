@@ -5,6 +5,13 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — build: split heavy vendors into cacheable chunks
+- `vite.config.ts` `manualChunks` splits framer-motion, sandpack/CodeMirror, react-markdown,
+  leaflet and jszip into their own vendor chunks. **Main entry: 638 kB → 272 kB** (gzip 82 kB);
+  heavy libs now cache independently of app code. `vendor-sandpack` (~982 kB) is lazy-loaded, so
+  the size-warning limit is set above it — build is now warning-free. (Build-only; no app behaviour
+  change.)
+
 ## 2026-06-05 · Claude — a11y: modal Escape + focus restore
 - **`kit/useDialogA11y.ts`** — while a portaled modal is open, **Escape closes it from anywhere**
   and focus is **restored** to the previously-focused element on close. Applied to the

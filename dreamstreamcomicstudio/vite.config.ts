@@ -41,10 +41,30 @@ export default defineConfig(({ mode }) => {
       }
     },
     build: {
+      // vendor-sandpack (CodeMirror + in-browser bundler) is inherently large but lazy-loaded
+      // (only the legacy Sandpack peek pulls it), so allow headroom past it.
+      chunkSizeWarningLimit: 1000,
       rollupOptions: {
         input: {
           main: path.resolve(__dirname, 'index.html'),
           studio: path.resolve(__dirname, 'studio.html')
+        },
+        output: {
+          // Split heavy, independently-cacheable vendors out of the entry chunks so a change
+          // to app code doesn't bust their cache (and the >500 kB warning clears).
+          manualChunks(id: string) {
+            if (!id.includes('node_modules')) return undefined;
+            if (id.includes('framer-motion')) return 'vendor-motion';
+            if (id.includes('@codesandbox/sandpack') || id.includes('@codemirror') || id.includes('codemirror')) return 'vendor-sandpack';
+            if (
+              id.includes('react-markdown') || id.includes('remark') || id.includes('rehype') ||
+              id.includes('micromark') || id.includes('mdast') || id.includes('hast') ||
+              id.includes('unist') || id.includes('vfile') || id.includes('property-information')
+            ) return 'vendor-markdown';
+            if (id.includes('leaflet')) return 'vendor-leaflet';
+            if (id.includes('jszip')) return 'vendor-jszip';
+            return undefined;
+          }
         }
       }
     },
