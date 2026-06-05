@@ -1,6 +1,16 @@
 # Phase 10 — Tools, MCP & sourcing upgrade (parallel workstream)
 
-**Status:** 📋 planned · **Parallel to** the Studio build · **Effort:** 1–2 weeks · **Spec:** [11-TOOLS-MCP-SOURCING.md](../11-TOOLS-MCP-SOURCING.md)
+**Status:** 🟢 **backend shipped** (JSON tool fallback [flag], server-side MCP registry, outbound MCP endpoint; OAuth/streaming MCP + dashboards deferred) · **Parallel to** the Studio build · **Effort:** 1–2 weeks · **Spec:** [11-TOOLS-MCP-SOURCING.md](../11-TOOLS-MCP-SOURCING.md)
+
+> **Shipped (2026-06-05):** `ai/tools/jsonToolProtocol.ts` lets non-OpenRouter models call
+> our tools via a JSON convention; wired into `runChat` behind `JSON_TOOL_PROTOCOL_ENABLED`
+> (off by default until validated) `+ test`. Server-side MCP registry:
+> `server/sql/mcp_servers.sql` (+ RLS + auto-disable), `services/mcpRegistry.ts`, curated
+> marketplace `ai/tools/mcpCatalog.ts`, CRUD via `routes/mcp.ts`; saved servers sync + merge
+> into chat (cap 6→10). **Outbound MCP server** (`mcpOutboundRouter`, `/api/connect/mcp`,
+> Bearer `MCP_OUTBOUND_TOKEN`) publishes our read-only tools as an authenticated MCP
+> endpoint. **Deferred:** OAuth + full streaming-SSE MCP client, action/write tools, the
+> Tools dashboard UI, and Tavily/Brave sourcing keys.
 
 ## Goal
 Make the capability surface reachable by every model, make MCP a real managed integration,

@@ -20,6 +20,8 @@ import {
   selectAgentsHeuristic,
   type AgentDefinition
 } from './registry.js';
+import { composePersona, withAgentPersona } from '../persona.js';
+import { verifyFindings, verificationBlock, type AgentFinding } from './verify.js';
 import type {
   ChatArtifact,
   ChatClientContext,
@@ -44,7 +46,9 @@ Rules:
 Return ONLY a JSON array, no prose:
 [{"agent":"<id>","task":"<instruction>"}]`;
 
-const SYNTH_SYSTEM = `You are the lead agent of a swarm. Specialized sub-agents have completed focused subtasks and their findings are provided to you. Synthesize them into ONE clear, accurate, well-structured answer that fully addresses the user's goal. Integrate and reconcile the findings, cite sources where given, prefer the most reliable information, and do not describe the orchestration process unless asked.`;
+const SYNTH_SYSTEM = composePersona(
+  `You are the lead agent of a swarm. Specialized sub-agents have completed focused subtasks and their findings are provided to you. Synthesize them into ONE clear, accurate, well-structured answer that fully addresses the user's goal. Integrate and reconcile the findings, cite sources where given, prefer the most reliable information, flag anything the agents could not verify, and do not describe the orchestration process unless asked.`
+);
 
 const MAX_AGENTS = 4;
 
@@ -127,6 +131,20 @@ const toolCtxFrom = (ctx?: ChatClientContext): ToolContext | undefined =>
     ? { timezone: ctx.timezone, locale: ctx.locale, units: ctx.units, location: ctx.location }
     : undefined;
 
+// Resilience (Phase 9): a single agent hiccup (a transient provider/network blip)
+// shouldn't drop a whole specialist from the answer. Retry the agent's call once on
+// failure with a short backoff; if it fails again, the caller records it as errored and
+// the verifier weights it to ~zero. Aborts (user cancelled) are never retried.
+const runWithRetry = async <T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> => {
+  try {
+    return await fn();
+  } catch (err) {
+    if (signal?.aborted || (err as Error)?.name === 'AbortError') throw err;
+    await new Promise((r) => setTimeout(r, 400));
+    return fn();
+  }
+};
+
 export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> => {
   const goal = lastUserText(params.messages).trim();
   // Prior conversation (everything before the current goal). Passing this to the planner
@@ -193,19 +211,24 @@ export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> 
       agents[i].status = 'running';
       emit();
       try {
-        const r = await runChat({
-          ...baseReq,
-          model: workerModel,
-          messages: [...priorMessages, { role: 'user', content: p.task }],
-          // Agent persona + the user's durable memory/persona, so agents share the same
-          // context the synthesizer and normal chat get (was persona-only — agents never
-          // saw who the user is or what they'd said earlier).
-          systemOverride: userMemory ? `${def.systemPrompt}\n\nUser context / preferences:\n${userMemory}` : def.systemPrompt,
-          clientContext: params.clientContext,
-          tools: resolveTools(def.toolNames, toolCtx),
-          temperature: 0.4,
-          maxTokens: 1400
-        });
+        // Wrap the agent's focused prompt in the shared brand voice (Phase 11) so all
+        // agents speak with one identity + honesty contract, then add the user's durable
+        // memory/persona so agents share the context the synthesizer and normal chat get.
+        const agentPrompt = withAgentPersona(def.systemPrompt);
+        const r = await runWithRetry(
+          () =>
+            runChat({
+              ...baseReq,
+              model: workerModel,
+              messages: [...priorMessages, { role: 'user', content: p.task }],
+              systemOverride: userMemory ? `${agentPrompt}\n\nUser context / preferences:\n${userMemory}` : agentPrompt,
+              clientContext: params.clientContext,
+              tools: resolveTools(def.toolNames, toolCtx),
+              temperature: 0.4,
+              maxTokens: 1400
+            }),
+          params.signal
+        );
         usageParts.push(r.usage);
         if (r.artifacts) agentArtifacts.push(...r.artifacts);
         if (r.citations) citations.push(...r.citations);
@@ -219,14 +242,40 @@ export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> 
           toolEvents: r.toolEvents
         };
         emit();
-        return { name: def.name, task: p.task, text: r.text || '', citations: r.citations || [] };
+        return {
+          id: def.id,
+          name: def.name,
+          task: p.task,
+          text: r.text || '',
+          citations: r.citations || [],
+          status: 'done' as const,
+          toolEvents: r.toolEvents
+        };
       } catch (err) {
         agents[i] = { ...agents[i], status: 'error', summary: (err as Error)?.message || 'agent failed' };
         emit();
-        return { name: def.name, task: p.task, text: '', citations: [] as ChatCitation[] };
+        return {
+          id: def.id,
+          name: def.name,
+          task: p.task,
+          text: '',
+          citations: [] as ChatCitation[],
+          status: 'error' as const,
+          toolEvents: undefined
+        };
       }
     })
   );
+
+  // 2b) VERIFY (Phase 9) — score each finding's trustworthiness before synthesis. Cheap,
+  // deterministic, always-on: attach confidence + flags to the trace (so the UI can show
+  // them) and hand the assessment to the synthesizer so it weights/labels accordingly.
+  const verification = verifyFindings(findings as AgentFinding[]);
+  for (let i = 0; i < agents.length; i += 1) {
+    const a = verification.assessments.find((x) => x.id === agents[i].id);
+    if (a) agents[i] = { ...agents[i], confidence: a.confidence, flags: a.flags };
+  }
+  emit();
 
   // 3) SYNTHESIZE — merge all findings into one streamed answer.
   const findingsBlock = findings
@@ -241,7 +290,8 @@ export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> 
         (sources ? `\nSources gathered:\n${sources}` : '');
     })
     .join('\n\n');
-  const synthInput = `User goal: ${goal}\n\nFindings from the specialized agents:\n\n${findingsBlock}\n\nNow write the single best answer for the user.`;
+  const verifyBlock = verificationBlock(findings as AgentFinding[], verification);
+  const synthInput = `User goal: ${goal}\n\nFindings from the specialized agents:\n\n${findingsBlock}\n\n${verifyBlock}\n\nNow write the single best answer for the user.`;
   const synthMessages: ChatMessage[] = [
     ...params.messages.slice(0, -1),
     { role: 'user', content: synthInput }

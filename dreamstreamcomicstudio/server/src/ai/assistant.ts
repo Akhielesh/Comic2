@@ -4,6 +4,7 @@ import { pickTextModel, TEXT_FALLBACK } from './autoRouter.js';
 import { buildPublicKnowledgeBlock } from './assistantKnowledge.js';
 import { buildUsage } from './usage.js';
 import { getProvider, resolveProviderContext } from './gateway.js';
+import { PERSONA_TONE, PERSONA_HONESTY } from './persona.js';
 import type { ChatMessage } from './providers/types.js';
 
 const safeContextJson = (context: UniversalAssistantContext) => {
@@ -29,7 +30,9 @@ export const queryUniversalAssistant = async (
   const knowledgeBase = buildPublicKnowledgeBlock();
 
   const systemPrompt = `
-You are the "DreamStream Universal Assistant".
+You are the "DreamStream Universal Assistant" — the in-app face of DreamStream's one brand voice.
+${PERSONA_TONE}
+${PERSONA_HONESTY}
 You only support DreamStream Comic Studio product questions and troubleshooting.
 You may answer meta questions about who you are, what you can do, and your platform safety limits.
 

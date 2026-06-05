@@ -1,6 +1,17 @@
 # Phase 6 — GitHub sync + one-click deploy
 
-**Status:** 📋 planned · **Depends on:** Phase 5 · **Effort:** 3–5 days · **See:** [07-INTEGRATIONS.md](../07-INTEGRATIONS.md)
+**Status:** 🟢 **GitHub sync shipped** · one-click **deploy deferred** (needs the Worker) · **Depends on:** Phase 5 · **Effort:** 3–5 days · **See:** [07-INTEGRATIONS.md](../07-INTEGRATIONS.md)
+
+> **Shipped (2026-06-05):** `services/studioGithub.ts` (Git Data API — atomic multi-file
+> push, recursive pull; pure `buildTreeEntries`/`parseRepoFullName` `+ test`) and
+> `routes/studioGithub.ts` → `/api/studio/github/{repos,push,pull}`. Push commits the saved
+> project's `studio_files` as ONE commit and records the repo on the project; pull reads the
+> repo tree back into `studio_files` + a new version. **Token handling deviation (justified):**
+> the repo has no encryption infra and a clear BYOK-transient pattern, so the GitHub PAT is
+> passed per-request via the `x-github-token` header and **never stored** — only the repo
+> name is persisted. **Deferred:** GitHub OAuth/App connect + `GitHubMenu`/`DeployMenu` UI,
+> and **one-click deploy** (`/api/studio/deploy` is an honest 501 — build/publish runs in the
+> Cloudflare Worker, which the owner must deploy first).
 
 ## Goal
 Ship what you built: connect a GitHub repo (two-way), and deploy to a public URL in one click.

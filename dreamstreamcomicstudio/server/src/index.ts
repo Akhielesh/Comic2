@@ -39,6 +39,8 @@ import { moderationRouter } from './routes/moderation.js';
 import { sharingRouter } from './routes/sharing.js';
 import { comicForgeRouter } from './routes/comicforge.js';
 import { studioRouter } from './routes/studio.js';
+import { agentsRouter } from './routes/agents.js';
+import { mcpRouter, mcpOutboundRouter } from './routes/mcp.js';
 import { modelsRouter } from './routes/models.js';
 import { prewarmCatalog, startCatalogRefreshLoop } from './services/modelCatalog.js';
 import { keysRouter } from './routes/keys.js';
@@ -145,6 +147,11 @@ app.use('/api/billing', systemRateLimit, optionalAuth, billingRouter);
 // Share token validation needs optionalAuth (returns loginRequired hint if not authenticated)
 app.use('/api/shares/token', optionalAuth, systemRateLimit, sharingRouter);
 
+// Outbound MCP server (Phase 10): external agents (Claude/Cursor/…) call our tool
+// registry as an MCP endpoint. Authenticated by a bearer token (NOT the app session),
+// so it must mount BEFORE the global requireAuth. Rate-limited like other public routes.
+app.use('/api/connect', systemRateLimit, mcpOutboundRouter);
+
 // Protect all API routes
 app.use('/api', requireAuth);
 
@@ -159,6 +166,8 @@ app.use('/api/shares', systemRateLimit, sharingRouter);
 app.use('/api/v1/comicforge', comicForgeRateLimit, comicForgeRouter);
 // Studio v2 control plane — auth'd (global requireAuth above), text-tier rate limited.
 app.use('/api/studio', textRateLimit, studioRouter);
+app.use('/api/agents', systemRateLimit, agentsRouter);
+app.use('/api/mcp', systemRateLimit, mcpRouter);
 
 app.use(errorHandler);
 

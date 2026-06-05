@@ -5,6 +5,62 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — PHASES 11 + 9 + 10 + 6 (four phases, backend cores) + SELF-AUDIT
+Built the buildable-now backbone of the next four phases — the three parallel platform
+workstreams plus GitHub sync — additively and (where it changes prod AI behavior)
+flag-gated, so production is unchanged until the owner opts in. All shipped to prod.
+
+**Phase 11 — Guardrails & personality (foundation):**
+- New `server/src/ai/persona.ts` — the single brand voice (identity/tone/honesty/refusal/
+  formatting) + `composePersona()` / `withAgentPersona()`. Composed into the chat prompt
+  (`CHAT_SYSTEM_PROMPT`), every swarm agent, the synthesizer, and the Universal Assistant.
+- New `server/src/ai/guardrails.ts` — post-generation scan: secret/credential leak
+  (redacted), figures stated with no tool call, missing citations, email/PII. Findings →
+  `CapabilityNotice`s (existing UI channel) + capability **audit log**. Wired into the chat
+  + swarm response paths. `+ guardrails.test.ts`, `persona.test.ts`.
+
+**Phase 9 — Agent system upgrade:**
+- New `server/src/ai/agents/verify.ts` — deterministic, always-on verifier/critic: scores
+  each finding's confidence + flags (no_sources / unverified_figures / hedged / errored)
+  before synthesis; injects the assessment into the synthesizer and onto the trace
+  (`SwarmAgentRun.confidence/flags`). `+ verify.test.ts`.
+- Resilience: agents retry once on a transient failure. Persona routing (above).
+- Custom-agent library: `server/sql/studio_agents.sql` (`custom_agents` + RLS),
+  `services/customAgents.ts` (CRUD, re-sanitized), `routes/agents.ts` (`/api/agents`
+  built-ins + CRUD). Saved agents auto-join a user's swarm runs.
+
+**Phase 10 — Tools / MCP / sourcing:**
+- New `server/src/ai/tools/jsonToolProtocol.ts` — JSON tool-protocol fallback so
+  non-OpenRouter models (NVIDIA / free) can call our tools; wired into `runChat` as a
+  self-contained loop, behind `JSON_TOOL_PROTOCOL_ENABLED` (off by default). `+ test`.
+- Server-side MCP registry: `server/sql/mcp_servers.sql` (+ RLS, auto-disable),
+  `services/mcpRegistry.ts`, curated marketplace `ai/tools/mcpCatalog.ts`. Saved servers
+  now sync server-side and merge into chat (cap 6→10).
+- **Outbound MCP server** `routes/mcp.ts` `mcpOutboundRouter` — DreamStream's read-only
+  tools as an authenticated JSON-RPC MCP endpoint (`/api/connect/mcp`, Bearer
+  `MCP_OUTBOUND_TOKEN`, disabled when unset) external agents can call.
+
+**Phase 6 — GitHub sync (deploy half needs the Worker):**
+- New `services/studioGithub.ts` (Git Data API: atomic multi-file push, recursive pull;
+  pure `buildTreeEntries`/`parseRepoFullName` tested) + `routes/studioGithub.ts`
+  (`/api/studio/github/{repos,push,pull}`). Token is **transient via `x-github-token`**
+  header — never stored (matches the BYOK posture; the repo has no encryption infra). Only
+  the repo name is persisted. `/api/studio/deploy` is an honest 501 until the Worker ships.
+
+- Verified: client + server typecheck, **311 tests** (+33; the 4 failing suites are the
+  pre-existing Supabase-env-unset ones), production build — all pass.
+- **SELF-AUDIT:** ✅ one persona drives chat/swarm/agents/assistant · ✅ guardrail layer
+  catches leaked secrets, fabricated figures, missing citations (unit-tested) + flags via
+  notices + audit log · ✅ verifier raises/flags confidence before synthesis (tested) ·
+  ✅ custom agents persist + manage; built-ins protected · ✅ JSON tool fallback parses +
+  runs (tested), gated off for prod safety · ✅ MCP servers persist server-side; outbound
+  authenticated endpoint works · ✅ GitHub push/pull two-way · 🔀 **deferred (need infra or
+  are client UI):** the model-based critic layer, live per-agent SSE streaming + agent-
+  library UI, OAuth MCP + full streaming SSE, action/write tools, and Phase 6 **one-click
+  deploy** (needs the Worker — honest 501) + the GitHub/agent/MCP **dashboards** (client) ·
+  ⚠️ DB-bound services unit-test the pure helpers, not the Supabase calls; behavior-changing
+  paths (JSON tools, outbound MCP) are off until their env flag/token is set.
+
 ## 2026-06-05 · Claude (session 012Drsxr…) — PHASE 5 (persistence backend) + SELF-AUDIT
 Built the durable project model so AI-built apps survive sleep/reload (container
 disposable, project durable). Domain logged as **deferred (not a blocker — tunnels)**.

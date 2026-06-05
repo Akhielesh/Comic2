@@ -204,6 +204,15 @@ export const STUDIO_REQUEST_TIMEOUT_MS = parseIntegerEnv(
 // sync with docs/studio/CLOUDFLARE_STUDIO_PLAN.md.
 export const STUDIO_COST_PER_AWAKE_SEC = Number(process.env.STUDIO_COST_PER_AWAKE_SEC || '0.00003');
 
+// --- Phase 10: tools/MCP/sourcing -------------------------------------------------
+// JSON tool-protocol fallback: lets non-OpenRouter models (NVIDIA, free models without
+// native function-calling) use our live tools via a JSON convention. Off by default —
+// it changes the system prompt for those providers, so it's opt-in until validated.
+export const JSON_TOOL_PROTOCOL_ENABLED = parseBooleanEnv(process.env.JSON_TOOL_PROTOCOL_ENABLED, false);
+// Bearer token that authenticates the outbound MCP endpoint (external agents calling our
+// tool registry). Empty ⇒ the endpoint is disabled (returns 503) rather than open.
+export const MCP_OUTBOUND_TOKEN = (process.env.MCP_OUTBOUND_TOKEN || '').trim();
+
 export const REQUIRED_RUNTIME_ENV_VARS = ['CORS_ORIGIN', 'VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY'] as const;
 type RequiredRuntimeEnv = (typeof REQUIRED_RUNTIME_ENV_VARS)[number];
 export const REQUIRED_BILLING_ENV_VARS = [

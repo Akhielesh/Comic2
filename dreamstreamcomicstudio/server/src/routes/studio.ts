@@ -21,8 +21,12 @@ import { signStudioBody } from '../services/studioSign.js';
 import { evaluateLaunchAllowed } from '../services/studioCaps.js';
 import { sanitizeFiles, deriveProjectName } from '../services/studioFiles.js';
 import { saveProject, listProjects, getProjectWithFiles, deleteProject } from '../services/studioRepository.js';
+import { studioGithubRouter } from './studioGithub.js';
 
 export const studioRouter = Router();
+
+// GitHub two-way sync (Phase 6) — /api/studio/github/{repos,push,pull}.
+studioRouter.use('/github', studioGithubRouter);
 
 const notConfigured = (): boolean => !STUDIO_WORKER_URL || !STUDIO_HMAC_SECRET;
 
@@ -205,6 +209,20 @@ studioRouter.post('/:id/stop', async (req, res, next) => {
 studioRouter.get('/:id/logs', (_req, res) => {
   res.status(501).json({
     error: { message: 'Live log streaming arrives with the Phase 1 Worker logs action.', code: 'STUDIO_LOGS_PENDING' }
+  });
+});
+
+// POST /api/studio/deploy — one-click deploy to a public URL (Phase 6). The build/publish
+// step runs in the Cloudflare Worker, so until the owner deploys it (Phase 0/1) this is
+// honestly pending rather than pretending to deploy. GitHub sync (above) works today.
+studioRouter.post('/deploy', (_req, res) => {
+  res.status(501).json({
+    error: {
+      message: notConfigured()
+        ? 'One-click deploy lands with the Cloudflare Worker (deploy it to enable). Until then, push to GitHub and deploy from there.'
+        : 'Deploy publishing is not wired in this build yet; push to GitHub and connect Pages/Workers to that repo.',
+      code: 'STUDIO_DEPLOY_PENDING'
+    }
   });
 });
 

@@ -9,10 +9,13 @@
 import type { ChatMessage } from './providers/types.js';
 import type { ChatArtifact, ChatClientContext, CapabilityNotice } from '../../../apiTypes.js';
 import { logCapabilityNotice } from './capabilities.js';
+import { composePersona } from './persona.js';
 import { getProvider, resolveProviderContext } from './gateway.js';
 import { buildUsage } from './usage.js';
 import type { AIProviderId } from './providers/types.js';
 import { toToolSpec, type ChatTool } from './tools/registry.js';
+import { buildJsonToolSystemBlock, extractToolCall, stripToolCallJson, formatToolResult } from './tools/jsonToolProtocol.js';
+import { JSON_TOOL_PROTOCOL_ENABLED } from '../config.js';
 
 export type ChatReasoningLevel = 'none' | 'low' | 'medium' | 'high';
 
@@ -85,7 +88,10 @@ ${json}`;
 
 // Default persona. Heavy emphasis on well-structured, component-friendly Markdown so
 // the client's rich renderer can surface tables, code, links, images and lists cleanly.
-export const CHAT_SYSTEM_PROMPT = `You are DreamStream Chat, a sharp, accurate AI assistant with live internet access and a suite of real-data tools.
+// The chat-specific behavior below is LAYERED on the shared brand persona
+// (server/src/ai/persona.ts) so chat speaks in the same voice as the swarm, the
+// Universal Assistant and the studio build agent — one identity, one honesty contract.
+const CHAT_BEHAVIOR = `You are operating as DreamStream Chat: live internet access and a suite of real-data tools are available to you.
 
 CORE BEHAVIOR — read carefully:
 - Be CONCISE and direct. Lead with the answer in the first sentence. Do NOT bombard the user with long preambles, caveats, or filler. Match the length of the answer to the question — short questions get short answers.
@@ -101,6 +107,8 @@ Formatting (use only what helps — never pad):
 - Markdown links [label](url) for sources; images ![alt](url) only with a real image URL; \`inline code\` for identifiers; \`$...$\` for math when helpful.
 
 Prefer signal over length. A tight, sourced, well-structured answer beats a long one.`;
+
+export const CHAT_SYSTEM_PROMPT = composePersona(CHAT_BEHAVIOR);
 
 // Render the user's runtime context as a compact, authoritative block so the model
 // stops being "situationally blind": it knows the real current date/time, the
@@ -193,14 +201,24 @@ export const runChat = async (
 - LIVE NUMBERS, NOT MEMORY: render_table / render_heatmap only DRAW the values you pass — they do not fetch. NEVER type stock/crypto prices, %s, market caps or other live figures into them (or into prose) from memory; fetch them first with get_stock / crypto_price / build_finance_terminal. A polished table of made-up numbers is a serious error. And on a FOLLOW-UP about a price you mentioned earlier, RE-FETCH it — do not reuse the earlier number, it has moved. Only discuss the tickers the user asked about; don't default to Apple/Tesla/Microsoft.`;
   }
 
+  // JSON tool-protocol fallback (Phase 10): non-OpenRouter providers have no native
+  // function-calling, so when enabled we teach the model to call tools via a JSON
+  // convention injected into the system prompt and run a text-driven tool loop below.
+  const useJsonTools =
+    params.provider !== 'openrouter' && JSON_TOOL_PROTOCOL_ENABLED && (params.tools?.length || 0) > 0;
+  if (useJsonTools) {
+    systemContent += `\n\n${buildJsonToolSystemBlock(params.tools as ChatTool[])}`;
+  }
+
   const messages: ChatMessage[] = [{ role: 'system', content: systemContent }, ...params.messages];
 
   const useReasoning =
     params.provider === 'openrouter' && params.reasoningLevel && params.reasoningLevel !== 'none';
   const useWeb = params.provider === 'openrouter' && Boolean(params.webSearch);
-  // Agentic tools are OpenRouter-only (function-calling + tool_calls parsing).
-  const tools = params.provider === 'openrouter' ? params.tools || [] : [];
-  const toolSpecs = tools.length ? tools.map(toToolSpec) : undefined;
+  // Native tools are OpenRouter-only (function-calling + tool_calls parsing); other
+  // providers reach the same tools through the JSON protocol when it's enabled.
+  const tools = params.provider === 'openrouter' ? params.tools || [] : useJsonTools ? params.tools || [] : [];
+  const toolSpecs = params.provider === 'openrouter' && tools.length ? tools.map(toToolSpec) : undefined;
 
   const ctx = resolveProviderContext(params.apiKey, params.provider);
   const baseReq = {
@@ -234,6 +252,68 @@ export const runChat = async (
       ? provider.generateTextStream(r, ctx, params.onDelta)
       : provider.generateText(r, ctx);
   };
+
+  const lastUserSeed = (): string => {
+    const m = [...params.messages].reverse().find((x) => x.role === 'user');
+    return typeof m?.content === 'string'
+      ? m.content
+      : Array.isArray(m?.content)
+        ? m!.content.map((p) => ('text' in p ? p.text : '')).join(' ')
+        : '';
+  };
+
+  // --- JSON tool-protocol loop (non-OpenRouter providers) -------------------------
+  // Mirrors the native loop below, but the model signals tool calls as JSON text rather
+  // than `tool_calls`. Kept as a self-contained branch so the native path is untouched.
+  if (useJsonTools) {
+    const convo: ChatMessage[] = [...messages];
+    let final = '';
+    let lastModel = params.model;
+    for (let i = 0; i <= MAX_TOOL_ITERATIONS; i += 1) {
+      const r = await provider.generateText({ ...baseReq, messages: convo }, ctx);
+      lastModel = r.model || lastModel;
+      if (r.citations) citations.push(...r.citations);
+      // On the final allowed turn, force an answer (ignore any further tool call).
+      const call = i < MAX_TOOL_ITERATIONS ? extractToolCall(r.text || '') : null;
+      if (!call) {
+        final = stripToolCallJson(r.text || '') || (r.text || '');
+        break;
+      }
+      convo.push({ role: 'assistant', content: r.text || '' });
+      const toolDef = tools.find((t) => t.name === call.name);
+      if (!toolDef) {
+        toolEvents.push({ tool: call.name, ok: false, summary: 'Unknown tool' });
+        convo.push({ role: 'user', content: formatToolResult(call.name, `Unknown tool: ${call.name}`) });
+        continue;
+      }
+      const query = typeof call.arguments.query === 'string' ? call.arguments.query : undefined;
+      try {
+        const out = await toolDef.execute(call.arguments, params.signal);
+        if (out.images) images.push(...out.images);
+        if (out.citations) citations.push(...out.citations);
+        if (out.artifacts) artifacts.push(...out.artifacts);
+        if (out.notice) addNotice({ tool: call.name, ...out.notice });
+        toolEvents.push({ tool: call.name, query, ok: true, summary: out.content.slice(0, 160) });
+        convo.push({ role: 'user', content: formatToolResult(call.name, out.content) });
+      } catch (err) {
+        const message = (err as Error)?.message || 'tool failed';
+        addNotice({ tool: call.name, level: 'error', message });
+        toolEvents.push({ tool: call.name, query, ok: false, summary: message });
+        convo.push({ role: 'user', content: formatToolResult(call.name, `Error: ${message}`) });
+      }
+    }
+    const merged = dedupeCitations(citations);
+    return {
+      text: final,
+      usage: buildUsage(lastUserSeed(), final, undefined),
+      model: lastModel,
+      citations: merged.length ? merged : undefined,
+      toolEvents: toolEvents.length ? toolEvents : undefined,
+      images: images.length ? images : undefined,
+      artifacts: artifacts.length ? artifacts : undefined,
+      notices: notices.length ? notices : undefined
+    };
+  }
 
   // Agentic loop: call the model, run any tools it asks for, feed results back, repeat.
   // A single call (no tools enabled) collapses to one iteration with no tool round-trips.

@@ -5,14 +5,18 @@ import { runSwarm } from '../ai/agents/orchestrator.js';
 import { makeSwarmTool, SWARM_TOOL_NAME } from '../ai/agents/swarmTool.js';
 import { sanitizeCustomAgents } from '../ai/agents/registry.js';
 import type { AgentDefinition } from '../ai/agents/registry.js';
+import { loadCustomAgentDefinitions } from '../services/customAgents.js';
 import { pickTextModel, TEXT_FALLBACK } from '../ai/autoRouter.js';
-import { NVIDIA_TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS } from '../config.js';
+import { NVIDIA_TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS, JSON_TOOL_PROTOCOL_ENABLED } from '../config.js';
 import type { AIProviderId, ChatMessage, MessagePart } from '../ai/providers/types.js';
 import { assertModelAllowedForUser } from '../services/modelAccessPolicy.js';
 import { sanitizeAssistantContext } from '../ai/assistantPolicy.js';
 import { resolveTools, type ChatTool } from '../ai/tools/registry.js';
 import { selectRelevantTools, ROUTABLE_TOOL_NAMES } from '../../../toolCatalog.js';
 import { buildMcpTools } from '../ai/tools/mcpClient.js';
+import { enabledMcpConfigs } from '../services/mcpRegistry.js';
+import { applyGuardrails } from '../ai/guardrails.js';
+import type { CapabilityNotice, McpServerConfig } from '../../../apiTypes.js';
 import { unfurlUrl } from '../ai/tools/unfurl.js';
 import {
   attachBillingToPayload,
@@ -209,7 +213,7 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
   }
 
   const clientContext = sanitizeClientContext(body.clientContext);
-  const customAgents = sanitizeCustomAgents(body.customAgents);
+  const requestCustomAgents = sanitizeCustomAgents(body.customAgents);
 
   const toolContext = clientContext
     ? {
@@ -233,17 +237,31 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
         ? lastUserMessage!.content.map((p) => ('text' in p ? p.text : '')).join(' ')
         : '';
   const MAX_MODEL_TOOLS = 20;
-  const routedToolNames =
-    resolved.provider === 'openrouter'
-      ? selectRelevantTools(lastUserText, ROUTABLE_TOOL_NAMES, MAX_MODEL_TOOLS)
-      : [];
-  const builtinTools =
-    resolved.provider === 'openrouter' ? resolveTools(routedToolNames, toolContext) : [];
+  // OpenRouter gets native function-calling; other providers get the same tools through
+  // the JSON protocol when it's enabled (Phase 10). Either way, smart-route to the most
+  // relevant handful for this message rather than handing over the whole suite.
+  const toolsEnabledForProvider = resolved.provider === 'openrouter' || JSON_TOOL_PROTOCOL_ENABLED;
+  const routedToolNames = toolsEnabledForProvider
+    ? selectRelevantTools(lastUserText, ROUTABLE_TOOL_NAMES, MAX_MODEL_TOOLS)
+    : [];
+  const builtinTools = toolsEnabledForProvider ? resolveTools(routedToolNames, toolContext) : [];
 
   // The agent-swarm meta-tool needs provider credentials, so it's built here (not in
   // resolveTools) and appended when the user enabled the Swarm toggle. OpenRouter only.
   const swarmRequested =
     Array.isArray(body.tools) && body.tools.some((t) => t === SWARM_TOOL_NAME);
+
+  // Merge the user's saved library agents (Phase 9) into the deployable pool — but only
+  // when the swarm is actually reachable this turn (the swarm tool is enabled, or this is
+  // the /swarm route), so ordinary chats don't pay for a DB lookup. Request-scoped agents
+  // win on an id collision.
+  const swarmReachable =
+    resolved.provider === 'openrouter' && (swarmRequested || req.path.endsWith('/swarm'));
+  const savedAgents =
+    swarmReachable && req.user?.id ? await loadCustomAgentDefinitions(req.user.id) : [];
+  const requestAgentIds = new Set(requestCustomAgents.map((a) => a.id));
+  const customAgents = [...requestCustomAgents, ...savedAgents.filter((a) => !requestAgentIds.has(a.id))];
+
   const metaTools: ChatTool[] =
     resolved.provider === 'openrouter' && swarmRequested
       ? [
@@ -262,18 +280,42 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
       : [];
 
   // Custom MCP servers (OpenRouter only): list their tools and wrap them. Best-effort —
-  // a broken/blocked server is skipped rather than failing the chat.
+  // a broken/blocked server is skipped rather than failing the chat. Sources are the
+  // request body (legacy/localStorage clients) AND the user's server-side registry
+  // (Phase 10), merged + deduped by url so saved servers sync across devices.
   let mcpTools: ChatTool[] = [];
-  if (resolved.provider === 'openrouter' && Array.isArray(body.mcpServers) && body.mcpServers.length) {
-    const servers = body.mcpServers
-      .filter((s) => s && typeof s.url === 'string' && typeof s.id === 'string')
-      .slice(0, 6);
-    mcpTools = await buildMcpTools(servers);
+  if (resolved.provider === 'openrouter') {
+    const requestServers = Array.isArray(body.mcpServers)
+      ? body.mcpServers.filter((s) => s && typeof s.url === 'string' && typeof s.id === 'string')
+      : [];
+    const savedServers = req.user?.id ? await enabledMcpConfigs(req.user.id).catch(() => []) : [];
+    const byUrl = new Map<string, McpServerConfig>();
+    for (const s of [...savedServers, ...requestServers]) byUrl.set(s.url, s as McpServerConfig);
+    const servers = [...byUrl.values()].slice(0, 10);
+    if (servers.length) mcpTools = await buildMcpTools(servers);
   }
 
   return {
     prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, systemPrompt, dreamstreamContextJson, tools: [...builtinTools, ...metaTools, ...mcpTools], clientContext, customAgents }
   };
+};
+
+// Output guardrail pass (Phase 11): scan the finished answer for leaked secrets,
+// figures stated without a tool call, and missing citations; merge any findings into
+// the response notices (which the UI already renders) and the capability audit log.
+const withGuardrailNotices = (result: {
+  text: string;
+  toolEvents?: { tool: string }[];
+  citations?: { url: string }[];
+  notices?: CapabilityNotice[];
+}): CapabilityNotice[] | undefined => {
+  const guardNotices = applyGuardrails({
+    text: result.text || '',
+    toolRan: (result.toolEvents?.length || 0) > 0,
+    citationCount: result.citations?.length || 0
+  });
+  const merged = [...(result.notices || []), ...guardNotices];
+  return merged.length ? merged : undefined;
 };
 
 const buildPayload = (p: PreparedChat, result: Awaited<ReturnType<typeof runChat>>): ChatResponse => ({
@@ -288,7 +330,7 @@ const buildPayload = (p: PreparedChat, result: Awaited<ReturnType<typeof runChat
   toolEvents: result.toolEvents,
   images: result.images,
   artifacts: result.artifacts,
-  notices: result.notices,
+  notices: withGuardrailNotices(result),
   usage: result.usage
 });
 
@@ -644,7 +686,7 @@ chatRouter.post('/swarm', async (req, res) => {
       toolEvents: result.toolEvents,
       images: result.images,
       artifacts: result.artifacts,
-      notices: result.notices,
+      notices: withGuardrailNotices(result),
       usage: result.usage
     };
     const finalPayload =

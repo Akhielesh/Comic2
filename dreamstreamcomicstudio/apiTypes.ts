@@ -1251,6 +1251,10 @@ export interface SwarmAgentRun {
   summary?: string;
   /** Tools the agent ran. */
   toolEvents?: ChatToolEvent[];
+  /** Verifier confidence in this finding, 0–1 (Phase 9). Filled after the verify stage. */
+  confidence?: number;
+  /** Verifier flags, e.g. "no_sources", "unverified_figures", "hedged" (Phase 9). */
+  flags?: string[];
 }
 export interface SwarmTraceArtifact {
   goal: string;

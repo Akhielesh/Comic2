@@ -1,6 +1,15 @@
 # Phase 11 — Guardrails & personality (parallel workstream)
 
-**Status:** 📋 planned · **Parallel to** the Studio build · **Effort:** 1 week · **Spec:** [12-GUARDRAILS-PERSONALITY.md](../12-GUARDRAILS-PERSONALITY.md)
+**Status:** 🟢 **shipped** (persona + output guardrails; studio code-safety + trust-chip UI deferred) · **Parallel to** the Studio build · **Effort:** 1 week · **Spec:** [12-GUARDRAILS-PERSONALITY.md](../12-GUARDRAILS-PERSONALITY.md)
+
+> **Shipped (2026-06-05):** `server/src/ai/persona.ts` is the single brand voice, composed
+> into chat (`CHAT_SYSTEM_PROMPT`), every swarm agent, the synthesizer and the Universal
+> Assistant. `server/src/ai/guardrails.ts` runs a post-generation scan (secret/credential
+> leak, figures-without-a-tool-call, missing citations, PII) → `CapabilityNotice`s (UI) +
+> the capability audit log; wired into the chat + swarm response paths. `+ guardrails.test.ts`,
+> `persona.test.ts`. **Deferred:** the model-based critic (heuristic verifier shipped in
+> Phase 9 instead), studio build-agent code-safety/secret-scan (lands with the Worker), and
+> dedicated trust-chip UI (flags surface via the existing notices channel today).
 
 ## Goal
 One coherent brand voice everywhere, and real safety beyond prompt instructions.

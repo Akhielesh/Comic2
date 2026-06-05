@@ -1,6 +1,16 @@
 # Phase 9 — Agent system upgrade (parallel workstream)
 
-**Status:** 📋 planned · **Parallel to** the Studio build · **Effort:** 1–2 weeks · **Spec:** [10-AGENTS-SWARM.md](../10-AGENTS-SWARM.md)
+**Status:** 🟢 **backend shipped** (verifier, retry, persona routing, custom-agent library; trace UI / live SSE deferred) · **Parallel to** the Studio build · **Effort:** 1–2 weeks · **Spec:** [10-AGENTS-SWARM.md](../10-AGENTS-SWARM.md)
+
+> **Shipped (2026-06-05):** `agents/verify.ts` — a deterministic, always-on verifier/critic
+> that scores each finding's confidence + flags before synthesis, injects the assessment
+> into the synthesizer, and attaches `confidence`/`flags` to the trace (`+ verify.test.ts`).
+> Agents now run through the shared persona (Phase 11) and **retry once** on a transient
+> failure. Custom-agent library: `server/sql/studio_agents.sql` (`custom_agents` + RLS),
+> `services/customAgents.ts`, `routes/agents.ts` (`/api/agents`); saved agents auto-join a
+> user's swarm. **Deferred (client/optional):** the SwarmTraceCard upgrade (show confidence +
+> re-run an agent), live per-agent SSE streaming, the agent-library UI, and a model-based
+> critic layer on top of the heuristic verifier.
 
 ## Goal
 Bring the multi-agent swarm to enterprise/Emergent-class: verified, on-brand, legible,
