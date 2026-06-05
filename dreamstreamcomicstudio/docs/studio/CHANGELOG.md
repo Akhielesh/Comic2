@@ -5,6 +5,24 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Phase 4 agentic build loop: deterministic core + coding router
+Built the logic-heavy half of the agentic build loop, fully unit-tested ahead of the live
+route (so it ships safely with zero behavior change — nothing calls it yet):
+- `server/src/ai/studio/observation.ts` — raw container signals (install stderr, Vite/TS
+  compile output, runtime console errors, preview HTTP status) → structured
+  `BuildObservation` (classified errors, unresolved module + `file:line:col`, stable
+  signature). Priority install → dev → runtime → http.
+- `buildGuards.ts` — loop termination: clean / iteration-cap / **stuck → ask the user**.
+- `buildAgent.ts` — `runBuildAgent` PLAN→RUN→OBSERVE→FIX orchestrator (DI'd run+fix, stage
+  event trace for the live panel).
+- `studioFix.ts` — server-side FIX: observation-driven minimal-diff prompt + tolerant JSON
+  parse (injected model call).
+- `autoRouter.ts` — `pickCodingModel` + `prefersCodingModel` route the FIX stage to strong
+  coding models (free-first; `quality` for BYOK).
+- Tests: observation/guards/buildAgent/studioFix/coding-router — **39 new cases, all green.**
+- **Next (live slice):** a `/api/studio/build` SSE route supplying real `run` (worker) +
+  `complete` (AI client), validated with a signed-in launch against the deployed worker.
+
 ## 2026-06-05 · Claude — INFRA LIVE: deploy worker, fix CORS, apply DB migrations
 Brought the Cloudflare/Studio infra up end-to-end and unblocked the live site.
 - **Diagnosed the live site being broken:** the frontend served at `dreamstreamstudio.ai`
