@@ -9,8 +9,10 @@
 // build route, where the authenticated request's provider/key/model are available.
 
 import { callStudioWorker, toRunResult } from './studioWorker.js';
-import type { RunResult } from '../ai/studio/buildAgent.js';
-import type { StudioFiles } from '../ai/studio/studioFix.js';
+import { sanitizeFixFiles, type FixSanitizeOptions } from './studioFiles.js';
+import type { BuildObservation } from '../ai/studio/observation.js';
+import type { FixOutput, RunResult } from '../ai/studio/buildAgent.js';
+import { requestStudioFix, type StudioFiles } from '../ai/studio/studioFix.js';
 
 /** buildAgent holds files as a path→content map; the worker wants [{path, content}]. */
 export const filesRecordToArray = (files: StudioFiles): { path: string; content: string }[] =>
@@ -83,3 +85,17 @@ export const createWorkerRun = (config: WorkerRunConfig) => {
     });
   };
 };
+
+/**
+ * Build the guard-railed `fix(files, observation)` dep for runBuildAgent: ask the model for
+ * minimal diffs (`complete` is the injected request-scoped model call, e.g. runChat +
+ * pickCodingModel), then run the output through `sanitizeFixFiles` so the autonomous loop
+ * can never write an unsafe path / oversized / runaway change set into a live project.
+ */
+export const createStudioFix =
+  (complete: (prompt: string) => Promise<string>, opts?: FixSanitizeOptions) =>
+  async (files: StudioFiles, observation: BuildObservation): Promise<FixOutput> => {
+    const result = await requestStudioFix(files, observation, complete);
+    const { files: safe } = sanitizeFixFiles(result.files, opts);
+    return { files: safe, note: result.note };
+  };

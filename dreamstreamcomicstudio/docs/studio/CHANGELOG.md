@@ -5,6 +5,17 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Phase 4: guard-railed FIX dep (createStudioFix)
+- `services/studioBuildService.ts` — `createStudioFix(complete, opts)` composes
+  `requestStudioFix` (observation-driven minimal-diff model call) with `sanitizeFixFiles`
+  (the guardrails) into the `fix(files, observation)` dep `runBuildAgent` expects. The
+  injected `complete` is the request-scoped model call (runChat + pickCodingModel).
+- Tests: drops unsafe paths from model output; passes the observation prompt through.
+- **Phase 4 backend is now complete + fully tested.** The only remaining piece is the
+  `/api/studio/build` SSE route (compose createWorkerRun + createStudioFix + an auth-scoped
+  `complete`, stream the trace) — best landed alongside a signed-in live validation — and
+  the `BuildTrace` client.
+
 ## 2026-06-05 · Claude — Phase 4 guardrails: FIX-output safety + path-traversal hardening
 Safety rails for the autonomous build loop (and a security win for the existing launch path):
 - `services/studioFiles.ts` — `isSafeStudioPath` (rejects `..` traversal, NUL/backslash,

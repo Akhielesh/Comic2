@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createWorkerRun, filesRecordToArray, probePreview } from './studioBuildService.js';
+import { createWorkerRun, createStudioFix, filesRecordToArray, probePreview } from './studioBuildService.js';
 import { runBuildAgent } from '../ai/studio/buildAgent.js';
+import { buildObservation } from '../ai/studio/observation.js';
 
 describe('filesRecordToArray', () => {
   it('maps a record to the worker file array, ensuring leading slashes', () => {
@@ -76,5 +77,33 @@ describe('createWorkerRun', () => {
     expect(res.ok).toBe(true);
     expect(res.iterations).toBe(1);
     expect(fix).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('createStudioFix', () => {
+  const obs = buildObservation({ stderr: 'Failed to resolve import "axios" from "a.ts"' });
+
+  it('returns guard-railed fixes (drops unsafe paths from model output)', async () => {
+    const complete = vi.fn(async (_prompt: string) =>
+      JSON.stringify({
+        note: 'add dep',
+        files: [
+          { path: '/package.json', content: '{"dependencies":{"axios":"^1"}}' },
+          { path: '../escape.ts', content: 'malicious' }
+        ]
+      })
+    );
+    const fix = createStudioFix(complete);
+    const out = await fix({ '/a.ts': 'x' }, obs);
+    expect(out.files['/package.json']).toContain('axios');
+    expect(out.files['/../escape.ts']).toBeUndefined();
+    expect(Object.keys(out.files)).toEqual(['/package.json']);
+    expect(out.note).toBe('add dep');
+  });
+
+  it('passes the observation-driven prompt to the model', async () => {
+    const complete = vi.fn(async (_prompt: string) => '{"files":[]}');
+    await createStudioFix(complete)({ '/a.ts': 'x' }, obs);
+    expect(complete.mock.calls[0][0]).toContain('OBSERVED ERRORS');
   });
 });
