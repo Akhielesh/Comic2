@@ -41,3 +41,12 @@ create policy waitlist_public_insert on public.waitlist_signups
 
 -- NOTE: intentionally no SELECT/UPDATE/DELETE policy for anon/authenticated.
 -- Reads + exports happen through the service role (which bypasses RLS).
+
+-- Defense-in-depth on top of RLS: this is a write-only marketing table, so client
+-- roles get INSERT and nothing else. The app only ever INSERTs (services/waitlist.ts
+-- uses .insert() with no .select()), so this changes no behaviour — it just makes the
+-- collected emails impossible for anon/authenticated to read, update, delete, or
+-- truncate, even if a policy were later misconfigured. Only the service role
+-- (server / Supabase dashboard) can read or manage the list.
+revoke select, update, delete, truncate on public.waitlist_signups from anon, authenticated;
+
