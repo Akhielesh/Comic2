@@ -1,5 +1,5 @@
 {
-  "name": "DreamStream Comic Studio",
-  "description": "A professional AI-powered comic creation studio. Transform scripts into fully realized comics with consistent characters, styles, and layouts using Gemini 2.5 Flash / 2.0 Flash + Flash Image.",
+  "name": "DreamStream Studio",
+  "description": "One AI-powered studio with three products: Comic Studio for turning scripts into cinematic comics, AI Chat for building with 100+ models, and Code (coming soon). New access is currently invite-only.",
   "requestFramePermissions": []
 }
