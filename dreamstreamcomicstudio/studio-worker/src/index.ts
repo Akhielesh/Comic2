@@ -18,6 +18,14 @@ export interface Env {
   Sandbox: DurableObjectNamespace<Sandbox>;
   /** Shared secret with the Railway backend; rejects any unsigned request. */
   STUDIO_HMAC_SECRET: string;
+  /**
+   * Domain whose FIRST-LEVEL wildcard serves preview URLs, e.g. `dreamstreamstudio.ai`
+   * (previews become `<port>-<id>-<token>.dreamstreamstudio.ai`, covered by free Universal
+   * SSL). Set as a wrangler var. Decoupled from the control endpoint on purpose: the worker
+   * only needs the `*.<domain>/*` route for previews, leaving the bare apex free for your
+   * real site. Falls back to the incoming request host (dev / single-domain setups).
+   */
+  STUDIO_PREVIEW_DOMAIN?: string;
 }
 
 interface StudioFile {
@@ -71,7 +79,13 @@ export default {
     if (proxied) return proxied;
 
     // 2) Control-plane requests (from Railway only, HMAC-signed): launch / stop / logs.
-    if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
+    //    A non-preview GET here is a stray subdomain caught by the `*.<domain>/*` route
+    //    (e.g. someone visits www.<domain>) — send them to the real site instead of a 405.
+    if (req.method !== 'POST') {
+      return env.STUDIO_PREVIEW_DOMAIN
+        ? Response.redirect(`https://${env.STUDIO_PREVIEW_DOMAIN}`, 302)
+        : json({ error: 'POST only' }, 405);
+    }
 
     const rawBody = await req.text();
     if (!(await verifyHmac(req, rawBody, env.STUDIO_HMAC_SECRET))) {
@@ -140,10 +154,13 @@ export default {
           env: { PORT: String(port), HOST: '0.0.0.0' }
         });
 
-        // 4. Expose the port → a PUBLIC preview URL. `hostname` is THIS worker's host
-        //    (e.g. dreamstream-studio.<account>.workers.dev), so the URL routes back here
-        //    via the worker's wildcard subdomain — no custom domain/DNS needed.
-        const exposed = await sandbox.exposePort(port, { hostname: new URL(req.url).host });
+        // 4. Expose the port → a PUBLIC preview URL on the configured preview domain
+        //    (`<port>-<id>-<token>.<STUDIO_PREVIEW_DOMAIN>`), which the `*.<domain>/*` route
+        //    sends back here → proxyToSandbox → the container. Falls back to the request
+        //    host for local dev. NOTE: exposePort rejects *.workers.dev — a real domain is
+        //    required (see README); STUDIO_PREVIEW_DOMAIN must be a zone in this account.
+        const hostname = env.STUDIO_PREVIEW_DOMAIN || new URL(req.url).host;
+        const exposed = await sandbox.exposePort(port, { hostname });
         return json({ status: 'starting', previewUrl: exposed.url, sandboxId: body.sandboxId, port });
       }
 

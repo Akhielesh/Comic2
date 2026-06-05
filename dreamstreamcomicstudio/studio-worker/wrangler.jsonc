@@ -20,22 +20,20 @@
   "durable_objects": {
     "bindings": [{ "class_name": "Sandbox", "name": "Sandbox" }]
   },
-  "migrations": [{ "new_sqlite_classes": ["Sandbox"], "tag": "v1" }]
+  "migrations": [{ "new_sqlite_classes": ["Sandbox"], "tag": "v1" }],
 
-  // ⚠️ A CUSTOM DOMAIN IS REQUIRED for live preview URLs. Cloudflare's Sandbox SDK builds
-  // subdomain preview URLs (<port>-<id>-<token>.<domain>) and its exposePort() THROWS
-  // `CustomDomainRequiredError` on *.workers.dev (no wildcard sub-subdomains there).
+  // Preview domain (first-level wildcard → free Universal SSL covers the preview hosts).
+  // The worker reads this to build `<port>-<id>-<token>.dreamstreamstudio.ai`.
+  "vars": { "STUDIO_PREVIEW_DOMAIN": "dreamstreamstudio.ai" },
+
+  // The worker only needs the WILDCARD route for previews. The bare apex (dreamstreamstudio.ai)
+  // and www stay free for your real site/app. The CONTROL endpoint stays on the worker's
+  // *.workers.dev URL — that's what Railway's STUDIO_WORKER_URL points at (control POSTs
+  // don't need the domain; only exposePort does, and it uses STUDIO_PREVIEW_DOMAIN above).
   //
-  // SETUP (after buying a cheap domain and adding it to Cloudflare as a zone):
-  //   1. UNCOMMENT the "routes" block below and replace EXAMPLE.COM with your domain.
-  //   2. Use the APEX domain (first-level wildcard `*.EXAMPLE.COM`) so free Universal SSL
-  //      covers the preview hosts — a sub-subdomain like *.studio.EXAMPLE.COM would need a
-  //      paid Advanced Certificate. A dedicated cheap domain just for the studio is ideal.
-  //   3. `wrangler deploy`, then set Railway STUDIO_WORKER_URL = https://EXAMPLE.COM
-  //      (the control endpoint shares the zone; proxyToSandbox routes only preview hosts).
-  //
-  // "routes": [
-  //   { "pattern": "EXAMPLE.COM/*", "zone_name": "EXAMPLE.COM" },
-  //   { "pattern": "*.EXAMPLE.COM/*", "zone_name": "EXAMPLE.COM" }
-  // ]
+  // Requires: `dreamstreamstudio.ai` added to Cloudflare as a zone in THIS account.
+  // (.com → .ai is a separate Redirect Rule in the dashboard — see README / OWNER-ACTIONS.)
+  "routes": [
+    { "pattern": "*.dreamstreamstudio.ai/*", "zone_name": "dreamstreamstudio.ai" }
+  ]
 }

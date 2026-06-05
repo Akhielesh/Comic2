@@ -5,6 +5,18 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Wire the real domains (dreamstreamstudio.ai primary, .com → .ai)
+Owner bought `dreamstreamstudio.ai` + `dreamstreamstudio.com`. Wired them in:
+- Worker preview domain is now **configurable** (`STUDIO_PREVIEW_DOMAIN`) and **decoupled
+  from the control endpoint** — the worker claims only `*.dreamstreamstudio.ai/*` for
+  previews, leaving the bare apex + www free for the real site. Control POSTs stay on the
+  worker's `*.workers.dev` URL (they never needed the domain). Stray subdomains on the route
+  302-redirect home instead of 405.
+- `wrangler.jsonc`: route `*.dreamstreamstudio.ai/*` + `vars.STUDIO_PREVIEW_DOMAIN`.
+- README + OWNER-ACTIONS: exact dashboard steps — add `.ai` as a zone, deploy, set Railway
+  `STUDIO_WORKER_URL` to the `.workers.dev` control URL, and a **`.com` → `.ai` 301 Redirect
+  Rule**. Worker typechecks clean.
+
 ## 2026-06-05 · Claude — Worker validated against the REAL SDK + custom-domain truth (Phase 1)
 Set out to "finish the Cloudflare setup"; validating the Worker against the installed SDK
 surfaced two prior mistakes and corrected them.

@@ -18,14 +18,17 @@ Cloudflare's Sandbox builds **subdomain** preview URLs (`<port>-<id>-<token>.<do
 wildcard sub-subdomains. (An earlier note here claimed a zero-config tunnel avoided this; that
 API does not exist in the SDK. The custom domain is real and unavoidable for live previews.)
 
-A **cheap dedicated domain (~$8–10/yr)** is perfect. Use the **apex** (first-level wildcard
-`*.EXAMPLE.COM`) so free **Universal SSL** covers preview hosts — a sub-subdomain like
-`*.studio.EXAMPLE.COM` would need a paid Advanced Certificate.
+**This deployment uses `dreamstreamstudio.ai`** (configured): previews are
+`<port>-<id>-<token>.dreamstreamstudio.ai`, covered by **free Universal SSL** (first-level
+wildcard). The worker claims ONLY the `*.dreamstreamstudio.ai/*` route, so the bare apex and
+`www` stay free for your real site. The **control endpoint stays on the worker's
+`*.workers.dev` URL** (control POSTs don't need the domain — only `exposePort` does, and it
+reads `STUDIO_PREVIEW_DOMAIN`). `dreamstreamstudio.com` → `.ai` is a Redirect Rule (below).
 
 ## Prerequisites (account owner)
 1. **Workers Paid** plan ($5/mo) — containers aren't on the free plan.
-2. A **custom domain added to Cloudflare as a zone** in this account (any registrar works;
-   Cloudflare Registrar is cheapest/at-cost). Universal SSL on the apex covers `*.EXAMPLE.COM`.
+2. **`dreamstreamstudio.ai` added to Cloudflare as a zone** in this account (update its
+   nameservers to Cloudflare's). Universal SSL then covers `*.dreamstreamstudio.ai`.
 3. **Docker** running locally (`docker info`) — `wrangler deploy` builds the image.
 
 ## Deploy (step by step)
@@ -34,17 +37,23 @@ cd studio-worker
 npm install
 npm run typecheck                     # should pass clean
 
-# 1. Add your domain to wrangler.jsonc: uncomment the "routes" block, replace EXAMPLE.COM.
-# 2. Set the shared HMAC secret (the SAME value also goes in Railway env):
+# wrangler.jsonc is already set: route *.dreamstreamstudio.ai/* + STUDIO_PREVIEW_DOMAIN.
 npx wrangler login
-npx wrangler secret put STUDIO_HMAC_SECRET
-
-# 3. Deploy (builds + pushes the container image; first deploy takes a few minutes):
-npm run deploy
+npx wrangler secret put STUDIO_HMAC_SECRET   # paste a strong random string
+npm run deploy                        # builds + pushes the image; first deploy ~few min
 ```
+The deploy prints the worker's `https://dreamstream-studio.<account>.workers.dev` URL.
+
 Then in **Railway** (the API service → Variables, redeploy):
-- `STUDIO_WORKER_URL = https://EXAMPLE.COM` (your domain — the control endpoint)
+- `STUDIO_WORKER_URL = https://dreamstream-studio.<account>.workers.dev`  (the **control** URL)
 - `STUDIO_HMAC_SECRET = <the same secret you set above>`
+
+### Route dreamstreamstudio.com → dreamstreamstudio.ai
+In Cloudflare: add **`dreamstreamstudio.com`** as a zone too, then **Rules → Redirect Rules →
+Create** a dynamic redirect:
+- **If** `Hostname` equals `dreamstreamstudio.com` **or** `www.dreamstreamstudio.com`
+- **Then** 301 to expression: `concat("https://dreamstreamstudio.ai", http.request.uri.path)`
+- Preserve query string ✓
 
 Then in **Cloudflare Pages** (frontend env, rebuild): `VITE_STUDIO_LIVE_ENABLED = true` to
 reveal the "Run live" button. And apply the Supabase migrations (`server/sql/studio_*.sql`).
@@ -64,8 +73,10 @@ routed to the right container; everything else is a control request. `sandboxId`
 authenticated user (`u_<userId>_<projectId>`) by the Railway route. Never expose this Worker
 directly to browsers.
 
-## How the no-DNS-headache routing works
-`exposePort(port, { hostname })` uses the **incoming request host** as the base, so when Railway
-POSTs to `https://EXAMPLE.COM` the preview URL becomes `https://<port>-<id>-<token>.EXAMPLE.COM`,
-which the `*.EXAMPLE.COM/*` route sends back to this Worker → `proxyToSandbox` → the container.
-No per-preview DNS records; the single wildcard route covers them all.
+## How the routing works
+`exposePort(port, { hostname })` uses `STUDIO_PREVIEW_DOMAIN` (= `dreamstreamstudio.ai`) as the
+base, so the preview URL is `https://<port>-<id>-<token>.dreamstreamstudio.ai`. The single
+`*.dreamstreamstudio.ai/*` route sends every such host back to this Worker → `proxyToSandbox` →
+the right container. No per-preview DNS records. Control POSTs come in on the worker's
+`*.workers.dev` URL (Railway's `STUDIO_WORKER_URL`), which is independent of the preview domain —
+so the bare apex `dreamstreamstudio.ai` is never touched by the worker and is free for your site.

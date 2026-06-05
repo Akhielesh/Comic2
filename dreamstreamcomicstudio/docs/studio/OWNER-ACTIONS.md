@@ -28,9 +28,10 @@ building everything else first and will validate together once these are done.
 | # | Action | Why | How | Status |
 |---|---|---|---|---|
 | O1 | Enable **Cloudflare Workers Paid** ($5/mo) | Containers aren't on Free | Cloudflare dashboard | ⏳ pending |
-| O2 | **Custom domain + wildcard route — REQUIRED** (corrected 2026-06-05) | The Sandbox SDK's `exposePort()` **throws `CustomDomainRequiredError` on `*.workers.dev`** — preview URLs are subdomain-based and need a wildcard. (The old "zero-config tunnels" note was wrong — that SDK API does not exist.) Buy a cheap dedicated domain, add it to Cloudflare, use the apex so free Universal SSL covers `*.DOMAIN`. | Buy ~$8–10/yr domain → add to Cloudflare → uncomment+fill `routes` in `studio-worker/wrangler.jsonc` | ⏳ **pending (decided: get a domain)** |
-| O3 | **Deploy the Worker** | Runs the AI-built apps | `cd studio-worker` → `npm install` → `npm run typecheck` → `wrangler login` → `wrangler secret put STUDIO_HMAC_SECRET` → `wrangler deploy` (Docker running, routes set). | ⏳ pending |
-| O4 | Set Railway env: `STUDIO_WORKER_URL` (= `https://YOURDOMAIN`), `STUDIO_HMAC_SECRET` | Control plane → Worker hop | Railway → API service → Variables → redeploy | ⏳ pending |
+| O2 | **Add `dreamstreamstudio.ai` to Cloudflare as a zone** (domains bought ✅) | Preview URLs need a real domain's wildcard (`exposePort` rejects `*.workers.dev`). Config is already wired in `wrangler.jsonc` (route `*.dreamstreamstudio.ai/*` + `STUDIO_PREVIEW_DOMAIN`). | Point `dreamstreamstudio.ai` nameservers at Cloudflare; Universal SSL auto-covers `*.dreamstreamstudio.ai`. The worker leaves the bare apex/www free for your real site. | ⏳ pending |
+| O2b | **Redirect `dreamstreamstudio.com` → `.ai`** | Use both domains, .com is the catch-all | Add `dreamstreamstudio.com` as a zone → Rules → Redirect Rules → 301 to `concat("https://dreamstreamstudio.ai", http.request.uri.path)` (see worker README) | ⏳ pending |
+| O3 | **Deploy the Worker** | Runs the AI-built apps | `cd studio-worker` → `npm install` → `npm run typecheck` → `wrangler login` → `wrangler secret put STUDIO_HMAC_SECRET` → `wrangler deploy` (Docker running). Routes already configured. | ⏳ pending |
+| O4 | Set Railway env: `STUDIO_WORKER_URL` (= the **`.workers.dev` control URL** printed by deploy), `STUDIO_HMAC_SECRET` | Control plane → Worker hop (control POSTs don't use the domain) | Railway → API service → Variables → redeploy | ⏳ pending |
 | O5 | Apply DB migrations `studio_runs.sql` + `studio_projects.sql` **+ `studio_agents.sql` + `mcp_servers.sql`** | run metering, project persistence, custom-agent library, server-side MCP registry | **I can apply all via Supabase access — just say so**, or run them in the Supabase SQL editor | ⏳ pending (offered) |
 | O6 | ~~Review/approve Phase 2 PR #77~~ | control plane shipped | merged to prod 2026-06-05 | ✅ done |
 | O7 | (Later, Phase 10) optional keys: `TAVILY_API_KEY`/`BRAVE_API_KEY` (search), `FOURSQUARE_API_KEY` (places) | Raise tool sourcing reliability | Railway env | 🔮 future |
@@ -53,11 +54,10 @@ When infra is up: trigger a build in the app → `/api/studio/launch` should ret
 ---
 
 ## ❓ Open decisions (need your call sometime)
-- **Brand + domain** — ⚠️ **NOW REQUIRED for the live path (was wrongly marked optional).**
-  The live preview genuinely needs a custom domain (see O2). **Decided: get a cheap domain.**
-  It can be a throwaway dedicated studio domain (doesn't need to be the final brand name) —
-  any ~$8–10/yr domain on the apex works with free Universal SSL. The final brand name can
-  be chosen separately later; this just unblocks deploys.
+- **Brand + domain** — ✅ **DECIDED + bought:** `dreamstreamstudio.ai` (primary) +
+  `dreamstreamstudio.com` (→ 301 to `.ai`). Studio previews live on
+  `*.dreamstreamstudio.ai`; the worker leaves the apex/www free for the real site. All wired
+  in `wrangler.jsonc`. Remaining = the Cloudflare dashboard steps O2/O2b/O3.
 - **Default build/coding model** — recommend strong-open default + frontier via BYOK.
 - **Per-project backend** — recommend SQLite-in-container first, Supabase-per-project later.
 
