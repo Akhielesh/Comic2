@@ -87,6 +87,9 @@ const App: React.FC = () => {
 
   // Simple routing state
   const [currentView, setCurrentView] = useState<AppView>('home');
+  // Which tab the auth page opens on: existing users sign in; everyone else can
+  // request early access while new signups are invite-only.
+  const [authInitialMode, setAuthInitialMode] = useState<'signin' | 'request-access'>('signin');
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [publicProject, setPublicProject] = useState<Project | null>(null);
   const [viewedProfile, setViewedProfile] = useState<string | null>(null); // username
@@ -525,6 +528,11 @@ const App: React.FC = () => {
     }
   };
 
+  const goToAuth = (mode: 'signin' | 'request-access' = 'signin') => {
+    setAuthInitialMode(mode);
+    handleNavigate('auth');
+  };
+
   const handleStartChatWithModel = (model: { id: string; name: string; source: 'openrouter' | 'nvidia' }) => {
     setPendingChatModel(model);
     clearReaderUrlParams();
@@ -652,7 +660,8 @@ const App: React.FC = () => {
               onViewComics={() => handleNavigate('gallery')}
               onEnterStudio={() => handleNavigate('dashboard')}
               onEnterComicForge={() => handleNavigate('comicforge')}
-              onSignIn={() => handleNavigate('auth')}
+              onSignIn={() => goToAuth('signin')}
+              onRequestAccess={() => goToAuth('request-access')}
               onOpenProfile={() => {
                 setSettingsTab('profile');
                 setSettingsReturnView(currentView);
@@ -690,6 +699,7 @@ const App: React.FC = () => {
 
           {effectiveView === 'auth' && (
             <AuthPage
+              initialMode={authInitialMode}
               onLoginSuccess={() => {
                 if (pendingReaderTarget) {
                   const target = pendingReaderTarget;
