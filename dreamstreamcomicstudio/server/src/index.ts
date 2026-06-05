@@ -5,7 +5,7 @@ import compression from 'compression';
 
 import {
   COMICFORGE_ENABLED,
-  CORS_ORIGINS,
+  isAllowedOrigin,
   MAX_BODY_SIZE,
   PORT,
   RATE_LIMIT_IMAGE_MAX_REQUESTS,
@@ -54,7 +54,6 @@ if (TRUST_PROXY !== false) {
   app.set('trust proxy', TRUST_PROXY);
 }
 
-const allowedOrigins = new Set(CORS_ORIGINS);
 app.use(attachRequestContext);
 app.use(requestLogger);
 app.use(applySecurityHeaders);
@@ -72,7 +71,7 @@ app.use(
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || allowedOrigins.has(origin)) {
+      if (isAllowedOrigin(origin)) {
         callback(null, true);
         return;
       }

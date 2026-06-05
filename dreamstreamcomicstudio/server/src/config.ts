@@ -42,6 +42,30 @@ export const BILLING_ENABLED = parseBooleanEnv(process.env.BILLING_ENABLED, true
 export const PORT = parseIntegerEnv(process.env.PORT, 7071, 'PORT', 1);
 export const CORS_ORIGINS = parseCorsOrigins(process.env.CORS_ORIGIN);
 export const CORS_ORIGIN = CORS_ORIGINS.join(',');
+
+// Production brand domains that are ALWAYS trusted for CORS, in addition to whatever
+// CORS_ORIGIN lists. This keeps the live site working even if CORS_ORIGIN is forgotten or
+// misconfigured on the host (Railway), and covers tokenized Studio preview subdomains
+// (`<port>-<id>-<token>.dreamstreamstudio.ai`). Apex, `www`, and any subdomain of these are
+// matched. HTTPS-only — http://localhost dev origins still come through CORS_ORIGIN above.
+const TRUSTED_ORIGIN_DOMAINS = ['dreamstreamstudio.ai', 'dreamstreamstudio.com'];
+
+export const isAllowedOrigin = (origin: string | undefined): boolean => {
+  // No Origin header = non-browser / same-origin request — allow (matches prior behavior).
+  if (!origin) return true;
+  if (CORS_ORIGINS.includes(origin)) return true;
+  let hostname: string;
+  try {
+    const url = new URL(origin);
+    if (url.protocol !== 'https:') return false;
+    hostname = url.hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  return TRUSTED_ORIGIN_DOMAINS.some(
+    (domain) => hostname === domain || hostname.endsWith(`.${domain}`)
+  );
+};
 export const MAX_BODY_SIZE = process.env.MAX_BODY_SIZE || '10mb';
 export const TRUST_PROXY = parseTrustProxy(process.env.TRUST_PROXY, IS_PRODUCTION);
 
