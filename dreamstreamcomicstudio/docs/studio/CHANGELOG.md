@@ -5,6 +5,12 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — a11y: modal Escape + focus restore
+- **`kit/useDialogA11y.ts`** — while a portaled modal is open, **Escape closes it from anywhere**
+  and focus is **restored** to the previously-focused element on close. Applied to the
+  CommandPalette + ShortcutsHelp (+ `aria-modal`, the help dialog now takes focus on open).
+- Test: help closes on Escape. 72 studio tests; typecheck + build green.
+
 ## 2026-06-05 · Claude — Sprint 4: model-tier / BYOK surface (S4.3)
 - The top-bar **coding** chip is now honest about the build model tier: **coding · free** (strong
   open model, free-first) vs **coding · your key** when an OpenRouter key is set (BYOK → frontier

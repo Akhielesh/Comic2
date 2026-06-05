@@ -1,12 +1,13 @@
 // ShortcutsHelp (Sprint 4): a small modal listing Code Studio keyboard shortcuts. Portaled,
 // themed, spring-animated, reduced-motion safe.
 
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'framer-motion';
 import { Keyboard } from 'lucide-react';
 import { useStudioTheme } from './themeStore';
 import { usePrefersReducedMotion, springSoft } from './motion';
+import { useDialogA11y } from './useDialogA11y';
 
 const SHORTCUTS: { keys: string; label: string }[] = [
   { keys: '⌘K', label: 'Command palette' },
@@ -19,17 +20,23 @@ const SHORTCUTS: { keys: string; label: string }[] = [
 export const ShortcutsHelp: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
   const t = useStudioTheme();
   const reduce = usePrefersReducedMotion();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogA11y(open, onClose);
+  useEffect(() => { if (open) dialogRef.current?.focus(); }, [open]);
   if (!open || typeof document === 'undefined') return null;
   return createPortal(
     <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/50" onClick={onClose}>
       <motion.div
+        ref={dialogRef}
+        tabIndex={-1}
         initial={reduce ? false : { opacity: 0, scale: 0.97 }}
         animate={reduce ? {} : { opacity: 1, scale: 1 }}
         transition={springSoft}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-label="Keyboard shortcuts"
-        className={`w-full max-w-sm rounded-xl border ${t.edgeStrong} ${t.panel} ${t.text} shadow-2xl overflow-hidden`}
+        aria-modal="true"
+        className={`w-full max-w-sm rounded-xl border ${t.edgeStrong} ${t.panel} ${t.text} shadow-2xl overflow-hidden focus:outline-none`}
       >
         <div className={`flex items-center gap-2 px-4 py-3 border-b ${t.edge} font-bold`}>
           <Keyboard className={`w-4 h-4 ${t.accent}`} /> Keyboard shortcuts

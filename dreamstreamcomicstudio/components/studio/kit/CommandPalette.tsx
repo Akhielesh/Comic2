@@ -7,6 +7,7 @@ import { motion } from 'framer-motion';
 import { Search, CornerDownLeft } from 'lucide-react';
 import { useStudioTheme } from './themeStore';
 import { usePrefersReducedMotion, springSoft } from './motion';
+import { useDialogA11y } from './useDialogA11y';
 
 export interface Command {
   id: string;
@@ -29,6 +30,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, c
   const [query, setQuery] = useState('');
   const [sel, setSel] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  useDialogA11y(open, onClose);
 
   useEffect(() => {
     if (open) { setQuery(''); setSel(0); const id = setTimeout(() => inputRef.current?.focus(), 0); return () => clearTimeout(id); }
@@ -65,6 +67,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, c
         onKeyDown={onKey}
         role="dialog"
         aria-label="Command palette"
+        aria-modal="true"
         className={`w-full max-w-lg rounded-xl border ${t.edgeStrong} ${t.panel} ${t.text} shadow-2xl overflow-hidden`}
       >
         <div className={`flex items-center gap-2 px-3 py-2.5 border-b ${t.edge}`}>

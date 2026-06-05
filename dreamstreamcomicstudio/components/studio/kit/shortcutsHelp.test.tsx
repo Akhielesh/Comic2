@@ -20,4 +20,11 @@ describe('ShortcutsHelp', () => {
     fireEvent.click(screen.getByRole('dialog').parentElement as HTMLElement);
     expect(onClose).toHaveBeenCalled();
   });
+
+  it('closes on Escape (from anywhere)', () => {
+    const onClose = vi.fn();
+    render(<ShortcutsHelp open onClose={onClose} />);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalled();
+  });
 });

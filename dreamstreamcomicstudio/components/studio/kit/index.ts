@@ -52,3 +52,4 @@ export { ThemeSwitcher } from './ThemeSwitcher';
 export { ResizableSplit, applyGutterDelta } from './ResizableSplit';
 export type { ResizableSplitProps } from './ResizableSplit';
 export { useMediaQuery, useIsWide } from './useMediaQuery';
+export { useDialogA11y } from './useDialogA11y';
