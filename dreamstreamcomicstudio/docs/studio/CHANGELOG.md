@@ -5,6 +5,15 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Sprint 4 (start): ⌘K command palette (S4.2)
+- **`kit/CommandPalette.tsx`** — a ⌘K palette (fuzzy filter, arrow-key nav, Enter to run, Esc to
+  close; spring-animated, portaled, themed). Generic `Command[]` API.
+- **`CodeStudioView`** — global ⌘K/Ctrl-K listener + a top-bar ⌘K hint; commands wired:
+  Build & run, Stop, Revert all, Download .zip, Theme (Black/White/DreamStream), Build from chat,
+  Back — each shown only when relevant.
+- Tests: `commandPalette.test.tsx` (filter / click-run / Esc / Enter). 62 studio tests; typecheck
+  + build green.
+
 ## 2026-06-05 · Claude — Sprint 3: Changes view — diff + revert (S3.1/S3.3)
 - **`workspace/diff.ts`** — a pure LCS line diff (`diffLines` + `diffStat`), unit-tested.
 - **`workspace/DiffView.tsx`** — themed +/- diff rendering. **`workspace/ChangesPanel.tsx`** —

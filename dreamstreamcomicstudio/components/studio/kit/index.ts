@@ -23,6 +23,9 @@ export type { ConfettiProps } from './Confetti';
 export { EmptyState } from './EmptyState';
 export type { EmptyStateProps } from './EmptyState';
 
+export { CommandPalette } from './CommandPalette';
+export type { Command, CommandPaletteProps } from './CommandPalette';
+
 export {
   usePrefersReducedMotion,
   springSoft,

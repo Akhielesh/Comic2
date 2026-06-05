@@ -10,11 +10,14 @@
 import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft, Wand2, Square, Share2, Download, FileCode, Cloud,
-  Sparkles, Cpu, Lock, Mail, Loader2,
+  Sparkles, Cpu, Lock, Mail, Loader2, Command as CommandIcon, Moon, Sun, Palette, Undo2, MessageSquarePlus,
 } from 'lucide-react';
 import type { CodeStudioArtifact } from '../../apiTypes';
-import { Reveal, Skeleton, StatusPulse, Lift, ThemeSwitcher, ResizableSplit, Confetti, useIsWide, useStudioTheme } from './kit';
-import type { RunStatus } from './kit';
+import {
+  Reveal, Skeleton, StatusPulse, Lift, ThemeSwitcher, ResizableSplit, Confetti, CommandPalette,
+  useIsWide, useStudioTheme, useStudioThemeStore,
+} from './kit';
+import type { RunStatus, Command } from './kit';
 import {
   CodeWorkspace, LogsConsole, PreviewFrame, BuildTrace, ChangesPanel, useStudioBuild,
   useStudioWorkspace, useStudioLogs, isPathDirty, workspaceCurrentArtifact,
@@ -61,11 +64,15 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const wsBaseline = useStudioWorkspace((s) => s.baseline);
   const wsPaths = useStudioWorkspace((s) => s.paths);
   const appendLog = useStudioLogs((s) => s.append);
+  const revertFile = useStudioWorkspace((s) => s.revertFile);
+  const setTheme = useStudioThemeStore((s) => s.setTheme);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const hasFiles = wsPaths.length > 0;
-  const dirtyCount = useMemo(
-    () => wsPaths.filter((p) => isPathDirty({ files: wsFiles, baseline: wsBaseline }, p)).length,
+  const dirtyList = useMemo(
+    () => wsPaths.filter((p) => isPathDirty({ files: wsFiles, baseline: wsBaseline }, p)),
     [wsPaths, wsFiles, wsBaseline]
   );
+  const dirtyCount = dirtyList.length;
   // The runnable app, built purely from the workspace store (works for chat hand-offs AND
   // projects opened from the start screen — read the working copy so edits boot).
   const currentArtifact = useMemo(
@@ -77,6 +84,15 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   useEffect(() => {
     if (artifact) loadArtifact(artifact);
   }, [artifact, loadArtifact]);
+
+  // ⌘K / Ctrl-K toggles the command palette.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); setPaletteOpen((o) => !o); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // "Run live" — drives the existing launch backend. Surfaces a clean error when the worker
   // isn't configured yet (the honest 503 from S0.1), which doubles as the S0.6 validation hook.
@@ -139,6 +155,18 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     setPreviewUrl(null);
     appendLog('system', 'Run stopped.');
   };
+
+  // Command palette actions (filtered + run by the ⌘K palette).
+  const commands: Command[] = [];
+  if (hasFiles && enabled) commands.push({ id: 'build', label: status === 'live' ? 'Re-build & run' : 'Build & run', hint: '⏎', icon: <Wand2 className="w-4 h-4" />, keywords: 'run agent compile heal', run: runBuild });
+  if (status === 'live') commands.push({ id: 'stop', label: 'Stop run', icon: <Square className="w-4 h-4" />, keywords: 'halt kill end', run: stopLive });
+  if (dirtyCount > 0) commands.push({ id: 'revert', label: `Revert all changes (${dirtyCount})`, icon: <Undo2 className="w-4 h-4" />, keywords: 'undo discard reset', run: () => dirtyList.forEach((p) => revertFile(p)) });
+  if (hasFiles) commands.push({ id: 'zip', label: 'Download .zip', icon: <Download className="w-4 h-4" />, keywords: 'export save download', run: () => void downloadArtifactZip(currentArtifact) });
+  commands.push({ id: 'theme-black', label: 'Theme: Black', icon: <Moon className="w-4 h-4" />, keywords: 'dark oled appearance theme', run: () => setTheme('black') });
+  commands.push({ id: 'theme-white', label: 'Theme: White', icon: <Sun className="w-4 h-4" />, keywords: 'light appearance theme', run: () => setTheme('light') });
+  commands.push({ id: 'theme-brand', label: 'Theme: DreamStream', icon: <Palette className="w-4 h-4" />, keywords: 'brand comic appearance theme', run: () => setTheme('brand') });
+  commands.push({ id: 'chat', label: 'Build from chat', icon: <MessageSquarePlus className="w-4 h-4" />, keywords: 'new prompt generate describe', run: () => onNavigate('chat') });
+  commands.push({ id: 'back', label: 'Back', icon: <ArrowLeft className="w-4 h-4" />, keywords: 'exit leave close', run: onBack });
 
   const projectName = wsTitle || 'Untitled project';
 
@@ -209,6 +237,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   return (
     <div className={`min-h-screen h-screen ${t.bg} ${t.text} flex flex-col`}>
       {celebrate && <Confetti onDone={() => setCelebrate(false)} />}
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={commands} />
       {/* Top bar */}
       <Reveal distance={-8}>
         <div className={`flex items-center gap-3 px-4 h-14 border-b ${t.edge} ${t.panelAlt}`}>
@@ -232,6 +261,13 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
           </div>
 
           <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={() => setPaletteOpen(true)}
+              title="Command palette (⌘K)"
+              className={`hidden md:inline-flex items-center gap-1 text-[11px] font-semibold rounded-full border ${t.edge} px-2 py-1 ${t.textDim} ${t.hover} ${t.focusRing}`}
+            >
+              <CommandIcon className="w-3 h-3" /> K
+            </button>
             <ThemeSwitcher className="hidden sm:inline-flex" />
             <StatusPulse status={status} className="mr-1" />
             {status === 'live' ? (
