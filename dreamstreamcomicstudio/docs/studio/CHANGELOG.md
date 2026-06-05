@@ -5,6 +5,16 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Phase 4: live RUN capability (worker launch→logs→probe)
+- `server/src/services/studioBuildService.ts` — `createWorkerRun` builds the `run(files)`
+  dep for `runBuildAgent`: (re)launch the container, fetch dev logs, probe the preview's
+  HTTP status, normalize via `toRunResult`. Worker call + HTTP probe are injectable.
+  Plus `filesRecordToArray` (orchestrator map → worker file array) and `probePreview`.
+- Tests: `studioBuildService.test.ts` incl. an end-to-end `runBuildAgent` drive (missing
+  dep → injected fix → clean) using a mocked worker. Suite 368 green.
+- Remaining for the live loop: the `/api/studio/build` SSE route composing `createWorkerRun`
+  (run) + a request-scoped AI `complete` (fix, via runChat + pickCodingModel), then `BuildTrace`.
+
 ## 2026-06-05 · Claude — Phase 4: shared Studio Worker client + run-result bridge
 - `server/src/services/studioWorker.ts` — single signed worker client (`callStudioWorker`,
   `studioConfigured`) + a pure `toRunResult` mapping the worker's launch/logs/preview-probe
