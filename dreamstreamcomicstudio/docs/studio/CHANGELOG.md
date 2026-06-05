@@ -5,6 +5,11 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — docs: bring 00-STATUS current (Sprints 0–5 shipped)
+Refreshed the authoritative tracker — Experience ~85%, "Latest" + "Where we are" now reflect the
+~19 increments shipped (Sprints 0–5) and the honest "needs the owner" list (live Build validation,
+prompt→generate, deploy/GitHub export, GA gating, app-wide design rollout).
+
 ## 2026-06-05 · Claude — Sprint 5: duplicate project (S5.2-lite)
 - **`StudioStart`** project cards get a **Duplicate** action — loads the project's files as a
   fresh untitled "Copy of …" (no project id), so the next Build saves it as a new project.

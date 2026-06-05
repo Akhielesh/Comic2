@@ -6,30 +6,39 @@
 
 **Last updated:** 2026-06-05 · **Updated by:** Claude · **Branch:** `claude/wizardly-shannon-gPFXf` → prod
 
-> Latest: **INFRA IS LIVE.** The Cloudflare Studio Worker (`dreamstream-studio`) is deployed,
-> the wildcard preview DNS resolves, the **CORS break that made the live site non-functional is
-> fixed + verified**, and all **4 studio DB migrations are applied** (7 tables, RLS on). The main
-> comic app at `dreamstreamstudio.ai` works end-to-end again. Phase 0 (infra) is **done**; the
-> studio control path is wired and ready for a live launch round-trip.
+> Latest: **THE CODE STUDIO PRODUCT IS BUILT + LIVE.** Sprints 0–5 (per
+> [`CODE-STUDIO-PRODUCT-PLAN.md`](./CODE-STUDIO-PRODUCT-PLAN.md)) shipped to production across ~19
+> increments. Code Studio is a real, themeable, agentic app builder: **templates / chat hand-off →
+> Monaco workspace (3 themes, file tree + tabs + file ops, ⌘K palette) → agentic Build (animated
+> plan→run→observe→fix trace + confetti + "over to you" stuck UX) → iterate (diff/revert, version
+> history + restore) → share the running app**. Infra (Worker + DNS + DB + CORS) remains live.
 >
-> 🟢 **Owner to-dos (now small) + how to resume →** [`OWNER-ACTIONS.md`](./OWNER-ACTIONS.md).
+> 🟢 **Owner to-dos + how to resume →** [`OWNER-ACTIONS.md`](./OWNER-ACTIONS.md).
 
 ---
 
 ## Overall progress
 
 ```
-Foundation  ██████████████████░░  ~90%   (infra LIVE: worker + DNS + DB migrations + CORS fix; control plane + persistence + GitHub sync shipped)
-Experience  ███████████░░░░░░░░░  ~55%   (Sprint 0 + Sprint 1 SHIPPED: full Code Studio workspace — Monaco editor, file tree, tabs, resizable panes, logs console, device-frame preview, load-saved-projects, 3 themes; Sprint 2 agentic build next)
+Foundation  ███████████████████░  ~95%   (infra LIVE; control plane + persistence + agentic loop + version routes + GitHub sync shipped)
+Experience  █████████████████░░░  ~85%   (Sprints 0–5 SHIPPED: workspace, 3 themes, agentic Build + trace + celebration, file ops, diff/revert, version history, ⌘K palette, templates, share-link MVP, duplicate)
 ```
 
-**Where we are:** infra is **live** (Cloudflare Worker deployed, wildcard preview DNS up,
-studio tables migrated, CORS fixed + verified). Shipped to prod: studio bug-fixes, the docs
-hub, the Worker, **Phase 2** control plane, **Phase 3 core** (Run-live, flag-gated),
-**Phase 5** persistence backend, platform workstreams **9/10/11** (backends), and
-**Phase 6** GitHub sync. **No longer infra-blocked** — the next builds (Phase 4 agentic loop,
-Phase 3 in-app logs, Phase 6 one-click deploy) can now run against the live worker. Remaining
-to fully *exercise*: a signed-in launch round-trip + the `VITE_STUDIO_LIVE_ENABLED` flag.
+**Where we are:** the studio **product** is built and on prod. Shipped this build-out (front-end +
+the additive bits of backend):
+- **Sprint 0** — Code Studio route, Motion Kit design system, one-CTA chat hand-off, legacy-engine quarantine.
+- **Sprint 1** — Monaco editor, nested file tree, tabs, dirty tracking, **resizable panes**, streaming **logs console**, **device-frame live preview**, load-saved-projects, responsive, **3 themes** (Black / White / DreamStream).
+- **Sprint 2** — the **agentic Build** (`/api/studio/build` SSE client), animated **BuildTrace**, **confetti** on green builds, **stuck-loop "over to you"** UX, illustrated empty/error states, 21st.dev Magic-MCP tech logos.
+- **Sprint 3** — **file ops** (add/delete/rename), **Changes** diff + revert, **version history + restore** (additive read-only routes; builds now persist to a stable project + accumulate versions).
+- **Sprint 4** — **⌘K command palette**, **starter templates**, **build shortcuts** (⌘B/⌘↵), shortcuts-help overlay.
+- **Sprint 5 (lite)** — **share** the running app (copy live preview link), **duplicate** project.
+
+**Needs the owner (not shipped blind):** a signed-in **live Build round-trip** validation
+(confirm `STUDIO_WORKER_URL` + `VITE_STUDIO_LIVE_ENABLED`) which also exercises the new version
+routes; **prompt→generate** (S2.1 — choose: reuse chat `generate_app` vs a dedicated route);
+**model-routing surface** (S4.3); **one-click deploy + GitHub export** (S6); **GA gating** (S6.3);
+and the **app-wide design-language rollout** (S7 — touches the main Comic/Chat app, so wants a
+green light before I change non-studio surfaces).
 
 ## Phase board
 
