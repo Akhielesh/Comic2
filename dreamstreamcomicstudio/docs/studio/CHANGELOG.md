@@ -5,6 +5,15 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Sprint 1 (cont.): live-preview device frames + boot reveal (S1.4)
+- **`workspace/PreviewFrame.tsx`** — the live-preview surface: a device-size toggle
+  (desktop/tablet/mobile with a device frame), **refresh**, **open-in-new-tab**, the preview
+  URL, and a **boot reveal** (shimmer skeleton → iframe fades in on load). Themed.
+- Wired into `CodeStudioView` (replaces the raw preview iframe). `+ previewFrame.test.tsx`
+  (toolbar + device toggle). 34 studio tests. Typecheck + build green.
+- **Workflow:** per owner — every PR now fast-forwards to production once CI is green (no
+  parked previews). Remaining Sprint 1: load saved projects (S1.7).
+
 ## 2026-06-05 · Claude — Sprint 1 (cont.): resizable panes (S1.1) + logs console (S1.5)
 - **`kit/ResizableSplit.tsx`** — a flex N-pane splitter with draggable gutters + sizes persisted
   to localStorage (flex-grow weights, fluid across window resizes). Pure `applyGutterDelta`

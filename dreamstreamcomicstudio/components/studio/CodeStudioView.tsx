@@ -16,7 +16,7 @@ import type { CodeStudioArtifact } from '../../apiTypes';
 import { Reveal, Skeleton, StatusPulse, Lift, ThemeSwitcher, ResizableSplit, useIsWide, useStudioTheme } from './kit';
 import type { RunStatus } from './kit';
 import {
-  CodeWorkspace, LogsConsole, useStudioWorkspace, useStudioLogs, isPathDirty, workspaceToArtifact,
+  CodeWorkspace, LogsConsole, PreviewFrame, useStudioWorkspace, useStudioLogs, isPathDirty, workspaceToArtifact,
 } from './workspace';
 import { launchLiveStudio, stopLiveStudio } from '../../services/studioApi';
 import { isLiveStudioEnabled } from '../../services/studioFlags';
@@ -157,7 +157,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const previewPane = (
     <PaneFrame title="Live preview" icon={<Cloud className="w-4 h-4" />}>
       {previewUrl ? (
-        <iframe title="Live preview" src={previewUrl} className="h-full w-full bg-white" />
+        <PreviewFrame url={previewUrl} />
       ) : !enabled && artifact ? (
         // Non-admin: instant in-browser peek so the CTA never dead-ends (decision D3).
         <Suspense fallback={<div className="p-3"><Skeleton className="h-full min-h-[12rem] w-full" /></div>}>
