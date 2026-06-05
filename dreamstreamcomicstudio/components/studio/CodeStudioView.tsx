@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import type { CodeStudioArtifact } from '../../apiTypes';
 import {
-  Reveal, Skeleton, StatusPulse, Lift, ThemeSwitcher, ResizableSplit, Confetti, CommandPalette,
+  Reveal, Skeleton, StatusPulse, Lift, ThemeSwitcher, ResizableSplit, Confetti, CommandPalette, ShortcutsHelp,
   useIsWide, useStudioTheme, useStudioThemeStore,
 } from './kit';
 import type { RunStatus, Command } from './kit';
@@ -67,6 +67,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const revertFile = useStudioWorkspace((s) => s.revertFile);
   const setTheme = useStudioThemeStore((s) => s.setTheme);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const runBuildRef = useRef<() => void>(() => {});
   const hasFiles = wsPaths.length > 0;
   const dirtyList = useMemo(
@@ -188,6 +189,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   commands.push({ id: 'theme-white', label: 'Theme: White', icon: <Sun className="w-4 h-4" />, keywords: 'light appearance theme', run: () => setTheme('light') });
   commands.push({ id: 'theme-brand', label: 'Theme: DreamStream', icon: <Palette className="w-4 h-4" />, keywords: 'brand comic appearance theme', run: () => setTheme('brand') });
   commands.push({ id: 'chat', label: 'Build from chat', icon: <MessageSquarePlus className="w-4 h-4" />, keywords: 'new prompt generate describe', run: () => onNavigate('chat') });
+  commands.push({ id: 'help', label: 'Keyboard shortcuts', icon: <CommandIcon className="w-4 h-4" />, keywords: 'keys help cheatsheet', run: () => setHelpOpen(true) });
   commands.push({ id: 'back', label: 'Back', icon: <ArrowLeft className="w-4 h-4" />, keywords: 'exit leave close', run: onBack });
 
   const projectName = wsTitle || 'Untitled project';
@@ -260,6 +262,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     <div className={`min-h-screen h-screen ${t.bg} ${t.text} flex flex-col`}>
       {celebrate && <Confetti onDone={() => setCelebrate(false)} />}
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={commands} />
+      <ShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
       {/* Top bar */}
       <Reveal distance={-8}>
         <div className={`flex items-center gap-3 px-4 h-14 border-b ${t.edge} ${t.panelAlt}`}>
@@ -289,6 +292,14 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
               className={`hidden md:inline-flex items-center gap-1 text-[11px] font-semibold rounded-full border ${t.edge} px-2 py-1 ${t.textDim} ${t.hover} ${t.focusRing}`}
             >
               <CommandIcon className="w-3 h-3" /> K
+            </button>
+            <button
+              onClick={() => setHelpOpen(true)}
+              title="Keyboard shortcuts"
+              aria-label="Keyboard shortcuts"
+              className={`hidden md:inline-flex items-center justify-center h-6 w-6 rounded-full border ${t.edge} ${t.textDim} ${t.hover} ${t.focusRing}`}
+            >
+              <span className="text-[11px] font-bold">?</span>
             </button>
             <ThemeSwitcher className="hidden sm:inline-flex" />
             <StatusPulse status={status} className="mr-1" />

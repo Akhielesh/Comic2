@@ -26,6 +26,8 @@ export type { EmptyStateProps } from './EmptyState';
 export { CommandPalette } from './CommandPalette';
 export type { Command, CommandPaletteProps } from './CommandPalette';
 
+export { ShortcutsHelp } from './ShortcutsHelp';
+
 export {
   usePrefersReducedMotion,
   springSoft,

@@ -5,6 +5,11 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Sprint 4: keyboard-shortcuts help overlay (S4.2)
+- **`kit/ShortcutsHelp.tsx`** — a themed, portaled modal listing the studio shortcuts (⌘K, ⌘B,
+  ⌘↵, ⌘S, Esc). Opened from a top-bar **?** button + a **Keyboard shortcuts** palette command.
+- Test: `shortcutsHelp.test.tsx` (open/close + content). 65 studio tests; typecheck + build green.
+
 ## 2026-06-05 · Claude — Sprint 4/5: share live link + build shortcuts (S5.1-lite / S4.2)
 - **Share** — the top-bar Share button now **copies the live preview URL** (with a "Copied!"
   state) while the container is alive — a real share-the-running-app MVP, no backend. Disabled
