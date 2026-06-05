@@ -1,7 +1,8 @@
 import React from 'react';
-import { ArrowRight, Bot, Zap, Sparkles } from 'lucide-react';
+import { ArrowRight, Bot, Mail, Sparkles } from 'lucide-react';
 import { Button } from '../Button';
 import { BrandLockup } from './BrandLockup';
+import { ComingSoonTab } from './ComingSoonTab';
 import { NotificationBell } from '../NotificationBell';
 import { UserAvatar } from '../UserAvatar';
 import { TokenAvailabilityPill } from '../TokenAvailabilityPill';
@@ -14,6 +15,7 @@ interface StaticSiteHeaderProps {
   onEnterStudio: () => void;
   onEnterComicForge: () => void;
   onSignIn: () => void;
+  onRequestAccess?: () => void;
   onOpenProfile: () => void;
   onNavigate: (view: string, id?: string) => void;
 }
@@ -26,6 +28,7 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
   onEnterStudio,
   onEnterComicForge,
   onSignIn,
+  onRequestAccess,
   onOpenProfile,
   onNavigate,
 }) => {
@@ -59,28 +62,30 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
           <nav className="hidden lg:flex items-center gap-1 bg-slate-100 border-2 border-black rounded-full px-2 py-1">
             <button
               onClick={() => onNavigate('how-it-works')}
-              className="px-4 py-1.5 text-sm font-bold text-slate-600 hover:bg-white hover:text-black rounded-full transition-all"
+              className="px-3 py-1.5 text-sm font-bold text-slate-600 hover:bg-white hover:text-black rounded-full transition-all"
             >
               How It Works
             </button>
             <button
               onClick={onViewComics}
-              className="px-4 py-1.5 text-sm font-bold text-slate-600 hover:bg-white hover:text-black rounded-full transition-all"
+              className="px-3 py-1.5 text-sm font-bold text-slate-600 hover:bg-white hover:text-black rounded-full transition-all"
             >
               Gallery
             </button>
             <button
               onClick={() => onNavigate('models')}
-              className="px-4 py-1.5 text-sm font-bold text-slate-600 hover:bg-white hover:text-black rounded-full transition-all"
+              className="px-3 py-1.5 text-sm font-bold text-slate-600 hover:bg-white hover:text-black rounded-full transition-all"
             >
               Models
             </button>
             <button
               onClick={() => onNavigate('chat')}
-              className="px-4 py-1.5 text-sm font-bold text-brand-blue hover:bg-brand-blue hover:text-white rounded-full transition-all flex items-center gap-1.5"
+              className="px-3 py-1.5 text-sm font-bold text-brand-blue hover:bg-brand-blue hover:text-white rounded-full transition-all flex items-center gap-1.5"
             >
               <Bot size={13} /> AI Chat
             </button>
+            {/* Third product — not shippable yet; shows a "coming soon" tooltip instead of navigating. */}
+            <ComingSoonTab label="Code" tooltip="Code Studio is coming soon" />
           </nav>
 
           {/* Auth controls */}
@@ -107,8 +112,9 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
                 >
                   Sign In
                 </button>
-                <Button onClick={onSignIn} size="sm" icon={<Zap size={14} />}>
-                  Start Free
+                {/* New signups are invite-only — collect interest instead of opening registration. */}
+                <Button onClick={onRequestAccess ?? onSignIn} size="sm" icon={<Mail size={14} />}>
+                  Request Access
                 </Button>
               </>
             )}

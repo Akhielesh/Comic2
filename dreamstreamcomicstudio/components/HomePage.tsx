@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Sparkles, Zap, Users, BookOpen, Check, HelpCircle, Mail, Info, ChevronRight, MessageSquare, Bot, Shield, Cpu, ArrowRight } from 'lucide-react';
+import { Sparkles, Zap, Users, BookOpen, Check, HelpCircle, Mail, Info, ChevronRight, MessageSquare, Bot, Shield, Cpu, ArrowRight, Code2, Lock } from 'lucide-react';
 import { Button } from './Button';
+import { WaitlistForm } from './WaitlistForm';
 import { getStudioStats, StudioStats } from '../services/stats';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -48,6 +49,10 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
 
   const toggleFaq = (index: number) => setFaqOpen(faqOpen === index ? null : index);
 
+  const scrollToUpdates = () => {
+    document.getElementById('stay-updated')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
 
@@ -56,23 +61,23 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
         <div className="max-w-7xl mx-auto grid lg:grid-cols-2 gap-12 items-center">
           <div className="space-y-8 relative z-10">
             <div className="inline-flex items-center gap-2 bg-black text-white px-4 py-2 rounded-full font-mono text-xs font-bold tracking-widest uppercase">
-              <Sparkles size={12} className="text-brand-yellow" /> Human led with AI powered studio
+              <Sparkles size={12} className="text-brand-yellow" /> One studio · three AI products
             </div>
             <h1 className="text-6xl md:text-7xl font-display leading-[0.9]">
-              Turn your stories into <span className="text-brand-blue">cinematic comics</span>.
+              Dream it. Stream it. <span className="text-brand-blue">Create it.</span>
             </h1>
             <p className="text-xl font-comic text-slate-600 max-w-lg leading-relaxed">
-              The professional studio workflow for storytellers. Control every beat, character, and panel with precision.
+              DreamStream Studio is your home for AI-powered creation — craft cinematic comics, brainstorm with 100+ AI models, and soon, build with code.
             </p>
             <div className="flex flex-wrap gap-4">
               <Button onClick={onEnterStudio} className="text-xl px-10 py-5 shadow-comic hover:shadow-none transition-all" icon={<Zap />}>
                 Start Creating
               </Button>
               <button
-                onClick={onViewComics}
-                className="px-8 py-4 border-4 border-black rounded-xl font-bold hover:bg-slate-100 transition-colors"
+                onClick={() => onNavigate?.('chat')}
+                className="px-8 py-4 border-4 border-black rounded-xl font-bold hover:bg-brand-blue hover:text-white transition-colors flex items-center gap-2"
               >
-                View Comics
+                <Bot size={18} /> Explore AI Chat
               </button>
               <button
                 onClick={() => onNavigate?.('how-it-works')}
@@ -83,10 +88,10 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
             </div>
             <div className="flex items-center gap-6 text-sm font-bold text-slate-500">
               <div className="flex items-center gap-2">
-                <Check size={16} className="text-green-600" /> Free Forever
+                <Check size={16} className="text-green-600" /> Invite-only early access
               </div>
               <div className="flex items-center gap-2">
-                <Check size={16} className="text-green-600" /> No Credit Card
+                <Check size={16} className="text-green-600" /> Bring your own API keys
               </div>
             </div>
           </div>
@@ -123,6 +128,91 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
                   <div className="text-sm font-mono text-zinc-400">New events are launching soon.</div>
                 </div>
                 <Button size="sm" variant="secondary" onClick={() => alert('Community Challenge is coming soon.')}>Coming Soon</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Three products under one roof */}
+      <section className="py-20 px-6 bg-white border-t-4 border-black">
+        <div className="max-w-7xl mx-auto">
+          <div className="text-center mb-14">
+            <div className="inline-flex items-center gap-2 bg-black text-white px-4 py-2 rounded-full font-mono text-xs font-bold uppercase tracking-widest mb-4">
+              <Sparkles size={12} className="text-brand-yellow" /> The DreamStream Studio suite
+            </div>
+            <h2 className="text-4xl md:text-5xl font-display mb-4">Three products. One studio.</h2>
+            <p className="font-comic text-slate-600 max-w-xl mx-auto">
+              Everything you need to dream up, build and ship your ideas — under a single account.
+            </p>
+          </div>
+
+          <div className="grid md:grid-cols-3 gap-6">
+            {/* Comic Studio — live */}
+            <div className="bg-white border-4 border-black rounded-2xl p-7 shadow-comic flex flex-col transition-transform duration-300 hover:-translate-y-1">
+              <div className="flex items-center justify-between mb-5">
+                <div className="w-14 h-14 bg-brand-yellow border-2 border-black rounded-xl flex items-center justify-center shadow-[3px_3px_0px_0px_rgba(0,0,0,0.8)] transform -rotate-2">
+                  <BookOpen size={26} />
+                </div>
+                <span className="text-[10px] font-extrabold uppercase tracking-wider bg-green-100 text-green-700 border-2 border-green-600 rounded-full px-2.5 py-1">Live</span>
+              </div>
+              <h3 className="text-2xl font-display mb-2">Comic Studio</h3>
+              <p className="text-sm font-comic text-slate-600 leading-relaxed flex-1">
+                Turn a script into cinematic, consistent comics — characters, worlds, storyboards, panels, lettering and export.
+              </p>
+              <button
+                onClick={onEnterStudio}
+                className="mt-6 inline-flex items-center gap-2 font-bold text-sm text-black hover:gap-3 transition-all"
+              >
+                Start creating <ArrowRight size={16} />
+              </button>
+            </div>
+
+            {/* AI Chat — live */}
+            <div className="bg-white border-4 border-black rounded-2xl p-7 shadow-comic flex flex-col transition-transform duration-300 hover:-translate-y-1">
+              <div className="flex items-center justify-between mb-5">
+                <div className="w-14 h-14 bg-brand-blue border-2 border-black rounded-xl flex items-center justify-center shadow-[3px_3px_0px_0px_rgba(0,0,0,0.8)] transform rotate-2 text-white">
+                  <Bot size={26} />
+                </div>
+                <span className="text-[10px] font-extrabold uppercase tracking-wider bg-green-100 text-green-700 border-2 border-green-600 rounded-full px-2.5 py-1">Live</span>
+              </div>
+              <h3 className="text-2xl font-display mb-2">AI Chat</h3>
+              <p className="text-sm font-comic text-slate-600 leading-relaxed flex-1">
+                Brainstorm and build with 100+ models — Claude, Gemini, GPT — with rich, interactive outputs and persistent threads.
+              </p>
+              <button
+                onClick={() => onNavigate?.('chat')}
+                className="mt-6 inline-flex items-center gap-2 font-bold text-sm text-brand-blue hover:gap-3 transition-all"
+              >
+                {user ? 'Open AI Chat' : 'Try AI Chat'} <ArrowRight size={16} />
+              </button>
+            </div>
+
+            {/* Code — coming soon */}
+            <div className="group relative bg-slate-50 border-4 border-dashed border-slate-300 rounded-2xl p-7 flex flex-col">
+              <div className="flex items-center justify-between mb-5">
+                <div className="w-14 h-14 bg-slate-200 border-2 border-slate-400 rounded-xl flex items-center justify-center text-slate-500 transform -rotate-2">
+                  <Code2 size={26} />
+                </div>
+                <span className="inline-flex items-center gap-1 text-[10px] font-extrabold uppercase tracking-wider bg-slate-200 text-slate-500 border-2 border-slate-400 rounded-full px-2.5 py-1">
+                  <Lock size={10} /> Coming soon
+                </span>
+              </div>
+              <h3 className="text-2xl font-display mb-2 text-slate-500">Code</h3>
+              <p className="text-sm font-comic text-slate-500 leading-relaxed flex-1">
+                Describe an app and watch it build itself. AI pair-programming with instant live previews — we’re hard at work on it.
+              </p>
+              <button
+                onClick={scrollToUpdates}
+                className="mt-6 inline-flex items-center gap-2 font-bold text-sm text-slate-500 hover:text-black transition-colors"
+              >
+                <Mail size={15} /> Notify me when it’s ready
+              </button>
+              {/* Hover tooltip */}
+              <div className="pointer-events-none absolute inset-x-0 -top-3 flex justify-center opacity-0 -translate-y-1 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-150">
+                <div className="bg-black text-white text-xs font-bold rounded-lg border-2 border-black shadow-comic px-3 py-1.5">
+                  🚧 In the workshop — coming soon
+                </div>
               </div>
             </div>
           </div>
@@ -174,7 +264,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               </div>
               {!user && (
                 <p className="text-xs font-mono text-slate-400">
-                  * AI Chat requires a free account. Takes 30 seconds.
+                  * AI Chat is open to members. New here? We’re in invite-only beta — request access above.
                 </p>
               )}
             </div>
@@ -252,6 +342,9 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
       <section className="py-20 bg-slate-50 border-b-4 border-black">
         <div className="max-w-7xl mx-auto px-6">
           <div className="text-center mb-16">
+            <div className="inline-flex items-center gap-2 bg-brand-yellow border-2 border-black px-3 py-1 rounded-full font-mono text-[11px] font-bold uppercase tracking-widest mb-4">
+              <BookOpen size={12} /> Inside Comic Studio
+            </div>
             <h2 className="text-4xl md:text-5xl font-display mb-4">The Studio Workflow</h2>
             <p className="font-comic text-slate-600">From raw idea to polished pages in 8 steps.</p>
           </div>
@@ -297,24 +390,58 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
         </div>
       </section>
 
+      {/* Stay updated — email capture */}
+      <section id="stay-updated" className="py-20 px-6 bg-brand-blue border-y-4 border-black scroll-mt-24">
+        <div className="max-w-3xl mx-auto">
+          <div className="bg-white border-4 border-black rounded-2xl shadow-comic p-8 md:p-10 text-center">
+            <div className="inline-flex items-center gap-2 bg-brand-yellow border-2 border-black px-3 py-1 rounded-full font-mono text-[11px] font-bold uppercase tracking-widest mb-5">
+              <Mail size={12} /> Stay in the loop
+            </div>
+            <h2 className="text-3xl md:text-4xl font-display mb-3">Want to stay updated?</h2>
+            <p className="font-comic text-slate-600 max-w-xl mx-auto mb-7">
+              Get product updates, early access invites, and the heads-up when <span className="font-bold text-black">Code</span> and new features go live. No spam — just the good stuff.
+            </p>
+            <div className="max-w-lg mx-auto">
+              <WaitlistForm kind="updates" source="home-stay-updated" buttonLabel="Keep me posted" />
+            </div>
+            <p className="text-xs font-mono text-slate-400 mt-4">
+              Prefer email? Reach us at{' '}
+              <a href="mailto:contact@dreamstream.studio" className="underline hover:text-black">contact@dreamstream.studio</a>
+            </p>
+          </div>
+        </div>
+      </section>
+
       {/* Footer */}
       <footer className="bg-black text-white pt-20 pb-10 px-6">
-        <div className="max-w-7xl mx-auto grid md:grid-cols-4 gap-12 mb-16">
-          <div className="col-span-2">
+        <div className="max-w-7xl mx-auto grid md:grid-cols-5 gap-12 mb-16">
+          <div className="md:col-span-2">
             <div className="flex items-center gap-3 mb-6">
               <div className="w-10 h-10 bg-brand-yellow border-2 border-white rounded-lg flex items-center justify-center text-black font-display text-2xl transform -rotate-3">D</div>
-              <div className="font-display text-2xl">DreamStream</div>
+              <div className="leading-none">
+                <div className="font-display text-2xl">DreamStream</div>
+                <div className="text-[10px] font-bold text-brand-yellow uppercase tracking-widest mt-1">Studio</div>
+              </div>
             </div>
             <p className="text-zinc-400 font-comic max-w-sm">
-              Built for storytellers who want control. The only AI studio that puts your vision first, from script to final print.
+              One studio for AI-powered creation — comics, chat, and soon code. Built for creators who want control, from first idea to final ship.
             </p>
+          </div>
+          <div>
+            <h4 className="font-bold uppercase tracking-widest text-zinc-500 mb-6 text-xs">Products</h4>
+            <ul className="space-y-4 text-sm font-bold">
+              <li><button onClick={onEnterStudio} className="flex items-center gap-2 hover:text-brand-yellow text-left"><BookOpen size={16} /> Comic Studio</button></li>
+              <li><button onClick={() => onNavigate?.('chat')} className="flex items-center gap-2 hover:text-brand-yellow text-left"><Bot size={16} /> AI Chat</button></li>
+              <li><button onClick={scrollToUpdates} className="flex items-center gap-2 text-zinc-500 hover:text-zinc-300 text-left"><Code2 size={16} /> Code <span className="text-[9px] uppercase tracking-wider bg-zinc-800 px-1.5 py-0.5 rounded">Soon</span></button></li>
+            </ul>
           </div>
           <div>
             <h4 className="font-bold uppercase tracking-widest text-zinc-500 mb-6 text-xs">Support</h4>
             <ul className="space-y-4 text-sm font-bold">
-              <li><a href="mailto:contact@dreamstream.com" className="flex items-center gap-2 hover:text-brand-yellow"><Mail size={16} /> Contact Us</a></li>
+              <li><a href="mailto:contact@dreamstream.studio" className="flex items-center gap-2 hover:text-brand-yellow"><Mail size={16} /> Contact Us</a></li>
+              <li><button onClick={scrollToUpdates} className="flex items-center gap-2 hover:text-brand-yellow text-left"><Sparkles size={16} /> Stay Updated</button></li>
               <li><button onClick={() => setFaqOpen(0)} className="flex items-center gap-2 hover:text-brand-yellow text-left"><HelpCircle size={16} /> FAQs</button></li>
-              <li><a href="#" className="flex items-center gap-2 hover:text-brand-yellow"><Info size={16} /> About</a></li>
+              <li><button onClick={() => onNavigate?.('how-it-works')} className="flex items-center gap-2 hover:text-brand-yellow text-left"><Info size={16} /> About</button></li>
             </ul>
           </div>
           <div>

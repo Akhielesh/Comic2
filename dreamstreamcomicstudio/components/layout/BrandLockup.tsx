@@ -14,7 +14,7 @@ export const BrandLockup: React.FC<BrandLockupProps> = ({ onClick, clickable = t
       </div>
       <div className="leading-none">
         <div className="font-display text-xl text-slate-900">DreamStream</div>
-        <div className="text-[10px] font-bold text-brand-blue uppercase tracking-widest mt-0.5">Comic Studio</div>
+        <div className="text-[10px] font-bold text-brand-blue uppercase tracking-widest mt-0.5">Studio</div>
       </div>
     </>
   );

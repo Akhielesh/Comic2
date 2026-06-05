@@ -1,18 +1,27 @@
 import React, { useState } from 'react';
 import { getAuthPersistMode, getAuthRedirectUrl, setAuthPersistMode, supabase } from '../services/supabase';
-import { Loader2, ArrowRight, Eye, EyeOff, CheckSquare } from 'lucide-react';
+import { Loader2, ArrowRight, Eye, EyeOff, CheckSquare, Lock } from 'lucide-react';
+import { WaitlistForm } from './WaitlistForm';
+
+// New registrations are invite-only for now: existing accounts can still sign in,
+// while everyone else can leave their email to request access. Flip this to true
+// to re-open self-serve sign-up.
+const SIGNUPS_ENABLED = false;
 
 interface AuthPageProps {
     onLoginSuccess: () => void;
     onOpenPrivacy: () => void;
     onOpenTerms: () => void;
+    initialMode?: 'signin' | 'request-access';
 }
 
-export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivacy, onOpenTerms }) => {
+export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivacy, onOpenTerms, initialMode = 'signin' }) => {
     const USERNAME_REGEX = /^[A-Za-z0-9_]{3,20}$/;
     const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const MIN_SIGNUP_AGE_YEARS = 8;
-    const [mode, setMode] = useState<'signin' | 'signup' | 'forgot' | 'magic-link'>('signin');
+    const [mode, setMode] = useState<'signin' | 'signup' | 'forgot' | 'magic-link' | 'request-access'>(
+        initialMode === 'request-access' && !SIGNUPS_ENABLED ? 'request-access' : 'signin'
+    );
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [message, setMessage] = useState<string | null>(null);
@@ -92,6 +101,9 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
 
         try {
             if (mode === 'signup') {
+                if (!SIGNUPS_ENABLED) {
+                    throw new Error('New sign-ups are invite-only right now. Request access and we’ll be in touch.');
+                }
                 // Validation
                 const normalizedEmail = email.trim().toLowerCase();
                 const normalizedUsername = username.trim();
@@ -277,14 +289,41 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                         Sign In
                     </button>
                     <button
-                        onClick={() => { setMode('signup'); setError(null); setMessage(null); setPendingVerificationEmail(null); }}
-                        className={`flex-1 py-4 font-display text-xl transition-colors ${mode === 'signup' ? 'bg-brand-blue text-white' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`}
+                        onClick={() => { setMode(SIGNUPS_ENABLED ? 'signup' : 'request-access'); setError(null); setMessage(null); setPendingVerificationEmail(null); }}
+                        className={`flex-1 py-4 font-display text-xl transition-colors ${(mode === 'signup' || mode === 'request-access') ? 'bg-brand-blue text-white' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`}
                     >
-                        Sign Up
+                        {SIGNUPS_ENABLED ? 'Sign Up' : 'Request Access'}
                     </button>
                 </div>
 
                 <div className="p-8">
+                    {mode === 'request-access' && (
+                        <div className="space-y-5">
+                            <div className="inline-flex items-center gap-2 bg-brand-blue/10 border-2 border-brand-blue text-brand-blue px-3 py-1.5 rounded-full font-mono text-xs font-bold uppercase tracking-widest">
+                                <Lock size={12} /> Invite-only beta
+                            </div>
+                            <div>
+                                <h3 className="font-display text-2xl mb-2">Request access</h3>
+                                <p className="text-sm font-comic text-slate-600 leading-relaxed">
+                                    DreamStream Studio is currently open to existing members only. Drop your email and
+                                    we’ll reach out the moment new access opens up.
+                                </p>
+                            </div>
+                            <WaitlistForm kind="access" source="auth-request-access" buttonLabel="Request access" />
+                            <p className="text-xs font-bold text-slate-500">
+                                Already have an account?{' '}
+                                <button
+                                    type="button"
+                                    onClick={() => { setMode('signin'); setError(null); setMessage(null); setPendingVerificationEmail(null); }}
+                                    className="text-brand-blue underline hover:no-underline"
+                                >
+                                    Sign in
+                                </button>
+                            </p>
+                        </div>
+                    )}
+
+                    {mode !== 'request-access' && (<>
                     {/* Header for Forgot Password */}
                     {mode === 'forgot' && (
                         <div className="mb-6 text-center">
@@ -516,6 +555,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                             )}
                         </button>
                     </form>
+                    </>)}
                 </div>
             </div>
 
