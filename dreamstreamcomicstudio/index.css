@@ -36,6 +36,24 @@
 @keyframes kitDrawLine { from { stroke-dashoffset: 1000; } to { stroke-dashoffset: 0; } }
 .kit-draw-line { stroke-dasharray: 1000; animation: kitDrawLine 0.9s ease-out both; }
 
+/* ---- Studio Motion Kit: skeleton shimmer (components/studio/kit/Shimmer.tsx) ---- */
+@keyframes studioShimmer { 0% { background-position: -180% 0; } 100% { background-position: 180% 0; } }
+.studio-shimmer {
+  background-color: rgba(148, 163, 184, 0.12);
+  background-image: linear-gradient(
+    100deg,
+    rgba(148, 163, 184, 0) 30%,
+    rgba(148, 163, 184, 0.22) 50%,
+    rgba(148, 163, 184, 0) 70%
+  );
+  background-size: 180% 100%;
+  background-repeat: no-repeat;
+  animation: studioShimmer 1.5s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .studio-shimmer { animation: none; }
+}
+
 /* ---- Weather card sky scene ---- */
 @keyframes wxDrift { 0% { transform: translateX(0); } 50% { transform: translateX(9px); } 100% { transform: translateX(0); } }
 @keyframes wxDrift2 { 0% { transform: translateX(0); } 50% { transform: translateX(-7px); } 100% { transform: translateX(0); } }

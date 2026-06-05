@@ -103,14 +103,14 @@ adopt Iconify). Monaco for the editor (`@monaco-editor/react`).
 Each story has grouped task checklists (**BE** backend · **UI** front-end · **DM** design/motion ·
 **QA** tests). Ship behind the admin/flag gate after each story; full suite green before every push.
 
-### Sprint 0 — Consolidate & unblock (foundation + design system)
+### Sprint 0 — Consolidate & unblock (foundation + design system) — ✅ buildable scope done
 **Goal:** one clear path; live round-trip works; design/motion foundations exist.
-- **S0.1 Fix `STUDIO_WORKER_URL`** — [BE] swap the placeholder for the real `…workers.dev`; add a startup config check that warns on an unparseable URL. [QA] launch returns a real worker error, not a parse crash.
-- **S0.2 Collapse the card to one CTA** — [UI] remove "Build in Studio" ✅ + (sequence) "Quick preview"; single **"Open in Code Studio"**. [UI] quarantine `/studio.html` + `studio/` (WebContainer) + Sandpack panel behind a dead flag. [DM] animate the CTA (lift + spark). [QA] one run CTA; zero dead tabs.
-- **S0.3 Wire `/api/studio/build` (SSE)** — [BE] route composing `createWorkerRun` + `createStudioFix` + auth-scoped `complete` (`runChat`+`pickCodingModel`); auth + caps + run metering; stream `BuildEvent`s. [QA] integration test (mocked worker/model) asserts SSE event order; auth + caps enforced.
-- **S0.4 Code Studio route skeleton** — [UI] `/studio` view (admin-gated) reachable from nav + the chat hand-off; 3-pane shell placeholder. [DM] page transition (fade+rise), pane stagger-in. [QA] route renders for admin; non-admin gated.
-- **S0.5 Motion Kit + design tokens** — [DM] add `framer-motion`/`lottie-react`; build the Motion Kit primitives (`Reveal`, `Stagger`, `Lift`, `Shimmer`, `StatusPulse`); define studio dark theme tokens; `prefers-reduced-motion` fallback. [QA] kit unit/smoke tests; reduced-motion verified.
-- **S0.6 Live round-trip validation** — [QA/E2E] signed-in admin launches a counter → `studio_runs` row + preview serves + logs stream.
+- ✅ **S0.1 Fix `STUDIO_WORKER_URL`** — [BE] `isValidStudioWorkerUrl` + `studioConfigured` reject the placeholder/malformed URL → clean 503, not a parse crash. + tests.
+- ✅ **S0.2 Collapse the card to one CTA** — [UI] `CodeStudioCard` is now a single animated **"Open in Code Studio"** CTA (+ quiet `.zip`); "Run live"/"Quick preview"/"Build in Studio" removed. [UI] `/studio.html` (WebContainer) + the Sandpack chat side-panel auto-open are quarantined behind `isLegacyStudioEnabled()` (default off); the page renders a "moved" redirect. [DM] CTA lift + spark via the Motion Kit. [QA] `CodeStudioCard.test.tsx`: one run CTA; hand-off fires.
+- ✅ **S0.3 Wire `/api/studio/build` (SSE)** — [BE] route composing `createWorkerRun` + `createStudioFix` + auth-scoped `complete`; auth + caps + run metering; streams BuildEvents. + tests.
+- ✅ **S0.4 Code Studio route skeleton** — [UI] `codestudio` view (admin-gated) reachable from nav + the chat hand-off; dark 3-pane shell + logs bar; working Run live. [DM] page fade+rise, pane stagger-in. [QA] `CodeStudioView.test.tsx`: admin shell / non-admin gate / empty state.
+- ✅ **S0.5 Motion Kit + design tokens** — [DM] added `framer-motion`/`lottie-react`; built `components/studio/kit/` (`Reveal`, `Stagger`, `Lift`, `Shimmer`, `StatusPulse`) + studio dark-theme tokens; `prefers-reduced-motion` fallback throughout. [QA] `kit.test.tsx` incl. reduced-motion.
+- 🟡 **S0.6 Live round-trip validation** — [QA/E2E] owner-side: set a real `STUDIO_WORKER_URL`, then a signed-in admin launches a counter → `studio_runs` row + preview serves + logs stream. The Run live button is the hook.
 - **Demo:** admin opens Code Studio (animated shell) → "Run live" works.
 
 ### Sprint 1 — Studio shell (the workspace)

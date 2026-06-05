@@ -5,6 +5,35 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Sprint 0 (front-end + design system): Motion Kit, Code Studio route, one CTA
+Built the buildable front-end half of Sprint 0 (the backend — S0.1 worker-URL guard + S0.3
+`/api/studio/build` SSE — shipped previously). All additive + gated; admins ungated.
+- **S0.5 — Motion Kit + studio theme.** New `components/studio/kit/` — house-styled wrappers
+  over Framer Motion that respect `prefers-reduced-motion`: `Reveal`, `Stagger`/`StaggerItem`,
+  `Lift`, `Shimmer`/`Skeleton`, `StatusPulse` + motion tokens (springs) and a `usePrefersReducedMotion`
+  hook (matchMedia-safe, no test mock needed). Dark "studio" theme tokens in `kit/theme.ts` +
+  `colors.studio.*` in tailwind + a reduced-motion-guarded `.studio-shimmer` keyframe in index.css.
+  Added deps `framer-motion@12` + `lottie-react@2`. `+ kit.test.tsx` (9 cases, incl. reduced-motion).
+- **S0.4 — Code Studio route skeleton.** New `components/studio/CodeStudioView.tsx` — a dark,
+  animated 3-pane shell (Prompt/Build · Code · Live preview) over a Console/Logs bar, wired into
+  App as the `codestudio` view (full-screen; shared header/FAB/assistant hidden). Admin-gated:
+  admins (or the live flag) get the shell with a working **Run live** (drives the existing launch
+  backend; surfaces the honest "not configured" error = the S0.6 hook); non-admins get a clean
+  private-preview gate with an instant in-browser peek of any handed-off app (decision D3) so the
+  CTA never dead-ends. `+ CodeStudioView.test.tsx` (3 cases: admin shell / non-admin gate / empty).
+- **S0.2 — Collapse the card to one CTA + quarantine legacy engines.** `CodeStudioCard` now shows a
+  single animated **"Open in Code Studio"** run CTA (+ a quiet `.zip`) that hands the app off via a
+  new `services/studioHandoff.ts` zustand store → App routes to the studio view. Retired the
+  "Run live" + Sandpack "Quick preview" buttons from the card. New `services/studioFlags.ts`
+  (`isLiveStudioEnabled` re-exported here + `isLegacyStudioEnabled`, default off): the chat's
+  Sandpack side-panel auto-open and the standalone `/studio.html` WebContainer page are now
+  quarantined behind that dead flag (the page renders a "moved to Code Studio" redirect). Header's
+  admin "Open Code Studio" now routes to `codestudio` (was `chat`). `+ CodeStudioCard.test.tsx`.
+- **S0.6 — live round-trip:** still owner-side (needs a real `STUDIO_WORKER_URL` + a signed-in admin
+  launch). The Run live button is the validation hook.
+- Verified: client + server typecheck, **385 tests** (+14; the 3 failing suites are the pre-existing
+  Supabase-env-unset ones), production build — all pass.
+
 ## 2026-06-05 · Claude — Sprint 0 (backend): /api/studio/build route + worker-URL guard
 - **S0.1** `services/studioWorker.ts` — `isValidStudioWorkerUrl` + `studioConfigured` now reject
   the docs placeholder / malformed `STUDIO_WORKER_URL`, so a bad value returns a clean

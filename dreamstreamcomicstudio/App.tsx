@@ -18,6 +18,7 @@ const PageStudio = lazyImportWithRetry(() => import('./components/pagestudio/Pag
 const ModelLibrary = lazyImportWithRetry(() => import('./components/ModelLibrary').then(module => ({ default: module.ModelLibrary })));
 const HowItWorks = lazyImportWithRetry(() => import('./components/HowItWorks').then(module => ({ default: module.HowItWorks })));
 const AIChatPlatform = lazyImportWithRetry(() => import('./components/chat/AIChatPlatform').then(module => ({ default: module.AIChatPlatform })));
+const CodeStudioView = lazyImportWithRetry(() => import('./components/studio/CodeStudioView').then(module => ({ default: module.CodeStudioView })));
 
 import { useProjectManager } from './hooks/useProjectManager';
 import { checkSystemDiagnostics, checkSystemStatus } from './services/geminiService';
@@ -29,6 +30,7 @@ import { AuthCallbackPage } from './components/AuthCallbackPage';
 import { supabase } from './services/supabase';
 import { getPrivateProfile, getPublicProject, incrementViewCount } from './services/db';
 import { setPendingChatModel } from './services/chatStorage';
+import { useStudioHandoff } from './services/studioHandoff';
 import { Project } from './types';
 import { Loader2 } from 'lucide-react';
 import { SystemDiagnosticsResponse } from './apiTypes';
@@ -57,6 +59,7 @@ type AppView =
   | 'profile'
   | 'comicforge'
   | 'pagestudio'
+  | 'codestudio'
   | 'shared';
 
 type SettingsTab = 'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin' | 'preferences' | 'security';
@@ -72,6 +75,9 @@ type PendingReaderTarget = {
 const App: React.FC = () => {
   const { user, loading: authLoading } = useAuth();
   const isAdmin = useIsAdmin();
+  // Chat → Code Studio hand-off: opening an app from chat bumps requestId; route here.
+  const studioHandoffArtifact = useStudioHandoff((s) => s.artifact);
+  const studioHandoffRequestId = useStudioHandoff((s) => s.requestId);
   const { projects, createProject, updateProject, deleteProject, duplicateProject, getProject, startGeneration, stopGeneration, hydrateProjectAssets } = useProjectManager();
 
   const [isCheckingKey, setIsCheckingKey] = useState(true);
@@ -89,6 +95,12 @@ const App: React.FC = () => {
 
   // Simple routing state
   const [currentView, setCurrentView] = useState<AppView>('home');
+
+  // When chat (or any surface) hands an app off to Code Studio, route to the studio view.
+  // requestId starts at 0 and increments per open(), so this only fires on a real hand-off.
+  useEffect(() => {
+    if (studioHandoffRequestId > 0) setCurrentView('codestudio');
+  }, [studioHandoffRequestId]);
   // Which tab the auth page opens on: existing users sign in; everyone else can
   // request early access while new signups are invite-only.
   const [authInitialMode, setAuthInitialMode] = useState<'signin' | 'request-access'>('signin');
@@ -516,6 +528,7 @@ const App: React.FC = () => {
       view === 'models' ||
       view === 'chat' ||
       view === 'comicforge' ||
+      view === 'codestudio' ||
       view === 'privacy' ||
       view === 'terms'
     ) {
@@ -637,20 +650,20 @@ const App: React.FC = () => {
   }
 
   // Protection: studio/creation views require an authenticated user. Reading stays open to all.
-  const isProtectedViewStrict = ['dashboard', 'editor', 'test', 'learn', 'settings', 'comicforge', 'pagestudio', 'chat'].includes(currentView);
+  const isProtectedViewStrict = ['dashboard', 'editor', 'test', 'learn', 'settings', 'comicforge', 'pagestudio', 'chat', 'codestudio'].includes(currentView);
   const effectiveView: AppView = !user && isProtectedViewStrict ? 'auth' : currentView;
 
   const activeProject = activeProjectId ? getProject(activeProjectId) : undefined;
   // Editor and ComicForge are focused, full-screen workspaces with their own
   // back/title bars, so we hide the global site header there (was a 3rd stacked header).
-  const showSharedHeader = !['reader', 'shared', 'editor', 'comicforge', 'pagestudio'].includes(effectiveView);
-  const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'chat';
+  const showSharedHeader = !['reader', 'shared', 'editor', 'comicforge', 'pagestudio', 'codestudio'].includes(effectiveView);
+  const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'chat' && effectiveView !== 'codestudio';
   // Hide the floating Universal Assistant on the full-screen chat product to avoid two stacked chat surfaces.
-  const showUniversalAssistant = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat';
+  const showUniversalAssistant = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'codestudio';
   // Show the global AI Chat FAB on every view except the chat page itself.
   // The marketing home page already has prominent AI Chat entry points, so the
   // floating "Open AI Chat" button is suppressed there to keep the landing clean.
-  const showGlobalChatFAB = effectiveView !== 'chat' && effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'home';
+  const showGlobalChatFAB = effectiveView !== 'chat' && effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'home' && effectiveView !== 'codestudio';
 
   const goToStayUpdated = () => {
     setCurrentView('home');
@@ -751,6 +764,15 @@ const App: React.FC = () => {
 
           {effectiveView === 'chat' && (
             <AIChatPlatform projects={projects} onBack={() => setCurrentView(user ? 'dashboard' : 'home')} />
+          )}
+
+          {effectiveView === 'codestudio' && (
+            <CodeStudioView
+              artifact={studioHandoffArtifact}
+              isAdmin={isAdmin}
+              onBack={() => setCurrentView(user ? 'dashboard' : 'home')}
+              onNavigate={handleNavigate}
+            />
           )}
 
           {effectiveView === 'how-it-works' && (

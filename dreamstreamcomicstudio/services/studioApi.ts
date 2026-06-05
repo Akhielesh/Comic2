@@ -13,13 +13,9 @@ export interface LiveStudioResult {
   runId?: string;
 }
 
-/**
- * Whether the live (Cloudflare container) Studio path is enabled in this build.
- * Off by default — the owner flips VITE_STUDIO_LIVE_ENABLED=true after deploying the
- * Studio Worker (see docs/studio/OWNER-ACTIONS.md), so production is unaffected until then.
- */
-export const isLiveStudioEnabled = (): boolean =>
-  String(import.meta.env.VITE_STUDIO_LIVE_ENABLED || '').toLowerCase() === 'true';
+// Re-exported from the dependency-free flags module (kept here for back-compat with existing
+// importers). New code can import directly from services/studioFlags.
+export { isLiveStudioEnabled } from './studioFlags';
 
 /** Launch the project on the live Studio and get back a preview URL to open. */
 export const launchLiveStudio = async (

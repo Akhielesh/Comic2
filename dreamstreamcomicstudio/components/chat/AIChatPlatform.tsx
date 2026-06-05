@@ -28,6 +28,7 @@ import { isProviderEnabled } from '../../services/sourceGovernance';
 import type { ModelSourceId } from '../../services/modelSelection';
 import { listMcpServers, getMcpServersByIds, onMcpServersChanged } from '../../services/mcpServers';
 import { recordToolEvents } from '../../services/toolAnalytics';
+import { isLegacyStudioEnabled } from '../../services/studioFlags';
 import type { McpServerConfig } from '../../apiTypes';
 import {
   branchSession,
@@ -567,8 +568,10 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       // chat finishing shouldn't yank a map open over the chat you're reading.
       const mapArtifact = res.artifacts?.find((a) => a.type === 'map');
       if (mapArtifact && sessionId === activeIdRef.current) setPanel(mapArtifact);
+      // Legacy Sandpack side-panel auto-open is quarantined behind a dead flag (Sprint 0,
+      // S0.2 / D3). Code apps now surface a single "Open in Code Studio" CTA on the card.
       const codeArtifact = res.artifacts?.find((a) => a.type === 'code_studio');
-      if (codeArtifact && sessionId === activeIdRef.current) {
+      if (isLegacyStudioEnabled() && codeArtifact && sessionId === activeIdRef.current) {
         setPanel(codeArtifact);
         setPanelFullscreen(false);
       }

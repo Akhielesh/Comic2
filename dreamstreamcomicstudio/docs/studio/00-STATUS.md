@@ -4,7 +4,7 @@
 > DreamStream Studio. Every agent/PR that changes anything **must** update this file and
 > `CHANGELOG.md`. If this file and reality disagree, fix this file.
 
-**Last updated:** 2026-06-05 · **Updated by:** Claude · **Branch:** `claude/wizardly-allen-k6OdD` → prod
+**Last updated:** 2026-06-05 · **Updated by:** Claude · **Branch:** `claude/wizardly-shannon-gPFXf` → prod
 
 > Latest: **INFRA IS LIVE.** The Cloudflare Studio Worker (`dreamstream-studio`) is deployed,
 > the wildcard preview DNS resolves, the **CORS break that made the live site non-functional is
@@ -20,7 +20,7 @@
 
 ```
 Foundation  ██████████████████░░  ~90%   (infra LIVE: worker + DNS + DB migrations + CORS fix; control plane + persistence + GitHub sync shipped)
-Experience  █████░░░░░░░░░░░░░░░░  ~25%   (Run-live wired end-to-end; platform AI 9/10/11 backends shipped, client UIs partial)
+Experience  ████████░░░░░░░░░░░░  ~40%   (Code Studio route skeleton + Motion Kit + one-CTA hand-off shipped (Sprint 0 FE); Run-live wired; platform AI 9/10/11 backends shipped, client UIs partial)
 ```
 
 **Where we are:** infra is **live** (Cloudflare Worker deployed, wildcard preview DNS up,

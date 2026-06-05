@@ -1,12 +1,14 @@
-// Inline chat artifact card for code_studio. Shown in the message thread; the
-// "Open Studio" button opens the full editor+preview in the side panel.
+// Inline chat artifact card for code_studio. Shown in the message thread; a single
+// "Open in Code Studio" CTA hands the app off to the dedicated Code Studio workspace
+// (chat is a feeder — plan decision D6). One run path, no competing buttons (Sprint 0,
+// S0.2): "Build in Studio" (WebContainer) and the Sandpack "Quick preview" side panel are
+// retired here in favour of the one route.
 
 import React from 'react';
-import { Code2, Play, FileCode, Layers, Download, Cloud, Loader2 } from 'lucide-react';
-import { useChatPanel } from '../panelContext';
+import { Code2, FileCode, Layers, Download, ArrowRight, Sparkles } from 'lucide-react';
 import { downloadArtifactZip } from '../../../services/studioLauncher';
-import { launchLiveStudio, isLiveStudioEnabled } from '../../../services/studioApi';
-import { useIsAdmin } from '../../../hooks/useIsAdmin';
+import { useStudioHandoff } from '../../../services/studioHandoff';
+import { Lift } from '../../studio/kit';
 import type { CodeStudioArtifact } from '../../../apiTypes';
 
 const TEMPLATE_LABELS: Record<string, string> = {
@@ -26,30 +28,9 @@ const TEMPLATE_COLORS: Record<string, string> = {
 };
 
 export const CodeStudioCard: React.FC<{ data: CodeStudioArtifact }> = ({ data }) => {
-  const openPanel = useChatPanel();
+  const openInStudio = useStudioHandoff((s) => s.open);
   const templateLabel = TEMPLATE_LABELS[data.template] || data.template;
   const templateColor = TEMPLATE_COLORS[data.template] || 'bg-slate-100 text-slate-700 border-slate-300';
-
-  // "Run live" (Cloudflare container) — shown when the live path is enabled
-  // (VITE_STUDIO_LIVE_ENABLED) OR for admins, who are never feature-gated. Degrades
-  // gracefully if the server isn't configured yet (surfaces a clear error).
-  const isAdmin = useIsAdmin();
-  const liveEnabled = isLiveStudioEnabled() || isAdmin;
-  const [launching, setLaunching] = React.useState(false);
-  const [liveError, setLiveError] = React.useState<string | null>(null);
-  const runLive = async () => {
-    setLaunching(true);
-    setLiveError(null);
-    try {
-      const res = await launchLiveStudio(data);
-      if (res.previewUrl) window.open(res.previewUrl, '_blank', 'noopener');
-      else setLiveError('The live preview started but returned no URL.');
-    } catch (err) {
-      setLiveError((err as Error)?.message || 'Live Studio is unavailable right now.');
-    } finally {
-      setLaunching(false);
-    }
-  };
 
   return (
     <div className="border-2 border-black rounded-xl shadow-comic bg-white overflow-hidden animate-fade-in">
@@ -87,27 +68,19 @@ export const CodeStudioCard: React.FC<{ data: CodeStudioArtifact }> = ({ data })
           )}
         </div>
 
-        {/* CTAs: Run live (cloud container) · Build (WebContainer) · quick Preview · zip */}
+        {/* Single CTA → the Code Studio workspace. .zip is a quiet secondary (a download, not a run path). */}
         <div className="flex flex-wrap items-center gap-2">
-          {liveEnabled && (
+          <Lift>
             <button
-              onClick={runLive}
-              disabled={launching}
-              title="Run this app on a live cloud container and open it in a new tab"
-              className="flex items-center gap-1.5 text-xs font-bold border-2 border-black rounded-full px-3 py-1 bg-sky-400 hover:bg-sky-300 shadow-[2px_2px_0_#000] hover:translate-y-[1px] hover:shadow-[1px_1px_0_#000] transition-all disabled:opacity-60"
+              onClick={() => openInStudio(data)}
+              title="Open this app in the Code Studio workspace"
+              className="group flex items-center gap-2 text-sm font-bold border-2 border-black rounded-full pl-3.5 pr-3 py-1.5 bg-lime-300 hover:bg-lime-200 shadow-[2px_2px_0_#000]"
             >
-              {launching ? <Loader2 className="w-3 h-3 animate-spin" /> : <Cloud className="w-3 h-3" />}
-              {launching ? 'Starting…' : 'Run live'}
+              <Sparkles className="w-3.5 h-3.5 transition-transform duration-300 group-hover:rotate-12 group-hover:scale-110" />
+              Open in Code Studio
+              <ArrowRight className="w-3.5 h-3.5 transition-transform duration-200 group-hover:translate-x-0.5" />
             </button>
-          )}
-          <button
-            onClick={() => openPanel?.({ type: 'code_studio', data })}
-            title="Quick preview in the side panel"
-            className="flex items-center gap-1.5 text-xs font-bold border-2 border-black rounded-full px-3 py-1 bg-white hover:bg-slate-100"
-          >
-            <Play className="w-3 h-3" />
-            Quick preview
-          </button>
+          </Lift>
           <button
             onClick={() => void downloadArtifactZip(data)}
             title="Download all files as a .zip"
@@ -117,10 +90,6 @@ export const CodeStudioCard: React.FC<{ data: CodeStudioArtifact }> = ({ data })
             .zip
           </button>
         </div>
-
-        {liveError && (
-          <p className="text-[11px] text-rose-600 mt-2">{liveError}</p>
-        )}
       </div>
     </div>
   );

@@ -6,6 +6,11 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Code Studio (Sprint 0):** a dedicated, dark, animated workspace route — a 3-pane shell
+  (prompt/build · code · live preview) with a working "Run live". Code apps in AI Chat now
+  hand off with a single **"Open in Code Studio"** button. Admin-gated private preview;
+  others can still preview an app instantly. Built on a new motion design system
+  (`components/studio/kit/`) that respects reduced-motion.
 - Model Library: live OpenRouter catalog, **compare up to 5** models, and
   **"Use this model"** (quick confirm) to set your image/text model.
 - Universal Assistant runs on a **free** OpenRouter model with an anti-hallucination

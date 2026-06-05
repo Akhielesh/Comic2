@@ -94,7 +94,7 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
                 badge="Admin"
                 caption="⚡ Admin preview"
                 items={[
-                  { label: 'Open Code Studio', description: 'Build & run apps live (agentic builder)', icon: <Code2 size={16} />, onClick: () => onNavigate('chat') },
+                  { label: 'Open Code Studio', description: 'Build & run apps live (agentic builder)', icon: <Code2 size={16} />, onClick: () => onNavigate('codestudio') },
                 ]}
               />
             ) : (
