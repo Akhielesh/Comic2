@@ -27,10 +27,10 @@ export const launchLiveStudio = async (
   projectId?: string
 ): Promise<LiveStudioResult> => {
   const files = artifact.files.map((f) => ({ path: f.path, content: f.content }));
-  return post<{ projectId?: string; files: { path: string; content: string }[] }, LiveStudioResult>(
-    '/api/studio/launch',
-    { projectId, files }
-  );
+  return post<
+    { projectId?: string; title?: string; template?: string; files: { path: string; content: string }[] },
+    LiveStudioResult
+  >('/api/studio/launch', { projectId, title: artifact.title, template: artifact.template, files });
 };
 
 /** Stop a running live preview. */

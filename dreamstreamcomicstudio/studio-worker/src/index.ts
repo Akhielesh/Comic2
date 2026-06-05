@@ -10,7 +10,7 @@
 // `wrangler deploy` (method names/return shapes may need minor tweaks per SDK version).
 // See README.md for setup, and ../docs/CLOUDFLARE_STUDIO_PLAN.md for the full design.
 
-import { getSandbox } from '@cloudflare/sandbox';
+import { getSandbox, proxyToSandbox } from '@cloudflare/sandbox';
 export { Sandbox } from '@cloudflare/sandbox';
 
 export interface Env {
@@ -60,6 +60,12 @@ async function verifyHmac(req: Request, rawBody: string, secret: string): Promis
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
+    // 1) Preview-URL requests (browser → the running app) get proxied to the right
+    //    container. proxyToSandbox returns a Response for preview hosts, else falsy.
+    const proxied = await proxyToSandbox(req, env);
+    if (proxied) return proxied;
+
+    // 2) Control-plane requests (from Railway only, HMAC-signed): launch / stop.
     if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
 
     const rawBody = await req.text();
@@ -76,7 +82,6 @@ export default {
     if (!body.sandboxId) return json({ error: 'sandboxId required' }, 400);
 
     const sandbox = getSandbox(env.Sandbox, body.sandboxId);
-    const hostname = new URL(req.url).hostname;
 
     try {
       if (body.action === 'stop') {
@@ -108,14 +113,13 @@ export default {
         // 3. Start the long-running dev server (background process).
         await sandbox.startProcess(body.dev || `cd /workspace && PORT=${port} npm run dev`);
 
-        // 4. Expose the port → tokenized preview URL the user opens in a new tab.
-        const exposed = await sandbox.exposePort(port, { hostname });
-        return json({
-          status: 'starting',
-          previewUrl: exposed.url,
-          sandboxId: body.sandboxId,
-          port
-        });
+        // 4. Get a PUBLIC preview URL via a zero-config Cloudflare quick tunnel — NO custom
+        //    domain / DNS needed (works on *.workers.dev). For a production custom-domain
+        //    setup, swap to exposePort(port, { hostname }) + wildcard routes instead.
+        //    VALIDATE the return shape against the installed SDK on first deploy.
+        const tunnel = await sandbox.tunnels.get(port);
+        const previewUrl = typeof tunnel === 'string' ? tunnel : (tunnel as { url: string }).url;
+        return json({ status: 'starting', previewUrl, sandboxId: body.sandboxId, port });
       }
 
       return json({ error: 'unknown action' }, 400);

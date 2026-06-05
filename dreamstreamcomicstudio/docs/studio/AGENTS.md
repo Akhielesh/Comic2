@@ -54,3 +54,12 @@ separately with `cd studio-worker && npm run typecheck` (needs its own `npm inst
 - If a task is ambiguous or architectural, write the question into `00-STATUS.md` "Open
   decisions" and ask the owner rather than guessing.
 - Self-hosting GPUs / large models is **out of scope** — models are API/BYOK.
+
+## 7. Shipping (owner rule)
+- When an **entire phase** is complete + self-audited + verified → **merge it to production
+  (`Dreamstrream-v1`)**, not a preview branch. Sub-phases (e.g. 3a) stay on the feature
+  branch until their phase is done (they may ride along in a PR if safe/flag-gated).
+- Everything shipped to prod must be **safe-by-default**: new infra-dependent features are
+  flag-gated (e.g. `VITE_STUDIO_LIVE_ENABLED`) or no-op until configured, so prod behavior
+  is unchanged until the owner enables them.
+- Always verify (client+server typecheck, tests, build) before merging.
