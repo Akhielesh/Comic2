@@ -204,12 +204,35 @@ studioRouter.post('/:id/stop', async (req, res, next) => {
   }
 });
 
-// GET /api/studio/:id/logs — live build/dev logs. Lands when the Worker's logs action
-// ships (Phase 1 follow-up); stubbed honestly until then so callers can detect it.
-studioRouter.get('/:id/logs', (_req, res) => {
-  res.status(501).json({
-    error: { message: 'Live log streaming arrives with the Phase 1 Worker logs action.', code: 'STUDIO_LOGS_PENDING' }
-  });
+// GET /api/studio/:id/logs — live build/dev logs from the running container. Backed by the
+// Worker's `logs` action (reads the dev process's stdout/stderr). This is the signal the
+// agentic build loop (Phase 4) reads to self-correct, and what the in-app log panel shows.
+studioRouter.get('/:id/logs', async (req, res, next) => {
+  try {
+    if (notConfigured()) return res.status(503).json(notConfiguredResponse);
+    const userId = req.user!.id;
+    const { data: run } = await getSupabaseAdmin()
+      .from('studio_runs')
+      .select('sandbox_id')
+      .eq('id', req.params.id)
+      .eq('user_id', userId)
+      .single();
+    if (!run?.sandbox_id) return res.status(404).json({ error: { message: 'Run not found.' } });
+
+    const worker = await callWorker({ action: 'logs', sandboxId: run.sandbox_id });
+    if (!worker.ok || worker.json?.status === 'error') {
+      return res.status(502).json({
+        error: { message: worker.json?.message || `Studio worker logs failed (HTTP ${worker.status}).`, code: 'STUDIO_WORKER_ERROR' }
+      });
+    }
+    return res.json({
+      stdout: typeof worker.json?.stdout === 'string' ? worker.json.stdout : '',
+      stderr: typeof worker.json?.stderr === 'string' ? worker.json.stderr : '',
+      processes: worker.json?.processes
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // POST /api/studio/deploy — one-click deploy to a public URL (Phase 6). The build/publish

@@ -34,8 +34,8 @@ Worker: **Phase 4** (agentic loop), Phase 3 in-app logs, and Phase 6 **one-click
 | Phase | Title | Status | Blocked by |
 |---|---|---|---|
 | — | Studio bug-fixes (tool fires reliably, universal fallback) | ✅ **shipped** (PR #75, merged) | — |
-| 0 | [Cloudflare infra](./phases/PHASE-0-infra.md) | ⛔ **blocked** | needs account owner: Workers Paid + wildcard domain |
-| 1 | [Studio Worker](./phases/PHASE-1-worker.md) | 🟡 **scaffolded** (PR #76), not validated | Phase 0 to deploy/test |
+| 0 | [Cloudflare infra](./phases/PHASE-0-infra.md) | ⛔ **blocked** | owner: Workers Paid + **a custom domain (now confirmed REQUIRED)** |
+| 1 | [Studio Worker](./phases/PHASE-1-worker.md) | 🟡 **scaffolded + typechecks vs real SDK 0.4.18** (fixed `exposePort`, added `logs`), not live-validated | Phase 0 (domain + deploy) |
 | 2 | [Railway control plane](./phases/PHASE-2-control-plane.md) | ✅ **shipped to prod** (#77) — `/api/studio/*`, HMAC, caps, runs | — |
 | 3 | [Studio UI shell](./phases/PHASE-3-studio-ui.md) | 🟡 **core shipped** (#77) — "Run live → new tab" (flag-gated); in-app log/status pieces **deferred** until the Worker's logs action | needs infra to validate |
 | 4 | [Agentic build loop](./phases/PHASE-4-agentic-loop.md) | 📋 planned | Phases 1–3 |

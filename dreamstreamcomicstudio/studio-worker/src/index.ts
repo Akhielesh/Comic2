@@ -1,20 +1,21 @@
 // DreamStream Studio Worker — Phase 1 (foundation).
 //
 // Spins up a per-user Cloudflare Container (via the Sandbox SDK), writes the AI-built
-// project into it, installs deps, starts the dev server, and returns a tokenized live
-// preview URL the user opens in a new tab. Controlled ONLY by our Railway backend via
-// HMAC-signed requests, so the container control plane is never exposed to browsers.
+// project into it, installs deps, starts the dev server, and returns a public preview
+// URL the user opens in a new tab. Controlled ONLY by our Railway backend via HMAC-signed
+// requests, so the container control plane is never exposed to browsers.
 //
-// STATUS: deploy-ready scaffold. The Sandbox SDK calls below follow the documented API;
-// VALIDATE them against the installed @cloudflare/sandbox version on the FIRST
-// `wrangler deploy` (method names/return shapes may need minor tweaks per SDK version).
-// See README.md for setup, and ../docs/CLOUDFLARE_STUDIO_PLAN.md for the full design.
+// Validated against @cloudflare/sandbox 0.4.x (typechecks against the real SDK types).
+// Preview URLs come from `exposePort(port, { hostname })`, which builds a subdomain-style
+// URL (`<port>-<sandboxId>-<token>.<hostname>`) that Cloudflare routes back to this Worker
+// (`*.<worker>.<account>.workers.dev`) — so NO custom domain is required. `proxyToSandbox`
+// handles those inbound preview requests. See README.md + ../docs/CLOUDFLARE_STUDIO_PLAN.md.
 
-import { getSandbox, proxyToSandbox } from '@cloudflare/sandbox';
+import { getSandbox, proxyToSandbox, type Sandbox } from '@cloudflare/sandbox';
 export { Sandbox } from '@cloudflare/sandbox';
 
 export interface Env {
-  Sandbox: DurableObjectNamespace;
+  Sandbox: DurableObjectNamespace<Sandbox>;
   /** Shared secret with the Railway backend; rejects any unsigned request. */
   STUDIO_HMAC_SECRET: string;
 }
@@ -25,7 +26,7 @@ interface StudioFile {
 }
 
 interface RequestBody {
-  action: 'launch' | 'stop';
+  action: 'launch' | 'stop' | 'logs';
   /** `u_<userId>_<projectId>` — ALWAYS scope per authenticated user (set by Railway). */
   sandboxId: string;
   files?: StudioFile[];
@@ -34,6 +35,10 @@ interface RequestBody {
   /** App port (1024–65535, not 3000, which the SDK reserves). */
   port?: number;
 }
+
+// Deterministic id for the dev server process, so the `logs` action can read its output
+// across separate control-plane requests without the launch having to thread an id back.
+const DEV_PROCESS_ID = 'dev';
 
 const json = (data: unknown, status = 200): Response =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
@@ -65,7 +70,7 @@ export default {
     const proxied = await proxyToSandbox(req, env);
     if (proxied) return proxied;
 
-    // 2) Control-plane requests (from Railway only, HMAC-signed): launch / stop.
+    // 2) Control-plane requests (from Railway only, HMAC-signed): launch / stop / logs.
     if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
 
     const rawBody = await req.text();
@@ -89,6 +94,23 @@ export default {
         return json({ status: 'stopped', sandboxId: body.sandboxId });
       }
 
+      if (body.action === 'logs') {
+        // Live build/dev output — the signal the agentic loop (Phase 4) reads to self-fix.
+        try {
+          const logs = await sandbox.getProcessLogs(DEV_PROCESS_ID);
+          return json({
+            status: 'ok',
+            sandboxId: body.sandboxId,
+            stdout: (logs.stdout || '').slice(-8000),
+            stderr: (logs.stderr || '').slice(-8000)
+          });
+        } catch {
+          // No dev process yet (or it was cleaned up) — report what's running instead.
+          const procs = await sandbox.listProcesses().catch(() => []);
+          return json({ status: 'ok', sandboxId: body.sandboxId, stdout: '', stderr: '', processes: procs.map((p) => ({ id: p.id, command: p.command })) });
+        }
+      }
+
       if (body.action === 'launch') {
         const files = Array.isArray(body.files) ? body.files : [];
         if (!files.length) return json({ error: 'no files provided' }, 400);
@@ -100,26 +122,29 @@ export default {
           await sandbox.writeFile(`/workspace${rel}`, f.content);
         }
 
-        // 2. Install dependencies (run to completion).
-        const install = await sandbox.exec(body.install || 'cd /workspace && npm install');
+        // 2. Install dependencies (run to completion in the workspace; npm install is slow).
+        const install = await sandbox.exec(body.install || 'npm install', { cwd: '/workspace', timeout: 300_000 });
         if (!install.success) {
           return json({
             status: 'error',
             phase: 'install',
-            log: (install.stderr || '').slice(-4000)
+            log: (install.stderr || install.stdout || '').slice(-4000)
           });
         }
 
-        // 3. Start the long-running dev server (background process).
-        await sandbox.startProcess(body.dev || `cd /workspace && PORT=${port} npm run dev`);
+        // 3. Start the long-running dev server as a tracked background process. PORT/HOST
+        //    are injected so the dev server binds the exposed port on all interfaces.
+        await sandbox.startProcess(body.dev || 'npm run dev', {
+          processId: DEV_PROCESS_ID,
+          cwd: '/workspace',
+          env: { PORT: String(port), HOST: '0.0.0.0' }
+        });
 
-        // 4. Get a PUBLIC preview URL via a zero-config Cloudflare quick tunnel — NO custom
-        //    domain / DNS needed (works on *.workers.dev). For a production custom-domain
-        //    setup, swap to exposePort(port, { hostname }) + wildcard routes instead.
-        //    VALIDATE the return shape against the installed SDK on first deploy.
-        const tunnel = await sandbox.tunnels.get(port);
-        const previewUrl = typeof tunnel === 'string' ? tunnel : (tunnel as { url: string }).url;
-        return json({ status: 'starting', previewUrl, sandboxId: body.sandboxId, port });
+        // 4. Expose the port → a PUBLIC preview URL. `hostname` is THIS worker's host
+        //    (e.g. dreamstream-studio.<account>.workers.dev), so the URL routes back here
+        //    via the worker's wildcard subdomain — no custom domain/DNS needed.
+        const exposed = await sandbox.exposePort(port, { hostname: new URL(req.url).host });
+        return json({ status: 'starting', previewUrl: exposed.url, sandboxId: body.sandboxId, port });
       }
 
       return json({ error: 'unknown action' }, 400);

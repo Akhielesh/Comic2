@@ -4,9 +4,9 @@
 # Express/static — the vast majority of what the AI builds). Built on the Cloudflare
 # Sandbox base image, which already ships Node + npm + a Linux toolchain.
 #
-# Pin the tag to match the @cloudflare/sandbox version you install (check the SDK's
-# docs/release notes — the base image and the npm package version move together).
-FROM docker.io/cloudflare/sandbox:0.4.3
+# The base image tag MUST match the @cloudflare/sandbox npm version (package.json) — they
+# move together. Pinned to 0.4.18 (verified: the worker typechecks against this SDK).
+FROM docker.io/cloudflare/sandbox:0.4.18
 
 WORKDIR /workspace
 

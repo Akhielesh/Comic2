@@ -15,7 +15,7 @@
 4. [`CHANGELOG.md`](./CHANGELOG.md) — full history of what was done (incl. self-audits).
 5. The current phase doc in [`phases/`](./phases/).
 
-- **Branch:** `claude/peaceful-gauss-0Gwni` · **Production:** `Dreamstrream-v1`
+- **Branch:** `claude/modest-cerf-x3uXx` · **Production:** `Dreamstrream-v1`
 - **Supabase project:** `Comic` (`bdjfmxfmhqhzvgrhbbzm`)
 - To continue: "read docs/studio/OWNER-ACTIONS.md and 00-STATUS.md, then continue the Studio build."
 
@@ -28,10 +28,10 @@ building everything else first and will validate together once these are done.
 | # | Action | Why | How | Status |
 |---|---|---|---|---|
 | O1 | Enable **Cloudflare Workers Paid** ($5/mo) | Containers aren't on Free | Cloudflare dashboard | ⏳ pending |
-| O2 | ~~Custom domain + wildcard DNS~~ — **NOT required** | Worker uses zero-config quick **tunnels** (`sandbox.tunnels.get` → `*.trycloudflare.com`); a domain is only an optional later upgrade for stable URLs | — | ✅ not needed |
-| O3 | **Deploy the Worker** | Runs the AI-built apps | `cd studio-worker` → `npm install` → `wrangler login` → `wrangler secret put STUDIO_HMAC_SECRET` → `wrangler deploy` (Docker running). **No domain/route config.** | ⏳ pending |
-| O4 | Set Railway env: `STUDIO_WORKER_URL` (= the `.workers.dev` URL), `STUDIO_HMAC_SECRET` | Control plane → Worker hop | Railway → API service → Variables → redeploy | ⏳ pending |
-| O5 | Apply DB migrations `server/sql/studio_runs.sql` **+ `studio_projects.sql`** | run metering + project persistence | **I can apply both via Supabase access — just say so**, or run them in the Supabase SQL editor | ⏳ pending (offered) |
+| O2 | **Custom domain + wildcard route — REQUIRED** (corrected 2026-06-05) | The Sandbox SDK's `exposePort()` **throws `CustomDomainRequiredError` on `*.workers.dev`** — preview URLs are subdomain-based and need a wildcard. (The old "zero-config tunnels" note was wrong — that SDK API does not exist.) Buy a cheap dedicated domain, add it to Cloudflare, use the apex so free Universal SSL covers `*.DOMAIN`. | Buy ~$8–10/yr domain → add to Cloudflare → uncomment+fill `routes` in `studio-worker/wrangler.jsonc` | ⏳ **pending (decided: get a domain)** |
+| O3 | **Deploy the Worker** | Runs the AI-built apps | `cd studio-worker` → `npm install` → `npm run typecheck` → `wrangler login` → `wrangler secret put STUDIO_HMAC_SECRET` → `wrangler deploy` (Docker running, routes set). | ⏳ pending |
+| O4 | Set Railway env: `STUDIO_WORKER_URL` (= `https://YOURDOMAIN`), `STUDIO_HMAC_SECRET` | Control plane → Worker hop | Railway → API service → Variables → redeploy | ⏳ pending |
+| O5 | Apply DB migrations `studio_runs.sql` + `studio_projects.sql` **+ `studio_agents.sql` + `mcp_servers.sql`** | run metering, project persistence, custom-agent library, server-side MCP registry | **I can apply all via Supabase access — just say so**, or run them in the Supabase SQL editor | ⏳ pending (offered) |
 | O6 | ~~Review/approve Phase 2 PR #77~~ | control plane shipped | merged to prod 2026-06-05 | ✅ done |
 | O7 | (Later, Phase 10) optional keys: `TAVILY_API_KEY`/`BRAVE_API_KEY` (search), `FOURSQUARE_API_KEY` (places) | Raise tool sourcing reliability | Railway env | 🔮 future |
 | O8 | Set `VITE_STUDIO_LIVE_ENABLED=true` (Cloudflare Pages env) **after** the Worker deploys | Reveals the "Run live" button in chat (hidden by default so prod is unaffected) | Cloudflare Pages → env → rebuild | ⏳ pending |
@@ -43,7 +43,7 @@ building everything else first and will validate together once these are done.
 ## 🧪 Built but NOT yet live-validated (validate after O1–O4)
 | Item | What to validate | From |
 |---|---|---|
-| Phase 1 Worker | Sandbox SDK calls (writeFile/exec/startProcess/exposePort/stop) on first `wrangler deploy` | [PHASE-1](./phases/PHASE-1-worker.md) |
+| Phase 1 Worker | **Now typechecks against the real SDK (0.4.18)** — fixed the non-existent `tunnels.get` → `exposePort`, added the `logs` action, pinned the Docker image. Still validate the live container round-trip on first `wrangler deploy` | [PHASE-1](./phases/PHASE-1-worker.md) |
 | Phase 2 control plane | end-to-end launch → preview URL → stop; HMAC cross-process; `studio_runs` writes | [PHASE-2](./phases/PHASE-2-control-plane.md) |
 | Phase 3a Run-live UI | "Run live" button (flag-gated) → `/api/studio/launch` → preview opens in a new tab (needs O8 flag + infra) | `components/chat/artifacts/CodeStudioCard.tsx` |
 | Phase 5 persistence | save-on-launch writes project+files+version; `/api/studio/projects` list/get/delete (needs `studio_projects.sql` applied + a build to fire) | `services/studioRepository.ts` |
@@ -53,11 +53,11 @@ When infra is up: trigger a build in the app → `/api/studio/launch` should ret
 ---
 
 ## ❓ Open decisions (need your call sometime)
-- **Brand + domain** — 🅿️ **DEFERRED, not blocking.** The clean `.com` space is exhausted
-  (18 names checked, all taken/aftermarket); recommend a coined name on **`.ai`** (or
-  `.studio`). The studio runs domain-free via tunnels meanwhile; a custom domain is only
-  an optional later upgrade for stable/branded preview URLs (then we flip the Worker from
-  `tunnels.get` back to `exposePort` + wildcard). Owner is finalizing the name.
+- **Brand + domain** — ⚠️ **NOW REQUIRED for the live path (was wrongly marked optional).**
+  The live preview genuinely needs a custom domain (see O2). **Decided: get a cheap domain.**
+  It can be a throwaway dedicated studio domain (doesn't need to be the final brand name) —
+  any ~$8–10/yr domain on the apex works with free Universal SSL. The final brand name can
+  be chosen separately later; this just unblocks deploys.
 - **Default build/coding model** — recommend strong-open default + frontier via BYOK.
 - **Per-project backend** — recommend SQLite-in-container first, Supabase-per-project later.
 

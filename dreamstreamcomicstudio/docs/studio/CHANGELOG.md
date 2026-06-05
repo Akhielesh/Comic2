@@ -5,6 +5,24 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Worker validated against the REAL SDK + custom-domain truth (Phase 1)
+Set out to "finish the Cloudflare setup"; validating the Worker against the installed SDK
+surfaced two prior mistakes and corrected them.
+- **Installed `@cloudflare/sandbox` and typechecked the Worker** (was excluded from CI).
+  Found: `sandbox.tunnels.get(...)` **does not exist**; the `Sandbox` DO binding was
+  untyped. Fixed `studio-worker/src/index.ts` → real `exposePort(port, { hostname })`
+  (preview URL from the incoming host), typed `DurableObjectNamespace<Sandbox>`, robust
+  `exec`/`startProcess` via `cwd`/`env`, and a deterministic dev `processId`. **Worker now
+  typechecks clean against SDK 0.4.18.** Pinned the npm dep + Dockerfile base image to 0.4.18.
+- **Added the `logs` action** (dev stdout/stderr) and wired the control-plane `/api/studio/:id/logs`
+  to it (was a 501 stub) — the signal Phase 4 reads to self-correct + the in-app log panel.
+- **Corrected a false "no domain needed" claim.** Cloudflare's `exposePort` THROWS
+  `CustomDomainRequiredError` on `*.workers.dev`; live preview URLs **require a custom
+  domain** with a wildcard route. Owner **decided to get a cheap domain**. Updated
+  `wrangler.jsonc` (apex first-level-wildcard route template + Universal-SSL note), the
+  Worker README (accurate step-by-step), `OWNER-ACTIONS.md` (O2 rewritten), and PHASE-1.
+- Verified: server typecheck + worker typecheck pass.
+
 ## 2026-06-05 · Claude — Client surfaces for the new backends (Phase 9 trace UI + Phase 10 marketplace)
 Made the just-shipped backends visible/usable (they were dormant in the UI):
 - **SwarmTraceCard** now shows the verifier's per-agent **confidence chip** (green/amber/red)

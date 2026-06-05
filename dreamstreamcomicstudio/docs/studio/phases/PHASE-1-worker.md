@@ -1,6 +1,12 @@
 # Phase 1 — Studio Worker
 
-**Status:** 🟡 scaffolded (PR #76), not validated · **Depends on:** Phase 0 to deploy · **Effort:** 1–2 days
+**Status:** 🟡 scaffolded + **typechecks against the real SDK (0.4.18)**, not yet live-validated · **Depends on:** Phase 0 (custom domain + deploy) · **Effort:** 1–2 days
+
+> **Corrected 2026-06-05:** validated `src/index.ts` against `@cloudflare/sandbox` 0.4.18.
+> Fixed a non-existent `sandbox.tunnels.get` call → the real `exposePort(port, { hostname })`,
+> typed the `Sandbox` DO binding, added a **`logs`** action (dev stdout/stderr — the Phase 4
+> signal), pinned the Docker base image to 0.4.18. **A custom domain is REQUIRED** —
+> `exposePort` throws `CustomDomainRequiredError` on `*.workers.dev` (see OWNER-ACTIONS O2).
 
 ## Goal
 A standalone Cloudflare Worker that, given a project's files, runs it in a per-user

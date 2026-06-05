@@ -22,14 +22,20 @@
   },
   "migrations": [{ "new_sqlite_classes": ["Sandbox"], "tag": "v1" }]
 
-  // NO custom domain needed: the Worker deploys to its free <name>.<account>.workers.dev
-  // URL, and preview URLs come from zero-config Cloudflare quick tunnels
-  // (sandbox.tunnels.get → *.trycloudflare.com). The control endpoint is the workers.dev URL.
+  // ⚠️ A CUSTOM DOMAIN IS REQUIRED for live preview URLs. Cloudflare's Sandbox SDK builds
+  // subdomain preview URLs (<port>-<id>-<token>.<domain>) and its exposePort() THROWS
+  // `CustomDomainRequiredError` on *.workers.dev (no wildcard sub-subdomains there).
   //
-  // OPTIONAL (production, if you later buy a domain): add wildcard routes + switch the
-  // Worker back to exposePort() for stable preview hostnames, e.g.:
-  //   "routes": [
-  //     { "pattern": "studio.<domain>/*", "zone_name": "<domain>" },
-  //     { "pattern": "*.studio.<domain>/*", "zone_name": "<domain>" }
-  //   ]
+  // SETUP (after buying a cheap domain and adding it to Cloudflare as a zone):
+  //   1. UNCOMMENT the "routes" block below and replace EXAMPLE.COM with your domain.
+  //   2. Use the APEX domain (first-level wildcard `*.EXAMPLE.COM`) so free Universal SSL
+  //      covers the preview hosts — a sub-subdomain like *.studio.EXAMPLE.COM would need a
+  //      paid Advanced Certificate. A dedicated cheap domain just for the studio is ideal.
+  //   3. `wrangler deploy`, then set Railway STUDIO_WORKER_URL = https://EXAMPLE.COM
+  //      (the control endpoint shares the zone; proxyToSandbox routes only preview hosts).
+  //
+  // "routes": [
+  //   { "pattern": "EXAMPLE.COM/*", "zone_name": "EXAMPLE.COM" },
+  //   { "pattern": "*.EXAMPLE.COM/*", "zone_name": "EXAMPLE.COM" }
+  // ]
 }
