@@ -12,8 +12,17 @@ import {
   getToolStats, summarizeToolStats, resetToolStats, onToolAnalyticsChanged,
   type ToolStats, type ToolStat
 } from '../../services/toolAnalytics';
-import { listMcpServers, onMcpServersChanged } from '../../services/mcpServers';
+import { listMcpServers, onMcpServersChanged, addMcpServer } from '../../services/mcpServers';
 import type { McpServerConfig } from '../../apiTypes';
+
+// Curated MCP marketplace — a few vetted, keyless https servers a user can connect in one
+// click (mirrors server/src/ai/tools/mcpCatalog.ts). Connecting adds the server to the
+// local MCP store, which already flows into the agent's tool loop.
+const MCP_MARKETPLACE: { id: string; name: string; url: string; blurb: string }[] = [
+  { id: 'deepwiki', name: 'DeepWiki', url: 'https://mcp.deepwiki.com/mcp', blurb: 'Ask questions about any public GitHub repo — docs, architecture, code.' },
+  { id: 'context7', name: 'Context7', url: 'https://mcp.context7.com/mcp', blurb: 'Up-to-date docs + code examples for thousands of libraries.' },
+  { id: 'huggingface', name: 'Hugging Face', url: 'https://huggingface.co/mcp', blurb: 'Search models, datasets and Spaces on the Hugging Face Hub.' }
+];
 
 const CAT_ICONS: Record<string, LucideIcon> = {
   Search, Newspaper, CloudSun, LineChart, MapPin, BookOpen, Type, Globe, Rocket,
@@ -264,6 +273,43 @@ export const ToolsDashboard: React.FC = () => {
             No tools match “{query}”.
           </div>
         )}
+      </div>
+
+      {/* Curated MCP marketplace — one-click connect (Phase 10) */}
+      <div>
+        <div className="flex items-center gap-1.5 mb-1.5">
+          <Boxes className="w-4 h-4 text-violet-600" />
+          <span className="font-bold text-sm">MCP marketplace</span>
+          <span className="text-[10px] text-slate-400">Vetted servers — connect one in a click to expose its tools to the AI</span>
+        </div>
+        <div className="grid sm:grid-cols-2 gap-2">
+          {MCP_MARKETPLACE.map((m) => {
+            const connected = mcpServers.some((s) => s.url === m.url);
+            return (
+              <div key={m.id} className="border-2 border-black rounded-lg bg-white p-2.5 flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5">
+                    <Server className="w-4 h-4 text-violet-600 shrink-0" />
+                    <span className="font-bold text-sm truncate">{m.name}</span>
+                    <KindBadge kind="mcp" />
+                    <AuthBadge auth="none" />
+                  </div>
+                  <div className="text-[11px] text-slate-600 mt-0.5">{m.blurb}</div>
+                  <div className="text-[10px] text-slate-400 mt-0.5 truncate" title={m.url}>{m.url}</div>
+                </div>
+                <button
+                  disabled={connected}
+                  onClick={() => addMcpServer({ name: m.name, url: m.url })}
+                  className={`shrink-0 inline-flex items-center gap-1 text-[11px] font-bold border-2 border-black rounded-lg px-2 py-1 ${
+                    connected ? 'bg-emerald-50 text-emerald-700 cursor-default' : 'bg-brand-yellow hover:shadow-comic-hover'
+                  }`}
+                >
+                  {connected ? <><CheckCircle2 className="w-3.5 h-3.5" /> Connected</> : <><Plug className="w-3.5 h-3.5" /> Connect</>}
+                </button>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* Custom MCP servers */}

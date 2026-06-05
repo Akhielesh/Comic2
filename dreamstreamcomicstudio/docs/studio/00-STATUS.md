@@ -48,8 +48,8 @@ Worker: **Phase 4** (agentic loop), Phase 3 in-app logs, and Phase 6 **one-click
 
 | # | Title | Status | Spec |
 |---|---|---|---|
-| 9 | [Agent system upgrade](./phases/PHASE-9-agent-system.md) (verifier, personality, trace, custom-agent library) | 🟢 **backend shipped** — verifier (confidence+flags), retry, persona routing, `custom_agents` library + `/api/agents`; **trace UI / live SSE / library UI deferred** | — |
-| 10 | [Tools/MCP/sourcing upgrade](./phases/PHASE-10-tools-mcp.md) (tools on all models, managed MCP, outbound MCP) | 🟢 **backend shipped** — JSON tool fallback (flag-gated), server-side MCP registry + curated catalog, outbound MCP endpoint; **OAuth/streaming MCP + dashboards deferred** | — |
+| 9 | [Agent system upgrade](./phases/PHASE-9-agent-system.md) (verifier, personality, trace, custom-agent library) | 🟢 **backend + trace UI shipped** — verifier (confidence+flags, now shown on the SwarmTraceCard), retry, persona routing, `custom_agents` library + `/api/agents`; **live SSE / re-run / library UI deferred** | — |
+| 10 | [Tools/MCP/sourcing upgrade](./phases/PHASE-10-tools-mcp.md) (tools on all models, managed MCP, outbound MCP) | 🟢 **backend + marketplace UI shipped** — JSON tool fallback (flag-gated), server-side MCP registry, **curated marketplace (one-click connect in ToolsDashboard)**, outbound MCP endpoint; **OAuth/streaming MCP + localStorage→server migration deferred** | — |
 | 11 | [Guardrails & personality](./phases/PHASE-11-guardrails-personality.md) (unified voice, output guardrails, code safety) | 🟢 **shipped** — unified `persona.ts` everywhere + output `guardrails.ts` (leak/fabrication/citation) wired + audit log; **studio code-safety + trust-chip UI deferred** | — |
 
 Legend: ✅ done · 🟡 in progress/partial · 📋 planned · ⛔ blocked

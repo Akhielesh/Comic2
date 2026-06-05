@@ -111,9 +111,9 @@ const places: PlacesResultsArtifact = {
 const swarm: SwarmTraceArtifact = {
   goal: 'Brief me on tech news + the market',
   agents: [
-    { id: 'tech', name: 'Tech Reporter', task: 'Latest tech news', status: 'done', summary: 'Found 3 major releases…', toolEvents: [{ tool: 'get_news', query: 'tech', ok: true }] },
-    { id: 'finance', name: 'Markets Analyst', task: 'Market summary', status: 'done', summary: 'Indices up 0.8%…', toolEvents: [{ tool: 'get_stock', ok: true }] },
-    { id: 'research', name: 'Web Researcher', task: 'Context', status: 'running' }
+    { id: 'tech', name: 'Tech Reporter', task: 'Latest tech news', status: 'done', summary: 'Found 3 major releases…', confidence: 0.9, flags: [], toolEvents: [{ tool: 'get_news', query: 'tech', ok: true }] },
+    { id: 'finance', name: 'Markets Analyst', task: 'Market summary', status: 'done', summary: 'Indices up 0.8%…', confidence: 0.55, flags: ['hedged'], toolEvents: [{ tool: 'get_stock', ok: true }] },
+    { id: 'research', name: 'Web Researcher', task: 'Context', status: 'done', summary: 'Background gathered from memory only.', confidence: 0.35, flags: ['no_sources'] }
   ]
 };
 

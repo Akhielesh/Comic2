@@ -5,6 +5,17 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Client surfaces for the new backends (Phase 9 trace UI + Phase 10 marketplace)
+Made the just-shipped backends visible/usable (they were dormant in the UI):
+- **SwarmTraceCard** now shows the verifier's per-agent **confidence chip** (green/amber/red)
+  + **flag badges** (no_sources / unverified_figures / hedged …) and an **overall
+  confidence** chip in the header. Gallery demo updated to match (`ComponentGallery.tsx`).
+- **ToolsDashboard** gains a curated **MCP marketplace** — vetted keyless servers with
+  one-click Connect (mirrors `mcpCatalog.ts`), wired to the existing local MCP store.
+- Verified: client typecheck + production build pass.
+- Still deferred (deeper): live per-agent SSE + "re-run a single agent" (needs a re-run
+  endpoint), and migrating the MCP store from localStorage to the server-side registry UI.
+
 ## 2026-06-05 · Claude — PHASES 11 + 9 + 10 + 6 (four phases, backend cores) + SELF-AUDIT
 Built the buildable-now backbone of the next four phases — the three parallel platform
 workstreams plus GitHub sync — additively and (where it changes prod AI behavior)
