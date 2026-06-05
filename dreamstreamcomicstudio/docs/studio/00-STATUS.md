@@ -54,16 +54,19 @@ Legend: ✅ done · 🟡 in progress/partial · 📋 planned · ⛔ blocked
 
 ## ➡️ NEXT STEP
 
-Phase 2 + Phase 3 core are **shipped to prod** (#77). Remaining work splits in two:
-- **Needs the Worker deployed first** (owner infra — see `OWNER-ACTIONS.md`): Phase 3
-  in-app logs/status, **Phase 4** agentic build loop (it must read real container errors).
-- **Buildable + shippable NOW (no infra):** **Phase 5** persistence (projects/files/
-  versions + CRUD), and parallel workstreams **Phase 9** (swarm verifier) / **10** (tools
-  on all models + MCP) / **11** (unified persona + output guardrails).
+**Shipped to prod:** studio bug-fixes, docs hub, Worker scaffold (tunnels — no domain),
+**Phase 2** control plane (#77), **Phase 3 core** (#77), **Phase 5** persistence backend (#78).
+The studio **backend is now substantially complete.**
 
-Recommended next (validated value to prod now): **Phase 5 persistence** or a parallel
-workstream. **Workflow:** build a full phase → self-audit → **merge it to production**
-(`Dreamstrream-v1`), not a preview branch. Sub-phases stay on the branch until done.
+What's left:
+- **Unlock everything → owner deploys the Worker** (~25 min, **no domain** — see
+  `OWNER-ACTIONS.md`). That makes the live path real and unblocks **Phase 4** (the agentic
+  build loop — the "magic") + Phase 3 in-app logs + the editor UI (Phase 5b).
+- **Buildable now without infra:** parallel workstreams **9** (swarm verifier), **10**
+  (tools on all models + MCP), **11** (unified persona + guardrails). These improve the
+  **live chat today** but change prod AI behavior — confirm direction before starting.
+
+**Workflow:** full phase → self-audit → **merge to production** (`Dreamstrream-v1`).
 
 **To unblock Phase 0/1 deploy:** the account owner must (a) enable **Workers Paid**,
 (b) add a **wildcard preview domain** (e.g. `*.studio.<domain>`), (c) confirm the domain
