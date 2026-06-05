@@ -5,6 +5,16 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Phase 4: shared Studio Worker client + run-result bridge
+- `server/src/services/studioWorker.ts` — single signed worker client (`callStudioWorker`,
+  `studioConfigured`) + a pure `toRunResult` mapping the worker's launch/logs/preview-probe
+  signals into the `RunResult` the observation parser consumes.
+- Refactored `routes/studio.ts` to use it — removed the duplicated `callWorker`/`notConfigured`
+  (DRY; one place owns HMAC signing + timeout).
+- Tests: `studioWorker.test.ts` (mapping + end-to-end into `buildObservation`). Suite 361 green.
+- Next: the `/api/studio/build` SSE route composing `runBuildAgent` with `callStudioWorker`
+  (run) + the platform AI client (fix), then the `BuildTrace` client.
+
 ## 2026-06-05 · Claude — Phase 4 agentic build loop: deterministic core + coding router
 Built the logic-heavy half of the agentic build loop, fully unit-tested ahead of the live
 route (so it ships safely with zero behavior change — nothing calls it yet):
