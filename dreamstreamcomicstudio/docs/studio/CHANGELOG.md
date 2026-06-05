@@ -5,6 +5,11 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Sprint 5: duplicate project (S5.2-lite)
+- **`StudioStart`** project cards get a **Duplicate** action — loads the project's files as a
+  fresh untitled "Copy of …" (no project id), so the next Build saves it as a new project.
+  Non-destructive to the original; client-only (no backend). Test added. 71 studio tests; green.
+
 ## 2026-06-05 · Claude — Sprint 3: version history + restore (S3.3, full)
 Additive, read-only backend + UI (no change to existing behaviour):
 - **Backend** — `studioRepository.listVersions` / `getVersionFiles` (ownership-scoped) + routes

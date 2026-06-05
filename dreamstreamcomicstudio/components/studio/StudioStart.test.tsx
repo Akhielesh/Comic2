@@ -58,4 +58,12 @@ describe('StudioStart', () => {
     expect(s.title).toBe('Counter');
     expect(s.paths).toContain('/src/App.tsx');
   });
+
+  it('duplicates a project as a fresh untitled copy', async () => {
+    render(<StudioStart onNavigate={vi.fn()} />);
+    fireEvent.click(await screen.findByLabelText(/Duplicate My Todo App/i));
+    await waitFor(() => expect(getStudioProject).toHaveBeenCalledWith('p1'));
+    await waitFor(() => expect(useStudioWorkspace.getState().title).toBe('Copy of My Todo App'));
+    expect(useStudioWorkspace.getState().projectId).toBeNull();
+  });
 });

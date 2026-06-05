@@ -3,7 +3,7 @@
 // project hydrates its files into the workspace store; the 3-pane workspace then takes over.
 
 import React, { useEffect, useState } from 'react';
-import { FolderOpen, Trash2, Loader2, MessageSquarePlus, RefreshCw } from 'lucide-react';
+import { FolderOpen, Trash2, Loader2, MessageSquarePlus, RefreshCw, Copy } from 'lucide-react';
 import { Reveal, Stagger, StaggerItem, Skeleton, Lift, EmptyState, useStudioTheme } from './kit';
 import { TemplateLogo } from './assets/techLogos';
 import { EmptyProjectsArt } from './assets/illustrations';
@@ -39,6 +39,7 @@ export const StudioStart: React.FC<StudioStartProps> = ({ onNavigate }) => {
   const [projects, setProjects] = useState<StudioProjectSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
+  const [dupId, setDupId] = useState<string | null>(null);
 
   const load = () => {
     setError(null);
@@ -59,6 +60,21 @@ export const StudioStart: React.FC<StudioStartProps> = ({ onNavigate }) => {
       setError((e as Error)?.message || 'Could not open that project.');
     } finally {
       setOpening(null);
+    }
+  };
+
+  // Duplicate: load the project's files as a fresh untitled copy (no id). The next Build saves
+  // it as a new project — non-destructive to the original.
+  const duplicate = async (id: string) => {
+    setDupId(id);
+    setError(null);
+    try {
+      const proj = await getStudioProject(id);
+      loadArtifact({ title: `Copy of ${proj.title}`, template: proj.template, files: proj.files });
+    } catch (e) {
+      setError((e as Error)?.message || 'Could not duplicate that project.');
+    } finally {
+      setDupId(null);
     }
   };
 
@@ -160,13 +176,25 @@ export const StudioStart: React.FC<StudioStartProps> = ({ onNavigate }) => {
                             {TEMPLATE_LABELS[p.template] || p.template} · {relativeTime(p.updatedAt)}
                           </p>
                         </div>
-                        <button
-                          onClick={() => remove(p.id)}
-                          title="Delete project"
-                          className={`ml-auto rounded p-1 opacity-0 group-hover:opacity-100 ${t.hover} text-rose-500`}
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        <span className="ml-auto flex items-center gap-0.5 opacity-0 group-hover:opacity-100">
+                          <button
+                            onClick={() => duplicate(p.id)}
+                            disabled={dupId === p.id}
+                            title="Duplicate project"
+                            aria-label={`Duplicate ${p.name}`}
+                            className={`rounded p-1 ${t.hover} ${t.textDim}`}
+                          >
+                            {dupId === p.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Copy className="w-3.5 h-3.5" />}
+                          </button>
+                          <button
+                            onClick={() => remove(p.id)}
+                            title="Delete project"
+                            aria-label={`Delete ${p.name}`}
+                            className={`rounded p-1 ${t.hover} text-rose-500`}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </span>
                       </div>
                       <button
                         onClick={() => open(p.id)}
