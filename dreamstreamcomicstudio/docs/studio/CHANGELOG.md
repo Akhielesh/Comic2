@@ -5,6 +5,17 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Sprint 3: Changes view — diff + revert (S3.1/S3.3)
+- **`workspace/diff.ts`** — a pure LCS line diff (`diffLines` + `diffStat`), unit-tested.
+- **`workspace/DiffView.tsx`** — themed +/- diff rendering. **`workspace/ChangesPanel.tsx`** —
+  the "what changed since you opened this" view: dirty files (working copy vs. loaded baseline),
+  each with a +/- stat, an expandable diff, **per-file Revert** + **Revert all**. Wired into the
+  Prompt/Build pane above the BuildTrace.
+- Self-contained (no backend); changes persist on the next Build. Full cross-build version
+  history/restore (`studio_versions`) is deferred (wants a versions list/restore endpoint).
+- Tests: `diff.test.ts` (LCS), `changesPanel.test.tsx` (list + revert). 58 studio tests; typecheck
+  + build green.
+
 ## 2026-06-05 · Claude — Sprint 3 (start): file ops — add / delete / rename (S3.4)
 - **Workspace store** gains `addFile` / `deleteFile` / `renameFile` with a safe
   `normalizeStudioPath` (rejects traversal/empty) + `renameInDir` (keeps the directory). Rename

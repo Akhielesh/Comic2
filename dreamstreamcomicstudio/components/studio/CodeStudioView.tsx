@@ -16,7 +16,7 @@ import type { CodeStudioArtifact } from '../../apiTypes';
 import { Reveal, Skeleton, StatusPulse, Lift, ThemeSwitcher, ResizableSplit, Confetti, useIsWide, useStudioTheme } from './kit';
 import type { RunStatus } from './kit';
 import {
-  CodeWorkspace, LogsConsole, PreviewFrame, BuildTrace, useStudioBuild,
+  CodeWorkspace, LogsConsole, PreviewFrame, BuildTrace, ChangesPanel, useStudioBuild,
   useStudioWorkspace, useStudioLogs, isPathDirty, workspaceCurrentArtifact,
 } from './workspace';
 import { StudioStart } from './StudioStart';
@@ -157,6 +157,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
             <span className="ml-1 text-[10px] uppercase tracking-wide">(Sprint 2)</span>
           </div>
         </div>
+        <ChangesPanel />
         <BuildTrace />
       </div>
     </PaneFrame>
