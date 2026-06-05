@@ -5,6 +5,18 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Sprint 0 (backend): /api/studio/build route + worker-URL guard
+- **S0.1** `services/studioWorker.ts` — `isValidStudioWorkerUrl` + `studioConfigured` now reject
+  the docs placeholder / malformed `STUDIO_WORKER_URL`, so a bad value returns a clean
+  "not configured" 503 instead of a `fetch()` "Failed to parse URL" crash. + tests.
+- **S0.3** `routes/studio.ts` — **`POST /api/studio/build`** (SSE): composes the tested Phase 4
+  engine (`runBuildAgent`) with the live worker `run` (`createWorkerRun`) + a guard-railed
+  coding-model `fix` (`createStudioFix` + `runChat`/`pickCodingModel`, user key or platform
+  fallback). Streams BuildEvents (plan/run/observe/fix/done) + a final `result`; auth + caps +
+  run metering; persists run + project. Additive + gated (nothing calls it until the UI lands).
+- Server typechecks; studio service tests green. Remaining Sprint 0: Motion Kit, Code Studio
+  route/view, collapse the card to one CTA, live round-trip validation (needs real worker URL).
+
 ## 2026-06-05 · Claude — Admins are never feature-gated (Code Studio + Run live)
 Fix: admins couldn't see Code Studio or the live "Run live" button — both were gated by a
 build flag / a hardcoded "Soon", with no admin bypass.

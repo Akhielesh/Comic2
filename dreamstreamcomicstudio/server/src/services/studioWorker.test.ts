@@ -1,6 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { toRunResult } from './studioWorker.js';
+import { toRunResult, isValidStudioWorkerUrl } from './studioWorker.js';
 import { buildObservation } from '../ai/studio/observation.js';
+
+describe('isValidStudioWorkerUrl', () => {
+  it('accepts a real https workers.dev URL', () => {
+    expect(isValidStudioWorkerUrl('https://dreamstream-studio.acme.workers.dev')).toBe(true);
+  });
+  it('rejects the docs placeholder and malformed values', () => {
+    expect(isValidStudioWorkerUrl('https://dreamstream-studio.<account>.workers.dev')).toBe(false);
+    expect(isValidStudioWorkerUrl('not a url')).toBe(false);
+    expect(isValidStudioWorkerUrl('')).toBe(false);
+    expect(isValidStudioWorkerUrl(undefined)).toBe(false);
+    expect(isValidStudioWorkerUrl('ftp://x.y')).toBe(false);
+  });
+});
 
 describe('toRunResult', () => {
   it('surfaces an install failure log only when the launch failed at install', () => {

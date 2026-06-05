@@ -12,8 +12,20 @@ export interface WorkerCallResult {
   json: any;
 }
 
-/** True once the owner has wired STUDIO_WORKER_URL + STUDIO_HMAC_SECRET (Railway env). */
-export const studioConfigured = (): boolean => Boolean(STUDIO_WORKER_URL && STUDIO_HMAC_SECRET);
+/** True iff `value` is a usable http(s) URL (rejects empty, malformed, and the docs
+ * placeholder `…<account>.workers.dev`). Prevents a `fetch()` "Failed to parse URL" crash. */
+export const isValidStudioWorkerUrl = (value: string | undefined): boolean => {
+  if (!value || value.includes('<') || value.includes('>')) return false;
+  try {
+    const u = new URL(value);
+    return u.protocol === 'https:' || u.protocol === 'http:';
+  } catch {
+    return false;
+  }
+};
+
+/** True once the owner has wired STUDIO_WORKER_URL (a valid URL) + STUDIO_HMAC_SECRET. */
+export const studioConfigured = (): boolean => Boolean(STUDIO_HMAC_SECRET) && isValidStudioWorkerUrl(STUDIO_WORKER_URL);
 
 /** Signed POST to the Studio Worker. Browsers never reach the Worker directly. */
 export const callStudioWorker = async (payload: Record<string, unknown>): Promise<WorkerCallResult> => {

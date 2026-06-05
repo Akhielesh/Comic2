@@ -11,13 +11,19 @@ import crypto from 'crypto';
 import {
   STUDIO_MAX_CONCURRENT_PER_USER,
   STUDIO_DAILY_BUILD_MINUTES,
-  STUDIO_COST_PER_AWAKE_SEC
+  STUDIO_COST_PER_AWAKE_SEC,
+  STUDIO_REQUEST_TIMEOUT_MS
 } from '../config.js';
 import { getSupabaseAdmin } from '../services/supabase.js';
 import { callStudioWorker, studioConfigured } from '../services/studioWorker.js';
+import { createWorkerRun, createStudioFix } from '../services/studioBuildService.js';
 import { evaluateLaunchAllowed } from '../services/studioCaps.js';
 import { sanitizeFiles, deriveProjectName } from '../services/studioFiles.js';
 import { saveProject, listProjects, getProjectWithFiles, deleteProject } from '../services/studioRepository.js';
+import { runBuildAgent } from '../ai/studio/buildAgent.js';
+import { pickCodingModel, TEXT_FALLBACK } from '../ai/autoRouter.js';
+import { runChat } from '../ai/chat.js';
+import { resolveProviderContext } from '../ai/gateway.js';
 import { studioGithubRouter } from './studioGithub.js';
 
 export const studioRouter = Router();
@@ -133,6 +139,150 @@ studioRouter.post('/launch', async (req, res, next) => {
     return res.json({ previewUrl, sandboxId, projectId, runId });
   } catch (err) {
     next(err);
+  }
+});
+
+// POST /api/studio/build — the agentic build loop (Phase 4) with a live SSE trace. Composes
+// the tested engine (runBuildAgent) with the real worker `run` (createWorkerRun) + a coding-
+// model `fix` (createStudioFix, guard-railed). Streams BuildEvents (plan/run/observe/fix/
+// done/stopped) so the Code Studio UI renders the build as it happens. Auth + caps + run
+// metering apply, same as launch. Safe to ship: nothing calls it until the Studio UI lands.
+studioRouter.post('/build', async (req, res, next) => {
+  try {
+    if (notConfigured()) return res.status(503).json(notConfiguredResponse);
+    const userId = req.user!.id;
+    const body = (req.body || {}) as {
+      projectId?: string;
+      title?: string;
+      template?: string;
+      files?: unknown;
+      install?: string;
+      dev?: string;
+      port?: number;
+      maxIterations?: number;
+    };
+
+    const files = sanitizeFiles(body.files);
+    if (!files.length) {
+      return res.status(400).json({ error: { message: 'files[] (with path + content) is required.' } });
+    }
+
+    try {
+      const usage = await getUsage(userId);
+      const decision = evaluateLaunchAllowed(usage, {
+        maxConcurrentPerUser: STUDIO_MAX_CONCURRENT_PER_USER,
+        dailyBuildMinutes: STUDIO_DAILY_BUILD_MINUTES
+      });
+      if (!decision.allowed) {
+        return res.status(429).json({ error: { message: decision.message, code: decision.code } });
+      }
+    } catch (err) {
+      console.warn('[studio] cap check skipped:', (err as Error)?.message);
+    }
+
+    const projectId =
+      typeof body.projectId === 'string' && body.projectId.trim()
+        ? body.projectId.trim().slice(0, 80)
+        : crypto.randomUUID();
+    const port =
+      Number.isInteger(body.port) && (body.port as number) > 1024 && body.port !== 3000 ? (body.port as number) : 3001;
+    const sandboxId = `u_${userId}_${projectId}`;
+    const maxIterations = Number.isInteger(body.maxIterations)
+      ? Math.min(Math.max(body.maxIterations as number, 1), 6)
+      : undefined;
+
+    // FIX model call: the user's OpenRouter key if present, else the platform key — routed to
+    // a strong coding model (free-first).
+    const providerCtx = resolveProviderContext(req.apiKeys?.openRouterKey as string | undefined, 'openrouter');
+    const complete = async (prompt: string): Promise<string> => {
+      let model: string;
+      try {
+        model = await pickCodingModel();
+      } catch {
+        model = TEXT_FALLBACK;
+      }
+      const result = await runChat({
+        provider: 'openrouter',
+        apiKey: providerCtx.apiKey,
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.2,
+        maxTokens: 8000,
+        fallbackModel: TEXT_FALLBACK,
+        timeoutMs: STUDIO_REQUEST_TIMEOUT_MS
+      });
+      return result.text || '';
+    };
+
+    // Open the SSE stream and drive the build.
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no'
+    });
+    const sse = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+    let runId: string | undefined;
+    try {
+      const { data } = await getSupabaseAdmin()
+        .from('studio_runs')
+        .insert({ user_id: userId, project_id: projectId, sandbox_id: sandboxId, status: 'starting' })
+        .select('id')
+        .single();
+      runId = data?.id;
+    } catch (err) {
+      console.warn('[studio] run record skipped:', (err as Error)?.message);
+    }
+    sse('start', { runId, projectId, sandboxId });
+
+    const initialFiles = Object.fromEntries(files.map((f) => [f.path, f.content]));
+    const run = createWorkerRun({ sandboxId, install: body.install, dev: body.dev, port });
+    const fix = createStudioFix(complete);
+
+    const result = await runBuildAgent(
+      initialFiles,
+      { run, fix, onEvent: (event) => sse(event.stage, event) },
+      maxIterations ? { maxIterations } : {}
+    );
+
+    // Persist final run state + the (possibly fixed) project.
+    try {
+      const admin = getSupabaseAdmin();
+      if (runId) {
+        await admin
+          .from('studio_runs')
+          .update({ status: result.ok ? 'live' : 'error', preview_url: result.previewUrl })
+          .eq('id', runId);
+      }
+      await saveProject({
+        userId,
+        projectId,
+        name: deriveProjectName(body.title, files),
+        template: typeof body.template === 'string' ? body.template : 'react-ts',
+        files: Object.entries(result.files).map(([path, content]) => ({ path, content })),
+        versionLabel: 'agentic build',
+        createdBy: 'agent'
+      });
+    } catch (err) {
+      console.warn('[studio] build persist skipped:', (err as Error)?.message);
+    }
+
+    sse('result', {
+      ok: result.ok,
+      reason: result.reason,
+      iterations: result.iterations,
+      previewUrl: result.previewUrl,
+      runId
+    });
+    res.end();
+  } catch (err) {
+    if (res.headersSent) {
+      res.write(`event: error\ndata: ${JSON.stringify({ message: (err as Error)?.message || 'Build failed.' })}\n\n`);
+      res.end();
+    } else {
+      next(err);
+    }
   }
 });
 
