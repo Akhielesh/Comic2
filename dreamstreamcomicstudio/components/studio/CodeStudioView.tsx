@@ -7,10 +7,10 @@
 // flag is on. Non-admins still get an instant in-browser preview of a handed-off app so the
 // single "Open in Code Studio" CTA never dead-ends.
 
-import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft, Wand2, Square, Share2, Download, FileCode, Cloud,
-  Sparkles, Cpu, Lock, Mail, Loader2, Command as CommandIcon, Moon, Sun, Palette, Undo2, MessageSquarePlus,
+  Sparkles, Cpu, Lock, Mail, Loader2, Command as CommandIcon, Moon, Sun, Palette, Undo2, MessageSquarePlus, Check,
 } from 'lucide-react';
 import type { CodeStudioArtifact } from '../../apiTypes';
 import {
@@ -67,6 +67,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const revertFile = useStudioWorkspace((s) => s.revertFile);
   const setTheme = useStudioThemeStore((s) => s.setTheme);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const runBuildRef = useRef<() => void>(() => {});
   const hasFiles = wsPaths.length > 0;
   const dirtyList = useMemo(
     () => wsPaths.filter((p) => isPathDirty({ files: wsFiles, baseline: wsBaseline }, p)),
@@ -85,10 +86,15 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     if (artifact) loadArtifact(artifact);
   }, [artifact, loadArtifact]);
 
-  // ⌘K / Ctrl-K toggles the command palette.
+  // Keyboard shortcuts: ⌘K palette · ⌘B / ⌘↵ Build · ⌘S (no-op — Code Studio saves on Build).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); setPaletteOpen((o) => !o); }
+      const mod = e.metaKey || e.ctrlKey;
+      if (!mod) return;
+      const k = e.key.toLowerCase();
+      if (k === 'k') { e.preventDefault(); setPaletteOpen((o) => !o); }
+      else if (k === 'b' || e.key === 'Enter') { e.preventDefault(); runBuildRef.current(); }
+      else if (k === 's') { e.preventDefault(); /* persisted on Build */ }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -101,6 +107,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [celebrate, setCelebrate] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
 
   // Agentic build: stream plan → run → observe → fix → done, self-healing errors. The final
   // preview URL is the live app. Drives the BuildTrace + logs + run status.
@@ -108,7 +115,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     stage === 'done' ? 'success' : stage === 'stopped' || stage === 'observe' ? 'warn' : 'info' as const;
 
   const runBuild = async () => {
-    if (!hasFiles) return;
+    if (!hasFiles || !enabled || status === 'starting') return;
     setStatus('starting');
     setError(null);
     setPreviewUrl(null);
@@ -148,12 +155,27 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     }
   };
 
+  runBuildRef.current = runBuild;
+
   const stopLive = async () => {
     if (runId) { try { await stopLiveStudio(runId); } catch { /* best-effort */ } }
     setStatus('idle');
     setRunId(null);
     setPreviewUrl(null);
     appendLog('system', 'Run stopped.');
+  };
+
+  // Share the running app — copy its live preview link (works while the container is alive).
+  const copyShare = async () => {
+    if (!previewUrl) return;
+    try {
+      await navigator.clipboard?.writeText(previewUrl);
+      setShareCopied(true);
+      setTimeout(() => setShareCopied(false), 1500);
+      appendLog('info', 'Preview link copied to clipboard.');
+    } catch {
+      appendLog('warn', 'Could not copy the link.');
+    }
   };
 
   // Command palette actions (filtered + run by the ⌘K palette).
@@ -291,11 +313,13 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
               </Lift>
             )}
             <button
-              disabled
-              title="Sharing arrives in a later sprint"
-              className={`hidden md:flex items-center gap-1.5 text-sm font-semibold rounded-full border ${t.edge} px-3 py-1.5 ${t.textFaint} cursor-not-allowed`}
+              onClick={copyShare}
+              disabled={!previewUrl}
+              title={previewUrl ? 'Copy the live preview link' : 'Build & run first to share the live app'}
+              className={`hidden md:flex items-center gap-1.5 text-sm font-semibold rounded-full border ${t.edge} px-3 py-1.5 ${t.focusRing} ${previewUrl ? `${t.textDim} ${t.hover}` : `${t.textFaint} cursor-not-allowed`}`}
             >
-              <Share2 className="w-3.5 h-3.5" /> Share
+              {shareCopied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Share2 className="w-3.5 h-3.5" />}
+              {shareCopied ? 'Copied!' : 'Share'}
             </button>
             {hasFiles && (
               <button

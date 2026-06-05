@@ -5,6 +5,15 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Sprint 4/5: share live link + build shortcuts (S5.1-lite / S4.2)
+- **Share** — the top-bar Share button now **copies the live preview URL** (with a "Copied!"
+  state) while the container is alive — a real share-the-running-app MVP, no backend. Disabled
+  until the app is running.
+- **Shortcuts** — global **⌘B / ⌘↵** trigger Build (guarded), **⌘K** the palette, **⌘S** is a
+  no-op (Code Studio saves on Build). Build now guards against re-entrancy + gating.
+- 63 studio tests; typecheck + build green. (Token-scoped expiring share links — full S5.1 — need
+  a backend endpoint and are deferred.)
+
 ## 2026-06-05 · Claude — Sprint 4: starter templates gallery (S4.1)
 - **`assets/templates.ts`** — `STARTER_TEMPLATES`: Counter + Todo (Vite React+TS scaffolds) and a
   static Landing page — minimal but valid/runnable projects (real package.json/vite config).
