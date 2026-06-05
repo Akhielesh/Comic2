@@ -2,7 +2,7 @@
 // working-copy → artifact, and the store's open/close/edit lifecycle.
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { useStudioWorkspace, isPathDirty, dirtyPaths, workspaceToArtifact } from './workspaceStore';
+import { useStudioWorkspace, isPathDirty, dirtyPaths, workspaceToArtifact, normalizeStudioPath, renameInDir } from './workspaceStore';
 import { buildTree } from './FileTree';
 import type { CodeStudioArtifact } from '../../../apiTypes';
 
@@ -83,5 +83,71 @@ describe('workspace store lifecycle', () => {
     expect(out.files.find((f) => f.path === '/index.tsx')?.content).toBe('NEW');
     expect(out.files.length).toBe(4);
     expect(out.title).toBe('Demo');
+  });
+});
+
+describe('path helpers', () => {
+  it('normalizeStudioPath cleans + rejects traversal', () => {
+    expect(normalizeStudioPath('src/App.tsx')).toBe('/src/App.tsx');
+    expect(normalizeStudioPath('//a///b.tsx')).toBe('/a/b.tsx');
+    expect(normalizeStudioPath('../secret')).toBe('');
+    expect(normalizeStudioPath('  ')).toBe('');
+  });
+  it('renameInDir keeps the directory', () => {
+    expect(renameInDir('/src/components/Button.tsx', 'Card.tsx')).toBe('/src/components/Card.tsx');
+    expect(renameInDir('/index.tsx', 'main.tsx')).toBe('/main.tsx');
+  });
+});
+
+describe('file ops', () => {
+  beforeEach(() => useStudioWorkspace.getState().reset());
+
+  it('adds a new file and focuses it', () => {
+    const ws = useStudioWorkspace.getState();
+    ws.loadArtifact(artifact);
+    ws.addFile('src/New.tsx', 'export const N = 1;');
+    const s = useStudioWorkspace.getState();
+    expect(s.paths).toContain('/src/New.tsx');
+    expect(s.activePath).toBe('/src/New.tsx');
+    expect(s.files['/src/New.tsx']).toBe('export const N = 1;');
+  });
+
+  it('does not overwrite an existing file', () => {
+    const ws = useStudioWorkspace.getState();
+    ws.loadArtifact(artifact);
+    ws.addFile('/index.tsx', 'X');
+    expect(useStudioWorkspace.getState().files['/index.tsx']).toBe('I'); // unchanged
+  });
+
+  it('deletes a file and refocuses', () => {
+    const ws = useStudioWorkspace.getState();
+    ws.loadArtifact(artifact);
+    ws.openFile('/src/App.tsx');
+    ws.deleteFile('/src/App.tsx');
+    const s = useStudioWorkspace.getState();
+    expect(s.paths).not.toContain('/src/App.tsx');
+    expect(s.files['/src/App.tsx']).toBeUndefined();
+    expect(s.activePath).not.toBe('/src/App.tsx');
+  });
+
+  it('renames a file, preserving content + tabs', () => {
+    const ws = useStudioWorkspace.getState();
+    ws.loadArtifact(artifact);
+    ws.openFile('/src/App.tsx');
+    ws.renameFile('/src/App.tsx', '/src/Main.tsx');
+    const s = useStudioWorkspace.getState();
+    expect(s.files['/src/Main.tsx']).toBe('A');
+    expect(s.files['/src/App.tsx']).toBeUndefined();
+    expect(s.openPaths).toContain('/src/Main.tsx');
+    expect(s.activePath).toBe('/src/Main.tsx');
+  });
+
+  it('rename is a no-op when the target already exists', () => {
+    const ws = useStudioWorkspace.getState();
+    ws.loadArtifact(artifact);
+    ws.renameFile('/src/App.tsx', '/index.tsx');
+    const s = useStudioWorkspace.getState();
+    expect(s.files['/src/App.tsx']).toBe('A'); // unchanged
+    expect(s.files['/index.tsx']).toBe('I');
   });
 });

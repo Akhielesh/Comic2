@@ -5,6 +5,18 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Sprint 3 (start): file ops — add / delete / rename (S3.4)
+- **Workspace store** gains `addFile` / `deleteFile` / `renameFile` with a safe
+  `normalizeStudioPath` (rejects traversal/empty) + `renameInDir` (keeps the directory). Rename
+  preserves content, dirty state and open tabs; delete refocuses a neighbour; add focuses the
+  new file. All persist on the next Build (save-on-build).
+- **FileTree** rows get hover **Rename** (inline input) + **Delete** actions; **CodeWorkspace**
+  Explorer header gets a **New file** affordance (inline path input). All gated off in read-only
+  (non-admin) mode.
+- Tests: path helpers + add/delete/rename/no-overwrite lifecycle (53 studio tests). Typecheck +
+  build green.
+- (Manual edit → re-run / S3.2 already worked: edit the working copy → Build re-runs it.)
+
 ## 2026-06-05 · Claude — Sprint 2: illustrated empty states (S2.5) + stuck-loop UX (S2.4)
 - **`kit/EmptyState.tsx`** + **`assets/illustrations.tsx`** (`EmptyProjectsArt`, `BuildErrorArt`,
   on-brand inline SVG using currentColor) — `StudioStart`'s empty state is now illustrated.

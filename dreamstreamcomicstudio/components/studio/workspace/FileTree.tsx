@@ -3,9 +3,10 @@
 // via the Motion Kit.
 
 import React, { useMemo, useState } from 'react';
-import { ChevronRight, ChevronDown, FileCode, FileJson, FileText, Folder, FolderOpen, File } from 'lucide-react';
+import { ChevronRight, ChevronDown, FileCode, FileJson, FileText, Folder, FolderOpen, File, Pencil, Trash2 } from 'lucide-react';
 import { Stagger, StaggerItem, useStudioTheme } from '../kit';
 import type { StudioThemeTokens } from '../kit';
+import { renameInDir } from './workspaceStore';
 
 interface TreeNode {
   name: string;
@@ -54,30 +55,69 @@ interface RowProps {
   activePath: string | null;
   dirtySet: Set<string>;
   onOpen: (path: string) => void;
+  onDelete?: (path: string) => void;
+  onRename?: (from: string, to: string) => void;
   t: StudioThemeTokens;
 }
 
-const TreeRow: React.FC<RowProps> = ({ node, depth, activePath, dirtySet, onOpen, t }) => {
+const TreeRow: React.FC<RowProps> = ({ node, depth, activePath, dirtySet, onOpen, onDelete, onRename, t }) => {
   const [open, setOpen] = useState(depth < 2); // top levels expanded by default
+  const [renaming, setRenaming] = useState(false);
   const pad = { paddingLeft: `${depth * 12 + 8}px` };
 
   if (node.isFile) {
     const Icon = fileIcon(node.name);
     const active = activePath === node.path;
     const dirty = dirtySet.has(node.path);
+
+    if (renaming) {
+      return (
+        <div style={pad} className="py-0.5 pr-2">
+          <input
+            autoFocus
+            defaultValue={node.name}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                const v = (e.target as HTMLInputElement).value.trim();
+                if (v) onRename?.(node.path, renameInDir(node.path, v));
+                setRenaming(false);
+              } else if (e.key === 'Escape') setRenaming(false);
+            }}
+            onBlur={() => setRenaming(false)}
+            className={`w-full rounded border ${t.edgeStrong} ${t.editorBg} ${t.text} px-1 py-0.5 text-xs font-mono ${t.focusRing}`}
+          />
+        </div>
+      );
+    }
+
     return (
-      <button
-        onClick={() => onOpen(node.path)}
+      <div
         style={pad}
         title={node.path}
-        className={`group flex w-full items-center gap-1.5 py-1 pr-2 text-left text-xs font-mono truncate ${
+        className={`group flex w-full items-center gap-1.5 py-1 pr-1 text-xs font-mono ${
           active ? `${t.accentSoft} ${t.accent}` : `${t.textDim} ${t.hover}`
         }`}
       >
-        <Icon className="w-3.5 h-3.5 shrink-0 opacity-70" />
-        <span className="truncate">{node.name}</span>
-        {dirty && <span className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" title="Unsaved changes" />}
-      </button>
+        <button onClick={() => onOpen(node.path)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left truncate">
+          <Icon className="w-3.5 h-3.5 shrink-0 opacity-70" />
+          <span className="truncate">{node.name}</span>
+        </button>
+        {dirty && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400 group-hover:hidden" title="Unsaved changes" />}
+        {(onRename || onDelete) && (
+          <span className="hidden group-hover:inline-flex items-center gap-0.5 shrink-0">
+            {onRename && (
+              <button onClick={() => setRenaming(true)} title="Rename" aria-label={`Rename ${node.name}`} className={`rounded p-0.5 ${t.hover}`}>
+                <Pencil className="w-3 h-3" />
+              </button>
+            )}
+            {onDelete && (
+              <button onClick={() => onDelete(node.path)} title="Delete" aria-label={`Delete ${node.name}`} className="rounded p-0.5 hover:bg-rose-500/10 text-rose-500">
+                <Trash2 className="w-3 h-3" />
+              </button>
+            )}
+          </span>
+        )}
+      </div>
     );
   }
 
@@ -95,7 +135,7 @@ const TreeRow: React.FC<RowProps> = ({ node, depth, activePath, dirtySet, onOpen
         <span className="truncate">{node.name}</span>
       </button>
       {open && node.children.map((c) => (
-        <TreeRow key={c.path} node={c} depth={depth + 1} activePath={activePath} dirtySet={dirtySet} onOpen={onOpen} t={t} />
+        <TreeRow key={c.path} node={c} depth={depth + 1} activePath={activePath} dirtySet={dirtySet} onOpen={onOpen} onDelete={onDelete} onRename={onRename} t={t} />
       ))}
     </div>
   );
@@ -106,9 +146,11 @@ export interface FileTreeProps {
   activePath: string | null;
   dirtyPaths: string[];
   onOpen: (path: string) => void;
+  onDelete?: (path: string) => void;
+  onRename?: (from: string, to: string) => void;
 }
 
-export const FileTree: React.FC<FileTreeProps> = ({ paths, activePath, dirtyPaths, onOpen }) => {
+export const FileTree: React.FC<FileTreeProps> = ({ paths, activePath, dirtyPaths, onOpen, onDelete, onRename }) => {
   const t = useStudioTheme();
   const tree = useMemo(() => buildTree(paths), [paths]);
   const dirtySet = useMemo(() => new Set(dirtyPaths), [dirtyPaths]);
@@ -121,7 +163,7 @@ export const FileTree: React.FC<FileTreeProps> = ({ paths, activePath, dirtyPath
     <Stagger className="py-1" step={0.02}>
       {tree.children.map((node) => (
         <StaggerItem key={node.path}>
-          <TreeRow node={node} depth={0} activePath={activePath} dirtySet={dirtySet} onOpen={onOpen} t={t} />
+          <TreeRow node={node} depth={0} activePath={activePath} dirtySet={dirtySet} onOpen={onOpen} onDelete={onDelete} onRename={onRename} t={t} />
         </StaggerItem>
       ))}
     </Stagger>

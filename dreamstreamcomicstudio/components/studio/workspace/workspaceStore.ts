@@ -46,9 +46,32 @@ interface WorkspaceState {
   updateContent: (path: string, content: string) => void;
   /** Revert a file to its baseline. */
   revertFile: (path: string) => void;
+  /** Create a new file (opens it). No-op if it already exists. */
+  addFile: (path: string, content?: string) => void;
+  /** Delete a file (closes its tab; focuses a neighbour). */
+  deleteFile: (path: string) => void;
+  /** Rename a file, preserving content + dirty state. No-op if the target exists. */
+  renameFile: (from: string, to: string) => void;
   /** Clear everything. */
   reset: () => void;
 }
+
+/** Normalise a studio file path: leading slash, collapsed slashes, no traversal. '' if invalid. */
+export const normalizeStudioPath = (raw: string): string => {
+  const trimmed = (raw || '').trim();
+  if (!trimmed) return '';
+  const path = ('/' + trimmed.replace(/^\/+/, '')).replace(/\/{2,}/g, '/').replace(/\/$/, '');
+  const segs = path.split('/').filter(Boolean);
+  if (segs.length === 0) return '';
+  if (segs.some((s) => s === '.' || s === '..')) return '';
+  return '/' + segs.join('/');
+};
+
+/** Resolve a new base-name within the same directory as `path`. */
+export const renameInDir = (path: string, newName: string): string => {
+  const dir = path.slice(0, path.lastIndexOf('/'));
+  return normalizeStudioPath(`${dir}/${newName.trim()}`);
+};
 
 export const useStudioWorkspace = create<WorkspaceState>((set, get) => ({
   loadedKey: null,
@@ -105,6 +128,43 @@ export const useStudioWorkspace = create<WorkspaceState>((set, get) => ({
   revertFile: (path) => set((s) => ({
     files: { ...s.files, [path]: s.baseline[path] ?? s.files[path] },
   })),
+
+  addFile: (rawPath, content = '') => set((s) => {
+    const path = normalizeStudioPath(rawPath);
+    if (!path || s.files[path] !== undefined) return s;
+    return {
+      files: { ...s.files, [path]: content },
+      paths: [...s.paths, path].sort((a, b) => a.localeCompare(b)),
+      openPaths: s.openPaths.includes(path) ? s.openPaths : [...s.openPaths, path],
+      activePath: path,
+    };
+  }),
+
+  deleteFile: (path) => set((s) => {
+    if (s.files[path] === undefined) return s;
+    const files = { ...s.files }; delete files[path];
+    const baseline = { ...s.baseline }; delete baseline[path];
+    const idx = s.openPaths.indexOf(path);
+    const openPaths = s.openPaths.filter((p) => p !== path);
+    let activePath = s.activePath;
+    if (s.activePath === path) activePath = openPaths[Math.min(idx, openPaths.length - 1)] ?? null;
+    return { files, baseline, paths: s.paths.filter((p) => p !== path), openPaths, activePath };
+  }),
+
+  renameFile: (from, to) => set((s) => {
+    const next = normalizeStudioPath(to);
+    if (s.files[from] === undefined || !next || next === from || s.files[next] !== undefined) return s;
+    const files = { ...s.files }; files[next] = files[from]; delete files[from];
+    const baseline = { ...s.baseline };
+    if (baseline[from] !== undefined) { baseline[next] = baseline[from]; delete baseline[from]; }
+    return {
+      files,
+      baseline,
+      paths: s.paths.filter((p) => p !== from).concat(next).sort((a, b) => a.localeCompare(b)),
+      openPaths: s.openPaths.map((p) => (p === from ? next : p)),
+      activePath: s.activePath === from ? next : s.activePath,
+    };
+  }),
 
   reset: () => set({ loadedKey: null, title: '', template: 'react-ts', files: {}, baseline: {}, paths: [], openPaths: [], activePath: null }),
 }));
