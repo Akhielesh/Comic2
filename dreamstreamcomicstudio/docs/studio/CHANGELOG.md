@@ -5,6 +5,17 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude (session 012Drsxr…) — Phase 2 + 3-core SHIPPED TO PROD + workflow change
+- Merged **#77 to production** (`Dreamstrream-v1`): Phase 2 control plane + Phase 3a
+  Run-live wiring. CI green; flag-gated so prod behavior is unchanged until O8.
+- **Workflow change (owner directive):** completed *phases* now merge straight to
+  **production**, not a preview branch (sub-phases stay on the branch). Recorded in
+  `AGENTS.md §7`. Everything ships safe-by-default (flag-gated / no-op until configured).
+- Phase 3: "Run live → new tab" is the core deliverable and is shipped; the in-app
+  log/status pieces are deferred until the Worker's logs action (needs infra).
+- **Next buildable-now:** Phase 5 persistence, or parallel workstreams 9/10/11. Phase 4
+  (agentic loop) needs the Worker deployed first.
+
 ## 2026-06-05 · Claude (session 012Drsxr…) — PHASE 3a + continuity log
 **Continuity:** added `OWNER-ACTIONS.md` (living resume + owner to-do + deferred-validation
 log); wired into AGENTS/README/00-STATUS (agents must keep it updated).

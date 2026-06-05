@@ -32,7 +32,7 @@ building everything else first and will validate together once these are done.
 | O3 | **Deploy the Worker** | Runs the AI-built apps | `cd studio-worker` → set `wrangler.jsonc` route → `wrangler secret put STUDIO_HMAC_SECRET` → `wrangler deploy` (Docker running). Full steps: [PHASE-0](./phases/PHASE-0-infra.md) | ⏳ pending |
 | O4 | Set Railway env: `STUDIO_WORKER_URL`, `STUDIO_HMAC_SECRET` | Control plane → Worker hop | Railway → API service → Variables → redeploy | ⏳ pending |
 | O5 | Apply DB migration `server/sql/studio_runs.sql` | Phase 2 run metering | **I can apply it via Supabase access — just say so**, or run it in the Supabase SQL editor | ⏳ pending (offered) |
-| O6 | Review/approve **Phase 2 PR #77** → merge to prod | Ship the control plane | GitHub | ⏳ pending |
+| O6 | ~~Review/approve Phase 2 PR #77~~ | control plane shipped | merged to prod 2026-06-05 | ✅ done |
 | O7 | (Later, Phase 10) optional keys: `TAVILY_API_KEY`/`BRAVE_API_KEY` (search), `FOURSQUARE_API_KEY` (places) | Raise tool sourcing reliability | Railway env | 🔮 future |
 | O8 | Set `VITE_STUDIO_LIVE_ENABLED=true` (Cloudflare Pages env) **after** the Worker deploys | Reveals the "Run live" button in chat (hidden by default so prod is unaffected) | Cloudflare Pages → env → rebuild | ⏳ pending |
 
@@ -64,8 +64,11 @@ When infra is up: trigger a build in the app → `/api/studio/launch` should ret
 
 ## 📌 PRs & branches
 - ✅ #75 merged (studio bug-fixes) · ✅ #76 merged (docs hub + Worker scaffold)
-- 🟢 #77 open/draft — **Phase 2 control plane**, awaiting review (O6)
+- ✅ #77 merged — **Phase 2 control plane + Phase 3a** Run-live wiring
 - Active branch: `claude/peaceful-gauss-0Gwni`
+- **Workflow:** completed phases now merge straight to **production** (`Dreamstrream-v1`);
+  sub-phases stay on the branch. Everything ships safe-by-default (flag-gated / no-op
+  until configured).
 
 ---
 

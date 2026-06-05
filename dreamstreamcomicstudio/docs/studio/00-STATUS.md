@@ -17,14 +17,15 @@
 ## Overall progress
 
 ```
-Foundation  ███████░░░░░░░░░░░░░░  ~35%   (planning complete; Phase 1 scaffolded)
-Experience  ██░░░░░░░░░░░░░░░░░░░  ~10%   (designed, not built)
+Foundation  ██████████░░░░░░░░░░  ~50%   (Phase 2 control plane + Phase 3 core shipped to prod)
+Experience  ███░░░░░░░░░░░░░░░░░░  ~15%   (Run-live wiring shipped, flag-gated; rest designed)
 ```
 
-**Where we are:** all planning/architecture is done and documented. The studio
-bug-fixes are shipped to production. The Cloudflare Studio Worker is scaffolded
-(deploy-ready, not yet validated on real infra). Nothing of the v2 *experience* (agentic
-loop, editor, persistence, GitHub, deploy) is built yet.
+**Where we are:** planning/architecture done + documented. Shipped to prod: studio
+bug-fixes, the docs hub, the Worker scaffold, **Phase 2 control plane**, and **Phase 3
+core** (Run-live → new tab, flag-gated). Not yet built: persistence (5), agentic loop (4,
+needs the Worker), GitHub/deploy (6), and the parallel upgrades (9–11). The Cloudflare
+Worker still needs the owner to deploy it before the live path can be validated.
 
 ## Phase board
 
@@ -33,8 +34,8 @@ loop, editor, persistence, GitHub, deploy) is built yet.
 | — | Studio bug-fixes (tool fires reliably, universal fallback) | ✅ **shipped** (PR #75, merged) | — |
 | 0 | [Cloudflare infra](./phases/PHASE-0-infra.md) | ⛔ **blocked** | needs account owner: Workers Paid + wildcard domain |
 | 1 | [Studio Worker](./phases/PHASE-1-worker.md) | 🟡 **scaffolded** (PR #76), not validated | Phase 0 to deploy/test |
-| 2 | [Railway control plane](./phases/PHASE-2-control-plane.md) | 🟢 **built + verified — in review** (`/api/studio/*`, HMAC, caps, runs) | — |
-| 3 | [Studio UI shell](./phases/PHASE-3-studio-ui.md) | 🟡 **in progress** — 3a client "Run live" wiring done (flag-gated); 3b shell/preview/logs next | Phase 2 for live wiring |
+| 2 | [Railway control plane](./phases/PHASE-2-control-plane.md) | ✅ **shipped to prod** (#77) — `/api/studio/*`, HMAC, caps, runs | — |
+| 3 | [Studio UI shell](./phases/PHASE-3-studio-ui.md) | 🟡 **core shipped** (#77) — "Run live → new tab" (flag-gated); in-app log/status pieces **deferred** until the Worker's logs action | needs infra to validate |
 | 4 | [Agentic build loop](./phases/PHASE-4-agentic-loop.md) | 📋 planned | Phases 1–3 |
 | 5 | [Editor + persistence](./phases/PHASE-5-editor-persistence.md) | 📋 planned | Phase 3 |
 | 6 | [GitHub + deploy](./phases/PHASE-6-github-deploy.md) | 📋 planned | Phase 5 |
@@ -53,11 +54,16 @@ Legend: ✅ done · 🟡 in progress/partial · 📋 planned · ⛔ blocked
 
 ## ➡️ NEXT STEP
 
-**Building Phase 3** (owner said "keep building"). 3a done: client "Run live" wiring
-(`services/studioApi.ts` + the flag-gated button in `CodeStudioCard`) — verified, behind
-`VITE_STUDIO_LIVE_ENABLED` so prod is unaffected. **Next: 3b** — the studio shell
-(file tree + editor area + LivePreview + log panel + status bar). Workflow still:
-build → self-audit → owner reviews before the *next phase*. Phase 2 (#77) awaits review.
+Phase 2 + Phase 3 core are **shipped to prod** (#77). Remaining work splits in two:
+- **Needs the Worker deployed first** (owner infra — see `OWNER-ACTIONS.md`): Phase 3
+  in-app logs/status, **Phase 4** agentic build loop (it must read real container errors).
+- **Buildable + shippable NOW (no infra):** **Phase 5** persistence (projects/files/
+  versions + CRUD), and parallel workstreams **Phase 9** (swarm verifier) / **10** (tools
+  on all models + MCP) / **11** (unified persona + output guardrails).
+
+Recommended next (validated value to prod now): **Phase 5 persistence** or a parallel
+workstream. **Workflow:** build a full phase → self-audit → **merge it to production**
+(`Dreamstrream-v1`), not a preview branch. Sub-phases stay on the branch until done.
 
 **To unblock Phase 0/1 deploy:** the account owner must (a) enable **Workers Paid**,
 (b) add a **wildcard preview domain** (e.g. `*.studio.<domain>`), (c) confirm the domain
