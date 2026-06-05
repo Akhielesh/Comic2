@@ -25,6 +25,8 @@ import {
 import { StudioStart } from './StudioStart';
 import { stopLiveStudio } from '../../services/studioApi';
 import { streamStudioBuild, type BuildStage } from '../../services/studioBuildApi';
+import { getOpenRouterKey } from '../../services/appSettings';
+import { isProviderEnabled } from '../../services/sourceGovernance';
 import { isLiveStudioEnabled } from '../../services/studioFlags';
 import { downloadArtifactZip } from '../../services/studioLauncher';
 
@@ -194,6 +196,8 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   commands.push({ id: 'back', label: 'Back', icon: <ArrowLeft className="w-4 h-4" />, keywords: 'exit leave close', run: onBack });
 
   const projectName = wsTitle || 'Untitled project';
+  // Build model tier: BYOK (your OpenRouter key → frontier models) vs. free-first auto.
+  const hasByok = isProviderEnabled('openrouter') && !!getOpenRouterKey();
 
   // ---- Panes (defined once, placed into the resizable or stacked layout) ----
   const promptPane = (
@@ -277,9 +281,15 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
           <div className={`h-5 w-px ${t.edge} border-l`} />
           <div className="flex items-center gap-2 min-w-0">
             <span className={`font-display text-lg tracking-wide ${t.text} truncate`}>{projectName}</span>
-            <span className={`hidden sm:inline-flex items-center gap-1 text-[11px] font-semibold rounded-full border ${t.edge} px-2 py-0.5 ${t.textDim}`}>
-              <Cpu className="w-3 h-3" /> coding · auto
-            </span>
+            <button
+              onClick={() => onNavigate('settings')}
+              title={hasByok
+                ? 'Builds run on a strong coding model using your OpenRouter key (BYOK). Manage keys in Settings.'
+                : 'Builds run on a strong open coding model — free. Add your OpenRouter key in Settings for frontier models.'}
+              className={`hidden sm:inline-flex items-center gap-1 text-[11px] font-semibold rounded-full border ${t.edge} px-2 py-0.5 ${t.textDim} ${t.hover} ${t.focusRing}`}
+            >
+              <Cpu className="w-3 h-3" /> coding · {hasByok ? 'your key' : 'free'}
+            </button>
             {dirtyCount > 0 && (
               <span className="hidden sm:inline-flex items-center gap-1 text-[11px] font-semibold text-amber-500" title="Unsaved edits in the working copy">
                 ● {dirtyCount} unsaved

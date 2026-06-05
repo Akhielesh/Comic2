@@ -5,6 +5,12 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Sprint 4: model-tier / BYOK surface (S4.3)
+- The top-bar **coding** chip is now honest about the build model tier: **coding · free** (strong
+  open model, free-first) vs **coding · your key** when an OpenRouter key is set (BYOK → frontier
+  models). Clicking it opens **Settings** (the BYOK upsell). Reflects the route's existing routing
+  (no behaviour change). 71 studio tests; typecheck + build green.
+
 ## 2026-06-05 · Claude — docs: bring 00-STATUS current (Sprints 0–5 shipped)
 Refreshed the authoritative tracker — Experience ~85%, "Latest" + "Where we are" now reflect the
 ~19 increments shipped (Sprints 0–5) and the honest "needs the owner" list (live Build validation,
