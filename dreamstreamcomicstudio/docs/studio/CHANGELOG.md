@@ -5,6 +5,28 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — INFRA LIVE: deploy worker, fix CORS, apply DB migrations
+Brought the Cloudflare/Studio infra up end-to-end and unblocked the live site.
+- **Diagnosed the live site being broken:** the frontend served at `dreamstreamstudio.ai`
+  but every API call 403'd — the Railway backend's `CORS_ORIGIN` didn't include the new
+  domain. **Fix:** added `isAllowedOrigin()` in `server/src/config.ts` that always trusts
+  the brand domains + their subdomains over HTTPS (apex, www, `*.dreamstreamstudio.ai`
+  preview hosts), with look-alike/HTTP rejection + unit tests (`config.cors.test.ts`).
+  Wired into the CORS middleware (`server/src/index.ts`). **Merged to prod (PR #79) and
+  verified live** — `https://dreamstreamstudio.ai` now gets `access-control-allow-origin`.
+- **Studio Worker deployed:** `dreamstream-studio` is live on Cloudflare (owner ran
+  `wrangler deploy`; container image built + pushed after a Docker CLI update). Wildcard
+  preview DNS (`A * → 192.0.2.0`, proxied) added — `*.dreamstreamstudio.ai` now resolves
+  and routes to the worker. HMAC secret set on the worker + Railway.
+- **DB migrations applied** to the `Comic` project (`bdjfmxfmhqhzvgrhbbzm`): `studio_runs`,
+  `studio_projects` (+ files/versions/deployments), `custom_agents`, `mcp_servers` — 7
+  tables, all RLS-enabled; security advisors clean (only the standard GraphQL-visibility
+  WARNs shared by every table).
+- **Docs:** `00-STATUS.md` (Phase 0 ✅, Phase 1 deployed, new NEXT STEP), `OWNER-ACTIONS.md`
+  (live-state table + statuses) updated.
+- **Follow-ups:** confirm `VITE_STUDIO_LIVE_ENABLED=true` (Pages) + `STUDIO_WORKER_URL`
+  (Railway); run a signed-in launch round-trip to validate Phase 1 live; then Phase 4.
+
 ## 2026-06-05 · Claude — Wire the real domains (dreamstreamstudio.ai primary, .com → .ai)
 Owner bought `dreamstreamstudio.ai` + `dreamstreamstudio.com`. Wired them in:
 - Worker preview domain is now **configurable** (`STUDIO_PREVIEW_DOMAIN`) and **decoupled

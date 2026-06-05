@@ -4,38 +4,40 @@
 > DreamStream Studio. Every agent/PR that changes anything **must** update this file and
 > `CHANGELOG.md`. If this file and reality disagree, fix this file.
 
-**Last updated:** 2026-06-05 · **Updated by:** Claude · **Branch:** `claude/modest-cerf-x3uXx` → prod
+**Last updated:** 2026-06-05 · **Updated by:** Claude · **Branch:** `claude/wizardly-allen-k6OdD` → prod
 
-> Latest: shipped the backend cores of **four** more phases — **11** (unified persona +
-> output guardrails), **9** (swarm verifier + custom-agent library + retry), **10** (JSON
-> tool fallback + server-side MCP registry + outbound MCP endpoint), and **6** (GitHub
-> two-way sync). Behavior-changing paths are flag-gated; deploy half of 6 still needs the Worker.
+> Latest: **INFRA IS LIVE.** The Cloudflare Studio Worker (`dreamstream-studio`) is deployed,
+> the wildcard preview DNS resolves, the **CORS break that made the live site non-functional is
+> fixed + verified**, and all **4 studio DB migrations are applied** (7 tables, RLS on). The main
+> comic app at `dreamstreamstudio.ai` works end-to-end again. Phase 0 (infra) is **done**; the
+> studio control path is wired and ready for a live launch round-trip.
 >
-> 🟠 **Owner to-dos + how to resume in a new session →** [`OWNER-ACTIONS.md`](./OWNER-ACTIONS.md)
-> (nothing there blocks further building — it's only for going *live*).
+> 🟢 **Owner to-dos (now small) + how to resume →** [`OWNER-ACTIONS.md`](./OWNER-ACTIONS.md).
 
 ---
 
 ## Overall progress
 
 ```
-Foundation  █████████████░░░░░░░  ~65%   (control plane + persistence + GitHub sync shipped)
-Experience  ████░░░░░░░░░░░░░░░░░  ~20%   (Run-live flag-gated; platform AI upgrades 9/10/11 backends shipped)
+Foundation  ██████████████████░░  ~90%   (infra LIVE: worker + DNS + DB migrations + CORS fix; control plane + persistence + GitHub sync shipped)
+Experience  █████░░░░░░░░░░░░░░░░  ~25%   (Run-live wired end-to-end; platform AI 9/10/11 backends shipped, client UIs partial)
 ```
 
-**Where we are:** planning/architecture done. Shipped to prod: studio bug-fixes, the docs
-hub, the Worker scaffold, **Phase 2** control plane, **Phase 3 core** (Run-live, flag-
-gated), **Phase 5** persistence backend, the platform workstreams **9/10/11** (backends),
-and **Phase 6** GitHub sync. Still infra-blocked on the owner deploying the Cloudflare
-Worker: **Phase 4** (agentic loop), Phase 3 in-app logs, and Phase 6 **one-click deploy**.
+**Where we are:** infra is **live** (Cloudflare Worker deployed, wildcard preview DNS up,
+studio tables migrated, CORS fixed + verified). Shipped to prod: studio bug-fixes, the docs
+hub, the Worker, **Phase 2** control plane, **Phase 3 core** (Run-live, flag-gated),
+**Phase 5** persistence backend, platform workstreams **9/10/11** (backends), and
+**Phase 6** GitHub sync. **No longer infra-blocked** — the next builds (Phase 4 agentic loop,
+Phase 3 in-app logs, Phase 6 one-click deploy) can now run against the live worker. Remaining
+to fully *exercise*: a signed-in launch round-trip + the `VITE_STUDIO_LIVE_ENABLED` flag.
 
 ## Phase board
 
 | Phase | Title | Status | Blocked by |
 |---|---|---|---|
 | — | Studio bug-fixes (tool fires reliably, universal fallback) | ✅ **shipped** (PR #75, merged) | — |
-| 0 | [Cloudflare infra](./phases/PHASE-0-infra.md) | ⛔ **blocked** | owner: Workers Paid + **a custom domain (now confirmed REQUIRED)** |
-| 1 | [Studio Worker](./phases/PHASE-1-worker.md) | 🟡 **scaffolded + typechecks vs real SDK 0.4.18** (fixed `exposePort`, added `logs`), not live-validated | Phase 0 (domain + deploy) |
+| 0 | [Cloudflare infra](./phases/PHASE-0-infra.md) | ✅ **done** — Workers Paid, `dreamstreamstudio.ai` zone + SSL, worker deployed, wildcard preview DNS, DB migrations applied, CORS fixed | — |
+| 1 | [Studio Worker](./phases/PHASE-1-worker.md) | ✅ **deployed** (`dreamstream-studio` live) — control plane + preview routing wired; live launch round-trip not yet exercised | needs a signed-in launch to validate |
 | 2 | [Railway control plane](./phases/PHASE-2-control-plane.md) | ✅ **shipped to prod** (#77) — `/api/studio/*`, HMAC, caps, runs | — |
 | 3 | [Studio UI shell](./phases/PHASE-3-studio-ui.md) | 🟡 **core shipped** (#77) — "Run live → new tab" (flag-gated); in-app log/status pieces **deferred** until the Worker's logs action | needs infra to validate |
 | 4 | [Agentic build loop](./phases/PHASE-4-agentic-loop.md) | 📋 planned | Phases 1–3 |
@@ -56,32 +58,29 @@ Legend: ✅ done · 🟡 in progress/partial · 📋 planned · ⛔ blocked
 
 ## ➡️ NEXT STEP
 
-The studio **backend is substantially complete** and the platform AI upgrades (9/10/11)
-+ GitHub sync (6) are shipped. What's left splits in two:
+Infra is live, so the previously-blocked phases are now buildable. Priority order:
 
-- **Needs the Worker deployed first** (owner infra — see `OWNER-ACTIONS.md`): **Phase 4**
-  agentic build loop (the "magic" — must read real container errors), Phase 3 in-app
-  logs/status, and Phase 6 **one-click deploy**.
-- **Buildable now without infra (mostly client UI + opt-in flips):**
-  - **Client surfaces** for the new backends: the swarm trace card (show confidence/flags
-    + re-run an agent), the agent-library UI (`/api/agents`), the MCP dashboard
-    (`/api/mcp` registry + curated catalog), GitHub/Deploy menus (`/api/studio/github/*`).
-  - **Flip on / harden the opt-in features:** validate the JSON tool protocol on a free
-    model then set `JSON_TOOL_PROTOCOL_ENABLED=true`; set `MCP_OUTBOUND_TOKEN` to enable
-    the outbound MCP endpoint. Add the model-based critic + live per-agent SSE.
+1. **Phase 4 — agentic build loop** (the "magic"): on launch, read the container's real
+   install/dev errors (the worker's `logs` action) and let the model self-correct across a
+   bounded retry loop. This is the core differentiator and was the main thing infra blocked.
+2. **Phase 3 — in-app logs/status**: stream the worker's `logs` into the studio panel +
+   live run status (starting/live/error), now that the worker exposes them.
+3. **Phase 6 — one-click deploy**: the `/api/studio/github/*` two-way sync is shipped; wire
+   the deploy target (was an honest 501) now that the worker can build/push.
+4. **Client surfaces** for shipped backends: swarm-trace re-run, custom-agent library UI
+   (`/api/agents`), MCP dashboard (`/api/mcp`), GitHub/Deploy menus.
+
+**Also to fully exercise the live path:** confirm `VITE_STUDIO_LIVE_ENABLED=true` on Pages,
+then run a signed-in launch → preview round-trip to validate Phase 1 end-to-end.
 
 **Workflow:** build a full phase → self-audit → **merge it to production** (`Dreamstrream-v1`),
 not a preview branch. Sub-phases stay on the branch until done.
-
-**To unblock Phase 0/1 deploy:** the account owner must (a) enable **Workers Paid**,
-(b) add a **wildcard preview domain** (e.g. `*.studio.<domain>`), (c) confirm the domain
-so the worker config + docs can be updated from the `studio.dreamstream.app` placeholder.
 
 ## Open decisions (see linked docs)
 
 | Decision | Default / recommendation | Status |
 |---|---|---|
-| Preview/deploy domain | `studio.dreamstream.app` (placeholder) | ❓ needs owner |
+| Preview/deploy domain | `*.dreamstreamstudio.ai` (live) | ✅ decided + deployed |
 | Sandbox provider | Cloudflare Containers | ✅ decided |
 | Egress from sandbox | allowed | ✅ decided |
 | Runtimes in image | Node-only to start | ✅ decided |
@@ -89,6 +88,7 @@ so the worker config + docs can be updated from the `studio.dreamstream.app` pla
 | Per-project backend | SQLite-in-container first, Supabase-per-project later | ❓ open |
 
 ## Known risks / honest caveats
-- Studio Worker SDK calls are **not yet validated** against a live deploy.
+- Studio Worker is **deployed** and typechecks against SDK 0.4.18, but the full live
+  **launch → preview → stop** round-trip hasn't been exercised by a signed-in user yet.
 - Self-hosting large models is **out of scope** (cost-prohibitive) — models stay BYOK/API.
 - WebContainer (current studio) is desktop-only; Cloudflare path replaces it (Phase 8).
