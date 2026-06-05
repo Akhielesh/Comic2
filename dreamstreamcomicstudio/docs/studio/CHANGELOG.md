@@ -5,6 +5,12 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Sprint 4: first-run onboarding welcome (S4.1)
+- **`components/studio/StudioWelcome.tsx`** — a dismissible, **persisted** (localStorage)
+  first-run card atop the Code Studio home: a 3-step orientation (template/chat → Build runs &
+  self-heals → iterate + share). Themed + animated. Test: shows once, persists dismissal.
+  73 studio tests; typecheck + build green.
+
 ## 2026-06-05 · Claude — build: split heavy vendors into cacheable chunks
 - `vite.config.ts` `manualChunks` splits framer-motion, sandpack/CodeMirror, react-markdown,
   leaflet and jszip into their own vendor chunks. **Main entry: 638 kB → 272 kB** (gzip 82 kB);

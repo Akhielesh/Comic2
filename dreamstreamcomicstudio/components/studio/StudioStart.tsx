@@ -8,6 +8,7 @@ import { Reveal, Stagger, StaggerItem, Skeleton, Lift, EmptyState, useStudioThem
 import { TemplateLogo } from './assets/techLogos';
 import { EmptyProjectsArt } from './assets/illustrations';
 import { STARTER_TEMPLATES } from './assets/templates';
+import { StudioWelcome } from './StudioWelcome';
 import { useStudioWorkspace } from './workspace';
 import {
   listStudioProjects, getStudioProject, deleteStudioProject, type StudioProjectSummary,
@@ -93,6 +94,7 @@ export const StudioStart: React.FC<StudioStartProps> = ({ onNavigate }) => {
     <div className="flex-1 min-h-0 overflow-auto p-6">
       <Reveal>
         <div className="mx-auto max-w-5xl">
+          <StudioWelcome />
           <div className="flex items-center gap-3">
             <h1 className={`font-display text-2xl tracking-wide ${t.text}`}>Your projects</h1>
             <button onClick={load} title="Refresh" className={`rounded-md p-1.5 ${t.hover} ${t.textDim}`}>
