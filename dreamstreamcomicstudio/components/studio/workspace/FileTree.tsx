@@ -4,7 +4,8 @@
 
 import React, { useMemo, useState } from 'react';
 import { ChevronRight, ChevronDown, FileCode, FileJson, FileText, Folder, FolderOpen, File } from 'lucide-react';
-import { Stagger, StaggerItem, studioTheme } from '../kit';
+import { Stagger, StaggerItem, useStudioTheme } from '../kit';
+import type { StudioThemeTokens } from '../kit';
 
 interface TreeNode {
   name: string;
@@ -53,9 +54,10 @@ interface RowProps {
   activePath: string | null;
   dirtySet: Set<string>;
   onOpen: (path: string) => void;
+  t: StudioThemeTokens;
 }
 
-const TreeRow: React.FC<RowProps> = ({ node, depth, activePath, dirtySet, onOpen }) => {
+const TreeRow: React.FC<RowProps> = ({ node, depth, activePath, dirtySet, onOpen, t }) => {
   const [open, setOpen] = useState(depth < 2); // top levels expanded by default
   const pad = { paddingLeft: `${depth * 12 + 8}px` };
 
@@ -69,7 +71,7 @@ const TreeRow: React.FC<RowProps> = ({ node, depth, activePath, dirtySet, onOpen
         style={pad}
         title={node.path}
         className={`group flex w-full items-center gap-1.5 py-1 pr-2 text-left text-xs font-mono truncate ${
-          active ? `bg-sky-500/15 ${studioTheme.accent}` : `${studioTheme.textDim} hover:bg-white/5`
+          active ? `${t.accentSoft} ${t.accent}` : `${t.textDim} ${t.hover}`
         }`}
       >
         <Icon className="w-3.5 h-3.5 shrink-0 opacity-70" />
@@ -86,14 +88,14 @@ const TreeRow: React.FC<RowProps> = ({ node, depth, activePath, dirtySet, onOpen
       <button
         onClick={() => setOpen((o) => !o)}
         style={pad}
-        className={`flex w-full items-center gap-1 py-1 pr-2 text-left text-xs font-semibold ${studioTheme.textDim} hover:bg-white/5`}
+        className={`flex w-full items-center gap-1 py-1 pr-2 text-left text-xs font-semibold ${t.textDim} ${t.hover}`}
       >
         <Chevron className="w-3.5 h-3.5 shrink-0 opacity-60" />
-        <FolderIcon className="w-3.5 h-3.5 shrink-0 text-sky-400/70" />
+        <FolderIcon className={`w-3.5 h-3.5 shrink-0 ${t.accent} opacity-80`} />
         <span className="truncate">{node.name}</span>
       </button>
       {open && node.children.map((c) => (
-        <TreeRow key={c.path} node={c} depth={depth + 1} activePath={activePath} dirtySet={dirtySet} onOpen={onOpen} />
+        <TreeRow key={c.path} node={c} depth={depth + 1} activePath={activePath} dirtySet={dirtySet} onOpen={onOpen} t={t} />
       ))}
     </div>
   );
@@ -107,18 +109,19 @@ export interface FileTreeProps {
 }
 
 export const FileTree: React.FC<FileTreeProps> = ({ paths, activePath, dirtyPaths, onOpen }) => {
+  const t = useStudioTheme();
   const tree = useMemo(() => buildTree(paths), [paths]);
   const dirtySet = useMemo(() => new Set(dirtyPaths), [dirtyPaths]);
 
   if (paths.length === 0) {
-    return <p className={`px-3 py-2 text-xs ${studioTheme.textFaint}`}>No files yet.</p>;
+    return <p className={`px-3 py-2 text-xs ${t.textFaint}`}>No files yet.</p>;
   }
 
   return (
     <Stagger className="py-1" step={0.02}>
       {tree.children.map((node) => (
         <StaggerItem key={node.path}>
-          <TreeRow node={node} depth={0} activePath={activePath} dirtySet={dirtySet} onOpen={onOpen} />
+          <TreeRow node={node} depth={0} activePath={activePath} dirtySet={dirtySet} onOpen={onOpen} t={t} />
         </StaggerItem>
       ))}
     </Stagger>

@@ -28,5 +28,12 @@ export {
   STAGGER_STEP,
 } from './motion';
 
-export { studioTheme } from './theme';
-export type { StudioTheme } from './theme';
+export {
+  studioTheme,
+  STUDIO_THEMES,
+  STUDIO_THEME_ORDER,
+  DEFAULT_STUDIO_THEME,
+} from './theme';
+export type { StudioThemeId, StudioThemeTokens } from './theme';
+export { useStudioTheme, useStudioThemeStore } from './themeStore';
+export { ThemeSwitcher } from './ThemeSwitcher';

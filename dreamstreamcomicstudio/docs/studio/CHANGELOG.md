@@ -5,6 +5,23 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Code Studio theming: Black / White / DreamStream (Code-Studio-only)
+Per owner request — three switchable workspace themes, scoped to Code Studio (the main app
+is untouched):
+- **`kit/theme.ts`** — a token registry (`STUDIO_THEMES`): `black` (absolute-black OLED),
+  `light` (clean white), `brand` (DreamStream comic look — black borders, brand yellow CTA,
+  brand-blue accents). Same token shape per theme (bg/panel/edge/hover/text/accent/…).
+- **`kit/themeStore.ts`** — persisted zustand store + `useStudioTheme()` hook every surface
+  reads; choice saved to localStorage (`studio.theme`).
+- **`kit/ThemeSwitcher.tsx`** — segmented Black/White/DreamStream control in the workspace
+  top bar.
+- Threaded the hook through `CodeStudioView`, `CodeWorkspace`, `FileTree`, `EditorTabs`,
+  `StatusPulse` (theme-aware status text) and **Monaco** (defines `studio-black` +
+  `studio-light`, follows the active theme). Replaced all dark-only literals (`hover:bg-white/5`,
+  `text-white`, hard hexes) with tokens so light/brand render correctly.
+- Tests: `theme.test.tsx` (registry completeness, store persistence, switcher). +5 studio tests
+  (23 total). Client typecheck + production build green.
+
 ## 2026-06-05 · Claude — Sprint 0 SHIPPED TO PROD + Sprint 1 (editor): Monaco workspace
 - **Sprint 0 merged to production** (`Dreamstrream-v1`, PR #83, CI green). Code Studio route,
   Motion Kit, one-CTA hand-off + legacy quarantine are live.

@@ -4,7 +4,7 @@
 
 import React from 'react';
 import Editor, { type BeforeMount, type OnMount } from '@monaco-editor/react';
-import { Skeleton } from '../kit';
+import { Skeleton, useStudioTheme } from '../kit';
 
 const langFromPath = (path: string): string => {
   const ext = path.split('.').pop()?.toLowerCase() ?? '';
@@ -30,21 +30,37 @@ const langFromPath = (path: string): string => {
   }
 };
 
-const defineStudioTheme: BeforeMount = (monaco) => {
-  monaco.editor.defineTheme('studio-dark', {
+const defineStudioThemes: BeforeMount = (monaco) => {
+  // Absolute-black dark theme.
+  monaco.editor.defineTheme('studio-black', {
     base: 'vs-dark',
     inherit: true,
     rules: [],
     colors: {
-      'editor.background': '#0e1219',
-      'editorGutter.background': '#0e1219',
-      'editor.lineHighlightBackground': '#11151f',
+      'editor.background': '#000000',
+      'editorGutter.background': '#000000',
+      'editor.lineHighlightBackground': '#0c0c0c',
       'editor.lineHighlightBorder': '#00000000',
-      'editorLineNumber.foreground': '#3b465c',
-      'editorLineNumber.activeForeground': '#7c8aa5',
-      'editorIndentGuide.background1': '#1c2433',
-      'editor.selectionBackground': '#21314d',
-      'scrollbarSlider.background': '#1c243388',
+      'editorLineNumber.foreground': '#3a3a3a',
+      'editorLineNumber.activeForeground': '#8a8a8a',
+      'editorIndentGuide.background1': '#1a1a1a',
+      'editor.selectionBackground': '#1f3350',
+      'scrollbarSlider.background': '#2a2a2a88',
+    },
+  });
+  // Clean light theme (also used by the DreamStream brand theme).
+  monaco.editor.defineTheme('studio-light', {
+    base: 'vs',
+    inherit: true,
+    rules: [],
+    colors: {
+      'editor.background': '#ffffff',
+      'editorGutter.background': '#ffffff',
+      'editor.lineHighlightBackground': '#f1f5f9',
+      'editor.lineHighlightBorder': '#00000000',
+      'editorLineNumber.foreground': '#cbd5e1',
+      'editorLineNumber.activeForeground': '#64748b',
+      'editor.selectionBackground': '#bae6fd',
     },
   });
 };
@@ -57,6 +73,7 @@ export interface MonacoEditorProps {
 }
 
 export const MonacoEditor: React.FC<MonacoEditorProps> = ({ path, value, onChange, readOnly }) => {
+  const t = useStudioTheme();
   const handleMount: OnMount = (_editor, monaco) => {
     // Be permissive: this is a previewing editor, not a type-checker. Keep JSX working and
     // suppress noisy semantic squiggles for snippets that reference uninstalled modules.
@@ -79,8 +96,8 @@ export const MonacoEditor: React.FC<MonacoEditorProps> = ({ path, value, onChang
       path={path}
       language={langFromPath(path)}
       value={value}
-      theme="studio-dark"
-      beforeMount={defineStudioTheme}
+      theme={t.monaco}
+      beforeMount={defineStudioThemes}
       onMount={handleMount}
       onChange={(v) => onChange(v ?? '')}
       loading={<div className="p-3 h-full"><Skeleton className="h-full min-h-[12rem] w-full" /></div>}

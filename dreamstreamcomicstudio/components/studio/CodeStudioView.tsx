@@ -1,10 +1,8 @@
-// Code Studio — the dedicated workspace route (Sprint 0, S0.4).
+// Code Studio — the dedicated workspace route (Sprint 0 shell, filled out in Sprint 1).
 //
-// This is the *skeleton* of the real product (plan §4): a dark, animated 3-pane shell
-// (Prompt/Build · Code · Live preview) over a Console/Logs bar. Sprint 1+ fills the panes
-// with the resizable layout, Monaco editor, streaming logs and the agentic BuildTrace; here
-// we stand up the shell, the design language (Motion Kit + studio theme), the chat hand-off,
-// and a working "Run live" that drives the existing launch backend (S0.1/S0.3).
+// A themeable, animated 3-pane workspace (Prompt/Build · Code · Live preview) over a
+// Console/Logs bar. The Code pane hosts the real editor (Monaco + tabs + file tree). The
+// workspace theme (Black / White / DreamStream) is Code-Studio-only and switches live.
 //
 // Gating: admins are never feature-gated; everyone else sees Code Studio only when the live
 // flag is on. Non-admins still get an instant in-browser preview of a handed-off app so the
@@ -16,7 +14,7 @@ import {
   Sparkles, Cpu, Lock, Mail, Cloud, Loader2,
 } from 'lucide-react';
 import type { CodeStudioArtifact } from '../../apiTypes';
-import { Reveal, Stagger, StaggerItem, Skeleton, StatusPulse, studioTheme, Lift } from './kit';
+import { Reveal, Stagger, StaggerItem, Skeleton, StatusPulse, Lift, ThemeSwitcher, useStudioTheme } from './kit';
 import type { RunStatus } from './kit';
 import { CodeWorkspace, useStudioWorkspace, isPathDirty, workspaceToArtifact } from './workspace';
 import { launchLiveStudio, stopLiveStudio } from '../../services/studioApi';
@@ -35,17 +33,21 @@ export interface CodeStudioViewProps {
 }
 
 const PaneFrame: React.FC<{ title: React.ReactNode; icon: React.ReactNode; className?: string; children: React.ReactNode }>
-  = ({ title, icon, className, children }) => (
-    <section className={`flex min-h-0 flex-col rounded-xl border ${studioTheme.edge} ${studioTheme.panel} overflow-hidden ${className ?? ''}`}>
-      <header className={`flex items-center gap-2 px-3 py-2 border-b ${studioTheme.edge} ${studioTheme.panelAlt}`}>
-        <span className={studioTheme.accent}>{icon}</span>
-        <span className={`text-xs font-semibold tracking-wide ${studioTheme.textDim} uppercase`}>{title}</span>
-      </header>
-      <div className="min-h-0 flex-1 overflow-auto">{children}</div>
-    </section>
-  );
+  = ({ title, icon, className, children }) => {
+    const t = useStudioTheme();
+    return (
+      <section className={`flex min-h-0 flex-col rounded-xl border ${t.edge} ${t.panel} overflow-hidden ${className ?? ''}`}>
+        <header className={`flex items-center gap-2 px-3 py-2 border-b ${t.edge} ${t.panelAlt}`}>
+          <span className={t.accent}>{icon}</span>
+          <span className={`text-xs font-semibold tracking-wide ${t.textDim} uppercase`}>{title}</span>
+        </header>
+        <div className="min-h-0 flex-1 overflow-auto">{children}</div>
+      </section>
+    );
+  };
 
 export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmin, onBack, onNavigate }) => {
+  const t = useStudioTheme();
   const enabled = isAdmin || isLiveStudioEnabled();
   const loadArtifact = useStudioWorkspace((s) => s.loadArtifact);
   const wsFiles = useStudioWorkspace((s) => s.files);
@@ -103,35 +105,36 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const projectName = artifact?.title || 'Untitled project';
 
   return (
-    <div className={`min-h-screen ${studioTheme.bg} ${studioTheme.text} flex flex-col`}>
+    <div className={`min-h-screen ${t.bg} ${t.text} flex flex-col`}>
       {/* Top bar */}
       <Reveal distance={-8}>
-        <div className={`flex items-center gap-3 px-4 h-14 border-b ${studioTheme.edge} ${studioTheme.panelAlt}`}>
+        <div className={`flex items-center gap-3 px-4 h-14 border-b ${t.edge} ${t.panelAlt}`}>
           <button
             onClick={onBack}
-            className={`flex items-center gap-1.5 text-sm font-semibold ${studioTheme.textDim} hover:text-white transition-colors ${studioTheme.focusRing} rounded-md px-1.5 py-1`}
+            className={`flex items-center gap-1.5 text-sm font-semibold ${t.textDim} ${t.hover} transition-colors ${t.focusRing} rounded-md px-1.5 py-1`}
           >
             <ArrowLeft className="w-4 h-4" /> Back
           </button>
-          <div className={`h-5 w-px ${studioTheme.edge} border-l`} />
+          <div className={`h-5 w-px ${t.edge} border-l`} />
           <div className="flex items-center gap-2 min-w-0">
-            <span className="font-display text-lg tracking-wide text-white truncate">{projectName}</span>
-            <span className={`hidden sm:inline-flex items-center gap-1 text-[11px] font-semibold rounded-full border ${studioTheme.edge} px-2 py-0.5 ${studioTheme.textDim}`}>
+            <span className={`font-display text-lg tracking-wide ${t.text} truncate`}>{projectName}</span>
+            <span className={`hidden sm:inline-flex items-center gap-1 text-[11px] font-semibold rounded-full border ${t.edge} px-2 py-0.5 ${t.textDim}`}>
               <Cpu className="w-3 h-3" /> coding · auto
             </span>
             {dirtyCount > 0 && (
-              <span className="hidden sm:inline-flex items-center gap-1 text-[11px] font-semibold text-amber-300" title="Unsaved edits in the working copy">
+              <span className="hidden sm:inline-flex items-center gap-1 text-[11px] font-semibold text-amber-500" title="Unsaved edits in the working copy">
                 ● {dirtyCount} unsaved
               </span>
             )}
           </div>
 
           <div className="ml-auto flex items-center gap-2">
+            <ThemeSwitcher className="hidden sm:inline-flex" />
             <StatusPulse status={status} className="mr-1" />
             {status === 'live' ? (
               <button
                 onClick={stopLive}
-                className={`flex items-center gap-1.5 text-sm font-bold rounded-full border ${studioTheme.edgeStrong} px-3 py-1.5 text-rose-300 hover:bg-white/5 ${studioTheme.focusRing}`}
+                className={`flex items-center gap-1.5 text-sm font-bold rounded-full border ${t.edgeStrong} px-3 py-1.5 text-rose-500 ${t.hover} ${t.focusRing}`}
               >
                 <Square className="w-3.5 h-3.5" /> Stop
               </button>
@@ -141,7 +144,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
                   onClick={runLive}
                   disabled={!enabled || !artifact || status === 'starting'}
                   title={enabled ? 'Run this app on a live cloud container' : 'Code Studio is in private preview'}
-                  className={`flex items-center gap-1.5 text-sm font-bold rounded-full px-3.5 py-1.5 text-black ${studioTheme.accentBg} ${studioTheme.accentBgHover} disabled:opacity-50 disabled:cursor-not-allowed ${studioTheme.focusRing}`}
+                  className={`flex items-center gap-1.5 text-sm font-bold rounded-full px-3.5 py-1.5 ${t.accentText} ${t.accentBg} ${t.accentBgHover} disabled:opacity-50 disabled:cursor-not-allowed ${t.focusRing}`}
                 >
                   {status === 'starting' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
                   {status === 'starting' ? 'Starting…' : 'Run live'}
@@ -151,7 +154,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
             <button
               disabled
               title="Sharing arrives in a later sprint"
-              className={`hidden sm:flex items-center gap-1.5 text-sm font-semibold rounded-full border ${studioTheme.edge} px-3 py-1.5 ${studioTheme.textFaint} cursor-not-allowed`}
+              className={`hidden md:flex items-center gap-1.5 text-sm font-semibold rounded-full border ${t.edge} px-3 py-1.5 ${t.textFaint} cursor-not-allowed`}
             >
               <Share2 className="w-3.5 h-3.5" /> Share
             </button>
@@ -159,7 +162,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
               <button
                 onClick={() => void downloadArtifactZip(artifact)}
                 title="Download all files as a .zip"
-                className={`flex items-center gap-1.5 text-sm font-semibold rounded-full border ${studioTheme.edge} px-3 py-1.5 ${studioTheme.textDim} hover:bg-white/5 ${studioTheme.focusRing}`}
+                className={`flex items-center gap-1.5 text-sm font-semibold rounded-full border ${t.edge} px-3 py-1.5 ${t.textDim} ${t.hover} ${t.focusRing}`}
               >
                 <Download className="w-3.5 h-3.5" /> <span className="hidden sm:inline">.zip</span>
               </button>
@@ -169,20 +172,20 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       </Reveal>
 
       {error && (
-        <div className="px-4 py-2 text-xs font-semibold text-rose-300 bg-rose-500/10 border-b border-rose-500/20">
+        <div className="px-4 py-2 text-xs font-semibold text-rose-500 bg-rose-500/10 border-b border-rose-500/20">
           {error}
         </div>
       )}
 
       {/* Non-admin private-preview banner */}
       {!enabled && (
-        <div className="px-4 py-2.5 text-sm bg-sky-500/10 border-b border-sky-500/20 flex flex-wrap items-center gap-2">
-          <Lock className="w-4 h-4 text-sky-300" />
-          <span className="text-sky-100 font-semibold">Code Studio is in private preview.</span>
-          <span className={studioTheme.textDim}>You can preview this app instantly below — live cloud runs are rolling out soon.</span>
+        <div className={`px-4 py-2.5 text-sm ${t.accentSoft} border-b ${t.edge} flex flex-wrap items-center gap-2`}>
+          <Lock className={`w-4 h-4 ${t.accent}`} />
+          <span className={`${t.text} font-semibold`}>Code Studio is in private preview.</span>
+          <span className={t.textDim}>You can preview this app instantly below — live cloud runs are rolling out soon.</span>
           <button
             onClick={() => onNavigate('home')}
-            className="ml-auto inline-flex items-center gap-1.5 text-xs font-bold rounded-full border border-sky-400/40 px-3 py-1 text-sky-200 hover:bg-sky-500/10"
+            className={`ml-auto inline-flex items-center gap-1.5 text-xs font-bold rounded-full border ${t.edgeStrong} px-3 py-1 ${t.accent} ${t.hover}`}
           >
             <Mail className="w-3.5 h-3.5" /> Get notified
           </button>
@@ -195,24 +198,24 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
         <StaggerItem className="min-h-0 flex">
           <PaneFrame title="Prompt · Build" icon={<Sparkles className="w-4 h-4" />} className="flex-1">
             <div className="p-3 space-y-3">
-              <div className={`rounded-lg border ${studioTheme.edge} ${studioTheme.panelAlt} p-3`}>
-                <p className={`text-sm ${studioTheme.textDim}`}>
+              <div className={`rounded-lg border ${t.edge} ${t.panelAlt} p-3`}>
+                <p className={`text-sm ${t.textDim}`}>
                   {artifact
                     ? 'This app was handed off from chat. Run it live, or (coming in Sprint 2) refine it by prompt.'
                     : 'Describe an app and watch it build live. Or open one from chat.'}
                 </p>
-                <div className={`mt-3 rounded-md border ${studioTheme.edge} bg-black/30 px-3 py-2 text-sm ${studioTheme.textFaint}`}>
+                <div className={`mt-3 rounded-md border ${t.edge} ${t.bg} px-3 py-2 text-sm ${t.textFaint}`}>
                   Describe a change…
                   <span className="ml-1 text-[10px] uppercase tracking-wide">(Sprint 2)</span>
                 </div>
               </div>
               {/* BuildTrace placeholder */}
               <div className="space-y-2">
-                <p className={`text-[11px] font-semibold uppercase tracking-wide ${studioTheme.textFaint}`}>Build trace</p>
+                <p className={`text-[11px] font-semibold uppercase tracking-wide ${t.textFaint}`}>Build trace</p>
                 {['Plan', 'Run', 'Observe', 'Fix'].map((step) => (
-                  <div key={step} className={`flex items-center gap-2 rounded-md border ${studioTheme.edge} px-2.5 py-2`}>
+                  <div key={step} className={`flex items-center gap-2 rounded-md border ${t.edge} px-2.5 py-2`}>
                     <StatusPulse status="idle" hideLabel />
-                    <span className={`text-xs ${studioTheme.textDim}`}>{step}</span>
+                    <span className={`text-xs ${t.textDim}`}>{step}</span>
                     <Skeleton className="ml-auto h-2 w-16" />
                   </div>
                 ))}
@@ -247,11 +250,11 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
             ) : (
               <div className="h-full min-h-[14rem] flex flex-col items-center justify-center gap-3 p-6 text-center">
                 <div className="relative">
-                  <div className="h-16 w-16 rounded-2xl border border-white/10 bg-white/[0.03] flex items-center justify-center">
-                    <Cloud className={`w-7 h-7 ${studioTheme.textFaint}`} />
+                  <div className={`h-16 w-16 rounded-2xl border ${t.edge} ${t.panelAlt} flex items-center justify-center`}>
+                    <Cloud className={`w-7 h-7 ${t.textFaint}`} />
                   </div>
                 </div>
-                <p className={`text-sm font-semibold ${studioTheme.textDim}`}>
+                <p className={`text-sm font-semibold ${t.textDim}`}>
                   {artifact ? 'Press Run live to boot this app in a cloud container.' : 'Your live app will appear here.'}
                 </p>
                 {status === 'starting' && (
@@ -265,10 +268,10 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
 
       {/* Console / Logs */}
       <Reveal delay={0.15}>
-        <div className={`border-t ${studioTheme.edge} ${studioTheme.panelAlt} px-4 py-2`}>
-          <div className={`flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide ${studioTheme.textFaint}`}>
+        <div className={`border-t ${t.edge} ${t.panelAlt} px-4 py-2`}>
+          <div className={`flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide ${t.textFaint}`}>
             <Terminal className="w-3.5 h-3.5" /> Console · Logs
-            <span className="ml-2 normal-case font-normal">streaming logs land in Sprint 1</span>
+            <span className="ml-2 normal-case font-normal">streaming logs land in a later Sprint 1 increment</span>
           </div>
           <div className="mt-1.5 space-y-1">
             <Skeleton className="h-2.5 w-2/3" />
