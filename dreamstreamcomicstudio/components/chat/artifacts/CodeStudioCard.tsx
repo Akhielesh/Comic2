@@ -6,6 +6,7 @@ import { Code2, Play, FileCode, Layers, Rocket, Download, Cloud, Loader2 } from 
 import { useChatPanel } from '../panelContext';
 import { openInStudio, downloadArtifactZip } from '../../../services/studioLauncher';
 import { launchLiveStudio, isLiveStudioEnabled } from '../../../services/studioApi';
+import { useIsAdmin } from '../../../hooks/useIsAdmin';
 import type { CodeStudioArtifact } from '../../../apiTypes';
 
 const TEMPLATE_LABELS: Record<string, string> = {
@@ -29,9 +30,11 @@ export const CodeStudioCard: React.FC<{ data: CodeStudioArtifact }> = ({ data })
   const templateLabel = TEMPLATE_LABELS[data.template] || data.template;
   const templateColor = TEMPLATE_COLORS[data.template] || 'bg-slate-100 text-slate-700 border-slate-300';
 
-  // "Run live" (Cloudflare container) — only shown when the live path is enabled
-  // (VITE_STUDIO_LIVE_ENABLED). Degrades gracefully if the server isn't configured yet.
-  const liveEnabled = isLiveStudioEnabled();
+  // "Run live" (Cloudflare container) — shown when the live path is enabled
+  // (VITE_STUDIO_LIVE_ENABLED) OR for admins, who are never feature-gated. Degrades
+  // gracefully if the server isn't configured yet (surfaces a clear error).
+  const isAdmin = useIsAdmin();
+  const liveEnabled = isLiveStudioEnabled() || isAdmin;
   const [launching, setLaunching] = React.useState(false);
   const [liveError, setLiveError] = React.useState<string | null>(null);
   const runLive = async () => {

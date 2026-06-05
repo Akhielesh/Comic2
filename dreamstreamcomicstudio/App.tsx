@@ -23,6 +23,7 @@ import { useProjectManager } from './hooks/useProjectManager';
 import { checkSystemDiagnostics, checkSystemStatus } from './services/geminiService';
 import { getFluxKeyInfo } from './services/appSettings';
 import { useAuth } from './contexts/AuthContext';
+import { useIsAdmin } from './hooks/useIsAdmin';
 import { AuthPage } from './components/AuthPage';
 import { AuthCallbackPage } from './components/AuthCallbackPage';
 import { supabase } from './services/supabase';
@@ -70,6 +71,7 @@ type PendingReaderTarget = {
 
 const App: React.FC = () => {
   const { user, loading: authLoading } = useAuth();
+  const isAdmin = useIsAdmin();
   const { projects, createProject, updateProject, deleteProject, duplicateProject, getProject, startGeneration, stopGeneration, hydrateProjectAssets } = useProjectManager();
 
   const [isCheckingKey, setIsCheckingKey] = useState(true);
@@ -663,6 +665,7 @@ const App: React.FC = () => {
           const header = (
             <StaticSiteHeader
               isAuthenticated={!!user}
+              isAdmin={isAdmin}
               currentView={effectiveView}
               onGoHome={handleBackToHome}
               onViewComics={() => handleNavigate('gallery')}

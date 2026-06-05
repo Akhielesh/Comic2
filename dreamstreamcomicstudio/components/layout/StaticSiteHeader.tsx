@@ -9,6 +9,8 @@ import { TokenAvailabilityPill } from '../TokenAvailabilityPill';
 
 interface StaticSiteHeaderProps {
   isAuthenticated: boolean;
+  /** Admins are never feature-gated — they get the real Code Studio entry, not "Soon". */
+  isAdmin?: boolean;
   currentView?: string;
   onGoHome: () => void;
   onViewComics: () => void;
@@ -24,6 +26,7 @@ interface StaticSiteHeaderProps {
 
 export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
   isAuthenticated,
+  isAdmin = false,
   currentView,
   onGoHome,
   onViewComics,
@@ -81,16 +84,31 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
                 { label: 'Model Catalog', description: 'Compare every available model', icon: <Cpu size={16} />, onClick: () => onNavigate('models') },
               ]}
             />
-            <NavDropdown
-              label="Code"
-              icon={<Code2 size={14} />}
-              variant="muted"
-              badge="Soon"
-              caption="🚧 In the workshop"
-              items={[
-                { label: 'Get notified', description: 'Be first to know when Code launches', icon: <Mail size={16} />, onClick: notify },
-              ]}
-            />
+            {/* Admins are never gated: they get the real Code Studio entry; everyone else
+                sees the "Soon" coming-soon capture until Code launches publicly. */}
+            {isAdmin ? (
+              <NavDropdown
+                label="Code"
+                icon={<Code2 size={14} />}
+                variant="blue"
+                badge="Admin"
+                caption="⚡ Admin preview"
+                items={[
+                  { label: 'Open Code Studio', description: 'Build & run apps live (agentic builder)', icon: <Code2 size={16} />, onClick: () => onNavigate('chat') },
+                ]}
+              />
+            ) : (
+              <NavDropdown
+                label="Code"
+                icon={<Code2 size={14} />}
+                variant="muted"
+                badge="Soon"
+                caption="🚧 In the workshop"
+                items={[
+                  { label: 'Get notified', description: 'Be first to know when Code launches', icon: <Mail size={16} />, onClick: notify },
+                ]}
+              />
+            )}
             <NavDropdown
               label="Models"
               icon={<Cpu size={14} />}

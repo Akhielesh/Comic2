@@ -5,6 +5,21 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Admins are never feature-gated (Code Studio + Run live)
+Fix: admins couldn't see Code Studio or the live "Run live" button — both were gated by a
+build flag / a hardcoded "Soon", with no admin bypass.
+- `hooks/useIsAdmin.ts` — cached client admin signal (backed by `/api/admin/me`).
+- `CodeStudioCard.tsx` — "Run live" now shows when `isLiveStudioEnabled() || isAdmin`.
+- `StaticSiteHeader.tsx` — admins get a real **Open Code Studio** nav entry (→ chat) instead
+  of the "Soon" coming-soon capture; `App.tsx` passes `isAdmin`.
+- Confirmed `akhieleshsrirangam@gmail.com` has role `admin`, so this unblocks the owner to
+  exercise the live container path. Server still needs `STUDIO_WORKER_URL` set for a launch
+  to succeed (else a clear "not configured" error).
+- Findings logged: the in-chat preview is **Sandpack** (in-browser, no Vite) which mis-renders
+  Vite-style projects as "Hello world"; the Cloudflare container ("Run live") is the correct
+  engine. Making it the canonical Code Studio preview + improving generate_app model routing
+  are the next product steps.
+
 ## 2026-06-05 · Claude — Phase 4: guard-railed FIX dep (createStudioFix)
 - `services/studioBuildService.ts` — `createStudioFix(complete, opts)` composes
   `requestStudioFix` (observation-driven minimal-diff model call) with `sanitizeFixFiles`
