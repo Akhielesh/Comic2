@@ -34,7 +34,7 @@ loop, editor, persistence, GitHub, deploy) is built yet.
 | 0 | [Cloudflare infra](./phases/PHASE-0-infra.md) | ⛔ **blocked** | needs account owner: Workers Paid + wildcard domain |
 | 1 | [Studio Worker](./phases/PHASE-1-worker.md) | 🟡 **scaffolded** (PR #76), not validated | Phase 0 to deploy/test |
 | 2 | [Railway control plane](./phases/PHASE-2-control-plane.md) | 🟢 **built + verified — in review** (`/api/studio/*`, HMAC, caps, runs) | — |
-| 3 | [Studio UI shell](./phases/PHASE-3-studio-ui.md) | 📋 planned — **buildable now** | Phase 2 for live wiring |
+| 3 | [Studio UI shell](./phases/PHASE-3-studio-ui.md) | 🟡 **in progress** — 3a client "Run live" wiring done (flag-gated); 3b shell/preview/logs next | Phase 2 for live wiring |
 | 4 | [Agentic build loop](./phases/PHASE-4-agentic-loop.md) | 📋 planned | Phases 1–3 |
 | 5 | [Editor + persistence](./phases/PHASE-5-editor-persistence.md) | 📋 planned | Phase 3 |
 | 6 | [GitHub + deploy](./phases/PHASE-6-github-deploy.md) | 📋 planned | Phase 5 |
@@ -53,10 +53,11 @@ Legend: ✅ done · 🟡 in progress/partial · 📋 planned · ⛔ blocked
 
 ## ➡️ NEXT STEP
 
-**Phase 2 is built + verified and awaiting owner review** (see audit in `CHANGELOG.md`).
-After approval, the next phase is **Phase 3 — Studio UI shell** (chat + live-preview-in-
-new-tab + "Run live"). Workflow: each phase is built → self-audited → owner reviews →
-next phase. Do not start Phase 3 until approved.
+**Building Phase 3** (owner said "keep building"). 3a done: client "Run live" wiring
+(`services/studioApi.ts` + the flag-gated button in `CodeStudioCard`) — verified, behind
+`VITE_STUDIO_LIVE_ENABLED` so prod is unaffected. **Next: 3b** — the studio shell
+(file tree + editor area + LivePreview + log panel + status bar). Workflow still:
+build → self-audit → owner reviews before the *next phase*. Phase 2 (#77) awaits review.
 
 **To unblock Phase 0/1 deploy:** the account owner must (a) enable **Workers Paid**,
 (b) add a **wildcard preview domain** (e.g. `*.studio.<domain>`), (c) confirm the domain

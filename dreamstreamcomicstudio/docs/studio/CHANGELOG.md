@@ -5,6 +5,19 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude (session 012Drsxr…) — PHASE 3a + continuity log
+**Continuity:** added `OWNER-ACTIONS.md` (living resume + owner to-do + deferred-validation
+log); wired into AGENTS/README/00-STATUS (agents must keep it updated).
+**Phase 3a — client "Run live" wiring (flag-gated):**
+- New `services/studioApi.ts` — `launchLiveStudio()` / `stopLiveStudio()` / `isLiveStudioEnabled()`
+  (kept out of studioLauncher so the standalone /studio bundle stays lean).
+- `CodeStudioCard.tsx` — adds a "Run live" button (loading + graceful error) shown ONLY
+  when `VITE_STUDIO_LIVE_ENABLED=true`, so production is unchanged by default.
+- Verified: client typecheck, 274 tests, production build — all pass.
+- SELF-AUDIT: ✅ additive + flag-gated (no prod change until O8) · ✅ degrades gracefully
+  on 503/error · ⚠️ end-to-end needs the Worker + flag (deferred validation logged) ·
+  🔭 3b (shell/editor/preview/logs) still to build; mid-phase, no checkin gate yet.
+
 ## 2026-06-05 · Claude (session 012Drsxr…) — PHASE 2 built + SELF-AUDIT
 **Phase 2 — Railway control plane (`/api/studio/*`).** Shipped #75/#76 to production first.
 - New: `server/src/routes/studio.ts` (launch/stop/logs), `services/studioSign.ts` (HMAC,

@@ -34,6 +34,7 @@ building everything else first and will validate together once these are done.
 | O5 | Apply DB migration `server/sql/studio_runs.sql` | Phase 2 run metering | **I can apply it via Supabase access — just say so**, or run it in the Supabase SQL editor | ⏳ pending (offered) |
 | O6 | Review/approve **Phase 2 PR #77** → merge to prod | Ship the control plane | GitHub | ⏳ pending |
 | O7 | (Later, Phase 10) optional keys: `TAVILY_API_KEY`/`BRAVE_API_KEY` (search), `FOURSQUARE_API_KEY` (places) | Raise tool sourcing reliability | Railway env | 🔮 future |
+| O8 | Set `VITE_STUDIO_LIVE_ENABLED=true` (Cloudflare Pages env) **after** the Worker deploys | Reveals the "Run live" button in chat (hidden by default so prod is unaffected) | Cloudflare Pages → env → rebuild | ⏳ pending |
 
 > Note: `SUPABASE_SERVICE_ROLE_KEY` is **already set in prod** (the image pipeline uses it) — nothing to do.
 
@@ -44,6 +45,7 @@ building everything else first and will validate together once these are done.
 |---|---|---|
 | Phase 1 Worker | Sandbox SDK calls (writeFile/exec/startProcess/exposePort/stop) on first `wrangler deploy` | [PHASE-1](./phases/PHASE-1-worker.md) |
 | Phase 2 control plane | end-to-end launch → preview URL → stop; HMAC cross-process; `studio_runs` writes | [PHASE-2](./phases/PHASE-2-control-plane.md) |
+| Phase 3a Run-live UI | "Run live" button (flag-gated) → `/api/studio/launch` → preview opens in a new tab (needs O8 flag + infra) | `components/chat/artifacts/CodeStudioCard.tsx` |
 
 When infra is up: trigger a build in the app → `/api/studio/launch` should return a preview URL that opens the running app.
 

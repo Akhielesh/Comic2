@@ -2,9 +2,10 @@
 // "Open Studio" button opens the full editor+preview in the side panel.
 
 import React from 'react';
-import { Code2, Play, FileCode, Layers, Rocket, Download } from 'lucide-react';
+import { Code2, Play, FileCode, Layers, Rocket, Download, Cloud, Loader2 } from 'lucide-react';
 import { useChatPanel } from '../panelContext';
 import { openInStudio, downloadArtifactZip } from '../../../services/studioLauncher';
+import { launchLiveStudio, isLiveStudioEnabled } from '../../../services/studioApi';
 import type { CodeStudioArtifact } from '../../../apiTypes';
 
 const TEMPLATE_LABELS: Record<string, string> = {
@@ -27,6 +28,25 @@ export const CodeStudioCard: React.FC<{ data: CodeStudioArtifact }> = ({ data })
   const openPanel = useChatPanel();
   const templateLabel = TEMPLATE_LABELS[data.template] || data.template;
   const templateColor = TEMPLATE_COLORS[data.template] || 'bg-slate-100 text-slate-700 border-slate-300';
+
+  // "Run live" (Cloudflare container) — only shown when the live path is enabled
+  // (VITE_STUDIO_LIVE_ENABLED). Degrades gracefully if the server isn't configured yet.
+  const liveEnabled = isLiveStudioEnabled();
+  const [launching, setLaunching] = React.useState(false);
+  const [liveError, setLiveError] = React.useState<string | null>(null);
+  const runLive = async () => {
+    setLaunching(true);
+    setLiveError(null);
+    try {
+      const res = await launchLiveStudio(data);
+      if (res.previewUrl) window.open(res.previewUrl, '_blank', 'noopener');
+      else setLiveError('The live preview started but returned no URL.');
+    } catch (err) {
+      setLiveError((err as Error)?.message || 'Live Studio is unavailable right now.');
+    } finally {
+      setLaunching(false);
+    }
+  };
 
   return (
     <div className="border-2 border-black rounded-xl shadow-comic bg-white overflow-hidden animate-fade-in">
@@ -64,8 +84,19 @@ export const CodeStudioCard: React.FC<{ data: CodeStudioArtifact }> = ({ data })
           )}
         </div>
 
-        {/* CTAs: Build (full WebContainer Studio) · quick Preview (side panel) · zip */}
+        {/* CTAs: Run live (cloud container) · Build (WebContainer) · quick Preview · zip */}
         <div className="flex flex-wrap items-center gap-2">
+          {liveEnabled && (
+            <button
+              onClick={runLive}
+              disabled={launching}
+              title="Run this app on a live cloud container and open it in a new tab"
+              className="flex items-center gap-1.5 text-xs font-bold border-2 border-black rounded-full px-3 py-1 bg-sky-400 hover:bg-sky-300 shadow-[2px_2px_0_#000] hover:translate-y-[1px] hover:shadow-[1px_1px_0_#000] transition-all disabled:opacity-60"
+            >
+              {launching ? <Loader2 className="w-3 h-3 animate-spin" /> : <Cloud className="w-3 h-3" />}
+              {launching ? 'Starting…' : 'Run live'}
+            </button>
+          )}
           <button
             onClick={() => openInStudio(data)}
             title="Open the full live sandbox: npm install, run, edit & debug in a new tab"
@@ -91,6 +122,10 @@ export const CodeStudioCard: React.FC<{ data: CodeStudioArtifact }> = ({ data })
             .zip
           </button>
         </div>
+
+        {liveError && (
+          <p className="text-[11px] text-rose-600 mt-2">{liveError}</p>
+        )}
       </div>
     </div>
   );
