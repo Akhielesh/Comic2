@@ -10,14 +10,15 @@
 // flag is on. Non-admins still get an instant in-browser preview of a handed-off app so the
 // single "Open in Code Studio" CTA never dead-ends.
 
-import React, { Suspense, lazy, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import {
-  ArrowLeft, Play, Square, Share2, Download, FileCode, FolderTree, Terminal,
+  ArrowLeft, Play, Square, Share2, Download, FileCode, Terminal,
   Sparkles, Cpu, Lock, Mail, Cloud, Loader2,
 } from 'lucide-react';
 import type { CodeStudioArtifact } from '../../apiTypes';
 import { Reveal, Stagger, StaggerItem, Skeleton, StatusPulse, studioTheme, Lift } from './kit';
 import type { RunStatus } from './kit';
+import { CodeWorkspace, useStudioWorkspace, isPathDirty, workspaceToArtifact } from './workspace';
 import { launchLiveStudio, stopLiveStudio } from '../../services/studioApi';
 import { isLiveStudioEnabled } from '../../services/studioFlags';
 import { downloadArtifactZip } from '../../services/studioLauncher';
@@ -46,12 +47,20 @@ const PaneFrame: React.FC<{ title: React.ReactNode; icon: React.ReactNode; class
 
 export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmin, onBack, onNavigate }) => {
   const enabled = isAdmin || isLiveStudioEnabled();
-  const files = artifact?.files ?? [];
-  const [activePath, setActivePath] = useState<string | null>(files[0]?.path ?? null);
-  const activeFile = useMemo(
-    () => files.find((f) => f.path === activePath) ?? files[0] ?? null,
-    [files, activePath]
+  const loadArtifact = useStudioWorkspace((s) => s.loadArtifact);
+  const wsFiles = useStudioWorkspace((s) => s.files);
+  const wsBaseline = useStudioWorkspace((s) => s.baseline);
+  const wsPaths = useStudioWorkspace((s) => s.paths);
+  const hasFiles = wsPaths.length > 0;
+  const dirtyCount = useMemo(
+    () => wsPaths.filter((p) => isPathDirty({ files: wsFiles, baseline: wsBaseline }, p)).length,
+    [wsPaths, wsFiles, wsBaseline]
   );
+
+  // Load the handed-off app into the editor workspace.
+  useEffect(() => {
+    if (artifact) loadArtifact(artifact);
+  }, [artifact, loadArtifact]);
 
   // "Run live" — drives the existing launch backend. Surfaces a clean error when the worker
   // isn't configured yet (the honest 503 from S0.1), which doubles as the S0.6 validation hook.
@@ -66,7 +75,9 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     setError(null);
     setPreviewUrl(null);
     try {
-      const res = await launchLiveStudio(artifact);
+      // Run the working copy (so live edits are what boots), not just the original hand-off.
+      const live = workspaceToArtifact(artifact, { files: wsFiles, paths: wsPaths });
+      const res = await launchLiveStudio(live);
       setRunId(res.runId ?? null);
       if (res.previewUrl) {
         setPreviewUrl(res.previewUrl);
@@ -108,6 +119,11 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
             <span className={`hidden sm:inline-flex items-center gap-1 text-[11px] font-semibold rounded-full border ${studioTheme.edge} px-2 py-0.5 ${studioTheme.textDim}`}>
               <Cpu className="w-3 h-3" /> coding · auto
             </span>
+            {dirtyCount > 0 && (
+              <span className="hidden sm:inline-flex items-center gap-1 text-[11px] font-semibold text-amber-300" title="Unsaved edits in the working copy">
+                ● {dirtyCount} unsaved
+              </span>
+            )}
           </div>
 
           <div className="ml-auto flex items-center gap-2">
@@ -205,42 +221,16 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
           </PaneFrame>
         </StaggerItem>
 
-        {/* Code editor */}
+        {/* Code editor — Monaco + tabs + file tree (workspace store) */}
         <StaggerItem className="min-h-0 flex">
           <PaneFrame title="Code" icon={<FileCode className="w-4 h-4" />} className="flex-1">
-            <div className="grid h-full grid-cols-[minmax(7rem,12rem)_minmax(0,1fr)] min-h-0">
-              {/* File tree */}
-              <div className={`border-r ${studioTheme.edge} ${studioTheme.panelAlt} overflow-auto`}>
-                <div className={`flex items-center gap-1.5 px-2.5 py-2 text-[11px] uppercase tracking-wide ${studioTheme.textFaint}`}>
-                  <FolderTree className="w-3.5 h-3.5" /> Files
-                </div>
-                {files.length === 0 && <p className={`px-2.5 py-2 text-xs ${studioTheme.textFaint}`}>No files yet.</p>}
-                {files.map((f) => {
-                  const name = f.path.split('/').filter(Boolean).pop() || f.path;
-                  const active = activeFile?.path === f.path;
-                  return (
-                    <button
-                      key={f.path}
-                      onClick={() => setActivePath(f.path)}
-                      className={`flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-xs font-mono truncate ${active ? `bg-sky-500/15 ${studioTheme.accent}` : `${studioTheme.textDim} hover:bg-white/5`}`}
-                      title={f.path}
-                    >
-                      <FileCode className="w-3 h-3 shrink-0 opacity-70" /> {name}
-                    </button>
-                  );
-                })}
+            {hasFiles ? (
+              <CodeWorkspace readOnly={!enabled} />
+            ) : (
+              <div className="p-3 space-y-2">
+                <Skeleton className="h-3 w-3/4" /><Skeleton className="h-3 w-1/2" /><Skeleton className="h-3 w-2/3" />
               </div>
-              {/* Read-only code view (Monaco lands in Sprint 1) */}
-              <div className="min-h-0 overflow-auto bg-black/30">
-                {activeFile ? (
-                  <pre className="p-3 text-[12px] leading-relaxed font-mono text-slate-300 whitespace-pre-wrap break-words">
-                    {activeFile.content}
-                  </pre>
-                ) : (
-                  <div className="p-3 space-y-2"><Skeleton className="h-3 w-3/4" /><Skeleton className="h-3 w-1/2" /><Skeleton className="h-3 w-2/3" /></div>
-                )}
-              </div>
-            </div>
+            )}
           </PaneFrame>
         </StaggerItem>
 

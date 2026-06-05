@@ -36,6 +36,7 @@
   "dependencies": {
     "@codesandbox/sandpack-react": "^2.20.0",
     "@google/genai": "^1.30.0",
+    "@monaco-editor/react": "^4.7.0",
     "@supabase/supabase-js": "^2.95.3",
     "@types/dotenv": "^6.1.1",
     "@webcontainer/api": "^1.6.4",

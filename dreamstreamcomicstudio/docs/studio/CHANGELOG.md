@@ -5,6 +5,25 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Sprint 0 SHIPPED TO PROD + Sprint 1 (editor): Monaco workspace
+- **Sprint 0 merged to production** (`Dreamstrream-v1`, PR #83, CI green). Code Studio route,
+  Motion Kit, one-CTA hand-off + legacy quarantine are live.
+- **Sprint 1 (S1.2/S1.3 — editor core):** new `components/studio/workspace/` — a real editor:
+  - `workspaceStore.ts` (zustand) — single source of truth: working copy per file, open tabs,
+    active tab, **dirty tracking vs. baseline**, open/close/edit/revert + pure helpers
+    (`isPathDirty`, `dirtyPaths`, `workspaceToArtifact`, `buildTree`).
+  - `MonacoEditor.tsx` — `@monaco-editor/react` with a custom **studio-dark** theme, per-file
+    models, language inferred from path, JSX-tolerant TS. (Monaco loads lazily from CDN.)
+  - `FileTree.tsx` — real **nested folder tree** (expand/collapse, dirty dots, Stagger-in).
+  - `EditorTabs.tsx` — closable tabs with dirty dot + active underline.
+  - `CodeWorkspace.tsx` — composes tree + tabs + Monaco; dropped into the Code pane.
+  - `CodeStudioView` now loads the hand-off into the workspace, shows an **unsaved** counter,
+    and **Run live runs the working copy** (edits boot). Non-admins get a read-only editor.
+  - Tests: `workspaceStore.test.ts` (tree/dirty/lifecycle/working-copy) + view test updated
+    (Monaco stubbed). Client typecheck + production build green; +6 studio tests.
+- Remaining Sprint 1: resizable panes (S1.1), live preview device frames + boot reveal (S1.4),
+  streaming logs (S1.5), Run/Stop status polish (S1.6), load saved projects (S1.7), responsive (S1.8).
+
 ## 2026-06-05 · Claude — Sprint 0 (front-end + design system): Motion Kit, Code Studio route, one CTA
 Built the buildable front-end half of Sprint 0 (the backend — S0.1 worker-URL guard + S0.3
 `/api/studio/build` SSE — shipped previously). All additive + gated; admins ungated.

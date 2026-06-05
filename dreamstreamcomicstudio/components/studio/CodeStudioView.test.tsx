@@ -2,7 +2,7 @@
 // gated private-preview state for everyone else.
 
 import React from 'react';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import type { CodeStudioArtifact } from '../../apiTypes';
 
@@ -15,8 +15,18 @@ vi.mock('../../services/studioApi', () => ({
 vi.mock('../../services/studioLauncher', () => ({
   downloadArtifactZip: vi.fn(async () => {}),
 }));
+// Monaco loads from a CDN at runtime — stub it so the editor renders synchronously in jsdom.
+vi.mock('@monaco-editor/react', () => ({
+  __esModule: true,
+  default: (props: { value?: string }) => <textarea data-testid="monaco" defaultValue={props.value} />,
+}));
 
 import { CodeStudioView } from './CodeStudioView';
+import { useStudioWorkspace } from './workspace';
+
+beforeEach(() => {
+  useStudioWorkspace.getState().reset();
+});
 
 const artifact: CodeStudioArtifact = {
   title: 'Counter App',
@@ -34,9 +44,10 @@ describe('CodeStudioView', () => {
     // Shell panes
     expect(screen.getByText('Code')).toBeInTheDocument();
     expect(screen.getByText('Live preview')).toBeInTheDocument();
-    // Hand-off project name + a file from the tree
+    // Hand-off project name + files from the explorer tree (App.tsx also appears as a tab)
     expect(screen.getByText('Counter App')).toBeInTheDocument();
-    expect(screen.getByText('App.tsx')).toBeInTheDocument();
+    expect(screen.getAllByText('App.tsx').length).toBeGreaterThan(0);
+    expect(screen.getByText('index.tsx')).toBeInTheDocument();
     // Run live is available to admins and not gated
     expect(screen.getByRole('button', { name: /run live/i })).toBeEnabled();
     expect(screen.queryByText(/private preview/i)).not.toBeInTheDocument();
