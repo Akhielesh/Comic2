@@ -4,7 +4,26 @@
 > waiting on **you** (the owner), and (c) everything built-but-not-yet-validated — so the
 > thread is never lost. This file is updated on every build.
 
-**Last updated:** 2026-06-05 · by Claude (session 012Drsxr…)
+**Last updated:** 2026-06-05 · by Claude — added a verified live-state audit (below) + a
+built-in CORS fallback for the brand domains.
+
+---
+
+## 🔎 Verified live state (audit 2026-06-05)
+Checked the real Cloudflare deployment end-to-end:
+
+| Piece | State |
+|---|---|
+| Zone `dreamstreamstudio.ai` on Cloudflare | ✅ live — resolves to Cloudflare, Universal SSL/HTTPS works |
+| Frontend at apex `dreamstreamstudio.ai` | ✅ live — serves the Comic Studio app (Cloudflare Pages/Assets) |
+| Backend API (`comic2-production.up.railway.app`) | ✅ healthy — `/api/health` → `{"status":"ok"}` |
+| **Frontend → backend CORS** | 🔴 **was BROKEN** — Railway rejected `https://dreamstreamstudio.ai` (`CORS blocked`). The app loaded but every API call 403'd. Now mitigated by a code fallback (always trusts `*.dreamstreamstudio.ai`/`.com`); still set Railway `CORS_ORIGIN` too — see **OC** below. |
+| `www.dreamstreamstudio.ai` | ❌ no DNS record |
+| `dreamstreamstudio.com` → `.ai` redirect | ❌ not set up — `.com` doesn't resolve |
+| Studio Worker (`dreamstream-studio`) | ❌ not deployed — only an unrelated `atlasd` "hello world" worker exists; `*.dreamstreamstudio.ai` previews don't resolve |
+
+> **Architecture reminder:** this is a *hybrid* — frontend on **Cloudflare**, API on **Railway**,
+> DB/auth on **Supabase**. Not literally "all on Cloudflare," and that's by design.
 
 ---
 
@@ -27,10 +46,12 @@ building everything else first and will validate together once these are done.
 
 | # | Action | Why | How | Status |
 |---|---|---|---|---|
-| O1 | Enable **Cloudflare Workers Paid** ($5/mo) | Containers aren't on Free | Cloudflare dashboard | ⏳ pending |
-| O2 | **Add `dreamstreamstudio.ai` to Cloudflare as a zone** (domains bought ✅) | Preview URLs need a real domain's wildcard (`exposePort` rejects `*.workers.dev`). Config is already wired in `wrangler.jsonc` (route `*.dreamstreamstudio.ai/*` + `STUDIO_PREVIEW_DOMAIN`). | Point `dreamstreamstudio.ai` nameservers at Cloudflare; Universal SSL auto-covers `*.dreamstreamstudio.ai`. The worker leaves the bare apex/www free for your real site. | ⏳ pending |
-| O2b | **Redirect `dreamstreamstudio.com` → `.ai`** | Use both domains, .com is the catch-all | Add `dreamstreamstudio.com` as a zone → Rules → Redirect Rules → 301 to `concat("https://dreamstreamstudio.ai", http.request.uri.path)` (see worker README) | ⏳ pending |
-| O3 | **Deploy the Worker** | Runs the AI-built apps | `cd studio-worker` → `npm install` → `npm run typecheck` → `wrangler login` → `wrangler secret put STUDIO_HMAC_SECRET` → `wrangler deploy` (Docker running). Routes already configured. | ⏳ pending |
+| OC | **Set Railway `CORS_ORIGIN`** to include `https://dreamstreamstudio.ai` (comma-sep, e.g. `https://dreamstreamstudio.ai,https://www.dreamstreamstudio.ai`) | The live app's API calls were 403'd by CORS | Railway → API service → Variables → redeploy. *(A code fallback now also always trusts the brand domains, so this is belt-and-suspenders — but still set it so the allowlist is explicit.)* | 🔴 **do this to unblock the live site** |
+| O1 | Enable **Cloudflare Workers Paid** ($5/mo) | Containers aren't on Free | Cloudflare dashboard | ⏳ pending (only needed for live previews) |
+| O2 | **Add `dreamstreamstudio.ai` to Cloudflare as a zone** (domains bought ✅) | Preview URLs need a real domain's wildcard (`exposePort` rejects `*.workers.dev`). Config is already wired in `wrangler.jsonc` (route `*.dreamstreamstudio.ai/*` + `STUDIO_PREVIEW_DOMAIN`). | Point `dreamstreamstudio.ai` nameservers at Cloudflare; Universal SSL auto-covers `*.dreamstreamstudio.ai`. The worker leaves the bare apex/www free for your real site. | ✅ **done** (verified live 2026-06-05 — zone active, SSL + frontend serving) |
+| O2a | **Add a `www.dreamstreamstudio.ai` DNS record** (optional) | `www` currently doesn't resolve | Cloudflare → DNS → add a proxied CNAME `www` → apex (or to the Pages project) | ⏳ pending |
+| O2b | **Redirect `dreamstreamstudio.com` → `.ai`** | Use both domains, .com is the catch-all | Add `dreamstreamstudio.com` as a zone → Rules → Redirect Rules → 301 to `concat("https://dreamstreamstudio.ai", http.request.uri.path)` (see worker README) | ⏳ pending (`.com` doesn't resolve yet) |
+| O3 | **Deploy the Worker** | Runs the AI-built apps | `cd studio-worker` → `npm install` → `npm run typecheck` → `wrangler login` → `wrangler secret put STUDIO_HMAC_SECRET` → `wrangler deploy` (Docker running). Routes already configured. | ⏳ pending (`dreamstream-studio` not on the account yet) |
 | O4 | Set Railway env: `STUDIO_WORKER_URL` (= the **`.workers.dev` control URL** printed by deploy), `STUDIO_HMAC_SECRET` | Control plane → Worker hop (control POSTs don't use the domain) | Railway → API service → Variables → redeploy | ⏳ pending |
 | O5 | Apply DB migrations `studio_runs.sql` + `studio_projects.sql` **+ `studio_agents.sql` + `mcp_servers.sql`** | run metering, project persistence, custom-agent library, server-side MCP registry | **I can apply all via Supabase access — just say so**, or run them in the Supabase SQL editor | ⏳ pending (offered) |
 | O6 | ~~Review/approve Phase 2 PR #77~~ | control plane shipped | merged to prod 2026-06-05 | ✅ done |
