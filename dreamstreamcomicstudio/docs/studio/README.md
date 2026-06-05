@@ -31,6 +31,9 @@ can pick up the work cold.
 | [05-UIUX.md](./05-UIUX.md) | UI/UX spec: layouts, components, states, animations, effects, mobile |
 | [06-DATA-MODEL.md](./06-DATA-MODEL.md) | Persistence & versioning: tables, RLS, storage |
 | [07-INTEGRATIONS.md](./07-INTEGRATIONS.md) | GitHub sync, one-click deploy, per-project backend, billing |
+| [10-AGENTS-SWARM.md](./10-AGENTS-SWARM.md) | Multi-agent swarm — analysis + redesign (guardrails, personality, legitimacy, usability) |
+| [11-TOOLS-MCP-SOURCING.md](./11-TOOLS-MCP-SOURCING.md) | Tools, MCP & sourcing — analysis + redesign (access for all models/agents) |
+| [12-GUARDRAILS-PERSONALITY.md](./12-GUARDRAILS-PERSONALITY.md) | Safety + one coherent brand voice across every surface |
 | [CLOUDFLARE_STUDIO_PLAN.md](./CLOUDFLARE_STUDIO_PLAN.md) | Compute/cost/sandbox design — verified Cloudflare pricing |
 | [PRODUCT_BLUEPRINT.md](./PRODUCT_BLUEPRINT.md) | Condensed product blueprint (superseded in detail by 01–07) |
 | [09-ROADMAP.md](./09-ROADMAP.md) | Phase-by-phase plan + links to each phase doc |

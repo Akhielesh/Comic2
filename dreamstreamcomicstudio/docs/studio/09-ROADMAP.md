@@ -42,6 +42,16 @@ acceptance criteria). Track live status in [`00-STATUS.md`](./00-STATUS.md).
 | 7 | Backend, polish, mobile | per-project DB; mobile; effects | after 6 | [PHASE-7](./phases/PHASE-7-backend-polish-mobile.md) |
 | 8 | Consolidate runtimes | one runtime (drop WebContainer/unpkg) | after 3 | [PHASE-8](./phases/PHASE-8-consolidate-runtimes.md) |
 
+## Platform workstreams (parallel to the Studio build)
+These improve the whole AI product (chat + swarm + tools), not just the studio. They can
+run alongside Phases 1–8.
+
+| # | Workstream | Outcome | Doc / spec |
+|---|---|---|---|
+| 9 | Agent system upgrade | verifier/critic, one brand voice, richer trace, custom-agent library, retries; wire `code` agent → build loop | [PHASE-9](./phases/PHASE-9-agent-system.md) · [10-AGENTS-SWARM](./10-AGENTS-SWARM.md) |
+| 10 | Tools/MCP/sourcing upgrade | tools on all models (JSON fallback), server-side + OAuth + streaming MCP, curated marketplace, **outbound MCP server**, sourcing reliability | [PHASE-10](./phases/PHASE-10-tools-mcp.md) · [11-TOOLS-MCP-SOURCING](./11-TOOLS-MCP-SOURCING.md) |
+| 11 | Guardrails & personality | unified persona, output guardrail layer, code/agent safety, trust signals, audit log | [PHASE-11](./phases/PHASE-11-guardrails-personality.md) · [12-GUARDRAILS-PERSONALITY](./12-GUARDRAILS-PERSONALITY.md) |
+
 ## Milestones
 - **M1 — "It runs" (P0–P3):** a user clicks "Run live" in chat, the app opens in a new
   tab from a real container. *This is the proof the architecture works.*

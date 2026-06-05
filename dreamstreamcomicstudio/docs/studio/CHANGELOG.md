@@ -6,6 +6,21 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 ---
 
 ## 2026-06-05 · Claude (session 012Drsxr…)
+**Deep analysis of the agent/tool/guardrail systems + parallel workstream phases.**
+- Read the real swarm (`orchestrator/registry/swarmTool`), MCP client + client registry,
+  tool registry/catalog, source governance, and `assistantPolicy` (guardrails).
+- Wrote `10-AGENTS-SWARM.md` (swarm analysis + redesign: verifier, personality,
+  legitimacy, usability), `11-TOOLS-MCP-SOURCING.md` (tools on all models, managed +
+  outbound MCP, sourcing), `12-GUARDRAILS-PERSONALITY.md` (unified voice + output guardrails).
+- Added parallel-workstream phases `PHASE-9` (agents), `PHASE-10` (tools/MCP), `PHASE-11`
+  (guardrails/personality); updated README map, `00-STATUS` board, `09-ROADMAP`.
+- Key findings: swarm is real (plan→dispatch→synth, 8 agents, context-aware, billing-
+  merged) but lacks a verifier, unified persona, and persisted custom agents; tools are
+  broad+free-first but **OpenRouter-only** and MCP is client-stored/shallow with no
+  outbound endpoint; guardrails exist (anti-fabrication, sanitization, SSRF, governance)
+  but personality is fragmented and there's no post-generation guardrail layer.
+
+## 2026-06-05 · Claude (session 012Drsxr…)
 **Built the documentation system + Studio Worker scaffold.**
 - Created `docs/studio/` hub: `README`, `00-STATUS` (living tracker), `AGENTS`, this
   `CHANGELOG`, `01-VISION`, `02-CURRENT-STATE` (honest audit vs Emergent/enterprise),

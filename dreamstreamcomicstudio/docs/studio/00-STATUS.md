@@ -6,6 +6,9 @@
 
 **Last updated:** 2026-06-05 · **Updated by:** Claude (session 012Drsxr…) · **Branch:** `claude/peaceful-gauss-0Gwni`
 
+> Latest: added deep analysis + redesign docs for the **agent swarm** (10), **tools/MCP/
+> sourcing** (11), and **guardrails/personality** (12), with parallel workstream phases 9–11.
+
 ---
 
 ## Overall progress
@@ -34,6 +37,14 @@ loop, editor, persistence, GitHub, deploy) is built yet.
 | 6 | [GitHub + deploy](./phases/PHASE-6-github-deploy.md) | 📋 planned | Phase 5 |
 | 7 | [Per-project backend, polish, mobile](./phases/PHASE-7-backend-polish-mobile.md) | 📋 planned | Phase 6 |
 | 8 | [Consolidate runtimes](./phases/PHASE-8-consolidate-runtimes.md) | 📋 planned | Phase 3 |
+
+**Platform workstreams (parallel — improve the whole product, not just the studio):**
+
+| # | Title | Status | Spec |
+|---|---|---|---|
+| 9 | [Agent system upgrade](./phases/PHASE-9-agent-system.md) (verifier, personality, trace, custom-agent library) | 📋 planned | [10-AGENTS-SWARM](./10-AGENTS-SWARM.md) |
+| 10 | [Tools/MCP/sourcing upgrade](./phases/PHASE-10-tools-mcp.md) (tools on all models, managed MCP, outbound MCP) | 📋 planned | [11-TOOLS-MCP-SOURCING](./11-TOOLS-MCP-SOURCING.md) |
+| 11 | [Guardrails & personality](./phases/PHASE-11-guardrails-personality.md) (unified voice, output guardrails, code safety) | 📋 planned | [12-GUARDRAILS-PERSONALITY](./12-GUARDRAILS-PERSONALITY.md) |
 
 Legend: ✅ done · 🟡 in progress/partial · 📋 planned · ⛔ blocked
 
