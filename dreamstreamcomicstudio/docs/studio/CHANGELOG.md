@@ -5,6 +5,35 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude (session 012Drsxr…) — PHASE 2 built + SELF-AUDIT
+**Phase 2 — Railway control plane (`/api/studio/*`).** Shipped #75/#76 to production first.
+- New: `server/src/routes/studio.ts` (launch/stop/logs), `services/studioSign.ts` (HMAC,
+  matches the Worker's verify), `services/studioCaps.ts` (pure per-user caps),
+  `server/sql/studio_runs.sql` (metering table + RLS), `studioSign.test.ts` +
+  `studioCaps.test.ts`. Edited `config.ts` (STUDIO_* env), `index.ts` (mount under
+  requireAuth + text rate limit), `server/.env.example`.
+- Verified: client + server typecheck, **274 tests** (+9), production build — all pass.
+
+**SELF-AUDIT (vs PHASE-2 acceptance criteria):**
+- ✅ Auth: `/api/studio/*` is behind global `requireAuth` → unauth = 401.
+- ✅ Caps: over-cap → 429 with clear code/message; unit-tested (concurrency + daily).
+- ✅ HMAC: sign scheme matches the Worker's verify exactly; round-trip unit-tested.
+- ✅ Runs: launch inserts a `studio_runs` row; stop closes it with awake_seconds + cost_usd.
+- ✅ Typecheck + signer/caps unit tests.
+- ⚠️ **Not live-validated end-to-end** — happy path needs the Worker deployed (Phase 0/1)
+  + Supabase service key; correct-by-construction but not run against real infra. Without
+  config, `/api/studio` returns 503 STUDIO_NOT_CONFIGURED (honest).
+- 🔀 **Deviation (justified):** did NOT route through token-based `usageEnforcer` (that's
+  for model tokens); studio compute uses dedicated caps + `studio_runs` metering. Billing
+  integration (awake_seconds→credits) deferred to Phase 7.
+- 🔭 **Scope:** migration creates only `studio_runs` (Phase 5 adds projects/files/versions);
+  `project_id` is text until linked in Phase 5. `/logs` is a 501 stub until the Worker's
+  logs action lands. No mocked route-level test yet (signer+caps covered).
+- 🛡️ **Follow-ups/risks:** caps currently fail-OPEN if the DB is unavailable (consider
+  fail-closed in prod for cost safety); concurrency cap has a minor TOCTOU race (DB
+  constraint/lock would harden it).
+- **Status:** built + verified, **awaiting owner review before Phase 3.**
+
 ## 2026-06-05 · Claude (session 012Drsxr…)
 **Deep analysis of the agent/tool/guardrail systems + parallel workstream phases.**
 - Read the real swarm (`orchestrator/registry/swarmTool`), MCP client + client registry,
