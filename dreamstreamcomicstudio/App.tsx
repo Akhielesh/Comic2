@@ -646,7 +646,15 @@ const App: React.FC = () => {
   // Hide the floating Universal Assistant on the full-screen chat product to avoid two stacked chat surfaces.
   const showUniversalAssistant = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat';
   // Show the global AI Chat FAB on every view except the chat page itself.
-  const showGlobalChatFAB = effectiveView !== 'chat' && effectiveView !== 'auth-callback' && effectiveView !== 'shared';
+  // The marketing home page already has prominent AI Chat entry points, so the
+  // floating "Open AI Chat" button is suppressed there to keep the landing clean.
+  const showGlobalChatFAB = effectiveView !== 'chat' && effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'home';
+
+  const goToStayUpdated = () => {
+    setCurrentView('home');
+    // Wait for the home view to mount before scrolling to the capture form.
+    setTimeout(() => document.getElementById('stay-updated')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 150);
+  };
 
   return (
     <ErrorBoundary>
@@ -662,6 +670,7 @@ const App: React.FC = () => {
               onEnterComicForge={() => handleNavigate('comicforge')}
               onSignIn={() => goToAuth('signin')}
               onRequestAccess={() => goToAuth('request-access')}
+              onNotify={goToStayUpdated}
               onOpenProfile={() => {
                 setSettingsTab('profile');
                 setSettingsReturnView(currentView);

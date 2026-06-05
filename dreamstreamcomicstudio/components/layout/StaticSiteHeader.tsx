@@ -1,8 +1,8 @@
 import React from 'react';
-import { ArrowRight, Bot, Mail, Sparkles } from 'lucide-react';
+import { Bot, Mail, Sparkles, BookOpen, Compass, Palette, LayoutGrid, MessageSquare, Cpu, Code2 } from 'lucide-react';
 import { Button } from '../Button';
 import { BrandLockup } from './BrandLockup';
-import { ComingSoonTab } from './ComingSoonTab';
+import { NavDropdown } from './NavDropdown';
 import { NotificationBell } from '../NotificationBell';
 import { UserAvatar } from '../UserAvatar';
 import { TokenAvailabilityPill } from '../TokenAvailabilityPill';
@@ -13,9 +13,11 @@ interface StaticSiteHeaderProps {
   onGoHome: () => void;
   onViewComics: () => void;
   onEnterStudio: () => void;
-  onEnterComicForge: () => void;
+  onEnterComicForge?: () => void;
   onSignIn: () => void;
   onRequestAccess?: () => void;
+  /** Jump to the "stay updated" capture (used by the Code "coming soon" product). */
+  onNotify?: () => void;
   onOpenProfile: () => void;
   onNavigate: (view: string, id?: string) => void;
 }
@@ -26,13 +28,14 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
   onGoHome,
   onViewComics,
   onEnterStudio,
-  onEnterComicForge,
   onSignIn,
   onRequestAccess,
+  onNotify,
   onOpenProfile,
   onNavigate,
 }) => {
   const isHome = currentView === 'home';
+  const notify = onNotify ?? (() => onNavigate('home'));
 
   return (
     <header className="sticky top-0 z-50 bg-white/95 backdrop-blur-md border-b-4 border-black">
@@ -58,34 +61,44 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
           {/* Logo */}
           <BrandLockup onClick={onGoHome} />
 
-          {/* Centre nav — desktop only */}
+          {/* Centre nav — desktop only. The four products, each with its own hover menu. */}
           <nav className="hidden lg:flex items-center gap-1 bg-slate-100 border-2 border-black rounded-full px-2 py-1">
-            <button
-              onClick={() => onNavigate('how-it-works')}
-              className="px-3 py-1.5 text-sm font-bold text-slate-600 hover:bg-white hover:text-black rounded-full transition-all"
-            >
-              How It Works
-            </button>
-            <button
-              onClick={onViewComics}
-              className="px-3 py-1.5 text-sm font-bold text-slate-600 hover:bg-white hover:text-black rounded-full transition-all"
-            >
-              Gallery
-            </button>
-            <button
-              onClick={() => onNavigate('models')}
-              className="px-3 py-1.5 text-sm font-bold text-slate-600 hover:bg-white hover:text-black rounded-full transition-all"
-            >
-              Models
-            </button>
-            <button
-              onClick={() => onNavigate('chat')}
-              className="px-3 py-1.5 text-sm font-bold text-brand-blue hover:bg-brand-blue hover:text-white rounded-full transition-all flex items-center gap-1.5"
-            >
-              <Bot size={13} /> AI Chat
-            </button>
-            {/* Third product — not shippable yet; shows a "coming soon" tooltip instead of navigating. */}
-            <ComingSoonTab label="Code" tooltip="Code Studio is coming soon" />
+            <NavDropdown
+              label="Comic"
+              icon={<BookOpen size={14} />}
+              items={[
+                { label: 'How It Works', description: 'The 8-step studio workflow', icon: <Compass size={16} />, onClick: () => onNavigate('how-it-works') },
+                { label: 'Studio', description: 'Turn your script into a comic', icon: <Palette size={16} />, onClick: onEnterStudio },
+                { label: 'Library', description: 'Browse the public comic gallery', icon: <LayoutGrid size={16} />, onClick: onViewComics },
+              ]}
+            />
+            <NavDropdown
+              label="AI Chat"
+              icon={<Bot size={14} />}
+              variant="blue"
+              items={[
+                { label: 'Open AI Chat', description: 'Chat with Claude, Gemini & 100+ models', icon: <MessageSquare size={16} />, onClick: () => onNavigate('chat') },
+                { label: 'Model Catalog', description: 'Compare every available model', icon: <Cpu size={16} />, onClick: () => onNavigate('models') },
+              ]}
+            />
+            <NavDropdown
+              label="Code"
+              icon={<Code2 size={14} />}
+              variant="muted"
+              badge="Soon"
+              caption="🚧 In the workshop"
+              items={[
+                { label: 'Get notified', description: 'Be first to know when Code launches', icon: <Mail size={16} />, onClick: notify },
+              ]}
+            />
+            <NavDropdown
+              label="Models"
+              icon={<Cpu size={14} />}
+              items={[
+                { label: 'Browse Models', description: 'Specs, pricing & benchmarks', icon: <Cpu size={16} />, onClick: () => onNavigate('models') },
+                { label: 'Use in AI Chat', description: 'Start a conversation with any model', icon: <MessageSquare size={16} />, onClick: () => onNavigate('chat') },
+              ]}
+            />
           </nav>
 
           {/* Auth controls */}
@@ -95,12 +108,6 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
                 <div className="hidden sm:block">
                   <TokenAvailabilityPill />
                 </div>
-                <Button onClick={onEnterStudio} size="sm" icon={<ArrowRight size={14} />}>
-                  Studio
-                </Button>
-                <Button onClick={onEnterComicForge} size="sm" variant="secondary" className="hidden md:flex">
-                  ComicForge
-                </Button>
                 <NotificationBell onNavigate={onNavigate} />
                 <UserAvatar onClick={onOpenProfile} />
               </>
