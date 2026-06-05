@@ -1,5 +1,5 @@
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { Code2, ExternalLink, Loader2, Map as MapIcon, Maximize2, Minimize2, Rocket, X } from 'lucide-react';
+import { Code2, ExternalLink, Loader2, Map as MapIcon, Maximize2, Minimize2, X } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { ChatSidebar } from './ChatSidebar';
 import { ChatConversation } from './ChatConversation';
@@ -23,7 +23,6 @@ import type { Project } from '../../types';
 import { sendChatMessageStream, runSwarmStream, updateChatMemory } from '../../services/chatApi';
 import { gatherClientContext } from '../../services/clientContext';
 import { toggleConnector, type ChatConnector } from '../../services/chatConnectors';
-import { openInStudio } from '../../services/studioLauncher';
 import { recommendModels, detectTools } from '../../services/chatSuggest';
 import { isProviderEnabled } from '../../services/sourceGovernance';
 import type { ModelSourceId } from '../../services/modelSelection';
@@ -784,13 +783,6 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
         <div className="flex items-center gap-1 shrink-0">
           {isCodeStudio && (
             <>
-              <button
-                onClick={() => openInStudio(panel.data as CodeStudioArtifact)}
-                title="Build & run in the full live Studio (npm install, terminal, debug)"
-                className="border-2 border-black rounded p-1 bg-lime-300 hover:bg-lime-200"
-              >
-                <Rocket className="w-3.5 h-3.5" />
-              </button>
               <button
                 onClick={handleOpenNewTab}
                 title="Open static preview in new tab"

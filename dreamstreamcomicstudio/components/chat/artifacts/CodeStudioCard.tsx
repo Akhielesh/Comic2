@@ -2,9 +2,9 @@
 // "Open Studio" button opens the full editor+preview in the side panel.
 
 import React from 'react';
-import { Code2, Play, FileCode, Layers, Rocket, Download, Cloud, Loader2 } from 'lucide-react';
+import { Code2, Play, FileCode, Layers, Download, Cloud, Loader2 } from 'lucide-react';
 import { useChatPanel } from '../panelContext';
-import { openInStudio, downloadArtifactZip } from '../../../services/studioLauncher';
+import { downloadArtifactZip } from '../../../services/studioLauncher';
 import { launchLiveStudio, isLiveStudioEnabled } from '../../../services/studioApi';
 import { useIsAdmin } from '../../../hooks/useIsAdmin';
 import type { CodeStudioArtifact } from '../../../apiTypes';
@@ -100,14 +100,6 @@ export const CodeStudioCard: React.FC<{ data: CodeStudioArtifact }> = ({ data })
               {launching ? 'Starting…' : 'Run live'}
             </button>
           )}
-          <button
-            onClick={() => openInStudio(data)}
-            title="Open the full live sandbox: npm install, run, edit & debug in a new tab"
-            className="flex items-center gap-1.5 text-xs font-bold border-2 border-black rounded-full px-3 py-1 bg-lime-400 hover:bg-lime-300 shadow-[2px_2px_0_#000] hover:translate-y-[1px] hover:shadow-[1px_1px_0_#000] transition-all"
-          >
-            <Rocket className="w-3 h-3" />
-            Build in Studio
-          </button>
           <button
             onClick={() => openPanel?.({ type: 'code_studio', data })}
             title="Quick preview in the side panel"
