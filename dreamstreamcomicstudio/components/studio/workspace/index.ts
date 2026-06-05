@@ -2,6 +2,9 @@
 
 export { CodeWorkspace } from './CodeWorkspace';
 export type { CodeWorkspaceProps } from './CodeWorkspace';
+export { LogsConsole } from './LogsConsole';
+export { useStudioLogs, MAX_LOG_ENTRIES } from './logsStore';
+export type { LogEntry, LogLevel } from './logsStore';
 export { MonacoEditor } from './MonacoEditor';
 export { FileTree, buildTree } from './FileTree';
 export { EditorTabs } from './EditorTabs';

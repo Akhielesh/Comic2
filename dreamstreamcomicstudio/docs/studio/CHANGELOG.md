@@ -5,6 +5,21 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Sprint 1 (cont.): resizable panes (S1.1) + logs console (S1.5)
+- **`kit/ResizableSplit.tsx`** — a flex N-pane splitter with draggable gutters + sizes persisted
+  to localStorage (flex-grow weights, fluid across window resizes). Pure `applyGutterDelta`
+  clamp helper (unit-tested). **`kit/useMediaQuery.ts`** (`useIsWide`) for responsive layout.
+- **`workspace/logsStore.ts` + `LogsConsole.tsx`** — a capped (500) console buffer + a
+  severity-coloured, monospace, auto-scrolling console with clear + autoscroll toggle. Run live
+  now streams lifecycle lines (launching / preview-ready / stopped / errors) into it.
+- **`CodeStudioView`** rebuilt: on wide screens a **resizable** vertical split (3-column
+  horizontal workspace over the logs console); on small screens a stacked, scrollable layout
+  (S1.8). 21st.dev Magic MCP component builder was attempted for the console but **timed out**,
+  so it was hand-built to match the kit/theme (will retry Magic for lighter pieces).
+- Tests: `ResizableSplit.test.ts` (clamp math) + `logsConsole.test.tsx` (store cap/clear +
+  console render/clear). 32 studio tests total. Client typecheck + production build green.
+- Remaining Sprint 1: live-preview device frames + boot reveal (S1.4), load saved projects (S1.7).
+
 ## 2026-06-05 · Claude — Code Studio theming: Black / White / DreamStream (Code-Studio-only)
 Per owner request — three switchable workspace themes, scoped to Code Studio (the main app
 is untouched):

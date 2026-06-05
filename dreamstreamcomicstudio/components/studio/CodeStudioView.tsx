@@ -1,8 +1,7 @@
-// Code Studio — the dedicated workspace route (Sprint 0 shell, filled out in Sprint 1).
-//
-// A themeable, animated 3-pane workspace (Prompt/Build · Code · Live preview) over a
-// Console/Logs bar. The Code pane hosts the real editor (Monaco + tabs + file tree). The
-// workspace theme (Black / White / DreamStream) is Code-Studio-only and switches live.
+// Code Studio — the dedicated workspace route. A themeable, animated, resizable 3-pane
+// workspace (Prompt/Build · Code · Live preview) over a streaming Console/Logs panel. The
+// Code pane hosts the real editor (Monaco + tabs + file tree); panes resize with persisted
+// sizes (wide screens) and stack on small ones. Workspace theme is Code-Studio-only.
 //
 // Gating: admins are never feature-gated; everyone else sees Code Studio only when the live
 // flag is on. Non-admins still get an instant in-browser preview of a handed-off app so the
@@ -10,13 +9,15 @@
 
 import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import {
-  ArrowLeft, Play, Square, Share2, Download, FileCode, Terminal,
-  Sparkles, Cpu, Lock, Mail, Cloud, Loader2,
+  ArrowLeft, Play, Square, Share2, Download, FileCode, Cloud,
+  Sparkles, Cpu, Lock, Mail, Loader2,
 } from 'lucide-react';
 import type { CodeStudioArtifact } from '../../apiTypes';
-import { Reveal, Stagger, StaggerItem, Skeleton, StatusPulse, Lift, ThemeSwitcher, useStudioTheme } from './kit';
+import { Reveal, Skeleton, StatusPulse, Lift, ThemeSwitcher, ResizableSplit, useIsWide, useStudioTheme } from './kit';
 import type { RunStatus } from './kit';
-import { CodeWorkspace, useStudioWorkspace, isPathDirty, workspaceToArtifact } from './workspace';
+import {
+  CodeWorkspace, LogsConsole, useStudioWorkspace, useStudioLogs, isPathDirty, workspaceToArtifact,
+} from './workspace';
 import { launchLiveStudio, stopLiveStudio } from '../../services/studioApi';
 import { isLiveStudioEnabled } from '../../services/studioFlags';
 import { downloadArtifactZip } from '../../services/studioLauncher';
@@ -36,7 +37,7 @@ const PaneFrame: React.FC<{ title: React.ReactNode; icon: React.ReactNode; class
   = ({ title, icon, className, children }) => {
     const t = useStudioTheme();
     return (
-      <section className={`flex min-h-0 flex-col rounded-xl border ${t.edge} ${t.panel} overflow-hidden ${className ?? ''}`}>
+      <section className={`flex h-full w-full min-h-0 flex-col rounded-lg border ${t.edge} ${t.panel} overflow-hidden ${className ?? ''}`}>
         <header className={`flex items-center gap-2 px-3 py-2 border-b ${t.edge} ${t.panelAlt}`}>
           <span className={t.accent}>{icon}</span>
           <span className={`text-xs font-semibold tracking-wide ${t.textDim} uppercase`}>{title}</span>
@@ -48,11 +49,13 @@ const PaneFrame: React.FC<{ title: React.ReactNode; icon: React.ReactNode; class
 
 export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmin, onBack, onNavigate }) => {
   const t = useStudioTheme();
+  const wide = useIsWide();
   const enabled = isAdmin || isLiveStudioEnabled();
   const loadArtifact = useStudioWorkspace((s) => s.loadArtifact);
   const wsFiles = useStudioWorkspace((s) => s.files);
   const wsBaseline = useStudioWorkspace((s) => s.baseline);
   const wsPaths = useStudioWorkspace((s) => s.paths);
+  const appendLog = useStudioLogs((s) => s.append);
   const hasFiles = wsPaths.length > 0;
   const dirtyCount = useMemo(
     () => wsPaths.filter((p) => isPathDirty({ files: wsFiles, baseline: wsBaseline }, p)).length,
@@ -76,6 +79,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     setStatus('starting');
     setError(null);
     setPreviewUrl(null);
+    appendLog('system', `Launching live container for "${artifact.title}"…`);
     try {
       // Run the working copy (so live edits are what boots), not just the original hand-off.
       const live = workspaceToArtifact(artifact, { files: wsFiles, paths: wsPaths });
@@ -84,14 +88,18 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       if (res.previewUrl) {
         setPreviewUrl(res.previewUrl);
         setStatus('live');
+        appendLog('success', `Preview ready → ${res.previewUrl}`);
         window.open(res.previewUrl, '_blank', 'noopener');
       } else {
         setStatus('error');
         setError('The live preview started but returned no URL yet.');
+        appendLog('warn', 'Container started but no preview URL was returned yet.');
       }
     } catch (err) {
+      const msg = (err as Error)?.message || 'Live Studio is unavailable right now.';
       setStatus('error');
-      setError((err as Error)?.message || 'Live Studio is unavailable right now.');
+      setError(msg);
+      appendLog('error', msg);
     }
   };
 
@@ -100,12 +108,85 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     setStatus('idle');
     setRunId(null);
     setPreviewUrl(null);
+    appendLog('system', 'Run stopped.');
   };
 
   const projectName = artifact?.title || 'Untitled project';
 
+  // ---- Panes (defined once, placed into the resizable or stacked layout) ----
+  const promptPane = (
+    <PaneFrame title="Prompt · Build" icon={<Sparkles className="w-4 h-4" />}>
+      <div className="p-3 space-y-3">
+        <div className={`rounded-lg border ${t.edge} ${t.panelAlt} p-3`}>
+          <p className={`text-sm ${t.textDim}`}>
+            {artifact
+              ? 'This app was handed off from chat. Run it live, or (coming in Sprint 2) refine it by prompt.'
+              : 'Describe an app and watch it build live. Or open one from chat.'}
+          </p>
+          <div className={`mt-3 rounded-md border ${t.edge} ${t.bg} px-3 py-2 text-sm ${t.textFaint}`}>
+            Describe a change…
+            <span className="ml-1 text-[10px] uppercase tracking-wide">(Sprint 2)</span>
+          </div>
+        </div>
+        <div className="space-y-2">
+          <p className={`text-[11px] font-semibold uppercase tracking-wide ${t.textFaint}`}>Build trace</p>
+          {['Plan', 'Run', 'Observe', 'Fix'].map((step) => (
+            <div key={step} className={`flex items-center gap-2 rounded-md border ${t.edge} px-2.5 py-2`}>
+              <StatusPulse status="idle" hideLabel />
+              <span className={`text-xs ${t.textDim}`}>{step}</span>
+              <Skeleton className="ml-auto h-2 w-16" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </PaneFrame>
+  );
+
+  const codePane = (
+    <PaneFrame title="Code" icon={<FileCode className="w-4 h-4" />}>
+      {hasFiles ? (
+        <CodeWorkspace readOnly={!enabled} />
+      ) : (
+        <div className="p-3 space-y-2">
+          <Skeleton className="h-3 w-3/4" /><Skeleton className="h-3 w-1/2" /><Skeleton className="h-3 w-2/3" />
+        </div>
+      )}
+    </PaneFrame>
+  );
+
+  const previewPane = (
+    <PaneFrame title="Live preview" icon={<Cloud className="w-4 h-4" />}>
+      {previewUrl ? (
+        <iframe title="Live preview" src={previewUrl} className="h-full w-full bg-white" />
+      ) : !enabled && artifact ? (
+        // Non-admin: instant in-browser peek so the CTA never dead-ends (decision D3).
+        <Suspense fallback={<div className="p-3"><Skeleton className="h-full min-h-[12rem] w-full" /></div>}>
+          <CodeStudioPanel data={artifact} editorHeight={420} />
+        </Suspense>
+      ) : (
+        <div className="h-full min-h-[14rem] flex flex-col items-center justify-center gap-3 p-6 text-center">
+          <div className={`h-16 w-16 rounded-2xl border ${t.edge} ${t.panelAlt} flex items-center justify-center`}>
+            <Cloud className={`w-7 h-7 ${t.textFaint}`} />
+          </div>
+          <p className={`text-sm font-semibold ${t.textDim}`}>
+            {artifact ? 'Press Run live to boot this app in a cloud container.' : 'Your live app will appear here.'}
+          </p>
+          {status === 'starting' && (
+            <div className="w-full max-w-xs space-y-2"><Skeleton className="h-3 w-full" /><Skeleton className="h-3 w-2/3" /></div>
+          )}
+        </div>
+      )}
+    </PaneFrame>
+  );
+
+  const logsPane = (
+    <div className={`flex h-full w-full overflow-hidden rounded-lg border ${t.edge}`}>
+      <LogsConsole />
+    </div>
+  );
+
   return (
-    <div className={`min-h-screen ${t.bg} ${t.text} flex flex-col`}>
+    <div className={`min-h-screen h-screen ${t.bg} ${t.text} flex flex-col`}>
       {/* Top bar */}
       <Reveal distance={-8}>
         <div className={`flex items-center gap-3 px-4 h-14 border-b ${t.edge} ${t.panelAlt}`}>
@@ -192,93 +273,26 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
         </div>
       )}
 
-      {/* 3-pane workspace */}
-      <Stagger className="flex-1 grid min-h-0 gap-3 p-3 grid-cols-1 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)_minmax(0,1.1fr)]">
-        {/* Prompt / Build */}
-        <StaggerItem className="min-h-0 flex">
-          <PaneFrame title="Prompt · Build" icon={<Sparkles className="w-4 h-4" />} className="flex-1">
-            <div className="p-3 space-y-3">
-              <div className={`rounded-lg border ${t.edge} ${t.panelAlt} p-3`}>
-                <p className={`text-sm ${t.textDim}`}>
-                  {artifact
-                    ? 'This app was handed off from chat. Run it live, or (coming in Sprint 2) refine it by prompt.'
-                    : 'Describe an app and watch it build live. Or open one from chat.'}
-                </p>
-                <div className={`mt-3 rounded-md border ${t.edge} ${t.bg} px-3 py-2 text-sm ${t.textFaint}`}>
-                  Describe a change…
-                  <span className="ml-1 text-[10px] uppercase tracking-wide">(Sprint 2)</span>
-                </div>
-              </div>
-              {/* BuildTrace placeholder */}
-              <div className="space-y-2">
-                <p className={`text-[11px] font-semibold uppercase tracking-wide ${t.textFaint}`}>Build trace</p>
-                {['Plan', 'Run', 'Observe', 'Fix'].map((step) => (
-                  <div key={step} className={`flex items-center gap-2 rounded-md border ${t.edge} px-2.5 py-2`}>
-                    <StatusPulse status="idle" hideLabel />
-                    <span className={`text-xs ${t.textDim}`}>{step}</span>
-                    <Skeleton className="ml-auto h-2 w-16" />
-                  </div>
-                ))}
-              </div>
-            </div>
-          </PaneFrame>
-        </StaggerItem>
-
-        {/* Code editor — Monaco + tabs + file tree (workspace store) */}
-        <StaggerItem className="min-h-0 flex">
-          <PaneFrame title="Code" icon={<FileCode className="w-4 h-4" />} className="flex-1">
-            {hasFiles ? (
-              <CodeWorkspace readOnly={!enabled} />
-            ) : (
-              <div className="p-3 space-y-2">
-                <Skeleton className="h-3 w-3/4" /><Skeleton className="h-3 w-1/2" /><Skeleton className="h-3 w-2/3" />
-              </div>
-            )}
-          </PaneFrame>
-        </StaggerItem>
-
-        {/* Live preview */}
-        <StaggerItem className="min-h-0 flex">
-          <PaneFrame title="Live preview" icon={<Cloud className="w-4 h-4" />} className="flex-1">
-            {previewUrl ? (
-              <iframe title="Live preview" src={previewUrl} className="h-full w-full bg-white" />
-            ) : !enabled && artifact ? (
-              // Non-admin: instant in-browser peek so the CTA never dead-ends (decision D3).
-              <Suspense fallback={<div className="p-3"><Skeleton className="h-full min-h-[12rem] w-full" /></div>}>
-                <CodeStudioPanel data={artifact} editorHeight={420} />
-              </Suspense>
-            ) : (
-              <div className="h-full min-h-[14rem] flex flex-col items-center justify-center gap-3 p-6 text-center">
-                <div className="relative">
-                  <div className={`h-16 w-16 rounded-2xl border ${t.edge} ${t.panelAlt} flex items-center justify-center`}>
-                    <Cloud className={`w-7 h-7 ${t.textFaint}`} />
-                  </div>
-                </div>
-                <p className={`text-sm font-semibold ${t.textDim}`}>
-                  {artifact ? 'Press Run live to boot this app in a cloud container.' : 'Your live app will appear here.'}
-                </p>
-                {status === 'starting' && (
-                  <div className="w-full max-w-xs space-y-2"><Skeleton className="h-3 w-full" /><Skeleton className="h-3 w-2/3" /></div>
-                )}
-              </div>
-            )}
-          </PaneFrame>
-        </StaggerItem>
-      </Stagger>
-
-      {/* Console / Logs */}
-      <Reveal delay={0.15}>
-        <div className={`border-t ${t.edge} ${t.panelAlt} px-4 py-2`}>
-          <div className={`flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide ${t.textFaint}`}>
-            <Terminal className="w-3.5 h-3.5" /> Console · Logs
-            <span className="ml-2 normal-case font-normal">streaming logs land in a later Sprint 1 increment</span>
-          </div>
-          <div className="mt-1.5 space-y-1">
-            <Skeleton className="h-2.5 w-2/3" />
-            <Skeleton className="h-2.5 w-1/2" />
-          </div>
+      {/* Workspace: resizable on wide screens, stacked on small ones */}
+      {wide ? (
+        <div className="flex-1 min-h-0 p-3">
+          <ResizableSplit direction="vertical" storageKey="studio.split.v" initial={[3.2, 1]} minPx={110}>
+            <ResizableSplit direction="horizontal" storageKey="studio.split.h" initial={[2.4, 3.4, 3.2]} minPx={220}>
+              {promptPane}
+              {codePane}
+              {previewPane}
+            </ResizableSplit>
+            {logsPane}
+          </ResizableSplit>
         </div>
-      </Reveal>
+      ) : (
+        <div className="flex-1 min-h-0 overflow-auto flex flex-col gap-3 p-3">
+          <div className="min-h-[15rem] flex">{promptPane}</div>
+          <div className="min-h-[22rem] flex">{codePane}</div>
+          <div className="min-h-[18rem] flex">{previewPane}</div>
+          <div className="min-h-[12rem] flex">{logsPane}</div>
+        </div>
+      )}
     </div>
   );
 };
