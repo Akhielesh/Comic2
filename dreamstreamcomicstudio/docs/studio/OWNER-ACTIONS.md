@@ -28,9 +28,9 @@ building everything else first and will validate together once these are done.
 | # | Action | Why | How | Status |
 |---|---|---|---|---|
 | O1 | Enable **Cloudflare Workers Paid** ($5/mo) | Containers aren't on Free | Cloudflare dashboard | ⏳ pending |
-| O2 | Confirm a **preview domain** (placeholder: `studio.dreamstream.app`) + add proxied wildcard DNS `*.studio.<domain>` | Preview URLs need a wildcard zone (`*.workers.dev` won't work) | Cloudflare DNS | ⏳ pending |
-| O3 | **Deploy the Worker** | Runs the AI-built apps | `cd studio-worker` → set `wrangler.jsonc` route → `wrangler secret put STUDIO_HMAC_SECRET` → `wrangler deploy` (Docker running). Full steps: [PHASE-0](./phases/PHASE-0-infra.md) | ⏳ pending |
-| O4 | Set Railway env: `STUDIO_WORKER_URL`, `STUDIO_HMAC_SECRET` | Control plane → Worker hop | Railway → API service → Variables → redeploy | ⏳ pending |
+| O2 | ~~Custom domain + wildcard DNS~~ — **NOT required** | Worker uses zero-config quick **tunnels** (`sandbox.tunnels.get` → `*.trycloudflare.com`); a domain is only an optional later upgrade for stable URLs | — | ✅ not needed |
+| O3 | **Deploy the Worker** | Runs the AI-built apps | `cd studio-worker` → `npm install` → `wrangler login` → `wrangler secret put STUDIO_HMAC_SECRET` → `wrangler deploy` (Docker running). **No domain/route config.** | ⏳ pending |
+| O4 | Set Railway env: `STUDIO_WORKER_URL` (= the `.workers.dev` URL), `STUDIO_HMAC_SECRET` | Control plane → Worker hop | Railway → API service → Variables → redeploy | ⏳ pending |
 | O5 | Apply DB migration `server/sql/studio_runs.sql` | Phase 2 run metering | **I can apply it via Supabase access — just say so**, or run it in the Supabase SQL editor | ⏳ pending (offered) |
 | O6 | ~~Review/approve Phase 2 PR #77~~ | control plane shipped | merged to prod 2026-06-05 | ✅ done |
 | O7 | (Later, Phase 10) optional keys: `TAVILY_API_KEY`/`BRAVE_API_KEY` (search), `FOURSQUARE_API_KEY` (places) | Raise tool sourcing reliability | Railway env | 🔮 future |

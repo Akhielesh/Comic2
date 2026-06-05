@@ -82,7 +82,6 @@ export default {
     if (!body.sandboxId) return json({ error: 'sandboxId required' }, 400);
 
     const sandbox = getSandbox(env.Sandbox, body.sandboxId);
-    const hostname = new URL(req.url).hostname;
 
     try {
       if (body.action === 'stop') {
@@ -114,14 +113,13 @@ export default {
         // 3. Start the long-running dev server (background process).
         await sandbox.startProcess(body.dev || `cd /workspace && PORT=${port} npm run dev`);
 
-        // 4. Expose the port → tokenized preview URL the user opens in a new tab.
-        const exposed = await sandbox.exposePort(port, { hostname });
-        return json({
-          status: 'starting',
-          previewUrl: exposed.url,
-          sandboxId: body.sandboxId,
-          port
-        });
+        // 4. Get a PUBLIC preview URL via a zero-config Cloudflare quick tunnel — NO custom
+        //    domain / DNS needed (works on *.workers.dev). For a production custom-domain
+        //    setup, swap to exposePort(port, { hostname }) + wildcard routes instead.
+        //    VALIDATE the return shape against the installed SDK on first deploy.
+        const tunnel = await sandbox.tunnels.get(port);
+        const previewUrl = typeof tunnel === 'string' ? tunnel : (tunnel as { url: string }).url;
+        return json({ status: 'starting', previewUrl, sandboxId: body.sandboxId, port });
       }
 
       return json({ error: 'unknown action' }, 400);
