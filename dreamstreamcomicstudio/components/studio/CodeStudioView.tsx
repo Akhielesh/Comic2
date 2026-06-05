@@ -13,7 +13,7 @@ import {
   Sparkles, Cpu, Lock, Mail, Loader2,
 } from 'lucide-react';
 import type { CodeStudioArtifact } from '../../apiTypes';
-import { Reveal, Skeleton, StatusPulse, Lift, ThemeSwitcher, ResizableSplit, useIsWide, useStudioTheme } from './kit';
+import { Reveal, Skeleton, StatusPulse, Lift, ThemeSwitcher, ResizableSplit, Confetti, useIsWide, useStudioTheme } from './kit';
 import type { RunStatus } from './kit';
 import {
   CodeWorkspace, LogsConsole, PreviewFrame, BuildTrace, useStudioBuild,
@@ -84,6 +84,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const [runId, setRunId] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [celebrate, setCelebrate] = useState(false);
 
   // Agentic build: stream plan → run → observe → fix → done, self-healing errors. The final
   // preview URL is the live app. Drives the BuildTrace + logs + run status.
@@ -110,6 +111,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
           },
           onResult: (r) => {
             useStudioBuild.getState().finish(r);
+            if (r.ok) setCelebrate(true); // 🎉 green build
             if (r.previewUrl) { setPreviewUrl(r.previewUrl); setStatus('live'); }
             else setStatus(r.ok ? 'idle' : 'error');
             appendLog(r.ok ? 'success' : 'warn',
@@ -205,6 +207,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
 
   return (
     <div className={`min-h-screen h-screen ${t.bg} ${t.text} flex flex-col`}>
+      {celebrate && <Confetti onDone={() => setCelebrate(false)} />}
       {/* Top bar */}
       <Reveal distance={-8}>
         <div className={`flex items-center gap-3 px-4 h-14 border-b ${t.edge} ${t.panelAlt}`}>

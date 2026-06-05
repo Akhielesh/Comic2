@@ -17,6 +17,9 @@ export type { ShimmerProps, SkeletonProps } from './Shimmer';
 export { StatusPulse } from './StatusPulse';
 export type { StatusPulseProps, RunStatus } from './StatusPulse';
 
+export { Confetti } from './Confetti';
+export type { ConfettiProps } from './Confetti';
+
 export {
   usePrefersReducedMotion,
   springSoft,

@@ -5,6 +5,7 @@
 import React, { useEffect, useState } from 'react';
 import { FolderOpen, Trash2, Loader2, Plus, MessageSquarePlus, RefreshCw } from 'lucide-react';
 import { Reveal, Stagger, StaggerItem, Skeleton, Lift, useStudioTheme } from './kit';
+import { TemplateLogo } from './assets/techLogos';
 import { useStudioWorkspace } from './workspace';
 import {
   listStudioProjects, getStudioProject, deleteStudioProject, type StudioProjectSummary,
@@ -126,7 +127,7 @@ export const StudioStart: React.FC<StudioStartProps> = ({ onNavigate }) => {
                   <Lift>
                     <div className={`group relative rounded-xl border ${t.edge} ${t.panel} p-4`}>
                       <div className="flex items-start gap-2">
-                        <FolderOpen className={`mt-0.5 w-4 h-4 shrink-0 ${t.accent}`} />
+                        <TemplateLogo template={p.template} className="mt-0.5 w-4 h-4 shrink-0" />
                         <div className="min-w-0">
                           <p className={`font-bold truncate ${t.text}`}>{p.name}</p>
                           <p className={`text-[11px] ${t.textFaint}`}>

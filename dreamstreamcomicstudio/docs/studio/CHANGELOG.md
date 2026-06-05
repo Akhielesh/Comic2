@@ -5,6 +5,15 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Sprint 2: success celebration (S2.7) + tech logos via 21st.dev MCP
+- **`kit/Confetti.tsx`** — a one-shot framer-motion celebration burst (reduced-motion safe,
+  self-removing). Fires over the workspace on a **green build** (`result.ok`).
+- **`assets/techLogos.tsx`** — React / TypeScript / JavaScript / HTML5 marks (TS/JS/HTML5
+  sourced via the **21st.dev Magic MCP `logo_search`**) + a `TemplateLogo` dispatcher; now
+  shown on the `StudioStart` project cards.
+- Tests: `confetti.test.tsx` (particles + reduced-motion), `techLogos.test.tsx`. Studio suite
+  green; typecheck + production build green.
+
 ## 2026-06-05 · Claude — Sprint 2 (start): agentic build + BuildTrace (S2.2/S2.6/S2.7)
 The "Lovable moment" — the primary action is now an **agentic Build** that streams the loop.
 - **`services/sse.ts`** — a dependency-free SSE reader (`parseSSEBlock` + `readSSEStream`),
