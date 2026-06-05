@@ -5,6 +5,13 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-05 · Claude — Sprint 4: starter templates gallery (S4.1)
+- **`assets/templates.ts`** — `STARTER_TEMPLATES`: Counter + Todo (Vite React+TS scaffolds) and a
+  static Landing page — minimal but valid/runnable projects (real package.json/vite config).
+- **`StudioStart`** — a **"Start from a template"** grid (logo + name + description); clicking
+  hydrates the template into the workspace → one Build away from running (zero→app in ≤2 clicks).
+- Test: template-loads-into-workspace. 63 studio tests; typecheck + build green.
+
 ## 2026-06-05 · Claude — Sprint 4 (start): ⌘K command palette (S4.2)
 - **`kit/CommandPalette.tsx`** — a ⌘K palette (fuzzy filter, arrow-key nav, Enter to run, Esc to
   close; spring-animated, portaled, themed). Generic `Command[]` API.

@@ -7,6 +7,7 @@ import { FolderOpen, Trash2, Loader2, MessageSquarePlus, RefreshCw } from 'lucid
 import { Reveal, Stagger, StaggerItem, Skeleton, Lift, EmptyState, useStudioTheme } from './kit';
 import { TemplateLogo } from './assets/techLogos';
 import { EmptyProjectsArt } from './assets/illustrations';
+import { STARTER_TEMPLATES } from './assets/templates';
 import { useStudioWorkspace } from './workspace';
 import {
   listStudioProjects, getStudioProject, deleteStudioProject, type StudioProjectSummary,
@@ -88,7 +89,30 @@ export const StudioStart: React.FC<StudioStartProps> = ({ onNavigate }) => {
               <MessageSquarePlus className="w-4 h-4" /> Build from chat
             </button>
           </div>
-          <p className={`mt-1 text-sm ${t.textDim}`}>Open a saved app to edit and run it, or describe a new one in chat.</p>
+          <p className={`mt-1 text-sm ${t.textDim}`}>Open a saved app to edit and run it, start from a template, or describe a new one in chat.</p>
+
+          {/* Start from a template (S4.1) */}
+          <div className="mt-5">
+            <p className={`text-[11px] font-semibold uppercase tracking-wide ${t.textFaint}`}>Start from a template</p>
+            <Stagger className="mt-2 grid gap-3 sm:grid-cols-2 lg:grid-cols-3" step={0.04}>
+              {STARTER_TEMPLATES.map((tpl) => (
+                <StaggerItem key={tpl.id}>
+                  <Lift>
+                    <button
+                      onClick={() => loadArtifact(tpl.artifact)}
+                      className={`w-full text-left rounded-xl border ${t.edge} ${t.panel} p-4 ${t.hover} ${t.focusRing}`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <TemplateLogo template={tpl.artifact.template} className="w-4 h-4 shrink-0" />
+                        <span className={`font-bold ${t.text}`}>{tpl.name}</span>
+                      </div>
+                      <p className={`mt-1 text-[11px] ${t.textFaint}`}>{tpl.description}</p>
+                    </button>
+                  </Lift>
+                </StaggerItem>
+              ))}
+            </Stagger>
+          </div>
 
           {error && <p className="mt-4 text-sm font-semibold text-rose-500">{error}</p>}
 

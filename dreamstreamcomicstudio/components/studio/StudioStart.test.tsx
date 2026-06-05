@@ -50,4 +50,12 @@ describe('StudioStart', () => {
     render(<StudioStart onNavigate={vi.fn()} />);
     expect(await screen.findByText(/no saved projects yet/i)).toBeInTheDocument();
   });
+
+  it('loads a starter template into the workspace', () => {
+    render(<StudioStart onNavigate={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /Counter/i }));
+    const s = useStudioWorkspace.getState();
+    expect(s.title).toBe('Counter');
+    expect(s.paths).toContain('/src/App.tsx');
+  });
 });
