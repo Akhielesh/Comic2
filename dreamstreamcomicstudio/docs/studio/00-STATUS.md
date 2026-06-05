@@ -8,6 +8,9 @@
 
 > Latest: added deep analysis + redesign docs for the **agent swarm** (10), **tools/MCP/
 > sourcing** (11), and **guardrails/personality** (12), with parallel workstream phases 9–11.
+>
+> 🟠 **Owner to-dos + how to resume in a new session →** [`OWNER-ACTIONS.md`](./OWNER-ACTIONS.md)
+> (nothing there blocks further building — it's only for going *live*).
 
 ---
 

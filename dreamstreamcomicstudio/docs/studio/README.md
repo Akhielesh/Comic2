@@ -24,6 +24,7 @@ can pick up the work cold.
 | File | What it is |
 |---|---|
 | **[00-STATUS.md](./00-STATUS.md)** | 🔴 LIVING status tracker — progress, current phase, blockers. Check this first. |
+| **[OWNER-ACTIONS.md](./OWNER-ACTIONS.md)** | 🟠 LIVING — what's waiting on YOU + built-but-not-validated + how to resume in a new session |
 | [01-VISION.md](./01-VISION.md) | What we're building and why; positioning vs Lovable/Emergent; goals & non-goals |
 | [02-CURRENT-STATE.md](./02-CURRENT-STATE.md) | **Brutally honest** audit of what exists today vs the enterprise/Emergent bar |
 | [03-ARCHITECTURE.md](./03-ARCHITECTURE.md) | System architecture, components, end-to-end data flows |
