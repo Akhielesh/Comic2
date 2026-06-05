@@ -28,6 +28,7 @@
   },
   "exclude": [
     "server",
+    "studio-worker",
     "node_modules",
     "dist"
   ]

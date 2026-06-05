@@ -1,0 +1,28 @@
+{
+  // DreamStream Studio Worker — owns the Sandbox Durable Object + Container.
+  // See README.md before deploying. Replace the route domain with your real zone.
+  "name": "dreamstream-studio",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // The container image (Dockerfile in this dir). standard-3 = 2 vCPU / 8 GiB / 16 GB —
+  // a good default for npm install + a Vite dev server (see CLOUDFLARE_STUDIO_PLAN §8).
+  "containers": [
+    {
+      "class_name": "Sandbox",
+      "image": "./Dockerfile",
+      "instance_type": "standard-3",
+      "max_instances": 50
+    }
+  ],
+
+  "durable_objects": {
+    "bindings": [{ "class_name": "Sandbox", "name": "Sandbox" }]
+  },
+  "migrations": [{ "new_sqlite_classes": ["Sandbox"], "tag": "v1" }],
+
+  // Preview URLs need a custom domain with WILDCARD DNS — *.workers.dev will NOT work.
+  // Replace dreamstream.app with your real zone.
+  "routes": [{ "pattern": "*.studio.dreamstream.app/*", "zone_name": "dreamstream.app" }]
+}
