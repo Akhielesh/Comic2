@@ -6,6 +6,10 @@
 
 **Last updated:** 2026-06-06 · **Updated by:** Claude · **Branch:** `claude/wizardly-franklin-EgL8k` (draft PR)
 
+> Latest (2026-06-06): **S4.0 — STUDIO ERROR BOUNDARY.** A render crash in the studio now shows a
+> recoverable panel (Try again / Reload / Back) instead of a white screen, wired around the Code Studio
+> mount. Enterprise hardening. 101 studio component tests pass.
+
 > Latest (2026-06-06): **S3b — DIFF-CENTRIC LIVE EDITS + CANCELLABLE GENERATION.** Refines now mark
 > each file new/modified and annotate edits with +added/−removed line diffs in the activity feed
 > (reviewable changelog); generation runs under an AbortController with a Stop button on the composer.

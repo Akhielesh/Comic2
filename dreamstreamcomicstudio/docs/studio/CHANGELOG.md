@@ -5,6 +5,17 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-06 · Claude — FEAT(S4.0): studio error boundary (enterprise hardening)
+A render-time crash anywhere in the studio used to take down the whole app (white screen). Added a
+reusable, themed `StudioErrorBoundary` (`components/studio/kit/ErrorBoundary.tsx`) that catches it and
+shows a recoverable panel — **Try again** (re-mounts the subtree), **Reload** (hard refresh), **Back**
+(exits the studio) — with a collapsible error detail, and logs the error + component stack. Wired
+around the Code Studio mount in `App.tsx` (imported directly, not via the kit barrel, to keep the main
+bundle lean). Files: `components/studio/kit/{ErrorBoundary.tsx,index.ts}` (+errorBoundary test),
+`App.tsx`. Typecheck + frontend build green; 101 studio component tests pass (boundary suite added).
+
+---
+
 ## 2026-06-06 · Claude — FEAT(S3b): diff-centric live edits + cancellable generation
 Two pro/enterprise-grade UX upgrades on top of the live activity stream:
 - **Diff-centric edits.** When refining an existing app, the activity feed now marks each file

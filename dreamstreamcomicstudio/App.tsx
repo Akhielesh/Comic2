@@ -19,6 +19,7 @@ const ModelLibrary = lazyImportWithRetry(() => import('./components/ModelLibrary
 const HowItWorks = lazyImportWithRetry(() => import('./components/HowItWorks').then(module => ({ default: module.HowItWorks })));
 const AIChatPlatform = lazyImportWithRetry(() => import('./components/chat/AIChatPlatform').then(module => ({ default: module.AIChatPlatform })));
 const CodeStudioView = lazyImportWithRetry(() => import('./components/studio/CodeStudioView').then(module => ({ default: module.CodeStudioView })));
+import { StudioErrorBoundary } from './components/studio/kit/ErrorBoundary';
 
 import { useProjectManager } from './hooks/useProjectManager';
 import { checkSystemDiagnostics, checkSystemStatus } from './services/geminiService';
@@ -767,12 +768,14 @@ const App: React.FC = () => {
           )}
 
           {effectiveView === 'codestudio' && (
-            <CodeStudioView
-              artifact={studioHandoffArtifact}
-              isAdmin={isAdmin}
-              onBack={() => setCurrentView(user ? 'dashboard' : 'home')}
-              onNavigate={handleNavigate}
-            />
+            <StudioErrorBoundary onBack={() => setCurrentView(user ? 'dashboard' : 'home')}>
+              <CodeStudioView
+                artifact={studioHandoffArtifact}
+                isAdmin={isAdmin}
+                onBack={() => setCurrentView(user ? 'dashboard' : 'home')}
+                onNavigate={handleNavigate}
+              />
+            </StudioErrorBoundary>
           )}
 
           {effectiveView === 'how-it-works' && (

@@ -52,6 +52,7 @@ export { StudioAurora } from './StudioAurora';
 
 export { ResizableSplit, applyGutterDelta } from './ResizableSplit';
 export type { ResizableSplitProps } from './ResizableSplit';
+export { StudioErrorBoundary } from './ErrorBoundary';
 export { useStudioFocus, STUDIO_FOCUS_ORDER } from './focusStore';
 export type { StudioFocus } from './focusStore';
 export { FocusToggle } from './FocusToggle';
