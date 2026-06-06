@@ -1,47 +1,27 @@
-// Stagger — reveal a list/grid of children in sequence. Wrap items in <StaggerItem/>.
-// Both degrade to plain <div>s under reduced motion.
+// Stagger — reveal a list/grid of children in sequence (CSS, visible-by-default). The container
+// gives each direct child an incremental entrance delay (see index.css .studio-stagger). Wrap
+// items in <StaggerItem/> (a passthrough that exists for readable call-sites + future hooks).
 
 import React from 'react';
-import { motion } from 'framer-motion';
-import { springSoft, staggerContainer, staggerItem, usePrefersReducedMotion } from './motion';
 
 export interface StaggerProps {
   children: React.ReactNode;
   className?: string;
-  /** Per-child delay (seconds). */
+  /** Kept for API compatibility (delays are CSS-driven now). */
   step?: number;
-  /** Delay before the first child (seconds). */
   delay?: number;
 }
 
-export const Stagger: React.FC<StaggerProps> = ({ children, className, step, delay }) => {
-  const reduce = usePrefersReducedMotion();
-  if (reduce) return <div className={className}>{children}</div>;
-  return (
-    <motion.div
-      className={className}
-      initial="hidden"
-      animate="shown"
-      variants={staggerContainer(step, delay)}
-    >
-      {children}
-    </motion.div>
-  );
-};
+export const Stagger: React.FC<StaggerProps> = ({ children, className }) => (
+  <div className={`studio-stagger ${className ?? ''}`}>{children}</div>
+);
 
 export interface StaggerItemProps {
   children: React.ReactNode;
   className?: string;
-  /** Rise distance in px. */
   distance?: number;
 }
 
-export const StaggerItem: React.FC<StaggerItemProps> = ({ children, className, distance }) => {
-  const reduce = usePrefersReducedMotion();
-  if (reduce) return <div className={className}>{children}</div>;
-  return (
-    <motion.div className={className} variants={staggerItem(distance)} transition={springSoft}>
-      {children}
-    </motion.div>
-  );
-};
+export const StaggerItem: React.FC<StaggerItemProps> = ({ children, className }) => (
+  <div className={className}>{children}</div>
+);

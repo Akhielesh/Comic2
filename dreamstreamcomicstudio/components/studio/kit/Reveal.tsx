@@ -1,30 +1,19 @@
-// Reveal — fade + rise a block in on mount. Calm static fallback under reduced motion.
+// Reveal — fade + rise a block in on mount. CSS-driven and *visible-by-default*: the animation
+// only enhances; content is never gated behind JS running (see index.css .studio-reveal).
 
 import React from 'react';
-import { motion } from 'framer-motion';
-import { revealVariants, springSoft, usePrefersReducedMotion } from './motion';
 
 export interface RevealProps {
   children: React.ReactNode;
   className?: string;
   /** Extra delay before the reveal (seconds). */
   delay?: number;
-  /** Rise distance in px. */
+  /** Kept for API compatibility (no longer used; reveal direction is fixed). */
   distance?: number;
 }
 
-export const Reveal: React.FC<RevealProps> = ({ children, className, delay = 0, distance = 12 }) => {
-  const reduce = usePrefersReducedMotion();
-  if (reduce) return <div className={className}>{children}</div>;
-  return (
-    <motion.div
-      className={className}
-      initial="hidden"
-      animate="shown"
-      variants={revealVariants(distance)}
-      transition={{ ...springSoft, delay }}
-    >
-      {children}
-    </motion.div>
-  );
-};
+export const Reveal: React.FC<RevealProps> = ({ children, className, delay = 0 }) => (
+  <div className={`studio-reveal ${className ?? ''}`} style={delay ? { animationDelay: `${delay}s` } : undefined}>
+    {children}
+  </div>
+);

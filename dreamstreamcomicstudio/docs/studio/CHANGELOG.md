@@ -5,6 +5,18 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-06 · Claude — FIX: Code Studio rendered blank (entrance animations gated visibility)
+**Bug:** opening Code Studio showed a blank page (content present in the DOM, visible only after
+opening DevTools forced a repaint). Cause: the Motion Kit's `Reveal`/`Stagger`/`StaggerItem` and
+the two modals used Framer Motion with `initial` opacity:0 → `animate` opacity:1. When the JS enter
+animation didn't run (e.g. RAF throttled while the tab wasn't focused on load), content stayed at
+opacity:0. The studio is the only surface using Framer, which is why only it went blank.
+**Fix:** reveals are now **CSS-driven and visible-by-default** (`.studio-reveal` / `.studio-stagger`
+/ `.studio-pop` in index.css, `animation-fill-mode: both` → end-state opacity:1) — matching the
+rest of the app's proven CSS-animation pattern. Animation is now a pure enhancement, never a
+visibility gate; reduced-motion still respected. Framer remains only for non-gating decoration
+(Lift hover, StatusPulse ring, Confetti). 73 studio tests; typecheck + build green.
+
 ## 2026-06-05 · Claude — Sprint 4: first-run onboarding welcome (S4.1)
 - **`components/studio/StudioWelcome.tsx`** — a dismissible, **persisted** (localStorage)
   first-run card atop the Code Studio home: a 3-step orientation (template/chat → Build runs &

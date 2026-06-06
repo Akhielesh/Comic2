@@ -54,6 +54,30 @@
   .studio-shimmer { animation: none; }
 }
 
+/* ---- Studio Motion Kit: entrance reveals (CSS, visible-by-default) ----
+   These power Reveal / Stagger / StaggerItem and the modals. Critically, the *end* state is
+   fully visible (opacity:1) and `animation-fill-mode: both` applies it, so content is NEVER
+   stuck invisible if the animation is throttled/blocked — it just fades in when it can. */
+@keyframes studioReveal { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes studioPop { from { opacity: 0; transform: translateY(-6px) scale(0.98); } to { opacity: 1; transform: none; } }
+
+.studio-reveal { animation: studioReveal 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.studio-pop { animation: studioPop 0.32s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+
+/* Stagger: each direct child reveals with a small incremental delay. */
+.studio-stagger > * { animation: studioReveal 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.studio-stagger > *:nth-child(1) { animation-delay: 0s; }
+.studio-stagger > *:nth-child(2) { animation-delay: 0.05s; }
+.studio-stagger > *:nth-child(3) { animation-delay: 0.1s; }
+.studio-stagger > *:nth-child(4) { animation-delay: 0.15s; }
+.studio-stagger > *:nth-child(5) { animation-delay: 0.2s; }
+.studio-stagger > *:nth-child(6) { animation-delay: 0.25s; }
+.studio-stagger > *:nth-child(n+7) { animation-delay: 0.3s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-reveal, .studio-pop, .studio-stagger > * { animation: none; }
+}
+
 /* ---- Weather card sky scene ---- */
 @keyframes wxDrift { 0% { transform: translateX(0); } 50% { transform: translateX(9px); } 100% { transform: translateX(0); } }
 @keyframes wxDrift2 { 0% { transform: translateX(0); } 50% { transform: translateX(-7px); } 100% { transform: translateX(0); } }

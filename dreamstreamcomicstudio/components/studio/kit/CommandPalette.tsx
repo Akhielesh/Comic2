@@ -3,10 +3,8 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { motion } from 'framer-motion';
 import { Search, CornerDownLeft } from 'lucide-react';
 import { useStudioTheme } from './themeStore';
-import { usePrefersReducedMotion, springSoft } from './motion';
 import { useDialogA11y } from './useDialogA11y';
 
 export interface Command {
@@ -26,7 +24,6 @@ export interface CommandPaletteProps {
 
 export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, commands }) => {
   const t = useStudioTheme();
-  const reduce = usePrefersReducedMotion();
   const [query, setQuery] = useState('');
   const [sel, setSel] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -59,16 +56,13 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, c
 
   return createPortal(
     <div className="fixed inset-0 z-[70] flex items-start justify-center p-4 pt-[12vh] bg-black/50" onClick={onClose}>
-      <motion.div
-        initial={reduce ? false : { opacity: 0, y: -8, scale: 0.98 }}
-        animate={reduce ? {} : { opacity: 1, y: 0, scale: 1 }}
-        transition={springSoft}
+      <div
         onClick={(e) => e.stopPropagation()}
         onKeyDown={onKey}
         role="dialog"
         aria-label="Command palette"
         aria-modal="true"
-        className={`w-full max-w-lg rounded-xl border ${t.edgeStrong} ${t.panel} ${t.text} shadow-2xl overflow-hidden`}
+        className={`studio-pop w-full max-w-lg rounded-xl border ${t.edgeStrong} ${t.panel} ${t.text} shadow-2xl overflow-hidden`}
       >
         <div className={`flex items-center gap-2 px-3 py-2.5 border-b ${t.edge}`}>
           <Search className={`w-4 h-4 ${t.textFaint}`} />
@@ -99,7 +93,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onClose, c
             </li>
           ))}
         </ul>
-      </motion.div>
+      </div>
     </div>,
     document.body
   );
