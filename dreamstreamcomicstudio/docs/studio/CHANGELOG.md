@@ -5,6 +5,28 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-06 · Claude — FIX: previews crashed + builds 429'd permanently (the "nothing works" report)
+Real bugs behind "the builds don't even work" + a console full of errors:
+- **Preview crash** (`Cannot set properties of null (setting 'innerHTML')` in Sandpack): generated/
+  starter apps are real **Vite** projects (`/index.html` → `/src/main.tsx` → `/src/App.tsx`), but
+  Sandpack's react template expects `/App.tsx` + its own entry + `/public/index.html` with
+  `#root`. No `#root` → the mount threw. New **`components/studio/workspace/sandpackProject.ts`**
+  normalizes ANY app into Sandpack's canonical shape (detects the root component, injects a
+  guaranteed `#root` html + an entry that mounts it and imports all CSS, strips the app's own
+  entry/html). `CodeStudioPanel` now uses it. **5 unit tests.**
+- **Build 429 (Too Many Requests) — permanent:** `/api/studio/build` inserted a `studio_runs` row
+  with `ended_at = null` and **never set `ended_at` on completion**, so every build counted as an
+  "active run" forever; after `STUDIO_MAX_CONCURRENT_PER_USER` (=2) builds, every build 429'd.
+  Fixed: builds that don't end with a live preview now set `ended_at`; the concurrency count is
+  **time-bounded** (only runs started in the last 30 min count), so abandoned/stale runs can't lock
+  a user out.
+- **429 cascade from generate:** generate **no longer auto-fires** the live cloud build (it hit the
+  cap on every prompt). Generate → instant in-browser preview; **Build** is an explicit action.
+- Generate prompt now requires the React root to be the **default export** of `/App.tsx` so the
+  preview entry can always mount it.
+**Verify:** client + server typecheck, production build green; **86 studio tests** (incl. 5 new
+sandpack-normalizer) pass.
+
 ## 2026-06-06 · Claude — Code Studio: in-place prompt→build + Linear/AI-studio dark redesign
 **Why:** the studio still bounced users to chat to start an app (the "Prompt · Build" pane was a
 dead `(Sprint 2)` placeholder; every CTA did `onNavigate('chat')`), and the themes felt flat. This

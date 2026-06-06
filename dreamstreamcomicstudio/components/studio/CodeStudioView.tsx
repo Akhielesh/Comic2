@@ -182,11 +182,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
         title: refining ? wsTitle : undefined,
       });
       loadArtifact(artifact);
-      appendLog('success', `${refining ? 'Updated' : 'Generated'} "${artifact.title}" — ${artifact.files.length} file(s).`);
-      if (enabled) {
-        // Live cloud build + self-heal. Defer a tick so the workspace store has the new files.
-        setTimeout(() => runBuildRef.current(), 0);
-      }
+      appendLog('success', `${refining ? 'Updated' : 'Generated'} "${artifact.title}" — ${artifact.files.length} file(s). Live preview is below; press Build to run it in a cloud container.`);
     } catch (err) {
       const msg = (err as Error)?.message || 'Generation failed.';
       setGenError(msg);

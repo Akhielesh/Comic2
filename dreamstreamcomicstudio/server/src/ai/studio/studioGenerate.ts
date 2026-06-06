@@ -53,6 +53,7 @@ const OUTPUT_CONTRACT = `Return ONLY a single JSON object — no prose, no markd
 Rules:
 - Emit COMPLETE, runnable code in every file. Never truncate, never write "// TODO" or placeholder comments.
 - Prefer the smallest set of files that works. For a React app, /App.tsx alone is fine (the Studio scaffolds Vite around it). If you need extra npm packages, also emit a /package.json listing them. For a static app, include /index.html.
+- For React, the root component MUST be the DEFAULT export of /App.tsx (or /src/App.tsx) so the studio can mount it.
 - Paths start with "/". Do not invent npm packages that do not exist.`;
 
 export const buildGeneratePrompt = (input: GenerateInput): string => {

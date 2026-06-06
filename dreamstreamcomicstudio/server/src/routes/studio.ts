@@ -41,13 +41,21 @@ const notConfiguredResponse = {
   }
 };
 
+// A run with ended_at IS NULL only counts toward the concurrency cap if it started recently.
+// Containers idle-sleep long before this; without the bound, a build/launch row that never got
+// closed (client navigated away, worker hiccup, or a build that didn't set ended_at) would block
+// the user from EVER building again with a spurious 429. 30 min is comfortably past idle-sleep.
+const ACTIVE_RUN_WINDOW_MS = 30 * 60 * 1000;
+
 /** The user's current Studio usage, for cap enforcement. */
 const getUsage = async (userId: string): Promise<{ activeRuns: number; dailyAwakeSeconds: number }> => {
   const admin = getSupabaseAdmin();
   const startOfDay = new Date();
   startOfDay.setHours(0, 0, 0, 0);
+  const activeSince = new Date(Date.now() - ACTIVE_RUN_WINDOW_MS).toISOString();
   const [active, daily] = await Promise.all([
-    admin.from('studio_runs').select('id', { count: 'exact', head: true }).eq('user_id', userId).is('ended_at', null),
+    admin.from('studio_runs').select('id', { count: 'exact', head: true })
+      .eq('user_id', userId).is('ended_at', null).gte('started_at', activeSince),
     admin.from('studio_runs').select('awake_seconds').eq('user_id', userId).gte('started_at', startOfDay.toISOString())
   ]);
   const dailyAwakeSeconds = (daily.data || []).reduce(
@@ -308,9 +316,17 @@ studioRouter.post('/build', async (req, res, next) => {
     try {
       const admin = getSupabaseAdmin();
       if (runId) {
+        // A build that didn't end with a live preview URL has no running container — close the run
+        // so it never counts against the concurrency cap. Live ones stay open (until Stop / the
+        // active-run window expires them) so metering still sees them.
+        const isLive = result.ok && !!result.previewUrl;
         await admin
           .from('studio_runs')
-          .update({ status: result.ok ? 'live' : 'error', preview_url: result.previewUrl })
+          .update({
+            status: result.ok ? 'live' : 'error',
+            preview_url: result.previewUrl,
+            ...(isLive ? {} : { ended_at: new Date().toISOString() })
+          })
           .eq('id', runId);
       }
       await saveProject({
