@@ -371,12 +371,16 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
 
     const files = currentArtifact.files.map((f) => ({ path: f.path, content: f.content }));
     let refined: { path: string; content: string }[] | null = null;
+    let trace: { id: string; name: string; status: 'done' | 'skipped' | 'error'; note?: string; changed: string[] }[] = [];
     let streamError: string | null = null;
     try {
       await streamStudioAgents(
         { files, projectId: wsProjectId ?? undefined, title: wsTitle, template: currentArtifact.template },
         {
-          onPlan: (p) => activity.pushPhase(`Assembling ${p.agents.length} agents · ${p.model.split('/').pop()}`),
+          onPlan: (p) => {
+            activity.pushPhase(`Review team (${p.agents.length}): ${p.agents.map((a) => a.name).join(', ')}`);
+            appendLog('system', `Lead assembled the review team on ${p.model.split('/').pop()}: ${p.agents.map((a) => a.name).join(', ')}`);
+          },
           onAgent: (s) => {
             if (s.status === 'running') { activity.pushPhase(`${s.name} reviewing… (${s.index + 1}/${s.total})`); return; }
             const changed = s.changed || [];
@@ -392,7 +396,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
               appendLog('warn', `[${s.name}] ${s.note || 'failed'}`);
             }
           },
-          onResult: (r) => { refined = r.files; },
+          onResult: (r) => { refined = r.files; trace = r.trace || []; },
           onError: (msg) => { streamError = msg; },
         },
         signal
@@ -401,10 +405,19 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
         const list = refined as { path: string; content: string }[];
         const artifact: CodeStudioArtifact = { title: wsTitle || currentArtifact.title, template: currentArtifact.template, files: list };
         loadArtifact(artifact);
-        const summary = `Agents refined "${artifact.title}" — ${list.length} file${list.length === 1 ? '' : 's'}`;
-        convo.resolveLastAssistant(`${summary}.`, 'done');
-        activity.finish('done', `✓ ${summary}`);
-        appendLog('success', `${summary}. Live preview updated.`);
+        // Lead aggregation — one summary that keeps an eye on what the whole team did.
+        const improved = trace.filter((x) => x.status === 'done');
+        const skipped = trace.filter((x) => x.status === 'skipped');
+        const errored = trace.filter((x) => x.status === 'error');
+        const parts: string[] = [`Lead review complete — "${artifact.title}", ${list.length} file${list.length === 1 ? '' : 's'}.`];
+        if (improved.length) parts.push(`Improved by ${improved.map((a) => a.name).join(', ')}.`);
+        if (skipped.length) parts.push(`${skipped.length} agent${skipped.length === 1 ? '' : 's'} found nothing to change.`);
+        if (errored.length) parts.push(`${errored.length} hit an error (${errored.map((a) => a.name).join(', ')}).`);
+        const lead = parts.join(' ');
+        convo.resolveLastAssistant(lead, 'done');
+        activity.pushPhase('Lead aggregated the team review');
+        activity.finish('done', `✓ ${lead}`);
+        appendLog('success', `${lead} Live preview updated.`);
       } else {
         const msg = streamError || 'The agents made no changes.';
         convo.resolveLastAssistant(msg, streamError ? 'error' : 'done');
