@@ -1,5 +1,33 @@
 import { describe, it, expect } from 'vitest';
-import { buildGeneratePrompt, parseGeneratedApp } from './studioGenerate.js';
+import { buildGeneratePrompt, parseGeneratedApp, runGenerate } from './studioGenerate.js';
+
+const VALID_APP = JSON.stringify({
+  title: 'X', template: 'react-ts', files: [{ path: '/App.tsx', content: 'export default () => null;' }],
+});
+
+describe('runGenerate (retry)', () => {
+  it('returns the app on a valid first answer without retrying', async () => {
+    let calls = 0;
+    const art = await runGenerate(async () => { calls++; return VALID_APP; }, { prompt: 'a todo app' });
+    expect(art).not.toBeNull();
+    expect(calls).toBe(1);
+  });
+
+  it('retries once with a stricter JSON reminder when the first answer is unparseable', async () => {
+    const seen: string[] = [];
+    const art = await runGenerate(async (p) => { seen.push(p); return seen.length === 1 ? 'sorry, I can not do that' : VALID_APP; }, { prompt: 'a todo app' });
+    expect(art).not.toBeNull();
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toContain('Output ONLY the JSON object');
+  });
+
+  it('returns null when both attempts fail', async () => {
+    let calls = 0;
+    const art = await runGenerate(async () => { calls++; return 'not json'; }, { prompt: 'x' });
+    expect(art).toBeNull();
+    expect(calls).toBe(2);
+  });
+});
 
 describe('buildGeneratePrompt', () => {
   it('builds a generate prompt from an idea', () => {

@@ -5,6 +5,14 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-06 · Claude — Code Studio: more reliable generation (stricter retry)
+Generation now retries ONCE with a stricter "output ONLY JSON" reminder when the model's first
+answer can't be parsed (truncation/prose/fence noise), cutting "the model did not return a valid
+app" failures. New tested runGenerate(complete, input) helper (injected model call) drives it; the
+/api/studio/generate route uses it. Server typecheck green; 11 generate tests pass.
+
+---
+
 ## 2026-06-06 · Claude — Code Studio: conversational build thread
 The studio now keeps a live conversation (your prompts + the agent's outcomes) above the iterate
 composer — generate/refine/quick-action/autofix all post to it with pending→done/error status, so

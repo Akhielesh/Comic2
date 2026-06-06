@@ -134,3 +134,22 @@ export const parseGeneratedApp = (text: string, fallbackTemplate?: string): Code
 
   return { title, description, files, template };
 };
+
+export const STRICT_JSON_REMINDER =
+  '\n\nIMPORTANT: Output ONLY the JSON object described above — no prose, no markdown fences, no explanation. Begin your reply with "{" and end with "}".';
+
+/**
+ * Generate an app, with ONE stricter retry when the model's first answer can't be parsed
+ * (truncation, prose, fence noise). `complete` is injected so this stays unit-testable.
+ */
+export const runGenerate = async (
+  complete: (prompt: string) => Promise<string>,
+  input: GenerateInput
+): Promise<CodeStudioArtifact | null> => {
+  const prompt = buildGeneratePrompt(input);
+  let artifact = parseGeneratedApp(await complete(prompt), input.template);
+  if (!artifact) {
+    artifact = parseGeneratedApp(await complete(prompt + STRICT_JSON_REMINDER), input.template);
+  }
+  return artifact;
+};

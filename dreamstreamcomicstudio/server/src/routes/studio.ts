@@ -21,7 +21,7 @@ import { evaluateLaunchAllowed } from '../services/studioCaps.js';
 import { sanitizeFiles, deriveProjectName } from '../services/studioFiles.js';
 import { saveProject, listProjects, getProjectWithFiles, deleteProject, listVersions, getVersionFiles } from '../services/studioRepository.js';
 import { runBuildAgent } from '../ai/studio/buildAgent.js';
-import { buildGeneratePrompt, parseGeneratedApp } from '../ai/studio/studioGenerate.js';
+import { runGenerate } from '../ai/studio/studioGenerate.js';
 import { pickCodingModel, TEXT_FALLBACK } from '../ai/autoRouter.js';
 import { runChat } from '../ai/chat.js';
 import { resolveProviderContext } from '../ai/gateway.js';
@@ -91,25 +91,27 @@ studioRouter.post('/generate', async (req, res, next) => {
     try { model = await pickCodingModel(); } catch { model = TEXT_FALLBACK; }
 
     const currentFiles = sanitizeFiles(body.files).map((f) => ({ path: f.path, content: f.content }));
-    const genPrompt = buildGeneratePrompt({
+
+    const complete = async (genPrompt: string): Promise<string> => {
+      const result = await runChat({
+        provider: 'openrouter',
+        apiKey: providerCtx.apiKey,
+        model,
+        messages: [{ role: 'user', content: genPrompt }],
+        temperature: 0.3,
+        maxTokens: 16000,
+        fallbackModel: TEXT_FALLBACK,
+        timeoutMs: STUDIO_REQUEST_TIMEOUT_MS
+      });
+      return result.text || '';
+    };
+
+    const artifact = await runGenerate(complete, {
       prompt,
       template: body.template,
       currentFiles: currentFiles.length ? currentFiles : undefined,
       currentTitle: typeof body.title === 'string' ? body.title : undefined
     });
-
-    const result = await runChat({
-      provider: 'openrouter',
-      apiKey: providerCtx.apiKey,
-      model,
-      messages: [{ role: 'user', content: genPrompt }],
-      temperature: 0.3,
-      maxTokens: 16000,
-      fallbackModel: TEXT_FALLBACK,
-      timeoutMs: STUDIO_REQUEST_TIMEOUT_MS
-    });
-
-    const artifact = parseGeneratedApp(result.text || '', body.template);
     if (!artifact) {
       return res.status(502).json({
         error: { message: 'The model did not return a valid app. Try rephrasing your idea.', code: 'STUDIO_GENERATE_INVALID' }
