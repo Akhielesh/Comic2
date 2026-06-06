@@ -72,8 +72,10 @@ Catalog lives in code as `CURATED_MCP_CATALOG` (`designSystem.ts`):
 
 Plus the in-app tools the agents already have: `web_search`, `github_repo`, `npm_package`,
 `pypi_package`, `image_search`, live-data tools, and any MCP servers a user saves in their account
-(`mcpRegistry`). Both **DreamStream chat** and the **Code Studio** consume the same MCP plumbing,
-so anything added here is available to both.
+(`mcpRegistry`). Both **DreamStream chat** and the **Code Studio** consume the same MCP plumbing:
+the Code Studio always gets the always-on + self-hosted servers; **DreamStream chat** gets the same
+set whenever the user is using tools (any tool enabled or an MCP server configured), so plain
+conversations stay untouched.
 
 ### Nango connector tools (native, no MCP needed)
 Beyond MCP, the agents get three first-class **Nango** tools (`server/src/ai/tools/nango.ts`),

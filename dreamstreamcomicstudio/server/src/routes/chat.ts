@@ -15,6 +15,7 @@ import { resolveTools, type ChatTool } from '../ai/tools/registry.js';
 import { selectRelevantTools, ROUTABLE_TOOL_NAMES } from '../../../toolCatalog.js';
 import { buildMcpTools } from '../ai/tools/mcpClient.js';
 import { enabledMcpConfigs } from '../services/mcpRegistry.js';
+import { ALWAYS_ON_STUDIO_MCP_SERVERS, envDesignMcpServers } from '../ai/studio/designSystem.js';
 import { applyGuardrails } from '../ai/guardrails.js';
 import type { CapabilityNotice, McpServerConfig } from '../../../apiTypes.js';
 import { unfurlUrl } from '../ai/tools/unfurl.js';
@@ -289,7 +290,17 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
       ? body.mcpServers.filter((s) => s && typeof s.url === 'string' && typeof s.id === 'string')
       : [];
     const savedServers = req.user?.id ? await enabledMcpConfigs(req.user.id).catch(() => []) : [];
-    const byUrl = new Map<string, McpServerConfig>();
+    // DreamStream chat gets the SAME always-on reference MCPs (Context7, DeepWiki) and any
+    // operator self-hosted design/connector MCPs as the Code Studio, plus the user's own servers.
+    // Operator-set servers are trusted (may use http/internal hosts); user servers stay strict.
+    const byUrl = new Map<string, McpServerConfig & { trusted?: boolean }>();
+    // Inject the curated defaults only when the user is already using tools (some tool enabled, or
+    // an MCP server configured), so plain conversations are unaffected. User servers behave as before.
+    const userUsingTools = routedToolNames.length > 0 || savedServers.length > 0 || requestServers.length > 0;
+    if (userUsingTools) {
+      for (const s of ALWAYS_ON_STUDIO_MCP_SERVERS) byUrl.set(s.url, s as McpServerConfig);
+      for (const s of envDesignMcpServers()) byUrl.set(s.url, s as McpServerConfig & { trusted?: boolean });
+    }
     for (const s of [...savedServers, ...requestServers]) byUrl.set(s.url, s as McpServerConfig);
     const servers = [...byUrl.values()].slice(0, 10);
     if (servers.length) mcpTools = await buildMcpTools(servers);
