@@ -6,6 +6,11 @@
 
 **Last updated:** 2026-06-06 · **Updated by:** Claude · **Branch:** `claude/wizardly-franklin-EgL8k` (draft PR)
 
+> Latest (2026-06-06): **S3b — DIFF-CENTRIC LIVE EDITS + CANCELLABLE GENERATION.** Refines now mark
+> each file new/modified and annotate edits with +added/−removed line diffs in the activity feed
+> (reviewable changelog); generation runs under an AbortController with a Stop button on the composer.
+> 148 studio tests pass.
+
 > Latest (2026-06-06): **S3 — POLYGLOT STUDIO.** The studio is no longer web-only: generation picks
 > the right language/stack for the idea (web/Node/Python/Go/CLI…), the Monaco editor highlights ~30
 > languages, and the preview shows an honest "run locally / cloud-run" panel for non-web projects

@@ -65,9 +65,10 @@ own connected accounts, all hostable by us.
   **Next polyglot increments:** real per-language execution in the cloud worker (Python/Go images),
   language-specific templates on the start screen, and per-language run/format commands.
 
-- **S3b — Diff-centric live edits.** When refining, stream a per-file **diff** (added/removed
-  lines) into the activity feed and the Changes panel as the model rewrites files, so edits read
-  like a reviewable changelog, not a black box.
+- **S3b — Diff-centric live edits + cancellable generation.** ✅ **shipped.** Refines mark each file
+  new/modified and annotate edits with **+added/−removed** line diffs in the activity feed (reviewable
+  changelog); generation runs under an `AbortController` with a **Stop** button on the composer.
+  _(client: `activityStore`/`ActivityFeed` diff fields, `PromptComposer.onCancel`, `CodeStudioView`.)_
 
 - **S4 — Agentic tool/service auto-wiring (planner surface).** Let the build agent declare the
   services an app needs (DB, auth, storage, payments) and surface a one-click "connect" plan that

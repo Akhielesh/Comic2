@@ -71,7 +71,17 @@ export const ActivityFeed: React.FC = () => {
                   <span className={`min-w-0 flex-1 truncate font-mono text-[11px] ${t.textDim}`} title={it.path}>
                     {it.path}
                   </span>
-                  {it.state === 'written' && it.bytes ? (
+                  {it.change === 'new' && (
+                    <span className="shrink-0 rounded-full bg-emerald-500/15 px-1.5 text-[9px] font-bold uppercase tracking-wide text-emerald-400">new</span>
+                  )}
+                  {/* Diff stat for an edited file (filled in when the edit resolves). */}
+                  {(it.added || it.removed) ? (
+                    <span className="shrink-0 text-[10px] font-semibold tabular-nums">
+                      {it.added ? <span className="text-emerald-400">+{it.added}</span> : null}
+                      {it.added && it.removed ? ' ' : null}
+                      {it.removed ? <span className="text-rose-400">−{it.removed}</span> : null}
+                    </span>
+                  ) : it.state === 'written' && it.bytes ? (
                     <span className={`shrink-0 text-[10px] tabular-nums ${t.textFaint}`}>{formatBytes(it.bytes)}</span>
                   ) : null}
                 </div>

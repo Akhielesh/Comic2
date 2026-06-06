@@ -39,6 +39,20 @@ describe('activityStore', () => {
     expect(useStudioActivity.getState().items).toHaveLength(2);
   });
 
+  it('carries new/modified change + diff stats, merging by path', () => {
+    const s = useStudioActivity.getState();
+    s.begin();
+    s.upsertFile({ path: '/App.tsx', status: 'writing', change: 'modified' });
+    s.upsertFile({ path: '/App.tsx', status: 'written', change: 'modified', added: 12, removed: 3 });
+    const file = useStudioActivity.getState().items.find((i) => i.path === '/App.tsx');
+    expect(file?.change).toBe('modified');
+    expect(file?.added).toBe(12);
+    expect(file?.removed).toBe(3);
+    s.upsertFile({ path: '/new.ts', status: 'written', change: 'new' });
+    const created = useStudioActivity.getState().items.find((i) => i.path === '/new.ts');
+    expect(created?.change).toBe('new');
+  });
+
   it('finish("done") collapses to the summary; finish("error") stays expanded', () => {
     const s = useStudioActivity.getState();
     s.begin();

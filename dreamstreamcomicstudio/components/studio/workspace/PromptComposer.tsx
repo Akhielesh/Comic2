@@ -10,7 +10,7 @@
 // glow. ⌘/Ctrl+Enter or Enter submits; Shift+Enter inserts a newline.
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Sparkles, ArrowUp, Loader2, Wand2 } from 'lucide-react';
+import { Sparkles, ArrowUp, Loader2, Wand2, Square } from 'lucide-react';
 import type { CodeStudioTemplate } from '../../../apiTypes';
 import { Button } from '../../ui/button';
 import { Textarea } from '../../ui/textarea';
@@ -33,6 +33,8 @@ const DEFAULT_SUGGESTIONS = [
 export interface PromptComposerProps {
   mode?: 'hero' | 'inline';
   onSubmit: (prompt: string, template?: CodeStudioTemplate) => void;
+  /** When provided, the submit button becomes a Stop button while busy (cancels generation). */
+  onCancel?: () => void;
   busy?: boolean;
   disabled?: boolean;
   error?: string | null;
@@ -47,6 +49,7 @@ export interface PromptComposerProps {
 export const PromptComposer: React.FC<PromptComposerProps> = ({
   mode = 'hero',
   onSubmit,
+  onCancel,
   busy = false,
   disabled = false,
   error,
@@ -155,23 +158,40 @@ export const PromptComposer: React.FC<PromptComposerProps> = ({
             )}
 
             <div className="ml-auto flex items-center gap-2">
-              {isHero && <span className="hidden text-[11px] text-slate-500 sm:inline">⏎ to generate</span>}
-              <Button
-                onClick={submit}
-                disabled={!canSubmit}
-                size={isHero ? 'default' : 'icon'}
-                aria-label="Generate app"
-              >
-                {busy ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : isHero ? (
-                  <>
-                    <Wand2 className="h-4 w-4" /> Generate
-                  </>
-                ) : (
-                  <ArrowUp className="h-4 w-4" />
-                )}
-              </Button>
+              {isHero && !busy && <span className="hidden text-[11px] text-slate-500 sm:inline">⏎ to generate</span>}
+              {busy && onCancel ? (
+                <Button
+                  onClick={onCancel}
+                  variant="secondary"
+                  size={isHero ? 'default' : 'icon'}
+                  aria-label="Stop generating"
+                >
+                  {isHero ? (
+                    <>
+                      <Square className="h-4 w-4" /> Stop
+                    </>
+                  ) : (
+                    <Square className="h-4 w-4" />
+                  )}
+                </Button>
+              ) : (
+                <Button
+                  onClick={submit}
+                  disabled={!canSubmit}
+                  size={isHero ? 'default' : 'icon'}
+                  aria-label="Generate app"
+                >
+                  {busy ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : isHero ? (
+                    <>
+                      <Wand2 className="h-4 w-4" /> Generate
+                    </>
+                  ) : (
+                    <ArrowUp className="h-4 w-4" />
+                  )}
+                </Button>
+              )}
             </div>
           </div>
         </div>

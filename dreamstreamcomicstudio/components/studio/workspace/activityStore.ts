@@ -7,6 +7,7 @@ import { create } from 'zustand';
 
 export type StudioActivityKind = 'phase' | 'file';
 export type StudioFileState = 'writing' | 'written';
+export type StudioFileChange = 'new' | 'modified';
 export type StudioActivityStatus = 'idle' | 'running' | 'done' | 'error';
 
 export interface StudioActivityItem {
@@ -17,7 +18,21 @@ export interface StudioActivityItem {
   path?: string;
   state?: StudioFileState;
   bytes?: number;
+  /** Whether this file is brand-new or an edit of an existing one (refine). */
+  change?: StudioFileChange;
+  /** Diff stats vs the pre-edit version (refine), filled in when the edit resolves. */
+  added?: number;
+  removed?: number;
   ts: number;
+}
+
+export interface UpsertFileInput {
+  path: string;
+  status: StudioFileState;
+  bytes?: number;
+  change?: StudioFileChange;
+  added?: number;
+  removed?: number;
 }
 
 interface ActivityState {
@@ -28,7 +43,7 @@ interface ActivityState {
 
   begin: () => void;
   pushPhase: (label: string) => void;
-  upsertFile: (f: { path: string; status: StudioFileState; bytes?: number }) => void;
+  upsertFile: (f: UpsertFileInput) => void;
   finish: (status: 'done' | 'error', summary: string) => void;
   setCollapsed: (collapsed: boolean) => void;
   reset: () => void;
@@ -64,12 +79,24 @@ export const useStudioActivity = create<ActivityState>((set) => ({
         return {
           items: [
             ...s.items,
-            { id: nextId(), kind: 'file', label: f.path, path: f.path, state: f.status, bytes: f.bytes, ts: Date.now() },
+            {
+              id: nextId(), kind: 'file', label: f.path, path: f.path,
+              state: f.status, bytes: f.bytes, change: f.change, added: f.added, removed: f.removed,
+              ts: Date.now(),
+            },
           ],
         };
       }
       const items = s.items.slice();
-      items[idx] = { ...items[idx], state: f.status, bytes: f.bytes ?? items[idx].bytes };
+      const prev = items[idx];
+      items[idx] = {
+        ...prev,
+        state: f.status,
+        bytes: f.bytes ?? prev.bytes,
+        change: f.change ?? prev.change,
+        added: f.added ?? prev.added,
+        removed: f.removed ?? prev.removed,
+      };
       return { items };
     }),
 

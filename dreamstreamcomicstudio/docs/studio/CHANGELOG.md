@@ -5,6 +5,23 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-06 · Claude — FEAT(S3b): diff-centric live edits + cancellable generation
+Two pro/enterprise-grade UX upgrades on top of the live activity stream:
+- **Diff-centric edits.** When refining an existing app, the activity feed now marks each file
+  **new** vs **modified** and, when the edit resolves, annotates modified files with a **+added /
+  −removed** line diff (computed client-side via the existing `diffLines`/`diffStat` LCS engine,
+  diffing the streamed result against a pre-edit snapshot). Edits read like a reviewable changelog,
+  not a black box. Brand-new apps stay clean (no badges).
+- **Cancellable generation.** Generation now runs under an `AbortController`; the composer's submit
+  button turns into a **Stop** button while busy (`PromptComposer.onCancel`, hero + inline, threaded
+  through `StudioStart`). Cancelling resolves the thread/feed as "Generation stopped." (no red error
+  banner) and does **not** fall back to the blocking route. The SSE clients already accept a signal.
+Files: `components/studio/workspace/{activityStore,ActivityFeed,PromptComposer}.tsx` (+activityStore
+test), `components/studio/{CodeStudioView,StudioStart}.tsx`. Typecheck + frontend build green; 148
+studio tests pass.
+
+---
+
 ## 2026-06-06 · Claude — FEAT(S3): polyglot studio — generate/understand/support many languages
 Per the owner's steer ("enhance our ability — code in multiple languages, understand/support relevant
 code"). The studio was web-only (React/TS); now it's polyglot:

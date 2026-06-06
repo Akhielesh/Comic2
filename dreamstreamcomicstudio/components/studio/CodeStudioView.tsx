@@ -23,7 +23,7 @@ import {
   CodeWorkspace, LogsConsole, PreviewFrame, BuildTrace, ChangesPanel, HistoryPanel, PromptComposer,
   ConversationThread, ActivityFeed, useStudioConversation, useStudioActivity, useStudioBuild,
   useStudioWorkspace, useStudioLogs, isPathDirty, workspaceCurrentArtifact,
-  detectProjectKind, projectKindLabel, isWebProject,
+  detectProjectKind, projectKindLabel, isWebProject, diffLines, diffStat,
 } from './workspace';
 import { StudioStart } from './StudioStart';
 import { stopLiveStudio } from '../../services/studioApi';
@@ -87,6 +87,8 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const runBuildRef = useRef<() => void>(() => {});
+  // Lets the user cancel an in-flight generation (Stop button on the composer).
+  const genAbortRef = useRef<AbortController | null>(null);
   const hasFiles = wsPaths.length > 0;
   const dirtyList = useMemo(
     () => wsPaths.filter((p) => isPathDirty({ files: wsFiles, baseline: wsBaseline }, p)),
@@ -213,8 +215,27 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       files: refining ? currentArtifact.files.map((f) => ({ path: f.path, content: f.content })) : undefined,
       title: refining ? wsTitle : undefined,
     };
+    // Pre-edit snapshot so we can mark each streamed file new/modified and, on success, annotate
+    // it with a +added/−removed diff stat (diff-centric live edits).
+    const baseline = new Map((input.files ?? []).map((f) => [f.path, f.content]));
+
+    const controller = new AbortController();
+    genAbortRef.current = controller;
+    const { signal } = controller;
 
     const succeed = (artifact: CodeStudioArtifact) => {
+      // Annotate each file with its diff vs the pre-edit version (refine only).
+      if (refining) {
+        for (const f of artifact.files) {
+          const old = baseline.get(f.path);
+          if (old !== undefined) {
+            const { added, removed } = diffStat(diffLines(old, f.content));
+            useStudioActivity.getState().upsertFile({ path: f.path, status: 'written', change: 'modified', added, removed });
+          } else {
+            useStudioActivity.getState().upsertFile({ path: f.path, status: 'written', change: 'new' });
+          }
+        }
+      }
       loadArtifact(artifact);
       const summary = `${refining ? 'Updated' : 'Built'} "${artifact.title}" — ${artifact.files.length} file${artifact.files.length === 1 ? '' : 's'}`;
       useStudioConversation.getState().resolveLastAssistant(`${summary}.`, 'done');
@@ -227,30 +248,44 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       setGenError(msg);
       appendLog('error', msg);
     };
+    const cancelled = () => {
+      useStudioConversation.getState().resolveLastAssistant('Generation stopped.', 'error');
+      useStudioActivity.getState().finish('error', 'Generation stopped.');
+      appendLog('warn', 'Generation stopped.');
+    };
 
     try {
       // Stream the build so the activity feed shows files appearing live; fall back to the
-      // blocking generate if the SSE transport isn't available.
+      // blocking generate if the SSE transport isn't available (but not if the user cancelled).
       let artifact: CodeStudioArtifact | null = null;
       let streamError: string | null = null;
       try {
         await streamGenerateStudioApp(input, {
           onPhase: (label) => { if (label) useStudioActivity.getState().pushPhase(label); },
-          onFile: (f) => useStudioActivity.getState().upsertFile(f),
+          onFile: (f) => useStudioActivity.getState().upsertFile({
+            ...f,
+            change: refining ? (baseline.has(f.path) ? 'modified' : 'new') : undefined,
+          }),
           onResult: (a) => { artifact = a; },
           onError: (msg) => { streamError = msg; },
-        });
-      } catch {
-        artifact = await generateStudioApp(input);
+        }, signal);
+      } catch (streamErr) {
+        if (signal.aborted) throw streamErr;
+        artifact = await generateStudioApp(input, signal);
       }
       if (artifact) succeed(artifact);
       else failWith(streamError || 'The model did not return a valid app. Try rephrasing your idea.');
     } catch (err) {
-      failWith((err as Error)?.message || 'Generation failed.');
+      if (signal.aborted) cancelled();
+      else failWith((err as Error)?.message || 'Generation failed.');
     } finally {
       setGenerating(false);
+      genAbortRef.current = null;
     }
   };
+
+  // Cancel an in-flight generation (the composer's Stop button).
+  const cancelGenerate = () => { genAbortRef.current?.abort(); };
 
   // Autodebug: feed the preview's error back to the model as a refine ("fix this").
   const handleAutofix = (errorMsg: string) => {
@@ -311,7 +346,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
         {/* Live, synchronous activity — files appearing as the AI writes them (Sprint 1). */}
         <ActivityFeed />
         {/* Iterate by prompt — refines the current app in place (no chat hand-off). */}
-        <PromptComposer mode="inline" onSubmit={handleGenerate} busy={generating} error={genError} />
+        <PromptComposer mode="inline" onSubmit={handleGenerate} onCancel={cancelGenerate} busy={generating} error={genError} />
         <div className="flex flex-wrap gap-1.5">
           {QUICK_ACTIONS.map((a) => (
             <button
@@ -528,6 +563,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
         <StudioStart
           onNavigate={onNavigate}
           onGenerate={handleGenerate}
+          onCancelGenerate={cancelGenerate}
           generating={generating}
           genError={genError}
           template={template}

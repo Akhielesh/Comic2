@@ -34,6 +34,8 @@ export interface StudioStartProps {
   onNavigate: (view: string) => void;
   /** Generate an app from a prompt, in place (the hero composer). When omitted, the composer is hidden. */
   onGenerate?: (prompt: string, template?: CodeStudioTemplate) => void;
+  /** Cancel an in-flight generation (turns the hero Generate button into Stop). */
+  onCancelGenerate?: () => void;
   generating?: boolean;
   genError?: string | null;
   template?: CodeStudioTemplate;
@@ -41,7 +43,7 @@ export interface StudioStartProps {
 }
 
 export const StudioStart: React.FC<StudioStartProps> = ({
-  onNavigate, onGenerate, generating, genError, template, onTemplateChange,
+  onNavigate, onGenerate, onCancelGenerate, generating, genError, template, onTemplateChange,
 }) => {
   const t = useStudioTheme();
   const loadArtifact = useStudioWorkspace((s) => s.loadArtifact);
@@ -107,6 +109,7 @@ export const StudioStart: React.FC<StudioStartProps> = ({
               <PromptComposer
                 mode="hero"
                 onSubmit={onGenerate}
+                onCancel={onCancelGenerate}
                 busy={generating}
                 error={genError}
                 template={template}
