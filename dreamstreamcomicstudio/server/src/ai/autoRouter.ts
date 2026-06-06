@@ -18,9 +18,13 @@ import type { AnnotatedModel } from './catalogAnnotations.js';
 export const TEXT_FALLBACK = 'openai/gpt-4o-mini';
 export const IMAGE_FALLBACK = 'google/gemini-2.5-flash-image';
 
-// Preference order among FREE text models (capable, generally reliable families).
+// Preference order among FREE text models (capable, generally reliable families), refreshed
+// for 2026: strong open generalists first. Needles are matched with id.includes(), so they must
+// appear in real catalog ids (e.g. 'deepseek/deepseek-chat-v3.1:free', 'z-ai/glm-4.5-air:free').
 const FREE_TEXT_PRIORITY = [
-  'llama-3.3', 'llama-3.1', 'deepseek-chat', 'deepseek', 'qwen-2.5', 'qwen',
+  'v3.1', 'deepseek-chat', 'deepseek-r1', 'deepseek',
+  'glm-4.6', 'glm-4.5', 'glm', 'qwen3', 'qwen-2.5', 'qwen',
+  'kimi-k2', 'gpt-oss', 'llama-3.3', 'llama-3.1',
   'gemini-2.0-flash', 'gemini', 'mistral', 'gemma'
 ];
 
@@ -76,6 +80,12 @@ type PickOpts = {
   filter?: (m: AnnotatedModel) => boolean;
   /** Soft preference — when some eligible models pass, rank those first. */
   prefer?: (m: AnnotatedModel) => boolean;
+  /**
+   * Tie-break order among free candidates (id.includes() needles, best-first). Defaults to
+   * FREE_TEXT_PRIORITY (good general text); pickCodingModel passes CODING_MODEL_PRIORITY so the
+   * strongest *coder* wins for code work without changing general-text picks.
+   */
+  rankOrder?: string[];
   /** Optional stage hint for the error message under 'free-only'. */
   stageHint?: string;
 };
@@ -104,7 +114,7 @@ export const pickTextModel = async (opts?: PickOpts): Promise<string> => {
     const text = models.filter(isTextModel).filter(gate).filter(isFreeVerified);
     if (text.length === 0) throw new NoFreeModelAvailableError('text', opts?.stageHint);
     const ranked = opts?.prefer ? [...text.filter(opts.prefer), ...text.filter((m) => !opts.prefer!(m))] : text;
-    for (const needle of FREE_TEXT_PRIORITY) {
+    for (const needle of (opts?.rankOrder ?? FREE_TEXT_PRIORITY)) {
       const hit = ranked.find((m) => m.id.toLowerCase().includes(needle));
       if (hit) return hit.id;
     }
@@ -124,7 +134,7 @@ export const pickTextModel = async (opts?: PickOpts): Promise<string> => {
     if (costPref === 'free') {
       const free = text.filter(isFreeVerified);
       if (free.length) {
-        for (const needle of FREE_TEXT_PRIORITY) {
+        for (const needle of (opts?.rankOrder ?? FREE_TEXT_PRIORITY)) {
           const hit = free.find((m) => m.id.toLowerCase().includes(needle));
           if (hit) return hit.id;
         }
@@ -138,12 +148,16 @@ export const pickTextModel = async (opts?: PickOpts): Promise<string> => {
   }
 };
 
-// Strong coding-model families, best-first — used by the Studio agentic build loop's FIX
-// stage, where code quality matters most. Free-first still applies (strong-open default;
-// frontier coders via BYOK), but among eligible models these are preferred.
+// Strong coding-model families, best-first — used by Code Studio (generation + the agentic build
+// loop's FIX stage), where code quality matters most. Free-first still applies (strong-open default;
+// frontier coders via BYOK), but among eligible models these are preferred AND ranked in this order.
+// Refreshed for 2026 with the proven open agentic coders (Qwen3-Coder, DeepSeek V3.1, GLM-4.6,
+// MiniMax M2, Kimi K2, Devstral, gpt-oss). Needles match catalog ids via id.includes().
 export const CODING_MODEL_PRIORITY = [
-  'deepseek-coder', 'qwen-2.5-coder', 'qwen-coder', 'codestral', 'codellama', 'code-llama',
-  'deepseek-v3', 'deepseek-chat', 'deepseek', 'qwen-2.5', 'qwen', 'llama-3.3',
+  'qwen3-coder', 'deepseek-coder', 'glm-4.6', 'glm-4.5', 'minimax-m2', 'kimi-k2',
+  'devstral', 'codestral', 'v3.1', 'v3.2', 'deepseek-chat', 'qwen-2.5-coder', 'qwen-coder',
+  'codellama', 'code-llama', 'gpt-oss', 'deepseek-r1', 'deepseek', 'qwen3', 'qwen-2.5', 'qwen',
+  'minimax', 'glm', 'llama-3.3',
   'gpt-4o', 'claude', 'gemini-2.0-flash', 'gemini'
 ];
 
@@ -164,7 +178,8 @@ export const pickCodingModel = async (opts?: PickOpts): Promise<string> => {
   const prefer = userPrefer
     ? (m: AnnotatedModel) => prefersCodingModel(m) || userPrefer(m)
     : prefersCodingModel;
-  return pickTextModel({ ...opts, prefer });
+  // Rank free candidates by coding strength (best coder first), not general-text order.
+  return pickTextModel({ rankOrder: CODING_MODEL_PRIORITY, ...opts, prefer });
 };
 
 /**

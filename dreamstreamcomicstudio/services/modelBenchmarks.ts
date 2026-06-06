@@ -41,7 +41,7 @@ export const BENCHMARK_METRICS: Record<BenchmarkMetricId, BenchmarkMetric> = {
   mmlu:      { id: 'mmlu', label: 'MMLU', category: 'knowledge', glossary: 'mmlu', topReference: 92, floor: 55, unit: '%' },
   gpqa:      { id: 'gpqa', label: 'GPQA (science)', category: 'science', glossary: 'gpqa', topReference: 85, floor: 25, unit: '%' },
   humaneval: { id: 'humaneval', label: 'HumanEval (code)', category: 'coding', glossary: 'humaneval', topReference: 96, floor: 40, unit: '%' },
-  swebench:  { id: 'swebench', label: 'SWE-bench (real code)', category: 'coding', glossary: 'swebench', topReference: 70, floor: 2, unit: '%' },
+  swebench:  { id: 'swebench', label: 'SWE-bench (real code)', category: 'coding', glossary: 'swebench', topReference: 80, floor: 2, unit: '%' },
   math:      { id: 'math', label: 'MATH', category: 'math', glossary: 'math', topReference: 96, floor: 20, unit: '%' }
 };
 
@@ -107,6 +107,13 @@ export const MODEL_BENCHMARKS: BenchmarkRecord[] = [
     source: 'Google', sourceUrl: 'https://blog.google/technology/ai/google-gemini-next-generation-model-february-2024/', asOf: '2024-Q4' },
 
   // ── DeepSeek ──────────────────────────────────────────────────────────────
+  // V3.1/V3.2 (and the V3.2-Exp "terminus") are the strong open agentic coders of the V3 line.
+  { match: /deepseek.*v3\.[12]|deepseek-v3\.[12]|deepseek-v3-[12]\b|deepseek.*v3p[12]|deepseek.*v3-2|deepseek.*terminus/i, family: 'DeepSeek-V3.1 / V3.2',
+    scores: { arena_elo: 1375, mmlu: 90, gpqa: 72, humaneval: 96, swebench: 67, math: 94 },
+    source: 'DeepSeek V3.1/V3.2 release + SWE-bench Verified', sourceUrl: 'https://api-docs.deepseek.com/news', asOf: '2026-Q1' },
+  { match: /deepseek.*r1.*0528|deepseek-r1-0528|deepseek.*r1\.1/i, family: 'DeepSeek-R1-0528 (reasoning)',
+    scores: { arena_elo: 1385, mmlu: 91, gpqa: 81, humaneval: 96, swebench: 57, math: 96 },
+    source: 'DeepSeek-R1-0528 update', sourceUrl: 'https://huggingface.co/deepseek-ai/DeepSeek-R1-0528', asOf: '2025-Q3' },
   { match: /deepseek.*r1|deepseek-r1/i, family: 'DeepSeek-R1 (reasoning)',
     scores: { arena_elo: 1360, mmlu: 90, gpqa: 71, humaneval: 96, swebench: 49, math: 95 },
     source: 'DeepSeek-R1 paper', sourceUrl: 'https://github.com/deepseek-ai/DeepSeek-R1', asOf: '2025-Q1' },
@@ -135,12 +142,19 @@ export const MODEL_BENCHMARKS: BenchmarkRecord[] = [
     source: 'Meta', sourceUrl: 'https://ai.meta.com/llama/', asOf: '2024-Q3' },
 
   // ── Qwen / Alibaba ────────────────────────────────────────────────────────
+  // Qwen3-Coder (480B-A35B) is the flagship open agentic coder — purpose-built, 256K–1M context.
+  { match: /qwen3.*coder|qwen-3.*coder|qwen3-coder/i, family: 'Qwen3-Coder (480B, agentic)',
+    scores: { arena_elo: 1335, mmlu: 85, gpqa: 64, humaneval: 94, swebench: 67, math: 86 },
+    source: 'Qwen3-Coder + SWE-bench Verified', sourceUrl: 'https://qwenlm.github.io/blog/qwen3-coder/', asOf: '2026-Q1' },
   { match: /qwen.*coder|qwen2\.5-coder|qwen-2\.5-coder/i, family: 'Qwen2.5-Coder',
     scores: { arena_elo: 1270, mmlu: 80, gpqa: 42, humaneval: 92, swebench: 38, math: 75 },
     source: 'Qwen2.5-Coder', sourceUrl: 'https://qwenlm.github.io/blog/qwen2.5-coder-family/', asOf: '2024-Q4' },
   { match: /qwq|qwen.*qwq/i, family: 'QwQ (reasoning)',
     scores: { arena_elo: 1290, mmlu: 84, gpqa: 65, humaneval: 88, swebench: 40, math: 90 },
     source: 'Qwen QwQ', sourceUrl: 'https://qwenlm.github.io/blog/qwq-32b-preview/', asOf: '2025-Q1' },
+  { match: /qwen3|qwen-3/i, family: 'Qwen3 (235B)',
+    scores: { arena_elo: 1320, mmlu: 87, gpqa: 66, humaneval: 90, swebench: 40, math: 88 },
+    source: 'Qwen3 release', sourceUrl: 'https://qwenlm.github.io/blog/qwen3/', asOf: '2025-Q3' },
   { match: /qwen.*2\.5|qwen2\.5|qwen-2\.5/i, family: 'Qwen2.5',
     scores: { arena_elo: 1260, mmlu: 85, gpqa: 49, humaneval: 86, swebench: 24, math: 83 },
     source: 'Qwen2.5', sourceUrl: 'https://qwenlm.github.io/blog/qwen2.5/', asOf: '2024-Q4' },
@@ -155,9 +169,39 @@ export const MODEL_BENCHMARKS: BenchmarkRecord[] = [
   { match: /mixtral/i, family: 'Mixtral (MoE)',
     scores: { arena_elo: 1190, mmlu: 78, gpqa: 35, humaneval: 75, swebench: 8, math: 50 },
     source: 'Mistral AI', sourceUrl: 'https://mistral.ai/news/mixtral-of-experts/', asOf: '2024-Q2' },
+  { match: /devstral/i, family: 'Devstral (Mistral, agentic coder)',
+    scores: { arena_elo: 1250, mmlu: 82, gpqa: 45, humaneval: 88, swebench: 53, math: 70 },
+    source: 'Mistral Devstral + SWE-bench Verified', sourceUrl: 'https://mistral.ai/news/devstral', asOf: '2025-Q3' },
+  { match: /codestral/i, family: 'Codestral (Mistral, code completion)',
+    scores: { arena_elo: 1230, mmlu: 80, gpqa: 40, humaneval: 86, swebench: 31, math: 65 },
+    source: 'Mistral Codestral', sourceUrl: 'https://mistral.ai/news/codestral-2501/', asOf: '2025-Q1' },
   { match: /mistral|magistral|ministral/i, family: 'Mistral',
     scores: { arena_elo: 1170, mmlu: 75, gpqa: 33, humaneval: 72, swebench: 7, math: 52 },
     source: 'Mistral AI', sourceUrl: 'https://mistral.ai/', asOf: '2024-Q4' },
+
+  // ── Open-weight frontier coders (2025–2026) ─────────────────────────────────
+  // Z.ai / Zhipu GLM — strongest all-round open coding family in late-2025/2026.
+  { match: /glm-4\.6|glm-4-6|glm.*4\.6/i, family: 'GLM-4.6 (Z.ai)',
+    scores: { arena_elo: 1350, mmlu: 86, gpqa: 74, humaneval: 93, swebench: 68, math: 90 },
+    source: 'Z.ai GLM-4.6 + SWE-bench Verified', sourceUrl: 'https://z.ai/blog/glm-4.6', asOf: '2026-Q1' },
+  { match: /glm-4\.5|glm-4-5|glm.*4\.5/i, family: 'GLM-4.5 (Z.ai)',
+    scores: { arena_elo: 1335, mmlu: 85, gpqa: 72, humaneval: 92, swebench: 64, math: 88 },
+    source: 'Z.ai GLM-4.5', sourceUrl: 'https://z.ai/blog/glm-4.5', asOf: '2025-Q3' },
+  { match: /\bglm[-_ ]?\d|zhipu/i, family: 'GLM (Zhipu / Z.ai)',
+    scores: { arena_elo: 1300, mmlu: 83, gpqa: 60, humaneval: 88, swebench: 50, math: 82 },
+    source: 'Zhipu GLM', sourceUrl: 'https://z.ai/', asOf: '2025-Q3' },
+  // Moonshot Kimi K2 — open trillion-param MoE, top open SWE-bench Verified at release.
+  { match: /kimi.*k2|kimi-k2|moonshot/i, family: 'Kimi K2 (Moonshot)',
+    scores: { arena_elo: 1340, mmlu: 87, gpqa: 70, humaneval: 94, swebench: 66, math: 90 },
+    source: 'Moonshot Kimi K2 + SWE-bench Verified', sourceUrl: 'https://moonshotai.github.io/Kimi-K2/', asOf: '2026-Q1' },
+  // OpenAI open-weight gpt-oss — strong reasoning/math, solid coding, fully open.
+  { match: /gpt-oss|gpt_oss/i, family: 'GPT-OSS (OpenAI open-weight)',
+    scores: { arena_elo: 1320, mmlu: 90, gpqa: 80, humaneval: 90, swebench: 55, math: 96 },
+    source: 'OpenAI gpt-oss model card', sourceUrl: 'https://openai.com/index/introducing-gpt-oss/', asOf: '2025-Q3' },
+  // MiniMax M2 — efficient open coder competitive with paid models on SWE-bench.
+  { match: /minimax/i, family: 'MiniMax M2',
+    scores: { arena_elo: 1330, mmlu: 86, gpqa: 70, humaneval: 92, swebench: 69, math: 88 },
+    source: 'MiniMax M2 + SWE-bench Verified', sourceUrl: 'https://www.minimax.io/', asOf: '2026-Q1' },
 
   // ── Others ────────────────────────────────────────────────────────────────
   { match: /grok-3|grok3/i, family: 'Grok 3',
