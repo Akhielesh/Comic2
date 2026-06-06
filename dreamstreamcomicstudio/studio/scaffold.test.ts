@@ -67,3 +67,39 @@ describe('scaffold — design stack support', () => {
     expect(files['tailwind.config.js']).toBeUndefined();
   });
 });
+
+describe('scaffold — Expo / React Native (web + mobile)', () => {
+  const rnApp = `import { View, Text } from 'react-native';\nexport default function App(){ return <View><Text>Hi</Text></View>; }`;
+
+  it('detects React Native and produces an Expo + react-native-web preview', () => {
+    const { files, devCommand } = scaffold(art([{ path: '/App.tsx', content: rnApp }]));
+    const pkg = JSON.parse(files['package.json']);
+    expect(pkg.dependencies['expo']).toBeDefined();
+    expect(pkg.dependencies['react-native']).toBeDefined();
+    expect(pkg.dependencies['react-native-web']).toBeDefined();
+    expect(pkg.scripts.native).toContain('expo start');
+    // Web preview is a plain Vite app, so it boots in the WebContainer like other web projects.
+    expect(devCommand).toEqual(['npm', ['run', 'dev']]);
+    expect(files['vite.config.js']).toContain("'react-native': 'react-native-web'");
+    expect(files['src/main.tsx']).toContain('AppRegistry');
+    expect(files['app.json']).toContain('"expo"');
+    expect(files['src/App.tsx']).toBe(rnApp);
+  });
+
+  it('adds imported, web-compatible RN libraries with Expo-aligned versions', () => {
+    const { files } = scaffold(art([
+      { path: '/App.tsx', content: `import { SafeAreaProvider } from 'react-native-safe-area-context';\n${rnApp}` },
+    ]));
+    const pkg = JSON.parse(files['package.json']);
+    expect(pkg.dependencies['react-native-safe-area-context']).toBeDefined();
+  });
+
+  it('detects Expo via app.json even without a react-native import', () => {
+    const { files } = scaffold(art([
+      { path: '/App.tsx', content: `export default () => null;` },
+      { path: '/app.json', content: JSON.stringify({ expo: { name: 'x' } }) },
+    ]));
+    const pkg = JSON.parse(files['package.json']);
+    expect(pkg.dependencies['expo']).toBeDefined();
+  });
+});

@@ -26,15 +26,18 @@ describe('designSystem', () => {
     expect(ALWAYS_ON_STUDIO_MCP_SERVERS.every((s) => s.url.startsWith('https://'))).toBe(true);
   });
 
-  it('envDesignMcpServers maps configured env vars to servers and rejects non-https', () => {
+  it('envDesignMcpServers maps env vars to trusted servers (http allowed for self-hosted), with optional headers', () => {
     const servers = envDesignMcpServers({
       STUDIO_SHADCN_MCP_URL: 'https://shadcn.example.com/mcp',
-      STUDIO_NANGO_MCP_URL: 'http://insecure.example.com/mcp', // dropped: not https
+      STUDIO_NANGO_MCP_URL: 'http://nango.internal:3003/mcp', // http allowed: operator-configured/trusted
+      STUDIO_NANGO_MCP_URL_HEADERS: '{"Authorization":"Bearer secret"}',
+      STUDIO_MAGIC_MCP_URL: 'not-a-url', // dropped: not http(s)
     });
-    const ids = servers.map((s) => s.id);
-    expect(ids).toContain('shadcn');
-    expect(ids).not.toContain('nango');
-    expect(servers.find((s) => s.id === 'shadcn')!.url).toBe('https://shadcn.example.com/mcp');
+    const byId = Object.fromEntries(servers.map((s) => [s.id, s]));
+    expect(byId.shadcn.trusted).toBe(true);
+    expect(byId.nango.url).toBe('http://nango.internal:3003/mcp');
+    expect(byId.nango.headers).toEqual({ Authorization: 'Bearer secret' });
+    expect(byId.magic).toBeUndefined();
   });
 
   it('catalog documents transport + license for every curated tool', () => {

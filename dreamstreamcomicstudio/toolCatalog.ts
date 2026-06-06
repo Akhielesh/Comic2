@@ -403,6 +403,27 @@ export const TOOL_CATALOG: ToolMeta[] = [
     dataShape: 'Text: age, gender, nationality estimates.', docsUrl: 'https://agify.io',
     keywords: ['age of name', 'gender of name', 'nationality of name', 'name origin', 'how old is the name']
   },
+  {
+    name: 'nango_search_integrations', label: 'API connectors (discover)', category: 'dev', kind: 'api', provider: 'Nango (self-hosted)',
+    description: 'List the third-party API integrations connectable through Nango (Slack, Google, Notion, Stripe, GitHub, …, 800+). Discover a provider before connecting it.',
+    auth: 'required', authEnv: 'NANGO_SECRET_KEY', rateLimit: 'Self-hosted (your infra)',
+    dataShape: 'Text: provider names + their integration ids (provider_config_key).', docsUrl: 'https://nango.dev/docs',
+    keywords: ['integration', 'connector', 'oauth', 'connect api', 'third party', 'slack', 'notion', 'stripe', 'salesforce', 'nango']
+  },
+  {
+    name: 'nango_connect_integration', label: 'API connectors (authorize)', category: 'dev', kind: 'api', provider: 'Nango (self-hosted)',
+    description: 'Start an OAuth/connect flow so an end user authorizes a provider; returns a short-lived connect session token the app hands to the Nango Connect UI.',
+    auth: 'required', authEnv: 'NANGO_SECRET_KEY', rateLimit: 'Self-hosted (your infra)',
+    dataShape: 'Text: connect session token + link (30-min expiry).', docsUrl: 'https://nango.dev/docs/guides/api-authorization/authorize-in-your-app-default-ui',
+    keywords: ['authorize', 'oauth', 'connect account', 'sign in with', 'link account', 'grant access', 'nango']
+  },
+  {
+    name: 'nango_call_api', label: 'API connectors (proxy)', category: 'dev', kind: 'api', provider: 'Nango (self-hosted)',
+    description: "Make an authenticated request to a connected provider's API via the Nango proxy (Nango injects the user's credentials and refreshes tokens). Verify real response shapes or call APIs at runtime.",
+    auth: 'required', authEnv: 'NANGO_SECRET_KEY', rateLimit: "Self-hosted + the provider's own limits",
+    dataShape: "Text: the provider's HTTP status + response body.", docsUrl: 'https://nango.dev/docs/guides/proxy-requests',
+    keywords: ['call api', 'proxy', 'fetch from', 'api request', 'get data from', 'post to', 'nango']
+  },
   // ---------------------------------------------------------------- dataviz -----
   {
     name: 'render_chart', label: 'Charts', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app SVG)',

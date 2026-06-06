@@ -49,9 +49,15 @@ Two layers:
 ## 2. Agent tools — curated free / open-source MCPs
 
 > **Transport constraint:** the app's MCP client (`server/src/ai/tools/mcpClient.ts`) speaks
-> JSON-RPC over **HTTPS** (SSRF-guarded). It **cannot** spawn local `npx` *stdio* servers — so the
-> root `.mcp.json` (Magic) is for **Claude Code only**, not the running app. `http` servers can be
-> added directly; `stdio` servers must be self-hosted as an HTTPS/SSE endpoint first (see §4).
+> JSON-RPC over HTTP. It **cannot** spawn local `npx` *stdio* servers — so the root `.mcp.json`
+> (Magic) is for **Claude Code only**, not the running app. `stdio` servers (shadcn, Magic UI) must
+> be fronted by an HTTP bridge first (`deploy/studio-tools/`, §4).
+>
+> **Trusted vs strict:** user-supplied MCP URLs stay behind the strict SSRF guard (https + public
+> hosts only). **Operator-configured** servers — the always-on defaults and anything set via the
+> `STUDIO_*_MCP_URL` env vars — are treated as **trusted**, so they may use `http` and internal
+> hostnames (a self-hosted sidecar like `http://shadcn-mcp:8001/mcp`). Optional auth headers come
+> from a companion `<ENVVAR>_HEADERS` JSON value.
 
 Catalog lives in code as `CURATED_MCP_CATALOG` (`designSystem.ts`):
 
@@ -69,6 +75,14 @@ Plus the in-app tools the agents already have: `web_search`, `github_repo`, `npm
 (`mcpRegistry`). Both **DreamStream chat** and the **Code Studio** consume the same MCP plumbing,
 so anything added here is available to both.
 
+### Nango connector tools (native, no MCP needed)
+Beyond MCP, the agents get three first-class **Nango** tools (`server/src/ai/tools/nango.ts`),
+registered globally and given to the **Data & Live APIs** agent — `nango_search_integrations`,
+`nango_connect_integration`, `nango_call_api` — for OAuth + proxy across **800+ APIs**. These call a
+self-hosted Nango's REST API directly (per-call `connectionId`), which is why they're preferred over
+the connection-scoped Nango MCP for general use. Setup + the runtime pattern: `INTEGRATIONS-NANGO.md`.
+Run everything with `deploy/studio-tools/docker-compose.yml`.
+
 ---
 
 ## 3. Web + mobile by default
@@ -79,29 +93,43 @@ so anything added here is available to both.
   deps** (framer-motion, lucide-react, shadcn's `@radix-ui/*`, recharts, react-router, etc.) to
   `package.json` — so the recommended stack renders on first install instead of dying on a missing
   dependency or unstyled utility classes.
-- **Native mobile (Expo / React Native):** the charter already steers native targets to Expo +
-  react-native-reusables, and the shadcn MCP serves React Native components. A first-class **Expo
-  scaffold + preview runtime** is the natural next step (WebContainer can run an Expo *web* export;
-  native preview needs a device/emulator bridge) — tracked as a follow-up, not in this change.
+- **Native mobile (Expo / React Native) — live:** `scaffold.ts` auto-**detects** React Native/Expo
+  (from a `react-native`/`expo` import, an `app.json` with `"expo"`, or RN deps) and scaffolds a real
+  Expo project. The **same RN code runs two ways from one codebase**: the in-studio preview is a
+  plain **Vite + react-native-web** app (aliases `react-native` → `react-native-web`, so it boots in
+  the WebContainer like any web project), and `npm run native` runs it on device via `expo start`.
+  Imported, web-compatible RN libs (safe-area-context, reanimated, react-navigation, `@expo/vector-icons`,
+  nativewind…) are added with Expo-SDK-aligned versions; for exact native versions users run
+  `npx expo install`. The charter steers RN UIs to core components + react-native-reusables, and the
+  shadcn MCP (`--framework react-native`) serves the matching component source.
 
 ---
 
-## 4. Self-hosting the stdio MCPs (shadcn / Magic / Magic UI)
+## 4. Self-hosting the stdio MCPs + Nango (one compose)
 
-Because the app only talks HTTPS MCP, expose the stdio servers over HTTP/SSE and point an env var
-at them. Example for shadcn (its server supports SSE natively):
+`deploy/studio-tools/docker-compose.yml` stands up everything: **Nango** (Postgres + Redis +
+`nango-server`), the **shadcn/ui MCP**, and the **Magic UI MCP** — the two stdio MCPs fronted by
+[`supergateway`](https://github.com/supercorp-ai/supergateway) (`--outputTransport streamableHttp`)
+so the app can reach them over HTTP.
 
 ```bash
-# Run the shadcn MCP in SSE mode behind your gateway/TLS
-MCP_TRANSPORT_MODE=sse npx @jpisnice/shadcn-ui-mcp-server --framework react
-# then in the studio deployment:
-export STUDIO_SHADCN_MCP_URL="https://mcp.internal.yourdomain.com/shadcn/sse"
+cd deploy/studio-tools
+cp ../../.env.studio-tools.example .env   # set NANGO_ENCRYPTION_KEY (openssl rand -base64 32)
+docker compose up -d
 ```
 
-Servers without a built-in HTTP mode can be fronted with a thin stdio→HTTP bridge
-(e.g. `supergateway`). Any URL set via `STUDIO_SHADCN_MCP_URL` / `STUDIO_MAGIC_MCP_URL` /
-`STUDIO_MAGICUI_MCP_URL` / `STUDIO_NANGO_MCP_URL` is merged into the studio's default servers at
-request time (`envDesignMcpServers()`), https-only, best-effort.
+Then point the app at them (operator-set → **trusted**, so http/internal hosts are allowed):
+
+```bash
+STUDIO_SHADCN_MCP_URL=http://shadcn-mcp:8001/mcp
+STUDIO_MAGICUI_MCP_URL=http://magicui-mcp:8002/mcp
+NANGO_HOST=http://nango-server:3003
+NANGO_SECRET_KEY=<from the Nango dashboard>
+```
+
+Any URL set via `STUDIO_SHADCN_MCP_URL` / `STUDIO_MAGIC_MCP_URL` / `STUDIO_MAGICUI_MCP_URL` /
+`STUDIO_NANGO_MCP_URL` is merged into the studio's servers at request time (`envDesignMcpServers()`),
+best-effort (an unreachable server simply yields no tools). Full Nango guide: `INTEGRATIONS-NANGO.md`.
 
 ---
 
@@ -158,10 +186,15 @@ Nango (self-host + configure which providers/actions are allowed), not to **abso
 
 | Env var | Effect |
 |---|---|
-| `STUDIO_SHADCN_MCP_URL` | Add a self-hosted shadcn/ui MCP (HTTPS/SSE) to studio agents |
+| `STUDIO_SHADCN_MCP_URL` | Add a self-hosted shadcn/ui MCP to studio agents |
 | `STUDIO_MAGIC_MCP_URL` | Add a self-hosted 21st.dev Magic MCP |
 | `STUDIO_MAGICUI_MCP_URL` | Add a self-hosted Magic UI MCP |
-| `STUDIO_NANGO_MCP_URL` | Add a self-hosted Nango MCP (800+ API connectors) |
+| `STUDIO_NANGO_MCP_URL` | Add a (connection-scoped) self-hosted Nango MCP |
+| `STUDIO_<NAME>_MCP_URL_HEADERS` | Optional JSON auth headers for that server (e.g. `{"Authorization":"Bearer …"}`) |
+| `NANGO_HOST` | Nango base URL for the connector tools (default `http://localhost:3003`) |
+| `NANGO_SECRET_KEY` | Enables `nango_search_integrations` / `nango_connect_integration` / `nango_call_api` |
+| `NANGO_DEFAULT_CONNECTION_ID` | Optional default connection for build-time API inspection |
 
-All are optional, https-only, and best-effort — an unreachable server simply yields no tools and
-never blocks a build.
+The `STUDIO_*_MCP_URL` servers are operator-set (**trusted**): http/internal hosts are allowed, all
+are best-effort — an unreachable server simply yields no tools and never blocks a build. Full env
+template: `.env.studio-tools.example`.

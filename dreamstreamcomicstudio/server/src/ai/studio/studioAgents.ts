@@ -14,6 +14,7 @@
 import { parseFixResponse, type StudioFiles } from './studioFix.js';
 import { sanitizeFixFiles, canonicalStudioPath } from '../../services/studioFiles.js';
 import { DESIGN_REVIEW_CHECKLIST } from './designSystem.js';
+import { NANGO_TOOL_NAMES } from '../tools/nango.js';
 
 export interface StudioAgentDef {
   id: string;
@@ -37,7 +38,9 @@ const RESEARCH_TOOLS = ['web_search', 'wiki_lookup', 'github_repo', 'npm_package
 const DESIGN_TOOLS = ['web_search', 'image_search'];
 const LIVE_DATA_TOOLS = [
   ...RESEARCH_TOOLS, 'image_search', 'video_search',
-  'get_news', 'get_stock', 'crypto_price', 'exchange_rate', 'get_weather', 'find_places', 'show_map'
+  'get_news', 'get_stock', 'crypto_price', 'exchange_rate', 'get_weather', 'find_places', 'show_map',
+  // Connect & call 800+ third-party APIs (OAuth + proxy) via a self-hosted Nango, when configured.
+  ...NANGO_TOOL_NAMES
 ];
 
 export const STUDIO_AGENTS: Record<string, StudioAgentDef> = {
@@ -69,7 +72,7 @@ export const STUDIO_AGENTS: Record<string, StudioAgentDef> = {
   data: {
     id: 'data', name: 'Data & Live APIs', icon: 'Database', default: false, toolNames: LIVE_DATA_TOOLS,
     description: 'Wires real, LIVE data sources and robust fetching into the app.',
-    focus: `Wire REAL, LIVE DATA into the app. Where it uses mock/placeholder/hard-coded data, replace it with real data from a suitable public API: use your tools to FIND and VERIFY real, free, CORS-friendly endpoints and their actual response shapes, then implement proper fetch + loading/error/empty states and typed parsing. Prefer keyless/public APIs; if a key is required, read it from an environment variable and document it in /.env.example. Do NOT invent endpoints — only use ones you verified with your tools.`
+    focus: `Wire REAL, LIVE DATA into the app. Where it uses mock/placeholder/hard-coded data, replace it with real data from a suitable public API: use your tools to FIND and VERIFY real, free, CORS-friendly endpoints and their actual response shapes, then implement proper fetch + loading/error/empty states and typed parsing. Prefer keyless/public APIs; if a key is required, read it from an environment variable and document it in /.env.example. Do NOT invent endpoints — only use ones you verified with your tools. For authenticated third-party services (Slack, Google, Notion, Stripe, GitHub, …), use the Nango tools (nango_search_integrations → nango_connect_integration → nango_call_api) to discover a provider, verify its real response shape, and wire OAuth + proxied calls — never hard-code third-party credentials.`
   },
   security: {
     id: 'security', name: 'Security', icon: 'ShieldCheck', default: true, toolNames: ['web_search', 'npm_package', 'pypi_package', 'github_repo'],

@@ -211,8 +211,164 @@ const vanillaScaffold = (artifact: CodeStudioArtifact, userFiles: Record<string,
   return { files, installCommand: ['npm', ['install']], devCommand: ['npm', ['run', 'dev']] };
 };
 
+// ---------------------------------------------------------------------------------------------
+// Expo / React Native — "web + mobile from one codebase".
+//
+// The SAME React Native code that runs on a device (via `npm run native` → `expo start`) is
+// previewed live in the browser by aliasing `react-native` → `react-native-web` and bundling it
+// with Vite. That keeps the in-studio preview reliable (it's a plain Vite app, so it boots in the
+// WebContainer like every other web project) while still emitting a real, runnable Expo project.
+// ---------------------------------------------------------------------------------------------
+
+// Expo SDK 51 / RN 0.74-aligned versions for common, web-compatible RN libraries. Only added when
+// the generated code imports them; for exact native versions users run `npx expo install`.
+const KNOWN_RN_DEPS: Record<string, string> = {
+  'react-native-safe-area-context': '4.10.5',
+  'react-native-reanimated': '~3.10.1',
+  'react-native-gesture-handler': '~2.16.1',
+  'react-native-screens': '3.31.1',
+  'react-native-svg': '15.2.0',
+  '@react-navigation/native': '^6.1.18',
+  '@react-navigation/native-stack': '^6.11.0',
+  '@react-navigation/bottom-tabs': '^6.6.1',
+  'expo-status-bar': '~1.12.1',
+  'expo-constants': '~16.0.2',
+  'expo-linear-gradient': '~13.0.2',
+  'expo-haptics': '~13.0.1',
+  'expo-image': '~1.12.15',
+  '@expo/vector-icons': '^14.0.2',
+  nativewind: '^2.0.11',
+};
+
+const isExpoArtifact = (userFiles: Record<string, string>): boolean => {
+  const appJson = userFiles['app.json'];
+  if (appJson && /"expo"\s*:/.test(appJson)) return true;
+  const pkg = userFiles['package.json'];
+  if (pkg && /"(expo|react-native)"\s*:/.test(pkg)) return true;
+  return Object.entries(userFiles).some(
+    ([p, c]) => /\.(t|j)sx?$/.test(p) && /from\s+['"](react-native|expo|expo-[\w-]+)['"]/.test(c)
+  );
+};
+
+/** Detect imported RN libraries (and bare expo-* modules) so they land in package.json. */
+const detectRnDeps = (files: Record<string, string>): Record<string, string> => {
+  const deps: Record<string, string> = {};
+  for (const [path, content] of Object.entries(files)) {
+    if (!/\.(t|j)sx?$/.test(path)) continue;
+    IMPORT_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = IMPORT_RE.exec(content))) {
+      const name = barePackage(m[1]);
+      if (!name) continue;
+      if (KNOWN_RN_DEPS[name]) deps[name] = KNOWN_RN_DEPS[name];
+    }
+  }
+  return deps;
+};
+
+const VITE_RNW = `import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+// React Native Web preview: the same React Native code that runs on device renders in the
+// browser by aliasing 'react-native' -> 'react-native-web'.
+export default defineConfig({
+  plugins: [react()],
+  define: { global: 'window', __DEV__: 'true', 'process.env': '{}' },
+  resolve: {
+    alias: { 'react-native': 'react-native-web' },
+    extensions: ['.web.tsx', '.web.ts', '.web.jsx', '.web.js', '.tsx', '.ts', '.jsx', '.js', '.json'],
+  },
+  server: { host: true },
+});
+`;
+
+const APP_JSON_EXPO = (name: string, slugName: string): string => JSON.stringify({
+  expo: {
+    name, slug: slugName, version: '1.0.0', orientation: 'portrait',
+    userInterfaceStyle: 'automatic', platforms: ['ios', 'android', 'web'],
+    web: { bundler: 'metro' },
+  }
+}, null, 2);
+
+const expoScaffold = (artifact: CodeStudioArtifact, userFiles: Record<string, string>): ScaffoldResult => {
+  const ts = !Object.keys(userFiles).some((p) => /^(src\/)?App\.jsx?$/.test(p));
+  const ext = ts ? 'tsx' : 'jsx';
+  const files: Record<string, string> = {};
+
+  // Keep the user's RN source under src/; we generate our own web entry + html + configs.
+  for (const [path, content] of Object.entries(userFiles)) {
+    if (path === 'index.html' || path === 'package.json' || path === 'app.json') continue;
+    if (/^(src\/)?(main|index)\.(t|j)sx?$/.test(path)) continue;
+    if (ROOT_CONFIG_RE.test(path)) { files[path] = content; continue; }
+    files[`src/${path}`] = content;
+  }
+  if (!Object.keys(files).some((p) => /^src\/App\.(t|j)sx?$/.test(p))) {
+    files[`src/App.${ext}`] = `import { View, Text, StyleSheet } from 'react-native';
+
+export default function App() {
+  return (
+    <View style={styles.center}><Text style={styles.title}>App</Text></View>
+  );
+}
+const styles = StyleSheet.create({
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  title: { fontSize: 24, fontWeight: '700' },
+});
+`;
+  }
+
+  // Web preview entry (react-native-web) — mirrors what expo/AppEntry does on device.
+  files[`src/main.${ext}`] = `import { AppRegistry } from 'react-native';
+import App from './App';
+
+AppRegistry.registerComponent('App', () => App);
+AppRegistry.runApplication('App', { rootTag: document.getElementById('root') });
+`;
+  files['index.html'] = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+    <title>${esc(artifact.title)}</title>
+    <style>html, body, #root { height: 100%; margin: 0; } #root { display: flex; }</style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.${ext}"></script>
+  </body>
+</html>
+`;
+  if (!files['vite.config.js'] && !files['vite.config.ts']) files['vite.config.js'] = VITE_RNW;
+  files['app.json'] = userFiles['app.json'] || APP_JSON_EXPO(artifact.title, slug(artifact.title));
+
+  // Merge any model-shipped deps with the required Expo + preview baseline.
+  const modelPkg = userFiles['package.json'] ? safeJson(userFiles['package.json']) : null;
+  const modelDeps = (modelPkg?.dependencies as Record<string, string>) || {};
+  const dependencies = {
+    expo: '~51.0.39', react: '18.2.0', 'react-dom': '18.2.0',
+    'react-native': '0.74.5', 'react-native-web': '~0.19.13',
+    ...detectRnDeps(userFiles), ...modelDeps,
+  };
+  files['package.json'] = JSON.stringify({
+    name: slug(artifact.title), private: true, version: '1.0.0',
+    main: 'node_modules/expo/AppEntry.js',
+    scripts: {
+      dev: 'vite', build: 'vite build', preview: 'vite preview',
+      native: 'expo start', 'native:web': 'expo start --web',
+    },
+    dependencies,
+    devDependencies: { '@vitejs/plugin-react': '^4.3.1', vite: '^5.4.0' },
+  }, null, 2);
+
+  return { files, installCommand: ['npm', ['install']], devCommand: ['npm', ['run', 'dev']] };
+};
+
 export const scaffold = (artifact: CodeStudioArtifact): ScaffoldResult => {
   const userFiles = flatten(artifact);
+
+  // Expo / React Native is detected from content (no template enum) and wired for web preview
+  // even when the model shipped its own package.json, so the studio controls the preview command.
+  if (isExpoArtifact(userFiles)) return expoScaffold(artifact, userFiles);
 
   // The model shipped a full project — trust its package.json + scripts.
   if (userFiles['package.json']) {

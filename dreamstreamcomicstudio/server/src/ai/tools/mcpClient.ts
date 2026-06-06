@@ -27,12 +27,22 @@ interface McpTool {
 const PRIVATE_HOST_RE =
   /^(localhost|127\.|0\.0\.0\.0|10\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?|\[?fc|\[?fd)/i;
 
-export const isSafeMcpUrl = (url: string): { ok: boolean; reason?: string } => {
+export const isSafeMcpUrl = (
+  url: string,
+  opts: { allowInternal?: boolean } = {}
+): { ok: boolean; reason?: string } => {
   let parsed: URL;
   try {
     parsed = new URL(url);
   } catch {
     return { ok: false, reason: 'invalid URL' };
+  }
+  // "Trusted" (operator-configured) servers — e.g. a self-hosted MCP sidecar — may use http and
+  // internal hostnames. The strict path (user-supplied URLs) still requires https + public hosts
+  // so the SSRF guard isn't weakened for anything a user can set.
+  if (opts.allowInternal) {
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return { ok: false, reason: 'must be http(s)' };
+    return { ok: true };
   }
   if (parsed.protocol !== 'https:') return { ok: false, reason: 'must use https' };
   if (PRIVATE_HOST_RE.test(parsed.hostname) || parsed.hostname.endsWith('.local')) {
@@ -127,11 +137,15 @@ const handshake = async (server: McpServerConfig, signal?: AbortSignal): Promise
   return init.sessionId;
 };
 
-export const listMcpTools = async (server: McpServerConfig, signal?: AbortSignal): Promise<McpTool[]> => {
+export const listMcpTools = async (
+  server: McpServerConfig,
+  signal?: AbortSignal,
+  allowInternal = false
+): Promise<McpTool[]> => {
   const cached = toolsCache.get(server.url);
   if (cached && Date.now() - cached.at < TOOLS_CACHE_TTL_MS) return cached.tools;
 
-  const safe = isSafeMcpUrl(server.url);
+  const safe = isSafeMcpUrl(server.url, { allowInternal });
   if (!safe.ok) throw new Error(`MCP server URL rejected: ${safe.reason}`);
 
   const sessionId = await handshake(server, signal);
@@ -166,14 +180,22 @@ const callMcpTool = async (
 // Namespaced tool id so MCP tools never collide with built-ins or each other.
 const mcpToolName = (serverId: string, tool: string) => `mcp_${serverId}_${tool}`;
 
-/** Build ChatTools for all tools exposed by the given MCP servers (best-effort per server). */
-export const buildMcpTools = async (servers: McpServerConfig[], signal?: AbortSignal): Promise<ChatTool[]> => {
+/**
+ * Build ChatTools for all tools exposed by the given MCP servers (best-effort per server).
+ * Servers flagged `trusted` (operator-configured, e.g. a self-hosted sidecar) may use http/internal
+ * hosts; user-supplied servers stay behind the strict https + public-host SSRF guard.
+ */
+export const buildMcpTools = async (
+  servers: (McpServerConfig & { trusted?: boolean })[],
+  signal?: AbortSignal
+): Promise<ChatTool[]> => {
   const out: ChatTool[] = [];
   for (const server of servers) {
-    if (!isSafeMcpUrl(server.url).ok) continue;
+    const allowInternal = Boolean(server.trusted);
+    if (!isSafeMcpUrl(server.url, { allowInternal }).ok) continue;
     let tools: McpTool[] = [];
     try {
-      tools = await listMcpTools(server, signal);
+      tools = await listMcpTools(server, signal, allowInternal);
     } catch {
       continue; // a broken server shouldn't break the chat
     }

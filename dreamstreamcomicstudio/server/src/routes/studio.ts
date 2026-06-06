@@ -156,7 +156,9 @@ const studioMcpTools = async (
       ? (body.mcpServers as { id?: unknown; url?: unknown }[]).filter((s) => s && typeof s.url === 'string' && typeof s.id === 'string')
       : [];
     const savedServers = req.user?.id ? await enabledMcpConfigs(req.user.id).catch(() => []) : [];
-    const byUrl = new Map<string, { id: string; url: string; name?: string }>();
+    // `trusted` lets operator-set servers (defaults + env) reach a self-hosted sidecar over
+    // http/internal hosts; user-supplied servers stay behind the strict SSRF guard (no trusted flag).
+    const byUrl = new Map<string, { id: string; url: string; name?: string; trusted?: boolean; headers?: Record<string, string> }>();
     for (const s of DEFAULT_STUDIO_MCP_SERVERS) byUrl.set(s.url, s);
     // Operator-configured (self-hosted) design + API-connector MCPs, read fresh each call.
     for (const s of envDesignMcpServers()) byUrl.set(s.url, s);

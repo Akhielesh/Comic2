@@ -23,6 +23,7 @@ import { SPACE_TOOLS } from './space.js';
 import { CULTURE_TOOLS } from './culture.js';
 import { DEV_TOOLS } from './dev.js';
 import { FINANCE_TERMINAL_TOOLS } from './financeTerminal.js';
+import { NANGO_TOOLS } from './nango.js';
 import { generateAppTool } from './codeStudio.js';
 
 export type { ChatTool, ToolExecResult, ToolContext } from './types.js';
@@ -507,7 +508,10 @@ const FREE_API_TOOLS: ChatTool[] = [
   ...GEO_TOOLS,
   ...SPACE_TOOLS,
   ...CULTURE_TOOLS,
-  ...DEV_TOOLS
+  ...DEV_TOOLS,
+  // External API connectors via a self-hosted Nango (800+ providers). Always registered so the
+  // tool names resolve; each call returns a clear "not configured" notice until NANGO_SECRET_KEY is set.
+  ...NANGO_TOOLS
 ];
 
 /** All context-free built-in tools, keyed by the name the model/clients reference. */

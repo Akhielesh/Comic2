@@ -1,0 +1,85 @@
+# Code Studio agent-tool sidecars: a self-hosted Nango (800+ API connectors) plus the design MCP
+# servers (shadcn/ui, Magic UI) exposed over Streamable HTTP so the app's MCP client can reach them.
+#
+# Why this exists: the app's MCP client speaks JSON-RPC over HTTP and CANNOT spawn `npx` stdio
+# servers, so the stdio design MCPs (shadcn, Magic UI) are fronted with `supergateway`, and Nango
+# runs as its documented self-hosted stack. Point the app at them via env (see ../../.env.studio-tools.example
+# and docs/studio/INTEGRATIONS-NANGO.md). Nango is Elastic License v2 — self-hosting to power our
+# product is allowed; reselling Nango-as-a-service is not.
+#
+# Usage:
+#   cp ../../.env.studio-tools.example .env && edit .env   # set NANGO_ENCRYPTION_KEY etc.
+#   docker compose up -d
+# Then on the app server set (same Docker network shown; use host:port if the app runs elsewhere):
+#   NANGO_HOST=http://nango-server:3003   NANGO_SECRET_KEY=<from the Nango dashboard>
+#   STUDIO_SHADCN_MCP_URL=http://shadcn-mcp:8001/mcp
+#   STUDIO_MAGICUI_MCP_URL=http://magicui-mcp:8002/mcp
+
+services:
+  # --- Nango: managed OAuth + token refresh + proxy for 800+ APIs ---------------------------
+  nango-db:
+    image: postgres:16.0-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${NANGO_DB_USER:-nango}
+      POSTGRES_PASSWORD: ${NANGO_DB_PASSWORD:-nango}
+      POSTGRES_DB: ${NANGO_DB_NAME:-nango}
+    volumes:
+      - nango-db-data:/var/lib/postgresql/data
+
+  nango-redis:
+    image: redis:7.2.4
+    restart: unless-stopped
+
+  nango-server:
+    image: nangohq/nango-server:hosted
+    restart: unless-stopped
+    depends_on: [nango-db, nango-redis]
+    ports:
+      - "3003:3003" # REST API + /proxy + /connect/sessions + /mcp
+      - "3009:3009" # Connect UI
+    environment:
+      # MANDATORY — generate once with `openssl rand -base64 32`; NEVER change it after first boot
+      # (no key rotation: changing it makes stored credentials undecryptable).
+      NANGO_ENCRYPTION_KEY: ${NANGO_ENCRYPTION_KEY}
+      NANGO_DATABASE_URL: postgres://${NANGO_DB_USER:-nango}:${NANGO_DB_PASSWORD:-nango}@nango-db:5432/${NANGO_DB_NAME:-nango}
+      NANGO_REDIS_URL: redis://nango-redis:6379
+      SERVER_PORT: "3003"
+      NANGO_SERVER_URL: ${NANGO_SERVER_URL:-http://localhost:3003}
+      NANGO_PUBLIC_SERVER_URL: ${NANGO_PUBLIC_SERVER_URL:-http://localhost:3003}
+      FLAG_SERVE_CONNECT_UI: "true"
+      # Dashboard basic-auth (the dashboard is where you copy your secret key from).
+      FLAG_AUTH_ENABLED: ${NANGO_FLAG_AUTH_ENABLED:-false}
+      NANGO_DASHBOARD_USERNAME: ${NANGO_DASHBOARD_USERNAME:-admin}
+      NANGO_DASHBOARD_PASSWORD: ${NANGO_DASHBOARD_PASSWORD:-admin}
+      # Logs UI (Elasticsearch) is opt-in; left off for the minimal footprint.
+      NANGO_LOGS_ENABLED: "false"
+
+  # --- Design MCP servers (stdio → Streamable HTTP via supergateway) ------------------------
+  # shadcn/ui: real component source/demos/blocks. Swap --framework to react-native for the mobile
+  # component set (react-native-reusables). A GitHub token raises the rate limit from 60→5000/hr.
+  shadcn-mcp:
+    image: node:20-alpine
+    restart: unless-stopped
+    command: >
+      npx -y supergateway
+      --stdio "npx -y @jpisnice/shadcn-ui-mcp-server --framework react"
+      --outputTransport streamableHttp --port 8001
+    environment:
+      GITHUB_PERSONAL_ACCESS_TOKEN: ${SHADCN_GITHUB_TOKEN:-}
+    ports:
+      - "8001:8001" # → STUDIO_SHADCN_MCP_URL=http://<host>:8001/mcp
+
+  # Magic UI: animated React + Tailwind components (marquee, blur-fade, shimmer, …).
+  magicui-mcp:
+    image: node:20-alpine
+    restart: unless-stopped
+    command: >
+      npx -y supergateway
+      --stdio "npx -y @magicuidesign/mcp"
+      --outputTransport streamableHttp --port 8002
+    ports:
+      - "8002:8002" # → STUDIO_MAGICUI_MCP_URL=http://<host>:8002/mcp
+
+volumes:
+  nango-db-data:

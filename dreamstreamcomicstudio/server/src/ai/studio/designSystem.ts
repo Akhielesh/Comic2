@@ -154,14 +154,36 @@ export const ALWAYS_ON_STUDIO_MCP_SERVERS: { id: string; name: string; url: stri
   CURATED_MCP_CATALOG.filter((m) => m.transport === 'http' && m.endpoint)
     .map((m) => ({ id: m.id, name: m.name, url: m.endpoint as string }));
 
+export interface EnvMcpServer {
+  id: string;
+  name: string;
+  url: string;
+  /** Operator-configured → may use http / internal hosts (bypasses the user-URL SSRF guard). */
+  trusted: true;
+  /** Optional auth headers, supplied as JSON via `<ENVVAR>_HEADERS` (e.g. an Authorization bearer). */
+  headers?: Record<string, string>;
+}
+
 /**
- * Optional MCP servers an operator has self-hosted and pointed at via env vars (the stdio
- * servers above, exposed over HTTPS/SSE, plus a self-hosted Nango). Read at call time so
- * deployments can add design/connector tools with zero code changes. Invalid/empty → skipped.
+ * Optional MCP servers an operator has self-hosted and pointed at via env vars (the stdio servers
+ * above, exposed over HTTP/SSE, plus a self-hosted Nango MCP). Read at call time so deployments add
+ * design/connector tools with zero code changes. Marked `trusted` since only the operator sets them;
+ * a companion `<ENVVAR>_HEADERS` JSON env attaches auth headers. Invalid/empty URLs are skipped.
  */
 export const envDesignMcpServers = (
   env: Record<string, string | undefined> = process.env
-): { id: string; name: string; url: string }[] =>
+): EnvMcpServer[] =>
   CURATED_MCP_CATALOG.filter((m) => m.envVar && env[m.envVar])
-    .map((m) => ({ id: m.id, name: m.name, url: (env[m.envVar as string] as string).trim() }))
-    .filter((s) => /^https:\/\//i.test(s.url));
+    .map((m) => {
+      const url = (env[m.envVar as string] as string).trim();
+      let headers: Record<string, string> | undefined;
+      const raw = env[`${m.envVar}_HEADERS`];
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === 'object') headers = parsed as Record<string, string>;
+        } catch { /* ignore malformed header JSON */ }
+      }
+      return { id: m.id, name: m.name, url, trusted: true as const, ...(headers ? { headers } : {}) };
+    })
+    .filter((s) => /^https?:\/\//i.test(s.url));
