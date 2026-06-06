@@ -19,7 +19,7 @@ import { domainStrength } from '../../services/modelDomains';
 import {
   getStudioModelSelection, setStudioModel, setStudioAuto, setStudioSource,
   setStudioCostPref, setStudioCreativity, setStudioMaxIterations, setStudioDefaultTemplate,
-  setStudioAgents, setStudioAgentPreferences,
+  setStudioAgents, setStudioAgentPreferences, setStudioAutoRunAgents,
   resetStudioModelSelection, STUDIO_MODEL_CHANGED, STUDIO_MAX_ITERATIONS_CEILING,
   type StudioModelSelection, type StudioCostPref
 } from '../../services/studioModelSelection';
@@ -368,6 +368,18 @@ export const StudioSettingsPanel: React.FC<{ open: boolean; onClose: () => void 
               rows={2}
               className={`mt-2 w-full rounded-lg border ${t.edge} ${t.panel} ${t.text} text-xs px-2.5 py-2 ${t.focusRing} resize-y`}
             />
+            <label className="mt-2 flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={sel.autoRunAgents === true}
+                onChange={(e) => setStudioAutoRunAgents(e.target.checked)}
+                className="mt-0.5 accent-violet-500"
+              />
+              <span className="min-w-0">
+                <span className="text-xs font-bold">Auto-run the team after each new build</span>
+                <span className={`block text-[10px] ${t.textFaint}`}>Seamless mode: every brand-new app is immediately refined by your selected agents. Off = run on demand.</span>
+              </span>
+            </label>
           </section>
 
           {/* Footer */}

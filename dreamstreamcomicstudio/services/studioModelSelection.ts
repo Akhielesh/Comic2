@@ -40,6 +40,8 @@ export interface StudioModelSelection {
   agents?: string[] | null;
   /** Free-text preferences the refinement agents should honor (style, stack, constraints). */
   agentPreferences?: string;
+  /** Automatically run the agent team after each brand-new build (seamless mode). */
+  autoRunAgents?: boolean;
 }
 
 const STORAGE = 'dreamstream_studio_model';
@@ -58,7 +60,8 @@ const DEFAULTS: StudioModelSelection = {
   maxIterations: STUDIO_DEFAULT_MAX_ITERATIONS,
   defaultTemplate: null,
   agents: null,
-  agentPreferences: ''
+  agentPreferences: '',
+  autoRunAgents: false
 };
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
@@ -76,7 +79,8 @@ const sanitize = (raw: Partial<StudioModelSelection>): StudioModelSelection => {
       ? clamp(merged.maxIterations, 1, STUDIO_MAX_ITERATIONS_CEILING)
       : STUDIO_DEFAULT_MAX_ITERATIONS,
     agents: Array.isArray(merged.agents) ? merged.agents.filter((x): x is string => typeof x === 'string') : null,
-    agentPreferences: typeof merged.agentPreferences === 'string' ? merged.agentPreferences : ''
+    agentPreferences: typeof merged.agentPreferences === 'string' ? merged.agentPreferences : '',
+    autoRunAgents: merged.autoRunAgents === true
   };
 };
 
@@ -171,6 +175,14 @@ export const getStudioAgentPreferences = (): string => read().agentPreferences ?
 export const setStudioAgentPreferences = (text: string) => {
   const next = read();
   next.agentPreferences = typeof text === 'string' ? text : '';
+  write(next);
+};
+
+export const getStudioAutoRunAgents = (): boolean => read().autoRunAgents === true;
+
+export const setStudioAutoRunAgents = (on: boolean) => {
+  const next = read();
+  next.autoRunAgents = !!on;
   write(next);
 };
 

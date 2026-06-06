@@ -26,7 +26,7 @@ import {
   detectProjectKind, projectKindLabel, isWebProject, runHint, diffLines, diffStat,
 } from './workspace';
 import { StudioStart } from './StudioStart';
-import { getStudioModelSelection, getStudioAgents, STUDIO_MODEL_CHANGED } from '../../services/studioModelSelection';
+import { getStudioModelSelection, getStudioAgents, getStudioAutoRunAgents, STUDIO_MODEL_CHANGED } from '../../services/studioModelSelection';
 import { stopLiveStudio } from '../../services/studioApi';
 import { generateStudioApp, streamGenerateStudioApp } from '../../services/studioGenerateApi';
 import { streamStudioBuild, type BuildStage } from '../../services/studioBuildApi';
@@ -103,6 +103,8 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     return () => window.removeEventListener(STUDIO_MODEL_CHANGED, onChange);
   }, []);
   const runBuildRef = useRef<() => void>(() => {});
+  // Lets handleGenerate auto-trigger the agent team (seamless mode) without a declaration-order issue.
+  const runAgentsRef = useRef<() => void>(() => {});
   // Lets the user cancel an in-flight generation (Stop button on the composer).
   const genAbortRef = useRef<AbortController | null>(null);
   // The last generation request, so a failed/cancelled run can be retried.
@@ -279,6 +281,11 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       useStudioConversation.getState().resolveLastAssistant(`${summary}.`, 'done');
       useStudioActivity.getState().finish('done', `✓ ${summary}`);
       appendLog('success', `${summary}. Live preview is below; press Build to run it in a cloud container.`);
+      // Seamless mode: optionally let the agent team refine a brand-new app right away.
+      if (!refining && enabled && getStudioAutoRunAgents()) {
+        appendLog('system', 'Auto-running the agent team to refine your new app…');
+        setTimeout(() => runAgentsRef.current(), 80);
+      }
     };
     const failWith = (msg: string) => {
       useStudioConversation.getState().resolveLastAssistant(msg, 'error');
@@ -405,6 +412,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       genAbortRef.current = null;
     }
   };
+  runAgentsRef.current = runAgents;
 
   // Retry the last generation after a failure or cancel (Retry button on the activity feed).
   const retryLastGenerate = () => {
