@@ -23,6 +23,10 @@ export interface RunResult extends ObservationInput {
 export interface FixOutput {
   files: StudioFiles; // changed files (path → full content)
   note?: string;
+  /** Guardrailed install command the agent wants the next run to use. */
+  install?: string;
+  /** Guardrailed dev/start command the agent wants the next run to use. */
+  dev?: string;
 }
 
 export type BuildStage = 'plan' | 'run' | 'observe' | 'fix' | 'done' | 'stopped';
@@ -36,8 +40,11 @@ export interface BuildEvent {
 }
 
 export interface BuildAgentDeps {
-  /** Launch (or re-launch after a fix) the project; returns the observed signals. */
-  run: (files: StudioFiles) => Promise<RunResult>;
+  /**
+   * Launch (or re-launch after a fix) the project; returns the observed signals. `opts` carries the
+   * agent's current guardrailed install/dev commands so a fix can change how the app is built/run.
+   */
+  run: (files: StudioFiles, opts?: { install?: string; dev?: string }) => Promise<RunResult>;
   /** Ask the model for minimal fixes given the current files + observation. */
   fix: (files: StudioFiles, observation: BuildObservation) => Promise<FixOutput>;
   /** Optional live trace sink (SSE in the real route). */
@@ -64,6 +71,9 @@ export const runBuildAgent = async (
   options: BuildAgentOptions = {}
 ): Promise<BuildAgentResult> => {
   let files: StudioFiles = { ...initialFiles };
+  // Agent-controlled (guardrailed) build/run commands — a fix may change them between runs.
+  let install: string | undefined;
+  let dev: string | undefined;
   let state: GuardState = initialGuardState(options.maxIterations);
   const events: BuildEvent[] = [];
   const emit = (event: BuildEvent): void => {
@@ -80,7 +90,7 @@ export const runBuildAgent = async (
       iteration: state.iteration,
       message: state.iteration === 0 ? 'Building & launching…' : `Re-running after fix #${state.iteration}…`
     });
-    const result = await deps.run(files);
+    const result = await deps.run(files, { install, dev });
     const observation = buildObservation(result);
     emit({
       stage: 'observe',
@@ -114,6 +124,8 @@ export const runBuildAgent = async (
     emit({ stage: 'fix', iteration: state.iteration + 1, message: `Fixing: ${observation.summary}`, observation });
     const fix = await deps.fix(files, observation);
     files = { ...files, ...fix.files };
+    if (fix.install) install = fix.install; // agent changed how deps are installed
+    if (fix.dev) dev = fix.dev; // agent changed how the app is started
     state = advanceGuardState(state, observation);
   }
 };

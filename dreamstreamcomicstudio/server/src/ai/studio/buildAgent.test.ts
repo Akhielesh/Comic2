@@ -32,6 +32,21 @@ describe('runBuildAgent', () => {
     expect(res.files['/package.json']).toContain('axios');
   });
 
+  it("threads a fix's guardrailed install/dev commands into the next run", async () => {
+    const results = [MISSING_AXIOS, CLEAN];
+    let i = 0;
+    const seenOpts: ({ install?: string; dev?: string } | undefined)[] = [];
+    const run = vi.fn(async (_files: Record<string, string>, opts?: { install?: string; dev?: string }) => {
+      seenOpts.push(opts);
+      return results[Math.min(i++, results.length - 1)];
+    });
+    const fix = vi.fn(async () => ({ files: { '/package.json': '{}' }, note: 'add three', install: 'npm install three', dev: 'npm run dev' }));
+    const res = await runBuildAgent({ '/a.ts': 'x' }, { run, fix });
+    expect(res.ok).toBe(true);
+    expect(seenOpts[0]).toEqual({ install: undefined, dev: undefined }); // first run: no agent commands yet
+    expect(seenOpts[1]).toEqual({ install: 'npm install three', dev: 'npm run dev' }); // after the fix
+  });
+
   it('stops as "stuck" when the same error persists despite fixes', async () => {
     const fix = vi.fn(async () => ({ files: {} })); // fix never actually changes anything
     const deps: BuildAgentDeps = { run: queuedRun([MISSING_AXIOS]), fix };

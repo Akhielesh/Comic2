@@ -56,13 +56,14 @@ export const createWorkerRun = (config: WorkerRunConfig) => {
   const call = config.call ?? callStudioWorker;
   const probe = config.probe ?? ((u: string) => probePreview(u));
 
-  return async (files: StudioFiles): Promise<RunResult> => {
+  return async (files: StudioFiles, opts?: { install?: string; dev?: string }): Promise<RunResult> => {
     const launch = await call({
       action: 'launch',
       sandboxId: config.sandboxId,
       files: filesRecordToArray(files),
-      install: config.install,
-      dev: config.dev,
+      // The agent's guardrailed install/dev commands (set by a fix) win over the request defaults.
+      install: opts?.install ?? config.install,
+      dev: opts?.dev ?? config.dev,
       port: config.port
     });
 
@@ -97,5 +98,6 @@ export const createStudioFix =
   async (files: StudioFiles, observation: BuildObservation): Promise<FixOutput> => {
     const result = await requestStudioFix(files, observation, complete);
     const { files: safe } = sanitizeFixFiles(result.files, opts);
-    return { files: safe, note: result.note };
+    // install/dev are already guardrailed by sanitizeStudioCommand in parseFixResponse.
+    return { files: safe, note: result.note, install: result.install, dev: result.dev };
   };
