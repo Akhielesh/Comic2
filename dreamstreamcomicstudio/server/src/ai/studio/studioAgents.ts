@@ -36,6 +36,8 @@ export interface StudioAgentDef {
 // over-broad list is harmless; this deliberately gives the team generous access.
 const RESEARCH_TOOLS = ['web_search', 'wiki_lookup', 'github_repo', 'npm_package', 'pypi_package', 'search_papers', 'search_books'];
 const DESIGN_TOOLS = ['web_search', 'image_search'];
+// Discover + connect + call 800+ third-party APIs via a self-hosted Nango (when configured).
+const INTEGRATION_TOOLS = ['web_search', 'github_repo', ...NANGO_TOOL_NAMES];
 const LIVE_DATA_TOOLS = [
   ...RESEARCH_TOOLS, 'image_search', 'video_search',
   'get_news', 'get_stock', 'crypto_price', 'exchange_rate', 'get_weather', 'find_places', 'show_map',
@@ -74,6 +76,11 @@ export const STUDIO_AGENTS: Record<string, StudioAgentDef> = {
     description: 'Wires real, LIVE data sources and robust fetching into the app.',
     focus: `Wire REAL, LIVE DATA into the app. Where it uses mock/placeholder/hard-coded data, replace it with real data from a suitable public API: use your tools to FIND and VERIFY real, free, CORS-friendly endpoints and their actual response shapes, then implement proper fetch + loading/error/empty states and typed parsing. Prefer keyless/public APIs; if a key is required, read it from an environment variable and document it in /.env.example. Do NOT invent endpoints — only use ones you verified with your tools. For authenticated third-party services (Slack, Google, Notion, Stripe, GitHub, …), use the Nango tools (nango_search_integrations → nango_connect_integration → nango_call_api) to discover a provider, verify its real response shape, and wire OAuth + proxied calls — never hard-code third-party credentials.`
   },
+  integrations: {
+    id: 'integrations', name: 'Integrations', icon: 'Plug', default: false, toolNames: INTEGRATION_TOOLS,
+    description: 'Connects authenticated third-party APIs (OAuth) via Nango — Slack, Google, Notion, Stripe, GitHub, …',
+    focus: `Wire AUTHENTICATED THIRD-PARTY INTEGRATIONS into the app using Nango (only when the user's app needs them). Flow: nango_search_integrations to discover the right provider id (provider_config_key); nango_call_api to verify the provider's REAL response shape; then implement it end-to-end — a server route that mints a connect session (POST /connect/sessions, server-side with the secret key) for nango_connect_integration, client code that opens the Nango Connect UI (@nangohq/frontend openConnectUI), and backend calls that go through the Nango proxy using the resulting connectionId. NEVER hard-code third-party credentials or put the Nango secret in client code; document NANGO_HOST/NANGO_SECRET_KEY in /.env.example. Only use providers/endpoints you verified with the tools. If the app needs no external integrations, change nothing.`
+  },
   security: {
     id: 'security', name: 'Security', icon: 'ShieldCheck', default: true, toolNames: ['web_search', 'npm_package', 'pypi_package', 'github_repo'],
     description: 'Input validation, secrets handling, XSS/injection and safe defaults.',
@@ -86,8 +93,8 @@ export const STUDIO_AGENTS: Record<string, StudioAgentDef> = {
   }
 };
 
-// Canonical run order: foundations → quality → presentation → data → safety → QA last.
-export const STUDIO_AGENT_ORDER = ['architecture', 'code', 'frontend', 'ui', 'design', 'data', 'security', 'verification'];
+// Canonical run order: foundations → quality → presentation → data → integrations → safety → QA last.
+export const STUDIO_AGENT_ORDER = ['architecture', 'code', 'frontend', 'ui', 'design', 'data', 'integrations', 'security', 'verification'];
 
 export const DEFAULT_STUDIO_AGENTS = STUDIO_AGENT_ORDER.filter((id) => STUDIO_AGENTS[id].default);
 

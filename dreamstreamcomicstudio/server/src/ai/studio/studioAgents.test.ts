@@ -28,6 +28,15 @@ describe('studioAgents — multi-agent refinement pipeline', () => {
     expect(cat.find((a) => a.id === 'data')!.hasTools).toBe(true);
   });
 
+  it('includes an opt-in Integrations agent wired with the Nango tools', () => {
+    const integrations = STUDIO_AGENTS.integrations;
+    expect(integrations).toBeDefined();
+    expect(integrations.default).toBe(false); // opt-in (needs Nango configured)
+    expect(integrations.toolNames).toContain('nango_call_api');
+    expect(STUDIO_AGENT_ORDER).toContain('integrations');
+    expect(studioAgentCatalog().find((a) => a.id === 'integrations')!.hasTools).toBe(true);
+  });
+
   it('runs enabled agents in order, applies diffs cumulatively, emits events', async () => {
     const events: StudioAgentEvent[] = [];
     const seen: string[] = [];

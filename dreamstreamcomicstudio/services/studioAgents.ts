@@ -24,6 +24,7 @@ export const STUDIO_AGENT_CATALOG: StudioAgentMeta[] = [
   { id: 'ui', name: 'UI / UX', icon: 'Layout', default: true, hasTools: false, description: 'Layout, interaction, accessibility & responsive design.' },
   { id: 'design', name: 'Visual Design', icon: 'Palette', default: false, hasTools: false, description: 'Typography, color, spacing system & aesthetic polish.' },
   { id: 'data', name: 'Data & Live APIs', icon: 'Database', default: false, hasTools: true, description: 'Wires real, LIVE data sources & robust fetching into the app.' },
+  { id: 'integrations', name: 'Integrations', icon: 'Plug', default: false, hasTools: true, description: 'Connects authenticated third-party APIs (OAuth) via Nango — Slack, Google, Notion, Stripe, …' },
   { id: 'security', name: 'Security', icon: 'ShieldCheck', default: true, hasTools: true, description: 'Input validation, secrets, XSS/injection & safe defaults.' },
   { id: 'verification', name: 'Verification / QA', icon: 'CheckCircle2', default: true, hasTools: false, description: 'Correctness, edge cases, error handling — does it actually run.' }
 ];

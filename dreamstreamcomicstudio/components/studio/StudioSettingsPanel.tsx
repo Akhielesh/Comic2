@@ -7,7 +7,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Cpu, Sparkles, Zap, Search, Check, RotateCcw, Star, Code2, Crown, Users,
-  Building2, MonitorSmartphone, Layout, Palette, Database, ShieldCheck, CheckCircle2
+  Building2, MonitorSmartphone, Layout, Palette, Database, ShieldCheck, CheckCircle2, Plug
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useStudioTheme } from './kit';
@@ -49,7 +49,7 @@ const TEMPLATE_OPTIONS: { id: string; label: string }[] = [
 ];
 
 const AGENT_ICONS: Record<string, LucideIcon> = {
-  Building2, Code2, MonitorSmartphone, Layout, Palette, Database, ShieldCheck, CheckCircle2
+  Building2, Code2, MonitorSmartphone, Layout, Palette, Database, ShieldCheck, CheckCircle2, Plug
 };
 
 const isCoderText = (m: CatalogModel): boolean => !m.supportsImageOutput;

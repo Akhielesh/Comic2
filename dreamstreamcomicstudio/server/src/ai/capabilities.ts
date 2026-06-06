@@ -11,6 +11,7 @@
 
 import type { CapabilityNotice, CapabilityReport, CapabilityStatus } from '../../../apiTypes.js';
 import { FOURSQUARE_API_KEY } from '../config.js';
+import { nangoEnabled } from './tools/nango.js';
 
 const MAX_NOTICES = 200;
 const ring: CapabilityNotice[] = [];
@@ -63,7 +64,37 @@ export const capabilityStatuses = (): CapabilityStatus[] => {
     { id: 'tool.show_map', label: 'Maps (OpenStreetMap)', status: 'ok', detail: 'Keyless.' },
     { id: 'tool.video_search', label: 'Video search (DuckDuckGo)', status: 'ok', detail: 'Keyless.' },
     { id: 'tool.image_search', label: 'Image search (DuckDuckGo)', status: 'ok', detail: 'Keyless.' },
-    { id: 'tool.run_agent_swarm', label: 'Agent swarm', status: openrouter ? 'ok' : 'unavailable', detail: openrouter ? 'Available.' : 'Needs OpenRouter (tool calling).' }
+    { id: 'tool.run_agent_swarm', label: 'Agent swarm', status: openrouter ? 'ok' : 'unavailable', detail: openrouter ? 'Available.' : 'Needs OpenRouter (tool calling).' },
+    // External API connectors + Code Studio / chat design tools (operator-configured).
+    {
+      id: 'tool.nango_integrations',
+      label: 'API connectors (Nango — 800+ APIs)',
+      status: nangoEnabled() ? 'ok' : 'unavailable',
+      detail: nangoEnabled()
+        ? 'Self-hosted Nango configured — agents can OAuth + proxy 800+ third-party APIs.'
+        : 'Set NANGO_SECRET_KEY (+ NANGO_HOST) to enable nango_search_integrations / _connect / _call_api.',
+      envVar: 'NANGO_SECRET_KEY'
+    },
+    { id: 'mcp.context7', label: 'Context7 docs MCP (studio + chat)', status: 'ok', detail: 'Always-on — live, version-correct library docs so models use real APIs.' },
+    { id: 'mcp.deepwiki', label: 'DeepWiki repo MCP (studio + chat)', status: 'ok', detail: 'Always-on — read proven patterns from popular GitHub repos.' },
+    {
+      id: 'mcp.design.shadcn', label: 'shadcn/ui MCP (self-hosted)',
+      status: hasEnv('STUDIO_SHADCN_MCP_URL') ? 'ok' : 'unavailable',
+      detail: hasEnv('STUDIO_SHADCN_MCP_URL') ? 'Configured.' : 'Optional: set STUDIO_SHADCN_MCP_URL to give agents real shadcn/ui (web + React Native) component source.',
+      envVar: 'STUDIO_SHADCN_MCP_URL'
+    },
+    {
+      id: 'mcp.design.magicui', label: 'Magic UI MCP (self-hosted)',
+      status: hasEnv('STUDIO_MAGICUI_MCP_URL') ? 'ok' : 'unavailable',
+      detail: hasEnv('STUDIO_MAGICUI_MCP_URL') ? 'Configured.' : 'Optional: set STUDIO_MAGICUI_MCP_URL for animated components.',
+      envVar: 'STUDIO_MAGICUI_MCP_URL'
+    },
+    {
+      id: 'mcp.design.magic', label: '21st.dev Magic MCP (self-hosted)',
+      status: hasEnv('STUDIO_MAGIC_MCP_URL') ? 'ok' : 'unavailable',
+      detail: hasEnv('STUDIO_MAGIC_MCP_URL') ? 'Configured.' : 'Optional: set STUDIO_MAGIC_MCP_URL for the 21st.dev component builder.',
+      envVar: 'STUDIO_MAGIC_MCP_URL'
+    }
   ];
 };
 

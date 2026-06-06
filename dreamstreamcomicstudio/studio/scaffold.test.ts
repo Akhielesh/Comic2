@@ -102,4 +102,26 @@ describe('scaffold — Expo / React Native (web + mobile)', () => {
     const pkg = JSON.parse(files['package.json']);
     expect(pkg.dependencies['expo']).toBeDefined();
   });
+
+  it('scaffolds a realistic multi-file Expo app into a coherent, runnable project', () => {
+    const { files, installCommand, devCommand } = scaffold(art([
+      { path: '/App.tsx', content: `import { NavigationContainer } from '@react-navigation/native';\nimport { SafeAreaProvider } from 'react-native-safe-area-context';\nimport Home from './screens/Home';\nexport default function App(){ return <SafeAreaProvider><NavigationContainer><Home/></NavigationContainer></SafeAreaProvider>; }` },
+      { path: '/screens/Home.tsx', content: `import { View, Text, FlatList } from 'react-native';\nimport Card from '../components/Card';\nexport default function Home(){ return <View><Text>Home</Text><Card/></View>; }` },
+      { path: '/components/Card.tsx', content: `import { View, Text } from 'react-native';\nexport default function Card(){ return <View><Text>Card</Text></View>; }` },
+    ]));
+    const pkg = JSON.parse(files['package.json']); // valid JSON
+    expect(pkg.dependencies.expo).toBeDefined();
+    expect(pkg.dependencies['react-native-safe-area-context']).toBeDefined();
+    expect(pkg.dependencies['@react-navigation/native']).toBeDefined();
+    // user tree preserved under src/ (no dangling relative imports)
+    expect(files['src/App.tsx']).toContain('SafeAreaProvider');
+    expect(files['src/screens/Home.tsx']).toContain('FlatList');
+    expect(files['src/components/Card.tsx']).toContain('Card');
+    // web preview wiring
+    expect(files['vite.config.js']).toContain("'react-native': 'react-native-web'");
+    expect(files['src/main.tsx']).toContain("registerComponent('App'");
+    expect(files['app.json']).toContain('"expo"');
+    expect(installCommand).toEqual(['npm', ['install']]);
+    expect(devCommand).toEqual(['npm', ['run', 'dev']]);
+  });
 });

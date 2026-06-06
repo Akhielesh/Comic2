@@ -33,6 +33,14 @@ resolvable anywhere by name). Each returns a clear "not configured" notice until
 | `nango_connect_integration` | Mints a short-lived **connect session** for an end user to authorize a provider | `integration`, `endUserId`, `endUserEmail?` |
 | `nango_call_api` | **Proxies** an authenticated request to a connected provider (Nango injects creds + refreshes tokens) | `integration`, `connectionId?`, `method?`, `path`, `query?`, `body?`, `baseUrlOverride?` |
 
+### The Integrations agent
+The Code Studio ships a dedicated, opt-in **Integrations** specialist (`studioAgents.ts`) wired with
+these three tools. Enable it for an app that needs third-party services and it discovers the provider,
+verifies the real response shape, generates the connect-session route + Connect-UI client code, and
+wires proxied calls — without hard-coding credentials. It's off by default (it only helps once Nango
+is configured). Operators can see whether Nango + the design MCPs are configured in
+**Settings → System** (the capability report).
+
 ### How a generated app uses it at runtime (the pattern agents follow)
 1. **Backend** mints a session: `POST {NANGO_HOST}/connect/sessions` with the secret key → `{ data: { token } }`.
 2. **Frontend** opens Connect UI: `import Nango from '@nangohq/frontend'; new Nango().openConnectUI({ sessionToken })`.
