@@ -1,5 +1,5 @@
-import React from 'react';
-import { Bot, Mail, Sparkles, BookOpen, Compass, Palette, LayoutGrid, MessageSquare, Cpu, Code2 } from 'lucide-react';
+import React, { useState } from 'react';
+import { Bot, Mail, Sparkles, BookOpen, Compass, Palette, LayoutGrid, MessageSquare, Cpu, Code2, Menu, X } from 'lucide-react';
 import { Button } from '../Button';
 import { BrandLockup } from './BrandLockup';
 import { NavDropdown } from './NavDropdown';
@@ -39,6 +39,28 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
 }) => {
   const isHome = currentView === 'home';
   const notify = onNotify ?? (() => onNavigate('home'));
+  const [mobileOpen, setMobileOpen] = useState(false);
+  // Run an action then close the mobile menu.
+  const go = (fn: () => void) => () => { fn(); setMobileOpen(false); };
+
+  // Same products as the desktop nav, flattened for the mobile menu (<1024px).
+  const mobileGroups: { heading: string; items: { label: string; onClick: () => void }[] }[] = [
+    { heading: 'Comic', items: [
+      { label: 'How It Works', onClick: () => onNavigate('how-it-works') },
+      { label: 'Comic Studio', onClick: onEnterStudio },
+      { label: 'Library', onClick: onViewComics },
+    ] },
+    { heading: 'AI Chat', items: [
+      { label: 'Open AI Chat', onClick: () => onNavigate('chat') },
+      { label: 'Model Catalog', onClick: () => onNavigate('models') },
+    ] },
+    { heading: 'Code', items: isAdmin
+      ? [{ label: 'Open Code Studio', onClick: () => onNavigate('codestudio') }]
+      : [{ label: 'Get notified', onClick: notify }] },
+    { heading: 'Models', items: [
+      { label: 'Browse Models', onClick: () => onNavigate('models') },
+    ] },
+  ];
 
   return (
     <header className="sticky top-0 z-50 bg-white border-b-4 border-black">
@@ -64,7 +86,7 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
           {/* Logo */}
           <BrandLockup onClick={onGoHome} />
 
-          {/* Centre nav — desktop only. The four products, each with its own hover menu. */}
+          {/* Centre nav — desktop only (≥1024px). The four products, each with its own hover menu. */}
           <nav className="hidden lg:flex items-center gap-1 bg-slate-100 border-2 border-black rounded-full px-2 py-1">
             <NavDropdown
               label="Comic"
@@ -121,6 +143,16 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
 
           {/* Auth controls */}
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            {/* Hamburger — shows the product nav below the desktop breakpoint (<1024px). */}
+            <button
+              onClick={() => setMobileOpen((o) => !o)}
+              className="lg:hidden inline-flex items-center justify-center h-9 w-9 rounded-lg border-2 border-black bg-white hover:bg-slate-100 transition-colors"
+              aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
+              aria-expanded={mobileOpen}
+            >
+              {mobileOpen ? <X size={18} /> : <Menu size={18} />}
+            </button>
+
             {isAuthenticated ? (
               <>
                 <div className="hidden sm:block">
@@ -147,6 +179,38 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
 
         </div>
       </div>
+
+      {/* Mobile product menu (<1024px) — restores the nav that the desktop bar hides. */}
+      {mobileOpen && (
+        <div className="lg:hidden border-t-2 border-black bg-white max-h-[75vh] overflow-auto">
+          <nav className="max-w-7xl mx-auto px-4 sm:px-6 py-3 space-y-3">
+            {mobileGroups.map((g) => (
+              <div key={g.heading}>
+                <p className="px-1 text-[11px] font-bold uppercase tracking-wide text-slate-400">{g.heading}</p>
+                <div className="mt-1 grid">
+                  {g.items.map((it) => (
+                    <button
+                      key={it.label}
+                      onClick={go(it.onClick)}
+                      className="text-left px-3 py-2 rounded-lg font-semibold text-slate-800 hover:bg-slate-100 transition-colors"
+                    >
+                      {it.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {!isAuthenticated && (
+              <button
+                onClick={go(onSignIn)}
+                className="w-full text-left px-3 py-2 rounded-lg font-semibold text-slate-800 hover:bg-slate-100 transition-colors"
+              >
+                Sign In
+              </button>
+            )}
+          </nav>
+        </div>
+      )}
     </header>
   );
 };

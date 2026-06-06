@@ -95,7 +95,7 @@ export const ResizableSplit: React.FC<ResizableSplitProps> = ({
   };
 
   return (
-    <div ref={containerRef} className={`flex ${horizontal ? 'flex-row' : 'flex-col'} min-h-0 min-w-0 ${className ?? ''}`}>
+    <div ref={containerRef} className={`flex ${horizontal ? 'flex-row' : 'flex-col'} h-full w-full min-h-0 min-w-0 ${className ?? ''}`}>
       {items.map((child, i) => (
         <React.Fragment key={i}>
           <div className="flex min-h-0 min-w-0 overflow-hidden" style={{ flexGrow: sizes[i] ?? 1, flexShrink: 1, flexBasis: 0 }}>

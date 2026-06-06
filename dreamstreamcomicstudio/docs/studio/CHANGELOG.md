@@ -5,6 +5,20 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-06 · Claude — FIX: header nav vanished < 1024px; studio panes collapsed in the wide layout
+Two responsive bugs, both browser-verified (headless Chromium screenshots at 800/1280px):
+- **Header had no nav under 1024px.** The product nav is `hidden lg:flex` with no fallback, so below
+  the `lg` breakpoint there was no navigation at all. Added a hamburger + mobile menu in
+  `StaticSiteHeader` listing every product group (Comic / AI Chat / Code / Models) + Sign In. Verified:
+  the hamburger appears < 1024px and opens the full menu; the desktop nav is unchanged ≥ 1024px.
+- **Studio wide layout could collapse.** `ResizableSplit`'s root had no height (`flex flex-col min-h-0`
+  with no `h-full`), so in the ≥1024px 3-pane layout the panes could size to 0 until a resize forced a
+  reflow (opening DevTools) — compounding the earlier blank-render report. Added `h-full w-full` so the
+  split fills its parent. Verified: panes now measure ~620px and the studio renders fully.
+Typecheck + build green; 82 studio tests pass.
+
+---
+
 ## 2026-06-06 · Claude — FIX: studio + header rendered blank until a forced repaint (backdrop-filter glitch)
 The redesign regressed rendering: opening a built project (e.g. the Counter template) showed a BLANK
 studio until a repaint was forced (e.g. opening DevTools). Cause: the new aurora used animated
