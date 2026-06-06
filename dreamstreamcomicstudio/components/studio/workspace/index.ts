@@ -18,6 +18,9 @@ export { FileTree, buildTree } from './FileTree';
 export { EditorTabs } from './EditorTabs';
 export { PromptComposer } from './PromptComposer';
 export type { PromptComposerProps } from './PromptComposer';
+export { ConversationThread } from './ConversationThread';
+export { useStudioConversation } from './conversationStore';
+export type { StudioMessage } from './conversationStore';
 export {
   useStudioWorkspace,
   isPathDirty,

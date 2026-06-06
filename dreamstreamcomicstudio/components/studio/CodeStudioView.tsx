@@ -19,7 +19,8 @@ import {
 } from './kit';
 import type { RunStatus, Command } from './kit';
 import {
-  CodeWorkspace, LogsConsole, PreviewFrame, BuildTrace, ChangesPanel, HistoryPanel, PromptComposer, useStudioBuild,
+  CodeWorkspace, LogsConsole, PreviewFrame, BuildTrace, ChangesPanel, HistoryPanel, PromptComposer,
+  ConversationThread, useStudioConversation, useStudioBuild,
   useStudioWorkspace, useStudioLogs, isPathDirty, workspaceCurrentArtifact,
 } from './workspace';
 import { StudioStart } from './StudioStart';
@@ -99,6 +100,9 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   useEffect(() => {
     if (artifact) loadArtifact(artifact);
   }, [artifact, loadArtifact]);
+
+  // Fresh build conversation per studio entry (a different project shouldn't inherit a stale thread).
+  useEffect(() => { useStudioConversation.getState().clear(); }, []);
 
   // Keyboard shortcuts: ⌘K palette · ⌘B / ⌘↵ Build · ⌘S (no-op — Code Studio saves on Build).
   useEffect(() => {
@@ -186,6 +190,10 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     setGenerating(true);
     setGenError(null);
     setPreviewError(null);
+    const convo = useStudioConversation.getState();
+    if (!refining) convo.clear(); // a brand-new app starts a fresh thread
+    convo.pushUser(prompt);
+    convo.pushAssistant(refining ? 'Updating your app…' : 'Generating your app…', 'pending');
     appendLog('system', refining ? `Refining: ${prompt}` : `Generating app: ${prompt}`);
     try {
       const artifact = await generateStudioApp({
@@ -195,9 +203,14 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
         title: refining ? wsTitle : undefined,
       });
       loadArtifact(artifact);
+      useStudioConversation.getState().resolveLastAssistant(
+        `${refining ? 'Updated' : 'Built'} "${artifact.title}" — ${artifact.files.length} file${artifact.files.length === 1 ? '' : 's'}.`,
+        'done'
+      );
       appendLog('success', `${refining ? 'Updated' : 'Generated'} "${artifact.title}" — ${artifact.files.length} file(s). Live preview is below; press Build to run it in a cloud container.`);
     } catch (err) {
       const msg = (err as Error)?.message || 'Generation failed.';
+      useStudioConversation.getState().resolveLastAssistant(msg, 'error');
       setGenError(msg);
       appendLog('error', msg);
     } finally {
@@ -254,6 +267,8 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const promptPane = (
     <PaneFrame title="Prompt · Build" icon={<Sparkles className="w-4 h-4" />}>
       <div className="p-3 space-y-3">
+        {/* The build conversation (your prompts + the agent's outcomes). */}
+        <ConversationThread />
         {/* Iterate by prompt — refines the current app in place (no chat hand-off). */}
         <PromptComposer mode="inline" onSubmit={handleGenerate} busy={generating} error={genError} />
         <div className="flex flex-wrap gap-1.5">

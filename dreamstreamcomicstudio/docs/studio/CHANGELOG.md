@@ -5,6 +5,14 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-06 · Claude — Code Studio: conversational build thread
+The studio now keeps a live conversation (your prompts + the agent's outcomes) above the iterate
+composer — generate/refine/quick-action/autofix all post to it with pending→done/error status, so
+building feels like a conversation (Lovable/Bolt). New conversationStore (4 tests) + ConversationThread;
+cleared on studio entry and when a brand-new app starts. Typecheck + build green; 82 studio tests pass.
+
+---
+
 ## 2026-06-06 · Claude — Code Studio: one-click quick-refine actions
 Lovable-style "what next" chips under the iterate composer (✨ Polish UI · 🌙 Dark mode · 📱
 Responsive · 🎬 Animations · 🧪 Sample data). Each fires a refine via the existing in-studio
