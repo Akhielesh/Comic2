@@ -6,6 +6,11 @@
 
 **Last updated:** 2026-06-06 · **Updated by:** Claude · **Branch:** `claude/wizardly-franklin-EgL8k` (draft PR)
 
+> Latest (2026-06-06): **AUTO-VERIFY + SELF-REPAIR (verifier agent).** Generation now statically checks
+> its own output (empty/placeholder files, missing React default export, invalid JSON, unresolved relative
+> imports) and **auto-repairs in one pass** before handing over — no "Fix with AI" click. First agent of the
+> build pipeline. 525 tests pass. (Next: distinct design/architecture/backend agent roles + a terminal.)
+
 > Latest (2026-06-06): **OWNER-REVIEW FIXES.** Back now returns to the studio's project list (not the
 > app home); **Auto** stack is the default (no forced language choice); the redundant top Build button is
 > gone; the left prompt/chat panel is wider + taller; preview errors are debounced (no more flashing); and

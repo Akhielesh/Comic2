@@ -27,6 +27,7 @@ import { runGenerate, buildGeneratePrompt, parseGeneratedApp, STRICT_JSON_REMIND
 import { runStudioAgents, sanitizeAgentIds, studioAgentCatalog, STUDIO_AGENTS } from '../ai/studio/studioAgents.js';
 import { resolveTools } from '../ai/tools/registry.js';
 import { scanStreamedFiles } from '../ai/studio/streamParse.js';
+import { verifyGeneratedApp, formatIssues } from '../ai/studio/verifyApp.js';
 import { pickCodingModel, TEXT_FALLBACK } from '../ai/autoRouter.js';
 import { runChat } from '../ai/chat.js';
 import { resolveProviderContext } from '../ai/gateway.js';
@@ -286,6 +287,35 @@ studioRouter.post('/generate/stream', async (req, res, next) => {
       sse('error', { message: 'The model did not return a valid app. Try rephrasing your idea.' });
       return res.end();
     }
+
+    // Verifier agent: statically check the generated app for the failure modes that break studio
+    // apps (empty/placeholder files, missing React default export, invalid JSON, unresolved relative
+    // imports) and auto-repair them in one pass — so the user gets a working app without clicking "fix".
+    try {
+      const issues = verifyGeneratedApp(artifact);
+      if (issues.length) {
+        sse('phase', { label: `Verifying — fixing ${issues.length} issue${issues.length === 1 ? '' : 's'}…` });
+        const repairPrompt = buildGeneratePrompt({
+          prompt: `The generated project has these issues. Fix them and return the COMPLETE updated project so it is correct and runs cleanly:\n${formatIssues(issues)}`,
+          template: body.template,
+          currentFiles: artifact.files.map((f) => ({ path: f.path, content: f.content })),
+          currentTitle: artifact.title
+        });
+        const repaired = parseGeneratedApp(await complete(repairPrompt, false), body.template);
+        if (repaired) {
+          artifact = repaired;
+          sse('phase', { label: verifyGeneratedApp(artifact).length ? 'Verified — applied fixes' : 'Verified ✓' });
+        } else {
+          sse('phase', { label: 'Verified — kept the best version' });
+        }
+      } else {
+        sse('phase', { label: 'Verified ✓' });
+      }
+    } catch (err) {
+      // Verification/repair is best-effort — never fail the generation over it.
+      console.warn('[studio] verify/repair skipped:', (err as Error)?.message);
+    }
+
     sse('result', { artifact });
     return res.end();
   } catch (err) {
