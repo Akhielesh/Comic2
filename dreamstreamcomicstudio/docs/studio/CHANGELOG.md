@@ -5,6 +5,31 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-06 · Claude — FEAT(S1): live agentic activity stream for app generation
+The #1 complaint — "the AI isn't working synchronously, I can't see what it's doing" — was real:
+`/api/studio/generate` was fully blocking, so generation showed a single "Generating your app…"
+spinner for the entire 20–60s with zero feedback (the streaming `BuildTrace` only existed for the
+gated cloud `/build`). Now generation streams:
+- **Server:** new SSE route `POST /api/studio/generate/stream` token-streams the model via
+  `runChat({onDelta})` and emits `start` / `phase` / `file` (writing→written, with byte counts) /
+  `result` events. New pure, unit-tested incremental JSON parser `server/src/ai/studio/streamParse.ts`
+  (`scanStreamedFiles`) discovers each file as soon as its path appears and marks it complete when its
+  object closes — tolerant of escapes, `\uXXXX`, and chunk-split boundaries. Keeps a stricter
+  non-streamed retry, mirroring `runGenerate`. The blocking `/generate` stays for back-compat/tests.
+- **Client:** `streamGenerateStudioApp()` (mirrors `studioBuildApi`); a new `activityStore` +
+  `ActivityFeed` component render the live feed — phases as steps, files spinning then ✓ with size,
+  auto-collapsing to a one-line summary ("✓ Built … 6 files") that re-opens. Wired into
+  `CodeStudioView.handleGenerate` (and surfaced on `StudioStart` for the first build) with a graceful
+  fallback to the blocking generate if SSE is unavailable.
+- Plan: new `docs/studio/CODE-STUDIO-LIBRECHAT-PLAN.md` maps LibreChat's premium features → our
+  sprints (S1 here; S2 code/preview toggle; S3 diff edits; S4–S6 service/account auto-wiring).
+Files: `server/src/ai/studio/streamParse.ts` (+test), `server/src/routes/studio.ts`,
+`services/studioGenerateApi.ts`, `services/sse.ts` (reused), `components/studio/workspace/{activityStore,
+ActivityFeed}.tsx` (+activityStore test), `components/studio/{CodeStudioView,StudioStart}.tsx`,
+`components/studio/workspace/index.ts`. Client typecheck + server build green; 136 studio tests pass; frontend build green.
+
+---
+
 ## 2026-06-06 · Claude — FIX: header nav vanished < 1024px; studio panes collapsed in the wide layout
 Two responsive bugs, both browser-verified (headless Chromium screenshots at 800/1280px):
 - **Header had no nav under 1024px.** The product nav is `hidden lg:flex` with no fallback, so below

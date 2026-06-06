@@ -20,12 +20,12 @@ import {
 import type { RunStatus, Command } from './kit';
 import {
   CodeWorkspace, LogsConsole, PreviewFrame, BuildTrace, ChangesPanel, HistoryPanel, PromptComposer,
-  ConversationThread, useStudioConversation, useStudioBuild,
+  ConversationThread, ActivityFeed, useStudioConversation, useStudioActivity, useStudioBuild,
   useStudioWorkspace, useStudioLogs, isPathDirty, workspaceCurrentArtifact,
 } from './workspace';
 import { StudioStart } from './StudioStart';
 import { stopLiveStudio } from '../../services/studioApi';
-import { generateStudioApp } from '../../services/studioGenerateApi';
+import { generateStudioApp, streamGenerateStudioApp } from '../../services/studioGenerateApi';
 import { streamStudioBuild, type BuildStage } from '../../services/studioBuildApi';
 import { getOpenRouterKey } from '../../services/appSettings';
 import { isProviderEnabled } from '../../services/sourceGovernance';
@@ -101,8 +101,11 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     if (artifact) loadArtifact(artifact);
   }, [artifact, loadArtifact]);
 
-  // Fresh build conversation per studio entry (a different project shouldn't inherit a stale thread).
-  useEffect(() => { useStudioConversation.getState().clear(); }, []);
+  // Fresh build conversation + activity per studio entry (don't inherit a stale thread/feed).
+  useEffect(() => {
+    useStudioConversation.getState().clear();
+    useStudioActivity.getState().reset();
+  }, []);
 
   // Keyboard shortcuts: ⌘K palette · ⌘B / ⌘↵ Build · ⌘S (no-op — Code Studio saves on Build).
   useEffect(() => {
@@ -194,25 +197,49 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     if (!refining) convo.clear(); // a brand-new app starts a fresh thread
     convo.pushUser(prompt);
     convo.pushAssistant(refining ? 'Updating your app…' : 'Generating your app…', 'pending');
+    useStudioActivity.getState().begin();
     appendLog('system', refining ? `Refining: ${prompt}` : `Generating app: ${prompt}`);
-    try {
-      const artifact = await generateStudioApp({
-        prompt,
-        template: tmpl ?? template,
-        files: refining ? currentArtifact.files.map((f) => ({ path: f.path, content: f.content })) : undefined,
-        title: refining ? wsTitle : undefined,
-      });
+
+    const input = {
+      prompt,
+      template: tmpl ?? template,
+      files: refining ? currentArtifact.files.map((f) => ({ path: f.path, content: f.content })) : undefined,
+      title: refining ? wsTitle : undefined,
+    };
+
+    const succeed = (artifact: CodeStudioArtifact) => {
       loadArtifact(artifact);
-      useStudioConversation.getState().resolveLastAssistant(
-        `${refining ? 'Updated' : 'Built'} "${artifact.title}" — ${artifact.files.length} file${artifact.files.length === 1 ? '' : 's'}.`,
-        'done'
-      );
-      appendLog('success', `${refining ? 'Updated' : 'Generated'} "${artifact.title}" — ${artifact.files.length} file(s). Live preview is below; press Build to run it in a cloud container.`);
-    } catch (err) {
-      const msg = (err as Error)?.message || 'Generation failed.';
+      const summary = `${refining ? 'Updated' : 'Built'} "${artifact.title}" — ${artifact.files.length} file${artifact.files.length === 1 ? '' : 's'}`;
+      useStudioConversation.getState().resolveLastAssistant(`${summary}.`, 'done');
+      useStudioActivity.getState().finish('done', `✓ ${summary}`);
+      appendLog('success', `${summary}. Live preview is below; press Build to run it in a cloud container.`);
+    };
+    const failWith = (msg: string) => {
       useStudioConversation.getState().resolveLastAssistant(msg, 'error');
+      useStudioActivity.getState().finish('error', msg);
       setGenError(msg);
       appendLog('error', msg);
+    };
+
+    try {
+      // Stream the build so the activity feed shows files appearing live; fall back to the
+      // blocking generate if the SSE transport isn't available.
+      let artifact: CodeStudioArtifact | null = null;
+      let streamError: string | null = null;
+      try {
+        await streamGenerateStudioApp(input, {
+          onPhase: (label) => { if (label) useStudioActivity.getState().pushPhase(label); },
+          onFile: (f) => useStudioActivity.getState().upsertFile(f),
+          onResult: (a) => { artifact = a; },
+          onError: (msg) => { streamError = msg; },
+        });
+      } catch {
+        artifact = await generateStudioApp(input);
+      }
+      if (artifact) succeed(artifact);
+      else failWith(streamError || 'The model did not return a valid app. Try rephrasing your idea.');
+    } catch (err) {
+      failWith((err as Error)?.message || 'Generation failed.');
     } finally {
       setGenerating(false);
     }
@@ -269,6 +296,8 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       <div className="p-3 space-y-3">
         {/* The build conversation (your prompts + the agent's outcomes). */}
         <ConversationThread />
+        {/* Live, synchronous activity — files appearing as the AI writes them (Sprint 1). */}
+        <ActivityFeed />
         {/* Iterate by prompt — refines the current app in place (no chat hand-off). */}
         <PromptComposer mode="inline" onSubmit={handleGenerate} busy={generating} error={genError} />
         <div className="flex flex-wrap gap-1.5">

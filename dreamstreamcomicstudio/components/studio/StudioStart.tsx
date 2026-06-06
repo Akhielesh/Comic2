@@ -10,7 +10,7 @@ import { TemplateLogo } from './assets/techLogos';
 import { EmptyProjectsArt } from './assets/illustrations';
 import { STARTER_TEMPLATES } from './assets/templates';
 import { StudioWelcome } from './StudioWelcome';
-import { PromptComposer, useStudioWorkspace } from './workspace';
+import { PromptComposer, ActivityFeed, useStudioWorkspace } from './workspace';
 import {
   listStudioProjects, getStudioProject, deleteStudioProject, type StudioProjectSummary,
 } from '../../services/studioApi';
@@ -103,7 +103,7 @@ export const StudioStart: React.FC<StudioStartProps> = ({
       <Reveal>
         <div className="mx-auto max-w-5xl">
           {onGenerate && (
-            <div className="mb-8 pt-6">
+            <div className="mb-8 pt-6 space-y-3">
               <PromptComposer
                 mode="hero"
                 onSubmit={onGenerate}
@@ -112,6 +112,8 @@ export const StudioStart: React.FC<StudioStartProps> = ({
                 template={template}
                 onTemplateChange={onTemplateChange}
               />
+              {/* Live activity for the first build (files appear as the AI writes them). */}
+              <ActivityFeed />
             </div>
           )}
 

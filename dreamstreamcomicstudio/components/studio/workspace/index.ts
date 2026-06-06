@@ -21,6 +21,9 @@ export type { PromptComposerProps } from './PromptComposer';
 export { ConversationThread } from './ConversationThread';
 export { useStudioConversation } from './conversationStore';
 export type { StudioMessage } from './conversationStore';
+export { ActivityFeed } from './ActivityFeed';
+export { useStudioActivity } from './activityStore';
+export type { StudioActivityItem } from './activityStore';
 export {
   useStudioWorkspace,
   isPathDirty,

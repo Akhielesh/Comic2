@@ -21,7 +21,8 @@ import { evaluateLaunchAllowed } from '../services/studioCaps.js';
 import { sanitizeFiles, deriveProjectName } from '../services/studioFiles.js';
 import { saveProject, listProjects, getProjectWithFiles, deleteProject, listVersions, getVersionFiles } from '../services/studioRepository.js';
 import { runBuildAgent } from '../ai/studio/buildAgent.js';
-import { runGenerate } from '../ai/studio/studioGenerate.js';
+import { runGenerate, buildGeneratePrompt, parseGeneratedApp, STRICT_JSON_REMINDER } from '../ai/studio/studioGenerate.js';
+import { scanStreamedFiles } from '../ai/studio/streamParse.js';
 import { pickCodingModel, TEXT_FALLBACK } from '../ai/autoRouter.js';
 import { runChat } from '../ai/chat.js';
 import { resolveProviderContext } from '../ai/gateway.js';
@@ -121,6 +122,115 @@ studioRouter.post('/generate', async (req, res, next) => {
     return res.json({ artifact });
   } catch (err) {
     next(err);
+  }
+});
+
+// POST /api/studio/generate/stream — the same generation as /generate, but streamed over SSE so
+// the studio can show the build happening *synchronously*: a live activity feed where each file
+// appears ("writing /App.tsx") and resolves ("written, 1.2 KB") as the model emits it. This is the
+// non-gated, pure-LLM path (no worker needed). The client falls back to the blocking /generate if
+// the stream isn't available. Auth + the global key middleware apply.
+studioRouter.post('/generate/stream', async (req, res, next) => {
+  try {
+    const body = (req.body || {}) as { prompt?: string; template?: string; files?: unknown; title?: string };
+    const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
+    if (!prompt) {
+      return res.status(400).json({ error: { message: 'A prompt describing the app is required.' } });
+    }
+
+    const providerCtx = resolveProviderContext(req.apiKeys?.openRouterKey as string | undefined, 'openrouter');
+    if (!providerCtx.apiKey) {
+      return res.status(400).json({
+        error: {
+          message: 'No coding model is available. Add an OpenRouter key in Settings (free models work too).',
+          code: 'STUDIO_NO_MODEL_KEY'
+        }
+      });
+    }
+
+    let model: string;
+    try { model = await pickCodingModel(); } catch { model = TEXT_FALLBACK; }
+
+    const currentFiles = sanitizeFiles(body.files).map((f) => ({ path: f.path, content: f.content }));
+    const refining = currentFiles.length > 0;
+    const genInput = {
+      prompt,
+      template: body.template,
+      currentFiles: refining ? currentFiles : undefined,
+      currentTitle: typeof body.title === 'string' ? body.title : undefined
+    };
+    const genPrompt = buildGeneratePrompt(genInput);
+
+    // Open the SSE stream.
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no'
+    });
+    const sse = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+    sse('start', { refining });
+    sse('phase', { label: refining ? 'Reading your current app…' : 'Designing your app…' });
+
+    // Stream the model's tokens; as files appear in the JSON, emit live file events.
+    let acc = '';
+    const writingSeen = new Set<string>();
+    const writtenSeen = new Set<string>();
+    let announcedWriting = false;
+    const onDelta = (delta: { content?: string }) => {
+      if (!delta.content) return;
+      acc += delta.content;
+      const files = scanStreamedFiles(acc);
+      if (files.length && !announcedWriting) {
+        announcedWriting = true;
+        sse('phase', { label: refining ? 'Applying your changes…' : 'Writing files…' });
+      }
+      for (const f of files) {
+        if (!writingSeen.has(f.path)) { writingSeen.add(f.path); sse('file', { path: f.path, status: 'writing' }); }
+        if (f.complete && !writtenSeen.has(f.path)) {
+          writtenSeen.add(f.path);
+          sse('file', { path: f.path, status: 'written', bytes: f.bytes });
+        }
+      }
+    };
+
+    const complete = async (p: string, stream: boolean): Promise<string> => {
+      const result = await runChat({
+        provider: 'openrouter',
+        apiKey: providerCtx.apiKey,
+        model,
+        messages: [{ role: 'user', content: p }],
+        temperature: 0.3,
+        maxTokens: 16000,
+        fallbackModel: TEXT_FALLBACK,
+        timeoutMs: STUDIO_REQUEST_TIMEOUT_MS,
+        ...(stream ? { onDelta } : {})
+      });
+      return result.text || '';
+    };
+
+    let text = (await complete(genPrompt, true)) || acc;
+    let artifact = parseGeneratedApp(text, body.template);
+    if (!artifact) {
+      // One stricter, non-streamed retry (matches runGenerate's resilience).
+      sse('phase', { label: 'Tightening the output…' });
+      text = await complete(genPrompt + STRICT_JSON_REMINDER, false);
+      artifact = parseGeneratedApp(text, body.template);
+    }
+
+    if (!artifact) {
+      sse('error', { message: 'The model did not return a valid app. Try rephrasing your idea.' });
+      return res.end();
+    }
+    sse('result', { artifact });
+    return res.end();
+  } catch (err) {
+    if (res.headersSent) {
+      res.write(`event: error\ndata: ${JSON.stringify({ message: (err as Error)?.message || 'Generation failed.' })}\n\n`);
+      return res.end();
+    }
+    return next(err);
   }
 });
 

@@ -4,7 +4,16 @@
 > DreamStream Studio. Every agent/PR that changes anything **must** update this file and
 > `CHANGELOG.md`. If this file and reality disagree, fix this file.
 
-**Last updated:** 2026-06-06 · **Updated by:** Claude · **Branch:** `claude/loving-mccarthy-guspZ` (draft PR)
+**Last updated:** 2026-06-06 · **Updated by:** Claude · **Branch:** `claude/wizardly-franklin-EgL8k` (draft PR)
+
+> Latest (2026-06-06): **S1 — LIVE AGENTIC ACTIVITY STREAM FOR GENERATION.** Generation is now
+> synchronous: a new SSE route `POST /api/studio/generate/stream` token-streams the model and emits
+> per-file events, driving a collapsible **ActivityFeed** where files appear live ("✎ writing → ✓
+> written, 1.2 KB") and collapse to a one-line summary when done. Kills the "AI isn't working
+> synchronously / I can't see what it's doing" complaint. Pure incremental JSON parser
+> (`streamParse.ts`) + graceful fallback to the blocking `/generate`. New plan doc
+> [`CODE-STUDIO-LIBRECHAT-PLAN.md`](./CODE-STUDIO-LIBRECHAT-PLAN.md) maps LibreChat → our sprints.
+> 136 studio tests pass; typecheck + server build + frontend build green.
 
 > Latest (2026-06-06): **IN-STUDIO PROMPT→BUILD + LINEAR/AI-STUDIO DARK REDESIGN.** Code Studio no
 > longer bounces you to chat — the "Prompt · Build" pane is now a real composer (hero + iterate),
