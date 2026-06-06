@@ -62,7 +62,16 @@ Rules:
 - "template" must be one of the listed web templates: use "react-ts"/"react" for React, and "static" for
   everything else (plain HTML/CSS, or any non-web project). The studio detects the real language from your
   file extensions, so "static" is correct for Python/Go/Node-API/etc.
-- Paths start with "/". Do not invent packages that do not exist.`;
+- Paths start with "/". Do not invent packages that do not exist.
+
+Quality bar (write like a senior engineer shipping to production):
+- Every relative import MUST resolve to a file you also emit. No dangling imports, no missing components.
+- Polished, modern UI by default: sensible layout, spacing, typography and color; responsive; tasteful
+  empty/loading/error states; accessible (labels, alt text, keyboard focus). Avoid unstyled scaffolding.
+- Real behavior, not a stub: wire up the interactions the idea implies and seed realistic sample data so
+  it looks alive on first load.
+- Robust code: handle edge cases and errors; for TypeScript use precise types (no stray "any"); keep
+  components small and readable. No dead code, no console spam.`;
 
 export const buildGeneratePrompt = (input: GenerateInput): string => {
   const template = normalizeTemplate(input.template);

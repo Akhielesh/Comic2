@@ -5,6 +5,16 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-06 · Claude — FEAT: stronger generation quality bar (production-grade code prompt)
+Owner: "the code is not even good." Raised the generation contract with explicit senior-engineer
+standards baked into `buildGeneratePrompt`/`OUTPUT_CONTRACT`: every relative import must resolve to an
+emitted file; polished/responsive/accessible UI with empty/loading/error states by default; real wired
+behavior + realistic seed data (not a stub); robust error handling and precise TS types. Pairs with the
+verifier agent (which enforces the import/placeholder rules statically + auto-repairs). File:
+`server/src/ai/studio/studioGenerate.ts`. Server build green; 525 tests pass.
+
+---
+
 ## 2026-06-06 · Claude — FEAT: auto-verify + self-repair pass for generation (verifier agent)
 Owner asked the AI to verify its own output and fix issues automatically (not make the user click
 "Fix with AI"). Added the first agent of the build pipeline:
