@@ -28,7 +28,7 @@ import {
 import { StudioStart } from './StudioStart';
 import { StudioBuildFlow, type StudioFlowState } from './StudioBuildFlow';
 import { clarifyStudioApp, planStudioApp } from '../../services/studioPlanApi';
-import { getStudioModelSelection, getStudioAgents, getStudioAutoRunAgents, STUDIO_MODEL_CHANGED } from '../../services/studioModelSelection';
+import { getStudioModelSelection, getStudioAgents, getStudioAutoRunAgents, getStudioRuntime, STUDIO_MODEL_CHANGED } from '../../services/studioModelSelection';
 import { stopLiveStudio } from '../../services/studioApi';
 import { generateStudioApp, streamGenerateStudioApp } from '../../services/studioGenerateApi';
 import { streamStudioBuild, type BuildStage } from '../../services/studioBuildApi';
@@ -236,6 +236,11 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
               r.ok ? `Build succeeded in ${r.iterations} iteration(s).` : `Build stopped: ${r.reason}`);
           },
           onError: (msg) => {
+            if (/not configured|STUDIO_NOT_CONFIGURED/i.test(msg)) {
+              setStatus('idle');
+              appendLog('system', 'Cloud sandbox not configured — showing the in-browser preview instead.');
+              return;
+            }
             useStudioBuild.getState().fail(msg);
             setStatus('error'); setError(msg); appendLog('error', msg);
           },
@@ -243,6 +248,12 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       );
     } catch (err) {
       const msg = (err as Error)?.message || 'Build failed.';
+      // Worker not deployed / unreachable → soft-fall back to the instant in-browser preview.
+      if (/not configured|STUDIO_NOT_CONFIGURED|50[23]/i.test(msg)) {
+        setStatus('idle');
+        appendLog('system', 'Cloud sandbox not available — using the in-browser preview instead.');
+        return;
+      }
       useStudioBuild.getState().fail(msg);
       setStatus('error');
       setError(msg);
@@ -491,9 +502,19 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const buildFromPlan = async () => {
     if (!flow.plan) return;
     setFlow((f) => ({ ...f, phase: 'building' }));
-    const res = await handleGenerate(flow.prompt, flowTmplRef.current, { plan: flow.plan, answers: flow.answers, autoReview: true });
-    if (res.ok || res.error === 'cancelled') setFlow({ phase: 'idle', prompt: '', answers: [] });
-    else setFlow((f) => ({ ...f, phase: 'error', error: res.error || 'Build failed.' }));
+    // Opt-in deep agent review; otherwise the worker self-heal loop (below) is the primary "run".
+    const autoReview = getStudioAutoRunAgents();
+    const res = await handleGenerate(flow.prompt, flowTmplRef.current, { plan: flow.plan, answers: flow.answers, autoReview });
+    if (res.ok || res.error === 'cancelled') {
+      setFlow({ phase: 'idle', prompt: '', answers: [] });
+      // Run it in the REAL sandbox (cloud worker, self-healing). Soft-falls back to the in-browser
+      // preview when the worker isn't available. Skipped if the agent review is already running.
+      if (res.ok && enabled && getStudioRuntime() !== 'browser' && !autoReview) {
+        setTimeout(() => runBuildRef.current(), 150);
+      }
+    } else {
+      setFlow((f) => ({ ...f, phase: 'error', error: res.error || 'Build failed.' }));
+    }
   };
 
   const resetFlow = () => { genAbortRef.current?.abort(); setFlow({ phase: 'idle', prompt: '', answers: [] }); };

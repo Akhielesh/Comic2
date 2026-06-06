@@ -42,7 +42,16 @@ export interface StudioModelSelection {
   agentPreferences?: string;
   /** Automatically run the agent team after each brand-new build (seamless mode). */
   autoRunAgents?: boolean;
+  /**
+   * Sandbox runtime preference:
+   *  - 'auto'    run in the cloud worker container when available, else the in-browser preview
+   *  - 'worker'  always use the cloud worker container (real terminal/backends)
+   *  - 'browser' always use the in-browser preview (no hosted worker needed)
+   */
+  runtime?: 'auto' | 'worker' | 'browser';
 }
+
+export type StudioRuntime = 'auto' | 'worker' | 'browser';
 
 const STORAGE = 'dreamstream_studio_model';
 export const STUDIO_MODEL_CHANGED = 'dreamstream:studio-model-changed';
@@ -61,7 +70,8 @@ const DEFAULTS: StudioModelSelection = {
   defaultTemplate: null,
   agents: null,
   agentPreferences: '',
-  autoRunAgents: false
+  autoRunAgents: false,
+  runtime: 'auto'
 };
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
@@ -80,7 +90,8 @@ const sanitize = (raw: Partial<StudioModelSelection>): StudioModelSelection => {
       : STUDIO_DEFAULT_MAX_ITERATIONS,
     agents: Array.isArray(merged.agents) ? merged.agents.filter((x): x is string => typeof x === 'string') : null,
     agentPreferences: typeof merged.agentPreferences === 'string' ? merged.agentPreferences : '',
-    autoRunAgents: merged.autoRunAgents === true
+    autoRunAgents: merged.autoRunAgents === true,
+    runtime: merged.runtime === 'worker' || merged.runtime === 'browser' ? merged.runtime : 'auto'
   };
 };
 
@@ -183,6 +194,14 @@ export const getStudioAutoRunAgents = (): boolean => read().autoRunAgents === tr
 export const setStudioAutoRunAgents = (on: boolean) => {
   const next = read();
   next.autoRunAgents = !!on;
+  write(next);
+};
+
+export const getStudioRuntime = (): StudioRuntime => read().runtime ?? 'auto';
+
+export const setStudioRuntime = (runtime: StudioRuntime) => {
+  const next = read();
+  next.runtime = runtime === 'worker' || runtime === 'browser' ? runtime : 'auto';
   write(next);
 };
 

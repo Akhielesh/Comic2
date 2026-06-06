@@ -19,7 +19,7 @@ import { domainStrength } from '../../services/modelDomains';
 import {
   getStudioModelSelection, setStudioModel, setStudioAuto, setStudioSource,
   setStudioCostPref, setStudioCreativity, setStudioMaxIterations, setStudioDefaultTemplate,
-  setStudioAgents, setStudioAgentPreferences, setStudioAutoRunAgents,
+  setStudioAgents, setStudioAgentPreferences, setStudioAutoRunAgents, setStudioRuntime,
   resetStudioModelSelection, STUDIO_MODEL_CHANGED, STUDIO_MAX_ITERATIONS_CEILING,
   type StudioModelSelection, type StudioCostPref
 } from '../../services/studioModelSelection';
@@ -304,6 +304,26 @@ export const StudioSettingsPanel: React.FC<{ open: boolean; onClose: () => void 
               />
               <p className={`text-[11px] ${t.textFaint}`}>How many times the build loop may fix its own errors.</p>
             </div>
+          </section>
+
+          {/* Sandbox runtime */}
+          <section className={card}>
+            <div className="text-sm font-bold mb-2">Sandbox runtime</div>
+            <div className="flex flex-wrap gap-2">
+              {([
+                { id: 'auto', label: 'Auto' },
+                { id: 'worker', label: 'Cloud worker' },
+                { id: 'browser', label: 'In-browser' }
+              ] as const).map((o) => (
+                <button key={o.id} onClick={() => setStudioRuntime(o.id)} className={chip((sel.runtime ?? 'auto') === o.id)}>
+                  {o.label}
+                </button>
+              ))}
+            </div>
+            <p className={`mt-2 text-[11px] ${t.textFaint}`}>
+              Auto runs builds in the cloud worker container (real terminal, installs, backends, internet) when it's
+              available, falling back to the in-browser preview otherwise. Pick In-browser to never use a hosted worker.
+            </p>
           </section>
 
           {/* Default template */}
