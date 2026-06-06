@@ -36,6 +36,10 @@ export interface StudioModelSelection {
   maxIterations: number;
   /** Default scaffold for new apps; null/undefined = let the AI choose from the prompt. */
   defaultTemplate?: string | null;
+  /** Enabled multi-agent refinement agents (ids). null = the default team. */
+  agents?: string[] | null;
+  /** Free-text preferences the refinement agents should honor (style, stack, constraints). */
+  agentPreferences?: string;
 }
 
 const STORAGE = 'dreamstream_studio_model';
@@ -52,7 +56,9 @@ const DEFAULTS: StudioModelSelection = {
   costPref: 'free',
   creativity: STUDIO_DEFAULT_CREATIVITY,
   maxIterations: STUDIO_DEFAULT_MAX_ITERATIONS,
-  defaultTemplate: null
+  defaultTemplate: null,
+  agents: null,
+  agentPreferences: ''
 };
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
@@ -68,7 +74,9 @@ const sanitize = (raw: Partial<StudioModelSelection>): StudioModelSelection => {
     creativity: Number.isFinite(merged.creativity) ? clamp(Number(merged.creativity), 0, 1) : STUDIO_DEFAULT_CREATIVITY,
     maxIterations: Number.isInteger(merged.maxIterations)
       ? clamp(merged.maxIterations, 1, STUDIO_MAX_ITERATIONS_CEILING)
-      : STUDIO_DEFAULT_MAX_ITERATIONS
+      : STUDIO_DEFAULT_MAX_ITERATIONS,
+    agents: Array.isArray(merged.agents) ? merged.agents.filter((x): x is string => typeof x === 'string') : null,
+    agentPreferences: typeof merged.agentPreferences === 'string' ? merged.agentPreferences : ''
   };
 };
 
@@ -145,6 +153,24 @@ export const setStudioMaxIterations = (maxIterations: number) => {
 export const setStudioDefaultTemplate = (template: string | null) => {
   const next = read();
   next.defaultTemplate = template && template.trim() ? template : null;
+  write(next);
+};
+
+/** Enabled refinement agent ids, or null when using the default team. */
+export const getStudioAgents = (): string[] | null => read().agents ?? null;
+
+/** Set the enabled refinement agents (null = default team). */
+export const setStudioAgents = (ids: string[] | null) => {
+  const next = read();
+  next.agents = Array.isArray(ids) ? ids : null;
+  write(next);
+};
+
+export const getStudioAgentPreferences = (): string => read().agentPreferences ?? '';
+
+export const setStudioAgentPreferences = (text: string) => {
+  const next = read();
+  next.agentPreferences = typeof text === 'string' ? text : '';
   write(next);
 };
 

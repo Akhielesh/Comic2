@@ -5,7 +5,11 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Cpu, Sparkles, Zap, Search, Check, RotateCcw, Star, Code2, Crown } from 'lucide-react';
+import {
+  Cpu, Sparkles, Zap, Search, Check, RotateCcw, Star, Code2, Crown, Users,
+  Building2, MonitorSmartphone, Layout, Palette, Database, ShieldCheck, CheckCircle2
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { useStudioTheme } from './kit';
 import { useDialogA11y } from './kit/useDialogA11y';
 import {
@@ -15,9 +19,11 @@ import { domainStrength } from '../../services/modelDomains';
 import {
   getStudioModelSelection, setStudioModel, setStudioAuto, setStudioSource,
   setStudioCostPref, setStudioCreativity, setStudioMaxIterations, setStudioDefaultTemplate,
+  setStudioAgents, setStudioAgentPreferences,
   resetStudioModelSelection, STUDIO_MODEL_CHANGED, STUDIO_MAX_ITERATIONS_CEILING,
   type StudioModelSelection, type StudioCostPref
 } from '../../services/studioModelSelection';
+import { STUDIO_AGENT_CATALOG, STUDIO_AGENT_ORDER, DEFAULT_STUDIO_AGENT_IDS } from '../../services/studioAgents';
 import { CODING_RECOMMENDATIONS, TIER_LABEL, type CodingPick } from '../../services/codingRecommendations';
 import type { ModelSourceId } from '../../services/modelSelection';
 
@@ -41,6 +47,10 @@ const TEMPLATE_OPTIONS: { id: string; label: string }[] = [
   { id: 'vanilla', label: 'Vanilla JS' },
   { id: 'static', label: 'Static HTML/CSS/JS' }
 ];
+
+const AGENT_ICONS: Record<string, LucideIcon> = {
+  Building2, Code2, MonitorSmartphone, Layout, Palette, Database, ShieldCheck, CheckCircle2
+};
 
 const isCoderText = (m: CatalogModel): boolean => !m.supportsImageOutput;
 
@@ -106,6 +116,14 @@ export const StudioSettingsPanel: React.FC<{ open: boolean; onClose: () => void 
   const pickRecommended = (pick: CodingPick) => {
     const { id, source } = resolveRecommended(pick, models, activeSource);
     setStudioModel(id, source);
+  };
+
+  // Enabled refinement agents (stored explicitly, else the default team).
+  const enabledAgents = useMemo(() => new Set(sel.agents ?? DEFAULT_STUDIO_AGENT_IDS), [sel.agents]);
+  const toggleAgent = (id: string) => {
+    const next = new Set(sel.agents ?? DEFAULT_STUDIO_AGENT_IDS);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setStudioAgents(STUDIO_AGENT_ORDER.filter((x) => next.has(x)));
   };
 
   if (!open || typeof document === 'undefined') return null;
@@ -298,6 +316,58 @@ export const StudioSettingsPanel: React.FC<{ open: boolean; onClose: () => void 
             >
               {TEMPLATE_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
             </select>
+          </section>
+
+          {/* AI agent team — which specialists run on "Refine with agent team". */}
+          <section className={card}>
+            <div className="flex items-center gap-2 mb-1">
+              <Users className={`w-4 h-4 ${t.accent}`} />
+              <span className="text-sm font-bold">AI agent team</span>
+              <span className={`ml-auto text-[11px] ${t.textFaint}`}>{enabledAgents.size} selected</span>
+            </div>
+            <p className={`text-[11px] ${t.textFaint} mb-2`}>
+              Pick which specialists run (in order) when you click <span className="font-semibold">Refine with agent team</span>. The
+              Data agent uses live web tools to wire real data into your app.
+            </p>
+            <div className="grid sm:grid-cols-2 gap-1.5">
+              {STUDIO_AGENT_CATALOG.map((a) => {
+                const Icon = AGENT_ICONS[a.icon] ?? Code2;
+                const on = enabledAgents.has(a.id);
+                return (
+                  <button
+                    key={a.id}
+                    onClick={() => toggleAgent(a.id)}
+                    title={a.description}
+                    className={`flex items-start gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors ${t.focusRing} ${
+                      on ? `${t.edgeStrong} ${t.accentSoft}` : `${t.edge} ${t.hover}`
+                    }`}
+                  >
+                    <span className={`mt-0.5 shrink-0 h-4 w-4 rounded border flex items-center justify-center ${on ? `${t.accentBg} ${t.accentText}` : t.edge}`}>
+                      {on && <Check className="w-3 h-3" />}
+                    </span>
+                    <Icon className={`w-4 h-4 shrink-0 ${on ? t.accent : t.textFaint}`} />
+                    <span className="min-w-0">
+                      <span className="flex items-center gap-1 text-xs font-bold">
+                        {a.name}
+                        {a.hasTools && <span className="text-[9px] font-bold uppercase text-emerald-400">live</span>}
+                      </span>
+                      <span className={`block text-[10px] leading-tight ${t.textFaint}`}>{a.description}</span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="mt-2 flex gap-2">
+              <button onClick={() => setStudioAgents(STUDIO_AGENT_ORDER)} className={chip(false)}>Select all</button>
+              <button onClick={() => setStudioAgents(DEFAULT_STUDIO_AGENT_IDS)} className={chip(false)}>Default team</button>
+            </div>
+            <textarea
+              value={sel.agentPreferences ?? ''}
+              onChange={(e) => setStudioAgentPreferences(e.target.value)}
+              placeholder="Optional preferences for the agents — e.g. 'use Tailwind, keep it minimal, target mobile, prefer free APIs'."
+              rows={2}
+              className={`mt-2 w-full rounded-lg border ${t.edge} ${t.panel} ${t.text} text-xs px-2.5 py-2 ${t.focusRing} resize-y`}
+            />
           </section>
 
           {/* Footer */}

@@ -11,7 +11,7 @@ import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useStat
 import {
   ArrowLeft, Wand2, Square, Share2, Download, FileCode, Cloud,
   Sparkles, Cpu, Lock, Mail, Loader2, Command as CommandIcon, Moon, Sun, Palette, Undo2, MessageSquarePlus, Check,
-  Columns, Eye, FilePlus,
+  Columns, Eye, FilePlus, Users,
 } from 'lucide-react';
 import type { CodeStudioArtifact, CodeStudioTemplate } from '../../apiTypes';
 import {
@@ -26,10 +26,12 @@ import {
   detectProjectKind, projectKindLabel, isWebProject, runHint, diffLines, diffStat,
 } from './workspace';
 import { StudioStart } from './StudioStart';
-import { getStudioModelSelection, STUDIO_MODEL_CHANGED } from '../../services/studioModelSelection';
+import { getStudioModelSelection, getStudioAgents, STUDIO_MODEL_CHANGED } from '../../services/studioModelSelection';
 import { stopLiveStudio } from '../../services/studioApi';
 import { generateStudioApp, streamGenerateStudioApp } from '../../services/studioGenerateApi';
 import { streamStudioBuild, type BuildStage } from '../../services/studioBuildApi';
+import { streamStudioAgents } from '../../services/studioAgentsApi';
+import { resolveStudioAgentIds, studioAgentName } from '../../services/studioAgents';
 import { getOpenRouterKey } from '../../services/appSettings';
 import { isProviderEnabled } from '../../services/sourceGovernance';
 import { isLiveStudioEnabled } from '../../services/studioFlags';
@@ -323,6 +325,87 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   // Cancel an in-flight generation (the composer's Stop button).
   const cancelGenerate = () => { genAbortRef.current?.abort(); };
 
+  // Multi-agent refine: a team of specialists (architecture, code, frontend, ui, design, data,
+  // security, verification) sequentially reviews + refines the current app. Streams a per-agent
+  // trace into the activity feed; on success the refined files replace the workspace.
+  const runAgents = async () => {
+    if (generating || !hasFiles) return;
+    const agentIds = resolveStudioAgentIds(getStudioAgents());
+    const names = agentIds.map(studioAgentName).join(', ');
+    setGenerating(true);
+    setGenError(null);
+    setPreviewError(null);
+    const convo = useStudioConversation.getState();
+    convo.pushUser(`Refine with agents: ${names}`);
+    convo.pushAssistant('Your agent team is refining the app…', 'pending');
+    const activity = useStudioActivity.getState();
+    activity.begin();
+    appendLog('system', `Refining with ${agentIds.length} agents: ${names}`);
+
+    const controller = new AbortController();
+    genAbortRef.current = controller;
+    const { signal } = controller;
+
+    const files = currentArtifact.files.map((f) => ({ path: f.path, content: f.content }));
+    let refined: { path: string; content: string }[] | null = null;
+    let streamError: string | null = null;
+    try {
+      await streamStudioAgents(
+        { files, projectId: wsProjectId ?? undefined, title: wsTitle, template: currentArtifact.template },
+        {
+          onPlan: (p) => activity.pushPhase(`Assembling ${p.agents.length} agents · ${p.model.split('/').pop()}`),
+          onAgent: (s) => {
+            if (s.status === 'running') { activity.pushPhase(`${s.name} reviewing… (${s.index + 1}/${s.total})`); return; }
+            const changed = s.changed || [];
+            if (s.status === 'done') {
+              changed.forEach((path) => activity.upsertFile({ path, status: 'written', change: 'modified' }));
+              activity.pushPhase(`${s.name}: ${s.note || 'updated'} · ${changed.length} file${changed.length === 1 ? '' : 's'}`);
+              appendLog('success', `[${s.name}] ${s.note || 'updated'}`);
+            } else if (s.status === 'skipped') {
+              activity.pushPhase(`${s.name}: no changes needed`);
+              appendLog('info', `[${s.name}] no changes needed`);
+            } else if (s.status === 'error') {
+              activity.pushPhase(`${s.name} failed`);
+              appendLog('warn', `[${s.name}] ${s.note || 'failed'}`);
+            }
+          },
+          onResult: (r) => { refined = r.files; },
+          onError: (msg) => { streamError = msg; },
+        },
+        signal
+      );
+      if (refined && (refined as { path: string; content: string }[]).length) {
+        const list = refined as { path: string; content: string }[];
+        const artifact: CodeStudioArtifact = { title: wsTitle || currentArtifact.title, template: currentArtifact.template, files: list };
+        loadArtifact(artifact);
+        const summary = `Agents refined "${artifact.title}" — ${list.length} file${list.length === 1 ? '' : 's'}`;
+        convo.resolveLastAssistant(`${summary}.`, 'done');
+        activity.finish('done', `✓ ${summary}`);
+        appendLog('success', `${summary}. Live preview updated.`);
+      } else {
+        const msg = streamError || 'The agents made no changes.';
+        convo.resolveLastAssistant(msg, streamError ? 'error' : 'done');
+        activity.finish(streamError ? 'error' : 'done', msg);
+        if (streamError) { setGenError(streamError); appendLog('error', streamError); }
+      }
+    } catch (err) {
+      if (signal.aborted) {
+        convo.resolveLastAssistant('Refinement stopped.', 'error');
+        activity.finish('error', 'Refinement stopped.');
+        appendLog('warn', 'Refinement stopped.');
+      } else {
+        const msg = (err as Error)?.message || 'Agent refinement failed.';
+        setGenError(msg);
+        convo.resolveLastAssistant(msg, 'error');
+        activity.finish('error', msg);
+        appendLog('error', msg);
+      }
+    } finally {
+      setGenerating(false);
+      genAbortRef.current = null;
+    }
+  };
+
   // Retry the last generation after a failure or cancel (Retry button on the activity feed).
   const retryLastGenerate = () => {
     const last = lastGenRef.current;
@@ -396,7 +479,8 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   }
   if (hasFiles) commands.push({ id: 'new', label: 'New project', icon: <FilePlus className="w-4 h-4" />, keywords: 'new reset start over fresh blank clear', run: newProject });
   commands.push({ id: 'chat', label: 'Build from chat', icon: <MessageSquarePlus className="w-4 h-4" />, keywords: 'new prompt generate describe', run: () => onNavigate('chat') });
-  commands.push({ id: 'studio-settings', label: 'Code Studio settings (coding model)', icon: <Cpu className="w-4 h-4" />, keywords: 'model coding source openrouter nvidia settings configure preferences creativity iterations', run: () => setSettingsOpen(true) });
+  if (hasFiles) commands.push({ id: 'agents', label: 'Refine with agent team', icon: <Users className="w-4 h-4" />, keywords: 'agents multi specialist architecture security verification data design refine improve review team', run: runAgents });
+  commands.push({ id: 'studio-settings', label: 'Code Studio settings (coding model & agents)', icon: <Cpu className="w-4 h-4" />, keywords: 'model coding source openrouter nvidia settings configure preferences creativity iterations agents', run: () => setSettingsOpen(true) });
   commands.push({ id: 'help', label: 'Keyboard shortcuts', icon: <CommandIcon className="w-4 h-4" />, keywords: 'keys help cheatsheet', run: () => setHelpOpen(true) });
   commands.push({ id: 'back', label: 'Back', icon: <ArrowLeft className="w-4 h-4" />, keywords: 'exit leave close', run: onBack });
 
@@ -428,6 +512,17 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
             </button>
           ))}
         </div>
+        {/* Multi-agent refine — a team of specialists improves the app per your selected agents. */}
+        {hasFiles && (
+          <button
+            onClick={runAgents}
+            disabled={generating}
+            title="A team of specialist agents (architecture, code, frontend, UI, design, data, security, QA) refines your app. Choose which agents in Settings."
+            className={`w-full inline-flex items-center justify-center gap-2 rounded-lg border ${t.edgeStrong} ${t.accentSoft} ${t.accent} px-3 py-2 text-sm font-bold ${t.hover} disabled:opacity-50 ${t.focusRing}`}
+          >
+            <Users className="w-4 h-4" /> Refine with agent team
+          </button>
+        )}
         <BuildTrace />
         {/* What backends/connections the AI's code expects + a one-click .env scaffold (S4.1). */}
         <ServicesPanel

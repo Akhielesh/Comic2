@@ -25,6 +25,10 @@ vi.mock('../../services/studioBuildApi', () => ({
 }));
 vi.mock('../../services/studioGenerateApi', () => ({
   generateStudioApp: vi.fn(async () => ({ title: 'P', template: 'react-ts', files: [] })),
+  streamGenerateStudioApp: vi.fn(async () => {}),
+}));
+vi.mock('../../services/studioAgentsApi', () => ({
+  streamStudioAgents: vi.fn(async () => {}),
 }));
 // Monaco loads from a CDN at runtime — stub it so the editor renders synchronously in jsdom.
 vi.mock('@monaco-editor/react', () => ({
