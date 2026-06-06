@@ -13,7 +13,7 @@ import {
   Sparkles, Cpu, Lock, Mail, Loader2, Command as CommandIcon, Moon, Sun, Palette, Undo2, MessageSquarePlus, Check,
   Columns, Eye, FilePlus, Users,
 } from 'lucide-react';
-import type { CodeStudioArtifact, CodeStudioTemplate } from '../../apiTypes';
+import type { CodeStudioArtifact, CodeStudioTemplate, StudioBuildPlan, StudioAnswer } from '../../apiTypes';
 import {
   Reveal, Skeleton, StatusPulse, ThemeSwitcher, FocusToggle, ResizableSplit, Confetti, CommandPalette, ShortcutsHelp,
   StudioAurora, useIsWide, useStudioTheme, useStudioThemeStore, useStudioFocus,
@@ -26,6 +26,8 @@ import {
   detectProjectKind, projectKindLabel, isWebProject, runHint, diffLines, diffStat,
 } from './workspace';
 import { StudioStart } from './StudioStart';
+import { StudioBuildFlow, type StudioFlowState } from './StudioBuildFlow';
+import { clarifyStudioApp, planStudioApp } from '../../services/studioPlanApi';
 import { getStudioModelSelection, getStudioAgents, getStudioAutoRunAgents, STUDIO_MODEL_CHANGED } from '../../services/studioModelSelection';
 import { stopLiveStudio } from '../../services/studioApi';
 import { generateStudioApp, streamGenerateStudioApp } from '../../services/studioGenerateApi';
@@ -105,6 +107,9 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const runBuildRef = useRef<() => void>(() => {});
   // Lets handleGenerate auto-trigger the agent team (seamless mode) without a declaration-order issue.
   const runAgentsRef = useRef<() => void>(() => {});
+  // The "engineering team" build flow for a NEW app: Understand → Plan → Build → Review.
+  const [flow, setFlow] = useState<StudioFlowState>({ phase: 'idle', prompt: '', answers: [] });
+  const flowTmplRef = useRef<CodeStudioTemplate | undefined>(undefined);
   // Lets the user cancel an in-flight generation (Stop button on the composer).
   const genAbortRef = useRef<AbortController | null>(null);
   // The last generation request, so a failed/cancelled run can be retried.
@@ -235,8 +240,12 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   // Generate (or refine) an app from a plain-language prompt — IN the studio, no chat hand-off.
   // On success the files load into the workspace; if live runs are enabled we auto-build (the
   // agentic self-heal loop), otherwise the instant in-browser preview shows the app immediately.
-  const handleGenerate = async (prompt: string, tmpl?: CodeStudioTemplate) => {
-    if (generating) return;
+  const handleGenerate = async (
+    prompt: string,
+    tmpl?: CodeStudioTemplate,
+    opts?: { plan?: StudioBuildPlan; answers?: StudioAnswer[]; autoReview?: boolean }
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (generating) return { ok: false, error: 'busy' };
     lastGenRef.current = { prompt, tmpl };
     const refining = hasFiles;
     setGenerating(true);
@@ -254,7 +263,10 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       template: tmpl ?? template,
       files: refining ? currentArtifact.files.map((f) => ({ path: f.path, content: f.content })) : undefined,
       title: refining ? wsTitle : undefined,
+      plan: refining ? undefined : opts?.plan,
+      answers: refining ? undefined : opts?.answers,
     };
+    let outcome: { ok: boolean; error?: string } = { ok: false };
     // Pre-edit snapshot so we can mark each streamed file new/modified and, on success, annotate
     // it with a +added/−removed diff stat (diff-centric live edits).
     const baseline = new Map((input.files ?? []).map((f) => [f.path, f.content]));
@@ -281,9 +293,10 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       useStudioConversation.getState().resolveLastAssistant(`${summary}.`, 'done');
       useStudioActivity.getState().finish('done', `✓ ${summary}`);
       appendLog('success', `${summary}. Live preview is below; press Build to run it in a cloud container.`);
-      // Seamless mode: optionally let the agent team refine a brand-new app right away.
-      if (!refining && enabled && getStudioAutoRunAgents()) {
-        appendLog('system', 'Auto-running the agent team to refine your new app…');
+      outcome = { ok: true };
+      // The agent team reviews a brand-new app (always for the build flow; opt-in otherwise).
+      if (!refining && enabled && (opts?.autoReview || getStudioAutoRunAgents())) {
+        appendLog('system', 'The agent team is reviewing your new app…');
         setTimeout(() => runAgentsRef.current(), 80);
       }
     };
@@ -292,11 +305,13 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       useStudioActivity.getState().finish('error', msg);
       setGenError(msg);
       appendLog('error', msg);
+      outcome = { ok: false, error: msg };
     };
     const cancelled = () => {
       useStudioConversation.getState().resolveLastAssistant('Generation stopped.', 'error');
       useStudioActivity.getState().finish('error', 'Generation stopped.');
       appendLog('warn', 'Generation stopped.');
+      outcome = { ok: false, error: 'cancelled' };
     };
 
     try {
@@ -327,6 +342,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       setGenerating(false);
       genAbortRef.current = null;
     }
+    return outcome;
   };
 
   // Cancel an in-flight generation (the composer's Stop button).
@@ -413,6 +429,50 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     }
   };
   runAgentsRef.current = runAgents;
+
+  // --- New-app build flow: Understand (clarify) → Plan → Build → Review (agent team) ---
+  const goToPlan = async (prompt: string, answers: StudioAnswer[]) => {
+    setFlow((f) => ({ ...f, phase: 'planning', prompt, answers }));
+    try {
+      const plan = await planStudioApp(prompt, answers);
+      setFlow((f) => ({ ...f, phase: 'plan', plan, answers }));
+    } catch (err) {
+      setFlow((f) => ({ ...f, phase: 'error', error: (err as Error)?.message || 'Could not draft a build plan.' }));
+    }
+  };
+
+  const startNewApp = async (prompt: string, tmpl?: CodeStudioTemplate) => {
+    const p = prompt.trim();
+    if (!p || generating) return;
+    flowTmplRef.current = tmpl;
+    setFlow({ phase: 'clarifying', prompt: p, answers: [] });
+    try {
+      const clarify = await clarifyStudioApp(p);
+      if (clarify.questions.length) setFlow({ phase: 'questions', prompt: p, clarify, answers: [] });
+      else await goToPlan(p, []); // nothing to ask → plan straight away
+    } catch {
+      await goToPlan(p, []); // clarify is best-effort
+    }
+  };
+
+  const submitAnswers = (answers: StudioAnswer[]) => { void goToPlan(flow.prompt, answers); };
+  const skipQuestions = () => { void goToPlan(flow.prompt, []); };
+  const regeneratePlan = () => { void goToPlan(flow.prompt, flow.answers); };
+
+  const buildFromPlan = async () => {
+    if (!flow.plan) return;
+    setFlow((f) => ({ ...f, phase: 'building' }));
+    const res = await handleGenerate(flow.prompt, flowTmplRef.current, { plan: flow.plan, answers: flow.answers, autoReview: true });
+    if (res.ok || res.error === 'cancelled') setFlow({ phase: 'idle', prompt: '', answers: [] });
+    else setFlow((f) => ({ ...f, phase: 'error', error: res.error || 'Build failed.' }));
+  };
+
+  const resetFlow = () => { genAbortRef.current?.abort(); setFlow({ phase: 'idle', prompt: '', answers: [] }); };
+  const retryFlow = () => {
+    if (flow.phase !== 'error') return;
+    if (flow.plan) void buildFromPlan();
+    else void startNewApp(flow.prompt, flowTmplRef.current);
+  };
 
   // Retry the last generation after a failure or cancel (Retry button on the activity feed).
   const retryLastGenerate = () => {
@@ -743,18 +803,32 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
         </div>
       )}
 
-      {/* No app loaded → the projects start screen (S1.7). Otherwise the workspace. */}
+      {/* No app loaded → either the engineering-team build flow (when active) or the projects
+          start screen. The flow gates the workspace/preview until there's a real, built app. */}
       {!hasFiles ? (
-        <StudioStart
-          onNavigate={onNavigate}
-          onGenerate={handleGenerate}
-          onCancelGenerate={cancelGenerate}
-          onRetryGenerate={retryLastGenerate}
-          generating={generating}
-          genError={genError}
-          template={template}
-          onTemplateChange={setTemplate}
-        />
+        flow.phase !== 'idle' ? (
+          <StudioBuildFlow
+            state={flow}
+            onSubmitAnswers={submitAnswers}
+            onSkipQuestions={skipQuestions}
+            onBuild={buildFromPlan}
+            onRegeneratePlan={regeneratePlan}
+            onBack={resetFlow}
+            onRetry={retryFlow}
+            busy={generating}
+          />
+        ) : (
+          <StudioStart
+            onNavigate={onNavigate}
+            onGenerate={startNewApp}
+            onCancelGenerate={cancelGenerate}
+            onRetryGenerate={retryLastGenerate}
+            generating={generating}
+            genError={genError}
+            template={template}
+            onTemplateChange={setTemplate}
+          />
+        )
       ) : wide ? (
         <div className="flex-1 min-h-0 p-3">
           <ResizableSplit direction="vertical" storageKey="studio.split.v" initial={[3.2, 1]} minPx={110}>

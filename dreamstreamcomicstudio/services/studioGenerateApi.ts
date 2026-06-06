@@ -6,7 +6,7 @@ import { post, postStream } from './apiClient';
 import { readSSEStream } from './sse';
 import { studioModelRequest } from './studioModelSelection';
 import type { ModelSourceId } from './modelSelection';
-import type { CodeStudioArtifact } from '../apiTypes';
+import type { CodeStudioArtifact, StudioBuildPlan, StudioAnswer } from '../apiTypes';
 
 export interface GenerateStudioInput {
   prompt: string;
@@ -23,6 +23,10 @@ export interface GenerateStudioInput {
   costPref?: 'free' | 'cheap' | 'quality';
   /** Override sampling temperature (0–1). */
   temperature?: number;
+  /** Approved build plan to implement (new-app flow). */
+  plan?: StudioBuildPlan;
+  /** The user's clarifying answers (new-app flow). */
+  answers?: StudioAnswer[];
 }
 
 /** Merge the studio's saved coding-model selection under the call's explicit overrides. */
