@@ -29,6 +29,8 @@ import { runClarify } from '../ai/studio/studioClarify.js';
 import { runPlan } from '../ai/studio/studioPlan.js';
 import { runStudioAgents, sanitizeAgentIds, studioAgentCatalog, STUDIO_AGENTS } from '../ai/studio/studioAgents.js';
 import { resolveTools } from '../ai/tools/registry.js';
+import { buildMcpTools } from '../ai/tools/mcpClient.js';
+import { enabledMcpConfigs } from '../services/mcpRegistry.js';
 import { scanStreamedFiles } from '../ai/studio/streamParse.js';
 import { verifyGeneratedApp, formatIssues } from '../ai/studio/verifyApp.js';
 import { pickCodingModel, TEXT_FALLBACK } from '../ai/autoRouter.js';
@@ -133,16 +135,39 @@ const getUsage = async (userId: string): Promise<{ activeRuns: number; dailyAwak
 // before it commits to a plan. resolveTools ignores unknown names, so this is safe to broaden.
 const PLAN_RESEARCH_TOOLS = ['web_search', 'wiki_lookup', 'github_repo', 'npm_package', 'pypi_package', 'search_papers'];
 
+// The user's configured MCP servers' tools, so Code Studio's planner + agents get the SAME extended
+// access as chat (their MCPs + APIs). Best-effort: saved (enabled) servers + any sent on the request,
+// deduped by URL. Network/registry hiccups never block a build.
+const studioMcpTools = async (
+  req: { user?: { id?: string }; },
+  body: { mcpServers?: unknown }
+) => {
+  try {
+    const requestServers = Array.isArray(body?.mcpServers)
+      ? (body.mcpServers as { id?: unknown; url?: unknown }[]).filter((s) => s && typeof s.url === 'string' && typeof s.id === 'string')
+      : [];
+    const savedServers = req.user?.id ? await enabledMcpConfigs(req.user.id).catch(() => []) : [];
+    const byUrl = new Map<string, { id: string; url: string }>();
+    for (const s of [...savedServers, ...requestServers] as { id: string; url: string }[]) byUrl.set(s.url, s);
+    const servers = [...byUrl.values()];
+    return servers.length ? await buildMcpTools(servers as Parameters<typeof buildMcpTools>[0]) : [];
+  } catch {
+    return [];
+  }
+};
+
 const studioStageComplete = async (
   req: { apiKeys?: { openRouterKey?: string | null; nvidiaKey?: string | null } },
   body: { source?: string; model?: string; costPref?: string },
   maxTokens: number,
-  toolNames?: string[]
+  toolNames?: string[],
+  extraTools?: Awaited<ReturnType<typeof buildMcpTools>>
 ): Promise<((prompt: string) => Promise<string>) | null> => {
   const resolved = resolveStudioProvider(req.apiKeys, body.source);
   if (!resolved) return null;
   const model = await resolveStudioCodingModel(resolved.provider, body.model, body.costPref);
   return async (prompt: string): Promise<string> => {
+    const tools = [...(toolNames && toolNames.length ? resolveTools(toolNames) : []), ...(extraTools || [])];
     const result = await runChat({
       provider: resolved.provider,
       apiKey: resolved.apiKey,
@@ -152,7 +177,7 @@ const studioStageComplete = async (
       maxTokens,
       fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
       timeoutMs: STUDIO_REQUEST_TIMEOUT_MS,
-      ...(toolNames && toolNames.length ? { tools: resolveTools(toolNames) } : {})
+      ...(tools.length ? { tools } : {})
     });
     return result.text || '';
   };
@@ -191,11 +216,12 @@ studioRouter.post('/clarify', async (req, res, next) => {
 // reviewable build plan (summary, stack, features, file tree, data sources). Pure LLM.
 studioRouter.post('/plan', async (req, res, next) => {
   try {
-    const body = (req.body || {}) as { prompt?: string; answers?: StudioAnswer[]; source?: string; model?: string; costPref?: string };
+    const body = (req.body || {}) as { prompt?: string; answers?: StudioAnswer[]; source?: string; model?: string; costPref?: string; mcpServers?: unknown };
     const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
     if (!prompt) return res.status(400).json({ error: { message: 'A prompt describing the app is required.' } });
-    // The planning stage researches real APIs/packages/repos with tools before committing.
-    const complete = await studioStageComplete(req, body, 2000, PLAN_RESEARCH_TOOLS);
+    // The planning stage researches real APIs/packages/repos with tools (incl. the user's MCPs).
+    const mcp = await studioMcpTools(req, body);
+    const complete = await studioStageComplete(req, body, 2000, PLAN_RESEARCH_TOOLS, mcp);
     if (!complete) return res.status(400).json(NO_MODEL_KEY);
     const answers = Array.isArray(body.answers) ? body.answers : undefined;
     const plan = await runPlan(prompt, answers, complete);
@@ -673,7 +699,7 @@ studioRouter.post('/agents', async (req, res, next) => {
     const body = (req.body || {}) as {
       projectId?: string; title?: string; template?: string; files?: unknown;
       prompt?: string; preferences?: string; agents?: unknown;
-      model?: string; source?: string; costPref?: string; temperature?: number;
+      model?: string; source?: string; costPref?: string; temperature?: number; mcpServers?: unknown;
     };
 
     const files = sanitizeFiles(body.files);
@@ -707,8 +733,11 @@ studioRouter.post('/agents', async (req, res, next) => {
     });
     const sse = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
-    // Each agent gets a focused model call; agents with toolNames get live web/data tools.
+    // The user's MCP servers' tools — extended access for the whole agent team (built once).
+    const mcp = await studioMcpTools(req, body);
+    // Each agent gets a focused model call; agents get their live web/data tools PLUS your MCP tools.
     const complete = async (prompt: string, toolNames: string[]): Promise<string> => {
+      const tools = [...resolveTools(toolNames), ...mcp];
       const result = await runChat({
         provider: resolved.provider,
         apiKey: resolved.apiKey,
@@ -718,7 +747,7 @@ studioRouter.post('/agents', async (req, res, next) => {
         maxTokens: 8000,
         fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
         timeoutMs: STUDIO_REQUEST_TIMEOUT_MS,
-        ...(toolNames.length ? { tools: resolveTools(toolNames) } : {})
+        ...(tools.length ? { tools } : {})
       });
       return result.text || '';
     };
