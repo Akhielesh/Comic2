@@ -1,0 +1,69 @@
+import { describe, it, expect } from 'vitest';
+import { scaffold } from './scaffold';
+import type { CodeStudioArtifact, CodeStudioTemplate } from '../apiTypes';
+
+const art = (
+  files: { path: string; content: string }[],
+  template: CodeStudioTemplate = 'react-ts'
+): CodeStudioArtifact => ({
+  title: 'Test App',
+  template,
+  files: files.map((f) => ({ ...f, language: 'typescript' })),
+});
+
+describe('scaffold — design stack support', () => {
+  it('adds imported design deps (framer-motion, lucide-react) to package.json', () => {
+    const { files } = scaffold(art([
+      {
+        path: '/App.tsx',
+        content: `import { motion } from 'framer-motion';\nimport { Home } from 'lucide-react';\nexport default function App(){ return <motion.div><Home/></motion.div>; }`,
+      },
+    ]));
+    const pkg = JSON.parse(files['package.json']);
+    expect(pkg.dependencies['framer-motion']).toBeDefined();
+    expect(pkg.dependencies['lucide-react']).toBeDefined();
+    expect(pkg.dependencies['react']).toBeDefined();
+  });
+
+  it('adds shadcn/ui Radix primitive imports as dependencies', () => {
+    const { files } = scaffold(art([
+      { path: '/App.tsx', content: `import * as Dialog from '@radix-ui/react-dialog';\nexport default () => null;` },
+    ]));
+    const pkg = JSON.parse(files['package.json']);
+    expect(pkg.dependencies['@radix-ui/react-dialog']).toBeDefined();
+  });
+
+  it('wires Tailwind + PostCSS when a CSS entry uses the @tailwind directives', () => {
+    const { files } = scaffold(art([
+      { path: '/App.tsx', content: `export default () => <div className="p-4" />;` },
+      { path: '/index.css', content: `@tailwind base;\n@tailwind components;\n@tailwind utilities;` },
+    ]));
+    const pkg = JSON.parse(files['package.json']);
+    expect(pkg.devDependencies['tailwindcss']).toBeDefined();
+    expect(pkg.devDependencies['autoprefixer']).toBeDefined();
+    expect(files['postcss.config.js']).toContain('tailwindcss');
+    expect(files['tailwind.config.js']).toContain('content');
+    // the model's css moved under src/ and is imported by the generated entry.
+    expect(files['src/index.css']).toContain('@tailwind');
+    expect(files['src/main.tsx']).toContain("import './index.css'");
+  });
+
+  it('keeps a model-emitted tailwind.config at the project root (not under src/)', () => {
+    const { files } = scaffold(art([
+      { path: '/App.tsx', content: `export default () => null;` },
+      { path: '/tailwind.config.js', content: `export default { content: ['./src/**/*'] };` },
+      { path: '/index.css', content: `@tailwind base;` },
+    ]));
+    expect(files['tailwind.config.js']).toBeDefined();
+    expect(files['src/tailwind.config.js']).toBeUndefined();
+  });
+
+  it('does NOT add Tailwind to a plain app that never opts in', () => {
+    const { files } = scaffold(art([
+      { path: '/App.tsx', content: `export default () => <div style={{ padding: 8 }} />;` },
+    ]));
+    const pkg = JSON.parse(files['package.json']);
+    expect(pkg.devDependencies?.tailwindcss).toBeUndefined();
+    expect(files['tailwind.config.js']).toBeUndefined();
+  });
+});

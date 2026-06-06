@@ -13,6 +13,7 @@
 
 import { parseFixResponse, type StudioFiles } from './studioFix.js';
 import { sanitizeFixFiles, canonicalStudioPath } from '../../services/studioFiles.js';
+import { DESIGN_REVIEW_CHECKLIST } from './designSystem.js';
 
 export interface StudioAgentDef {
   id: string;
@@ -53,17 +54,17 @@ export const STUDIO_AGENTS: Record<string, StudioAgentDef> = {
   frontend: {
     id: 'frontend', name: 'Frontend Engineer', icon: 'MonitorSmartphone', default: true, toolNames: RESEARCH_TOOLS,
     description: 'Framework correctness, hooks, rendering performance and build config.',
-    focus: `Review FRONTEND engineering: framework correctness (React hooks/effects/keys, state updates), rendering performance, proper loading/error states, animations/transitions, and build/runtime configuration. Look up real library usage with your tools when unsure. Fix anti-patterns and ensure the app compiles and runs cleanly in the browser.`
+    focus: `Review FRONTEND engineering: framework correctness (React hooks/effects/keys, state updates), rendering performance, proper loading/error states, animations/transitions, and build/runtime configuration. Look up real library usage with your tools when unsure. Fix anti-patterns and ensure the app compiles and runs cleanly in the browser. ${DESIGN_REVIEW_CHECKLIST}`
   },
   ui: {
     id: 'ui', name: 'UI / UX', icon: 'Layout', default: true, toolNames: DESIGN_TOOLS,
     description: 'Layout, interaction, accessibility and responsive design.',
-    focus: `Review UI/UX: layout, spacing, visual hierarchy, interaction feedback, tasteful motion/animations, empty/loading/error states, keyboard accessibility (a11y), and full RESPONSIVE behavior across mobile and desktop. Improve usability and polish without breaking behavior.`
+    focus: `Review UI/UX: layout, spacing, visual hierarchy, interaction feedback, tasteful motion/animations, empty/loading/error states, keyboard accessibility (a11y), and full RESPONSIVE behavior across mobile and desktop. Improve usability and polish without breaking behavior. ${DESIGN_REVIEW_CHECKLIST}`
   },
   design: {
     id: 'design', name: 'Visual Design', icon: 'Palette', default: false, toolNames: DESIGN_TOOLS,
     description: 'Typography, color, spacing system and overall aesthetic polish.',
-    focus: `Review VISUAL DESIGN: typography scale, color palette and contrast, consistent spacing/radius/shadows, motion, and overall aesthetic polish. Draw on real design references via your tools. Apply a cohesive, modern, attractive look. Keep the structure and behavior — change styling only.`
+    focus: `Review VISUAL DESIGN: typography scale, color palette and contrast, consistent spacing/radius/shadows, motion, and overall aesthetic polish. Draw on real design references via your tools. Apply a cohesive, modern, attractive look. Keep the structure and behavior — change styling only. ${DESIGN_REVIEW_CHECKLIST}`
   },
   data: {
     id: 'data', name: 'Data & Live APIs', icon: 'Database', default: false, toolNames: LIVE_DATA_TOOLS,

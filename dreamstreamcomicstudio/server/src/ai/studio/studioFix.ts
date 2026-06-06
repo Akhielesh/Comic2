@@ -8,6 +8,7 @@
 
 import { extractJson } from '../json.js';
 import type { BuildObservation } from './observation.js';
+import { DESIGN_FIX_NOTE } from './designSystem.js';
 
 export type StudioFiles = Record<string, string>;
 
@@ -77,6 +78,7 @@ Rules:
   different start command, also return an "install" and/or "dev" command. Use ONLY a package
   manager or build/run tool (npm/pnpm/yarn/npx/node/vite/python/pip/go/…). NO shell operators,
   pipes, redirects, env-assignments, or command chaining — those are rejected.
+- ${DESIGN_FIX_NOTE}
 
 PROJECT FILES:
 

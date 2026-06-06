@@ -10,6 +10,7 @@
 
 import type { CodeStudioArtifact, CodeStudioFile, CodeStudioTemplate, StudioBuildPlan, StudioAnswer } from '../../../../apiTypes.js';
 import { renderPlanForBuild } from './studioPlan.js';
+import { buildDesignDirective } from './designSystem.js';
 
 const EXT_TO_LANG: Record<string, string> = {
   ts: 'typescript', tsx: 'typescript',
@@ -94,6 +95,8 @@ ${renderFiles(input.currentFiles!)}
 REQUESTED CHANGE:
 ${input.prompt}
 
+${buildDesignDirective({ prompt: input.prompt, refining: true })}
+
 ${OUTPUT_CONTRACT}`;
   }
 
@@ -113,6 +116,8 @@ ${renderPlanForBuild(input.plan)}
 
 Default web stack if the plan doesn't imply another: ${template}.
 
+${buildDesignDirective({ prompt: input.prompt })}
+
 ${OUTPUT_CONTRACT}`;
   }
 
@@ -122,6 +127,8 @@ PROJECT IDEA:
 ${input.prompt}
 
 Default web stack if the idea is a UI and doesn't imply another: ${template}.
+
+${buildDesignDirective({ prompt: input.prompt })}
 
 ${OUTPUT_CONTRACT}`;
 };

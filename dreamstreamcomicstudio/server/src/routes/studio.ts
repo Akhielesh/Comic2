@@ -31,6 +31,7 @@ import { runStudioAgents, sanitizeAgentIds, studioAgentCatalog, STUDIO_AGENTS } 
 import { resolveTools } from '../ai/tools/registry.js';
 import { buildMcpTools } from '../ai/tools/mcpClient.js';
 import { enabledMcpConfigs } from '../services/mcpRegistry.js';
+import { ALWAYS_ON_STUDIO_MCP_SERVERS, envDesignMcpServers } from '../ai/studio/designSystem.js';
 import { scanStreamedFiles } from '../ai/studio/streamParse.js';
 import { verifyGeneratedApp, formatIssues } from '../ai/studio/verifyApp.js';
 import { pickCodingModel, TEXT_FALLBACK } from '../ai/autoRouter.js';
@@ -135,12 +136,13 @@ const getUsage = async (userId: string): Promise<{ activeRuns: number; dailyAwak
 // before it commits to a plan. resolveTools ignores unknown names, so this is safe to broaden.
 const PLAN_RESEARCH_TOOLS = ['web_search', 'wiki_lookup', 'github_repo', 'npm_package', 'pypi_package', 'search_papers'];
 
-// Always-on reference sources for Code Studio. DeepWiki turns any public GitHub repo into a
-// searchable wiki — so the planner + agents can read/ask about popular, relevant repos and take
-// real patterns/references from them before building (read_wiki_contents / ask_question).
-const DEFAULT_STUDIO_MCP_SERVERS: { id: string; url: string; name?: string }[] = [
-  { id: 'deepwiki', name: 'DeepWiki (GitHub repos)', url: 'https://mcp.deepwiki.com/mcp' }
-];
+// Always-on reference sources for Code Studio (curated in designSystem.ts): Context7 for live,
+// version-correct library docs (so the team uses real Tailwind/shadcn/Framer Motion APIs, not
+// hallucinated ones) + DeepWiki to read patterns from popular GitHub repos. Plus any design or
+// API-connector MCPs an operator has self-hosted over HTTPS and pointed at via env vars
+// (STUDIO_SHADCN_MCP_URL / STUDIO_MAGIC_MCP_URL / STUDIO_MAGICUI_MCP_URL / STUDIO_NANGO_MCP_URL).
+// All are best-effort: an unreachable server yields no tools and never blocks a build.
+const DEFAULT_STUDIO_MCP_SERVERS: { id: string; url: string; name?: string }[] = ALWAYS_ON_STUDIO_MCP_SERVERS;
 
 // Tools for Code Studio's planner + agents: the always-on DeepWiki reference source + the user's
 // configured MCP servers (saved + request), so the team gets the SAME extended access as chat
@@ -156,6 +158,8 @@ const studioMcpTools = async (
     const savedServers = req.user?.id ? await enabledMcpConfigs(req.user.id).catch(() => []) : [];
     const byUrl = new Map<string, { id: string; url: string; name?: string }>();
     for (const s of DEFAULT_STUDIO_MCP_SERVERS) byUrl.set(s.url, s);
+    // Operator-configured (self-hosted) design + API-connector MCPs, read fresh each call.
+    for (const s of envDesignMcpServers()) byUrl.set(s.url, s);
     for (const s of [...savedServers, ...requestServers] as { id: string; url: string }[]) byUrl.set(s.url, s);
     const servers = [...byUrl.values()];
     return servers.length ? await buildMcpTools(servers as Parameters<typeof buildMcpTools>[0]) : [];
