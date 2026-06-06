@@ -21,6 +21,10 @@ export const buildPlanPrompt = (prompt: string, answers?: StudioAnswer[]): strin
 USER'S IDEA:
 ${prompt}${renderAnswers(answers)}
 
+FIRST, RESEARCH (use your tools before deciding): study how this kind of app is built well — use the
+DeepWiki tools to read/ask about RELEVANT, POPULAR GitHub repos in this domain and borrow their proven
+structure and patterns, and verify real packages/APIs (npm/pypi/web). Reference what you learned in "notes".
+
 Produce:
 - title: a short product name.
 - summary: 1–2 sentences describing what the app does and for whom.

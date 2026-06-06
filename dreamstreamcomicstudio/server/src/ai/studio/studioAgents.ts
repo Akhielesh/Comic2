@@ -113,6 +113,7 @@ ${def.focus}
 
 Rules:
 - Make REAL, surgical improvements in your area. Do not rewrite everything; change only what your specialty calls for.
+- Use your tools when it helps: research real packages/APIs, and consult the DeepWiki tools to see how popular GitHub repos solve this and borrow proven patterns/references.
 - Keep the app runnable. Return the COMPLETE content of each file you change — never truncate, never leave placeholders or TODOs.
 - If the project is already solid in your area, return an empty files array with a short note.
 - Only include files you actually changed.

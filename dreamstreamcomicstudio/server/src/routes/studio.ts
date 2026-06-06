@@ -135,9 +135,16 @@ const getUsage = async (userId: string): Promise<{ activeRuns: number; dailyAwak
 // before it commits to a plan. resolveTools ignores unknown names, so this is safe to broaden.
 const PLAN_RESEARCH_TOOLS = ['web_search', 'wiki_lookup', 'github_repo', 'npm_package', 'pypi_package', 'search_papers'];
 
-// The user's configured MCP servers' tools, so Code Studio's planner + agents get the SAME extended
-// access as chat (their MCPs + APIs). Best-effort: saved (enabled) servers + any sent on the request,
-// deduped by URL. Network/registry hiccups never block a build.
+// Always-on reference sources for Code Studio. DeepWiki turns any public GitHub repo into a
+// searchable wiki — so the planner + agents can read/ask about popular, relevant repos and take
+// real patterns/references from them before building (read_wiki_contents / ask_question).
+const DEFAULT_STUDIO_MCP_SERVERS: { id: string; url: string; name?: string }[] = [
+  { id: 'deepwiki', name: 'DeepWiki (GitHub repos)', url: 'https://mcp.deepwiki.com/mcp' }
+];
+
+// Tools for Code Studio's planner + agents: the always-on DeepWiki reference source + the user's
+// configured MCP servers (saved + request), so the team gets the SAME extended access as chat
+// (their MCPs + APIs). Best-effort + deduped by URL; network/registry hiccups never block a build.
 const studioMcpTools = async (
   req: { user?: { id?: string }; },
   body: { mcpServers?: unknown }
@@ -147,7 +154,8 @@ const studioMcpTools = async (
       ? (body.mcpServers as { id?: unknown; url?: unknown }[]).filter((s) => s && typeof s.url === 'string' && typeof s.id === 'string')
       : [];
     const savedServers = req.user?.id ? await enabledMcpConfigs(req.user.id).catch(() => []) : [];
-    const byUrl = new Map<string, { id: string; url: string }>();
+    const byUrl = new Map<string, { id: string; url: string; name?: string }>();
+    for (const s of DEFAULT_STUDIO_MCP_SERVERS) byUrl.set(s.url, s);
     for (const s of [...savedServers, ...requestServers] as { id: string; url: string }[]) byUrl.set(s.url, s);
     const servers = [...byUrl.values()];
     return servers.length ? await buildMcpTools(servers as Parameters<typeof buildMcpTools>[0]) : [];
