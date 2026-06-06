@@ -108,6 +108,8 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const runBuildRef = useRef<() => void>(() => {});
   // Lets handleGenerate auto-trigger the agent team (seamless mode) without a declaration-order issue.
   const runAgentsRef = useRef<() => void>(() => {});
+  // Mirror of the live runId so the unmount cleanup can pause the sandbox without a stale closure.
+  const runIdRef = useRef<string | null>(null);
   // The "engineering team" build flow for a NEW app: Understand → Plan → Build → Review.
   const [flow, setFlow] = useState<StudioFlowState>({ phase: 'idle', prompt: '', answers: [] });
   const flowTmplRef = useRef<CodeStudioTemplate | undefined>(undefined);
@@ -196,6 +198,11 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
 
   // Keep a ref of `generating` so the (stable-identity) preview-error callback can gate autofix.
   useEffect(() => { generatingRef.current = generating; }, [generating]);
+
+  // Pause the live sandbox when the user leaves the studio (unmount) — never leave a container
+  // running (and billing) after they navigate away. Mirror runId so the cleanup isn't stale.
+  useEffect(() => { runIdRef.current = runId; }, [runId]);
+  useEffect(() => () => { const id = runIdRef.current; if (id) void stopLiveStudio(id).catch(() => {}); }, []);
 
   // One chat per build: persist this project's conversation, and restore it when a project opens.
   const convoMessages = useStudioConversation((s) => s.messages);
@@ -547,11 +554,20 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   // Start over: clear the workspace + thread + activity back to the projects/start screen.
   const newProject = () => {
     genAbortRef.current?.abort();
+    // Pause the live sandbox for the project we're leaving (don't keep a container running).
+    if (runId) { void stopLiveStudio(runId).catch(() => {}); appendLog('system', 'Paused the live sandbox.'); }
     useStudioWorkspace.getState().reset();
     useStudioConversation.getState().clear();
     useStudioActivity.getState().reset();
+    setFlow({ phase: 'idle', prompt: '', answers: [] });
     setStatus('idle'); setRunId(null); setPreviewUrl(null);
     setError(null); setGenError(null); setPreviewError(null);
+  };
+
+  // Leave Code Studio entirely — pause any live sandbox first.
+  const leaveStudio = () => {
+    if (runId) void stopLiveStudio(runId).catch(() => {});
+    onBack();
   };
 
   // Jump from an activity-feed file row straight into the editor (and reveal the Code pane).
@@ -616,7 +632,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   if (hasFiles) commands.push({ id: 'agents', label: 'Refine with agent team', icon: <Users className="w-4 h-4" />, keywords: 'agents multi specialist architecture security verification data design refine improve review team', run: runAgents });
   commands.push({ id: 'studio-settings', label: 'Code Studio settings (coding model & agents)', icon: <Cpu className="w-4 h-4" />, keywords: 'model coding source openrouter nvidia settings configure preferences creativity iterations agents', run: () => setSettingsOpen(true) });
   commands.push({ id: 'help', label: 'Keyboard shortcuts', icon: <CommandIcon className="w-4 h-4" />, keywords: 'keys help cheatsheet', run: () => setHelpOpen(true) });
-  commands.push({ id: 'back', label: 'Back', icon: <ArrowLeft className="w-4 h-4" />, keywords: 'exit leave close', run: onBack });
+  commands.push({ id: 'back', label: 'Back', icon: <ArrowLeft className="w-4 h-4" />, keywords: 'exit leave close', run: leaveStudio });
 
   const projectName = wsTitle || 'Untitled project';
   // Build model tier: BYOK (your OpenRouter key → frontier models) vs. free-first auto.
@@ -776,7 +792,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
           {/* Back is contextual: with a project open it returns to the studio's project list
               (so you can pick another); from the list it exits the studio. */}
           <button
-            onClick={hasFiles ? newProject : onBack}
+            onClick={hasFiles ? newProject : leaveStudio}
             title={hasFiles ? 'Back to your projects' : 'Leave Code Studio'}
             className={`flex items-center gap-1.5 text-sm font-semibold ${t.textDim} ${t.hover} transition-colors ${t.focusRing} rounded-md px-1.5 py-1`}
           >
