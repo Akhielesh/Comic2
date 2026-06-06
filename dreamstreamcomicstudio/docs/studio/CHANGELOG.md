@@ -5,6 +5,26 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-06 · Claude — FEAT: auto-verify + self-repair pass for generation (verifier agent)
+Owner asked the AI to verify its own output and fix issues automatically (not make the user click
+"Fix with AI"). Added the first agent of the build pipeline:
+- New pure, tested `server/src/ai/studio/verifyApp.ts` (`verifyGeneratedApp`) statically checks a
+  generated project for the failure modes that actually break studio apps: **empty files**, **placeholder
+  /“rest of code” truncation markers**, a **React entry with no default export**, **invalid JSON
+  manifests**, and **unresolved relative imports** (best-effort module resolution incl. index +
+  extensionless). Conservative to avoid false positives.
+- Wired into `POST /api/studio/generate/stream`: after generation, if issues are found the route emits a
+  **“Verifying — fixing N issues…”** phase and does **one automatic repair pass** (feeding the issues
+  back to the coding model) before handing the app to the user, then a **“Verified ✓”** phase. Best-effort
+  — never fails the generation. Generation already routes to a coding-specific model (`pickCodingModel`).
+Files: `server/src/ai/studio/verifyApp.ts` (+test), `server/src/routes/studio.ts`. Server build + client
+typecheck + frontend build green; **525 tests pass** (8 new).
+
+> Next in the pipeline: distinct design/architecture/backend agent roles + a multi-pass plan→build→verify
+> loop, and a terminal for non-web/SQL projects. Tracked in `CODE-STUDIO-LIBRECHAT-PLAN.md`.
+
+---
+
 ## 2026-06-06 · Claude — FIX: studio UX bugs + app-wide refresh routing (from owner review)
 Direct fixes for the owner's reported issues:
 - **Back went to the app home, not the studio.** Back is now contextual: with a project open it returns
