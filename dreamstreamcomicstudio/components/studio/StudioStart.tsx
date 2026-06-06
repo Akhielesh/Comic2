@@ -36,6 +36,8 @@ export interface StudioStartProps {
   onGenerate?: (prompt: string, template?: CodeStudioTemplate) => void;
   /** Cancel an in-flight generation (turns the hero Generate button into Stop). */
   onCancelGenerate?: () => void;
+  /** Retry the last generation after a failure (Retry button on the activity feed). */
+  onRetryGenerate?: () => void;
   generating?: boolean;
   genError?: string | null;
   template?: CodeStudioTemplate;
@@ -43,7 +45,7 @@ export interface StudioStartProps {
 }
 
 export const StudioStart: React.FC<StudioStartProps> = ({
-  onNavigate, onGenerate, onCancelGenerate, generating, genError, template, onTemplateChange,
+  onNavigate, onGenerate, onCancelGenerate, onRetryGenerate, generating, genError, template, onTemplateChange,
 }) => {
   const t = useStudioTheme();
   const loadArtifact = useStudioWorkspace((s) => s.loadArtifact);
@@ -116,7 +118,7 @@ export const StudioStart: React.FC<StudioStartProps> = ({
                 onTemplateChange={onTemplateChange}
               />
               {/* Live activity for the first build (files appear as the AI writes them). */}
-              <ActivityFeed />
+              <ActivityFeed onRetry={onRetryGenerate} />
             </div>
           )}
 

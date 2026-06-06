@@ -6,6 +6,10 @@
 
 **Last updated:** 2026-06-06 · **Updated by:** Claude · **Branch:** `claude/wizardly-franklin-EgL8k` (draft PR)
 
+> Latest (2026-06-06): **GENERATION RESILIENCE & CONTROL.** Failed/cancelled runs get a **Retry**
+> button; **Esc** cancels an in-flight generation; the activity feed auto-scrolls while streaming; and
+> the composer suggestions now include polyglot ideas. 113 component tests pass.
+
 > Latest (2026-06-06): **S4.1 — SERVICES & CONNECTIONS DETECTOR.** The studio now reads the AI's code
 > and surfaces the backends it expects (Supabase/Postgres/Stripe/storage/LLM/…) + the env vars it
 > references, with a one-click **Add /.env.example** and a Connect-accounts path. First half of agentic

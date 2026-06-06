@@ -26,7 +26,9 @@ const FRAMEWORKS: { id: CodeStudioTemplate; label: string }[] = [
 const DEFAULT_SUGGESTIONS = [
   'A habit tracker with streaks and a weekly chart',
   'A markdown notes app with live preview',
-  'A pomodoro timer with sound and settings',
+  'A FastAPI service with /health and a /items CRUD',
+  'A Go CLI that bulk-renames files by a pattern',
+  'A Node/Express REST API for a todo list',
   'A landing page for a SaaS with pricing',
 ];
 

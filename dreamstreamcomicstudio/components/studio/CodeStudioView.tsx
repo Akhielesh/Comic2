@@ -89,6 +89,8 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const runBuildRef = useRef<() => void>(() => {});
   // Lets the user cancel an in-flight generation (Stop button on the composer).
   const genAbortRef = useRef<AbortController | null>(null);
+  // The last generation request, so a failed/cancelled run can be retried.
+  const lastGenRef = useRef<{ prompt: string; tmpl?: CodeStudioTemplate } | null>(null);
   const hasFiles = wsPaths.length > 0;
   const dirtyList = useMemo(
     () => wsPaths.filter((p) => isPathDirty({ files: wsFiles, baseline: wsBaseline }, p)),
@@ -145,6 +147,14 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   // Stable identity so the preview's ErrorWatcher effect doesn't re-fire every render.
   const onPreviewError = useCallback((e: string | null) => setPreviewError(e), []);
 
+  // Esc cancels an in-flight generation (only listens while generating).
+  useEffect(() => {
+    if (!generating) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') genAbortRef.current?.abort(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [generating]);
+
   // Agentic build: stream plan → run → observe → fix → done, self-healing errors. The final
   // preview URL is the live app. Drives the BuildTrace + logs + run status.
   const stageLevel = (stage: BuildStage) =>
@@ -198,6 +208,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   // agentic self-heal loop), otherwise the instant in-browser preview shows the app immediately.
   const handleGenerate = async (prompt: string, tmpl?: CodeStudioTemplate) => {
     if (generating) return;
+    lastGenRef.current = { prompt, tmpl };
     const refining = hasFiles;
     setGenerating(true);
     setGenError(null);
@@ -287,6 +298,12 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   // Cancel an in-flight generation (the composer's Stop button).
   const cancelGenerate = () => { genAbortRef.current?.abort(); };
 
+  // Retry the last generation after a failure or cancel (Retry button on the activity feed).
+  const retryLastGenerate = () => {
+    const last = lastGenRef.current;
+    if (last && !generating) void handleGenerate(last.prompt, last.tmpl);
+  };
+
   // Jump from an activity-feed file row straight into the editor (and reveal the Code pane).
   const openFileInEditor = (path: string) => {
     useStudioWorkspace.getState().openFile(path);
@@ -358,7 +375,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
         <ConversationThread />
         {/* Live, synchronous activity — files appearing as the AI writes them (Sprint 1).
             Rows are clickable: jump straight to the file in the editor. */}
-        <ActivityFeed onOpenFile={openFileInEditor} />
+        <ActivityFeed onOpenFile={openFileInEditor} onRetry={retryLastGenerate} />
         {/* Iterate by prompt — refines the current app in place (no chat hand-off). */}
         <PromptComposer mode="inline" onSubmit={handleGenerate} onCancel={cancelGenerate} busy={generating} error={genError} />
         <div className="flex flex-wrap gap-1.5">
@@ -590,6 +607,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
           onNavigate={onNavigate}
           onGenerate={handleGenerate}
           onCancelGenerate={cancelGenerate}
+          onRetryGenerate={retryLastGenerate}
           generating={generating}
           genError={genError}
           template={template}

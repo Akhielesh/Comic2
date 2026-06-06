@@ -5,6 +5,21 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-06 · Claude — FEAT: generation resilience & control (retry, Esc-cancel, autoscroll, polyglot hints)
+Enterprise-grade resilience + control polish on the generation flow:
+- **Retry.** A failed or cancelled run now shows a **Retry** button in the activity-feed header that
+  re-runs the last prompt (`lastGenRef`). Wired in both the workspace and the start screen. (Refactored
+  the feed header from a single button to a div so the Retry button doesn't nest inside the toggle.)
+- **Esc to cancel.** While generating, **Esc** aborts the in-flight run (effect listens only while busy).
+- **Auto-scroll.** The activity detail auto-scrolls to the newest item while streaming.
+- **Polyglot prompts.** The composer's example suggestions now include non-web ideas (FastAPI service,
+  Go CLI, Node/Express API) so the multi-language capability is discoverable.
+Files: `components/studio/workspace/{ActivityFeed,PromptComposer}.tsx` (+activityFeed test),
+`components/studio/{CodeStudioView,StudioStart}.tsx`. Typecheck + frontend build green; 113 studio
+component tests pass.
+
+---
+
 ## 2026-06-06 · Claude — FEAT(S4.1): "Services & connections" detector + .env scaffold
 First half of the agentic auto-wiring vision ("the AI knows what services/connections it needs"):
 - New pure, tested `serviceDetect.ts` (`detectServices`) reads the generated code and infers the
