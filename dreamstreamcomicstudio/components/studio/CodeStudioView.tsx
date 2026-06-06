@@ -26,6 +26,7 @@ import {
   detectProjectKind, projectKindLabel, isWebProject, runHint, diffLines, diffStat,
 } from './workspace';
 import { StudioStart } from './StudioStart';
+import { getStudioModelSelection, STUDIO_MODEL_CHANGED } from '../../services/studioModelSelection';
 import { stopLiveStudio } from '../../services/studioApi';
 import { generateStudioApp, streamGenerateStudioApp } from '../../services/studioGenerateApi';
 import { streamStudioBuild, type BuildStage } from '../../services/studioBuildApi';
@@ -36,6 +37,11 @@ import { downloadArtifactZip } from '../../services/studioLauncher';
 
 // Sandpack peek is heavy and legacy-ish — load it only when actually shown.
 const CodeStudioPanel = lazy(() => import('../chat/CodeStudioPanel'));
+// The settings panel pulls in the live model catalog — load it only when opened (keeps it out
+// of the studio's eager bundle and the view's import graph).
+const StudioSettingsPanel = lazy(() =>
+  import('./StudioSettingsPanel').then((m) => ({ default: m.StudioSettingsPanel }))
+);
 
 export interface CodeStudioViewProps {
   /** App handed off from chat (if any). */
@@ -86,6 +92,14 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const setFocus = useStudioFocus((s) => s.setFocus);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // The studio's own coding-model selection (independent of comics/chat), reflected in the pill.
+  const [studioModel, setStudioModel] = useState(() => getStudioModelSelection());
+  useEffect(() => {
+    const onChange = () => setStudioModel(getStudioModelSelection());
+    window.addEventListener(STUDIO_MODEL_CHANGED, onChange);
+    return () => window.removeEventListener(STUDIO_MODEL_CHANGED, onChange);
+  }, []);
   const runBuildRef = useRef<() => void>(() => {});
   // Lets the user cancel an in-flight generation (Stop button on the composer).
   const genAbortRef = useRef<AbortController | null>(null);
@@ -143,7 +157,10 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
   // undefined = "Auto" — the AI picks the best stack from the prompt (no forced choice).
-  const [template, setTemplate] = useState<CodeStudioTemplate | undefined>(undefined);
+  // Seed from the studio's saved default scaffold (Settings) when the user set one.
+  const [template, setTemplate] = useState<CodeStudioTemplate | undefined>(
+    () => (getStudioModelSelection().defaultTemplate as CodeStudioTemplate | null) ?? undefined
+  );
   const [previewError, setPreviewError] = useState<string | null>(null);
   // Debounce preview errors: the in-browser preview reports transient compile/HMR blips while a
   // refine streams in, which made the error banner flash. Only surface an error that *persists*
@@ -379,6 +396,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   }
   if (hasFiles) commands.push({ id: 'new', label: 'New project', icon: <FilePlus className="w-4 h-4" />, keywords: 'new reset start over fresh blank clear', run: newProject });
   commands.push({ id: 'chat', label: 'Build from chat', icon: <MessageSquarePlus className="w-4 h-4" />, keywords: 'new prompt generate describe', run: () => onNavigate('chat') });
+  commands.push({ id: 'studio-settings', label: 'Code Studio settings (coding model)', icon: <Cpu className="w-4 h-4" />, keywords: 'model coding source openrouter nvidia settings configure preferences creativity iterations', run: () => setSettingsOpen(true) });
   commands.push({ id: 'help', label: 'Keyboard shortcuts', icon: <CommandIcon className="w-4 h-4" />, keywords: 'keys help cheatsheet', run: () => setHelpOpen(true) });
   commands.push({ id: 'back', label: 'Back', icon: <ArrowLeft className="w-4 h-4" />, keywords: 'exit leave close', run: onBack });
 
@@ -510,6 +528,11 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       {celebrate && <Confetti onDone={() => setCelebrate(false)} />}
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={commands} />
       <ShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
+      {settingsOpen && (
+        <Suspense fallback={null}>
+          <StudioSettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+        </Suspense>
+      )}
       {/* Top bar */}
       <Reveal distance={-8}>
         <div className={`flex items-center gap-3 px-4 h-14 border-b ${t.edge} ${t.panelAlt}`}>
@@ -526,13 +549,17 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
           <div className="flex items-center gap-2 min-w-0">
             <span className={`font-display text-lg tracking-wide ${t.text} truncate`}>{projectName}</span>
             <button
-              onClick={() => onNavigate('settings')}
-              title={hasByok
-                ? 'Builds run on a strong coding model using your OpenRouter key (BYOK). Manage keys in Settings.'
-                : 'Builds run on a strong open coding model — free. Add your OpenRouter key in Settings for frontier models.'}
+              onClick={() => setSettingsOpen(true)}
+              title={studioModel.mode === 'specific' && studioModel.model
+                ? `Code Studio coding model: ${studioModel.model}. Click to change (independent of comics & chat).`
+                : hasByok
+                  ? 'Code Studio auto-picks a strong coder using your OpenRouter key (BYOK). Click to customize.'
+                  : 'Code Studio auto-picks a strong open coder — free. Click to pin a model, source & build options.'}
               className={`hidden sm:inline-flex items-center gap-1 text-[11px] font-semibold rounded-full border ${t.edge} px-2 py-0.5 ${t.textDim} ${t.hover} ${t.focusRing}`}
             >
-              <Cpu className="w-3 h-3" /> coding · {hasByok ? 'your key' : 'free'}
+              <Cpu className="w-3 h-3" /> coding · {studioModel.mode === 'specific' && studioModel.model
+                ? studioModel.model.split('/').pop()!.replace(/:free$/i, '')
+                : (hasByok ? 'auto · your key' : 'auto · free')}
             </button>
             {dirtyCount > 0 && (
               <span className="hidden sm:inline-flex items-center gap-1 text-[11px] font-semibold text-amber-500" title="Unsaved edits in the working copy">

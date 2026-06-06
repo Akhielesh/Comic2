@@ -3,6 +3,8 @@
 
 import { postStream } from './apiClient';
 import { readSSEStream } from './sse';
+import { studioModelRequest } from './studioModelSelection';
+import type { ModelSourceId } from './modelSelection';
 
 export type BuildStage = 'plan' | 'run' | 'observe' | 'fix' | 'done' | 'stopped';
 
@@ -42,6 +44,11 @@ export interface StudioBuildPayload {
   template?: string;
   files: { path: string; content: string }[];
   maxIterations?: number;
+  /** Studio coding-model overrides (else taken from studioModelSelection). */
+  model?: string;
+  source?: ModelSourceId;
+  costPref?: 'free' | 'cheap' | 'quality';
+  temperature?: number;
 }
 
 export interface StudioBuildHandlers {
@@ -59,7 +66,7 @@ export const streamStudioBuild = async (
   handlers: StudioBuildHandlers,
   signal?: AbortSignal
 ): Promise<void> => {
-  const res = await postStream('/api/studio/build', payload, { signal });
+  const res = await postStream('/api/studio/build', { ...studioModelRequest(), ...payload }, { signal });
   await readSSEStream(res.body, ({ event, data }) => {
     let parsed: unknown;
     try { parsed = JSON.parse(data); } catch { return; }

@@ -12,8 +12,10 @@ import {
   STUDIO_MAX_CONCURRENT_PER_USER,
   STUDIO_DAILY_BUILD_MINUTES,
   STUDIO_COST_PER_AWAKE_SEC,
-  STUDIO_REQUEST_TIMEOUT_MS
+  STUDIO_REQUEST_TIMEOUT_MS,
+  NVIDIA_TEXT_MODEL
 } from '../config.js';
+import type { AIProviderId } from '../ai/providers/types.js';
 import { getSupabaseAdmin } from '../services/supabase.js';
 import { callStudioWorker, studioConfigured } from '../services/studioWorker.js';
 import { createWorkerRun, createStudioFix } from '../services/studioBuildService.js';
@@ -39,6 +41,59 @@ const notConfiguredResponse = {
   error: {
     message: 'Live Studio is not configured on this server yet (set STUDIO_WORKER_URL and STUDIO_HMAC_SECRET).',
     code: 'STUDIO_NOT_CONFIGURED'
+  }
+};
+
+// --- Code Studio model routing -----------------------------------------------------
+// Code Studio picks its coding model INDEPENDENTLY of the comics/chat selection. By default
+// it free-first auto-picks a proven coder; the client may pin a specific model + source (and
+// tune spend preference / creativity) via the request body. Source routing mirrors the chat
+// route: an explicit source wins when its key is present, else we fall back to whichever key
+// exists (OpenRouter preferred, then NVIDIA).
+
+type StudioCostPref = 'free' | 'cheap' | 'quality';
+const STUDIO_GEN_TEMPERATURE = 0.3;
+const STUDIO_FIX_TEMPERATURE = 0.2;
+const clamp01 = (n: number): number => Math.min(1, Math.max(0, n));
+const normCostPref = (p?: string): StudioCostPref => (p === 'cheap' || p === 'quality' ? p : 'free');
+const studioTemp = (t: unknown, fallback: number): number =>
+  typeof t === 'number' && Number.isFinite(t) ? clamp01(t) : fallback;
+
+/** Resolve the provider + key for a studio request, honoring an explicit `source`. */
+const resolveStudioProvider = (
+  keys: { openRouterKey?: string | null; nvidiaKey?: string | null } | undefined,
+  requestedSource?: string
+): { provider: AIProviderId; apiKey: string } | null => {
+  const source = String(requestedSource || '').trim().toLowerCase();
+  const openRouterKey = (keys?.openRouterKey || undefined) as string | undefined;
+  const nvidiaKey = (keys?.nvidiaKey || undefined) as string | undefined;
+  if (source === 'nvidia' && nvidiaKey) return { provider: 'nvidia', apiKey: nvidiaKey };
+  if (source === 'openrouter' && openRouterKey) return { provider: 'openrouter', apiKey: openRouterKey };
+  if (openRouterKey) return { provider: 'openrouter', apiKey: openRouterKey };
+  if (nvidiaKey) return { provider: 'nvidia', apiKey: nvidiaKey };
+  return null;
+};
+
+/** A user-pinned model id wins; otherwise auto-pick the strongest coder for the provider. */
+const resolveStudioCodingModel = async (
+  provider: AIProviderId,
+  requestedModel?: string,
+  costPref?: string
+): Promise<string> => {
+  const pinned = typeof requestedModel === 'string' ? requestedModel.trim() : '';
+  if (pinned) return pinned;
+  const pref = normCostPref(costPref);
+  if (provider === 'nvidia') {
+    try {
+      return await pickCodingModel({ costPref: pref, filter: (m) => m.source === 'nvidia' });
+    } catch {
+      return NVIDIA_TEXT_MODEL;
+    }
+  }
+  try {
+    return await pickCodingModel({ costPref: pref });
+  } catch {
+    return TEXT_FALLBACK;
   }
 };
 
@@ -72,36 +127,39 @@ const getUsage = async (userId: string): Promise<{ activeRuns: number; dailyAwak
 // the global key middleware apply. Also handles "refine" when current files are sent along.
 studioRouter.post('/generate', async (req, res, next) => {
   try {
-    const body = (req.body || {}) as { prompt?: string; template?: string; files?: unknown; title?: string };
+    const body = (req.body || {}) as {
+      prompt?: string; template?: string; files?: unknown; title?: string;
+      model?: string; source?: string; costPref?: string; temperature?: number;
+    };
     const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
     if (!prompt) {
       return res.status(400).json({ error: { message: 'A prompt describing the app is required.' } });
     }
 
-    const providerCtx = resolveProviderContext(req.apiKeys?.openRouterKey as string | undefined, 'openrouter');
-    if (!providerCtx.apiKey) {
+    const resolved = resolveStudioProvider(req.apiKeys, body.source);
+    if (!resolved) {
       return res.status(400).json({
         error: {
-          message: 'No coding model is available. Add an OpenRouter key in Settings (free models work too).',
+          message: 'No coding model is available. Add an OpenRouter or NVIDIA key in Settings (free models work too).',
           code: 'STUDIO_NO_MODEL_KEY'
         }
       });
     }
 
-    let model: string;
-    try { model = await pickCodingModel(); } catch { model = TEXT_FALLBACK; }
+    const model = await resolveStudioCodingModel(resolved.provider, body.model, body.costPref);
+    const temperature = studioTemp(body.temperature, STUDIO_GEN_TEMPERATURE);
 
     const currentFiles = sanitizeFiles(body.files).map((f) => ({ path: f.path, content: f.content }));
 
     const complete = async (genPrompt: string): Promise<string> => {
       const result = await runChat({
-        provider: 'openrouter',
-        apiKey: providerCtx.apiKey,
+        provider: resolved.provider,
+        apiKey: resolved.apiKey,
         model,
         messages: [{ role: 'user', content: genPrompt }],
-        temperature: 0.3,
+        temperature,
         maxTokens: 16000,
-        fallbackModel: TEXT_FALLBACK,
+        fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
         timeoutMs: STUDIO_REQUEST_TIMEOUT_MS
       });
       return result.text || '';
@@ -132,24 +190,27 @@ studioRouter.post('/generate', async (req, res, next) => {
 // the stream isn't available. Auth + the global key middleware apply.
 studioRouter.post('/generate/stream', async (req, res, next) => {
   try {
-    const body = (req.body || {}) as { prompt?: string; template?: string; files?: unknown; title?: string };
+    const body = (req.body || {}) as {
+      prompt?: string; template?: string; files?: unknown; title?: string;
+      model?: string; source?: string; costPref?: string; temperature?: number;
+    };
     const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
     if (!prompt) {
       return res.status(400).json({ error: { message: 'A prompt describing the app is required.' } });
     }
 
-    const providerCtx = resolveProviderContext(req.apiKeys?.openRouterKey as string | undefined, 'openrouter');
-    if (!providerCtx.apiKey) {
+    const resolved = resolveStudioProvider(req.apiKeys, body.source);
+    if (!resolved) {
       return res.status(400).json({
         error: {
-          message: 'No coding model is available. Add an OpenRouter key in Settings (free models work too).',
+          message: 'No coding model is available. Add an OpenRouter or NVIDIA key in Settings (free models work too).',
           code: 'STUDIO_NO_MODEL_KEY'
         }
       });
     }
 
-    let model: string;
-    try { model = await pickCodingModel(); } catch { model = TEXT_FALLBACK; }
+    const model = await resolveStudioCodingModel(resolved.provider, body.model, body.costPref);
+    const temperature = studioTemp(body.temperature, STUDIO_GEN_TEMPERATURE);
 
     const currentFiles = sanitizeFiles(body.files).map((f) => ({ path: f.path, content: f.content }));
     const refining = currentFiles.length > 0;
@@ -197,13 +258,13 @@ studioRouter.post('/generate/stream', async (req, res, next) => {
 
     const complete = async (p: string, stream: boolean): Promise<string> => {
       const result = await runChat({
-        provider: 'openrouter',
-        apiKey: providerCtx.apiKey,
+        provider: resolved.provider,
+        apiKey: resolved.apiKey,
         model,
         messages: [{ role: 'user', content: p }],
-        temperature: 0.3,
+        temperature,
         maxTokens: 16000,
-        fallbackModel: TEXT_FALLBACK,
+        fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
         timeoutMs: STUDIO_REQUEST_TIMEOUT_MS,
         ...(stream ? { onDelta } : {})
       });
@@ -338,6 +399,10 @@ studioRouter.post('/build', async (req, res, next) => {
       dev?: string;
       port?: number;
       maxIterations?: number;
+      model?: string;
+      source?: string;
+      costPref?: string;
+      temperature?: number;
     };
 
     const files = sanitizeFiles(body.files);
@@ -369,24 +434,21 @@ studioRouter.post('/build', async (req, res, next) => {
       ? Math.min(Math.max(body.maxIterations as number, 1), 6)
       : undefined;
 
-    // FIX model call: the user's OpenRouter key if present, else the platform key — routed to
-    // a strong coding model (free-first).
-    const providerCtx = resolveProviderContext(req.apiKeys?.openRouterKey as string | undefined, 'openrouter');
+    // FIX model call: honors the studio's chosen coding model + source (BYOK key if present,
+    // else the platform key). Defaults to a strong coding model, free-first.
+    const resolved = resolveStudioProvider(req.apiKeys, body.source)
+      ?? { provider: 'openrouter' as AIProviderId, apiKey: resolveProviderContext(undefined, 'openrouter').apiKey };
+    const fixModel = await resolveStudioCodingModel(resolved.provider, body.model, body.costPref);
+    const fixTemperature = studioTemp(body.temperature, STUDIO_FIX_TEMPERATURE);
     const complete = async (prompt: string): Promise<string> => {
-      let model: string;
-      try {
-        model = await pickCodingModel();
-      } catch {
-        model = TEXT_FALLBACK;
-      }
       const result = await runChat({
-        provider: 'openrouter',
-        apiKey: providerCtx.apiKey,
-        model,
+        provider: resolved.provider,
+        apiKey: resolved.apiKey,
+        model: fixModel,
         messages: [{ role: 'user', content: prompt }],
-        temperature: 0.2,
+        temperature: fixTemperature,
         maxTokens: 8000,
-        fallbackModel: TEXT_FALLBACK,
+        fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
         timeoutMs: STUDIO_REQUEST_TIMEOUT_MS
       });
       return result.text || '';

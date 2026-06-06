@@ -4,6 +4,8 @@
 
 import { post, postStream } from './apiClient';
 import { readSSEStream } from './sse';
+import { studioModelRequest } from './studioModelSelection';
+import type { ModelSourceId } from './modelSelection';
 import type { CodeStudioArtifact } from '../apiTypes';
 
 export interface GenerateStudioInput {
@@ -13,7 +15,21 @@ export interface GenerateStudioInput {
   files?: { path: string; content: string }[];
   /** Current project title, for continuity when refining. */
   title?: string;
+  /** Override the studio's chosen coding model id (else taken from studioModelSelection). */
+  model?: string;
+  /** Override the source (else from studioModelSelection). */
+  source?: ModelSourceId;
+  /** Override spend preference for auto-pick. */
+  costPref?: 'free' | 'cheap' | 'quality';
+  /** Override sampling temperature (0–1). */
+  temperature?: number;
 }
+
+/** Merge the studio's saved coding-model selection under the call's explicit overrides. */
+const withStudioModel = (input: GenerateStudioInput): GenerateStudioInput => ({
+  ...studioModelRequest(),
+  ...input
+});
 
 /** Generate (or refine) an app from a prompt. Resolves to the runnable artifact. */
 export const generateStudioApp = async (
@@ -22,7 +38,7 @@ export const generateStudioApp = async (
 ): Promise<CodeStudioArtifact> => {
   const { artifact } = await post<GenerateStudioInput, { artifact: CodeStudioArtifact }>(
     '/api/studio/generate',
-    input,
+    withStudioModel(input),
     { signal }
   );
   return artifact;
@@ -55,7 +71,7 @@ export const streamGenerateStudioApp = async (
   handlers: StudioGenerateHandlers,
   signal?: AbortSignal
 ): Promise<void> => {
-  const res = await postStream('/api/studio/generate/stream', input, { signal });
+  const res = await postStream('/api/studio/generate/stream', withStudioModel(input), { signal });
   await readSSEStream(res.body, ({ event, data }) => {
     let parsed: unknown;
     try { parsed = JSON.parse(data); } catch { return; }
