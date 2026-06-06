@@ -37,16 +37,17 @@ own connected accounts, all hostable by us.
 > Convention: **S<n>** ships to a draft PR, updates `00-STATUS.md` + `CHANGELOG.md`,
 > typecheck + tests + build green.
 
-- **S1 — Live agentic activity stream (generation).** _← in progress._
+- **S1 — Live agentic activity stream (generation).** ✅ **shipped.**
   Stream `/api/studio/generate` token-by-token; incrementally parse `files[]` so the UI shows
   each file appear live ("✎ writing → ✓ written"), grouped + collapsible into a summary. Kills
   the "AI isn't working synchronously / I can't see what it's doing" complaint. Graceful fallback
   to the blocking route. _(server: `streamParse.ts` + `/generate/stream` SSE; client:
   `streamGenerateStudioApp` + `activityStore` + `ActivityFeed`.)_
 
-- **S2 — Code ⇄ Preview focus toggle + real-estate controls.** A segmented "Code / Split /
-  Preview" toggle and per-pane maximize so the user can dedicate the screen to reviewing code or
-  the running app. Persist the choice.
+- **S2 — Code ⇄ Preview focus toggle + real-estate controls.** ✅ **shipped.** A segmented
+  "Code · Split · Preview" toggle (persisted, + ⌘K palette) so the user can dedicate the screen to
+  reviewing code or the running app; each focus keeps its own resize state.
+  _(`kit/focusStore.ts` + `kit/FocusToggle.tsx`, wired in `CodeStudioView`.)_
 
 - **S3 — Diff-centric live edits.** When refining, stream a per-file **diff** (added/removed
   lines) into the activity feed and the Changes panel as the model rewrites files, so edits read

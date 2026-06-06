@@ -11,11 +11,12 @@ import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useStat
 import {
   ArrowLeft, Wand2, Square, Share2, Download, FileCode, Cloud,
   Sparkles, Cpu, Lock, Mail, Loader2, Command as CommandIcon, Moon, Sun, Palette, Undo2, MessageSquarePlus, Check,
+  Columns, Eye,
 } from 'lucide-react';
 import type { CodeStudioArtifact, CodeStudioTemplate } from '../../apiTypes';
 import {
-  Reveal, Skeleton, StatusPulse, Lift, ThemeSwitcher, ResizableSplit, Confetti, CommandPalette, ShortcutsHelp,
-  StudioAurora, useIsWide, useStudioTheme, useStudioThemeStore,
+  Reveal, Skeleton, StatusPulse, Lift, ThemeSwitcher, FocusToggle, ResizableSplit, Confetti, CommandPalette, ShortcutsHelp,
+  StudioAurora, useIsWide, useStudioTheme, useStudioThemeStore, useStudioFocus,
 } from './kit';
 import type { RunStatus, Command } from './kit';
 import {
@@ -80,6 +81,8 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const appendLog = useStudioLogs((s) => s.append);
   const revertFile = useStudioWorkspace((s) => s.revertFile);
   const setTheme = useStudioThemeStore((s) => s.setTheme);
+  const focus = useStudioFocus((s) => s.focus);
+  const setFocus = useStudioFocus((s) => s.setFocus);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const runBuildRef = useRef<() => void>(() => {});
@@ -282,6 +285,11 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   commands.push({ id: 'theme-black', label: 'Theme: Black', icon: <Moon className="w-4 h-4" />, keywords: 'dark oled appearance theme', run: () => setTheme('black') });
   commands.push({ id: 'theme-white', label: 'Theme: White', icon: <Sun className="w-4 h-4" />, keywords: 'light appearance theme', run: () => setTheme('light') });
   commands.push({ id: 'theme-brand', label: 'Theme: DreamStream', icon: <Palette className="w-4 h-4" />, keywords: 'brand comic appearance theme', run: () => setTheme('brand') });
+  if (hasFiles) {
+    commands.push({ id: 'focus-code', label: 'Focus: Code', icon: <FileCode className="w-4 h-4" />, keywords: 'layout maximize editor review code real estate', run: () => setFocus('code') });
+    commands.push({ id: 'focus-split', label: 'Focus: Split', icon: <Columns className="w-4 h-4" />, keywords: 'layout three pane default code preview', run: () => setFocus('split') });
+    commands.push({ id: 'focus-preview', label: 'Focus: Preview', icon: <Eye className="w-4 h-4" />, keywords: 'layout maximize preview review running app real estate', run: () => setFocus('preview') });
+  }
   commands.push({ id: 'chat', label: 'Build from chat', icon: <MessageSquarePlus className="w-4 h-4" />, keywords: 'new prompt generate describe', run: () => onNavigate('chat') });
   commands.push({ id: 'help', label: 'Keyboard shortcuts', icon: <CommandIcon className="w-4 h-4" />, keywords: 'keys help cheatsheet', run: () => setHelpOpen(true) });
   commands.push({ id: 'back', label: 'Back', icon: <ArrowLeft className="w-4 h-4" />, keywords: 'exit leave close', run: onBack });
@@ -427,6 +435,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
             >
               <span className="text-[11px] font-bold">?</span>
             </button>
+            {hasFiles && <FocusToggle className="hidden lg:inline-flex" />}
             <ThemeSwitcher className="hidden sm:inline-flex" />
             <StatusPulse status={status} className="mr-1" />
             {status === 'live' ? (
@@ -505,19 +514,33 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       ) : wide ? (
         <div className="flex-1 min-h-0 p-3">
           <ResizableSplit direction="vertical" storageKey="studio.split.v" initial={[3.2, 1]} minPx={110}>
-            <ResizableSplit direction="horizontal" storageKey="studio.split.h" initial={[2.4, 3.4, 3.2]} minPx={220}>
-              {promptPane}
-              {codePane}
-              {previewPane}
-            </ResizableSplit>
+            {/* Focus-aware horizontal layout — Code or Preview can take the full pane
+                (each focus keeps its own resize state via a distinct storageKey). */}
+            {focus === 'code' ? (
+              <ResizableSplit direction="horizontal" storageKey="studio.split.h.code" initial={[2.4, 6.6]} minPx={220}>
+                {promptPane}
+                {codePane}
+              </ResizableSplit>
+            ) : focus === 'preview' ? (
+              <ResizableSplit direction="horizontal" storageKey="studio.split.h.preview" initial={[2.4, 6.6]} minPx={220}>
+                {promptPane}
+                {previewPane}
+              </ResizableSplit>
+            ) : (
+              <ResizableSplit direction="horizontal" storageKey="studio.split.h" initial={[2.4, 3.4, 3.2]} minPx={220}>
+                {promptPane}
+                {codePane}
+                {previewPane}
+              </ResizableSplit>
+            )}
             {logsPane}
           </ResizableSplit>
         </div>
       ) : (
         <div className="flex-1 min-h-0 overflow-auto flex flex-col gap-3 p-3">
           <div className="min-h-[15rem] flex">{promptPane}</div>
-          <div className="min-h-[22rem] flex">{codePane}</div>
-          <div className="min-h-[18rem] flex">{previewPane}</div>
+          {focus !== 'preview' && <div className="min-h-[22rem] flex">{codePane}</div>}
+          {focus !== 'code' && <div className="min-h-[18rem] flex">{previewPane}</div>}
           <div className="min-h-[12rem] flex">{logsPane}</div>
         </div>
       )}

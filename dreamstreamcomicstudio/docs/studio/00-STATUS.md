@@ -6,6 +6,10 @@
 
 **Last updated:** 2026-06-06 · **Updated by:** Claude · **Branch:** `claude/wizardly-franklin-EgL8k` (draft PR)
 
+> Latest (2026-06-06): **S2 — CODE ⇄ PREVIEW FOCUS TOGGLE.** A Code · Split · Preview segmented
+> toggle (persisted) in the studio top bar + ⌘K palette lets the user maximize the screen for
+> reviewing the code or the running app; each focus keeps its own resize state. 139 studio tests pass.
+
 > Latest (2026-06-06): **S1 — LIVE AGENTIC ACTIVITY STREAM FOR GENERATION.** Generation is now
 > synchronous: a new SSE route `POST /api/studio/generate/stream` token-streams the model and emits
 > per-file events, driving a collapsible **ActivityFeed** where files appear live ("✎ writing → ✓

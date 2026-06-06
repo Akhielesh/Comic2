@@ -5,6 +5,21 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-06 · Claude — FEAT(S2): Code ⇄ Preview focus toggle (maximize real estate)
+The studio's wide layout was a fixed 3-pane split, so reviewing code or the running app meant
+squinting at a third of the screen. Added a **Code · Split · Preview** segmented toggle
+(`components/studio/kit/FocusToggle.tsx`) in the top bar, backed by a persisted `focusStore`
+(localStorage, like the theme). "Code" gives prompt + editor, "Preview" gives prompt + running app,
+"Split" is the default 3-pane — each focus keeps its own resize state via a distinct
+`ResizableSplit` storageKey, so widths don't clobber each other. The stacked (narrow) layout hides
+the non-focused pane too. Also added ⌘K command-palette entries (Focus: Code/Split/Preview). The
+toggle uses `aria-label` (not an sr-only text node) so it doesn't collide with the "Code" pane
+title in tests. Files: `components/studio/kit/{focusStore,FocusToggle}.tsx` (+focusStore test),
+`components/studio/kit/index.ts`, `components/studio/CodeStudioView.tsx`. Typecheck + build green;
+139 studio tests pass.
+
+---
+
 ## 2026-06-06 · Claude — FEAT(S1): live agentic activity stream for app generation
 The #1 complaint — "the AI isn't working synchronously, I can't see what it's doing" — was real:
 `/api/studio/generate` was fully blocking, so generation showed a single "Generating your app…"
