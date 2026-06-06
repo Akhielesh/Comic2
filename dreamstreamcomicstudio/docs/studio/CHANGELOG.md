@@ -5,6 +5,25 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-06 · Claude — FEAT(S3): polyglot studio — generate/understand/support many languages
+Per the owner's steer ("enhance our ability — code in multiple languages, understand/support relevant
+code"). The studio was web-only (React/TS); now it's polyglot:
+- **Generation** is language-agnostic: `buildGeneratePrompt`/`OUTPUT_CONTRACT` now tell the model to pick
+  the right language/stack for the idea (web UI, Node/Python API, CLI, script, Go, …), emit the right
+  manifest (`package.json`/`requirements.txt`/`go.mod`) + a README with run steps, and set `template` to
+  the closest web template ("static" for non-web). `server/src/ai/studio/studioGenerate.ts`.
+- **Editor** highlights ~30 languages: `MonacoEditor` `langFromPath` replaced with a broad ext→Monaco map
+  (python/go/rust/java/kotlin/c/cpp/csharp/php/ruby/shell/sql/graphql/dockerfile/…), not just web files.
+- **Preview** is honest for non-web projects: new pure, unit-tested `projectKind.ts` (`detectProjectKind`)
+  classifies the file set (web wins when present, else the dominant language); the preview pane renders the
+  in-browser preview for web projects and a clean "{Language} project — run locally / cloud-run / download"
+  panel for non-web ones instead of a broken browser preview.
+Files: `server/src/ai/studio/studioGenerate.ts`, `components/studio/workspace/{MonacoEditor,projectKind}.tsx`
+(+projectKind test), `workspace/index.ts`, `CodeStudioView.tsx`. Typecheck + server build + frontend build
+green; 147 studio tests pass.
+
+---
+
 ## 2026-06-06 · Claude — FEAT(S2): Code ⇄ Preview focus toggle (maximize real estate)
 The studio's wide layout was a fixed 3-pane split, so reviewing code or the running app meant
 squinting at a third of the screen. Added a **Code · Split · Preview** segmented toggle

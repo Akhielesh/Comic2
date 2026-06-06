@@ -23,6 +23,7 @@ import {
   CodeWorkspace, LogsConsole, PreviewFrame, BuildTrace, ChangesPanel, HistoryPanel, PromptComposer,
   ConversationThread, ActivityFeed, useStudioConversation, useStudioActivity, useStudioBuild,
   useStudioWorkspace, useStudioLogs, isPathDirty, workspaceCurrentArtifact,
+  detectProjectKind, projectKindLabel, isWebProject,
 } from './workspace';
 import { StudioStart } from './StudioStart';
 import { stopLiveStudio } from '../../services/studioApi';
@@ -98,6 +99,9 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     () => workspaceCurrentArtifact({ title: wsTitle, template: wsTemplate, files: wsFiles, paths: wsPaths }),
     [wsTitle, wsTemplate, wsFiles, wsPaths]
   );
+  // Polyglot: classify the project so the preview renders web apps in-browser but shows an honest
+  // "run it locally / cloud-run" panel for non-web projects (Python/Go/…) instead of a broken preview.
+  const projectKind = useMemo(() => detectProjectKind(currentArtifact.files), [currentArtifact.files]);
 
   // Load the handed-off app into the editor workspace.
   useEffect(() => {
@@ -357,12 +361,30 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       )}
       {previewUrl ? (
         <PreviewFrame url={previewUrl} />
-      ) : hasFiles ? (
+      ) : hasFiles && isWebProject(projectKind) ? (
         // Instant in-browser preview — works without the live worker. A live cloud Build
         // supersedes this with a real container URL when enabled. onError drives autodebug.
         <Suspense fallback={<div className="p-3"><Skeleton className="h-full min-h-[12rem] w-full" /></div>}>
           <CodeStudioPanel data={currentArtifact} editorHeight={460} previewOnly onError={onPreviewError} />
         </Suspense>
+      ) : hasFiles ? (
+        // Non-web project (Python/Go/…) — the browser can't run it. Be honest + helpful.
+        <div className="h-full min-h-[14rem] flex flex-col items-center justify-center gap-3 p-6 text-center">
+          <div className={`h-16 w-16 rounded-2xl border ${t.edge} ${t.panelAlt} flex items-center justify-center`}>
+            <FileCode className={`w-7 h-7 ${t.accent}`} />
+          </div>
+          <p className={`text-sm font-semibold ${t.text}`}>{projectKindLabel(projectKind)} project</p>
+          <p className={`text-xs ${t.textDim} max-w-xs`}>
+            This isn't a browser app, so there's no in-page preview. Check the README for run steps,
+            download the project, or run it live in a cloud container.
+          </p>
+          <button
+            onClick={() => void downloadArtifactZip(currentArtifact)}
+            className={`inline-flex items-center gap-1.5 text-xs font-bold rounded-full border ${t.edgeStrong} px-3 py-1.5 ${t.text} ${t.hover} ${t.focusRing}`}
+          >
+            <Download className="w-3.5 h-3.5" /> Download .zip
+          </button>
+        </div>
       ) : (
         <div className="h-full min-h-[14rem] flex flex-col items-center justify-center gap-3 p-6 text-center">
           <div className={`h-16 w-16 rounded-2xl border ${t.edge} ${t.panelAlt} flex items-center justify-center`}>

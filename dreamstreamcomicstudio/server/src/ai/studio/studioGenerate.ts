@@ -48,13 +48,21 @@ const renderFiles = (files: { path: string; content: string }[]): string =>
     .join('\n\n');
 
 const OUTPUT_CONTRACT = `Return ONLY a single JSON object — no prose, no markdown fences around it — of EXACTLY this shape:
-{"title":"<short app name>","description":"<one sentence>","template":"react-ts|react|vanilla-ts|vanilla|static","files":[{"path":"/App.tsx","content":"<full file content>"}]}
+{"title":"<short name>","description":"<one sentence>","template":"react-ts|react|vanilla-ts|vanilla|static","files":[{"path":"/App.tsx","content":"<full file content>"}]}
 
 Rules:
 - Emit COMPLETE, runnable code in every file. Never truncate, never write "// TODO" or placeholder comments.
-- Prefer the smallest set of files that works. For a React app, /App.tsx alone is fine (the Studio scaffolds Vite around it). If you need extra npm packages, also emit a /package.json listing them. For a static app, include /index.html.
-- For React, the root component MUST be the DEFAULT export of /App.tsx (or /src/App.tsx) so the studio can mount it.
-- Paths start with "/". Do not invent npm packages that do not exist.`;
+- Use the RIGHT language and project layout for the idea — you are NOT limited to web apps. For example:
+  - Web UI → React (root component = DEFAULT export of /App.tsx or /src/App.tsx) or a static /index.html.
+  - HTTP API / backend → Node/Express (/server.js + /package.json) or Python (/main.py + /requirements.txt).
+  - Script · CLI · data/automation → Python (/main.py + /requirements.txt), Node (/index.js), or Go (/main.go).
+- Prefer the smallest set of files that runs. Include the language's manifest when you need dependencies
+  (/package.json, /requirements.txt, /go.mod, …). For any non-web project add a short /README.md with the
+  exact run commands.
+- "template" must be one of the listed web templates: use "react-ts"/"react" for React, and "static" for
+  everything else (plain HTML/CSS, or any non-web project). The studio detects the real language from your
+  file extensions, so "static" is correct for Python/Go/Node-API/etc.
+- Paths start with "/". Do not invent packages that do not exist.`;
 
 export const buildGeneratePrompt = (input: GenerateInput): string => {
   const template = normalizeTemplate(input.template);
@@ -73,12 +81,12 @@ ${input.prompt}
 ${OUTPUT_CONTRACT}`;
   }
 
-  return `You are a senior engineer building a complete, runnable web app from a one-line idea, to open in a live code studio (editor + instant preview).
+  return `You are a senior engineer building a complete, runnable project from a one-line idea, to open in a live code studio (multi-language editor + instant web preview). Pick the language and stack that best fit the idea — a web UI, a backend API, a CLI, a script, or a data task — don't force everything into a web app.
 
-APP IDEA:
+PROJECT IDEA:
 ${input.prompt}
 
-Preferred framework template: ${template} (use it unless the idea clearly needs another).
+Default web stack if the idea is a UI and doesn't imply another: ${template}.
 
 ${OUTPUT_CONTRACT}`;
 };

@@ -8,6 +8,14 @@
 > [`00-STATUS.md`](./00-STATUS.md), and it sequences feature-by-feature so each loop
 > iteration ships one shippable slice.
 
+## Direction (decided with the owner, 2026-06-06)
+
+**Enhance our own stack** (React 19 + Express + Supabase + OpenRouter) to LibreChat's feature/UX
+bar — do **not** fork LibreChat (a MongoDB/Node monorepo; a literal fork would regress our working
+auth/billing/image pipeline). Use LibreChat as the reference, build the capabilities natively.
+**Top priority from the owner: polyglot — the studio must generate, understand and support as many
+coding languages as possible, not just web apps.** (S3 below delivers the first cut.)
+
 ## North-star experience
 
 A user describes an app in plain language and **watches the AI build it synchronously** —
@@ -49,7 +57,15 @@ own connected accounts, all hostable by us.
   reviewing code or the running app; each focus keeps its own resize state.
   _(`kit/focusStore.ts` + `kit/FocusToggle.tsx`, wired in `CodeStudioView`.)_
 
-- **S3 — Diff-centric live edits.** When refining, stream a per-file **diff** (added/removed
+- **S3 — Polyglot studio (multi-language).** ✅ **shipped.** Generation picks the right language/stack
+  for the idea (web/Node/Python/Go/CLI/script…) and emits the right manifest + README; the Monaco editor
+  highlights ~30 languages; the preview shows an honest "run locally / cloud-run / download" panel for
+  non-web projects instead of a broken browser preview. _(server: `studioGenerate` prompt/contract;
+  client: `MonacoEditor` lang map, `projectKind.ts`, `CodeStudioView` preview fallback.)_
+  **Next polyglot increments:** real per-language execution in the cloud worker (Python/Go images),
+  language-specific templates on the start screen, and per-language run/format commands.
+
+- **S3b — Diff-centric live edits.** When refining, stream a per-file **diff** (added/removed
   lines) into the activity feed and the Changes panel as the model rewrites files, so edits read
   like a reviewable changelog, not a black box.
 

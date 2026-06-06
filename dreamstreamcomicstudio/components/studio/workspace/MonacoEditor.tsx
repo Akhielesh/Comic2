@@ -6,28 +6,30 @@ import React from 'react';
 import Editor, { type BeforeMount, type OnMount } from '@monaco-editor/react';
 import { Skeleton, useStudioTheme } from '../kit';
 
+// Map a file extension to a Monaco language id. Polyglot: Monaco ships basic-language grammars
+// for all of these, so Python/Go/Rust/Java/etc. highlight correctly — not just web files.
+const EXT_TO_MONACO: Record<string, string> = {
+  ts: 'typescript', tsx: 'typescript', mts: 'typescript', cts: 'typescript',
+  js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
+  json: 'json', jsonc: 'json',
+  css: 'css', scss: 'scss', sass: 'scss', less: 'less',
+  html: 'html', htm: 'html', xml: 'xml', svg: 'xml', vue: 'html', svelte: 'html',
+  md: 'markdown', markdown: 'markdown', mdx: 'markdown',
+  yml: 'yaml', yaml: 'yaml', toml: 'ini', ini: 'ini', env: 'ini',
+  py: 'python', rb: 'ruby', php: 'php', go: 'go', rs: 'rust',
+  java: 'java', kt: 'kotlin', kts: 'kotlin', swift: 'swift', scala: 'scala',
+  c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp', cs: 'csharp',
+  sh: 'shell', bash: 'shell', zsh: 'shell', fish: 'shell',
+  sql: 'sql', graphql: 'graphql', gql: 'graphql',
+  lua: 'lua', r: 'r', dart: 'dart', pl: 'perl', ps1: 'powershell',
+  bat: 'bat', cmd: 'bat', clj: 'clojure', ex: 'elixir', exs: 'elixir',
+};
+
 const langFromPath = (path: string): string => {
-  const ext = path.split('.').pop()?.toLowerCase() ?? '';
-  switch (ext) {
-    case 'ts':
-    case 'tsx': return 'typescript';
-    case 'js':
-    case 'jsx':
-    case 'mjs':
-    case 'cjs': return 'javascript';
-    case 'json': return 'json';
-    case 'css': return 'css';
-    case 'scss':
-    case 'sass': return 'scss';
-    case 'less': return 'less';
-    case 'html':
-    case 'htm': return 'html';
-    case 'md':
-    case 'markdown': return 'markdown';
-    case 'yml':
-    case 'yaml': return 'yaml';
-    default: return 'plaintext';
-  }
+  const file = path.split('/').pop()?.toLowerCase() ?? '';
+  if (file === 'dockerfile' || file.endsWith('.dockerfile')) return 'dockerfile';
+  const ext = file.includes('.') ? file.split('.').pop()! : '';
+  return EXT_TO_MONACO[ext] ?? 'plaintext';
 };
 
 const defineStudioThemes: BeforeMount = (monaco) => {

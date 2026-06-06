@@ -6,6 +6,11 @@
 
 **Last updated:** 2026-06-06 · **Updated by:** Claude · **Branch:** `claude/wizardly-franklin-EgL8k` (draft PR)
 
+> Latest (2026-06-06): **S3 — POLYGLOT STUDIO.** The studio is no longer web-only: generation picks
+> the right language/stack for the idea (web/Node/Python/Go/CLI…), the Monaco editor highlights ~30
+> languages, and the preview shows an honest "run locally / cloud-run" panel for non-web projects
+> instead of a broken browser preview (`detectProjectKind`). 147 studio tests pass.
+
 > Latest (2026-06-06): **S2 — CODE ⇄ PREVIEW FOCUS TOGGLE.** A Code · Split · Preview segmented
 > toggle (persisted) in the studio top bar + ⌘K palette lets the user maximize the screen for
 > reviewing the code or the running app; each focus keeps its own resize state. 139 studio tests pass.
