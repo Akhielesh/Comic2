@@ -42,6 +42,15 @@ export interface CodeStudioViewProps {
   onNavigate: (view: string) => void;
 }
 
+// One-click refine prompts (Lovable-style "what next") shown under the iterate composer.
+const QUICK_ACTIONS: { label: string; prompt: string }[] = [
+  { label: '✨ Polish UI', prompt: 'Polish the visual design — spacing, typography, colors, and overall aesthetics. Keep all behavior.' },
+  { label: '🌙 Dark mode', prompt: 'Add a dark mode toggle and make the styling adapt to it.' },
+  { label: '📱 Responsive', prompt: 'Make the layout fully responsive and great on mobile.' },
+  { label: '🎬 Animations', prompt: 'Add tasteful, smooth animations and transitions.' },
+  { label: '🧪 Sample data', prompt: 'Pre-fill the app with realistic sample data so it looks alive on first load.' },
+];
+
 const PaneFrame: React.FC<{ title: React.ReactNode; icon: React.ReactNode; className?: string; children: React.ReactNode }>
   = ({ title, icon, className, children }) => {
     const t = useStudioTheme();
@@ -247,6 +256,19 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       <div className="p-3 space-y-3">
         {/* Iterate by prompt — refines the current app in place (no chat hand-off). */}
         <PromptComposer mode="inline" onSubmit={handleGenerate} busy={generating} error={genError} />
+        <div className="flex flex-wrap gap-1.5">
+          {QUICK_ACTIONS.map((a) => (
+            <button
+              key={a.label}
+              onClick={() => handleGenerate(a.prompt)}
+              disabled={generating}
+              title={a.prompt}
+              className={`rounded-full border ${t.edge} px-2.5 py-1 text-[11px] font-medium ${t.textDim} ${t.hover} disabled:opacity-50 ${t.focusRing}`}
+            >
+              {a.label}
+            </button>
+          ))}
+        </div>
         <BuildTrace />
         <ChangesPanel />
         <HistoryPanel />

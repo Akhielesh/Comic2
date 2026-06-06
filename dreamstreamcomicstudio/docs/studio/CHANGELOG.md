@@ -5,6 +5,11 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-06 · Claude — Code Studio: one-click quick-refine actions
+Lovable-style "what next" chips under the iterate composer (✨ Polish UI · 🌙 Dark mode · 📱
+Responsive · 🎬 Animations · 🧪 Sample data). Each fires a refine via the existing in-studio
+generate path, so iterating an app is one click. Typecheck + build green; 78 studio tests pass.
+
 ## 2026-06-06 · Claude — Code Studio: in-preview autodebug ("Fix with AI" loop)
 The "autodebug" ask, closed in-browser (no worker needed). `CodeStudioPanel` moved to Sandpack's
 composed API (`SandpackProvider` + `SandpackLayout` + an `ErrorWatcher` using `useSandpack`), so the
