@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import type { CodeStudioArtifact, CodeStudioTemplate } from '../../apiTypes';
 import {
-  Reveal, Skeleton, StatusPulse, Lift, ThemeSwitcher, FocusToggle, ResizableSplit, Confetti, CommandPalette, ShortcutsHelp,
+  Reveal, Skeleton, StatusPulse, ThemeSwitcher, FocusToggle, ResizableSplit, Confetti, CommandPalette, ShortcutsHelp,
   StudioAurora, useIsWide, useStudioTheme, useStudioThemeStore, useStudioFocus,
 } from './kit';
 import type { RunStatus, Command } from './kit';
@@ -142,10 +142,18 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const [shareCopied, setShareCopied] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
-  const [template, setTemplate] = useState<CodeStudioTemplate>('react-ts');
+  // undefined = "Auto" — the AI picks the best stack from the prompt (no forced choice).
+  const [template, setTemplate] = useState<CodeStudioTemplate | undefined>(undefined);
   const [previewError, setPreviewError] = useState<string | null>(null);
-  // Stable identity so the preview's ErrorWatcher effect doesn't re-fire every render.
-  const onPreviewError = useCallback((e: string | null) => setPreviewError(e), []);
+  // Debounce preview errors: the in-browser preview reports transient compile/HMR blips while a
+  // refine streams in, which made the error banner flash. Only surface an error that *persists*
+  // (~1.2s); clear it immediately on recovery. Stable identity so the watcher effect is steady.
+  const previewErrTimer = useRef<number | null>(null);
+  const onPreviewError = useCallback((e: string | null) => {
+    if (previewErrTimer.current) { clearTimeout(previewErrTimer.current); previewErrTimer.current = null; }
+    if (!e) { setPreviewError(null); return; }
+    previewErrTimer.current = window.setTimeout(() => setPreviewError(e), 1200);
+  }, []);
 
   // Esc cancels an in-flight generation (only listens while generating).
   useEffect(() => {
@@ -430,7 +438,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
 
   const previewPane = (
     <PaneFrame title="Live preview" icon={<Cloud className="w-4 h-4" />}>
-      {previewError && hasFiles && !previewUrl && (
+      {previewError && hasFiles && !previewUrl && !generating && (
         <div className="flex items-start gap-2 px-3 py-2 border-b border-rose-500/20 bg-rose-500/10 text-xs">
           <span className="mt-0.5 shrink-0 font-semibold text-rose-400">⚠ Error</span>
           <span className="min-w-0 flex-1 truncate text-rose-200/90" title={previewError}>{previewError}</span>
@@ -505,11 +513,14 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       {/* Top bar */}
       <Reveal distance={-8}>
         <div className={`flex items-center gap-3 px-4 h-14 border-b ${t.edge} ${t.panelAlt}`}>
+          {/* Back is contextual: with a project open it returns to the studio's project list
+              (so you can pick another); from the list it exits the studio. */}
           <button
-            onClick={onBack}
+            onClick={hasFiles ? newProject : onBack}
+            title={hasFiles ? 'Back to your projects' : 'Leave Code Studio'}
             className={`flex items-center gap-1.5 text-sm font-semibold ${t.textDim} ${t.hover} transition-colors ${t.focusRing} rounded-md px-1.5 py-1`}
           >
-            <ArrowLeft className="w-4 h-4" /> Back
+            <ArrowLeft className="w-4 h-4" /> {hasFiles ? 'Projects' : 'Back'}
           </button>
           <div className={`h-5 w-px ${t.edge} border-l`} />
           <div className="flex items-center gap-2 min-w-0">
@@ -549,25 +560,15 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
             {hasFiles && <FocusToggle className="hidden lg:inline-flex" />}
             <ThemeSwitcher className="hidden sm:inline-flex" />
             <StatusPulse status={status} className="mr-1" />
-            {status === 'live' ? (
+            {/* No top "Build" button — building happens through the prompt/chat. A live cloud run
+                (when enabled) is available via ⌘K → "Build & run". Stop appears only while live. */}
+            {status === 'live' && (
               <button
                 onClick={stopLive}
                 className={`flex items-center gap-1.5 text-sm font-bold rounded-full border ${t.edgeStrong} px-3 py-1.5 text-rose-500 ${t.hover} ${t.focusRing}`}
               >
                 <Square className="w-3.5 h-3.5" /> Stop
               </button>
-            ) : (
-              <Lift>
-                <button
-                  onClick={runBuild}
-                  disabled={!enabled || !hasFiles || status === 'starting'}
-                  title={enabled ? 'Build & run this app live, self-healing errors' : 'Code Studio is in private preview'}
-                  className={`flex items-center gap-1.5 text-sm font-bold rounded-full px-3.5 py-1.5 ${t.accentText} ${t.accentBg} ${t.accentBgHover} disabled:opacity-50 disabled:cursor-not-allowed ${t.focusRing}`}
-                >
-                  {status === 'starting' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
-                  {status === 'starting' ? 'Building…' : 'Build'}
-                </button>
-              </Lift>
             )}
             <button
               onClick={copyShare}
@@ -630,17 +631,17 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
             {/* Focus-aware horizontal layout — Code or Preview can take the full pane
                 (each focus keeps its own resize state via a distinct storageKey). */}
             {focus === 'code' ? (
-              <ResizableSplit direction="horizontal" storageKey="studio.split.h.code" initial={[2.4, 6.6]} minPx={220}>
+              <ResizableSplit direction="horizontal" storageKey="studio.split.h.code.v2" initial={[3.6, 6.4]} minPx={280}>
                 {promptPane}
                 {codePane}
               </ResizableSplit>
             ) : focus === 'preview' ? (
-              <ResizableSplit direction="horizontal" storageKey="studio.split.h.preview" initial={[2.4, 6.6]} minPx={220}>
+              <ResizableSplit direction="horizontal" storageKey="studio.split.h.preview.v2" initial={[3.6, 6.4]} minPx={280}>
                 {promptPane}
                 {previewPane}
               </ResizableSplit>
             ) : (
-              <ResizableSplit direction="horizontal" storageKey="studio.split.h" initial={[2.4, 3.4, 3.2]} minPx={220}>
+              <ResizableSplit direction="horizontal" storageKey="studio.split.h.v2" initial={[3.4, 3.1, 3.1]} minPx={260}>
                 {promptPane}
                 {codePane}
                 {previewPane}

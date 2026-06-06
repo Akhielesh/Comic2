@@ -63,6 +63,15 @@ type AppView =
   | 'codestudio'
   | 'shared';
 
+// Top-level views whose identity is persisted in the URL (?view=) so a refresh restores the page.
+// Path/param-managed views (reader, shared, auth-callback, models) are intentionally excluded —
+// they have their own URL handling and must not be clobbered.
+// (editor/comicforge/pagestudio/profile are excluded: they need a loaded project/profile that
+//  isn't encoded here, so restoring them blind would render a broken page — they fall back to home.)
+const RESTORABLE_VIEWS = new Set<AppView>([
+  'dashboard', 'chat', 'codestudio', 'gallery', 'learn', 'test', 'how-it-works', 'privacy', 'terms', 'settings',
+]);
+
 type SettingsTab = 'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin' | 'preferences' | 'security';
 
 type AuthCallbackStatus = 'idle' | 'verifying' | 'success' | 'error';
@@ -229,6 +238,32 @@ const App: React.FC = () => {
       setCurrentView('models');
     }
   }, []);
+
+  // Restore the active view from the URL (?view=) on load, so refreshing keeps you on the same
+  // section instead of bouncing to the home page. Declared BEFORE the sync effect below so it
+  // reads the param before the sync effect can rewrite it. Path/param-managed routes are skipped.
+  useEffect(() => {
+    const path = window.location.pathname;
+    if (path.startsWith('/share/') || path === '/models' || path === '/auth/callback') return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('view') === 'read') return; // reader deep-link handled separately
+    const v = params.get('view');
+    if (v && RESTORABLE_VIEWS.has(v as AppView)) setCurrentView(v as AppView);
+  }, []);
+
+  // Keep the URL's ?view= in sync with the active view so a refresh restores it. Views that manage
+  // their own URL (reader/shared/auth-callback/models) are left untouched. Uses replaceState so it
+  // doesn't spam browser history on every transition.
+  useEffect(() => {
+    if (currentView === 'reader' || currentView === 'shared' || currentView === 'auth-callback' || currentView === 'models') return;
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('id'); // reader-only param; drop it when not reading
+      if (currentView === 'home') url.searchParams.delete('view');
+      else url.searchParams.set('view', currentView);
+      window.history.replaceState({}, '', url);
+    } catch { /* history unavailable; navigation still works via state */ }
+  }, [currentView]);
 
   useEffect(() => {
     if (!user?.email || user.email !== 'admin@test.com') {

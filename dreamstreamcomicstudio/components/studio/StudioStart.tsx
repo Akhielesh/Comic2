@@ -41,7 +41,7 @@ export interface StudioStartProps {
   generating?: boolean;
   genError?: string | null;
   template?: CodeStudioTemplate;
-  onTemplateChange?: (t: CodeStudioTemplate) => void;
+  onTemplateChange?: (t: CodeStudioTemplate | undefined) => void;
 }
 
 export const StudioStart: React.FC<StudioStartProps> = ({

@@ -5,6 +5,35 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-06 · Claude — FIX: studio UX bugs + app-wide refresh routing (from owner review)
+Direct fixes for the owner's reported issues:
+- **Back went to the app home, not the studio.** Back is now contextual: with a project open it returns
+  to the studio's **project list** (so you can pick another project); only from the list does it leave
+  Code Studio. (`CodeStudioView` Back → `newProject` when `hasFiles`; label switches to "Projects".)
+- **Choosing a language was forced.** Added an **Auto** chip (now the default) so the AI picks the best
+  stack from the prompt — you can build immediately without choosing. Explicit chips remain optional.
+  (`PromptComposer` `FRAMEWORKS` + `template`/`onTemplateChange` accept `undefined`; studio defaults to Auto.)
+- **Redundant top "Build" button removed.** Building happens through the prompt/chat; a live cloud run
+  (when enabled) stays available via ⌘K → "Build & run". **Stop** appears only while a live run is active.
+- **Left prompt/chat panel was too small.** Widened its default share in all focus layouts (new
+  `*.v2` split keys so existing users get the wider default) and made the inline composer taller (2 rows,
+  up to 200px) so it reads like a proper chat panel.
+- **Preview "error" flashing.** Preview errors are now **debounced ~1.2s** (and suppressed entirely while
+  a generation is streaming), so transient compile/HMR blips no longer flash the red banner.
+- **App-wide: refresh always bounced to home.** `currentView` was React state with no URL. Now the
+  active view is persisted to the URL (`?view=`) and **restored on refresh** for the main sections
+  (dashboard/chat/codestudio/gallery/learn/test/how-it-works/privacy/terms/settings). Path/param routes
+  (reader/shared/auth-callback/models) keep their own URLs.
+Files: `components/studio/{CodeStudioView,StudioStart}.tsx`, `components/studio/workspace/PromptComposer.tsx`,
+`components/studio/CodeStudioView.test.tsx`, `App.tsx`. Typecheck + server build + frontend build green;
+**517 tests pass** (full CI-equivalent suite).
+
+> Still on the roadmap (larger efforts, not faked): a real multi-agent build (design/backend/architecture
+> agents) with auto-verification + coding-specific models, and a terminal for non-web/SQL projects. Tracked
+> in `CODE-STUDIO-LIBRECHAT-PLAN.md`; next iterations.
+
+---
+
 ## 2026-06-06 · Claude — FEAT: "New project" action (start over) + verified full CI suite
 - Added a **New project** command (⌘K palette, when a project is loaded) that aborts any in-flight
   run and clears the workspace + conversation thread + activity back to the projects/start screen.

@@ -17,7 +17,10 @@ import { Textarea } from '../../ui/textarea';
 import { Badge } from '../../ui/badge';
 import { cn } from '../../../lib/utils';
 
-const FRAMEWORKS: { id: CodeStudioTemplate; label: string }[] = [
+// "Auto" (undefined) lets the AI pick the best language/stack from the idea — the default, so the
+// user never has to choose. The explicit chips remain for when they want to force one.
+const FRAMEWORKS: { id: CodeStudioTemplate | undefined; label: string }[] = [
+  { id: undefined, label: 'Auto' },
   { id: 'react-ts', label: 'React + TS' },
   { id: 'react', label: 'React' },
   { id: 'static', label: 'HTML/CSS' },
@@ -42,9 +45,9 @@ export interface PromptComposerProps {
   error?: string | null;
   /** Hero-only: example prompts shown as chips. */
   suggestions?: string[];
-  /** Controlled framework choice (hero). */
+  /** Controlled framework choice (hero). `undefined` = Auto (the AI picks). */
   template?: CodeStudioTemplate;
-  onTemplateChange?: (t: CodeStudioTemplate) => void;
+  onTemplateChange?: (t: CodeStudioTemplate | undefined) => void;
   className?: string;
 }
 
@@ -71,7 +74,7 @@ export const PromptComposer: React.FC<PromptComposerProps> = ({
     const el = ref.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, isHero ? 220 : 140)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, isHero ? 220 : 200)}px`;
   }, [value, isHero]);
 
   const submit = () => {
@@ -128,7 +131,7 @@ export const PromptComposer: React.FC<PromptComposerProps> = ({
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
             disabled={disabled || busy}
-            rows={isHero ? 3 : 1}
+            rows={isHero ? 3 : 2}
             placeholder={
               isHero
                 ? 'Build me a habit tracker with streaks and a weekly chart…'
@@ -143,12 +146,13 @@ export const PromptComposer: React.FC<PromptComposerProps> = ({
               <div className="flex items-center gap-1">
                 {FRAMEWORKS.map((f) => (
                   <button
-                    key={f.id}
+                    key={f.label}
                     type="button"
                     onClick={() => onTemplateChange?.(f.id)}
+                    title={f.id ? `Force ${f.label}` : 'Let the AI choose the best stack for your idea'}
                     className={cn(
                       'rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors',
-                      (template ?? 'react-ts') === f.id
+                      template === f.id
                         ? 'border-violet-400/40 bg-violet-500/15 text-violet-200'
                         : 'border-white/10 text-slate-400 hover:bg-white/[0.06] hover:text-slate-200'
                     )}

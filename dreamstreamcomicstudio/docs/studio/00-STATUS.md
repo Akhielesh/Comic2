@@ -6,6 +6,13 @@
 
 **Last updated:** 2026-06-06 · **Updated by:** Claude · **Branch:** `claude/wizardly-franklin-EgL8k` (draft PR)
 
+> Latest (2026-06-06): **OWNER-REVIEW FIXES.** Back now returns to the studio's project list (not the
+> app home); **Auto** stack is the default (no forced language choice); the redundant top Build button is
+> gone; the left prompt/chat panel is wider + taller; preview errors are debounced (no more flashing); and
+> **refresh now restores the page app-wide** via `?view=` (dashboard/chat/codestudio/gallery/…). 517 tests pass.
+> Still queued (bigger): real multi-agent build (design/backend/architect agents) + auto-verification +
+> coding-specific models, and a terminal for non-web/SQL projects.
+
 > Latest (2026-06-06): **GENERATION RESILIENCE & CONTROL.** Failed/cancelled runs get a **Retry**
 > button; **Esc** cancels an in-flight generation; the activity feed auto-scrolls while streaming; and
 > the composer suggestions now include polyglot ideas. 113 component tests pass.

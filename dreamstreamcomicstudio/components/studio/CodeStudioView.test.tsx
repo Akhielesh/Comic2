@@ -59,22 +59,25 @@ describe('CodeStudioView', () => {
     expect(screen.getByText('Counter App')).toBeInTheDocument();
     expect(screen.getAllByText('App.tsx').length).toBeGreaterThan(0);
     expect(screen.getByText('index.tsx')).toBeInTheDocument();
-    // Run live is available to admins and not gated
-    expect(screen.getByRole('button', { name: /^build$/i })).toBeEnabled();
-    expect(screen.queryByText(/private preview/i)).not.toBeInTheDocument();
+    // Back is contextual — with a project open it returns to the projects list.
+    expect(screen.getByRole('button', { name: /projects/i })).toBeInTheDocument();
+    // There is no redundant top "Build" button (building happens via the prompt).
+    expect(screen.queryByRole('button', { name: /^build$/i })).not.toBeInTheDocument();
+    // Admins aren't shown the private-preview banner.
+    expect(screen.queryByText(/instant-preview mode/i)).not.toBeInTheDocument();
   });
 
   it('gates non-admins behind a private-preview notice with Run live disabled', () => {
     render(<CodeStudioView artifact={null} isAdmin={false} onBack={vi.fn()} onNavigate={vi.fn()} />);
-    // Non-admins build with the instant in-browser preview; live cloud runs (Build) stay gated.
+    // Non-admins build with the instant in-browser preview; there's no top "Build" button.
     expect(screen.getByText(/instant-preview mode/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^build$/i })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /^build$/i })).not.toBeInTheDocument();
   });
 
   it('shows the projects start screen when nothing is loaded (Run live disabled)', () => {
     render(<CodeStudioView artifact={null} isAdmin onBack={vi.fn()} onNavigate={vi.fn()} />);
     expect(screen.getByText('Your projects')).toBeInTheDocument();
-    // Run live is disabled until an app is loaded
-    expect(screen.getByRole('button', { name: /^build$/i })).toBeDisabled();
+    // No top "Build" button — building happens through the prompt.
+    expect(screen.queryByRole('button', { name: /^build$/i })).not.toBeInTheDocument();
   });
 });
