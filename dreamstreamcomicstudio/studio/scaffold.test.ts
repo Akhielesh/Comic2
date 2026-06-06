@@ -81,9 +81,37 @@ describe('scaffold — Expo / React Native (web + mobile)', () => {
     // Web preview is a plain Vite app, so it boots in the WebContainer like other web projects.
     expect(devCommand).toEqual(['npm', ['run', 'dev']]);
     expect(files['vite.config.js']).toContain("'react-native': 'react-native-web'");
-    expect(files['src/main.tsx']).toContain('AppRegistry');
+    expect(files['web-entry.tsx']).toContain('AppRegistry');
     expect(files['app.json']).toContain('"expo"');
-    expect(files['src/App.tsx']).toBe(rnApp);
+    expect(files['App.tsx']).toBe(rnApp);
+  });
+
+  it('keeps App + source at the project root so the Expo native entry resolves them', () => {
+    const { files } = scaffold(art([{ path: '/App.tsx', content: rnApp }]));
+    expect(files['App.tsx']).toBeDefined();
+    expect(files['src/App.tsx']).toBeUndefined(); // NOT moved under src/ (would break expo/AppEntry)
+    const pkg = JSON.parse(files['package.json']);
+    expect(pkg.main).toContain('expo/AppEntry');
+  });
+
+  it('wires NativeWind (babel/metro/tailwind/global.css) for the native build when imported', () => {
+    const { files } = scaffold(art([
+      { path: '/App.tsx', content: `import { cssInterop } from 'nativewind';\nimport { View } from 'react-native';\nexport default () => <View className="flex-1" />;` },
+    ]));
+    const pkg = JSON.parse(files['package.json']);
+    expect(pkg.dependencies.nativewind).toMatch(/4/);
+    expect(pkg.devDependencies.tailwindcss).toBeDefined();
+    expect(files['babel.config.js']).toContain('nativewind/babel');
+    expect(files['metro.config.js']).toContain('withNativeWind');
+    expect(files['tailwind.config.js']).toContain('nativewind/preset');
+    expect(files['global.css']).toContain('@tailwind');
+  });
+
+  it('does NOT add NativeWind config to a plain (StyleSheet) RN app', () => {
+    const { files } = scaffold(art([{ path: '/App.tsx', content: rnApp }]));
+    expect(files['babel.config.js']).toBeUndefined();
+    expect(files['metro.config.js']).toBeUndefined();
+    expect(JSON.parse(files['package.json']).dependencies.nativewind).toBeUndefined();
   });
 
   it('adds imported, web-compatible RN libraries with Expo-aligned versions', () => {
@@ -113,13 +141,13 @@ describe('scaffold — Expo / React Native (web + mobile)', () => {
     expect(pkg.dependencies.expo).toBeDefined();
     expect(pkg.dependencies['react-native-safe-area-context']).toBeDefined();
     expect(pkg.dependencies['@react-navigation/native']).toBeDefined();
-    // user tree preserved under src/ (no dangling relative imports)
-    expect(files['src/App.tsx']).toContain('SafeAreaProvider');
-    expect(files['src/screens/Home.tsx']).toContain('FlatList');
-    expect(files['src/components/Card.tsx']).toContain('Card');
+    // user tree preserved at root (no dangling relative imports; native + web share it)
+    expect(files['App.tsx']).toContain('SafeAreaProvider');
+    expect(files['screens/Home.tsx']).toContain('FlatList');
+    expect(files['components/Card.tsx']).toContain('Card');
     // web preview wiring
     expect(files['vite.config.js']).toContain("'react-native': 'react-native-web'");
-    expect(files['src/main.tsx']).toContain("registerComponent('App'");
+    expect(files['web-entry.tsx']).toContain("registerComponent('App'");
     expect(files['app.json']).toContain('"expo"');
     expect(installCommand).toEqual(['npm', ['install']]);
     expect(devCommand).toEqual(['npm', ['run', 'dev']]);

@@ -237,8 +237,48 @@ const KNOWN_RN_DEPS: Record<string, string> = {
   'expo-haptics': '~13.0.1',
   'expo-image': '~1.12.15',
   '@expo/vector-icons': '^14.0.2',
-  nativewind: '^2.0.11',
+  nativewind: '^4.1.23',
 };
+
+const DEFAULT_RN_APP = `import { View, Text, StyleSheet } from 'react-native';
+
+export default function App() {
+  return (
+    <View style={styles.center}><Text style={styles.title}>App</Text></View>
+  );
+}
+const styles = StyleSheet.create({
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  title: { fontSize: 24, fontWeight: '700' },
+});
+`;
+
+// NativeWind (Tailwind for React Native, the basis of react-native-reusables) is opt-in: when the
+// generated code imports it (or ships Tailwind directives / a tailwind config), we wire the native
+// build correctly (babel + metro + tailwind preset + a global.css). Styling is canonical on device
+// (`npm run native`); the lightweight Vite web preview renders layout/base styles.
+const usesNativeWind = (files: Record<string, string>): boolean =>
+  Object.entries(files).some(([p, c]) => /\.(t|j)sx?$/.test(p) && /from\s+['"]nativewind['"]/.test(c)) ||
+  Object.entries(files).some(([p, c]) => p.endsWith('.css') && TAILWIND_CSS_RE.test(c)) ||
+  Object.keys(files).some((p) => /(^|\/)tailwind\.config\./.test(p));
+
+const NW_BABEL = `module.exports = function (api) {
+  api.cache(true);
+  return { presets: [['babel-preset-expo', { jsxImportSource: 'nativewind' }], 'nativewind/babel'] };
+};
+`;
+const NW_METRO = `const { getDefaultConfig } = require('expo/metro-config');
+const { withNativeWind } = require('nativewind/metro');
+module.exports = withNativeWind(getDefaultConfig(__dirname), { input: './global.css' });
+`;
+const NW_TAILWIND = `/** @type {import('tailwindcss').Config} */
+module.exports = {
+  content: ['./App.{js,jsx,ts,tsx}', './src/**/*.{js,jsx,ts,tsx}', './components/**/*.{js,jsx,ts,tsx}', './screens/**/*.{js,jsx,ts,tsx}'],
+  presets: [require('nativewind/preset')],
+  theme: { extend: {} },
+  plugins: [],
+};
+`;
 
 const isExpoArtifact = (userFiles: Record<string, string>): boolean => {
   const appJson = userFiles['app.json'];
@@ -291,34 +331,21 @@ const APP_JSON_EXPO = (name: string, slugName: string): string => JSON.stringify
 }, null, 2);
 
 const expoScaffold = (artifact: CodeStudioArtifact, userFiles: Record<string, string>): ScaffoldResult => {
-  const ts = !Object.keys(userFiles).some((p) => /^(src\/)?App\.jsx?$/.test(p));
-  const ext = ts ? 'tsx' : 'jsx';
   const files: Record<string, string> = {};
 
-  // Keep the user's RN source under src/; we generate our own web entry + html + configs.
+  // Keep the user's RN code at the project ROOT — Expo's AppEntry, Metro and Tailwind all expect
+  // App + the source tree there. We only ADD a web preview harness + configs alongside it, so the
+  // SAME project runs on device (`npm run native`) and previews on web (`npm run dev` via Vite).
   for (const [path, content] of Object.entries(userFiles)) {
     if (path === 'index.html' || path === 'package.json' || path === 'app.json') continue;
-    if (/^(src\/)?(main|index)\.(t|j)sx?$/.test(path)) continue;
-    if (ROOT_CONFIG_RE.test(path)) { files[path] = content; continue; }
-    files[`src/${path}`] = content;
+    if (/^(src\/)?(main|index)\.(t|j)sx?$/.test(path)) continue; // skip Sandpack-flavored web entries
+    files[path] = content;
   }
-  if (!Object.keys(files).some((p) => /^src\/App\.(t|j)sx?$/.test(p))) {
-    files[`src/App.${ext}`] = `import { View, Text, StyleSheet } from 'react-native';
+  const ext = Object.keys(files).some((p) => /\.jsx?$/.test(p)) && !Object.keys(files).some((p) => /\.tsx?$/.test(p)) ? 'jsx' : 'tsx';
+  if (!Object.keys(files).some((p) => /^App\.(t|j)sx?$/.test(p))) files[`App.${ext}`] = DEFAULT_RN_APP;
 
-export default function App() {
-  return (
-    <View style={styles.center}><Text style={styles.title}>App</Text></View>
-  );
-}
-const styles = StyleSheet.create({
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  title: { fontSize: 24, fontWeight: '700' },
-});
-`;
-  }
-
-  // Web preview entry (react-native-web) — mirrors what expo/AppEntry does on device.
-  files[`src/main.${ext}`] = `import { AppRegistry } from 'react-native';
+  // Web preview harness (Vite + react-native-web) over the ROOT App — mirrors expo/AppEntry.
+  files[`web-entry.${ext}`] = `import { AppRegistry } from 'react-native';
 import App from './App';
 
 AppRegistry.registerComponent('App', () => App);
@@ -334,12 +361,23 @@ AppRegistry.runApplication('App', { rootTag: document.getElementById('root') });
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/main.${ext}"></script>
+    <script type="module" src="/web-entry.${ext}"></script>
   </body>
 </html>
 `;
   if (!files['vite.config.js'] && !files['vite.config.ts']) files['vite.config.js'] = VITE_RNW;
   files['app.json'] = userFiles['app.json'] || APP_JSON_EXPO(artifact.title, slug(artifact.title));
+
+  // NativeWind (Tailwind for RN / react-native-reusables): wire the native build when opted into.
+  const extraDevDeps: Record<string, string> = {};
+  const nativewind = usesNativeWind(userFiles);
+  if (nativewind) {
+    if (!Object.keys(files).some((p) => /^babel\.config\./.test(p))) files['babel.config.js'] = NW_BABEL;
+    if (!Object.keys(files).some((p) => /^metro\.config\./.test(p))) files['metro.config.js'] = NW_METRO;
+    if (!Object.keys(files).some((p) => /^tailwind\.config\./.test(p))) files['tailwind.config.js'] = NW_TAILWIND;
+    if (!Object.keys(files).some((p) => p === 'global.css' || p.endsWith('/global.css'))) files['global.css'] = TAILWIND_ENTRY_CSS;
+    extraDevDeps.tailwindcss = '^3.4.17';
+  }
 
   // Merge any model-shipped deps with the required Expo + preview baseline.
   const modelPkg = userFiles['package.json'] ? safeJson(userFiles['package.json']) : null;
@@ -347,6 +385,7 @@ AppRegistry.runApplication('App', { rootTag: document.getElementById('root') });
   const dependencies = {
     expo: '~51.0.39', react: '18.2.0', 'react-dom': '18.2.0',
     'react-native': '0.74.5', 'react-native-web': '~0.19.13',
+    ...(nativewind ? { nativewind: '^4.1.23' } : {}),
     ...detectRnDeps(userFiles), ...modelDeps,
   };
   files['package.json'] = JSON.stringify({
@@ -357,7 +396,7 @@ AppRegistry.runApplication('App', { rootTag: document.getElementById('root') });
       native: 'expo start', 'native:web': 'expo start --web',
     },
     dependencies,
-    devDependencies: { '@vitejs/plugin-react': '^4.3.1', vite: '^5.4.0' },
+    devDependencies: { '@vitejs/plugin-react': '^4.3.1', vite: '^5.4.0', ...extraDevDeps },
   }, null, 2);
 
   return { files, installCommand: ['npm', ['install']], devCommand: ['npm', ['run', 'dev']] };

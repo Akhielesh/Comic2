@@ -100,10 +100,17 @@ Run everything with `deploy/studio-tools/docker-compose.yml`.
   Expo project. The **same RN code runs two ways from one codebase**: the in-studio preview is a
   plain **Vite + react-native-web** app (aliases `react-native` → `react-native-web`, so it boots in
   the WebContainer like any web project), and `npm run native` runs it on device via `expo start`.
-  Imported, web-compatible RN libs (safe-area-context, reanimated, react-navigation, `@expo/vector-icons`,
-  nativewind…) are added with Expo-SDK-aligned versions; for exact native versions users run
-  `npx expo install`. The charter steers RN UIs to core components + react-native-reusables, and the
-  shadcn MCP (`--framework react-native`) serves the matching component source.
+  - **App + source stay at the project root** (not under `src/`) so Expo's native entry
+    (`node_modules/expo/AppEntry.js`) resolves `App` — the web harness (`index.html` + `web-entry.tsx`)
+    is added alongside.
+  - **NativeWind / react-native-reusables:** import `nativewind` and the scaffold wires the native
+    build — `babel.config.js` (jsxImportSource), `metro.config.js` (`withNativeWind`),
+    `tailwind.config.js` (`nativewind/preset`) and a `global.css`. NativeWind styling is canonical on
+    device; the lightweight Vite preview renders layout/base styles. The shadcn MCP
+    (`--framework react-native`) serves matching react-native-reusables component source.
+  - Imported, web-compatible RN libs (safe-area-context, reanimated, react-navigation,
+    `@expo/vector-icons`, …) are added with Expo-SDK-aligned versions; for exact native versions run
+    `npx expo install`.
 
 ---
 
