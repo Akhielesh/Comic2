@@ -21,7 +21,7 @@ import {
 import type { RunStatus, Command } from './kit';
 import {
   CodeWorkspace, LogsConsole, PreviewFrame, BuildTrace, ChangesPanel, HistoryPanel, PromptComposer,
-  ConversationThread, ActivityFeed, useStudioConversation, useStudioActivity, useStudioBuild,
+  ConversationThread, ActivityFeed, ServicesPanel, useStudioConversation, useStudioActivity, useStudioBuild,
   useStudioWorkspace, useStudioLogs, isPathDirty, workspaceCurrentArtifact,
   detectProjectKind, projectKindLabel, isWebProject, runHint, diffLines, diffStat,
 } from './workspace';
@@ -293,6 +293,13 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     if (focus === 'preview') setFocus('split');
   };
 
+  // Scaffold /.env.example with the env vars the AI's code references (Services panel).
+  const addEnvExample = (content: string) => {
+    useStudioWorkspace.getState().addFile('/.env.example', content);
+    if (focus === 'preview') setFocus('split');
+    appendLog('success', 'Added /.env.example with the variables this app expects.');
+  };
+
   // Autodebug: feed the preview's error back to the model as a refine ("fix this").
   const handleAutofix = (errorMsg: string) => {
     if (!errorMsg || generating) return;
@@ -368,6 +375,13 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
           ))}
         </div>
         <BuildTrace />
+        {/* What backends/connections the AI's code expects + a one-click .env scaffold (S4.1). */}
+        <ServicesPanel
+          files={currentArtifact.files}
+          hasEnvExample={wsPaths.includes('/.env.example')}
+          onAddEnvExample={addEnvExample}
+          onConnect={() => onNavigate('settings')}
+        />
         <ChangesPanel />
         <HistoryPanel />
       </div>

@@ -26,6 +26,9 @@ export { useStudioActivity } from './activityStore';
 export type { StudioActivityItem } from './activityStore';
 export { detectProjectKind, projectKindLabel, isWebProject, runHint } from './projectKind';
 export type { ProjectKind } from './projectKind';
+export { ServicesPanel } from './ServicesPanel';
+export { detectServices, buildEnvExample } from './serviceDetect';
+export type { DetectedServices, ServiceId } from './serviceDetect';
 export {
   useStudioWorkspace,
   isPathDirty,

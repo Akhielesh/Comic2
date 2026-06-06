@@ -5,6 +5,24 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-06 · Claude — FEAT(S4.1): "Services & connections" detector + .env scaffold
+First half of the agentic auto-wiring vision ("the AI knows what services/connections it needs"):
+- New pure, tested `serviceDetect.ts` (`detectServices`) reads the generated code and infers the
+  backends it expects — **Supabase, Postgres, Prisma, MongoDB, Firebase, Stripe, object storage,
+  OpenAI, Anthropic, Redis** — plus the **env vars** it references (`process.env`/`import.meta.env`,
+  filtering build noise like NODE_ENV/PORT).
+- New `ServicesPanel` (in the prompt pane under the build trace) shows the detected services as chips,
+  lists the expected env vars, and offers a **real, working action now**: **Add /.env.example** (built
+  via `buildEnvExample`, written into the project, opened in the editor) — plus a **Connect your
+  accounts →** affordance routing to Settings (the OAuth/token wiring is the prioritized owner-action
+  list). Renders nothing when a project needs no services/env.
+This advances S4 visibly without needing the owner's credentials; the connect handshake lands with the
+P1 owner actions. Files: `components/studio/workspace/{serviceDetect,ServicesPanel}.tsx` (+serviceDetect
+test), `workspace/index.ts`, `CodeStudioView.tsx`. Typecheck + frontend build green; 110 studio
+component tests pass.
+
+---
+
 ## 2026-06-06 · Claude — FEAT: deeper agentic edit flow — node detection, clickable activity, diff/timing markers
 Senior-pass polish that connects the flows and adds professional markers:
 - **Content-aware project detection.** `detectProjectKind` now takes file *content* and distinguishes a

@@ -6,6 +6,11 @@
 
 **Last updated:** 2026-06-06 · **Updated by:** Claude · **Branch:** `claude/wizardly-franklin-EgL8k` (draft PR)
 
+> Latest (2026-06-06): **S4.1 — SERVICES & CONNECTIONS DETECTOR.** The studio now reads the AI's code
+> and surfaces the backends it expects (Supabase/Postgres/Stripe/storage/LLM/…) + the env vars it
+> references, with a one-click **Add /.env.example** and a Connect-accounts path. First half of agentic
+> auto-wiring (OAuth/tokens are the prioritized owner actions). 110 component tests pass.
+
 > Latest (2026-06-06): **DEEPER AGENTIC EDIT FLOW.** Content-aware project detection (tells a Node
 > backend from a browser app; adds `runHint`), **clickable activity rows** that jump to the file in the
 > editor, and header **markers** (file count, aggregate +added/−removed, elapsed time). Node API starter
