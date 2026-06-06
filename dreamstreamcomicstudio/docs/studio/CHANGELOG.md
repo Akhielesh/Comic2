@@ -5,6 +5,39 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-06 · Claude — Code Studio: in-place prompt→build + Linear/AI-studio dark redesign
+**Why:** the studio still bounced users to chat to start an app (the "Prompt · Build" pane was a
+dead `(Sprint 2)` placeholder; every CTA did `onNavigate('chat')`), and the themes felt flat. This
+makes Code Studio an actual app builder — type an idea, it builds **right here** — and gives it a
+premium, AI-centric look.
+
+**New — type your idea → app builds in the studio (no chat hand-off):**
+- **`server/src/ai/studio/studioGenerate.ts`** (+ test, 8 cases) — pure prompt builder + tolerant
+  JSON parser (handles fences/prose; prefers the outermost object). Generate **and** refine modes.
+- **`POST /api/studio/generate`** in `server/src/routes/studio.ts` — reuses the build route's
+  coding-model plumbing (`resolveProviderContext` → `pickCodingModel`/`TEXT_FALLBACK` → `runChat`).
+  **Not** gated by the Cloudflare worker — generation is pure LLM, so it works as soon as a coding
+  key is set; the live cloud run (`/build`) remains the upgrade.
+- **`services/studioGenerateApi.ts`** + **`components/studio/workspace/PromptComposer.tsx`** — a
+  real composer (hero + inline/iterate modes, aurora glow, auto-grow, ⏎ to generate, suggestion
+  chips, framework pills). Wired into `CodeStudioView` (`handleGenerate`: generate → load →
+  auto-build when live-enabled) and `StudioStart` (leads with the hero composer; chat-redirect CTAs
+  removed). Preview now defaults to the **instant in-browser** Sandpack for everyone (works without
+  the worker), not just non-admins.
+
+**New — Linear / AI-studio dark redesign (Code-Studio-scoped):**
+- shadcn/21st.dev foundation: `lib/utils.ts` (`cn`), `components/ui/{button,textarea,badge}.tsx`
+  (cva + cn), deps `clsx` + `tailwind-merge` + `class-variance-authority`. The `magic` (21st.dev)
+  MCP is wired for pulling further components.
+- Premium dark theme: `kit/theme.ts` `black` → near-black `#0B0B0F` base, frosted-glass panels
+  (`backdrop-blur`), electric violet accent (was flat OLED + sky). `kit/StudioAurora.tsx` + aurora
+  keyframes in `index.css` (reduced-motion safe). Monaco `studio-black` bg retuned to match.
+
+**Verify:** client + server typecheck green; production build green; **73 studio tests + 8 new
+generate tests pass; 459 total** (3 unrelated suites fail only on unset Supabase env).
+**Owner note:** live cloud Build/Run still needs `STUDIO_WORKER_URL` + `VITE_STUDIO_LIVE_ENABLED`;
+in-studio generation needs a coding key (OpenRouter BYOK or platform `OPENROUTER_API_KEY`).
+
 ## 2026-06-06 · Claude — FIX: Code Studio rendered blank (entrance animations gated visibility)
 **Bug:** opening Code Studio showed a blank page (content present in the DOM, visible only after
 opening DevTools forced a repaint). Cause: the Motion Kit's `Reveal`/`Stagger`/`StaggerItem` and

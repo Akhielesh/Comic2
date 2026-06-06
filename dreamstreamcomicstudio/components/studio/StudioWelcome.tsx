@@ -13,8 +13,8 @@ const readDone = (): boolean => {
 };
 
 const STEPS = [
-  { icon: FileCode2, text: 'Start from a template, or describe an app in chat.' },
-  { icon: Wand2, text: 'Press Build — it runs live in a container and self-heals errors.' },
+  { icon: FileCode2, text: 'Describe an app right here, or start from a template.' },
+  { icon: Wand2, text: 'The agent writes it, runs it, and self-heals errors.' },
   { icon: GitCompare, text: 'Iterate by editing or prompting, then share the running app.' },
 ];
 

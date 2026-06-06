@@ -37,15 +37,15 @@ const defineStudioThemes: BeforeMount = (monaco) => {
     inherit: true,
     rules: [],
     colors: {
-      'editor.background': '#000000',
-      'editorGutter.background': '#000000',
-      'editor.lineHighlightBackground': '#0c0c0c',
+      'editor.background': '#0B0B0F',
+      'editorGutter.background': '#0B0B0F',
+      'editor.lineHighlightBackground': '#15151c',
       'editor.lineHighlightBorder': '#00000000',
-      'editorLineNumber.foreground': '#3a3a3a',
-      'editorLineNumber.activeForeground': '#8a8a8a',
-      'editorIndentGuide.background1': '#1a1a1a',
-      'editor.selectionBackground': '#1f3350',
-      'scrollbarSlider.background': '#2a2a2a88',
+      'editorLineNumber.foreground': '#3a3a46',
+      'editorLineNumber.activeForeground': '#9a92b8',
+      'editorIndentGuide.background1': '#1c1c26',
+      'editor.selectionBackground': '#2c2452',
+      'scrollbarSlider.background': '#7c5cff33',
     },
   });
   // Clean light theme (also used by the DreamStream brand theme).

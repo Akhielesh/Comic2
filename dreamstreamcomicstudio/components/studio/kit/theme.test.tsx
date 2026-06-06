@@ -58,8 +58,8 @@ describe('ThemeSwitcher', () => {
     render(<ThemeSwitcher />);
     const radios = screen.getAllByRole('radio');
     expect(radios.length).toBe(3);
-    // black is active by default
-    expect(screen.getByRole('radio', { checked: true })).toHaveAttribute('title', 'Black theme');
+    // the premium dark theme is active by default
+    expect(screen.getByRole('radio', { checked: true })).toHaveAttribute('title', 'Dark theme');
     fireEvent.click(screen.getByRole('radio', { name: /White/i }));
     expect(useStudioThemeStore.getState().id).toBe('light');
   });

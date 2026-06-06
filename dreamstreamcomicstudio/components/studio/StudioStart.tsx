@@ -3,13 +3,14 @@
 // project hydrates its files into the workspace store; the 3-pane workspace then takes over.
 
 import React, { useEffect, useState } from 'react';
-import { FolderOpen, Trash2, Loader2, MessageSquarePlus, RefreshCw, Copy } from 'lucide-react';
+import { FolderOpen, Trash2, Loader2, RefreshCw, Copy } from 'lucide-react';
+import type { CodeStudioTemplate } from '../../apiTypes';
 import { Reveal, Stagger, StaggerItem, Skeleton, Lift, EmptyState, useStudioTheme } from './kit';
 import { TemplateLogo } from './assets/techLogos';
 import { EmptyProjectsArt } from './assets/illustrations';
 import { STARTER_TEMPLATES } from './assets/templates';
 import { StudioWelcome } from './StudioWelcome';
-import { useStudioWorkspace } from './workspace';
+import { PromptComposer, useStudioWorkspace } from './workspace';
 import {
   listStudioProjects, getStudioProject, deleteStudioProject, type StudioProjectSummary,
 } from '../../services/studioApi';
@@ -30,11 +31,18 @@ const relativeTime = (iso: string): string => {
 };
 
 export interface StudioStartProps {
-  /** Whether to suggest the chat hand-off (full studio is gated for non-admins). */
   onNavigate: (view: string) => void;
+  /** Generate an app from a prompt, in place (the hero composer). When omitted, the composer is hidden. */
+  onGenerate?: (prompt: string, template?: CodeStudioTemplate) => void;
+  generating?: boolean;
+  genError?: string | null;
+  template?: CodeStudioTemplate;
+  onTemplateChange?: (t: CodeStudioTemplate) => void;
 }
 
-export const StudioStart: React.FC<StudioStartProps> = ({ onNavigate }) => {
+export const StudioStart: React.FC<StudioStartProps> = ({
+  onNavigate, onGenerate, generating, genError, template, onTemplateChange,
+}) => {
   const t = useStudioTheme();
   const loadArtifact = useStudioWorkspace((s) => s.loadArtifact);
   const [projects, setProjects] = useState<StudioProjectSummary[] | null>(null);
@@ -94,20 +102,27 @@ export const StudioStart: React.FC<StudioStartProps> = ({ onNavigate }) => {
     <div className="flex-1 min-h-0 overflow-auto p-6">
       <Reveal>
         <div className="mx-auto max-w-5xl">
+          {onGenerate && (
+            <div className="mb-8 pt-6">
+              <PromptComposer
+                mode="hero"
+                onSubmit={onGenerate}
+                busy={generating}
+                error={genError}
+                template={template}
+                onTemplateChange={onTemplateChange}
+              />
+            </div>
+          )}
+
           <StudioWelcome />
           <div className="flex items-center gap-3">
             <h1 className={`font-display text-2xl tracking-wide ${t.text}`}>Your projects</h1>
             <button onClick={load} title="Refresh" className={`rounded-md p-1.5 ${t.hover} ${t.textDim}`}>
               <RefreshCw className="w-4 h-4" />
             </button>
-            <button
-              onClick={() => onNavigate('chat')}
-              className={`ml-auto inline-flex items-center gap-1.5 text-sm font-bold rounded-full px-3.5 py-1.5 ${t.accentText} ${t.accentBg} ${t.accentBgHover} ${t.focusRing}`}
-            >
-              <MessageSquarePlus className="w-4 h-4" /> Build from chat
-            </button>
           </div>
-          <p className={`mt-1 text-sm ${t.textDim}`}>Open a saved app to edit and run it, start from a template, or describe a new one in chat.</p>
+          <p className={`mt-1 text-sm ${t.textDim}`}>Open a saved app to edit and run it, or start from a template.</p>
 
           {/* Start from a template (S4.1) */}
           <div className="mt-5">
@@ -151,15 +166,8 @@ export const StudioStart: React.FC<StudioStartProps> = ({ onNavigate }) => {
               <EmptyState
                 art={<EmptyProjectsArt />}
                 title="No saved projects yet"
-                description="Describe an app in chat and open it here — it saves automatically when you run it."
-              >
-                <button
-                  onClick={() => onNavigate('chat')}
-                  className={`inline-flex items-center gap-1.5 text-sm font-bold rounded-full px-4 py-2 ${t.accentText} ${t.accentBg} ${t.accentBgHover} ${t.focusRing}`}
-                >
-                  <MessageSquarePlus className="w-4 h-4" /> Build from chat
-                </button>
-              </EmptyState>
+                description="Describe an app above and it appears here — saved automatically when you build it."
+              />
             </div>
           )}
 

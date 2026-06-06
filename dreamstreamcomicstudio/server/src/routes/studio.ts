@@ -21,6 +21,7 @@ import { evaluateLaunchAllowed } from '../services/studioCaps.js';
 import { sanitizeFiles, deriveProjectName } from '../services/studioFiles.js';
 import { saveProject, listProjects, getProjectWithFiles, deleteProject, listVersions, getVersionFiles } from '../services/studioRepository.js';
 import { runBuildAgent } from '../ai/studio/buildAgent.js';
+import { buildGeneratePrompt, parseGeneratedApp } from '../ai/studio/studioGenerate.js';
 import { pickCodingModel, TEXT_FALLBACK } from '../ai/autoRouter.js';
 import { runChat } from '../ai/chat.js';
 import { resolveProviderContext } from '../ai/gateway.js';
@@ -55,6 +56,63 @@ const getUsage = async (userId: string): Promise<{ activeRuns: number; dailyAwak
   );
   return { activeRuns: active.count || 0, dailyAwakeSeconds };
 };
+
+// POST /api/studio/generate — turn a plain-language idea into a runnable app artifact, right
+// inside the studio (no chat hand-off). Pure LLM (no sandbox/worker), so it works whenever a
+// coding key is configured; the live cloud run (/build, /launch) is a separate upgrade. Auth +
+// the global key middleware apply. Also handles "refine" when current files are sent along.
+studioRouter.post('/generate', async (req, res, next) => {
+  try {
+    const body = (req.body || {}) as { prompt?: string; template?: string; files?: unknown; title?: string };
+    const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
+    if (!prompt) {
+      return res.status(400).json({ error: { message: 'A prompt describing the app is required.' } });
+    }
+
+    const providerCtx = resolveProviderContext(req.apiKeys?.openRouterKey as string | undefined, 'openrouter');
+    if (!providerCtx.apiKey) {
+      return res.status(400).json({
+        error: {
+          message: 'No coding model is available. Add an OpenRouter key in Settings (free models work too).',
+          code: 'STUDIO_NO_MODEL_KEY'
+        }
+      });
+    }
+
+    let model: string;
+    try { model = await pickCodingModel(); } catch { model = TEXT_FALLBACK; }
+
+    const currentFiles = sanitizeFiles(body.files).map((f) => ({ path: f.path, content: f.content }));
+    const genPrompt = buildGeneratePrompt({
+      prompt,
+      template: body.template,
+      currentFiles: currentFiles.length ? currentFiles : undefined,
+      currentTitle: typeof body.title === 'string' ? body.title : undefined
+    });
+
+    const result = await runChat({
+      provider: 'openrouter',
+      apiKey: providerCtx.apiKey,
+      model,
+      messages: [{ role: 'user', content: genPrompt }],
+      temperature: 0.3,
+      maxTokens: 16000,
+      fallbackModel: TEXT_FALLBACK,
+      timeoutMs: STUDIO_REQUEST_TIMEOUT_MS
+    });
+
+    const artifact = parseGeneratedApp(result.text || '', body.template);
+    if (!artifact) {
+      return res.status(502).json({
+        error: { message: 'The model did not return a valid app. Try rephrasing your idea.', code: 'STUDIO_GENERATE_INVALID' }
+      });
+    }
+
+    return res.json({ artifact });
+  } catch (err) {
+    next(err);
+  }
+});
 
 // POST /api/studio/launch — start a live preview container for the AI-built project.
 studioRouter.post('/launch', async (req, res, next) => {

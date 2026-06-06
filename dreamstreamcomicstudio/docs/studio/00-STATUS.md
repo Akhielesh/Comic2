@@ -4,7 +4,16 @@
 > DreamStream Studio. Every agent/PR that changes anything **must** update this file and
 > `CHANGELOG.md`. If this file and reality disagree, fix this file.
 
-**Last updated:** 2026-06-05 · **Updated by:** Claude · **Branch:** `claude/wizardly-shannon-gPFXf` → prod
+**Last updated:** 2026-06-06 · **Updated by:** Claude · **Branch:** `claude/loving-mccarthy-guspZ` (draft PR)
+
+> Latest (2026-06-06): **IN-STUDIO PROMPT→BUILD + LINEAR/AI-STUDIO DARK REDESIGN.** Code Studio no
+> longer bounces you to chat — the "Prompt · Build" pane is now a real composer (hero + iterate),
+> backed by a new pure-LLM `POST /api/studio/generate` (works without the Cloudflare worker; live
+> cloud Build remains the upgrade). The instant in-browser preview is now the default for everyone.
+> The studio was reskinned to a premium **Linear/AI-studio dark** aesthetic (near-black `#0B0B0F`,
+> frosted-glass panels, violet accent, aurora glow) on a new shadcn/21st.dev foundation
+> (`lib/utils` `cn`, `components/ui/*`). Scoped to Code Studio; the Comic/Chat app is untouched.
+> 73 studio + 8 new generate tests pass; typecheck + build green. See CHANGELOG for files.
 
 > Latest: **THE CODE STUDIO PRODUCT IS BUILT + LIVE.** Sprints 0–5 (per
 > [`CODE-STUDIO-PRODUCT-PLAN.md`](./CODE-STUDIO-PRODUCT-PLAN.md)) shipped to production across ~19

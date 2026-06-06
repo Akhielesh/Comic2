@@ -16,6 +16,8 @@ export type { LogEntry, LogLevel } from './logsStore';
 export { MonacoEditor } from './MonacoEditor';
 export { FileTree, buildTree } from './FileTree';
 export { EditorTabs } from './EditorTabs';
+export { PromptComposer } from './PromptComposer';
+export type { PromptComposerProps } from './PromptComposer';
 export {
   useStudioWorkspace,
   isPathDirty,

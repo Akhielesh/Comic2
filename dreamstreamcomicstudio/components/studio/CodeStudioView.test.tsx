@@ -23,6 +23,9 @@ vi.mock('../../services/studioLauncher', () => ({
 vi.mock('../../services/studioBuildApi', () => ({
   streamStudioBuild: vi.fn(async () => {}),
 }));
+vi.mock('../../services/studioGenerateApi', () => ({
+  generateStudioApp: vi.fn(async () => ({ title: 'P', template: 'react-ts', files: [] })),
+}));
 // Monaco loads from a CDN at runtime — stub it so the editor renders synchronously in jsdom.
 vi.mock('@monaco-editor/react', () => ({
   __esModule: true,
@@ -63,7 +66,8 @@ describe('CodeStudioView', () => {
 
   it('gates non-admins behind a private-preview notice with Run live disabled', () => {
     render(<CodeStudioView artifact={null} isAdmin={false} onBack={vi.fn()} onNavigate={vi.fn()} />);
-    expect(screen.getByText(/private preview/i)).toBeInTheDocument();
+    // Non-admins build with the instant in-browser preview; live cloud runs (Build) stay gated.
+    expect(screen.getByText(/instant-preview mode/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^build$/i })).toBeDisabled();
   });
 

@@ -48,6 +48,7 @@ export {
 export type { StudioThemeId, StudioThemeTokens } from './theme';
 export { useStudioTheme, useStudioThemeStore } from './themeStore';
 export { ThemeSwitcher } from './ThemeSwitcher';
+export { StudioAurora } from './StudioAurora';
 
 export { ResizableSplit, applyGutterDelta } from './ResizableSplit';
 export type { ResizableSplitProps } from './ResizableSplit';

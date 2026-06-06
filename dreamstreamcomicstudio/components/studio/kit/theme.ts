@@ -56,28 +56,30 @@ export interface StudioThemeTokens {
 }
 
 export const STUDIO_THEMES: Record<StudioThemeId, StudioThemeTokens> = {
-  // ---- Absolute black (OLED dark) ----
+  // ---- Linear / AI-studio dark (the default hero theme) ----
+  // Near-black charcoal base with frosted-glass panels that float over the aurora glow
+  // (see StudioAurora). Electric violet accent. Premium, AI-centric — not flat OLED.
   black: {
     id: 'black',
-    label: 'Black',
+    label: 'Dark',
     isDark: true,
     monaco: 'studio-black',
-    bg: 'bg-black',
-    panel: 'bg-[#0a0a0a]',
-    panelAlt: 'bg-[#060606]',
-    editorBg: 'bg-black',
-    edge: 'border-white/10',
+    bg: 'bg-[#0B0B0F]',
+    panel: 'bg-white/[0.025] backdrop-blur-xl',
+    panelAlt: 'bg-white/[0.045] backdrop-blur-xl',
+    editorBg: 'bg-[#0B0B0F]',
+    edge: 'border-white/[0.08]',
     edgeStrong: 'border-white/25',
-    hover: 'hover:bg-white/5',
-    text: 'text-slate-100',
+    hover: 'hover:bg-white/[0.06]',
+    text: 'text-[#E8E8F0]',
     textDim: 'text-slate-400',
     textFaint: 'text-slate-500',
-    accent: 'text-sky-400',
-    accentSoft: 'bg-sky-500/15',
-    accentBg: 'bg-sky-500',
-    accentBgHover: 'hover:bg-sky-400',
-    accentText: 'text-black',
-    focusRing: 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/60',
+    accent: 'text-violet-300',
+    accentSoft: 'bg-violet-500/15',
+    accentBg: 'bg-violet-500',
+    accentBgHover: 'hover:bg-violet-400',
+    accentText: 'text-white',
+    focusRing: 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/60',
   },
   // ---- White (light) ----
   light: {

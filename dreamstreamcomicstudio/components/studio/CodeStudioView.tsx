@@ -12,18 +12,19 @@ import {
   ArrowLeft, Wand2, Square, Share2, Download, FileCode, Cloud,
   Sparkles, Cpu, Lock, Mail, Loader2, Command as CommandIcon, Moon, Sun, Palette, Undo2, MessageSquarePlus, Check,
 } from 'lucide-react';
-import type { CodeStudioArtifact } from '../../apiTypes';
+import type { CodeStudioArtifact, CodeStudioTemplate } from '../../apiTypes';
 import {
   Reveal, Skeleton, StatusPulse, Lift, ThemeSwitcher, ResizableSplit, Confetti, CommandPalette, ShortcutsHelp,
-  useIsWide, useStudioTheme, useStudioThemeStore,
+  StudioAurora, useIsWide, useStudioTheme, useStudioThemeStore,
 } from './kit';
 import type { RunStatus, Command } from './kit';
 import {
-  CodeWorkspace, LogsConsole, PreviewFrame, BuildTrace, ChangesPanel, HistoryPanel, useStudioBuild,
+  CodeWorkspace, LogsConsole, PreviewFrame, BuildTrace, ChangesPanel, HistoryPanel, PromptComposer, useStudioBuild,
   useStudioWorkspace, useStudioLogs, isPathDirty, workspaceCurrentArtifact,
 } from './workspace';
 import { StudioStart } from './StudioStart';
 import { stopLiveStudio } from '../../services/studioApi';
+import { generateStudioApp } from '../../services/studioGenerateApi';
 import { streamStudioBuild, type BuildStage } from '../../services/studioBuildApi';
 import { getOpenRouterKey } from '../../services/appSettings';
 import { isProviderEnabled } from '../../services/sourceGovernance';
@@ -112,6 +113,9 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const [error, setError] = useState<string | null>(null);
   const [celebrate, setCelebrate] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [genError, setGenError] = useState<string | null>(null);
+  const [template, setTemplate] = useState<CodeStudioTemplate>('react-ts');
 
   // Agentic build: stream plan → run → observe → fix → done, self-healing errors. The final
   // preview URL is the live app. Drives the BuildTrace + logs + run status.
@@ -161,6 +165,37 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
 
   runBuildRef.current = runBuild;
 
+  // Generate (or refine) an app from a plain-language prompt — IN the studio, no chat hand-off.
+  // On success the files load into the workspace; if live runs are enabled we auto-build (the
+  // agentic self-heal loop), otherwise the instant in-browser preview shows the app immediately.
+  const handleGenerate = async (prompt: string, tmpl?: CodeStudioTemplate) => {
+    if (generating) return;
+    const refining = hasFiles;
+    setGenerating(true);
+    setGenError(null);
+    appendLog('system', refining ? `Refining: ${prompt}` : `Generating app: ${prompt}`);
+    try {
+      const artifact = await generateStudioApp({
+        prompt,
+        template: tmpl ?? template,
+        files: refining ? currentArtifact.files.map((f) => ({ path: f.path, content: f.content })) : undefined,
+        title: refining ? wsTitle : undefined,
+      });
+      loadArtifact(artifact);
+      appendLog('success', `${refining ? 'Updated' : 'Generated'} "${artifact.title}" — ${artifact.files.length} file(s).`);
+      if (enabled) {
+        // Live cloud build + self-heal. Defer a tick so the workspace store has the new files.
+        setTimeout(() => runBuildRef.current(), 0);
+      }
+    } catch (err) {
+      const msg = (err as Error)?.message || 'Generation failed.';
+      setGenError(msg);
+      appendLog('error', msg);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   const stopLive = async () => {
     if (runId) { try { await stopLiveStudio(runId); } catch { /* best-effort */ } }
     setStatus('idle');
@@ -203,19 +238,10 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const promptPane = (
     <PaneFrame title="Prompt · Build" icon={<Sparkles className="w-4 h-4" />}>
       <div className="p-3 space-y-3">
-        <div className={`rounded-lg border ${t.edge} ${t.panelAlt} p-3`}>
-          <p className={`text-sm ${t.textDim}`}>
-            {artifact
-              ? 'This app was handed off from chat. Run it live, or (coming in Sprint 2) refine it by prompt.'
-              : 'Describe an app and watch it build live. Or open one from chat.'}
-          </p>
-          <div className={`mt-3 rounded-md border ${t.edge} ${t.bg} px-3 py-2 text-sm ${t.textFaint}`}>
-            Describe a change…
-            <span className="ml-1 text-[10px] uppercase tracking-wide">(Sprint 2)</span>
-          </div>
-        </div>
-        <ChangesPanel />
+        {/* Iterate by prompt — refines the current app in place (no chat hand-off). */}
+        <PromptComposer mode="inline" onSubmit={handleGenerate} busy={generating} error={genError} />
         <BuildTrace />
+        <ChangesPanel />
         <HistoryPanel />
       </div>
     </PaneFrame>
@@ -237,8 +263,9 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     <PaneFrame title="Live preview" icon={<Cloud className="w-4 h-4" />}>
       {previewUrl ? (
         <PreviewFrame url={previewUrl} />
-      ) : !enabled && hasFiles ? (
-        // Non-admin: instant in-browser peek so the CTA never dead-ends (decision D3).
+      ) : hasFiles ? (
+        // Instant in-browser preview — works without the live worker. A live cloud Build
+        // supersedes this with a real container URL when enabled.
         <Suspense fallback={<div className="p-3"><Skeleton className="h-full min-h-[12rem] w-full" /></div>}>
           <CodeStudioPanel data={currentArtifact} editorHeight={420} />
         </Suspense>
@@ -265,7 +292,8 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   );
 
   return (
-    <div className={`min-h-screen h-screen ${t.bg} ${t.text} flex flex-col`}>
+    <div className={`relative overflow-hidden min-h-screen h-screen ${t.bg} ${t.text} flex flex-col`}>
+      <StudioAurora className="-z-10" />
       {celebrate && <Confetti onDone={() => setCelebrate(false)} />}
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={commands} />
       <ShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
@@ -367,8 +395,8 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       {!enabled && (
         <div className={`px-4 py-2.5 text-sm ${t.accentSoft} border-b ${t.edge} flex flex-wrap items-center gap-2`}>
           <Lock className={`w-4 h-4 ${t.accent}`} />
-          <span className={`${t.text} font-semibold`}>Code Studio is in private preview.</span>
-          <span className={t.textDim}>You can preview this app instantly below — live cloud runs are rolling out soon.</span>
+          <span className={`${t.text} font-semibold`}>You're building in instant-preview mode.</span>
+          <span className={t.textDim}>Generate and edit apps with a live in-browser preview now — one-click cloud runs &amp; sharing are rolling out.</span>
           <button
             onClick={() => onNavigate('home')}
             className={`ml-auto inline-flex items-center gap-1.5 text-xs font-bold rounded-full border ${t.edgeStrong} px-3 py-1 ${t.accent} ${t.hover}`}
@@ -380,7 +408,14 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
 
       {/* No app loaded → the projects start screen (S1.7). Otherwise the workspace. */}
       {!hasFiles ? (
-        <StudioStart onNavigate={onNavigate} />
+        <StudioStart
+          onNavigate={onNavigate}
+          onGenerate={handleGenerate}
+          generating={generating}
+          genError={genError}
+          template={template}
+          onTemplateChange={setTemplate}
+        />
       ) : wide ? (
         <div className="flex-1 min-h-0 p-3">
           <ResizableSplit direction="vertical" storageKey="studio.split.v" initial={[3.2, 1]} minPx={110}>
