@@ -5,6 +5,17 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-06 · Claude — FEAT: polyglot starter templates (Python API, Go CLI)
+Showcases the polyglot studio (S3) on the start screen: added **Python API** (FastAPI + requirements
++ README) and **Go CLI** (main.go + go.mod + README) starters to `STARTER_TEMPLATES`. Both are
+unambiguously non-web, so they exercise multi-language editor highlighting and the new "run locally"
+preview panel end-to-end. (Skipped a bare-`.js` Node-API starter for now — a `.js`-only project is
+ambiguous with web and `detectProjectKind` leans web; a node-backend heuristic is a future increment.)
+File: `components/studio/assets/templates.ts`. Typecheck + frontend build green; 101 studio component
+tests pass.
+
+---
+
 ## 2026-06-06 · Claude — FEAT(S4.0): studio error boundary (enterprise hardening)
 A render-time crash anywhere in the studio used to take down the whole app (white screen). Added a
 reusable, themed `StudioErrorBoundary` (`components/studio/kit/ErrorBoundary.tsx`) that catches it and

@@ -52,6 +52,34 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
     },
   },
   {
+    id: 'py-api',
+    name: 'Python API',
+    description: 'A FastAPI service with /health + /items — run locally with uvicorn.',
+    artifact: {
+      title: 'Python API',
+      template: 'static',
+      files: [
+        { path: '/main.py', content: `from fastapi import FastAPI\nfrom pydantic import BaseModel\n\napp = FastAPI(title="Items API")\n\n\nclass Item(BaseModel):\n    name: str\n    price: float\n\n\nitems: list[Item] = []\n\n\n@app.get("/health")\ndef health():\n    return {"status": "ok"}\n\n\n@app.get("/items")\ndef list_items():\n    return items\n\n\n@app.post("/items")\ndef add_item(item: Item):\n    items.append(item)\n    return item\n` },
+        { path: '/requirements.txt', content: `fastapi==0.115.0\nuvicorn==0.30.6\n` },
+        { path: '/README.md', content: `# Python API (FastAPI)\n\n## Run\n\n\`\`\`bash\npip install -r requirements.txt\nuvicorn main:app --reload\n\`\`\`\n\nOpen http://127.0.0.1:8000/docs for the interactive API explorer.\n` },
+      ],
+    },
+  },
+  {
+    id: 'go-cli',
+    name: 'Go CLI',
+    description: 'A small Go command-line program — build and run with the Go toolchain.',
+    artifact: {
+      title: 'Go CLI',
+      template: 'static',
+      files: [
+        { path: '/main.go', content: `package main\n\nimport (\n\t"bufio"\n\t"fmt"\n\t"os"\n\t"strings"\n)\n\nfunc main() {\n\tfmt.Print("What's your name? ")\n\tname, _ := bufio.NewReader(os.Stdin).ReadString('\\n')\n\tname = strings.TrimSpace(name)\n\tif name == "" {\n\t\tname = "world"\n\t}\n\tfmt.Printf("Hello, %s!\\n", name)\n}\n` },
+        { path: '/go.mod', content: `module example.com/cli\n\ngo 1.22\n` },
+        { path: '/README.md', content: `# Go CLI\n\n## Run\n\n\`\`\`bash\ngo run .\n\`\`\`\n\nBuild a binary: \`go build -o app .\`\n` },
+      ],
+    },
+  },
+  {
     id: 'landing',
     name: 'Landing page',
     description: 'A single-file HTML/CSS hero — no build step.',
