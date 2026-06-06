@@ -826,6 +826,65 @@ export interface CodeStudioArtifact {
   template: CodeStudioTemplate;
 }
 
+// --- Code Studio "engineering team" build flow (clarify → plan → build) ---------------
+// The studio doesn't one-shot a prompt into a single file anymore. It first asks smart
+// clarifying questions (the user picks options or types a custom answer), drafts a concrete
+// build plan the user can review, then builds the full multi-file app to that plan — and a
+// team of specialist agents reviews it. These types are the shared contract for that flow.
+
+export type StudioQuestionKind = 'single' | 'multi';
+
+export interface StudioClarifyOption {
+  label: string;
+  value: string;
+  /** Optional one-liner explaining the option. */
+  hint?: string;
+}
+
+export interface StudioClarifyQuestion {
+  id: string;
+  question: string;
+  /** single = pick one, multi = pick several. The user may also type a custom answer when allowed. */
+  kind: StudioQuestionKind;
+  options: StudioClarifyOption[];
+  /** Whether the user can type their own answer instead of (or in addition to) the options. */
+  allowCustom: boolean;
+}
+
+export interface StudioClarifyResult {
+  /** 0–4 high-signal questions the AI wants answered before building. Empty = build straight away. */
+  questions: StudioClarifyQuestion[];
+  /** Assumptions the AI will make for anything it did not ask about. */
+  assumptions: string[];
+}
+
+export interface StudioAnswer {
+  question: string;
+  answer: string;
+}
+
+export interface StudioPlanFile {
+  path: string;
+  purpose: string;
+}
+
+export interface StudioBuildPlan {
+  title: string;
+  summary: string;
+  /** e.g. "React dashboard", "Express API", "Python CLI". */
+  appType: string;
+  stack: string[];
+  /** Concrete features the build will implement. */
+  features: string[];
+  /** Planned file tree with each file's purpose. */
+  files: StudioPlanFile[];
+  /** Real data sources / APIs the app will use (when relevant). */
+  dataSources?: string[];
+  /** Notes, risks, or decisions worth surfacing to the user. */
+  notes?: string[];
+}
+
+
 export interface WeatherDaily {
   date: string;
   minC: number;

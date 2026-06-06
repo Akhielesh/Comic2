@@ -8,7 +8,8 @@
 // Kept pure + dependency-injected (the model call lives in the route) so prompt/parse logic is
 // unit-testable.
 
-import type { CodeStudioArtifact, CodeStudioFile, CodeStudioTemplate } from '../../../../apiTypes.js';
+import type { CodeStudioArtifact, CodeStudioFile, CodeStudioTemplate, StudioBuildPlan, StudioAnswer } from '../../../../apiTypes.js';
+import { renderPlanForBuild } from './studioPlan.js';
 
 const EXT_TO_LANG: Record<string, string> = {
   ts: 'typescript', tsx: 'typescript',
@@ -40,6 +41,10 @@ export interface GenerateInput {
   currentFiles?: { path: string; content: string }[];
   /** Current project title (refine), for continuity. */
   currentTitle?: string;
+  /** Build plan to follow (new-app flow) — produced by the PLAN stage. */
+  plan?: StudioBuildPlan;
+  /** The user's clarifying answers (new-app flow). */
+  answers?: StudioAnswer[];
 }
 
 const renderFiles = (files: { path: string; content: string }[]): string =>
@@ -56,9 +61,11 @@ Rules:
   - Web UI → React (root component = DEFAULT export of /App.tsx or /src/App.tsx) or a static /index.html.
   - HTTP API / backend → Node/Express (/server.js + /package.json) or Python (/main.py + /requirements.txt).
   - Script · CLI · data/automation → Python (/main.py + /requirements.txt), Node (/index.js), or Go (/main.go).
-- Prefer the smallest set of files that runs. Include the language's manifest when you need dependencies
-  (/package.json, /requirements.txt, /go.mod, …). For any non-web project add a short /README.md with the
-  exact run commands.
+- Build a COMPLETE, well-structured, MULTI-FILE application — never cram everything into one file. Split it
+  into a sensible tree: an entry file, a SEPARATE file for each significant component/screen, hooks/logic,
+  shared types, a small data layer, and styles as appropriate (a real app is typically 5–15 files). Include
+  the language's manifest when you need dependencies (/package.json, /requirements.txt, /go.mod, …). For any
+  non-web project add a short /README.md with the exact run commands.
 - "template" must be one of the listed web templates: use "react-ts"/"react" for React, and "static" for
   everything else (plain HTML/CSS, or any non-web project). The studio detects the real language from your
   file extensions, so "static" is correct for Python/Go/Node-API/etc.
@@ -86,6 +93,25 @@ ${renderFiles(input.currentFiles!)}
 
 REQUESTED CHANGE:
 ${input.prompt}
+
+${OUTPUT_CONTRACT}`;
+  }
+
+  // Plan-driven build (new "engineering team" flow): follow the approved plan so the output is a
+  // structured, multi-file app — not a one-shot single file.
+  if (input.plan) {
+    const answersBlock = input.answers?.length
+      ? `\n\nThe user's answers to clarifying questions (honor these):\n${input.answers.map((a) => `- ${a.question} → ${a.answer}`).join('\n')}`
+      : '';
+    return `You are a senior engineer implementing an APPROVED build plan in a live code studio (multi-language editor + instant web preview). Build the COMPLETE application to the plan — create the planned files, implement every listed feature for real, and make it run cleanly on first load.
+
+PROJECT IDEA:
+${input.prompt}${answersBlock}
+
+APPROVED BUILD PLAN (implement it faithfully — you may add files it implies, but cover everything listed):
+${renderPlanForBuild(input.plan)}
+
+Default web stack if the plan doesn't imply another: ${template}.
 
 ${OUTPUT_CONTRACT}`;
   }

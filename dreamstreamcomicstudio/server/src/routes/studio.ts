@@ -16,6 +16,7 @@ import {
   NVIDIA_TEXT_MODEL
 } from '../config.js';
 import type { AIProviderId } from '../ai/providers/types.js';
+import type { StudioBuildPlan, StudioAnswer } from '../../../apiTypes.js';
 import { getSupabaseAdmin } from '../services/supabase.js';
 import { callStudioWorker, studioConfigured } from '../services/studioWorker.js';
 import { createWorkerRun, createStudioFix } from '../services/studioBuildService.js';
@@ -24,6 +25,8 @@ import { sanitizeFiles, deriveProjectName } from '../services/studioFiles.js';
 import { saveProject, listProjects, getProjectWithFiles, deleteProject, listVersions, getVersionFiles } from '../services/studioRepository.js';
 import { runBuildAgent } from '../ai/studio/buildAgent.js';
 import { runGenerate, buildGeneratePrompt, parseGeneratedApp, STRICT_JSON_REMINDER } from '../ai/studio/studioGenerate.js';
+import { runClarify } from '../ai/studio/studioClarify.js';
+import { runPlan } from '../ai/studio/studioPlan.js';
 import { runStudioAgents, sanitizeAgentIds, studioAgentCatalog, STUDIO_AGENTS } from '../ai/studio/studioAgents.js';
 import { resolveTools } from '../ai/tools/registry.js';
 import { scanStreamedFiles } from '../ai/studio/streamParse.js';
@@ -124,6 +127,80 @@ const getUsage = async (userId: string): Promise<{ activeRuns: number; dailyAwak
   return { activeRuns: active.count || 0, dailyAwakeSeconds };
 };
 
+// Shared: resolve provider + a coding-model `complete()` for the non-streaming flow stages
+// (clarify, plan). Returns null when no key is configured.
+const studioStageComplete = async (
+  req: { apiKeys?: { openRouterKey?: string | null; nvidiaKey?: string | null } },
+  body: { source?: string; model?: string; costPref?: string },
+  maxTokens: number
+): Promise<((prompt: string) => Promise<string>) | null> => {
+  const resolved = resolveStudioProvider(req.apiKeys, body.source);
+  if (!resolved) return null;
+  const model = await resolveStudioCodingModel(resolved.provider, body.model, body.costPref);
+  return async (prompt: string): Promise<string> => {
+    const result = await runChat({
+      provider: resolved.provider,
+      apiKey: resolved.apiKey,
+      model,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.3,
+      maxTokens,
+      fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+      timeoutMs: STUDIO_REQUEST_TIMEOUT_MS
+    });
+    return result.text || '';
+  };
+};
+
+const NO_MODEL_KEY = {
+  error: {
+    message: 'No coding model is available. Add an OpenRouter or NVIDIA key in Settings (free models work too).',
+    code: 'STUDIO_NO_MODEL_KEY'
+  }
+};
+
+// POST /api/studio/clarify — the CLARIFY stage: the AI decides what (if anything) it needs to ask
+// the user before building, returning 0–4 structured questions (options + custom answers) and the
+// assumptions it will otherwise make. Pure LLM; fast.
+studioRouter.post('/clarify', async (req, res, next) => {
+  try {
+    const body = (req.body || {}) as { prompt?: string; source?: string; model?: string; costPref?: string };
+    const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
+    if (!prompt) return res.status(400).json({ error: { message: 'A prompt describing the app is required.' } });
+    const complete = await studioStageComplete(req, body, 1200);
+    if (!complete) return res.status(400).json(NO_MODEL_KEY);
+    try {
+      const result = await runClarify(prompt, complete);
+      return res.json(result);
+    } catch {
+      // Never block the build on a clarify hiccup — just skip straight to planning.
+      return res.json({ questions: [], assumptions: [] });
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/studio/plan — the PLAN stage: turn the idea (+ the user's answers) into a concrete,
+// reviewable build plan (summary, stack, features, file tree, data sources). Pure LLM.
+studioRouter.post('/plan', async (req, res, next) => {
+  try {
+    const body = (req.body || {}) as { prompt?: string; answers?: StudioAnswer[]; source?: string; model?: string; costPref?: string };
+    const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
+    if (!prompt) return res.status(400).json({ error: { message: 'A prompt describing the app is required.' } });
+    const complete = await studioStageComplete(req, body, 2000);
+    if (!complete) return res.status(400).json(NO_MODEL_KEY);
+    const answers = Array.isArray(body.answers) ? body.answers : undefined;
+    const plan = await runPlan(prompt, answers, complete);
+    if (!plan) {
+      return res.status(502).json({ error: { message: 'Could not draft a build plan. Try rephrasing your idea.', code: 'STUDIO_PLAN_INVALID' } });
+    }
+    return res.json({ plan });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /api/studio/generate — turn a plain-language idea into a runnable app artifact, right
 // inside the studio (no chat hand-off). Pure LLM (no sandbox/worker), so it works whenever a
 // coding key is configured; the live cloud run (/build, /launch) is a separate upgrade. Auth +
@@ -133,6 +210,7 @@ studioRouter.post('/generate', async (req, res, next) => {
     const body = (req.body || {}) as {
       prompt?: string; template?: string; files?: unknown; title?: string;
       model?: string; source?: string; costPref?: string; temperature?: number;
+      plan?: StudioBuildPlan; answers?: StudioAnswer[];
     };
     const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
     if (!prompt) {
@@ -172,7 +250,9 @@ studioRouter.post('/generate', async (req, res, next) => {
       prompt,
       template: body.template,
       currentFiles: currentFiles.length ? currentFiles : undefined,
-      currentTitle: typeof body.title === 'string' ? body.title : undefined
+      currentTitle: typeof body.title === 'string' ? body.title : undefined,
+      plan: currentFiles.length ? undefined : body.plan,
+      answers: currentFiles.length ? undefined : (Array.isArray(body.answers) ? body.answers : undefined)
     });
     if (!artifact) {
       return res.status(502).json({
@@ -196,6 +276,7 @@ studioRouter.post('/generate/stream', async (req, res, next) => {
     const body = (req.body || {}) as {
       prompt?: string; template?: string; files?: unknown; title?: string;
       model?: string; source?: string; costPref?: string; temperature?: number;
+      plan?: StudioBuildPlan; answers?: StudioAnswer[];
     };
     const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
     if (!prompt) {
@@ -221,7 +302,9 @@ studioRouter.post('/generate/stream', async (req, res, next) => {
       prompt,
       template: body.template,
       currentFiles: refining ? currentFiles : undefined,
-      currentTitle: typeof body.title === 'string' ? body.title : undefined
+      currentTitle: typeof body.title === 'string' ? body.title : undefined,
+      plan: refining ? undefined : body.plan,
+      answers: refining ? undefined : (Array.isArray(body.answers) ? body.answers : undefined)
     };
     const genPrompt = buildGeneratePrompt(genInput);
 
