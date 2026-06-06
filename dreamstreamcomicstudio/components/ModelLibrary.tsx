@@ -20,7 +20,8 @@ import {
   MessageSquare,
   SlidersHorizontal,
   ArrowUpDown,
-  RotateCcw
+  RotateCcw,
+  Code2
 } from 'lucide-react';
 import {
   fetchModelCatalog,
@@ -47,6 +48,7 @@ import { recordModelFeedback, latestVote, feedbackSummary, MODEL_FEEDBACK_CHANGE
 import { topDomains, domainStrength, DOMAIN_META, FILTERABLE_DOMAINS, type DomainId } from '../services/modelDomains';
 import { getModelBenchmarks, BENCHMARK_METRICS, formatScore, type BenchmarkMetricId } from '../services/modelBenchmarks';
 import { DomainTags, ModelInsightsPanel } from './models/ModelInsights';
+import { CodingLeaderboard } from './models/CodingLeaderboard';
 import { InfoDot } from './common/InfoTooltip';
 import type { GLOSSARY } from '../services/modelGlossary';
 import { describeCost, classBadge } from '../shared/pricing';
@@ -663,6 +665,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
   const [compareIds, setCompareIds] = useState<string[]>([]);
   const [showCompare, setShowCompare] = useState(false);
   const [smartTeam, setSmartTeam] = useState<SmartTeam | null>(null);
+  const [view, setView] = useState<'library' | 'leaderboard'>('library');
   const [domainPick, setDomainPick] = useState<{ domain: DomainId; best: ReturnType<typeof pickBestForDomain>; mode: SmartMode } | null>(null);
 
   useEffect(() => {
@@ -757,6 +760,16 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
 
         <VerifiedStrip />
 
+        {/* View: curated Library vs the technical coding leaderboard (OpenRouter-style ranking). */}
+        <div className="mt-4 inline-flex rounded-xl border-2 border-black overflow-hidden">
+          <button onClick={() => setView('library')} className={`px-4 py-2 text-sm font-bold ${view === 'library' ? 'bg-black text-white' : 'bg-white hover:bg-slate-100'}`}>Library</button>
+          <button onClick={() => setView('leaderboard')} className={`px-4 py-2 text-sm font-bold border-l-2 border-black inline-flex items-center gap-1.5 ${view === 'leaderboard' ? 'bg-emerald-600 text-white' : 'bg-white hover:bg-slate-100'}`}><Code2 className="w-4 h-4" /> Coding leaderboard</button>
+        </div>
+
+        {view === 'leaderboard' ? (
+          <CodingLeaderboard models={models} onStartChat={onStartChat} />
+        ) : (
+        <>
         {/* Smart auto-pick — the app's own reasoning picks the best model per stage. */}
         <div className="mt-4 bg-gradient-to-r from-brand-blue/10 to-brand-yellow/10 border-2 border-black rounded-xl p-4">
           <div className="flex flex-wrap items-center gap-3">
@@ -955,6 +968,8 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
               ))}
             </div>
           </>
+        )}
+        </>
         )}
       </div>
 
