@@ -7,7 +7,7 @@
 // flag is on. Non-admins still get an instant in-browser preview of a handed-off app so the
 // single "Open in Code Studio" CTA never dead-ends.
 
-import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft, Wand2, Square, Share2, Download, FileCode, Cloud,
   Sparkles, Cpu, Lock, Mail, Loader2, Command as CommandIcon, Moon, Sun, Palette, Undo2, MessageSquarePlus, Check,
@@ -116,6 +116,9 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
   const [template, setTemplate] = useState<CodeStudioTemplate>('react-ts');
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  // Stable identity so the preview's ErrorWatcher effect doesn't re-fire every render.
+  const onPreviewError = useCallback((e: string | null) => setPreviewError(e), []);
 
   // Agentic build: stream plan → run → observe → fix → done, self-healing errors. The final
   // preview URL is the live app. Drives the BuildTrace + logs + run status.
@@ -173,6 +176,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     const refining = hasFiles;
     setGenerating(true);
     setGenError(null);
+    setPreviewError(null);
     appendLog('system', refining ? `Refining: ${prompt}` : `Generating app: ${prompt}`);
     try {
       const artifact = await generateStudioApp({
@@ -190,6 +194,13 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     } finally {
       setGenerating(false);
     }
+  };
+
+  // Autodebug: feed the preview's error back to the model as a refine ("fix this").
+  const handleAutofix = (errorMsg: string) => {
+    if (!errorMsg || generating) return;
+    appendLog('warn', 'Auto-fixing the preview error…');
+    void handleGenerate(`The live preview shows this error — find the root cause and fix it so the app runs cleanly:\n\n${errorMsg}`);
   };
 
   const stopLive = async () => {
@@ -257,13 +268,26 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
 
   const previewPane = (
     <PaneFrame title="Live preview" icon={<Cloud className="w-4 h-4" />}>
+      {previewError && hasFiles && !previewUrl && (
+        <div className="flex items-start gap-2 px-3 py-2 border-b border-rose-500/20 bg-rose-500/10 text-xs">
+          <span className="mt-0.5 shrink-0 font-semibold text-rose-400">⚠ Error</span>
+          <span className="min-w-0 flex-1 truncate text-rose-200/90" title={previewError}>{previewError}</span>
+          <button
+            onClick={() => handleAutofix(previewError)}
+            disabled={generating}
+            className="shrink-0 inline-flex items-center gap-1 rounded-full bg-violet-500 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-violet-400 disabled:opacity-50"
+          >
+            {generating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />} Fix with AI
+          </button>
+        </div>
+      )}
       {previewUrl ? (
         <PreviewFrame url={previewUrl} />
       ) : hasFiles ? (
         // Instant in-browser preview — works without the live worker. A live cloud Build
-        // supersedes this with a real container URL when enabled.
+        // supersedes this with a real container URL when enabled. onError drives autodebug.
         <Suspense fallback={<div className="p-3"><Skeleton className="h-full min-h-[12rem] w-full" /></div>}>
-          <CodeStudioPanel data={currentArtifact} editorHeight={420} />
+          <CodeStudioPanel data={currentArtifact} editorHeight={460} previewOnly onError={onPreviewError} />
         </Suspense>
       ) : (
         <div className="h-full min-h-[14rem] flex flex-col items-center justify-center gap-3 p-6 text-center">

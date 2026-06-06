@@ -5,6 +5,15 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-06 · Claude — Code Studio: in-preview autodebug ("Fix with AI" loop)
+The "autodebug" ask, closed in-browser (no worker needed). `CodeStudioPanel` moved to Sandpack's
+composed API (`SandpackProvider` + `SandpackLayout` + an `ErrorWatcher` using `useSandpack`), so the
+preview's runtime/compile errors are observable. When the instant preview errors, the studio shows a
+**⚠ Error · Fix with AI** bar; one click feeds the exact error back to the model as a refine, which
+returns corrected files → the preview re-runs. The studio preview is now **preview-only** (the
+Monaco Code pane is the editor); chat still gets the full editor+preview. Typecheck + build green;
+464 tests pass (3 unrelated Supabase-env suites aside).
+
 ## 2026-06-06 · Claude — FIX: previews crashed + builds 429'd permanently (the "nothing works" report)
 Real bugs behind "the builds don't even work" + a console full of errors:
 - **Preview crash** (`Cannot set properties of null (setting 'innerHTML')` in Sandpack): generated/
