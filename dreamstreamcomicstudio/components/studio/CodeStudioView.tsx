@@ -175,11 +175,26 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   // refine streams in, which made the error banner flash. Only surface an error that *persists*
   // (~1.2s); clear it immediately on recovery. Stable identity so the watcher effect is steady.
   const previewErrTimer = useRef<number | null>(null);
+  // Autonomous autofix: when a persistent preview error appears (and nothing else is building),
+  // the AI fixes it automatically — no "Fix with AI" click needed — up to a small budget per app.
+  const MAX_AUTOFIX = 4;
+  const autofixCountRef = useRef(0);
+  const autofixRef = useRef<(msg: string) => void>(() => {});
+  const generatingRef = useRef(false);
   const onPreviewError = useCallback((e: string | null) => {
     if (previewErrTimer.current) { clearTimeout(previewErrTimer.current); previewErrTimer.current = null; }
-    if (!e) { setPreviewError(null); return; }
-    previewErrTimer.current = window.setTimeout(() => setPreviewError(e), 1200);
+    if (!e) { setPreviewError(null); autofixCountRef.current = 0; return; }
+    previewErrTimer.current = window.setTimeout(() => {
+      setPreviewError(e);
+      if (!generatingRef.current && autofixCountRef.current < MAX_AUTOFIX) {
+        autofixCountRef.current += 1;
+        autofixRef.current(e);
+      }
+    }, 1200);
   }, []);
+
+  // Keep a ref of `generating` so the (stable-identity) preview-error callback can gate autofix.
+  useEffect(() => { generatingRef.current = generating; }, [generating]);
 
   // Esc cancels an in-flight generation (only listens while generating).
   useEffect(() => {
@@ -248,6 +263,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     if (generating) return { ok: false, error: 'busy' };
     lastGenRef.current = { prompt, tmpl };
     const refining = hasFiles;
+    if (!refining) autofixCountRef.current = 0; // fresh autofix budget per new app
     setGenerating(true);
     setGenError(null);
     setPreviewError(null);
@@ -516,12 +532,14 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     appendLog('success', 'Added /.env.example with the variables this app expects.');
   };
 
-  // Autodebug: feed the preview's error back to the model as a refine ("fix this").
+  // Autodebug: feed the preview's error back to the model as a refine ("fix this"). Runs both on
+  // the manual button and automatically (autofixRef) when the preview keeps erroring.
   const handleAutofix = (errorMsg: string) => {
     if (!errorMsg || generating) return;
-    appendLog('warn', 'Auto-fixing the preview error…');
-    void handleGenerate(`The live preview shows this error — find the root cause and fix it so the app runs cleanly:\n\n${errorMsg}`);
+    appendLog('warn', `Auto-fixing the preview error… (attempt ${autofixCountRef.current || 1}/${MAX_AUTOFIX})`);
+    void handleGenerate(`The live preview shows this error — find the ROOT CAUSE and fix it so the app runs cleanly. Return the full corrected files; do not reintroduce the error:\n\n${errorMsg}`);
   };
+  autofixRef.current = handleAutofix;
 
   const stopLive = async () => {
     if (runId) { try { await stopLiveStudio(runId); } catch { /* best-effort */ } }

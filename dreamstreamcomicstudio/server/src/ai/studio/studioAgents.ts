@@ -29,47 +29,56 @@ export interface StudioAgentDef {
   icon: string;
 }
 
+// Broad, safe toolsets so agents can actually RESEARCH — look up real packages, repos, docs,
+// papers and live data — instead of building blind. resolveTools ignores unknown names, so an
+// over-broad list is harmless; this deliberately gives the team generous access.
+const RESEARCH_TOOLS = ['web_search', 'wiki_lookup', 'github_repo', 'npm_package', 'pypi_package', 'search_papers', 'search_books'];
+const DESIGN_TOOLS = ['web_search', 'image_search'];
+const LIVE_DATA_TOOLS = [
+  ...RESEARCH_TOOLS, 'image_search', 'video_search',
+  'get_news', 'get_stock', 'crypto_price', 'exchange_rate', 'get_weather', 'find_places', 'show_map'
+];
+
 export const STUDIO_AGENTS: Record<string, StudioAgentDef> = {
   architecture: {
-    id: 'architecture', name: 'Architect', icon: 'Building2', default: true, toolNames: [],
+    id: 'architecture', name: 'Architect', icon: 'Building2', default: true, toolNames: RESEARCH_TOOLS,
     description: 'Project structure, module boundaries, state management and scalability.',
-    focus: `Review the project's ARCHITECTURE: file/module structure, separation of concerns, component and state boundaries, data flow, and scalability. Extract reusable pieces, untangle dependencies, and make the structure clean and idiomatic for the stack. Do not change the visual design or behavior — only the structure.`
+    focus: `Review the project's ARCHITECTURE: file/module structure, separation of concerns, component and state boundaries, data flow, and scalability. RESEARCH proven patterns and real libraries with your tools (web_search, github_repo, npm_package) when it helps. Extract reusable pieces, untangle dependencies, and make the structure clean and idiomatic for the stack. Do not change the visual design or behavior — only the structure.`
   },
   code: {
-    id: 'code', name: 'Code Engineer', icon: 'Code2', default: true, toolNames: ['web_search', 'npm_package', 'github_repo'],
+    id: 'code', name: 'Code Engineer', icon: 'Code2', default: true, toolNames: RESEARCH_TOOLS,
     description: 'Code quality, correctness, completeness and idiomatic patterns.',
-    focus: `Review CODE QUALITY: correctness, completeness (no TODOs/placeholders/stubs), idiomatic patterns, dead code, naming, and obvious bugs. Make the code production-quality and fully runnable. Use web_search/npm_package only to confirm a real package name or API signature — never invent packages.`
+    focus: `Review CODE QUALITY: correctness, completeness (no TODOs/placeholders/stubs), idiomatic patterns, dead code, naming, and obvious bugs. RESEARCH real packages and exact API signatures with your tools (npm_package/pypi_package/github_repo/web_search) before using them — never invent packages or APIs. Make the code production-quality and fully runnable.`
   },
   frontend: {
-    id: 'frontend', name: 'Frontend Engineer', icon: 'MonitorSmartphone', default: true, toolNames: [],
+    id: 'frontend', name: 'Frontend Engineer', icon: 'MonitorSmartphone', default: true, toolNames: RESEARCH_TOOLS,
     description: 'Framework correctness, hooks, rendering performance and build config.',
-    focus: `Review FRONTEND engineering: framework correctness (React hooks/effects/keys, state updates), rendering performance, proper loading/error states, and build/runtime configuration. Fix anti-patterns and ensure the app compiles and runs cleanly in the browser.`
+    focus: `Review FRONTEND engineering: framework correctness (React hooks/effects/keys, state updates), rendering performance, proper loading/error states, animations/transitions, and build/runtime configuration. Look up real library usage with your tools when unsure. Fix anti-patterns and ensure the app compiles and runs cleanly in the browser.`
   },
   ui: {
-    id: 'ui', name: 'UI / UX', icon: 'Layout', default: true, toolNames: [],
+    id: 'ui', name: 'UI / UX', icon: 'Layout', default: true, toolNames: DESIGN_TOOLS,
     description: 'Layout, interaction, accessibility and responsive design.',
-    focus: `Review UI/UX: layout, spacing, visual hierarchy, interaction feedback, empty/loading/error states, keyboard accessibility (a11y), and full RESPONSIVE behavior across mobile and desktop. Improve usability and polish without breaking behavior.`
+    focus: `Review UI/UX: layout, spacing, visual hierarchy, interaction feedback, tasteful motion/animations, empty/loading/error states, keyboard accessibility (a11y), and full RESPONSIVE behavior across mobile and desktop. Improve usability and polish without breaking behavior.`
   },
   design: {
-    id: 'design', name: 'Visual Design', icon: 'Palette', default: false, toolNames: [],
+    id: 'design', name: 'Visual Design', icon: 'Palette', default: false, toolNames: DESIGN_TOOLS,
     description: 'Typography, color, spacing system and overall aesthetic polish.',
-    focus: `Review VISUAL DESIGN: typography scale, color palette and contrast, consistent spacing/radius/shadows, and overall aesthetic polish. Apply a cohesive, modern, attractive look. Keep the structure and behavior — change styling only.`
+    focus: `Review VISUAL DESIGN: typography scale, color palette and contrast, consistent spacing/radius/shadows, motion, and overall aesthetic polish. Draw on real design references via your tools. Apply a cohesive, modern, attractive look. Keep the structure and behavior — change styling only.`
   },
   data: {
-    id: 'data', name: 'Data & Live APIs', icon: 'Database', default: false,
-    toolNames: ['web_search', 'wiki_lookup', 'get_news', 'get_stock', 'crypto_price', 'exchange_rate', 'get_weather', 'find_places', 'github_repo', 'npm_package'],
+    id: 'data', name: 'Data & Live APIs', icon: 'Database', default: false, toolNames: LIVE_DATA_TOOLS,
     description: 'Wires real, LIVE data sources and robust fetching into the app.',
     focus: `Wire REAL, LIVE DATA into the app. Where it uses mock/placeholder/hard-coded data, replace it with real data from a suitable public API: use your tools to FIND and VERIFY real, free, CORS-friendly endpoints and their actual response shapes, then implement proper fetch + loading/error/empty states and typed parsing. Prefer keyless/public APIs; if a key is required, read it from an environment variable and document it in /.env.example. Do NOT invent endpoints — only use ones you verified with your tools.`
   },
   security: {
-    id: 'security', name: 'Security', icon: 'ShieldCheck', default: true, toolNames: ['web_search'],
+    id: 'security', name: 'Security', icon: 'ShieldCheck', default: true, toolNames: ['web_search', 'npm_package', 'pypi_package', 'github_repo'],
     description: 'Input validation, secrets handling, XSS/injection and safe defaults.',
-    focus: `Review SECURITY: input validation/sanitization, output encoding (XSS), unsafe HTML/eval, secrets hard-coded in client code (move to env vars), risky dependencies, and safe-by-default configuration. Fix real vulnerabilities; do not bolt on heavyweight auth the app didn't ask for.`
+    focus: `Review SECURITY: input validation/sanitization, output encoding (XSS), unsafe HTML/eval, secrets hard-coded in client code (move to env vars), risky dependencies (check them with npm_package/web_search), and safe-by-default configuration. Fix real vulnerabilities; do not bolt on heavyweight auth the app didn't ask for.`
   },
   verification: {
-    id: 'verification', name: 'Verification / QA', icon: 'CheckCircle2', default: true, toolNames: [],
+    id: 'verification', name: 'Verification / QA', icon: 'CheckCircle2', default: true, toolNames: ['web_search'],
     description: 'Correctness, edge cases, error handling — does it actually run.',
-    focus: `Act as QA / VERIFICATION (run LAST): trace the app end-to-end for correctness and edge cases (empty inputs, errors, async races), make sure it actually builds and runs, and fix any remaining defects with the smallest changes possible. If everything is solid, change nothing.`
+    focus: `Act as QA / VERIFICATION (run LAST): trace the app end-to-end for correctness and edge cases (empty inputs, errors, async races), make sure it actually builds and runs with no dangling imports or missing files, and fix any remaining defects with the smallest changes possible. If everything is solid, change nothing.`
   }
 };
 

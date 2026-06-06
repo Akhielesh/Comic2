@@ -129,10 +129,15 @@ const getUsage = async (userId: string): Promise<{ activeRuns: number; dailyAwak
 
 // Shared: resolve provider + a coding-model `complete()` for the non-streaming flow stages
 // (clarify, plan). Returns null when no key is configured.
+// Research tools the planning stage may use to investigate real APIs, packages, repos and docs
+// before it commits to a plan. resolveTools ignores unknown names, so this is safe to broaden.
+const PLAN_RESEARCH_TOOLS = ['web_search', 'wiki_lookup', 'github_repo', 'npm_package', 'pypi_package', 'search_papers'];
+
 const studioStageComplete = async (
   req: { apiKeys?: { openRouterKey?: string | null; nvidiaKey?: string | null } },
   body: { source?: string; model?: string; costPref?: string },
-  maxTokens: number
+  maxTokens: number,
+  toolNames?: string[]
 ): Promise<((prompt: string) => Promise<string>) | null> => {
   const resolved = resolveStudioProvider(req.apiKeys, body.source);
   if (!resolved) return null;
@@ -146,7 +151,8 @@ const studioStageComplete = async (
       temperature: 0.3,
       maxTokens,
       fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
-      timeoutMs: STUDIO_REQUEST_TIMEOUT_MS
+      timeoutMs: STUDIO_REQUEST_TIMEOUT_MS,
+      ...(toolNames && toolNames.length ? { tools: resolveTools(toolNames) } : {})
     });
     return result.text || '';
   };
@@ -188,7 +194,8 @@ studioRouter.post('/plan', async (req, res, next) => {
     const body = (req.body || {}) as { prompt?: string; answers?: StudioAnswer[]; source?: string; model?: string; costPref?: string };
     const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
     if (!prompt) return res.status(400).json({ error: { message: 'A prompt describing the app is required.' } });
-    const complete = await studioStageComplete(req, body, 2000);
+    // The planning stage researches real APIs/packages/repos with tools before committing.
+    const complete = await studioStageComplete(req, body, 2000, PLAN_RESEARCH_TOOLS);
     if (!complete) return res.status(400).json(NO_MODEL_KEY);
     const answers = Array.isArray(body.answers) ? body.answers : undefined;
     const plan = await runPlan(prompt, answers, complete);
