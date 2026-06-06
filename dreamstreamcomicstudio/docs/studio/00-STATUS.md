@@ -6,6 +6,11 @@
 
 **Last updated:** 2026-06-06 · **Updated by:** Claude · **Branch:** `claude/wizardly-franklin-EgL8k` (draft PR)
 
+> Latest (2026-06-06): **DEEPER AGENTIC EDIT FLOW.** Content-aware project detection (tells a Node
+> backend from a browser app; adds `runHint`), **clickable activity rows** that jump to the file in the
+> editor, and header **markers** (file count, aggregate +added/−removed, elapsed time). Node API starter
+> re-enabled. `OWNER-ACTIONS.md` now leads with a prioritized "what YOU need to do" list. 105 component tests pass.
+
 > Latest (2026-06-06): **S4.0 — STUDIO ERROR BOUNDARY.** A render crash in the studio now shows a
 > recoverable panel (Try again / Reload / Back) instead of a white screen, wired around the Code Studio
 > mount. Enterprise hardening. 101 studio component tests pass.

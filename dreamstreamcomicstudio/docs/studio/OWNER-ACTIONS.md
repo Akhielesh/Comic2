@@ -4,8 +4,35 @@
 > waiting on **you** (the owner), and (c) everything built-but-not-yet-validated — so the
 > thread is never lost. This file is updated on every build.
 
-**Last updated:** 2026-06-05 · by Claude — **infra is LIVE.** Worker deployed, wildcard DNS
-up, CORS fixed (verified), all 4 studio migrations applied. Remaining owner items are small.
+**Last updated:** 2026-06-06 · by Claude — studio agentic build-out (live activity stream, polyglot,
+diffs, error boundary, focus toggle) shipped on `claude/wizardly-franklin-EgL8k` (PR #105). The list
+below is the **single, prioritized set of things that need YOU** — everything else I'm building.
+
+---
+
+## 🎯 WHAT YOU NEED TO DO (prioritized — nothing else blocks me)
+
+> I've finished, or am finishing, all the engineering that doesn't require your accounts/secrets.
+> These are the human-only steps. Do the **P0** ones to light up live runs; the **P1** ones unlock
+> the connected-accounts features (S4–S6) when you want them. Values are never printed/committed —
+> set them in the host dashboards.
+
+### P0 — light up live cloud runs (you already did most of the infra)
+1. **Cloudflare Pages env:** set `VITE_STUDIO_LIVE_ENABLED=true` then rebuild — reveals "Run live" for everyone (admins already bypass).
+2. **Railway env:** confirm `STUDIO_WORKER_URL` is set (the worker control URL) alongside the existing `STUDIO_HMAC_SECRET`, then redeploy.
+3. **Smoke test with me:** sign in → generate an app → press **Build** → confirm a preview URL opens. Ping me and I'll validate the round-trip + fix anything.
+
+### P1 — connected accounts / auto-wiring (needed for S4–S6; do when you want those features)
+> Decision first: **per-user BYO tokens** (each user connects their own GitHub/Supabase/etc. — recommended, most "pro") **vs platform-owned** (you provide one set for everyone). I'll default to per-user OAuth and keep platform keys optional.
+
+4. **GitHub** (repo create / push / PR from the studio): create a **GitHub OAuth App** (or GitHub App) → set `GITHUB_OAUTH_CLIENT_ID` + `GITHUB_OAUTH_CLIENT_SECRET` (Railway) and the callback URL `https://dreamstreamstudio.ai/api/studio/github/callback`. (Two-way sync code already exists; this turns on the connect-account UX.)
+5. **Supabase-per-project** (AI provisions a DB/auth/storage for generated apps): create a **Supabase OAuth app** or a management PAT → `SUPABASE_OAUTH_CLIENT_ID`/`SECRET` (or `SUPABASE_MANAGEMENT_TOKEN`). (We already use Supabase for the platform; this is for *user* projects.)
+6. **Deploy targets** (one-click deploy of built apps): pick which to support first and provide tokens — **Railway** (`RAILWAY_TOKEN`), **Vercel** (`VERCEL_TOKEN`), and/or **Cloudflare** (`CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`).
+7. **Storage** for user uploads/artifacts in generated apps: confirm whether to reuse the platform Supabase Storage or wire per-project buckets.
+
+### P2 — optional quality/keys
+8. Tool-sourcing keys (raise reliability): `TAVILY_API_KEY` / `BRAVE_API_KEY`, `FOURSQUARE_API_KEY` (Railway env).
+9. Optional domains: `www.dreamstreamstudio.ai` record; `dreamstreamstudio.com` → `.ai` 301.
 
 ---
 

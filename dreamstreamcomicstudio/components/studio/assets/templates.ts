@@ -66,6 +66,20 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
     },
   },
   {
+    id: 'node-api',
+    name: 'Node API',
+    description: 'A minimal Express REST API with in-memory items — run with npm start.',
+    artifact: {
+      title: 'Node API',
+      template: 'static',
+      files: [
+        { path: '/server.js', content: `import express from 'express';\n\nconst app = express();\napp.use(express.json());\n\nconst items = [];\n\napp.get('/health', (_req, res) => res.json({ status: 'ok' }));\napp.get('/items', (_req, res) => res.json(items));\napp.post('/items', (req, res) => {\n  items.push(req.body);\n  res.status(201).json(req.body);\n});\n\nconst port = process.env.PORT || 3000;\napp.listen(port, () => console.log(\`API on http://localhost:\${port}\`));\n` },
+        { path: '/package.json', content: JSON.stringify({ name: 'node-api', private: true, version: '0.0.0', type: 'module', scripts: { start: 'node server.js' }, dependencies: { express: '^4.19.2' } }, null, 2) },
+        { path: '/README.md', content: `# Node API (Express)\n\n## Run\n\n\`\`\`bash\nnpm install\nnpm start\n\`\`\`\n\nThen: \`curl http://localhost:3000/health\`\n` },
+      ],
+    },
+  },
+  {
     id: 'go-cli',
     name: 'Go CLI',
     description: 'A small Go command-line program — build and run with the Go toolchain.',

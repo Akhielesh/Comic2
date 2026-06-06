@@ -40,6 +40,9 @@ interface ActivityState {
   collapsed: boolean;
   items: StudioActivityItem[];
   summary: string | null;
+  /** Epoch ms when the run started / ended — drives the elapsed-time marker. */
+  startedAt: number | null;
+  endedAt: number | null;
 
   begin: () => void;
   pushPhase: (label: string) => void;
@@ -56,13 +59,22 @@ const nextId = (): string => `a${Date.now().toString(36)}_${seq++}`;
 export const fileCount = (items: StudioActivityItem[]): number =>
   items.filter((i) => i.kind === 'file').length;
 
+/** Aggregate +added/−removed across all file items (for the header diff marker). */
+export const diffTotals = (items: StudioActivityItem[]): { added: number; removed: number } =>
+  items.reduce(
+    (acc, i) => (i.kind === 'file' ? { added: acc.added + (i.added ?? 0), removed: acc.removed + (i.removed ?? 0) } : acc),
+    { added: 0, removed: 0 }
+  );
+
 export const useStudioActivity = create<ActivityState>((set) => ({
   status: 'idle',
   collapsed: false,
   items: [],
   summary: null,
+  startedAt: null,
+  endedAt: null,
 
-  begin: () => set({ status: 'running', collapsed: false, items: [], summary: null }),
+  begin: () => set({ status: 'running', collapsed: false, items: [], summary: null, startedAt: Date.now(), endedAt: null }),
 
   pushPhase: (label) =>
     set((s) => {
@@ -102,9 +114,9 @@ export const useStudioActivity = create<ActivityState>((set) => ({
 
   // On success, auto-collapse to the summary line (it "can be collapsed later"); keep errors open.
   finish: (status, summary) =>
-    set({ status, summary, collapsed: status === 'done' }),
+    set({ status, summary, collapsed: status === 'done', endedAt: Date.now() }),
 
   setCollapsed: (collapsed) => set({ collapsed }),
 
-  reset: () => set({ status: 'idle', collapsed: false, items: [], summary: null }),
+  reset: () => set({ status: 'idle', collapsed: false, items: [], summary: null, startedAt: null, endedAt: null }),
 }));

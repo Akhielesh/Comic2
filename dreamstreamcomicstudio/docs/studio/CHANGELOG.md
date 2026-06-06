@@ -5,6 +5,26 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-06 · Claude — FEAT: deeper agentic edit flow — node detection, clickable activity, diff/timing markers
+Senior-pass polish that connects the flows and adds professional markers:
+- **Content-aware project detection.** `detectProjectKind` now takes file *content* and distinguishes a
+  **Node backend** (Express/Fastify dep, or a server with `.listen`) from a browser app — fixing the
+  bare-`.js` ambiguity. Added a `node` kind + `runHint(kind)` (copy-pasteable run command per language).
+  Re-enabled the **Node API** starter (now correctly classified, not a broken web preview).
+- **Connected flow.** Activity-feed file rows are now **clickable** — clicking one opens that file in the
+  editor (and reveals the Code pane if you were in Preview-only). `ActivityFeed` gained `onOpenFile`.
+- **Helpful markers.** The activity header now shows the **file count**, an **aggregate +added/−removed**
+  diff, and the **elapsed time** of the run (`activityStore` records `startedAt`/`endedAt`; `diffTotals`
+  helper). The non-web preview panel shows a `$ <run command>` hint.
+- **Owner actions.** `OWNER-ACTIONS.md` now leads with a single prioritized "what YOU need to do" list
+  (P0 light-up live runs; P1 connected-accounts OAuth/tokens for GitHub/Supabase/Railway/Vercel/CF; P2
+  optional keys) so nothing about the connected-accounts work is ambiguous when you're ready.
+Files: `components/studio/workspace/{projectKind,activityStore,ActivityFeed}.tsx` (+tests),
+`components/studio/CodeStudioView.tsx`, `components/studio/assets/templates.ts`, `docs/studio/OWNER-ACTIONS.md`.
+Typecheck + frontend build green; 105 studio component tests pass.
+
+---
+
 ## 2026-06-06 · Claude — FEAT: polyglot starter templates (Python API, Go CLI)
 Showcases the polyglot studio (S3) on the start screen: added **Python API** (FastAPI + requirements
 + README) and **Go CLI** (main.go + go.mod + README) starters to `STARTER_TEMPLATES`. Both are

@@ -23,7 +23,7 @@ import {
   CodeWorkspace, LogsConsole, PreviewFrame, BuildTrace, ChangesPanel, HistoryPanel, PromptComposer,
   ConversationThread, ActivityFeed, useStudioConversation, useStudioActivity, useStudioBuild,
   useStudioWorkspace, useStudioLogs, isPathDirty, workspaceCurrentArtifact,
-  detectProjectKind, projectKindLabel, isWebProject, diffLines, diffStat,
+  detectProjectKind, projectKindLabel, isWebProject, runHint, diffLines, diffStat,
 } from './workspace';
 import { StudioStart } from './StudioStart';
 import { stopLiveStudio } from '../../services/studioApi';
@@ -287,6 +287,12 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   // Cancel an in-flight generation (the composer's Stop button).
   const cancelGenerate = () => { genAbortRef.current?.abort(); };
 
+  // Jump from an activity-feed file row straight into the editor (and reveal the Code pane).
+  const openFileInEditor = (path: string) => {
+    useStudioWorkspace.getState().openFile(path);
+    if (focus === 'preview') setFocus('split');
+  };
+
   // Autodebug: feed the preview's error back to the model as a refine ("fix this").
   const handleAutofix = (errorMsg: string) => {
     if (!errorMsg || generating) return;
@@ -343,8 +349,9 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       <div className="p-3 space-y-3">
         {/* The build conversation (your prompts + the agent's outcomes). */}
         <ConversationThread />
-        {/* Live, synchronous activity — files appearing as the AI writes them (Sprint 1). */}
-        <ActivityFeed />
+        {/* Live, synchronous activity — files appearing as the AI writes them (Sprint 1).
+            Rows are clickable: jump straight to the file in the editor. */}
+        <ActivityFeed onOpenFile={openFileInEditor} />
         {/* Iterate by prompt — refines the current app in place (no chat hand-off). */}
         <PromptComposer mode="inline" onSubmit={handleGenerate} onCancel={cancelGenerate} busy={generating} error={genError} />
         <div className="flex flex-wrap gap-1.5">
@@ -410,9 +417,14 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
           </div>
           <p className={`text-sm font-semibold ${t.text}`}>{projectKindLabel(projectKind)} project</p>
           <p className={`text-xs ${t.textDim} max-w-xs`}>
-            This isn't a browser app, so there's no in-page preview. Check the README for run steps,
+            This isn't a browser app, so there's no in-page preview. Run it locally (see the README),
             download the project, or run it live in a cloud container.
           </p>
+          {runHint(projectKind) && (
+            <code className={`max-w-full overflow-auto rounded-md border ${t.edge} ${t.panelAlt} px-2.5 py-1.5 font-mono text-[11px] ${t.textDim}`}>
+              $ {runHint(projectKind)}
+            </code>
+          )}
           <button
             onClick={() => void downloadArtifactZip(currentArtifact)}
             className={`inline-flex items-center gap-1.5 text-xs font-bold rounded-full border ${t.edgeStrong} px-3 py-1.5 ${t.text} ${t.hover} ${t.focusRing}`}

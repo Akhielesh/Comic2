@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { useStudioActivity, fileCount } from './activityStore';
+import { useStudioActivity, fileCount, diffTotals } from './activityStore';
 
 const reset = () => useStudioActivity.getState().reset();
 
@@ -51,6 +51,17 @@ describe('activityStore', () => {
     s.upsertFile({ path: '/new.ts', status: 'written', change: 'new' });
     const created = useStudioActivity.getState().items.find((i) => i.path === '/new.ts');
     expect(created?.change).toBe('new');
+  });
+
+  it('diffTotals sums +added/−removed across file items and records timing', () => {
+    const s = useStudioActivity.getState();
+    s.begin();
+    expect(useStudioActivity.getState().startedAt).not.toBeNull();
+    s.upsertFile({ path: '/a.ts', status: 'written', change: 'modified', added: 5, removed: 2 });
+    s.upsertFile({ path: '/b.ts', status: 'written', change: 'modified', added: 7, removed: 1 });
+    expect(diffTotals(useStudioActivity.getState().items)).toEqual({ added: 12, removed: 3 });
+    s.finish('done', 'ok');
+    expect(useStudioActivity.getState().endedAt).not.toBeNull();
   });
 
   it('finish("done") collapses to the summary; finish("error") stays expanded', () => {

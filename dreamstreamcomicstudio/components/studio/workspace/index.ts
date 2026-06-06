@@ -24,7 +24,7 @@ export type { StudioMessage } from './conversationStore';
 export { ActivityFeed } from './ActivityFeed';
 export { useStudioActivity } from './activityStore';
 export type { StudioActivityItem } from './activityStore';
-export { detectProjectKind, projectKindLabel, isWebProject } from './projectKind';
+export { detectProjectKind, projectKindLabel, isWebProject, runHint } from './projectKind';
 export type { ProjectKind } from './projectKind';
 export {
   useStudioWorkspace,
