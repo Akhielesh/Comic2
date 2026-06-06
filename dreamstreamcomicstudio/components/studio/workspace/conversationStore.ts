@@ -21,6 +21,8 @@ interface ConversationState {
   pushAssistant: (text: string, status?: StudioMsgStatus) => string;
   /** Resolve the most recent assistant message (its text + status). */
   resolveLastAssistant: (text: string, status: StudioMsgStatus) => void;
+  /** Replace the whole thread (e.g. restoring a saved per-build chat). */
+  setMessages: (messages: StudioMessage[]) => void;
   clear: () => void;
 }
 
@@ -48,5 +50,6 @@ export const useStudioConversation = create<ConversationState>((set) => ({
       messages[idx] = { ...messages[idx], text, status };
       return { messages };
     }),
+  setMessages: (messages) => set({ messages: [...messages] }),
   clear: () => set({ messages: [] }),
 }));

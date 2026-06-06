@@ -28,6 +28,7 @@ import {
 import { StudioStart } from './StudioStart';
 import { StudioBuildFlow, type StudioFlowState } from './StudioBuildFlow';
 import { clarifyStudioApp, planStudioApp } from '../../services/studioPlanApi';
+import { saveStudioChat, loadStudioChat } from '../../services/studioChatHistory';
 import { getStudioModelSelection, getStudioAgents, getStudioAutoRunAgents, getStudioRuntime, STUDIO_MODEL_CHANGED } from '../../services/studioModelSelection';
 import { stopLiveStudio } from '../../services/studioApi';
 import { generateStudioApp, streamGenerateStudioApp } from '../../services/studioGenerateApi';
@@ -195,6 +196,19 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
 
   // Keep a ref of `generating` so the (stable-identity) preview-error callback can gate autofix.
   useEffect(() => { generatingRef.current = generating; }, [generating]);
+
+  // One chat per build: persist this project's conversation, and restore it when a project opens.
+  const convoMessages = useStudioConversation((s) => s.messages);
+  useEffect(() => {
+    if (wsProjectId && convoMessages.length) saveStudioChat(wsProjectId, convoMessages);
+  }, [convoMessages, wsProjectId]);
+  useEffect(() => {
+    if (!wsProjectId) return;
+    const saved = loadStudioChat(wsProjectId);
+    if (saved && saved.length && useStudioConversation.getState().messages.length === 0) {
+      useStudioConversation.getState().setMessages(saved);
+    }
+  }, [wsProjectId]);
 
   // Esc cancels an in-flight generation (only listens while generating).
   useEffect(() => {
@@ -608,6 +622,14 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   // Build model tier: BYOK (your OpenRouter key → frontier models) vs. free-first auto.
   const hasByok = isProviderEnabled('openrouter') && !!getOpenRouterKey();
 
+  // Context bar labels (model · runtime · agents · status) — all from the live studio selection.
+  const ctxModel = studioModel.mode === 'specific' && studioModel.model
+    ? studioModel.model.split('/').pop()!.replace(/:free$/i, '')
+    : (hasByok ? 'auto · your key' : 'auto · free');
+  const ctxRuntime = { auto: 'Auto runtime', worker: 'Cloud worker', browser: 'In-browser' }[studioModel.runtime ?? 'auto'];
+  const ctxAgents = resolveStudioAgentIds(studioModel.agents ?? null).length;
+  const ctxStatus = generating ? 'working…' : status === 'live' ? 'live' : status === 'starting' ? 'starting…' : status === 'error' ? 'error' : 'ready';
+
   // ---- Panes (defined once, placed into the resizable or stacked layout) ----
   const promptPane = (
     <PaneFrame title="Prompt · Build" icon={<Sparkles className="w-4 h-4" />}>
@@ -833,6 +855,23 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
           </div>
         </div>
       </Reveal>
+
+      {/* Context bar — at-a-glance: which model, runtime, agent team and build status are in play. */}
+      {hasFiles && (
+        <button
+          onClick={() => setSettingsOpen(true)}
+          title="Code Studio context — model · runtime · agents · status. Click to change in Settings."
+          className={`flex items-center gap-2 px-4 py-1 border-b ${t.edge} ${t.panelAlt} text-[11px] ${t.textDim} ${t.hover} ${t.focusRing} overflow-x-auto whitespace-nowrap`}
+        >
+          <span className="inline-flex items-center gap-1"><Cpu className="w-3 h-3" /> {ctxModel}</span>
+          <span className={t.textFaint}>·</span>
+          <span className="inline-flex items-center gap-1"><Cloud className="w-3 h-3" /> {ctxRuntime}</span>
+          <span className={t.textFaint}>·</span>
+          <span className="inline-flex items-center gap-1"><Users className="w-3 h-3" /> {ctxAgents} agents</span>
+          <span className={t.textFaint}>·</span>
+          <span className={`inline-flex items-center gap-1 font-semibold ${status === 'live' ? 'text-emerald-500' : status === 'error' ? 'text-rose-500' : t.textDim}`}>{ctxStatus}</span>
+        </button>
+      )}
 
       {error && (
         <div className="px-4 py-2 text-xs font-semibold text-rose-500 bg-rose-500/10 border-b border-rose-500/20">
