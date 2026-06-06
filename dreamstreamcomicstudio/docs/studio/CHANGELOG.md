@@ -5,6 +5,15 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-06 · Claude — FEAT: "New project" action (start over) + verified full CI suite
+- Added a **New project** command (⌘K palette, when a project is loaded) that aborts any in-flight
+  run and clears the workspace + conversation thread + activity back to the projects/start screen.
+- Verified the work against the **full** CI suite (`npm test -- --run` with placeholder Supabase env,
+  matching `.github/workflows/ci.yml`): **517 tests pass**, typecheck + server build + frontend build green.
+File: `components/studio/CodeStudioView.tsx`.
+
+---
+
 ## 2026-06-06 · Claude — FEAT: generation resilience & control (retry, Esc-cancel, autoscroll, polyglot hints)
 Enterprise-grade resilience + control polish on the generation flow:
 - **Retry.** A failed or cancelled run now shows a **Retry** button in the activity-feed header that

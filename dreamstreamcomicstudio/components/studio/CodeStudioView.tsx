@@ -11,7 +11,7 @@ import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useStat
 import {
   ArrowLeft, Wand2, Square, Share2, Download, FileCode, Cloud,
   Sparkles, Cpu, Lock, Mail, Loader2, Command as CommandIcon, Moon, Sun, Palette, Undo2, MessageSquarePlus, Check,
-  Columns, Eye,
+  Columns, Eye, FilePlus,
 } from 'lucide-react';
 import type { CodeStudioArtifact, CodeStudioTemplate } from '../../apiTypes';
 import {
@@ -304,6 +304,16 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     if (last && !generating) void handleGenerate(last.prompt, last.tmpl);
   };
 
+  // Start over: clear the workspace + thread + activity back to the projects/start screen.
+  const newProject = () => {
+    genAbortRef.current?.abort();
+    useStudioWorkspace.getState().reset();
+    useStudioConversation.getState().clear();
+    useStudioActivity.getState().reset();
+    setStatus('idle'); setRunId(null); setPreviewUrl(null);
+    setError(null); setGenError(null); setPreviewError(null);
+  };
+
   // Jump from an activity-feed file row straight into the editor (and reveal the Code pane).
   const openFileInEditor = (path: string) => {
     useStudioWorkspace.getState().openFile(path);
@@ -359,6 +369,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     commands.push({ id: 'focus-split', label: 'Focus: Split', icon: <Columns className="w-4 h-4" />, keywords: 'layout three pane default code preview', run: () => setFocus('split') });
     commands.push({ id: 'focus-preview', label: 'Focus: Preview', icon: <Eye className="w-4 h-4" />, keywords: 'layout maximize preview review running app real estate', run: () => setFocus('preview') });
   }
+  if (hasFiles) commands.push({ id: 'new', label: 'New project', icon: <FilePlus className="w-4 h-4" />, keywords: 'new reset start over fresh blank clear', run: newProject });
   commands.push({ id: 'chat', label: 'Build from chat', icon: <MessageSquarePlus className="w-4 h-4" />, keywords: 'new prompt generate describe', run: () => onNavigate('chat') });
   commands.push({ id: 'help', label: 'Keyboard shortcuts', icon: <CommandIcon className="w-4 h-4" />, keywords: 'keys help cheatsheet', run: () => setHelpOpen(true) });
   commands.push({ id: 'back', label: 'Back', icon: <ArrowLeft className="w-4 h-4" />, keywords: 'exit leave close', run: onBack });
