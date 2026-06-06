@@ -24,6 +24,8 @@ import { sanitizeFiles, deriveProjectName } from '../services/studioFiles.js';
 import { saveProject, listProjects, getProjectWithFiles, deleteProject, listVersions, getVersionFiles } from '../services/studioRepository.js';
 import { runBuildAgent } from '../ai/studio/buildAgent.js';
 import { runGenerate, buildGeneratePrompt, parseGeneratedApp, STRICT_JSON_REMINDER } from '../ai/studio/studioGenerate.js';
+import { runStudioAgents, sanitizeAgentIds, studioAgentCatalog, STUDIO_AGENTS } from '../ai/studio/studioAgents.js';
+import { resolveTools } from '../ai/tools/registry.js';
 import { scanStreamedFiles } from '../ai/studio/streamParse.js';
 import { pickCodingModel, TEXT_FALLBACK } from '../ai/autoRouter.js';
 import { runChat } from '../ai/chat.js';
@@ -527,6 +529,115 @@ studioRouter.post('/build', async (req, res, next) => {
   } catch (err) {
     if (res.headersSent) {
       res.write(`event: error\ndata: ${JSON.stringify({ message: (err as Error)?.message || 'Build failed.' })}\n\n`);
+      res.end();
+    } else {
+      next(err);
+    }
+  }
+});
+
+// GET /api/studio/agents — the catalog of specialist refinement agents (for the UI).
+studioRouter.get('/agents', (_req, res) => {
+  res.json({ agents: studioAgentCatalog() });
+});
+
+// POST /api/studio/agents — multi-agent refinement. A team of specialist agents (architecture,
+// code, frontend, ui, design, data, security, verification) sequentially reviews + refines the
+// current app, each within its specialty, honoring the user's preferences. Pure LLM (no worker/
+// sandbox), like /generate — works as soon as a coding key is configured. Live web/data tools are
+// wired in for the data agent so it can research real APIs and wire LIVE data into the app.
+// Streams a per-agent SSE trace and returns the refined files. Auth + the global key middleware apply.
+studioRouter.post('/agents', async (req, res, next) => {
+  try {
+    const userId = req.user!.id;
+    const body = (req.body || {}) as {
+      projectId?: string; title?: string; template?: string; files?: unknown;
+      prompt?: string; preferences?: string; agents?: unknown;
+      model?: string; source?: string; costPref?: string; temperature?: number;
+    };
+
+    const files = sanitizeFiles(body.files);
+    if (!files.length) {
+      return res.status(400).json({ error: { message: 'files[] (with path + content) is required.' } });
+    }
+
+    const resolved = resolveStudioProvider(req.apiKeys, body.source);
+    if (!resolved) {
+      return res.status(400).json({
+        error: {
+          message: 'No coding model is available. Add an OpenRouter or NVIDIA key in Settings (free models work too).',
+          code: 'STUDIO_NO_MODEL_KEY'
+        }
+      });
+    }
+
+    const model = await resolveStudioCodingModel(resolved.provider, body.model, body.costPref);
+    const temperature = studioTemp(body.temperature, STUDIO_GEN_TEMPERATURE);
+    const agentIds = sanitizeAgentIds(body.agents);
+    const preferences = [
+      typeof body.prompt === 'string' ? body.prompt.trim() : '',
+      typeof body.preferences === 'string' ? body.preferences.trim() : ''
+    ].filter(Boolean).join('\n');
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no'
+    });
+    const sse = (event: string, data: unknown) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+
+    // Each agent gets a focused model call; agents with toolNames get live web/data tools.
+    const complete = async (prompt: string, toolNames: string[]): Promise<string> => {
+      const result = await runChat({
+        provider: resolved.provider,
+        apiKey: resolved.apiKey,
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        temperature,
+        maxTokens: 8000,
+        fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+        timeoutMs: STUDIO_REQUEST_TIMEOUT_MS,
+        ...(toolNames.length ? { tools: resolveTools(toolNames) } : {})
+      });
+      return result.text || '';
+    };
+
+    sse('plan', {
+      model,
+      source: resolved.provider,
+      agents: agentIds.map((id) => ({ id, name: STUDIO_AGENTS[id].name }))
+    });
+
+    const initial = Object.fromEntries(files.map((f) => [f.path, f.content]));
+    const result = await runStudioAgents(initial, agentIds, preferences, {
+      complete,
+      onEvent: (e) => sse(e.stage, e)
+    });
+
+    // Persist the refined project (best-effort) so the workspace + history survive reloads.
+    try {
+      await saveProject({
+        userId,
+        projectId: typeof body.projectId === 'string' && body.projectId.trim() ? body.projectId.trim().slice(0, 80) : crypto.randomUUID(),
+        name: deriveProjectName(body.title, files),
+        template: typeof body.template === 'string' ? body.template : 'react-ts',
+        files: Object.entries(result.files).map(([path, content]) => ({ path, content })),
+        versionLabel: 'multi-agent refine',
+        createdBy: 'agent'
+      });
+    } catch (err) {
+      console.warn('[studio] agents persist skipped:', (err as Error)?.message);
+    }
+
+    sse('result', {
+      files: Object.entries(result.files).map(([path, content]) => ({ path, content })),
+      trace: result.trace
+    });
+    res.end();
+  } catch (err) {
+    if (res.headersSent) {
+      res.write(`event: error\ndata: ${JSON.stringify({ message: (err as Error)?.message || 'Agent refinement failed.' })}\n\n`);
       res.end();
     } else {
       next(err);
