@@ -15,7 +15,7 @@ const buttonVariants = cva(
           'bg-gradient-to-r from-violet-500 to-violet-600 text-white shadow-[0_0_0_1px_rgba(124,92,255,0.4),0_8px_30px_-8px_rgba(124,92,255,0.7)] hover:from-violet-400 hover:to-violet-500 hover:shadow-[0_0_0_1px_rgba(124,92,255,0.6),0_10px_36px_-8px_rgba(124,92,255,0.9)]',
         // Glassy secondary.
         secondary:
-          'bg-white/[0.06] text-slate-100 border border-white/10 backdrop-blur-md hover:bg-white/[0.1]',
+          'bg-white/[0.06] text-slate-100 border border-white/10 hover:bg-white/[0.1]',
         outline:
           'border border-white/15 bg-transparent text-slate-200 hover:bg-white/[0.06] hover:border-white/25',
         ghost: 'bg-transparent text-slate-300 hover:bg-white/[0.06] hover:text-slate-100',

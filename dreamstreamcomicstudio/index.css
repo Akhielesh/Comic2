@@ -288,29 +288,17 @@
 }
 
 /* ============================================================================
-   Code Studio — Linear/AI-studio dark aesthetic (scoped to the studio surface)
-   Aurora background drift + composer focus glow. Honors prefers-reduced-motion.
+   Code Studio — Linear/AI-studio dark aesthetic (scoped to the studio surface).
+   Composer focus glow. The aurora is filter-free static gradients (StudioAurora.tsx) —
+   NOT animated blur blobs — to avoid the GPU compositing glitch that rendered the studio
+   blank until a forced repaint.
    ========================================================================== */
-@keyframes auroraDrift {
-  0%   { transform: translate3d(0, 0, 0) scale(1); }
-  50%  { transform: translate3d(4%, -3%, 0) scale(1.08); }
-  100% { transform: translate3d(0, 0, 0) scale(1); }
-}
-@keyframes auroraDrift2 {
-  0%   { transform: translate3d(0, 0, 0) scale(1.06); }
-  50%  { transform: translate3d(-5%, 4%, 0) scale(1); }
-  100% { transform: translate3d(0, 0, 0) scale(1.06); }
-}
 @keyframes composerGlow {
   0%, 100% { opacity: 0.45; }
   50%      { opacity: 0.8; }
 }
-.studio-aurora-blob   { will-change: transform; animation: auroraDrift 20s ease-in-out infinite; }
-.studio-aurora-blob-2 { will-change: transform; animation: auroraDrift2 26s ease-in-out infinite; }
 .studio-composer-glow { animation: composerGlow 4.5s ease-in-out infinite; }
 
 @media (prefers-reduced-motion: reduce) {
-  .studio-aurora-blob,
-  .studio-aurora-blob-2,
   .studio-composer-glow { animation: none; }
 }

@@ -111,7 +111,7 @@ export const PromptComposer: React.FC<PromptComposerProps> = ({
         />
         <div
           className={cn(
-            'relative rounded-2xl border bg-[#0d0d12]/80 backdrop-blur-xl transition-colors',
+            'relative rounded-2xl border bg-[#0d0d12] transition-colors',
             focused ? 'border-violet-400/40' : 'border-white/10'
           )}
         >

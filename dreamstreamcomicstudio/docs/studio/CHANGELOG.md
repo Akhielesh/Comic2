@@ -5,6 +5,22 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-06 · Claude — FIX: studio + header rendered blank until a forced repaint (backdrop-filter glitch)
+The redesign regressed rendering: opening a built project (e.g. the Counter template) showed a BLANK
+studio until a repaint was forced (e.g. opening DevTools). Cause: the new aurora used animated
+`filter: blur(120px)` blobs with `will-change: transform`, and the glass panels were ~97.5%
+transparent with `backdrop-blur-xl` — a GPU compositing combo that fails to paint until a repaint
+(and since the panels were near-transparent, the failure showed as nothing at all). Fixes:
+- Studio panels are now SOLID (`#101016` / `#16161d`), no `backdrop-blur`.
+- `StudioAurora` is filter-free STATIC radial-gradients — no `blur()`, no `will-change`, no animation.
+- Removed `backdrop-blur` from the composer box and the Button `secondary` variant.
+- Main app header (`StaticSiteHeader`): dropped `backdrop-blur-md` (and `bg-white/95` → `bg-white`) —
+  the same backdrop-filter created a stacking context that could hide the header behind an open
+  right panel (the "can't see the header when a panel is open" report).
+Typecheck + build green; 82 studio tests pass.
+
+---
+
 ## 2026-06-06 · Claude — Code Studio: more reliable generation (stricter retry)
 Generation now retries ONCE with a stricter "output ONLY JSON" reminder when the model's first
 answer can't be parsed (truncation/prose/fence noise), cutting "the model did not return a valid

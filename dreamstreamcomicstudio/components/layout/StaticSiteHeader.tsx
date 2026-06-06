@@ -41,7 +41,7 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
   const notify = onNotify ?? (() => onNavigate('home'));
 
   return (
-    <header className="sticky top-0 z-50 bg-white/95 backdrop-blur-md border-b-4 border-black">
+    <header className="sticky top-0 z-50 bg-white border-b-4 border-black">
       {/* Announcement banner — home page only */}
       {isHome && (
         <div className="bg-brand-yellow border-b-2 border-black py-1.5 px-4 text-center text-xs font-bold text-black tracking-wide">
