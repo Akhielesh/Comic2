@@ -24,6 +24,7 @@ import { CULTURE_TOOLS } from './culture.js';
 import { DEV_TOOLS } from './dev.js';
 import { FINANCE_TERMINAL_TOOLS } from './financeTerminal.js';
 import { NANGO_TOOLS } from './nango.js';
+import { VIDEO_TOOLS } from './videoRender.js';
 import { generateAppTool } from './codeStudio.js';
 
 export type { ChatTool, ToolExecResult, ToolContext } from './types.js';
@@ -511,7 +512,9 @@ const FREE_API_TOOLS: ChatTool[] = [
   ...DEV_TOOLS,
   // External API connectors via a self-hosted Nango (800+ providers). Always registered so the
   // tool names resolve; each call returns a clear "not configured" notice until NANGO_SECRET_KEY is set.
-  ...NANGO_TOOLS
+  ...NANGO_TOOLS,
+  // HTML→MP4 rendering via a self-hosted HyperFrames worker (not configured → clear notice).
+  ...VIDEO_TOOLS
 ];
 
 /** All context-free built-in tools, keyed by the name the model/clients reference. */
