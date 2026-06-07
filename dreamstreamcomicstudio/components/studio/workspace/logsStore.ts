@@ -13,7 +13,8 @@ export interface LogEntry {
   ts: number;
 }
 
-export const MAX_LOG_ENTRIES = 500;
+// Keep a deep buffer so the FULL console is available to read + analyze (not just recent lines).
+export const MAX_LOG_ENTRIES = 5000;
 
 let seq = 0;
 /** Reset the id sequence (tests only). */

@@ -11,7 +11,7 @@ import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useStat
 import {
   ArrowLeft, Wand2, Square, Share2, Download, FileCode, Cloud,
   Sparkles, Cpu, Lock, Mail, Loader2, Command as CommandIcon, Moon, Sun, Palette, Undo2, MessageSquarePlus, Check,
-  Columns, Eye, FilePlus, Users,
+  Columns, Eye, FilePlus, Users, Maximize2, Minimize2,
 } from 'lucide-react';
 import type { CodeStudioArtifact, CodeStudioTemplate, StudioBuildPlan, StudioAnswer } from '../../apiTypes';
 import {
@@ -35,6 +35,7 @@ import { generateStudioApp, streamGenerateStudioApp } from '../../services/studi
 import { streamStudioBuild, type BuildStage } from '../../services/studioBuildApi';
 import { streamStudioAgents } from '../../services/studioAgentsApi';
 import { resolveStudioAgentIds, studioAgentName } from '../../services/studioAgents';
+import { createStudioSession } from '../../services/studioSessions';
 import { getOpenRouterKey } from '../../services/appSettings';
 import { isProviderEnabled } from '../../services/sourceGovernance';
 import { isLiveStudioEnabled } from '../../services/studioFlags';
@@ -65,14 +66,15 @@ const QUICK_ACTIONS: { label: string; prompt: string }[] = [
   { label: '🧪 Sample data', prompt: 'Pre-fill the app with realistic sample data so it looks alive on first load.' },
 ];
 
-const PaneFrame: React.FC<{ title: React.ReactNode; icon: React.ReactNode; className?: string; children: React.ReactNode }>
-  = ({ title, icon, className, children }) => {
+const PaneFrame: React.FC<{ title: React.ReactNode; icon: React.ReactNode; className?: string; actions?: React.ReactNode; children: React.ReactNode }>
+  = ({ title, icon, className, actions, children }) => {
     const t = useStudioTheme();
     return (
       <section className={`flex h-full w-full min-h-0 flex-col rounded-lg border ${t.edge} ${t.panel} overflow-hidden ${className ?? ''}`}>
         <header className={`flex items-center gap-2 px-3 py-2 border-b ${t.edge} ${t.panelAlt}`}>
           <span className={t.accent}>{icon}</span>
           <span className={`text-xs font-semibold tracking-wide ${t.textDim} uppercase`}>{title}</span>
+          {actions ? <div className="ml-auto flex items-center gap-1">{actions}</div> : null}
         </header>
         <div className="min-h-0 flex-1 overflow-auto">{children}</div>
       </section>
@@ -177,6 +179,8 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   // True while the AI is auto-fixing a preview error — drives a CALM loading bar instead of the
   // old red banner that flashed on/off through each repair cycle.
   const [autofixing, setAutofixing] = useState(false);
+  // Fullscreen the live preview (covers the studio) when the user wants maximum real estate.
+  const [previewFull, setPreviewFull] = useState(false);
   // Debounce preview errors: the in-browser preview reports transient compile/HMR blips while a
   // refine streams in, which made the error banner flash. Only surface an error that *persists*
   // (~1.2s); clear it immediately on recovery. Stable identity so the watcher effect is steady.
@@ -306,7 +310,16 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     setGenError(null);
     setPreviewError(null);
     const convo = useStudioConversation.getState();
-    if (!refining) convo.clear(); // a brand-new app starts a fresh thread
+    if (!refining) {
+      convo.clear(); // a brand-new app starts a fresh thread
+      // Every new project gets a stored, client-generated project + session id from creation.
+      const ws = useStudioWorkspace.getState();
+      if (!ws.projectId) {
+        const s = createStudioSession();
+        ws.setIdentity(s.projectId, s.sessionId);
+        appendLog('system', `New project — ${s.tag}`);
+      }
+    }
     convo.pushUser(prompt);
     convo.pushAssistant(refining ? 'Updating your app…' : 'Generating your app…', 'pending');
     useStudioActivity.getState().begin();
@@ -707,7 +720,20 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   );
 
   const previewPane = (
-    <PaneFrame title="Live preview" icon={<Cloud className="w-4 h-4" />}>
+    <PaneFrame
+      title="Live preview"
+      icon={<Cloud className="w-4 h-4" />}
+      className={previewFull ? 'fixed inset-0 z-[60] rounded-none' : ''}
+      actions={
+        <button
+          onClick={() => setPreviewFull((v) => !v)}
+          title={previewFull ? 'Exit fullscreen' : 'Fullscreen preview'}
+          className={`rounded p-1 ${t.hover} ${t.textFaint}`}
+        >
+          {previewFull ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+        </button>
+      }
+    >
       {/* Calm "auto-fixing" bar while the AI repairs preview/console errors automatically — replaces
           the old red banner that flashed on/off each repair cycle. */}
       {hasFiles && !previewUrl && (autofixing || (generating && previewError)) && (

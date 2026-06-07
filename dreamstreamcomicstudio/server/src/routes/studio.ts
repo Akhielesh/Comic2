@@ -27,7 +27,7 @@ import { runBuildAgent } from '../ai/studio/buildAgent.js';
 import { runGenerate, buildGeneratePrompt, parseGeneratedApp, STRICT_JSON_REMINDER, reviewCompleteness } from '../ai/studio/studioGenerate.js';
 import { runClarify } from '../ai/studio/studioClarify.js';
 import { runPlan } from '../ai/studio/studioPlan.js';
-import { runStudioAgents, sanitizeAgentIds, studioAgentCatalog, STUDIO_AGENTS } from '../ai/studio/studioAgents.js';
+import { runStudioAgentsParallel, sanitizeAgentIds, studioAgentCatalog, STUDIO_AGENTS } from '../ai/studio/studioAgents.js';
 import { resolveTools } from '../ai/tools/registry.js';
 import { buildMcpTools } from '../ai/tools/mcpClient.js';
 import { enabledMcpConfigs } from '../services/mcpRegistry.js';
@@ -788,9 +788,26 @@ studioRouter.post('/agents', async (req, res, next) => {
       agents: agentIds.map((id) => ({ id, name: STUDIO_AGENTS[id].name }))
     });
 
+    // Synthesis applies all reviewers' findings at once — precise (low temp) + room for full files.
+    const synthesize = async (prompt: string): Promise<string> => {
+      const result = await runChat({
+        provider: resolved.provider,
+        apiKey: resolved.apiKey,
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: STUDIO_FIX_TEMPERATURE,
+        maxTokens: 16000,
+        fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+        timeoutMs: STUDIO_REQUEST_TIMEOUT_MS
+      });
+      return result.text || '';
+    };
+
     const initial = Object.fromEntries(files.map((f) => [f.path, f.content]));
-    const result = await runStudioAgents(initial, agentIds, preferences, {
-      complete,
+    // Parallel review → single synthesis: specialists critique concurrently, one writer applies.
+    const result = await runStudioAgentsParallel(initial, agentIds, preferences, {
+      review: complete,
+      synthesize,
       onEvent: (e) => sse(e.stage, e)
     });
 

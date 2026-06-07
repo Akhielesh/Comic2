@@ -21,6 +21,8 @@ interface WorkspaceState {
   loadedKey: string | null;
   /** Persisted project id (set when opening a saved project or after a Build). */
   projectId: string | null;
+  /** Client-generated session id for the current editing session. */
+  sessionId: string | null;
   /** Project name of the loaded app. */
   title: string;
   /** Template of the loaded app (drives the runtime). */
@@ -56,6 +58,8 @@ interface WorkspaceState {
   renameFile: (from: string, to: string) => void;
   /** Set the persisted project id (e.g. from a Build's start event). */
   setProjectId: (id: string | null) => void;
+  /** Set the project + session id together (a brand-new project identity). */
+  setIdentity: (projectId: string, sessionId: string) => void;
   /** Replace the whole file set as a fresh clean baseline (e.g. restoring a version). */
   replaceFiles: (files: { path: string; content: string }[]) => void;
   /** Clear everything. */
@@ -82,6 +86,7 @@ export const renameInDir = (path: string, newName: string): string => {
 export const useStudioWorkspace = create<WorkspaceState>((set, get) => ({
   loadedKey: null,
   projectId: null,
+  sessionId: null,
   title: '',
   template: 'react-ts',
   files: {},
@@ -175,6 +180,7 @@ export const useStudioWorkspace = create<WorkspaceState>((set, get) => ({
   }),
 
   setProjectId: (id) => set({ projectId: id }),
+  setIdentity: (projectId, sessionId) => set({ projectId, sessionId }),
 
   replaceFiles: (fileArr) => set((s) => {
     const files: Record<string, string> = {};
@@ -192,7 +198,7 @@ export const useStudioWorkspace = create<WorkspaceState>((set, get) => ({
     };
   }),
 
-  reset: () => set({ loadedKey: null, projectId: null, title: '', template: 'react-ts', files: {}, baseline: {}, paths: [], openPaths: [], activePath: null }),
+  reset: () => set({ loadedKey: null, projectId: null, sessionId: null, title: '', template: 'react-ts', files: {}, baseline: {}, paths: [], openPaths: [], activePath: null }),
 }));
 
 // ---- Pure selectors / helpers (unit-testable without React) ----------------------------

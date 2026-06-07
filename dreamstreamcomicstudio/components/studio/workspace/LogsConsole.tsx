@@ -2,7 +2,7 @@
 // auto-scrolling, with a clear button + autoscroll toggle. Reads the studio logs store.
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Terminal, Trash2, ArrowDownToLine } from 'lucide-react';
+import { Terminal, Trash2, ArrowDownToLine, Copy, Check } from 'lucide-react';
 import { useStudioLogs, type LogLevel } from './logsStore';
 import { useStudioTheme } from '../kit';
 
@@ -25,7 +25,18 @@ export const LogsConsole: React.FC = () => {
   const entries = useStudioLogs((s) => s.entries);
   const clear = useStudioLogs((s) => s.clear);
   const [autoscroll, setAutoscroll] = useState(true);
+  const [copied, setCopied] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Copy the FULL console (all entries, timestamped) so it can be pasted/analyzed elsewhere.
+  const copyAll = () => {
+    const text = entries.map((e) => `${fmtTime(e.ts)} [${e.level}] ${e.text}`).join('\n');
+    try {
+      void navigator.clipboard?.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch { /* clipboard unavailable */ }
+  };
 
   useEffect(() => {
     if (!autoscroll) return;
@@ -46,6 +57,14 @@ export const LogsConsole: React.FC = () => {
             className={`rounded p-1 ${t.hover} ${autoscroll ? t.accent : t.textFaint}`}
           >
             <ArrowDownToLine className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={copyAll}
+            disabled={!entries.length}
+            title="Copy all logs"
+            className={`rounded p-1 ${t.hover} ${copied ? t.accent : t.textFaint} disabled:opacity-40`}
+          >
+            {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
           </button>
           <button
             onClick={clear}

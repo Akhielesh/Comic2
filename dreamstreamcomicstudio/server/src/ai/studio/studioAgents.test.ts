@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   runStudioAgents,
+  runStudioAgentsParallel,
   sanitizeAgentIds,
   studioAgentCatalog,
   STUDIO_AGENTS,
@@ -92,5 +93,43 @@ describe('studioAgents — multi-agent refinement pipeline', () => {
     );
     expect(Object.keys(result.files)).toEqual(['/App.tsx']);
     expect(result.files['/App.tsx']).toBe('fixed');
+  });
+});
+
+describe('runStudioAgentsParallel — parallel review → single synthesis', () => {
+  it('reviews concurrently, feeds findings into one synthesis writer', async () => {
+    const reviewed: string[] = [];
+    const result = await runStudioAgentsParallel(
+      { '/App.tsx': 'base' },
+      ['architecture', 'code', 'verification'],
+      'make it great',
+      {
+        review: async (prompt, toolNames) => {
+          const id = STUDIO_AGENT_ORDER.find((x) => prompt.includes(`You are the ${STUDIO_AGENTS[x].name} `));
+          reviewed.push(id!);
+          void toolNames;
+          return JSON.stringify({ findings: id === 'architecture' ? ['/App.tsx: weak structure -> split it'] : [] });
+        },
+        synthesize: async (prompt) => {
+          expect(prompt).toContain('weak structure'); // findings are fed into synthesis
+          return JSON.stringify({ note: 'applied', files: [{ path: '/App.tsx', content: 'synthesized' }] });
+        }
+      }
+    );
+    expect(reviewed.sort()).toEqual(['architecture', 'code', 'verification']);
+    expect(result.files['/App.tsx']).toBe('synthesized');
+    expect(result.trace.find((t) => t.id === 'synthesis')!.status).toBe('done');
+  });
+
+  it('skips synthesis entirely when no reviewer finds anything', async () => {
+    let synthCalls = 0;
+    const result = await runStudioAgentsParallel(
+      { '/App.tsx': 'base' },
+      ['code'],
+      '',
+      { review: async () => JSON.stringify({ findings: [] }), synthesize: async () => { synthCalls += 1; return ''; } }
+    );
+    expect(synthCalls).toBe(0);
+    expect(result.files['/App.tsx']).toBe('base'); // unchanged
   });
 });

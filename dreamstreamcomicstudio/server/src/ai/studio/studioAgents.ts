@@ -15,6 +15,7 @@ import { parseFixResponse, type StudioFiles } from './studioFix.js';
 import { sanitizeFixFiles, canonicalStudioPath } from '../../services/studioFiles.js';
 import { DESIGN_REVIEW_CHECKLIST } from './designSystem.js';
 import { NANGO_TOOL_NAMES } from '../tools/nango.js';
+import { extractJson } from '../json.js';
 
 export interface StudioAgentDef {
   id: string;
@@ -204,6 +205,123 @@ export const runStudioAgents = async (
       const note = (err as Error)?.message || 'agent failed';
       trace.push({ id: def.id, name: def.name, status: 'error', note, changed: [] });
       deps.onEvent?.({ stage: 'agent', agentId: def.id, name: def.name, status: 'error', note, changed: [], index: i, total });
+    }
+  }
+
+  deps.onEvent?.({ stage: 'done', total });
+  return { files: working, trace };
+};
+
+// ---------------------------------------------------------------------------------------------
+// Parallel review → single synthesis.
+//
+// The sequential pipeline above is correct but slow (one model call per agent, in series). This
+// runs every specialist CONCURRENTLY as a read-only REVIEWER (they critique the SAME base, so there
+// are no conflicting edits), then a SINGLE synthesis pass applies all findings at once. That's the
+// safe way to "do the work in parallel": parallel analysis, one writer.
+// ---------------------------------------------------------------------------------------------
+
+/** Review-only prompt: critique the app within a specialty and return findings (no file edits). */
+export const buildReviewPrompt = (def: StudioAgentDef, files: StudioFiles, preferences: string): string =>
+  `You are the ${def.name} reviewing an app in a live code studio. Work ONLY within your specialty; other specialists cover the rest.
+
+YOUR FOCUS:
+${def.focus}
+
+Report concrete, actionable problems in your area — bugs, missing functionality, gaps, risks. Be specific: name the file, what's wrong, and the fix. Do NOT rewrite the app; only review.
+${preferences ? `\nUSER PREFERENCES / GOAL:\n${preferences}\n` : ''}
+PROJECT FILES:
+
+${renderFiles(files)}
+
+Return ONLY JSON — no prose: {"findings":["<file>: <problem> → <fix>", ...]} (use an empty array if your area is already solid).`;
+
+/** Synthesis prompt: apply ALL reviewers' findings at once and return the complete corrected app. */
+export const buildSynthesisPrompt = (files: StudioFiles, findings: string, preferences: string): string =>
+  `You are the lead engineer applying a specialist team's review to an app in a live code studio. Apply EVERY valid finding below and return the COMPLETE updated project so it builds and runs cleanly — real, working code, no placeholders, no regressions.
+
+TEAM REVIEW FINDINGS:
+${findings}
+${preferences ? `\nUSER PREFERENCES / GOAL (honor these):\n${preferences}\n` : ''}
+PROJECT FILES:
+
+${renderFiles(files)}
+
+Return ONLY a JSON object — no prose outside the JSON:
+{"note":"one short sentence on what you improved","files":[{"path":"/path","content":"<full updated file content>"}]}`;
+
+const parseFindings = (text: string): string[] => {
+  try {
+    const obj = extractJson(text) as { findings?: unknown };
+    const arr = Array.isArray(obj?.findings) ? obj.findings : [];
+    return arr.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).slice(0, 30);
+  } catch {
+    return [];
+  }
+};
+
+export interface RunStudioAgentsParallelDeps {
+  /** Concurrent reviewer call (read-only). `toolNames` lets reviewers use live tools. */
+  review: (prompt: string, toolNames: string[]) => Promise<string>;
+  /** Single synthesis call that returns the corrected files. */
+  synthesize: (prompt: string) => Promise<string>;
+  onEvent?: (e: StudioAgentEvent) => void;
+  signal?: AbortSignal;
+}
+
+/**
+ * Run the enabled agents as PARALLEL reviewers, then a single synthesis pass applies their combined
+ * findings. Pure orchestration (model calls injected) so it's unit-testable. Safe-by-design: only the
+ * synthesis writes files, so concurrent agents can never clobber each other's edits.
+ */
+export const runStudioAgentsParallel = async (
+  initialFiles: StudioFiles,
+  agentIds: string[],
+  preferences: string,
+  deps: RunStudioAgentsParallelDeps
+): Promise<StudioAgentRunResult> => {
+  let working: StudioFiles = {};
+  for (const [p, c] of Object.entries(initialFiles)) working[canonicalStudioPath(p)] = c;
+
+  const ordered = sanitizeAgentIds(agentIds);
+  const total = ordered.length;
+  const trace: StudioAgentTraceEntry[] = [];
+
+  // 1) PARALLEL review — every specialist critiques the same base concurrently (read-only).
+  for (const id of ordered) deps.onEvent?.({ stage: 'agent', agentId: id, name: STUDIO_AGENTS[id].name, status: 'running' });
+  const reviews = await Promise.all(
+    ordered.map(async (id) => {
+      const def = STUDIO_AGENTS[id];
+      try {
+        const findings = parseFindings(await deps.review(buildReviewPrompt(def, working, preferences), def.toolNames));
+        const status: 'done' | 'skipped' = findings.length ? 'done' : 'skipped';
+        const note = findings.length ? `${findings.length} finding(s)` : 'no issues';
+        trace.push({ id, name: def.name, status, note, changed: [] });
+        deps.onEvent?.({ stage: 'agent', agentId: id, name: def.name, status, note });
+        return { name: def.name, findings };
+      } catch (err) {
+        const note = (err as Error)?.message || 'review failed';
+        trace.push({ id, name: def.name, status: 'error', note, changed: [] });
+        deps.onEvent?.({ stage: 'agent', agentId: id, name: def.name, status: 'error', note });
+        return { name: def.name, findings: [] as string[] };
+      }
+    })
+  );
+
+  // 2) SINGLE synthesis — apply all findings at once (one writer → no conflicting edits).
+  const allFindings = reviews
+    .filter((r) => r.findings.length)
+    .map((r) => `## ${r.name}\n${r.findings.map((f) => `- ${f}`).join('\n')}`)
+    .join('\n\n');
+  if (allFindings && !deps.signal?.aborted) {
+    try {
+      const parsed = parseFixResponse(await deps.synthesize(buildSynthesisPrompt(working, allFindings, preferences)));
+      const safe = sanitizeFixFiles(parsed.files, { maxFiles: 40 });
+      const changed = Object.keys(safe.files);
+      if (changed.length) working = { ...working, ...safe.files };
+      trace.push({ id: 'synthesis', name: 'Synthesis', status: changed.length ? 'done' : 'skipped', note: parsed.note, changed });
+    } catch (err) {
+      trace.push({ id: 'synthesis', name: 'Synthesis', status: 'error', note: (err as Error)?.message || 'synthesis failed', changed: [] });
     }
   }
 
