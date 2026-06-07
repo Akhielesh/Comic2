@@ -119,12 +119,12 @@ ${OUTPUT_CONTRACT}`;
     const answersBlock = input.answers?.length
       ? `\n\nThe user's answers to clarifying questions (honor these):\n${input.answers.map((a) => `- ${a.question} → ${a.answer}`).join('\n')}`
       : '';
-    return `You are a senior engineer implementing an APPROVED build plan in a live code studio (multi-language editor + instant web preview). Build the COMPLETE application to the plan — create the planned files, implement every listed feature for real, and make it run cleanly on first load.
+    return `You are a senior engineer implementing an APPROVED build plan in a live code studio (multi-language editor + instant web preview). Build the COMPLETE application and make it run cleanly on first load.
 
 PROJECT IDEA:
 ${input.prompt}${answersBlock}
 
-APPROVED BUILD PLAN (implement it faithfully — you may add files it implies, but cover everything listed):
+APPROVED BUILD PLAN — this defines the GOAL: the product, every feature, the stack and the data. Implement EVERY listed feature for real. You have FULL FREEDOM over HOW you build it: design the file structure, components and architecture yourself, exactly as a senior engineer would. Any file list in the plan is only a rough suggestion — create, split, rename, add or omit files however is best for a clean, well-organized, complete app. Do not feel bound to the suggested paths.
 ${renderPlanForBuild(input.plan)}
 
 Default web stack if the plan doesn't imply another: ${template}.

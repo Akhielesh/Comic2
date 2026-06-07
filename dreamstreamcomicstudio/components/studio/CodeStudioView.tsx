@@ -11,7 +11,7 @@ import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useStat
 import {
   ArrowLeft, Wand2, Square, Share2, Download, FileCode, Cloud,
   Sparkles, Cpu, Lock, Mail, Loader2, Command as CommandIcon, Moon, Sun, Palette, Undo2, MessageSquarePlus, Check,
-  Columns, Eye, FilePlus, Users, Maximize2, Minimize2, Video,
+  Columns, Eye, FilePlus, Users, Maximize2, Minimize2, Video, Terminal, ChevronUp,
 } from 'lucide-react';
 import type { CodeStudioArtifact, CodeStudioTemplate, StudioBuildPlan, StudioAnswer } from '../../apiTypes';
 import {
@@ -95,6 +95,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const wsPaths = useStudioWorkspace((s) => s.paths);
   const wsProjectId = useStudioWorkspace((s) => s.projectId);
   const appendLog = useStudioLogs((s) => s.append);
+  const logCount = useStudioLogs((s) => s.entries.length);
   const revertFile = useStudioWorkspace((s) => s.revertFile);
   const setTheme = useStudioThemeStore((s) => s.setTheme);
   const focus = useStudioFocus((s) => s.focus);
@@ -177,10 +178,20 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const [template, setTemplate] = useState<CodeStudioTemplate | undefined>(
     () => (getStudioModelSelection().defaultTemplate as CodeStudioTemplate | null) ?? undefined
   );
+  // The latest *persistent* preview error (sticky — only cleared when the preview actually recovers,
+  // or when the user starts a new app / refine). Keeping it sticky is what makes "Fix with AI" always
+  // reachable and stops the banner flashing on/off through each auto-repair cycle.
   const [previewError, setPreviewError] = useState<string | null>(null);
-  // True while the AI is auto-fixing a preview error — drives a CALM loading bar instead of the
-  // old red banner that flashed on/off through each repair cycle.
-  const [autofixing, setAutofixing] = useState(false);
+  // How many automatic fix attempts we've spent on the CURRENT error episode (state so the banner
+  // re-renders: calm "auto-fixing…" bar while budget remains, clickable error once it's exhausted).
+  const [autofixTries, setAutofixTries] = useState(0);
+  const autofixTriesRef = useRef(0);
+  const setTries = useCallback((n: number) => { autofixTriesRef.current = n; setAutofixTries(n); }, []);
+  // Console/logs dock (under the preview) — collapsible, persisted.
+  const [logsOpen, setLogsOpen] = useState<boolean>(() => {
+    try { return window.localStorage.getItem('studio.logs.open') !== '0'; } catch { return true; }
+  });
+  useEffect(() => { try { window.localStorage.setItem('studio.logs.open', logsOpen ? '1' : '0'); } catch { /* ignore */ } }, [logsOpen]);
   // Fullscreen the live preview (covers the studio) when the user wants maximum real estate.
   const [previewFull, setPreviewFull] = useState(false);
   // Client-side screen recording of the preview → downloadable video (no server / no egress).
@@ -190,33 +201,50 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     const r = await startPreviewRecording(wsTitle || 'preview');
     if (r) setRecording(r);
   };
-  // Debounce preview errors: the in-browser preview reports transient compile/HMR blips while a
-  // refine streams in, which made the error banner flash. Only surface an error that *persists*
-  // (~1.2s); clear it immediately on recovery. Stable identity so the watcher effect is steady.
+  // The in-browser preview (Sandpack) reports transient compile/HMR blips while a refine streams in,
+  // and only re-emits when the error *string* changes — so we debounce BOTH directions: a new error
+  // must persist (~0.9s) before we surface it, and a recovery must hold (~0.5s) before we clear it.
+  // That single debounce is what stops the flashing in both directions. Stable identity (deps: []) so
+  // the Sandpack ErrorWatcher effect doesn't re-subscribe on every render.
   const previewErrTimer = useRef<number | null>(null);
-  // Autonomous autofix: when a persistent preview error appears (and nothing else is building),
-  // the AI fixes it automatically — no "Fix with AI" click needed — up to a small budget per app.
+  // Autonomous autofix budget per error episode. Once spent, we STOP auto-retrying and leave a
+  // clickable "Fix with AI" error (which resets the budget). The loop itself is driven by the
+  // watchdog effect below — not by Sandpack re-emitting — so it never silently stalls.
   const MAX_AUTOFIX = 4;
-  const autofixCountRef = useRef(0);
   const autofixRef = useRef<(msg: string) => void>(() => {});
   const generatingRef = useRef(false);
   const onPreviewError = useCallback((e: string | null) => {
     if (previewErrTimer.current) { clearTimeout(previewErrTimer.current); previewErrTimer.current = null; }
-    if (!e) { setPreviewError(null); setAutofixing(false); autofixCountRef.current = 0; return; }
     previewErrTimer.current = window.setTimeout(() => {
-      setPreviewError(e);
-      if (!generatingRef.current && autofixCountRef.current < MAX_AUTOFIX) {
-        autofixCountRef.current += 1;
-        setAutofixing(true); // calm "auto-fixing…" state, not a flashing error
-        autofixRef.current(e);
-      } else {
-        setAutofixing(false); // already building, or budget exhausted → surface a clickable error
+      if (!e) {
+        // Stable recovery → clear the error and reset the auto-fix budget for the next episode.
+        setPreviewError(null);
+        setTries(0);
+        return;
       }
-    }, 1200);
-  }, []);
+      // Stable error → make it the current (sticky) error; the watchdog effect drives any auto-fix.
+      setPreviewError((prev) => (prev === e ? prev : e));
+    }, e ? 900 : 500);
+  }, [setTries]);
 
   // Keep a ref of `generating` so the (stable-identity) preview-error callback can gate autofix.
   useEffect(() => { generatingRef.current = generating; }, [generating]);
+
+  // Auto-fix watchdog: whenever a persistent preview error is showing, nothing else is generating,
+  // and we still have budget, kick off an automatic fix after a short settle (long enough for the
+  // preview to re-render and report a recovery first, so we never "fix" an already-fixed app). This
+  // effect — not Sandpack's error event — drives the loop, so it continues across identical errors
+  // and always terminates at the clickable error once the budget is spent.
+  useEffect(() => {
+    if (!hasFiles || previewUrl || !previewError || generating) return;
+    if (autofixTriesRef.current >= MAX_AUTOFIX) return;
+    const id = window.setTimeout(() => {
+      if (generatingRef.current || !previewError || autofixTriesRef.current >= MAX_AUTOFIX) return;
+      setTries(autofixTriesRef.current + 1);
+      autofixRef.current(previewError);
+    }, 700);
+    return () => window.clearTimeout(id);
+  }, [previewError, generating, hasFiles, previewUrl, setTries]);
 
   // Pause the live sandbox when the user leaves the studio (unmount) — never leave a container
   // running (and billing) after they navigate away. Mirror runId so the cleanup isn't stale.
@@ -228,6 +256,12 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   useEffect(() => {
     if (wsProjectId && convoMessages.length) saveStudioChat(wsProjectId, convoMessages);
   }, [convoMessages, wsProjectId]);
+  // Keep the (full-height, left) chat scrolled to the latest message — like a real chat thread.
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = chatScrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [convoMessages, generating]);
   useEffect(() => {
     if (!wsProjectId) return;
     const saved = loadStudioChat(wsProjectId);
@@ -309,15 +343,17 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const handleGenerate = async (
     prompt: string,
     tmpl?: CodeStudioTemplate,
-    opts?: { plan?: StudioBuildPlan; answers?: StudioAnswer[]; autoReview?: boolean }
+    opts?: { plan?: StudioBuildPlan; answers?: StudioAnswer[]; autoReview?: boolean; autofix?: boolean }
   ): Promise<{ ok: boolean; error?: string }> => {
     if (generating) return { ok: false, error: 'busy' };
     lastGenRef.current = { prompt, tmpl };
     const refining = hasFiles;
-    if (!refining) autofixCountRef.current = 0; // fresh autofix budget per new app
     setGenerating(true);
     setGenError(null);
-    setPreviewError(null);
+    // A user-initiated build/refine clears the current error and resets the auto-fix budget. An
+    // AUTOMATIC fix keeps the sticky error (so the calm "auto-fixing…" bar stays put and never
+    // flashes back to a clickable error mid-loop) until the preview genuinely recovers.
+    if (!opts?.autofix) { setPreviewError(null); setTries(0); }
     const convo = useStudioConversation.getState();
     if (!refining) {
       convo.clear(); // a brand-new app starts a fresh thread
@@ -433,7 +469,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     const names = agentIds.map(studioAgentName).join(', ');
     setGenerating(true);
     setGenError(null);
-    setPreviewError(null);
+    setPreviewError(null); setTries(0);
     const convo = useStudioConversation.getState();
     convo.pushUser(`Refine with agents: ${names}`);
     convo.pushAssistant('Your agent team is refining the app…', 'pending');
@@ -589,7 +625,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     useStudioActivity.getState().reset();
     setFlow({ phase: 'idle', prompt: '', answers: [] });
     setStatus('idle'); setRunId(null); setPreviewUrl(null);
-    setError(null); setGenError(null); setPreviewError(null);
+    setError(null); setGenError(null); setPreviewError(null); setTries(0);
   };
 
   // Leave Code Studio entirely — pause any live sandbox first.
@@ -611,15 +647,20 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     appendLog('success', 'Added /.env.example with the variables this app expects.');
   };
 
-  // Autodebug: feed the preview's error back to the model as a refine ("fix this"). Runs both on
-  // the manual button and automatically (autofixRef) when the preview keeps erroring.
+  // Autodebug: feed the preview's error back to the model as a refine ("fix this"). The auto-loop
+  // (watchdog effect) calls this with the budget already incremented; the manual "Fix with AI"
+  // button resets the budget so the loop re-engages from scratch.
   const handleAutofix = (errorMsg: string, manual = false) => {
     if (!errorMsg || generating) return;
-    if (manual) { autofixCountRef.current = 0; setAutofixing(true); } // manual retry resets the budget
-    appendLog('warn', `Auto-fixing the preview error… (attempt ${autofixCountRef.current || 1}/${MAX_AUTOFIX})`);
-    void handleGenerate(`The live preview shows this error — find the ROOT CAUSE and fix it so the app runs cleanly. Return the full corrected files; do not reintroduce the error:\n\n${errorMsg}`);
+    if (manual) setTries(1); // manual retry resets + spends one attempt, then the loop continues
+    appendLog('warn', `Auto-fixing the preview error… (attempt ${autofixTriesRef.current || 1}/${MAX_AUTOFIX})`);
+    void handleGenerate(
+      `The live preview shows this error — find the ROOT CAUSE and fix it so the app runs cleanly. Return the full corrected files; do not reintroduce the error:\n\n${errorMsg}`,
+      undefined,
+      { autofix: true }
+    );
   };
-  autofixRef.current = handleAutofix;
+  autofixRef.current = (msg: string) => handleAutofix(msg, false);
 
   const stopLive = async () => {
     if (runId) { try { await stopLiveStudio(runId); } catch { /* best-effort */ } }
@@ -678,29 +719,21 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const ctxStatus = generating ? 'working…' : status === 'live' ? 'live' : status === 'starting' ? 'starting…' : status === 'error' ? 'error' : 'ready';
 
   // ---- Panes (defined once, placed into the resizable or stacked layout) ----
+  // Chat pane — full height on the left. The conversation history scrolls and fills the column;
+  // the composer is pinned at the bottom (like a real chat), so the build history is always visible.
   const promptPane = (
-    <PaneFrame title="Prompt · Build" icon={<Sparkles className="w-4 h-4" />}>
-      <div className="p-3 space-y-3">
-        {/* The build conversation (your prompts + the agent's outcomes). */}
+    <section className={`flex h-full w-full min-h-0 flex-col rounded-lg border ${t.edge} ${t.panel} overflow-hidden`}>
+      <header className={`flex items-center gap-2 px-3 py-2 border-b ${t.edge} ${t.panelAlt}`}>
+        <span className={t.accent}><Sparkles className="w-4 h-4" /></span>
+        <span className={`text-xs font-semibold tracking-wide ${t.textDim} uppercase`}>Chat · Build</span>
+      </header>
+      {/* Scrollable history — conversation first, then live activity + supporting panels. */}
+      <div ref={chatScrollRef} className="min-h-0 flex-1 overflow-auto p-3 space-y-3">
+        {/* The build conversation (your prompts + the agent's outcomes) — the full history. */}
         <ConversationThread />
         {/* Live, synchronous activity — files appearing as the AI writes them (Sprint 1).
             Rows are clickable: jump straight to the file in the editor. */}
         <ActivityFeed onOpenFile={openFileInEditor} onRetry={retryLastGenerate} />
-        {/* Iterate by prompt — refines the current app in place (no chat hand-off). */}
-        <PromptComposer mode="inline" onSubmit={handleGenerate} onCancel={cancelGenerate} busy={generating} error={genError} />
-        <div className="flex flex-wrap gap-1.5">
-          {QUICK_ACTIONS.map((a) => (
-            <button
-              key={a.label}
-              onClick={() => handleGenerate(a.prompt)}
-              disabled={generating}
-              title={a.prompt}
-              className={`rounded-full border ${t.edge} px-2.5 py-1 text-[11px] font-medium ${t.textDim} ${t.hover} disabled:opacity-50 ${t.focusRing}`}
-            >
-              {a.label}
-            </button>
-          ))}
-        </div>
         {/* The manual "Refine with agent team" button was removed: quality work now runs
             automatically (strong model + the server's completeness self-review + auto error-fix).
             The full specialist team is still available via the command palette when wanted. */}
@@ -715,7 +748,24 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
         <ChangesPanel />
         <HistoryPanel />
       </div>
-    </PaneFrame>
+      {/* Pinned composer — iterate by prompt, refining the current app in place (no chat hand-off). */}
+      <div className={`shrink-0 border-t ${t.edge} ${t.panelAlt} p-3 space-y-2`}>
+        <PromptComposer mode="inline" onSubmit={handleGenerate} onCancel={cancelGenerate} busy={generating} error={genError} />
+        <div className="flex flex-wrap gap-1.5">
+          {QUICK_ACTIONS.map((a) => (
+            <button
+              key={a.label}
+              onClick={() => handleGenerate(a.prompt)}
+              disabled={generating}
+              title={a.prompt}
+              className={`rounded-full border ${t.edge} px-2.5 py-1 text-[11px] font-medium ${t.textDim} ${t.hover} disabled:opacity-50 ${t.focusRing}`}
+            >
+              {a.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 
   const codePane = (
@@ -756,16 +806,19 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
         </>
       }
     >
-      {/* Calm "auto-fixing" bar while the AI repairs preview/console errors automatically — replaces
-          the old red banner that flashed on/off each repair cycle. */}
-      {hasFiles && !previewUrl && (autofixing || (generating && previewError)) && (
+      {/* Calm "auto-fixing" bar while we still have budget OR a fix is actively streaming — the error
+          is sticky underneath, so this never flips back to a red banner mid-loop (no flashing). */}
+      {hasFiles && !previewUrl && previewError && (generating || autofixTries < MAX_AUTOFIX) && (
         <div className="flex items-center gap-2 px-3 py-2 border-b border-violet-500/20 bg-violet-500/10 text-xs">
           <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin text-violet-400" />
-          <span className="min-w-0 flex-1 text-violet-200/90">Auto-fixing errors so it runs cleanly…</span>
+          <span className="min-w-0 flex-1 text-violet-200/90">
+            Auto-fixing errors so it runs cleanly…{autofixTries > 0 ? ` (attempt ${autofixTries}/${MAX_AUTOFIX})` : ''}
+          </span>
         </div>
       )}
-      {/* Only a PERSISTENT, clickable error once auto-fix is exhausted (no flashing, easy to hit). */}
-      {previewError && hasFiles && !previewUrl && !generating && !autofixing && (
+      {/* Only a PERSISTENT, clickable error once auto-fix is exhausted — always reachable (no flashing,
+          easy to hit). "Fix with AI" resets the budget and re-engages the loop. */}
+      {hasFiles && !previewUrl && previewError && !generating && autofixTries >= MAX_AUTOFIX && (
         <div className="flex items-start gap-2 px-3 py-2 border-b border-rose-500/20 bg-rose-500/10 text-xs">
           <span className="mt-0.5 shrink-0 font-semibold text-rose-400">⚠ Error</span>
           <span className="min-w-0 flex-1 truncate text-rose-200/90" title={previewError}>{previewError}</span>
@@ -824,11 +877,38 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     </PaneFrame>
   );
 
-  const logsPane = (
+  // Console/logs dock — lives to the RIGHT, below the preview, and quick-collapses to a slim bar.
+  const logsDock = (
     <div className={`flex h-full w-full overflow-hidden rounded-lg border ${t.edge}`}>
-      <LogsConsole />
+      <LogsConsole onCollapse={() => setLogsOpen(false)} />
     </div>
   );
+  const collapsedLogsBar = (
+    <button
+      onClick={() => setLogsOpen(true)}
+      title="Show console"
+      aria-label="Show console"
+      className={`flex w-full shrink-0 items-center gap-2 rounded-lg border ${t.edge} ${t.panelAlt} px-3 py-1.5 ${t.hover} ${t.focusRing}`}
+    >
+      <Terminal className={`w-3.5 h-3.5 ${t.accent}`} />
+      <span className={`text-[11px] font-semibold uppercase tracking-wide ${t.textDim}`}>Console · Logs</span>
+      <span className={`text-[10px] ${t.textFaint}`}>{logCount}</span>
+      <ChevronUp className={`ml-auto w-3.5 h-3.5 ${t.textFaint}`} />
+    </button>
+  );
+  // Stack a primary pane (the preview, or code when preview is hidden) over the collapsible console.
+  const withLogsDock = (mainPane: React.ReactNode, splitKey: string) =>
+    logsOpen ? (
+      <ResizableSplit direction="vertical" storageKey={splitKey} initial={[3, 1]} minPx={90}>
+        {mainPane}
+        {logsDock}
+      </ResizableSplit>
+    ) : (
+      <div className="flex h-full min-h-0 w-full flex-col gap-2">
+        <div className="flex min-h-0 flex-1">{mainPane}</div>
+        {collapsedLogsBar}
+      </div>
+    );
 
   return (
     <div className={`relative overflow-hidden min-h-screen h-screen ${t.bg} ${t.text} flex flex-col`}>
@@ -992,36 +1072,33 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
           />
         )
       ) : wide ? (
+        // Chat is a FULL-HEIGHT column on the left; the console docks to the RIGHT, under the preview
+        // (collapsible). Each focus keeps its own resize state via a distinct storageKey.
         <div className="flex-1 min-h-0 p-3">
-          <ResizableSplit direction="vertical" storageKey="studio.split.v" initial={[3.2, 1]} minPx={110}>
-            {/* Focus-aware horizontal layout — Code or Preview can take the full pane
-                (each focus keeps its own resize state via a distinct storageKey). */}
-            {focus === 'code' ? (
-              <ResizableSplit direction="horizontal" storageKey="studio.split.h.code.v2" initial={[3.6, 6.4]} minPx={280}>
-                {promptPane}
-                {codePane}
-              </ResizableSplit>
-            ) : focus === 'preview' ? (
-              <ResizableSplit direction="horizontal" storageKey="studio.split.h.preview.v2" initial={[3.6, 6.4]} minPx={280}>
-                {promptPane}
-                {previewPane}
-              </ResizableSplit>
-            ) : (
-              <ResizableSplit direction="horizontal" storageKey="studio.split.h.v2" initial={[3.4, 3.1, 3.1]} minPx={260}>
-                {promptPane}
-                {codePane}
-                {previewPane}
-              </ResizableSplit>
-            )}
-            {logsPane}
-          </ResizableSplit>
+          {focus === 'code' ? (
+            <ResizableSplit direction="horizontal" storageKey="studio.split.main.code" initial={[3.4, 8]} minPx={280}>
+              {promptPane}
+              {withLogsDock(codePane, 'studio.split.dock.code')}
+            </ResizableSplit>
+          ) : focus === 'preview' ? (
+            <ResizableSplit direction="horizontal" storageKey="studio.split.main.preview" initial={[3.4, 8]} minPx={280}>
+              {promptPane}
+              {withLogsDock(previewPane, 'studio.split.dock.preview')}
+            </ResizableSplit>
+          ) : (
+            <ResizableSplit direction="horizontal" storageKey="studio.split.main.split" initial={[3.2, 3.4, 3.4]} minPx={240}>
+              {promptPane}
+              {codePane}
+              {withLogsDock(previewPane, 'studio.split.dock.split')}
+            </ResizableSplit>
+          )}
         </div>
       ) : (
         <div className="flex-1 min-h-0 overflow-auto flex flex-col gap-3 p-3">
-          <div className="min-h-[15rem] flex">{promptPane}</div>
+          <div className="min-h-[18rem] flex">{promptPane}</div>
           {focus !== 'preview' && <div className="min-h-[22rem] flex">{codePane}</div>}
           {focus !== 'code' && <div className="min-h-[18rem] flex">{previewPane}</div>}
-          <div className="min-h-[12rem] flex">{logsPane}</div>
+          {logsOpen ? <div className="min-h-[12rem] flex">{logsDock}</div> : collapsedLogsBar}
         </div>
       )}
     </div>
