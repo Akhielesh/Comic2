@@ -639,6 +639,11 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     if (!text && attachments.length === 0) return;
 
     const sessionId = activeSession.id;
+    // `busy` is React state and flips a tick late, so a mobile double-tap (touchend +
+    // click) can fire two sends before it updates — which is how a chat ends up with two
+    // identical user turns. `abortMap` is set synchronously when a generation starts, so
+    // it's the reliable guard against a duplicate in-flight send for this chat.
+    if (abortMap.current.has(sessionId)) return;
     const { reqModel, reqSource, reqTools } = resolveRequest(text, overrideModel);
 
     const userTurn: ChatTurn = {

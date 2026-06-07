@@ -1,5 +1,27 @@
-import { get, post, postStream } from './apiClient';
+import { get, post, postStream, ApiError } from './apiClient';
 import type { ChatRequest, ChatResponse, SwarmTraceArtifact, SystemDashboard } from '../apiTypes';
+
+/**
+ * True when an error looks like a transport/connectivity failure rather than a
+ * deliberate server response (4xx/5xx with a body). Mobile networks, captive
+ * proxies and some CDNs terminate long-lived SSE streams mid-flight — the body
+ * read then rejects with a bare "network error" / "Load failed" / "Failed to
+ * fetch". `safeFetch` also surfaces unreachable-server failures as ApiError
+ * status 0. In those cases the buffered (non-streaming) endpoint usually still
+ * works, so callers can safely retry there.
+ */
+const isTransportError = (err: unknown): boolean => {
+  if (err instanceof ApiError) return err.status === 0;
+  const msg = String((err as Error)?.message || '').toLowerCase();
+  return (
+    msg.includes('network error') ||
+    msg.includes('networkerror') ||
+    msg.includes('failed to fetch') ||
+    msg.includes('load failed') ||
+    msg.includes('network connection was lost') ||
+    msg.includes('streaming is not supported')
+  );
+};
 
 /** Admin-only: live system dashboard (capabilities, tool health, limits, gaps). */
 export const getSystemDashboard = (): Promise<SystemDashboard> => get<SystemDashboard>('/api/system/dashboard');
@@ -111,18 +133,44 @@ export const sendChatMessageStream = async (
   req: ChatRequest,
   handlers: ChatStreamHandlers = {}
 ): Promise<ChatResponse> => {
-  const res = await postStream('/api/chat/stream', req, { signal: handlers.signal });
-  let final: ChatResponse | null = null;
-  let streamError: string | null = null;
-  await consumeEventStream(res, (event, parsed) => {
-    if (event === 'delta' && typeof parsed.content === 'string') handlers.onDelta?.(parsed.content);
-    else if (event === 'reasoning' && typeof parsed.reasoning === 'string') handlers.onReasoning?.(parsed.reasoning);
-    else if (event === 'final') final = parsed as ChatResponse;
-    else if (event === 'error') streamError = String(parsed.message || 'The request failed.');
-  });
-  if (streamError) throw new Error(streamError);
-  if (!final) throw new Error('The model returned no response.');
-  return final;
+  // Track whether ANY content arrived before a failure: if the stream is cut after
+  // partial output we must surface the error (not silently re-answer), but if it
+  // dies before a single byte we can transparently fall back to the buffered endpoint.
+  let receivedAny = false;
+  try {
+    const res = await postStream('/api/chat/stream', req, { signal: handlers.signal });
+    let final: ChatResponse | null = null;
+    let streamError: string | null = null;
+    await consumeEventStream(res, (event, parsed) => {
+      if (event === 'delta' && typeof parsed.content === 'string') {
+        receivedAny = true;
+        handlers.onDelta?.(parsed.content);
+      } else if (event === 'reasoning' && typeof parsed.reasoning === 'string') {
+        receivedAny = true;
+        handlers.onReasoning?.(parsed.reasoning);
+      } else if (event === 'final') {
+        receivedAny = true;
+        final = parsed as ChatResponse;
+      } else if (event === 'error') {
+        streamError = String(parsed.message || 'The request failed.');
+      }
+    });
+    if (streamError) throw new Error(streamError);
+    if (!final) throw new Error('The model returned no response.');
+    return final;
+  } catch (err) {
+    // SSE is brittle on mobile networks/proxies that don't pass long-lived streams —
+    // the connection opens, then the body read rejects with a bare "network error".
+    // When nothing was streamed and the user didn't cancel, retry once over the
+    // buffered (non-streaming) endpoint, which is far more proxy-friendly. Push the
+    // full answer through onDelta so the UI renders it just like a streamed turn.
+    if (!receivedAny && !handlers.signal?.aborted && isTransportError(err)) {
+      const final = await sendChatMessage(req, { signal: handlers.signal });
+      if (final.text) handlers.onDelta?.(final.text);
+      return final;
+    }
+    throw err;
+  }
 };
 
 export interface SwarmStreamHandlers extends ChatStreamHandlers {
