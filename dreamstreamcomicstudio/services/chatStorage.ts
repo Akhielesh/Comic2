@@ -335,6 +335,7 @@ export const branchSession = (source: ChatSession, throughTurnId: string): ChatS
     webSearch: source.webSearch,
     dreamstreamAccess: source.dreamstreamAccess,
     tools: [...source.tools],
+    mcpServers: [...(source.mcpServers || [])],
     systemPrompt: source.systemPrompt,
     turns,
     parentSessionId: source.id,

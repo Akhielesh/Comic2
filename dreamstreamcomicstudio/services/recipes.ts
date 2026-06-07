@@ -4,7 +4,7 @@
 
 import { get, post, del, postStream } from './apiClient';
 import { readSSEStream } from './sse';
-import type { RecipeCardArtifact, ChatArtifact } from '../apiTypes';
+import type { RecipeCardArtifact, ChatArtifact, ChatCitation, ChatToolEvent, ChatToolImage, CapabilityNotice, ChatRequestMessage } from '../apiTypes';
 
 /** A stored recipe as returned by the API (recipe fields + storage metadata). */
 export interface StoredRecipe extends RecipeCardArtifact {
@@ -44,7 +44,7 @@ export interface RunRecipeRequest {
   recipe?: RecipeCardArtifact;
   values?: Record<string, unknown>;
   /** A placeholder message is required by the chat pipeline; defaults are added below. */
-  messages?: { role: 'user' | 'assistant'; content: string }[];
+  messages?: ChatRequestMessage[];
   model?: string;
   source?: string;
   systemPrompt?: string;
@@ -71,6 +71,11 @@ export interface DistillResult {
 
 export interface RecipeRunOutcome {
   text: string;
+  model?: string;
+  citations?: ChatCitation[];
+  toolEvents?: ChatToolEvent[];
+  images?: ChatToolImage[];
+  notices?: CapabilityNotice[];
   artifacts?: ChatArtifact[];
   structured?: unknown;
   activities?: string[];
@@ -90,7 +95,17 @@ export const runRecipe = async (
   const res = await runRecipeStream(req, signal);
   let text = '';
   let error: string | undefined;
-  let final: { text?: string; artifacts?: ChatArtifact[]; structured?: unknown; activities?: string[] } | null = null;
+  let final: {
+    text?: string;
+    model?: string;
+    citations?: ChatCitation[];
+    toolEvents?: ChatToolEvent[];
+    images?: ChatToolImage[];
+    notices?: CapabilityNotice[];
+    artifacts?: ChatArtifact[];
+    structured?: unknown;
+    activities?: string[];
+  } | null = null;
 
   await readSSEStream(res.body, ({ event, data }) => {
     let parsed: Record<string, unknown>;
@@ -114,6 +129,11 @@ export const runRecipe = async (
   if (final) {
     return {
       text: typeof final.text === 'string' && final.text ? final.text : text,
+      model: final.model,
+      citations: final.citations,
+      toolEvents: final.toolEvents,
+      images: final.images,
+      notices: final.notices,
       artifacts: final.artifacts,
       structured: final.structured,
       activities: final.activities,
