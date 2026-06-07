@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { X, Brain, Network, Wrench, Plus, Trash2, Check, Pencil, Bot, Sparkles, Activity, LayoutGrid } from 'lucide-react';
+import { X, Brain, Network, Wrench, Plus, Trash2, Check, Pencil, Bot, Sparkles, Activity, LayoutGrid, BookOpen } from 'lucide-react';
 import { ModalPortal } from '../modals/ModalPortal';
 import { SystemDashboard } from './SystemDashboard';
 import { ComponentGallery } from './ComponentGallery';
+import { RecipeStudio } from './RecipeStudio';
 import { ToolsDashboard } from './ToolsDashboard';
 import type { CustomAgentDef } from '../../apiTypes';
 import { getChatMemory, setChatMemory } from '../../services/chatStorage';
@@ -12,7 +13,7 @@ import {
   parseMemoryItems, formatMemoryItems
 } from '../../services/chatAgents';
 
-type Tab = 'memory' | 'agents' | 'tools' | 'system' | 'gallery';
+type Tab = 'memory' | 'agents' | 'recipes' | 'tools' | 'system' | 'gallery';
 
 interface ChatSettingsModalProps {
   userId?: string;
@@ -41,6 +42,7 @@ export const ChatSettingsModal: React.FC<ChatSettingsModalProps> = ({
             {([
               ['memory', 'Memory', Brain],
               ['agents', 'Agents', Network],
+              ['recipes', 'Recipes', BookOpen],
               ['tools', 'Tools', Wrench],
               ['system', 'System', Activity],
               ['gallery', 'Gallery', LayoutGrid]
@@ -58,6 +60,7 @@ export const ChatSettingsModal: React.FC<ChatSettingsModalProps> = ({
           <div className="flex-1 min-h-0 overflow-y-auto p-5">
             {tab === 'memory' && <MemoryTab userId={userId} onMemoryChange={onMemoryChange} />}
             {tab === 'agents' && <AgentsTab userId={userId} onAgentsChange={onAgentsChange} />}
+            {tab === 'recipes' && <RecipeStudio userId={userId} />}
             {tab === 'tools' && <ToolsDashboard />}
             {tab === 'system' && <SystemDashboard />}
             {tab === 'gallery' && <ComponentGallery />}
