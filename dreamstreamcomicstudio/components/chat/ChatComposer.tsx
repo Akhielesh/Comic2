@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Send, Paperclip, X, Brain, Square, Loader2, LayoutGrid, FileText, Wand2, Undo2, Network, Server, Slash } from 'lucide-react';
 import type { ChatReasoningLevel } from '../../apiTypes';
 import type { ChatAttachment } from '../../services/chatStorage';
@@ -29,6 +29,9 @@ interface ChatComposerProps {
   onSend: (text: string, attachments: ChatAttachment[]) => void;
   /** Run a `/`-command skill (a recipe) instead of a plain message. */
   onRunSkill: (skill: ChatSkill, arg: string) => void;
+  /** When set, prefill the composer with this text (e.g. clicking a skill suggestion). */
+  seedText?: string;
+  onSeedConsumed?: () => void;
   onStop: () => void;
 }
 
@@ -69,6 +72,8 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   onToggleMcpServer,
   onSend,
   onRunSkill,
+  seedText,
+  onSeedConsumed,
   onStop
 }) => {
   const [text, setText] = useState('');
@@ -81,6 +86,23 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   const [menuDismissed, setMenuDismissed] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Prefill from a clicked suggestion (e.g. a skill chip), then focus the box.
+  useEffect(() => {
+    if (!seedText) return;
+    setText(seedText);
+    setMenuDismissed(true);
+    onSeedConsumed?.();
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        autoGrow(el);
+        el.setSelectionRange(el.value.length, el.value.length);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seedText]);
 
   const skillMatches = isSlashQuery(text) && !menuDismissed ? filterSkills(slashQuery(text)) : [];
   const menuOpen = skillMatches.length > 0;
