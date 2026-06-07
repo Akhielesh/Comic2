@@ -11,6 +11,7 @@
 
 import { runChat } from '../chat.js';
 import { runSwarm } from '../agents/orchestrator.js';
+import { runDeepResearch, type ResearchDepth } from '../research/deepResearch.js';
 import { resolveTools, type ToolContext } from '../tools/registry.js';
 import { TEXT_FALLBACK } from '../autoRouter.js';
 import { coerceJsonOrNull } from '../jsonCoerce.js';
@@ -129,6 +130,43 @@ export const runRecipe = async (params: RunRecipeParams): Promise<RunRecipeResul
   });
 
   try {
+    // ── Deep research ────────────────────────────────────────────────────────
+    // The /research, /deepresearch and /science skills run a dedicated iterative,
+    // citation-grounded engine (plan → parallel search → gap-fill → grounded synth)
+    // instead of the shallow two-agent swarm pass.
+    if (recipe.id === 'deep-research-brief') {
+      const depthRaw = String(r.values.depth ?? 'standard');
+      const depth: ResearchDepth = depthRaw === 'quick' || depthRaw === 'exhaustive' ? depthRaw : 'standard';
+      const res = await runDeepResearch({
+        topic: String(r.values.topic ?? '').trim(),
+        audience: r.values.audience ? String(r.values.audience) : undefined,
+        depth,
+        provider: params.provider,
+        apiKey: params.apiKey,
+        model,
+        priorMessages: params.priorMessages,
+        systemPrompt: userMemory,
+        fallbackModel: params.fallbackModel || TEXT_FALLBACK,
+        timeoutMs: params.timeoutMs,
+        signal: params.signal,
+        onDelta: params.onDelta,
+        onProgress: params.onProgress ? (t) => params.onProgress?.(t) : undefined
+      });
+      return {
+        recipeId: recipe.id,
+        title: recipe.title,
+        missing: [],
+        text: res.text,
+        model: res.model,
+        citations: res.citations,
+        toolEvents: res.toolEvents,
+        artifacts: [baseArtifact('done'), { type: 'swarm_trace', data: res.trace }],
+        notices: res.notices,
+        usage: res.usage,
+        activities: r.activities
+      };
+    }
+
     // ── Swarm recipes ────────────────────────────────────────────────────────
     if (recipe.swarm) {
       // Instructions steer every agent + synthesis; merge with durable user memory.
