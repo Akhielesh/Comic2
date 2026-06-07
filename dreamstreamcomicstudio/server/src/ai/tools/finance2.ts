@@ -84,7 +84,19 @@ export const cryptoPriceTool: ChatTool = {
         citations: [{ url: `https://www.coingecko.com/en/coins/${top.id}`, title: `${top.name} on CoinGecko` }]
       };
     } catch (err) {
-      return { content: `Crypto price lookup failed: ${(err as Error)?.message || 'unknown error'}.` };
+      const message = (err as Error)?.message || 'unknown error';
+      // CoinGecko's keyless tier rate-limits (429) often; tell the UI honestly rather than
+      // letting the model decide it's an unknown coin.
+      const rateLimited = /\b429\b|rate.?limit/i.test(message);
+      return {
+        content: `Crypto price lookup failed: ${message}.`,
+        notice: {
+          level: rateLimited ? 'warn' : 'error',
+          message: rateLimited
+            ? 'Live crypto data is rate-limited right now — try again in a moment.'
+            : 'Live crypto price data is unavailable right now.'
+        }
+      };
     }
   }
 };
