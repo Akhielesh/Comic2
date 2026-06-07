@@ -128,7 +128,11 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   // busy chat never blocks (or gets stopped by) another. `busyIds` = sessions whose
   // answer is currently generating.
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Sidebar starts open on desktop, closed on phones so the conversation owns the
+  // whole screen (on mobile it opens as an overlay drawer, not an inline column).
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => typeof window === 'undefined' || window.matchMedia('(min-width: 768px)').matches
+  );
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const [memory, setMemory] = useState('');
@@ -831,25 +835,38 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
   return (
     <ChatPanelContext.Provider value={setPanel}>
     <div className="h-[100dvh] flex overflow-hidden bg-white">
-      {sidebarOpen && (
-        <ChatSidebar
-          sessions={sessions}
-          projects={projectsList}
-          activeId={activeId}
-          generatingIds={busyIds}
-          hasMemory={Boolean(memory.trim())}
-          onSelect={setActiveId}
-          onNew={handleNew}
-          onDelete={handleDelete}
-          onRename={handleRename}
-          onMoveToProject={handleMoveToProject}
-          onNewProject={() => setProjectModal({ editing: null })}
-          onEditProject={(project) => setProjectModal({ editing: project })}
-          onDeleteProject={handleDeleteProject}
-          onEditMemory={handleEditMemory}
-          onBack={onBack}
-        />
-      )}
+      {sidebarOpen && (() => {
+        // On phones the sidebar floats over the conversation as a drawer (with a tap-to-close
+        // backdrop) instead of stealing a 288px column; selecting a chat closes it. On desktop
+        // it stays an inline flex column exactly as before.
+        const closeOnMobile = () => { if (!isDesktop) setSidebarOpen(false); };
+        const sidebar = (
+          <ChatSidebar
+            sessions={sessions}
+            projects={projectsList}
+            activeId={activeId}
+            generatingIds={busyIds}
+            hasMemory={Boolean(memory.trim())}
+            onSelect={(id) => { setActiveId(id); closeOnMobile(); }}
+            onNew={() => { handleNew(); closeOnMobile(); }}
+            onDelete={handleDelete}
+            onRename={handleRename}
+            onMoveToProject={handleMoveToProject}
+            onNewProject={() => setProjectModal({ editing: null })}
+            onEditProject={(project) => setProjectModal({ editing: project })}
+            onDeleteProject={handleDeleteProject}
+            onEditMemory={handleEditMemory}
+            onBack={onBack}
+          />
+        );
+        if (isDesktop) return sidebar;
+        return (
+          <div className="fixed inset-0 z-40 flex md:hidden">
+            <div className="absolute inset-0 bg-black/40 animate-fade-in" onClick={() => setSidebarOpen(false)} aria-hidden />
+            <div className="relative z-10 h-full shadow-2xl animate-slide-in-left">{sidebar}</div>
+          </div>
+        );
+      })()}
 
       <ChatConversation
         session={activeSession}
