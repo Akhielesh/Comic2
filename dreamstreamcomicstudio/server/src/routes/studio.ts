@@ -24,7 +24,7 @@ import { evaluateLaunchAllowed } from '../services/studioCaps.js';
 import { sanitizeFiles, deriveProjectName } from '../services/studioFiles.js';
 import { saveProject, listProjects, getProjectWithFiles, deleteProject, listVersions, getVersionFiles } from '../services/studioRepository.js';
 import { runBuildAgent } from '../ai/studio/buildAgent.js';
-import { runGenerate, buildGeneratePrompt, parseGeneratedApp, STRICT_JSON_REMINDER, reviewCompleteness } from '../ai/studio/studioGenerate.js';
+import { runGenerate, buildGeneratePrompt, parseGeneratedApp, STRICT_JSON_REMINDER, reviewCompleteness, repairUntilClean } from '../ai/studio/studioGenerate.js';
 import { runClarify } from '../ai/studio/studioClarify.js';
 import { runPlan } from '../ai/studio/studioPlan.js';
 import { runStudioAgentsParallel, sanitizeAgentIds, studioAgentCatalog, STUDIO_AGENTS } from '../ai/studio/studioAgents.js';
@@ -34,7 +34,7 @@ import { makeImageTool, imageGenAvailable, type ImageKeys } from '../ai/tools/im
 import { enabledMcpConfigs } from '../services/mcpRegistry.js';
 import { ALWAYS_ON_STUDIO_MCP_SERVERS, envDesignMcpServers, externalMcpEnabled } from '../ai/studio/designSystem.js';
 import { scanStreamedFiles } from '../ai/studio/streamParse.js';
-import { verifyGeneratedApp, formatIssues } from '../ai/studio/verifyApp.js';
+import { verifyGeneratedApp } from '../ai/studio/verifyApp.js';
 import { pickCodingModel, TEXT_FALLBACK } from '../ai/autoRouter.js';
 import { runChat } from '../ai/chat.js';
 import { resolveProviderContext } from '../ai/gateway.js';
@@ -428,24 +428,19 @@ studioRouter.post('/generate/stream', async (req, res, next) => {
 
     // Verifier agent: statically check the generated app for the failure modes that break studio
     // apps (empty/placeholder files, missing React default export, invalid JSON, unresolved relative
-    // imports) and auto-repair them in one pass — so the user gets a working app without clicking "fix".
+    // imports) and auto-repair them in a LOOP — re-checking after each pass — so the user gets a
+    // working app without clicking "fix", and a stubborn issue gets more than one attempt.
     try {
-      const issues = verifyGeneratedApp(artifact);
-      if (issues.length) {
-        sse('phase', { label: `Verifying — fixing ${issues.length} issue${issues.length === 1 ? '' : 's'}…` });
-        const repairPrompt = buildGeneratePrompt({
-          prompt: `The generated project has these issues. Fix them and return the COMPLETE updated project so it is correct and runs cleanly:\n${formatIssues(issues)}`,
-          template: body.template,
-          currentFiles: artifact.files.map((f) => ({ path: f.path, content: f.content })),
-          currentTitle: artifact.title
-        });
-        const repaired = parseGeneratedApp(await complete(repairPrompt, false), body.template);
-        if (repaired) {
-          artifact = repaired;
-          sse('phase', { label: verifyGeneratedApp(artifact).length ? 'Verified — applied fixes' : 'Verified ✓' });
-        } else {
-          sse('phase', { label: 'Verified — kept the best version' });
-        }
+      const before = verifyGeneratedApp(artifact);
+      if (before.length) {
+        sse('phase', { label: `Verifying — fixing ${before.length} issue${before.length === 1 ? '' : 's'}…` });
+        artifact = await repairUntilClean(
+          (p) => complete(p, false),
+          { prompt, template: body.template, currentFiles: artifact.files.map((f) => ({ path: f.path, content: f.content })), currentTitle: artifact.title },
+          artifact,
+          { onPass: ({ pass, issues }) => sse('phase', { label: `Verifying pass ${pass} — fixing ${issues.length} issue${issues.length === 1 ? '' : 's'}…` }) }
+        );
+        sse('phase', { label: verifyGeneratedApp(artifact).length ? 'Verified — applied fixes' : 'Verified ✓' });
       } else {
         sse('phase', { label: 'Verified ✓' });
       }

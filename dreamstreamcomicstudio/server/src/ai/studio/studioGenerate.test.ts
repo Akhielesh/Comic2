@@ -47,6 +47,19 @@ describe('runGenerate (auto-repair + completeness review)', () => {
     expect(art!.files[0].content).toContain('setInterval(');
   });
 
+  it('loops verify→repair across MULTIPLE passes until the app is clean', async () => {
+    // Two broken answers in a row, then a clean one: generate + 2 repair passes = 3 calls.
+    const STILL_STUB = JSON.stringify({
+      title: 'G', template: 'react-ts',
+      files: [{ path: '/App.tsx', content: 'export default function App(){ return null; }\n// requestAnimationFrame game loop here' }],
+    });
+    const answers = [STUB, STILL_STUB, FIXED];
+    let n = 0;
+    const art = await runGenerate(async () => answers[n++] ?? FIXED, { prompt: 'a game' }, { review: false });
+    expect(n).toBe(3); // generate + two repair passes
+    expect(art!.files[0].content).toContain('setInterval(');
+  });
+
   it('runs a completeness review for NEW apps and adopts the improved result', async () => {
     const ONE = JSON.stringify({ title: 'X', template: 'react-ts', files: [{ path: '/App.tsx', content: 'export default () => null;' }] });
     const TWO = JSON.stringify({ title: 'X', template: 'react-ts', files: [

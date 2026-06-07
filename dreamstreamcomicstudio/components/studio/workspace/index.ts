@@ -33,6 +33,12 @@ export type { ProjectKind } from './projectKind';
 export { ServicesPanel } from './ServicesPanel';
 export { detectServices, buildEnvExample } from './serviceDetect';
 export type { DetectedServices, ServiceId } from './serviceDetect';
+export { InsightsPanel } from './InsightsPanel';
+export type { InsightsPanelProps } from './InsightsPanel';
+export {
+  analyzeProject, insightsSummary, issuesToFixPrompt, suggestNextSteps, insightsToMarkdown,
+} from './codeInsights';
+export type { CodeInsights, CodeIssue, InsightSeverity } from './codeInsights';
 export {
   useStudioWorkspace,
   isPathDirty,
