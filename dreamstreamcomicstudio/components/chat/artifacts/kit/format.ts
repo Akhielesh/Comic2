@@ -25,6 +25,16 @@ export const formatPrice = (n?: number, currency = 'USD'): string => {
   return `${sym}${n.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals })}`;
 };
 
+/** Like formatPrice, but compacts large values ("$3.12T") so table columns don't overflow. */
+export const formatPriceCompact = (n?: number, currency = 'USD'): string => {
+  if (typeof n !== 'number' || !Number.isFinite(n)) return '—';
+  if (Math.abs(n) >= 1_000_000) {
+    const sym = CURRENCY_SYMBOLS[currency] ?? '';
+    return `${sym}${compactNumber(n)}`;
+  }
+  return formatPrice(n, currency);
+};
+
 /** Signed percent, e.g. "+1.39%". */
 export const formatPercent = (n?: number, decimals = 2): string => {
   if (typeof n !== 'number' || !Number.isFinite(n)) return '—';

@@ -104,7 +104,30 @@ const tableTool: ChatTool = {
       rows: {
         type: 'array',
         description: 'Each row is an ARRAY of cells aligned to columns. A cell is a value (string/number) or an object {value, spark:[numbers], color:"#hex", sub:"second line", href:"url"}.',
-        items: { type: 'array', items: {} }
+        items: {
+          type: 'array',
+          // A cell is a primitive value OR a rich object. An explicit union keeps the
+          // schema valid for strict function-calling models (an empty `items: {}` schema
+          // makes some providers reject the whole call).
+          items: {
+            anyOf: [
+              { type: 'string' },
+              { type: 'number' },
+              { type: 'boolean' },
+              { type: 'null' },
+              {
+                type: 'object',
+                properties: {
+                  value: { type: ['string', 'number', 'boolean', 'null'] },
+                  spark: { type: 'array', items: { type: 'number' } },
+                  color: { type: 'string' },
+                  sub: { type: 'string' },
+                  href: { type: 'string' }
+                }
+              }
+            ]
+          }
+        }
       },
       sort: {
         type: 'object',

@@ -19,9 +19,8 @@ const tone = (value: number | undefined): { bg: string; fg: string } => {
   return { bg: `rgb(${r}, ${g}, ${b})`, fg: intensity > 0.45 ? '#ffffff' : '#0f172a' };
 };
 
-const Tile: React.FC<{ cell: HeatmapCell; unit: string }> = ({ cell, unit }) => {
+const Tile: React.FC<{ cell: HeatmapCell; unit: string; grow: number }> = ({ cell, unit, grow }) => {
   const { bg, fg } = tone(cell.value);
-  const grow = cell.weight && cell.weight > 0 ? Math.max(1, Math.min(6, cell.weight)) : 1;
   const body = (
     <div
       className="flex min-h-[3.5rem] flex-col justify-between rounded-md border border-black/10 p-2 transition-transform hover:-translate-y-0.5"
@@ -39,11 +38,11 @@ const Tile: React.FC<{ cell: HeatmapCell; unit: string }> = ({ cell, unit }) => 
   return cell.href ? <a href={cell.href} target="_blank" rel="noopener noreferrer" className="contents">{body}</a> : body;
 };
 
-const Group: React.FC<{ group: HeatmapGroup; unit: string }> = ({ group, unit }) => (
+const Group: React.FC<{ group: HeatmapGroup; unit: string; growOf: (w?: number) => number }> = ({ group, unit, growOf }) => (
   <div>
     {group.name && <div className="mb-1 px-1 text-[10px] font-bold uppercase tracking-wide text-slate-400">{group.name}</div>}
     <div className="flex flex-wrap gap-1.5">
-      {group.cells.map((cell, i) => <Tile key={i} cell={cell} unit={unit} />)}
+      {group.cells.map((cell, i) => <Tile key={i} cell={cell} unit={unit} grow={growOf(cell.weight)} />)}
     </div>
   </div>
 );
@@ -57,6 +56,23 @@ export const HeatmapCard: React.FC<{ data: HeatmapArtifact }> = ({ data }) => {
       : [];
   if (!groups.length) return null;
 
+  // Tile size ∝ weight, but NORMALIZED across all tiles. Raw weights like market caps
+  // (1e12…) would otherwise every clamp to the max and render uniform tiles; map the
+  // observed [min,max] onto a 1–6 grow range so sizes are actually proportional. Small
+  // pre-scaled weights (already 1–6) pass through unchanged.
+  const weights = groups
+    .flatMap((g) => g.cells)
+    .map((c) => (typeof c.weight === 'number' && c.weight > 0 ? c.weight : null))
+    .filter((w): w is number => w !== null);
+  const maxW = weights.length ? Math.max(...weights) : 0;
+  const minW = weights.length ? Math.min(...weights) : 0;
+  const growOf = (w?: number): number => {
+    if (typeof w !== 'number' || w <= 0) return 1;
+    if (maxW <= 6 && minW >= 1) return Math.max(1, Math.min(6, w)); // already small ints
+    if (maxW === minW) return 3;
+    return 1 + (5 * (w - minW)) / (maxW - minW);
+  };
+
   return (
     <Surface
       accent="#0ea5e9"
@@ -69,7 +85,7 @@ export const HeatmapCard: React.FC<{ data: HeatmapArtifact }> = ({ data }) => {
       footer={data.caption ? <div className="text-[10px] font-medium text-slate-400">{data.caption}</div> : undefined}
     >
       <div className="space-y-3 p-3 pt-1">
-        {groups.map((g, i) => <Group key={i} group={g} unit={unit} />)}
+        {groups.map((g, i) => <Group key={i} group={g} unit={unit} growOf={growOf} />)}
       </div>
     </Surface>
   );

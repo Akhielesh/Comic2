@@ -7,7 +7,7 @@ import type {
   DataTableRowCell,
   DataTableValue
 } from '../../../apiTypes';
-import { Surface, Sparkline, resolveTheme, formatPrice, formatPercent, formatSigned, compactNumber } from './kit';
+import { Surface, Sparkline, resolveTheme, formatPriceCompact, formatPercent, formatSigned, compactNumber } from './kit';
 import type { PaletteName } from './kit';
 
 // The universal, schema-driven data TABLE — the tabular counterpart to ChartCard.
@@ -63,7 +63,7 @@ const CellBody: React.FC<{ col: DataTableColumn; raw: DataTableRowCell; accent: 
     const color = pos ? '#059669' : neg ? '#dc2626' : '#64748b';
     body = <span className="font-bold" style={{ color }}>{kind === 'deltaPercent' ? formatPercent(num) : formatSigned(num)}</span>;
   } else if (kind === 'currency' && hasNum) {
-    body = <span className="font-semibold text-slate-800">{formatPrice(num, currency)}</span>;
+    body = <span className="font-semibold text-slate-800">{formatPriceCompact(num, currency)}</span>;
   } else if (kind === 'percent' && hasNum) {
     body = <span className="font-semibold text-slate-800">{`${num.toFixed(2)}%`}</span>;
   } else if (kind === 'number' && hasNum) {
