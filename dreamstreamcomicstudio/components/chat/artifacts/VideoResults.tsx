@@ -62,7 +62,7 @@ export const VideoResults: React.FC<{ data: VideoResultsArtifact }> = ({ data })
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}
-                  className="absolute top-1 right-1 p-1 rounded bg-black/60 text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/80"
+                  className="absolute top-1 right-1 p-1 rounded bg-black/60 text-white hover-reveal hover:bg-black/80"
                   title="Open original"
                 >
                   <ExternalLink className="w-3 h-3" />

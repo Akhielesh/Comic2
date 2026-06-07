@@ -25,6 +25,7 @@ import { DEV_TOOLS } from './dev.js';
 import { FINANCE_TERMINAL_TOOLS } from './financeTerminal.js';
 import { NANGO_TOOLS } from './nango.js';
 import { VIDEO_TOOLS } from './videoRender.js';
+import { LIVE_TEMPLATE_TOOLS } from './liveTemplateTool.js';
 import { generateAppTool } from './codeStudio.js';
 
 export type { ChatTool, ToolExecResult, ToolContext } from './types.js';
@@ -514,7 +515,9 @@ const FREE_API_TOOLS: ChatTool[] = [
   // tool names resolve; each call returns a clear "not configured" notice until NANGO_SECRET_KEY is set.
   ...NANGO_TOOLS,
   // HTML→MP4 rendering via a self-hosted HyperFrames worker (not configured → clear notice).
-  ...VIDEO_TOOLS
+  ...VIDEO_TOOLS,
+  // Data-driven live HTML artifacts (html_template_v1) — pure + local.
+  ...LIVE_TEMPLATE_TOOLS
 ];
 
 /** All context-free built-in tools, keyed by the name the model/clients reference. */
@@ -534,9 +537,9 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
 /** Names of tools that are built per-request with situational context. */
 const CONTEXTUAL_TOOL_NAMES = ['get_news', 'find_places'] as const;
 
-// Meta-tools built outside resolveTools (they need provider creds), but still part
-// of the client allowlist. `run_agent_swarm` is wired in by the chat route.
-const META_TOOL_NAMES = ['run_agent_swarm'] as const;
+// Meta-tools built outside resolveTools (they need provider creds / user keys), but still part
+// of the client allowlist. `run_agent_swarm` and `generate_image` are wired in by the routes.
+const META_TOOL_NAMES = ['run_agent_swarm', 'generate_image'] as const;
 
 /** The set of tool names a client is allowed to enable (allowlist). */
 export const KNOWN_TOOL_NAMES = [...Object.keys(STATIC_TOOLS), ...CONTEXTUAL_TOOL_NAMES, ...META_TOOL_NAMES];

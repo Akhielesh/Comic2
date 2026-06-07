@@ -425,11 +425,25 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['call api', 'proxy', 'fetch from', 'api request', 'get data from', 'post to', 'nango']
   },
   {
+    name: 'generate_image', label: 'Image generation', category: 'dev', kind: 'builtin', provider: 'Gemini · Ideogram · Flux (BYOK — your account)',
+    description: 'Generate a real image from a text prompt using your own image-generation account key (Gemini/Ideogram/Flux). For illustrations, hero/cover images, icons, OG/share images.',
+    auth: 'required', authEnv: 'GEMINI_API_KEY', rateLimit: "Your provider account's limits",
+    dataShape: 'An image (shown to the user) + a short confirmation.', docsUrl: 'https://ai.google.dev/gemini-api/docs/imagen',
+    keywords: ['image', 'generate image', 'illustration', 'picture', 'art', 'hero image', 'icon', 'og image', 'cover', 'render image', 'imagen', 'ideogram', 'flux']
+  },
+  {
     name: 'render_video', label: 'HTML → MP4 video', category: 'dev', kind: 'api', provider: 'HyperFrames render worker (self-hosted)',
     description: 'Render a self-contained HTML/CSS/GSAP animation to an MP4 via a self-hosted headless-Chromium + ffmpeg worker. For motion graphics, promos, explainers.',
     auth: 'required', authEnv: 'STUDIO_VIDEO_RENDER_URL', rateLimit: 'Self-hosted (your infra)',
     dataShape: 'Text: a URL/path to the rendered MP4.', docsUrl: 'https://github.com/nexu-io/html-video',
     keywords: ['video', 'mp4', 'render', 'animation', 'motion graphics', 'hyperframes', 'html to video', 'promo', 'explainer']
+  },
+  {
+    name: 'render_live_template', label: 'Live data artifact', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (html_template_v1)',
+    description: 'Render a data-driven HTML artifact from an html_template_v1 template ({{ dot.path }} bindings, no JS) + a data object — for live dashboards/reports that re-render from data.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Safe, HTML-escaped interpolated HTML.', docsUrl: 'https://dreamstream.app',
+    keywords: ['live', 'dashboard', 'template', 'data-driven', 'report', 'binding', 'interpolate', 'live artifact']
   },
   // ---------------------------------------------------------------- dataviz -----
   {

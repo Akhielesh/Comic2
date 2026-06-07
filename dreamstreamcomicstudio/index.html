@@ -8,10 +8,17 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <title>DreamStream Studio — Comics, AI Chat &amp; Code</title>
+    <!-- Warm up connections to the external origins we pull from, so a slow handshake
+         doesn't widen the window before styles/fonts arrive. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin />
+    <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com" />
     <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Comic+Neue:wght@400;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
-    <!-- PDF Generation Libraries -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <!-- PDF Generation Libraries (export-only; deferred so a slow/blocked CDN can't
+         stall first paint — they're not needed until the user exports a PDF). -->
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
   <script type="importmap">
 {
   "imports": {
@@ -44,14 +51,57 @@
     border-left: 2px solid #000;
   }
   .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: #FACC15; 
+    background: #FACC15;
     border: 2px solid #000;
   }
+  /* First-paint splash, rendered inside #root and styled with INLINE CSS only (never
+     depends on the bundled Tailwind sheet). Guarantees a branded, styled first paint —
+     so the app can never show raw/unstyled content while JS/CSS are still loading.
+     React replaces #root's contents on mount, removing it automatically. */
+  #app-splash {
+    position: fixed; inset: 0; z-index: 9999;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 16px; background-color: #3B82F6; color: #ffffff;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  #app-splash .spinner {
+    width: 46px; height: 46px; border-radius: 9999px;
+    border: 5px solid rgba(255,255,255,0.35); border-top-color: #FACC15;
+    animation: appSplashSpin 0.8s linear infinite;
+  }
+  #app-splash .brand { font-weight: 800; font-size: 18px; letter-spacing: 0.02em; }
+  #app-splash .slow { display: none; max-width: 300px; text-align: center; font-size: 13px; line-height: 1.5; }
+  #app-splash .slow button {
+    margin-top: 10px; font-weight: 700; color: #18181b; background: #FACC15;
+    border: 2px solid #000; border-radius: 8px; padding: 8px 16px; cursor: pointer;
+  }
+  @keyframes appSplashSpin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { #app-splash .spinner { animation: none; } }
 </style>
 <link rel="stylesheet" href="/index.css">
 </head>
   <body class="text-slate-900 antialiased selection:bg-brand-yellow selection:text-black">
-    <div id="root"></div>
+    <div id="root">
+      <!-- Styled (inline-CSS) loading splash. React clears #root on mount and this vanishes. -->
+      <div id="app-splash">
+        <div class="spinner"></div>
+        <div class="brand">DreamStream Studio</div>
+        <div class="slow">
+          This is taking longer than usual.
+          <br />
+          <button type="button" onclick="window.location.reload()">Reload</button>
+        </div>
+      </div>
+    </div>
+    <script>
+      // Watchdog: if the app JS hasn't mounted (splash still present) after a while —
+      // e.g. a chunk/CDN failed to load — surface a styled Reload prompt instead of an
+      // indefinite spinner. Harmless once React has replaced #root.
+      setTimeout(function () {
+        var slow = document.querySelector('#app-splash .slow');
+        if (slow) slow.style.display = 'block';
+      }, 12000);
+    </script>
   <script type="module" src="/index.tsx"></script>
 </body>
 </html>

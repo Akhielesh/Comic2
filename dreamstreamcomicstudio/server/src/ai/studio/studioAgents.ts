@@ -37,13 +37,15 @@ export interface StudioAgentDef {
 // papers and live data — instead of building blind. resolveTools ignores unknown names, so an
 // over-broad list is harmless; this deliberately gives the team generous access.
 const RESEARCH_TOOLS = ['web_search', 'wiki_lookup', 'github_repo', 'npm_package', 'pypi_package', 'search_papers', 'search_books'];
-const DESIGN_TOOLS = ['web_search', 'image_search'];
+const DESIGN_TOOLS = ['web_search', 'image_search', 'generate_image'];
 // Discover + connect + call 800+ third-party APIs via a self-hosted Nango (when configured) +
 // render HTML→MP4 via the self-hosted HyperFrames worker.
 const INTEGRATION_TOOLS = ['web_search', 'github_repo', ...NANGO_TOOL_NAMES, ...VIDEO_TOOL_NAMES];
 const LIVE_DATA_TOOLS = [
   ...RESEARCH_TOOLS, 'image_search', 'video_search',
   'get_news', 'get_stock', 'crypto_price', 'exchange_rate', 'get_weather', 'find_places', 'show_map',
+  // Data-driven live HTML artifacts (html_template_v1).
+  'render_live_template',
   // Connect & call 800+ third-party APIs (OAuth + proxy) via a self-hosted Nango, when configured.
   ...NANGO_TOOL_NAMES
 ];

@@ -254,55 +254,55 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
       />
 
       {/* Reader Controls */}
-      <header className="h-16 bg-white border-b-4 border-black flex items-center justify-between px-6 shadow-lg shrink-0">
+      <header className="h-16 bg-white border-b-4 border-black flex items-center justify-between gap-2 px-3 sm:px-6 shadow-lg shrink-0">
         <div className="flex items-center gap-3 min-w-0">
-          <h1 className="font-display text-2xl text-black truncate">{project.name}</h1>
+          <h1 className="font-display text-lg sm:text-2xl text-black truncate">{project.name}</h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <button
             onClick={() => onNavigate?.('gallery')}
-            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50"
+            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-slate-50"
           >
             Library
           </button>
           <button
             onClick={() => onNavigate?.('dashboard')}
-            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50"
+            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-slate-50"
           >
             Dashboard
           </button>
           <button
             onClick={() => setShowStory((prev) => !prev)}
-            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50 flex items-center gap-1"
+            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-slate-50 flex items-center gap-1"
           >
             <BookOpen className="w-4 h-4" /> Story
           </button>
           <button
             onClick={() => setShowInfo((prev) => !prev)}
-            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50"
+            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-slate-50"
           >
             Info
           </button>
           <button
             onClick={() => setShowComments((prev) => !prev)}
-            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50 flex items-center gap-1"
+            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-slate-50 flex items-center gap-1"
           >
             <MessageSquareText className="w-4 h-4" /> Comments
           </button>
           <button
             onClick={() => setReaderMode(readerMode === 'scroll' ? 'flip' : 'scroll')}
-            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-brand-yellow"
+            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-brand-yellow"
           >
             {readerMode === 'scroll' ? 'Page Flip' : 'Scroll'}
           </button>
           <button
             onClick={toggleFullscreen}
-            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50 flex items-center gap-1"
+            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-slate-50 flex items-center gap-1"
           >
             {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
             {isFullscreen ? 'Exit' : 'Full'}
           </button>
-          <button onClick={handleAttemptClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+          <button onClick={handleAttemptClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors shrink-0">
             <X className="w-6 h-6" />
           </button>
         </div>
@@ -365,7 +365,7 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
               </div>
             </div>
           ) : (
-            <div className="h-full flex flex-col items-center justify-center p-6">
+            <div className="h-full flex flex-col items-center justify-center p-3 sm:p-6">
               <div className="max-w-4xl w-full bg-white shadow-2xl border-4 border-black rounded-xl overflow-hidden">
                 {showStory && (
                   <div className="p-4 border-b-4 border-black bg-white">
@@ -378,7 +378,7 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
                 {pages.length > 0 ? (
                   <div className={`relative bg-white w-fit max-w-full mx-auto ${flipDirection === 'next' ? 'animate-page-flip-next' : flipDirection === 'prev' ? 'animate-page-flip-prev' : ''}`}>
                     {pages[pageIndex]?.imageUrl ? (
-                      <img src={pages[pageIndex].imageUrl} alt="Comic page" className="block max-h-[78vh] w-auto max-w-full mx-auto object-contain" />
+                      <img src={pages[pageIndex].imageUrl} alt="Comic page" className="block max-h-[62vh] sm:max-h-[78vh] w-auto max-w-full mx-auto object-contain" />
                     ) : (
                       <div className="w-full min-h-[420px] flex items-center justify-center bg-amber-50 text-amber-800 text-sm font-bold border-b-2 border-black">
                         {pages[pageIndex]?.type === 'panel' ? 'Image missing for this panel' : 'Image missing for this page'}
@@ -395,11 +395,11 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
                   <div className="p-10 text-center text-slate-400 font-display text-2xl">This comic hasn't been drawn yet!</div>
                 )}
                 <div className="flex items-center justify-between p-4 border-t-4 border-black bg-slate-50">
-                  <button onClick={goPrev} className="px-3 py-2 border-2 border-black rounded-lg text-xs font-bold flex items-center gap-1 bg-white">
+                  <button onClick={goPrev} className="px-4 py-2.5 sm:py-2 border-2 border-black rounded-lg text-sm sm:text-xs font-bold flex items-center gap-1 bg-white active:translate-y-0.5 transition-transform">
                     <ChevronLeft className="w-4 h-4" /> Prev
                   </button>
                   <div className="text-xs font-bold">{pageIndex + 1} / {Math.max(pages.length, 1)}</div>
-                  <button onClick={goNext} className="px-3 py-2 border-2 border-black rounded-lg text-xs font-bold flex items-center gap-1 bg-white">
+                  <button onClick={goNext} className="px-4 py-2.5 sm:py-2 border-2 border-black rounded-lg text-sm sm:text-xs font-bold flex items-center gap-1 bg-white active:translate-y-0.5 transition-transform">
                     Next <ChevronRight className="w-4 h-4" />
                   </button>
                 </div>
@@ -409,8 +409,13 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
         </div>
 
         {showInfo && (
-          <aside className="w-full md:w-80 border-l-4 border-black bg-white p-4 overflow-y-auto">
-            <h2 className="font-display text-xl mb-3">Comic Info</h2>
+          <aside className="w-full md:w-80 shrink-0 border-l-4 border-black bg-white p-4 overflow-y-auto">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="font-display text-xl">Comic Info</h2>
+              <button onClick={() => setShowInfo(false)} className="p-2 -mr-2 rounded-full hover:bg-slate-100 md:hidden" aria-label="Close info">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
             <div className="space-y-3 text-sm">
               <div>
                 <div className="text-xs uppercase font-bold text-slate-500">Title</div>
