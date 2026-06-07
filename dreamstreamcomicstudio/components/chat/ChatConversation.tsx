@@ -10,7 +10,7 @@ import type { McpServerConfig } from '../../apiTypes';
 import { estimateTokens } from '../../services/chatUtils';
 import { ChatMessageView } from './ChatMessageView';
 import { ChatComposer } from './ChatComposer';
-import type { ChatSkill } from '../../services/chatSkills';
+import { CHAT_SKILLS, type ChatSkill } from '../../services/chatSkills';
 import { ChatContextMeter } from './ChatContextMeter';
 import { ChatModelSuggester } from './ChatModelSuggester';
 
@@ -23,6 +23,10 @@ interface ChatConversationProps {
   onOpenModelPicker: () => void;
   onSend: (text: string, attachments: ChatAttachment[]) => void;
   onRunSkill: (skill: ChatSkill, arg: string) => void;
+  /** Click a skill suggestion → prefill the composer with its command. */
+  onPickSkill: (skill: ChatSkill) => void;
+  seedText?: string;
+  onSeedConsumed?: () => void;
   onStop: () => void;
   onBranch: (turnId: string, chooseNewModel: boolean) => void;
   onRegenerate: (turnId: string) => void;
@@ -124,6 +128,9 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
   onOpenModelPicker,
   onSend,
   onRunSkill,
+  onPickSkill,
+  seedText,
+  onSeedConsumed,
   onStop,
   onBranch,
   onRegenerate,
@@ -271,6 +278,25 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
               ))}
             </div>
 
+            {/* Skills: type `/` in the box, or tap one to get started. */}
+            <div className="w-full mt-4">
+              <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-400">
+                Skills — type <code className="rounded bg-slate-100 px-1">/</code> in the box
+              </div>
+              <div className="flex flex-wrap justify-center gap-1.5">
+                {CHAT_SKILLS.slice(0, 7).map((s) => (
+                  <button
+                    key={s.command}
+                    onClick={() => onPickSkill(s)}
+                    title={s.description}
+                    className="flex items-center gap-1 rounded-full border-2 border-black bg-white px-2.5 py-1 text-[11px] font-bold shadow-comic hover:bg-fuchsia-100 hover:translate-y-[1px]"
+                  >
+                    <span>{s.emoji}</span> /{s.command}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="w-full mt-4 flex flex-col items-center">
               <ChatModelSuggester models={suggestModels} onStart={onStartWithModel} />
             </div>
@@ -324,6 +350,8 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
         onToggleMcpServer={onToggleMcpServer}
         onSend={onSend}
         onRunSkill={onRunSkill}
+        seedText={seedText}
+        onSeedConsumed={onSeedConsumed}
         onStop={onStop}
       />
     </div>
