@@ -1320,6 +1320,51 @@ export interface SwarmTraceArtifact {
   agents: SwarmAgentRun[];
 }
 
+// ── Recipes ─────────────────────────────────────────────────────────────────
+// A reusable, parameterized agent workflow (native port of goose recipes). These
+// mirror the server schema in server/src/ai/recipes/schema.ts.
+
+export type RecipeParameterType = 'string' | 'number' | 'boolean' | 'select';
+export type RecipeRequirement = 'required' | 'optional' | 'user_prompt';
+
+export interface RecipeParameterView {
+  key: string;
+  input_type: RecipeParameterType;
+  requirement: RecipeRequirement;
+  description?: string;
+  default?: string | number | boolean;
+  options?: string[];
+}
+
+/** A recipe summary card (browse / save confirmation). */
+export interface RecipeCardArtifact {
+  id?: string;
+  slug?: string;
+  title: string;
+  description: string;
+  instructions?: string;
+  prompt?: string;
+  parameters?: RecipeParameterView[];
+  tools?: string[];
+  agents?: string[];
+  swarm?: boolean;
+  activities?: string[];
+  builtin?: boolean;
+}
+
+/** A record of a recipe run: which recipe, with which parameters, and the outcome. */
+export interface RecipeRunArtifact {
+  recipeId?: string;
+  title: string;
+  description?: string;
+  params: { key: string; value: string }[];
+  mode: 'swarm' | 'agent';
+  status: 'done' | 'error';
+  /** Structured output when the recipe declared a response schema. */
+  structured?: unknown;
+  activities?: string[];
+}
+
 export type ChatCitation = { url: string; title?: string };
 
 export type ChatResponse = {

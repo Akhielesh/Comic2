@@ -3,6 +3,7 @@ import type { ChatRequest, ChatResponse, ChatClientContext } from '../../../apiT
 import { runChat, type ChatReasoningLevel } from '../ai/chat.js';
 import { runSwarm } from '../ai/agents/orchestrator.js';
 import { makeSwarmTool, SWARM_TOOL_NAME } from '../ai/agents/swarmTool.js';
+import { makeRecipeTools } from '../ai/recipes/recipeTool.js';
 import { sanitizeCustomAgents } from '../ai/agents/registry.js';
 import type { AgentDefinition } from '../ai/agents/registry.js';
 import { loadCustomAgentDefinitions } from '../services/customAgents.js';
@@ -144,7 +145,9 @@ type PreparedChat = {
 type PrepResult = { error: { status: number; body: unknown } } | { prepared: PreparedChat };
 
 // Shared request validation + resolution for both the JSON and streaming handlers.
-const prepareChat = async (req: any): Promise<PrepResult> => {
+// Exported so sibling routes (e.g. /api/recipes) resolve provider, model, billing
+// context and user memory identically instead of duplicating that logic.
+export const prepareChat = async (req: any): Promise<PrepResult> => {
   const body = (req.body || {}) as Partial<ChatRequest> & { source?: string };
 
   const resolved = resolveChatProvider(req, body.source);
@@ -263,22 +266,40 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
   const requestAgentIds = new Set(requestCustomAgents.map((a) => a.id));
   const customAgents = [...requestCustomAgents, ...savedAgents.filter((a) => !requestAgentIds.has(a.id))];
 
-  const metaTools: ChatTool[] =
-    resolved.provider === 'openrouter' && swarmRequested
-      ? [
-          makeSwarmTool({
-            provider: resolved.provider,
-            apiKey: resolved.apiKey,
-            model,
-            messages,
-            systemPrompt,
-            clientContext,
-            extraAgents: customAgents,
-            fallbackModel: TEXT_FALLBACK,
-            timeoutMs: TEXT_REQUEST_TIMEOUT_MS
-          })
-        ]
-      : [];
+  const metaTools: ChatTool[] = [];
+  if (resolved.provider === 'openrouter' && swarmRequested) {
+    metaTools.push(
+      makeSwarmTool({
+        provider: resolved.provider,
+        apiKey: resolved.apiKey,
+        model,
+        messages,
+        systemPrompt,
+        clientContext,
+        extraAgents: customAgents,
+        fallbackModel: TEXT_FALLBACK,
+        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+      })
+    );
+  }
+  // Recipe meta-tools: let the model run a saved recipe or crystallize a good workflow
+  // into a new one mid-chat (OpenRouter only — needs function calling). This is how the
+  // agents grow and reuse their own skills.
+  if (resolved.provider === 'openrouter') {
+    metaTools.push(
+      ...makeRecipeTools({
+        provider: resolved.provider,
+        apiKey: resolved.apiKey,
+        model,
+        messages,
+        systemPrompt,
+        clientContext,
+        userId: req.user?.id,
+        fallbackModel: TEXT_FALLBACK,
+        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+      })
+    );
+  }
 
   // Custom MCP servers (OpenRouter only): list their tools and wrap them. Best-effort —
   // a broken/blocked server is skipped rather than failing the chat. Sources are the
