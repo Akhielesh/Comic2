@@ -115,6 +115,15 @@ export const ASSISTANT_GEMINI_API_KEY = process.env.ASSISTANT_GEMINI_API_KEY || 
 export const GEMINI_BASE_URL = process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com';
 
 export const TEXT_REQUEST_TIMEOUT_MS = parseIntegerEnv(process.env.TEXT_REQUEST_TIMEOUT_MS, 60_000, 'TEXT_REQUEST_TIMEOUT_MS', 1_000);
+// Maximum output (completion) tokens for the AI Chat Platform. The old flat 2048 cap
+// truncated long answers AND — critically — cut off generate_app/render_chart tool-call
+// arguments mid-JSON (the whole app/chart rides in those arguments), so "build me an
+// app/chart" silently produced nothing. Raised so chat behaves like a pro assistant.
+export const CHAT_MAX_OUTPUT_TOKENS = parseIntegerEnv(process.env.CHAT_MAX_OUTPUT_TOKENS, 8192, 'CHAT_MAX_OUTPUT_TOKENS', 256);
+// Hard backstop for a single streaming model call. The streaming timeout below is an IDLE
+// window (reset on every token) so legitimately long answers/code generation finish; this
+// caps total wall-clock so a dribbling/stuck upstream can't stream forever.
+export const CHAT_STREAM_MAX_TOTAL_MS = parseIntegerEnv(process.env.CHAT_STREAM_MAX_TOTAL_MS, 300_000, 'CHAT_STREAM_MAX_TOTAL_MS', 10_000);
 export const IMAGE_REQUEST_TIMEOUT_MS = parseIntegerEnv(process.env.IMAGE_REQUEST_TIMEOUT_MS, 60_000, 'IMAGE_REQUEST_TIMEOUT_MS', 1_000);
 export const ASSISTANT_REQUEST_TIMEOUT_MS = parseIntegerEnv(process.env.ASSISTANT_REQUEST_TIMEOUT_MS, 30_000, 'ASSISTANT_REQUEST_TIMEOUT_MS', 1_000);
 

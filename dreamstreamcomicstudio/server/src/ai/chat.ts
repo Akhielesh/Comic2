@@ -15,7 +15,7 @@ import { buildUsage } from './usage.js';
 import type { AIProviderId } from './providers/types.js';
 import { toToolSpec, type ChatTool } from './tools/registry.js';
 import { buildJsonToolSystemBlock, extractToolCall, stripToolCallJson, formatToolResult } from './tools/jsonToolProtocol.js';
-import { JSON_TOOL_PROTOCOL_ENABLED } from '../config.js';
+import { JSON_TOOL_PROTOCOL_ENABLED, CHAT_MAX_OUTPUT_TOKENS } from '../config.js';
 
 export type ChatReasoningLevel = 'none' | 'low' | 'medium' | 'high';
 
@@ -139,15 +139,25 @@ ${lines.join('\n')}
 - Report measurements in the user's preferred units. Do not claim you don't know the date or the user's general location — it is given above.`;
 };
 
-const reasoningMaxTokens = (level?: ChatReasoningLevel): number => {
-  switch (level) {
-    case 'high':
-      return 4096;
-    case 'medium':
-      return 3072;
-    default:
-      return 2048;
-  }
+// Output-token budget for a chat answer. The old flat 2048 cap truncated long answers and —
+// worse — cut off generate_app/render_chart tool-call arguments mid-JSON (the entire app or
+// chart rides inside those arguments), so "build me an app/chart" silently produced nothing.
+// OpenRouter (the tool-calling path) gets the full budget; reasoning models get extra headroom
+// because the hidden reasoning trace is billed against the same completion budget. NVIDIA NIMs
+// are text-only (no tool calls) and some cap completion lower, so they stay conservative.
+const answerTokenBudget = (provider: AIProviderId, level?: ChatReasoningLevel): number => {
+  const reasoningHeadroom =
+    provider === 'openrouter'
+      ? level === 'high'
+        ? 4096
+        : level === 'medium'
+          ? 3072
+          : level === 'low'
+            ? 2048
+            : 0
+      : 0;
+  const base = provider === 'openrouter' ? CHAT_MAX_OUTPUT_TOKENS : Math.min(CHAT_MAX_OUTPUT_TOKENS, 4096);
+  return base + reasoningHeadroom;
 };
 
 const dedupeCitations = (citations: { url: string; title?: string }[]) => {
@@ -224,7 +234,7 @@ export const runChat = async (
   const baseReq = {
     model: params.model,
     temperature: typeof params.temperature === 'number' ? params.temperature : 0.7,
-    maxTokens: params.maxTokens ?? reasoningMaxTokens(params.reasoningLevel),
+    maxTokens: params.maxTokens ?? answerTokenBudget(params.provider, params.reasoningLevel),
     timeoutMs: params.timeoutMs,
     retries: 2,
     fallbackModel: params.fallbackModel,

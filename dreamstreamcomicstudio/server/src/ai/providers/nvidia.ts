@@ -57,6 +57,13 @@ const nvidiaFetch = async <T = any>(
       throw new Error(`NVIDIA ${path} failed: ${res.status} ${res.statusText} ${errBody.slice(0, 500)}`);
     }
     return (await res.json()) as T;
+  } catch (err) {
+    // Map our own timeout abort (a bare DOMException "This operation was aborted") to an
+    // actionable message instead of leaking that opaque string to the user.
+    if (controller.signal.aborted) {
+      throw new Error(`The model took too long to respond (timed out after ${Math.round(timeoutMs / 1000)}s). Please try again, or pick a faster model.`);
+    }
+    throw err;
   } finally {
     clearTimeout(timer);
   }

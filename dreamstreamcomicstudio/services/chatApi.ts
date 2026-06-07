@@ -23,6 +23,9 @@ const isTransportError = (err: unknown): boolean => {
   );
 };
 
+// Re-exported from the dependency-free module so existing importers keep working.
+export { friendlyChatError } from './chatErrors';
+
 /** Admin-only: live system dashboard (capabilities, tool health, limits, gaps). */
 export const getSystemDashboard = (): Promise<SystemDashboard> => get<SystemDashboard>('/api/system/dashboard');
 

@@ -20,7 +20,7 @@ import { getCapabilities } from '../../services/modelCapabilities';
 import { fetchModelCatalog, type CatalogModel } from '../../services/modelCatalog';
 import type { ChatReasoningLevel, ChatRequestMessage, ChatMessagePart, UniversalAssistantContext } from '../../apiTypes';
 import type { Project } from '../../types';
-import { sendChatMessageStream, runSwarmStream, updateChatMemory } from '../../services/chatApi';
+import { sendChatMessageStream, runSwarmStream, updateChatMemory, friendlyChatError } from '../../services/chatApi';
 import { runRecipe } from '../../services/recipes';
 import type { ChatSkill } from '../../services/chatSkills';
 import { gatherClientContext } from '../../services/clientContext';
@@ -625,13 +625,24 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         updateSession(sessionId, (s) => ({ ...s, updatedAt: Date.now() }));
         return;
       }
+      const friendly = friendlyChatError(err);
       updateSession(sessionId, (s) => ({
         ...s,
-        turns: s.turns.map((t) =>
-          t.id === aiTurnId
-            ? { ...t, content: `**Couldn't complete that.** ${(err as Error)?.message || 'The request failed. Check your API key in Settings → API Configuration and try again.'}`, error: true }
-            : t
-        ),
+        turns: s.turns.map((t) => {
+          if (t.id !== aiTurnId) return t;
+          // Keep any answer that already streamed in — don't blow it away with the error
+          // (that was why a long/tool-heavy turn that got cut showed "aborted" and NOTHING
+          // else). Surface the failure as a soft note appended below the partial content.
+          const partial = (t.content || '').trim();
+          if (partial) {
+            return { ...t, content: `${t.content}\n\n---\n*⚠️ Response interrupted: ${friendly}*` };
+          }
+          return {
+            ...t,
+            content: `**Couldn't complete that.** ${friendly} If this keeps happening, check your API key in Settings → API Configuration.`,
+            error: true
+          };
+        }),
         updatedAt: Date.now()
       }));
     } finally {
