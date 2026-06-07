@@ -135,7 +135,12 @@ mcpOutboundRouter.post('/mcp', async (req, res) => {
       })
     );
   }
-  if (method === 'notifications/initialized' || method === 'ping') {
+  // Notifications (no id) MUST get 202 Accepted with no body per the Streamable HTTP spec —
+  // a JSON-RPC result reply to a notification trips strict clients (Claude/Cursor).
+  if (typeof method === 'string' && method.startsWith('notifications/')) {
+    return res.status(202).end();
+  }
+  if (method === 'ping') {
     return res.json(rpcResult(id, {}));
   }
   if (method === 'tools/list') {
