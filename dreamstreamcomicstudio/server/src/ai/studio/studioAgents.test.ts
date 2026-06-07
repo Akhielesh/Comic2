@@ -132,4 +132,37 @@ describe('runStudioAgentsParallel — parallel review → single synthesis', () 
     expect(synthCalls).toBe(0);
     expect(result.files['/App.tsx']).toBe('base'); // unchanged
   });
+
+  it('computes a composite score and iterates rounds until the ship bar (Design Jury)', async () => {
+    let synth = 0;
+    const result = await runStudioAgentsParallel(
+      { '/App.tsx': 'v0' },
+      ['architecture', 'code'],
+      '',
+      {
+        review: async () => JSON.stringify({ findings: ['/App.tsx: x → y'], score: 5 }),
+        synthesize: async () => { synth += 1; return JSON.stringify({ note: 'fix', files: [{ path: '/App.tsx', content: `v${synth}` }] }); },
+        maxRounds: 2, shipScore: 8,
+      }
+    );
+    expect(synth).toBe(2); // composite 5 < 8 → two synthesis rounds
+    expect(result.score).toBe(5);
+    expect(result.files['/App.tsx']).toBe('v2');
+  });
+
+  it('ships early (no synthesis) once the composite score meets the bar', async () => {
+    let synth = 0;
+    const result = await runStudioAgentsParallel(
+      { '/App.tsx': 'v0' },
+      ['architecture'],
+      '',
+      {
+        review: async () => JSON.stringify({ findings: ['/App.tsx: minor nit'], score: 9 }),
+        synthesize: async () => { synth += 1; return ''; },
+        maxRounds: 2, shipScore: 8,
+      }
+    );
+    expect(synth).toBe(0); // composite 9 ≥ 8 → ship, skip synthesis
+    expect(result.score).toBe(9);
+  });
 });

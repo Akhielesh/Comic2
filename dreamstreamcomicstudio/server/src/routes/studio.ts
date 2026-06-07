@@ -808,11 +808,13 @@ studioRouter.post('/agents', async (req, res, next) => {
     };
 
     const initial = Object.fromEntries(files.map((f) => [f.path, f.content]));
-    // Parallel review → single synthesis: specialists critique concurrently, one writer applies.
+    // Parallel scored review → single synthesis ("Design Jury"): specialists critique + score
+    // concurrently, one writer applies all findings, iterate up to 2 rounds until the ship bar.
     const result = await runStudioAgentsParallel(initial, agentIds, preferences, {
       review: complete,
       synthesize,
-      onEvent: (e) => sse(e.stage, e)
+      onEvent: (e) => sse(e.stage, e),
+      maxRounds: 2
     });
 
     // Persist the refined project (best-effort) so the workspace + history survive reloads.
@@ -832,7 +834,8 @@ studioRouter.post('/agents', async (req, res, next) => {
 
     sse('result', {
       files: Object.entries(result.files).map(([path, content]) => ({ path, content })),
-      trace: result.trace
+      trace: result.trace,
+      score: result.score
     });
     res.end();
   } catch (err) {
