@@ -254,55 +254,55 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
       />
 
       {/* Reader Controls */}
-      <header className="h-16 bg-white border-b-4 border-black flex items-center justify-between px-6 shadow-lg shrink-0">
+      <header className="h-16 bg-white border-b-4 border-black flex items-center justify-between gap-2 px-3 sm:px-6 shadow-lg shrink-0">
         <div className="flex items-center gap-3 min-w-0">
-          <h1 className="font-display text-2xl text-black truncate">{project.name}</h1>
+          <h1 className="font-display text-lg sm:text-2xl text-black truncate">{project.name}</h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <button
             onClick={() => onNavigate?.('gallery')}
-            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50"
+            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-slate-50"
           >
             Library
           </button>
           <button
             onClick={() => onNavigate?.('dashboard')}
-            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50"
+            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-slate-50"
           >
             Dashboard
           </button>
           <button
             onClick={() => setShowStory((prev) => !prev)}
-            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50 flex items-center gap-1"
+            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-slate-50 flex items-center gap-1"
           >
             <BookOpen className="w-4 h-4" /> Story
           </button>
           <button
             onClick={() => setShowInfo((prev) => !prev)}
-            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50"
+            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-slate-50"
           >
             Info
           </button>
           <button
             onClick={() => setShowComments((prev) => !prev)}
-            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50 flex items-center gap-1"
+            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-slate-50 flex items-center gap-1"
           >
             <MessageSquareText className="w-4 h-4" /> Comments
           </button>
           <button
             onClick={() => setReaderMode(readerMode === 'scroll' ? 'flip' : 'scroll')}
-            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-brand-yellow"
+            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-brand-yellow"
           >
             {readerMode === 'scroll' ? 'Page Flip' : 'Scroll'}
           </button>
           <button
             onClick={toggleFullscreen}
-            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 bg-slate-50 flex items-center gap-1"
+            className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-slate-50 flex items-center gap-1"
           >
             {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
             {isFullscreen ? 'Exit' : 'Full'}
           </button>
-          <button onClick={handleAttemptClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors">
+          <button onClick={handleAttemptClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors shrink-0">
             <X className="w-6 h-6" />
           </button>
         </div>
