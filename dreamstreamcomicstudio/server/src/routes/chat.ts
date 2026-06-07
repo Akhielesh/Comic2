@@ -3,6 +3,7 @@ import type { ChatRequest, ChatResponse, ChatClientContext } from '../../../apiT
 import { runChat, type ChatReasoningLevel } from '../ai/chat.js';
 import { runSwarm } from '../ai/agents/orchestrator.js';
 import { makeSwarmTool, SWARM_TOOL_NAME } from '../ai/agents/swarmTool.js';
+import { makeDeepResearchTool } from '../ai/research/deepResearchTool.js';
 import { makeImageTool, imageGenAvailable, type ImageKeys } from '../ai/tools/imageGen.js';
 import { sanitizeCustomAgents } from '../ai/agents/registry.js';
 import type { AgentDefinition } from '../ai/agents/registry.js';
@@ -288,6 +289,24 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   const imageKeys = (req as { apiKeys?: ImageKeys }).apiKeys || {};
   const imageRequested = Array.isArray(body.tools) && body.tools.some((t) => t === 'generate_image');
   if (imageRequested && imageGenAvailable(imageKeys)) metaTools.push(makeImageTool(imageKeys));
+
+  // Deep research as an always-available tool (OpenRouter), so a natural-language request
+  // like "research X thoroughly" triggers the real iterative, citation-grounded engine
+  // instead of a one-shot web_search — not only the /research slash command.
+  if (resolved.provider === 'openrouter') {
+    metaTools.push(
+      makeDeepResearchTool({
+        provider: resolved.provider,
+        apiKey: resolved.apiKey,
+        model,
+        messages,
+        systemPrompt,
+        clientContext,
+        fallbackModel: TEXT_FALLBACK,
+        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+      })
+    );
+  }
 
   // NOTE: recipes are invoked by the USER via `/` slash-commands (see the chat
   // composer command palette), not pushed at the model on every turn. Forcing
