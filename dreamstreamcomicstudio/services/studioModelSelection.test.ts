@@ -23,7 +23,9 @@ describe('studioModelSelection (independent Code Studio coding model)', () => {
     const sel = getStudioModelSelection();
     expect(sel.mode).toBe('auto');
     expect(sel.model).toBeNull();
-    expect(sel.costPref).toBe('free');
+    // Default is the STRONGEST coder ('quality'), not free — weak free coders can't
+    // build real apps (see STUDIO_DEFAULT_SELECTION in studioModelSelection.ts).
+    expect(sel.costPref).toBe('quality');
     expect(sel.creativity).toBe(STUDIO_DEFAULT_CREATIVITY);
     expect(sel.maxIterations).toBe(STUDIO_DEFAULT_MAX_ITERATIONS);
     // Auto sends no model id, so the server free-first picks a proven coder.
