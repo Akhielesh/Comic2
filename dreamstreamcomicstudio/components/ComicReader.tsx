@@ -66,6 +66,18 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
   const [pageIndex, setPageIndex] = useState(0);
   const [flipDirection, setFlipDirection] = useState<'next' | 'prev' | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // On phones, multi-column comic grids (3-up splash, golden-ratio, etc.) are unreadable,
+  // so we collapse every layout to a single vertical column — the standard way comics are
+  // read on mobile. Tracked reactively so rotating the device re-flows immediately.
+  const [isNarrow, setIsNarrow] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 640px)').matches
+  );
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 640px)');
+    const on = () => setIsNarrow(mq.matches);
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, []);
   const readerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const saveTimer = useRef<number | null>(null);
@@ -132,6 +144,7 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
   // renderPanelText removed — use <PanelDialogue /> component instead
 
   const getLayoutClass = () => {
+    if (isNarrow) return 'flex flex-col items-center gap-3';
     switch (project.state.layoutType) {
       case 'webtoon': return 'flex flex-col items-center gap-4';
       case 'strip': return 'flex flex-col gap-2';
@@ -151,6 +164,7 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
   };
 
   const getPanelClass = (idx: number) => {
+    if (isNarrow) return 'w-full max-w-md';
     switch (project.state.layoutType) {
       case 'splash_insets':
         return idx === 0 ? 'col-span-3 row-span-2' : 'col-span-1 row-span-1';
@@ -319,7 +333,7 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
                     </div>
                   </div>
                 )}
-                <div className={`p-8 grid gap-6 ${getLayoutClass()}`}>
+                <div className={`p-4 sm:p-8 ${getLayoutClass()}`}>
                   {allPanelsMissingArt && (
                     <div className="col-span-full text-center py-6 text-amber-700 font-bold border-2 border-amber-400 bg-amber-50 rounded-lg">
                       All panel artwork is currently missing for this comic.

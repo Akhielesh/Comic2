@@ -2,7 +2,11 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#3B82F6" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <title>DreamStream Studio — Comics, AI Chat &amp; Code</title>
     <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Comic+Neue:wght@400;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
     <!-- PDF Generation Libraries -->
@@ -30,6 +34,10 @@
   /* Custom Scrollbar for comic feel */
   .custom-scrollbar::-webkit-scrollbar {
     width: 12px;
+  }
+  /* Thinner scrollbars on touch/small screens so they don't eat horizontal space. */
+  @media (max-width: 767px), (pointer: coarse) {
+    .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
   }
   .custom-scrollbar::-webkit-scrollbar-track {
     background: #18181b; 

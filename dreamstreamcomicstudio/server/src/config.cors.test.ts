@@ -17,6 +17,17 @@ describe("isAllowedOrigin", () => {
     expect(isAllowedOrigin("https://3000-uabc-deadbeef.dreamstreamstudio.ai")).toBe(true);
   });
 
+  it("trusts the live Cloudflare Pages frontend and its preview deploys", () => {
+    expect(isAllowedOrigin("https://comic2.pages.dev")).toBe(true);
+    // Cloudflare preview deploys are <hash>.comic2.pages.dev
+    expect(isAllowedOrigin("https://a1b2c3d4.comic2.pages.dev")).toBe(true);
+  });
+
+  it("does NOT trust unrelated pages.dev sites", () => {
+    expect(isAllowedOrigin("https://evil.pages.dev")).toBe(false);
+    expect(isAllowedOrigin("https://comic2.pages.dev.evil.com")).toBe(false);
+  });
+
   it("rejects the brand domains over plain HTTP", () => {
     expect(isAllowedOrigin("http://dreamstreamstudio.ai")).toBe(false);
   });

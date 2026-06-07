@@ -499,7 +499,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
               (e.target as HTMLInputElement).blur();
             }
           }}
-          className="font-display text-lg bg-transparent border-b-2 border-transparent focus:border-black outline-none min-w-0 flex-1 max-w-[16rem] truncate"
+          className="font-display text-lg bg-transparent border-b-2 border-transparent focus:border-black outline-none min-w-0 flex-1 sm:max-w-[16rem] truncate"
         />
 
         {state.generationStatus?.isActive && (
@@ -531,7 +531,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           </button>
         </div>
       </div>
-      <main className="p-6 max-w-7xl mx-auto w-full flex-1 space-y-4">
+      <main className="p-3 sm:p-6 max-w-7xl mx-auto w-full flex-1 space-y-4">
         {deploymentParity?.mismatch && (
           <div className="max-w-7xl mx-auto border-2 border-amber-500 bg-amber-50 rounded-lg p-3 text-xs font-bold text-amber-800">
             Deployment mismatch detected: frontend `{deploymentParity.frontendGitSha}` vs backend `{deploymentParity.backendGitSha}`.
