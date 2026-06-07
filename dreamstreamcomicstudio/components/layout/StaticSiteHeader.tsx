@@ -169,9 +169,11 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
                 >
                   Sign In
                 </button>
-                {/* New signups are invite-only — collect interest instead of opening registration. */}
+                {/* New signups are invite-only — collect interest instead of opening registration.
+                    Compact label on phones so the header never overflows a ~360px viewport. */}
                 <Button onClick={onRequestAccess ?? onSignIn} size="sm" icon={<Mail size={14} />}>
-                  Request Access
+                  <span className="hidden sm:inline">Request Access</span>
+                  <span className="sm:hidden">Join</span>
                 </Button>
               </>
             )}
