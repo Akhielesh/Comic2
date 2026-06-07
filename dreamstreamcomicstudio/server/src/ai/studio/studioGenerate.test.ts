@@ -1,21 +1,22 @@
 import { describe, it, expect } from 'vitest';
-import { buildGeneratePrompt, parseGeneratedApp, runGenerate } from './studioGenerate.js';
+import { buildGeneratePrompt, parseGeneratedApp, runGenerate, reviewCompleteness } from './studioGenerate.js';
 
 const VALID_APP = JSON.stringify({
   title: 'X', template: 'react-ts', files: [{ path: '/App.tsx', content: 'export default () => null;' }],
 });
 
+// review:false isolates the parse/retry behavior from the new auto-repair + completeness review passes.
 describe('runGenerate (retry)', () => {
   it('returns the app on a valid first answer without retrying', async () => {
     let calls = 0;
-    const art = await runGenerate(async () => { calls++; return VALID_APP; }, { prompt: 'a todo app' });
+    const art = await runGenerate(async () => { calls++; return VALID_APP; }, { prompt: 'a todo app' }, { review: false });
     expect(art).not.toBeNull();
     expect(calls).toBe(1);
   });
 
   it('retries once with a stricter JSON reminder when the first answer is unparseable', async () => {
     const seen: string[] = [];
-    const art = await runGenerate(async (p) => { seen.push(p); return seen.length === 1 ? 'sorry, I can not do that' : VALID_APP; }, { prompt: 'a todo app' });
+    const art = await runGenerate(async (p) => { seen.push(p); return seen.length === 1 ? 'sorry, I can not do that' : VALID_APP; }, { prompt: 'a todo app' }, { review: false });
     expect(art).not.toBeNull();
     expect(seen).toHaveLength(2);
     expect(seen[1]).toContain('Output ONLY the JSON object');
@@ -23,9 +24,57 @@ describe('runGenerate (retry)', () => {
 
   it('returns null when both attempts fail', async () => {
     let calls = 0;
-    const art = await runGenerate(async () => { calls++; return 'not json'; }, { prompt: 'x' });
+    const art = await runGenerate(async () => { calls++; return 'not json'; }, { prompt: 'x' }, { review: false });
     expect(art).toBeNull();
     expect(calls).toBe(2);
+  });
+});
+
+describe('runGenerate (auto-repair + completeness review)', () => {
+  const STUB = JSON.stringify({
+    title: 'G', template: 'react-ts',
+    files: [{ path: '/App.tsx', content: 'export default function App(){ return null; }\n// game loop, setInterval, etc.' }],
+  });
+  const FIXED = JSON.stringify({
+    title: 'G', template: 'react-ts',
+    files: [{ path: '/App.tsx', content: 'export default function App(){ setInterval(() => {}, 16); return null; }' }],
+  });
+
+  it('auto-repairs a static stub issue (comment-only game loop) before returning', async () => {
+    let n = 0;
+    const art = await runGenerate(async () => { n += 1; return n === 1 ? STUB : FIXED; }, { prompt: 'a game' }, { review: false });
+    expect(n).toBe(2); // generate + one repair pass
+    expect(art!.files[0].content).toContain('setInterval(');
+  });
+
+  it('runs a completeness review for NEW apps and adopts the improved result', async () => {
+    const ONE = JSON.stringify({ title: 'X', template: 'react-ts', files: [{ path: '/App.tsx', content: 'export default () => null;' }] });
+    const TWO = JSON.stringify({ title: 'X', template: 'react-ts', files: [
+      { path: '/App.tsx', content: 'export default () => null;' },
+      { path: '/src/engine.ts', content: 'export const tick = () => {};' },
+    ] });
+    let n = 0;
+    const art = await runGenerate(async () => { n += 1; return n === 1 ? ONE : TWO; }, { prompt: 'a game' }); // review defaults on
+    expect(n).toBe(2); // generate (clean) + completeness review
+    expect(art!.files).toHaveLength(2);
+  });
+
+  it('skips the completeness review when refining an existing app', async () => {
+    let n = 0;
+    await runGenerate(async () => { n += 1; return VALID_APP; }, {
+      prompt: 'tweak it', currentFiles: [{ path: '/App.tsx', content: 'export default () => null;' }],
+    });
+    expect(n).toBe(1); // refine → no review pass
+  });
+
+  it('reviewCompleteness keeps the original when the review is degraded (fewer files)', async () => {
+    const original = parseGeneratedApp(JSON.stringify({ title: 'X', template: 'react-ts', files: [
+      { path: '/App.tsx', content: 'export default () => null;' },
+      { path: '/src/a.ts', content: 'export const a = 1;' },
+    ] }))!;
+    const worse = JSON.stringify({ title: 'X', template: 'react-ts', files: [{ path: '/App.tsx', content: 'export default () => null;' }] });
+    const out = await reviewCompleteness(async () => worse, 'a game', original, 'react-ts');
+    expect(out.files).toHaveLength(2); // kept the original, not the degraded review
   });
 });
 

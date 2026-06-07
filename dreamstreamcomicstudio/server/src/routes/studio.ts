@@ -24,7 +24,7 @@ import { evaluateLaunchAllowed } from '../services/studioCaps.js';
 import { sanitizeFiles, deriveProjectName } from '../services/studioFiles.js';
 import { saveProject, listProjects, getProjectWithFiles, deleteProject, listVersions, getVersionFiles } from '../services/studioRepository.js';
 import { runBuildAgent } from '../ai/studio/buildAgent.js';
-import { runGenerate, buildGeneratePrompt, parseGeneratedApp, STRICT_JSON_REMINDER } from '../ai/studio/studioGenerate.js';
+import { runGenerate, buildGeneratePrompt, parseGeneratedApp, STRICT_JSON_REMINDER, reviewCompleteness } from '../ai/studio/studioGenerate.js';
 import { runClarify } from '../ai/studio/studioClarify.js';
 import { runPlan } from '../ai/studio/studioPlan.js';
 import { runStudioAgents, sanitizeAgentIds, studioAgentCatalog, STUDIO_AGENTS } from '../ai/studio/studioAgents.js';
@@ -444,6 +444,19 @@ studioRouter.post('/generate/stream', async (req, res, next) => {
     } catch (err) {
       // Verification/repair is best-effort — never fail the generation over it.
       console.warn('[studio] verify/repair skipped:', (err as Error)?.message);
+    }
+
+    // Functional completeness self-review (new apps only): catch skeletons that "compile" but don't
+    // actually implement the request, and complete them in one pass before handing over.
+    if (!refining) {
+      try {
+        sse('phase', { label: 'Checking it actually works…' });
+        const before = artifact.files.length;
+        artifact = await reviewCompleteness((p) => complete(p, false), prompt, artifact, body.template);
+        sse('phase', { label: artifact.files.length > before ? 'Filled in missing functionality ✓' : 'Looks complete ✓' });
+      } catch (err) {
+        console.warn('[studio] completeness review skipped:', (err as Error)?.message);
+      }
     }
 
     sse('result', { artifact });

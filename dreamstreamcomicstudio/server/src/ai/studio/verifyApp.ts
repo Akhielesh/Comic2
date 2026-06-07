@@ -28,7 +28,15 @@ const CODE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/i;
 
 // Placeholder / truncation markers that mean the model didn't emit complete code.
 const PLACEHOLDER =
-  /(\/\/\s*\.\.\.|\/\*\s*\.\.\.\s*\*\/|\.\.\.\s*rest of|rest of the (code|file|component|implementation)|implementation (goes )?here|your code here|<your code|TODO:?\s*implement|FIXME:?\s*implement)/i;
+  /(\/\/\s*\.\.\.|\/\*\s*\.\.\.\s*\*\/|\.\.\.\s*rest of|rest of the (code|file|component|implementation)|implementation (goes )?here|your code (goes )?here|<your code|TODO:?\s*implement|FIXME:?\s*implement|for brevity|for simplicity|simplified for|in a real (app|game|implementation|world|project)|would (go|be|need) here|not (yet )?implemented|coming soon|placeholder (for|logic|implementation)|stubbed(\s+out)?)/i;
+
+// A real interactive app / game needs a loop or timer. This catches the most common stub: the model
+// writes a COMMENT describing the loop ("// game loop, setInterval, etc.") but never calls one — so
+// the core mechanic is missing even though the file "compiles". (The generated Retro Pac-Man failed
+// exactly here: `// Game initialization logic, setInterval for game loop, etc.` with no real loop.)
+const LOOP_IN_COMMENT =
+  /\/\/[^\n]*\b(game ?loop|render ?loop|animation ?loop|update loop|game (initialization )?logic|setinterval|requestanimationframe)\b|\/\*[\s\S]*?\b(game ?loop|setinterval|requestanimationframe)\b[\s\S]*?\*\//i;
+const LOOP_CALL = /\b(setInterval|setTimeout|requestAnimationFrame)\s*\(/;
 
 const EXT_CANDIDATES = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json', '.css', '.scss', '.less'];
 const INDEX_CANDIDATES = ['/index.ts', '/index.tsx', '/index.js', '/index.jsx'];
@@ -104,6 +112,18 @@ export const verifyGeneratedApp = (artifact: VerifyArtifact): AppIssue[] => {
       if (!resolvesRelative(f.path, spec, paths)) {
         issues.push({ file: f.path, message: `Imports "${spec}" but no matching file exists — create it or fix the path.` });
       }
+    }
+  }
+
+  // 6. Core mechanic stubbed: a comment describes a game/animation loop or timer, but the file never
+  //    actually calls one — the interactive behavior is missing even though it "compiles".
+  for (const f of files) {
+    if (!CODE_EXT.test(f.path) || !f.content) continue;
+    if (LOOP_IN_COMMENT.test(f.content) && !LOOP_CALL.test(f.content)) {
+      issues.push({
+        file: f.path,
+        message: 'Mentions a game/animation loop or timer in a comment but never implements one — implement the real loop (requestAnimationFrame/setInterval) with actual update/movement/collision/scoring logic, not a comment.'
+      });
     }
   }
 

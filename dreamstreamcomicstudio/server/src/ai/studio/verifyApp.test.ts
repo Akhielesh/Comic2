@@ -62,6 +62,36 @@ describe('verifyGeneratedApp', () => {
     expect(issues).toEqual([]);
   });
 
+  it('flags a comment-only game loop (the Retro Pac-Man failure mode)', () => {
+    const issues = verifyGeneratedApp({
+      template: 'react-ts',
+      files: [{
+        path: '/hooks/useGameLogic.ts',
+        content: 'export const useGameLogic = () => {\n  const start = () => {\n    // Game initialization logic, setInterval for game loop, etc.\n  };\n  return { start };\n};',
+      }],
+    });
+    expect(issues.some((i) => /loop or timer|implement the real loop/i.test(i.message))).toBe(true);
+  });
+
+  it('does NOT flag when a real loop/timer is actually implemented', () => {
+    const issues = verifyGeneratedApp({
+      template: 'react-ts',
+      files: [{
+        path: '/hooks/useGameLogic.ts',
+        content: 'export const useGameLogic = () => {\n  // game loop\n  const id = setInterval(() => tick(), 16);\n  return { id };\n};\nfunction tick(){}',
+      }],
+    });
+    expect(issues).toEqual([]);
+  });
+
+  it('flags narrative "in a real app …" placeholders', () => {
+    const issues = verifyGeneratedApp({
+      template: 'react-ts',
+      files: [{ path: '/App.tsx', content: 'export default () => {\n  // in a real app this would fetch from an API\n  return null;\n};' }],
+    });
+    expect(issues.some((i) => /placeholder/i.test(i.message))).toBe(true);
+  });
+
   it('formatIssues renders a bullet list', () => {
     const out = formatIssues([{ file: '/App.tsx', message: 'broken' }, { message: 'general' }]);
     expect(out).toContain('- /App.tsx: broken');

@@ -11,6 +11,7 @@
 import type { CodeStudioArtifact, CodeStudioFile, CodeStudioTemplate, StudioBuildPlan, StudioAnswer } from '../../../../apiTypes.js';
 import { renderPlanForBuild } from './studioPlan.js';
 import { buildDesignDirective } from './designSystem.js';
+import { verifyGeneratedApp, formatIssues, type AppIssue } from './verifyApp.js';
 
 const EXT_TO_LANG: Record<string, string> = {
   ts: 'typescript', tsx: 'typescript',
@@ -79,6 +80,14 @@ Quality bar (write like a senior engineer shipping to production):
   empty/loading/error states; accessible (labels, alt text, keyboard focus). Avoid unstyled scaffolding.
 - Real behavior, not a stub: wire up the interactions the idea implies and seed realistic sample data so
   it looks alive on first load.
+- IMPLEMENT THE CORE MECHANIC FOR REAL — this is the #1 requirement, before any visual polish. Whatever
+  the request centers on must actually work end-to-end: an interactive app or game needs a real
+  update/animation loop (requestAnimationFrame or setInterval), input handlers (keyboard/touch/mouse)
+  wired to state, and the actual rules (movement, collision, scoring, win/lose, levels). NEVER write a
+  comment that DESCRIBES behavior in place of the code (e.g. "// game loop, setInterval, etc." or
+  "// initialization logic here"), never leave a handler empty, never ship a static mock of a dynamic
+  feature. If you reference a flag like "gameOver", it must be a real boolean derived from real game
+  state — not an unused function. A skeleton that renders but does nothing is a FAILURE.
 - Robust code: handle edge cases and errors; for TypeScript use precise types (no stray "any"); keep
   components small and readable. No dead code, no console spam.`;
 
@@ -189,18 +198,80 @@ export const parseGeneratedApp = (text: string, fallbackTemplate?: string): Code
 export const STRICT_JSON_REMINDER =
   '\n\nIMPORTANT: Output ONLY the JSON object described above — no prose, no markdown fences, no explanation. Begin your reply with "{" and end with "}".';
 
+/** Refine prompt that feeds verifier issues back for a one-pass auto-repair (parity with the stream path). */
+const buildRepairPrompt = (input: GenerateInput, artifact: CodeStudioArtifact, issues: AppIssue[]): string =>
+  buildGeneratePrompt({
+    prompt: `The generated project has these issues. Fix them and return the COMPLETE updated project so it is correct, complete and runs cleanly:\n${formatIssues(issues)}`,
+    template: input.template,
+    currentFiles: artifact.files.map((f) => ({ path: f.path, content: f.content })),
+    currentTitle: artifact.title
+  });
+
+/** A model self-review against the ORIGINAL request — the "does it actually work?" quality gate. */
+export const buildCompletenessReviewPrompt = (originalPrompt: string, artifact: CodeStudioArtifact): string =>
+  `You generated this project for the request:
+"${originalPrompt}"
+
+${renderFiles(artifact.files)}
+
+Review it CRITICALLY, as if you were the user trying to use it. It must be a COMPLETE, WORKING implementation, not a skeleton:
+- The core behaviour/mechanic actually works end-to-end (for a game: a real loop, input handling, movement, collision, scoring, win/lose; for an app: the real interactions + data flow the request implies).
+- No placeholder logic, no comment standing in for missing code, no empty/no-op handlers, no static mock of a dynamic feature.
+- It runs and is usable on first load.
+
+If it is already complete and correct, return it UNCHANGED. Otherwise return the COMPLETE corrected project with every gap implemented for real.
+
+${OUTPUT_CONTRACT}`;
+
+/** Run one completeness self-review; keep the original unless the review parses AND is no more broken. */
+export const reviewCompleteness = async (
+  complete: (prompt: string) => Promise<string>,
+  originalPrompt: string,
+  artifact: CodeStudioArtifact,
+  template?: string
+): Promise<CodeStudioArtifact> => {
+  try {
+    const reviewed = parseGeneratedApp(await complete(buildCompletenessReviewPrompt(originalPrompt, artifact)), template);
+    if (
+      reviewed &&
+      reviewed.files.length >= artifact.files.length &&
+      verifyGeneratedApp(reviewed).length <= verifyGeneratedApp(artifact).length
+    ) {
+      return reviewed;
+    }
+  } catch {
+    /* best-effort — keep the original on any failure */
+  }
+  return artifact;
+};
+
 /**
- * Generate an app, with ONE stricter retry when the model's first answer can't be parsed
- * (truncation, prose, fence noise). `complete` is injected so this stays unit-testable.
+ * Generate an app: parse (with ONE stricter retry on unparseable output), then AUTO-REPAIR any static
+ * issues the verifier finds (empty/placeholder/stub markers, a comment-only game loop, missing default
+ * export, bad JSON, unresolved imports), then run ONE functional completeness self-review for NEW apps
+ * — so the user gets a working app, not a skeleton, without clicking "fix". `complete` is injected so
+ * this stays unit-testable; `review` can be disabled (defaults on for new apps, off for refine).
  */
 export const runGenerate = async (
   complete: (prompt: string) => Promise<string>,
-  input: GenerateInput
+  input: GenerateInput,
+  opts: { review?: boolean } = {}
 ): Promise<CodeStudioArtifact | null> => {
   const prompt = buildGeneratePrompt(input);
   let artifact = parseGeneratedApp(await complete(prompt), input.template);
   if (!artifact) {
     artifact = parseGeneratedApp(await complete(prompt + STRICT_JSON_REMINDER), input.template);
   }
+  if (!artifact) return null;
+
+  const issues = verifyGeneratedApp(artifact);
+  if (issues.length) {
+    const repaired = parseGeneratedApp(await complete(buildRepairPrompt(input, artifact, issues)), input.template);
+    if (repaired) artifact = repaired;
+  }
+
+  const review = opts.review ?? !(input.currentFiles && input.currentFiles.length);
+  if (review) artifact = await reviewCompleteness(complete, input.prompt, artifact, input.template);
+
   return artifact;
 };
