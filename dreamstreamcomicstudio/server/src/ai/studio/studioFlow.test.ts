@@ -58,7 +58,10 @@ describe('studioPlan.parsePlan', () => {
       features: ['Add transactions'], files: [{ path: '/src/App.tsx', purpose: 'root' }], dataSources: [], notes: []
     };
     const txt = renderPlanForBuild(plan);
-    expect(txt).toContain('FILES TO CREATE');
+    // The plan suggests structure, but the builder owns the final file layout — so it's framed
+    // as advisory, not a binding "files to create" contract.
+    expect(txt).toContain('SUGGESTED STRUCTURE');
+    expect(txt.toLowerCase()).toContain('advisory');
     expect(txt).toContain('/src/App.tsx');
     expect(txt).toContain('Add transactions');
   });

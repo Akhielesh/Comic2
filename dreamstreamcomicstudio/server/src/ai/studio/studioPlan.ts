@@ -16,7 +16,7 @@ const renderAnswers = (answers?: StudioAnswer[]): string => {
 };
 
 export const buildPlanPrompt = (prompt: string, answers?: StudioAnswer[]): string =>
-  `You are the tech lead planning a new build in a code studio. Produce a concrete, buildable plan for a COMPLETE application — the kind you'd write before assigning work to a team. Be specific and ambitious but realistic; this plan will directly drive the build.
+  `You are the tech lead planning a new build in a code studio. Produce a concrete plan for a COMPLETE application — the GOAL and scope you'd hand to a senior engineer. Define WHAT to build (product, features, stack, data); leave the HOW (the exact files, structure and implementation) to the build step, which has FULL freedom to create, organize and customize files as it sees fit. Be specific and ambitious but realistic.
 
 USER'S IDEA:
 ${prompt}${renderAnswers(answers)}
@@ -30,9 +30,11 @@ Produce:
 - summary: 1–2 sentences describing what the app does and for whom.
 - appType: e.g. "React dashboard", "Express REST API", "Python CLI".
 - stack: the concrete technologies (framework, language, key libraries, styling).
-- features: 6–12 concrete, user-visible features the build will implement (not vague).
-- files: the planned file tree — a REAL app is many files, not one. List each file path and its purpose
-  (entry, each significant component, hooks/logic, types, styles, data layer, manifest, README as needed).
+- features: 6–12 concrete, user-visible features the build will implement (not vague). This is the heart of
+  the plan — be thorough and specific here.
+- files: OPTIONAL and HIGH-LEVEL ONLY. A short sketch of a few key files and their purpose, illustrative of
+  the shape of a real multi-file app. The engineer who builds this has full freedom over the final layout, so
+  keep it light — do NOT prescribe a rigid, exhaustive tree, and feel free to omit this entirely.
 - dataSources: real APIs/data the app uses (only if relevant; prefer free/public/CORS-friendly).
 - notes: key decisions, assumptions, or risks worth surfacing.
 
@@ -92,7 +94,7 @@ export const renderPlanForBuild = (plan: StudioBuildPlan): string => {
   if (plan.appType) lines.push(`TYPE: ${plan.appType}`);
   if (plan.stack.length) lines.push(`STACK: ${plan.stack.join(', ')}`);
   if (plan.features.length) lines.push(`FEATURES:\n${plan.features.map((f) => `- ${f}`).join('\n')}`);
-  if (plan.files.length) lines.push(`FILES TO CREATE:\n${plan.files.map((f) => `- ${f.path}${f.purpose ? ` — ${f.purpose}` : ''}`).join('\n')}`);
+  if (plan.files.length) lines.push(`SUGGESTED STRUCTURE (advisory only — reorganize, add, split or rename files freely):\n${plan.files.map((f) => `- ${f.path}${f.purpose ? ` — ${f.purpose}` : ''}`).join('\n')}`);
   if (plan.dataSources?.length) lines.push(`DATA SOURCES: ${plan.dataSources.join(', ')}`);
   if (plan.notes?.length) lines.push(`NOTES:\n${plan.notes.map((n) => `- ${n}`).join('\n')}`);
   return lines.join('\n');
