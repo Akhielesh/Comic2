@@ -33,7 +33,7 @@
   enterprise bar. No filler.
 
 ## Progress
-**Sections complete: 11 / 55** · target ~200 pages.
+**Sections complete: 14 / 55** · target ~200 pages.
 
 Legend: ✅ written · ✍️ in progress · 📋 planned
 
@@ -54,18 +54,18 @@ Legend: ✅ written · ✍️ in progress · 📋 planned
 |---|---|---|---|
 | 08 | Product principles & design tenets | [spec/08-principles-tenets.md](./spec/08-principles-tenets.md) | ✅ |
 | 09 | Domain model & glossary | [spec/09-domain-model-glossary.md](./spec/09-domain-model-glossary.md) | ✅ |
-| 10 | Feature catalog (epics → features) | spec/10-feature-catalog.md | ✍️ |
-| 11 | End-to-end user journeys | spec/11-user-journeys.md | ✍️ |
+| 10 | Feature catalog (epics → features) | [spec/10-feature-catalog.md](./spec/10-feature-catalog.md) | ✅ |
+| 11 | End-to-end user journeys | [spec/11-user-journeys.md](./spec/11-user-journeys.md) | ✅ |
 | 12 | Information architecture & navigation | [spec/12-information-architecture.md](./spec/12-information-architecture.md) | ✅ |
-| 13 | UX spec: intake & onboarding | spec/13-ux-intake-onboarding.md | 📋 |
-| 14 | UX spec: Operator Console (24/7 workspace) | spec/14-ux-operator-console.md | 📋 |
-| 15 | UX spec: build / iterate / preview | spec/15-ux-build-iterate-preview.md | 📋 |
-| 16 | UX spec: approvals, checkpoints & notifications | spec/16-ux-approvals-notifications.md | 📋 |
-| 17 | UX spec: billing & account | spec/17-ux-billing-account.md | 📋 |
-| 18 | UX spec: integrations & connections | spec/18-ux-integrations.md | 📋 |
-| 19 | Mobile experience | spec/19-mobile.md | 📋 |
-| 20 | Accessibility (WCAG) spec | spec/20-accessibility.md | 📋 |
-| 21 | Content, voice & persona guidelines | spec/21-content-voice.md | 📋 |
+| 13 | UX spec: intake & onboarding | spec/13-ux-intake-onboarding.md | ✍️ |
+| 14 | UX spec: Operator Console (24/7 workspace) | spec/14-ux-operator-console.md | ✍️ |
+| 15 | UX spec: build / iterate / preview | spec/15-ux-build-iterate-preview.md | ✍️ |
+| 16 | UX spec: approvals, checkpoints & notifications | spec/16-ux-approvals-notifications.md | ✍️ |
+| 17 | UX spec: billing & account | spec/17-ux-billing-account.md | ✍️ |
+| 18 | UX spec: integrations & connections | spec/18-ux-integrations.md | ✍️ |
+| 19 | Mobile experience | spec/19-mobile.md | ✍️ |
+| 20 | Accessibility (WCAG) spec | spec/20-accessibility.md | ✍️ |
+| 21 | Content, voice & persona guidelines | [spec/21-content-voice.md](./spec/21-content-voice.md) | ✅ |
 
 ### Part III — Architecture
 | # | Section | File | Status |

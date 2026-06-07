@@ -4,14 +4,13 @@
 
 ## 11.1 How to read this section
 
-This section traces the **complete arc** of each primary persona ([03-personas-jtbd](./03-personas-jtbd.md))
+This section traces each primary persona's ([03-personas-jtbd](./03-personas-jtbd.md)) arc
 through the product, surface by surface ([Intake / Operator Console / Code Studio](./00-executive-summary.md)
-§0.4). Each journey is written honestly: the **happy path** *and* the **failure /
-checkpoint branches** that the design ([Master Plan](../00-MASTER-PLAN.md) §8) deliberately
-forces. Every journey lists its **trigger**, a numbered **step-by-step flow** (user action ↔
-system action), the **checkpoints** that gate it, the **failure branches**, and the
-**success state**. Each step is annotated with the spec section and/or epic (A0–A9, F0–F10)
-that implements it, so this doubles as a traceability map.
+§0.4). Each journey is honest: the **happy path** *and* the **failure / checkpoint branches**
+the design ([Master Plan](../00-MASTER-PLAN.md) §8) deliberately forces. Each lists a
+**trigger**, a numbered **step-by-step flow**, the **checkpoints** that gate it, the **failure
+branches**, and the **success state** — annotated with the spec section and/or epic (A0–A9,
+F0–F10) that implements it, so this doubles as a traceability map.
 
 Notation: **[U]** = user action, **[S]** = system/agent action, **◇** = checkpoint (human
 gate), **✗** = failure branch. The atomic unit referenced throughout is **one tick** —
