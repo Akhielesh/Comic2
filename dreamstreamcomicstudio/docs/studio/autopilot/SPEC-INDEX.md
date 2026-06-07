@@ -33,7 +33,7 @@
   enterprise bar. No filler.
 
 ## Progress
-**Sections complete: 23 / 55** · target ~200 pages. (Parts I + II complete; Part III underway.)
+**Sections complete: 24 / 55** · target ~200 pages. (Parts I + II complete; Part III underway.)
 
 Legend: ✅ written · ✍️ in progress · 📋 planned
 
@@ -73,7 +73,7 @@ Legend: ✅ written · ✍️ in progress · 📋 planned
 | 22 | System architecture overview | [spec/22-system-architecture.md](./spec/22-system-architecture.md) | ✅ |
 | 23 | Cloudflare topology (DO/Workflows/Containers) — deep | spec/23-cloudflare-topology.md | ✍️ |
 | 24 | The autonomous engine (the loop) — deep | spec/24-autonomous-engine.md | ✍️ |
-| 25 | Multi-tenancy & isolation | spec/25-multitenancy-isolation.md | ✍️ |
+| 25 | Multi-tenancy & isolation | [spec/25-multitenancy-isolation.md](./spec/25-multitenancy-isolation.md) | ✅ |
 | 26 | Data model & schema (all tables + RLS) | spec/26-data-model-schema.md | ✍️ |
 | 27 | API surface — REST | spec/27-api-rest.md | ✍️ |
 | 28 | API surface — realtime & events | spec/28-api-realtime-events.md | ✍️ |
