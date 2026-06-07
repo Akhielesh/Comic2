@@ -42,6 +42,30 @@ const parseError = async (res: Response) => {
   }
 };
 
+/**
+ * `fetch` rejects with a TypeError ("Failed to fetch" / "NetworkError" / "Load failed")
+ * when the request never reaches the server — the usual culprits are a CORS block, a wrong
+ * or empty `VITE_API_BASE_URL`, mixed http/https content, or the backend being asleep/down.
+ * Browsers deliberately hide the detail, so we turn that opaque failure into one actionable
+ * message (status 0) instead of a bare "network error" the user can't act on. User-initiated
+ * aborts are rethrown untouched so callers can detect cancellation.
+ */
+const safeFetch = async (url: string, init: RequestInit): Promise<Response> => {
+  try {
+    return await fetch(url, init);
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') throw err;
+    if ((err as Error)?.name === 'AbortError') throw err;
+    const target = url || 'the API server';
+    throw new ApiError(
+      `Couldn't reach the AI server (${target}). This is usually a connectivity or CORS issue, or the API URL isn't configured. ` +
+        `Check your internet connection and try again — if it persists, the server may be misconfigured.`,
+      0,
+      { cause: (err as Error)?.message, url }
+    );
+  }
+};
+
 const getAuthToken = async (): Promise<string | undefined> => {
   if (cachedAccessToken) return cachedAccessToken;
 
@@ -83,7 +107,7 @@ const buildRequestHeaders = async (options?: { apiKey?: string; modelId?: string
 
 export const post = async <TReq, TRes>(path: string, body: TReq, options?: { signal?: AbortSignal; apiKey?: string; modelId?: string; stage?: string }): Promise<TRes> => {
   const headers = await buildRequestHeaders(options);
-  const res = await fetch(buildApiUrl(path), {
+  const res = await safeFetch(buildApiUrl(path), {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
@@ -98,7 +122,7 @@ export const post = async <TReq, TRes>(path: string, body: TReq, options?: { sig
 export const postStream = async <TReq>(path: string, body: TReq, options?: { signal?: AbortSignal }): Promise<Response> => {
   const headers = await buildRequestHeaders();
   headers.Accept = 'text/event-stream';
-  const res = await fetch(buildApiUrl(path), {
+  const res = await safeFetch(buildApiUrl(path), {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
@@ -111,7 +135,7 @@ export const postStream = async <TReq>(path: string, body: TReq, options?: { sig
 /** DELETE that returns parsed JSON. Throws ApiError on non-OK. */
 export const del = async <TRes>(path: string, options?: { signal?: AbortSignal }): Promise<TRes> => {
   const headers = await buildRequestHeaders();
-  const res = await fetch(buildApiUrl(path), { method: 'DELETE', headers, signal: options?.signal });
+  const res = await safeFetch(buildApiUrl(path), { method: 'DELETE', headers, signal: options?.signal });
   if (!res.ok) throw await parseError(res);
   return res.json() as Promise<TRes>;
 };
@@ -124,7 +148,7 @@ export const get = async <TRes>(path: string, options?: { modelId?: string; sign
   const ideogramKey = isProviderEnabled('ideogram') ? getActiveKeyValue('ideogram') : null;
   const token = await getAuthToken();
 
-  const res = await fetch(buildApiUrl(path), {
+  const res = await safeFetch(buildApiUrl(path), {
     signal: options?.signal,
     headers: {
       ...(geminiKey ? { 'X-Gemini-Key': geminiKey } : {}),
