@@ -534,9 +534,9 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
 /** Names of tools that are built per-request with situational context. */
 const CONTEXTUAL_TOOL_NAMES = ['get_news', 'find_places'] as const;
 
-// Meta-tools built outside resolveTools (they need provider creds), but still part
-// of the client allowlist. `run_agent_swarm` is wired in by the chat route.
-const META_TOOL_NAMES = ['run_agent_swarm'] as const;
+// Meta-tools built outside resolveTools (they need provider creds / user keys), but still part
+// of the client allowlist. `run_agent_swarm` and `generate_image` are wired in by the routes.
+const META_TOOL_NAMES = ['run_agent_swarm', 'generate_image'] as const;
 
 /** The set of tool names a client is allowed to enable (allowlist). */
 export const KNOWN_TOOL_NAMES = [...Object.keys(STATIC_TOOLS), ...CONTEXTUAL_TOOL_NAMES, ...META_TOOL_NAMES];

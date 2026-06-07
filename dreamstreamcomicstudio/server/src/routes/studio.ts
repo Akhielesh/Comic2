@@ -30,6 +30,7 @@ import { runPlan } from '../ai/studio/studioPlan.js';
 import { runStudioAgentsParallel, sanitizeAgentIds, studioAgentCatalog, STUDIO_AGENTS } from '../ai/studio/studioAgents.js';
 import { resolveTools } from '../ai/tools/registry.js';
 import { buildMcpTools } from '../ai/tools/mcpClient.js';
+import { makeImageTool, imageGenAvailable, type ImageKeys } from '../ai/tools/imageGen.js';
 import { enabledMcpConfigs } from '../services/mcpRegistry.js';
 import { ALWAYS_ON_STUDIO_MCP_SERVERS, envDesignMcpServers, externalMcpEnabled } from '../ai/studio/designSystem.js';
 import { scanStreamedFiles } from '../ai/studio/streamParse.js';
@@ -769,9 +770,13 @@ studioRouter.post('/agents', async (req, res, next) => {
 
     // The user's MCP servers' tools — extended access for the whole agent team (built once).
     const mcp = await studioMcpTools(req, body);
+    // BYOK image generation, bound to the user's own account keys (built once, used only by agents
+    // that request 'generate_image' and only when a key is configured).
+    const imageKeys = (req as { apiKeys?: ImageKeys }).apiKeys || {};
     // Each agent gets a focused model call; agents get their live web/data tools PLUS your MCP tools.
     const complete = async (prompt: string, toolNames: string[]): Promise<string> => {
-      const tools = [...resolveTools(toolNames), ...mcp];
+      const img = imageGenAvailable(imageKeys) && toolNames.includes('generate_image') ? [makeImageTool(imageKeys)] : [];
+      const tools = [...resolveTools(toolNames), ...mcp, ...img];
       const result = await runChat({
         provider: resolved.provider,
         apiKey: resolved.apiKey,
