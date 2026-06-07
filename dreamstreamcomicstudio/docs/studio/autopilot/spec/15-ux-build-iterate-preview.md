@@ -240,13 +240,12 @@ inventory). A8 adds the **sync panel** in the Prompt·Build column (collapsible,
 └────────────────────────────────────────────┘
 ```
 
-- **Connect** uses the existing connector flow (Nango / PAT) → stored as a `venture_connection`;
+- **Connect** uses the existing connector flow (Nango / PAT) → a `venture_connection`;
   least-privilege scopes; the token is **never logged or shown** ([Master Plan §5](../00-MASTER-PLAN.md)).
-- **Autonomous commits** are attributed to the agent with the goal in the message
-  (`Add auth (goal #14)`); **pushing to a protected branch / opening to production** is gated by
-  the same checkpoint policy as a deploy.
-- **Pull latest** lets a human edit on GitHub and have the venture pick up the change on the next
-  SENSE — closing the two-way loop.
+- **Autonomous commits** are agent-attributed with the goal in the message (`Add auth (goal #14)`);
+  **pushing to a protected branch / production** is gated by the same checkpoint policy as a deploy.
+- **Pull latest** lets a human edit on GitHub and have the venture pick it up on the next SENSE —
+  closing the two-way loop.
 
 ## 15.10 Mobile & accessibility
 

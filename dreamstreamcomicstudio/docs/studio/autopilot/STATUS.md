@@ -6,13 +6,15 @@
 
 **Last updated:** 2026-06-07 · **Updated by:** Claude · **Branch:** `claude/gracious-albattani-bDL8T`
 
-> Latest (2026-06-07): **MASTER SPEC STARTED (~200-page product spec).** Scaffolded
-> [`SPEC-INDEX.md`](./SPEC-INDEX.md) (55 sections across 5 parts) under [`spec/`](./spec/) and
-> wrote Part I strategy core in full depth: 00 executive summary, 01 vision/positioning, 02
-> market/competitive analysis, 03 personas/JTBD. Remaining sections are being written
-> section-by-section (parallel writer-agents). Note: the `/loop` auto-scheduler (cron/wakeup
-> tools) isn't available in this environment, so the spec is built within-session, not on a
-> timer. **4 / 55 sections complete.**
+> Latest (2026-06-07): **MASTER SPEC — PARTS I + II COMPLETE (22 / 55).** Scaffolded
+> [`SPEC-INDEX.md`](./SPEC-INDEX.md) (55 sections, 5 parts) under [`spec/`](./spec/). Part I
+> Strategy (00–07) and Part II Product Definition (08–21) are written in full depth: exec
+> summary, vision, market/competitive, personas, value prop, business model, metrics, risks,
+> principles, domain model, feature catalog (~110 features), user journeys, IA, all UX specs
+> (intake, Operator Console, build/iterate, approvals, billing, integrations, mobile, a11y,
+> content/voice). **Part III — Architecture (22–34) in progress.** Built via parallel
+> writer-agents (the `/loop` cron/wakeup scheduler isn't available in this environment, so the
+> spec is built within-session, committing each section as it lands). **22 / 55 complete.**
 
 > Latest (2026-06-07): **ENTERPRISE FOUNDATIONS AUDITED + PLANNED + CLOUDFLARE ANSWERED.** Ran
 > a code-level audit of all 10 cross-cutting concerns (sessions, sync, concurrency, model
