@@ -23,13 +23,14 @@ describe('studioModelSelection (independent Code Studio coding model)', () => {
     const sel = getStudioModelSelection();
     expect(sel.mode).toBe('auto');
     expect(sel.model).toBeNull();
-    // Default is the STRONGEST coder ('quality'), not free — weak free coders can't
-    // build real apps (see STUDIO_DEFAULT_SELECTION in studioModelSelection.ts).
+    // Default is 'quality' now — weak free coders can't build real apps (server picks the strongest).
     expect(sel.costPref).toBe('quality');
-    expect(sel.creativity).toBe(STUDIO_DEFAULT_CREATIVITY);
+    expect(sel.designPreset ?? null).toBeNull(); // Auto design system by default
     expect(sel.maxIterations).toBe(STUDIO_DEFAULT_MAX_ITERATIONS);
-    // Auto sends no model id, so the server free-first picks a proven coder.
+    // Auto sends no model id, so the server auto-picks the strongest available coder.
     expect(studioModelRequest().model).toBeUndefined();
+    // Temperature is owned by the server now (the client no longer sends one).
+    expect(studioModelRequest().temperature).toBeUndefined();
   });
 
   it('pins a specific model + source and surfaces it in the request', () => {

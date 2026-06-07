@@ -36,6 +36,8 @@ export interface StudioModelSelection {
   maxIterations: number;
   /** Default scaffold for new apps; null/undefined = let the AI choose from the prompt. */
   defaultTemplate?: string | null;
+  /** Pinned design-system preset id (null/undefined = let the AI pick the best fit per prompt). */
+  designPreset?: string | null;
   /** Enabled multi-agent refinement agents (ids). null = the default team. */
   agents?: string[] | null;
   /** Free-text preferences the refinement agents should honor (style, stack, constraints). */
@@ -70,6 +72,7 @@ const DEFAULTS: StudioModelSelection = {
   creativity: STUDIO_DEFAULT_CREATIVITY,
   maxIterations: STUDIO_DEFAULT_MAX_ITERATIONS,
   defaultTemplate: null,
+  designPreset: null,
   agents: null,
   agentPreferences: '',
   autoRunAgents: false,
@@ -90,6 +93,7 @@ const sanitize = (raw: Partial<StudioModelSelection>): StudioModelSelection => {
     maxIterations: Number.isInteger(merged.maxIterations)
       ? clamp(merged.maxIterations, 1, STUDIO_MAX_ITERATIONS_CEILING)
       : STUDIO_DEFAULT_MAX_ITERATIONS,
+    designPreset: typeof merged.designPreset === 'string' && merged.designPreset.trim() ? merged.designPreset : null,
     agents: Array.isArray(merged.agents) ? merged.agents.filter((x): x is string => typeof x === 'string') : null,
     agentPreferences: typeof merged.agentPreferences === 'string' ? merged.agentPreferences : '',
     autoRunAgents: merged.autoRunAgents === true,
@@ -173,6 +177,13 @@ export const setStudioDefaultTemplate = (template: string | null) => {
   write(next);
 };
 
+/** Pin a design-system preset id (null = let the AI auto-pick the best fit per prompt). */
+export const setStudioDesignPreset = (id: string | null) => {
+  const next = read();
+  next.designPreset = id && id.trim() ? id : null;
+  write(next);
+};
+
 /** Enabled refinement agent ids, or null when using the default team. */
 export const getStudioAgents = (): string[] | null => read().agents ?? null;
 
@@ -222,6 +233,7 @@ export interface StudioModelRequest {
   costPref?: StudioCostPref;
   temperature?: number;
   maxIterations?: number;
+  designPreset?: string;
 }
 
 export const studioModelRequest = (): StudioModelRequest => {
@@ -232,6 +244,7 @@ export const studioModelRequest = (): StudioModelRequest => {
     costPref: s.costPref,
     maxIterations: s.maxIterations
   };
+  if (s.designPreset) req.designPreset = s.designPreset;
   if (s.mode === 'specific' && s.model) {
     req.model = s.model;
     if (s.source) req.source = s.source;

@@ -19,6 +19,14 @@ that sends user prompt/code off-box must be operator-gated (see `STUDIO_DISABLE_
 ## Onboarded ✅
 - **Design-system library** → `DESIGN_PRESETS` in `designSystem.ts` (vendored, local, 26 brand-grade
   systems across the categories OD covers; the agent auto-picks the best fit per request). No egress.
+- **Design SKILLS axis** → `DESIGN_SKILLS` (15 reusable techniques incl. motion: bento hero,
+  scroll-reveal, command palette, glass cards, sticky data-table, gradient hero, marquee, animated
+  stats, skeletons, empty states, theme toggle, micro-interactions, page transitions, responsive
+  nav, toasts). Auto-recommended per prompt + injected as recipes. Vendored, no egress.
+- **Design-system picker** → users can PIN any of the 26 systems in Studio settings
+  (`designPreset`), threaded client → server → directive; default "Auto" keeps per-prompt picking.
+- **Slide-deck artifact** → the generate contract now builds presentations/decks as a first-class
+  app type.
 - **MCP catalog entry** for OD (env-gated `STUDIO_OPENDESIGN_MCP_URL`) for power users who self-host it.
 - **Privacy gate** `STUDIO_DISABLE_EXTERNAL_MCP` so third-party reference MCPs can be turned off.
 

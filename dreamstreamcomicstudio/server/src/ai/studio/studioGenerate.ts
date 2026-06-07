@@ -47,6 +47,8 @@ export interface GenerateInput {
   plan?: StudioBuildPlan;
   /** The user's clarifying answers (new-app flow). */
   answers?: StudioAnswer[];
+  /** Optional user-pinned design-system preset id (overrides the heuristic pick). */
+  designPreset?: string;
 }
 
 const renderFiles = (files: { path: string; content: string }[]): string =>
@@ -62,6 +64,7 @@ Rules:
 - Use the RIGHT language and project layout for the idea — you are NOT limited to web apps. For example:
   - Web UI → React (root component = DEFAULT export of /App.tsx or /src/App.tsx) or a static /index.html.
   - Mobile app → Expo + React Native (/App.tsx using react-native components + /app.json). Keep "template":"react-ts"; the studio auto-detects React Native, previews it on web via react-native-web, and runs it on device via "npm run native". Prefer core RN components + react-native-reusables; build it cross-platform.
+  - Presentation / slide deck → a web slides app (reveal.js, or a keyboard-navigable slide component with arrow-key + dot navigation and a clean theme).
   - HTTP API / backend → Node/Express (/server.js + /package.json) or Python (/main.py + /requirements.txt).
   - Script · CLI · data/automation → Python (/main.py + /requirements.txt), Node (/index.js), or Go (/main.go).
 - Build a COMPLETE, well-structured, MULTI-FILE application — never cram everything into one file. Split it
@@ -126,7 +129,7 @@ ${renderPlanForBuild(input.plan)}
 
 Default web stack if the plan doesn't imply another: ${template}.
 
-${buildDesignDirective({ prompt: input.prompt })}
+${buildDesignDirective({ prompt: input.prompt, presetId: input.designPreset })}
 
 ${OUTPUT_CONTRACT}`;
   }
@@ -138,7 +141,7 @@ ${input.prompt}
 
 Default web stack if the idea is a UI and doesn't imply another: ${template}.
 
-${buildDesignDirective({ prompt: input.prompt })}
+${buildDesignDirective({ prompt: input.prompt, presetId: input.designPreset })}
 
 ${OUTPUT_CONTRACT}`;
 };

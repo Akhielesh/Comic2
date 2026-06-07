@@ -262,7 +262,7 @@ studioRouter.post('/generate', async (req, res, next) => {
     const body = (req.body || {}) as {
       prompt?: string; template?: string; files?: unknown; title?: string;
       model?: string; source?: string; costPref?: string; temperature?: number;
-      plan?: StudioBuildPlan; answers?: StudioAnswer[];
+      plan?: StudioBuildPlan; answers?: StudioAnswer[]; designPreset?: string;
     };
     const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
     if (!prompt) {
@@ -304,7 +304,8 @@ studioRouter.post('/generate', async (req, res, next) => {
       currentFiles: currentFiles.length ? currentFiles : undefined,
       currentTitle: typeof body.title === 'string' ? body.title : undefined,
       plan: currentFiles.length ? undefined : body.plan,
-      answers: currentFiles.length ? undefined : (Array.isArray(body.answers) ? body.answers : undefined)
+      answers: currentFiles.length ? undefined : (Array.isArray(body.answers) ? body.answers : undefined),
+      designPreset: typeof body.designPreset === 'string' ? body.designPreset : undefined
     });
     if (!artifact) {
       return res.status(502).json({
@@ -328,7 +329,7 @@ studioRouter.post('/generate/stream', async (req, res, next) => {
     const body = (req.body || {}) as {
       prompt?: string; template?: string; files?: unknown; title?: string;
       model?: string; source?: string; costPref?: string; temperature?: number;
-      plan?: StudioBuildPlan; answers?: StudioAnswer[];
+      plan?: StudioBuildPlan; answers?: StudioAnswer[]; designPreset?: string;
     };
     const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
     if (!prompt) {
@@ -356,7 +357,8 @@ studioRouter.post('/generate/stream', async (req, res, next) => {
       currentFiles: refining ? currentFiles : undefined,
       currentTitle: typeof body.title === 'string' ? body.title : undefined,
       plan: refining ? undefined : body.plan,
-      answers: refining ? undefined : (Array.isArray(body.answers) ? body.answers : undefined)
+      answers: refining ? undefined : (Array.isArray(body.answers) ? body.answers : undefined),
+      designPreset: typeof body.designPreset === 'string' ? body.designPreset : undefined
     };
     const genPrompt = buildGeneratePrompt(genInput);
 
