@@ -10,6 +10,7 @@ import type { McpServerConfig } from '../../apiTypes';
 import { estimateTokens } from '../../services/chatUtils';
 import { ChatMessageView } from './ChatMessageView';
 import { ChatComposer } from './ChatComposer';
+import type { ChatSkill } from '../../services/chatSkills';
 import { ChatContextMeter } from './ChatContextMeter';
 import { ChatModelSuggester } from './ChatModelSuggester';
 
@@ -21,6 +22,7 @@ interface ChatConversationProps {
   onToggleSidebar: () => void;
   onOpenModelPicker: () => void;
   onSend: (text: string, attachments: ChatAttachment[]) => void;
+  onRunSkill: (skill: ChatSkill, arg: string) => void;
   onStop: () => void;
   onBranch: (turnId: string, chooseNewModel: boolean) => void;
   onRegenerate: (turnId: string) => void;
@@ -121,6 +123,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
   onToggleSidebar,
   onOpenModelPicker,
   onSend,
+  onRunSkill,
   onStop,
   onBranch,
   onRegenerate,
@@ -227,7 +230,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
               title="Rename this chat"
             >
               <span className="font-bold text-sm truncate">{session.title}</span>
-              <Pencil className="w-3.5 h-3.5 shrink-0 opacity-0 group-hover:opacity-100" />
+              <Pencil className="w-3.5 h-3.5 shrink-0 hover-reveal" />
             </button>
           )}
         </div>
@@ -320,6 +323,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
         onToggleConnector={onToggleConnector}
         onToggleMcpServer={onToggleMcpServer}
         onSend={onSend}
+        onRunSkill={onRunSkill}
         onStop={onStop}
       />
     </div>

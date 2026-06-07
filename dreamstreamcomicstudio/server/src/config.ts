@@ -48,7 +48,12 @@ export const CORS_ORIGIN = CORS_ORIGINS.join(',');
 // misconfigured on the host (Railway), and covers tokenized Studio preview subdomains
 // (`<port>-<id>-<token>.dreamstreamstudio.ai`). Apex, `www`, and any subdomain of these are
 // matched. HTTPS-only — http://localhost dev origins still come through CORS_ORIGIN above.
-const TRUSTED_ORIGIN_DOMAINS = ['dreamstreamstudio.ai', 'dreamstreamstudio.com'];
+//
+// `comic2.pages.dev` is the live Cloudflare Pages frontend; trusting it here (plus its
+// `<hash>.comic2.pages.dev` preview deploys) prevents the "network error" the chat/comic
+// flows hit when the browser's CORS check fails because Railway's CORS_ORIGIN wasn't set.
+// NOTE: only the project's own `*.comic2.pages.dev` is trusted, NOT all of `pages.dev`.
+const TRUSTED_ORIGIN_DOMAINS = ['dreamstreamstudio.ai', 'dreamstreamstudio.com', 'comic2.pages.dev'];
 
 export const isAllowedOrigin = (origin: string | undefined): boolean => {
   // No Origin header = non-browser / same-origin request — allow (matches prior behavior).

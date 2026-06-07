@@ -89,7 +89,7 @@ const SessionRow: React.FC<{
       <div ref={menuRef} className="relative">
         <button
           onClick={(e) => { e.stopPropagation(); setMenuOpen((v) => !v); }}
-          className={`p-1 rounded hover:bg-black/10 ${menuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+          className={`p-1 rounded hover:bg-black/10 ${menuOpen ? 'opacity-100' : 'hover-reveal'}`}
           title="Options"
         >
           <MoreVertical className="w-4 h-4" />
@@ -164,7 +164,7 @@ const ProjectGroup: React.FC<{
           <span className="text-[10px] text-slate-500 shrink-0">{sessions.length}</span>
         </button>
         <div ref={menuRef} className="relative">
-          <button onClick={() => setMenuOpen((v) => !v)} className={`p-1 rounded hover:bg-black/10 ${menuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><MoreVertical className="w-4 h-4" /></button>
+          <button onClick={() => setMenuOpen((v) => !v)} className={`p-1 rounded hover:bg-black/10 ${menuOpen ? 'opacity-100' : 'hover-reveal'}`}><MoreVertical className="w-4 h-4" /></button>
           {menuOpen && (
             <div className="absolute right-0 top-7 z-30 w-36 bg-white border-2 border-black rounded-lg shadow-comic py-1">
               <button onClick={() => { setMenuOpen(false); onEdit(); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-slate-100 text-left"><Pencil className="w-3.5 h-3.5" /> Edit</button>

@@ -212,7 +212,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, busy, is
 
         {/* User message actions: copy + edit & resend. */}
         {isUser && !editing && (
-          <div className="flex items-center gap-2 mt-1 px-1 text-[11px] text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="flex items-center gap-2 mt-1 px-1 text-[11px] text-slate-400 hover-reveal">
             <button onClick={handleCopy} className="flex items-center gap-0.5 hover:text-black font-bold" title="Copy message">
               {copied ? <Check className="w-3 h-3 text-green-600" /> : <Copy className="w-3 h-3" />}
               {copied ? 'Copied' : 'Copy'}
