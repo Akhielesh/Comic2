@@ -3,7 +3,6 @@ import type { ChatRequest, ChatResponse, ChatClientContext } from '../../../apiT
 import { runChat, type ChatReasoningLevel } from '../ai/chat.js';
 import { runSwarm } from '../ai/agents/orchestrator.js';
 import { makeSwarmTool, SWARM_TOOL_NAME } from '../ai/agents/swarmTool.js';
-import { makeRecipeTools } from '../ai/recipes/recipeTool.js';
 import { sanitizeCustomAgents } from '../ai/agents/registry.js';
 import type { AgentDefinition } from '../ai/agents/registry.js';
 import { loadCustomAgentDefinitions } from '../services/customAgents.js';
@@ -282,24 +281,11 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
       })
     );
   }
-  // Recipe meta-tools: let the model run a saved recipe or crystallize a good workflow
-  // into a new one mid-chat (OpenRouter only — needs function calling). This is how the
-  // agents grow and reuse their own skills.
-  if (resolved.provider === 'openrouter') {
-    metaTools.push(
-      ...makeRecipeTools({
-        provider: resolved.provider,
-        apiKey: resolved.apiKey,
-        model,
-        messages,
-        systemPrompt,
-        clientContext,
-        userId: req.user?.id,
-        fallbackModel: TEXT_FALLBACK,
-        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
-      })
-    );
-  }
+  // NOTE: recipes are invoked by the USER via `/` slash-commands (see the chat
+  // composer command palette), not pushed at the model on every turn. Forcing
+  // run_recipe/save_recipe onto every chat both (a) added object-typed tool params
+  // that stricter models reject — breaking the whole completion — and (b) wasn't the
+  // UX we want. The /api/recipes/run endpoint backs the slash-commands directly.
 
   // Custom MCP servers (OpenRouter only): list their tools and wrap them. Best-effort —
   // a broken/blocked server is skipped rather than failing the chat. Sources are the

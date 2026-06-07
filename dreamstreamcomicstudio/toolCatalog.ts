@@ -424,6 +424,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
     dataShape: "Text: the provider's HTTP status + response body.", docsUrl: 'https://nango.dev/docs/guides/proxy-requests',
     keywords: ['call api', 'proxy', 'fetch from', 'api request', 'get data from', 'post to', 'nango']
   },
+  {
+    name: 'render_video', label: 'HTML → MP4 video', category: 'dev', kind: 'api', provider: 'HyperFrames render worker (self-hosted)',
+    description: 'Render a self-contained HTML/CSS/GSAP animation to an MP4 via a self-hosted headless-Chromium + ffmpeg worker. For motion graphics, promos, explainers.',
+    auth: 'required', authEnv: 'STUDIO_VIDEO_RENDER_URL', rateLimit: 'Self-hosted (your infra)',
+    dataShape: 'Text: a URL/path to the rendered MP4.', docsUrl: 'https://github.com/nexu-io/html-video',
+    keywords: ['video', 'mp4', 'render', 'animation', 'motion graphics', 'hyperframes', 'html to video', 'promo', 'explainer']
+  },
   // ---------------------------------------------------------------- dataviz -----
   {
     name: 'render_chart', label: 'Charts', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app SVG)',

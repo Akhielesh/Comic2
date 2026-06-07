@@ -58,11 +58,15 @@ export const makeRecipeTools = (ctx: RecipeToolContext): ChatTool[] => {
       'Use this when a task matches an existing recipe instead of improvising from scratch. Available recipes:\n' +
       catalog +
       '\nPass `values` for the recipe\'s parameters (e.g. {"topic":"…"}). Missing required parameters are reported back.',
+    // NOTE: `values` is a JSON *string*, not an object-typed param. Strict providers
+    // (Gemini family, OpenAI strict mode) reject an object param with no `properties`,
+    // which fails the whole completion — so free-form dicts are passed as JSON text and
+    // parsed by asObject().
     parameters: {
       type: 'object',
       properties: {
         recipe_id: { type: 'string', description: 'The id of the recipe to run (from the list above).' },
-        values: { type: 'object', description: 'Parameter values for the recipe, e.g. {"topic":"fusion energy"}.' }
+        values: { type: 'string', description: 'JSON object of parameter values, e.g. {"topic":"fusion energy"}.' }
       },
       required: ['recipe_id']
     },
@@ -103,7 +107,7 @@ export const makeRecipeTools = (ctx: RecipeToolContext): ChatTool[] => {
     parameters: {
       type: 'object',
       properties: {
-        recipe: { type: 'object', description: 'The recipe to save (title + instructions/prompt + optional parameters/tools/agents).' }
+        recipe: { type: 'string', description: 'The recipe to save as a JSON object string: {title, description, instructions, prompt?, parameters?, tools?, agents?, swarm?}.' }
       },
       required: ['recipe']
     },

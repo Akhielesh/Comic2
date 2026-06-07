@@ -12,6 +12,7 @@
 import type { CapabilityNotice, CapabilityReport, CapabilityStatus } from '../../../apiTypes.js';
 import { FOURSQUARE_API_KEY } from '../config.js';
 import { nangoEnabled } from './tools/nango.js';
+import { videoRenderEnabled } from './tools/videoRender.js';
 
 const MAX_NOTICES = 200;
 const ring: CapabilityNotice[] = [];
@@ -74,6 +75,15 @@ export const capabilityStatuses = (): CapabilityStatus[] => {
         ? 'Self-hosted Nango configured — agents can OAuth + proxy 800+ third-party APIs.'
         : 'Set NANGO_SECRET_KEY (+ NANGO_HOST) to enable nango_search_integrations / _connect / _call_api.',
       envVar: 'NANGO_SECRET_KEY'
+    },
+    {
+      id: 'tool.render_video',
+      label: 'HTML → MP4 video (HyperFrames worker)',
+      status: videoRenderEnabled() ? 'ok' : 'unavailable',
+      detail: videoRenderEnabled()
+        ? 'Render worker configured — agents can turn HTML/CSS/GSAP animations into MP4.'
+        : 'Set STUDIO_VIDEO_RENDER_URL to a self-hosted HyperFrames render worker (headless Chromium + ffmpeg). Client-side preview recording works without it.',
+      envVar: 'STUDIO_VIDEO_RENDER_URL'
     },
     { id: 'mcp.context7', label: 'Context7 docs MCP (studio + chat)', status: 'ok', detail: 'Always-on — live, version-correct library docs so models use real APIs.' },
     { id: 'mcp.deepwiki', label: 'DeepWiki repo MCP (studio + chat)', status: 'ok', detail: 'Always-on — read proven patterns from popular GitHub repos.' },
