@@ -11,8 +11,11 @@ import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useStat
 import {
   ArrowLeft, Wand2, Square, Share2, Download, FileCode, Cloud,
   Sparkles, Cpu, Lock, Mail, Loader2, Command as CommandIcon, Moon, Sun, Palette, Undo2, MessageSquarePlus, Check,
-  Columns, Eye, FilePlus, Users, Maximize2, Minimize2, Video, Terminal, ChevronUp,
+  Columns, Eye, FilePlus, Users, Maximize2, Minimize2, Video, Terminal, ChevronUp, Fingerprint, ShieldCheck,
 } from 'lucide-react';
+
+/** Short, display-friendly id (last 6 chars) for the identity chip. */
+const shortId = (id?: string | null): string => (id ? id.slice(-6) : '—');
 import type { CodeStudioArtifact, CodeStudioTemplate, StudioBuildPlan, StudioAnswer } from '../../apiTypes';
 import {
   Reveal, Skeleton, StatusPulse, ThemeSwitcher, FocusToggle, ResizableSplit, Confetti, CommandPalette, ShortcutsHelp,
@@ -21,9 +24,10 @@ import {
 import type { RunStatus, Command } from './kit';
 import {
   CodeWorkspace, LogsConsole, PreviewFrame, BuildTrace, ChangesPanel, HistoryPanel, PromptComposer,
-  ConversationThread, ActivityFeed, ServicesPanel, useStudioConversation, useStudioActivity, useStudioBuild,
+  ConversationThread, ActivityFeed, ServicesPanel, InsightsPanel, useStudioConversation, useStudioActivity, useStudioBuild,
   useStudioWorkspace, useStudioLogs, isPathDirty, workspaceCurrentArtifact,
   detectProjectKind, projectKindLabel, isWebProject, runHint, diffLines, diffStat,
+  analyzeProject, insightsSummary, insightsToMarkdown, issuesToFixPrompt,
 } from './workspace';
 import { StudioStart } from './StudioStart';
 import { StudioBuildFlow, type StudioFlowState } from './StudioBuildFlow';
@@ -94,6 +98,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const wsBaseline = useStudioWorkspace((s) => s.baseline);
   const wsPaths = useStudioWorkspace((s) => s.paths);
   const wsProjectId = useStudioWorkspace((s) => s.projectId);
+  const wsSessionId = useStudioWorkspace((s) => s.sessionId);
   const appendLog = useStudioLogs((s) => s.append);
   const logCount = useStudioLogs((s) => s.entries.length);
   const revertFile = useStudioWorkspace((s) => s.revertFile);
@@ -137,6 +142,12 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   // Polyglot: classify the project so the preview renders web apps in-browser but shows an honest
   // "run it locally / cloud-run" panel for non-web projects (Python/Go/…) instead of a broken preview.
   const projectKind = useMemo(() => detectProjectKind(currentArtifact.files), [currentArtifact.files]);
+  // Live code verification + metrics — pure, instant, recomputed only when the files change. This is
+  // the studio's "it actually verified the code" surface (health score, issues, import graph).
+  const insights = useMemo(
+    () => analyzeProject(currentArtifact.files, currentArtifact.template),
+    [currentArtifact.files, currentArtifact.template]
+  );
 
   // Load the handed-off app into the editor workspace.
   useEffect(() => {
@@ -148,6 +159,16 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     useStudioConversation.getState().clear();
     useStudioActivity.getState().reset();
   }, []);
+
+  // Always have an identity to reference: ensure a session id (and a project id) the moment the
+  // studio opens — and again after "New project" clears it — surfaced in the header and stamped onto
+  // exports/reports, so there's never "nothing to reference it to".
+  useEffect(() => {
+    if (wsSessionId) return;
+    const ws = useStudioWorkspace.getState();
+    const s = createStudioSession();
+    ws.setIdentity(ws.projectId ?? s.projectId, s.sessionId);
+  }, [wsSessionId]);
 
   // Keyboard shortcuts: ⌘K palette · ⌘B / ⌘↵ Build · ⌘S (no-op — Code Studio saves on Build).
   useEffect(() => {
@@ -245,6 +266,17 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     }, 700);
     return () => window.clearTimeout(id);
   }, [previewError, generating, hasFiles, previewUrl, setTries]);
+
+  // Surface the verifier's result in the console whenever the code settles (not mid-stream), so the
+  // logs show real, specific output ("Verified N files · health X/100 · K issues") instead of silence.
+  const lastVerifyRef = useRef<string>('');
+  useEffect(() => {
+    if (!hasFiles || generating) return;
+    const summary = insightsSummary(insights);
+    if (summary === lastVerifyRef.current) return;
+    lastVerifyRef.current = summary;
+    appendLog(insights.counts.error ? 'warn' : 'success', summary);
+  }, [insights, hasFiles, generating, appendLog]);
 
   // Pause the live sandbox when the user leaves the studio (unmount) — never leave a container
   // running (and billing) after they navigate away. Mirror runId so the cleanup isn't stale.
@@ -615,6 +647,23 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     if (last && !generating) void handleGenerate(last.prompt, last.tmpl);
   };
 
+  // Export a shareable verification report (markdown) stamped with the project + session id.
+  const exportReport = () => {
+    const md = insightsToMarkdown(insights, { title: wsTitle, projectId: wsProjectId, sessionId: wsSessionId });
+    try {
+      const blob = new Blob([md], { type: 'text/markdown' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${(wsTitle || 'project').replace(/[^\w.-]+/g, '_')}-report.md`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      appendLog('info', 'Exported the project report.');
+    } catch {
+      appendLog('warn', 'Could not export the report.');
+    }
+  };
+
   // Start over: clear the workspace + thread + activity back to the projects/start screen.
   const newProject = () => {
     genAbortRef.current?.abort();
@@ -691,6 +740,8 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   if (hasFiles) commands.push({ id: 'zip', label: 'Download .zip', icon: <Download className="w-4 h-4" />, keywords: 'export save download', run: () => void downloadArtifactZip(currentArtifact) });
   if (hasFiles) commands.push({ id: 'export-md', label: 'Export as Markdown', icon: <Download className="w-4 h-4" />, keywords: 'export markdown md share copy docs', run: () => exportProjectMarkdown(currentArtifact) });
   if (hasFiles) commands.push({ id: 'print-pdf', label: 'Print / Save as PDF', icon: <FileCode className="w-4 h-4" />, keywords: 'print pdf export save preview', run: () => printPreview(previewUrl) });
+  if (hasFiles && (insights.counts.error + insights.counts.warn) > 0) commands.push({ id: 'fix-issues', label: `Fix ${insights.counts.error + insights.counts.warn} code issue(s) with AI`, icon: <ShieldCheck className="w-4 h-4" />, keywords: 'verify fix repair lint errors issues health quality', run: () => void handleGenerate(issuesToFixPrompt(insights.issues)) });
+  if (hasFiles) commands.push({ id: 'report', label: 'Export project report', icon: <Download className="w-4 h-4" />, keywords: 'report insights health verify metrics export markdown', run: exportReport });
   commands.push({ id: 'theme-black', label: 'Theme: Black', icon: <Moon className="w-4 h-4" />, keywords: 'dark oled appearance theme', run: () => setTheme('black') });
   commands.push({ id: 'theme-white', label: 'Theme: White', icon: <Sun className="w-4 h-4" />, keywords: 'light appearance theme', run: () => setTheme('light') });
   commands.push({ id: 'theme-brand', label: 'Theme: DreamStream', icon: <Palette className="w-4 h-4" />, keywords: 'brand comic appearance theme', run: () => setTheme('brand') });
@@ -729,11 +780,23 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       </header>
       {/* Scrollable history — conversation first, then live activity + supporting panels. */}
       <div ref={chatScrollRef} className="min-h-0 flex-1 overflow-auto p-3 space-y-3">
-        {/* The build conversation (your prompts + the agent's outcomes) — the full history. */}
-        <ConversationThread />
+        {/* The build conversation (your prompts + the agent's outcomes) — the full history.
+            Bubbles are interactive: copy any message, or re-send one of your prompts. */}
+        <ConversationThread onResend={(text) => void handleGenerate(text)} />
         {/* Live, synchronous activity — files appearing as the AI writes them (Sprint 1).
             Rows are clickable: jump straight to the file in the editor. */}
         <ActivityFeed onOpenFile={openFileInEditor} onRetry={retryLastGenerate} />
+        {/* Live code verification — health score, real metrics, fixable issues + smart suggestions. */}
+        {hasFiles && (
+          <InsightsPanel
+            insights={insights}
+            onOpenFile={openFileInEditor}
+            onFix={(p) => void handleGenerate(p)}
+            onSuggest={(p) => void handleGenerate(p)}
+            onExport={exportReport}
+            busy={generating}
+          />
+        )}
         {/* The manual "Refine with agent team" button was removed: quality work now runs
             automatically (strong model + the server's completeness self-review + auto error-fix).
             The full specialist team is still available via the command palette when wanted. */}
@@ -954,6 +1017,20 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
                 ● {dirtyCount} unsaved
               </span>
             )}
+            {(wsProjectId || wsSessionId) && (
+              <button
+                onClick={() => {
+                  try {
+                    void navigator.clipboard?.writeText(`project: ${wsProjectId ?? '—'}\nsession: ${wsSessionId ?? '—'}`);
+                    appendLog('info', 'Copied project & session id to clipboard.');
+                  } catch { /* clipboard unavailable */ }
+                }}
+                title={`Project ID: ${wsProjectId ?? '—'}\nSession ID: ${wsSessionId ?? '—'}\nClick to copy`}
+                className={`hidden lg:inline-flex items-center gap-1 text-[10px] font-mono rounded-full border ${t.edge} px-2 py-0.5 ${t.textFaint} ${t.hover} ${t.focusRing}`}
+              >
+                <Fingerprint className="w-3 h-3" /> {shortId(wsProjectId ?? wsSessionId)}
+              </button>
+            )}
           </div>
 
           <div className="ml-auto flex items-center gap-2">
@@ -1019,6 +1096,13 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
           <span className="inline-flex items-center gap-1"><Cloud className="w-3 h-3" /> {ctxRuntime}</span>
           <span className={t.textFaint}>·</span>
           <span className="inline-flex items-center gap-1"><Users className="w-3 h-3" /> {ctxAgents} agents</span>
+          <span className={t.textFaint}>·</span>
+          <span
+            className={`inline-flex items-center gap-1 font-semibold ${insights.score >= 75 ? 'text-emerald-500' : insights.score >= 55 ? 'text-amber-500' : 'text-rose-500'}`}
+            title={`Code health ${insights.score}/100 — ${insights.counts.error} errors, ${insights.counts.warn} warnings`}
+          >
+            <ShieldCheck className="w-3 h-3" /> {insights.score} {insights.grade}
+          </span>
           <span className={t.textFaint}>·</span>
           <span className={`inline-flex items-center gap-1 font-semibold ${status === 'live' ? 'text-emerald-500' : status === 'error' ? 'text-rose-500' : t.textDim}`}>{ctxStatus}</span>
         </button>
