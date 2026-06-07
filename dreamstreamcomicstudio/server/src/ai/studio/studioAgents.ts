@@ -170,6 +170,8 @@ export interface StudioAgentTraceEntry {
 export interface StudioAgentRunResult {
   files: StudioFiles;
   trace: StudioAgentTraceEntry[];
+  /** Composite critique score (0–10) from the last review round, when reviewers returned scores. */
+  score?: number;
 }
 
 /**
@@ -236,7 +238,7 @@ PROJECT FILES:
 
 ${renderFiles(files)}
 
-Return ONLY JSON — no prose: {"findings":["<file>: <problem> → <fix>", ...]} (use an empty array if your area is already solid).`;
+Return ONLY JSON — no prose: {"findings":["<file>: <problem> → <fix>", ...], "score": <0-10>} ("score" rates ONLY your specialty: 10 = excellent / ship-ready; use empty findings + a high score when your area is already solid).`;
 
 /** Synthesis prompt: apply ALL reviewers' findings at once and return the complete corrected app. */
 export const buildSynthesisPrompt = (files: StudioFiles, findings: string, preferences: string): string =>
@@ -252,13 +254,15 @@ ${renderFiles(files)}
 Return ONLY a JSON object — no prose outside the JSON:
 {"note":"one short sentence on what you improved","files":[{"path":"/path","content":"<full updated file content>"}]}`;
 
-const parseFindings = (text: string): string[] => {
+const parseReview = (text: string): { findings: string[]; score: number | null } => {
   try {
-    const obj = extractJson(text) as { findings?: unknown };
+    const obj = extractJson(text) as { findings?: unknown; score?: unknown };
     const arr = Array.isArray(obj?.findings) ? obj.findings : [];
-    return arr.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).slice(0, 30);
+    const findings = arr.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).slice(0, 30);
+    const score = typeof obj?.score === 'number' && Number.isFinite(obj.score) ? Math.max(0, Math.min(10, obj.score)) : null;
+    return { findings, score };
   } catch {
-    return [];
+    return { findings: [], score: null };
   }
 };
 
@@ -269,6 +273,10 @@ export interface RunStudioAgentsParallelDeps {
   synthesize: (prompt: string) => Promise<string>;
   onEvent?: (e: StudioAgentEvent) => void;
   signal?: AbortSignal;
+  /** Critique rounds (review → synthesis), default 1, capped at 3. Each round re-reviews the latest files. */
+  maxRounds?: number;
+  /** Composite score (0–10) at/above which we stop early — the Design-Jury "ship" bar (default 8). */
+  shipScore?: number;
 }
 
 /**
@@ -288,45 +296,60 @@ export const runStudioAgentsParallel = async (
   const ordered = sanitizeAgentIds(agentIds);
   const total = ordered.length;
   const trace: StudioAgentTraceEntry[] = [];
+  const maxRounds = Math.max(1, Math.min(3, deps.maxRounds ?? 1));
+  const shipScore = deps.shipScore ?? 8;
+  let composite: number | undefined;
 
-  // 1) PARALLEL review — every specialist critiques the same base concurrently (read-only).
-  for (const id of ordered) deps.onEvent?.({ stage: 'agent', agentId: id, name: STUDIO_AGENTS[id].name, status: 'running' });
-  const reviews = await Promise.all(
-    ordered.map(async (id) => {
-      const def = STUDIO_AGENTS[id];
-      try {
-        const findings = parseFindings(await deps.review(buildReviewPrompt(def, working, preferences), def.toolNames));
-        const status: 'done' | 'skipped' = findings.length ? 'done' : 'skipped';
-        const note = findings.length ? `${findings.length} finding(s)` : 'no issues';
-        trace.push({ id, name: def.name, status, note, changed: [] });
-        deps.onEvent?.({ stage: 'agent', agentId: id, name: def.name, status, note });
-        return { name: def.name, findings };
-      } catch (err) {
-        const note = (err as Error)?.message || 'review failed';
-        trace.push({ id, name: def.name, status: 'error', note, changed: [] });
-        deps.onEvent?.({ stage: 'agent', agentId: id, name: def.name, status: 'error', note });
-        return { name: def.name, findings: [] as string[] };
-      }
-    })
-  );
+  // "Design Jury": each round runs PARALLEL scored reviews on the latest files, then ONE synthesis
+  // applies all findings (one writer → no conflicting edits). Stop early once the app is clean or the
+  // composite score hits the ship bar; otherwise iterate up to maxRounds.
+  for (let round = 0; round < maxRounds; round += 1) {
+    if (deps.signal?.aborted) break;
+    for (const id of ordered) deps.onEvent?.({ stage: 'agent', agentId: id, name: STUDIO_AGENTS[id].name, status: 'running', index: round, total });
+    const reviews = await Promise.all(
+      ordered.map(async (id) => {
+        const def = STUDIO_AGENTS[id];
+        try {
+          const { findings, score } = parseReview(await deps.review(buildReviewPrompt(def, working, preferences), def.toolNames));
+          const status: 'done' | 'skipped' = findings.length ? 'done' : 'skipped';
+          const note = `${findings.length ? `${findings.length} finding(s)` : 'no issues'}${score != null ? ` · ${score}/10` : ''}`;
+          trace.push({ id, name: def.name, status, note, changed: [] });
+          deps.onEvent?.({ stage: 'agent', agentId: id, name: def.name, status, note, index: round, total });
+          return { findings, score };
+        } catch (err) {
+          const note = (err as Error)?.message || 'review failed';
+          trace.push({ id, name: def.name, status: 'error', note, changed: [] });
+          deps.onEvent?.({ stage: 'agent', agentId: id, name: def.name, status: 'error', note, index: round, total });
+          return { findings: [] as string[], score: null as number | null };
+        }
+      })
+    );
 
-  // 2) SINGLE synthesis — apply all findings at once (one writer → no conflicting edits).
-  const allFindings = reviews
-    .filter((r) => r.findings.length)
-    .map((r) => `## ${r.name}\n${r.findings.map((f) => `- ${f}`).join('\n')}`)
-    .join('\n\n');
-  if (allFindings && !deps.signal?.aborted) {
+    const scores = reviews.map((r) => r.score).filter((s): s is number => s != null);
+    composite = scores.length ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10 : undefined;
+
+    const allFindings = ordered
+      .map((id, i) => ({ name: STUDIO_AGENTS[id].name, findings: reviews[i].findings }))
+      .filter((r) => r.findings.length)
+      .map((r) => `## ${r.name}\n${r.findings.map((f) => `- ${f}`).join('\n')}`)
+      .join('\n\n');
+
+    // Ship if nothing to fix, or the jury says it's good enough.
+    if (!allFindings || (composite != null && composite >= shipScore) || deps.signal?.aborted) break;
+
     try {
       const parsed = parseFixResponse(await deps.synthesize(buildSynthesisPrompt(working, allFindings, preferences)));
       const safe = sanitizeFixFiles(parsed.files, { maxFiles: 40 });
       const changed = Object.keys(safe.files);
       if (changed.length) working = { ...working, ...safe.files };
-      trace.push({ id: 'synthesis', name: 'Synthesis', status: changed.length ? 'done' : 'skipped', note: parsed.note, changed });
+      trace.push({ id: 'synthesis', name: `Synthesis (round ${round + 1})`, status: changed.length ? 'done' : 'skipped', note: parsed.note, changed });
+      if (!changed.length) break; // nothing changed → further rounds won't help
     } catch (err) {
-      trace.push({ id: 'synthesis', name: 'Synthesis', status: 'error', note: (err as Error)?.message || 'synthesis failed', changed: [] });
+      trace.push({ id: 'synthesis', name: `Synthesis (round ${round + 1})`, status: 'error', note: (err as Error)?.message || 'synthesis failed', changed: [] });
+      break;
     }
   }
 
   deps.onEvent?.({ stage: 'done', total });
-  return { files: working, trace };
+  return { files: working, trace, score: composite };
 };
