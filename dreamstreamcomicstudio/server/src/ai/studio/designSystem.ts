@@ -236,8 +236,8 @@ export const CURATED_MCP_CATALOG: CuratedMcp[] = [
   },
   {
     id: 'opendesign',
-    name: 'Open Design (142+ design systems + skills)',
-    what: 'nexu-io/open-design as an MCP server: 142+ brand-grade DESIGN.md systems + 100+ design skills the agents can read on demand. A curated subset is also baked in as DESIGN_PRESETS.',
+    name: 'Open Design (local design assets via MCP)',
+    what: "nexu-io/open-design's stdio MCP server (od mcp install) exposes a LOCAL Open Design instance via od search-files / get-file / get-artifact / plugin run (loopback by default) — i.e. it reads YOUR local OD projects, it is not a hosted design-system catalog. The brand-grade design SYSTEMS themselves are onboarded directly as DESIGN_PRESETS (Apache-2.0 DESIGN.md content).",
     transport: 'stdio',
     pkg: 'open-design (od mcp install)',
     license: 'Apache-2.0',
