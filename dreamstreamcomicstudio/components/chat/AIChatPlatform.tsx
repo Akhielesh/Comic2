@@ -21,6 +21,8 @@ import { fetchModelCatalog, type CatalogModel } from '../../services/modelCatalo
 import type { ChatReasoningLevel, ChatRequestMessage, ChatMessagePart, UniversalAssistantContext } from '../../apiTypes';
 import type { Project } from '../../types';
 import { sendChatMessageStream, runSwarmStream, updateChatMemory } from '../../services/chatApi';
+import { runRecipe } from '../../services/recipes';
+import type { ChatSkill } from '../../services/chatSkills';
 import { gatherClientContext } from '../../services/clientContext';
 import { toggleConnector, type ChatConnector } from '../../services/chatConnectors';
 import { recommendModels, detectTools } from '../../services/chatSuggest';
@@ -281,7 +283,10 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
             // Preserve the Auto-vs-pinned choice so a new chat behaves like the last.
             autoMode: activeSession.autoMode,
             lockedSource: activeSession.lockedSource,
-            tools: [...activeSession.tools]
+            tools: [...activeSession.tools],
+            // Carry over the user's enabled MCP servers/sources too — losing them on
+            // every new chat was why source selections "never stuck".
+            mcpServers: [...(activeSession.mcpServers || [])]
           }
         : {}
     );
@@ -461,8 +466,10 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     reqSource?: ModelSourceId;
     reqTools: string[];
     regenerateTurnId?: string;
+    /** When set, run a recipe (a `/`-skill) instead of a normal chat completion. */
+    recipeRun?: { recipeId: string; values: Record<string, unknown> };
   }) => {
-    const { sessionId, baseTurns, reqModel, reqSource, reqTools, regenerateTurnId } = opts;
+    const { sessionId, baseTurns, reqModel, reqSource, reqTools, regenerateTurnId, recipeRun } = opts;
     // Bind to the TARGET session (captured at send time), not whatever chat happens to
     // be active when an async tick resolves — so switching/creating chats mid-stream
     // never crosses settings or output between conversations.
@@ -521,26 +528,52 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           turns: s.turns.map((t) => (t.id === aiTurnId ? { ...t, reasoning: (t.reasoning || '') + chunk } : t))
         }));
 
-      // Route through the agent swarm when enabled (OpenRouter only); otherwise the
-      // normal single-model stream. The swarm streams a live plan/agent trace.
+      // Live plan/agent trace → a swarm_trace artifact on the turn (shared by the swarm
+      // path and swarm-backed recipes like /research and /market).
+      const onTrace = (trace: unknown) =>
+        setSessionState((s) => ({
+          ...s,
+          turns: s.turns.map((t) =>
+            t.id === aiTurnId
+              ? { ...t, artifacts: [{ type: 'swarm_trace', data: trace }, ...((t.artifacts || []).filter((a) => a.type !== 'swarm_trace'))] }
+              : t
+          )
+        }));
+
+      // Three generation paths: a `/`-skill recipe, the agent swarm, or a normal stream.
       const useSwarm = Boolean(session.swarm) && reqSource === 'openrouter';
-      const res = useSwarm
-        ? await runSwarmStream(reqBody, {
-            signal: controller.signal,
-            onDelta,
-            onReasoning,
-            // Surface the live plan/agent trace as a swarm_trace artifact on the turn.
-            onTrace: (trace) =>
-              setSessionState((s) => ({
-                ...s,
-                turns: s.turns.map((t) =>
-                  t.id === aiTurnId
-                    ? { ...t, artifacts: [{ type: 'swarm_trace', data: trace }, ...((t.artifacts || []).filter((a) => a.type !== 'swarm_trace'))] }
-                    : t
-                )
-              }))
-          })
-        : await sendChatMessageStream(reqBody, { signal: controller.signal, onDelta, onReasoning });
+      const res = recipeRun
+        ? await (async () => {
+            const outcome = await runRecipe(
+              {
+                recipeId: recipeRun.recipeId,
+                values: recipeRun.values,
+                messages: reqMessages,
+                model: reqSource === 'openrouter' ? reqModel : undefined,
+                source: 'openrouter',
+                systemPrompt: reqBody.systemPrompt
+              },
+              { onDelta, onTrace },
+              controller.signal
+            );
+            if (outcome.error) throw new Error(outcome.error);
+            return {
+              text: outcome.text,
+              model: outcome.model || reqModel || 'recipe',
+              requestedModel: reqModel,
+              reasoningLevel: session.reasoningLevel,
+              webSearch: session.webSearch,
+              reasoning: undefined as string | undefined,
+              citations: outcome.citations,
+              toolEvents: outcome.toolEvents,
+              images: outcome.images,
+              artifacts: outcome.artifacts,
+              notices: outcome.notices
+            };
+          })()
+        : useSwarm
+          ? await runSwarmStream(reqBody, { signal: controller.signal, onDelta, onReasoning, onTrace })
+          : await sendChatMessageStream(reqBody, { signal: controller.signal, onDelta, onReasoning });
 
       // Finalize: snapshot this answer as a variant and show it as the active one.
       updateSession(sessionId, (s) => ({
@@ -626,6 +659,36 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     }));
 
     await runGeneration({ sessionId, baseTurns, reqModel, reqSource, reqTools });
+  };
+
+  // Run a `/`-command skill: append a user turn showing the command, then stream the
+  // matching recipe's result back into the conversation (same machinery as a normal turn).
+  const handleRunSkill = async (skill: ChatSkill, arg: string) => {
+    if (!activeSession || busy) return;
+    const sessionId = activeSession.id;
+    const display = `/${skill.command}${arg ? ` ${arg}` : ''}`;
+    const userTurn: ChatTurn = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: display,
+      createdAt: Date.now()
+    };
+    const isFirst = activeSession.turns.length === 0;
+    const baseTurns = [...activeSession.turns, userTurn];
+    updateSession(sessionId, (s) => ({
+      ...s,
+      turns: baseTurns,
+      title: isFirst ? `${skill.label}: ${arg || skill.label}`.slice(0, 60) : s.title,
+      updatedAt: Date.now()
+    }));
+    await runGeneration({
+      sessionId,
+      baseTurns,
+      reqModel: activeSession.modelId || undefined,
+      reqSource: activeSession.source || undefined,
+      reqTools: [],
+      recipeRun: { recipeId: skill.recipeId, values: skill.buildValues(arg) }
+    });
   };
 
   // Regenerate an assistant turn: re-run the prompt that produced it, keeping the
@@ -876,6 +939,7 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
         onOpenModelPicker={() => setShowModelPicker(true)}
         onSend={handleSend}
+        onRunSkill={handleRunSkill}
         onStop={handleStop}
         onBranch={handleBranch}
         onRegenerate={handleRegenerate}

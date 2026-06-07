@@ -1,11 +1,12 @@
 import React, { useRef, useState } from 'react';
-import { Send, Paperclip, X, Brain, Square, Loader2, LayoutGrid, FileText, Wand2, Undo2, Network, Server } from 'lucide-react';
+import { Send, Paperclip, X, Brain, Square, Loader2, LayoutGrid, FileText, Wand2, Undo2, Network, Server, Slash } from 'lucide-react';
 import type { ChatReasoningLevel } from '../../apiTypes';
 import type { ChatAttachment } from '../../services/chatStorage';
 import { enhancePrompt } from '../../services/chatApi';
 import { REASONING_LEVELS, type ChatModelFeatures } from '../../services/chatFeatures';
 import type { ChatConnector } from '../../services/chatConnectors';
 import type { McpServerConfig } from '../../apiTypes';
+import { type ChatSkill, isSlashQuery, slashQuery, filterSkills, parseSkillInput } from '../../services/chatSkills';
 
 interface ChatComposerProps {
   busy: boolean;
@@ -26,6 +27,8 @@ interface ChatComposerProps {
   onToggleConnector: (connector: ChatConnector, on: boolean) => void;
   onToggleMcpServer: (id: string, on: boolean) => void;
   onSend: (text: string, attachments: ChatAttachment[]) => void;
+  /** Run a `/`-command skill (a recipe) instead of a plain message. */
+  onRunSkill: (skill: ChatSkill, arg: string) => void;
   onStop: () => void;
 }
 
@@ -65,6 +68,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   onToggleConnector,
   onToggleMcpServer,
   onSend,
+  onRunSkill,
   onStop
 }) => {
   const [text, setText] = useState('');
@@ -72,8 +76,30 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   const [enhancing, setEnhancing] = useState(false);
   // Holds the pre-enhancement draft so the user can undo a suggestion they dislike.
   const [beforeEnhance, setBeforeEnhance] = useState<string | null>(null);
+  // Slash-command ("skills") menu: open while typing `/cmd` with no space yet.
+  const [skillIndex, setSkillIndex] = useState(0);
+  const [menuDismissed, setMenuDismissed] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const skillMatches = isSlashQuery(text) && !menuDismissed ? filterSkills(slashQuery(text)) : [];
+  const menuOpen = skillMatches.length > 0;
+  const activeSkill = menuOpen ? skillMatches[Math.min(skillIndex, skillMatches.length - 1)] : null;
+
+  // Pick a skill from the menu: drop its command into the input so the user can type the
+  // argument (or run immediately if the skill takes no argument).
+  const acceptSkill = (skill: ChatSkill) => {
+    if (!skill.argRequired) {
+      onRunSkill(skill, '');
+      setText('');
+      setMenuDismissed(false);
+      if (textareaRef.current) textareaRef.current.style.height = 'auto';
+      return;
+    }
+    setText(`/${skill.command} `);
+    setMenuDismissed(true);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  };
 
   const canSend = (text.trim().length > 0 || attachments.length > 0) && !busy;
   const canEnhance = text.trim().length > 2 && !busy && !enhancing;
@@ -104,16 +130,54 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
     requestAnimationFrame(() => textareaRef.current && autoGrow(textareaRef.current));
   };
 
-  const submit = () => {
-    if (!canSend) return;
-    onSend(text.trim(), attachments);
+  const resetInput = () => {
     setText('');
     setAttachments([]);
     setBeforeEnhance(null);
+    setMenuDismissed(false);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
   };
 
+  const submit = () => {
+    if (busy) return;
+    // A complete `/command arg` runs the matching skill (recipe) instead of sending text.
+    const parsed = parseSkillInput(text.trim());
+    if (parsed) {
+      if (parsed.arg || !parsed.skill.argRequired) {
+        onRunSkill(parsed.skill, parsed.arg);
+        resetInput();
+      }
+      // `/research` with no argument yet: keep it in the box, wait for the topic.
+      return;
+    }
+    if (!canSend) return;
+    onSend(text.trim(), attachments);
+    resetInput();
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (menuOpen) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSkillIndex((i) => (i + 1) % skillMatches.length);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSkillIndex((i) => (i - 1 + skillMatches.length) % skillMatches.length);
+        return;
+      }
+      if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+        e.preventDefault();
+        if (activeSkill) acceptSkill(activeSkill);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setMenuDismissed(true);
+        return;
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       submit();
@@ -229,7 +293,42 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
         </div>
       )}
 
-      <div className="flex items-end gap-2">
+      <div className="relative flex items-end gap-2">
+        {/* Slash-command (skills) menu */}
+        {menuOpen && (
+          <div className="absolute bottom-full left-0 right-0 z-20 mb-2 overflow-hidden rounded-xl border-2 border-black bg-white shadow-comic animate-fade-in">
+            <div className="flex items-center gap-1 border-b-2 border-black bg-brand-yellow px-3 py-1.5 text-[11px] font-extrabold uppercase tracking-wide">
+              <Slash className="h-3 w-3" /> Skills — ↑↓ choose · Enter to pick · Esc to dismiss
+            </div>
+            <ul className="max-h-64 overflow-y-auto">
+              {skillMatches.map((s, i) => {
+                const active = i === Math.min(skillIndex, skillMatches.length - 1);
+                return (
+                  <li key={s.command}>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        acceptSkill(s);
+                      }}
+                      onMouseEnter={() => setSkillIndex(i)}
+                      className={`flex w-full items-start gap-2 px-3 py-2 text-left ${active ? 'bg-fuchsia-50' : 'hover:bg-slate-50'}`}
+                    >
+                      <span className="mt-0.5 text-base leading-none">{s.emoji}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-1.5">
+                          <code className="text-[12px] font-extrabold">/{s.command}</code>
+                          <span className="text-[11px] text-slate-400">{s.argRequired ? `<${s.argName}>` : `[${s.argName}]`}</span>
+                        </span>
+                        <span className="block text-[11px] text-slate-500">{s.description}</span>
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
         {(
           <>
             <input
@@ -263,13 +362,16 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
           ref={textareaRef}
           value={text}
           onChange={(e) => {
-            setText(e.target.value);
+            const v = e.target.value;
+            setText(v);
+            setSkillIndex(0);
+            if (!v.startsWith('/')) setMenuDismissed(false);
             if (beforeEnhance !== null) setBeforeEnhance(null);
             autoGrow(e.target);
           }}
           onKeyDown={handleKeyDown}
           rows={1}
-          placeholder="Message the model…  (Enter to send, Shift+Enter for newline)"
+          placeholder="Message the model…  (type / for skills · Enter to send)"
           className="flex-1 resize-none border-2 border-black rounded-lg px-3 py-2.5 text-sm outline-none focus:shadow-comic-hover max-h-[200px]"
         />
 
