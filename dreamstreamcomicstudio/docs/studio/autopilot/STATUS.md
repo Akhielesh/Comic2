@@ -6,6 +6,16 @@
 
 **Last updated:** 2026-06-07 · **Updated by:** Claude · **Branch:** `claude/gracious-albattani-bDL8T`
 
+> Latest (2026-06-07): **ENTERPRISE FOUNDATIONS AUDITED + PLANNED + CLOUDFLARE ANSWERED.** Ran
+> a code-level audit of all 10 cross-cutting concerns (sessions, sync, concurrency, model
+> reliability, testing, design, integrations, observability, docs, security) →
+> [`F-ENTERPRISE-FOUNDATIONS.md`](./F-ENTERPRISE-FOUNDATIONS.md) (F0–F10, file-referenced,
+> ranked). Verified Cloudflare capabilities (2026-06) and defined the enterprise topology
+> (Workers + **Durable Objects** + **Workflows** + Containers) →
+> [`ARCHITECTURE-CLOUDFLARE.md`](./ARCHITECTURE-CLOUDFLARE.md). **Revised sequencing:** F0
+> (observability) → F1 (provider reliability) → F2 (distributed correctness) ship **before**
+> A2 wires real autonomy. Still nothing built — awaiting owner go-ahead.
+
 > Latest (2026-06-07): **PLAN LANDED.** Defined the Autopilot workstream — the autonomous,
 > 24/7 "describe an idea → agents build & ship it continuously" layer on top of the existing
 > studio. Master plan + operating model + this tracker created; wired into `../00-STATUS.md`
@@ -37,11 +47,36 @@ Build       ░░░░░░░░░░░░░░░░░░░░    0%  
 
 Legend: ✅ done · 🟢 backend/partial · 🟡 in progress · 📋 planned · ⛔ blocked
 
+## Foundations board (F-series — runs under the A-series)
+
+Full detail + file refs: [`F-ENTERPRISE-FOUNDATIONS.md`](./F-ENTERPRISE-FOUNDATIONS.md).
+Current state is audited (🟡 partial across the board); these epics close the gap.
+
+| Epic | Title | Priority | Status |
+|---|---|---|---|
+| F0 | Observability (Sentry, metrics, tracing, audit log) | **P0** — ship before A2 | 📋 planned |
+| F1 | AI provider reliability (key pool, circuit breaker, cross-provider failover) | **P0** — the owner's #1 pain | 📋 planned |
+| F2 | Distributed correctness (shared limits, optimistic concurrency, idempotency) | **P0** — ship before A2 | 📋 planned |
+| F3 | Session & identity hardening (first-party sessions, JWKS, device revocation) | P1 | 📋 planned |
+| F4 | Real-time & multi-device sync (Durable Objects) | P1 | 📋 planned |
+| F5 | Testing & quality gates (integration, E2E, contract, coverage gate) | P1 | 📋 planned |
+| F6 | Schema & migration management (runner + RLS-coverage CI) | P1 | 📋 planned |
+| F7 | API contract & docs (OpenAPI, unified docs) | P2 | 📋 planned |
+| F8 | Input validation & supply-chain security (zod, helmet, CI scans) | P1 | 📋 planned |
+| F9 | Design-system unification & a11y | P2 | 📋 planned |
+| F10 | Integrations framework unification (catalog, webhooks, connection state) | P2 | 📋 planned |
+
 ## ➡️ NEXT STEP
 
-**Owner decision:** approve starting **Epic A0 — Brakes first** (admin-only, flag-gated,
-zero impact on existing users). Then Claude builds A0→A2 (governed-but-idle loop) before
-wiring any real builds. See [`00-MASTER-PLAN.md` §9](./00-MASTER-PLAN.md#9-the-epic--sprint-backlog).
+**Revised, enterprise-correct order:** ship **F0 → F1 → F2** (so the platform is observable,
+its providers are reliable, and limits hold across instances), then **A0 brakes → A1 control
+plane → A2 loop engine**, with F3–F10 running alongside A3–A9.
+
+**Owner decision:** approve starting **F1 (AI provider reliability)** and **F0 (observability)**
+— these directly fix the "model connection & source issues" you flagged and are independent,
+additive, and safe to ship now. (Or start **A0** if you'd rather stand up the autonomy
+governance first.) See [`F-ENTERPRISE-FOUNDATIONS.md`](./F-ENTERPRISE-FOUNDATIONS.md) +
+[`00-MASTER-PLAN.md` §9](./00-MASTER-PLAN.md#9-the-epic--sprint-backlog).
 
 ## Open decisions
 
