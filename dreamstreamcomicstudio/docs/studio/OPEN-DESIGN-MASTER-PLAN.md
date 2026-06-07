@@ -33,11 +33,11 @@ so generated apps get exact CSS variables.
 ## B. Skills (155) — onboard as a techniques axis
 **Native:** `DESIGN_SKILLS` — reusable technique recipes auto-applied per prompt + injected into the
 directive.
-**Status:** ✅ **22 shipped** across layout/motion/data/states/nav (incl. the 7 motion-graphics ones).
-**Plan:** expand to cover the remaining text-skill themes from the repo: branding/strategy
-(`brand-guidelines`, `creative-director`, `color-expert`, `design-review`, `taste-skill`), GSAP family,
-charts (`d3-visualization`, `data-report`), 3D (`threejs`, `shader-dev`), social cards, docs, Figma
-flows. Pure text → vendor as skills, grouped by category.
+**Status:** ✅ **38 shipped** — layout/motion/data/states/nav + the 7 motion-graphics ones + a brand/
+systems/product wave (brand-system, color-system, type-system, d3-charts, 3D/WebGL, social/OG cards,
+auth-flow, forms+validation, search+filter, onboarding tour, pricing table, SEO/meta, i18n, realtime,
+print styles, resilient errors). Pure text, auto-recommended per prompt. **Plan:** keep adding niche
+themes (GSAP deep-dives, Figma flows) on demand.
 
 ## C. Plugins (261) — onboard by category
 | Category | Count | Native onboarding | Status |
@@ -71,7 +71,7 @@ HTML ✅ (within zip) · Markdown ✅ (`studioExport`) · PDF ✅ (print preview
 
 ## G. Quality / review (Critique Theater / Design Jury)
 **open-design:** 5 panelists (Designer/Critic/Brand/Accessibility/Copy), composite score, ≤3 rounds, ship ≥8.
-**Native:** ✅ **parallel review → single synthesis** (`runStudioAgentsParallel`) + completeness self-review + build-fix loop. **Plan:** add an explicit *scored* critique loop (score dimensions + iterate until threshold) to match the Jury exactly. 🚧
+**Native:** ✅ **Scored parallel review → single synthesis** (`runStudioAgentsParallel`): each specialist scores its area 0–10 + lists findings; we compute a composite, synthesize all findings, and **iterate up to 2 rounds until the composite hits the ship bar (8)** — the Design Jury, on our stack. Plus the completeness self-review + build-fix loop. ✅
 
 ## H. Tooling / infra (re-implemented or N/A on our stack)
 - **Model router** → our `autoRouter` (quality-first coder). ✅
@@ -83,13 +83,17 @@ HTML ✅ (within zip) · Markdown ✅ (`studioExport`) · PDF ✅ (print preview
 ---
 
 ## Sequenced backlog (one-by-one, highest value first)
-1. **Critique scored loop** (G) — match the Design Jury: dimensioned scoring + iterate-to-threshold on top of parallel synthesis.
-2. **Expand skills** (B) — branding/GSAP/charts/3D/social/docs/Figma technique recipes (vendored text).
-3. **Image generation tool** (E) — provider-pluggable, BYOK, opt-in; unlocks the 45 image-template packs.
-4. **Vendor more real design systems + tokens** (A) — bring exact `DESIGN.md` + `design-tokens.json` for top brands.
+1. ~~**Critique scored loop**~~ ✅ shipped (scored review + iterate-to-ship-bar).
+2. ~~**Expand skills**~~ ✅ shipped (38 skills across the major themes).
+3. **Image generation tool** (E) — provider-pluggable, BYOK, opt-in; unlocks the 45 image-template packs. *(needs an image provider key.)*
+4. **Vendor more real design systems + tokens** (A) — bring exact `DESIGN.md` + `design-tokens.json` for top brands beyond the 40 shipped.
 5. **Studio workflows** (C scenarios) — named generate/refine/migrate/media pipelines surfaced in the UI.
-6. **Live data-driven artifacts** (D) — `html_template_v1`-style data binding for dashboards.
+6. **Live data-driven artifacts** (D) — `html_template_v1`-style data binding for dashboards. *(larger feature.)*
 7. **PPTX export** (F) — only if demanded (heavy lib).
+
+> Items 3, 6, 7 genuinely need an API key (image provider), a substantial new subsystem (live-data
+> binding), or a heavy dependency (PPTX) — they can't be responsibly "completed + verified" blind, so
+> they're scoped here rather than half-shipped. Say the word (or provide the key) and I'll build them.
 
 ## Shipped so far (this program)
 40 design systems + picker · 22 design skills (incl. motion-graphics) · deck artifact · Expo/RN web+mobile ·
