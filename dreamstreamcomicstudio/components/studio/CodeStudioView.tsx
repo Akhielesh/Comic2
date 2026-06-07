@@ -174,6 +174,9 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     () => (getStudioModelSelection().defaultTemplate as CodeStudioTemplate | null) ?? undefined
   );
   const [previewError, setPreviewError] = useState<string | null>(null);
+  // True while the AI is auto-fixing a preview error — drives a CALM loading bar instead of the
+  // old red banner that flashed on/off through each repair cycle.
+  const [autofixing, setAutofixing] = useState(false);
   // Debounce preview errors: the in-browser preview reports transient compile/HMR blips while a
   // refine streams in, which made the error banner flash. Only surface an error that *persists*
   // (~1.2s); clear it immediately on recovery. Stable identity so the watcher effect is steady.
@@ -186,12 +189,15 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const generatingRef = useRef(false);
   const onPreviewError = useCallback((e: string | null) => {
     if (previewErrTimer.current) { clearTimeout(previewErrTimer.current); previewErrTimer.current = null; }
-    if (!e) { setPreviewError(null); autofixCountRef.current = 0; return; }
+    if (!e) { setPreviewError(null); setAutofixing(false); autofixCountRef.current = 0; return; }
     previewErrTimer.current = window.setTimeout(() => {
       setPreviewError(e);
       if (!generatingRef.current && autofixCountRef.current < MAX_AUTOFIX) {
         autofixCountRef.current += 1;
+        setAutofixing(true); // calm "auto-fixing…" state, not a flashing error
         autofixRef.current(e);
+      } else {
+        setAutofixing(false); // already building, or budget exhausted → surface a clickable error
       }
     }, 1200);
   }, []);
@@ -585,8 +591,9 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
 
   // Autodebug: feed the preview's error back to the model as a refine ("fix this"). Runs both on
   // the manual button and automatically (autofixRef) when the preview keeps erroring.
-  const handleAutofix = (errorMsg: string) => {
+  const handleAutofix = (errorMsg: string, manual = false) => {
     if (!errorMsg || generating) return;
+    if (manual) { autofixCountRef.current = 0; setAutofixing(true); } // manual retry resets the budget
     appendLog('warn', `Auto-fixing the preview error… (attempt ${autofixCountRef.current || 1}/${MAX_AUTOFIX})`);
     void handleGenerate(`The live preview shows this error — find the ROOT CAUSE and fix it so the app runs cleanly. Return the full corrected files; do not reintroduce the error:\n\n${errorMsg}`);
   };
@@ -670,17 +677,9 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
             </button>
           ))}
         </div>
-        {/* Multi-agent refine — a team of specialists improves the app per your selected agents. */}
-        {hasFiles && (
-          <button
-            onClick={runAgents}
-            disabled={generating}
-            title="A team of specialist agents (architecture, code, frontend, UI, design, data, security, QA) refines your app. Choose which agents in Settings."
-            className={`w-full inline-flex items-center justify-center gap-2 rounded-lg border ${t.edgeStrong} ${t.accentSoft} ${t.accent} px-3 py-2 text-sm font-bold ${t.hover} disabled:opacity-50 ${t.focusRing}`}
-          >
-            <Users className="w-4 h-4" /> Refine with agent team
-          </button>
-        )}
+        {/* The manual "Refine with agent team" button was removed: quality work now runs
+            automatically (strong model + the server's completeness self-review + auto error-fix).
+            The full specialist team is still available via the command palette when wanted. */}
         <BuildTrace />
         {/* What backends/connections the AI's code expects + a one-click .env scaffold (S4.1). */}
         <ServicesPanel
@@ -709,16 +708,24 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
 
   const previewPane = (
     <PaneFrame title="Live preview" icon={<Cloud className="w-4 h-4" />}>
-      {previewError && hasFiles && !previewUrl && !generating && (
+      {/* Calm "auto-fixing" bar while the AI repairs preview/console errors automatically — replaces
+          the old red banner that flashed on/off each repair cycle. */}
+      {hasFiles && !previewUrl && (autofixing || (generating && previewError)) && (
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-violet-500/20 bg-violet-500/10 text-xs">
+          <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin text-violet-400" />
+          <span className="min-w-0 flex-1 text-violet-200/90">Auto-fixing errors so it runs cleanly…</span>
+        </div>
+      )}
+      {/* Only a PERSISTENT, clickable error once auto-fix is exhausted (no flashing, easy to hit). */}
+      {previewError && hasFiles && !previewUrl && !generating && !autofixing && (
         <div className="flex items-start gap-2 px-3 py-2 border-b border-rose-500/20 bg-rose-500/10 text-xs">
           <span className="mt-0.5 shrink-0 font-semibold text-rose-400">⚠ Error</span>
           <span className="min-w-0 flex-1 truncate text-rose-200/90" title={previewError}>{previewError}</span>
           <button
-            onClick={() => handleAutofix(previewError)}
-            disabled={generating}
-            className="shrink-0 inline-flex items-center gap-1 rounded-full bg-violet-500 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-violet-400 disabled:opacity-50"
+            onClick={() => handleAutofix(previewError, true)}
+            className="shrink-0 inline-flex items-center gap-1 rounded-full bg-violet-500 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-violet-400"
           >
-            {generating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />} Fix with AI
+            <Wand2 className="w-3 h-3" /> Fix with AI
           </button>
         </div>
       )}

@@ -64,7 +64,9 @@ const DEFAULTS: StudioModelSelection = {
   mode: 'auto',
   model: null,
   source: null,
-  costPref: 'free',
+  // Default to the STRONGEST available coder — weak free coders can't build real apps. The server
+  // owns the (creative) temperature now, so the client no longer sends one.
+  costPref: 'quality',
   creativity: STUDIO_DEFAULT_CREATIVITY,
   maxIterations: STUDIO_DEFAULT_MAX_ITERATIONS,
   defaultTemplate: null,
@@ -83,7 +85,7 @@ const sanitize = (raw: Partial<StudioModelSelection>): StudioModelSelection => {
     mode: merged.mode === 'specific' ? 'specific' : 'auto',
     model: merged.mode === 'specific' && typeof merged.model === 'string' && merged.model.trim() ? merged.model : null,
     source: merged.source === 'openrouter' || merged.source === 'nvidia' ? merged.source : null,
-    costPref: merged.costPref === 'cheap' || merged.costPref === 'quality' ? merged.costPref : 'free',
+    costPref: merged.costPref === 'cheap' || merged.costPref === 'free' || merged.costPref === 'quality' ? merged.costPref : 'quality',
     creativity: Number.isFinite(merged.creativity) ? clamp(Number(merged.creativity), 0, 1) : STUDIO_DEFAULT_CREATIVITY,
     maxIterations: Number.isInteger(merged.maxIterations)
       ? clamp(merged.maxIterations, 1, STUDIO_MAX_ITERATIONS_CEILING)
@@ -224,9 +226,10 @@ export interface StudioModelRequest {
 
 export const studioModelRequest = (): StudioModelRequest => {
   const s = read();
+  // Temperature is deliberately NOT sent: the server applies a single creative default so every
+  // build is ambitious by default (the per-user creativity knob was removed).
   const req: StudioModelRequest = {
     costPref: s.costPref,
-    temperature: s.creativity,
     maxIterations: s.maxIterations
   };
   if (s.mode === 'specific' && s.model) {

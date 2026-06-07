@@ -129,6 +129,12 @@ export const pickTextModel = async (opts?: PickOpts): Promise<string> => {
       if (preferred.length) text = preferred;
     }
     if (costPref === 'quality') {
+      // Honor an explicit strength ranking (the studio passes STRONG_CODING_PRIORITY so the best
+      // available coder wins, free or paid) before falling back to the largest-context model.
+      for (const needle of (opts?.rankOrder ?? [])) {
+        const hit = text.find((m) => m.id.toLowerCase().includes(needle));
+        if (hit) return hit.id;
+      }
       return [...text].sort(byContextDesc)[0]?.id || TEXT_FALLBACK;
     }
     if (costPref === 'free') {
@@ -161,6 +167,16 @@ export const CODING_MODEL_PRIORITY = [
   'gpt-4o', 'claude', 'gemini-2.0-flash', 'gemini'
 ];
 
+// STRONGEST coders first (frontier, then top open coders) — used in 'quality' mode so BYOK/credit
+// users get the most capable available coder, not just the best FREE one. Needles match catalog ids.
+export const STRONG_CODING_PRIORITY = [
+  'claude-opus-4', 'claude-sonnet-4', 'claude-3.7', 'claude-sonnet', 'claude',
+  'gpt-5', 'gpt-4.1', 'o4-mini', 'o3', 'gpt-4o',
+  'deepseek-coder', 'deepseek-chat', 'v3.2', 'v3.1',
+  'qwen3-coder', 'qwen-2.5-coder', 'glm-4.6', 'minimax-m2', 'kimi-k2',
+  'devstral', 'codestral', 'gemini-2.5-pro', 'gemini-2.5', 'gemini-2.0-flash', 'qwen3'
+];
+
 /** True when a model id looks like a strong coding model. */
 export const prefersCodingModel = (m: AnnotatedModel): boolean => {
   const id = m.id.toLowerCase();
@@ -178,8 +194,10 @@ export const pickCodingModel = async (opts?: PickOpts): Promise<string> => {
   const prefer = userPrefer
     ? (m: AnnotatedModel) => prefersCodingModel(m) || userPrefer(m)
     : prefersCodingModel;
-  // Rank free candidates by coding strength (best coder first), not general-text order.
-  return pickTextModel({ rankOrder: CODING_MODEL_PRIORITY, ...opts, prefer });
+  // Quality → rank by STRONGEST coder first (frontier, BYOK); free/cheap → best FREE coder first.
+  const quality = resolveCostPref(opts) === 'quality';
+  const rankOrder = opts?.rankOrder ?? (quality ? STRONG_CODING_PRIORITY : CODING_MODEL_PRIORITY);
+  return pickTextModel({ ...opts, rankOrder, prefer });
 };
 
 /**

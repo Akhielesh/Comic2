@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 const catalogMock = vi.hoisted(() => ({ models: [] as any[] }));
 vi.mock('../services/modelCatalog.js', () => ({ getCatalog: async () => catalogMock }));
 
-import { pickCodingModel, prefersCodingModel, CODING_MODEL_PRIORITY } from './autoRouter.js';
+import { pickCodingModel, prefersCodingModel, CODING_MODEL_PRIORITY, STRONG_CODING_PRIORITY } from './autoRouter.js';
 
 const model = (over: any) => ({
   id: 'x',
@@ -59,5 +59,27 @@ describe('pickCodingModel', () => {
   it('falls back to a normal pick when no coding model exists', async () => {
     catalogMock.models = [model({ id: 'meta-llama/llama-3.1-8b-instruct:free' })];
     expect(await pickCodingModel()).toBe('meta-llama/llama-3.1-8b-instruct:free');
+  });
+
+  it('quality mode prefers the STRONGEST coder (frontier), free or paid', async () => {
+    catalogMock.models = [
+      model({ id: 'qwen/qwen-2.5-coder-32b-instruct:free' }),
+      model({ id: 'anthropic/claude-sonnet-4', isFree: false, costClass: 'paid', contextLength: 200000 }),
+      model({ id: 'deepseek/deepseek-chat-v3.1:free' }),
+    ];
+    expect(await pickCodingModel({ costPref: 'quality' })).toBe('anthropic/claude-sonnet-4');
+  });
+
+  it('free mode still prefers the best FREE coder over a paid frontier model', async () => {
+    catalogMock.models = [
+      model({ id: 'anthropic/claude-sonnet-4', isFree: false, costClass: 'paid', contextLength: 200000 }),
+      model({ id: 'qwen/qwen3-coder:free' }),
+    ];
+    expect(await pickCodingModel({ costPref: 'free' })).toBe('qwen/qwen3-coder:free');
+  });
+
+  it('STRONG_CODING_PRIORITY is non-empty and lowercase', () => {
+    expect(STRONG_CODING_PRIORITY.length).toBeGreaterThan(0);
+    expect(STRONG_CODING_PRIORITY.every((n) => n === n.toLowerCase())).toBe(true);
   });
 });

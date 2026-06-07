@@ -18,7 +18,7 @@ import {
 import { domainStrength } from '../../services/modelDomains';
 import {
   getStudioModelSelection, setStudioModel, setStudioAuto, setStudioSource,
-  setStudioCostPref, setStudioCreativity, setStudioMaxIterations, setStudioDefaultTemplate,
+  setStudioCostPref, setStudioMaxIterations, setStudioDefaultTemplate,
   setStudioAgents, setStudioAgentPreferences, setStudioAutoRunAgents, setStudioRuntime,
   resetStudioModelSelection, STUDIO_MODEL_CHANGED, STUDIO_MAX_ITERATIONS_CEILING,
   type StudioModelSelection, type StudioCostPref
@@ -280,19 +280,8 @@ export const StudioSettingsPanel: React.FC<{ open: boolean; onClose: () => void 
             </div>
           </section>
 
-          {/* Creativity + iterations */}
-          <section className={`${card} grid sm:grid-cols-2 gap-4`}>
-            <div>
-              <div className="flex items-center justify-between text-sm font-bold mb-1">
-                <span>Creativity</span><span className={`text-xs font-mono ${t.accent}`}>{sel.creativity.toFixed(2)}</span>
-              </div>
-              <input
-                type="range" min={0} max={1} step={0.05} value={sel.creativity}
-                onChange={(e) => setStudioCreativity(parseFloat(e.target.value))}
-                className="w-full accent-violet-500"
-              />
-              <p className={`text-[11px] ${t.textFaint}`}>Lower = precise &amp; deterministic. Higher = more inventive.</p>
-            </div>
+          {/* Self-heal iterations (creativity is now a fixed, ambitious server default — no knob). */}
+          <section className={card}>
             <div>
               <div className="flex items-center justify-between text-sm font-bold mb-1">
                 <span>Self-heal iterations</span><span className={`text-xs font-mono ${t.accent}`}>{sel.maxIterations}</span>

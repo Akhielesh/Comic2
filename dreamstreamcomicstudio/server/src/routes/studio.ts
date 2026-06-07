@@ -61,10 +61,13 @@ const notConfiguredResponse = {
 // exists (OpenRouter preferred, then NVIDIA).
 
 type StudioCostPref = 'free' | 'cheap' | 'quality';
-const STUDIO_GEN_TEMPERATURE = 0.3;
+// Generation leans creative (ambitious, complete apps); fixes stay precise/deterministic.
+const STUDIO_GEN_TEMPERATURE = 0.6;
 const STUDIO_FIX_TEMPERATURE = 0.2;
 const clamp01 = (n: number): number => Math.min(1, Math.max(0, n));
-const normCostPref = (p?: string): StudioCostPref => (p === 'cheap' || p === 'quality' ? p : 'free');
+// Default to the STRONGEST available coder ('quality') — weak free coders can't build real apps.
+// An explicit 'free'/'cheap' from the client is still honored.
+const normCostPref = (p?: string): StudioCostPref => (p === 'cheap' || p === 'free' || p === 'quality' ? p : 'quality');
 const studioTemp = (t: unknown, fallback: number): number =>
   typeof t === 'number' && Number.isFinite(t) ? clamp01(t) : fallback;
 
