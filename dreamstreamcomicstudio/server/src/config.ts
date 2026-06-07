@@ -244,9 +244,12 @@ export const STUDIO_COST_PER_AWAKE_SEC = Number(process.env.STUDIO_COST_PER_AWAK
 
 // --- Phase 10: tools/MCP/sourcing -------------------------------------------------
 // JSON tool-protocol fallback: lets non-OpenRouter models (NVIDIA, free models without
-// native function-calling) use our live tools via a JSON convention. Off by default —
-// it changes the system prompt for those providers, so it's opt-in until validated.
-export const JSON_TOOL_PROTOCOL_ENABLED = parseBooleanEnv(process.env.JSON_TOOL_PROTOCOL_ENABLED, false);
+// native function-calling) use our live tools via a JSON convention. ON by default — without
+// it those providers are entirely tool-blind (no web/news/finance/charts/app-builder), even
+// while the persona claims "live tools enabled". The detector is strict (whole-reply JSON or
+// an explicit {"tool_call":…} wrapper), so a normal answer that merely contains JSON is never
+// mistaken for a call. Set JSON_TOOL_PROTOCOL_ENABLED=false to disable.
+export const JSON_TOOL_PROTOCOL_ENABLED = parseBooleanEnv(process.env.JSON_TOOL_PROTOCOL_ENABLED, true);
 // Bearer token that authenticates the outbound MCP endpoint (external agents calling our
 // tool registry). Empty ⇒ the endpoint is disabled (returns 503) rather than open.
 export const MCP_OUTBOUND_TOKEN = (process.env.MCP_OUTBOUND_TOKEN || '').trim();

@@ -12,7 +12,6 @@
 // actual loop is driven by `runChat` when the protocol is enabled for a non-OpenRouter
 // provider.
 
-import { coerceJsonOrNull } from '../jsonCoerce.js';
 import type { ChatTool } from './types.js';
 
 export interface ParsedToolCall {
@@ -46,32 +45,87 @@ You will then receive a message beginning with "TOOL_RESULT" containing what the
 HOW TO ANSWER — when you have enough information (or no tool is needed), reply normally in prose/Markdown with NO JSON tool_call object. Never fabricate data: if a tool failed or returned nothing useful, say so plainly and answer from your own knowledge with a clear "not from a live source" caveat.`;
 };
 
-/**
- * Detect a tool call in a model reply. Accepts the strict `{"tool_call":{...}}` shape, a
- * bare `{"name":...,"arguments":...}` object, and JSON wrapped in prose or ```fences```
- * (via the shared JSON coercer). Returns null when the reply is a normal answer.
- */
-export const extractToolCall = (text: string): ParsedToolCall | null => {
-  if (!text || typeof text !== 'string') return null;
-  // Fast path: no JSON-looking braces at all.
-  if (!text.includes('{')) return null;
+// Walk a balanced, string-aware JSON object starting at `start` ('{') and return the
+// substring through its matching '}'. Used to pull out an explicit {"tool_call":…} wrapper
+// without tripping over braces inside string values.
+const extractBalanced = (s: string, start: number): string | null => {
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < s.length; i += 1) {
+    const ch = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+    } else if (ch === '"') inStr = true;
+    else if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return s.slice(start, i + 1);
+    }
+  }
+  return null;
+};
 
-  const parsed = coerceJsonOrNull(text);
-  const candidate =
-    parsed && typeof parsed === 'object'
-      ? ((parsed as Record<string, unknown>).tool_call ?? parsed)
-      : null;
+const toCall = (obj: unknown): ParsedToolCall | null => {
+  if (!obj || typeof obj !== 'object') return null;
+  const root = obj as Record<string, unknown>;
+  const candidate = (root.tool_call ?? root) as Record<string, unknown>;
   if (!candidate || typeof candidate !== 'object') return null;
-
-  const c = candidate as Record<string, unknown>;
-  const name = typeof c.name === 'string' ? c.name.trim() : '';
+  const name = typeof candidate.name === 'string' ? candidate.name.trim() : '';
   if (!name) return null;
-  const rawArgs = c.arguments ?? c.args ?? c.parameters ?? {};
+  const rawArgs = candidate.arguments ?? candidate.args ?? candidate.parameters ?? {};
   const args =
     rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs)
       ? (rawArgs as Record<string, unknown>)
       : {};
   return { name, arguments: args };
+};
+
+/**
+ * Detect a tool call in a model reply. STRICT by design: a call is recognized only when
+ * (1) the WHOLE reply is a JSON object (the instructed shape), or (2) the reply contains an
+ * explicit `{"tool_call": {...}}` wrapper. A bare `{"name":...}` found mid-prose is NOT
+ * promoted — that produced false positives (normal answers that merely contained JSON were
+ * mistaken for tool calls, corrupting the reply). Returns null for a normal answer.
+ */
+export const extractToolCall = (text: string): ParsedToolCall | null => {
+  if (!text || typeof text !== 'string') return null;
+  if (!text.includes('{')) return null;
+
+  // Unwrap a reply that is entirely a single ```json fenced block.
+  let body = text.trim();
+  const fence = body.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (fence) body = fence[1].trim();
+
+  // 1) The whole reply is a JSON object (what the protocol asks the model to emit).
+  if (body.startsWith('{') && body.endsWith('}')) {
+    try {
+      const call = toCall(JSON.parse(body));
+      if (call) return call;
+    } catch {
+      /* fall through to the explicit-wrapper scan */
+    }
+  }
+
+  // 2) An explicit {"tool_call": {...}} wrapper anywhere in the reply.
+  const idx = body.indexOf('"tool_call"');
+  if (idx !== -1) {
+    const objStart = body.lastIndexOf('{', idx);
+    if (objStart !== -1) {
+      const slice = extractBalanced(body, objStart);
+      if (slice) {
+        try {
+          const call = toCall(JSON.parse(slice));
+          if (call) return call;
+        } catch {
+          /* not a valid wrapper */
+        }
+      }
+    }
+  }
+  return null;
 };
 
 /**

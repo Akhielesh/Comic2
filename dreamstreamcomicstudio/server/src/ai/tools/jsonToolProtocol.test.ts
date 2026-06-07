@@ -49,6 +49,13 @@ describe('extractToolCall', () => {
     expect(extractToolCall('Here are 3 options: a, b, c.')).toBeNull();
   });
 
+  it('does NOT promote a bare {name} object found mid-prose (false-positive guard)', () => {
+    // A normal answer that merely contains JSON with a `name` field must not be mistaken
+    // for a tool call — that corrupted real answers on the non-OpenRouter path.
+    expect(extractToolCall('Here is an example user record: {"name": "Ada", "role": "admin"}. Hope that helps!')).toBeNull();
+    expect(extractToolCall('To define a function: `{"name": "x"}` is just a JSON object.')).toBeNull();
+  });
+
   it('returns null for empty / non-string input', () => {
     expect(extractToolCall('')).toBeNull();
     expect(extractToolCall(undefined as unknown as string)).toBeNull();
