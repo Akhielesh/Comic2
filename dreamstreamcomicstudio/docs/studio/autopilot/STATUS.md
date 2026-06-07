@@ -6,6 +6,14 @@
 
 **Last updated:** 2026-06-07 · **Updated by:** Claude · **Branch:** `claude/gracious-albattani-bDL8T`
 
+> Latest (2026-06-07): **MASTER SPEC STARTED (~200-page product spec).** Scaffolded
+> [`SPEC-INDEX.md`](./SPEC-INDEX.md) (55 sections across 5 parts) under [`spec/`](./spec/) and
+> wrote Part I strategy core in full depth: 00 executive summary, 01 vision/positioning, 02
+> market/competitive analysis, 03 personas/JTBD. Remaining sections are being written
+> section-by-section (parallel writer-agents). Note: the `/loop` auto-scheduler (cron/wakeup
+> tools) isn't available in this environment, so the spec is built within-session, not on a
+> timer. **4 / 55 sections complete.**
+
 > Latest (2026-06-07): **ENTERPRISE FOUNDATIONS AUDITED + PLANNED + CLOUDFLARE ANSWERED.** Ran
 > a code-level audit of all 10 cross-cutting concerns (sessions, sync, concurrency, model
 > reliability, testing, design, integrations, observability, docs, security) →
