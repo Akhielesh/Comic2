@@ -25,6 +25,7 @@ import { DEV_TOOLS } from './dev.js';
 import { FINANCE_TERMINAL_TOOLS } from './financeTerminal.js';
 import { NANGO_TOOLS } from './nango.js';
 import { VIDEO_TOOLS } from './videoRender.js';
+import { LIVE_TEMPLATE_TOOLS } from './liveTemplateTool.js';
 import { generateAppTool } from './codeStudio.js';
 
 export type { ChatTool, ToolExecResult, ToolContext } from './types.js';
@@ -514,7 +515,9 @@ const FREE_API_TOOLS: ChatTool[] = [
   // tool names resolve; each call returns a clear "not configured" notice until NANGO_SECRET_KEY is set.
   ...NANGO_TOOLS,
   // HTML→MP4 rendering via a self-hosted HyperFrames worker (not configured → clear notice).
-  ...VIDEO_TOOLS
+  ...VIDEO_TOOLS,
+  // Data-driven live HTML artifacts (html_template_v1) — pure + local.
+  ...LIVE_TEMPLATE_TOOLS
 ];
 
 /** All context-free built-in tools, keyed by the name the model/clients reference. */

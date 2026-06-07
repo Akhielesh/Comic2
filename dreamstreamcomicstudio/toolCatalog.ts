@@ -438,6 +438,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
     dataShape: 'Text: a URL/path to the rendered MP4.', docsUrl: 'https://github.com/nexu-io/html-video',
     keywords: ['video', 'mp4', 'render', 'animation', 'motion graphics', 'hyperframes', 'html to video', 'promo', 'explainer']
   },
+  {
+    name: 'render_live_template', label: 'Live data artifact', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (html_template_v1)',
+    description: 'Render a data-driven HTML artifact from an html_template_v1 template ({{ dot.path }} bindings, no JS) + a data object — for live dashboards/reports that re-render from data.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Safe, HTML-escaped interpolated HTML.', docsUrl: 'https://dreamstream.app',
+    keywords: ['live', 'dashboard', 'template', 'data-driven', 'report', 'binding', 'interpolate', 'live artifact']
+  },
   // ---------------------------------------------------------------- dataviz -----
   {
     name: 'render_chart', label: 'Charts', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app SVG)',
