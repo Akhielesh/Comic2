@@ -1320,6 +1320,20 @@ export interface SwarmTraceArtifact {
   agents: SwarmAgentRun[];
 }
 
+/** A premium deep-research report header — summarizes the investigation behind the brief. */
+export interface ResearchReportArtifact {
+  topic: string;
+  depth: 'quick' | 'standard' | 'exhaustive';
+  audience?: string;
+  /** The sub-questions the engine investigated. */
+  questions: string[];
+  /** Distinct sources gathered. */
+  sourceCount: number;
+  /** How many sources were fetched & read in full (vs. snippet only). */
+  readCount: number;
+  sources: { title: string; url: string }[];
+}
+
 // ── Recipes ─────────────────────────────────────────────────────────────────
 // A reusable, parameterized agent workflow (native port of goose recipes). These
 // mirror the server schema in server/src/ai/recipes/schema.ts.

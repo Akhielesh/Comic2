@@ -15,12 +15,13 @@ import { FinanceTerminal } from './artifacts/FinanceTerminal';
 import { CodeStudioCard } from './artifacts/CodeStudioCard';
 import { RecipeCard } from './artifacts/RecipeCard';
 import { RecipeRunCard } from './artifacts/RecipeRunCard';
+import { ResearchReport } from './artifacts/ResearchReport';
 import type {
   WeatherArtifact, NewsResultsArtifact, StockQuoteArtifact,
   VideoResultsArtifact, PlacesResultsArtifact, SwarmTraceArtifact,
   ChartArtifact, MetricBoardArtifact, MapArtifact,
   DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact,
-  RecipeCardArtifact, RecipeRunArtifact
+  RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact
 } from '../../apiTypes';
 
 // A living gallery of the chat's rich-output components, each with sample data, so
@@ -301,6 +302,27 @@ const recipeRunDemo: RecipeRunArtifact = {
   activities: ['Turn this into a one-slide summary', 'Strongest counter-arguments?']
 };
 
+const researchReportDemo: ResearchReportArtifact = {
+  topic: 'solid-state batteries',
+  depth: 'exhaustive',
+  audience: 'a busy executive',
+  questions: [
+    'What are solid-state batteries and how do they differ from Li-ion?',
+    'Which companies and labs lead the field, and what are their timelines?',
+    'What energy-density and safety gains do peer-reviewed results show?',
+    'What manufacturing and cost barriers remain at scale?',
+    'What is the realistic commercialization outlook for EVs by 2030?'
+  ],
+  sourceCount: 11,
+  readCount: 8,
+  sources: [
+    { title: 'Solid-state battery — Wikipedia', url: 'https://en.wikipedia.org/wiki/Solid-state_battery' },
+    { title: 'Toyota outlines solid-state roadmap', url: 'https://www.reuters.com/business/autos-transportation/' },
+    { title: 'QuantumScape Q4 results and data', url: 'https://www.quantumscape.com/' },
+    { title: 'Nature Energy: sulfide electrolyte advances', url: 'https://www.nature.com/nenergy/' }
+  ]
+};
+
 export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Weather station (animated · gauges · map)', type: 'weather', node: <WeatherStation data={weather} /> },
   { title: 'Market card (hover · range timeline · candlesticks)', type: 'stock_quote', node: <MarketCard data={stock} /> },
@@ -318,6 +340,7 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Code Studio card (multi-file app · live preview)', type: 'code_studio', node: <CodeStudioCard data={codeStudioDemo} /> },
   { title: 'Recipe card (reusable agent workflow · params · tools)', type: 'recipe_card', node: <RecipeCard data={recipeDemo} /> },
   { title: 'Recipe run (params · structured output · follow-ups)', type: 'recipe_run', node: <RecipeRunCard data={recipeRunDemo} /> },
+  { title: 'Research report (questions · sources read · grounded brief header)', type: 'research_report', node: <ResearchReport data={researchReportDemo} /> },
   { title: 'Markdown table (inline)', node: <ChatMarkdown text={tableMd} /> }
 ];
 

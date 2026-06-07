@@ -51,6 +51,19 @@ export interface DeepResearchParams {
   onProgress?: (trace: SwarmTraceArtifact) => void;
 }
 
+export interface ResearchReport {
+  topic: string;
+  depth: ResearchDepth;
+  audience?: string;
+  /** The sub-questions the engine actually investigated. */
+  questions: string[];
+  /** Distinct sources gathered. */
+  sourceCount: number;
+  /** How many of those sources were fetched & read in full (vs. snippet only). */
+  readCount: number;
+  sources: { title: string; url: string }[];
+}
+
 export interface DeepResearchResult {
   text: string;
   model: string;
@@ -59,6 +72,8 @@ export interface DeepResearchResult {
   usage: ApiUsage;
   notices?: CapabilityNotice[];
   trace: SwarmTraceArtifact;
+  /** Structured summary of the investigation, for the premium research-report card. */
+  report: ResearchReport;
 }
 
 const DEPTH: Record<
@@ -256,6 +271,17 @@ export const runDeepResearch = async (p: DeepResearchParams): Promise<DeepResear
     })
     .join('\n\n');
 
+  const depth = p.depth ?? 'standard';
+  const report: ResearchReport = {
+    topic,
+    depth,
+    audience: p.audience,
+    questions,
+    sourceCount: sources.length,
+    readCount: readable.size,
+    sources: sources.map((s) => ({ title: s.title, url: s.url }))
+  };
+
   // Honest failure: no grounding → don't write a brief from memory and call it research.
   if (!sources.length) {
     return {
@@ -265,7 +291,8 @@ export const runDeepResearch = async (p: DeepResearchParams): Promise<DeepResear
       model: p.model,
       usage: mergeUsage(usageParts),
       notices: [{ tool: 'deep_research', level: 'error', message: 'Web search returned no sources — the research could not be grounded.' }],
-      trace: trace()
+      trace: trace(),
+      report
     };
   }
 
@@ -292,6 +319,7 @@ export const runDeepResearch = async (p: DeepResearchParams): Promise<DeepResear
     citations: sources.map((s) => ({ url: s.url, title: s.title })),
     toolEvents,
     usage: mergeUsage(usageParts),
-    trace: trace()
+    trace: trace(),
+    report
   };
 };

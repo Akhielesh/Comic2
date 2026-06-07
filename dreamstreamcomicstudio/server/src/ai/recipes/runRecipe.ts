@@ -160,7 +160,11 @@ export const runRecipe = async (params: RunRecipeParams): Promise<RunRecipeResul
         model: res.model,
         citations: res.citations,
         toolEvents: res.toolEvents,
-        artifacts: [baseArtifact('done'), { type: 'swarm_trace', data: res.trace }],
+        artifacts: [
+          { type: 'research_report', data: res.report },
+          { type: 'swarm_trace', data: res.trace },
+          baseArtifact('done')
+        ],
         notices: res.notices,
         usage: res.usage,
         activities: r.activities
