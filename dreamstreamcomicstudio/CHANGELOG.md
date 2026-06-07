@@ -6,6 +6,16 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Autopilot workstream — plan only (2026-06-07):** defined the always-on autonomous
+  ventures layer (idea → roadmap → continuous build/test/deploy/iterate, 24/7, with hard
+  budgets + human checkpoints, hybrid hosting via managed previews + BYO accounts through
+  Nango, and central Stripe billing). New docs under `docs/studio/autopilot/`:
+  `00-MASTER-PLAN.md` (vision delta, architecture, security/multi-tenancy, hosting adapters,
+  billing, the A0–A9 epic backlog), `OPERATING-MODEL.md` (how Claude builds it continuously +
+  safety gates), `STATUS.md` (living tracker). Wired into `docs/studio/00-STATUS.md` and
+  `09-ROADMAP.md`. **No code yet** — Epic A0 (budgets/kill-switch/checkpoints/audit) is next,
+  flag-gated (`VENTURES_ENABLED` off) + admin-only, on owner go-ahead. Owner decisions locked:
+  hybrid hosting, generalize the studio, continuous-with-checkpoints autonomy, extend this repo.
 - **Code Studio (Sprint 0):** a dedicated, dark, animated workspace route — a 3-pane shell
   (prompt/build · code · live preview) with a working "Run live". Code apps in AI Chat now
   hand off with a single **"Open in Code Studio"** button. Admin-gated private preview;

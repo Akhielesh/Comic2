@@ -4,7 +4,16 @@
 > DreamStream Studio. Every agent/PR that changes anything **must** update this file and
 > `CHANGELOG.md`. If this file and reality disagree, fix this file.
 
-**Last updated:** 2026-06-06 · **Updated by:** Claude · **Branch:** `claude/wizardly-franklin-EgL8k` (draft PR)
+**Last updated:** 2026-06-07 · **Updated by:** Claude · **Branch:** `claude/gracious-albattani-bDL8T` (draft PR)
+
+> Latest (2026-06-07): **AUTOPILOT WORKSTREAM PLANNED (always-on autonomous ventures).** New
+> layer on top of the studio: user describes a business/product idea → agents continuously
+> plan→build→test→deploy→iterate 24/7, with **hard budgets + human checkpoints**, hybrid
+> hosting (managed previews + BYO accounts via Nango), and central Stripe billing. This is the
+> deliberate decision to build what `01-VISION.md` listed as a non-goal ("24/7 always-on as the
+> core loop"), safely. Plan + operating model + tracker in
+> [`autopilot/`](./autopilot/00-MASTER-PLAN.md). **Nothing built yet** — Epic A0 (the brakes)
+> is next, flag-gated + admin-only, on owner go-ahead.
 
 > Latest (2026-06-06): **AUTO-VERIFY + SELF-REPAIR (verifier agent).** Generation now statically checks
 > its own output (empty/placeholder files, missing React default export, invalid JSON, unresolved relative
@@ -126,6 +135,12 @@ green light before I change non-studio surfaces).
 | 11 | [Guardrails & personality](./phases/PHASE-11-guardrails-personality.md) (unified voice, output guardrails, code safety) | 🟢 **shipped** — unified `persona.ts` everywhere + output `guardrails.ts` (leak/fabrication/citation) wired + audit log; **studio code-safety + trust-chip UI deferred** | — |
 
 Legend: ✅ done · 🟡 in progress/partial · 📋 planned · ⛔ blocked
+
+**Autopilot — always-on autonomous ventures (new layer, separate tracker):**
+
+| Workstream | Title | Status | Tracker |
+|---|---|---|---|
+| Autopilot (A0–A9) | Idea → 24/7 autonomous build/deploy/iterate with budgets + checkpoints, hybrid hosting, central billing | 📋 **planned** (full backlog defined; nothing built; A0 = brakes next) | [`autopilot/STATUS.md`](./autopilot/STATUS.md) · [`autopilot/00-MASTER-PLAN.md`](./autopilot/00-MASTER-PLAN.md) |
 
 ## ➡️ NEXT STEP
 
