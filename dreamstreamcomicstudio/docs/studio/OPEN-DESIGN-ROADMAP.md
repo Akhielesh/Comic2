@@ -27,8 +27,21 @@ that sends user prompt/code off-box must be operator-gated (see `STUDIO_DISABLE_
   (`designPreset`), threaded client → server → directive; default "Auto" keeps per-prompt picking.
 - **Slide-deck artifact** → the generate contract now builds presentations/decks as a first-class
   app type.
+- **Motion-graphics ("HyperFrames") skills** → 7 motion-graphics techniques in `DESIGN_SKILLS`
+  (ambient animated background, kinetic typography, scroll-driven scene, parallax, Lottie/Rive vector
+  motion, generative canvas FX, celebration burst) — all reduced-motion-safe.
+- **Richer export** → `services/studioExport.ts`: export the whole project as one Markdown doc, and
+  Print / Save-as-PDF the live preview (command palette: "Export as Markdown", "Print / Save as PDF").
+  Beyond the existing .zip.
 - **MCP catalog entry** for OD (env-gated `STUDIO_OPENDESIGN_MCP_URL`) for power users who self-host it.
 - **Privacy gate** `STUDIO_DISABLE_EXTERNAL_MCP` so third-party reference MCPs can be turned off.
+
+## Remaining / deferred
+- **PPTX export** — only meaningful for decks, and a generated reveal.js deck already exports to
+  PDF/PPTX itself; a shell-level PPTX exporter needs a heavy lib (pptxgenjs) for niche value, so it's
+  intentionally deferred rather than bloating the bundle.
+- **Vendor more raw `DESIGN.md` systems** — the curated 26 cover the spectrum; pull specific extra
+  brands on request.
 
 ## Backlog — implement one by one (highest value first)
 1. **Design "skills" axis** — adapt OD's `SKILL.md` concept as reusable *techniques* the agent can

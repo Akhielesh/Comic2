@@ -40,6 +40,7 @@ import { getOpenRouterKey } from '../../services/appSettings';
 import { isProviderEnabled } from '../../services/sourceGovernance';
 import { isLiveStudioEnabled } from '../../services/studioFlags';
 import { downloadArtifactZip } from '../../services/studioLauncher';
+import { exportProjectMarkdown, printPreview } from '../../services/studioExport';
 
 // Sandpack peek is heavy and legacy-ish — load it only when actually shown.
 const CodeStudioPanel = lazy(() => import('../chat/CodeStudioPanel'));
@@ -639,6 +640,8 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   if (status === 'live') commands.push({ id: 'stop', label: 'Stop run', icon: <Square className="w-4 h-4" />, keywords: 'halt kill end', run: stopLive });
   if (dirtyCount > 0) commands.push({ id: 'revert', label: `Revert all changes (${dirtyCount})`, icon: <Undo2 className="w-4 h-4" />, keywords: 'undo discard reset', run: () => dirtyList.forEach((p) => revertFile(p)) });
   if (hasFiles) commands.push({ id: 'zip', label: 'Download .zip', icon: <Download className="w-4 h-4" />, keywords: 'export save download', run: () => void downloadArtifactZip(currentArtifact) });
+  if (hasFiles) commands.push({ id: 'export-md', label: 'Export as Markdown', icon: <Download className="w-4 h-4" />, keywords: 'export markdown md share copy docs', run: () => exportProjectMarkdown(currentArtifact) });
+  if (hasFiles) commands.push({ id: 'print-pdf', label: 'Print / Save as PDF', icon: <FileCode className="w-4 h-4" />, keywords: 'print pdf export save preview', run: () => printPreview(previewUrl) });
   commands.push({ id: 'theme-black', label: 'Theme: Black', icon: <Moon className="w-4 h-4" />, keywords: 'dark oled appearance theme', run: () => setTheme('black') });
   commands.push({ id: 'theme-white', label: 'Theme: White', icon: <Sun className="w-4 h-4" />, keywords: 'light appearance theme', run: () => setTheme('light') });
   commands.push({ id: 'theme-brand', label: 'Theme: DreamStream', icon: <Palette className="w-4 h-4" />, keywords: 'brand comic appearance theme', run: () => setTheme('brand') });
