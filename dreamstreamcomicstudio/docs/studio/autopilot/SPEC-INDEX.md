@@ -33,7 +33,7 @@
   enterprise bar. No filler.
 
 ## Progress
-**Sections complete: 4 / 55** · target ~200 pages.
+**Sections complete: 8 / 55** · target ~200 pages.
 
 Legend: ✅ written · ✍️ in progress · 📋 planned
 
@@ -44,19 +44,19 @@ Legend: ✅ written · ✍️ in progress · 📋 planned
 | 01 | Vision, mission & positioning | [spec/01-vision-positioning.md](./spec/01-vision-positioning.md) | ✅ |
 | 02 | Market & competitive analysis | [spec/02-market-competitive-analysis.md](./spec/02-market-competitive-analysis.md) | ✅ |
 | 03 | Personas & jobs-to-be-done | [spec/03-personas-jtbd.md](./spec/03-personas-jtbd.md) | ✅ |
-| 04 | Value proposition & differentiation | spec/04-value-proposition.md | 📋 |
-| 05 | Business model & pricing | spec/05-business-model-pricing.md | 📋 |
-| 06 | Success metrics, KPIs & North Star | spec/06-metrics-kpis.md | 📋 |
-| 07 | Assumptions, constraints & risks | spec/07-assumptions-risks.md | 📋 |
+| 04 | Value proposition & differentiation | [spec/04-value-proposition.md](./spec/04-value-proposition.md) | ✅ |
+| 05 | Business model & pricing | spec/05-business-model-pricing.md | ✍️ |
+| 06 | Success metrics, KPIs & North Star | [spec/06-metrics-kpis.md](./spec/06-metrics-kpis.md) | ✅ |
+| 07 | Assumptions, constraints & risks | spec/07-assumptions-risks.md | ✍️ |
 
 ### Part II — Product Definition
 | # | Section | File | Status |
 |---|---|---|---|
-| 08 | Product principles & design tenets | spec/08-principles-tenets.md | 📋 |
-| 09 | Domain model & glossary | spec/09-domain-model-glossary.md | 📋 |
-| 10 | Feature catalog (epics → features) | spec/10-feature-catalog.md | 📋 |
-| 11 | End-to-end user journeys | spec/11-user-journeys.md | 📋 |
-| 12 | Information architecture & navigation | spec/12-information-architecture.md | 📋 |
+| 08 | Product principles & design tenets | [spec/08-principles-tenets.md](./spec/08-principles-tenets.md) | ✅ |
+| 09 | Domain model & glossary | spec/09-domain-model-glossary.md | ✍️ |
+| 10 | Feature catalog (epics → features) | spec/10-feature-catalog.md | ✍️ |
+| 11 | End-to-end user journeys | spec/11-user-journeys.md | ✍️ |
+| 12 | Information architecture & navigation | [spec/12-information-architecture.md](./spec/12-information-architecture.md) | ✅ |
 | 13 | UX spec: intake & onboarding | spec/13-ux-intake-onboarding.md | 📋 |
 | 14 | UX spec: Operator Console (24/7 workspace) | spec/14-ux-operator-console.md | 📋 |
 | 15 | UX spec: build / iterate / preview | spec/15-ux-build-iterate-preview.md | 📋 |
