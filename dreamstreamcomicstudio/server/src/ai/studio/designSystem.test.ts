@@ -5,6 +5,9 @@ import {
   ALWAYS_ON_STUDIO_MCP_SERVERS,
   envDesignMcpServers,
   CURATED_MCP_CATALOG,
+  DESIGN_PRESETS,
+  pickDesignPreset,
+  externalMcpEnabled,
 } from './designSystem.js';
 
 describe('designSystem', () => {
@@ -38,6 +41,47 @@ describe('designSystem', () => {
     expect(byId.nango.url).toBe('http://nango.internal:3003/mcp');
     expect(byId.nango.headers).toEqual({ Authorization: 'Bearer secret' });
     expect(byId.magic).toBeUndefined();
+  });
+
+  it('pickDesignPreset matches by keyword and is null when nothing fits', () => {
+    expect(pickDesignPreset('a retro arcade game')!.id).toBe('comic');
+    expect(pickDesignPreset('an analytics dashboard with charts')!.id).toBe('data-dashboard');
+    expect(pickDesignPreset('a native iOS app')!.id).toBe('ios-native');
+    expect(pickDesignPreset('')).toBeNull();
+    expect(pickDesignPreset('zzzz nothing matches here')).toBeNull();
+  });
+
+  it('buildDesignDirective offers the library + a recommended preset for new apps, skips it on refine', () => {
+    const fresh = buildDesignDirective({ prompt: 'an analytics dashboard' });
+    expect(fresh).toContain('DESIGN-SYSTEM LIBRARY');
+    expect(fresh).toContain('Data Dashboard');
+    expect(fresh).toContain(DESIGN_CHARTER);
+
+    const refine = buildDesignDirective({ prompt: 'tweak it', refining: true });
+    expect(refine).toContain('EDIT to an existing app');
+    expect(refine).not.toContain('DESIGN-SYSTEM LIBRARY');
+  });
+
+  it('every preset is well-formed, ids are unique, and the library is comprehensive', () => {
+    expect(DESIGN_PRESETS.length).toBeGreaterThanOrEqual(24);
+    const ids = new Set<string>();
+    for (const p of DESIGN_PRESETS) {
+      expect(Boolean(p.id && p.name && p.tagline && p.directive)).toBe(true);
+      expect(p.keywords.length).toBeGreaterThan(0);
+      ids.add(p.id);
+    }
+    expect(ids.size).toBe(DESIGN_PRESETS.length); // no duplicate ids
+    const od = CURATED_MCP_CATALOG.find((m) => m.id === 'opendesign');
+    expect(od?.license).toBe('Apache-2.0');
+    expect(od?.envVar).toBe('STUDIO_OPENDESIGN_MCP_URL');
+  });
+
+  it('externalMcpEnabled gates third-party reference MCPs via env (privacy / no-egress)', () => {
+    expect(externalMcpEnabled({})).toBe(true);
+    expect(externalMcpEnabled({ STUDIO_DISABLE_EXTERNAL_MCP: '1' })).toBe(false);
+    expect(externalMcpEnabled({ STUDIO_DISABLE_EXTERNAL_MCP: 'true' })).toBe(false);
+    expect(externalMcpEnabled({ STUDIO_DISABLE_EXTERNAL_MCP: 'on' })).toBe(false);
+    expect(externalMcpEnabled({ STUDIO_DISABLE_EXTERNAL_MCP: 'no' })).toBe(true);
   });
 
   it('catalog documents transport + license for every curated tool', () => {
