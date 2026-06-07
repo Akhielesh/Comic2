@@ -586,6 +586,20 @@ chatRouter.post('/stream', async (req, res) => {
   };
   send('meta', { model: p.model, requestedModel: p.requestedModel || p.model, source: p.resolved.provider });
 
+  // SSE keep-alive. A tool-grounded turn (web search → weather/places → synthesis) can run
+  // 20–60s before the first token, during which the stream sends NO bytes. Mobile carriers,
+  // the Railway/Cloudflare edge and other proxies drop an idle streaming connection after
+  // ~30s — the browser then surfaces the cut as a bare "network error" and the whole turn
+  // fails. A periodic comment line (ignored by the SSE parser) keeps the connection hot
+  // until real output flows. Cleared in `finally` so it never outlives the response.
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(': keep-alive\n\n');
+    } catch {
+      /* socket already closed */
+    }
+  }, 15_000);
+
   try {
     const result = await runChat({
       ...runChatParams(p),
@@ -614,7 +628,6 @@ chatRouter.post('/stream', async (req, res) => {
         ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled)
         : payload;
     send('final', finalPayload);
-    res.end();
   } catch (error) {
     if (reserve && reserve.allowed) {
       await releaseReservedOperation({
@@ -627,6 +640,8 @@ chatRouter.post('/stream', async (req, res) => {
       });
     }
     send('error', { message: (error as Error)?.message || 'The request failed.' });
+  } finally {
+    clearInterval(heartbeat);
     res.end();
   }
 });
@@ -669,6 +684,16 @@ chatRouter.post('/swarm', async (req, res) => {
     res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   };
   send('meta', { model: p.model, requestedModel: p.requestedModel || p.model, source: p.resolved.provider });
+
+  // Keep-alive: the swarm's plan + parallel-agent phase can be quiet for a while before the
+  // first trace/token; without periodic bytes an idle proxy drops the stream (see /stream).
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(': keep-alive\n\n');
+    } catch {
+      /* socket already closed */
+    }
+  }, 15_000);
 
   try {
     const result = await runSwarm({
@@ -721,7 +746,6 @@ chatRouter.post('/swarm', async (req, res) => {
         ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled)
         : payload;
     send('final', finalPayload);
-    res.end();
   } catch (error) {
     if (reserve && reserve.allowed) {
       await releaseReservedOperation({
@@ -734,6 +758,8 @@ chatRouter.post('/swarm', async (req, res) => {
       });
     }
     send('error', { message: (error as Error)?.message || 'The swarm failed.' });
+  } finally {
+    clearInterval(heartbeat);
     res.end();
   }
 });

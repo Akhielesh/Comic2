@@ -161,13 +161,27 @@ export const sendChatMessageStream = async (
   } catch (err) {
     // SSE is brittle on mobile networks/proxies that don't pass long-lived streams —
     // the connection opens, then the body read rejects with a bare "network error".
-    // When nothing was streamed and the user didn't cancel, retry once over the
-    // buffered (non-streaming) endpoint, which is far more proxy-friendly. Push the
-    // full answer through onDelta so the UI renders it just like a streamed turn.
+    // When nothing was streamed and the user didn't cancel, fall back to the buffered
+    // (non-streaming) endpoint, which is far more proxy-friendly. Retry it a couple of
+    // times with backoff so a single transient drop / cold start doesn't sink the turn.
+    // Push the full answer through onDelta so the UI renders it just like a streamed one.
     if (!receivedAny && !handlers.signal?.aborted && isTransportError(err)) {
-      const final = await sendChatMessage(req, { signal: handlers.signal });
-      if (final.text) handlers.onDelta?.(final.text);
-      return final;
+      let lastErr: unknown = err;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (handlers.signal?.aborted) break;
+        if (attempt > 0) await new Promise((r) => setTimeout(r, 1000 * attempt));
+        try {
+          const final = await sendChatMessage(req, { signal: handlers.signal });
+          if (final.text) handlers.onDelta?.(final.text);
+          return final;
+        } catch (retryErr) {
+          lastErr = retryErr;
+          // A real server response (rate limit, missing key, …) is not worth retrying —
+          // surface it immediately so the user sees the actionable message.
+          if (!isTransportError(retryErr)) throw retryErr;
+        }
+      }
+      throw lastErr;
     }
     throw err;
   }
