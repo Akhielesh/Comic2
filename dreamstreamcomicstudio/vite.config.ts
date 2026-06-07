@@ -53,7 +53,19 @@ export default defineConfig(({ mode }) => {
           // Split heavy, independently-cacheable vendors out of the entry chunks so a change
           // to app code doesn't bust their cache (and the >500 kB warning clears).
           manualChunks(id: string) {
+            // Vite's dynamic-import preload helper is pulled in by every chunk with a lazy
+            // import — including the entry. Left unassigned, Rollup folds it into a heavy
+            // vendor chunk (here vendor-sandpack, 958 kB), which then gets eagerly preloaded
+            // on first paint just to obtain this tiny helper. Pin it to the always-eager
+            // React chunk so the entry references it for free and Sandpack stays lazy.
+            if (id.includes('preload-helper')) return 'vendor-react';
             if (!id.includes('node_modules')) return undefined;
+            // Pin React core to its own stable, eagerly-loaded chunk. Without this, Rollup
+            // merges react/react-dom into whichever vendor chunk first pulls them in (here
+            // vendor-sandpack), forcing the landing page to download ~950 kB of Sandpack/
+            // CodeMirror just to get React. The regex matches exact package segments so it
+            // never catches react-markdown, react-leaflet, @codesandbox/sandpack-react, etc.
+            if (/[\\/]node_modules[\\/](react|react-dom|scheduler|react-router|react-router-dom)[\\/]/.test(id)) return 'vendor-react';
             if (id.includes('framer-motion')) return 'vendor-motion';
             if (id.includes('@codesandbox/sandpack') || id.includes('@codemirror') || id.includes('codemirror')) return 'vendor-sandpack';
             if (
