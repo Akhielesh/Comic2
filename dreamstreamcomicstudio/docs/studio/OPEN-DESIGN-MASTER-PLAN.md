@@ -63,8 +63,10 @@ themes (GSAP deep-dives, Figma flows) on demand.
 
 ## E. Media generation
 **open-design:** image (OpenAI/Fal/Grok/Leonardo…), video (Fal/HyperFrames), audio/TTS (OpenAI/ElevenLabs).
-**Native plan:** a `generate_image` tool (provider-pluggable, BYOK, opt-in) + the shipped `render_video`.
-**Status:** ⬜ image/audio planned; ✅ video.
+**Native:** ✅ **`generate_image`** — BYOK image generation **through the user's own account keys**
+(Gemini/Ideogram/Flux via `req.apiKeys`), a per-request tool wired into chat + the studio design/UI
+agents, reusing the proven `/api/image` provider calls. ✅ **`render_video`** for video.
+**Status:** ✅ image + video; audio/TTS ⬜ (same BYOK pattern, planned).
 
 ## F. Exports
 HTML ✅ (within zip) · Markdown ✅ (`studioExport`) · PDF ✅ (print preview) · ZIP ✅ · **MP4 ✅** (record + worker) · **PPTX ⬜** (deferred — a generated reveal.js deck self-exports; shell PPTX needs a heavy lib for niche value).
@@ -85,7 +87,7 @@ HTML ✅ (within zip) · Markdown ✅ (`studioExport`) · PDF ✅ (print preview
 ## Sequenced backlog (one-by-one, highest value first)
 1. ~~**Critique scored loop**~~ ✅ shipped (scored review + iterate-to-ship-bar).
 2. ~~**Expand skills**~~ ✅ shipped (38 skills across the major themes).
-3. **Image generation tool** (E) — provider-pluggable, BYOK, opt-in; unlocks the 45 image-template packs. *(needs an image provider key.)*
+3. ~~**Image generation tool**~~ ✅ shipped — BYOK `generate_image` (Gemini/Ideogram/Flux, the user's own keys) in chat + studio agents. Unlocks the image-template packs.
 4. **Vendor more real design systems + tokens** (A) — bring exact `DESIGN.md` + `design-tokens.json` for top brands beyond the 40 shipped.
 5. **Studio workflows** (C scenarios) — named generate/refine/migrate/media pipelines surfaced in the UI.
 6. **Live data-driven artifacts** (D) — `html_template_v1`-style data binding for dashboards. *(larger feature.)*

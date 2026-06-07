@@ -21,8 +21,9 @@ describe('registry ↔ catalogue consistency', () => {
   });
 
   it('resolves every static/contextual tool to a callable spec', () => {
-    // Exclude the swarm meta-tool (built in the route with provider creds).
-    const resolvable = KNOWN_TOOL_NAMES.filter((n) => n !== 'run_agent_swarm');
+    // Exclude meta-tools built in the routes with provider creds / user keys.
+    const META = new Set(['run_agent_swarm', 'generate_image']);
+    const resolvable = KNOWN_TOOL_NAMES.filter((n) => !META.has(n));
     const tools = resolveTools(resolvable);
     expect(tools.length).toBe(resolvable.length);
     for (const t of tools) {

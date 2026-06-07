@@ -3,6 +3,7 @@ import type { ChatRequest, ChatResponse, ChatClientContext } from '../../../apiT
 import { runChat, type ChatReasoningLevel } from '../ai/chat.js';
 import { runSwarm } from '../ai/agents/orchestrator.js';
 import { makeSwarmTool, SWARM_TOOL_NAME } from '../ai/agents/swarmTool.js';
+import { makeImageTool, imageGenAvailable, type ImageKeys } from '../ai/tools/imageGen.js';
 import { sanitizeCustomAgents } from '../ai/agents/registry.js';
 import type { AgentDefinition } from '../ai/agents/registry.js';
 import { loadCustomAgentDefinitions } from '../services/customAgents.js';
@@ -281,6 +282,13 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
       })
     );
   }
+  // BYOK image generation: built with the user's OWN image-account keys (gemini/ideogram/flux),
+  // appended when the user enabled the generate_image tool and a key is configured. Provider-agnostic
+  // (uses its own image keys, not the chat model's provider).
+  const imageKeys = (req as { apiKeys?: ImageKeys }).apiKeys || {};
+  const imageRequested = Array.isArray(body.tools) && body.tools.some((t) => t === 'generate_image');
+  if (imageRequested && imageGenAvailable(imageKeys)) metaTools.push(makeImageTool(imageKeys));
+
   // NOTE: recipes are invoked by the USER via `/` slash-commands (see the chat
   // composer command palette), not pushed at the model on every turn. Forcing
   // run_recipe/save_recipe onto every chat both (a) added object-typed tool params
