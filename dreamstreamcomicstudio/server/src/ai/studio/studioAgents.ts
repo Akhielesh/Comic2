@@ -44,6 +44,8 @@ const INTEGRATION_TOOLS = ['web_search', 'github_repo', ...NANGO_TOOL_NAMES, ...
 const LIVE_DATA_TOOLS = [
   ...RESEARCH_TOOLS, 'image_search', 'video_search',
   'get_news', 'get_stock', 'crypto_price', 'exchange_rate', 'get_weather', 'find_places', 'show_map',
+  // Data-driven live HTML artifacts (html_template_v1).
+  'render_live_template',
   // Connect & call 800+ third-party APIs (OAuth + proxy) via a self-hosted Nango, when configured.
   ...NANGO_TOOL_NAMES
 ];

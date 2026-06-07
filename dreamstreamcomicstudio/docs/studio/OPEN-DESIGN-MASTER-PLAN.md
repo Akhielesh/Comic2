@@ -56,7 +56,7 @@ themes (GSAP deep-dives, Figma flows) on demand.
 | Mobile (Expo/React Native, web-preview) | `scaffold.ts` Expo path + NativeWind | ✅ |
 | Slide deck | generate contract → reveal.js/slides | ✅ |
 | Design system | `DESIGN_PRESETS` | ✅ |
-| Dashboard / live artifact | `data-dashboard` preset + data agent; **data-driven live templates** | 🚧 (live-artifact data binding ⬜) |
+| Dashboard / live artifact | `data-dashboard` preset + data agent; **html_template_v1 engine + render_live_template tool** (data-only, safe) | ✅ core (live refresh + UI card ⬜) |
 | Images | image generation tool | ⬜ (E) |
 | Video / HyperFrames → MP4 | `render_video` worker + client recorder | ✅ #1, ✅ #2 (worker) |
 | Email / magazine layouts | presets (`magazine`, `luxury-editorial`) + skills | 🚧 |
@@ -90,7 +90,7 @@ HTML ✅ (within zip) · Markdown ✅ (`studioExport`) · PDF ✅ (print preview
 3. ~~**Image generation tool**~~ ✅ shipped — BYOK `generate_image` (Gemini/Ideogram/Flux, the user's own keys) in chat + studio agents. Unlocks the image-template packs.
 4. **Vendor more real design systems + tokens** (A) — bring exact `DESIGN.md` + `design-tokens.json` for top brands beyond the 40 shipped.
 5. **Studio workflows** (C scenarios) — named generate/refine/migrate/media pipelines surfaced in the UI.
-6. **Live data-driven artifacts** (D) — `html_template_v1`-style data binding for dashboards. *(larger feature.)*
+6. ~~**Live data-driven artifacts**~~ ✅ core shipped — the `html_template_v1` engine (safe, data-only `{{ dot.path }}` binding) + the `render_live_template` tool. End-to-end auto-refresh + a live-artifact UI card remain.
 7. **PPTX export** (F) — only if demanded (heavy lib).
 
 > Items 3, 6, 7 genuinely need an API key (image provider), a substantial new subsystem (live-data
