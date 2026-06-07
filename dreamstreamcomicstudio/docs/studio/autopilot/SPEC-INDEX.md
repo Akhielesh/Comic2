@@ -33,7 +33,7 @@
   enterprise bar. No filler.
 
 ## Progress
-**Sections complete: 24 / 55** · target ~200 pages. (Parts I + II complete; Part III underway.)
+**Sections complete: 29 / 55** · target ~200 pages. (Parts I + II complete; Part III underway.)
 
 Legend: ✅ written · ✍️ in progress · 📋 planned
 
@@ -71,12 +71,12 @@ Legend: ✅ written · ✍️ in progress · 📋 planned
 | # | Section | File | Status |
 |---|---|---|---|
 | 22 | System architecture overview | [spec/22-system-architecture.md](./spec/22-system-architecture.md) | ✅ |
-| 23 | Cloudflare topology (DO/Workflows/Containers) — deep | spec/23-cloudflare-topology.md | ✍️ |
-| 24 | The autonomous engine (the loop) — deep | spec/24-autonomous-engine.md | ✍️ |
+| 23 | Cloudflare topology (DO/Workflows/Containers) — deep | [spec/23-cloudflare-topology.md](./spec/23-cloudflare-topology.md) | ✅ |
+| 24 | The autonomous engine (the loop) — deep | [spec/24-autonomous-engine.md](./spec/24-autonomous-engine.md) | ✅ |
 | 25 | Multi-tenancy & isolation | [spec/25-multitenancy-isolation.md](./spec/25-multitenancy-isolation.md) | ✅ |
-| 26 | Data model & schema (all tables + RLS) | spec/26-data-model-schema.md | ✍️ |
-| 27 | API surface — REST | spec/27-api-rest.md | ✍️ |
-| 28 | API surface — realtime & events | spec/28-api-realtime-events.md | ✍️ |
+| 26 | Data model & schema (all tables + RLS) | [spec/26-data-model-schema.md](./spec/26-data-model-schema.md) | ✅ |
+| 27 | API surface — REST | [spec/27-api-rest.md](./spec/27-api-rest.md) | ✅ |
+| 28 | API surface — realtime & events | [spec/28-api-realtime-events.md](./spec/28-api-realtime-events.md) | ✅ |
 | 29 | AI/model gateway (providers, routing, reliability) | spec/29-model-gateway.md | 📋 |
 | 30 | Integrations framework (Nango + MCP + webhooks) | spec/30-integrations-framework.md | 📋 |
 | 31 | Deploy adapters (managed + BYO) | spec/31-deploy-adapters.md | 📋 |
