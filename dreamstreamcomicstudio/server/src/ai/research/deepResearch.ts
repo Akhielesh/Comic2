@@ -17,6 +17,7 @@
 
 import { runChat } from '../chat.js';
 import { webSearch } from '../tools/search.js';
+import { fetchReadable } from './readable.js';
 import { coerceJsonOrNull } from '../jsonCoerce.js';
 import { pickTextModel, TEXT_FALLBACK } from '../autoRouter.js';
 import { composePersona } from '../persona.js';
@@ -60,10 +61,15 @@ export interface DeepResearchResult {
   trace: SwarmTraceArtifact;
 }
 
-const DEPTH: Record<ResearchDepth, { questions: number; perQuery: number; gap: boolean; synthTokens: number }> = {
-  quick: { questions: 3, perQuery: 5, gap: false, synthTokens: 3000 },
-  standard: { questions: 5, perQuery: 6, gap: false, synthTokens: 4000 },
-  exhaustive: { questions: 8, perQuery: 6, gap: true, synthTokens: 6000 }
+const DEPTH: Record<
+  ResearchDepth,
+  { questions: number; perQuery: number; gap: boolean; read: boolean; maxReads: number; synthTokens: number }
+> = {
+  // `read` fetches the actual top source pages (not just snippets); `maxReads` caps how
+  // many to fetch so latency/cost stay bounded. quick stays snippet-only for speed.
+  quick: { questions: 3, perQuery: 5, gap: false, read: false, maxReads: 0, synthTokens: 3000 },
+  standard: { questions: 5, perQuery: 6, gap: false, read: true, maxReads: 8, synthTokens: 4500 },
+  exhaustive: { questions: 8, perQuery: 6, gap: true, read: true, maxReads: 14, synthTokens: 6500 }
 };
 
 const PLANNER = `You are a meticulous research lead planning a deep-research investigation. Decompose the user's TOPIC into the most information-rich, NON-overlapping sub-questions a researcher must answer to produce a rigorous, decision-ready brief. Across the set, cover (only those that fit the topic): core facts/definitions, current state & latest developments, key players/options, hard evidence/data/numbers, comparisons & trade-offs, risks/criticisms/controversies, and outlook. Each sub-question must be SPECIFIC and independently searchable (a good web query). Return ONLY a JSON array of strings — the questions — and nothing else.`;
@@ -187,6 +193,42 @@ export const runDeepResearch = async (p: DeepResearchParams): Promise<DeepResear
     );
   }
 
+  // 3.5) READ the top source pages so synthesis is grounded in the actual article text,
+  // not just 320-char snippets. Bounded (maxReads) and best-effort: blocked/binary pages
+  // are simply skipped and fall back to their snippet.
+  const readable = new Map<string, string>();
+  if (cfg.read && cfg.maxReads > 0) {
+    const toRead: string[] = [];
+    const seen = new Set<string>();
+    // Prefer the top 2 results of each question, round-robin, until the budget is hit.
+    for (let rank = 0; rank < 2 && toRead.length < cfg.maxReads; rank += 1) {
+      for (const f of findings) {
+        const r = f.results[rank];
+        if (r && !seen.has(r.url)) {
+          seen.add(r.url);
+          toRead.push(r.url);
+          if (toRead.length >= cfg.maxReads) break;
+        }
+      }
+    }
+    if (toRead.length) {
+      const readStep: SwarmAgentRun = { id: 'read', name: 'Read sources', task: `Reading ${toRead.length} top sources`, status: 'running' };
+      steps.push(readStep);
+      emit();
+      const texts = await Promise.all(toRead.map((u) => fetchReadable(u, p.signal).catch(() => null)));
+      let okCount = 0;
+      toRead.forEach((u, i) => {
+        if (texts[i]) {
+          readable.set(u, texts[i] as string);
+          okCount += 1;
+        }
+      });
+      toolEvents.push({ tool: 'read_url', ok: okCount > 0, summary: `read ${okCount}/${toRead.length} sources` });
+      steps[steps.length - 1] = { ...readStep, status: 'done', summary: `read ${okCount}/${toRead.length} sources` };
+      emit();
+    }
+  }
+
   // Number every UNIQUE source (dedupe by url) so the brief can cite [n] stably.
   const byUrl = new Map<string, number>();
   const sources: { n: number; title: string; url: string }[] = [];
@@ -203,7 +245,12 @@ export const runDeepResearch = async (p: DeepResearchParams): Promise<DeepResear
     .map((f) => {
       if (!f.results.length) return `Q: ${f.question}\n  (no sources found)`;
       const lines = f.results
-        .map((r) => `  [${num(r)}] ${r.title} — ${r.url}\n      ${(r.snippet || '').replace(/\s+/g, ' ').slice(0, 320)}`)
+        .map((r) => {
+          // Prefer the fetched article text (richer, real facts/figures) over the snippet.
+          const full = readable.get(r.url);
+          const body = full ? full.slice(0, 900) : (r.snippet || '').replace(/\s+/g, ' ').slice(0, 320);
+          return `  [${num(r)}] ${r.title} — ${r.url}\n      ${body}`;
+        })
         .join('\n');
       return `Q: ${f.question}\n${lines}`;
     })
