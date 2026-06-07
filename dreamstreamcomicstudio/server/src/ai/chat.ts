@@ -34,7 +34,7 @@ export interface ChatToolImage {
 }
 
 /** Max model⇄tool round-trips before we force a final answer. */
-const MAX_TOOL_ITERATIONS = 4;
+const MAX_TOOL_ITERATIONS = 6;
 
 export interface RunChatParams {
   provider: AIProviderId;
@@ -69,6 +69,13 @@ export interface RunChatParams {
   signal?: AbortSignal;
   /** When set, stream content/reasoning deltas as they arrive (SSE). */
   onDelta?: (delta: { content?: string; reasoning?: string }) => void;
+  /**
+   * Called before a follow-up model turn (after tools ran) so the client can DISCARD
+   * the prior turn's streamed pre-tool narration — otherwise the model's "let me look
+   * that up…" preamble bleeds into the final answer on screen, then snaps away on
+   * finalize. Lets the live view match the saved answer.
+   */
+  onReset?: () => void;
 }
 
 // Guardrail framing for the DreamStream connector. The context is read-only and
@@ -387,7 +394,20 @@ export const runChat = async (
 
     // Next turn. On the final allowed iteration, drop tools to force a written answer.
     const allowMoreTools = iterations < MAX_TOOL_ITERATIONS;
+    // Discard the just-streamed pre-tool narration on the client before the next turn
+    // streams, so the live view doesn't accumulate "let me check…" preambles.
+    params.onReset?.();
     result = await callModel(messages, allowMoreTools);
+  }
+
+  // If we exhausted the tool-round budget, the model was forced to answer mid-plan —
+  // be honest that the answer may be incomplete rather than letting it look complete.
+  if (iterations >= MAX_TOOL_ITERATIONS) {
+    addNotice({
+      tool: 'agent',
+      level: 'warn',
+      message: `Reached the ${MAX_TOOL_ITERATIONS}-step tool limit for this turn — the answer may be incomplete. Ask a follow-up to continue.`
+    });
   }
 
   if (result.citations) citations.push(...result.citations);

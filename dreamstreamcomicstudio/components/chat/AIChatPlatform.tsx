@@ -533,6 +533,13 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           ...s,
           turns: s.turns.map((t) => (t.id === aiTurnId ? { ...t, reasoning: (t.reasoning || '') + chunk } : t))
         }));
+      // A new turn is starting after tools ran — clear the prior turn's streamed
+      // pre-tool narration so it doesn't pile up above the real answer.
+      const onReset = () =>
+        setSessionState((s) => ({
+          ...s,
+          turns: s.turns.map((t) => (t.id === aiTurnId ? { ...t, content: '', reasoning: undefined } : t))
+        }));
 
       // Live plan/agent trace → a swarm_trace artifact on the turn (shared by the swarm
       // path and swarm-backed recipes like /research and /market).
@@ -579,7 +586,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           })()
         : useSwarm
           ? await runSwarmStream(reqBody, { signal: controller.signal, onDelta, onReasoning, onTrace })
-          : await sendChatMessageStream(reqBody, { signal: controller.signal, onDelta, onReasoning });
+          : await sendChatMessageStream(reqBody, { signal: controller.signal, onDelta, onReasoning, onReset });
 
       // Finalize: snapshot this answer as a variant and show it as the active one.
       updateSession(sessionId, (s) => ({

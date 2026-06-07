@@ -606,7 +606,10 @@ chatRouter.post('/stream', async (req, res) => {
       onDelta: (d) => {
         if (d.content) send('delta', { content: d.content });
         else if (d.reasoning) send('reasoning', { reasoning: d.reasoning });
-      }
+      },
+      // Tell the client to drop the previous turn's streamed pre-tool narration before
+      // the next turn streams, so multi-step answers don't accumulate preamble on screen.
+      onReset: () => send('reset', {})
     });
 
     const settled =

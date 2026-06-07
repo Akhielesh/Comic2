@@ -89,6 +89,12 @@ export interface ChatStreamHandlers {
   onDelta?: (content: string) => void;
   /** Incremental reasoning trace. */
   onReasoning?: (text: string) => void;
+  /**
+   * The server is starting a new turn after running tools — discard the streamed
+   * content/reasoning so far so the prior turn's pre-tool narration doesn't bleed into
+   * the final answer on screen.
+   */
+  onReset?: () => void;
   signal?: AbortSignal;
 }
 
@@ -151,6 +157,8 @@ export const sendChatMessageStream = async (
       } else if (event === 'reasoning' && typeof parsed.reasoning === 'string') {
         receivedAny = true;
         handlers.onReasoning?.(parsed.reasoning);
+      } else if (event === 'reset') {
+        handlers.onReset?.();
       } else if (event === 'final') {
         receivedAny = true;
         final = parsed as ChatResponse;
