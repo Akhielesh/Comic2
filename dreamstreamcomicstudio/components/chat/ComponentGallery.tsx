@@ -13,11 +13,14 @@ import { DataTableCard } from './artifacts/DataTableCard';
 import { HeatmapCard } from './artifacts/HeatmapCard';
 import { FinanceTerminal } from './artifacts/FinanceTerminal';
 import { CodeStudioCard } from './artifacts/CodeStudioCard';
+import { RecipeCard } from './artifacts/RecipeCard';
+import { RecipeRunCard } from './artifacts/RecipeRunCard';
 import type {
   WeatherArtifact, NewsResultsArtifact, StockQuoteArtifact,
   VideoResultsArtifact, PlacesResultsArtifact, SwarmTraceArtifact,
   ChartArtifact, MetricBoardArtifact, MapArtifact,
-  DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact
+  DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact,
+  RecipeCardArtifact, RecipeRunArtifact
 } from '../../apiTypes';
 
 // A living gallery of the chat's rich-output components, each with sample data, so
@@ -268,6 +271,36 @@ export default function App() {
   ]
 };
 
+const recipeDemo: RecipeCardArtifact = {
+  id: 'comic-concept-forge',
+  title: 'Comic Concept Forge',
+  description: 'Forge a complete comic concept: logline, world, a cast bible, and the first 6 beats.',
+  builtin: true,
+  agents: [],
+  tools: [],
+  swarm: false,
+  parameters: [
+    { key: 'premise', input_type: 'string', requirement: 'required', description: 'The core idea or what-if.' },
+    { key: 'genre', input_type: 'string', requirement: 'optional', default: 'sci-fi' },
+    { key: 'tone', input_type: 'select', requirement: 'optional', default: 'hopeful', options: ['hopeful', 'noir', 'epic', 'comedic'] }
+  ],
+  instructions: 'You are a senior comic showrunner. Develop a vivid, internally-consistent comic concept for: {{ premise }} ({{ genre }}, {{ tone }}). Build a logline, a setting bible, a 3–5 character cast with consistent visual signatures, and the first arc beats.',
+  activities: ['Expand issue 1 into a script', 'Design a cover concept', 'Write character image prompts']
+};
+
+const recipeRunDemo: RecipeRunArtifact = {
+  recipeId: 'deep-research-brief',
+  title: 'Deep Research Brief',
+  mode: 'swarm',
+  status: 'done',
+  params: [
+    { key: 'topic', value: 'solid-state batteries' },
+    { key: 'depth', value: 'standard' }
+  ],
+  structured: { score: 0.82, learnings: ['Lead with the bottom line', 'Cite primary sources with dates'] },
+  activities: ['Turn this into a one-slide summary', 'Strongest counter-arguments?']
+};
+
 export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Weather station (animated · gauges · map)', type: 'weather', node: <WeatherStation data={weather} /> },
   { title: 'Market card (hover · range timeline · candlesticks)', type: 'stock_quote', node: <MarketCard data={stock} /> },
@@ -283,6 +316,8 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Market heatmap (sectors · cap-weighted tiles)', type: 'market_heatmap', node: <HeatmapCard data={heatmap} /> },
   { title: 'Finance Terminal (composite: quote · KPIs · table · heatmap · news)', type: 'finance_terminal', node: <FinanceTerminal data={terminal} /> },
   { title: 'Code Studio card (multi-file app · live preview)', type: 'code_studio', node: <CodeStudioCard data={codeStudioDemo} /> },
+  { title: 'Recipe card (reusable agent workflow · params · tools)', type: 'recipe_card', node: <RecipeCard data={recipeDemo} /> },
+  { title: 'Recipe run (params · structured output · follow-ups)', type: 'recipe_run', node: <RecipeRunCard data={recipeRunDemo} /> },
   { title: 'Markdown table (inline)', node: <ChatMarkdown text={tableMd} /> }
 ];
 

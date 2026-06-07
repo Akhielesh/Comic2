@@ -1,5 +1,5 @@
 import React from 'react';
-import type { ChatArtifact, WeatherArtifact, VideoResultsArtifact, MapArtifact, NewsResultsArtifact, StockQuoteArtifact, SwarmTraceArtifact, PlacesResultsArtifact, ChartArtifact, MetricBoardArtifact, DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact } from '../../../apiTypes';
+import type { ChatArtifact, WeatherArtifact, VideoResultsArtifact, MapArtifact, NewsResultsArtifact, StockQuoteArtifact, SwarmTraceArtifact, PlacesResultsArtifact, ChartArtifact, MetricBoardArtifact, DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact, RecipeCardArtifact, RecipeRunArtifact } from '../../../apiTypes';
 import { WeatherStation } from './WeatherStation';
 import { VideoResults } from './VideoResults';
 import { MapArtifactCard } from './MapArtifactCard';
@@ -13,6 +13,8 @@ import { DataTableCard } from './DataTableCard';
 import { HeatmapCard } from './HeatmapCard';
 import { FinanceTerminal } from './FinanceTerminal';
 import { CodeStudioCard } from './CodeStudioCard';
+import { RecipeCard } from './RecipeCard';
+import { RecipeRunCard } from './RecipeRunCard';
 
 // Renderer registry for typed rich-output artifacts. Adding a new rich component is
 // a single entry here — the chat loop and storage never change.
@@ -34,7 +36,9 @@ const ARTIFACT_RENDERERS: Record<string, (data: unknown, key: number) => React.R
   data_table: (d, k) => <DataTableCard key={k} data={d as DataTableArtifact} />,
   market_heatmap: (d, k) => <HeatmapCard key={k} data={d as HeatmapArtifact} />,
   finance_terminal: (d, k) => <FinanceTerminal key={k} data={d as FinanceTerminalArtifact} />,
-  code_studio: (d, k) => <CodeStudioCard key={k} data={d as CodeStudioArtifact} />
+  code_studio: (d, k) => <CodeStudioCard key={k} data={d as CodeStudioArtifact} />,
+  recipe_card: (d, k) => <RecipeCard key={k} data={d as RecipeCardArtifact} />,
+  recipe_run: (d, k) => <RecipeRunCard key={k} data={d as RecipeRunArtifact} />
 };
 
 /** Every artifact type the renderer can display. Cross-checked against the gallery. */
@@ -47,7 +51,7 @@ const renderArtifact = (artifact: ChatArtifact, key: number): React.ReactNode =>
 // charts, KPI boards, news) pack two-up so the model can aggregate several data
 // sources side by side — e.g. "compare gold, oil and the S&P" → three quote cards
 // laid out in a grid instead of a tall stack.
-const FULL_WIDTH = new Set(['weather', 'map', 'places_results', 'video_results', 'swarm_trace', 'code_studio']);
+const FULL_WIDTH = new Set(['weather', 'map', 'places_results', 'video_results', 'swarm_trace', 'code_studio', 'recipe_card', 'recipe_run']);
 
 export const ChatArtifacts: React.FC<{ artifacts?: ChatArtifact[] }> = ({ artifacts }) => {
   if (!artifacts || artifacts.length === 0) return null;

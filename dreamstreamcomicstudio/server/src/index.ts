@@ -40,6 +40,7 @@ import { sharingRouter } from './routes/sharing.js';
 import { comicForgeRouter } from './routes/comicforge.js';
 import { studioRouter } from './routes/studio.js';
 import { agentsRouter } from './routes/agents.js';
+import { recipesRouter } from './routes/recipes.js';
 import { mcpRouter, mcpOutboundRouter } from './routes/mcp.js';
 import { modelsRouter } from './routes/models.js';
 import { prewarmCatalog, startCatalogRefreshLoop } from './services/modelCatalog.js';
@@ -166,6 +167,7 @@ app.use('/api/v1/comicforge', comicForgeRateLimit, comicForgeRouter);
 // Studio v2 control plane — auth'd (global requireAuth above), text-tier rate limited.
 app.use('/api/studio', textRateLimit, studioRouter);
 app.use('/api/agents', systemRateLimit, agentsRouter);
+app.use('/api/recipes', textRateLimit, recipesRouter);
 app.use('/api/mcp', systemRateLimit, mcpRouter);
 
 app.use(errorHandler);
