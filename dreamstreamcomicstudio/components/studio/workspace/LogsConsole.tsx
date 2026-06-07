@@ -2,9 +2,14 @@
 // auto-scrolling, with a clear button + autoscroll toggle. Reads the studio logs store.
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Terminal, Trash2, ArrowDownToLine, Copy, Check } from 'lucide-react';
+import { Terminal, Trash2, ArrowDownToLine, Copy, Check, ChevronDown } from 'lucide-react';
 import { useStudioLogs, type LogLevel } from './logsStore';
 import { useStudioTheme } from '../kit';
+
+export interface LogsConsoleProps {
+  /** When provided, a collapse button appears in the header (used by the right-side preview dock). */
+  onCollapse?: () => void;
+}
 
 const LEVEL_TEXT: Record<LogLevel, string> = {
   system: 'text-slate-400',
@@ -20,7 +25,7 @@ const fmtTime = (ts: number) => {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 };
 
-export const LogsConsole: React.FC = () => {
+export const LogsConsole: React.FC<LogsConsoleProps> = ({ onCollapse }) => {
   const t = useStudioTheme();
   const entries = useStudioLogs((s) => s.entries);
   const clear = useStudioLogs((s) => s.clear);
@@ -73,6 +78,16 @@ export const LogsConsole: React.FC = () => {
           >
             <Trash2 className="w-3.5 h-3.5" />
           </button>
+          {onCollapse && (
+            <button
+              onClick={onCollapse}
+              title="Collapse console"
+              aria-label="Collapse console"
+              className={`rounded p-1 ${t.hover} ${t.textFaint}`}
+            >
+              <ChevronDown className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
       </header>
 

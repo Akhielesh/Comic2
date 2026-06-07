@@ -56,8 +56,11 @@ export const PlanPanel: React.FC<PlanPanelProps> = ({ plan, onBuild, onRegenerat
 
         {plan.files.length > 0 && (
           <div className={`rounded-lg border ${t.edge} ${t.panelAlt} p-3`}>
-            <p className={`flex items-center gap-1.5 text-[11px] font-bold uppercase ${t.textFaint} mb-1.5`}>
-              <FileCode2 className="w-3.5 h-3.5" /> Files ({plan.files.length})
+            <p className={`flex items-center gap-1.5 text-[11px] font-bold uppercase ${t.textFaint} mb-1`}>
+              <FileCode2 className="w-3.5 h-3.5" /> Suggested structure
+            </p>
+            <p className={`text-[10px] ${t.textFaint} mb-1.5`}>
+              A rough sketch — the builder has full freedom to reorganize and add files.
             </p>
             <ul className="space-y-1 max-h-56 overflow-auto">
               {plan.files.map((f, i) => (
