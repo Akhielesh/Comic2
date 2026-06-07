@@ -30,9 +30,14 @@ drop policy if exists "recipes_owner_modify" on public.recipes;
 create policy "recipes_owner_modify" on public.recipes
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
--- Keep updated_at fresh on every write.
+-- Keep updated_at fresh on every write. search_path is pinned empty (the body only
+-- calls now() from pg_catalog) to satisfy the function_search_path_mutable linter.
 create or replace function public.touch_recipes_updated_at()
-returns trigger language plpgsql as $$
+returns trigger
+language plpgsql
+security invoker
+set search_path = ''
+as $$
 begin
   new.updated_at = now();
   return new;
