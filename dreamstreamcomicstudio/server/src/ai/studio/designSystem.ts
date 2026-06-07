@@ -46,20 +46,126 @@ export const DESIGN_REVIEW_CHECKLIST = `Hold the app to the studio DESIGN BAR: r
 export const DESIGN_FIX_NOTE =
   'When a fix touches the UI, preserve (and where trivial, improve) the existing design language — keep it responsive for web + mobile, accessible, and tastefully animated. Never regress to unstyled scaffolding to "just make it build".';
 
+// ---------------------------------------------------------------------------------------------
+// Brand-grade design-system presets.
+//
+// Onboarded from the open-source nexu-io/open-design project (Apache-2.0): its `DESIGN.md` systems
+// are markdown design languages injected into an agent's system prompt — the same pattern we use.
+// Rather than vendoring its Electron/Next.js app, we curate the design KNOWLEDGE here as concrete,
+// pickable design languages, and the agent applies the best-fit per the user's ask (grounding the
+// aesthetic in proven systems instead of inventing one from scratch). The full 142-system library
+// is also available by self-hosting open-design's MCP server (STUDIO_OPENDESIGN_MCP_URL).
+// ---------------------------------------------------------------------------------------------
+
+export interface DesignPreset {
+  id: string;
+  name: string;
+  category: string;
+  /** One-line "when to use" for the picker summary. */
+  tagline: string;
+  /** Prompt keywords that suggest this preset. */
+  keywords: string[];
+  /** Concrete design language injected when this preset is chosen. */
+  directive: string;
+}
+
+export const DESIGN_PRESETS: DesignPreset[] = [
+  {
+    id: 'comic', name: 'DreamStream Comic', category: 'expressive', tagline: 'bold comic-book energy (house style)',
+    keywords: ['comic', 'fun', 'bold', 'playful', 'kids', 'game', 'arcade', 'retro'],
+    directive: 'Bold comic-book UI: thick 2px black borders, hard offset "comic" shadows, a display/condensed headline font + clean body, a saturated primary plus one accent, high contrast, chunky rounded buttons, and snappy pop/scale motion. Energetic and playful but always legible.'
+  },
+  {
+    id: 'warm-editorial', name: 'Warm Editorial', category: 'editorial', tagline: 'literary, warm, book-like (after open-design "Claude")',
+    keywords: ['editorial', 'warm', 'reading', 'blog', 'writing', 'literary', 'magazine', 'docs', 'content'],
+    directive: 'Warm editorial "literary salon" (adapted from open-design): a parchment canvas (#f5f4ed), warm-tinted neutrals ONLY (no cool blue-grays), serif headlines (weight 500, tight 1.1–1.3 line-height) + sans body at 1.6 line-height, a terracotta CTA (#c96442), ring-based depth (0 0 0 1px) instead of drop shadows, 8–32px radii, generous spacing, and alternating light/dark sections for a chapter-like rhythm.'
+  },
+  {
+    id: 'minimal-product', name: 'Minimal Product', category: 'product', tagline: 'crisp, monochrome, keyboard-first (Linear/Vercel)',
+    keywords: ['minimal', 'clean', 'saas', 'tool', 'productivity', 'developer', 'linear', 'vercel', 'dashboard app'],
+    directive: 'Minimal product UI: near-monochrome grayscale with ONE restrained accent, crisp 1px borders, a tight type scale, high information density, subtle fast micro-interactions (120–180ms), first-class dark mode, keyboard-first affordances. Nothing decorative — every element earns its place.'
+  },
+  {
+    id: 'premium-saas', name: 'Premium SaaS', category: 'product', tagline: 'polished, trustworthy, expensive-feeling (Stripe)',
+    keywords: ['premium', 'saas', 'landing', 'marketing', 'startup', 'fintech', 'enterprise', 'pricing'],
+    directive: 'Premium SaaS: a confident type scale, generous whitespace, refined multi-stop gradients used sparingly, soft layered shadows, smooth 200–300ms easing, and polished empty/loading/success states. Trustworthy and expensive-feeling without being flashy.'
+  },
+  {
+    id: 'playful', name: 'Playful Consumer', category: 'expressive', tagline: 'bright, rounded, delightful (Duolingo)',
+    keywords: ['playful', 'consumer', 'social', 'kids', 'learning', 'rewards', 'gamified', 'cute', 'friendly'],
+    directive: 'Playful consumer app: a bright saturated palette, big friendly rounded shapes, large rounded type, springy/bouncy motion, generous tap targets, and delightful micro-rewards. Fun and energetic while staying accessible (contrast + reduced-motion).'
+  },
+  {
+    id: 'neobrutalist', name: 'Neobrutalist', category: 'expressive', tagline: 'stark, high-contrast, raw structure',
+    keywords: ['brutalist', 'neobrutalism', 'raw', 'bold', 'edgy', 'statement', 'portfolio'],
+    directive: 'Neobrutalist: stark high contrast, thick black borders, hard (non-blurred) offset shadows, raw grotesk/mono type, flat saturated blocks, NO gradients, visible structure. Bold and confident — but keep text contrast and tap targets accessible.'
+  },
+  {
+    id: 'glass-aurora', name: 'Glass / Aurora', category: 'expressive', tagline: 'translucent glass over vibrant gradients',
+    keywords: ['glass', 'glassmorphism', 'aurora', 'gradient', 'modern', 'crypto', 'web3', 'futuristic'],
+    directive: 'Glassmorphism / aurora: translucent blurred panels (backdrop-blur), vibrant gradient/aurora backdrops, soft glows, light hairline borders, and layered depth. Use blur sparingly and keep text on solid-enough surfaces so contrast never drops below 4.5:1.'
+  },
+  {
+    id: 'dark-terminal', name: 'Dark Terminal', category: 'technical', tagline: 'near-black, neon accent, technical',
+    keywords: ['terminal', 'cyber', 'hacker', 'dev tool', 'cli', 'code', 'matrix', 'neon', 'dark'],
+    directive: 'Dark terminal / cyber: near-black surfaces, a single neon accent, monospace accents, subtle grid lines and glow, crisp dense data. Technical and focused — restrained, not a toy.'
+  },
+  {
+    id: 'ios-native', name: 'iOS Native', category: 'mobile', tagline: 'SF-style, large titles, springy (mobile)',
+    keywords: ['ios', 'iphone', 'apple', 'mobile', 'native app', 'app store'],
+    directive: 'iOS-native (mobile): SF-style type with large titles, system grays, rounded cards, blurred navigation bars, full-width grouped lists, safe-area insets, smooth spring transitions, and haptic-feeling interactions. Pair with the Expo/React Native target.'
+  },
+  {
+    id: 'material', name: 'Material 3', category: 'mobile', tagline: 'dynamic color, elevation, ripple (Android)',
+    keywords: ['material', 'android', 'google', 'mobile', 'm3'],
+    directive: 'Material 3: dynamic color tokens, tonal elevation surfaces, FABs, ripple feedback, clear type roles, generous touch targets, and motion with standard easing. Good for Android-leaning or cross-platform apps.'
+  },
+  {
+    id: 'data-dashboard', name: 'Data Dashboard', category: 'product', tagline: 'dense, scannable, chart-first',
+    keywords: ['dashboard', 'analytics', 'admin', 'metrics', 'charts', 'report', 'data', 'monitoring', 'finance'],
+    directive: 'Data-dense dashboard: compact spacing, tabular numerals, a muted neutral palette with semantic accents (success/warn/error), strong hierarchy, minimal motion, and excellent charts + tables that stay scannable at a glance.'
+  },
+  {
+    id: 'luxury-editorial', name: 'Luxury Editorial', category: 'editorial', tagline: 'dramatic serif, vast whitespace, aspirational',
+    keywords: ['luxury', 'fashion', 'brand', 'agency', 'portfolio', 'gallery', 'photography', 'elegant', 'premium brand'],
+    directive: 'Luxury editorial / fashion: dramatic high-contrast serif display, vast negative space, large full-bleed imagery, a restrained near-monochrome palette with one accent, and slow elegant transitions. Refined and aspirational.'
+  }
+];
+
+/** Heuristically pick the best-fit preset from the prompt (or null when nothing clearly matches). */
+export const pickDesignPreset = (prompt?: string): DesignPreset | null => {
+  const p = (prompt || '').toLowerCase();
+  if (!p.trim()) return null;
+  let best: { preset: DesignPreset; score: number } | null = null;
+  for (const preset of DESIGN_PRESETS) {
+    const score = preset.keywords.reduce((n, k) => (p.includes(k) ? n + 1 : n), 0);
+    if (score > 0 && (!best || score > best.score)) best = { preset, score };
+  }
+  return best?.preset ?? null;
+};
+
+/** Compact, model-facing list of the available design systems. */
+export const presetLibrarySummary = (): string =>
+  DESIGN_PRESETS.map((p) => `- ${p.name} (${p.category}) — ${p.tagline}`).join('\n');
+
 /**
- * The self-customizing layer. Rather than forcing one house style on every app, this tells the
- * model to READ the user's ask, choose an aesthetic that fits it, and commit. This is the
- * "broadly self-customized by the agent depending on the user's ask" behavior — adaptive, but
- * always on top of the non-negotiable charter.
+ * The self-customizing layer. Rather than forcing one house style on every app, this gives the
+ * model a curated library of brand-grade design systems (onboarded from open-design), recommends
+ * the best fit for the request, and tells it to commit — adaptive, but always on the charter.
  */
 export const buildDesignDirective = (brief: DesignBrief = {}): string => {
   const adapt = brief.refining
     ? `This is an EDIT to an existing app: respect and EXTEND its established design language (its palette, type, spacing, motion and component patterns) — refine and elevate it, don't reinvent it. New UI must feel like it always belonged.`
-    : `Before writing code, infer the right design from the request and COMMIT to it: who is this for, what mood fits (e.g. playful, minimal, premium, editorial, technical), one accent-led color story, information density, and how much motion is appropriate. Then apply that language consistently across every screen and component.`;
+    : `Before writing code, infer the right design from the request and COMMIT to it: who is this for, what mood fits, one accent-led color story, information density, and how much motion is appropriate. Then apply that language consistently across every screen and component.`;
+
+  const preset = brief.refining ? null : pickDesignPreset(brief.prompt);
+  const library = brief.refining
+    ? ''
+    : `\nDESIGN-SYSTEM LIBRARY — pick the brand-grade system that best fits this request and apply it fully (or commit to an equally strong custom one):\n${presetLibrarySummary()}${preset ? `\n\nRecommended for THIS request — **${preset.name}**:\n${preset.directive}` : ''}\n`;
 
   return `DESIGN DIRECTIVE (self-customize to THIS request, then hold the bar):
 ${adapt}
-
+${library}
 ${DESIGN_CHARTER}`;
 };
 
@@ -127,6 +233,16 @@ export const CURATED_MCP_CATALOG: CuratedMcp[] = [
     license: 'proprietary (free tier)',
     free: true,
     envVar: 'STUDIO_MAGIC_MCP_URL'
+  },
+  {
+    id: 'opendesign',
+    name: 'Open Design (142+ design systems + skills)',
+    what: 'nexu-io/open-design as an MCP server: 142+ brand-grade DESIGN.md systems + 100+ design skills the agents can read on demand. A curated subset is also baked in as DESIGN_PRESETS.',
+    transport: 'stdio',
+    pkg: 'open-design (od mcp install)',
+    license: 'Apache-2.0',
+    free: true,
+    envVar: 'STUDIO_OPENDESIGN_MCP_URL'
   },
   {
     id: 'magicui',
