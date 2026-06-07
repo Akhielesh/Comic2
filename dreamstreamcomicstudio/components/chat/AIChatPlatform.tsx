@@ -138,6 +138,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   const [showModelPicker, setShowModelPicker] = useState(false);
   const [initialized, setInitialized] = useState(false);
   const [memory, setMemory] = useState('');
+  // Text to prefill the composer with (e.g. clicking a skill chip in the empty state).
+  const [composerSeed, setComposerSeed] = useState('');
   const [settingsTab, setSettingsTab] = useState<'memory' | 'agents' | 'tools' | null>(null);
   const [customAgents, setCustomAgents] = useState(() => listCustomAgents());
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(() => listMcpServers());
@@ -422,10 +424,14 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         reqModel = best.id;
         reqSource = best.source;
       }
-      // Auto-enable the relevant tools. We attach them whenever the request isn't
-      // pinned to NVIDIA (which can't tool-call); the server only honors them for
-      // OpenRouter, so this is safe even when the source resolves server-side.
-      reqTools = reqSource === 'nvidia' ? [] : detectTools(text);
+      // Auto-enable the relevant tools, but HONOR the user's explicit connector/tool
+      // toggles: auto-detection ADDS tools it thinks are relevant, it never silently
+      // discards the ones the user turned on. (Previously Auto mode overwrote the user's
+      // selection every message, so the toggles felt ignored / "always auto-enabled".)
+      reqTools =
+        reqSource === 'nvidia'
+          ? []
+          : Array.from(new Set([...(activeSession.tools || []), ...detectTools(text)]));
     }
     return { reqModel, reqSource, reqTools };
   };
@@ -639,6 +645,11 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     if (!text && attachments.length === 0) return;
 
     const sessionId = activeSession.id;
+    // `busy` is React state and flips a tick late, so a mobile double-tap (touchend +
+    // click) can fire two sends before it updates — which is how a chat ends up with two
+    // identical user turns. `abortMap` is set synchronously when a generation starts, so
+    // it's the reliable guard against a duplicate in-flight send for this chat.
+    if (abortMap.current.has(sessionId)) return;
     const { reqModel, reqSource, reqTools } = resolveRequest(text, overrideModel);
 
     const userTurn: ChatTurn = {
@@ -689,6 +700,16 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       reqTools: [],
       recipeRun: { recipeId: skill.recipeId, values: skill.buildValues(arg) }
     });
+  };
+
+  // Click a skill chip: no-arg skills run immediately; otherwise prefill the composer
+  // with the command so the user can type the argument.
+  const handlePickSkill = (skill: ChatSkill) => {
+    if (!skill.argRequired) {
+      void handleRunSkill(skill, '');
+      return;
+    }
+    setComposerSeed(`/${skill.command} `);
   };
 
   // Regenerate an assistant turn: re-run the prompt that produced it, keeping the
@@ -940,6 +961,9 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
         onOpenModelPicker={() => setShowModelPicker(true)}
         onSend={handleSend}
         onRunSkill={handleRunSkill}
+        onPickSkill={handlePickSkill}
+        seedText={composerSeed}
+        onSeedConsumed={() => setComposerSeed('')}
         onStop={handleStop}
         onBranch={handleBranch}
         onRegenerate={handleRegenerate}
