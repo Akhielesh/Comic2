@@ -41,16 +41,21 @@ export const cryptoPriceTool: ChatTool = {
       const changePercent = typeof change === 'number' ? change : 0;
       const changeAbs = changePercent ? value - value / (1 + changePercent / 100) : 0;
 
-      // Best-effort 7-day price series → render as the interactive MarketCard.
+      // Best-effort 1-YEAR daily price series → the interactive MarketCard derives its
+      // range tabs (1M/6M/1Y…) by ~daily point count, so a year of DAILY points makes
+      // those ranges accurate. (The old 7-day hourly series made every range show the
+      // same week, mislabeled as "1M"/"6M".)
       let series: { date: string; close: number }[] | undefined;
       try {
         const chart = await fetchJson<{ prices?: [number, number][] }>(
-          `https://api.coingecko.com/api/v3/coins/${encodeURIComponent(top.id)}/market_chart?vs_currency=${encodeURIComponent(vs)}&days=7&interval=hourly`,
+          `https://api.coingecko.com/api/v3/coins/${encodeURIComponent(top.id)}/market_chart?vs_currency=${encodeURIComponent(vs)}&days=365`,
           { signal }
         );
         const pts = chart.prices || [];
         if (pts.length) {
-          const step = Math.max(1, Math.floor(pts.length / 40)); // downsample to ~40 points
+          // Keep ~daily resolution (one point ≈ one day) so range-by-point-count is right;
+          // only downsample if CoinGecko returned a finer (e.g. hourly) granularity.
+          const step = Math.max(1, Math.floor(pts.length / 370));
           series = pts.filter((_, i) => i % step === 0).map(([ms, p]) => ({ date: new Date(ms).toISOString(), close: p }));
         }
       } catch {
