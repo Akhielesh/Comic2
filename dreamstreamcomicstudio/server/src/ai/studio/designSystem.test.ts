@@ -7,6 +7,8 @@ import {
   CURATED_MCP_CATALOG,
   DESIGN_PRESETS,
   pickDesignPreset,
+  pickDesignSkills,
+  DESIGN_SKILLS,
   externalMcpEnabled,
 } from './designSystem.js';
 
@@ -74,6 +76,21 @@ describe('designSystem', () => {
     const od = CURATED_MCP_CATALOG.find((m) => m.id === 'opendesign');
     expect(od?.license).toBe('Apache-2.0');
     expect(od?.envVar).toBe('STUDIO_OPENDESIGN_MCP_URL');
+  });
+
+  it('design skills: pick techniques by keyword and inject their recipes', () => {
+    const ids = pickDesignSkills('a landing page with a hero and scroll animations').map((s) => s.id);
+    expect(ids).toContain('scroll-reveal');
+    expect(DESIGN_SKILLS.length).toBeGreaterThanOrEqual(12);
+    const d = buildDesignDirective({ prompt: 'a landing page with scroll animations and a data table' });
+    expect(d).toContain('TECHNIQUES');
+    expect(d).toContain('Data table'); // matched skill recipe is injected
+  });
+
+  it('a user-pinned preset overrides the heuristic pick', () => {
+    const d = buildDesignDirective({ prompt: 'a dashboard', presetId: 'neobrutalist' });
+    expect(d).toContain('user PINNED');
+    expect(d).toContain('Neobrutalist');
   });
 
   it('externalMcpEnabled gates third-party reference MCPs via env (privacy / no-egress)', () => {

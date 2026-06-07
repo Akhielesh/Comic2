@@ -23,6 +23,8 @@ export interface DesignBrief {
   prompt?: string;
   /** True when iterating on an existing app (respect the established look, don't reinvent it). */
   refining?: boolean;
+  /** Optional pinned design-system preset id (from the user's settings); overrides the heuristic pick. */
+  presetId?: string;
 }
 
 /**
@@ -218,24 +220,84 @@ export const pickDesignPreset = (prompt?: string): DesignPreset | null => {
 export const presetLibrarySummary = (): string =>
   DESIGN_PRESETS.map((p) => `- ${p.name} (${p.category}) — ${p.tagline}`).join('\n');
 
+/** Find a preset by id (for a user-pinned design system). */
+export const presetById = (id?: string): DesignPreset | null =>
+  (id ? DESIGN_PRESETS.find((p) => p.id === id) : undefined) ?? null;
+
+// ---------------------------------------------------------------------------------------------
+// Design SKILLS — reusable techniques (adapted from open-design's SKILL.md concept). A design system
+// sets the *look*; skills are concrete *recipes* the agent layers on top (incl. motion / HyperFrames).
+// Vendored, local text — zero network calls.
+// ---------------------------------------------------------------------------------------------
+
+export interface DesignSkill {
+  id: string;
+  name: string;
+  keywords: string[];
+  directive: string;
+}
+
+export const DESIGN_SKILLS: DesignSkill[] = [
+  { id: 'bento-hero', name: 'Bento hero', keywords: ['bento', 'hero', 'landing', 'overview', 'features'], directive: 'Bento hero: a responsive grid of rounded modular cards of varied sizes; each card is one idea (stat/visual/feature); consistent radius + gap, soft shadow, subtle hover lift.' },
+  { id: 'scroll-reveal', name: 'Scroll reveal', keywords: ['scroll', 'reveal', 'landing', 'animate', 'marketing', 'story'], directive: 'Scroll-reveal: fade + translateY 12–20px sections in as they enter the viewport (IntersectionObserver or Framer Motion whileInView), staggered 60–80ms, once-only; honor prefers-reduced-motion.' },
+  { id: 'command-palette', name: 'Command palette', keywords: ['command palette', 'cmdk', 'shortcut', 'search', 'power user', 'productivity', 'tool'], directive: 'Command palette: a ⌘K / Ctrl-K modal with fuzzy search over actions + navigation, full keyboard nav, recent items, focus-trap + ARIA. Fast and accessible.' },
+  { id: 'glass-cards', name: 'Glass cards', keywords: ['glass', 'blur', 'frosted', 'translucent', 'overlay'], directive: 'Glass cards: translucent panels (backdrop-blur, hairline border + inner highlight) over a colorful/gradient backdrop; keep text on solid-enough areas so contrast stays ≥4.5:1.' },
+  { id: 'sticky-data-table', name: 'Data table', keywords: ['table', 'data', 'grid', 'rows', 'admin', 'list', 'spreadsheet'], directive: 'Data table: sticky header (and first column on mobile), zebra/hover rows, right-aligned tabular-nums numbers, sortable headers, a sticky toolbar (search/filter), and skeleton + empty states.' },
+  { id: 'gradient-hero', name: 'Gradient hero', keywords: ['hero', 'gradient', 'mesh', 'aurora', 'landing', 'launch'], directive: 'Gradient hero: a vivid mesh/aurora backdrop behind a bold headline + subhead + primary/secondary CTA; place foreground text on a solid or blurred panel for legibility.' },
+  { id: 'marquee-logos', name: 'Logo marquee', keywords: ['marquee', 'logos', 'partners', 'trusted by', 'carousel'], directive: 'Logo marquee: an infinite, gentle horizontal marquee of logos; pause on hover; CSS or Framer Motion; reduced-motion → static grid.' },
+  { id: 'animated-counters', name: 'Animated stats', keywords: ['stats', 'counter', 'metrics', 'numbers', 'kpi'], directive: 'Animated stats: count-up numbers when they scroll into view (ease-out ~1s), tabular-nums to avoid layout shift; reduced-motion → show the final value immediately.' },
+  { id: 'skeletons', name: 'Skeleton loading', keywords: ['loading', 'skeleton', 'shimmer', 'async', 'fetch'], directive: 'Skeletons: shape-matched shimmer placeholders for every async region (cards/lists/tables) instead of spinners; match the final layout to avoid content shift.' },
+  { id: 'empty-states', name: 'Empty states', keywords: ['empty', 'onboarding', 'first run', 'no data', 'placeholder'], directive: 'Empty states: a friendly icon/illustration + one-line explanation + a primary action for every collection before data exists.' },
+  { id: 'theme-toggle', name: 'Dark-mode toggle', keywords: ['dark mode', 'theme', 'light', 'toggle', 'appearance'], directive: 'Dark mode: a class-based, persisted theme toggle driven by CSS variables/tokens for both themes, defaulting to system preference, switching instantly.' },
+  { id: 'micro-interactions', name: 'Micro-interactions', keywords: ['interactions', 'hover', 'feedback', 'polish', 'delight', 'animation'], directive: 'Micro-interactions: tasteful hover/press/focus feedback (scale ~0.98 on press, subtle elevation on hover, 120–180ms), success checkmarks, optimistic UI — transform/opacity only.' },
+  { id: 'page-transitions', name: 'Page transitions', keywords: ['transition', 'route', 'navigation', 'spa', 'tabs', 'motion'], directive: 'Route/tab transitions: animate view changes (cross-fade + slight slide) via Framer Motion AnimatePresence (web) or shared-element/spring (RN); keep <300ms; reduced-motion safe.' },
+  { id: 'responsive-nav', name: 'Responsive nav', keywords: ['nav', 'navigation', 'menu', 'header', 'sidebar', 'mobile menu'], directive: 'Responsive nav: a desktop top/side bar that collapses into an accessible mobile drawer or bottom-tab bar; keyboard + focus-trap; clear active-route indication.' },
+  { id: 'toasts', name: 'Toasts', keywords: ['toast', 'notification', 'snackbar', 'alert', 'feedback'], directive: 'Toasts: non-blocking, stacked, auto-dismiss notifications with semantic colors and an undo affordance where relevant; accessible (role=status); reduced-motion safe.' }
+];
+
+/** Heuristically pick up to `max` techniques that fit the request. */
+export const pickDesignSkills = (prompt?: string, max = 4): DesignSkill[] => {
+  const p = (prompt || '').toLowerCase();
+  if (!p.trim()) return [];
+  return DESIGN_SKILLS
+    .map((s) => ({ s, score: s.keywords.reduce((n, k) => (p.includes(k) ? n + 1 : n), 0) }))
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, max)
+    .map((x) => x.s);
+};
+
+/** A compact techniques menu + recipes for the ones that fit this request. */
+export const designSkillsBlock = (prompt?: string): string => {
+  const menu = DESIGN_SKILLS.map((s) => s.name).join(', ');
+  const picked = pickDesignSkills(prompt, 4);
+  return `\nTECHNIQUES — apply the ones that fit (and any others that help): ${menu}.${picked.length ? `\nApply these for THIS request:\n${picked.map((s) => `- ${s.name}: ${s.directive}`).join('\n')}` : ''}\n`;
+};
+
 /**
- * The self-customizing layer. Rather than forcing one house style on every app, this gives the
- * model a curated library of brand-grade design systems (onboarded from open-design), recommends
- * the best fit for the request, and tells it to commit — adaptive, but always on the charter.
+ * The self-customizing layer. Gives the model a curated library of brand-grade design SYSTEMS
+ * (onboarded from open-design) + reusable SKILLS/techniques, recommends the best fit (or honors a
+ * user-pinned preset), and tells it to commit — adaptive, but always on the charter.
  */
 export const buildDesignDirective = (brief: DesignBrief = {}): string => {
   const adapt = brief.refining
     ? `This is an EDIT to an existing app: respect and EXTEND its established design language (its palette, type, spacing, motion and component patterns) — refine and elevate it, don't reinvent it. New UI must feel like it always belonged.`
     : `Before writing code, infer the right design from the request and COMMIT to it: who is this for, what mood fits, one accent-led color story, information density, and how much motion is appropriate. Then apply that language consistently across every screen and component.`;
 
-  const preset = brief.refining ? null : pickDesignPreset(brief.prompt);
-  const library = brief.refining
-    ? ''
-    : `\nDESIGN-SYSTEM LIBRARY — pick the brand-grade system that best fits this request and apply it fully (or commit to an equally strong custom one):\n${presetLibrarySummary()}${preset ? `\n\nRecommended for THIS request — **${preset.name}**:\n${preset.directive}` : ''}\n`;
+  if (brief.refining) {
+    return `DESIGN DIRECTIVE (self-customize to THIS request, then hold the bar):
+${adapt}
+
+${DESIGN_CHARTER}`;
+  }
+
+  const preset = presetById(brief.presetId) ?? pickDesignPreset(brief.prompt);
+  const pinned = Boolean(presetById(brief.presetId));
+  const library = `\nDESIGN-SYSTEM LIBRARY — pick the brand-grade system that best fits this request and apply it fully (or commit to an equally strong custom one):\n${presetLibrarySummary()}${preset ? `\n\n${pinned ? 'The user PINNED this design system — use it' : 'Recommended for THIS request'} — **${preset.name}**:\n${preset.directive}` : ''}\n`;
 
   return `DESIGN DIRECTIVE (self-customize to THIS request, then hold the bar):
 ${adapt}
-${library}
+${library}${designSkillsBlock(brief.prompt)}
 ${DESIGN_CHARTER}`;
 };
 

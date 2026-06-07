@@ -18,12 +18,13 @@ import {
 import { domainStrength } from '../../services/modelDomains';
 import {
   getStudioModelSelection, setStudioModel, setStudioAuto, setStudioSource,
-  setStudioCostPref, setStudioMaxIterations, setStudioDefaultTemplate,
+  setStudioCostPref, setStudioMaxIterations, setStudioDefaultTemplate, setStudioDesignPreset,
   setStudioAgents, setStudioAgentPreferences, setStudioAutoRunAgents, setStudioRuntime,
   resetStudioModelSelection, STUDIO_MODEL_CHANGED, STUDIO_MAX_ITERATIONS_CEILING,
   type StudioModelSelection, type StudioCostPref
 } from '../../services/studioModelSelection';
 import { STUDIO_AGENT_CATALOG, STUDIO_AGENT_ORDER, DEFAULT_STUDIO_AGENT_IDS } from '../../services/studioAgents';
+import { DESIGN_PRESETS as DESIGN_PRESET_OPTIONS } from '../../services/designPresets';
 import { CODING_RECOMMENDATIONS, TIER_LABEL, type CodingPick } from '../../services/codingRecommendations';
 import type { ModelSourceId } from '../../services/modelSelection';
 
@@ -325,6 +326,20 @@ export const StudioSettingsPanel: React.FC<{ open: boolean; onClose: () => void 
             >
               {TEMPLATE_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
             </select>
+          </section>
+
+          {/* Design system — pin a brand-grade look, or let the AI auto-pick the best fit per prompt. */}
+          <section className={card}>
+            <div className="text-sm font-bold mb-2">Design system</div>
+            <select
+              value={sel.designPreset ?? ''}
+              onChange={(e) => setStudioDesignPreset(e.target.value || null)}
+              className={`w-full rounded-lg border ${t.edge} ${t.panel} ${t.text} text-xs px-2.5 py-2 ${t.focusRing}`}
+            >
+              <option value="">Auto — best fit per prompt (recommended)</option>
+              {DESIGN_PRESET_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+            </select>
+            <p className={`mt-2 text-[11px] ${t.textFaint}`}>Pin one of {DESIGN_PRESET_OPTIONS.length} brand-grade systems, or leave on Auto.</p>
           </section>
 
           {/* AI agent team — which specialists run on "Refine with agent team". */}
