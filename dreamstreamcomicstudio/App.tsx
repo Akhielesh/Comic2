@@ -38,7 +38,9 @@ import { SystemDiagnosticsResponse } from './apiTypes';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { StaticSiteHeader } from './components/layout/StaticSiteHeader';
 import { LegalMicroLinks } from './components/layout/LegalMicroLinks';
-import { UniversalAssistant } from './components/UniversalAssistant';
+// Lazy so its markdown renderer (react-markdown ≈ 158 kB) isn't pulled into the
+// first-paint bundle — the floating assistant isn't needed for initial render.
+const UniversalAssistant = lazyImportWithRetry(() => import('./components/UniversalAssistant').then(module => ({ default: module.UniversalAssistant })));
 import { GlobalChatFAB } from './components/GlobalChatFAB';
 
 type AppView =
@@ -946,14 +948,16 @@ const App: React.FC = () => {
         )}
 
         {showUniversalAssistant && (
-          <UniversalAssistant
-            currentView={effectiveView}
-            activeProject={activeProject}
-            projects={projects}
-            onSaveCreativeDirection={activeProject ? (text) => updateProject(activeProject.id, (prev) => ({
-              state: { ...prev.state, creativeDirection: [prev.state.creativeDirection, text].filter(Boolean).join('\n\n') }
-            })) : undefined}
-          />
+          <Suspense fallback={null}>
+            <UniversalAssistant
+              currentView={effectiveView}
+              activeProject={activeProject}
+              projects={projects}
+              onSaveCreativeDirection={activeProject ? (text) => updateProject(activeProject.id, (prev) => ({
+                state: { ...prev.state, creativeDirection: [prev.state.creativeDirection, text].filter(Boolean).join('\n\n') }
+              })) : undefined}
+            />
+          </Suspense>
         )}
 
         {showGlobalChatFAB && (
