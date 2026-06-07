@@ -51,7 +51,9 @@ export const BubbleEditorModal: React.FC<BubbleEditorModalProps> = ({
         onClose();
     };
 
-    const handleMouseDown = (e: React.MouseEvent, id: string, currentX: number, currentY: number) => {
+    // Pointer Events (not mouse-only) so dragging works for touch + pen too — mouse-only
+    // handlers never fire on a phone, leaving bubbles impossible to reposition there.
+    const handlePointerDown = (e: React.PointerEvent, id: string, currentX: number, currentY: number) => {
         e.stopPropagation();
         setSelectedBlockId(id);
         dragRef.current = {
@@ -63,7 +65,7 @@ export const BubbleEditorModal: React.FC<BubbleEditorModalProps> = ({
         };
     };
 
-    const handleMouseMove = (e: React.MouseEvent) => {
+    const handlePointerMove = (e: React.PointerEvent) => {
         if (!dragRef.current || !containerRef.current) return;
 
         // Calculate delta in percentages relative to container size
@@ -77,14 +79,14 @@ export const BubbleEditorModal: React.FC<BubbleEditorModalProps> = ({
         handleUpdateBlock(dragRef.current.id, { position: { x: newX, y: newY } });
     };
 
-    const handleMouseUp = () => {
+    const handlePointerUp = () => {
         dragRef.current = null;
     };
 
     const selectedBlock = blocks.find(b => b.id === selectedBlockId);
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp}>
             <div className="bg-white rounded-xl w-full max-w-5xl h-[85vh] flex overflow-hidden shadow-2xl flex-col md:flex-row">
 
                 {/* Editor Area (Left/Top) */}
@@ -118,8 +120,8 @@ export const BubbleEditorModal: React.FC<BubbleEditorModalProps> = ({
                                 return (
                                     <div
                                         key={block.id}
-                                        onMouseDown={(e) => handleMouseDown(e, block.id, x, y)}
-                                        className={`absolute cursor-move transition-shadow ${isSelected ? 'z-50' : 'z-10'}`}
+                                        onPointerDown={(e) => handlePointerDown(e, block.id, x, y)}
+                                        className={`absolute cursor-move touch-none transition-shadow ${isSelected ? 'z-50' : 'z-10'}`}
                                         style={{ top: `${y}%`, left: `${x}%` }}
                                     >
                                         <div className={`

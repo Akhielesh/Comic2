@@ -23,7 +23,7 @@ const steps = [
 export const StepIndicator: React.FC<StepIndicatorProps> = ({ currentStep, maxStepReached, onStepClick }) => {
   return (
     <div className="w-full py-2.5 sticky top-0 z-40 bg-brand-blue/90 backdrop-blur-sm border-b-2 border-black">
-      <div className="max-w-5xl mx-auto px-4">
+      <div className="max-w-5xl mx-auto px-4 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <div className="flex items-center justify-between relative">
           {/* Connecting Line */}
           <div className="absolute left-0 top-1/2 w-full h-1 bg-black/30 -z-10 rounded-full" />
