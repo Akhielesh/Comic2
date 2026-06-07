@@ -31,7 +31,7 @@ import { runStudioAgentsParallel, sanitizeAgentIds, studioAgentCatalog, STUDIO_A
 import { resolveTools } from '../ai/tools/registry.js';
 import { buildMcpTools } from '../ai/tools/mcpClient.js';
 import { enabledMcpConfigs } from '../services/mcpRegistry.js';
-import { ALWAYS_ON_STUDIO_MCP_SERVERS, envDesignMcpServers } from '../ai/studio/designSystem.js';
+import { ALWAYS_ON_STUDIO_MCP_SERVERS, envDesignMcpServers, externalMcpEnabled } from '../ai/studio/designSystem.js';
 import { scanStreamedFiles } from '../ai/studio/streamParse.js';
 import { verifyGeneratedApp, formatIssues } from '../ai/studio/verifyApp.js';
 import { pickCodingModel, TEXT_FALLBACK } from '../ai/autoRouter.js';
@@ -162,7 +162,9 @@ const studioMcpTools = async (
     // `trusted` lets operator-set servers (defaults + env) reach a self-hosted sidecar over
     // http/internal hosts; user-supplied servers stay behind the strict SSRF guard (no trusted flag).
     const byUrl = new Map<string, { id: string; url: string; name?: string; trusted?: boolean; headers?: Record<string, string> }>();
-    for (const s of DEFAULT_STUDIO_MCP_SERVERS) byUrl.set(s.url, s);
+    // Always-on reference MCPs are THIRD-PARTY (send context off-box) — skip them when external MCP
+    // is disabled for privacy. Operator self-hosted + user MCPs below are unaffected.
+    if (externalMcpEnabled()) for (const s of DEFAULT_STUDIO_MCP_SERVERS) byUrl.set(s.url, s);
     // Operator-configured (self-hosted) design + API-connector MCPs, read fresh each call.
     for (const s of envDesignMcpServers()) byUrl.set(s.url, s);
     for (const s of [...savedServers, ...requestServers] as { id: string; url: string }[]) byUrl.set(s.url, s);

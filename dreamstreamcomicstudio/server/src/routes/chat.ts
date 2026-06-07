@@ -15,7 +15,7 @@ import { resolveTools, type ChatTool } from '../ai/tools/registry.js';
 import { selectRelevantTools, ROUTABLE_TOOL_NAMES } from '../../../toolCatalog.js';
 import { buildMcpTools } from '../ai/tools/mcpClient.js';
 import { enabledMcpConfigs } from '../services/mcpRegistry.js';
-import { ALWAYS_ON_STUDIO_MCP_SERVERS, envDesignMcpServers } from '../ai/studio/designSystem.js';
+import { ALWAYS_ON_STUDIO_MCP_SERVERS, envDesignMcpServers, externalMcpEnabled } from '../ai/studio/designSystem.js';
 import { applyGuardrails } from '../ai/guardrails.js';
 import type { CapabilityNotice, McpServerConfig } from '../../../apiTypes.js';
 import { unfurlUrl } from '../ai/tools/unfurl.js';
@@ -298,7 +298,8 @@ const prepareChat = async (req: any): Promise<PrepResult> => {
     // an MCP server configured), so plain conversations are unaffected. User servers behave as before.
     const userUsingTools = routedToolNames.length > 0 || savedServers.length > 0 || requestServers.length > 0;
     if (userUsingTools) {
-      for (const s of ALWAYS_ON_STUDIO_MCP_SERVERS) byUrl.set(s.url, s as McpServerConfig);
+      // Always-on reference MCPs are third-party; skip them when external MCP is disabled (privacy).
+      if (externalMcpEnabled()) for (const s of ALWAYS_ON_STUDIO_MCP_SERVERS) byUrl.set(s.url, s as McpServerConfig);
       for (const s of envDesignMcpServers()) byUrl.set(s.url, s as McpServerConfig & { trusted?: boolean });
     }
     for (const s of [...savedServers, ...requestServers]) byUrl.set(s.url, s as McpServerConfig);

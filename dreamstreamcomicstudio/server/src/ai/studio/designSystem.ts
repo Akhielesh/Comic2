@@ -129,6 +129,76 @@ export const DESIGN_PRESETS: DesignPreset[] = [
     id: 'luxury-editorial', name: 'Luxury Editorial', category: 'editorial', tagline: 'dramatic serif, vast whitespace, aspirational',
     keywords: ['luxury', 'fashion', 'brand', 'agency', 'portfolio', 'gallery', 'photography', 'elegant', 'premium brand'],
     directive: 'Luxury editorial / fashion: dramatic high-contrast serif display, vast negative space, large full-bleed imagery, a restrained near-monochrome palette with one accent, and slow elegant transitions. Refined and aspirational.'
+  },
+  {
+    id: 'swiss', name: 'Swiss / International', category: 'editorial', tagline: 'grid-driven, objective, Helvetica-like',
+    keywords: ['swiss', 'international', 'typographic', 'grid', 'minimalist', 'objective', 'bauhaus'],
+    directive: 'Swiss / International Typographic: a strict modular grid, a neutral grotesk (Helvetica/Inter), flush-left ragged-right text, generous margins, mostly black/white/red, asymmetric balance, and near-zero decoration. Objective, precise, content-led.'
+  },
+  {
+    id: 'bento', name: 'Bento Grid', category: 'product', tagline: 'modular rounded tiles (Apple-keynote style)',
+    keywords: ['bento', 'grid', 'landing', 'feature', 'showcase', 'overview', 'tiles'],
+    directive: 'Bento-grid layout: a responsive grid of rounded modular cards of varied sizes, each a self-contained feature/visual, soft shadows, consistent radius and gap, restrained palette with accent highlights, and subtle hover lift. Great for landing pages + overviews.'
+  },
+  {
+    id: 'synthwave', name: 'Synthwave / Retro 80s', category: 'expressive', tagline: 'neon sunset, grids, retro-future',
+    keywords: ['synthwave', 'retro', '80s', 'neon', 'vaporwave', 'arcade', 'outrun', 'retrowave'],
+    directive: 'Synthwave / retro-80s: deep indigo-to-magenta sunset gradients, neon pink/cyan glows, perspective grid horizons, chrome/outline display type, and tasteful glow/scanline accents. Bold and nostalgic — keep body text on solid panels for contrast.'
+  },
+  {
+    id: 'corporate-trust', name: 'Corporate Trust', category: 'product', tagline: 'calm, accessible, dependable (health/finance/gov)',
+    keywords: ['corporate', 'healthcare', 'medical', 'finance', 'bank', 'insurance', 'government', 'enterprise', 'b2b', 'trust'],
+    directive: 'Corporate trust: a calm, accessible palette (dependable blues/teals + neutral grays), clear hierarchy, comfortable reading sizes, conservative spacing, restrained motion, and obvious affordances. Prioritize clarity, accessibility (WCAG AA+) and credibility over flair.'
+  },
+  {
+    id: 'ecommerce', name: 'E-commerce / Storefront', category: 'product', tagline: 'conversion-first product UI',
+    keywords: ['ecommerce', 'shop', 'store', 'storefront', 'product', 'cart', 'checkout', 'retail', 'marketplace'],
+    directive: 'Conversion-focused storefront: crisp product cards with strong imagery, clear price + primary CTA, trust signals (ratings, returns, secure checkout), sticky add-to-cart, fast filtering, and a clean grid. Reduce friction; make the buy action unmissable.'
+  },
+  {
+    id: 'workspace', name: 'Calm Workspace', category: 'product', tagline: 'content-first productivity (Notion-like)',
+    keywords: ['notion', 'workspace', 'docs', 'notes', 'wiki', 'productivity', 'editor', 'knowledge'],
+    directive: 'Calm productivity workspace: a quiet neutral palette, content-first layout with a slim sidebar, comfortable typography, subtle dividers instead of heavy borders, hover-revealed controls, and minimal chrome so the user\'s content is the hero.'
+  },
+  {
+    id: 'pastel-soft', name: 'Soft Pastel', category: 'expressive', tagline: 'gentle, rounded, wellness/calm',
+    keywords: ['pastel', 'soft', 'wellness', 'calm', 'meditation', 'health', 'gentle', 'cozy', 'mindful'],
+    directive: 'Soft pastel: muted pastel palette, large radii, airy spacing, gentle soft shadows, rounded friendly type, and slow easing. Warm and calming — keep enough contrast for legibility (don\'t wash text out).'
+  },
+  {
+    id: 'gradient-mesh', name: 'Gradient Mesh', category: 'expressive', tagline: 'vivid mesh gradients, modern marketing',
+    keywords: ['gradient', 'mesh', 'colorful', 'marketing', 'modern', 'vibrant', 'ai', 'launch'],
+    directive: 'Vivid gradient-mesh: lush multi-color mesh/blob gradient backgrounds, white or near-black foreground panels for legibility, bold display headings, glassy accents, and smooth reveal motion. Energetic and modern — keep text off the busiest gradient areas.'
+  },
+  {
+    id: 'claymorphism', name: 'Claymorphism', category: 'expressive', tagline: 'soft 3D clay, puffy depth',
+    keywords: ['clay', 'claymorphism', '3d', 'puffy', 'soft ui', 'cute', 'rounded'],
+    directive: 'Claymorphism: soft 3D "clay" surfaces with double (inner light + outer soft) shadows, big rounded shapes, playful saturated-but-soft palette, and squishy press motion. Friendly and tactile; keep contrast on text elements.'
+  },
+  {
+    id: 'a11y-first', name: 'Accessibility-First', category: 'product', tagline: 'WCAG AAA, large, high-contrast, keyboard',
+    keywords: ['accessible', 'accessibility', 'a11y', 'wcag', 'inclusive', 'low vision', 'high contrast', 'senior'],
+    directive: 'Accessibility-first: WCAG AAA contrast, large base font (≥18px) and tap targets (≥48px), highly visible focus rings, full keyboard + screen-reader support (semantic landmarks, ARIA, skip links), no motion-dependence (honor prefers-reduced-motion), clear error text. Usable by everyone.'
+  },
+  {
+    id: 'magazine', name: 'Magazine / Print', category: 'editorial', tagline: 'columns, drop caps, editorial grid',
+    keywords: ['magazine', 'print', 'news', 'article', 'journal', 'editorial grid', 'publication'],
+    directive: 'Magazine / print editorial: a multi-column grid, expressive serif headlines with drop caps, pull quotes, refined hierarchy, hairline rules, and image-led spreads. Reads like a publication; keep responsive single-column on mobile.'
+  },
+  {
+    id: 'developer-docs', name: 'Developer Docs', category: 'technical', tagline: 'sidebar nav, code-first, readable',
+    keywords: ['docs', 'documentation', 'api reference', 'developer', 'guide', 'sdk', 'reference'],
+    directive: 'Developer docs: a persistent sidebar nav + on-page TOC, generous readable measure, first-class syntax-highlighted code blocks with copy buttons, callout/admonition styles, anchored headings, and fast search. Optimized for scanning and copy-paste; great dark mode.'
+  },
+  {
+    id: 'monospace', name: 'Monospace Minimal', category: 'technical', tagline: 'strict mono, ascii-clean, minimal',
+    keywords: ['monospace', 'mono', 'ascii', 'minimal', 'terminal-lite', 'indie', 'maker'],
+    directive: 'Monospace-minimal: a single monospace family throughout, strict near-monochrome palette, hairline borders, tight grid, ASCII-clean dividers, and almost no color except one accent. Crisp, technical, indie-maker aesthetic.'
+  },
+  {
+    id: 'kids-bright', name: 'Kids / Education', category: 'expressive', tagline: 'big, bright, friendly, safe',
+    keywords: ['kids', 'children', 'education', 'school', 'learning', 'teach', 'classroom', 'toddler'],
+    directive: 'Kids / education: big bright primary colors, large rounded friendly shapes and type, generous tap targets, simple obvious navigation, cheerful illustrations/mascots, encouraging feedback, and playful but gentle motion. Safe, legible, and easy for small hands.'
   }
 ];
 
@@ -303,3 +373,13 @@ export const envDesignMcpServers = (
       return { id: m.id, name: m.name, url, trusted: true as const, ...(headers ? { headers } : {}) };
     })
     .filter((s) => /^https?:\/\//i.test(s.url));
+
+/**
+ * Privacy / data-egress control. The always-on reference MCPs (Context7, DeepWiki) send the agent's
+ * context — which can include the user's prompt and generated code — to THIRD-PARTY servers. Set
+ * STUDIO_DISABLE_EXTERNAL_MCP=1 to turn them off for privacy-sensitive / no-egress deployments;
+ * operator self-hosted MCPs (STUDIO_*_MCP_URL) and the user's own saved MCPs still work, and the
+ * vendored design knowledge (DESIGN_PRESETS) never makes a network call at all.
+ */
+export const externalMcpEnabled = (env: Record<string, string | undefined> = process.env): boolean =>
+  !/^(1|true|yes|on)$/i.test((env.STUDIO_DISABLE_EXTERNAL_MCP || '').trim());

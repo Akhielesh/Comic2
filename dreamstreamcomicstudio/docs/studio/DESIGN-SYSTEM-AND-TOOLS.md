@@ -203,6 +203,13 @@ Nango (self-host + configure which providers/actions are allowed), not to **abso
 | `NANGO_HOST` | Nango base URL for the connector tools (default `http://localhost:3003`) |
 | `NANGO_SECRET_KEY` | Enables `nango_search_integrations` / `nango_connect_integration` / `nango_call_api` |
 | `NANGO_DEFAULT_CONNECTION_ID` | Optional default connection for build-time API inspection |
+| `STUDIO_OPENDESIGN_MCP_URL` | Add a self-hosted Open Design MCP (reads a local OD instance; niche) |
+| `STUDIO_DISABLE_EXTERNAL_MCP` | **Privacy:** set to `1`/`true` to turn OFF the always-on third-party reference MCPs (Context7, DeepWiki) so no prompt/code leaves the box. Self-hosted + user MCPs and the vendored `DESIGN_PRESETS` are unaffected. |
+
+> **Data-egress note:** the only studio feature that sends your prompt/code to a third party is the
+> always-on reference MCPs (Context7, DeepWiki). They're best-effort and now gated by
+> `STUDIO_DISABLE_EXTERNAL_MCP`. The brand-grade design systems (`DESIGN_PRESETS`) are **vendored
+> locally and make no network calls** — see `OPEN-DESIGN-ROADMAP.md` and `CREDITS-OPEN-DESIGN.md`.
 
 The `STUDIO_*_MCP_URL` servers are operator-set (**trusted**): http/internal hosts are allowed, all
 are best-effort — an unreachable server simply yields no tools and never blocks a build. Full env
