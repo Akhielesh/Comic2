@@ -11,7 +11,7 @@ import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useStat
 import {
   ArrowLeft, Wand2, Square, Share2, Download, FileCode, Cloud,
   Sparkles, Cpu, Lock, Mail, Loader2, Command as CommandIcon, Moon, Sun, Palette, Undo2, MessageSquarePlus, Check,
-  Columns, Eye, FilePlus, Users, Maximize2, Minimize2,
+  Columns, Eye, FilePlus, Users, Maximize2, Minimize2, Video,
 } from 'lucide-react';
 import type { CodeStudioArtifact, CodeStudioTemplate, StudioBuildPlan, StudioAnswer } from '../../apiTypes';
 import {
@@ -41,6 +41,7 @@ import { isProviderEnabled } from '../../services/sourceGovernance';
 import { isLiveStudioEnabled } from '../../services/studioFlags';
 import { downloadArtifactZip } from '../../services/studioLauncher';
 import { exportProjectMarkdown, printPreview } from '../../services/studioExport';
+import { startPreviewRecording, screenRecordingSupported, type ActiveRecording } from '../../services/studioRecord';
 
 // Sandpack peek is heavy and legacy-ish — load it only when actually shown.
 const CodeStudioPanel = lazy(() => import('../chat/CodeStudioPanel'));
@@ -182,6 +183,13 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const [autofixing, setAutofixing] = useState(false);
   // Fullscreen the live preview (covers the studio) when the user wants maximum real estate.
   const [previewFull, setPreviewFull] = useState(false);
+  // Client-side screen recording of the preview → downloadable video (no server / no egress).
+  const [recording, setRecording] = useState<ActiveRecording | null>(null);
+  const togglePreviewRecording = async () => {
+    if (recording) { recording.stop(); setRecording(null); return; }
+    const r = await startPreviewRecording(wsTitle || 'preview');
+    if (r) setRecording(r);
+  };
   // Debounce preview errors: the in-browser preview reports transient compile/HMR blips while a
   // refine streams in, which made the error banner flash. Only surface an error that *persists*
   // (~1.2s); clear it immediately on recovery. Stable identity so the watcher effect is steady.
@@ -728,13 +736,24 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       icon={<Cloud className="w-4 h-4" />}
       className={previewFull ? 'fixed inset-0 z-[60] rounded-none' : ''}
       actions={
-        <button
-          onClick={() => setPreviewFull((v) => !v)}
-          title={previewFull ? 'Exit fullscreen' : 'Fullscreen preview'}
-          className={`rounded p-1 ${t.hover} ${t.textFaint}`}
-        >
-          {previewFull ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
-        </button>
+        <>
+          {screenRecordingSupported() && (
+            <button
+              onClick={() => void togglePreviewRecording()}
+              title={recording ? 'Stop recording' : 'Record preview to video'}
+              className={`rounded p-1 ${t.hover} ${recording ? 'text-rose-400' : t.textFaint}`}
+            >
+              {recording ? <Square className="w-3.5 h-3.5" /> : <Video className="w-3.5 h-3.5" />}
+            </button>
+          )}
+          <button
+            onClick={() => setPreviewFull((v) => !v)}
+            title={previewFull ? 'Exit fullscreen' : 'Fullscreen preview'}
+            className={`rounded p-1 ${t.hover} ${t.textFaint}`}
+          >
+            {previewFull ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+          </button>
+        </>
       }
     >
       {/* Calm "auto-fixing" bar while the AI repairs preview/console errors automatically — replaces
