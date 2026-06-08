@@ -8,6 +8,11 @@
 
 import { getSupabaseAdmin, getSupabaseCapabilityStatus } from './supabase.js';
 import { logger } from '../lib/logger.js';
+import { TtlCache } from '../lib/cache.js';
+
+// The overview runs ~9 queries; admin dashboards poll/refresh it repeatedly, so a
+// short TTL coalesces those into one round-trip per window per day-range.
+const overviewCache = new TtlCache<AnalyticsOverview>(30_000, 64);
 
 const EVENT_COLUMNS = 'id, user_id, session_id, event_type, severity, source, surface, message, metadata, request_id, client_ts, created_at';
 const FEEDBACK_COLUMNS = 'id, user_id, session_id, target_type, target_id, vote, category, sentiment, comment, source, surface, metadata, client_ts, created_at';
@@ -65,8 +70,7 @@ export interface AnalyticsOverview {
   recentDislikes: Array<Record<string, unknown>>;
 }
 
-export const getAnalyticsOverview = async (daysInput: unknown): Promise<AnalyticsOverview> => {
-  const windowDays = clampInt(daysInput, 7, 1, 90);
+const computeAnalyticsOverview = async (windowDays: number): Promise<AnalyticsOverview> => {
   const since = sinceIso(windowDays);
   const base: AnalyticsOverview = {
     windowDays,
@@ -131,6 +135,13 @@ export const getAnalyticsOverview = async (daysInput: unknown): Promise<Analytic
     logger.warn('analytics_overview_failed', { message: (error as Error)?.message || String(error) });
     return base;
   }
+};
+
+// Public, cached entry point. Repeated dashboard refreshes within the TTL share one
+// computation; `days` is clamped + part of the key so each range caches separately.
+export const getAnalyticsOverview = (daysInput: unknown): Promise<AnalyticsOverview> => {
+  const windowDays = clampInt(daysInput, 7, 1, 90);
+  return overviewCache.getOrSet(`overview:${windowDays}`, () => computeAnalyticsOverview(windowDays));
 };
 
 export interface ListOptions {
