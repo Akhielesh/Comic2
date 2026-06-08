@@ -16,7 +16,20 @@ to production is safe — it does nothing until `VENTURES_ENABLED=true`.
   (Claude can do the merge — additive, no force-push), **or** point Railway/Pages at the feature
   branch for a first test.
 
-## 1. [OWNER] Environment — set on Railway (backend) unless noted
+## 1. [OWNER] Environment — set on Railway (backend)
+
+### Option A — Inline pilot (RECOMMENDED, simplest: no second service, no Redis)
+Set these three Variables on the **existing backend service** and redeploy:
+| Var | Value |
+|---|---|
+| `OPENROUTER_API_KEY` | a NEW, credit-capped OpenRouter key (server-side only; never sent to browsers) |
+| `VENTURES_ENABLED` | `true` |
+| `VENTURES_PILOT_INLINE` | `true` |
+The API process then ticks active ventures on a timer (`VENTURES_TICK_INTERVAL_MS`, default 60s).
+To stop instantly: set `VENTURES_ENABLED=false` (or `VENTURES_KILL=true`) and redeploy. That's it
+for validation — skip Option B below.
+
+### Option B — Dedicated worker + Redis (for scale, later)
 | Var | Where | Why |
 |---|---|---|
 | `OPENROUTER_API_KEY` (and/or `NVIDIA_API_KEY`) | Railway | The model key the loop builds with (intake + builds). BYOK pools via `OPENROUTER_API_KEYS`/`NVIDIA_API_KEYS` optional. |

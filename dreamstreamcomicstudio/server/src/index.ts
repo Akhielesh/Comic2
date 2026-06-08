@@ -49,6 +49,7 @@ import { accountRouter } from './routes/account.js';
 import { prewarmCatalog, startCatalogRefreshLoop } from './services/modelCatalog.js';
 import { keysRouter } from './routes/keys.js';
 import { venturesRouter } from './routes/ventures.js';
+import { startInlineVenturesRunner } from './ventures/inlineRunner.js';
 
 validateRuntimeConfig();
 
@@ -192,6 +193,8 @@ app.listen(PORT, () => {
   // request is instant (no slow live fetch on a cold start), then keep it warm in the background.
   void prewarmCatalog();
   startCatalogRefreshLoop();
+  // Autopilot pilot loop (in-process). No-op unless VENTURES_ENABLED && VENTURES_PILOT_INLINE.
+  startInlineVenturesRunner();
 });
 
 // Run the ComicForge worker in-process when the feature is enabled and a queue is
