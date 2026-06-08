@@ -30,6 +30,7 @@ import { isProviderEnabled } from '../../services/sourceGovernance';
 import type { ModelSourceId } from '../../services/modelSelection';
 import { listMcpServers, getMcpServersByIds, onMcpServersChanged } from '../../services/mcpServers';
 import { recordToolEvents } from '../../services/toolAnalytics';
+import { captureError } from '../../services/telemetry';
 import { isLegacyStudioEnabled } from '../../services/studioFlags';
 import type { McpServerConfig } from '../../apiTypes';
 import {
@@ -632,6 +633,15 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         return;
       }
       const friendly = friendlyChatError(err);
+      // Record the failed chat (with its session/turn + model) so every failure is
+      // collected for analysis, not just shown to the user and forgotten.
+      captureError(err, {
+        eventType: 'chat_failed',
+        source: 'ai_chat',
+        sessionId,
+        message: friendly,
+        metadata: { turnId: aiTurnId }
+      });
       updateSession(sessionId, (s) => ({
         ...s,
         turns: s.turns.map((t) => {

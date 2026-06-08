@@ -2,8 +2,13 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import { AuthProvider } from './contexts/AuthContext';
+import { initTelemetry } from './services/telemetry';
 
 import { BrowserRouter } from 'react-router-dom';
+
+// Start capturing uncaught errors / unhandled rejections + batch-flush telemetry
+// as early as possible, so crashes during initial render are still recorded.
+initTelemetry();
 
 const VITE_PRELOAD_RETRY_KEY = 'dreamstream_vite_preload_retry';
 

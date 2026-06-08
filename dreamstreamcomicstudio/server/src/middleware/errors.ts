@@ -1,4 +1,5 @@
 import { NextFunction, Request, Response } from 'express';
+import { recordServerError } from '../services/telemetryStore.js';
 
 type ErrorLike = {
   code?: string;
@@ -61,6 +62,7 @@ export const errorHandler = (err: ErrorLike, req: Request, res: Response, _next:
   const code = getPublicErrorCode(status, err);
 
   const logEvent = {
+    ts: new Date().toISOString(),
     event: 'server_error',
     requestId: req.requestId,
     path: req.originalUrl,
@@ -75,6 +77,22 @@ export const errorHandler = (err: ErrorLike, req: Request, res: Response, _next:
 
   // Keep complete error detail only in logs.
   console.error(JSON.stringify(logEvent));
+
+  // Persist genuine server failures (5xx) to the telemetry store so "every failed
+  // request" lands alongside client-reported failures for triage. Fire-and-forget:
+  // routine 4xx (auth/validation) are skipped to avoid flooding the table.
+  if (status >= 500) {
+    recordServerError({
+      requestId: req.requestId,
+      path: req.originalUrl,
+      method: req.method,
+      status,
+      code,
+      message: err?.message,
+      userId: req.user?.id ?? null,
+      ip: req.ip
+    });
+  }
 
   const errorResponse: {
     message: string;

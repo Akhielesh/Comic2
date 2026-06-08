@@ -33,6 +33,7 @@ export const requestLogger = (req: Request, res: Response, next: NextFunction) =
     const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
     console.info(
       JSON.stringify({
+        ts: new Date().toISOString(),
         event: 'http_request',
         requestId: req.requestId,
         method: req.method,

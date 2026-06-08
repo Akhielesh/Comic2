@@ -1492,3 +1492,96 @@ export type SystemVersionResponse = {
   buildTimestamp: string;
   worldExtractionContractVersion: number;
 };
+
+// ── Telemetry & Feedback ─────────────────────────────────────────────────────
+// Captured client → server (POST /api/telemetry/{events,feedback}) to power
+// product observability — failed chats, errors, app crashes, informative logs —
+// and the feedback loop: like/dislike on responses & errors plus general platform
+// feedback (category + sentiment + comment). Persisted to Supabase by the service
+// role; see server/sql/telemetry_feedback.sql.
+
+export type TelemetrySeverity = 'debug' | 'info' | 'warn' | 'error' | 'critical';
+
+/** Product surface a signal came from, so analytics can be sliced by system. */
+export type TelemetrySource =
+  | 'ai_chat'
+  | 'code_studio'
+  | 'universal_assistant'
+  | 'comic_studio'
+  | 'comicforge'
+  | 'test_lab'
+  | 'client'
+  | 'server'
+  | 'unknown';
+
+export interface TelemetryEventInput {
+  /** Coarse category: 'error' | 'chat_failed' | 'app_crash' | 'unhandled_rejection' | 'log' | … */
+  eventType: string;
+  severity?: TelemetrySeverity;
+  source?: TelemetrySource;
+  /** App view / route the event happened on. */
+  surface?: string;
+  /** Short human-readable summary. */
+  message?: string;
+  /** Client session id (chat session id or per-tab id) that groups a flow. */
+  sessionId?: string;
+  /** ISO timestamp captured on the client when the event occurred. */
+  clientTs?: string;
+  /** Extra structured context (model, status, stack, url, …). */
+  metadata?: Record<string, unknown>;
+}
+
+export interface TelemetryIngestRequest {
+  events: TelemetryEventInput[];
+}
+
+export interface TelemetryIngestResponse {
+  ok: boolean;
+  accepted: number;
+  persisted: boolean;
+}
+
+export type FeedbackVoteValue = 'like' | 'dislike';
+export type FeedbackSentiment = 'positive' | 'neutral' | 'negative' | 'frustrated';
+
+export type FeedbackTargetType =
+  | 'chat_response'
+  | 'universal_assistant'
+  | 'error'
+  | 'app_crash'
+  | 'studio'
+  | 'platform';
+
+export interface FeedbackInput {
+  targetType: FeedbackTargetType;
+  /** Id of the thing being rated (message id, error id, …) when applicable. */
+  targetId?: string;
+  vote?: FeedbackVoteValue;
+  /** General-feedback category, e.g. 'AI response quality'. */
+  category?: string;
+  sentiment?: FeedbackSentiment;
+  /** Free-text note (dislike reason / general comment). */
+  comment?: string;
+  source?: TelemetrySource;
+  surface?: string;
+  sessionId?: string;
+  clientTs?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface FeedbackResponse {
+  ok: boolean;
+  persisted: boolean;
+}
+
+/** General-feedback categories surfaced in the feedback widget. */
+export const FEEDBACK_CATEGORIES = [
+  'AI response quality',
+  'Bug or error',
+  'Speed / performance',
+  'Confusing UI',
+  'Missing feature',
+  'Billing or credits',
+  'Other'
+] as const;
+export type FeedbackCategory = (typeof FEEDBACK_CATEGORIES)[number];
