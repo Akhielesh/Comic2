@@ -892,6 +892,24 @@ export interface GenerationInsight {
   failedPanelTitles?: string[];
 }
 
+/** Immutable copy of the world/style/continuity inputs as they were when a comic was
+ *  generated. Single-panel re-rolls prefer this so "patching" a panel stays faithful to the
+ *  original even if the user later edits or deletes entities/styles. See generationManager. */
+export interface GenerationSnapshot {
+  takenAt: number;
+  styleImageId?: string;
+  stylePrompt?: string;
+  selectedStyleId?: string;
+  styleAspectRatio?: AspectRatio;
+  imageResolution?: ImageResolution;
+  gridTemplateId?: string;
+  storyMood?: StoryMood;
+  characters: Character[];
+  items: Item[];
+  locations: Location[];
+  continuity?: ContinuityState;
+}
+
 export interface ComicState {
   pipelineMode?: PipelineMode;
   comicforge?: ComicForgeState;
@@ -922,6 +940,8 @@ export interface ComicState {
   storyMood?: StoryMood;
   /** Rolling history (most recent last, capped) of generation-run insights for analysis. */
   generationInsights?: GenerationInsight[];
+  /** World/style/continuity as captured at the last full generation, for faithful re-rolls. */
+  generationSnapshot?: GenerationSnapshot;
   continuity?: ContinuityState;
   overview?: string;
   publishedAt?: number;

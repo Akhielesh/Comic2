@@ -141,7 +141,23 @@ export const startBackgroundGeneration = async (
   try {
     addLog("Starting generation process...");
     addLog(`Story mood: ${storyMood.label} (${storyMood.brightness} palette). ${storyMood.summary}`);
-    onUpdate(project.id, (prev) => ({ state: { ...prev.state, storyMood } }));
+    // Snapshot the world/style/continuity exactly as used for this run, so single-panel
+    // re-rolls later stay faithful even if the user edits or deletes entities/styles.
+    const generationSnapshot = {
+      takenAt: Date.now(),
+      styleImageId: state.styleImageId,
+      stylePrompt: state.stylePrompt,
+      selectedStyleId: state.selectedStyleId,
+      styleAspectRatio: state.styleAspectRatio,
+      imageResolution: state.imageResolution,
+      gridTemplateId: state.gridTemplateId,
+      storyMood,
+      characters: state.characters || [],
+      items: state.items || [],
+      locations: state.locations || [],
+      continuity: state.continuity
+    };
+    onUpdate(project.id, (prev) => ({ state: { ...prev.state, storyMood, generationSnapshot } }));
     if (staleDownstreamFingerprint) {
       addLog("Warning: generation started with stale script/scene/world fingerprints.");
     }
@@ -679,6 +695,27 @@ export const regenerateSinglePanel = async (
   const panelIndex = state.panels.findIndex((p) => p.id === panelId);
   if (panelIndex === -1) throw new Error("Panel not found");
 
+  // Prefer the generation-time snapshot for world/style/continuity so a re-roll matches how
+  // the comic was originally drawn — even if entities/styles were edited or deleted since.
+  // Older comics without a snapshot fall back to live state (behaviour unchanged). The panel
+  // text and scenes stay live so the user's edits to THIS panel are still honoured.
+  const snap = state.generationSnapshot;
+  const refState = snap
+    ? {
+        ...state,
+        characters: snap.characters,
+        items: snap.items,
+        locations: snap.locations,
+        continuity: snap.continuity ?? state.continuity,
+        styleImageId: snap.styleImageId ?? state.styleImageId,
+        stylePrompt: snap.stylePrompt ?? state.stylePrompt,
+        styleAspectRatio: snap.styleAspectRatio ?? state.styleAspectRatio,
+        imageResolution: snap.imageResolution ?? state.imageResolution,
+        gridTemplateId: snap.gridTemplateId ?? state.gridTemplateId,
+        storyMood: snap.storyMood ?? state.storyMood
+      }
+    : state;
+
   const targetPanel = state.panels[panelIndex];
   const sanitizedDescription = sanitizePanelDescription(targetPanel.description || targetPanel.prompt || "");
   if (sanitizedDescription.flagged && hasMultiFrameLanguage(sanitizedDescription.text)) {
@@ -690,11 +727,11 @@ export const regenerateSinglePanel = async (
     prompt: sanitizedDescription.text || targetPanel.prompt
   });
   const scene = state.scenes.find((s) => s.id === targetPanel.sceneId);
-  const sceneBinding = scene ? getSceneBinding(state, scene.id) : undefined;
-  const panelContinuity = resolvePanelContinuity(state, normalizedTargetPanel);
-  const panelScopedContext = buildPanelScopedContext(state, normalizedTargetPanel);
-  const referencePack = buildPanelReferencePack(state, normalizedTargetPanel, {
-    styleImageId: state.styleImageId,
+  const sceneBinding = scene ? getSceneBinding(refState, scene.id) : undefined;
+  const panelContinuity = resolvePanelContinuity(refState, normalizedTargetPanel);
+  const panelScopedContext = buildPanelScopedContext(refState, normalizedTargetPanel);
+  const referencePack = buildPanelReferencePack(refState, normalizedTargetPanel, {
+    styleImageId: refState.styleImageId,
     lastPanelImageId: state.panels
       .slice(0, panelIndex)
       .map((panel) => panel.imageId)
@@ -708,7 +745,7 @@ export const regenerateSinglePanel = async (
   }
 
   // 1. Gather Context
-  const entityVisualContext = buildEntityTextContext(state, normalizedTargetPanel);
+  const entityVisualContext = buildEntityTextContext(refState, normalizedTargetPanel);
   const recentPanels = state.panels
     .slice(Math.max(0, panelIndex - 3), panelIndex)
     .map((panel) => sanitizePanelDescription(panel.description || panel.prompt || '').text)
@@ -716,10 +753,10 @@ export const regenerateSinglePanel = async (
 
   const imagePrompt = buildImagePrompt({
     stage: "panel_regen",
-    stylePrompt: state.stylePrompt,
+    stylePrompt: refState.stylePrompt,
     sceneSynopsis: scene?.synopsis || undefined,
     creativeDirection: state.creativeDirection || undefined,
-    moodGuidance: (state.storyMood?.promptGuidance) || classifyStoryMood(state.script, state.creativeDirection).promptGuidance,
+    moodGuidance: (refState.storyMood?.promptGuidance) || classifyStoryMood(state.script, state.creativeDirection).promptGuidance,
     focalSubject: normalizedTargetPanel.focalSubject,
     shotType: normalizedTargetPanel.shotType,
     cameraAngle: normalizedTargetPanel.cameraAngle,
@@ -736,17 +773,17 @@ export const regenerateSinglePanel = async (
   });
 
   // 2. Generate Image — match this panel's layout-slot aspect ratio (same as the main run).
-  const regenGridTemplate = state.gridTemplateId ? getGridTemplate(state.gridTemplateId) : null;
+  const regenGridTemplate = refState.gridTemplateId ? getGridTemplate(refState.gridTemplateId) : null;
   const regenSlotCount = regenGridTemplate?.panelSlots.length || 0;
   const regenSlot = regenSlotCount > 0 ? regenGridTemplate!.panelSlots[panelIndex % regenSlotCount] : null;
-  const ratioConfig = resolveAspectRatio(state, regenSlot?.effectiveRatio || state.styleAspectRatio);
+  const ratioConfig = resolveAspectRatio(refState, regenSlot?.effectiveRatio || refState.styleAspectRatio);
   const lockedModelId = resolveLockedPanelModelId();
   const runId = crypto.randomUUID();
 
   const generated = await generateImage(
     imagePrompt,
     ratioConfig.modelRatio,
-    state.imageResolution,
+    refState.imageResolution,
     referencePack.imageIds,
     project.id,
     {
@@ -798,7 +835,7 @@ export const regenerateSinglePanel = async (
         imageIdHistory: appendCappedHistory(p.imageIdHistory, generated.imageId),
         imageUrlHistory: appendCappedHistory(p.imageUrlHistory, generated.imageUrl),
         continuity: {
-          ...resolvePanelContinuity(prev.state, normalizedTargetPanel),
+          ...resolvePanelContinuity(refState, normalizedTargetPanel),
           referenceImageIds: referencePack.imageIds
         },
         dialogueBlocks: p.dialogueBlocks?.length
