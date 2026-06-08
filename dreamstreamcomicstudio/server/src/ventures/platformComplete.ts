@@ -41,9 +41,10 @@ export const getPlatformComplete = async (maxTokens = 4000): Promise<PlatformCom
   if (pools.nvidia.size > 0) candidates.push('nvidia');
   if (candidates.length === 0) return null;
 
-  // Resolve a model per provider once. OpenRouter picks the strongest available coder; NVIDIA
-  // uses its configured default (a pooled openrouter model id wouldn't be valid on NVIDIA).
-  const orModel = await pickCodingModel().catch(() => TEXT_FALLBACK);
+  // Resolve a model per provider once. OpenRouter picks the STRONGEST available coder (quality —
+  // weak/free coders produce the "terrible code" the owner flagged); NVIDIA uses its configured
+  // default (a pooled openrouter model id wouldn't be valid on NVIDIA).
+  const orModel = await pickCodingModel({ costPref: 'quality' }).catch(() => TEXT_FALLBACK);
   const models: Record<AIProviderId, string> = { openrouter: orModel, nvidia: NVIDIA_TEXT_MODEL };
 
   const complete = async (prompt: string): Promise<string> => {
