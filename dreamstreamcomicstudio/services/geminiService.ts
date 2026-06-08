@@ -771,8 +771,17 @@ const runStoryTool = async (
   }
 };
 
-export const suggestStyle = async (script: string): Promise<string> => {
-  const instruction = "Analyze this script and suggest a unique, creative visual style for a comic adaptation. Provide a concise, evocative style prompt (art style, colors, mood) suitable for an image generator. Output ONLY the prompt, no intro.";
+export const suggestStyle = async (
+  script: string,
+  opts?: { moodHint?: string; creativeDirection?: string }
+): Promise<string> => {
+  const moodLine = opts?.moodHint?.trim()
+    ? ` The story's detected mood is: ${opts.moodHint.trim()}. The suggested style MUST match this mood — its palette, lighting and energy should fit the tone. Do NOT default to dark, grim, desaturated, or noir looks unless the story itself is genuinely dark.`
+    : ' Match the style to the story\'s actual emotional tone (a happy story should feel warm and bright, not dark and moody).';
+  const directionLine = opts?.creativeDirection?.trim()
+    ? ` Honour the author's creative direction: ${opts.creativeDirection.trim()}.`
+    : '';
+  const instruction = `Analyze this script and suggest a unique, creative visual style for a comic adaptation.${moodLine}${directionLine} Provide a concise, evocative style prompt (art style, colors, lighting, mood) suitable for an image generator. Output ONLY the prompt, no intro.`;
   return await runStoryTool(script, instruction, []);
 };
 
