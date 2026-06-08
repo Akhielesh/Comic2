@@ -478,8 +478,9 @@ chatRouter.post('/enhance', async (req, res, next) => {
         error: { message: 'Enhancing needs an OpenRouter or NVIDIA key.', code: 'MISSING_CHAT_API_KEY' }
       });
     }
-    const model =
-      resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : await pickTextModel({ preferFree: true });
+    // Utility calls (enhance/memory) must be RELIABLE, not free-but-flaky — use the fast
+    // default model with the paid net so they don't silently fail when free models 429.
+    const model = resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;
 
     const result = await runChat({
       provider: resolved.provider,
@@ -490,6 +491,7 @@ chatRouter.post('/enhance', async (req, res, next) => {
       temperature: 0.4,
       maxTokens: 600,
       fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+      fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
       timeoutMs: TEXT_REQUEST_TIMEOUT_MS
     });
     const enhanced = (result.text || '').trim();
@@ -541,8 +543,9 @@ chatRouter.post('/memory', async (req, res, next) => {
       .join('\n')
       .slice(0, 6000);
 
-    const model =
-      resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : await pickTextModel({ preferFree: true });
+    // Reliable model for memory distillation — a flaky free model that 429s or returns
+    // garbage is exactly why memory "felt terrible".
+    const model = resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;
     const result = await runChat({
       provider: resolved.provider,
       apiKey: resolved.apiKey,
@@ -552,6 +555,7 @@ chatRouter.post('/memory', async (req, res, next) => {
       temperature: 0.2,
       maxTokens: 500,
       fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+      fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
       timeoutMs: TEXT_REQUEST_TIMEOUT_MS
     });
     const updated = (result.text || '').trim().slice(0, MAX_MEMORY_CHARS);

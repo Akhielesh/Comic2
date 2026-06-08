@@ -436,14 +436,13 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     return { reqModel, reqSource, reqTools };
   };
 
-  // Auto-memory: after some exchanges, distill durable facts about the user and
-  // merge them into their long-term memory in the background (logged-in users only).
-  // Throttled to every other exchange to keep it cheap and non-intrusive.
-  const memoryCounterRef = useRef(0);
+  // Auto-memory: after each exchange, distill durable facts about the user and merge them
+  // into their long-term memory in the background (logged-in users only). Runs from the
+  // FIRST exchange — the previous "every other, skip the first" throttle meant something the
+  // user said up front (name, location, what they're building) wasn't remembered until later.
+  // It's cheap (a small, fast model call) and best-effort.
   const updateMemoryInBackground = (priorTurns: ChatTurn[], answerText: string) => {
     if (!user?.id || !answerText.trim()) return;
-    memoryCounterRef.current += 1;
-    if (memoryCounterRef.current % 2 !== 0) return;
     const recent: ChatRequestMessage[] = priorTurns
       .filter((t) => !t.error)
       .slice(-5)
