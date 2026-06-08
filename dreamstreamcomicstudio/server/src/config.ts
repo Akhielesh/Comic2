@@ -151,6 +151,11 @@ export const IDEOGRAM_FETCH_IMAGE_TIMEOUT_MS = parseIntegerEnv(
 // AI_PROVIDER gates the unified path: 'gemini' = legacy Google SDK + Pixazo, 'openrouter' = gateway.
 export const AI_PROVIDER = (process.env.AI_PROVIDER || 'gemini').trim().toLowerCase();
 export const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
+// F1: provider key-pool. The single key above is always included; OPENROUTER_API_KEYS adds more
+// (comma-separated) so one rate-limited key can't throttle the platform. De-duped by KeyPool.
+export const OPENROUTER_API_KEYS = [OPENROUTER_API_KEY, ...(process.env.OPENROUTER_API_KEYS || '').split(',')]
+  .map((k) => k.trim())
+  .filter(Boolean);
 export const OPENROUTER_BASE_URL = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
 export const OPENROUTER_APP_URL = process.env.OPENROUTER_APP_URL || 'https://dreamstream.studio';
 export const OPENROUTER_APP_TITLE = process.env.OPENROUTER_APP_TITLE || 'DreamStream Comic Studio';
@@ -175,6 +180,10 @@ export const REASONING_EFFORT = ((): 'off' | 'low' | 'medium' | 'high' => {
 // BYOK: users add their own `nvapi-...` key (free tier: ~1,000 credits, 40 req/min). A platform
 // key is optional and only used to populate the shared catalog when no user key is present.
 export const NVIDIA_API_KEY = process.env.NVIDIA_API_KEY || '';
+// F1: NVIDIA key-pool (single key + optional comma-separated NVIDIA_API_KEYS). De-duped by KeyPool.
+export const NVIDIA_API_KEYS = [NVIDIA_API_KEY, ...(process.env.NVIDIA_API_KEYS || '').split(',')]
+  .map((k) => k.trim())
+  .filter(Boolean);
 export const NVIDIA_BASE_URL = process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1';
 // Default NVIDIA NIM text model used when a request doesn't name a concrete NVIDIA model.
 export const NVIDIA_TEXT_MODEL = process.env.NVIDIA_TEXT_MODEL || 'meta/llama-3.3-70b-instruct';

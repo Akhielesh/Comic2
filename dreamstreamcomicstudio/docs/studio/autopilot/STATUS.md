@@ -6,6 +6,15 @@
 
 **Last updated:** 2026-06-07 · **Updated by:** Claude · **Branch:** `claude/gracious-albattani-bDL8T`
 
+> Latest (2026-06-08): **F1 — AI PROVIDER RELIABILITY PRIMITIVES + AUTONOMOUS-PATH WIRING.**
+> New `server/src/ai/reliability/`: a pure **circuit breaker** (closed→open→half-open, 11 tests)
+> and a pure **key pool** (round-robin + per-key 429 cooldown). Config now parses multi-key pools
+> (`OPENROUTER_API_KEYS`/`NVIDIA_API_KEYS`; single key always included, de-duped). Wired into the
+> autonomous build path (`platformComplete.ts`): key rotation off a rate-limited key + breaker +
+> **cross-provider failover (OpenRouter→NVIDIA)** — directly addressing the audit's #1 finding,
+> without touching the shared chat/image gateway. 99 tests; server typecheck green. Broader
+> gateway wiring + image-gen retry parity + provider contract tests are follow-ups.
+
 > Latest (2026-06-08): **A8 — OPERATOR CONSOLE v1 SHIPPED (the cockpit is visible).**
 > `components/ventures/OperatorConsole.tsx` at `?view=ventures` (RESTORABLE): draft a venture from
 > an idea, see the venture list, per-venture status + budget meter, the roadmap, an approval queue
@@ -150,7 +159,7 @@ Current state is audited (🟡 partial across the board); these epics close the 
 | Epic | Title | Priority | Status |
 |---|---|---|---|
 | F0 | Observability (Sentry, metrics, tracing, audit log) | **P0** — ship before A2 | 📋 planned |
-| F1 | AI provider reliability (key pool, circuit breaker, cross-provider failover) | **P0** — the owner's #1 pain | 📋 planned |
+| F1 | AI provider reliability (key pool, circuit breaker, cross-provider failover) | **P0** — the owner's #1 pain | 🟢 **primitives + autonomous-path wiring shipped** (`ai/reliability/`); shared-gateway wiring + image-gen hardening + contract tests are follow-ups |
 | F2 | Distributed correctness (shared limits, optimistic concurrency, idempotency) | **P0** — ship before A2 | 📋 planned |
 | F3 | Session & identity hardening (first-party sessions, JWKS, device revocation) | P1 | 📋 planned |
 | F4 | Real-time & multi-device sync (Durable Objects) | P1 | 📋 planned |
