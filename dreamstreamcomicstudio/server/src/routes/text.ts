@@ -80,19 +80,29 @@ const resolveTextProvider = async (
     return { apiKey: openRouterKey as string, model, provider: 'openrouter' };
   };
 
+  const geminiKey = req.apiKeys?.geminiKey;
+  const geminiPick = async (): Promise<TextProvider> => ({
+    apiKey: geminiKey as string,
+    model: await assertTextModelAccess(req, resolveRequestedModel(req.header('X-Gemini-Model'))),
+    provider: 'gemini'
+  });
+
   // Explicit source selection wins (the user picked a model from this source).
   if (textSource === 'nvidia' && nvidiaKey) return nvidiaPick();
   if (textSource === 'openrouter' && openRouterKey) return openRouterPick();
+  if (textSource === 'gemini' && geminiKey) return geminiPick();
+
+  // Heavy structured-JSON stages (world extraction / panel breakdown / script analysis) regularly
+  // time out on free OpenRouter models — the "model took too long … pick a faster model" 60s 500s
+  // and the panel-breakdown failures seen in production. When a Gemini key is available, prefer the
+  // fast, reliable Gemini path for these stages instead of a slow free OpenRouter model.
+  const STRUCTURED_STAGES: PipelineStage[] = ['extract_world', 'panel_breakdown', 'analyze_script'];
+  if (!textSource && geminiKey && STRUCTURED_STAGES.includes(stage)) return geminiPick();
 
   // Fallback precedence.
   if (openRouterKey) return openRouterPick();
   if (nvidiaKey) return nvidiaPick();
-
-  const geminiKey = req.apiKeys?.geminiKey;
-  if (geminiKey) {
-    const model = await assertTextModelAccess(req, resolveRequestedModel(req.header('X-Gemini-Model')));
-    return { apiKey: geminiKey, model, provider: 'gemini' };
-  }
+  if (geminiKey) return geminiPick();
   res.status(401).json({
     error: {
       message: 'No AI text key found. Add an OpenRouter, NVIDIA Build, or Gemini key in Settings → API Configuration.',
