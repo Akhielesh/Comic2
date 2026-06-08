@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Plus, Trash2, Move, MessageSquare, Cloud, Zap, Volume2, Type } from 'lucide-react';
+import { X, Plus, Trash2, Move, MessageSquare, Cloud, Zap, Volume2, Type, Sparkles, CheckCheck } from 'lucide-react';
 import { ComicPanel, TextLayout, DialogueBlock } from '../../types';
 import { ensureDialogueBlocks } from '../../services/dialogueUtils';
 import { SpeechBubble, NarrationBox } from '../PanelDialogue';
@@ -49,6 +49,31 @@ export const BubbleEditorModal: React.FC<BubbleEditorModalProps> = ({
             dialogueBlocks: blocks
         });
         onClose();
+    };
+
+    // Deterministic "AI auto-select": pick a bubble style from the line's content so the user
+    // doesn't have to set each one by hand. Shouts (ALL CAPS / "!!"), thoughts (parenth?cal or
+    // "I think…"), whispers (*asterisks* / "quietly"), else plain speech. Narration is left as-is.
+    const classifyStyle = (text: string): 'speech' | 'thought' | 'shout' | 'whisper' => {
+        const t = (text || '').trim();
+        if (!t) return 'speech';
+        const letters = t.replace(/[^a-zA-Z]/g, '');
+        const isAllCaps = letters.length >= 3 && letters === letters.toUpperCase();
+        if (isAllCaps || /!{2,}/.test(t) || /!\s*$/.test(t)) return 'shout';
+        if (/^\(.*\)$/.test(t) || /\b(think|thinking|wonder|thought|imagine)\b/i.test(t)) return 'thought';
+        if (/^\*.*\*$/.test(t) || /\b(whisper|whispers|quietly|murmur|psst|under (his|her|their) breath)\b/i.test(t)) return 'whisper';
+        return 'speech';
+    };
+
+    const handleAutoStyle = () => {
+        setBlocks(prev => prev.map(b => b.kind === 'narration' ? b : { ...b, style: classifyStyle(b.text) }));
+    };
+
+    const handleApplyStyleToAll = () => {
+        if (!selectedBlockId) return;
+        const source = blocks.find(b => b.id === selectedBlockId);
+        const style = source?.style || 'speech';
+        setBlocks(prev => prev.map(b => b.kind === 'narration' ? b : { ...b, style }));
     };
 
     // Pointer Events (not mouse-only) so dragging works for touch + pen too — mouse-only
@@ -160,10 +185,10 @@ export const BubbleEditorModal: React.FC<BubbleEditorModalProps> = ({
                     <div className="flex-1 overflow-y-auto p-4 space-y-6">
 
                         {/* Action Buttons */}
-                        <div>
+                        <div className="space-y-2">
                             <Button
                                 variant="outline"
-                                className="w-full mb-2"
+                                className="w-full"
                                 icon={<Plus size={16} />}
                                 onClick={() => {
                                     const newBlock: DialogueBlock = {
@@ -180,6 +205,28 @@ export const BubbleEditorModal: React.FC<BubbleEditorModalProps> = ({
                             >
                                 Add New Bubble
                             </Button>
+                            <div className="grid grid-cols-2 gap-2">
+                                <Button
+                                    variant="secondary"
+                                    className="w-full"
+                                    icon={<Sparkles size={14} />}
+                                    disabled={blocks.length === 0}
+                                    onClick={handleAutoStyle}
+                                    title="Let the app pick a bubble style for every line from its wording"
+                                >
+                                    AI auto-style
+                                </Button>
+                                <Button
+                                    variant="secondary"
+                                    className="w-full"
+                                    icon={<CheckCheck size={14} />}
+                                    disabled={!selectedBlockId}
+                                    onClick={handleApplyStyleToAll}
+                                    title="Apply the selected bubble's style to every bubble in this panel"
+                                >
+                                    Apply to all
+                                </Button>
+                            </div>
                         </div>
 
                         {/* Selected Block Editor */}

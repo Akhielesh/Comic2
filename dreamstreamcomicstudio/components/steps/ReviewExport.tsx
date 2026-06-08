@@ -589,6 +589,9 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
             <div className="text-[11px] font-mono text-slate-500">
               {costUpdatedAt ? `Updated ${new Date(costUpdatedAt).toLocaleTimeString()}` : "Waiting for data..."}
             </div>
+            <div className="text-[11px] font-mono text-slate-400 mt-1 select-all" title="Reference these when reporting an issue">
+              Project {projectId} · Session {state.sessionId || "—"}
+            </div>
             {auditSummary && (
               <div className="text-[11px] text-slate-600 mt-1 max-w-xl">{auditSummary}</div>
             )}
