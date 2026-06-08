@@ -120,9 +120,33 @@ export interface ChatSession {
   projectId?: string | null;
 }
 
+// Open the IndexedDB. Hardened so it can NEVER hang the caller: a timeout and an
+// onblocked handler (fired when another tab holds an older DB version open) reject
+// instead of leaving the promise pending forever — which is what froze the chat on
+// an eternal loading spinner.
+const DB_OPEN_TIMEOUT_MS = 6000;
 const openDb = (): Promise<IDBDatabase> =>
   new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settle = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      action();
+    };
+    let request: IDBOpenDBRequest;
+    try {
+      if (typeof indexedDB === 'undefined') {
+        reject(new Error('IndexedDB unavailable'));
+        return;
+      }
+      request = indexedDB.open(DB_NAME, DB_VERSION);
+    } catch (err) {
+      reject(err instanceof Error ? err : new Error('IndexedDB open threw'));
+      return;
+    }
+    timer = setTimeout(() => settle(() => reject(new Error('IndexedDB open timed out'))), DB_OPEN_TIMEOUT_MS);
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(SESSIONS_STORE)) {
@@ -133,8 +157,11 @@ const openDb = (): Promise<IDBDatabase> =>
         db.createObjectStore(PROJECTS_STORE, { keyPath: 'id' });
       }
     };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    request.onsuccess = () => settle(() => resolve(request.result));
+    request.onerror = () => settle(() => reject(request.error || new Error('IndexedDB open failed')));
+    // Fires when an upgrade is needed but another tab holds the DB open — without this
+    // handler the request silently waits forever.
+    request.onblocked = () => settle(() => reject(new Error('IndexedDB open blocked (another tab is open)')));
   });
 
 const runTransaction = async <T>(
