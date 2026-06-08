@@ -141,8 +141,10 @@ export const startBackgroundGeneration = async (
   try {
     addLog("Starting generation process...");
     addLog(`Story mood: ${storyMood.label} (${storyMood.brightness} palette). ${storyMood.summary}`);
-    // Snapshot the world/style/continuity exactly as used for this run, so single-panel
-    // re-rolls later stay faithful even if the user edits or deletes entities/styles.
+    // Snapshot only the small STYLE inputs used for this run, so single-panel re-rolls stay
+    // faithful even if the style/mood is edited later. References are NOT duplicated here —
+    // each panel already stores its own continuity.referenceImageIds (see regen below), which
+    // keeps project state lean instead of copying the whole world on every generation.
     const generationSnapshot = {
       takenAt: Date.now(),
       styleImageId: state.styleImageId,
@@ -151,11 +153,7 @@ export const startBackgroundGeneration = async (
       styleAspectRatio: state.styleAspectRatio,
       imageResolution: state.imageResolution,
       gridTemplateId: state.gridTemplateId,
-      storyMood,
-      characters: state.characters || [],
-      items: state.items || [],
-      locations: state.locations || [],
-      continuity: state.continuity
+      storyMood
     };
     onUpdate(project.id, (prev) => ({ state: { ...prev.state, storyMood, generationSnapshot } }));
     if (staleDownstreamFingerprint) {
@@ -695,18 +693,14 @@ export const regenerateSinglePanel = async (
   const panelIndex = state.panels.findIndex((p) => p.id === panelId);
   if (panelIndex === -1) throw new Error("Panel not found");
 
-  // Prefer the generation-time snapshot for world/style/continuity so a re-roll matches how
-  // the comic was originally drawn — even if entities/styles were edited or deleted since.
-  // Older comics without a snapshot fall back to live state (behaviour unchanged). The panel
-  // text and scenes stay live so the user's edits to THIS panel are still honoured.
+  // Prefer the generation-time STYLE snapshot so a re-roll matches how the comic was
+  // originally drawn — even if the style/mood was edited since. References themselves come
+  // from the panel's own stored continuity.referenceImageIds (below), so we don't need to
+  // duplicate the world here. Older comics without a snapshot fall back to live state.
   const snap = state.generationSnapshot;
   const refState = snap
     ? {
         ...state,
-        characters: snap.characters,
-        items: snap.items,
-        locations: snap.locations,
-        continuity: snap.continuity ?? state.continuity,
         styleImageId: snap.styleImageId ?? state.styleImageId,
         stylePrompt: snap.stylePrompt ?? state.stylePrompt,
         styleAspectRatio: snap.styleAspectRatio ?? state.styleAspectRatio,
@@ -730,7 +724,7 @@ export const regenerateSinglePanel = async (
   const sceneBinding = scene ? getSceneBinding(refState, scene.id) : undefined;
   const panelContinuity = resolvePanelContinuity(refState, normalizedTargetPanel);
   const panelScopedContext = buildPanelScopedContext(refState, normalizedTargetPanel);
-  const referencePack = buildPanelReferencePack(refState, normalizedTargetPanel, {
+  const builtReferencePack = buildPanelReferencePack(refState, normalizedTargetPanel, {
     styleImageId: refState.styleImageId,
     lastPanelImageId: state.panels
       .slice(0, panelIndex)
@@ -739,6 +733,14 @@ export const regenerateSinglePanel = async (
       .at(-1),
     maxReferences: 8
   });
+  // Prefer the references this panel was actually drawn with (captured at generation onto
+  // the panel) so a re-roll reproduces the original look even if entities were edited or
+  // deleted since. Only rebuild from live state when the panel never recorded any.
+  const storedReferenceIds = (normalizedTargetPanel.continuity?.referenceImageIds || [])
+    .filter((id): id is string => !!id);
+  const referencePack = storedReferenceIds.length
+    ? { ...builtReferencePack, imageIds: storedReferenceIds.slice(0, 8) }
+    : builtReferencePack;
   const requiredReferences = strictMode && (panelContinuity.requiredEntityIds?.length || 0) > 0;
   if (requiredReferences && referencePack.imageIds.length === 0) {
     throw new Error(`${STRICT_REFERENCE_ERROR}: Required continuity references are missing for this panel.`);

@@ -892,9 +892,10 @@ export interface GenerationInsight {
   failedPanelTitles?: string[];
 }
 
-/** Immutable copy of the world/style/continuity inputs as they were when a comic was
- *  generated. Single-panel re-rolls prefer this so "patching" a panel stays faithful to the
- *  original even if the user later edits or deletes entities/styles. See generationManager. */
+/** Small, immutable copy of the STYLE inputs as they were when a comic was generated.
+ *  Single-panel re-rolls prefer this (plus each panel's own stored reference image IDs) so
+ *  "patching" a panel stays faithful to the original even if the user later edits the
+ *  style/mood — without duplicating the whole world into state. See generationManager. */
 export interface GenerationSnapshot {
   takenAt: number;
   styleImageId?: string;
@@ -904,10 +905,6 @@ export interface GenerationSnapshot {
   imageResolution?: ImageResolution;
   gridTemplateId?: string;
   storyMood?: StoryMood;
-  characters: Character[];
-  items: Item[];
-  locations: Location[];
-  continuity?: ContinuityState;
 }
 
 export interface ComicState {
