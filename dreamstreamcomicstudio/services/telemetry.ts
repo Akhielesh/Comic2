@@ -122,7 +122,7 @@ export const flushTelemetry = async (): Promise<void> => {
   flushing = true;
   const batch = queue.splice(0, MAX_BATCH);
   try {
-    await post('/telemetry/events', { events: batch });
+    await post('/api/telemetry/events', { events: batch });
   } catch {
     // Delivery failed (offline / rate-limited / server down). Drop the batch rather
     // than retry-storm — telemetry is best-effort and must not generate more traffic.
@@ -141,7 +141,7 @@ const beaconFlush = () => {
     if (queue.length === 0 || typeof navigator === 'undefined' || !navigator.sendBeacon) return;
     const batch = queue.splice(0, MAX_QUEUE);
     const blob = new Blob([JSON.stringify({ events: batch })], { type: 'application/json' });
-    navigator.sendBeacon(buildApiUrl('/telemetry/events'), blob);
+    navigator.sendBeacon(buildApiUrl('/api/telemetry/events'), blob);
   });
 };
 

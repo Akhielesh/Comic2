@@ -71,6 +71,7 @@ import {
 import { buildModelEntitlements } from '../services/modelEntitlements';
 import { isFreeOnly, setFreeOnly, onFreeOnlyChanged } from '../services/freeOnlyMode';
 import { VerificationCenter } from './VerificationCenter';
+import { AdminAnalytics } from './admin/AdminAnalytics';
 
 type SettingsTab = 'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin' | 'preferences' | 'security';
 
@@ -1638,6 +1639,13 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                     <summary className="px-4 py-3 cursor-pointer font-display text-lg">Verification Center</summary>
                     <div className="border-t-2 border-black">
                         <VerificationCenter />
+                    </div>
+                </details>
+
+                <details className="border-2 border-black rounded-xl bg-white" open>
+                    <summary className="px-4 py-3 cursor-pointer font-display text-lg">Feedback &amp; Telemetry Analytics</summary>
+                    <div className="border-t-2 border-black">
+                        <AdminAnalytics />
                     </div>
                 </details>
 

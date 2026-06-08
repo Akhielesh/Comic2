@@ -3,6 +3,12 @@ import type { BillingPlanTier } from '../../../shared/types/billing.js';
 import { setUserPlanTier } from '../services/billingLedger.js';
 import { getSupabaseAdmin } from '../services/supabase.js';
 import { hydrateAccessProfile, requireAdmin, requireModerator } from '../middleware/requireAdmin.js';
+import {
+  getAnalyticsOverview,
+  getSessionTimeline,
+  listFeedback,
+  listTelemetryEvents
+} from '../services/telemetryAnalytics.js';
 
 const readablePlanTiers: BillingPlanTier[] = ['free', 'creator', 'pro', 'studio', 'custom', 'admin'];
 const assignablePlanTiers: BillingPlanTier[] = ['free', 'creator', 'studio', 'custom', 'admin'];
@@ -451,6 +457,56 @@ adminRouter.post('/projects/:projectId/force-private', requireModerator, async (
       ownerUserId: project.user_id,
       reason
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── Telemetry & feedback analytics (admin-only) ──────────────────────────────
+// Read access over everything the capture pipeline collects: failures, the AI
+// flow, and dislikes. Admin-gated because it exposes all users' activity.
+adminRouter.get('/analytics/overview', requireAdmin, async (req, res, next) => {
+  try {
+    res.json(await getAnalyticsOverview(req.query.days));
+  } catch (error) {
+    next(error);
+  }
+});
+
+adminRouter.get('/analytics/events', requireAdmin, async (req, res, next) => {
+  try {
+    res.json(await listTelemetryEvents({
+      severity: typeof req.query.severity === 'string' ? req.query.severity : undefined,
+      source: typeof req.query.source === 'string' ? req.query.source : undefined,
+      type: typeof req.query.type === 'string' ? req.query.type : undefined,
+      q: typeof req.query.q === 'string' ? req.query.q : undefined,
+      limit: req.query.limit,
+      cursor: req.query.cursor,
+      days: req.query.days
+    }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+adminRouter.get('/analytics/feedback', requireAdmin, async (req, res, next) => {
+  try {
+    res.json(await listFeedback({
+      vote: typeof req.query.vote === 'string' ? req.query.vote : undefined,
+      targetType: typeof req.query.targetType === 'string' ? req.query.targetType : undefined,
+      sentiment: typeof req.query.sentiment === 'string' ? req.query.sentiment : undefined,
+      limit: req.query.limit,
+      cursor: req.query.cursor,
+      days: req.query.days
+    }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+adminRouter.get('/analytics/sessions/:sessionId', requireAdmin, async (req, res, next) => {
+  try {
+    res.json(await getSessionTimeline(String(req.params.sessionId || '').trim()));
   } catch (error) {
     next(error);
   }

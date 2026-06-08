@@ -37,7 +37,7 @@ export const submitFeedback = async (
       sessionId: input.sessionId ?? getTelemetrySessionId(),
       clientTs: input.clientTs ?? new Date().toISOString()
     };
-    const res = await post<FeedbackInput, FeedbackResponse>('/telemetry/feedback', payload);
+    const res = await post<FeedbackInput, FeedbackResponse>('/api/telemetry/feedback', payload);
     return { ok: Boolean(res?.ok), persisted: Boolean(res?.persisted) };
   } catch {
     // Best-effort: a dropped feedback submit must not surface as an app error.
