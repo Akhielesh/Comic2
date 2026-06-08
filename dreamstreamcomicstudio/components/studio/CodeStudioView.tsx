@@ -27,7 +27,7 @@ import {
   ConversationThread, ActivityFeed, ServicesPanel, InsightsPanel, useStudioConversation, useStudioActivity, useStudioBuild,
   useStudioWorkspace, useStudioLogs, isPathDirty, workspaceCurrentArtifact,
   detectProjectKind, projectKindLabel, isWebProject, runHint, diffLines, diffStat,
-  analyzeProject, insightsSummary, insightsToMarkdown, issuesToFixPrompt,
+  analyzeProject, applyRuntimeStatus, insightsSummary, insightsToMarkdown, issuesToFixPrompt,
 } from './workspace';
 import { StudioStart } from './StudioStart';
 import { StudioBuildFlow, type StudioFlowState } from './StudioBuildFlow';
@@ -144,7 +144,9 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const projectKind = useMemo(() => detectProjectKind(currentArtifact.files), [currentArtifact.files]);
   // Live code verification + metrics — pure, instant, recomputed only when the files change. This is
   // the studio's "it actually verified the code" surface (health score, issues, import graph).
-  const insights = useMemo(
+  // NOTE: this is STATIC only; the real "does it run" signal (previewError) is folded in below via
+  // applyRuntimeStatus so a failing app can never display as healthy.
+  const baseInsights = useMemo(
     () => analyzeProject(currentArtifact.files, currentArtifact.template),
     [currentArtifact.files, currentArtifact.template]
   );
@@ -208,6 +210,9 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const [autofixTries, setAutofixTries] = useState(0);
   const autofixTriesRef = useRef(0);
   const setTries = useCallback((n: number) => { autofixTriesRef.current = n; setAutofixTries(n); }, []);
+  // Displayed insights = static analysis WITH the real preview error folded in, so "code health"
+  // is honest: a preview that fails to run shows as failing (F), never 100/A.
+  const insights = useMemo(() => applyRuntimeStatus(baseInsights, previewError), [baseInsights, previewError]);
   // Console/logs dock (under the preview) — collapsible, persisted.
   const [logsOpen, setLogsOpen] = useState<boolean>(() => {
     try { return window.localStorage.getItem('studio.logs.open') !== '0'; } catch { return true; }
@@ -231,16 +236,21 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   // Autonomous autofix budget per error episode. Once spent, we STOP auto-retrying and leave a
   // clickable "Fix with AI" error (which resets the budget). The loop itself is driven by the
   // watchdog effect below — not by Sandpack re-emitting — so it never silently stalls.
-  const MAX_AUTOFIX = 4;
+  // ONE automatic fix attempt per error episode, then stop and surface a manual "Fix with AI"
+  // button. Auto-rebuilding repeatedly (the old value was 4) just churned full-project rewrites on
+  // every preview hiccup — worse than letting the user decide. Manual retry is always available.
+  const MAX_AUTOFIX = 1;
   const autofixRef = useRef<(msg: string) => void>(() => {});
   const generatingRef = useRef(false);
   const onPreviewError = useCallback((e: string | null) => {
     if (previewErrTimer.current) { clearTimeout(previewErrTimer.current); previewErrTimer.current = null; }
     previewErrTimer.current = window.setTimeout(() => {
       if (!e) {
-        // Stable recovery → clear the error and reset the auto-fix budget for the next episode.
+        // Stable recovery → clear the error. We deliberately do NOT reset the auto-fix budget here:
+        // a regenerate makes the preview flicker to "no error" mid-reload, and resetting on that
+        // transient null re-armed MAX_AUTOFIX every cycle → endless rebuilds. The budget resets only
+        // on a USER-initiated build/refine (handleGenerate non-autofix / runAgents / reset).
         setPreviewError(null);
-        setTries(0);
         return;
       }
       // Stable error → make it the current (sticky) error; the watchdog effect drives any auto-fix.

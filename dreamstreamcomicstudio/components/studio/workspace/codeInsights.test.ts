@@ -2,11 +2,42 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  analyzeProject, insightsSummary, issuesToFixPrompt, suggestNextSteps, insightsToMarkdown,
+  analyzeProject, applyRuntimeStatus, insightsSummary, issuesToFixPrompt, suggestNextSteps, insightsToMarkdown,
   type InsightFile,
 } from './codeInsights';
 
 const f = (path: string, content: string): InsightFile => ({ path, content });
+
+describe('applyRuntimeStatus — honest health', () => {
+  const clean = () =>
+    analyzeProject([f('/App.tsx', 'export default function App(){ return <div>hi</div>; }')], 'react-ts');
+
+  it('a statically-clean project scores high WITHOUT a runtime error', () => {
+    const ins = clean();
+    expect(ins.score).toBeGreaterThanOrEqual(90);
+    expect(applyRuntimeStatus(ins, null).score).toBe(ins.score); // no error → unchanged
+    expect(applyRuntimeStatus(ins, '   ').score).toBe(ins.score); // blank → unchanged
+  });
+
+  it('a live preview error caps health to a failing grade even if static checks passed', () => {
+    const ins = clean();
+    expect(ins.grade).toBe('A');
+    const withErr = applyRuntimeStatus(ins, "ReferenceError: foo is not defined");
+    expect(withErr.score).toBeLessThanOrEqual(25);
+    expect(withErr.grade).toBe('F');
+    expect(withErr.counts.error).toBe(ins.counts.error + 1);
+    expect(withErr.issues[0].severity).toBe('error');
+    expect(withErr.issues[0].message).toMatch(/preview failed to run/i);
+  });
+
+  it('does not mutate the input insights', () => {
+    const ins = clean();
+    const before = ins.score;
+    applyRuntimeStatus(ins, 'boom');
+    expect(ins.score).toBe(before);
+    expect(ins.issues.length).toBeGreaterThanOrEqual(0);
+  });
+});
 
 describe('analyzeProject — metrics', () => {
   it('counts files, non-blank LOC and language breakdown', () => {

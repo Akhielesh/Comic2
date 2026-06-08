@@ -233,6 +233,22 @@ export const analyzeProject = (files: InsightFile[], template?: string): CodeIns
   };
 };
 
+/**
+ * Fold a LIVE preview compile/runtime error into the insights so "code health" reflects what
+ * actually happened when the code RAN — not just static checks. Static cleanliness (resolved
+ * imports, a default export, valid JSON) does NOT mean the app works, so without this an app that
+ * fails to run can still score 100. When a preview error is present this injects it as the top
+ * issue and caps the score to a failing grade — a broken app can never show as healthy.
+ */
+export const applyRuntimeStatus = (ins: CodeInsights, previewError?: string | null): CodeInsights => {
+  const err = previewError?.trim();
+  if (!err) return ins;
+  const runtimeIssue: CodeIssue = { severity: 'error', message: `Live preview failed to run: ${err.slice(0, 300)}` };
+  const counts = { ...ins.counts, error: ins.counts.error + 1 };
+  const score = Math.min(ins.score, 25); // it doesn't run → not healthy (caps to grade F)
+  return { ...ins, issues: [runtimeIssue, ...ins.issues], counts, score, grade: gradeFor(score) };
+};
+
 /** A one-line console summary of a verification pass (so the logs show real, not vague, output). */
 export const insightsSummary = (ins: CodeInsights): string =>
   `Verified ${ins.files} file${ins.files === 1 ? '' : 's'} · ${ins.loc} LOC · health ${ins.score}/100 (${ins.grade}) · ` +

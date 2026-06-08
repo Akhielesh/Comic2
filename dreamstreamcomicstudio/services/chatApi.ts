@@ -187,10 +187,13 @@ export const sendChatMessageStream = async (
   req: ChatRequest,
   handlers: ChatStreamHandlers = {}
 ): Promise<ChatResponse> => {
-  // Track whether ANY content arrived before a failure: if the stream is cut after
-  // partial output we must surface the error (not silently re-answer), but if it
-  // dies before a single byte we can transparently fall back to the buffered endpoint.
+  // Track whether ANY event arrived, and—separately—whether actual ANSWER CONTENT
+  // arrived. Reasoning ("thinking") tokens count as `receivedAny` but NOT as content:
+  // a high-reasoning turn can stream a long thought trace and then end with no answer
+  // (empty content, no `final`). We must still recover from that, so the recovery path
+  // keys off `receivedContent`, not `receivedAny`.
   let receivedAny = false;
+  let receivedContent = false;
   try {
     const res = await postStream('/api/chat/stream', req, { signal: handlers.signal });
     let final: ChatResponse | null = null;
@@ -198,6 +201,7 @@ export const sendChatMessageStream = async (
     await consumeEventStream(res, (event, parsed) => {
       if (event === 'delta' && typeof parsed.content === 'string') {
         receivedAny = true;
+        receivedContent = true;
         handlers.onDelta?.(parsed.content);
       } else if (event === 'reasoning' && typeof parsed.reasoning === 'string') {
         receivedAny = true;
@@ -206,13 +210,18 @@ export const sendChatMessageStream = async (
         handlers.onReset?.();
       } else if (event === 'final') {
         receivedAny = true;
+        if (typeof (parsed as ChatResponse).text === 'string' && (parsed as ChatResponse).text.trim()) {
+          receivedContent = true;
+        }
         final = parsed as ChatResponse;
       } else if (event === 'error') {
         streamError = String(parsed.message || 'The request failed.');
       }
     });
     if (streamError) throw new Error(streamError);
-    if (!final) throw new Error('The model returned no response.');
+    // No `final`, OR a `final` with empty text (e.g. reasoning consumed the whole budget):
+    // treat as "no usable answer" so the recovery path below can re-run and actually answer.
+    if (!final || !receivedContent) throw new Error('The model returned no response.');
     return final;
   } catch (err) {
     // SSE is brittle on mobile networks/proxies that don't pass long-lived streams —
@@ -221,7 +230,17 @@ export const sendChatMessageStream = async (
     // (non-streaming) endpoint, which is far more proxy-friendly. Retry it a couple of
     // times with backoff so a single transient drop / cold start doesn't sink the turn.
     // Push the full answer through onDelta so the UI renders it just like a streamed one.
-    if (!receivedAny && !handlers.signal?.aborted && isTransportError(err)) {
+    // Recover whenever NO answer content reached the user (reasoning-only / empty
+    // counts as "no content"). Two cases land here:
+    //  (a) a transport drop before any content (SSE is brittle on mobile/proxies), and
+    //  (b) the stream ended with only reasoning / empty content — the high-reasoning
+    //      "thinks but never answers" failure we see in production.
+    // For (b) we re-run with reasoning DOWNGRADED so the model spends its budget
+    // answering instead of thinking, which is what actually fixes the empty turn.
+    const emptyStream = err instanceof Error && /returned no response/i.test(err.message);
+    if (!receivedContent && !handlers.signal?.aborted && (isTransportError(err) || emptyStream)) {
+      const highReasoning = req.reasoningLevel === 'high' || req.reasoningLevel === 'medium';
+      const retryReq: ChatRequest = emptyStream && highReasoning ? { ...req, reasoningLevel: 'low' } : req;
       let lastErr: unknown = err;
       for (let attempt = 0; attempt < 3; attempt++) {
         if (handlers.signal?.aborted) break;
@@ -229,9 +248,13 @@ export const sendChatMessageStream = async (
         // Bound each buffered attempt so a dead/slow server can't hang the UI forever.
         const guard = withTimeoutSignal(handlers.signal, 120_000);
         try {
-          const final = await sendChatMessage(req, { signal: guard.signal });
-          if (final.text) handlers.onDelta?.(final.text);
-          return final;
+          const final = await sendChatMessage(retryReq, { signal: guard.signal });
+          if (final.text && final.text.trim()) {
+            handlers.onDelta?.(final.text);
+            return final;
+          }
+          // Buffered also returned empty — keep trying (with the downgrade applied).
+          lastErr = new Error('The model returned no response.');
         } catch (retryErr) {
           lastErr = retryErr;
           // A real server response (rate limit, missing key, …) is not worth retrying —
