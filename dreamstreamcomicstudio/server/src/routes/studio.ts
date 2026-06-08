@@ -176,7 +176,9 @@ const studioMcpTools = async (
   }
 };
 
-const studioStageComplete = async (
+// Exported so the Autopilot intake route (A3) reuses the exact same model wiring (provider
+// resolution + coding-model selection + runChat with fallback). Additive — no behavior change.
+export const studioStageComplete = async (
   req: { apiKeys?: { openRouterKey?: string | null; nvidiaKey?: string | null } },
   body: { source?: string; model?: string; costPref?: string },
   maxTokens: number,

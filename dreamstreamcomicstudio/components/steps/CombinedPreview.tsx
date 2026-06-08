@@ -5,6 +5,7 @@ import { generatePanelBreakdown } from '../../services/geminiService';
 import { Button } from '../Button';
 import { ensureDialogueBlocks, normalizePanelDialogue } from '../../services/dialogueUtils';
 import { buildDefaultContinuityState, resolvePanelContinuity, validateContinuityState } from '../../services/continuity';
+import { hasDownstreamDrift } from '../../services/pipelineFingerprint';
 import {
   DEFAULT_PRICING_CONFIG,
   normalizePricingConfig,
@@ -21,7 +22,7 @@ import { buildProjectReport } from '../../services/reporting';
 import { ApiError } from '../../services/apiClient';
 import { LimitExceededModal } from '../modals/LimitExceededModal';
 import { applyStyleLockResolution, resolveStyleLock } from '../../services/styleLock';
-import { hasMultiFrameLanguage, sanitizePanelDescription } from '../../services/panelDescription';
+import { hasMultiFrameLanguage, sanitizePanelDescription, derivePanelTitle } from '../../services/panelDescription';
 import { buildCostViewModel } from '../../services/costViewModel';
 
 interface CombinedPreviewProps {
@@ -33,6 +34,21 @@ interface CombinedPreviewProps {
 
 const computePanelPlanVersion = (scenes: ComicState['scenes']) => {
   return scenes.reduce((acc, scene) => acc + scene.synopsis.length + scene.setting.length + scene.characters.join('|').length, 0) + scenes.length;
+};
+
+// Turn a raw planning error into a short, actionable message for the banner. Timeouts are
+// the common case (the text model takes >60s on a complex scene) and have a specific fix.
+const friendlyPlanError = (error: unknown): string => {
+  const msg = (error instanceof Error ? error.message : String(error || '')).trim();
+  if (!msg) return 'Panel planning failed. Please try again.';
+  if (/timed out|took too long|timeout/i.test(msg)) {
+    return 'Panel planning timed out — the text model took too long. Try again, or switch to a faster text model in Settings.';
+  }
+  if (/no image|image output/i.test(msg)) return msg;
+  if (/network|couldn.?t reach|failed to fetch/i.test(msg)) {
+    return 'Couldn\'t reach the AI server. Check your connection and try again.';
+  }
+  return `Couldn't plan panels: ${msg}`;
 };
 
 const normalizePanel = (panel: ComicPanel): ComicPanel => {
@@ -49,7 +65,8 @@ const PanelWireframe: React.FC<{ panel: ComicPanel; textLayout: TextLayout }> = 
   const blocks = ensureDialogueBlocks(panel.dialogue, panel.dialogueBlocks, panel.description);
   return (
     <div className="relative border-2 border-black rounded-lg bg-white p-3 min-h-[140px]">
-      <div className="text-[10px] font-mono text-slate-500 mb-2">Prompt</div>
+      <div className="font-display text-sm leading-tight mb-1">{derivePanelTitle(panel)}</div>
+      <div className="text-[10px] font-mono text-slate-500 mb-1">Prompt</div>
       <div className="text-xs font-comic text-slate-700">{panel.description}</div>
       {textLayout !== 'none' && blocks.length > 0 && (
         <div className="mt-2 space-y-1">
@@ -90,6 +107,10 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
     estimated: true
   });
   const [limitDetails, setLimitDetails] = useState<Record<string, unknown> | null>(null);
+  // Non-billing planning failures (timeouts, 500s, network) used to fail silently —
+  // the spinner stopped and nothing appeared. Surface them so the user can retry.
+  // sceneId remembers which scene to re-run (null = "Generate All Plans").
+  const [planError, setPlanError] = useState<{ message: string; sceneId: number | null } | null>(null);
   const pricing = useMemo(() => normalizePricingConfig(state.pricingConfig || DEFAULT_PRICING_CONFIG), [state.pricingConfig]);
   const plannedPanelCount = state.panels.length;
   const estimatedTokens = useMemo(() => {
@@ -131,6 +152,9 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
     return (legacy.imagePerOutput || 0) * plannedPanelCount;
   })();
   const estimatedCt = Math.ceil(costSummary.totalProjected / 0.0001);
+  // True when the script/scenes/world were edited AFTER the panels were planned — generating
+  // now would bake stale references into the comic (a quiet but common corruption).
+  const downstreamDrift = useMemo(() => hasDownstreamDrift(state), [state]);
   const continuityValidation = useMemo(
     () => validateContinuityState(state),
     [state]
@@ -229,6 +253,7 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
     if (!scene) return;
     setIsPlanning(true);
     setPlanningSceneId(sceneId);
+    setPlanError(null);
     try {
       const count = layoutPanelCount;
       const result = await generatePanelBreakdown(scene, state.stylePrompt, state.layoutType, projectId, count, {
@@ -256,6 +281,11 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
         })(),
         id: `s${scene.id}-p${index}-${Date.now()}`,
         sceneId: scene.id,
+        title: panel.title,
+        focalSubject: panel.focalSubject,
+        shotType: panel.shotType,
+        cameraAngle: panel.cameraAngle,
+        composition: panel.composition,
         dialogue: panel.dialogue || '',
         dialogueBlocks: panel.dialogueBlocks,
         imageIdHistory: [],
@@ -286,6 +316,7 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
       console.error(e);
       const details = extractLimitDetails(e);
       if (details) setLimitDetails(details);
+      else setPlanError({ message: friendlyPlanError(e), sceneId });
     } finally {
       setIsPlanning(false);
       setPlanningSceneId(null);
@@ -294,6 +325,7 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
 
   const generateAllPlans = async () => {
     setIsPlanning(true);
+    setPlanError(null);
     try {
       const allPanels: ComicPanel[] = [];
       for (const scene of state.scenes) {
@@ -317,6 +349,11 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
           allPanels.push(normalizePanel({
             id: `s${scene.id}-p${index}-${Date.now()}`,
             sceneId: scene.id,
+            title: panel.title,
+            focalSubject: panel.focalSubject,
+            shotType: panel.shotType,
+            cameraAngle: panel.cameraAngle,
+            composition: panel.composition,
             description: sanitized.text,
             prompt: sanitized.text,
             dialogue: panel.dialogue || '',
@@ -343,6 +380,7 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
       console.error(e);
       const details = extractLimitDetails(e);
       if (details) setLimitDetails(details);
+      else setPlanError({ message: friendlyPlanError(e), sceneId: null });
     } finally {
       setIsPlanning(false);
     }
@@ -482,6 +520,30 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
             </Button>
           </div>
         </div>
+        {planError && (
+          <div className="mt-4 rounded-lg border-2 border-red-300 bg-red-50 p-3 flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <div className="text-sm font-bold text-red-700">Panel planning failed.</div>
+              <div className="text-xs text-red-700 mt-1">{planError.message}</div>
+              <div className="mt-2 flex gap-2">
+                <button
+                  onClick={() => (planError.sceneId != null ? generatePlanForScene(planError.sceneId) : generateAllPlans())}
+                  disabled={isPlanning}
+                  className="text-xs font-bold border border-red-400 text-red-700 bg-white rounded px-2 py-1 hover:bg-red-100 disabled:opacity-50"
+                >
+                  Retry
+                </button>
+                <button
+                  onClick={() => setPlanError(null)}
+                  className="text-xs font-bold border border-red-300 text-red-600 bg-white rounded px-2 py-1 hover:bg-red-100"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {!styleLockResolution.resolved && (
           <div className="mt-4 rounded-lg border-2 border-amber-400 bg-amber-50 p-3">
             <div className="text-sm font-bold text-amber-800">Style lock is unresolved.</div>
@@ -498,6 +560,23 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
             </div>
           </div>
         )}
+        {downstreamDrift && plannedPanelCount > 0 && (
+          <div className="mt-4 rounded-lg border-2 border-amber-400 bg-amber-50 p-3">
+            <div className="text-sm font-bold text-amber-800">Your script or world changed after these panels were planned.</div>
+            <div className="text-xs text-amber-700 mt-1">
+              Generating now can bake in stale character names or references. Re-plan the panels so they match your latest edits.
+            </div>
+            <div className="mt-2">
+              <button
+                onClick={generateAllPlans}
+                disabled={isPlanning}
+                className="text-xs font-bold border border-amber-500 text-amber-800 bg-white rounded px-2 py-1 hover:bg-amber-100 disabled:opacity-50"
+              >
+                Re-plan All Panels
+              </button>
+            </div>
+          </div>
+        )}
         {multiFramePanels.length > 0 && (
           <div className="mt-4 rounded-lg border-2 border-orange-300 bg-orange-50 p-3">
             <div className="text-sm font-bold text-orange-800">Multi-frame panel descriptions detected.</div>
@@ -506,27 +585,39 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
             </div>
           </div>
         )}
-        {!continuityValidation.isValid && (
-          <div className="mt-4 rounded-lg border-2 border-red-300 bg-red-50 p-3">
-            <div className="text-sm font-bold text-red-700">Continuity lock is blocking generation.</div>
-            <div className="text-xs text-red-700 mt-1">
-              Resolve required references or scene bindings first.
+        {!continuityValidation.isValid && (() => {
+          const refIssues = continuityValidation.issues.filter(
+            (issue) => issue.code === 'ENTITY_REFERENCE_MISSING' || issue.code === 'ENTITY_NOT_FOUND'
+          );
+          const missingRefCount = refIssues.length;
+          return (
+            <div className="mt-4 rounded-lg border-2 border-red-300 bg-red-50 p-3">
+              <div className="text-sm font-bold text-red-700">
+                {missingRefCount > 0
+                  ? `${missingRefCount} character/item${missingRefCount === 1 ? '' : 's'} need a reference image before generating.`
+                  : 'Continuity lock is blocking generation.'}
+              </div>
+              <div className="text-xs text-red-700 mt-1">
+                {missingRefCount > 0
+                  ? 'In strict mode, generation stops on any subject without a reference image (the #1 reason a comic fails). Generate their reference art in the World stage, then come back.'
+                  : 'Resolve required references or scene bindings first.'}
+              </div>
+              <div className="mt-2">
+                <button
+                  onClick={() => onStateUpdate({ step: AppStep.REFERENCE_BUILDER })}
+                  className="text-xs font-bold border border-red-400 text-red-700 bg-white rounded px-2 py-1 hover:bg-red-100"
+                >
+                  Fix In World Builder
+                </button>
+              </div>
+              <ul className="mt-2 space-y-1 text-xs text-red-700 list-disc pl-5">
+                {continuityValidation.issues.slice(0, 5).map((issue, index) => (
+                  <li key={`${issue.code}-${index}`}>{issue.message}</li>
+                ))}
+              </ul>
             </div>
-            <div className="mt-2">
-              <button
-                onClick={() => onStateUpdate({ step: AppStep.REFERENCE_BUILDER })}
-                className="text-xs font-bold border border-red-400 text-red-700 bg-white rounded px-2 py-1 hover:bg-red-100"
-              >
-                Fix In World Builder
-              </button>
-            </div>
-            <ul className="mt-2 space-y-1 text-xs text-red-700 list-disc pl-5">
-              {continuityValidation.issues.slice(0, 5).map((issue, index) => (
-                <li key={`${issue.code}-${index}`}>{issue.message}</li>
-              ))}
-            </ul>
-          </div>
-        )}
+          );
+        })()}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

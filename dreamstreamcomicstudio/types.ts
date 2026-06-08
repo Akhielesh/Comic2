@@ -733,6 +733,9 @@ export interface ComicPanel {
   isGenerating?: boolean;
   isPlanned?: boolean;
   continuity?: PanelContinuity;
+  /** Short, human-readable caption/title for this panel (e.g. "The Boat Departs"), from
+   *  the breakdown. Used as the panel's label/alt instead of the raw prose prompt. */
+  title?: string;
   /** Concrete subject of this panel (from the breakdown), so generation stays on-story. */
   focalSubject?: string;
   /** Camera/shot direction from the breakdown. */
@@ -854,6 +857,59 @@ export interface Review {
   };
 }
 
+/** A deterministic read of a story's emotional tone, derived from its text (see
+ *  services/storyMood.ts). Used to keep style + image generation faithful to the
+ *  story's mood, and logged so we can later analyse the AI's understanding. */
+export interface StoryMood {
+  key: string;
+  label: string;
+  brightness: 'dark' | 'neutral' | 'bright';
+  energy: 'calm' | 'neutral' | 'high';
+  /** Palette hint, e.g. "warm, sunlit, saturated". */
+  palette: string;
+  /** Lighting hint, e.g. "soft natural daylight". */
+  lighting: string;
+  /** One-line guardrail injected into image prompts so renders match the tone. */
+  promptGuidance: string;
+  /** Preset style ids that suit this mood, most-fitting first. */
+  recommendedStyleIds: string[];
+  /** Short human-readable explanation (UI + logging). */
+  summary: string;
+  /** 0-1 signal strength of the classification. */
+  confidence: number;
+}
+
+/** A compact, persisted record of one generation run's "understanding" + outcome — what
+ *  mood/style the AI used and how it turned out — so failures like "happy story rendered
+ *  dark" can be analysed after the fact. Built by services/contextLog.ts. */
+export interface GenerationInsight {
+  generatedAt: number;
+  mood?: { key: string; label: string; brightness: string; confidence: number; summary: string };
+  styleId?: string;
+  stylePrompt?: string;
+  totals: { panels: number; rendered: number; failed: number; fallbacks: number };
+  modelsUsed: string[];
+  failedPanelTitles?: string[];
+}
+
+/** Immutable copy of the world/style/continuity inputs as they were when a comic was
+ *  generated. Single-panel re-rolls prefer this so "patching" a panel stays faithful to the
+ *  original even if the user later edits or deletes entities/styles. See generationManager. */
+export interface GenerationSnapshot {
+  takenAt: number;
+  styleImageId?: string;
+  stylePrompt?: string;
+  selectedStyleId?: string;
+  styleAspectRatio?: AspectRatio;
+  imageResolution?: ImageResolution;
+  gridTemplateId?: string;
+  storyMood?: StoryMood;
+  characters: Character[];
+  items: Item[];
+  locations: Location[];
+  continuity?: ContinuityState;
+}
+
 export interface ComicState {
   pipelineMode?: PipelineMode;
   comicforge?: ComicForgeState;
@@ -878,6 +934,14 @@ export interface ComicState {
   };
   scenes: Scene[];
   continuitySummary?: string;
+  /** Deterministic mood/tone read of the story (bright/dark, calm/high-energy). Drives
+   *  mood-aware style recommendations + image-prompt lighting/palette so a happy story
+   *  doesn't render dark & moody. Persisted for later analysis of AI understanding. */
+  storyMood?: StoryMood;
+  /** Rolling history (most recent last, capped) of generation-run insights for analysis. */
+  generationInsights?: GenerationInsight[];
+  /** World/style/continuity as captured at the last full generation, for faithful re-rolls. */
+  generationSnapshot?: GenerationSnapshot;
   continuity?: ContinuityState;
   overview?: string;
   publishedAt?: number;

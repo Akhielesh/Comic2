@@ -6,6 +6,97 @@
 
 **Last updated:** 2026-06-07 · **Updated by:** Claude · **Branch:** `claude/gracious-albattani-bDL8T`
 
+> Latest (2026-06-08): **A6 — SENSE LAYER v1 (the iterate loop closes).** `POST /api/ventures/:id/signals`
+> (error|feedback|health) records a `venture_event` and, for live ventures, auto-creates a **deduped**
+> fix/improve goal (`ventures/sense.ts`, pure + 8 tests) — so a runtime error or piece of feedback
+> becomes a backlog goal the loop then builds. Unauthenticated app-injected signals (per-venture token)
+> + real analytics ingestion are follow-ups. Server typecheck green; 100 ventures tests.
+
+> Latest (2026-06-08): **F0 — METRICS + AUDIT LOG (observability substrate).** Added a pure metrics
+> registry (`observability/metrics.ts`) wired to per-provider `ai_*` counters + `venture_tick`
+> outcomes, and a platform `audit_log` (table applied to Supabase + `observability/auditLog.ts`
+> best-effort writer) recording sensitive admin actions (kill-switch, checkpoint resolve, roadmap
+> approve). Surfaced via admin `GET /api/ventures/admin/metrics` + `/admin/audit`. Closes the
+> audit's "no per-provider observability / ephemeral audit" gaps (substrate; Sentry + distributed
+> tracing are follow-ups). Server + client typecheck green; tests green.
+
+> Latest (2026-06-08): **F2 — SHARED RATE-LIMIT STORE (distributed correctness).** Replaced the
+> per-process in-memory limiter with a store abstraction (`middleware/rateLimitStore.ts`): Redis-backed
+> (shared across instances) when `REDIS_URL` is set, else the EXACT original in-memory behavior — so
+> single-instance deploys are unchanged and multi-instance now enforces one true limit. Fails OPEN on
+> any Redis hiccup (never blocks real traffic). `rateLimit.ts` middleware is now async + store-backed,
+> same headers/429. 4 new tests (103 total); server + client typecheck green. Optimistic-concurrency
+> on project saves + idempotency keys are follow-ups.
+
+> Latest (2026-06-08): **F1 — AI PROVIDER RELIABILITY PRIMITIVES + AUTONOMOUS-PATH WIRING.**
+> New `server/src/ai/reliability/`: a pure **circuit breaker** (closed→open→half-open, 11 tests)
+> and a pure **key pool** (round-robin + per-key 429 cooldown). Config now parses multi-key pools
+> (`OPENROUTER_API_KEYS`/`NVIDIA_API_KEYS`; single key always included, de-duped). Wired into the
+> autonomous build path (`platformComplete.ts`): key rotation off a rate-limited key + breaker +
+> **cross-provider failover (OpenRouter→NVIDIA)** — directly addressing the audit's #1 finding,
+> without touching the shared chat/image gateway. 99 tests; server typecheck green. Broader
+> gateway wiring + image-gen retry parity + provider contract tests are follow-ups.
+
+> Latest (2026-06-08): **A8 — OPERATOR CONSOLE v1 SHIPPED (the cockpit is visible).**
+> `components/ventures/OperatorConsole.tsx` at `?view=ventures` (RESTORABLE): draft a venture from
+> an idea, see the venture list, per-venture status + budget meter, the roadmap, an approval queue
+> (one-click approve/deny), a polled activity feed, and pause/resume/approve-roadmap controls.
+> Backed by `services/venturesApi.ts` (+ `put`/`patch` added to `apiClient`) and wired into App.tsx
+> additively (lazy view). Gracefully shows "not enabled" when the server gate is off. Client
+> typecheck + frontend build + server build + 88 tests all green. Real-time WS stream, deployments
+> panel, and mobile polish are follow-ups. **The whole A0→A8 pipeline now has a face.**
+
+> Latest (2026-06-08): **A4 — ACT NOW BUILDS FOR REAL (pure-LLM, governed).** The tick's stub ACT
+> is replaced: `tickRunner.act` runs the existing `studioGenerate.runGenerate` (pure-LLM, no
+> Cloudflare worker) for the selected goal against the venture's `studio_project` (`v_<ventureId>`),
+> auto-verifies + repairs, and saves a `studio_version` — using a worker-side platform-key
+> `complete` (`platformComplete.ts`) and a tested goal→build-input composer (`build.ts`). Spend is
+> budget-checked BEFORE the build (DECIDE gate, `VENTURES_BUILD_COST_ESTIMATE_USD`) and metered
+> after. This is the M-A2 capability: **idea → roadmap → approve → the loop autonomously builds the
+> app, governed.** 88 ventures tests; server + client typecheck green. Deploy/run (worker) = A5.
+> **To actually run it: a model key (OPENROUTER_API_KEY/NVIDIA_API_KEY) + REDIS_URL + worker +
+> VENTURES_ENABLED=true.** Still flag-gated/off.
+
+> Latest (2026-06-08): **A3 INTAKE → ROADMAP SHIPPED (backend).** `ventures/intake.ts` turns an
+> idea into a venture spec + prioritized roadmap (DI `complete`, robust JSON extraction safe
+> against prose/fences/nested-arrays), wired as `POST /api/ventures/intake` (creates draft venture
+> + default budget + goals + a `roadmap_approval` checkpoint) and `POST /:id/approve-roadmap`
+> (approve → activate). Reuses the studio's exported `studioStageComplete` model wiring. 9 new
+> tests (79 total); server + client typecheck green. Needs a model key (OpenRouter/NVIDIA) at
+> runtime to actually draft a roadmap. **Next: A4 — wire the tick's stub ACT to the real build
+> engine (needs the live worker + keys to validate).**
+
+> Latest (2026-06-08): **A2 ENGINE BACKEND COMPLETE (governed loop, stub ACT).** Shipped the
+> governed `tick` (`ventures/tick.ts`, dependency-injected + 9 unit tests proving it advances a
+> backlog and stops on kill/budget/checkpoint/stuck), the real-persistence adapter
+> (`tickRunner.ts`), and the BullMQ scheduler/worker (`queue.ts`/`scheduler.ts`/`worker.ts`) +
+> `npm run ventures:worker`. The loop is **governed-but-idle**: ACT is a safe stub (A4 wires the
+> real build engine), so a venture's backlog visibly advances tick-by-tick without building
+> anything yet — proving the brakes + durability before any real autonomy. 70 ventures tests
+> pass; server + client typecheck green. **Owner (to actually run it): provide `REDIS_URL` + add
+> a `ventures:worker` Railway service + set `VENTURES_ENABLED=true`.** Still all flag-gated/off.
+
+> Latest (2026-06-08): **A1 CONTROL PLANE SHIPPED + MIGRATIONS APPLIED TO SUPABASE.** Applied
+> `ventures_foundation.sql` + `ventures_control_plane.sql` to the **Comic** project
+> (`bdjfmxfmhqhzvgrhbbzm`) — 7 new tables (`ventures`, `venture_budgets`, `venture_checkpoints`,
+> `venture_events`, `venture_goals`, `venture_runs`, `venture_connections`), all RLS
+> owner-isolated; added nullable `venture_id` to `studio_projects`/`studio_deployments`.
+> **Strictly additive — no data deleted; all existing rows intact.** Shipped the persistence
+> (`repository.ts` + `controlPlane.ts`), pure input validators, and the `/api/ventures/*` router
+> (CRUD + budgets + checkpoints + events + connections + admin kill switch), mounted after global
+> `requireAuth`, **flag-gated + admin-only until GA**. 61 unit tests pass; server + client
+> typecheck + frontend build all green. (No Railway tool in this env — Railway env/worker steps
+> remain owner to-dos.)
+
+> Latest (2026-06-08): **BUILD STARTED — Epic A0 (brakes) core shipped (code, flag-gated).**
+> First real integration code, all under `VENTURES_ENABLED=false` so the live product is
+> untouched: `server/src/ventures/{budget,checkpoints,events,killSwitch}.ts` (pure governance
+> logic), the `server/sql/ventures_foundation.sql` migration (ventures + venture_budgets +
+> venture_checkpoints + venture_events, RLS owner-isolated), and config flags in `config.ts`.
+> **35 new unit tests pass; server + client typecheck green.** Remaining A0: venture_id metering
+> tags + the DB persistence/repo + admin kill route (these land with the A1 control plane).
+> **Owner action queued (not blocking):** apply `ventures_foundation.sql` when you want A1+ live.
+
 > Latest (2026-06-08): **MASTER SPEC COMPLETE — 55 / 55 SECTIONS (~200 pages).** All five parts
 > are written in full depth and pushed: I Strategy (00–07), II Product Definition (08–21), III
 > Architecture (22–34), IV Foundations/NFRs (35–44), V Delivery (45–54) — including the detailed
@@ -69,15 +160,15 @@ Build       ░░░░░░░░░░░░░░░░░░░░    0%  
 
 | Epic | Title | Status | Blocked by |
 |---|---|---|---|
-| A0 | Brakes first (budgets, kill-switch, checkpoints, audit) | 📋 planned — **next** | owner go-ahead to start building |
-| A1 | Venture control plane (data + API) | 📋 planned | A0; migration apply (owner) |
-| A2 | Autonomous loop engine (bounded, crash-safe; stub ACT) | 📋 planned | A1; `REDIS_URL` + worker service (owner) |
-| A3 | Intake → roadmap (idea → approved backlog) | 📋 planned | A2 |
-| A4 | Wire ACT/VERIFY to the real build engine | 📋 planned | A3; studio live flags (owner) |
+| A0 | Brakes first (budgets, kill-switch, checkpoints, audit) | 🟢 **core shipped** (pure logic + SQL + flags + 35 tests); repo/route/metering land with A1 | — |
+| A1 | Venture control plane (data + API) | 🟢 **shipped** — migrations applied to Supabase, repo + controlPlane + `/api/ventures` routes (incl. admin kill) mounted, flag/admin-gated; client API + apiTypes land with A8 | — |
+| A2 | Autonomous loop engine (bounded, crash-safe; stub ACT) | 🟢 **backend complete** — DECIDE gate + governed `tick` (DI, 9 tests) + `tickRunner` (real persistence) + BullMQ `queue`/`scheduler`/`worker` + `npm run ventures:worker`. ACT is a stub (A4 wires real builds). | `REDIS_URL` + worker service (owner) |
+| A3 | Intake → roadmap (idea → approved backlog) | 🟢 **backend shipped** — `intake.ts` (idea→spec+roadmap, robust parse) + `/api/ventures/intake` + `/:id/approve-roadmap`; needs a model key at runtime. Intake UI = A8. | model key (owner) |
+| A4 | Wire ACT/VERIFY to the real build engine | 🟢 **build wired** — ACT runs `studioGenerate.runGenerate` (pure-LLM, no worker) → saves a versioned `studio_project` per venture; platform-key `complete`; budget-checked pre-build. Static verify via runGenerate. Needs a model key to run. | model key (owner) |
 | A5 | Deploy adapters (managed + BYO via Nango) | 📋 planned | A4; per-venture connections (owner) |
-| A6 | Sense layer (signals → iterate loop) | 📋 planned | A5 |
+| A6 | Sense layer (signals → iterate loop) | 🟢 **backend v1 shipped** — `POST /:id/signals` (error/feedback/health) records an event + auto-creates a deduped fix/improve goal so the loop iterates; unauth app-injected signals + analytics ingestion are follow-ups | — |
 | A7 | Central billing & budgets portal | 📋 planned | A1; Stripe price config |
-| A8 | Operator console (24/7 workspace UI) | 📋 planned | A1–A7 |
+| A8 | Operator console (24/7 workspace UI) | 🟢 **shipped (v1)** — `components/ventures/OperatorConsole.tsx` at `?view=ventures`: intake, venture list, status/budget meter, roadmap, approval queue (approve/deny), activity feed (polled), pause/resume/approve-roadmap. `venturesApi` client. Real-time WS + deployments panel = follow-ups. | — |
 | A9 | Multi-tenant security hardening & GA | 📋 planned | A1–A8; security review + owner GA approval |
 
 Legend: ✅ done · 🟢 backend/partial · 🟡 in progress · 📋 planned · ⛔ blocked
@@ -89,9 +180,9 @@ Current state is audited (🟡 partial across the board); these epics close the 
 
 | Epic | Title | Priority | Status |
 |---|---|---|---|
-| F0 | Observability (Sentry, metrics, tracing, audit log) | **P0** — ship before A2 | 📋 planned |
-| F1 | AI provider reliability (key pool, circuit breaker, cross-provider failover) | **P0** — the owner's #1 pain | 📋 planned |
-| F2 | Distributed correctness (shared limits, optimistic concurrency, idempotency) | **P0** — ship before A2 | 📋 planned |
+| F0 | Observability (Sentry, metrics, tracing, audit log) | **P0** | 🟢 **metrics + audit log shipped** (`observability/metrics.ts` + `auditLog.ts` + `audit_log` table; admin `/api/ventures/admin/metrics` + `/admin/audit`); Sentry + distributed tracing are follow-ups |
+| F1 | AI provider reliability (key pool, circuit breaker, cross-provider failover) | **P0** — the owner's #1 pain | 🟢 **primitives + autonomous-path wiring shipped** (`ai/reliability/`); shared-gateway wiring + image-gen hardening + contract tests are follow-ups |
+| F2 | Distributed correctness (shared limits, optimistic concurrency, idempotency) | **P0** | 🟢 **shared rate-limiter + idempotent intake + atomic spend** (Redis limiter w/ fallback; `runOnce` dedupe; `increment_venture_spend` RPC removes the spend read-modify-write race); optimistic concurrency on project saves is a follow-up |
 | F3 | Session & identity hardening (first-party sessions, JWKS, device revocation) | P1 | 📋 planned |
 | F4 | Real-time & multi-device sync (Durable Objects) | P1 | 📋 planned |
 | F5 | Testing & quality gates (integration, E2E, contract, coverage gate) | P1 | 📋 planned |

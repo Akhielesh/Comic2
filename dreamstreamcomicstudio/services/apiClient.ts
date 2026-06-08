@@ -153,6 +153,22 @@ export const del = async <TRes>(path: string, options?: { signal?: AbortSignal }
   return res.json() as Promise<TRes>;
 };
 
+/** PUT with a JSON body. Throws ApiError on non-OK. */
+export const put = async <TReq, TRes>(path: string, body: TReq, options?: { signal?: AbortSignal }): Promise<TRes> => {
+  const headers = await buildRequestHeaders();
+  const res = await safeFetch(buildApiUrl(path), { method: 'PUT', headers, body: JSON.stringify(body), signal: options?.signal });
+  if (!res.ok) throw await parseError(res);
+  return res.json() as Promise<TRes>;
+};
+
+/** PATCH with a JSON body. Throws ApiError on non-OK. */
+export const patch = async <TReq, TRes>(path: string, body: TReq, options?: { signal?: AbortSignal }): Promise<TRes> => {
+  const headers = await buildRequestHeaders();
+  const res = await safeFetch(buildApiUrl(path), { method: 'PATCH', headers, body: JSON.stringify(body), signal: options?.signal });
+  if (!res.ok) throw await parseError(res);
+  return res.json() as Promise<TRes>;
+};
+
 export const get = async <TRes>(path: string, options?: { modelId?: string; signal?: AbortSignal }): Promise<TRes> => {
   const geminiKey = isProviderEnabled('gemini') ? (getActiveKeyValue('gemini') || getGeminiKey()) : null;
   const fluxKey = isProviderEnabled('pixazo') ? (getActiveKeyValue('pixazo') || getFluxKeyInfo().key) : null;

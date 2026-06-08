@@ -160,6 +160,11 @@ export const IDEOGRAM_FETCH_IMAGE_TIMEOUT_MS = parseIntegerEnv(
 // AI_PROVIDER gates the unified path: 'gemini' = legacy Google SDK + Pixazo, 'openrouter' = gateway.
 export const AI_PROVIDER = (process.env.AI_PROVIDER || 'gemini').trim().toLowerCase();
 export const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
+// F1: provider key-pool. The single key above is always included; OPENROUTER_API_KEYS adds more
+// (comma-separated) so one rate-limited key can't throttle the platform. De-duped by KeyPool.
+export const OPENROUTER_API_KEYS = [OPENROUTER_API_KEY, ...(process.env.OPENROUTER_API_KEYS || '').split(',')]
+  .map((k) => k.trim())
+  .filter(Boolean);
 export const OPENROUTER_BASE_URL = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
 export const OPENROUTER_APP_URL = process.env.OPENROUTER_APP_URL || 'https://dreamstream.studio';
 export const OPENROUTER_APP_TITLE = process.env.OPENROUTER_APP_TITLE || 'DreamStream Comic Studio';
@@ -184,6 +189,10 @@ export const REASONING_EFFORT = ((): 'off' | 'low' | 'medium' | 'high' => {
 // BYOK: users add their own `nvapi-...` key (free tier: ~1,000 credits, 40 req/min). A platform
 // key is optional and only used to populate the shared catalog when no user key is present.
 export const NVIDIA_API_KEY = process.env.NVIDIA_API_KEY || '';
+// F1: NVIDIA key-pool (single key + optional comma-separated NVIDIA_API_KEYS). De-duped by KeyPool.
+export const NVIDIA_API_KEYS = [NVIDIA_API_KEY, ...(process.env.NVIDIA_API_KEYS || '').split(',')]
+  .map((k) => k.trim())
+  .filter(Boolean);
 export const NVIDIA_BASE_URL = process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1';
 // Default NVIDIA NIM text model used when a request doesn't name a concrete NVIDIA model.
 export const NVIDIA_TEXT_MODEL = process.env.NVIDIA_TEXT_MODEL || 'meta/llama-3.3-70b-instruct';
@@ -253,6 +262,45 @@ export const JSON_TOOL_PROTOCOL_ENABLED = parseBooleanEnv(process.env.JSON_TOOL_
 // Bearer token that authenticates the outbound MCP endpoint (external agents calling our
 // tool registry). Empty ⇒ the endpoint is disabled (returns 503) rather than open.
 export const MCP_OUTBOUND_TOKEN = (process.env.MCP_OUTBOUND_TOKEN || '').trim();
+
+// --- Autopilot (always-on autonomous ventures) — Epic A0: brakes-first, flag-gated -------
+// The ENTIRE Autopilot layer is OFF by default. Nothing autonomous runs unless
+// VENTURES_ENABLED is true AND the kill switch (VENTURES_KILL) is false. This keeps the
+// existing Comic/Chat/Studio product completely unaffected until explicitly turned on.
+// See docs/studio/autopilot/00-MASTER-PLAN.md and OPERATING-MODEL.md.
+export const VENTURES_ENABLED = parseBooleanEnv(process.env.VENTURES_ENABLED, false);
+// Global emergency stop: when true, the scheduler pauses ALL ventures (an admin can also flip
+// this at runtime via the in-process override in ventures/killSwitch.ts).
+export const VENTURES_KILL = parseBooleanEnv(process.env.VENTURES_KILL, false);
+// Global cap on concurrent autonomous ticks across all ventures (protects providers + spend).
+export const VENTURES_MAX_CONCURRENT_TICKS = parseIntegerEnv(
+  process.env.VENTURES_MAX_CONCURRENT_TICKS,
+  5,
+  'VENTURES_MAX_CONCURRENT_TICKS',
+  1
+);
+// Default per-venture budget caps (USD) applied when a venture has no explicit budget set.
+export const VENTURES_DEFAULT_USD_PER_DAY = Number(process.env.VENTURES_DEFAULT_USD_PER_DAY || '5');
+export const VENTURES_DEFAULT_USD_TOTAL = Number(process.env.VENTURES_DEFAULT_USD_TOTAL || '50');
+// Ventures worker/scheduler (Epic A2). The worker is a SEPARATE process (npm run ventures:worker)
+// and requires REDIS_URL; without it the queue is unavailable (the API is unaffected).
+export const VENTURES_QUEUE_PREFIX = (process.env.VENTURES_QUEUE_PREFIX || 'ventures').trim() || 'ventures';
+export const VENTURES_WORKER_CONCURRENCY = parseIntegerEnv(
+  process.env.VENTURES_WORKER_CONCURRENCY,
+  2,
+  'VENTURES_WORKER_CONCURRENCY',
+  1
+);
+// How often the scheduler fans out ticks to active ventures (ms). The heartbeat of the loop.
+export const VENTURES_TICK_INTERVAL_MS = parseIntegerEnv(
+  process.env.VENTURES_TICK_INTERVAL_MS,
+  60_000,
+  'VENTURES_TICK_INTERVAL_MS',
+  1_000
+);
+// Conservative pre-spend estimate ($) per build goal, checked against the budget BEFORE acting
+// (A4). Real usage-based cost metering lands with F1; until then this keeps budgets meaningful.
+export const VENTURES_BUILD_COST_ESTIMATE_USD = Number(process.env.VENTURES_BUILD_COST_ESTIMATE_USD || '0.05');
 
 export const REQUIRED_RUNTIME_ENV_VARS = ['CORS_ORIGIN', 'VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY'] as const;
 type RequiredRuntimeEnv = (typeof REQUIRED_RUNTIME_ENV_VARS)[number];

@@ -2,6 +2,9 @@ import { Project, GenerationStatus, ComicPanel } from "../types";
 import { generatePanelBreakdown, updateContinuitySummary } from "./geminiService";
 import { generateImage } from "./imageService";
 import { buildImagePrompt } from "./imagePrompt";
+import { classifyStoryMood } from "./storyMood";
+import { buildGenerationInsight, appendGenerationInsight, formatInsightLogLine } from "./contextLog";
+import { stableHash, hashScenes, hashWorld, hasStaleDownstreamFingerprint } from "./pipelineFingerprint";
 import { resolveAspectRatio } from "./imageUtils";
 import { getGridTemplate } from "./panelLayout";
 import { normalizePanelDialogue } from "./dialogueUtils";
@@ -30,65 +33,6 @@ const generationCanceled = new Set<string>();
 const STRICT_STYLE_LOCK_ERROR = "STRICT_STYLE_LOCK_UNRESOLVED";
 const STRICT_REFERENCE_ERROR = "STRICT_REFERENCE_REQUIRED";
 const MULTI_FRAME_ERROR = "MULTI_FRAME_DESCRIPTION";
-
-const stableHash = (value: string) => {
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
-  }
-  return `h${Math.abs(hash >>> 0).toString(16)}`;
-};
-
-const hashScenes = (state: Project["state"]) =>
-  stableHash(
-    JSON.stringify(
-      (state.scenes || []).map((scene) => ({
-        id: scene.id,
-        rawText: scene.rawText || "",
-        synopsis: scene.synopsis || "",
-        setting: scene.setting || "",
-        characters: scene.characters || []
-      }))
-    )
-  );
-
-const hashWorld = (state: Project["state"]) =>
-  stableHash(
-    JSON.stringify({
-      characters: (state.characters || []).map((entry) => ({
-        id: entry.id,
-        name: entry.name,
-        description: entry.description,
-        bio: entry.bio,
-        referenceImageIds: entry.referenceImageIds || []
-      })),
-      items: (state.items || []).map((entry) => ({
-        id: entry.id,
-        name: entry.name,
-        description: entry.description,
-        referenceImageIds: entry.referenceImageIds || []
-      })),
-      locations: (state.locations || []).map((entry) => ({
-        id: entry.id,
-        name: entry.name,
-        description: entry.description,
-        referenceImageIds: entry.referenceImageIds || []
-      }))
-    })
-  );
-
-const hasStaleDownstreamFingerprint = (state: Project["state"]) => {
-  const expectedScriptHash = stableHash(state.script || "");
-  const expectedSceneHash = hashScenes(state);
-  const expectedWorldHash = hashWorld(state);
-  if (!state.scriptHash || !state.sceneHash || !state.worldHash) return true;
-  return (
-    state.scriptHash !== expectedScriptHash ||
-    state.sceneHash !== expectedSceneHash ||
-    state.worldHash !== expectedWorldHash
-  );
-};
 
 const countUngroundedEntities = (state: Project["state"]) =>
   (state.continuity?.validation?.issues || []).filter((issue) => issue.code === "ENTITY_NOT_FOUND").length;
@@ -190,8 +134,30 @@ export const startBackgroundGeneration = async (
     });
   };
 
+  // Read the story's mood once so every panel render gets a palette/lighting guardrail
+  // (keeps a happy story from rendering dark & moody). Persist + log it for later analysis.
+  const storyMood = classifyStoryMood(state.script, state.creativeDirection);
+
   try {
     addLog("Starting generation process...");
+    addLog(`Story mood: ${storyMood.label} (${storyMood.brightness} palette). ${storyMood.summary}`);
+    // Snapshot the world/style/continuity exactly as used for this run, so single-panel
+    // re-rolls later stay faithful even if the user edits or deletes entities/styles.
+    const generationSnapshot = {
+      takenAt: Date.now(),
+      styleImageId: state.styleImageId,
+      stylePrompt: state.stylePrompt,
+      selectedStyleId: state.selectedStyleId,
+      styleAspectRatio: state.styleAspectRatio,
+      imageResolution: state.imageResolution,
+      gridTemplateId: state.gridTemplateId,
+      storyMood,
+      characters: state.characters || [],
+      items: state.items || [],
+      locations: state.locations || [],
+      continuity: state.continuity
+    };
+    onUpdate(project.id, (prev) => ({ state: { ...prev.state, storyMood, generationSnapshot } }));
     if (staleDownstreamFingerprint) {
       addLog("Warning: generation started with stale script/scene/world fingerprints.");
     }
@@ -234,12 +200,21 @@ export const startBackgroundGeneration = async (
       }
     }));
     if (strictMode && !validation.isValid) {
-      addLog(`Continuity validation failed (${validation.issues.length} issues).`);
+      addLog(`Continuity validation failed (${validation.issues.length} issue${validation.issues.length === 1 ? '' : 's'}).`);
+      // Name the specific blockers so the user knows exactly what to fix instead of a
+      // bare "Failed: Continuity". Missing reference images are the #1 cause.
+      const needsRefs = validation.issues
+        .filter((issue) => issue.code === 'ENTITY_REFERENCE_MISSING' || issue.code === 'ENTITY_NOT_FOUND')
+        .map((issue) => issue.message);
+      validation.issues.slice(0, 6).forEach((issue) => addLog(`• ${issue.message}`));
+      const refHint = needsRefs.length
+        ? ` Generate reference images for: ${[...new Set(needsRefs)].slice(0, 6).join('; ')}.`
+        : '';
       void createSystemNotification(
-        `Generation blocked: continuity validation failed (${validation.issues.length} issue${validation.issues.length === 1 ? '' : 's'}).`,
+        `Generation blocked: continuity needs attention (${validation.issues.length} issue${validation.issues.length === 1 ? '' : 's'}).${refHint} Fix in the World stage, then start again.`,
         { projectId: project.id, stage: 'generation' }
       );
-      stopWithStatus("Failed: Continuity");
+      stopWithStatus(needsRefs.length ? "Failed: missing reference images (see World stage)" : "Failed: Continuity");
       return;
     }
 
@@ -314,6 +289,7 @@ export const startBackgroundGeneration = async (
             return {
               id: `s${scene.id}-p${idx}-${Date.now()}`,
               sceneId: scene.id,
+              title: panel.title,
               description: sanitized.text,
               prompt: sanitized.text,
               focalSubject: panel.focalSubject,
@@ -424,6 +400,7 @@ export const startBackgroundGeneration = async (
             focalSubject: panelFocalSubject,
             sceneSynopsis: scene.synopsis || undefined,
             creativeDirection: state.creativeDirection || undefined,
+            moodGuidance: storyMood.promptGuidance,
             shotType: panelShotType,
             cameraAngle: panelCameraAngle,
             composition: panelComposition,
@@ -604,7 +581,11 @@ export const startBackgroundGeneration = async (
         }));
 
         if (batchHadStrictFailure) {
-          throw new Error(`${STRICT_REFERENCE_ERROR}: Strict continuity constraints were violated in this batch.`);
+          // Previously this threw and discarded the ENTIRE run for one bad panel. The
+          // offending panels are already saved with a failureReason, so instead we keep
+          // going and let the user retry just those from the Done stage — losing the whole
+          // comic over a single missing reference was the worst "comics keep failing" case.
+          addLog("Some panels couldn't satisfy strict continuity (missing references or multi-frame text). They're flagged — continuing with the rest.");
         }
 
         // Stop if billing limit hit — remaining panels would all fail
@@ -639,7 +620,31 @@ export const startBackgroundGeneration = async (
       `[METRICS] panel_ref_count=${averageRefCount} zero_ref_panel=${zeroRefPanelCount} mixed_model_in_run=${mixedModelInRun} multi_frame_description_detected=${multiFrameDetectedCount} style_lock_resolved=${initialStyleResolution.resolution.resolved ? 1 : 0} stale_downstream_fingerprint=${staleDownstreamFingerprint ? 1 : 0} dropped_entity_count=${droppedEntityCount} ungrounded_entity_count=${ungroundedEntityCount}`
     );
 
-    addLog("Build Complete!");
+    // Persist a compact record of this run's understanding + outcome (mood -> style ->
+    // result) so issues like "happy story rendered dark" can be analysed later.
+    const runInsight = buildGenerationInsight({
+      panels: freshPanels,
+      mood: storyMood,
+      styleId: state.selectedStyleId,
+      stylePrompt: state.stylePrompt,
+      modelsUsed: [...panelModelsUsed],
+      fallbacks: currentStatus.logs.filter((entry) => /Model fallback/i.test(entry.message)).length
+    });
+    addLog(formatInsightLogLine(runInsight));
+    onUpdate(project.id, (prev) => ({
+      state: { ...prev.state, generationInsights: appendGenerationInsight(prev.state.generationInsights, runInsight) }
+    }));
+
+    const flaggedPanels = freshPanels.filter((panel) => panel.failureReason && !panel.imageId);
+    if (flaggedPanels.length > 0) {
+      addLog(`Build complete with ${flaggedPanels.length} panel${flaggedPanels.length === 1 ? '' : 's'} to retry — open the Done stage to re-roll ${flaggedPanels.length === 1 ? 'it' : 'them'}.`);
+      void createSystemNotification(
+        `Comic finished — ${flaggedPanels.length} panel${flaggedPanels.length === 1 ? '' : 's'} need a retry (missing references or a description fix). Completed panels are saved.`,
+        { projectId: project.id, stage: 'generation' }
+      );
+    } else {
+      addLog("Build Complete!");
+    }
     updateStatus({
       isActive: false,
       progress: 100,
@@ -690,6 +695,27 @@ export const regenerateSinglePanel = async (
   const panelIndex = state.panels.findIndex((p) => p.id === panelId);
   if (panelIndex === -1) throw new Error("Panel not found");
 
+  // Prefer the generation-time snapshot for world/style/continuity so a re-roll matches how
+  // the comic was originally drawn — even if entities/styles were edited or deleted since.
+  // Older comics without a snapshot fall back to live state (behaviour unchanged). The panel
+  // text and scenes stay live so the user's edits to THIS panel are still honoured.
+  const snap = state.generationSnapshot;
+  const refState = snap
+    ? {
+        ...state,
+        characters: snap.characters,
+        items: snap.items,
+        locations: snap.locations,
+        continuity: snap.continuity ?? state.continuity,
+        styleImageId: snap.styleImageId ?? state.styleImageId,
+        stylePrompt: snap.stylePrompt ?? state.stylePrompt,
+        styleAspectRatio: snap.styleAspectRatio ?? state.styleAspectRatio,
+        imageResolution: snap.imageResolution ?? state.imageResolution,
+        gridTemplateId: snap.gridTemplateId ?? state.gridTemplateId,
+        storyMood: snap.storyMood ?? state.storyMood
+      }
+    : state;
+
   const targetPanel = state.panels[panelIndex];
   const sanitizedDescription = sanitizePanelDescription(targetPanel.description || targetPanel.prompt || "");
   if (sanitizedDescription.flagged && hasMultiFrameLanguage(sanitizedDescription.text)) {
@@ -701,11 +727,11 @@ export const regenerateSinglePanel = async (
     prompt: sanitizedDescription.text || targetPanel.prompt
   });
   const scene = state.scenes.find((s) => s.id === targetPanel.sceneId);
-  const sceneBinding = scene ? getSceneBinding(state, scene.id) : undefined;
-  const panelContinuity = resolvePanelContinuity(state, normalizedTargetPanel);
-  const panelScopedContext = buildPanelScopedContext(state, normalizedTargetPanel);
-  const referencePack = buildPanelReferencePack(state, normalizedTargetPanel, {
-    styleImageId: state.styleImageId,
+  const sceneBinding = scene ? getSceneBinding(refState, scene.id) : undefined;
+  const panelContinuity = resolvePanelContinuity(refState, normalizedTargetPanel);
+  const panelScopedContext = buildPanelScopedContext(refState, normalizedTargetPanel);
+  const referencePack = buildPanelReferencePack(refState, normalizedTargetPanel, {
+    styleImageId: refState.styleImageId,
     lastPanelImageId: state.panels
       .slice(0, panelIndex)
       .map((panel) => panel.imageId)
@@ -719,7 +745,7 @@ export const regenerateSinglePanel = async (
   }
 
   // 1. Gather Context
-  const entityVisualContext = buildEntityTextContext(state, normalizedTargetPanel);
+  const entityVisualContext = buildEntityTextContext(refState, normalizedTargetPanel);
   const recentPanels = state.panels
     .slice(Math.max(0, panelIndex - 3), panelIndex)
     .map((panel) => sanitizePanelDescription(panel.description || panel.prompt || '').text)
@@ -727,9 +753,10 @@ export const regenerateSinglePanel = async (
 
   const imagePrompt = buildImagePrompt({
     stage: "panel_regen",
-    stylePrompt: state.stylePrompt,
+    stylePrompt: refState.stylePrompt,
     sceneSynopsis: scene?.synopsis || undefined,
     creativeDirection: state.creativeDirection || undefined,
+    moodGuidance: (refState.storyMood?.promptGuidance) || classifyStoryMood(state.script, state.creativeDirection).promptGuidance,
     focalSubject: normalizedTargetPanel.focalSubject,
     shotType: normalizedTargetPanel.shotType,
     cameraAngle: normalizedTargetPanel.cameraAngle,
@@ -746,17 +773,17 @@ export const regenerateSinglePanel = async (
   });
 
   // 2. Generate Image — match this panel's layout-slot aspect ratio (same as the main run).
-  const regenGridTemplate = state.gridTemplateId ? getGridTemplate(state.gridTemplateId) : null;
+  const regenGridTemplate = refState.gridTemplateId ? getGridTemplate(refState.gridTemplateId) : null;
   const regenSlotCount = regenGridTemplate?.panelSlots.length || 0;
   const regenSlot = regenSlotCount > 0 ? regenGridTemplate!.panelSlots[panelIndex % regenSlotCount] : null;
-  const ratioConfig = resolveAspectRatio(state, regenSlot?.effectiveRatio || state.styleAspectRatio);
+  const ratioConfig = resolveAspectRatio(refState, regenSlot?.effectiveRatio || refState.styleAspectRatio);
   const lockedModelId = resolveLockedPanelModelId();
   const runId = crypto.randomUUID();
 
   const generated = await generateImage(
     imagePrompt,
     ratioConfig.modelRatio,
-    state.imageResolution,
+    refState.imageResolution,
     referencePack.imageIds,
     project.id,
     {
@@ -808,7 +835,7 @@ export const regenerateSinglePanel = async (
         imageIdHistory: appendCappedHistory(p.imageIdHistory, generated.imageId),
         imageUrlHistory: appendCappedHistory(p.imageUrlHistory, generated.imageUrl),
         continuity: {
-          ...resolvePanelContinuity(prev.state, normalizedTargetPanel),
+          ...resolvePanelContinuity(refState, normalizedTargetPanel),
           referenceImageIds: referencePack.imageIds
         },
         dialogueBlocks: p.dialogueBlocks?.length

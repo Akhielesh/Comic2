@@ -1,25 +1,10 @@
 import { NextFunction, Request, Response } from 'express';
-
-type RateLimitBucket = {
-  count: number;
-  resetAt: number;
-};
+import { getRateLimitStore } from './rateLimitStore.js';
 
 type RateLimitConfig = {
   maxRequests: number;
   scope: string;
   windowMs: number;
-};
-
-const buckets = new Map<string, RateLimitBucket>();
-let requestCounter = 0;
-
-const cleanupExpiredBuckets = (now: number) => {
-  for (const [key, value] of buckets.entries()) {
-    if (value.resetAt <= now) {
-      buckets.delete(key);
-    }
-  }
 };
 
 const resolveRequesterKey = (req: Request) => {
@@ -31,36 +16,35 @@ const resolveRequesterKey = (req: Request) => {
 
 const clampToPositive = (value: number) => Math.max(0, value);
 
+// F2: counts live in a shared store (Redis when REDIS_URL is set, else in-memory — identical to
+// the original behavior). This makes limits hold across instances instead of being per-process.
 export const createRateLimit = ({ scope, windowMs, maxRequests }: RateLimitConfig) =>
-  (req: Request, res: Response, next: NextFunction) => {
+  async (req: Request, res: Response, next: NextFunction) => {
     const now = Date.now();
-    requestCounter += 1;
+    const bucketKey = `${scope}:${resolveRequesterKey(req)}`;
 
-    if (requestCounter % 200 === 0) {
-      cleanupExpiredBuckets(now);
-      requestCounter = 0;
+    let count: number;
+    let resetAt: number;
+    try {
+      const hit = await getRateLimitStore().hit(bucketKey, windowMs, maxRequests);
+      count = hit.count;
+      resetAt = hit.resetAt;
+    } catch {
+      // Fail open: a rate-limit store hiccup must never block legitimate traffic.
+      next();
+      return;
     }
 
-    const requester = resolveRequesterKey(req);
-    const bucketKey = `${scope}:${requester}`;
-    const existing = buckets.get(bucketKey);
-    const activeBucket = !existing || existing.resetAt <= now
-      ? { count: 0, resetAt: now + windowMs }
-      : existing;
-
-    activeBucket.count += 1;
-    buckets.set(bucketKey, activeBucket);
-
-    const remaining = clampToPositive(maxRequests - activeBucket.count);
-    const retryAfterMs = clampToPositive(activeBucket.resetAt - now);
+    const remaining = clampToPositive(maxRequests - count);
+    const retryAfterMs = clampToPositive(resetAt - now);
     const retryAfterSeconds = Math.max(1, Math.ceil(retryAfterMs / 1000));
 
     res.setHeader('X-RateLimit-Limit', String(maxRequests));
     res.setHeader('X-RateLimit-Remaining', String(remaining));
-    res.setHeader('X-RateLimit-Reset', String(Math.floor(activeBucket.resetAt / 1000)));
+    res.setHeader('X-RateLimit-Reset', String(Math.floor(resetAt / 1000)));
     res.setHeader('RateLimit-Policy', `${scope};w=${Math.floor(windowMs / 1000)};q=${maxRequests}`);
 
-    if (activeBucket.count <= maxRequests) {
+    if (count <= maxRequests) {
       next();
       return;
     }

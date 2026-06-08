@@ -1098,6 +1098,7 @@ export const generatePanelBreakdown = async (
       ${previousPanelContext?.map((panel, idx) => `- Prev ${idx + 1}: ${panel.description} | ${panel.dialogue || ''}`).join('\n') || 'None provided'}
       
       Return JSON array of panels. Each panel must include:
+      - title: a short 2-5 word caption naming this exact panel (e.g. "The Boat Departs", "First Light", "Her Last Warning"). Concrete and specific to THIS panel's moment; NOT generic ("Panel 1", "A Scene") and NOT a full sentence.
       - focalSubject: the concrete subject of THIS panel, drawn from the synopsis/setting (e.g. "the weathered fishing trawler", "the harbour at dawn"). Never generic ("a hero", "a figure") and never off-genre. This is what the artist must actually draw.
       - description: visual prompt for the artist describing exactly what is in frame (no text in image). It MUST depict the focalSubject and the scene's real content — do NOT substitute generic comic-book or superhero imagery.
       - shotType: one of wide / establishing / medium / close-up / extreme close-up / over-the-shoulder.
@@ -1127,6 +1128,7 @@ export const generatePanelBreakdown = async (
           items: {
             type: Type.OBJECT,
             properties: {
+              title: { type: Type.STRING, description: 'Short 2-5 word caption naming this panel; concrete, specific, not generic and not a full sentence' },
               focalSubject: { type: Type.STRING, description: 'Concrete subject of this panel, from the synopsis/setting; never generic or off-genre' },
               description: { type: Type.STRING, description: 'Visual prompt for the artist; must depict the focalSubject and the real scene content' },
               shotType: { type: Type.STRING, description: 'wide / establishing / medium / close-up / extreme close-up / over-the-shoulder' },

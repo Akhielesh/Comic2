@@ -48,6 +48,7 @@ import { invitesRouter } from './routes/invites.js';
 import { accountRouter } from './routes/account.js';
 import { prewarmCatalog, startCatalogRefreshLoop } from './services/modelCatalog.js';
 import { keysRouter } from './routes/keys.js';
+import { venturesRouter } from './routes/ventures.js';
 
 validateRuntimeConfig();
 
@@ -176,6 +177,8 @@ app.use('/api/studio', textRateLimit, studioRouter);
 app.use('/api/agents', systemRateLimit, agentsRouter);
 app.use('/api/recipes', textRateLimit, recipesRouter);
 app.use('/api/mcp', systemRateLimit, mcpRouter);
+// Autopilot control plane (Epic A1). Flag-gated + admin-only until GA (see ventures router).
+app.use('/api/ventures', systemRateLimit, venturesRouter);
 // Tester invite redemption (authenticated users).
 app.use('/api/invites', systemRateLimit, invitesRouter);
 // Account: server-side encrypted BYOK key storage (authenticated).

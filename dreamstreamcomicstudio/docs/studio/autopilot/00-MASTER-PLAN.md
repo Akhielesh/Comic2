@@ -355,21 +355,24 @@ files to touch, acceptance criteria, and any owner action. Mark `[x]` as you shi
 **Goal:** make autonomy *safe to turn on later* by shipping every governance primitive
 before any loop exists. Everything is admin-only + flag-gated (`VENTURES_ENABLED=false`).
 
-- [ ] Migration `server/sql/ventures_foundation.sql`: tables `ventures`, `venture_budgets`,
+- [x] Migration `server/sql/ventures_foundation.sql`: tables `ventures`, `venture_budgets`,
       `venture_checkpoints`, `venture_events` (+ RLS owner-isolation mirroring
-      `projects_rls_owner_isolation.sql`).
-- [ ] `server/src/ventures/budget.ts` — pure budget evaluator: given a venture + a proposed
-      spend, return `allow | pause-budget`. Unit-tested.
-- [ ] `server/src/ventures/checkpoints.ts` — create/list/resolve checkpoints; the 6
-      checkpoint types from §8. Unit-tested.
-- [ ] `server/src/ventures/events.ts` — append-only event writer (what/why/cost/result +
-      model + prompt hash). Unit-tested.
-- [ ] Global kill switch: `VENTURES_KILL=true` env + an admin route to flip it; the future
-      worker must check it every tick.
+      `projects_rls_owner_isolation.sql`). ✅ shipped (apply via Supabase migration flow).
+- [x] `server/src/ventures/budget.ts` — pure budget evaluator: given a venture + a proposed
+      spend, return `allow | pause-budget`. Unit-tested. ✅ + `budgetAlertLevel` (80/100%).
+- [x] `server/src/ventures/checkpoints.ts` — create/list/resolve checkpoints; the 6
+      checkpoint types from §8. Unit-tested. ✅ (`checkpointForAction`, transitions, resolve).
+- [x] `server/src/ventures/events.ts` — append-only event writer (what/why/cost/result +
+      model). Unit-tested. ✅ (pure shaping + secret redaction; DB append lands in A1).
+- [x] Global kill switch: `VENTURES_KILL=true` env + runtime override
+      (`server/src/ventures/killSwitch.ts`); the future worker checks it every tick.
+      (Admin route to flip it at runtime lands with the A1 control plane.)
 - [ ] Wire metering tags: extend `costEstimator.ts`/`billingLedger.ts` calls to accept a
       `venture_id` tag (additive, no behavior change).
-- [ ] Feature flag `VENTURES_ENABLED` (default false) gating all of the above.
-- [ ] Tests: budget breach pauses; checkpoint lifecycle; event append; kill switch honored.
+- [x] Feature flag `VENTURES_ENABLED` (default false) gating all of the above
+      (`server/src/config.ts`), + `VENTURES_MAX_CONCURRENT_TICKS` + default budget caps.
+- [x] Tests: budget breach + alert levels; checkpoint lifecycle; event append/redaction;
+      kill switch honored. ✅ 35 unit tests, server+client typecheck green.
 
 **Acceptance:** with `VENTURES_ENABLED=false` nothing changes for users; with it on (admin),
 you can create a venture row, set a budget, raise/resolve a checkpoint, and read the audit
@@ -383,18 +386,23 @@ trail — but no autonomous work runs yet. Typecheck + server build + vitest gre
 **Goal:** full CRUD + state for ventures, goals, runs, connections — the substrate the loop
 will drive. Still no loop.
 
-- [ ] Migration `server/sql/ventures_control_plane.sql`: `venture_goals`, `venture_runs`,
-      `venture_connections`, `venture_deployments` (or add `venture_id` to existing
-      `studio_deployments`); add `venture_id` FK to `studio_projects`. RLS on all.
-- [ ] `server/src/services/ventureRepository.ts` — typed CRUD mirroring
-      `studioRepository.ts` patterns.
-- [ ] `server/src/routes/ventures.ts` — `/api/ventures` (list/create/get/update/delete),
-      `/api/ventures/:id/goals`, `/checkpoints`, `/budget`, `/connections`, `/events`,
-      `/runs`. Auth + RLS + caps middleware.
-- [ ] Client API `services/venturesApi.ts` (mirror `studioApi.ts`).
+- [x] Migration `server/sql/ventures_control_plane.sql`: `venture_goals`, `venture_runs`,
+      `venture_connections`; added `venture_id` to `studio_projects` + `studio_deployments`.
+      RLS on all. ✅ **applied to the Comic Supabase project** (additive; existing data untouched).
+- [x] Venture persistence repository — typed CRUD mirroring `studioRepository.ts` patterns,
+      shipped as `server/src/ventures/repository.ts` (ventures + budgets + checkpoints + events:
+      create/get/list/status, getBudget/upsertBudget/recordSpend, checkpoint create/list/
+      approve-deny/expire, append/list events). Goals/runs/connections CRUD follow with their
+      migration below.
+- [x] `server/src/routes/ventures.ts` — `/api/ventures` (list/create/get), `/:id/status`,
+      `/:id/goals`, `/:id/budget` (get/put), `/:id/checkpoints` (+ `/:cid/resolve`),
+      `/:id/events`, `/:id/connections`, and admin `/admin/kill`. Mounted in `index.ts` after
+      global `requireAuth`; flag-gated + admin-only until GA. ✅ shipped.
+- [ ] Client API `services/venturesApi.ts` (mirror `studioApi.ts`) — pending (lands with A8 UI).
 - [ ] Shared types in `apiTypes.ts` (Venture, VentureGoal, VentureRun, Checkpoint, Budget,
-      Connection, VentureEvent).
-- [ ] Tests: route validation, RLS isolation (user A can't read user B's venture), CRUD.
+      Connection, VentureEvent) — pending (lands with A8 UI).
+- [x] Tests: pure input validation (`ventures/validate.ts`, 14 tests) shipped. RLS-isolation +
+      CRUD integration tests deferred to F5 (no integration harness yet).
 
 **Acceptance:** an admin can fully manage a venture + its backlog + budget + connections
 over the API, owner-isolated. No loop yet. Verify suite green.
@@ -408,18 +416,21 @@ over the API, owner-isolated. No loop yet. Verify suite green.
 venture, governed by A0's brakes. Still building *nothing real* yet — ACT is a stub that
 just logs — so we can prove the governance + durability in isolation.
 
-- [ ] `server/src/ventures/queue.ts` — BullMQ queue + repeatable job (mirror
-      `comicforge/queue.ts`).
-- [ ] `server/src/ventures/scheduler.ts` — picks active, non-paused, in-budget ventures and
-      enqueues a tick; respects kill switch + global concurrency cap.
-- [ ] `server/src/ventures/tick.ts` — one tick: SENSE (backlog only for now) → ORIENT
-      (LLM picks next goal, cost-aware model via `autoRouter`) → DECIDE (A0 gate) → **ACT
-      (stub)** → VERIFY (skip) → SHIP (skip) → REFLECT (write event, update goal). Fully
-      resumable from durable state; wall-clock + max-ticks guards; no-progress detector.
-- [ ] `npm run ventures:worker` script + a separate process entry (mirror
-      `comicforge:worker`); deployable as its own Railway service.
-- [ ] Tests: a tick advances a goal; budget breach mid-run pauses; kill switch stops the
-      scheduler; no-progress raises a checkpoint; crash mid-tick resumes cleanly.
+- [x] `server/src/ventures/queue.ts` — guarded BullMQ queue (mirror `comicforge/queue.ts`),
+      per-venture jobId de-dupe. ✅
+- [x] `server/src/ventures/scheduler.ts` — fans out a tick per ACTIVE venture; respects
+      `VENTURES_ENABLED` + kill switch + `VENTURES_MAX_CONCURRENT_TICKS`. ✅ (in-budget/checkpoint
+      filtering happens inside the tick's DECIDE gate.)
+- [x] `server/src/ventures/tick.ts` — one tick: SENSE (backlog) → ORIENT (deterministic
+      priority pick for now; LLM goal-selection in A3/A4) → DECIDE (A0 gate) → **ACT (stub)** →
+      REFLECT (event + goal update + metered spend). Durable-state resumable; no-progress
+      detector → pause 'stuck'. Real-persistence adapter in `tickRunner.ts`. ✅ (wall-clock +
+      max-ticks-per-run guards are an A2 follow-up.)
+- [x] `npm run ventures:worker` script + separate process entry (`worker.ts`, mirrors
+      `comicforge:worker`); deployable as its own Railway service. ✅
+- [x] Tests: tick advances a goal; budget breach pauses (pre-spend); kill switch halts;
+      no-progress → stuck; gated→approved→advances; priority selection. ✅ 9 DI tests (70 total).
+      (Crash-resume is durable-by-construction; an integration test lands with F5.)
 
 **Acceptance:** with the flag on, a seeded venture's backlog visibly advances tick-by-tick
 (in `venture_events`/`venture_goals`), stops on budget/kill/stuck, and survives a worker
@@ -436,16 +447,17 @@ worker as a Railway service.
 spec + a structured roadmap (epics→features→tasks) the user **approves** (a checkpoint)
 before any autonomous work.
 
-- [ ] `server/src/ventures/intake.ts` — LLM flow: idea → `{ name, summary, scope,
-      success_metrics, roadmap: VentureGoal[] }`. Reuse `studioPlan.ts` patterns + swarm
-      planner. JSON-validated (`ai/json.ts`, `jsonCoerce.ts`).
-- [ ] Route `POST /api/ventures/intake` (draft) + `POST /api/ventures/:id/approve-roadmap`
-      (resolves the roadmap checkpoint, flips the venture to `active`).
-- [ ] Scope guard wiring: store the approved `scope`; ORIENT must stay within it or raise a
-      scope checkpoint.
-- [ ] Client intake UI (a wizard) — minimal for now; full console in A8.
-- [ ] Tests: intake produces a valid roadmap; venture stays `draft` until approved; scope
-      stored.
+- [x] `server/src/ventures/intake.ts` — LLM flow: idea → `{ name, summary, scope, goals[] }`,
+      DI `complete` (mirrors `studioPlan.ts`), robust object extraction (prose/fence/nested-array
+      safe). ✅
+- [x] Route `POST /api/ventures/intake` (creates draft venture + default budget + goals +
+      `roadmap_approval` checkpoint, status `roadmap_pending`) + `POST /:id/approve-roadmap`
+      (resolves the roadmap checkpoint → flips to `active`). Reuses exported `studioStageComplete`. ✅
+- [x] Scope guard wiring: approved `scope` stored on the venture; the DECIDE gate enforces
+      `inScope` (scope_change checkpoint). (partial — plumbing done; LLM ORIENT scope-check is A4.)
+- [ ] Client intake UI (a wizard) — pending (lands with A8 console).
+- [x] Tests: intake parses a valid roadmap, retries on bad output, gives up gracefully; goals
+      normalized; venture stays `roadmap_pending` until approved. ✅ 9 tests (79 total).
 
 **Acceptance:** "Build me a habit-tracker SaaS with email reminders" → a reviewable roadmap
 of concrete goals; approving it activates the venture and the A2 loop starts working it.
@@ -459,16 +471,20 @@ Verify green.
 **Goal:** replace A2's stub ACT with the **existing agentic build loop + swarm code agent**,
 so ticks actually produce/modify code with real verification.
 
-- [ ] In `tick.ts` ACT: dispatch the chosen goal to the Phase-4 build loop
-      (`server/src/ai/studio/buildAgent.ts` / `studioGenerate.ts` / `studioFix.ts`) against
-      the venture's `studio_project`; create a `studio_version` on success.
-- [ ] VERIFY: run `verifyApp.ts` + build/typecheck + tests + the A9 code-safety scan
-      (initially a basic secret/dangerous-op check; full scan in A9).
-- [ ] Use the swarm's `code` agent for decomposition on larger goals (the PHASE-9
-      integration item, now actually consumed).
-- [ ] Minimal-diff iteration + per-goal iteration cap (reuse `buildGuards.ts`).
-- [ ] Tests: a real goal (e.g. "add a landing page") yields a passing `studio_version`;
-      a failing build triggers FIX within the cap then a checkpoint if stuck.
+- [x] ACT does a REAL build: `tickRunner.act` runs the existing **pure-LLM** generator
+      (`studioGenerate.runGenerate`, no Cloudflare worker needed) for the goal against the
+      venture's `studio_project` (`v_<ventureId>`) and saves a `studio_version` on success.
+      Worker-side platform-key `complete` (`ventures/platformComplete.ts`); goal→build-input
+      composer (`ventures/build.ts`, tested). ✅ (uses `runGenerate`, not the worker-bound
+      `buildAgent`, since the loop runs headless; the worker-backed run/observe path is A5.)
+- [x] VERIFY (static): `runGenerate` already runs `verifyApp.ts` + one auto-repair + a
+      completeness self-review before returning. (partial — sandbox build/typecheck/tests + the
+      A9 code-safety scan come with A5/A9.)
+- [ ] Use the swarm's `code` agent for decomposition on larger goals — deferred.
+- [x] Refine-mode minimal iteration (keeps existing files) + per-goal attempt cap via the
+      no-progress detector. (partial — `buildGuards.ts` reuse is a follow-up.)
+- [x] Tests: goal→build-input composer (3 tests) + the governed-tick paths (DI). A live
+      "real goal → passing version" round-trip needs a model key (validate when configured).
 
 **Acceptance:** an approved venture autonomously builds its first few backlog goals into a
 working `studio_project` with versions + metered cost, pausing if it gets stuck. Verify green.
@@ -549,16 +565,16 @@ credits, and gets alerted before overspend. Verify green.
 ### Epic A8 — Operator Console (the 24/7 workspace UI)
 **Goal:** the user-facing cockpit. Watch agents work live, approve checkpoints, steer.
 
-- [ ] Route + shell `components/ventures/` (reuse the studio's Linear/dark design system,
-      `components/ui/*`, `lib/utils` `cn`).
-- [ ] **Live activity stream** (reuse `ActivityFeed` + `SwarmTraceCard` patterns) over an
-      SSE `/api/ventures/:id/stream` of `venture_events`.
-- [ ] **Roadmap/backlog board** (goals by status) — drag to reprioritize (writes goals).
-- [ ] **Approval queue** for checkpoints — approve/deny with one click + context.
-- [ ] **Budget meter** + spend; **pause / resume / kill** controls (per venture + global).
-- [ ] **Deployments** panel (preview/prod links, status, rollback) + **logs**.
-- [ ] Venture list/dashboard; intake wizard (from A3); mobile-responsive.
-- [ ] Tests + a Gallery demo entry (per `CLAUDE.md` rule) for any new artifact components.
+- [x] Route + shell `components/ventures/OperatorConsole.tsx` (dark theme), client API
+      `services/venturesApi.ts` + `put`/`patch` in `apiClient`, wired at `?view=ventures`. ✅
+- [x] **Live activity stream** — `venture_events` feed (polled every 5s; SSE/WS over
+      `venture_events` is F4). (partial — polling now, real-time later.)
+- [x] **Roadmap/backlog board** (goals by status). (drag-to-reprioritize is a follow-up.)
+- [x] **Approval queue** for checkpoints — one-click approve/deny with context. ✅
+- [x] **Budget meter** + spend; **pause / resume** + **approve-roadmap** controls. (global
+      kill is the admin route; per-venture kill UI is a follow-up.)
+- [x] Venture list/dashboard + **intake** (idea → draft) inline. (mobile polish is a follow-up.)
+- [ ] Deployments panel + logs (with A5); drag-reprioritize; Gallery demo — follow-ups.
 
 **Acceptance:** from one screen the user creates a venture, approves its roadmap, watches it
 build live, approves the prod deploy, sees spend, and can pause/kill — on desktop and
