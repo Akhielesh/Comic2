@@ -26,6 +26,8 @@ import { runIntake } from '../ventures/intake.js';
 import { runOnce } from '../ventures/idempotency.js';
 import { studioStageComplete } from './studio.js';
 import { getKillSwitch, setKillSwitch } from '../ventures/killSwitch.js';
+import { snapshot } from '../observability/metrics.js';
+import { recordAudit, listAudit } from '../observability/auditLog.js';
 import { budgetAlertLevel } from '../ventures/budget.js';
 import {
   parseCreateVenture,
@@ -59,11 +61,20 @@ venturesRouter.use(ventureGate);
 venturesRouter.get('/admin/kill', requireAdmin, (_req, res) => {
   res.json({ killed: getKillSwitch() });
 });
-venturesRouter.post('/admin/kill', requireAdmin, (req, res) => {
+venturesRouter.post('/admin/kill', requireAdmin, async (req, res) => {
   const on = (req.body || {}).on;
   if (typeof on !== 'boolean') return badRequest(res, "Body must be { on: boolean }.");
   setKillSwitch(on);
+  await recordAudit({ actorId: req.user!.id, action: 'ventures.kill', detail: { on } });
   res.json({ killed: getKillSwitch() });
+});
+
+// Admin observability (F0): metrics snapshot + recent audit log.
+venturesRouter.get('/admin/metrics', requireAdmin, (_req, res) => {
+  res.json({ metrics: snapshot() });
+});
+venturesRouter.get('/admin/audit', requireAdmin, async (_req, res) => {
+  res.json({ audit: await listAudit(200) });
 });
 
 // --- Ventures -------------------------------------------------------------------------
@@ -164,6 +175,13 @@ venturesRouter.post('/:id/approve-roadmap', async (req, res) => {
       await resolveCheckpointRow(req.user!.id, c.id, { to: 'approved', resolvedBy: req.user!.id });
     }
     await setVentureStatus(req.user!.id, req.params.id, 'active');
+    await recordAudit({
+      actorId: req.user!.id,
+      action: 'ventures.roadmap.approve',
+      targetType: 'venture',
+      targetId: req.params.id,
+      detail: { approved: open.length }
+    });
     res.json({ ok: true, status: 'active', approved: open.length });
   } catch (e) {
     serverError(res, e);
@@ -267,6 +285,13 @@ venturesRouter.post('/:id/checkpoints/:checkpointId/resolve', async (req, res) =
       resolvedBy: req.user!.id
     });
     if (!done) return res.status(409).json({ error: { message: 'Checkpoint not found or already resolved.' } });
+    await recordAudit({
+      actorId: req.user!.id,
+      action: 'ventures.checkpoint.resolve',
+      targetType: 'checkpoint',
+      targetId: req.params.checkpointId,
+      detail: { ventureId: req.params.id, decision: parsed.value }
+    });
     res.json({ ok: true, status: parsed.value });
   } catch (e) {
     serverError(res, e);

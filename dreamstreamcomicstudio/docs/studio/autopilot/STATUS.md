@@ -6,6 +6,14 @@
 
 **Last updated:** 2026-06-07 · **Updated by:** Claude · **Branch:** `claude/gracious-albattani-bDL8T`
 
+> Latest (2026-06-08): **F0 — METRICS + AUDIT LOG (observability substrate).** Added a pure metrics
+> registry (`observability/metrics.ts`) wired to per-provider `ai_*` counters + `venture_tick`
+> outcomes, and a platform `audit_log` (table applied to Supabase + `observability/auditLog.ts`
+> best-effort writer) recording sensitive admin actions (kill-switch, checkpoint resolve, roadmap
+> approve). Surfaced via admin `GET /api/ventures/admin/metrics` + `/admin/audit`. Closes the
+> audit's "no per-provider observability / ephemeral audit" gaps (substrate; Sentry + distributed
+> tracing are follow-ups). Server + client typecheck green; tests green.
+
 > Latest (2026-06-08): **F2 — SHARED RATE-LIMIT STORE (distributed correctness).** Replaced the
 > per-process in-memory limiter with a store abstraction (`middleware/rateLimitStore.ts`): Redis-backed
 > (shared across instances) when `REDIS_URL` is set, else the EXACT original in-memory behavior — so
@@ -166,7 +174,7 @@ Current state is audited (🟡 partial across the board); these epics close the 
 
 | Epic | Title | Priority | Status |
 |---|---|---|---|
-| F0 | Observability (Sentry, metrics, tracing, audit log) | **P0** | 🟢 **metrics registry + per-provider/tick counters shipped** (`observability/metrics.ts`); Sentry + tracing + /metrics exporter + audit log are follow-ups |
+| F0 | Observability (Sentry, metrics, tracing, audit log) | **P0** | 🟢 **metrics + audit log shipped** (`observability/metrics.ts` + `auditLog.ts` + `audit_log` table; admin `/api/ventures/admin/metrics` + `/admin/audit`); Sentry + distributed tracing are follow-ups |
 | F1 | AI provider reliability (key pool, circuit breaker, cross-provider failover) | **P0** — the owner's #1 pain | 🟢 **primitives + autonomous-path wiring shipped** (`ai/reliability/`); shared-gateway wiring + image-gen hardening + contract tests are follow-ups |
 | F2 | Distributed correctness (shared limits, optimistic concurrency, idempotency) | **P0** | 🟢 **shared rate-limit store + idempotent intake shipped** (Redis-backed limiter w/ in-memory fallback; `runOnce` de-dupe on intake); optimistic concurrency on project saves is a follow-up |
 | F3 | Session & identity hardening (first-party sessions, JWKS, device revocation) | P1 | 📋 planned |
