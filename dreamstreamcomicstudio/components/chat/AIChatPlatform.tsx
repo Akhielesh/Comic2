@@ -116,7 +116,15 @@ const applyVariant = (turn: ChatTurn, v: ChatTurnVariant): ChatTurn => ({
 const composeSystemPrompt = (memory: string, persona?: string): string | undefined => {
   const parts: string[] = [];
   if (persona && persona.trim()) parts.push(persona.trim());
-  if (memory && memory.trim()) parts.push(`Durable facts to remember about the user:\n${memory.trim()}`);
+  if (memory && memory.trim()) {
+    // Inject stored memory WITH a relevance guard. Without this the model forced every
+    // stored fact onto every question — e.g. applying a stale "10 years of job-search
+    // experience" note to a student's biology question. Memory is background, not a lens.
+    parts.push(
+      `Background facts about the user (from earlier conversations) — use ONLY when they are clearly relevant to the current question:\n${memory.trim()}\n\n` +
+        `Relevance rules: treat these as optional background, never a frame. If a fact does not obviously apply to what the user is asking right now, ignore it — do NOT bend the answer to fit it, and do not assume the user's profile/role/experience unless the current message implies it. If stored facts seem to contradict the current message, trust the current message.`
+    );
+  }
   return parts.length ? parts.join('\n\n') : undefined;
 };
 
