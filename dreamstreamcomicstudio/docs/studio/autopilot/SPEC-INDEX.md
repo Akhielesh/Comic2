@@ -33,7 +33,7 @@
   enterprise bar. No filler.
 
 ## Progress
-**Sections complete: 30 / 55** · target ~200 pages. (Parts I + II complete; Part III underway.)
+**Sections complete: 35 / 55** · target ~200 pages. (Parts I–III complete.)
 
 Legend: ✅ written · ✍️ in progress · 📋 planned
 
@@ -77,12 +77,12 @@ Legend: ✅ written · ✍️ in progress · 📋 planned
 | 26 | Data model & schema (all tables + RLS) | [spec/26-data-model-schema.md](./spec/26-data-model-schema.md) | ✅ |
 | 27 | API surface — REST | [spec/27-api-rest.md](./spec/27-api-rest.md) | ✅ |
 | 28 | API surface — realtime & events | [spec/28-api-realtime-events.md](./spec/28-api-realtime-events.md) | ✅ |
-| 29 | AI/model gateway (providers, routing, reliability) | spec/29-model-gateway.md | 📋 |
+| 29 | AI/model gateway (providers, routing, reliability) | [spec/29-model-gateway.md](./spec/29-model-gateway.md) | ✅ |
 | 30 | Integrations framework (Nango + MCP + webhooks) | [spec/30-integrations-framework.md](./spec/30-integrations-framework.md) | ✅ |
-| 31 | Deploy adapters (managed + BYO) | spec/31-deploy-adapters.md | 📋 |
-| 32 | Storage & file management | spec/32-storage.md | 📋 |
-| 33 | Sessions & identity architecture | spec/33-sessions-identity.md | 📋 |
-| 34 | Real-time & sync architecture | spec/34-realtime-sync.md | 📋 |
+| 31 | Deploy adapters (managed + BYO) | [spec/31-deploy-adapters.md](./spec/31-deploy-adapters.md) | ✅ |
+| 32 | Storage & file management | [spec/32-storage.md](./spec/32-storage.md) | ✅ |
+| 33 | Sessions & identity architecture | [spec/33-sessions-identity.md](./spec/33-sessions-identity.md) | ✅ |
+| 34 | Real-time & sync architecture | [spec/34-realtime-sync.md](./spec/34-realtime-sync.md) | ✅ |
 
 ### Part IV — Non-functional / Foundations
 | # | Section | File | Status |

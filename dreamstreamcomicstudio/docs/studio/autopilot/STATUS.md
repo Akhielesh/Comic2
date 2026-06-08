@@ -6,6 +6,15 @@
 
 **Last updated:** 2026-06-07 · **Updated by:** Claude · **Branch:** `claude/gracious-albattani-bDL8T`
 
+> Latest (2026-06-08): **MASTER SPEC — PARTS I–III COMPLETE (35 / 55).** Part III Architecture
+> (22–34) is fully written in depth: system architecture, the flagship deep Cloudflare
+> DO/Workflows/Containers topology, the autonomous engine, multi-tenancy/isolation, the full
+> data model + RLS (all tables), REST + realtime/events APIs, model gateway (F1 design),
+> integrations framework (F10), deploy adapters, storage, sessions/identity (F3), and
+> realtime/sync (F4) — all grounded in the actual codebase. **Part IV (Foundations/NFRs, 35–44)
+> next, then Part V (Delivery, 45–54).** Built via parallel writer-agents, committing as each
+> lands. **35 / 55 complete.**
+
 > Latest (2026-06-07): **MASTER SPEC — PARTS I + II COMPLETE (22 / 55).** Scaffolded
 > [`SPEC-INDEX.md`](./SPEC-INDEX.md) (55 sections, 5 parts) under [`spec/`](./spec/). Part I
 > Strategy (00–07) and Part II Product Definition (08–21) are written in full depth: exec
