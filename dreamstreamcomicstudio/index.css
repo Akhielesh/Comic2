@@ -130,6 +130,13 @@
   animation: progressLoop 2.5s linear infinite;
 }
 
+/* Moving diagonal stripes for the generation/build progress bar (ComicGenerator). */
+@keyframes comicBarberpole { from { background-position: 0 0; } to { background-position: 40px 0; } }
+.animate-barberpole { animation: comicBarberpole 0.8s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .animate-barberpole { animation: none; }
+}
+
 .animate-page-flip-next {
   animation: pageFlipNext 0.35s ease-out both;
   transform-origin: right center;
