@@ -45,6 +45,7 @@ import { mcpRouter, mcpOutboundRouter } from './routes/mcp.js';
 import { modelsRouter } from './routes/models.js';
 import { telemetryRouter } from './routes/telemetry.js';
 import { invitesRouter } from './routes/invites.js';
+import { accountRouter } from './routes/account.js';
 import { prewarmCatalog, startCatalogRefreshLoop } from './services/modelCatalog.js';
 import { keysRouter } from './routes/keys.js';
 import { venturesRouter } from './routes/ventures.js';
@@ -181,6 +182,8 @@ app.use('/api/mcp', systemRateLimit, mcpRouter);
 app.use('/api/ventures', systemRateLimit, venturesRouter);
 // Tester invite redemption (authenticated users).
 app.use('/api/invites', systemRateLimit, invitesRouter);
+// Account: server-side encrypted BYOK key storage (authenticated).
+app.use('/api/account', systemRateLimit, accountRouter);
 
 app.use(errorHandler);
 

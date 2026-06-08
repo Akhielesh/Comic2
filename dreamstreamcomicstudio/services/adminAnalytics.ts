@@ -21,6 +21,14 @@ export interface AnalyticsOverview {
   eventsBySource: Record<string, number>;
   feedbackBySentiment: Record<string, number>;
   feedbackByCategory: Record<string, number>;
+  topIssues: Array<{
+    signature: string;
+    eventType: string;
+    source: string;
+    count: number;
+    sample: string;
+    exampleSessionId?: string | null;
+  }>;
   recentFailures: TelemetryEventRow[];
   recentDislikes: FeedbackRow[];
 }

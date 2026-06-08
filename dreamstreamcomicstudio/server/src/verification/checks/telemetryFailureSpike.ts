@@ -8,21 +8,9 @@
 
 import crypto from 'node:crypto';
 import type { CheckImpl, RawFinding, Severity } from '../types.js';
+import { failureSignature } from '../../lib/failureSignature.js';
 
 const fp = (parts: string[]) => crypto.createHash('sha256').update(parts.join('::')).digest('hex').slice(0, 16);
-
-// Collapse volatile bits (ids, numbers, urls) so "timeout after 31s" and
-// "timeout after 12s" fold into one signature.
-const normalizeMessage = (msg: unknown): string =>
-  String(msg || '')
-    .toLowerCase()
-    .replace(/https?:\/\/\S+/g, '<url>')
-    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, '<uuid>')
-    .replace(/\b[0-9a-f]{16,}\b/g, '<hex>')
-    .replace(/\b\d+\b/g, '<n>')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 140);
 
 export const telemetryFailureSpike: CheckImpl = {
   builtinId: 'telemetry_failure_spike',
@@ -67,8 +55,7 @@ export const telemetryFailureSpike: CheckImpl = {
     for (const row of rows) {
       const eventType = String(row.event_type || 'error');
       const source = String(row.source || 'unknown');
-      const sig = normalizeMessage(row.message);
-      const key = `${eventType}|${source}|${sig}`;
+      const key = failureSignature(eventType, source, row.message);
       const existing = groups.get(key) || {
         eventType,
         source,

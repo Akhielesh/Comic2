@@ -22,8 +22,7 @@ import type { McpServerConfig } from '../apiTypes';
 import { Button } from './Button';
 import { ModelSelectionPanel } from './ModelSelectionPanel';
 import { useAuth } from '../contexts/AuthContext';
-import { supabase } from '../services/supabase';
-import { encryptKey } from '../services/crypto';
+import { syncByokKeyToServer } from '../services/byokSync';
 
 // Manage custom remote MCP servers (their tools appear as connectors in the chat).
 const McpServersPanel: React.FC = () => {
@@ -252,18 +251,9 @@ const AddKeyForm: React.FC<{ provider: ApiKeyProvider; onChange: () => void }> =
     if (!key.trim()) return;
     addKey({ provider, label, key, limitUsd: limit.trim() ? Number(limit) : null });
 
-    // Sync to Supabase so the key survives sign-out → sign-in cycles.
-    if (user) {
-      try {
-        const { encrypted, iv } = await encryptKey(key.trim());
-        await supabase.from('user_api_keys').upsert(
-          { user_id: user.id, provider, encrypted_key: encrypted, iv },
-          { onConflict: 'user_id,provider' }
-        );
-      } catch (e) {
-        console.error('Failed to sync key to cloud', e);
-      }
-    }
+    // Mirror to the cloud via the server, which encrypts with a server-only secret
+    // (so the key survives sign-out → sign-in without the old hardcoded-secret weakness).
+    if (user) await syncByokKeyToServer(provider, key.trim());
 
     setLabel(''); setKey(''); setLimit('');
     onChange();

@@ -288,6 +288,9 @@ const ModelCard: React.FC<{
     </div>
 
     <div className="flex flex-wrap gap-1">
+      {model.apiCallable === false && (
+        <Badge className="bg-amber-100 text-amber-800 border-amber-400" >Download-only</Badge>
+      )}
       {capabilityBadges(model).map((b) => <Badge key={b.label} className={TONE_CLASS[b.tone]}>{b.label}</Badge>)}
     </div>
 
@@ -301,7 +304,7 @@ const ModelCard: React.FC<{
     <div className="mt-auto flex items-center justify-between gap-2 pt-2 border-t border-dashed border-slate-200">
       <div className="flex items-center gap-1.5">
         <UseModelControl model={model} selection={selection} onUse={onUse} />
-        {onStartChat && canChatWith(model) && (
+        {onStartChat && canChatWith(model) && model.apiCallable !== false && (
           <button
             onClick={(e) => { e.stopPropagation(); onStartChat({ id: model.id, name: model.name, source: providerOrigin(model) as 'openrouter' | 'nvidia' }); }}
             className="text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black bg-brand-blue text-white hover:bg-blue-600 flex items-center gap-1"

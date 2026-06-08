@@ -154,6 +154,29 @@ export const AdminAnalytics: React.FC = () => {
             <Chips title="Feedback category" data={overview.feedbackByCategory} />
           </div>
 
+          {overview.topIssues && overview.topIssues.length > 0 && (
+            <div>
+              <div className="text-xs font-bold uppercase tracking-wide text-slate-500 mb-1">Top issues (same failure, grouped)</div>
+              <div className="border-2 border-black rounded-xl bg-white divide-y-2 divide-slate-100">
+                {overview.topIssues.map((issue) => (
+                  <button
+                    key={issue.signature}
+                    onClick={() => void openSession(issue.exampleSessionId)}
+                    disabled={!issue.exampleSessionId}
+                    className="w-full text-left p-2.5 hover:bg-slate-50 disabled:hover:bg-white"
+                  >
+                    <div className="flex items-center gap-2 text-[11px]">
+                      <span className="px-1.5 py-0.5 rounded font-bold bg-red-100 text-red-700 tabular-nums">×{issue.count}</span>
+                      <span className="font-bold">{issue.eventType}</span>
+                      <span className="text-slate-400">{issue.source}</span>
+                    </div>
+                    {issue.sample && <div className="text-[11px] text-slate-600 mt-0.5 line-clamp-2">{issue.sample}</div>}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="grid lg:grid-cols-2 gap-4">
             <div>
               <div className="text-xs font-bold uppercase tracking-wide text-slate-500 mb-1">Recent failures</div>

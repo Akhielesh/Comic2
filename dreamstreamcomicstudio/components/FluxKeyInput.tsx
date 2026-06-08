@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { supabase } from "../services/supabase";
-import { encryptKey } from "../services/crypto";
+import { syncByokKeyToServer } from "../services/byokSync";
 import { Key } from "lucide-react";
 import { clearFluxKey, getFluxKeyInfo, getFluxKeySuffix, setFluxKey } from "../services/appSettings";
 import { Button } from "./Button";
@@ -27,21 +26,8 @@ export const FluxKeyInput: React.FC<FluxKeyInputProps> = ({ className = "", comp
     if (!trimmed) return;
     setFluxKey(trimmed);
 
-    // Save to DB
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        const { encrypted, iv } = await encryptKey(trimmed);
-        await supabase.from('user_api_keys').upsert({
-          user_id: user.id,
-          provider: 'flux',
-          encrypted_key: encrypted,
-          iv
-        }, { onConflict: 'user_id,provider' });
-      }
-    } catch (e) {
-      console.error("Failed to sync key to DB", e);
-    }
+    // Mirror to the cloud via the server (server-side encryption with a server-only secret).
+    await syncByokKeyToServer('flux', trimmed);
 
     const info = getFluxKeyInfo();
     setSuffix(info.key ? info.key.slice(-4) : null);

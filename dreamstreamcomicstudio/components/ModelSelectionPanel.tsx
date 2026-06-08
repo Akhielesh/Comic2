@@ -32,6 +32,17 @@ const SourceBadge: React.FC<{ source?: ModelSource }> = ({ source }) =>
     </span>
   ) : null;
 
+// NVIDIA Build lists many "download-only" NIMs that aren't on the hosted API (they
+// 404 "not found for account"). We flag them so they're clearly not selectable.
+const DownloadOnlyBadge: React.FC = () => (
+  <span
+    className="text-[9px] font-bold uppercase px-1 py-0.5 rounded border border-amber-400 bg-amber-50 text-amber-700 shrink-0"
+    title="Listed on NVIDIA Build but download-only — not callable via the hosted API"
+  >
+    Download-only
+  </span>
+);
+
 const CapBadges: React.FC<{ model?: CatalogModel }> = ({ model }) => {
   if (!model) return null;
   const c = getCapabilities(model);
@@ -144,11 +155,20 @@ const Slot: React.FC<{
                 // Single offering → one plain row.
                 if (g.variants.length === 1) {
                   const m = g.variants[0];
+                  const dl = m.apiCallable === false;
                   return (
-                    <button key={m.id} type="button" onClick={() => choose(m)} title={SOURCE_HOSTING[m.source]} className={rowClass(m.id)}>
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => choose(m)}
+                      disabled={dl}
+                      title={dl ? 'Download-only on NVIDIA — not callable via the hosted API' : SOURCE_HOSTING[m.source]}
+                      className={`${rowClass(m.id)} ${dl ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
                       <SourceBadge source={m.source} />
                       <span className="truncate flex-1 min-w-0">{m.name}</span>
-                      {m.isFree && <span className="text-[10px] font-bold text-green-700">free</span>}
+                      {dl && <DownloadOnlyBadge />}
+                      {m.isFree && !dl && <span className="text-[10px] font-bold text-green-700">free</span>}
                       {m.id === selectedId && <Check className="w-3.5 h-3.5 text-brand-blue shrink-0" />}
                     </button>
                   );
@@ -168,11 +188,21 @@ const Slot: React.FC<{
                     ) : (
                       <div className="px-2 pb-1 text-[10px] text-slate-400">Differs by: {g.differences.map((d) => DIFF_AXIS_LABEL[d]).join(', ')}</div>
                     )}
-                    {g.variants.map((m) => (
-                      <button key={m.id} type="button" onClick={() => choose(m)} title={SOURCE_HOSTING[m.source]} className={`${rowClass(m.id)} pl-6`}>
+                    {g.variants.map((m) => {
+                      const dl = m.apiCallable === false;
+                      return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => choose(m)}
+                        disabled={dl}
+                        title={dl ? 'Download-only on NVIDIA — not callable via the hosted API' : SOURCE_HOSTING[m.source]}
+                        className={`${rowClass(m.id)} pl-6 ${dl ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >
                         <SourceBadge source={m.source} />
                         <span className="font-semibold shrink-0">{SOURCE_LABEL[m.source]}</span>
-                        {m.isFree && <span className="text-[10px] font-bold text-green-700">free</span>}
+                        {dl && <DownloadOnlyBadge />}
+                        {m.isFree && !dl && <span className="text-[10px] font-bold text-green-700">free</span>}
                         {/* The actual technical difference, per source. */}
                         {g.differences.map((axis) => (
                           <span key={axis} className="text-[9px] px-1 py-0.5 rounded border border-slate-300 bg-white text-slate-600">
@@ -181,7 +211,8 @@ const Slot: React.FC<{
                         ))}
                         {m.id === selectedId && <Check className="w-3.5 h-3.5 text-brand-blue shrink-0 ml-auto" />}
                       </button>
-                    ))}
+                      );
+                    })}
                   </div>
                 );
               })

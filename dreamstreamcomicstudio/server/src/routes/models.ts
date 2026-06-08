@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { getCatalog, filterCatalog, getProviderModels, type CatalogFilters } from '../services/modelCatalog.js';
 import { fetchOpenRouterKeyStatus, fetchOpenRouterCredits } from '../ai/providers/openrouter.js';
-import { persistHarvestedModels, loadPersistedModels } from '../services/modelCatalogStore.js';
+import { persistHarvestedModels, loadPersistedModels, loadCallabilityMap } from '../services/modelCatalogStore.js';
 import type { AnnotatedModel } from '../ai/catalogAnnotations.js';
 
 export const modelsRouter = Router();
@@ -17,15 +17,22 @@ const parseSource = (value: unknown): CatalogFilters['source'] =>
 // public models page — we serve the cached NVIDIA catalog so it's still populated. We never
 // store the key; only the public model list (the same data on build.nvidia.com) is cached.
 const withNvidiaModels = async (req: Request, base: AnnotatedModel[]): Promise<AnnotatedModel[]> => {
+  // Attach the probed hosted-API callability so the UI can flag NVIDIA's download-only
+  // NIMs (which 404 "not found for account") — whether the list is live or cached.
+  const attachCallability = (models: AnnotatedModel[], map: Map<string, boolean>): AnnotatedModel[] =>
+    models.map((m) => (map.has(m.id) ? { ...m, apiCallable: map.get(m.id) } : m));
+
   const nvidiaKey = req.header('X-Nvidia-Key') || process.env.NVIDIA_API_KEY || null;
   if (nvidiaKey) {
     const nvidia = await getProviderModels('nvidia', nvidiaKey);
     if (nvidia.length) {
       void persistHarvestedModels('nvidia', nvidia); // fire-and-forget cache top-up
-      return [...base, ...nvidia];
+      const callability = await loadCallabilityMap('nvidia');
+      return [...base, ...attachCallability(nvidia, callability)];
     }
   }
-  // No key or the live fetch failed → fall back to the harvested cache.
+  // No key or the live fetch failed → fall back to the harvested cache (already merges
+  // api_callable in loadPersistedModels).
   const cached = await loadPersistedModels('nvidia');
   return cached.length ? [...base, ...cached] : base;
 };

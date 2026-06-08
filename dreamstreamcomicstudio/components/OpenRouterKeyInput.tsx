@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { supabase } from "../services/supabase";
-import { encryptKey } from "../services/crypto";
+import { syncByokKeyToServer } from "../services/byokSync";
 import { Key } from "lucide-react";
 import {
   clearOpenRouterKey,
@@ -43,21 +42,10 @@ export const OpenRouterKeyInput: React.FC<OpenRouterKeyInputProps> = ({
     if (!trimmed) return;
     setOpenRouterKey(trimmed);
 
-    // Best-effort sync to the encrypted user_api_keys table (mirrors FluxKeyInput).
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        const { encrypted, iv } = await encryptKey(trimmed);
-        await supabase.from('user_api_keys').upsert({
-          user_id: user.id,
-          provider: 'openrouter',
-          encrypted_key: encrypted,
-          iv
-        }, { onConflict: 'user_id,provider' });
-      }
-    } catch (e) {
-      console.error("Failed to sync OpenRouter key to DB", e);
-    }
+    // Mirror to the cloud via the server, which encrypts with a server-only secret.
+    // (The old client-side encryption used a hardcoded bundle secret, so the stored
+    // ciphertext was decryptable by anyone with the frontend.)
+    await syncByokKeyToServer('openrouter', trimmed);
 
     setInput("");
     refresh();
