@@ -30,7 +30,7 @@ import { isProviderEnabled } from '../../services/sourceGovernance';
 import type { ModelSourceId } from '../../services/modelSelection';
 import { listMcpServers, getMcpServersByIds, onMcpServersChanged } from '../../services/mcpServers';
 import { recordToolEvents } from '../../services/toolAnalytics';
-import { captureError } from '../../services/telemetry';
+import { captureError, captureEvent } from '../../services/telemetry';
 import { isLegacyStudioEnabled } from '../../services/studioFlags';
 import type { McpServerConfig } from '../../apiTypes';
 import {
@@ -511,6 +511,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     markBusy(sessionId, true);
     const controller = new AbortController();
     abortMap.current.set(sessionId, controller);
+    // Per-turn timing for observability (the chat_turn telemetry event below).
+    const turnStartedAt = Date.now();
 
     const setSessionState = (updater: (s: ChatSession) => ChatSession) =>
       setSessions((prev) => prev.map((s) => (s.id === sessionId ? updater(s) : s)));
@@ -640,6 +642,31 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       }));
       // Fold the tools that ran into local usage analytics (Settings → Tools).
       recordToolEvents(res.toolEvents);
+      // Per-turn observability: capture a COMPACT success event (no message content) so
+      // chat quality/latency/model/tool patterns are analyzable in the admin dashboard.
+      captureEvent({
+        eventType: 'chat_turn',
+        severity: 'info',
+        source: 'ai_chat',
+        sessionId,
+        metadata: {
+          model: res.model,
+          requestedModel: res.requestedModel || reqModel,
+          source: reqSource,
+          reasoningLevel: session.reasoningLevel,
+          webSearch: Boolean(session.webSearch),
+          swarm: Boolean(session.swarm),
+          recipe: recipeRun?.recipeId,
+          regenerate: Boolean(regenerateTurnId),
+          latencyMs: Date.now() - turnStartedAt,
+          toolCount: res.toolEvents?.length || 0,
+          toolsFailed: res.toolEvents?.filter((e) => !e.ok).length || 0,
+          citations: res.citations?.length || 0,
+          notices: res.notices?.length || 0,
+          contentLength: (res.text || '').length,
+          empty: !((res.text || '').trim())
+        }
+      });
       // Only pop the side panel if this chat is the one being viewed — a background
       // chat finishing shouldn't yank a map open over the chat you're reading.
       const mapArtifact = res.artifacts?.find((a) => a.type === 'map');
