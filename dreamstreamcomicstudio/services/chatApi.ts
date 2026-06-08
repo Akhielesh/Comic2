@@ -303,6 +303,24 @@ export const runSwarmStream = async (
     else if (event === 'error') streamError = String(parsed.message || 'The swarm failed.');
   });
   if (streamError) throw new Error(streamError);
-  if (!final) throw new Error('The swarm returned no response.');
+  if (!final) {
+    // The swarm synthesized no answer (e.g. reasoning-only / agents produced nothing).
+    // There's no buffered-swarm endpoint, so recover with a regular completion (reasoning
+    // downgraded if it was heavy) rather than failing the turn outright.
+    if (!handlers.signal?.aborted) {
+      const highReasoning = req.reasoningLevel === 'high' || req.reasoningLevel === 'medium';
+      const fallbackReq: ChatRequest = highReasoning ? { ...req, reasoningLevel: 'low' } : req;
+      try {
+        const fallback = await sendChatMessage(fallbackReq, { signal: handlers.signal });
+        if (fallback.text && fallback.text.trim()) {
+          handlers.onDelta?.(fallback.text);
+          return fallback;
+        }
+      } catch (fallbackErr) {
+        if (!isTransportError(fallbackErr)) throw fallbackErr;
+      }
+    }
+    throw new Error('The swarm returned no response.');
+  }
   return final;
 };
