@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Users, Wand2, Check, UploadCloud, Download, Image as ImageIcon, CheckSquare, Square, Zap, Box, MapPin, AlertCircle } from 'lucide-react';
+import { Users, Wand2, Check, UploadCloud, Download, Image as ImageIcon, CheckSquare, Square, Zap, Box, MapPin, AlertCircle, RefreshCw } from 'lucide-react';
 import { extractWorldDetails, checkConsistency } from '../../services/geminiService';
 import { generateImage } from '../../services/imageService';
 import { Scene, Character, Item, Location, ComicState, ContinuityState } from '../../types';
@@ -99,6 +99,7 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
   const [showLibraryModal, setShowLibraryModal] = useState(false);
   const [worldDiagnostics, setWorldDiagnostics] = useState<ExtractWorldResponse['diagnostics']>();
   const [worldDiagnosticsAcknowledged, setWorldDiagnosticsAcknowledged] = useState(false);
+  const [extractError, setExtractError] = useState<string | null>(null);
   const entitiesRef = useRef({ characters: initialCharacters, items: initialItems, locations: initialLocations });
 
   const makeContinuity = useCallback(
@@ -127,24 +128,30 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
     [makeContinuity, onDataUpdate]
   );
 
+  const runExtraction = useCallback(async () => {
+    setExtractError(null);
+    setIsLoading(true);
+    try {
+      const data = await extractWorldDetails(scenes, projectId, script, creativeDirection);
+      commitWorldState(data.characters, data.items, data.locations);
+      setWorldDiagnostics(data.diagnostics);
+      setWorldDiagnosticsAcknowledged(false);
+    } catch (e: any) {
+      console.error(e);
+      setExtractError(
+        e?.message ||
+        'World extraction failed — the model may have timed out. Retry, or add your cast manually.'
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  }, [commitWorldState, scenes, projectId, script, creativeDirection]);
+
   useEffect(() => {
     if (hasFetched.current) return;
     hasFetched.current = true;
-
-    const fetchWorld = async () => {
-      try {
-        const data = await extractWorldDetails(scenes, projectId, script, creativeDirection);
-        commitWorldState(data.characters, data.items, data.locations);
-        setWorldDiagnostics(data.diagnostics);
-        setWorldDiagnosticsAcknowledged(false);
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    fetchWorld();
-  }, [commitWorldState, scenes, projectId, script]);
+    runExtraction();
+  }, [runExtraction]);
 
   useEffect(() => {
     setCharacters(initialCharacters);
@@ -583,6 +590,27 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
       <div className="flex flex-col items-center justify-center py-20 space-y-6 bg-white rounded-xl border-4 border-black shadow-comic max-w-2xl mx-auto">
         <div className="animate-spin w-12 h-12 border-4 border-brand-blue border-t-transparent rounded-full"></div>
         <p className="font-display text-xl">Scouting Locations & Casting Actors...</p>
+      </div>
+    )
+  }
+
+  // Auto-extraction failed (e.g. the text model timed out / 500'd). Don't strand the user on a
+  // dead screen — let them retry or skip straight to building the cast by hand.
+  const hasAnyWorld = characters.length > 0 || items.length > 0 || locations.length > 0;
+  if (extractError && !hasAnyWorld) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 px-6 space-y-5 bg-white rounded-xl border-4 border-black shadow-comic max-w-2xl mx-auto text-center">
+        <div className="w-14 h-14 rounded-full bg-red-100 border-4 border-black flex items-center justify-center">
+          <AlertCircle className="w-7 h-7 text-red-600" />
+        </div>
+        <p className="font-display text-xl">Couldn't auto-build your world</p>
+        <p className="text-sm text-slate-600 max-w-md">{extractError}</p>
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <Button onClick={runExtraction} icon={<RefreshCw className="w-4 h-4" />}>Retry extraction</Button>
+          <Button variant="secondary" onClick={() => setExtractError(null)} icon={<Wand2 className="w-4 h-4" />}>
+            Add cast manually
+          </Button>
+        </div>
       </div>
     )
   }

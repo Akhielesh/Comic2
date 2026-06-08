@@ -209,37 +209,63 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   }, []);
 
   // Bootstrap sessions + any pending "Chat with this model" handoff from the Library.
+  //
+  // CRITICAL: this must ALWAYS finish (set `initialized`) within a few seconds, even if
+  // cloud sync or IndexedDB hangs/fails — otherwise the render gate below (`!initialized`)
+  // strands the user on the loading spinner forever (the long-standing "chat never loads"
+  // bug). So every await is time-bounded, writes are fire-and-forget, and a finally block
+  // guarantees we open at least an empty local chat.
   useEffect(() => {
     let active = true;
-    (async () => {
-      // Best-effort cloud sync first (no-op until the chat_sync table exists / signed out).
-      await syncFromCloud().catch(() => {});
-      const [stored, storedProjects] = await Promise.all([listChatSessions(), listChatProjects()]);
-      if (!active) return;
-      setMemory(getChatMemory(user?.id));
-      setCustomAgents(listCustomAgents(user?.id));
-      setProjectsList(storedProjects);
+    // Resolve to `fallback` if `p` doesn't settle within `ms` (and never reject).
+    const settleWithin = <T,>(p: Promise<T>, ms: number, fallback: T): Promise<T> =>
+      Promise.race([p.catch(() => fallback), new Promise<T>((res) => setTimeout(() => res(fallback), ms))]);
 
-      const pending = consumePendingChatModel();
-      if (pending) {
-        const session = createEmptySession({
-          modelId: pending.id,
-          modelName: pending.name,
-          source: pending.source
-        });
-        await saveChatSession(session);
-        setSessions([session, ...stored]);
-        setActiveId(session.id);
-      } else if (stored.length > 0) {
-        setSessions(stored);
-        setActiveId(stored[0].id);
-      } else {
-        const session = createEmptySession();
-        await saveChatSession(session);
-        setSessions([session]);
-        setActiveId(session.id);
+    (async () => {
+      try {
+        // Best-effort, time-bounded cloud sync (no-op when signed out / table missing).
+        await Promise.race([
+          syncFromCloud().catch(() => {}),
+          new Promise<void>((r) => setTimeout(r, 6000))
+        ]);
+        const [stored, storedProjects] = await Promise.all([
+          settleWithin(listChatSessions(), 6000, [] as ChatSession[]),
+          settleWithin(listChatProjects(), 6000, [] as ChatProject[])
+        ]);
+        if (!active) return;
+        setMemory(getChatMemory(user?.id));
+        setCustomAgents(listCustomAgents(user?.id));
+        setProjectsList(storedProjects);
+
+        const pending = consumePendingChatModel();
+        if (pending) {
+          const session = createEmptySession({
+            modelId: pending.id,
+            modelName: pending.name,
+            source: pending.source
+          });
+          void saveChatSession(session).catch(() => {});
+          setSessions([session, ...stored]);
+          setActiveId(session.id);
+        } else if (stored.length > 0) {
+          setSessions(stored);
+          setActiveId(stored[0].id);
+        } else {
+          const session = createEmptySession();
+          void saveChatSession(session).catch(() => {});
+          setSessions([session]);
+          setActiveId(session.id);
+        }
+      } catch {
+        // Last resort: never strand the user on the spinner — open a fresh local chat.
+        if (active) {
+          const session = createEmptySession();
+          setSessions([session]);
+          setActiveId(session.id);
+        }
+      } finally {
+        if (active) setInitialized(true);
       }
-      setInitialized(true);
     })();
     return () => {
       active = false;

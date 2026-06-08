@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Check, AlertCircle, ArrowLeft, Wand2, Sparkles, ChevronDown, ChevronLeft, ChevronRight, Search, X } from 'lucide-react';
+import { Check, AlertCircle, ArrowLeft, Wand2, Sparkles, ChevronDown, ChevronLeft, ChevronRight, Search, X, Plus } from 'lucide-react';
 import { analyzeScriptDetailed, suggestStyle, suggestFormFactor } from '../../services/geminiService';
 import { classifyStoryMood, moodHintLine } from '../../services/storyMood';
 import { generateImage } from '../../services/imageService';
@@ -153,6 +153,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
 }) => {
   const [customPrompt, setCustomPrompt] = useState('');
   const [customStyleInput, setCustomStyleInput] = useState('');
+  const [customStyles, setCustomStyles] = useState<StylePreset[]>([]);
   const [aiTheme, setAiTheme] = useState<StylePreset | null>(null);
   const [isSuggestingValues, setIsSuggestingValues] = useState(false);
   const [showAdvancedFormFactors, setShowAdvancedFormFactors] = useState(false);
@@ -558,6 +559,23 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
     await Promise.all(workers);
   };
 
+  const addCustomStyle = () => {
+    const text = customStyleInput.trim();
+    if (!text) return;
+    setCustomStyles((prev) => [
+      ...prev,
+      {
+        id: `custom-${Date.now()}-${prev.length}`,
+        label: `Custom Style ${prev.length + 1}`,
+        prompt: text,
+        description: 'Your custom defined style.'
+      }
+    ]);
+    setCustomStyleInput('');
+  };
+
+  const removeCustomStyle = (id: string) => setCustomStyles((prev) => prev.filter((s) => s.id !== id));
+
   const handleGenerateSelected = async () => {
     setIsBatchGenerating(true);
     setError(null);
@@ -569,8 +587,8 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
       selectedStyles.push(aiTheme);
     }
 
-    if (selectedStyles.length === 0 && !customStyleInput) {
-      setError('Select at least one style or enter a custom style.');
+    if (selectedStyles.length === 0 && !customStyleInput.trim() && customStyles.length === 0) {
+      setError('Select at least one style, or add one or more custom styles.');
       setIsBatchGenerating(false);
       return;
     }
@@ -588,21 +606,24 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
       return;
     }
 
-    // Create a virtual preset for Custom Style if present
+    // Gather ALL custom styles: any already added to the list, plus whatever is still typed in
+    // the box (so an un-added draft isn't lost). Each generates its own preview variant.
+    const customPresets: StylePreset[] = [...customStyles];
     if (customStyleInput.trim()) {
-      const customPreset: StylePreset = {
+      customPresets.push({
         id: `custom-${Date.now()}`,
-        label: 'Custom Style',
-        prompt: customStyleInput,
+        label: customPresets.length ? `Custom Style ${customPresets.length + 1}` : 'Custom Style',
+        prompt: customStyleInput.trim(),
         description: 'Your custom defined style.'
-      };
-      selectedStyles.push(customPreset);
+      });
     }
+    selectedStyles.push(...customPresets);
 
     const selectionLookup: Record<string, StyleSelectionState> = { ...styleSelections };
-    const customSelection = selectedStyles.find((entry) => entry.id.startsWith('custom-'));
-    if (customSelection && !selectionLookup[customSelection.id]) {
-      selectionLookup[customSelection.id] = { selected: true, formFactors: [DEFAULT_FORM_FACTOR] };
+    for (const customPreset of customPresets) {
+      if (!selectionLookup[customPreset.id]) {
+        selectionLookup[customPreset.id] = { selected: true, formFactors: [DEFAULT_FORM_FACTOR] };
+      }
     }
 
     const normalizedCustomRatio = formatRatio(customRatioInput);
@@ -1040,20 +1061,45 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
             <div className="max-h-[520px] overflow-y-auto pr-2 custom-scrollbar">
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
 
-                {/* Custom Style Card */}
-                <div className={`border-4 rounded-xl p-4 space-y-3 transition-all ${customStyleInput ? 'border-brand-blue bg-brand-blue/5 shadow-comic' : 'border-dashed border-slate-300 bg-slate-50'}`}>
-                  <div className="font-display text-lg">Your Custom Style</div>
+                {/* Custom Style Card — add as many custom styles as you like to the list */}
+                <div className={`border-4 rounded-xl p-4 space-y-3 transition-all ${(customStyleInput || customStyles.length) ? 'border-brand-blue bg-brand-blue/5 shadow-comic' : 'border-dashed border-slate-300 bg-slate-50'}`}>
+                  <div className="font-display text-lg">Your Custom Styles</div>
                   <textarea
                     value={customStyleInput}
                     onChange={(e) => setCustomStyleInput(e.target.value)}
+                    onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); addCustomStyle(); } }}
                     placeholder="Describe a unique style e.g. 'Pixel art cyberpunk with neon pink outlines'..."
                     className="w-full h-24 text-xs font-medium bg-white border-2 border-slate-200 rounded p-2 focus:border-black focus:ring-0 resize-none"
                   />
-                  {customStyleInput && (
-                    <div className="text-[10px] text-brand-blue font-bold flex items-center gap-1">
-                      <Check size={12} /> Ready to generate
+                  <button
+                    type="button"
+                    onClick={addCustomStyle}
+                    disabled={!customStyleInput.trim()}
+                    className="w-full text-xs font-bold border-2 border-black rounded py-1.5 bg-brand-blue text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-brand-blue/90 transition-colors flex items-center justify-center gap-1"
+                  >
+                    <Plus size={12} /> Add style to list
+                  </button>
+                  {customStyles.length > 0 && (
+                    <div className="space-y-1.5">
+                      {customStyles.map((s, i) => (
+                        <div key={s.id} className="flex items-start gap-2 text-[11px] bg-white border-2 border-slate-200 rounded p-1.5">
+                          <span className="font-bold text-brand-blue shrink-0">{i + 1}.</span>
+                          <span className="flex-1 line-clamp-2">{s.prompt}</span>
+                          <button type="button" onClick={() => removeCustomStyle(s.id)} className="text-slate-400 hover:text-brand-red shrink-0" aria-label="Remove style">
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ))}
                     </div>
                   )}
+                  {(() => {
+                    const readyCount = customStyles.length + (customStyleInput.trim() ? 1 : 0);
+                    return readyCount > 0 ? (
+                      <div className="text-[10px] text-brand-blue font-bold flex items-center gap-1">
+                        <Check size={12} /> {readyCount} custom {readyCount === 1 ? 'style' : 'styles'} will generate
+                      </div>
+                    ) : null;
+                  })()}
                 </div>
 
                 {/* AI Theme Gen Card */}
