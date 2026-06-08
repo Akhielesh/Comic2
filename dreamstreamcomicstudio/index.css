@@ -18,14 +18,18 @@
   100% { transform: translateX(140%); }
 }
 
+/* The NEW page swings in from the turning edge and settles flat — reads as a real
+   page turn instead of the old 8deg wobble. Origin is the spine (set per-direction). */
 @keyframes pageFlipNext {
-  0% { transform: perspective(1200px) rotateY(0deg); }
-  100% { transform: perspective(1200px) rotateY(-8deg); }
+  0%   { transform: perspective(1600px) rotateY(-28deg) scale(0.96); opacity: 0.35; filter: brightness(0.88); }
+  60%  { opacity: 1; }
+  100% { transform: perspective(1600px) rotateY(0deg) scale(1); opacity: 1; filter: brightness(1); }
 }
 
 @keyframes pageFlipPrev {
-  0% { transform: perspective(1200px) rotateY(0deg); }
-  100% { transform: perspective(1200px) rotateY(8deg); }
+  0%   { transform: perspective(1600px) rotateY(28deg) scale(0.96); opacity: 0.35; filter: brightness(0.88); }
+  60%  { opacity: 1; }
+  100% { transform: perspective(1600px) rotateY(0deg) scale(1); opacity: 1; filter: brightness(1); }
 }
 
 .animate-fade-in {
@@ -138,13 +142,17 @@
 }
 
 .animate-page-flip-next {
-  animation: pageFlipNext 0.35s ease-out both;
-  transform-origin: right center;
+  animation: pageFlipNext 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: left center;
 }
 
 .animate-page-flip-prev {
-  animation: pageFlipPrev 0.35s ease-out both;
-  transform-origin: left center;
+  animation: pageFlipPrev 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: right center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-page-flip-next, .animate-page-flip-prev { animation: none; }
 }
 
 /* ---- How It Works page motion ---- */
