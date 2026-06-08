@@ -28,5 +28,15 @@ export const friendlyChatError = (err: unknown): string => {
   ) {
     return 'The connection to the AI server was interrupted. Check your internet and try again.';
   }
+  // A model that's in the catalog but not enabled on the user's provider account.
+  // NVIDIA returns 404 "Function '…': Not found for account '…'"; OpenRouter returns
+  // "No endpoints found for <model>". Both mean: this model isn't callable for you.
+  if (
+    lower.includes('not found for account') ||
+    lower.includes('no endpoints found') ||
+    (lower.includes('not found') && lower.includes('function'))
+  ) {
+    return "That model isn't available on your provider account (it's listed in the catalog but your key can't call it). Pick a different model or source.";
+  }
   return msg;
 };

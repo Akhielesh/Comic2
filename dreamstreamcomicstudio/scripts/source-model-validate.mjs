@@ -99,7 +99,9 @@ const probeModel = async (src, model) => {
     const res = await fetch(`${src.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${src.key}`, ...src.headers },
-      body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], max_tokens: 16, temperature: 0 }),
+      // temperature 0.2 (not 0): some NVIDIA NIM models reject temperature=0 with a
+      // 422 (must be > 0), which would otherwise show as a false failure.
+      body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], max_tokens: 16, temperature: 0.2 }),
       signal: controller.signal
     });
     const ms = Date.now() - started;
