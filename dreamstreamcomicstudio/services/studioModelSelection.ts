@@ -202,7 +202,9 @@ export const setStudioAgentPreferences = (text: string) => {
   write(next);
 };
 
-export const getStudioAutoRunAgents = (): boolean => read().autoRunAgents === true;
+// Default ON: the agent team reviews/hardens new builds so code isn't shipped on the model's first
+// answer. Set false to disable for faster (lower-quality) builds.
+export const getStudioAutoRunAgents = (): boolean => read().autoRunAgents !== false;
 
 export const setStudioAutoRunAgents = (on: boolean) => {
   const next = read();

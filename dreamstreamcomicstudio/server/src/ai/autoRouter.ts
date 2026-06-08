@@ -244,6 +244,16 @@ export const prefersCodingModel = (m: AnnotatedModel): boolean => {
 };
 
 /**
+ * True when a model id is a STRONG/frontier coder (matches STRONG_CODING_PRIORITY — Claude/GPT-class
+ * or a top open coder). Used to warn when a build is about to run on a weak/free model, which is the
+ * dominant cause of "terrible generated code". A plain id check (no catalog) so it's pure + cheap.
+ */
+export const isStrongCoder = (modelId: string): boolean => {
+  const id = (modelId || '').toLowerCase();
+  return STRONG_CODING_PRIORITY.some((needle) => id.includes(needle));
+};
+
+/**
  * Best model for code generation / fixing (the Studio build loop's FIX stage). Prefers
  * strong coding families; free-first by default — pass `costPref:'quality'` for BYOK/credit
  * users who want the strongest available coder. Falls back gracefully (via pickTextModel)

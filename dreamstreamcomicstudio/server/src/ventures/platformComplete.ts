@@ -32,6 +32,8 @@ const isRateLimit = (e: unknown): boolean => /429|rate.?limit|quota|too many req
 
 export interface PlatformComplete {
   complete: (prompt: string) => Promise<string>;
+  /** The primary coding model id (for a weak-model warning in the loop). */
+  model: string;
 }
 
 /** A resilient platform-key `complete(prompt)`, or null if no platform key is configured. */
@@ -87,5 +89,5 @@ export const getPlatformComplete = async (maxTokens = 4000): Promise<PlatformCom
     throw lastErr;
   };
 
-  return { complete };
+  return { complete, model: models[candidates[0]] };
 };
