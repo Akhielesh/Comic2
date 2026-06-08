@@ -939,6 +939,8 @@ export interface ComicState {
   generationInsights?: GenerationInsight[];
   /** World/style/continuity as captured at the last full generation, for faithful re-rolls. */
   generationSnapshot?: GenerationSnapshot;
+  /** Stable id for the generation session that produced this comic (paired with project id). */
+  sessionId?: string;
   continuity?: ContinuityState;
   overview?: string;
   publishedAt?: number;

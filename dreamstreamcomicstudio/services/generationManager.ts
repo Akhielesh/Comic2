@@ -155,7 +155,16 @@ export const startBackgroundGeneration = async (
       gridTemplateId: state.gridTemplateId,
       storyMood
     };
-    onUpdate(project.id, (prev) => ({ state: { ...prev.state, storyMood, generationSnapshot } }));
+    const newSessionId = `sess_${(crypto.randomUUID?.() || Date.now().toString(36))}`;
+    onUpdate(project.id, (prev) => ({
+      state: {
+        ...prev.state,
+        storyMood,
+        generationSnapshot,
+        // Stamp a stable session id the first time this comic is generated; keep it on re-runs.
+        sessionId: prev.state.sessionId || newSessionId
+      }
+    }));
     if (staleDownstreamFingerprint) {
       addLog("Warning: generation started with stale script/scene/world fingerprints.");
     }
@@ -317,7 +326,10 @@ export const startBackgroundGeneration = async (
       }
 
       // --- Batched parallel generation (GENERATION_BATCH_SIZE at a time) ---
-      const GENERATION_BATCH_SIZE = 3;
+      // 4 panels in flight at once: fewer batches => less wall-clock wait. Individual failures
+      // are isolated by Promise.allSettled below and flagged for retry, so a larger batch can't
+      // sink the whole run if one panel rate-limits.
+      const GENERATION_BATCH_SIZE = 4;
       const sceneBinding = getSceneBinding(state, scene.id);
       const sceneFreshStart = freshPanels.length;
 
