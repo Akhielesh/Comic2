@@ -3,6 +3,7 @@ import { generatePanelBreakdown, updateContinuitySummary } from "./geminiService
 import { generateImage } from "./imageService";
 import { buildImagePrompt } from "./imagePrompt";
 import { classifyStoryMood } from "./storyMood";
+import { buildGenerationInsight, appendGenerationInsight, formatInsightLogLine } from "./contextLog";
 import { stableHash, hashScenes, hashWorld, hasStaleDownstreamFingerprint } from "./pipelineFingerprint";
 import { resolveAspectRatio } from "./imageUtils";
 import { getGridTemplate } from "./panelLayout";
@@ -602,6 +603,21 @@ export const startBackgroundGeneration = async (
     addLog(
       `[METRICS] panel_ref_count=${averageRefCount} zero_ref_panel=${zeroRefPanelCount} mixed_model_in_run=${mixedModelInRun} multi_frame_description_detected=${multiFrameDetectedCount} style_lock_resolved=${initialStyleResolution.resolution.resolved ? 1 : 0} stale_downstream_fingerprint=${staleDownstreamFingerprint ? 1 : 0} dropped_entity_count=${droppedEntityCount} ungrounded_entity_count=${ungroundedEntityCount}`
     );
+
+    // Persist a compact record of this run's understanding + outcome (mood -> style ->
+    // result) so issues like "happy story rendered dark" can be analysed later.
+    const runInsight = buildGenerationInsight({
+      panels: freshPanels,
+      mood: storyMood,
+      styleId: state.selectedStyleId,
+      stylePrompt: state.stylePrompt,
+      modelsUsed: [...panelModelsUsed],
+      fallbacks: currentStatus.logs.filter((entry) => /Model fallback/i.test(entry.message)).length
+    });
+    addLog(formatInsightLogLine(runInsight));
+    onUpdate(project.id, (prev) => ({
+      state: { ...prev.state, generationInsights: appendGenerationInsight(prev.state.generationInsights, runInsight) }
+    }));
 
     const flaggedPanels = freshPanels.filter((panel) => panel.failureReason && !panel.imageId);
     if (flaggedPanels.length > 0) {

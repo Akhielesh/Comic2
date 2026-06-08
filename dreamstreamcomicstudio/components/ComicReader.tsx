@@ -513,6 +513,13 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
                   <div>{project.state.layoutType || 'grid'}</div>
                 </div>
               </div>
+              {project.state.storyMood && (
+                <div className="border border-slate-200 rounded p-2">
+                  <div className="text-xs uppercase font-bold text-slate-500">Mood the AI read</div>
+                  <div className="font-semibold">{project.state.storyMood.label}</div>
+                  <div className="text-xs text-slate-500 mt-0.5">{project.state.storyMood.summary}</div>
+                </div>
+              )}
             </div>
           </aside>
         )}

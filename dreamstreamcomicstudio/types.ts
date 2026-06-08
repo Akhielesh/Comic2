@@ -879,6 +879,19 @@ export interface StoryMood {
   confidence: number;
 }
 
+/** A compact, persisted record of one generation run's "understanding" + outcome — what
+ *  mood/style the AI used and how it turned out — so failures like "happy story rendered
+ *  dark" can be analysed after the fact. Built by services/contextLog.ts. */
+export interface GenerationInsight {
+  generatedAt: number;
+  mood?: { key: string; label: string; brightness: string; confidence: number; summary: string };
+  styleId?: string;
+  stylePrompt?: string;
+  totals: { panels: number; rendered: number; failed: number; fallbacks: number };
+  modelsUsed: string[];
+  failedPanelTitles?: string[];
+}
+
 export interface ComicState {
   pipelineMode?: PipelineMode;
   comicforge?: ComicForgeState;
@@ -907,6 +920,8 @@ export interface ComicState {
    *  mood-aware style recommendations + image-prompt lighting/palette so a happy story
    *  doesn't render dark & moody. Persisted for later analysis of AI understanding. */
   storyMood?: StoryMood;
+  /** Rolling history (most recent last, capped) of generation-run insights for analysis. */
+  generationInsights?: GenerationInsight[];
   continuity?: ContinuityState;
   overview?: string;
   publishedAt?: number;
