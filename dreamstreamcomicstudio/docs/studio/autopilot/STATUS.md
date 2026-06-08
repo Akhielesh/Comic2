@@ -6,6 +6,14 @@
 
 **Last updated:** 2026-06-07 · **Updated by:** Claude · **Branch:** `claude/gracious-albattani-bDL8T`
 
+> Latest (2026-06-08): **F2 — SHARED RATE-LIMIT STORE (distributed correctness).** Replaced the
+> per-process in-memory limiter with a store abstraction (`middleware/rateLimitStore.ts`): Redis-backed
+> (shared across instances) when `REDIS_URL` is set, else the EXACT original in-memory behavior — so
+> single-instance deploys are unchanged and multi-instance now enforces one true limit. Fails OPEN on
+> any Redis hiccup (never blocks real traffic). `rateLimit.ts` middleware is now async + store-backed,
+> same headers/429. 4 new tests (103 total); server + client typecheck green. Optimistic-concurrency
+> on project saves + idempotency keys are follow-ups.
+
 > Latest (2026-06-08): **F1 — AI PROVIDER RELIABILITY PRIMITIVES + AUTONOMOUS-PATH WIRING.**
 > New `server/src/ai/reliability/`: a pure **circuit breaker** (closed→open→half-open, 11 tests)
 > and a pure **key pool** (round-robin + per-key 429 cooldown). Config now parses multi-key pools
@@ -160,7 +168,7 @@ Current state is audited (🟡 partial across the board); these epics close the 
 |---|---|---|---|
 | F0 | Observability (Sentry, metrics, tracing, audit log) | **P0** — ship before A2 | 📋 planned |
 | F1 | AI provider reliability (key pool, circuit breaker, cross-provider failover) | **P0** — the owner's #1 pain | 🟢 **primitives + autonomous-path wiring shipped** (`ai/reliability/`); shared-gateway wiring + image-gen hardening + contract tests are follow-ups |
-| F2 | Distributed correctness (shared limits, optimistic concurrency, idempotency) | **P0** — ship before A2 | 📋 planned |
+| F2 | Distributed correctness (shared limits, optimistic concurrency, idempotency) | **P0** | 🟢 **shared rate-limit store shipped** (Redis-backed w/ in-memory fallback, fail-open); optimistic concurrency + idempotency keys are follow-ups |
 | F3 | Session & identity hardening (first-party sessions, JWKS, device revocation) | P1 | 📋 planned |
 | F4 | Real-time & multi-device sync (Durable Objects) | P1 | 📋 planned |
 | F5 | Testing & quality gates (integration, E2E, contract, coverage gate) | P1 | 📋 planned |
