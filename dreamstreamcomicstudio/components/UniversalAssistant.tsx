@@ -9,6 +9,9 @@ import { buildProjectSnapshot, summarizeAllProjects, summarizeProject } from '..
 import { getUsageLimits, getUserProfile, loadArtifactsForProject, loadTestRuns } from '../services/db';
 import { buildTestLabSummary, getRecentTestRuns } from '../services/testLabAnalytics';
 import { useAuth } from '../contexts/AuthContext';
+import { captureError, captureEvent } from '../services/telemetry';
+import { detectSentiment, submitFeedback } from '../services/feedback';
+import { FeedbackButtons } from './feedback/FeedbackButtons';
 
 type ChatItem = {
   id: string;
@@ -200,6 +203,28 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
     setStatusMessage(null);
     setIsSending(true);
 
+    // Understand + write down disappointment: when the user vents at the assistant,
+    // capture the sentiment as feedback automatically (no thumbs-down hunt required).
+    const sentiment = detectSentiment(message);
+    if (sentiment) {
+      captureEvent({
+        eventType: 'assistant_user_sentiment',
+        severity: sentiment === 'frustrated' ? 'warn' : 'info',
+        source: 'universal_assistant',
+        surface: currentView,
+        message,
+        metadata: { sentiment }
+      });
+      void submitFeedback({
+        targetType: 'universal_assistant',
+        sentiment,
+        comment: message,
+        source: 'universal_assistant',
+        surface: currentView,
+        metadata: { auto: true, view: currentView }
+      });
+    }
+
     try {
       const context = await buildContext();
       const response = await queryUniversalAssistant(message, history, context);
@@ -234,6 +259,12 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
         ]);
       }
       setStatusMessage(error instanceof Error ? error.message : 'Request failed');
+      captureError(error, {
+        eventType: 'assistant_failed',
+        source: 'universal_assistant',
+        surface: currentView,
+        metadata: { historyLength: history.length }
+      });
     } finally {
       setIsSending(false);
     }
@@ -288,14 +319,24 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
                       </div>
                     )}
                     <MessageCard text={message.text} />
-                    {onSaveCreativeDirection && message.text.trim() && (
-                      <button
-                        onClick={() => { onSaveCreativeDirection(message.text); setSavedMsgIds((prev) => new Set(prev).add(message.id)); }}
-                        className="text-[10px] font-bold text-brand-blue hover:underline"
-                      >
-                        {savedMsgIds.has(message.id) ? '✓ Saved to story context' : '+ Save to story context'}
-                      </button>
-                    )}
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      {onSaveCreativeDirection && message.text.trim() ? (
+                        <button
+                          onClick={() => { onSaveCreativeDirection(message.text); setSavedMsgIds((prev) => new Set(prev).add(message.id)); }}
+                          className="text-[10px] font-bold text-brand-blue hover:underline"
+                        >
+                          {savedMsgIds.has(message.id) ? '✓ Saved to story context' : '+ Save to story context'}
+                        </button>
+                      ) : <span />}
+                      <FeedbackButtons
+                        targetType="universal_assistant"
+                        targetId={message.id}
+                        source="universal_assistant"
+                        surface={currentView}
+                        compact
+                        metadata={{ offTopicBlocked: Boolean(message.offTopicBlocked) }}
+                      />
+                    </div>
                   </div>
                 )}
               </div>

@@ -39,10 +39,10 @@ import { SystemDiagnosticsResponse } from './apiTypes';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { StaticSiteHeader } from './components/layout/StaticSiteHeader';
 import { LegalMicroLinks } from './components/layout/LegalMicroLinks';
+import { FeedbackWidget } from './components/feedback/FeedbackWidget';
 // Lazy so its markdown renderer (react-markdown ≈ 158 kB) isn't pulled into the
 // first-paint bundle — the floating assistant isn't needed for initial render.
 const UniversalAssistant = lazyImportWithRetry(() => import('./components/UniversalAssistant').then(module => ({ default: module.UniversalAssistant })));
-import { GlobalChatFAB } from './components/GlobalChatFAB';
 
 type AppView =
   | 'home'
@@ -700,10 +700,10 @@ const App: React.FC = () => {
   const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'chat' && effectiveView !== 'codestudio';
   // Hide the floating Universal Assistant on the full-screen chat product to avoid two stacked chat surfaces.
   const showUniversalAssistant = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'codestudio';
-  // Show the global AI Chat FAB on every view except the chat page itself.
-  // The marketing home page already has prominent AI Chat entry points, so the
-  // floating "Open AI Chat" button is suppressed there to keep the landing clean.
-  const showGlobalChatFAB = effectiveView !== 'chat' && effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'home' && effectiveView !== 'codestudio';
+  // The global "Send feedback" pill (bottom-right). Hidden on the immersive chat /
+  // code studio surfaces (they have their own inline feedback) and on the bare
+  // auth-callback / shared viewer screens.
+  const showFeedbackWidget = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'codestudio';
 
   const goToStayUpdated = () => {
     setCurrentView('home');
@@ -968,13 +968,8 @@ const App: React.FC = () => {
           </Suspense>
         )}
 
-        {showGlobalChatFAB && (
-          <GlobalChatFAB
-            isAuthenticated={!!user}
-            onOpenChat={() => handleNavigate('chat')}
-            onSignIn={() => handleNavigate('auth')}
-          />
-        )}
+        {showFeedbackWidget && <FeedbackWidget />}
+
       </div>
     </ErrorBoundary>
   );

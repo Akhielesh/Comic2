@@ -3,12 +3,14 @@ import type { ChatRequest, ChatResponse, ChatClientContext } from '../../../apiT
 import { runChat, type ChatReasoningLevel } from '../ai/chat.js';
 import { runSwarm } from '../ai/agents/orchestrator.js';
 import { makeSwarmTool, SWARM_TOOL_NAME } from '../ai/agents/swarmTool.js';
+import { makeDeepResearchTool } from '../ai/research/deepResearchTool.js';
+import { resolveClientGeo, clientIpFromReq } from '../ai/clientGeo.js';
 import { makeImageTool, imageGenAvailable, type ImageKeys } from '../ai/tools/imageGen.js';
 import { sanitizeCustomAgents } from '../ai/agents/registry.js';
 import type { AgentDefinition } from '../ai/agents/registry.js';
 import { loadCustomAgentDefinitions } from '../services/customAgents.js';
-import { pickTextModel, TEXT_FALLBACK } from '../ai/autoRouter.js';
-import { NVIDIA_TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS, JSON_TOOL_PROTOCOL_ENABLED } from '../config.js';
+import { pickTextModel, pickTextModelChain, markModelDown, TEXT_FALLBACK } from '../ai/autoRouter.js';
+import { NVIDIA_TEXT_MODEL, OPENROUTER_TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS, JSON_TOOL_PROTOCOL_ENABLED } from '../config.js';
 import type { AIProviderId, ChatMessage, MessagePart } from '../ai/providers/types.js';
 import { assertModelAllowedForUser } from '../services/modelAccessPolicy.js';
 import { sanitizeAssistantContext } from '../ai/assistantPolicy.js';
@@ -136,6 +138,8 @@ type PreparedChat = {
   reasoningLevel: ChatReasoningLevel;
   webSearch: boolean;
   systemPrompt?: string;
+  /** OpenRouter server-side fallback chain (≤3) so dead/rate-limited models don't yield empty. */
+  fallbackModels?: string[];
   dreamstreamContextJson?: string;
   tools: ChatTool[];
   clientContext?: ChatClientContext;
@@ -177,13 +181,16 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   }
 
   const requestedModel = (typeof body.model === 'string' ? body.model.trim() : '') || (req.header('X-Text-Model') || '').trim();
-  // Auto-pick: on OpenRouter the whole chat is tool-grounded (web search, app builder,
-  // charts…), so a model that can't function-call is useless here. Softly PREFER a free
-  // model that advertises `tools` support — otherwise auto-mode could land on a free
-  // model with no function-calling and silently lose every tool (incl. generate_app).
+  // Free-only is a user choice (header). When ON we use the cooldown-aware FREE chain (slower
+  // but free). When OFF (the default) the chat leads with a FAST, capable, cheap model rather
+  // than a free one — free models are 10-30x slower (9-22s vs ~1s) and frequently 429/404,
+  // which is why chats felt slow and "stuck on gpt-4o-mini". gemini-2.5-flash answers in ~0.7s.
+  const freeOnly = (req.header('X-Free-Only') || '').toLowerCase() === 'true';
   let model = requestedModel || (resolved.provider === 'nvidia'
     ? NVIDIA_TEXT_MODEL
-    : await pickTextModel({ preferFree: true, prefer: (m) => (m.supportedParameters || []).includes('tools') }));
+    : freeOnly
+      ? await pickTextModel({ preferFree: true, prefer: (m) => (m.supportedParameters || []).includes('tools') })
+      : OPENROUTER_TEXT_MODEL);
   if (resolved.provider === 'nvidia' && !model.includes('/')) model = NVIDIA_TEXT_MODEL;
 
   if (resolved.provider === 'openrouter' && req.user?.id) {
@@ -202,6 +209,33 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
     }
   }
 
+  // Build a SERVER-SIDE fallback chain (≤3) so a dead/rate-limited free model never yields
+  // "no response": OpenRouter routes to the first available model in the list. The primary
+  // is first; the cheap paid TEXT_FALLBACK is the guaranteed last resort. This is the fix
+  // for free models being 404 (retired) / 429 (rate-limited), which left chats empty.
+  let fallbackModels: string[] | undefined;
+  if (resolved.provider === 'openrouter') {
+    if (requestedModel) {
+      // Pinned model: keep it primary; add the cheap paid net (unless free-only).
+      fallbackModels = freeOnly || model === TEXT_FALLBACK ? [model] : [model, TEXT_FALLBACK];
+    } else if (freeOnly) {
+      // Free-only: cooldown-aware FREE chain (a free model that just failed is skipped so we
+      // don't re-pay its ~15-20s fallback latency).
+      const chain = await pickTextModelChain({
+        preferFree: true,
+        prefer: (m) => (m.supportedParameters || []).includes('tools'),
+        freeOnly: true,
+        max: 2
+      }).catch(() => [model]);
+      fallbackModels = chain.length ? chain : [model];
+      model = fallbackModels[0] || model;
+    } else {
+      // Default: FAST. Lead with the quick capable model, gpt-4o-mini as the reliable net.
+      fallbackModels = Array.from(new Set([OPENROUTER_TEXT_MODEL, TEXT_FALLBACK]));
+      model = fallbackModels[0];
+    }
+  }
+
   const reasoningLevel = isReasoningLevel(body.reasoningLevel) ? body.reasoningLevel : 'none';
   // Internet access is a backend default, not a user toggle: every OpenRouter chat
   // gets live web grounding (the model must source from the internet).
@@ -216,7 +250,26 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
     dreamstreamContextJson = raw.length > 12_000 ? `${raw.slice(0, 12_000)}…` : raw;
   }
 
-  const clientContext = sanitizeClientContext(body.clientContext);
+  let clientContext = sanitizeClientContext(body.clientContext);
+  // The browser only shares precise location after an explicit permission grant (rare), so
+  // when no location came through, derive a COARSE one from the request IP. This is what makes
+  // "weather", "near me" and "local news" resolve to the USER instead of the whole world.
+  if (!clientContext?.location) {
+    const geo = await resolveClientGeo(clientIpFromReq(req)).catch(() => null);
+    if (geo && (geo.city || geo.country)) {
+      clientContext = {
+        ...(clientContext || {}),
+        location: {
+          city: geo.city,
+          region: geo.region,
+          country: geo.country,
+          lat: geo.lat,
+          lng: geo.lng,
+          approximate: true
+        }
+      };
+    }
+  }
   const requestCustomAgents = sanitizeCustomAgents(body.customAgents);
 
   const toolContext = clientContext
@@ -289,6 +342,30 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   const imageRequested = Array.isArray(body.tools) && body.tools.some((t) => t === 'generate_image');
   if (imageRequested && imageGenAvailable(imageKeys)) metaTools.push(makeImageTool(imageKeys));
 
+  // Deep research is a HEAVY tool (multi-search + page reads + 2 model calls), so it is
+  // offered only when the user's message actually signals a research intent — not on every
+  // chat (always-on, the model over-invoked it and turned ordinary turns into multi-minute
+  // runs). A natural-language "research X thoroughly / deep dive on Y" still triggers it;
+  // the /research slash command runs the engine directly regardless.
+  const researchIntent =
+    /\b(deep[\s-]?research|deep[\s-]?dive|thorough(ly)?|comprehensive|in[\s-]?depth|investigate|dossier|literature review|white\s?paper|sourced\s+(report|brief|analysis)|research\s+(report|brief|paper|on|about|into))\b/i.test(
+      lastUserText
+    );
+  if (resolved.provider === 'openrouter' && researchIntent) {
+    metaTools.push(
+      makeDeepResearchTool({
+        provider: resolved.provider,
+        apiKey: resolved.apiKey,
+        model,
+        messages,
+        systemPrompt,
+        clientContext,
+        fallbackModel: TEXT_FALLBACK,
+        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+      })
+    );
+  }
+
   // NOTE: recipes are invoked by the USER via `/` slash-commands (see the chat
   // composer command palette), not pushed at the model on every turn. Forcing
   // run_recipe/save_recipe onto every chat both (a) added object-typed tool params
@@ -323,7 +400,7 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   }
 
   return {
-    prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, systemPrompt, dreamstreamContextJson, tools: [...builtinTools, ...metaTools, ...mcpTools], clientContext, customAgents }
+    prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, systemPrompt, fallbackModels, dreamstreamContextJson, tools: [...builtinTools, ...metaTools, ...mcpTools], clientContext, customAgents }
   };
 };
 
@@ -373,6 +450,7 @@ const runChatParams = (p: PreparedChat) => ({
   tools: p.tools,
   clientContext: p.clientContext,
   fallbackModel: p.resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+  fallbackModels: p.fallbackModels,
   timeoutMs: TEXT_REQUEST_TIMEOUT_MS
 });
 
@@ -400,8 +478,9 @@ chatRouter.post('/enhance', async (req, res, next) => {
         error: { message: 'Enhancing needs an OpenRouter or NVIDIA key.', code: 'MISSING_CHAT_API_KEY' }
       });
     }
-    const model =
-      resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : await pickTextModel({ preferFree: true });
+    // Utility calls (enhance/memory) must be RELIABLE, not free-but-flaky — use the fast
+    // default model with the paid net so they don't silently fail when free models 429.
+    const model = resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;
 
     const result = await runChat({
       provider: resolved.provider,
@@ -412,6 +491,7 @@ chatRouter.post('/enhance', async (req, res, next) => {
       temperature: 0.4,
       maxTokens: 600,
       fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+      fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
       timeoutMs: TEXT_REQUEST_TIMEOUT_MS
     });
     const enhanced = (result.text || '').trim();
@@ -463,8 +543,9 @@ chatRouter.post('/memory', async (req, res, next) => {
       .join('\n')
       .slice(0, 6000);
 
-    const model =
-      resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : await pickTextModel({ preferFree: true });
+    // Reliable model for memory distillation — a flaky free model that 429s or returns
+    // garbage is exactly why memory "felt terrible".
+    const model = resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;
     const result = await runChat({
       provider: resolved.provider,
       apiKey: resolved.apiKey,
@@ -474,6 +555,7 @@ chatRouter.post('/memory', async (req, res, next) => {
       temperature: 0.2,
       maxTokens: 500,
       fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+      fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
       timeoutMs: TEXT_REQUEST_TIMEOUT_MS
     });
     const updated = (result.text || '').trim().slice(0, MAX_MEMORY_CHARS);
@@ -517,6 +599,9 @@ chatRouter.post('/', async (req, res, next) => {
 
     try {
       const result = await runChat(runChatParams(p));
+      if (p.resolved.provider === 'openrouter' && result.model && p.model && result.model !== p.model) {
+        markModelDown(p.model);
+      }
       const settled =
         reserve && reserve.allowed
           ? await settleReservedOperation({
@@ -606,8 +691,18 @@ chatRouter.post('/stream', async (req, res) => {
       onDelta: (d) => {
         if (d.content) send('delta', { content: d.content });
         else if (d.reasoning) send('reasoning', { reasoning: d.reasoning });
-      }
+      },
+      // Tell the client to drop the previous turn's streamed pre-tool narration before
+      // the next turn streams, so multi-step answers don't accumulate preamble on screen.
+      onReset: () => send('reset', {})
     });
+
+    // Adaptive speed: if the served model differs from the (free) primary we led the chain
+    // with, that primary is currently unavailable/rate-limited — cool it down so the next
+    // requests skip it and respond fast instead of re-paying its fallback latency.
+    if (p.resolved.provider === 'openrouter' && result.model && p.model && result.model !== p.model) {
+      markModelDown(p.model);
+    }
 
     const settled =
       reserve && reserve.allowed

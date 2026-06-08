@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Check, AlertCircle, ArrowLeft, Wand2, Sparkles, ChevronDown, ChevronLeft, ChevronRight, Search, X } from 'lucide-react';
 import { analyzeScriptDetailed, suggestStyle, suggestFormFactor } from '../../services/geminiService';
+import { classifyStoryMood, moodHintLine } from '../../services/storyMood';
 import { generateImage } from '../../services/imageService';
 import { Scene, StyleVariant, AspectRatio, ImageResolution } from '../../types';
 import { Button } from '../Button';
@@ -205,6 +206,15 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
     });
     return init;
   });
+
+  // Read the story's emotional tone so recommendations/previews match it instead of
+  // defaulting to the old fixed (dark-skewed) list. Falls back to the static set when the
+  // story has no clear signal.
+  const storyMood = useMemo(() => classifyStoryMood(localScript || script), [localScript, script]);
+  const recommendedStyleIds = useMemo(() => {
+    const ids = storyMood.recommendedStyleIds.filter((id) => STYLE_PRESETS.some((s) => s.id === id));
+    return ids.length >= 3 ? ids : RECOMMENDED_STYLE_IDS;
+  }, [storyMood]);
 
   useEffect(() => {
     setLocalScript(script || '');
@@ -496,7 +506,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
 
     setStyleSelections((prev) => {
       const next = { ...prev };
-      RECOMMENDED_STYLE_IDS.forEach((id) => {
+      recommendedStyleIds.forEach((id) => {
         const current = next[id] || { selected: false, formFactors: [] };
         // If style already has specific factors, keep them, otherwise use the Best Factor
         const nextFactors = current.formFactors.length > 0 ? current.formFactors : [bestFactor];
@@ -514,7 +524,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
     if (!script) return;
     setIsSuggestingValues(true);
     try {
-      const suggestedPrompt = await suggestStyle(script);
+      const suggestedPrompt = await suggestStyle(script, { moodHint: moodHintLine(storyMood) });
       if (suggestedPrompt) {
         const themeId = `ai-theme-${Date.now()}`;
         const newTheme: StylePreset = {
@@ -706,6 +716,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
           stage: "style",
           stylePrompt: style.prompt,
           sceneContext: sceneStyleContext,
+          moodGuidance: storyMood.promptGuidance,
           extraNotes: styleOnlyNotes || 'Linework and palette study only.'
         });
         try {
@@ -892,19 +903,27 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
       <div className="bg-white p-6 rounded-xl border-4 border-black shadow-comic space-y-4">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
-            <h3 className="text-2xl font-display">Recommended 5</h3>
-            <p className="text-sm text-slate-600 font-comic">A solid starting set to keep things focused.</p>
+            <h3 className="text-2xl font-display">Recommended for your story</h3>
+            <p className="text-sm text-slate-600 font-comic">Matched to the tone we read in your script — a happy story won't get a dark, moody set.</p>
+            <div className="mt-2 inline-flex items-center gap-2 px-3 py-1 rounded-full border-2 border-black bg-slate-50 text-xs font-bold">
+              <Sparkles className="w-3.5 h-3.5 text-brand-blue" />
+              <span>Detected mood: {storyMood.label}</span>
+              <span className="text-slate-400 font-normal hidden sm:inline">· {storyMood.palette}</span>
+            </div>
           </div>
           <Button onClick={selectRecommended} variant="secondary" icon={<Sparkles className="w-4 h-4" />}>
             Select Recommended
           </Button>
         </div>
         <div className="flex flex-wrap gap-2">
-          {STYLE_PRESETS.filter((style) => RECOMMENDED_STYLE_IDS.includes(style.id)).map((style) => (
-            <span key={style.id} className="px-3 py-1 text-xs font-bold border-2 border-black rounded bg-brand-yellow/60">
-              {style.label}
-            </span>
-          ))}
+          {recommendedStyleIds
+            .map((id) => STYLE_PRESETS.find((style) => style.id === id))
+            .filter((style): style is StylePreset => !!style)
+            .map((style) => (
+              <span key={style.id} className="px-3 py-1 text-xs font-bold border-2 border-black rounded bg-brand-yellow/60">
+                {style.label}
+              </span>
+            ))}
         </div>
       </div>
 

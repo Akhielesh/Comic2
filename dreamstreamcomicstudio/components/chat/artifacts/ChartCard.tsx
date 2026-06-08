@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import type { ChartArtifact, DataChartSeries } from '../../../apiTypes';
-import { Surface, resolveTheme, withAlpha } from './kit';
+import { Surface, resolveTheme, withAlpha, compactNumber } from './kit';
 import type { PaletteName } from './kit';
 
 // The universal, schema-driven data-viz card. One artifact shape renders line, area,
@@ -9,9 +9,19 @@ import type { PaletteName } from './kit';
 // gives the model a structured way to visualize ANY data (not just markets).
 
 const W = 560;
+// Currency-like units read as a PREFIX ("$1.2K"), everything else as a suffix ("12%").
+const CURRENCY_PREFIX = new Set(['$', '€', '£', '¥', '₹', '₩']);
 const fmt = (n: number, unit?: string): string => {
-  const s = Math.abs(n) >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 1 }) : `${Math.round(n * 100) / 100}`;
-  return unit ? `${s}${unit}` : s;
+  if (!Number.isFinite(n)) return '—';
+  // Compact large magnitudes so axis ticks/tooltips don't overflow (3.12e12 → "3.12T").
+  const s =
+    Math.abs(n) >= 100_000
+      ? compactNumber(n)
+      : Math.abs(n) >= 1000
+        ? n.toLocaleString(undefined, { maximumFractionDigits: 1 })
+        : `${Math.round(n * 100) / 100}`;
+  if (!unit) return s;
+  return CURRENCY_PREFIX.has(unit) ? `${unit}${s}` : `${s}${unit}`;
 };
 
 const niceLabel = (x: number | string): string => (typeof x === 'number' ? String(x) : x);
@@ -186,8 +196,11 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
                         return <rect key={i} x={groupX + slot * 0.15} y={y} width={inner} height={Math.max(0, h)} fill={colorOf(s, i)} rx="1.5" />;
                       }
                       const bw = inner / n;
-                      const y = yTo(val);
-                      return <rect key={i} x={groupX + slot * 0.15 + bw * vi} y={y} width={Math.max(1, bw - 1)} height={Math.max(0, yTo(0) - y)} fill={colorOf(s, i)} rx="1.5" />;
+                      // Draw from the zero line: positive bars go up, NEGATIVE bars go
+                      // down (previously clamped to 0 height, so they vanished).
+                      const yVal = yTo(val);
+                      const yZero = yTo(0);
+                      return <rect key={i} x={groupX + slot * 0.15 + bw * vi} y={Math.min(yVal, yZero)} width={Math.max(1, bw - 1)} height={Math.max(0, Math.abs(yVal - yZero))} fill={colorOf(s, i)} rx="1.5" />;
                     })}
                   </g>
                 );
@@ -204,7 +217,7 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
                   <g key={i}>
                     {data.variant === 'area' && <path d={`${line} L${pts[pts.length - 1][0]},${yTo(0)} L${pts[0][0]},${yTo(0)} Z`} fill={withAlpha(col, 0.18)} />}
                     <path d={line} fill="none" stroke={col} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" className="kit-draw-line" />
-                    {pts.map(([x, y], pi) => <circle key={pi} cx={x} cy={y} r={hover?.cat === pi ? 3.5 : 0} fill={col} stroke="#fff" strokeWidth="1.5" />)}
+                    {pts.map(([x, y], pi) => <circle key={pi} cx={x} cy={y} r={pts.length === 1 ? 3.5 : hover?.cat === pi ? 3.5 : 0} fill={col} stroke="#fff" strokeWidth="1.5" />)}
                   </g>
                 );
               })}

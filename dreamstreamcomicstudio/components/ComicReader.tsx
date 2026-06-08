@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Project, ComicPanel, DialogueBlock, TextLayout } from '../types';
 import { CommentSection } from './CommentSection';
-import { X, ChevronLeft, ChevronRight, Maximize2, Minimize2, BookOpen, MessageSquareText } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Maximize2, Minimize2, BookOpen, MessageSquareText, Volume2, VolumeX, Sparkles } from 'lucide-react';
 import { PanelDialogue } from './PanelDialogue';
+import { derivePanelTitle } from '../services/panelDescription';
 import { loadReaderState, saveReaderState } from '../services/db';
 
 import { ReviewModal } from './modals/ReviewModal';
@@ -10,6 +11,60 @@ import { submitReview } from '../services/db';
 import { useAuth } from '../contexts/AuthContext';
 import { StaticSiteHeader } from './layout/StaticSiteHeader';
 import { LegalMicroLinks } from './layout/LegalMicroLinks';
+
+// Reveals its children with a comic "pop-in" the first time they scroll into view.
+const RevealOnScroll: React.FC<{ className?: string; children: React.ReactNode }> = ({ className, children }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || visible) return;
+    // Degrade gracefully where IntersectionObserver isn't available (jsdom/SSR): just show.
+    if (typeof IntersectionObserver === 'undefined') { setVisible(true); return; }
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) { setVisible(true); io.disconnect(); }
+      });
+    }, { rootMargin: '0px 0px -8% 0px', threshold: 0.08 });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [visible]);
+  return (
+    <div ref={ref} className={`comic-reveal ${visible ? 'is-visible' : ''} ${className || ''}`}>
+      {children}
+    </div>
+  );
+};
+
+// A short, soft "page turn" using WebAudio (filtered noise burst) — no asset needed.
+const playPageTurnSound = () => {
+  try {
+    const Ctx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const duration = 0.18;
+    const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * duration), ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      // Decaying noise = paper rustle.
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / data.length, 2.5);
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 1600;
+    filter.Q.value = 0.7;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.18;
+    src.connect(filter); filter.connect(gain); gain.connect(ctx.destination);
+    src.start();
+    src.stop(ctx.currentTime + duration);
+    src.onended = () => ctx.close().catch(() => undefined);
+  } catch {
+    /* audio not available — ignore */
+  }
+};
 
 interface ComicReaderProps {
   project: Project;
@@ -40,6 +95,23 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
   const [showComments, setShowComments] = useState(false);
   const [showReviewModal, setShowReviewModal] = useState(false);
   const [readerMode, setReaderMode] = useState<'scroll' | 'flip'>('scroll');
+  // Comic-feel toggles, remembered across sessions.
+  const [soundOn, setSoundOn] = useState<boolean>(() => {
+    try { return window.localStorage.getItem('reader_sound') !== 'off'; } catch { return true; }
+  });
+  const [fxOn, setFxOn] = useState<boolean>(() => {
+    try { return window.localStorage.getItem('reader_fx') === 'on'; } catch { return false; }
+  });
+  const toggleSound = () => setSoundOn((prev) => {
+    const next = !prev;
+    try { window.localStorage.setItem('reader_sound', next ? 'on' : 'off'); } catch { /* ignore */ }
+    return next;
+  });
+  const toggleFx = () => setFxOn((prev) => {
+    const next = !prev;
+    try { window.localStorage.setItem('reader_fx', next ? 'on' : 'off'); } catch { /* ignore */ }
+    return next;
+  });
   // ... existing state ...
 
   // Review Trigger Logic
@@ -81,6 +153,7 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
   const readerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const saveTimer = useRef<number | null>(null);
+  const touchStartX = useRef<number | null>(null);
   const textLayout = project.state.textLayout || 'caption';
   const panelCount = project.state.panels.length;
   const panelsWithArtCount = project.state.panels.filter((panel) => !!panel.imageUrl).length;
@@ -105,20 +178,31 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
     return () => document.removeEventListener('fullscreenchange', handleChange);
   }, []);
 
-  // Preload next panel images for smoother navigation
-  useEffect(() => {
-    const panels = project.state.panels || [];
-    const PRELOAD_AHEAD = 3;
-    const startIdx = readerMode === 'flip' ? pageIndex + 1 : 0;
-    const endIdx = readerMode === 'flip' ? Math.min(pageIndex + 1 + PRELOAD_AHEAD, panels.length) : panels.length;
-    for (let i = startIdx; i < endIdx; i++) {
-      const url = panels[i]?.imageUrl;
-      if (url) {
-        const img = new Image();
-        img.src = url;
-      }
+  const pages = useMemo(() => {
+    const list: Array<{ type: 'cover' | 'panel'; panel?: ComicPanel; imageUrl?: string }> = [];
+    if (project.state.coverImageUrl) {
+      list.push({ type: 'cover', imageUrl: project.state.coverImageUrl });
     }
-  }, [pageIndex, readerMode, project.state.panels]);
+    project.state.panels.forEach((panel) => {
+      list.push({ type: 'panel', panel, imageUrl: panel.imageUrl });
+    });
+    return list;
+  }, [project.state.coverImageUrl, project.state.panels]);
+
+  // Preload nearby page images so a flip (forward OR back) never flashes blank.
+  useEffect(() => {
+    const list = pages;
+    const PRELOAD_AHEAD = 3;
+    const preload = (url?: string) => { if (url) { const img = new Image(); img.src = url; } };
+    if (readerMode === 'flip') {
+      preload(list[pageIndex - 1]?.imageUrl);
+      for (let i = pageIndex + 1; i < Math.min(pageIndex + 1 + PRELOAD_AHEAD, list.length); i++) {
+        preload(list[i]?.imageUrl);
+      }
+    } else {
+      list.forEach((p) => preload(p.imageUrl));
+    }
+  }, [pageIndex, readerMode, pages]);
 
   useEffect(() => {
     return () => {
@@ -143,52 +227,49 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
 
   // renderPanelText removed — use <PanelDialogue /> component instead
 
+  // Grid layouts use `auto-rows-auto` + `items-start` so every cell is exactly as tall as
+  // its image — images keep their true aspect ratio instead of being squashed/cropped into
+  // fixed-pixel rows (the old `auto-rows-[200px]` / `auto-rows-fr` is what made panels look
+  // "never rightfully sized"). `items-start` stops short panels from stretching to match
+  // taller neighbours.
   const getLayoutClass = () => {
-    if (isNarrow) return 'flex flex-col items-center gap-3';
+    if (isNarrow) return 'flex flex-col items-center gap-4';
     switch (project.state.layoutType) {
       case 'webtoon': return 'flex flex-col items-center gap-4';
-      case 'strip': return 'flex flex-col gap-2';
-      case 'graphic_novel': return 'grid grid-cols-3 gap-4 auto-rows-fr';
-      case 'conversation_grid': return 'grid grid-cols-2 gap-4 auto-rows-fr';
-      case 'splash_insets': return 'grid grid-cols-3 gap-4 auto-rows-[200px]';
-      case 'golden_ratio': return 'grid grid-cols-3 gap-4 auto-rows-[180px]';
-      case 'diagonal_action': return 'grid grid-cols-2 gap-4 auto-rows-[200px]';
-      case 'storyboard': return 'grid grid-cols-3 gap-2 auto-rows-[150px]';
-      case 'manga': return 'grid grid-cols-2 gap-4 auto-rows-fr';
-      case 'cinematic': return 'grid grid-cols-1 gap-4';
+      case 'strip': return 'flex flex-col gap-3';
+      case 'graphic_novel': return 'grid grid-cols-2 lg:grid-cols-3 gap-4 auto-rows-auto items-start';
+      case 'conversation_grid': return 'grid grid-cols-2 gap-4 auto-rows-auto items-start';
+      case 'splash_insets': return 'grid grid-cols-2 lg:grid-cols-3 gap-4 auto-rows-auto items-start';
+      case 'golden_ratio': return 'grid grid-cols-2 lg:grid-cols-3 gap-4 auto-rows-auto items-start';
+      case 'diagonal_action': return 'grid grid-cols-2 gap-4 auto-rows-auto items-start';
+      case 'storyboard': return 'grid grid-cols-2 lg:grid-cols-3 gap-3 auto-rows-auto items-start';
+      case 'manga': return 'grid grid-cols-2 gap-4 auto-rows-auto items-start';
+      case 'cinematic': return 'flex flex-col items-center gap-4';
       case 'grid':
       case 'custom':
       default:
-        return 'grid grid-cols-1 md:grid-cols-2 gap-6';
+        return 'grid grid-cols-1 md:grid-cols-2 gap-6 auto-rows-auto items-start';
     }
   };
 
+  // Only horizontal emphasis (col-span) survives — row-span needs fixed row heights, which
+  // we removed, and it was the other half of the distortion. A full-width "splash" panel
+  // still reads as a hero shot; the rest flow naturally at their own aspect ratios.
   const getPanelClass = (idx: number) => {
-    if (isNarrow) return 'w-full max-w-md';
+    if (isNarrow) return 'w-full max-w-xl';
     switch (project.state.layoutType) {
       case 'splash_insets':
-        return idx === 0 ? 'col-span-3 row-span-2' : 'col-span-1 row-span-1';
+        return idx === 0 ? 'col-span-2 lg:col-span-3' : 'col-span-1';
       case 'golden_ratio':
-        return idx === 0 ? 'col-span-2 row-span-2' : 'col-span-1 row-span-1';
+        return idx === 0 ? 'col-span-2' : 'col-span-1';
       case 'diagonal_action':
-        return idx % 3 === 0 ? 'col-span-2 row-span-1' : 'col-span-1 row-span-1';
+        return idx % 3 === 0 ? 'col-span-2' : 'col-span-1';
       case 'graphic_novel':
-        return idx % 4 === 0 ? 'col-span-2 row-span-1' : 'col-span-1 row-span-1';
+        return idx % 4 === 0 ? 'col-span-2' : 'col-span-1';
       default:
-        return 'col-span-1 row-span-1';
+        return 'col-span-1';
     }
   };
-
-  const pages = useMemo(() => {
-    const list: Array<{ type: 'cover' | 'panel'; panel?: ComicPanel; imageUrl?: string }> = [];
-    if (project.state.coverImageUrl) {
-      list.push({ type: 'cover', imageUrl: project.state.coverImageUrl });
-    }
-    project.state.panels.forEach((panel) => {
-      list.push({ type: 'panel', panel, imageUrl: panel.imageUrl });
-    });
-    return list;
-  }, [project.state.coverImageUrl, project.state.panels]);
 
   useEffect(() => {
     if (pageIndex >= pages.length && pages.length > 0) {
@@ -206,6 +287,7 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
 
   const goNext = () => {
     if (pageIndex >= pages.length - 1) return;
+    if (soundOn) playPageTurnSound();
     setFlipDirection('next');
     setPageIndex((prev) => {
       const next = prev + 1;
@@ -216,6 +298,7 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
 
   const goPrev = () => {
     if (pageIndex <= 0) return;
+    if (soundOn) playPageTurnSound();
     setFlipDirection('prev');
     setPageIndex((prev) => {
       const next = prev - 1;
@@ -226,9 +309,48 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
 
   useEffect(() => {
     if (!flipDirection) return;
-    const timer = window.setTimeout(() => setFlipDirection(null), 320);
+    // Match the 0.45s page-flip animation so the transform isn't cleared mid-turn.
+    const timer = window.setTimeout(() => setFlipDirection(null), 470);
     return () => window.clearTimeout(timer);
   }, [flipDirection]);
+
+  // Touch swipe in flip mode (horizontal drag turns the page).
+  const onTouchStart = (e: React.TouchEvent) => { touchStartX.current = e.touches[0]?.clientX ?? null; };
+  const onTouchEnd = (e: React.TouchEvent) => {
+    if (touchStartX.current == null) return;
+    const dx = (e.changedTouches[0]?.clientX ?? touchStartX.current) - touchStartX.current;
+    touchStartX.current = null;
+    if (Math.abs(dx) < 45) return;
+    if (dx < 0) goNext(); else goPrev();
+  };
+
+  // Keyboard navigation: arrows/space/PageUp-Down turn pages (flip) or page-scroll
+  // (scroll), Home/End jump to ends, Esc closes. Ignored while typing in a field.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (e.key === 'Escape') { handleAttemptClose(); return; }
+      if (readerMode === 'flip') {
+        if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); goNext(); }
+        else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); goPrev(); }
+        else if (e.key === 'Home') { e.preventDefault(); setFlipDirection('prev'); setPageIndex(0); }
+        else if (e.key === 'End') { e.preventDefault(); setFlipDirection('next'); setPageIndex(Math.max(pages.length - 1, 0)); }
+      } else {
+        const el = scrollRef.current;
+        if (!el) return;
+        const page = el.clientHeight * 0.9;
+        if (e.key === 'ArrowDown') { e.preventDefault(); el.scrollBy({ top: 140, behavior: 'smooth' }); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); el.scrollBy({ top: -140, behavior: 'smooth' }); }
+        else if (e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); el.scrollBy({ top: page, behavior: 'smooth' }); }
+        else if (e.key === 'PageUp') { e.preventDefault(); el.scrollBy({ top: -page, behavior: 'smooth' }); }
+        else if (e.key === 'Home') { e.preventDefault(); el.scrollTo({ top: 0, behavior: 'smooth' }); }
+        else if (e.key === 'End') { e.preventDefault(); el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' }); }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [readerMode, pageIndex, pages.length]);
 
   const toggleFullscreen = async () => {
     if (!document.fullscreenElement && readerRef.current) {
@@ -296,6 +418,22 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
             {readerMode === 'scroll' ? 'Page Flip' : 'Scroll'}
           </button>
           <button
+            onClick={toggleFx}
+            title="Halftone comic texture"
+            aria-pressed={fxOn}
+            className={`text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap flex items-center gap-1 ${fxOn ? 'bg-brand-blue text-white' : 'bg-slate-50'}`}
+          >
+            <Sparkles className="w-4 h-4" /> FX
+          </button>
+          <button
+            onClick={toggleSound}
+            title={soundOn ? 'Mute page-turn sound' : 'Unmute page-turn sound'}
+            aria-pressed={soundOn}
+            className="text-xs font-bold border-2 border-black rounded-lg px-2 py-1 shrink-0 whitespace-nowrap bg-slate-50 flex items-center gap-1"
+          >
+            {soundOn ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+          </button>
+          <button
             onClick={toggleFullscreen}
             className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-slate-50 flex items-center gap-1"
           >
@@ -329,7 +467,7 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
                 {project.state.coverImageUrl && (
                   <div className="p-6 border-b-4 border-black bg-slate-100">
                     <div className="border-4 border-black rounded-lg overflow-hidden shadow-comic">
-                      <img src={project.state.coverImageUrl} alt={`${project.name} cover`} className="w-full h-auto" />
+                      <img src={project.state.coverImageUrl} alt={`${project.name} cover`} className="block w-full h-auto animate-fade-in" />
                     </div>
                   </div>
                 )}
@@ -340,21 +478,23 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
                     </div>
                   )}
                   {project.state.panels.map((panel, idx) => (
-                    <div key={idx} className={`border-2 border-black shadow-sm relative ${getPanelClass(idx)}`}>
-                      {panel.imageUrl ? (
-                        <img src={panel.imageUrl} alt={panel.description} className="w-full h-auto" />
-                      ) : (
-                        <div className="w-full min-h-[280px] flex items-center justify-center bg-amber-50 text-amber-800 text-sm font-bold border-b-2 border-black">
-                          Image missing for this panel
-                        </div>
-                      )}
-                      {!panel.imageUrl && (
-                        <div className="px-3 py-1 text-[11px] font-bold bg-amber-100 border-b border-amber-300 text-amber-800">
-                          Dialogue shown without artwork
-                        </div>
-                      )}
-                      <PanelDialogue panel={panel} layout={textLayout} />
-                    </div>
+                    <RevealOnScroll key={idx} className={getPanelClass(idx)}>
+                      <div className={`border-2 border-black shadow-sm relative ${fxOn ? 'comic-halftone' : ''}`}>
+                        {panel.imageUrl ? (
+                          <img src={panel.imageUrl} alt={derivePanelTitle(panel, idx)} loading="lazy" className="block w-full h-auto animate-fade-in" />
+                        ) : (
+                          <div className="w-full min-h-[280px] flex items-center justify-center bg-amber-50 text-amber-800 text-sm font-bold border-b-2 border-black">
+                            Image missing for this panel
+                          </div>
+                        )}
+                        {!panel.imageUrl && (
+                          <div className="px-3 py-1 text-[11px] font-bold bg-amber-100 border-b border-amber-300 text-amber-800">
+                            Dialogue shown without artwork
+                          </div>
+                        )}
+                        <PanelDialogue panel={panel} layout={textLayout} />
+                      </div>
+                    </RevealOnScroll>
                   ))}
                   {project.state.panels.length === 0 && (
                     <div className="col-span-full text-center py-20 text-slate-400 font-display text-2xl">
@@ -365,10 +505,10 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
               </div>
             </div>
           ) : (
-            <div className="h-full flex flex-col items-center justify-center p-3 sm:p-6">
-              <div className="max-w-4xl w-full bg-white shadow-2xl border-4 border-black rounded-xl overflow-hidden">
+            <div className="h-full flex flex-col items-center p-2 sm:p-4">
+              <div className="flex flex-col w-full max-w-5xl flex-1 min-h-0 bg-white shadow-2xl border-4 border-black rounded-xl overflow-hidden">
                 {showStory && (
-                  <div className="p-4 border-b-4 border-black bg-white">
+                  <div className="p-4 border-b-4 border-black bg-white shrink-0 max-h-40 overflow-y-auto custom-scrollbar">
                     <div className="border-2 border-black rounded-lg p-3 bg-slate-50">
                       <div className="text-xs font-bold uppercase text-slate-500 mb-2">Story</div>
                       <pre className="whitespace-pre-wrap font-comic text-sm text-slate-700">{project.state.script || "No story text yet."}</pre>
@@ -376,34 +516,51 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
                   </div>
                 )}
                 {pages.length > 0 ? (
-                  <div className={`relative bg-white w-fit max-w-full mx-auto ${flipDirection === 'next' ? 'animate-page-flip-next' : flipDirection === 'prev' ? 'animate-page-flip-prev' : ''}`}>
-                    {pages[pageIndex]?.imageUrl ? (
-                      <img src={pages[pageIndex].imageUrl} alt="Comic page" className="block max-h-[62vh] sm:max-h-[78vh] w-auto max-w-full mx-auto object-contain" />
-                    ) : (
-                      <div className="w-full min-h-[420px] flex items-center justify-center bg-amber-50 text-amber-800 text-sm font-bold border-b-2 border-black">
-                        {pages[pageIndex]?.type === 'panel' ? 'Image missing for this panel' : 'Image missing for this page'}
-                      </div>
-                    )}
-                    {pages[pageIndex]?.panel && !pages[pageIndex]?.imageUrl && (
-                      <div className="px-3 py-2 text-[11px] font-bold bg-amber-100 border-b border-amber-300 text-amber-800">
-                        Dialogue shown without artwork
-                      </div>
-                    )}
-                    {pages[pageIndex]?.panel && <PanelDialogue panel={pages[pageIndex].panel!} layout={textLayout} />}
+                  // The page region flexes to fill remaining height; the page itself is bounded
+                  // by BOTH max-h-full and max-w-full so it always scales to fit the viewport on
+                  // either axis — never oversized, never leaving dead space.
+                  <div
+                    className="flex-1 min-h-0 flex items-center justify-center bg-slate-100 overflow-hidden p-2 sm:p-3 select-none"
+                    onTouchStart={onTouchStart}
+                    onTouchEnd={onTouchEnd}
+                  >
+                    <div
+                      key={pageIndex}
+                      className={`relative inline-flex max-h-full max-w-full ${fxOn ? 'comic-halftone' : ''} ${flipDirection === 'next' ? 'animate-page-flip-next' : flipDirection === 'prev' ? 'animate-page-flip-prev' : ''}`}
+                    >
+                      {pages[pageIndex]?.imageUrl ? (
+                        <img
+                          src={pages[pageIndex].imageUrl}
+                          alt={pages[pageIndex]?.panel ? derivePanelTitle(pages[pageIndex].panel!, pageIndex) : 'Comic cover'}
+                          className="block max-h-full max-w-full w-auto h-auto object-contain mx-auto border-2 border-black shadow-comic bg-white"
+                        />
+                      ) : (
+                        <div className="w-[70vw] max-w-md min-h-[300px] flex items-center justify-center bg-amber-50 text-amber-800 text-sm font-bold border-2 border-black rounded">
+                          {pages[pageIndex]?.type === 'panel' ? 'Image missing for this panel' : 'Image missing for this page'}
+                        </div>
+                      )}
+                      {pages[pageIndex]?.panel && <PanelDialogue panel={pages[pageIndex].panel!} layout={textLayout} />}
+                    </div>
                   </div>
                 ) : (
-                  <div className="p-10 text-center text-slate-400 font-display text-2xl">This comic hasn't been drawn yet!</div>
+                  <div className="flex-1 flex items-center justify-center p-10 text-center text-slate-400 font-display text-2xl">This comic hasn't been drawn yet!</div>
                 )}
-                <div className="flex items-center justify-between p-4 border-t-4 border-black bg-slate-50">
-                  <button onClick={goPrev} className="px-4 py-2.5 sm:py-2 border-2 border-black rounded-lg text-sm sm:text-xs font-bold flex items-center gap-1 bg-white active:translate-y-0.5 transition-transform">
-                    <ChevronLeft className="w-4 h-4" /> Prev
-                  </button>
-                  <div className="text-xs font-bold">{pageIndex + 1} / {Math.max(pages.length, 1)}</div>
-                  <button onClick={goNext} className="px-4 py-2.5 sm:py-2 border-2 border-black rounded-lg text-sm sm:text-xs font-bold flex items-center gap-1 bg-white active:translate-y-0.5 transition-transform">
-                    Next <ChevronRight className="w-4 h-4" />
-                  </button>
+                <div className="shrink-0 border-t-4 border-black bg-slate-50">
+                  <div className="h-1.5 bg-slate-200" aria-hidden>
+                    <div className="h-full bg-brand-yellow transition-all duration-300" style={{ width: `${(Math.min(pageIndex + 1, pages.length) / Math.max(pages.length, 1)) * 100}%` }} />
+                  </div>
+                  <div className="flex items-center justify-between p-3">
+                    <button onClick={goPrev} disabled={pageIndex <= 0} className="px-4 py-2.5 sm:py-2 border-2 border-black rounded-lg text-sm sm:text-xs font-bold flex items-center gap-1 bg-white active:translate-y-0.5 transition-transform disabled:opacity-40 disabled:cursor-not-allowed">
+                      <ChevronLeft className="w-4 h-4" /> Prev
+                    </button>
+                    <div className="text-xs font-bold tabular-nums">{Math.min(pageIndex + 1, Math.max(pages.length, 1))} / {Math.max(pages.length, 1)}</div>
+                    <button onClick={goNext} disabled={pageIndex >= pages.length - 1} className="px-4 py-2.5 sm:py-2 border-2 border-black rounded-lg text-sm sm:text-xs font-bold flex items-center gap-1 bg-white active:translate-y-0.5 transition-transform disabled:opacity-40 disabled:cursor-not-allowed">
+                      Next <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               </div>
+              <div className="text-[11px] text-slate-500 font-comic mt-1.5 hidden sm:block">← → or space to turn · Home/End to jump · Esc to close · swipe on touch</div>
             </div>
           )}
         </div>
@@ -447,6 +604,13 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
                   <div>{project.state.layoutType || 'grid'}</div>
                 </div>
               </div>
+              {project.state.storyMood && (
+                <div className="border border-slate-200 rounded p-2">
+                  <div className="text-xs uppercase font-bold text-slate-500">Mood the AI read</div>
+                  <div className="font-semibold">{project.state.storyMood.label}</div>
+                  <div className="text-xs text-slate-500 mt-0.5">{project.state.storyMood.summary}</div>
+                </div>
+              )}
             </div>
           </aside>
         )}

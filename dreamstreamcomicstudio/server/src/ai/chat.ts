@@ -15,7 +15,7 @@ import { buildUsage } from './usage.js';
 import type { AIProviderId } from './providers/types.js';
 import { toToolSpec, type ChatTool } from './tools/registry.js';
 import { buildJsonToolSystemBlock, extractToolCall, stripToolCallJson, formatToolResult } from './tools/jsonToolProtocol.js';
-import { JSON_TOOL_PROTOCOL_ENABLED } from '../config.js';
+import { JSON_TOOL_PROTOCOL_ENABLED, CHAT_MAX_OUTPUT_TOKENS } from '../config.js';
 
 export type ChatReasoningLevel = 'none' | 'low' | 'medium' | 'high';
 
@@ -34,7 +34,7 @@ export interface ChatToolImage {
 }
 
 /** Max model⇄tool round-trips before we force a final answer. */
-const MAX_TOOL_ITERATIONS = 4;
+const MAX_TOOL_ITERATIONS = 6;
 
 export interface RunChatParams {
   provider: AIProviderId;
@@ -54,6 +54,8 @@ export interface RunChatParams {
   reasoningLevel?: ChatReasoningLevel;
   webSearch?: boolean;
   fallbackModel?: string;
+  /** Ordered fallback chain (≤3) → OpenRouter routes past dead/rate-limited models. */
+  fallbackModels?: string[];
   timeoutMs?: number;
   /**
    * Pre-sanitized DreamStream workspace context (JSON string). Present only when the
@@ -69,6 +71,13 @@ export interface RunChatParams {
   signal?: AbortSignal;
   /** When set, stream content/reasoning deltas as they arrive (SSE). */
   onDelta?: (delta: { content?: string; reasoning?: string }) => void;
+  /**
+   * Called before a follow-up model turn (after tools ran) so the client can DISCARD
+   * the prior turn's streamed pre-tool narration — otherwise the model's "let me look
+   * that up…" preamble bleeds into the final answer on screen, then snaps away on
+   * finalize. Lets the live view match the saved answer.
+   */
+  onReset?: () => void;
 }
 
 // Guardrail framing for the DreamStream connector. The context is read-only and
@@ -139,15 +148,25 @@ ${lines.join('\n')}
 - Report measurements in the user's preferred units. Do not claim you don't know the date or the user's general location — it is given above.`;
 };
 
-const reasoningMaxTokens = (level?: ChatReasoningLevel): number => {
-  switch (level) {
-    case 'high':
-      return 4096;
-    case 'medium':
-      return 3072;
-    default:
-      return 2048;
-  }
+// Output-token budget for a chat answer. The old flat 2048 cap truncated long answers and —
+// worse — cut off generate_app/render_chart tool-call arguments mid-JSON (the entire app or
+// chart rides inside those arguments), so "build me an app/chart" silently produced nothing.
+// OpenRouter (the tool-calling path) gets the full budget; reasoning models get extra headroom
+// because the hidden reasoning trace is billed against the same completion budget. NVIDIA NIMs
+// are text-only (no tool calls) and some cap completion lower, so they stay conservative.
+const answerTokenBudget = (provider: AIProviderId, level?: ChatReasoningLevel): number => {
+  const reasoningHeadroom =
+    provider === 'openrouter'
+      ? level === 'high'
+        ? 4096
+        : level === 'medium'
+          ? 3072
+          : level === 'low'
+            ? 2048
+            : 0
+      : 0;
+  const base = provider === 'openrouter' ? CHAT_MAX_OUTPUT_TOKENS : Math.min(CHAT_MAX_OUTPUT_TOKENS, 4096);
+  return base + reasoningHeadroom;
 };
 
 const dedupeCitations = (citations: { url: string; title?: string }[]) => {
@@ -224,10 +243,11 @@ export const runChat = async (
   const baseReq = {
     model: params.model,
     temperature: typeof params.temperature === 'number' ? params.temperature : 0.7,
-    maxTokens: params.maxTokens ?? reasoningMaxTokens(params.reasoningLevel),
+    maxTokens: params.maxTokens ?? answerTokenBudget(params.provider, params.reasoningLevel),
     timeoutMs: params.timeoutMs,
     retries: 2,
     fallbackModel: params.fallbackModel,
+    ...(params.provider === 'openrouter' && params.fallbackModels?.length ? { models: params.fallbackModels } : {}),
     ...(useReasoning ? { reasoningEffort: params.reasoningLevel as 'low' | 'medium' | 'high' } : {}),
     ...(useWeb ? { webSearch: true } : {})
   };
@@ -377,7 +397,20 @@ export const runChat = async (
 
     // Next turn. On the final allowed iteration, drop tools to force a written answer.
     const allowMoreTools = iterations < MAX_TOOL_ITERATIONS;
+    // Discard the just-streamed pre-tool narration on the client before the next turn
+    // streams, so the live view doesn't accumulate "let me check…" preambles.
+    params.onReset?.();
     result = await callModel(messages, allowMoreTools);
+  }
+
+  // If we exhausted the tool-round budget, the model was forced to answer mid-plan —
+  // be honest that the answer may be incomplete rather than letting it look complete.
+  if (iterations >= MAX_TOOL_ITERATIONS) {
+    addNotice({
+      tool: 'agent',
+      level: 'warn',
+      message: `Reached the ${MAX_TOOL_ITERATIONS}-step tool limit for this turn — the answer may be incomplete. Ask a follow-up to continue.`
+    });
   }
 
   if (result.citations) citations.push(...result.citations);

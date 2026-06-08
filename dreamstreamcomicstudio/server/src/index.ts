@@ -43,6 +43,8 @@ import { agentsRouter } from './routes/agents.js';
 import { recipesRouter } from './routes/recipes.js';
 import { mcpRouter, mcpOutboundRouter } from './routes/mcp.js';
 import { modelsRouter } from './routes/models.js';
+import { telemetryRouter } from './routes/telemetry.js';
+import { invitesRouter } from './routes/invites.js';
 import { prewarmCatalog, startCatalogRefreshLoop } from './services/modelCatalog.js';
 import { keysRouter } from './routes/keys.js';
 import { venturesRouter } from './routes/ventures.js';
@@ -142,6 +144,10 @@ app.use('/api/system', systemRateLimit, systemRouter);
 app.use('/api/models', systemRateLimit, modelsRouter);
 // BYOK key validation — read-only provider checks, no app login required.
 app.use('/api/keys', systemRateLimit, keysRouter);
+// Telemetry + feedback capture. Public + optionalAuth so failures that happen
+// while logged-out (or while auth itself is failing) are still recorded; userId
+// is attached when a valid session is present.
+app.use('/api/telemetry', systemRateLimit, optionalAuth, telemetryRouter);
 app.use('/api/assistant', optionalAuth, assistantLimits, assistantRouter);
 app.use('/api/billing', systemRateLimit, optionalAuth, billingRouter);
 
@@ -172,6 +178,8 @@ app.use('/api/recipes', textRateLimit, recipesRouter);
 app.use('/api/mcp', systemRateLimit, mcpRouter);
 // Autopilot control plane (Epic A1). Flag-gated + admin-only until GA (see ventures router).
 app.use('/api/ventures', systemRateLimit, venturesRouter);
+// Tester invite redemption (authenticated users).
+app.use('/api/invites', systemRateLimit, invitesRouter);
 
 app.use(errorHandler);
 

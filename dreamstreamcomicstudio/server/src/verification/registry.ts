@@ -6,13 +6,15 @@ import { autorouterFreeInvariant } from './checks/autorouterFreeInvariant.js';
 import { pricingFreshness } from './checks/pricingFreshness.js';
 import { costReconciliation } from './checks/costReconciliation.js';
 import { multiProviderCost } from './checks/multiProviderCost.js';
+import { telemetryFailureSpike } from './checks/telemetryFailureSpike.js';
 
 const BUILTINS: CheckImpl[] = [
   freeLabelIntegrity,
   autorouterFreeInvariant,
   pricingFreshness,
   costReconciliation,
-  multiProviderCost
+  multiProviderCost,
+  telemetryFailureSpike
 ];
 
 export const getBuiltin = (id: string): CheckImpl | undefined =>

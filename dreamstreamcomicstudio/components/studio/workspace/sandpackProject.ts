@@ -9,7 +9,7 @@
 
 import type { CodeStudioArtifact } from '../../../apiTypes';
 
-export type SandpackTemplate = 'react-ts' | 'react' | 'vanilla-ts' | 'vanilla';
+export type SandpackTemplate = 'react-ts' | 'react' | 'vanilla-ts' | 'vanilla' | 'static';
 
 export interface SandpackProject {
   template: SandpackTemplate;
@@ -27,13 +27,15 @@ const BUILD_ONLY_DEPS = new Set([
 ]);
 
 const TEMPLATE_MAP: Record<string, SandpackTemplate> = {
-  'react-ts': 'react-ts', react: 'react', 'vanilla-ts': 'vanilla-ts', vanilla: 'vanilla', static: 'vanilla',
+  // `static` maps to Sandpack's native static env (serves /index.html verbatim) rather
+  // than the parcel `vanilla` bundler, which mangles self-contained HTML with inline
+  // <script> / CDN module imports (the dominant single-file output shape).
+  'react-ts': 'react-ts', react: 'react', 'vanilla-ts': 'vanilla-ts', vanilla: 'vanilla', static: 'static',
 };
 const mapTemplate = (t: string): SandpackTemplate => TEMPLATE_MAP[t] ?? 'react-ts';
 
 const norm = (p: string): string => (p.startsWith('/') ? p : `/${p}`);
 const baseName = (p: string): string => p.split('/').pop() || p;
-const stripExt = (p: string): string => p.replace(/\.[a-zA-Z0-9]+$/, '');
 const esc = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -82,6 +84,24 @@ if (el) {
 }
 `;
 
+// Fallback root shown only when an app has source files but no detectable root
+// component or entry — so the preview renders the file list instead of a blank frame.
+const minimalApp = (title: string, files: string[]): string =>
+  `export default function App() {
+  return (
+    <div style={{ font: '14px system-ui', padding: 24, lineHeight: 1.5 }}>
+      <h2 style={{ margin: '0 0 8px' }}>${esc(title || 'App')}</h2>
+      <p style={{ color: '#64748b', margin: '0 0 12px' }}>
+        No root component was detected, so a preview couldn't be auto-mounted. Files in this project:
+      </p>
+      <ul style={{ margin: 0, paddingLeft: 18 }}>
+        ${files.map((f) => `<li><code>${esc(f)}</code></li>`).join('\n        ')}
+      </ul>
+    </div>
+  );
+}
+`;
+
 // A path is one of the app's own entry/html files that we replace with canonical ones.
 const isEntryOrHtml = (p: string): boolean => {
   const b = baseName(p).toLowerCase();
@@ -102,6 +122,16 @@ export const buildSandpackProject = (data: CodeStudioArtifact): SandpackProject 
     all[p] = f.content;
   }
   const dependencies = extractDependencies(pkgJson);
+
+  // ---- static: serve the HTML verbatim through Sandpack's static env ----
+  if (template === 'static') {
+    const files = { ...all };
+    if (!files['/index.html']) {
+      const anyHtml = Object.keys(all).find((k) => k.endsWith('.html'));
+      files['/index.html'] = anyHtml ? all[anyHtml] : htmlShell(data.title);
+    }
+    return { template, files };
+  }
 
   // ---- vanilla / static: just need an html (+ an entry Sandpack can load) ----
   if (template === 'vanilla' || template === 'vanilla-ts') {
@@ -136,7 +166,15 @@ export const buildSandpackProject = (data: CodeStudioArtifact): SandpackProject 
     const files = { ...all };
     if (!files['/public/index.html']) files['/public/index.html'] = htmlShell(data.title);
     const entry = Object.keys(all).find((p) => /(^|\/)(main|index)\.(t|j)sx?$/.test(p));
-    return { template, files, dependencies, entry };
+    if (entry) return { template, files, dependencies, entry };
+    // Nothing mountable (components but no root/entry) → synthesize a canonical entry +
+    // a minimal App so the preview shows the project instead of a blank/crashed frame.
+    const appFile = isTs ? '/App.tsx' : '/App.jsx';
+    const fileList = Object.keys(all).filter((p) => !p.endsWith('.css')).map(baseName);
+    files[appFile] = minimalApp(data.title, fileList);
+    const entryPath = isTs ? '/index.tsx' : '/index.js';
+    files[entryPath] = reactEntry(`.${appFile}`, cssImports);
+    return { template, files, entry: entryPath, dependencies };
   }
 
   const files: Record<string, string> = {};
@@ -145,7 +183,11 @@ export const buildSandpackProject = (data: CodeStudioArtifact): SandpackProject 
     files[p] = c;
   }
   const entryPath = isTs ? '/index.tsx' : '/index.js';
-  files[entryPath] = reactEntry(`.${stripExt(appPath)}`, cssImports);
+  // Import the app with its EXPLICIT extension (e.g. './App.jsx'). Extensionless
+  // './App' can resolve to the template's default stub (Sandpack merges its own
+  // /App.tsx for react-ts) when the generated file's extension differs — which renders
+  // the template's "Hello world" instead of the real app.
+  files[entryPath] = reactEntry(`.${appPath}`, cssImports);
   files['/public/index.html'] = htmlShell(data.title);
 
   return { template, files, entry: entryPath, dependencies };

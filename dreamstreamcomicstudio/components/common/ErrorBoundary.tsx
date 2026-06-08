@@ -1,6 +1,8 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
 import { Button } from '../Button';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { captureEvent } from '../../services/telemetry';
+import { FeedbackButtons } from '../feedback/FeedbackButtons';
 
 interface Props {
     children: ReactNode;
@@ -23,6 +25,19 @@ export class ErrorBoundary extends Component<Props, State> {
 
     public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
         console.error('Uncaught error:', error, errorInfo);
+        // Record the crash so "every failed log" is captured, with enough context
+        // (message + stacks) to reconstruct what blew up.
+        captureEvent({
+            eventType: 'app_crash',
+            severity: 'critical',
+            source: 'client',
+            message: error.message,
+            metadata: {
+                name: error.name,
+                stack: typeof error.stack === 'string' ? error.stack.slice(0, 4000) : undefined,
+                componentStack: errorInfo.componentStack?.slice(0, 4000)
+            }
+        });
     }
 
     private handleReload = () => {
@@ -50,6 +65,13 @@ export class ErrorBoundary extends Component<Props, State> {
                             <Button onClick={this.handleReload} icon={<RefreshCw className="w-4 h-4" />}>
                                 Reload Application
                             </Button>
+                        </div>
+                        <div className="pt-2 flex justify-center">
+                            <FeedbackButtons
+                                targetType="app_crash"
+                                source="client"
+                                metadata={{ message: this.state.error?.message }}
+                            />
                         </div>
                     </div>
                 </div>

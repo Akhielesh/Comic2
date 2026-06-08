@@ -14,6 +14,7 @@ import { SourceCard } from './SourceCard';
 import { useChatPanel } from './panelContext';
 import type { ChatTurn } from '../../services/chatStorage';
 import { extractCodeBlocks, codeBlockFilename, downloadTextFile, triggerDownload, buildPlaygroundFiles, buildStudioArtifact } from '../../services/chatUtils';
+import { FeedbackButtons } from '../feedback/FeedbackButtons';
 
 interface ChatMessageViewProps {
   turn: ChatTurn;
@@ -386,6 +387,19 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, busy, is
               </div>
             )}
           </div>
+        )}
+
+        {/* Per-response feedback. Shown on every finished assistant turn — including
+            failed ones — so a like/dislike signal is captured no matter the outcome. */}
+        {!isUser && !(busy && isLast) && (turn.content || turn.error) && (
+          <FeedbackButtons
+            targetType="chat_response"
+            targetId={turn.id}
+            source="ai_chat"
+            compact
+            className="mt-1 px-1"
+            metadata={{ model: turn.model, hadError: Boolean(turn.error) }}
+          />
         )}
       </div>
     </div>

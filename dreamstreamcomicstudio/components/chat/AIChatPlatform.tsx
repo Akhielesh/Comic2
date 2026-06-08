@@ -20,7 +20,7 @@ import { getCapabilities } from '../../services/modelCapabilities';
 import { fetchModelCatalog, type CatalogModel } from '../../services/modelCatalog';
 import type { ChatReasoningLevel, ChatRequestMessage, ChatMessagePart, UniversalAssistantContext } from '../../apiTypes';
 import type { Project } from '../../types';
-import { sendChatMessageStream, runSwarmStream, updateChatMemory } from '../../services/chatApi';
+import { sendChatMessageStream, runSwarmStream, updateChatMemory, friendlyChatError } from '../../services/chatApi';
 import { runRecipe } from '../../services/recipes';
 import type { ChatSkill } from '../../services/chatSkills';
 import { gatherClientContext } from '../../services/clientContext';
@@ -30,6 +30,7 @@ import { isProviderEnabled } from '../../services/sourceGovernance';
 import type { ModelSourceId } from '../../services/modelSelection';
 import { listMcpServers, getMcpServersByIds, onMcpServersChanged } from '../../services/mcpServers';
 import { recordToolEvents } from '../../services/toolAnalytics';
+import { captureError } from '../../services/telemetry';
 import { isLegacyStudioEnabled } from '../../services/studioFlags';
 import type { McpServerConfig } from '../../apiTypes';
 import {
@@ -436,14 +437,13 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     return { reqModel, reqSource, reqTools };
   };
 
-  // Auto-memory: after some exchanges, distill durable facts about the user and
-  // merge them into their long-term memory in the background (logged-in users only).
-  // Throttled to every other exchange to keep it cheap and non-intrusive.
-  const memoryCounterRef = useRef(0);
+  // Auto-memory: after each exchange, distill durable facts about the user and merge them
+  // into their long-term memory in the background (logged-in users only). Runs from the
+  // FIRST exchange — the previous "every other, skip the first" throttle meant something the
+  // user said up front (name, location, what they're building) wasn't remembered until later.
+  // It's cheap (a small, fast model call) and best-effort.
   const updateMemoryInBackground = (priorTurns: ChatTurn[], answerText: string) => {
     if (!user?.id || !answerText.trim()) return;
-    memoryCounterRef.current += 1;
-    if (memoryCounterRef.current % 2 !== 0) return;
     const recent: ChatRequestMessage[] = priorTurns
       .filter((t) => !t.error)
       .slice(-5)
@@ -533,6 +533,13 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           ...s,
           turns: s.turns.map((t) => (t.id === aiTurnId ? { ...t, reasoning: (t.reasoning || '') + chunk } : t))
         }));
+      // A new turn is starting after tools ran — clear the prior turn's streamed
+      // pre-tool narration so it doesn't pile up above the real answer.
+      const onReset = () =>
+        setSessionState((s) => ({
+          ...s,
+          turns: s.turns.map((t) => (t.id === aiTurnId ? { ...t, content: '', reasoning: undefined } : t))
+        }));
 
       // Live plan/agent trace → a swarm_trace artifact on the turn (shared by the swarm
       // path and swarm-backed recipes like /research and /market).
@@ -579,7 +586,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           })()
         : useSwarm
           ? await runSwarmStream(reqBody, { signal: controller.signal, onDelta, onReasoning, onTrace })
-          : await sendChatMessageStream(reqBody, { signal: controller.signal, onDelta, onReasoning });
+          : await sendChatMessageStream(reqBody, { signal: controller.signal, onDelta, onReasoning, onReset });
 
       // Finalize: snapshot this answer as a variant and show it as the active one.
       updateSession(sessionId, (s) => ({
@@ -625,13 +632,33 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         updateSession(sessionId, (s) => ({ ...s, updatedAt: Date.now() }));
         return;
       }
+      const friendly = friendlyChatError(err);
+      // Record the failed chat (with its session/turn + model) so every failure is
+      // collected for analysis, not just shown to the user and forgotten.
+      captureError(err, {
+        eventType: 'chat_failed',
+        source: 'ai_chat',
+        sessionId,
+        message: friendly,
+        metadata: { turnId: aiTurnId }
+      });
       updateSession(sessionId, (s) => ({
         ...s,
-        turns: s.turns.map((t) =>
-          t.id === aiTurnId
-            ? { ...t, content: `**Couldn't complete that.** ${(err as Error)?.message || 'The request failed. Check your API key in Settings → API Configuration and try again.'}`, error: true }
-            : t
-        ),
+        turns: s.turns.map((t) => {
+          if (t.id !== aiTurnId) return t;
+          // Keep any answer that already streamed in — don't blow it away with the error
+          // (that was why a long/tool-heavy turn that got cut showed "aborted" and NOTHING
+          // else). Surface the failure as a soft note appended below the partial content.
+          const partial = (t.content || '').trim();
+          if (partial) {
+            return { ...t, content: `${t.content}\n\n---\n*⚠️ Response interrupted: ${friendly}*` };
+          }
+          return {
+            ...t,
+            content: `**Couldn't complete that.** ${friendly} If this keeps happening, check your API key in Settings → API Configuration.`,
+            error: true
+          };
+        }),
         updatedAt: Date.now()
       }));
     } finally {

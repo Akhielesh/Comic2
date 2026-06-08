@@ -53,7 +53,9 @@ export interface ResolvedTheme {
 
 /** Resolve a {palette, accent, trend} into concrete colors. */
 export const resolveTheme = (input: ThemeInput = {}): ResolvedTheme => {
-  const base = PALETTES[input.palette ?? 'brand'];
+  // The model supplies `palette` as a free string, so an out-of-set name (or a typo)
+  // must NOT crash the card — fall back to brand instead of throwing on `base.accent`.
+  const base = PALETTES[input.palette as PaletteName] ?? PALETTES.brand;
   let accent = input.accent ?? base.accent;
   if (typeof input.trend === 'number') {
     accent = input.trend > 0 ? BULL : input.trend < 0 ? BEAR : NEUTRAL;

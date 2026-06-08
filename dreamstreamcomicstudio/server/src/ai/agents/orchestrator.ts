@@ -315,6 +315,18 @@ export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> 
   const finalTrace: SwarmTraceArtifact = { goal, agents: agents.map((a) => ({ ...a })) };
   const mergedCitations = dedupeCitations(citations);
 
+  // Dedupe artifacts across agents — several agents independently fetching e.g. the same
+  // stock would otherwise stack near-identical cards. Key by type + a stable identity.
+  const seenArtifacts = new Set<string>();
+  const dedupedArtifacts = agentArtifacts.filter((a) => {
+    const d = (a.data ?? {}) as Record<string, unknown>;
+    const id = d.symbol ?? d.title ?? d.location ?? d.query ?? JSON.stringify(d).slice(0, 200);
+    const key = `${a.type}:${String(id)}`;
+    if (seenArtifacts.has(key)) return false;
+    seenArtifacts.add(key);
+    return true;
+  });
+
   return {
     text: synthRes.text,
     model: synthRes.model || params.model,
@@ -322,7 +334,7 @@ export const runSwarm = async (params: RunSwarmParams): Promise<RunSwarmResult> 
     citations: mergedCitations.length ? mergedCitations : undefined,
     toolEvents: toolEvents.length ? toolEvents : undefined,
     images: images.length ? images : undefined,
-    artifacts: [{ type: 'swarm_trace', data: finalTrace }, ...agentArtifacts],
+    artifacts: [{ type: 'swarm_trace', data: finalTrace }, ...dedupedArtifacts],
     notices: notices.length ? notices : undefined,
     usage: mergeUsage(usageParts),
     trace: finalTrace

@@ -504,8 +504,13 @@ export const toolsByCategory = (category: ToolCategory): ToolMeta[] =>
 /** All tool names in the catalogue. */
 export const ALL_TOOL_NAMES: string[] = TOOL_CATALOG.map((t) => t.name);
 
-/** Tool names that are safe to auto-enable / route to (everything except the swarm). */
-export const ROUTABLE_TOOL_NAMES: string[] = TOOL_CATALOG.filter((t) => t.name !== 'run_agent_swarm').map((t) => t.name);
+// Route-built META tools: attached explicitly by the chat route (the swarm with provider
+// creds; image gen with the user's BYOK image keys on explicit enable). They are NOT in the
+// static tool registry, so routing them would just waste a smart-routing slot — exclude them.
+const META_TOOL_NAMES = new Set(['run_agent_swarm', 'generate_image']);
+
+/** Tool names that are safe to auto-enable / route to (everything except route-built meta tools). */
+export const ROUTABLE_TOOL_NAMES: string[] = TOOL_CATALOG.filter((t) => !META_TOOL_NAMES.has(t.name)).map((t) => t.name);
 
 const tokenize = (text: string): string[] => {
   const matches = text.toLowerCase().match(/[a-z0-9&]+/g);

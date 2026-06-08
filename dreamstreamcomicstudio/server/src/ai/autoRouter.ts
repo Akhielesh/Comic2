@@ -18,6 +18,27 @@ import type { AnnotatedModel } from './catalogAnnotations.js';
 export const TEXT_FALLBACK = 'openai/gpt-4o-mini';
 export const IMAGE_FALLBACK = 'google/gemini-2.5-flash-image';
 
+// --- Adaptive model health: skip recently-failed (404/429) models ----------------
+// Free models are frequently rate-limited; leading the fallback chain with one that's
+// down makes OpenRouter burn ~15-20s waiting before it routes to a working model. We
+// learn from that: when a chain falls OVER (the served model isn't the free one we led
+// with), mark that model "down" for a short window so the next requests skip it and stay
+// fast — then retry it once the window passes. Process-local, best-effort, self-healing.
+const MODEL_DOWN_TTL_MS = 8 * 60_000;
+const downUntil = new Map<string, number>();
+export const markModelDown = (id: string, ttlMs = MODEL_DOWN_TTL_MS): void => {
+  if (id) downUntil.set(id, Date.now() + ttlMs);
+};
+export const isModelDown = (id: string): boolean => {
+  const until = downUntil.get(id);
+  if (!until) return false;
+  if (Date.now() > until) {
+    downUntil.delete(id);
+    return false;
+  }
+  return true;
+};
+
 // Preference order among FREE text models (capable, generally reliable families), refreshed
 // for 2026: strong open generalists first. Needles are matched with id.includes(), so they must
 // appear in real catalog ids (e.g. 'deepseek/deepseek-chat-v3.1:free', 'z-ai/glm-4.5-air:free').
@@ -152,6 +173,45 @@ export const pickTextModel = async (opts?: PickOpts): Promise<string> => {
   } catch {
     return TEXT_FALLBACK;
   }
+};
+
+/**
+ * An ordered fallback CHAIN of text models for OpenRouter's `models` array (≤3), so a
+ * single dead/rate-limited free model never means "no response": OpenRouter routes to the
+ * first available one server-side. Free-first; unless `freeOnly`, the cheap paid
+ * TEXT_FALLBACK is appended as the guaranteed last resort.
+ */
+export const pickTextModelChain = async (
+  opts?: PickOpts & { freeOnly?: boolean; max?: number }
+): Promise<string[]> => {
+  const max = Math.min(opts?.max ?? 3, 3);
+  const gate = opts?.filter ?? (() => true);
+  let models: AnnotatedModel[] = [];
+  try {
+    ({ models } = await getCatalog());
+  } catch {
+    return [TEXT_FALLBACK];
+  }
+  let text = models.filter(isTextModel).filter(gate);
+  if (opts?.prefer) {
+    const preferred = text.filter(opts.prefer);
+    if (preferred.length) text = preferred;
+  }
+  // Skip models we recently saw fail (404/429) so we don't lead the chain with a known-bad
+  // free model and pay OpenRouter's ~15-20s wait before it routes onward.
+  const free = text.filter(isFreeVerified).filter((m) => !isModelDown(m.id));
+  const ranked: string[] = [];
+  const push = (id: string) => { if (id && !ranked.includes(id)) ranked.push(id); };
+  for (const needle of (opts?.rankOrder ?? FREE_TEXT_PRIORITY)) {
+    for (const m of free) if (m.id.toLowerCase().includes(needle)) push(m.id);
+  }
+  for (const m of free) push(m.id);
+  // Reserve the last slot for the paid safety net unless we're strictly free-only.
+  const freeSlots = opts?.freeOnly ? max : Math.max(1, max - 1);
+  const chain = ranked.slice(0, freeSlots);
+  if (!opts?.freeOnly) chain.push(TEXT_FALLBACK);
+  if (chain.length === 0) chain.push(TEXT_FALLBACK);
+  return Array.from(new Set(chain)).slice(0, max);
 };
 
 // Strong coding-model families, best-first — used by Code Studio (generation + the agentic build

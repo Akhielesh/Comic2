@@ -1,7 +1,14 @@
 import React from 'react';
 import type { MetricBoardArtifact, MetricTile } from '../../../apiTypes';
-import { Surface, Sparkline, RadialGauge, TrendPill } from './kit';
+import { Surface, Sparkline, RadialGauge, TrendPill, compactNumber } from './kit';
 import { ChartCard } from './ChartCard';
+
+// A large KPI value: compact giant numbers (≥1M) so they don't overflow the tile,
+// but keep thousands readable as grouped digits (e.g. 84,230).
+const formatTileValue = (v: string | number): string => {
+  if (typeof v !== 'number') return v;
+  return Math.abs(v) >= 1_000_000 ? compactNumber(v) : v.toLocaleString();
+};
 
 // A board of KPI tiles — the "at a glance" data-viz surface. Each tile is a stat with
 // an optional delta pill, sparkline, progress ring, or a fully embedded ChartCard.
@@ -23,7 +30,10 @@ const COLS: Record<number, string> = {
 
 const Tile: React.FC<{ tile: MetricTile }> = ({ tile }) => {
   const status = tile.status ? STATUS[tile.status] : null;
-  const sparkColor = status?.bar ?? (typeof tile.delta === 'number' ? (tile.delta >= 0 ? '#059669' : '#dc2626') : '#3B82F6');
+  // Trend can come from delta OR (when that's absent) deltaPercent.
+  const trendVal = typeof tile.delta === 'number' ? tile.delta : tile.deltaPercent;
+  const hasTrend = typeof tile.delta === 'number' || typeof tile.deltaPercent === 'number';
+  const sparkColor = status?.bar ?? (typeof trendVal === 'number' ? (trendVal >= 0 ? '#059669' : '#dc2626') : '#3B82F6');
 
   if (tile.chart) {
     return (
@@ -40,10 +50,10 @@ const Tile: React.FC<{ tile: MetricTile }> = ({ tile }) => {
         <div className="min-w-0">
           <div className="truncate text-[11px] font-bold uppercase tracking-wide text-slate-500">{tile.label}</div>
           <div className="mt-0.5 flex items-baseline gap-1">
-            <span className="font-display text-2xl leading-none">{typeof tile.value === 'number' ? tile.value.toLocaleString() : tile.value}</span>
+            <span className="font-display text-2xl leading-none">{formatTileValue(tile.value)}</span>
             {tile.unit && <span className="text-xs font-bold text-slate-400">{tile.unit}</span>}
           </div>
-          {typeof tile.delta === 'number' && (
+          {hasTrend && (
             <div className="mt-1">
               <TrendPill change={tile.delta} changePercent={tile.deltaPercent} size="sm" />
             </div>

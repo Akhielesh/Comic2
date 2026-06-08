@@ -51,6 +51,13 @@ export type GenerateTextRequest = {
   /** Reliable model to retry on if `model` is unavailable (404) or rate-limited (429). */
   fallbackModel?: string;
   /**
+   * Ordered fallback chain (≤3, OpenRouter's `models` cap). When set, OpenRouter routes
+   * to the first AVAILABLE model server-side — skipping 404/429 ones — so a dead or
+   * rate-limited free model no longer means "no response". The primary `model` should be
+   * the first entry.
+   */
+  models?: string[];
+  /**
    * True when the caller is in strict free-only mode. The provider must NOT retry
    * on a paid `fallbackModel` if the primary call fails — it should surface the error
    * so the route can return a Block + explain response (HTTP 402 NO_FREE_MODEL_AVAILABLE).

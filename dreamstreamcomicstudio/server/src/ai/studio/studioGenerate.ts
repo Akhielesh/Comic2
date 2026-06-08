@@ -119,12 +119,12 @@ ${OUTPUT_CONTRACT}`;
     const answersBlock = input.answers?.length
       ? `\n\nThe user's answers to clarifying questions (honor these):\n${input.answers.map((a) => `- ${a.question} → ${a.answer}`).join('\n')}`
       : '';
-    return `You are a senior engineer implementing an APPROVED build plan in a live code studio (multi-language editor + instant web preview). Build the COMPLETE application to the plan — create the planned files, implement every listed feature for real, and make it run cleanly on first load.
+    return `You are a senior engineer implementing an APPROVED build plan in a live code studio (multi-language editor + instant web preview). Build the COMPLETE application and make it run cleanly on first load.
 
 PROJECT IDEA:
 ${input.prompt}${answersBlock}
 
-APPROVED BUILD PLAN (implement it faithfully — you may add files it implies, but cover everything listed):
+APPROVED BUILD PLAN — this defines the GOAL: the product, every feature, the stack and the data. Implement EVERY listed feature for real. You have FULL FREEDOM over HOW you build it: design the file structure, components and architecture yourself, exactly as a senior engineer would. Any file list in the plan is only a rough suggestion — create, split, rename, add or omit files however is best for a clean, well-organized, complete app. Do not feel bound to the suggested paths.
 ${renderPlanForBuild(input.plan)}
 
 Default web stack if the plan doesn't imply another: ${template}.
@@ -210,6 +210,34 @@ const buildRepairPrompt = (input: GenerateInput, artifact: CodeStudioArtifact, i
     currentTitle: artifact.title
   });
 
+/**
+ * Loop the static verifier + auto-repair until the app is clean or the pass budget is spent. This is
+ * what makes the studio actually VERIFY the code (rather than ship the first answer): each pass feeds
+ * the remaining issues back to the model and re-checks. Returns the cleanest artifact it reached.
+ * Shared by both the blocking generate ({@link runGenerate}) and the SSE stream route.
+ */
+export const MAX_REPAIR_PASSES = 3;
+export const repairUntilClean = async (
+  complete: (prompt: string) => Promise<string>,
+  input: GenerateInput,
+  artifact: CodeStudioArtifact,
+  opts: { maxPasses?: number; onPass?: (info: { pass: number; issues: AppIssue[] }) => void } = {}
+): Promise<CodeStudioArtifact> => {
+  const maxPasses = opts.maxPasses ?? MAX_REPAIR_PASSES;
+  let current = artifact;
+  let issues = verifyGeneratedApp(current);
+  let pass = 0;
+  while (issues.length && pass < maxPasses) {
+    pass += 1;
+    opts.onPass?.({ pass, issues });
+    const repaired = parseGeneratedApp(await complete(buildRepairPrompt(input, current, issues)), input.template);
+    if (!repaired) break; // unparseable repair → keep the best version we have
+    current = repaired;
+    issues = verifyGeneratedApp(current);
+  }
+  return current;
+};
+
 /** A model self-review against the ORIGINAL request — the "does it actually work?" quality gate. */
 export const buildCompletenessReviewPrompt = (originalPrompt: string, artifact: CodeStudioArtifact): string =>
   `You generated this project for the request:
@@ -267,11 +295,8 @@ export const runGenerate = async (
   }
   if (!artifact) return null;
 
-  const issues = verifyGeneratedApp(artifact);
-  if (issues.length) {
-    const repaired = parseGeneratedApp(await complete(buildRepairPrompt(input, artifact, issues)), input.template);
-    if (repaired) artifact = repaired;
-  }
+  // Verify + repair in a loop (not a single pass) so the app keeps getting fixed until it's clean.
+  artifact = await repairUntilClean(complete, input, artifact);
 
   const review = opts.review ?? !(input.currentFiles && input.currentFiles.length);
   if (review) artifact = await reviewCompleteness(complete, input.prompt, artifact, input.template);

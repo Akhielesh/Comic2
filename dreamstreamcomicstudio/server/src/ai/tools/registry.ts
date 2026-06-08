@@ -105,13 +105,21 @@ const imageSearchTool: ChatTool = {
     if (!query) return { content: 'No image query was provided.' };
     try {
       const results: ImageResult[] = await ddgImageSearch(query, signal);
-      if (!results.length) return { content: `No images found for "${query}".` };
+      if (!results.length) {
+        return {
+          content: `No images found for "${query}".`,
+          notice: { level: 'warn', message: `Image search returned no results for "${query}".` }
+        };
+      }
       const content = `Found ${results.length} images for "${query}":\n${results
         .map((r, i) => `[${i + 1}] ${r.title || 'image'} — ${r.url}`)
         .join('\n')}`;
       return { content, images: results };
     } catch (err) {
-      return { content: `Image search failed: ${(err as Error)?.message || 'unknown error'}.` };
+      return {
+        content: `Image search failed: ${(err as Error)?.message || 'unknown error'}.`,
+        notice: { level: 'error', message: 'Image search is unavailable right now.' }
+      };
     }
   }
 };
@@ -156,13 +164,21 @@ const videoSearchTool: ChatTool = {
     if (!query) return { content: 'No video query was provided.' };
     try {
       const results = await ddgVideoSearch(query, signal);
-      if (!results.length) return { content: `No videos found for "${query}".` };
+      if (!results.length) {
+        return {
+          content: `No videos found for "${query}".`,
+          notice: { level: 'warn', message: `Video search returned no results for "${query}".` }
+        };
+      }
       const content = `Found ${results.length} videos for "${query}":\n${results
         .map((r, i) => `[${i + 1}] ${r.title}${r.publisher ? ` — ${r.publisher}` : ''} (${r.url})`)
         .join('\n')}`;
       return { content, artifacts: [{ type: 'video_results', data: { query, results } }] };
     } catch (err) {
-      return { content: `Video search failed: ${(err as Error)?.message || 'unknown error'}.` };
+      return {
+        content: `Video search failed: ${(err as Error)?.message || 'unknown error'}.`,
+        notice: { level: 'error', message: 'Video search is unavailable right now.' }
+      };
     }
   }
 };
@@ -229,7 +245,10 @@ const makeNewsTool = (ctx?: ToolContext): ChatTool => ({
     try {
       const data = await fetchNews({ query, topic, region, lang }, signal);
       if (!data.items.length) {
-        return { content: `No news found for "${query || topic || 'top headlines'}".` };
+        return {
+          content: `No news found for "${query || topic || 'top headlines'}".`,
+          notice: { level: 'warn', message: `No news results for "${query || topic || 'top headlines'}".` }
+        };
       }
       const label = query || (topic ? `${topic} news` : 'top headlines');
       const content = `Latest ${label}${region ? ` (${region})` : ''}:\n${data.items
@@ -246,7 +265,10 @@ const makeNewsTool = (ctx?: ToolContext): ChatTool => ({
         artifacts: [{ type: 'news_results', data }]
       };
     } catch (err) {
-      return { content: `News lookup failed: ${(err as Error)?.message || 'unknown error'}.` };
+      return {
+        content: `News lookup failed: ${(err as Error)?.message || 'unknown error'}.`,
+        notice: { level: 'error', message: 'Live news is unavailable right now.' }
+      };
     }
   }
 });
@@ -328,6 +350,7 @@ const makePlacesTool = (ctx?: ToolContext): ChatTool => ({
       let data;
       const fsqOn = foursquareEnabled();
       let usedFsq = false;
+      let fsqFailed = false; // a Foursquare ERROR (auth/rate-limit/5xx), distinct from "no matches"
       if (fsqOn) {
         try {
           data = await findPlacesFoursquare(
@@ -338,23 +361,26 @@ const makePlacesTool = (ctx?: ToolContext): ChatTool => ({
           else usedFsq = true;
         } catch {
           data = undefined;
+          fsqFailed = true;
         }
       }
       if (!data) {
         data = await findPlaces({ query, near: near || undefined, userLocation }, signal);
       }
-      // Be honest about degraded mode (open data ⇒ no ratings/photos/menus).
+      // Be honest about degraded mode — and don't misreport a Foursquare OUTAGE as "no matches".
       const notice = !usedFsq
         ? {
-            level: 'info' as const,
-            message: fsqOn
-              ? 'Foursquare returned nothing here, so these are OpenStreetMap results (no ratings/photos).'
-              : 'Showing OpenStreetMap results — ratings, photos and price need a Foursquare key.',
+            level: fsqFailed ? ('warn' as const) : ('info' as const),
+            message: fsqFailed
+              ? 'Foursquare is unavailable right now (auth or rate limit) — showing OpenStreetMap results (no ratings/photos).'
+              : fsqOn
+                ? 'Foursquare had no matches here, so these are OpenStreetMap results (no ratings/photos).'
+                : 'Showing OpenStreetMap results — ratings, photos and price need a Foursquare key.',
             fix: fsqOn ? undefined : 'Set FOURSQUARE_API_KEY'
           }
         : undefined;
       if (!data.results.length) {
-        return { content: `No ${data.query} found near ${data.near}.` };
+        return { content: `No ${data.query} found near ${data.near}.`, notice };
       }
       const lines = data.results
         .slice(0, 8)
@@ -368,7 +394,10 @@ const makePlacesTool = (ctx?: ToolContext): ChatTool => ({
       const content = `Found ${data.results.length} ${data.query} near ${data.near}:\n${lines}\nA rich local results card with a map is shown to the user.`;
       return { content, artifacts: [{ type: 'places_results', data }], notice };
     } catch (err) {
-      return { content: `Places lookup failed: ${(err as Error)?.message || 'unknown error'}.` };
+      return {
+        content: `Places lookup failed: ${(err as Error)?.message || 'unknown error'}.`,
+        notice: { level: 'error', message: 'Local place search is unavailable right now.' }
+      };
     }
   }
 });

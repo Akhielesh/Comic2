@@ -133,15 +133,43 @@ const fetchAirQuality = async (
   }
 };
 
+// Open-Meteo's geocoder wants a SIMPLE name ("Ashburn"), so a "City, Region, Country" string
+// (which is exactly what the model passes from the user's location context) returns nothing.
+// Try the full string, then progressively simpler forms (first two segments, then the city).
+const geocodePlace = async (place: string, signal?: AbortSignal): Promise<any | null> => {
+  const trimmed = place.trim();
+  const segs = trimmed.split(',').map((s) => s.trim()).filter(Boolean);
+  const region = segs[1]?.toLowerCase(); // e.g. "virginia" — used to disambiguate same-named cities
+  const variants = Array.from(
+    new Set([trimmed, segs.slice(0, 2).join(', '), segs[0]].filter((v) => v && v.length > 0))
+  );
+  for (const v of variants) {
+    const geo = await fetchJson<{ results?: any[] }>(
+      `${GEO_URL}?name=${encodeURIComponent(v)}&count=5&language=en&format=json`,
+      signal
+    ).catch(() => ({ results: undefined as any[] | undefined }));
+    const results = geo.results || [];
+    if (!results.length) continue;
+    // Prefer the result whose region (admin1) or country matches what the user is in, so
+    // "Ashburn" picks Ashburn, VIRGINIA — not the more-populous Ashburn, Georgia.
+    if (region) {
+      const match = results.find((r) => {
+        const a1 = String(r.admin1 || '').toLowerCase();
+        const cc = String(r.country_code || '').toLowerCase();
+        return a1 === region || a1.includes(region) || region.includes(a1) || cc === region;
+      });
+      if (match) return match;
+    }
+    return results[0];
+  }
+  return null;
+};
+
 export const getWeather = async (
   place: string,
   signal?: AbortSignal
 ): Promise<WeatherArtifact> => {
-  const geo = await fetchJson<{ results?: any[] }>(
-    `${GEO_URL}?name=${encodeURIComponent(place)}&count=1&language=en&format=json`,
-    signal
-  );
-  const hit = geo.results?.[0];
+  const hit = await geocodePlace(place, signal);
   if (!hit) throw new Error(`Couldn't find a place called "${place}".`);
 
   const label = [hit.name, hit.admin1, hit.country].filter(Boolean).join(', ');

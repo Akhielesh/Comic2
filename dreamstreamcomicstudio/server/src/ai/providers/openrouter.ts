@@ -14,6 +14,7 @@ import {
   OPENROUTER_APP_URL,
   OPENROUTER_APP_TITLE,
   OPENROUTER_REQUEST_TIMEOUT_MS,
+  CHAT_STREAM_MAX_TOTAL_MS,
   REASONING_EFFORT
 } from '../../config.js';
 import { withRetry } from '../utils.js';
@@ -67,6 +68,13 @@ const openRouterFetch = async <T = any>(
       throw new Error(`OpenRouter ${path} failed: ${res.status} ${res.statusText} ${errBody.slice(0, 500)}`);
     }
     return (await res.json()) as T;
+  } catch (err) {
+    // Map our own timeout abort (a bare DOMException "This operation was aborted") to an
+    // actionable message instead of leaking that opaque string all the way to the user.
+    if (controller.signal.aborted) {
+      throw new Error(`The model took too long to respond (timed out after ${Math.round(timeoutMs / 1000)}s). Please try again, or pick a faster model.`);
+    }
+    throw err;
   } finally {
     clearTimeout(timer);
   }
@@ -238,6 +246,12 @@ const buildBaseBody = (req: GenerateTextRequest): Record<string, unknown> => {
     model: req.model,
     usage: { include: true }
   };
+  // Server-side fallback chain: OpenRouter routes to the first available model in this
+  // ordered list, skipping any that 404 (retired) or 429 (rate-limited) — which is what
+  // makes the chat resilient to free models being dead/throttled. Capped at 3 by the API.
+  if (req.models && req.models.length > 1) {
+    baseBody.models = Array.from(new Set(req.models)).slice(0, 3);
+  }
   if (typeof req.temperature === 'number') baseBody.temperature = req.temperature;
   if (typeof req.maxTokens === 'number') baseBody.max_tokens = req.maxTokens;
   if (req.jsonSchema) {
@@ -354,9 +368,49 @@ const streamOnce = async (
   ctx: ProviderContext,
   onDelta: (delta: { content?: string; reasoning?: string }) => void
 ): Promise<GenerateTextResult> => {
-  const timeoutMs = req.timeoutMs ?? OPENROUTER_REQUEST_TIMEOUT_MS;
+  // The stream timeout is an IDLE window, not a wall-clock deadline: it resets on every
+  // token, so a long answer / code-generation / tool-grounded turn streams to completion
+  // instead of being killed at 60s (which surfaced as the dreaded "This operation was
+  // aborted" and wiped the half-streamed reply). A separate hard cap guards a stuck upstream.
+  const idleMs = req.timeoutMs ?? OPENROUTER_REQUEST_TIMEOUT_MS;
+  const overallDeadline = Date.now() + Math.max(CHAT_STREAM_MAX_TOTAL_MS, idleMs * 2);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let idleTimedOut = false;
+  let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  const armIdle = () => {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      idleTimedOut = true;
+      controller.abort();
+    }, idleMs);
+  };
+
+  // Accumulators live outside the try so a mid-stream abort can still return the partial
+  // answer that already streamed to the user (rather than throwing it all away).
+  let text = '';
+  let reasoning = '';
+  let model = req.model;
+  let usage: ProviderUsage = {};
+  let citations: { url: string; title?: string }[] | undefined;
+  let raw: any = null;
+  const toolAcc = new Map<number, { id: string; name: string; args: string }>();
+
+  const buildResult = (): GenerateTextResult => {
+    const toolCalls = Array.from(toolAcc.values())
+      .filter((t) => t.name)
+      .map((t) => ({ id: t.id || `call_${t.name}`, name: t.name, arguments: t.args || '{}' }));
+    return {
+      text,
+      model: String(model || req.model),
+      usage,
+      reasoning: reasoning || undefined,
+      citations,
+      toolCalls: toolCalls.length ? toolCalls : undefined,
+      raw
+    };
+  };
+
+  armIdle();
   try {
     const res = await fetch(`${OPENROUTER_BASE_URL}/chat/completions`, {
       method: 'POST',
@@ -372,13 +426,6 @@ const streamOnce = async (
     const reader = (res.body as ReadableStream<Uint8Array>).getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    let text = '';
-    let reasoning = '';
-    let model = req.model;
-    let usage: ProviderUsage = {};
-    let citations: { url: string; title?: string }[] | undefined;
-    let raw: any = null;
-    const toolAcc = new Map<number, { id: string; name: string; args: string }>();
 
     const handle = (payload: string) => {
       if (!payload || payload === '[DONE]') return;
@@ -412,6 +459,12 @@ const streamOnce = async (
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      armIdle(); // activity → reset the idle window
+      if (Date.now() > overallDeadline) {
+        idleTimedOut = true;
+        controller.abort();
+        break;
+      }
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
@@ -423,21 +476,18 @@ const streamOnce = async (
     const tail = buffer.trim();
     if (tail.startsWith('data:')) handle(tail.slice(5).trim());
 
-    const toolCalls = Array.from(toolAcc.values())
-      .filter((t) => t.name)
-      .map((t) => ({ id: t.id || `call_${t.name}`, name: t.name, arguments: t.args || '{}' }));
-
-    return {
-      text,
-      model: String(model || req.model),
-      usage,
-      reasoning: reasoning || undefined,
-      citations,
-      toolCalls: toolCalls.length ? toolCalls : undefined,
-      raw
-    };
+    return buildResult();
+  } catch (err) {
+    // On our own timeout, keep whatever already streamed (partial answer / partial tool
+    // call) rather than failing the whole turn — that's how a pro chat behaves when a
+    // stream is interrupted. Only surface an error when nothing at all came through.
+    if (idleTimedOut || controller.signal.aborted) {
+      if (text.trim() || toolAcc.size > 0) return buildResult();
+      throw new Error(`The model stopped responding (no output for ${Math.round(idleMs / 1000)}s). Please try again, or pick a faster model.`);
+    }
+    throw err;
   } finally {
-    clearTimeout(timer);
+    if (idleTimer) clearTimeout(idleTimer);
   }
 };
 

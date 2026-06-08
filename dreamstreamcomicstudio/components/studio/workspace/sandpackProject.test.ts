@@ -18,7 +18,7 @@ describe('buildSandpackProject', () => {
     expect(p.template).toBe('react-ts');
     // Canonical entry + html injected.
     expect(p.entry).toBe('/index.tsx');
-    expect(p.files['/index.tsx']).toContain("import App from './src/App'");
+    expect(p.files['/index.tsx']).toContain("import App from './src/App.tsx'"); // explicit ext
     expect(p.files['/index.tsx']).toContain("import './src/styles.css'"); // CSS preserved
     expect(p.files['/index.tsx']).toContain("document.getElementById('root')");
     expect(p.files['/public/index.html']).toContain('id="root"');
@@ -34,18 +34,41 @@ describe('buildSandpackProject', () => {
       title: 'X', template: 'react-ts',
       files: [{ path: '/App.tsx', content: 'export default () => <div/>;' }],
     });
-    expect(p.files['/index.tsx']).toContain("import App from './App'");
+    expect(p.files['/index.tsx']).toContain("import App from './App.tsx'");
     expect(p.files['/public/index.html']).toContain('id="root"');
   });
 
-  it('maps static to vanilla and keeps the html, adding an entry stub', () => {
+  it('imports the app with its REAL extension so a template stub cannot shadow it', () => {
+    // /App.jsx in a react-ts project: Sandpack merges its own /App.tsx stub, so an
+    // extensionless "./App" import would resolve to the stub. The explicit extension
+    // disambiguates to the generated file.
+    const p = buildSandpackProject({
+      title: 'Mix', template: 'react-ts',
+      files: [{ path: '/App.jsx', content: 'export default () => <div>real</div>;' }],
+    });
+    expect(p.files['/index.tsx']).toContain("import App from './App.jsx'");
+    expect(p.files['/index.tsx']).not.toContain("import App from './App'\n");
+  });
+
+  it('routes static through Sandpack\'s static env and serves the html verbatim', () => {
     const p = buildSandpackProject({
       title: 'Landing', template: 'static',
-      files: [{ path: '/index.html', content: '<h1>Launch</h1>' }],
+      files: [{ path: '/index.html', content: '<h1>Launch</h1><script>console.log(1)</script>' }],
     });
-    expect(p.template).toBe('vanilla');
+    expect(p.template).toBe('static');
     expect(p.files['/index.html']).toContain('Launch');
-    expect(p.files['/index.js']).toBe(''); // Sandpack vanilla needs an entry
+    expect(p.files['/index.html']).toContain('<script>'); // inline script preserved
+    expect(p.files['/index.js']).toBeUndefined(); // no bundler entry forced
+  });
+
+  it('synthesizes a mountable fallback when there is no root component or entry', () => {
+    const p = buildSandpackProject({
+      title: 'Lib', template: 'react-ts',
+      files: [{ path: '/utils.ts', content: 'export const add = (a:number,b:number)=>a+b;' }],
+    });
+    expect(p.entry).toBe('/index.tsx');
+    expect(p.files['/App.tsx']).toContain('export default function App');
+    expect(p.files['/App.tsx']).toContain('utils.ts'); // lists the project files
   });
 
   it('extracts runtime deps from package.json and strips build-only tooling', () => {

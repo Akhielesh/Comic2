@@ -24,8 +24,15 @@ const withTimeout = async (
   accept: string,
   opts: FetchOptions
 ): Promise<Response> => {
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  // Track whether OUR timeout fired so we can turn the otherwise-opaque
+  // DOMException "This operation was aborted" into an honest "<host> timed out".
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
   const onAbort = () => controller.abort();
   if (opts.signal) {
     if (opts.signal.aborted) controller.abort();
@@ -36,6 +43,11 @@ const withTimeout = async (
       headers: { 'User-Agent': USER_AGENT, Accept: accept, ...(opts.headers || {}) },
       signal: controller.signal
     });
+  } catch (err) {
+    // Our timeout → a clear message. A caller-initiated abort (user cancel) or a real
+    // network error propagates unchanged so callers can tell them apart.
+    if (timedOut) throw new Error(`${hostOf(url)} timed out after ${Math.round(timeoutMs / 1000)}s`);
+    throw err;
   } finally {
     clearTimeout(timer);
     opts.signal?.removeEventListener('abort', onAbort);
@@ -46,7 +58,13 @@ const withTimeout = async (
 export const fetchJson = async <T = unknown>(url: string, opts: FetchOptions = {}): Promise<T> => {
   const res = await withTimeout(url, opts.accept || 'application/json', opts);
   if (!res.ok) throw new Error(`${hostOf(url)} returned ${res.status}`);
-  return (await res.json()) as T;
+  // A non-JSON body (HTML error page served with 200, empty body, gateway error) would
+  // otherwise surface as an opaque SyntaxError — map it to a clear, honest message.
+  try {
+    return (await res.json()) as T;
+  } catch {
+    throw new Error(`${hostOf(url)} returned an invalid (non-JSON) response`);
+  }
 };
 
 /** GET text/XML/CSV, throwing on a non-2xx status. */

@@ -6,25 +6,31 @@ import { formatSigned, formatPercent } from './format';
 // Small shared status atoms: a trend pill (signed change + arrow), a generic badge,
 // and a selectable chip. Used across finance/news/data cards.
 
-export const TrendPill: React.FC<{ change: number; changePercent?: number; size?: 'sm' | 'md' }> = ({
+export const TrendPill: React.FC<{ change?: number; changePercent?: number; size?: 'sm' | 'md' }> = ({
   change,
   changePercent,
   size = 'md'
 }) => {
-  const up = change > 0;
-  const down = change < 0;
+  // Direction is driven by the absolute change when present, otherwise by the percent —
+  // so a tile that supplies only `changePercent` still renders a correct up/down pill
+  // instead of vanishing.
+  const basis = typeof change === 'number' ? change : changePercent ?? 0;
+  const up = basis > 0;
+  const down = basis < 0;
   const color = up ? BULL : down ? BEAR : NEUTRAL;
   const Icon = up ? TrendingUp : down ? TrendingDown : Minus;
   const text = size === 'sm' ? 'text-[11px]' : 'text-xs';
   const icon = size === 'sm' ? 'w-3 h-3' : 'w-3.5 h-3.5';
+  const hasChange = typeof change === 'number';
+  const hasPercent = typeof changePercent === 'number';
   return (
     <span
       className={`inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 font-bold ${text}`}
       style={{ color, backgroundColor: `${color}1a` }}
     >
       <Icon className={icon} />
-      {formatSigned(change)}
-      {typeof changePercent === 'number' && <span className="opacity-80">({formatPercent(changePercent)})</span>}
+      {hasChange ? formatSigned(change) : hasPercent ? formatPercent(changePercent) : ''}
+      {hasChange && hasPercent && <span className="opacity-80">({formatPercent(changePercent)})</span>}
     </span>
   );
 };

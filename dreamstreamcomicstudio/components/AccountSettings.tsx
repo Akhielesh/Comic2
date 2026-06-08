@@ -71,6 +71,9 @@ import {
 import { buildModelEntitlements } from '../services/modelEntitlements';
 import { isFreeOnly, setFreeOnly, onFreeOnlyChanged } from '../services/freeOnlyMode';
 import { VerificationCenter } from './VerificationCenter';
+import { AdminAnalytics } from './admin/AdminAnalytics';
+import { InviteManager } from './admin/InviteManager';
+import { RedeemInvite } from './RedeemInvite';
 
 type SettingsTab = 'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin' | 'preferences' | 'security';
 
@@ -1641,6 +1644,20 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                     </div>
                 </details>
 
+                <details className="border-2 border-black rounded-xl bg-white" open>
+                    <summary className="px-4 py-3 cursor-pointer font-display text-lg">Feedback &amp; Telemetry Analytics</summary>
+                    <div className="border-t-2 border-black">
+                        <AdminAnalytics />
+                    </div>
+                </details>
+
+                <details className="border-2 border-black rounded-xl bg-white">
+                    <summary className="px-4 py-3 cursor-pointer font-display text-lg">Tester Invites</summary>
+                    <div className="border-t-2 border-black">
+                        <InviteManager />
+                    </div>
+                </details>
+
                 <div className="border-2 border-black bg-slate-50 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
                     <div className="text-sm">
                         <div className="font-bold">Access Level</div>
@@ -2119,6 +2136,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
 
         return (
             <div className="space-y-6 animate-fade-in max-w-3xl">
+                <RedeemInvite />
                 <ApiConfiguration />
             </div>
         );
