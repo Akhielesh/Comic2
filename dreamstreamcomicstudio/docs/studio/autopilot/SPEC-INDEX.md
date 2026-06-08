@@ -33,7 +33,7 @@
   enterprise bar. No filler.
 
 ## Progress
-**Sections complete: 35 / 55** · target ~200 pages. (Parts I–III complete.)
+**Sections complete: 38 / 55** · target ~200 pages. (Parts I–III complete; Part IV underway.)
 
 Legend: ✅ written · ✍️ in progress · 📋 planned
 
@@ -87,11 +87,11 @@ Legend: ✅ written · ✍️ in progress · 📋 planned
 ### Part IV — Non-functional / Foundations
 | # | Section | File | Status |
 |---|---|---|---|
-| 35 | Security architecture & threat model | spec/35-security-threat-model.md | 📋 |
+| 35 | Security architecture & threat model | [spec/35-security-threat-model.md](./spec/35-security-threat-model.md) | ✅ |
 | 36 | Privacy, compliance & data governance | spec/36-privacy-compliance.md | 📋 |
 | 37 | Reliability & SRE (SLOs, error budgets) | spec/37-reliability-sre.md | 📋 |
-| 38 | Observability (logs/metrics/traces/alerts) | spec/38-observability.md | 📋 |
-| 39 | Performance & scalability | spec/39-performance-scalability.md | 📋 |
+| 38 | Observability (logs/metrics/traces/alerts) | [spec/38-observability.md](./spec/38-observability.md) | ✅ |
+| 39 | Performance & scalability | [spec/39-performance-scalability.md](./spec/39-performance-scalability.md) | ✅ |
 | 40 | Cost model & FinOps | spec/40-cost-finops.md | 📋 |
 | 41 | Billing & metering architecture | spec/41-billing-metering.md | 📋 |
 | 42 | Disaster recovery & backups | spec/42-disaster-recovery.md | 📋 |
