@@ -79,8 +79,8 @@ Build       ░░░░░░░░░░░░░░░░░░░░    0%  
 | Epic | Title | Status | Blocked by |
 |---|---|---|---|
 | A0 | Brakes first (budgets, kill-switch, checkpoints, audit) | 🟢 **core shipped** (pure logic + SQL + flags + 35 tests); repo/route/metering land with A1 | — |
-| A1 | Venture control plane (data + API) | 📋 planned | A0; migration apply (owner) |
-| A2 | Autonomous loop engine (bounded, crash-safe; stub ACT) | 📋 planned | A1; `REDIS_URL` + worker service (owner) |
+| A1 | Venture control plane (data + API) | 🟡 **persistence shipped** (`ventures/repository.ts`); routes + goals/runs migration + client API next | migration apply (owner) |
+| A2 | Autonomous loop engine (bounded, crash-safe; stub ACT) | 🟢 **DECIDE gate shipped** (`ventures/decide.ts`, pure + tested); scheduler/tick + worker next | `REDIS_URL` + worker service (owner) |
 | A3 | Intake → roadmap (idea → approved backlog) | 📋 planned | A2 |
 | A4 | Wire ACT/VERIFY to the real build engine | 📋 planned | A3; studio live flags (owner) |
 | A5 | Deploy adapters (managed + BYO via Nango) | 📋 planned | A4; per-venture connections (owner) |

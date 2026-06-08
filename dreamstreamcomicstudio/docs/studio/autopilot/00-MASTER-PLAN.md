@@ -389,8 +389,11 @@ will drive. Still no loop.
 - [ ] Migration `server/sql/ventures_control_plane.sql`: `venture_goals`, `venture_runs`,
       `venture_connections`, `venture_deployments` (or add `venture_id` to existing
       `studio_deployments`); add `venture_id` FK to `studio_projects`. RLS on all.
-- [ ] `server/src/services/ventureRepository.ts` — typed CRUD mirroring
-      `studioRepository.ts` patterns.
+- [x] Venture persistence repository — typed CRUD mirroring `studioRepository.ts` patterns,
+      shipped as `server/src/ventures/repository.ts` (ventures + budgets + checkpoints + events:
+      create/get/list/status, getBudget/upsertBudget/recordSpend, checkpoint create/list/
+      approve-deny/expire, append/list events). Goals/runs/connections CRUD follow with their
+      migration below.
 - [ ] `server/src/routes/ventures.ts` — `/api/ventures` (list/create/get/update/delete),
       `/api/ventures/:id/goals`, `/checkpoints`, `/budget`, `/connections`, `/events`,
       `/runs`. Auth + RLS + caps middleware.
