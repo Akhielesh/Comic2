@@ -16,6 +16,10 @@ touching anything. These docs are written so you can start cold and continue cor
 - Backend (Railway): `server/src/` (Express + TS). Routes in `server/src/routes/`, AI in `server/src/ai/`.
 - The chat platform: `components/chat/`, server `server/src/ai/chat.ts` + `server/src/routes/chat.ts`.
 - Tool registry (what the AI can call): `server/src/ai/tools/registry.ts` + `toolCatalog.ts`.
+- **Studio build agents' constitution** (the rules the in-app app-builder follows): docs in
+  [`agent-constitution/`](./agent-constitution/00_README_AND_WIRING.md); implemented as
+  `server/src/ai/studio/constitution.ts`, composed into the PLAN/GENERATE/FIX prompts. When you
+  change studio build behavior, keep the docs and that module in sync.
 - Current code studio: `studio/` (WebContainer — being replaced) + `components/chat/CodeStudioPanel.tsx` (Sandpack).
 - **Studio Worker (v2 sandbox):** `studio-worker/` (separate Cloudflare Worker; isolated from app build).
 - Shared types: `apiTypes.ts`, `types.ts`. Conventions: `CLAUDE.md`.
