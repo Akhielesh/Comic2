@@ -114,7 +114,10 @@ export const IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-2.5-flash-i
 export const ASSISTANT_GEMINI_API_KEY = process.env.ASSISTANT_GEMINI_API_KEY || process.env.GEMINI_API_KEY || '';
 export const GEMINI_BASE_URL = process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com';
 
-export const TEXT_REQUEST_TIMEOUT_MS = parseIntegerEnv(process.env.TEXT_REQUEST_TIMEOUT_MS, 60_000, 'TEXT_REQUEST_TIMEOUT_MS', 1_000);
+// 90s (was 60s): heavy structured-extraction steps (world extraction, panel breakdown)
+// were timing out at exactly 60s in production telemetry. Chat is unaffected — streaming
+// is bounded earlier by the client's idle timeout. Env-overridable for further tuning.
+export const TEXT_REQUEST_TIMEOUT_MS = parseIntegerEnv(process.env.TEXT_REQUEST_TIMEOUT_MS, 90_000, 'TEXT_REQUEST_TIMEOUT_MS', 1_000);
 // Maximum output (completion) tokens for the AI Chat Platform. The old flat 2048 cap
 // truncated long answers AND — critically — cut off generate_app/render_chart tool-call
 // arguments mid-JSON (the whole app/chart rides in those arguments), so "build me an
