@@ -182,7 +182,7 @@ Current state is audited (🟡 partial across the board); these epics close the 
 |---|---|---|---|
 | F0 | Observability (Sentry, metrics, tracing, audit log) | **P0** | 🟢 **metrics + audit log shipped** (`observability/metrics.ts` + `auditLog.ts` + `audit_log` table; admin `/api/ventures/admin/metrics` + `/admin/audit`); Sentry + distributed tracing are follow-ups |
 | F1 | AI provider reliability (key pool, circuit breaker, cross-provider failover) | **P0** — the owner's #1 pain | 🟢 **primitives + autonomous-path wiring shipped** (`ai/reliability/`); shared-gateway wiring + image-gen hardening + contract tests are follow-ups |
-| F2 | Distributed correctness (shared limits, optimistic concurrency, idempotency) | **P0** | 🟢 **shared rate-limit store + idempotent intake shipped** (Redis-backed limiter w/ in-memory fallback; `runOnce` de-dupe on intake); optimistic concurrency on project saves is a follow-up |
+| F2 | Distributed correctness (shared limits, optimistic concurrency, idempotency) | **P0** | 🟢 **shared rate-limiter + idempotent intake + atomic spend** (Redis limiter w/ fallback; `runOnce` dedupe; `increment_venture_spend` RPC removes the spend read-modify-write race); optimistic concurrency on project saves is a follow-up |
 | F3 | Session & identity hardening (first-party sessions, JWKS, device revocation) | P1 | 📋 planned |
 | F4 | Real-time & multi-device sync (Durable Objects) | P1 | 📋 planned |
 | F5 | Testing & quality gates (integration, E2E, contract, coverage gate) | P1 | 📋 planned |

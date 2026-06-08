@@ -33,8 +33,6 @@ export interface VentureRow {
   updatedAt: string;
 }
 
-const today = (): string => new Date().toISOString().slice(0, 10);
-
 // ---------------------------------------------------------------------------------------
 // Ventures
 // ---------------------------------------------------------------------------------------
@@ -182,32 +180,16 @@ export const recordSpend = async (input: {
   tokens?: number;
   containerMinutes?: number;
 }): Promise<void> => {
+  // Atomic increment (F2): a single UPDATE via the increment_venture_spend function avoids the
+  // read-modify-write race where two concurrent ticks lose a spend update. Daily reset is inline.
   const admin = getSupabaseAdmin();
-  const { data: row } = await admin
-    .from('venture_budgets')
-    .select('spent_usd_today, spent_usd_total, tokens_used, container_minutes_used, day_anchor')
-    .eq('venture_id', input.ventureId)
-    .eq('user_id', input.userId)
-    .maybeSingle();
-  if (!row) return; // no budget row → nothing to meter against yet
-
-  const dayRolled = row.day_anchor !== today();
-  const addUsd = Math.max(0, input.usd ?? 0);
-  const addTokens = Math.max(0, input.tokens ?? 0);
-  const addMinutes = Math.max(0, input.containerMinutes ?? 0);
-
-  await admin
-    .from('venture_budgets')
-    .update({
-      spent_usd_today: (dayRolled ? 0 : Number(row.spent_usd_today) || 0) + addUsd,
-      spent_usd_total: (Number(row.spent_usd_total) || 0) + addUsd,
-      tokens_used: (Number(row.tokens_used) || 0) + addTokens,
-      container_minutes_used: (Number(row.container_minutes_used) || 0) + addMinutes,
-      day_anchor: today(),
-      updated_at: new Date().toISOString()
-    })
-    .eq('venture_id', input.ventureId)
-    .eq('user_id', input.userId);
+  await admin.rpc('increment_venture_spend', {
+    p_venture_id: input.ventureId,
+    p_user_id: input.userId,
+    p_usd: Math.max(0, input.usd ?? 0),
+    p_tokens: Math.max(0, input.tokens ?? 0),
+    p_minutes: Math.max(0, input.containerMinutes ?? 0)
+  });
 };
 
 // ---------------------------------------------------------------------------------------
