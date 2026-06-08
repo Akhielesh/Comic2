@@ -20,6 +20,7 @@ import {
   getStudioModelSelection, setStudioModel, setStudioAuto, setStudioSource,
   setStudioCostPref, setStudioMaxIterations, setStudioDefaultTemplate, setStudioDesignPreset,
   setStudioAgents, setStudioAgentPreferences, setStudioAutoRunAgents, setStudioRuntime,
+  setStudioProjectLimit,
   resetStudioModelSelection, STUDIO_MODEL_CHANGED, STUDIO_MAX_ITERATIONS_CEILING,
   type StudioModelSelection, type StudioCostPref
 } from '../../services/studioModelSelection';
@@ -279,6 +280,35 @@ export const StudioSettingsPanel: React.FC<{ open: boolean; onClose: () => void 
                 </button>
               ))}
             </div>
+          </section>
+
+          {/* Project spend limit — the AI builds within this; $0 = free models only. */}
+          <section className={card}>
+            <div className="text-sm font-bold mb-2">Project spend limit</div>
+            <div className="flex items-center gap-2">
+              <span className={`text-sm ${t.textFaint}`}>$</span>
+              <input
+                type="number"
+                min={0}
+                step={1}
+                value={sel.projectLimitUsd ?? ''}
+                placeholder="No cap"
+                onChange={(e) => {
+                  const v = e.target.value.trim();
+                  setStudioProjectLimit(v === '' ? null : Math.max(0, Number(v) || 0));
+                }}
+                className="w-28 rounded border border-white/10 bg-black/20 px-2 py-1 text-sm focus:outline-none focus:border-violet-500"
+              />
+              {sel.projectLimitUsd != null && (
+                <button onClick={() => setStudioProjectLimit(null)} className={`text-[11px] underline ${t.textFaint}`}>
+                  clear
+                </button>
+              )}
+            </div>
+            <p className={`mt-2 text-[11px] ${t.textFaint}`}>
+              <b>$0</b> = free models only · <b>&gt; $0</b> = paid/frontier allowed up to this cap · <b>empty</b> = no
+              cap (bounded by your key's remaining credit). The build picks models within this limit.
+            </p>
           </section>
 
           {/* Self-heal iterations (creativity is now a fixed, ambitious server default — no knob). */}

@@ -41,6 +41,14 @@ export const sanitizeProjectForStorage = (project: Project): Project => {
   delete (cloned.state as any).coverTemplateImageUrl;
   delete (cloned.state as any).styleImageUrl;
 
+  // generationStatus.logs is transient UI state appended on every tick of a run. Persisting it
+  // makes project state grow unbounded (the climbing project_state_bytes). Keep the small status
+  // fields for resume, but never save the log buffer — the live build screen reads it in-memory.
+  const status = (cloned.state as any).generationStatus;
+  if (status && Array.isArray(status.logs) && status.logs.length) {
+    (cloned.state as any).generationStatus = { ...status, logs: [] };
+  }
+
   return cloned;
 };
 

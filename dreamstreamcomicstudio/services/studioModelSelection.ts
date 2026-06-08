@@ -10,6 +10,7 @@
 // and the server falls back to its free-first pickCodingModel(). Pinning is purely additive.
 
 import type { ModelSourceId } from './modelSelection';
+import { clampProjectLimit, resolveBuildTier } from './modelBudget';
 
 /** auto = server free-first proven coder (seamless). specific = a pinned model id. */
 export type StudioModelMode = 'auto' | 'specific';
@@ -51,6 +52,12 @@ export interface StudioModelSelection {
    *  - 'browser' always use the in-browser preview (no hosted worker needed)
    */
   runtime?: 'auto' | 'worker' | 'browser';
+  /**
+   * Per-project spend limit in USD the user sets right in the studio. null = no explicit cap (use
+   * the key's remaining credit). 0 = free models only. >0 = paid/frontier allowed up to this cap.
+   * Always clamped to the OpenRouter key's real remaining credit (see services/modelBudget.ts).
+   */
+  projectLimitUsd?: number | null;
 }
 
 export type StudioRuntime = 'auto' | 'worker' | 'browser';
@@ -202,12 +209,42 @@ export const setStudioAgentPreferences = (text: string) => {
   write(next);
 };
 
-export const getStudioAutoRunAgents = (): boolean => read().autoRunAgents === true;
+// Default ON: the agent team reviews/hardens new builds so code isn't shipped on the model's first
+// answer. Set false to disable for faster (lower-quality) builds.
+export const getStudioAutoRunAgents = (): boolean => read().autoRunAgents !== false;
 
 export const setStudioAutoRunAgents = (on: boolean) => {
   const next = read();
   next.autoRunAgents = !!on;
   write(next);
+};
+
+// --- Per-project spend limit (the inline cap the user sets in the studio) -----------------
+/** The user's project spend cap in USD (null = no cap, use the key's remaining credit). */
+export const getStudioProjectLimit = (): number | null => {
+  const v = read().projectLimitUsd;
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
+};
+
+/** Set the project spend cap. Pass the key's remaining credit so it's clamped (a project can never
+ *  be allowed to outspend the key). Returns the clamped value actually stored. */
+export const setStudioProjectLimit = (usd: number | null, keyRemainingUsd: number | null = null): number | null => {
+  const { limitUsd } = clampProjectLimit(usd, keyRemainingUsd);
+  const next = read();
+  next.projectLimitUsd = limitUsd;
+  write(next);
+  return limitUsd;
+};
+
+/**
+ * The effective cost preference a build should use, honoring the project limit + the key's nature:
+ * a free-tier key or an exhausted/zero project budget → 'free'; an explicit funded cap → 'quality';
+ * no cap → the user's standing costPref. This is what makes the AI use models within the limit.
+ */
+export const getStudioBuildCostPref = (keyIsFreeTier = false, spentUsd = 0): StudioCostPref => {
+  const limit = getStudioProjectLimit();
+  if (limit == null) return keyIsFreeTier ? 'free' : read().costPref;
+  return resolveBuildTier({ projectLimitUsd: limit, spentUsd, keyIsFreeTier }) === 'free' ? 'free' : 'quality';
 };
 
 export const getStudioRuntime = (): StudioRuntime => read().runtime ?? 'auto';
@@ -241,7 +278,10 @@ export const studioModelRequest = (): StudioModelRequest => {
   // Temperature is deliberately NOT sent: the server applies a single creative default so every
   // build is ambitious by default (the per-user creativity knob was removed).
   const req: StudioModelRequest = {
-    costPref: s.costPref,
+    // Budget-aware: a project spend limit (or a free-tier key) forces 'free'; a funded cap allows
+    // 'quality'; no cap falls back to the user's standing costPref. This is what makes the build
+    // respect the per-project limit the user set.
+    costPref: getStudioBuildCostPref(),
     maxIterations: s.maxIterations
   };
   if (s.designPreset) req.designPreset = s.designPreset;
