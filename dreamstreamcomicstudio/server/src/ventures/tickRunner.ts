@@ -24,6 +24,7 @@ import { getPlatformComplete } from './platformComplete.js';
 import { buildGoalGenerateInput } from './build.js';
 import { runGenerate } from '../ai/studio/studioGenerate.js';
 import { getProjectWithFiles, saveProject } from '../services/studioRepository.js';
+import { incr } from '../observability/metrics.js';
 
 // In-process per-goal attempt counter for no-progress detection. A4 keeps this lightweight;
 // F5 will persist attempts durably on the goal/run.
@@ -133,5 +134,7 @@ export const runVentureTick = async (userId: string, ventureId: string): Promise
     }
   };
 
-  return runTick(io);
+  const result = await runTick(io);
+  incr('venture_tick', { outcome: result.outcome });
+  return result;
 };

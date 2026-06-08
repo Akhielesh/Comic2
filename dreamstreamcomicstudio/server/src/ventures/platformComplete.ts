@@ -15,6 +15,7 @@ import { runChat } from '../ai/chat.js';
 import { pickCodingModel, TEXT_FALLBACK } from '../ai/autoRouter.js';
 import { KeyPool } from '../ai/reliability/keyPool.js';
 import { CircuitBreaker } from '../ai/reliability/circuitBreaker.js';
+import { incr } from '../observability/metrics.js';
 import type { AIProviderId } from '../ai/providers/types.js';
 
 // Module-level pools + breakers (shared across ticks in the worker process).
@@ -54,6 +55,7 @@ export const getPlatformComplete = async (maxTokens = 4000): Promise<PlatformCom
       for (let attempt = 0; attempt < Math.max(1, pool.size); attempt++) {
         const key = pool.next();
         if (!key) break; // every key for this provider is cooling down
+        incr('ai_request', { provider });
         try {
           const r = await runChat({
             provider,
@@ -66,13 +68,16 @@ export const getPlatformComplete = async (maxTokens = 4000): Promise<PlatformCom
             timeoutMs: STUDIO_REQUEST_TIMEOUT_MS
           });
           breaker.onSuccess();
+          incr('ai_success', { provider });
           return r.text;
         } catch (e) {
           lastErr = e;
           if (isRateLimit(e)) {
+            incr('ai_rate_limited', { provider });
             pool.markRateLimited(key); // bench this key, try the next key
             continue;
           }
+          incr('ai_error', { provider });
           breaker.onFailure(); // real provider trouble — stop hammering it, fail over
           break;
         }
