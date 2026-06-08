@@ -11,6 +11,7 @@
 import type { CodeStudioArtifact, CodeStudioFile, CodeStudioTemplate, StudioBuildPlan, StudioAnswer } from '../../../../apiTypes.js';
 import { renderPlanForBuild } from './studioPlan.js';
 import { buildDesignDirective } from './designSystem.js';
+import { STUDIO_CONSTITUTION } from './constitution.js';
 import { verifyGeneratedApp, formatIssues, type AppIssue } from './verifyApp.js';
 
 const EXT_TO_LANG: Record<string, string> = {
@@ -99,7 +100,9 @@ export const buildGeneratePrompt = (input: GenerateInput): string => {
   const refining = Array.isArray(input.currentFiles) && input.currentFiles.length > 0;
 
   if (refining) {
-    return `You are a senior engineer iterating on an existing app in a live code studio. Apply the requested change and return the COMPLETE updated project (every file), so it can replace the current files.
+    return `${STUDIO_CONSTITUTION}
+
+You are a senior engineer iterating on an existing app in a live code studio. Apply the requested change and return the COMPLETE updated project (every file), so it can replace the current files.
 
 CURRENT APP${input.currentTitle ? ` ("${input.currentTitle}")` : ''} — template: ${template}
 
@@ -119,7 +122,9 @@ ${OUTPUT_CONTRACT}`;
     const answersBlock = input.answers?.length
       ? `\n\nThe user's answers to clarifying questions (honor these):\n${input.answers.map((a) => `- ${a.question} → ${a.answer}`).join('\n')}`
       : '';
-    return `You are a senior engineer implementing an APPROVED build plan in a live code studio (multi-language editor + instant web preview). Build the COMPLETE application and make it run cleanly on first load.
+    return `${STUDIO_CONSTITUTION}
+
+You are a senior engineer implementing an APPROVED build plan in a live code studio (multi-language editor + instant web preview). Build the COMPLETE application and make it run cleanly on first load.
 
 PROJECT IDEA:
 ${input.prompt}${answersBlock}
@@ -134,7 +139,9 @@ ${buildDesignDirective({ prompt: input.prompt, presetId: input.designPreset })}
 ${OUTPUT_CONTRACT}`;
   }
 
-  return `You are a senior engineer building a complete, runnable project from a one-line idea, to open in a live code studio (multi-language editor + instant web preview). Pick the language and stack that best fit the idea — a web UI, a backend API, a CLI, a script, or a data task — don't force everything into a web app.
+  return `${STUDIO_CONSTITUTION}
+
+You are a senior engineer building a complete, runnable project from a one-line idea, to open in a live code studio (multi-language editor + instant web preview). Pick the language and stack that best fit the idea — a web UI, a backend API, a CLI, a script, or a data task — don't force everything into a web app.
 
 PROJECT IDEA:
 ${input.prompt}
