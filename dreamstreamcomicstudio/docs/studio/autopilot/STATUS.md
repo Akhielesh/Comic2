@@ -6,6 +6,15 @@
 
 **Last updated:** 2026-06-07 · **Updated by:** Claude · **Branch:** `claude/gracious-albattani-bDL8T`
 
+> Latest (2026-06-08): **BUILD STARTED — Epic A0 (brakes) core shipped (code, flag-gated).**
+> First real integration code, all under `VENTURES_ENABLED=false` so the live product is
+> untouched: `server/src/ventures/{budget,checkpoints,events,killSwitch}.ts` (pure governance
+> logic), the `server/sql/ventures_foundation.sql` migration (ventures + venture_budgets +
+> venture_checkpoints + venture_events, RLS owner-isolated), and config flags in `config.ts`.
+> **35 new unit tests pass; server + client typecheck green.** Remaining A0: venture_id metering
+> tags + the DB persistence/repo + admin kill route (these land with the A1 control plane).
+> **Owner action queued (not blocking):** apply `ventures_foundation.sql` when you want A1+ live.
+
 > Latest (2026-06-08): **MASTER SPEC COMPLETE — 55 / 55 SECTIONS (~200 pages).** All five parts
 > are written in full depth and pushed: I Strategy (00–07), II Product Definition (08–21), III
 > Architecture (22–34), IV Foundations/NFRs (35–44), V Delivery (45–54) — including the detailed
@@ -69,7 +78,7 @@ Build       ░░░░░░░░░░░░░░░░░░░░    0%  
 
 | Epic | Title | Status | Blocked by |
 |---|---|---|---|
-| A0 | Brakes first (budgets, kill-switch, checkpoints, audit) | 📋 planned — **next** | owner go-ahead to start building |
+| A0 | Brakes first (budgets, kill-switch, checkpoints, audit) | 🟢 **core shipped** (pure logic + SQL + flags + 35 tests); repo/route/metering land with A1 | — |
 | A1 | Venture control plane (data + API) | 📋 planned | A0; migration apply (owner) |
 | A2 | Autonomous loop engine (bounded, crash-safe; stub ACT) | 📋 planned | A1; `REDIS_URL` + worker service (owner) |
 | A3 | Intake → roadmap (idea → approved backlog) | 📋 planned | A2 |

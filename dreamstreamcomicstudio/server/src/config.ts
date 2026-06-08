@@ -242,6 +242,26 @@ export const JSON_TOOL_PROTOCOL_ENABLED = parseBooleanEnv(process.env.JSON_TOOL_
 // tool registry). Empty ⇒ the endpoint is disabled (returns 503) rather than open.
 export const MCP_OUTBOUND_TOKEN = (process.env.MCP_OUTBOUND_TOKEN || '').trim();
 
+// --- Autopilot (always-on autonomous ventures) — Epic A0: brakes-first, flag-gated -------
+// The ENTIRE Autopilot layer is OFF by default. Nothing autonomous runs unless
+// VENTURES_ENABLED is true AND the kill switch (VENTURES_KILL) is false. This keeps the
+// existing Comic/Chat/Studio product completely unaffected until explicitly turned on.
+// See docs/studio/autopilot/00-MASTER-PLAN.md and OPERATING-MODEL.md.
+export const VENTURES_ENABLED = parseBooleanEnv(process.env.VENTURES_ENABLED, false);
+// Global emergency stop: when true, the scheduler pauses ALL ventures (an admin can also flip
+// this at runtime via the in-process override in ventures/killSwitch.ts).
+export const VENTURES_KILL = parseBooleanEnv(process.env.VENTURES_KILL, false);
+// Global cap on concurrent autonomous ticks across all ventures (protects providers + spend).
+export const VENTURES_MAX_CONCURRENT_TICKS = parseIntegerEnv(
+  process.env.VENTURES_MAX_CONCURRENT_TICKS,
+  5,
+  'VENTURES_MAX_CONCURRENT_TICKS',
+  1
+);
+// Default per-venture budget caps (USD) applied when a venture has no explicit budget set.
+export const VENTURES_DEFAULT_USD_PER_DAY = Number(process.env.VENTURES_DEFAULT_USD_PER_DAY || '5');
+export const VENTURES_DEFAULT_USD_TOTAL = Number(process.env.VENTURES_DEFAULT_USD_TOTAL || '50');
+
 export const REQUIRED_RUNTIME_ENV_VARS = ['CORS_ORIGIN', 'VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY'] as const;
 type RequiredRuntimeEnv = (typeof REQUIRED_RUNTIME_ENV_VARS)[number];
 export const REQUIRED_BILLING_ENV_VARS = [

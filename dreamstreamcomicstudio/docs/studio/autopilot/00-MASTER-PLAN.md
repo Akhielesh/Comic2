@@ -355,21 +355,24 @@ files to touch, acceptance criteria, and any owner action. Mark `[x]` as you shi
 **Goal:** make autonomy *safe to turn on later* by shipping every governance primitive
 before any loop exists. Everything is admin-only + flag-gated (`VENTURES_ENABLED=false`).
 
-- [ ] Migration `server/sql/ventures_foundation.sql`: tables `ventures`, `venture_budgets`,
+- [x] Migration `server/sql/ventures_foundation.sql`: tables `ventures`, `venture_budgets`,
       `venture_checkpoints`, `venture_events` (+ RLS owner-isolation mirroring
-      `projects_rls_owner_isolation.sql`).
-- [ ] `server/src/ventures/budget.ts` — pure budget evaluator: given a venture + a proposed
-      spend, return `allow | pause-budget`. Unit-tested.
-- [ ] `server/src/ventures/checkpoints.ts` — create/list/resolve checkpoints; the 6
-      checkpoint types from §8. Unit-tested.
-- [ ] `server/src/ventures/events.ts` — append-only event writer (what/why/cost/result +
-      model + prompt hash). Unit-tested.
-- [ ] Global kill switch: `VENTURES_KILL=true` env + an admin route to flip it; the future
-      worker must check it every tick.
+      `projects_rls_owner_isolation.sql`). ✅ shipped (apply via Supabase migration flow).
+- [x] `server/src/ventures/budget.ts` — pure budget evaluator: given a venture + a proposed
+      spend, return `allow | pause-budget`. Unit-tested. ✅ + `budgetAlertLevel` (80/100%).
+- [x] `server/src/ventures/checkpoints.ts` — create/list/resolve checkpoints; the 6
+      checkpoint types from §8. Unit-tested. ✅ (`checkpointForAction`, transitions, resolve).
+- [x] `server/src/ventures/events.ts` — append-only event writer (what/why/cost/result +
+      model). Unit-tested. ✅ (pure shaping + secret redaction; DB append lands in A1).
+- [x] Global kill switch: `VENTURES_KILL=true` env + runtime override
+      (`server/src/ventures/killSwitch.ts`); the future worker checks it every tick.
+      (Admin route to flip it at runtime lands with the A1 control plane.)
 - [ ] Wire metering tags: extend `costEstimator.ts`/`billingLedger.ts` calls to accept a
       `venture_id` tag (additive, no behavior change).
-- [ ] Feature flag `VENTURES_ENABLED` (default false) gating all of the above.
-- [ ] Tests: budget breach pauses; checkpoint lifecycle; event append; kill switch honored.
+- [x] Feature flag `VENTURES_ENABLED` (default false) gating all of the above
+      (`server/src/config.ts`), + `VENTURES_MAX_CONCURRENT_TICKS` + default budget caps.
+- [x] Tests: budget breach + alert levels; checkpoint lifecycle; event append/redaction;
+      kill switch honored. ✅ 35 unit tests, server+client typecheck green.
 
 **Acceptance:** with `VENTURES_ENABLED=false` nothing changes for users; with it on (admin),
 you can create a venture row, set a budget, raise/resolve a checkpoint, and read the audit
