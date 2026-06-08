@@ -155,6 +155,22 @@
   .animate-page-flip-next, .animate-page-flip-prev { animation: none; }
 }
 
+/* Reader "comic feel": panels pop in as they scroll into view. */
+@keyframes comicPanelReveal { from { opacity: 0; transform: translateY(26px) scale(0.985); } to { opacity: 1; transform: none; } }
+.comic-reveal { opacity: 0; will-change: opacity, transform; }
+.comic-reveal.is-visible { animation: comicPanelReveal 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+@media (prefers-reduced-motion: reduce) {
+  .comic-reveal, .comic-reveal.is-visible { opacity: 1; animation: none; }
+}
+
+/* Optional halftone print texture overlay for that comic-page feel. */
+.comic-halftone { position: relative; }
+.comic-halftone::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background-image: radial-gradient(rgba(0,0,0,0.55) 1px, transparent 1.4px);
+  background-size: 4px 4px; mix-blend-mode: multiply; opacity: 0.16;
+}
+
 /* ---- How It Works page motion ---- */
 @keyframes hiwGradientPan {
   0% { background-position: 0% 50%; }

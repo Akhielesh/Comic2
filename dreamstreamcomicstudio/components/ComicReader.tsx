@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Project, ComicPanel, DialogueBlock, TextLayout } from '../types';
 import { CommentSection } from './CommentSection';
-import { X, ChevronLeft, ChevronRight, Maximize2, Minimize2, BookOpen, MessageSquareText } from 'lucide-react';
+import { X, ChevronLeft, ChevronRight, Maximize2, Minimize2, BookOpen, MessageSquareText, Volume2, VolumeX, Sparkles } from 'lucide-react';
 import { PanelDialogue } from './PanelDialogue';
 import { derivePanelTitle } from '../services/panelDescription';
 import { loadReaderState, saveReaderState } from '../services/db';
@@ -11,6 +11,60 @@ import { submitReview } from '../services/db';
 import { useAuth } from '../contexts/AuthContext';
 import { StaticSiteHeader } from './layout/StaticSiteHeader';
 import { LegalMicroLinks } from './layout/LegalMicroLinks';
+
+// Reveals its children with a comic "pop-in" the first time they scroll into view.
+const RevealOnScroll: React.FC<{ className?: string; children: React.ReactNode }> = ({ className, children }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || visible) return;
+    // Degrade gracefully where IntersectionObserver isn't available (jsdom/SSR): just show.
+    if (typeof IntersectionObserver === 'undefined') { setVisible(true); return; }
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) { setVisible(true); io.disconnect(); }
+      });
+    }, { rootMargin: '0px 0px -8% 0px', threshold: 0.08 });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [visible]);
+  return (
+    <div ref={ref} className={`comic-reveal ${visible ? 'is-visible' : ''} ${className || ''}`}>
+      {children}
+    </div>
+  );
+};
+
+// A short, soft "page turn" using WebAudio (filtered noise burst) — no asset needed.
+const playPageTurnSound = () => {
+  try {
+    const Ctx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const duration = 0.18;
+    const buffer = ctx.createBuffer(1, Math.floor(ctx.sampleRate * duration), ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      // Decaying noise = paper rustle.
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / data.length, 2.5);
+    }
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 1600;
+    filter.Q.value = 0.7;
+    const gain = ctx.createGain();
+    gain.gain.value = 0.18;
+    src.connect(filter); filter.connect(gain); gain.connect(ctx.destination);
+    src.start();
+    src.stop(ctx.currentTime + duration);
+    src.onended = () => ctx.close().catch(() => undefined);
+  } catch {
+    /* audio not available — ignore */
+  }
+};
 
 interface ComicReaderProps {
   project: Project;
@@ -41,6 +95,23 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
   const [showComments, setShowComments] = useState(false);
   const [showReviewModal, setShowReviewModal] = useState(false);
   const [readerMode, setReaderMode] = useState<'scroll' | 'flip'>('scroll');
+  // Comic-feel toggles, remembered across sessions.
+  const [soundOn, setSoundOn] = useState<boolean>(() => {
+    try { return window.localStorage.getItem('reader_sound') !== 'off'; } catch { return true; }
+  });
+  const [fxOn, setFxOn] = useState<boolean>(() => {
+    try { return window.localStorage.getItem('reader_fx') === 'on'; } catch { return false; }
+  });
+  const toggleSound = () => setSoundOn((prev) => {
+    const next = !prev;
+    try { window.localStorage.setItem('reader_sound', next ? 'on' : 'off'); } catch { /* ignore */ }
+    return next;
+  });
+  const toggleFx = () => setFxOn((prev) => {
+    const next = !prev;
+    try { window.localStorage.setItem('reader_fx', next ? 'on' : 'off'); } catch { /* ignore */ }
+    return next;
+  });
   // ... existing state ...
 
   // Review Trigger Logic
@@ -216,6 +287,7 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
 
   const goNext = () => {
     if (pageIndex >= pages.length - 1) return;
+    if (soundOn) playPageTurnSound();
     setFlipDirection('next');
     setPageIndex((prev) => {
       const next = prev + 1;
@@ -226,6 +298,7 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
 
   const goPrev = () => {
     if (pageIndex <= 0) return;
+    if (soundOn) playPageTurnSound();
     setFlipDirection('prev');
     setPageIndex((prev) => {
       const next = prev - 1;
@@ -345,6 +418,22 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
             {readerMode === 'scroll' ? 'Page Flip' : 'Scroll'}
           </button>
           <button
+            onClick={toggleFx}
+            title="Halftone comic texture"
+            aria-pressed={fxOn}
+            className={`text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap flex items-center gap-1 ${fxOn ? 'bg-brand-blue text-white' : 'bg-slate-50'}`}
+          >
+            <Sparkles className="w-4 h-4" /> FX
+          </button>
+          <button
+            onClick={toggleSound}
+            title={soundOn ? 'Mute page-turn sound' : 'Unmute page-turn sound'}
+            aria-pressed={soundOn}
+            className="text-xs font-bold border-2 border-black rounded-lg px-2 py-1 shrink-0 whitespace-nowrap bg-slate-50 flex items-center gap-1"
+          >
+            {soundOn ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+          </button>
+          <button
             onClick={toggleFullscreen}
             className="text-xs font-bold border-2 border-black rounded-lg px-3 py-1 shrink-0 whitespace-nowrap bg-slate-50 flex items-center gap-1"
           >
@@ -389,21 +478,23 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
                     </div>
                   )}
                   {project.state.panels.map((panel, idx) => (
-                    <div key={idx} className={`border-2 border-black shadow-sm relative ${getPanelClass(idx)}`}>
-                      {panel.imageUrl ? (
-                        <img src={panel.imageUrl} alt={derivePanelTitle(panel, idx)} loading="lazy" className="block w-full h-auto animate-fade-in" />
-                      ) : (
-                        <div className="w-full min-h-[280px] flex items-center justify-center bg-amber-50 text-amber-800 text-sm font-bold border-b-2 border-black">
-                          Image missing for this panel
-                        </div>
-                      )}
-                      {!panel.imageUrl && (
-                        <div className="px-3 py-1 text-[11px] font-bold bg-amber-100 border-b border-amber-300 text-amber-800">
-                          Dialogue shown without artwork
-                        </div>
-                      )}
-                      <PanelDialogue panel={panel} layout={textLayout} />
-                    </div>
+                    <RevealOnScroll key={idx} className={getPanelClass(idx)}>
+                      <div className={`border-2 border-black shadow-sm relative ${fxOn ? 'comic-halftone' : ''}`}>
+                        {panel.imageUrl ? (
+                          <img src={panel.imageUrl} alt={derivePanelTitle(panel, idx)} loading="lazy" className="block w-full h-auto animate-fade-in" />
+                        ) : (
+                          <div className="w-full min-h-[280px] flex items-center justify-center bg-amber-50 text-amber-800 text-sm font-bold border-b-2 border-black">
+                            Image missing for this panel
+                          </div>
+                        )}
+                        {!panel.imageUrl && (
+                          <div className="px-3 py-1 text-[11px] font-bold bg-amber-100 border-b border-amber-300 text-amber-800">
+                            Dialogue shown without artwork
+                          </div>
+                        )}
+                        <PanelDialogue panel={panel} layout={textLayout} />
+                      </div>
+                    </RevealOnScroll>
                   ))}
                   {project.state.panels.length === 0 && (
                     <div className="col-span-full text-center py-20 text-slate-400 font-display text-2xl">
@@ -435,7 +526,7 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
                   >
                     <div
                       key={pageIndex}
-                      className={`relative inline-flex max-h-full max-w-full ${flipDirection === 'next' ? 'animate-page-flip-next' : flipDirection === 'prev' ? 'animate-page-flip-prev' : ''}`}
+                      className={`relative inline-flex max-h-full max-w-full ${fxOn ? 'comic-halftone' : ''} ${flipDirection === 'next' ? 'animate-page-flip-next' : flipDirection === 'prev' ? 'animate-page-flip-prev' : ''}`}
                     >
                       {pages[pageIndex]?.imageUrl ? (
                         <img
