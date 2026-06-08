@@ -13,6 +13,35 @@ Entry format:
 
 ---
 
+## 2026-06-08 — Transactional + newsletter email via Cloudflare Email Sending
+
+- **Problem:** no mailing service. Needed newsletter request confirmation, signup/auth
+  confirmations, and essential transactional emails — branded to the app UI/UX — and an
+  answer on whether Cloudflare could do it, at what cost/limits.
+- **Root cause / context:** auth emails were Supabase-default; marketing capture was a
+  client-only insert into `waitlist_signups` with no confirmation email and no log.
+- **Solution:** Cloudflare **Email Sending** (public beta, `env.EMAIL.send`, $5/mo Workers
+  Paid + 3,000/mo free, then $0.35/1k). Built a dedicated **email-worker** (`/send` HMAC,
+  `/auth-hook` Supabase Send Email Hook, `/health`) that renders a shared, dependency-free,
+  email-safe **comic-branded** template library (`shared/email/`). Backend **mailer**
+  (`server/src/services/mailer.ts`) is dormant-until-configured and adds: marketing
+  suppression, a **hard cost cap** (defaults under the free tier, with `[email][COST]`
+  alerts), per-attempt logging to `email_log`, working one-click **unsubscribe**
+  (signed token + `List-Unsubscribe` header), and a read-receipt **open pixel**. Essential
+  vs marketing classification (`TEMPLATE_KIND`) gates unsubscribe/suppression. Newsletter
+  goes **double opt-in** via a new public `/api/newsletter` route; `WaitlistForm` routes
+  through it with a graceful fallback to the old direct insert.
+- **Files:** `shared/email/{theme,layout,templates,index,templates.test}.ts`,
+  `email-worker/{src/index.ts,wrangler.jsonc,package.json,tsconfig.json,README.md}`,
+  `server/src/services/{mailer,emailStore}.ts`, `server/src/routes/{newsletter,email}.ts`,
+  `server/sql/email_system.sql`, `server/src/config.ts`, `server/src/index.ts`,
+  `services/waitlist.ts`, `scripts/email-preview.ts`, `docs/email/*`, `.env.example`.
+- **Verify:** client + server typecheck clean; email-worker typecheck clean against
+  `@cloudflare/workers-types`; 11 template tests pass (incl. escaping, URL sanitization,
+  essential-never-unsubscribable, pixel-only-when-supplied); 12 previews render.
+- **Owner actions:** see `docs/email/SETUP.md` (Workers Paid + domain DNS, deploy worker +
+  secrets, Railway env, optional Supabase hook).
+
 ## 2026-05-29 — Text pipeline migrated to OpenRouter (analyze-script 400 fix)
 
 - **Problem:** analyze-script (and every text stage) returned 400 `API_KEY_INVALID` from
