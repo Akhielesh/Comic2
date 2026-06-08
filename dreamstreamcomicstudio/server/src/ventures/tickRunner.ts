@@ -25,6 +25,7 @@ import { buildGoalGenerateInput } from './build.js';
 import { runGenerate } from '../ai/studio/studioGenerate.js';
 import { getProjectWithFiles, saveProject } from '../services/studioRepository.js';
 import { incr } from '../observability/metrics.js';
+import { isStrongCoder } from '../ai/autoRouter.js';
 
 // In-process per-goal attempt counter for no-progress detection. A4 keeps this lightweight;
 // F5 will persist attempts durably on the goal/run.
@@ -60,6 +61,18 @@ export const runVentureTick = async (userId: string, ventureId: string): Promise
       const pc = await getPlatformComplete(4000);
       if (!pc) {
         return { ok: false, error: 'No platform model key configured (set OPENROUTER_API_KEY or NVIDIA_API_KEY).' };
+      }
+      // Surface the dominant cause of poor generated code: a weak/free coder. The build still runs,
+      // but the owner sees they should set a frontier coding key.
+      if (!isStrongCoder(pc.model)) {
+        await appendEvent({
+          ventureId,
+          userId,
+          kind: 'warning',
+          level: 'warn',
+          message: `Building with a non-frontier model (${pc.model}). Set a frontier coding key (Claude/GPT-class) for materially better code.`,
+          source: 'engine'
+        });
       }
       const venture = await getVenture(userId, ventureId);
       const projectId = `v_${ventureId}`;

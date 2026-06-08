@@ -21,6 +21,7 @@ export type VentureEventKind =
   | 'venture.paused'
   | 'venture.resumed'
   | 'signal'
+  | 'warning'
   | 'error';
 
 export interface VentureEventInput {
