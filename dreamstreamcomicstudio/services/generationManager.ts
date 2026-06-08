@@ -2,6 +2,7 @@ import { Project, GenerationStatus, ComicPanel } from "../types";
 import { generatePanelBreakdown, updateContinuitySummary } from "./geminiService";
 import { generateImage } from "./imageService";
 import { buildImagePrompt } from "./imagePrompt";
+import { classifyStoryMood } from "./storyMood";
 import { resolveAspectRatio } from "./imageUtils";
 import { getGridTemplate } from "./panelLayout";
 import { normalizePanelDialogue } from "./dialogueUtils";
@@ -190,8 +191,14 @@ export const startBackgroundGeneration = async (
     });
   };
 
+  // Read the story's mood once so every panel render gets a palette/lighting guardrail
+  // (keeps a happy story from rendering dark & moody). Persist + log it for later analysis.
+  const storyMood = classifyStoryMood(state.script, state.creativeDirection);
+
   try {
     addLog("Starting generation process...");
+    addLog(`Story mood: ${storyMood.label} (${storyMood.brightness} palette). ${storyMood.summary}`);
+    onUpdate(project.id, (prev) => ({ state: { ...prev.state, storyMood } }));
     if (staleDownstreamFingerprint) {
       addLog("Warning: generation started with stale script/scene/world fingerprints.");
     }
@@ -424,6 +431,7 @@ export const startBackgroundGeneration = async (
             focalSubject: panelFocalSubject,
             sceneSynopsis: scene.synopsis || undefined,
             creativeDirection: state.creativeDirection || undefined,
+            moodGuidance: storyMood.promptGuidance,
             shotType: panelShotType,
             cameraAngle: panelCameraAngle,
             composition: panelComposition,
@@ -730,6 +738,7 @@ export const regenerateSinglePanel = async (
     stylePrompt: state.stylePrompt,
     sceneSynopsis: scene?.synopsis || undefined,
     creativeDirection: state.creativeDirection || undefined,
+    moodGuidance: (state.storyMood?.promptGuidance) || classifyStoryMood(state.script, state.creativeDirection).promptGuidance,
     focalSubject: normalizedTargetPanel.focalSubject,
     shotType: normalizedTargetPanel.shotType,
     cameraAngle: normalizedTargetPanel.cameraAngle,

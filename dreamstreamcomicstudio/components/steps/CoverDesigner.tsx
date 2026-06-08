@@ -6,6 +6,7 @@ import { saveImage, getImageUrl } from '../../services/db';
 import { Button } from '../Button';
 import { ImagePreviewModal } from '../modals/ImagePreviewModal';
 import { buildImagePrompt } from '../../services/imagePrompt';
+import { classifyStoryMood } from '../../services/storyMood';
 import { resolveAspectRatio } from '../../services/imageUtils';
 import { COVER_TEMPLATE_DEFINITIONS } from '../../services/coverTemplates';
 
@@ -114,6 +115,7 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
           setting: scene?.setting || '',
           characters: cast || 'Lead cast',
           items: keyItems || undefined,
+          moodGuidance: (state.storyMood?.promptGuidance) || classifyStoryMood(state.script, state.creativeDirection).promptGuidance,
           extraNotes: `${sharedBrief} ${variation}`.trim(),
           projectTitle: coverTitleIdea || state.styleCategory || undefined
         });

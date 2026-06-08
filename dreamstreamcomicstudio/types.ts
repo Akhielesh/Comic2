@@ -854,6 +854,28 @@ export interface Review {
   };
 }
 
+/** A deterministic read of a story's emotional tone, derived from its text (see
+ *  services/storyMood.ts). Used to keep style + image generation faithful to the
+ *  story's mood, and logged so we can later analyse the AI's understanding. */
+export interface StoryMood {
+  key: string;
+  label: string;
+  brightness: 'dark' | 'neutral' | 'bright';
+  energy: 'calm' | 'neutral' | 'high';
+  /** Palette hint, e.g. "warm, sunlit, saturated". */
+  palette: string;
+  /** Lighting hint, e.g. "soft natural daylight". */
+  lighting: string;
+  /** One-line guardrail injected into image prompts so renders match the tone. */
+  promptGuidance: string;
+  /** Preset style ids that suit this mood, most-fitting first. */
+  recommendedStyleIds: string[];
+  /** Short human-readable explanation (UI + logging). */
+  summary: string;
+  /** 0-1 signal strength of the classification. */
+  confidence: number;
+}
+
 export interface ComicState {
   pipelineMode?: PipelineMode;
   comicforge?: ComicForgeState;
@@ -878,6 +900,10 @@ export interface ComicState {
   };
   scenes: Scene[];
   continuitySummary?: string;
+  /** Deterministic mood/tone read of the story (bright/dark, calm/high-energy). Drives
+   *  mood-aware style recommendations + image-prompt lighting/palette so a happy story
+   *  doesn't render dark & moody. Persisted for later analysis of AI understanding. */
+  storyMood?: StoryMood;
   continuity?: ContinuityState;
   overview?: string;
   publishedAt?: number;
