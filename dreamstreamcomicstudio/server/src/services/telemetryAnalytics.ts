@@ -78,6 +78,15 @@ export interface AnalyticsOverview {
   }>;
   recentFailures: Array<Record<string, unknown>>;
   recentDislikes: Array<Record<string, unknown>>;
+  /** Aggregated chat quality/latency from chat_turn events. */
+  chatPerformance: {
+    turns: number;
+    avgLatencyMs: number;
+    p95LatencyMs: number;
+    emptyRate: number;
+    toolFailureRate: number;
+    topModels: Array<{ model: string; count: number }>;
+  };
 }
 
 const computeAnalyticsOverview = async (windowDays: number): Promise<AnalyticsOverview> => {
@@ -94,7 +103,8 @@ const computeAnalyticsOverview = async (windowDays: number): Promise<AnalyticsOv
     feedbackByCategory: {},
     topIssues: [],
     recentFailures: [],
-    recentDislikes: []
+    recentDislikes: [],
+    chatPerformance: { turns: 0, avgLatencyMs: 0, p95LatencyMs: 0, emptyRate: 0, toolFailureRate: 0, topModels: [] }
   };
   if (!base.storageEnabled) return base;
 
@@ -111,7 +121,8 @@ const computeAnalyticsOverview = async (windowDays: number): Promise<AnalyticsOv
       eventsRowsRes,
       feedbackRowsRes,
       recentFailuresRes,
-      recentDislikesRes
+      recentDislikesRes,
+      chatTurnRowsRes
     ] = await Promise.all([
       countIn('telemetry_events', since),
       countIn('telemetry_events', since, (q) => q.in('severity', ['error', 'critical'])),
@@ -121,11 +132,13 @@ const computeAnalyticsOverview = async (windowDays: number): Promise<AnalyticsOv
       admin.from('telemetry_events').select('severity, event_type, source, session_id, user_id, message').gte('created_at', since).order('created_at', { ascending: false }).limit(AGG_CAP),
       admin.from('user_feedback').select('sentiment, category').gte('created_at', since).limit(AGG_CAP),
       admin.from('telemetry_events').select(EVENT_COLUMNS).in('severity', ['error', 'critical']).gte('created_at', since).order('created_at', { ascending: false }).limit(15),
-      admin.from('user_feedback').select(FEEDBACK_COLUMNS).eq('vote', 'dislike').gte('created_at', since).order('created_at', { ascending: false }).limit(15)
+      admin.from('user_feedback').select(FEEDBACK_COLUMNS).eq('vote', 'dislike').gte('created_at', since).order('created_at', { ascending: false }).limit(15),
+      admin.from('telemetry_events').select('metadata').eq('event_type', 'chat_turn').gte('created_at', since).order('created_at', { ascending: false }).limit(AGG_CAP)
     ]);
 
     const eventRows = (eventsRowsRes.data || []) as Array<Record<string, unknown>>;
     const feedbackRows = (feedbackRowsRes.data || []) as Array<Record<string, unknown>>;
+    const chatTurnRows = (chatTurnRowsRes.data || []) as Array<{ metadata?: Record<string, unknown> }>;
 
     base.totals.events = totalEvents;
     base.totals.failures = totalFailures;
@@ -165,6 +178,35 @@ const computeAnalyticsOverview = async (windowDays: number): Promise<AnalyticsOv
       }
     }
     base.topIssues = Array.from(issues.values()).sort((a, b) => b.count - a.count).slice(0, 15);
+
+    // Chat performance from chat_turn events (compact per-turn metrics).
+    if (chatTurnRows.length) {
+      const latencies: number[] = [];
+      let emptyCount = 0;
+      let toolFailedCount = 0;
+      const modelTally: Record<string, number> = {};
+      for (const row of chatTurnRows) {
+        const m = (row.metadata || {}) as Record<string, unknown>;
+        const lat = Number(m.latencyMs);
+        if (Number.isFinite(lat) && lat >= 0) latencies.push(lat);
+        if (m.empty === true) emptyCount += 1;
+        if (Number(m.toolsFailed) > 0) toolFailedCount += 1;
+        const model = typeof m.model === 'string' && m.model ? m.model : 'unknown';
+        modelTally[model] = (modelTally[model] || 0) + 1;
+      }
+      latencies.sort((a, b) => a - b);
+      const turns = chatTurnRows.length;
+      const avg = latencies.length ? Math.round(latencies.reduce((s, v) => s + v, 0) / latencies.length) : 0;
+      const p95 = latencies.length ? latencies[Math.min(latencies.length - 1, Math.floor(latencies.length * 0.95))] : 0;
+      base.chatPerformance = {
+        turns,
+        avgLatencyMs: avg,
+        p95LatencyMs: p95,
+        emptyRate: turns ? emptyCount / turns : 0,
+        toolFailureRate: turns ? toolFailedCount / turns : 0,
+        topModels: Object.entries(modelTally).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([model, count]) => ({ model, count }))
+      };
+    }
 
     base.recentFailures = (recentFailuresRes.data || []) as Array<Record<string, unknown>>;
     base.recentDislikes = (recentDislikesRes.data || []) as Array<Record<string, unknown>>;
