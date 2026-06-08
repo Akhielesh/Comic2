@@ -28,6 +28,9 @@ export interface TickGoal {
   priority: number;
   /** The engine action this goal performs; defaults to an in-sandbox build (no checkpoint). */
   action?: EngineAction;
+  /** Optional goal text the ACT step uses to build (ignored by the pure decision logic). */
+  title?: string;
+  detail?: string | null;
 }
 
 export interface TickEmit {

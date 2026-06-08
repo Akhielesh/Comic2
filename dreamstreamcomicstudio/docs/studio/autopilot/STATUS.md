@@ -6,6 +6,17 @@
 
 **Last updated:** 2026-06-07 · **Updated by:** Claude · **Branch:** `claude/gracious-albattani-bDL8T`
 
+> Latest (2026-06-08): **A4 — ACT NOW BUILDS FOR REAL (pure-LLM, governed).** The tick's stub ACT
+> is replaced: `tickRunner.act` runs the existing `studioGenerate.runGenerate` (pure-LLM, no
+> Cloudflare worker) for the selected goal against the venture's `studio_project` (`v_<ventureId>`),
+> auto-verifies + repairs, and saves a `studio_version` — using a worker-side platform-key
+> `complete` (`platformComplete.ts`) and a tested goal→build-input composer (`build.ts`). Spend is
+> budget-checked BEFORE the build (DECIDE gate, `VENTURES_BUILD_COST_ESTIMATE_USD`) and metered
+> after. This is the M-A2 capability: **idea → roadmap → approve → the loop autonomously builds the
+> app, governed.** 88 ventures tests; server + client typecheck green. Deploy/run (worker) = A5.
+> **To actually run it: a model key (OPENROUTER_API_KEY/NVIDIA_API_KEY) + REDIS_URL + worker +
+> VENTURES_ENABLED=true.** Still flag-gated/off.
+
 > Latest (2026-06-08): **A3 INTAKE → ROADMAP SHIPPED (backend).** `ventures/intake.ts` turns an
 > idea into a venture spec + prioritized roadmap (DI `complete`, robust JSON extraction safe
 > against prose/fences/nested-arrays), wired as `POST /api/ventures/intake` (creates draft venture
@@ -113,7 +124,7 @@ Build       ░░░░░░░░░░░░░░░░░░░░    0%  
 | A1 | Venture control plane (data + API) | 🟢 **shipped** — migrations applied to Supabase, repo + controlPlane + `/api/ventures` routes (incl. admin kill) mounted, flag/admin-gated; client API + apiTypes land with A8 | — |
 | A2 | Autonomous loop engine (bounded, crash-safe; stub ACT) | 🟢 **backend complete** — DECIDE gate + governed `tick` (DI, 9 tests) + `tickRunner` (real persistence) + BullMQ `queue`/`scheduler`/`worker` + `npm run ventures:worker`. ACT is a stub (A4 wires real builds). | `REDIS_URL` + worker service (owner) |
 | A3 | Intake → roadmap (idea → approved backlog) | 🟢 **backend shipped** — `intake.ts` (idea→spec+roadmap, robust parse) + `/api/ventures/intake` + `/:id/approve-roadmap`; needs a model key at runtime. Intake UI = A8. | model key (owner) |
-| A4 | Wire ACT/VERIFY to the real build engine | 📋 planned | A3; studio live flags (owner) |
+| A4 | Wire ACT/VERIFY to the real build engine | 🟢 **build wired** — ACT runs `studioGenerate.runGenerate` (pure-LLM, no worker) → saves a versioned `studio_project` per venture; platform-key `complete`; budget-checked pre-build. Static verify via runGenerate. Needs a model key to run. | model key (owner) |
 | A5 | Deploy adapters (managed + BYO via Nango) | 📋 planned | A4; per-venture connections (owner) |
 | A6 | Sense layer (signals → iterate loop) | 📋 planned | A5 |
 | A7 | Central billing & budgets portal | 📋 planned | A1; Stripe price config |

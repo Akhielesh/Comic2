@@ -256,3 +256,13 @@ export const listActiveVentures = async (limit = 100): Promise<Array<{ id: strin
     .limit(limit);
   return (data || []).map((v: any) => ({ id: v.id, userId: v.user_id }));
 };
+
+/** Link a studio_project to a venture (additive — sets the nullable venture_id column). */
+export const linkProjectToVenture = async (
+  userId: string,
+  projectId: string,
+  ventureId: string
+): Promise<void> => {
+  const admin = getSupabaseAdmin();
+  await admin.from('studio_projects').update({ venture_id: ventureId }).eq('id', projectId).eq('user_id', userId);
+};

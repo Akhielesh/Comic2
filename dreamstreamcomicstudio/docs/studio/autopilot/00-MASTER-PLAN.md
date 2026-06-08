@@ -471,16 +471,20 @@ Verify green.
 **Goal:** replace A2's stub ACT with the **existing agentic build loop + swarm code agent**,
 so ticks actually produce/modify code with real verification.
 
-- [ ] In `tick.ts` ACT: dispatch the chosen goal to the Phase-4 build loop
-      (`server/src/ai/studio/buildAgent.ts` / `studioGenerate.ts` / `studioFix.ts`) against
-      the venture's `studio_project`; create a `studio_version` on success.
-- [ ] VERIFY: run `verifyApp.ts` + build/typecheck + tests + the A9 code-safety scan
-      (initially a basic secret/dangerous-op check; full scan in A9).
-- [ ] Use the swarm's `code` agent for decomposition on larger goals (the PHASE-9
-      integration item, now actually consumed).
-- [ ] Minimal-diff iteration + per-goal iteration cap (reuse `buildGuards.ts`).
-- [ ] Tests: a real goal (e.g. "add a landing page") yields a passing `studio_version`;
-      a failing build triggers FIX within the cap then a checkpoint if stuck.
+- [x] ACT does a REAL build: `tickRunner.act` runs the existing **pure-LLM** generator
+      (`studioGenerate.runGenerate`, no Cloudflare worker needed) for the goal against the
+      venture's `studio_project` (`v_<ventureId>`) and saves a `studio_version` on success.
+      Worker-side platform-key `complete` (`ventures/platformComplete.ts`); goal→build-input
+      composer (`ventures/build.ts`, tested). ✅ (uses `runGenerate`, not the worker-bound
+      `buildAgent`, since the loop runs headless; the worker-backed run/observe path is A5.)
+- [x] VERIFY (static): `runGenerate` already runs `verifyApp.ts` + one auto-repair + a
+      completeness self-review before returning. (partial — sandbox build/typecheck/tests + the
+      A9 code-safety scan come with A5/A9.)
+- [ ] Use the swarm's `code` agent for decomposition on larger goals — deferred.
+- [x] Refine-mode minimal iteration (keeps existing files) + per-goal attempt cap via the
+      no-progress detector. (partial — `buildGuards.ts` reuse is a follow-up.)
+- [x] Tests: goal→build-input composer (3 tests) + the governed-tick paths (DI). A live
+      "real goal → passing version" round-trip needs a model key (validate when configured).
 
 **Acceptance:** an approved venture autonomously builds its first few backlog goals into a
 working `studio_project` with versions + metered cost, pausing if it gets stuck. Verify green.

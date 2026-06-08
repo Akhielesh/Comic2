@@ -277,6 +277,9 @@ export const VENTURES_TICK_INTERVAL_MS = parseIntegerEnv(
   'VENTURES_TICK_INTERVAL_MS',
   1_000
 );
+// Conservative pre-spend estimate ($) per build goal, checked against the budget BEFORE acting
+// (A4). Real usage-based cost metering lands with F1; until then this keeps budgets meaningful.
+export const VENTURES_BUILD_COST_ESTIMATE_USD = Number(process.env.VENTURES_BUILD_COST_ESTIMATE_USD || '0.05');
 
 export const REQUIRED_RUNTIME_ENV_VARS = ['CORS_ORIGIN', 'VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY'] as const;
 type RequiredRuntimeEnv = (typeof REQUIRED_RUNTIME_ENV_VARS)[number];

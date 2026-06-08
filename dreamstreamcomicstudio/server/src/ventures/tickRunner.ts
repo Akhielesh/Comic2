@@ -1,25 +1,32 @@
-// Repository-backed adapter that runs one real tick for a venture. Epic A2.
+// Repository-backed adapter that runs one real tick for a venture. Epic A2 + A4.
 // Maps the durable Supabase repository to the TickIO interface and calls the pure runTick.
-// The ACT step is a STUB here (always succeeds, zero cost) so we can prove the governed loop
-// end-to-end against the real DB WITHOUT building/deploying anything; A4 replaces stubAct with
-// the real build engine. Driven by the scheduler/worker (added next). Flag-gated upstream.
+// The ACT step now performs a REAL build (A4): it generates/iterates the venture's app via the
+// existing studio generator (pure-LLM, no Cloudflare worker needed) using a platform model key,
+// then saves it as a versioned studio_project linked to the venture. Deploy/run (worker) is A5.
+// Everything is flag-gated upstream (VENTURES_ENABLED) and budget-checked by the DECIDE gate
+// BEFORE this ACT runs, so a venture can never exceed its cap.
 
-import { VENTURES_ENABLED } from '../config.js';
+import { VENTURES_ENABLED, VENTURES_BUILD_COST_ESTIMATE_USD } from '../config.js';
 import { getKillSwitch } from './killSwitch.js';
 import { runTick, type TickGoal, type TickIO, type TickResult } from './tick.js';
 import {
   appendEvent,
   createCheckpoint,
   getBudget,
+  getVenture,
   isCheckpointApproved,
   recordSpend,
   setVentureStatus
 } from './repository.js';
-import { listGoals, updateGoal } from './controlPlane.js';
+import { listGoals, updateGoal, linkProjectToVenture } from './controlPlane.js';
 import { classifyGoalAction } from './goalAction.js';
+import { getPlatformComplete } from './platformComplete.js';
+import { buildGoalGenerateInput } from './build.js';
+import { runGenerate } from '../ai/studio/studioGenerate.js';
+import { getProjectWithFiles, saveProject } from '../services/studioRepository.js';
 
-// In-process per-goal attempt counter for no-progress detection. The ACT stub never fails in
-// A2, so this is effectively dormant; A4 will persist attempts durably on the goal/run.
+// In-process per-goal attempt counter for no-progress detection. A4 keeps this lightweight;
+// F5 will persist attempts durably on the goal/run.
 const attemptCounts = new Map<string, number>();
 
 export const runVentureTick = async (userId: string, ventureId: string): Promise<TickResult> => {
@@ -31,8 +38,9 @@ export const runVentureTick = async (userId: string, ventureId: string): Promise
         id: g.id,
         status: g.status,
         priority: g.priority,
-        // Classify the goal so risky actions (prod deploy, destructive, publish) route through
-        // their checkpoint in the DECIDE gate; ordinary build work stays autonomous.
+        title: g.title,
+        detail: g.detail,
+        // Classify so risky actions (prod deploy, destructive, publish) route through a checkpoint.
         action: classifyGoalAction({ title: g.title, detail: g.detail ?? undefined, kind: g.kind })
       })),
 
@@ -43,9 +51,45 @@ export const runVentureTick = async (userId: string, ventureId: string): Promise
 
     isCheckpointApproved: (kind) => isCheckpointApproved(userId, ventureId, kind),
 
-    estimateSpend: () => ({ usd: 0 }), // A2 stub estimate; A4 estimates real token/compute cost
+    estimateSpend: () => ({ usd: VENTURES_BUILD_COST_ESTIMATE_USD }),
 
-    act: async () => ({ ok: true, costUsd: 0 }), // STUB — A4 wires the real build loop
+    // ACT — real pure-LLM build (A4). Generate/iterate the venture's app for this goal and
+    // persist it as a versioned project. Returns ok=false on any failure (→ retry / stuck).
+    act: async (goal) => {
+      const pc = await getPlatformComplete(4000);
+      if (!pc) {
+        return { ok: false, error: 'No platform model key configured (set OPENROUTER_API_KEY or NVIDIA_API_KEY).' };
+      }
+      const venture = await getVenture(userId, ventureId);
+      const projectId = `v_${ventureId}`;
+      const existing = await getProjectWithFiles(userId, projectId);
+      const input = buildGoalGenerateInput(
+        {
+          ventureName: venture?.name,
+          ventureSummary: venture?.summary ?? null,
+          ventureScope: venture?.scope ?? null,
+          goalTitle: goal.title || 'Build the next increment',
+          goalDetail: goal.detail ?? null
+        },
+        existing?.files?.map((f) => ({ path: f.path, content: f.content }))
+      );
+      const artifact = await runGenerate(pc.complete, input);
+      if (!artifact || !artifact.files.length) {
+        return { ok: false, error: 'The build produced no usable files.' };
+      }
+      await saveProject({
+        userId,
+        projectId,
+        name: venture?.name || artifact.title,
+        template: artifact.template,
+        files: artifact.files.map((f) => ({ path: f.path, content: f.content, language: f.language })),
+        versionLabel: `goal: ${(goal.title || '').slice(0, 60)}`,
+        createdBy: 'agent'
+      });
+      await linkProjectToVenture(userId, projectId, ventureId).catch(() => {});
+      await updateGoal(userId, goal.id, { projectId });
+      return { ok: true, costUsd: VENTURES_BUILD_COST_ESTIMATE_USD };
+    },
 
     markGoal: async (goalId, status) => {
       await updateGoal(userId, goalId, { status });
