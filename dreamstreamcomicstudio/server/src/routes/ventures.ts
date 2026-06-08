@@ -21,7 +21,9 @@ import {
   resolveCheckpointRow,
   listEvents
 } from '../ventures/repository.js';
-import { createGoal, listGoals, listConnections } from '../ventures/controlPlane.js';
+import { createGoal, createGoals, listGoals, listConnections } from '../ventures/controlPlane.js';
+import { runIntake } from '../ventures/intake.js';
+import { studioStageComplete } from './studio.js';
 import { getKillSwitch, setKillSwitch } from '../ventures/killSwitch.js';
 import { budgetAlertLevel } from '../ventures/budget.js';
 import {
@@ -85,6 +87,68 @@ venturesRouter.post('/', async (req, res) => {
       usdTotal: VENTURES_DEFAULT_USD_TOTAL
     });
     res.status(201).json({ id });
+  } catch (e) {
+    serverError(res, e);
+  }
+});
+
+// --- Intake → roadmap (A3) -----------------------------------------------------------
+venturesRouter.post('/intake', async (req, res) => {
+  const idea = typeof (req.body || {}).idea === 'string' ? (req.body as { idea: string }).idea.trim() : '';
+  if (!idea) return badRequest(res, 'An "idea" describing the product is required.');
+  if (idea.length > 8000) return badRequest(res, 'idea must be <= 8000 characters.');
+  try {
+    const complete = await studioStageComplete(req as never, (req.body || {}) as never, 2500);
+    if (!complete) {
+      return res.status(400).json({
+        error: { message: 'No model key configured (add an OpenRouter or NVIDIA key in Settings).', code: 'NO_MODEL_KEY' }
+      });
+    }
+    const roadmap = await runIntake(idea, complete);
+    if (!roadmap) {
+      return res.status(502).json({
+        error: { message: 'Could not draft a roadmap. Try rephrasing the idea.', code: 'VENTURE_INTAKE_INVALID' }
+      });
+    }
+    const { id } = await createVenture({
+      userId: req.user!.id,
+      name: roadmap.name,
+      summary: roadmap.summary,
+      scope: roadmap.scope
+    });
+    await upsertBudget({
+      userId: req.user!.id,
+      ventureId: id,
+      usdPerDay: VENTURES_DEFAULT_USD_PER_DAY,
+      usdTotal: VENTURES_DEFAULT_USD_TOTAL
+    });
+    await createGoals({ userId: req.user!.id, ventureId: id, goals: roadmap.goals });
+    await setVentureStatus(req.user!.id, id, 'roadmap_pending');
+    // Gate: the roadmap must be approved (checkpoint) before the loop works it.
+    await createCheckpoint({
+      userId: req.user!.id,
+      ventureId: id,
+      kind: 'roadmap_approval',
+      title: `Approve the roadmap for "${roadmap.name}"`,
+      detail: `${roadmap.goals.length} goals proposed.`
+    });
+    res.status(201).json({ id, roadmap });
+  } catch (e) {
+    serverError(res, e);
+  }
+});
+
+// POST /:id/approve-roadmap — approve the roadmap checkpoint(s) + activate the venture (A3/A0).
+venturesRouter.post('/:id/approve-roadmap', async (req, res) => {
+  try {
+    const venture = await getVenture(req.user!.id, req.params.id);
+    if (!venture) return notFound(res);
+    const open = (await listOpenCheckpoints(req.user!.id, req.params.id)).filter((c) => c.kind === 'roadmap_approval');
+    for (const c of open) {
+      await resolveCheckpointRow(req.user!.id, c.id, { to: 'approved', resolvedBy: req.user!.id });
+    }
+    await setVentureStatus(req.user!.id, req.params.id, 'active');
+    res.json({ ok: true, status: 'active', approved: open.length });
   } catch (e) {
     serverError(res, e);
   }

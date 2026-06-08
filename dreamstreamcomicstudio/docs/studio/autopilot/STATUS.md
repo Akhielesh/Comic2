@@ -6,6 +6,15 @@
 
 **Last updated:** 2026-06-07 · **Updated by:** Claude · **Branch:** `claude/gracious-albattani-bDL8T`
 
+> Latest (2026-06-08): **A3 INTAKE → ROADMAP SHIPPED (backend).** `ventures/intake.ts` turns an
+> idea into a venture spec + prioritized roadmap (DI `complete`, robust JSON extraction safe
+> against prose/fences/nested-arrays), wired as `POST /api/ventures/intake` (creates draft venture
+> + default budget + goals + a `roadmap_approval` checkpoint) and `POST /:id/approve-roadmap`
+> (approve → activate). Reuses the studio's exported `studioStageComplete` model wiring. 9 new
+> tests (79 total); server + client typecheck green. Needs a model key (OpenRouter/NVIDIA) at
+> runtime to actually draft a roadmap. **Next: A4 — wire the tick's stub ACT to the real build
+> engine (needs the live worker + keys to validate).**
+
 > Latest (2026-06-08): **A2 ENGINE BACKEND COMPLETE (governed loop, stub ACT).** Shipped the
 > governed `tick` (`ventures/tick.ts`, dependency-injected + 9 unit tests proving it advances a
 > backlog and stops on kill/budget/checkpoint/stuck), the real-persistence adapter
@@ -103,7 +112,7 @@ Build       ░░░░░░░░░░░░░░░░░░░░    0%  
 | A0 | Brakes first (budgets, kill-switch, checkpoints, audit) | 🟢 **core shipped** (pure logic + SQL + flags + 35 tests); repo/route/metering land with A1 | — |
 | A1 | Venture control plane (data + API) | 🟢 **shipped** — migrations applied to Supabase, repo + controlPlane + `/api/ventures` routes (incl. admin kill) mounted, flag/admin-gated; client API + apiTypes land with A8 | — |
 | A2 | Autonomous loop engine (bounded, crash-safe; stub ACT) | 🟢 **backend complete** — DECIDE gate + governed `tick` (DI, 9 tests) + `tickRunner` (real persistence) + BullMQ `queue`/`scheduler`/`worker` + `npm run ventures:worker`. ACT is a stub (A4 wires real builds). | `REDIS_URL` + worker service (owner) |
-| A3 | Intake → roadmap (idea → approved backlog) | 📋 planned | A2 |
+| A3 | Intake → roadmap (idea → approved backlog) | 🟢 **backend shipped** — `intake.ts` (idea→spec+roadmap, robust parse) + `/api/ventures/intake` + `/:id/approve-roadmap`; needs a model key at runtime. Intake UI = A8. | model key (owner) |
 | A4 | Wire ACT/VERIFY to the real build engine | 📋 planned | A3; studio live flags (owner) |
 | A5 | Deploy adapters (managed + BYO via Nango) | 📋 planned | A4; per-venture connections (owner) |
 | A6 | Sense layer (signals → iterate loop) | 📋 planned | A5 |

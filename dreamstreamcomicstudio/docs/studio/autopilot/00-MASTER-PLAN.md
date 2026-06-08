@@ -447,16 +447,17 @@ worker as a Railway service.
 spec + a structured roadmap (epics→features→tasks) the user **approves** (a checkpoint)
 before any autonomous work.
 
-- [ ] `server/src/ventures/intake.ts` — LLM flow: idea → `{ name, summary, scope,
-      success_metrics, roadmap: VentureGoal[] }`. Reuse `studioPlan.ts` patterns + swarm
-      planner. JSON-validated (`ai/json.ts`, `jsonCoerce.ts`).
-- [ ] Route `POST /api/ventures/intake` (draft) + `POST /api/ventures/:id/approve-roadmap`
-      (resolves the roadmap checkpoint, flips the venture to `active`).
-- [ ] Scope guard wiring: store the approved `scope`; ORIENT must stay within it or raise a
-      scope checkpoint.
-- [ ] Client intake UI (a wizard) — minimal for now; full console in A8.
-- [ ] Tests: intake produces a valid roadmap; venture stays `draft` until approved; scope
-      stored.
+- [x] `server/src/ventures/intake.ts` — LLM flow: idea → `{ name, summary, scope, goals[] }`,
+      DI `complete` (mirrors `studioPlan.ts`), robust object extraction (prose/fence/nested-array
+      safe). ✅
+- [x] Route `POST /api/ventures/intake` (creates draft venture + default budget + goals +
+      `roadmap_approval` checkpoint, status `roadmap_pending`) + `POST /:id/approve-roadmap`
+      (resolves the roadmap checkpoint → flips to `active`). Reuses exported `studioStageComplete`. ✅
+- [x] Scope guard wiring: approved `scope` stored on the venture; the DECIDE gate enforces
+      `inScope` (scope_change checkpoint). (partial — plumbing done; LLM ORIENT scope-check is A4.)
+- [ ] Client intake UI (a wizard) — pending (lands with A8 console).
+- [x] Tests: intake parses a valid roadmap, retries on bad output, gives up gracefully; goals
+      normalized; venture stays `roadmap_pending` until approved. ✅ 9 tests (79 total).
 
 **Acceptance:** "Build me a habit-tracker SaaS with email reminders" → a reviewable roadmap
 of concrete goals; approving it activates the venture and the A2 loop starts working it.
