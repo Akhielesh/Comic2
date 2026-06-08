@@ -129,6 +129,19 @@ export const postStream = async <TReq>(path: string, body: TReq, options?: { sig
     signal: options?.signal
   });
   if (!res.ok) throw await parseError(res);
+  // If the request was misrouted to the static site (e.g. VITE_API_BASE_URL unset, so the
+  // call hit the SPA instead of the API), the body is HTML, not an event stream — which
+  // otherwise reads as "no response" / hangs. Fail with an actionable message instead.
+  const contentType = res.headers.get('content-type') || '';
+  if (contentType.includes('text/html')) {
+    // Status 502 (not 0) so this is NOT treated as a retryable transport error — the
+    // buffered endpoint would return the same HTML; surface the actionable message directly.
+    throw new ApiError(
+      `The chat backend wasn't reachable — the request returned a web page, not a data stream. The API URL is likely misconfigured (VITE_API_BASE_URL).`,
+      502,
+      { url: buildApiUrl(path), contentType }
+    );
+  }
   return res;
 };
 
