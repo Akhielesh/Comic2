@@ -120,9 +120,13 @@ export const startBackgroundGeneration = async (
     }));
   };
 
+  // Cap the in-memory log buffer so a long run can't grow status (and the per-tick state writes)
+  // without bound. Storage drops logs entirely (see sanitizeProjectForStorage); this bounds memory.
+  const MAX_RUN_LOGS = 200;
   const addLog = (message: string) => {
     const newLog = { timestamp: Date.now(), message };
-    updateStatus({ logs: [...currentStatus.logs, newLog] });
+    const logs = [...currentStatus.logs, newLog];
+    updateStatus({ logs: logs.length > MAX_RUN_LOGS ? logs.slice(-MAX_RUN_LOGS) : logs });
   };
 
   const stopWithStatus = (description: string) => {
