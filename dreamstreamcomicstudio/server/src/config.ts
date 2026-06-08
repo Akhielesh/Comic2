@@ -254,6 +254,30 @@ export const STUDIO_REQUEST_TIMEOUT_MS = parseIntegerEnv(
 // sync with docs/studio/CLOUDFLARE_STUDIO_PLAN.md.
 export const STUDIO_COST_PER_AWAKE_SEC = Number(process.env.STUDIO_COST_PER_AWAKE_SEC || '0.00003');
 
+// --- Transactional email (Cloudflare Email Sending via email-worker) --------------
+// The backend never talks to the email service directly — it signs requests to the
+// email-worker (HMAC, mirroring the Studio worker). EMPTY EMAIL_WORKER_URL or
+// EMAIL_HMAC_SECRET ⇒ the mailer is dormant (sends are skipped, nothing breaks).
+export const EMAIL_WORKER_URL = process.env.EMAIL_WORKER_URL || '';
+export const EMAIL_HMAC_SECRET = process.env.EMAIL_HMAC_SECRET || '';
+// Public origin of THIS backend, used to build absolute unsubscribe + read-receipt links
+// embedded in mail (e.g. https://api.dreamstream.studio). Required for marketing mail.
+export const EMAIL_PUBLIC_BASE_URL = (process.env.EMAIL_PUBLIC_BASE_URL || '').replace(/\/+$/, '');
+// Public app origin used for post-confirm redirects + in-email app links.
+export const APP_PUBLIC_URL = (process.env.APP_PUBLIC_URL || 'https://dreamstream.studio').replace(/\/+$/, '');
+export const EMAIL_REQUEST_TIMEOUT_MS = parseIntegerEnv(
+  process.env.EMAIL_REQUEST_TIMEOUT_MS,
+  15_000,
+  'EMAIL_REQUEST_TIMEOUT_MS',
+  1_000
+);
+// HARD cost guardrails. Defaults sit UNDER Cloudflare's free 3,000/month tier, so you
+// cannot be billed for overage unless you deliberately raise EMAIL_MAX_PER_MONTH past 3000.
+// When a cap is hit the send is skipped + logged (status='rate_limited') and an alert is
+// emitted to the server logs. See docs/email/cloudflare-email-cost-and-limits.md.
+export const EMAIL_MAX_PER_DAY = parseIntegerEnv(process.env.EMAIL_MAX_PER_DAY, 200, 'EMAIL_MAX_PER_DAY', 0);
+export const EMAIL_MAX_PER_MONTH = parseIntegerEnv(process.env.EMAIL_MAX_PER_MONTH, 2_500, 'EMAIL_MAX_PER_MONTH', 0);
+
 // --- Phase 10: tools/MCP/sourcing -------------------------------------------------
 // JSON tool-protocol fallback: lets non-OpenRouter models (NVIDIA, free models without
 // native function-calling) use our live tools via a JSON convention. ON by default — without
