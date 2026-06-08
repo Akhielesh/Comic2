@@ -16,6 +16,7 @@ import {
   setVentureStatus
 } from './repository.js';
 import { listGoals, updateGoal } from './controlPlane.js';
+import { classifyGoalAction } from './goalAction.js';
 
 // In-process per-goal attempt counter for no-progress detection. The ACT stub never fails in
 // A2, so this is effectively dormant; A4 will persist attempts durably on the goal/run.
@@ -29,8 +30,10 @@ export const runVentureTick = async (userId: string, ventureId: string): Promise
       (await listGoals(userId, ventureId)).map((g) => ({
         id: g.id,
         status: g.status,
-        priority: g.priority
-        // action defaults to 'run_build' (no checkpoint); A4/A5 derive deploy actions.
+        priority: g.priority,
+        // Classify the goal so risky actions (prod deploy, destructive, publish) route through
+        // their checkpoint in the DECIDE gate; ordinary build work stays autonomous.
+        action: classifyGoalAction({ title: g.title, detail: g.detail ?? undefined, kind: g.kind })
       })),
 
     loadBudgetState: async () => {
