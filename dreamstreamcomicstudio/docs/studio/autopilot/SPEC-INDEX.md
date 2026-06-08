@@ -33,7 +33,7 @@
   enterprise bar. No filler.
 
 ## Progress
-**Sections complete: 51 / 55** · target ~200 pages. (Parts I–IV complete; Part V — Delivery — nearly done.)
+**Sections complete: 55 / 55** ✅ — **ALL PARTS WRITTEN.** (~200 pages; ~190k words across 55 files.)
 
 Legend: ✅ written · ✍️ in progress · 📋 planned
 
@@ -101,13 +101,13 @@ Legend: ✅ written · ✍️ in progress · 📋 planned
 ### Part V — Delivery
 | # | Section | File | Status |
 |---|---|---|---|
-| 45 | Foundations backlog F0–F10 (detailed) | spec/45-foundations-backlog.md | 📋 |
+| 45 | Foundations backlog F0–F10 (detailed) | [spec/45-foundations-backlog.md](./spec/45-foundations-backlog.md) | ✅ |
 | 46 | Autonomy backlog A0–A9 (detailed) | [spec/46-autonomy-backlog.md](./spec/46-autonomy-backlog.md) | ✅ |
 | 47 | Roadmap, milestones & sequencing | [spec/47-roadmap.md](./spec/47-roadmap.md) | ✅ |
 | 48 | Team, RACI & ways of working | [spec/48-team-raci.md](./spec/48-team-raci.md) | ✅ |
 | 49 | Owner actions & external dependencies | [spec/49-owner-actions.md](./spec/49-owner-actions.md) | ✅ |
-| 50 | Runbooks & operational procedures | spec/50-runbooks.md | 📋 |
+| 50 | Runbooks & operational procedures | [spec/50-runbooks.md](./spec/50-runbooks.md) | ✅ |
 | 51 | Launch plan & GTM | [spec/51-launch-gtm.md](./spec/51-launch-gtm.md) | ✅ |
-| 52 | Appendix A: configuration & env var reference | spec/52-appendix-config.md | 📋 |
+| 52 | Appendix A: configuration & env var reference | [spec/52-appendix-config.md](./spec/52-appendix-config.md) | ✅ |
 | 53 | Appendix B: decision log (ADRs) | [spec/53-appendix-decisions.md](./spec/53-appendix-decisions.md) | ✅ |
-| 54 | Appendix C: data dictionary | spec/54-appendix-data-dictionary.md | 📋 |
+| 54 | Appendix C: data dictionary | [spec/54-appendix-data-dictionary.md](./spec/54-appendix-data-dictionary.md) | ✅ |
