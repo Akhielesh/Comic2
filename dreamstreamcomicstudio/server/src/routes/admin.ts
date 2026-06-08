@@ -9,6 +9,7 @@ import {
   listFeedback,
   listTelemetryEvents
 } from '../services/telemetryAnalytics.js';
+import { generateInvites, listInvites, revokeInvite } from '../services/invites.js';
 
 const readablePlanTiers: BillingPlanTier[] = ['free', 'creator', 'pro', 'studio', 'custom', 'admin'];
 const assignablePlanTiers: BillingPlanTier[] = ['free', 'creator', 'studio', 'custom', 'admin'];
@@ -507,6 +508,52 @@ adminRouter.get('/analytics/feedback', requireAdmin, async (req, res, next) => {
 adminRouter.get('/analytics/sessions/:sessionId', requireAdmin, async (req, res, next) => {
   try {
     res.json(await getSessionTimeline(String(req.params.sessionId || '').trim()));
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── Tester invites (admin-only generation/management) ────────────────────────
+adminRouter.post('/invites', requireAdmin, async (req, res, next) => {
+  try {
+    const actorId = req.user?.id;
+    if (!actorId) return res.status(401).json({ error: { message: 'User not authenticated' } });
+    const created = await generateInvites({
+      count: req.body?.count,
+      label: req.body?.label,
+      note: req.body?.note,
+      maxUses: req.body?.maxUses,
+      expiresInDays: req.body?.expiresInDays,
+      createdBy: actorId
+    });
+    console.info('[ADMIN_ACTION] invites_generated', { actorId, count: created.length });
+    res.json({ items: created });
+  } catch (error) {
+    next(error);
+  }
+});
+
+adminRouter.get('/invites', requireAdmin, async (req, res, next) => {
+  try {
+    const items = await listInvites({
+      limit: Number(req.query.limit) || undefined,
+      offset: Number(req.query.cursor) || undefined,
+      status: typeof req.query.status === 'string' ? req.query.status : undefined
+    });
+    res.json({ items });
+  } catch (error) {
+    next(error);
+  }
+});
+
+adminRouter.post('/invites/:id/revoke', requireAdmin, async (req, res, next) => {
+  try {
+    const actorId = req.user?.id;
+    const id = String(req.params.id || '').trim();
+    if (!id) return res.status(400).json({ error: { message: 'invite id is required' } });
+    await revokeInvite(id);
+    console.info('[ADMIN_ACTION] invite_revoked', { actorId, id });
+    res.json({ success: true, id });
   } catch (error) {
     next(error);
   }
