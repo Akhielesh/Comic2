@@ -19,6 +19,7 @@ const ModelLibrary = lazyImportWithRetry(() => import('./components/ModelLibrary
 const HowItWorks = lazyImportWithRetry(() => import('./components/HowItWorks').then(module => ({ default: module.HowItWorks })));
 const AIChatPlatform = lazyImportWithRetry(() => import('./components/chat/AIChatPlatform').then(module => ({ default: module.AIChatPlatform })));
 const CodeStudioView = lazyImportWithRetry(() => import('./components/studio/CodeStudioView').then(module => ({ default: module.CodeStudioView })));
+const OperatorConsoleView = lazyImportWithRetry(() => import('./components/ventures/OperatorConsole').then(module => ({ default: module.OperatorConsole })));
 import { StudioErrorBoundary } from './components/studio/kit/ErrorBoundary';
 
 import { useProjectManager } from './hooks/useProjectManager';
@@ -63,6 +64,7 @@ type AppView =
   | 'comicforge'
   | 'pagestudio'
   | 'codestudio'
+  | 'ventures'
   | 'shared';
 
 // Top-level views whose identity is persisted in the URL (?view=) so a refresh restores the page.
@@ -71,7 +73,7 @@ type AppView =
 // (editor/comicforge/pagestudio/profile are excluded: they need a loaded project/profile that
 //  isn't encoded here, so restoring them blind would render a broken page — they fall back to home.)
 const RESTORABLE_VIEWS = new Set<AppView>([
-  'dashboard', 'chat', 'codestudio', 'gallery', 'learn', 'test', 'how-it-works', 'privacy', 'terms', 'settings',
+  'dashboard', 'chat', 'codestudio', 'ventures', 'gallery', 'learn', 'test', 'how-it-works', 'privacy', 'terms', 'settings',
 ]);
 
 type SettingsTab = 'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin' | 'preferences' | 'security';
@@ -813,6 +815,12 @@ const App: React.FC = () => {
                 onNavigate={handleNavigate}
               />
             </StudioErrorBoundary>
+          )}
+
+          {effectiveView === 'ventures' && (
+            <Suspense fallback={<div className="min-h-screen bg-neutral-950" />}>
+              <OperatorConsoleView isAdmin={isAdmin} onBack={() => setCurrentView(user ? 'dashboard' : 'home')} />
+            </Suspense>
           )}
 
           {effectiveView === 'how-it-works' && (

@@ -565,16 +565,16 @@ credits, and gets alerted before overspend. Verify green.
 ### Epic A8 — Operator Console (the 24/7 workspace UI)
 **Goal:** the user-facing cockpit. Watch agents work live, approve checkpoints, steer.
 
-- [ ] Route + shell `components/ventures/` (reuse the studio's Linear/dark design system,
-      `components/ui/*`, `lib/utils` `cn`).
-- [ ] **Live activity stream** (reuse `ActivityFeed` + `SwarmTraceCard` patterns) over an
-      SSE `/api/ventures/:id/stream` of `venture_events`.
-- [ ] **Roadmap/backlog board** (goals by status) — drag to reprioritize (writes goals).
-- [ ] **Approval queue** for checkpoints — approve/deny with one click + context.
-- [ ] **Budget meter** + spend; **pause / resume / kill** controls (per venture + global).
-- [ ] **Deployments** panel (preview/prod links, status, rollback) + **logs**.
-- [ ] Venture list/dashboard; intake wizard (from A3); mobile-responsive.
-- [ ] Tests + a Gallery demo entry (per `CLAUDE.md` rule) for any new artifact components.
+- [x] Route + shell `components/ventures/OperatorConsole.tsx` (dark theme), client API
+      `services/venturesApi.ts` + `put`/`patch` in `apiClient`, wired at `?view=ventures`. ✅
+- [x] **Live activity stream** — `venture_events` feed (polled every 5s; SSE/WS over
+      `venture_events` is F4). (partial — polling now, real-time later.)
+- [x] **Roadmap/backlog board** (goals by status). (drag-to-reprioritize is a follow-up.)
+- [x] **Approval queue** for checkpoints — one-click approve/deny with context. ✅
+- [x] **Budget meter** + spend; **pause / resume** + **approve-roadmap** controls. (global
+      kill is the admin route; per-venture kill UI is a follow-up.)
+- [x] Venture list/dashboard + **intake** (idea → draft) inline. (mobile polish is a follow-up.)
+- [ ] Deployments panel + logs (with A5); drag-reprioritize; Gallery demo — follow-ups.
 
 **Acceptance:** from one screen the user creates a venture, approves its roadmap, watches it
 build live, approves the prod deploy, sees spend, and can pause/kill — on desktop and

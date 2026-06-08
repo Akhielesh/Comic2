@@ -6,6 +6,15 @@
 
 **Last updated:** 2026-06-07 · **Updated by:** Claude · **Branch:** `claude/gracious-albattani-bDL8T`
 
+> Latest (2026-06-08): **A8 — OPERATOR CONSOLE v1 SHIPPED (the cockpit is visible).**
+> `components/ventures/OperatorConsole.tsx` at `?view=ventures` (RESTORABLE): draft a venture from
+> an idea, see the venture list, per-venture status + budget meter, the roadmap, an approval queue
+> (one-click approve/deny), a polled activity feed, and pause/resume/approve-roadmap controls.
+> Backed by `services/venturesApi.ts` (+ `put`/`patch` added to `apiClient`) and wired into App.tsx
+> additively (lazy view). Gracefully shows "not enabled" when the server gate is off. Client
+> typecheck + frontend build + server build + 88 tests all green. Real-time WS stream, deployments
+> panel, and mobile polish are follow-ups. **The whole A0→A8 pipeline now has a face.**
+
 > Latest (2026-06-08): **A4 — ACT NOW BUILDS FOR REAL (pure-LLM, governed).** The tick's stub ACT
 > is replaced: `tickRunner.act` runs the existing `studioGenerate.runGenerate` (pure-LLM, no
 > Cloudflare worker) for the selected goal against the venture's `studio_project` (`v_<ventureId>`),
@@ -128,7 +137,7 @@ Build       ░░░░░░░░░░░░░░░░░░░░    0%  
 | A5 | Deploy adapters (managed + BYO via Nango) | 📋 planned | A4; per-venture connections (owner) |
 | A6 | Sense layer (signals → iterate loop) | 📋 planned | A5 |
 | A7 | Central billing & budgets portal | 📋 planned | A1; Stripe price config |
-| A8 | Operator console (24/7 workspace UI) | 📋 planned | A1–A7 |
+| A8 | Operator console (24/7 workspace UI) | 🟢 **shipped (v1)** — `components/ventures/OperatorConsole.tsx` at `?view=ventures`: intake, venture list, status/budget meter, roadmap, approval queue (approve/deny), activity feed (polled), pause/resume/approve-roadmap. `venturesApi` client. Real-time WS + deployments panel = follow-ups. | — |
 | A9 | Multi-tenant security hardening & GA | 📋 planned | A1–A8; security review + owner GA approval |
 
 Legend: ✅ done · 🟢 backend/partial · 🟡 in progress · 📋 planned · ⛔ blocked
