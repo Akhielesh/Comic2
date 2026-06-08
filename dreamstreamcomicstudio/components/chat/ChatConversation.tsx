@@ -306,6 +306,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
             <ChatMessageView
               key={turn.id}
               turn={turn}
+              sessionId={session.id}
               busy={busy}
               onBranch={turn.role === 'assistant' && !turn.error ? (chooseNew) => onBranch(turn.id, chooseNew) : undefined}
               onRegenerate={turn.role === 'assistant' ? () => onRegenerate(turn.id) : undefined}

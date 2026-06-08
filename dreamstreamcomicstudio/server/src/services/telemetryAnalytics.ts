@@ -9,6 +9,7 @@
 import { getSupabaseAdmin, getSupabaseCapabilityStatus } from './supabase.js';
 import { logger } from '../lib/logger.js';
 import { TtlCache } from '../lib/cache.js';
+import { failureSignature } from '../lib/failureSignature.js';
 
 // The overview runs ~9 queries; admin dashboards poll/refresh it repeatedly, so a
 // short TTL coalesces those into one round-trip per window per day-range.
@@ -66,6 +67,15 @@ export interface AnalyticsOverview {
   eventsBySource: Record<string, number>;
   feedbackBySentiment: Record<string, number>;
   feedbackByCategory: Record<string, number>;
+  /** Failures grouped by normalized signature — the "same issue happened N times" view. */
+  topIssues: Array<{
+    signature: string;
+    eventType: string;
+    source: string;
+    count: number;
+    sample: string;
+    exampleSessionId?: string | null;
+  }>;
   recentFailures: Array<Record<string, unknown>>;
   recentDislikes: Array<Record<string, unknown>>;
 }
@@ -82,6 +92,7 @@ const computeAnalyticsOverview = async (windowDays: number): Promise<AnalyticsOv
     eventsBySource: {},
     feedbackBySentiment: {},
     feedbackByCategory: {},
+    topIssues: [],
     recentFailures: [],
     recentDislikes: []
   };
@@ -107,7 +118,7 @@ const computeAnalyticsOverview = async (windowDays: number): Promise<AnalyticsOv
       countIn('user_feedback', since),
       countIn('user_feedback', since, (q) => q.eq('vote', 'like')),
       countIn('user_feedback', since, (q) => q.eq('vote', 'dislike')),
-      admin.from('telemetry_events').select('severity, event_type, source, session_id, user_id').gte('created_at', since).order('created_at', { ascending: false }).limit(AGG_CAP),
+      admin.from('telemetry_events').select('severity, event_type, source, session_id, user_id, message').gte('created_at', since).order('created_at', { ascending: false }).limit(AGG_CAP),
       admin.from('user_feedback').select('sentiment, category').gte('created_at', since).limit(AGG_CAP),
       admin.from('telemetry_events').select(EVENT_COLUMNS).in('severity', ['error', 'critical']).gte('created_at', since).order('created_at', { ascending: false }).limit(15),
       admin.from('user_feedback').select(FEEDBACK_COLUMNS).eq('vote', 'dislike').gte('created_at', since).order('created_at', { ascending: false }).limit(15)
@@ -128,6 +139,33 @@ const computeAnalyticsOverview = async (windowDays: number): Promise<AnalyticsOv
     base.eventsBySource = tally(eventRows, 'source');
     base.feedbackBySentiment = tally(feedbackRows.filter((r) => r.sentiment), 'sentiment');
     base.feedbackByCategory = tally(feedbackRows.filter((r) => r.category), 'category');
+
+    // "Same issue" aggregation: collapse failures by normalized signature so a
+    // recurring error shows as one row with a count, not N scattered lines.
+    const issues = new Map<string, AnalyticsOverview['topIssues'][number]>();
+    for (const r of eventRows) {
+      const severity = String(r.severity);
+      if (severity !== 'error' && severity !== 'critical') continue;
+      const eventType = String(r.event_type || 'error');
+      const source = String(r.source || 'unknown');
+      const signature = failureSignature(eventType, source, r.message);
+      const existing = issues.get(signature);
+      if (existing) {
+        existing.count += 1;
+        if (!existing.exampleSessionId && r.session_id) existing.exampleSessionId = String(r.session_id);
+      } else {
+        issues.set(signature, {
+          signature,
+          eventType,
+          source,
+          count: 1,
+          sample: String(r.message || '').slice(0, 200),
+          exampleSessionId: r.session_id ? String(r.session_id) : null
+        });
+      }
+    }
+    base.topIssues = Array.from(issues.values()).sort((a, b) => b.count - a.count).slice(0, 15);
+
     base.recentFailures = (recentFailuresRes.data || []) as Array<Record<string, unknown>>;
     base.recentDislikes = (recentDislikesRes.data || []) as Array<Record<string, unknown>>;
     return base;

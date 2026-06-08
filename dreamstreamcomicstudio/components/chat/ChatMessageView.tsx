@@ -18,6 +18,8 @@ import { FeedbackButtons } from '../feedback/FeedbackButtons';
 
 interface ChatMessageViewProps {
   turn: ChatTurn;
+  /** Chat/session id, threaded to per-response feedback so ratings correlate to the chat. */
+  sessionId?: string;
   /** True while a generation is in flight (disables regenerate/edit). */
   busy?: boolean;
   /** Whether this is the last turn in the conversation. */
@@ -32,7 +34,7 @@ interface ChatMessageViewProps {
   onSelectVariant?: (index: number) => void;
 }
 
-export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, busy, isLast, onBranch, onRegenerate, onEdit, onSelectVariant }) => {
+export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionId, busy, isLast, onBranch, onRegenerate, onEdit, onSelectVariant }) => {
   const [copied, setCopied] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
   const [branchOpen, setBranchOpen] = useState(false);
@@ -45,8 +47,10 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, busy, is
   // Version navigation (regenerate history) for assistant turns.
   const variantCount = turn.variants?.length || 0;
   const activeVariant = typeof turn.activeVariant === 'number' ? turn.activeVariant : variantCount - 1;
-  // Live reasoning: streaming reasoning while the answer text hasn't started yet.
-  const streamingThinking = !isUser && busy && isLast && !turn.content && Boolean(turn.reasoning);
+  // Live reasoning: show the model's thinking as it streams — and KEEP it visible
+  // after the answer text starts (it used to vanish the moment the first content
+  // token arrived, so you could never actually watch the agent think).
+  const liveReasoning = !isUser && busy && isLast && Boolean(turn.reasoning);
 
   useEffect(() => {
     if (!branchOpen) return;
@@ -143,6 +147,14 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, busy, is
               )}
             </div>
           )}
+          {liveReasoning && (
+            <details open className="mb-2">
+              <summary className="flex items-center gap-1.5 text-[11px] font-bold text-indigo-600 cursor-pointer select-none">
+                <Brain className="w-3.5 h-3.5 animate-pulse" /> Thinking…
+              </summary>
+              <pre className="mt-1 text-[11px] whitespace-pre-wrap break-words text-slate-500 max-h-40 overflow-y-auto font-sans border-l-2 border-indigo-200 pl-2">{turn.reasoning}</pre>
+            </details>
+          )}
           {isUser && editing ? (
             <div className="w-full">
               <textarea
@@ -167,13 +179,6 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, busy, is
             <MessageBody text={turn.content || '…'} className="text-sm" />
           ) : turn.content ? (
             <ChatMarkdown text={turn.content} className="text-sm" />
-          ) : streamingThinking ? (
-            <div className="py-1">
-              <div className="flex items-center gap-1.5 text-[11px] font-bold text-indigo-600 mb-1">
-                <Brain className="w-3.5 h-3.5 animate-pulse" /> Thinking…
-              </div>
-              <pre className="text-[11px] whitespace-pre-wrap break-words text-slate-500 max-h-32 overflow-y-auto font-sans">{turn.reasoning}</pre>
-            </div>
           ) : (
             <span className="flex items-center gap-1.5 py-1">
               <span className="w-2 h-2 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: '0ms' }} />
@@ -395,6 +400,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, busy, is
           <FeedbackButtons
             targetType="chat_response"
             targetId={turn.id}
+            sessionId={sessionId}
             source="ai_chat"
             compact
             className="mt-1 px-1"
