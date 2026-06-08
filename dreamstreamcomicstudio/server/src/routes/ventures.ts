@@ -19,8 +19,10 @@ import {
   createCheckpoint,
   listOpenCheckpoints,
   resolveCheckpointRow,
-  listEvents
+  listEvents,
+  appendEvent
 } from '../ventures/repository.js';
+import { signalToGoal, goalAlreadyOpen } from '../ventures/sense.js';
 import { createGoal, createGoals, listGoals, listConnections } from '../ventures/controlPlane.js';
 import { runIntake } from '../ventures/intake.js';
 import { runOnce } from '../ventures/idempotency.js';
@@ -315,6 +317,51 @@ venturesRouter.get('/:id/connections', async (req, res) => {
     const venture = await getVenture(req.user!.id, req.params.id);
     if (!venture) return notFound(res);
     res.json({ connections: await listConnections(req.user!.id, req.params.id) });
+  } catch (e) {
+    serverError(res, e);
+  }
+});
+
+// --- Sense layer (A6): ingest a signal → record it → (deduped) auto-create a fix/improve goal ---
+venturesRouter.post('/:id/signals', async (req, res) => {
+  const body = (req.body || {}) as { type?: string; message?: string; data?: Record<string, unknown> };
+  if (body.type !== 'error' && body.type !== 'feedback' && body.type !== 'health') {
+    return badRequest(res, "type must be 'error', 'feedback', or 'health'.");
+  }
+  const message = typeof body.message === 'string' ? body.message.trim() : '';
+  if (!message) return badRequest(res, 'message is required.');
+  try {
+    const venture = await getVenture(req.user!.id, req.params.id);
+    if (!venture) return notFound(res);
+    await appendEvent({
+      ventureId: req.params.id,
+      userId: req.user!.id,
+      kind: body.type === 'error' ? 'error' : 'signal',
+      level: body.type === 'error' ? 'error' : 'info',
+      message,
+      data: body.data,
+      source: 'signal'
+    });
+    // Auto-create a fix/improve goal for live ventures (deduped by title), so the loop iterates.
+    let goalId: string | null = null;
+    if (venture.status === 'active' || venture.status === 'paused') {
+      const sg = signalToGoal({ type: body.type, message, data: body.data });
+      if (sg) {
+        const existing = await listGoals(req.user!.id, req.params.id);
+        if (!goalAlreadyOpen(sg.title, existing)) {
+          const created = await createGoal({
+            userId: req.user!.id,
+            ventureId: req.params.id,
+            title: sg.title,
+            detail: sg.detail,
+            kind: sg.kind,
+            priority: sg.priority
+          });
+          goalId = created.id;
+        }
+      }
+    }
+    res.status(201).json({ ok: true, goalId });
   } catch (e) {
     serverError(res, e);
   }

@@ -20,6 +20,7 @@ export type VentureEventKind =
   | 'kill.activated'
   | 'venture.paused'
   | 'venture.resumed'
+  | 'signal'
   | 'error';
 
 export interface VentureEventInput {

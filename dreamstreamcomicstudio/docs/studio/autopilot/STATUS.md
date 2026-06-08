@@ -6,6 +6,12 @@
 
 **Last updated:** 2026-06-07 · **Updated by:** Claude · **Branch:** `claude/gracious-albattani-bDL8T`
 
+> Latest (2026-06-08): **A6 — SENSE LAYER v1 (the iterate loop closes).** `POST /api/ventures/:id/signals`
+> (error|feedback|health) records a `venture_event` and, for live ventures, auto-creates a **deduped**
+> fix/improve goal (`ventures/sense.ts`, pure + 8 tests) — so a runtime error or piece of feedback
+> becomes a backlog goal the loop then builds. Unauthenticated app-injected signals (per-venture token)
+> + real analytics ingestion are follow-ups. Server typecheck green; 100 ventures tests.
+
 > Latest (2026-06-08): **F0 — METRICS + AUDIT LOG (observability substrate).** Added a pure metrics
 > registry (`observability/metrics.ts`) wired to per-provider `ai_*` counters + `venture_tick`
 > outcomes, and a platform `audit_log` (table applied to Supabase + `observability/auditLog.ts`
@@ -160,7 +166,7 @@ Build       ░░░░░░░░░░░░░░░░░░░░    0%  
 | A3 | Intake → roadmap (idea → approved backlog) | 🟢 **backend shipped** — `intake.ts` (idea→spec+roadmap, robust parse) + `/api/ventures/intake` + `/:id/approve-roadmap`; needs a model key at runtime. Intake UI = A8. | model key (owner) |
 | A4 | Wire ACT/VERIFY to the real build engine | 🟢 **build wired** — ACT runs `studioGenerate.runGenerate` (pure-LLM, no worker) → saves a versioned `studio_project` per venture; platform-key `complete`; budget-checked pre-build. Static verify via runGenerate. Needs a model key to run. | model key (owner) |
 | A5 | Deploy adapters (managed + BYO via Nango) | 📋 planned | A4; per-venture connections (owner) |
-| A6 | Sense layer (signals → iterate loop) | 📋 planned | A5 |
+| A6 | Sense layer (signals → iterate loop) | 🟢 **backend v1 shipped** — `POST /:id/signals` (error/feedback/health) records an event + auto-creates a deduped fix/improve goal so the loop iterates; unauth app-injected signals + analytics ingestion are follow-ups | — |
 | A7 | Central billing & budgets portal | 📋 planned | A1; Stripe price config |
 | A8 | Operator console (24/7 workspace UI) | 🟢 **shipped (v1)** — `components/ventures/OperatorConsole.tsx` at `?view=ventures`: intake, venture list, status/budget meter, roadmap, approval queue (approve/deny), activity feed (polled), pause/resume/approve-roadmap. `venturesApi` client. Real-time WS + deployments panel = follow-ups. | — |
 | A9 | Multi-tenant security hardening & GA | 📋 planned | A1–A8; security review + owner GA approval |
