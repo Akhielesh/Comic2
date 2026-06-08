@@ -33,7 +33,7 @@
   enterprise bar. No filler.
 
 ## Progress
-**Sections complete: 38 / 55** · target ~200 pages. (Parts I–III complete; Part IV underway.)
+**Sections complete: 45 / 55** · target ~200 pages. (Parts I–IV complete; Part V — Delivery — last.)
 
 Legend: ✅ written · ✍️ in progress · 📋 planned
 
@@ -88,15 +88,15 @@ Legend: ✅ written · ✍️ in progress · 📋 planned
 | # | Section | File | Status |
 |---|---|---|---|
 | 35 | Security architecture & threat model | [spec/35-security-threat-model.md](./spec/35-security-threat-model.md) | ✅ |
-| 36 | Privacy, compliance & data governance | spec/36-privacy-compliance.md | 📋 |
-| 37 | Reliability & SRE (SLOs, error budgets) | spec/37-reliability-sre.md | 📋 |
+| 36 | Privacy, compliance & data governance | [spec/36-privacy-compliance.md](./spec/36-privacy-compliance.md) | ✅ |
+| 37 | Reliability & SRE (SLOs, error budgets) | [spec/37-reliability-sre.md](./spec/37-reliability-sre.md) | ✅ |
 | 38 | Observability (logs/metrics/traces/alerts) | [spec/38-observability.md](./spec/38-observability.md) | ✅ |
 | 39 | Performance & scalability | [spec/39-performance-scalability.md](./spec/39-performance-scalability.md) | ✅ |
-| 40 | Cost model & FinOps | spec/40-cost-finops.md | 📋 |
-| 41 | Billing & metering architecture | spec/41-billing-metering.md | 📋 |
-| 42 | Disaster recovery & backups | spec/42-disaster-recovery.md | 📋 |
-| 43 | Quality & testing strategy | spec/43-testing-strategy.md | 📋 |
-| 44 | CI/CD & release management | spec/44-cicd-release.md | 📋 |
+| 40 | Cost model & FinOps | [spec/40-cost-finops.md](./spec/40-cost-finops.md) | ✅ |
+| 41 | Billing & metering architecture | [spec/41-billing-metering.md](./spec/41-billing-metering.md) | ✅ |
+| 42 | Disaster recovery & backups | [spec/42-disaster-recovery.md](./spec/42-disaster-recovery.md) | ✅ |
+| 43 | Quality & testing strategy | [spec/43-testing-strategy.md](./spec/43-testing-strategy.md) | ✅ |
+| 44 | CI/CD & release management | [spec/44-cicd-release.md](./spec/44-cicd-release.md) | ✅ |
 
 ### Part V — Delivery
 | # | Section | File | Status |
