@@ -236,7 +236,10 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   // Autonomous autofix budget per error episode. Once spent, we STOP auto-retrying and leave a
   // clickable "Fix with AI" error (which resets the budget). The loop itself is driven by the
   // watchdog effect below — not by Sandpack re-emitting — so it never silently stalls.
-  const MAX_AUTOFIX = 4;
+  // ONE automatic fix attempt per error episode, then stop and surface a manual "Fix with AI"
+  // button. Auto-rebuilding repeatedly (the old value was 4) just churned full-project rewrites on
+  // every preview hiccup — worse than letting the user decide. Manual retry is always available.
+  const MAX_AUTOFIX = 1;
   const autofixRef = useRef<(msg: string) => void>(() => {});
   const generatingRef = useRef(false);
   const onPreviewError = useCallback((e: string | null) => {
