@@ -433,6 +433,10 @@ const isProjectLikesMissingError = (error: unknown): boolean => {
   );
 };
 
+// Throttle the project_state_bytes metric so it doesn't spam the console on every save (saves
+// fire on every generation tick). Only log the first time, or when the size changes meaningfully.
+const lastStateBytesLogged = new Map<string, number>();
+
 // 1. Projects
 export const saveProject = async (project: Project): Promise<void> => {
   const { data: { user } } = await supabase.auth.getUser();
@@ -450,7 +454,11 @@ export const saveProject = async (project: Project): Promise<void> => {
     ?? (isPublic ? Date.now() : undefined);
   const stateWithPublishMeta = effectivePublishedAt ? { ...state, publishedAt: effectivePublishedAt } : state;
   const stateBytes = new Blob([JSON.stringify(stateWithPublishMeta)]).size;
-  console.info("[METRICS] project_state_bytes", { projectId: id, bytes: stateBytes });
+  const prevBytes = lastStateBytesLogged.get(id);
+  if (prevBytes === undefined || Math.abs(stateBytes - prevBytes) >= 4096) {
+    lastStateBytesLogged.set(id, stateBytes);
+    console.info("[METRICS] project_state_bytes", { projectId: id, bytes: stateBytes });
+  }
 
   const { error } = await supabase.from('projects').upsert({
     id,

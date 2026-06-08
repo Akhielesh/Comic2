@@ -12,7 +12,7 @@ import {
   analyzeTestLabReport
 } from '../ai/text.js';
 import { TEXT_MODEL, NVIDIA_TEXT_MODEL } from '../config.js';
-import { pickTextModel } from '../ai/autoRouter.js';
+import { pickTextModel, type CostPref } from '../ai/autoRouter.js';
 import { resolveStageModel, type PipelineStage } from '../ai/stageModels.js';
 import { getProvider, resolveProviderContext } from '../ai/gateway.js';
 import type { ChatMessage } from '../ai/providers/types.js';
@@ -73,26 +73,35 @@ const resolveTextProvider = async (
   const openRouterPick = async (): Promise<TextProvider> => {
     // Validate the requested model against the stage's required capabilities (e.g.
     // structured-JSON for analyze/world/panel/audit) and downgrade if needed.
-    // When the user has free-only mode on (X-Free-Only header), pass 'free-only'
-    // — that surface throws NoFreeModelAvailableError instead of falling back to paid.
-    const costPref = req.freeOnly ? 'free-only' : 'free';
+    // Heavy structured-JSON stages (world / panel breakdown / script analysis) routinely blow
+    // past the 60s request timeout on free models — the production extract-world 500s and
+    // panel-breakdown failures. For PAID users (free-only OFF) pick a capable model ('quality')
+    // for those stages so they actually complete; free-only users keep strict free, and every
+    // other stage keeps the free-first default.
+    const HEAVY_STRUCTURED_STAGES: PipelineStage[] = ['extract_world', 'panel_breakdown', 'analyze_script'];
+    const costPref: CostPref = req.freeOnly
+      ? 'free-only'
+      : (HEAVY_STRUCTURED_STAGES.includes(stage) ? 'quality' : 'free');
     const { model } = await resolveStageModel(stage, requested, { costPref });
     return { apiKey: openRouterKey as string, model, provider: 'openrouter' };
   };
 
+  const geminiKey = req.apiKeys?.geminiKey;
+  const geminiPick = async (): Promise<TextProvider> => ({
+    apiKey: geminiKey as string,
+    model: await assertTextModelAccess(req, resolveRequestedModel(req.header('X-Gemini-Model'))),
+    provider: 'gemini'
+  });
+
   // Explicit source selection wins (the user picked a model from this source).
   if (textSource === 'nvidia' && nvidiaKey) return nvidiaPick();
   if (textSource === 'openrouter' && openRouterKey) return openRouterPick();
+  if (textSource === 'gemini' && geminiKey) return geminiPick();
 
   // Fallback precedence.
   if (openRouterKey) return openRouterPick();
   if (nvidiaKey) return nvidiaPick();
-
-  const geminiKey = req.apiKeys?.geminiKey;
-  if (geminiKey) {
-    const model = await assertTextModelAccess(req, resolveRequestedModel(req.header('X-Gemini-Model')));
-    return { apiKey: geminiKey, model, provider: 'gemini' };
-  }
+  if (geminiKey) return geminiPick();
   res.status(401).json({
     error: {
       message: 'No AI text key found. Add an OpenRouter, NVIDIA Build, or Gemini key in Settings → API Configuration.',

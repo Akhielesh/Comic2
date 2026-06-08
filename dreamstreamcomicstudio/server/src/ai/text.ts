@@ -862,11 +862,18 @@ export const extractWorldDetails = async (
     };
   }
   const ai = createClient(apiKey);
-  const sceneContext = scenes.map((scene) => [
-    `Scene ${scene.id}:`,
-    `Raw Script Excerpt: ${scene.rawText || ''}`,
-    `Known Scene Characters: ${(scene.characters || []).join(', ') || 'None listed'}`
-  ].join('\n')).join('\n\n');
+  // Cap how much raw text per scene we send. Sending every scene's full body in one call is the
+  // main reason extraction blows past the request timeout (and racks up cost) on long scripts.
+  // Entities are named throughout, so a generous head slice keeps grounding while staying fast.
+  const MAX_SCENE_CHARS = 2000;
+  const sceneContext = scenes.map((scene) => {
+    const raw = (scene.rawText || '').slice(0, MAX_SCENE_CHARS);
+    return [
+      `Scene ${scene.id}:`,
+      `Raw Script Excerpt: ${raw}`,
+      `Known Scene Characters: ${(scene.characters || []).join(', ') || 'None listed'}`
+    ].join('\n');
+  }).join('\n\n');
   const directionNote = creativeDirection && creativeDirection.trim()
     ? `\nAuthor's creative direction (bias entity descriptions toward this tone/intent; do not invent entities absent from the scenes):\n${creativeDirection.trim()}\n`
     : '';
