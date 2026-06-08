@@ -693,7 +693,15 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         source: 'ai_chat',
         sessionId,
         message: friendly,
-        metadata: { turnId: aiTurnId }
+        metadata: {
+          turnId: aiTurnId,
+          requestedModel: reqModel,
+          source: reqSource,
+          reasoningLevel: session.reasoningLevel,
+          webSearch: Boolean(session.webSearch),
+          swarm: Boolean(session.swarm),
+          latencyMs: Date.now() - turnStartedAt
+        }
       });
       updateSession(sessionId, (s) => ({
         ...s,
