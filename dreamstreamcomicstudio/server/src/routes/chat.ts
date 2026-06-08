@@ -4,6 +4,7 @@ import { runChat, type ChatReasoningLevel } from '../ai/chat.js';
 import { runSwarm } from '../ai/agents/orchestrator.js';
 import { makeSwarmTool, SWARM_TOOL_NAME } from '../ai/agents/swarmTool.js';
 import { makeDeepResearchTool } from '../ai/research/deepResearchTool.js';
+import { resolveClientGeo, clientIpFromReq } from '../ai/clientGeo.js';
 import { makeImageTool, imageGenAvailable, type ImageKeys } from '../ai/tools/imageGen.js';
 import { sanitizeCustomAgents } from '../ai/agents/registry.js';
 import type { AgentDefinition } from '../ai/agents/registry.js';
@@ -249,7 +250,26 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
     dreamstreamContextJson = raw.length > 12_000 ? `${raw.slice(0, 12_000)}…` : raw;
   }
 
-  const clientContext = sanitizeClientContext(body.clientContext);
+  let clientContext = sanitizeClientContext(body.clientContext);
+  // The browser only shares precise location after an explicit permission grant (rare), so
+  // when no location came through, derive a COARSE one from the request IP. This is what makes
+  // "weather", "near me" and "local news" resolve to the USER instead of the whole world.
+  if (!clientContext?.location) {
+    const geo = await resolveClientGeo(clientIpFromReq(req)).catch(() => null);
+    if (geo && (geo.city || geo.country)) {
+      clientContext = {
+        ...(clientContext || {}),
+        location: {
+          city: geo.city,
+          region: geo.region,
+          country: geo.country,
+          lat: geo.lat,
+          lng: geo.lng,
+          approximate: true
+        }
+      };
+    }
+  }
   const requestCustomAgents = sanitizeCustomAgents(body.customAgents);
 
   const toolContext = clientContext
