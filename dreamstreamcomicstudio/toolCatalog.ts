@@ -25,6 +25,7 @@ export type ToolCategory =
   | 'dev'
   | 'dataviz'
   | 'codegen'
+  | 'learning'
   | 'agents';
 
 export type ToolAuth = 'none' | 'optional' | 'required';
@@ -77,6 +78,7 @@ export const CATEGORY_META: CategoryMeta[] = [
   { id: 'dev', label: 'Developer & utility', icon: 'Code2', blurb: 'GitHub, packages, QR codes, demographics.' },
   { id: 'dataviz', label: 'Data & charts', icon: 'BarChart3', blurb: 'Turn data into charts and KPI boards.' },
   { id: 'codegen', label: 'App builder', icon: 'AppWindow', blurb: 'Generate full multi-file apps with a live preview.' },
+  { id: 'learning', label: 'Learning', icon: 'GraduationCap', blurb: 'Interactive quizzes and practice for studying any topic.' },
   { id: 'agents', label: 'Agents', icon: 'Network', blurb: 'Delegate complex tasks to a swarm.' }
 ];
 
@@ -459,6 +461,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
     auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
     dataShape: 'KPI board: tiles with deltas, sparklines, rings.', docsUrl: 'https://dreamstream.app',
     keywords: ['dashboard', 'kpi', 'kpis', 'metrics', 'scorecard', 'stat board', 'at a glance', 'summary stats', 'overview']
+  },
+  {
+    name: 'generate_quiz', label: 'Quiz / practice', category: 'learning', kind: 'builtin', provider: 'DreamStream (in-app, self-grading)',
+    description: 'Generate an interactive, self-grading quiz (single-select, multi-select, true/false, short answer) to help the user learn or test a topic — with per-question explanations and hints.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Interactive quiz card: mixed-format questions, instant grading, score + explanations.', docsUrl: 'https://dreamstream.app',
+    keywords: ['quiz', 'quiz me', 'test me', 'practice questions', 'practice problems', 'mcq', 'multiple choice', 'flashcards', 'assess', 'check my understanding', 'study', 'exam', 'review questions']
   },
   {
     name: 'render_table', label: 'Data table', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app)',

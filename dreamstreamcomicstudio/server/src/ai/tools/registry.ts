@@ -530,6 +530,70 @@ const metricsTool: ChatTool = {
   }
 };
 
+// Build an interactive, self-grading quiz from questions the model authors — for
+// on-demand learning/practice. Pure + local (no external API).
+const quizTool: ChatTool = {
+  name: 'generate_quiz',
+  description:
+    'Generate an interactive, self-grading quiz to help the user learn or test a topic. Use it whenever the user is studying/learning and would benefit from practice ("quiz me", "test me", "practice questions"), or PROACTIVELY right after explaining a concept. Mix question types: "single" (one correct choice), "multi" (several correct), "true_false", and "short" (typed answer). For single/multi/true_false provide `choices` (each with an id + text) and put the correct choice id(s) in `correct`; for "short" put accepted answer strings in `correct`. Add a brief `explanation` per question (shown after grading) and an optional `hint`. The interactive quiz card is shown to the user — keep prose brief.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      topic: { type: 'string', description: 'Subject area, e.g. "Biology" or "SQL joins".' },
+      description: { type: 'string' },
+      questions: {
+        type: 'array',
+        description: 'The quiz questions (aim for 3–8, varied types and difficulty).',
+        items: {
+          type: 'object',
+          properties: {
+            type: { type: 'string', enum: ['single', 'multi', 'true_false', 'short'] },
+            prompt: { type: 'string', description: 'The question text.' },
+            choices: {
+              type: 'array',
+              description: 'For single/multi/true_false. Omit for "short".',
+              items: { type: 'object', properties: { id: { type: 'string' }, text: { type: 'string' } }, required: ['id', 'text'] }
+            },
+            correct: { type: 'array', items: { type: 'string' }, description: 'Choice id(s) for single/multi/true_false; accepted answer strings for "short".' },
+            explanation: { type: 'string', description: 'Shown after the user checks answers.' },
+            hint: { type: 'string' }
+          },
+          required: ['type', 'prompt', 'correct']
+        }
+      }
+    },
+    required: ['title', 'questions']
+  },
+  execute: async (args) => {
+    const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined);
+    const types = new Set(['single', 'multi', 'true_false', 'short']);
+    const rawQs = Array.isArray(args?.questions) ? (args!.questions as unknown[]) : [];
+    const questions = rawQs
+      .map((raw, i) => {
+        const q = raw as Record<string, unknown>;
+        const type = types.has(String(q?.type)) ? String(q.type) : 'single';
+        const choices = Array.isArray(q?.choices)
+          ? (q.choices as unknown[])
+              .map((c, ci) => {
+                const co = c as Record<string, unknown>;
+                return { id: str(co?.id) || String.fromCharCode(97 + ci), text: str(co?.text) || '' };
+              })
+              .filter((c) => c.text)
+          : undefined;
+        const correct = Array.isArray(q?.correct) ? (q.correct as unknown[]).map((x) => String(x)).filter(Boolean) : [];
+        return { id: str(q?.id) || `q${i + 1}`, type, prompt: str(q?.prompt) || '', choices, correct, explanation: str(q?.explanation), hint: str(q?.hint) };
+      })
+      .filter((q) => q.prompt && q.correct.length > 0);
+    if (!questions.length) return { content: 'No usable quiz questions were provided (each needs a prompt and at least one correct answer).' };
+    const data = { title: str(args?.title) || 'Quiz', topic: str(args?.topic), description: str(args?.description), questions };
+    return {
+      content: `Created a ${questions.length}-question quiz${data.topic ? ` on ${data.topic}` : ''}. An interactive, self-grading quiz card is shown to the user.`,
+      artifacts: [{ type: 'quiz', data }]
+    };
+  }
+};
+
 // Flatten the free-API tool packs into a name→tool map. These are all context-free
 // (they take explicit args), so they live alongside the original built-ins.
 const FREE_API_TOOLS: ChatTool[] = [
@@ -559,6 +623,7 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   get_stock: stockTool,
   render_chart: chartTool,
   show_metrics: metricsTool,
+  generate_quiz: quizTool,
   generate_app: generateAppTool,
   ...Object.fromEntries(FREE_API_TOOLS.map((t) => [t.name, t]))
 };

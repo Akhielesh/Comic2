@@ -807,6 +807,32 @@ export type CapabilityNotice = {
 // client-side renderer; new artifact types are added without touching the loop.
 export type ChatArtifact = { type: string; data: unknown };
 
+// --- Quiz / assessment artifact (on-demand learning components) ---
+// Emitted by the `generate_quiz` tool so the AI can build interactive practice
+// questions when a user is learning a topic. The client self-grades — no round-trip.
+export type QuizQuestionType = 'single' | 'multi' | 'short' | 'true_false';
+export interface QuizChoice {
+  id: string;
+  text: string;
+}
+export interface QuizQuestion {
+  id: string;
+  type: QuizQuestionType;
+  prompt: string;
+  /** Choices for single / multi / true_false questions. */
+  choices?: QuizChoice[];
+  /** Correct answer(s): choice id(s) for single/multi/true_false; accepted answer strings for short. */
+  correct: string[];
+  explanation?: string;
+  hint?: string;
+}
+export interface QuizArtifact {
+  title: string;
+  topic?: string;
+  description?: string;
+  questions: QuizQuestion[];
+}
+
 // --- Code Studio artifact ---
 // Emitted by the `generate_app` tool. Carries a complete multi-file project
 // that the client renders in the live, editable Code Studio side panel.

@@ -16,13 +16,51 @@ import { CodeStudioCard } from './artifacts/CodeStudioCard';
 import { RecipeCard } from './artifacts/RecipeCard';
 import { RecipeRunCard } from './artifacts/RecipeRunCard';
 import { ResearchReport } from './artifacts/ResearchReport';
+import { Quiz } from './artifacts/Quiz';
 import type {
   WeatherArtifact, NewsResultsArtifact, StockQuoteArtifact,
   VideoResultsArtifact, PlacesResultsArtifact, SwarmTraceArtifact,
   ChartArtifact, MetricBoardArtifact, MapArtifact,
   DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact,
-  RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact
+  RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact
 } from '../../apiTypes';
+
+const quizDemo: QuizArtifact = {
+  title: 'Photosynthesis — quick check',
+  topic: 'Biology',
+  description: 'A short mixed-format quiz to test the basics.',
+  questions: [
+    {
+      id: 'q1', type: 'single', prompt: 'Where in the cell does photosynthesis occur?',
+      choices: [
+        { id: 'a', text: 'Mitochondria' },
+        { id: 'b', text: 'Chloroplast' },
+        { id: 'c', text: 'Nucleus' },
+        { id: 'd', text: 'Ribosome' }
+      ],
+      correct: ['b'], explanation: 'Chloroplasts contain chlorophyll, which captures light energy.', hint: 'It is green.'
+    },
+    {
+      id: 'q2', type: 'multi', prompt: 'Which are INPUTS to photosynthesis? (select all)',
+      choices: [
+        { id: 'a', text: 'Carbon dioxide' },
+        { id: 'b', text: 'Water' },
+        { id: 'c', text: 'Oxygen' },
+        { id: 'd', text: 'Sunlight' }
+      ],
+      correct: ['a', 'b', 'd'], explanation: 'CO₂, water and light are inputs; oxygen is an output.'
+    },
+    {
+      id: 'q3', type: 'true_false', prompt: 'Photosynthesis releases oxygen.',
+      choices: [{ id: 't', text: 'True' }, { id: 'f', text: 'False' }],
+      correct: ['t']
+    },
+    {
+      id: 'q4', type: 'short', prompt: 'What gas do plants release as a by-product?',
+      correct: ['oxygen', 'o2'], explanation: 'Oxygen (O₂) is released during the light reactions.'
+    }
+  ]
+};
 
 // A living gallery of the chat's rich-output components, each with sample data, so
 // the UI library can be seen and sanity-checked in one place.
@@ -341,6 +379,7 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Recipe card (reusable agent workflow · params · tools)', type: 'recipe_card', node: <RecipeCard data={recipeDemo} /> },
   { title: 'Recipe run (params · structured output · follow-ups)', type: 'recipe_run', node: <RecipeRunCard data={recipeRunDemo} /> },
   { title: 'Research report (questions · sources read · grounded brief header)', type: 'research_report', node: <ResearchReport data={researchReportDemo} /> },
+  { title: 'Quiz (MCQ · multi-select · true/false · short answer · self-grading)', type: 'quiz', node: <Quiz data={quizDemo} /> },
   { title: 'Markdown table (inline)', node: <ChatMarkdown text={tableMd} /> }
 ];
 
