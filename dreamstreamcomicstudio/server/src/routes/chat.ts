@@ -290,10 +290,16 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   const imageRequested = Array.isArray(body.tools) && body.tools.some((t) => t === 'generate_image');
   if (imageRequested && imageGenAvailable(imageKeys)) metaTools.push(makeImageTool(imageKeys));
 
-  // Deep research as an always-available tool (OpenRouter), so a natural-language request
-  // like "research X thoroughly" triggers the real iterative, citation-grounded engine
-  // instead of a one-shot web_search — not only the /research slash command.
-  if (resolved.provider === 'openrouter') {
+  // Deep research is a HEAVY tool (multi-search + page reads + 2 model calls), so it is
+  // offered only when the user's message actually signals a research intent — not on every
+  // chat (always-on, the model over-invoked it and turned ordinary turns into multi-minute
+  // runs). A natural-language "research X thoroughly / deep dive on Y" still triggers it;
+  // the /research slash command runs the engine directly regardless.
+  const researchIntent =
+    /\b(deep[\s-]?research|deep[\s-]?dive|thorough(ly)?|comprehensive|in[\s-]?depth|investigate|dossier|literature review|white\s?paper|sourced\s+(report|brief|analysis)|research\s+(report|brief|paper|on|about|into))\b/i.test(
+      lastUserText
+    );
+  if (resolved.provider === 'openrouter' && researchIntent) {
     metaTools.push(
       makeDeepResearchTool({
         provider: resolved.provider,

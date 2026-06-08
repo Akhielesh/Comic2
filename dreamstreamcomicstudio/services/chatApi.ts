@@ -98,7 +98,13 @@ export interface ChatStreamHandlers {
   signal?: AbortSignal;
 }
 
-/** Consume an SSE stream, dispatching each parsed record to `onRecord`. */
+// If the stream goes completely silent for this long, treat the connection as dead and
+// fail with an actionable error instead of "loading" forever. The server sends an SSE
+// keep-alive comment every 15s, so a live (even slow, tool-heavy) turn always delivers
+// bytes well within this window — only a genuinely stalled/buffered/dead connection trips it.
+const STREAM_IDLE_TIMEOUT_MS = 45_000;
+
+/** Consume an SSE stream, dispatching each parsed record to `onRecord`. Aborts on a silent stall. */
 const consumeEventStream = async (
   res: Response,
   onRecord: (event: string, parsed: any) => void
@@ -122,9 +128,27 @@ const consumeEventStream = async (
     onRecord(event, parsed);
   };
 
+  // Idle watchdog: race each read against a timeout so a stalled connection can't hang
+  // the UI indefinitely. ANY byte (including the server's keep-alive comments) resets it.
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const { done, value } = await reader.read();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const idle = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error('The connection went silent — the network connection was lost. Please try again.')),
+        STREAM_IDLE_TIMEOUT_MS
+      );
+    });
+    let result: ReadableStreamReadResult<Uint8Array>;
+    try {
+      result = await Promise.race([reader.read(), idle]);
+    } catch (err) {
+      await reader.cancel().catch(() => {});
+      throw err;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    const { done, value } = result;
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     const records = buffer.split('\n\n');
@@ -132,6 +156,27 @@ const consumeEventStream = async (
     for (const record of records) handleRecord(record);
   }
   if (buffer.trim()) handleRecord(buffer);
+};
+
+/**
+ * Derive an AbortSignal that fires when the parent aborts OR after `ms` — so a single
+ * request can be bounded by both user-cancel and a hard timeout. Call `done()` to clear.
+ */
+const withTimeoutSignal = (parent: AbortSignal | undefined, ms: number): { signal: AbortSignal; done: () => void } => {
+  const ctrl = new AbortController();
+  const onAbort = () => ctrl.abort();
+  if (parent) {
+    if (parent.aborted) ctrl.abort();
+    else parent.addEventListener('abort', onAbort, { once: true });
+  }
+  const timer = setTimeout(() => ctrl.abort(new DOMException('Request timed out', 'TimeoutError')), ms);
+  return {
+    signal: ctrl.signal,
+    done: () => {
+      clearTimeout(timer);
+      parent?.removeEventListener('abort', onAbort);
+    }
+  };
 };
 
 /**
@@ -181,8 +226,10 @@ export const sendChatMessageStream = async (
       for (let attempt = 0; attempt < 3; attempt++) {
         if (handlers.signal?.aborted) break;
         if (attempt > 0) await new Promise((r) => setTimeout(r, 1000 * attempt));
+        // Bound each buffered attempt so a dead/slow server can't hang the UI forever.
+        const guard = withTimeoutSignal(handlers.signal, 120_000);
         try {
-          const final = await sendChatMessage(req, { signal: handlers.signal });
+          const final = await sendChatMessage(req, { signal: guard.signal });
           if (final.text) handlers.onDelta?.(final.text);
           return final;
         } catch (retryErr) {
@@ -190,6 +237,8 @@ export const sendChatMessageStream = async (
           // A real server response (rate limit, missing key, …) is not worth retrying —
           // surface it immediately so the user sees the actionable message.
           if (!isTransportError(retryErr)) throw retryErr;
+        } finally {
+          guard.done();
         }
       }
       throw lastErr;
