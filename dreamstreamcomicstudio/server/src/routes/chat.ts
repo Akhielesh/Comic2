@@ -8,8 +8,8 @@ import { makeImageTool, imageGenAvailable, type ImageKeys } from '../ai/tools/im
 import { sanitizeCustomAgents } from '../ai/agents/registry.js';
 import type { AgentDefinition } from '../ai/agents/registry.js';
 import { loadCustomAgentDefinitions } from '../services/customAgents.js';
-import { pickTextModel, pickTextModelChain, TEXT_FALLBACK } from '../ai/autoRouter.js';
-import { NVIDIA_TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS, JSON_TOOL_PROTOCOL_ENABLED } from '../config.js';
+import { pickTextModel, pickTextModelChain, markModelDown, TEXT_FALLBACK } from '../ai/autoRouter.js';
+import { NVIDIA_TEXT_MODEL, OPENROUTER_TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS, JSON_TOOL_PROTOCOL_ENABLED } from '../config.js';
 import type { AIProviderId, ChatMessage, MessagePart } from '../ai/providers/types.js';
 import { assertModelAllowedForUser } from '../services/modelAccessPolicy.js';
 import { sanitizeAssistantContext } from '../ai/assistantPolicy.js';
@@ -180,13 +180,16 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   }
 
   const requestedModel = (typeof body.model === 'string' ? body.model.trim() : '') || (req.header('X-Text-Model') || '').trim();
-  // Auto-pick: on OpenRouter the whole chat is tool-grounded (web search, app builder,
-  // charts…), so a model that can't function-call is useless here. Softly PREFER a free
-  // model that advertises `tools` support — otherwise auto-mode could land on a free
-  // model with no function-calling and silently lose every tool (incl. generate_app).
+  // Free-only is a user choice (header). When ON we use the cooldown-aware FREE chain (slower
+  // but free). When OFF (the default) the chat leads with a FAST, capable, cheap model rather
+  // than a free one — free models are 10-30x slower (9-22s vs ~1s) and frequently 429/404,
+  // which is why chats felt slow and "stuck on gpt-4o-mini". gemini-2.5-flash answers in ~0.7s.
+  const freeOnly = (req.header('X-Free-Only') || '').toLowerCase() === 'true';
   let model = requestedModel || (resolved.provider === 'nvidia'
     ? NVIDIA_TEXT_MODEL
-    : await pickTextModel({ preferFree: true, prefer: (m) => (m.supportedParameters || []).includes('tools') }));
+    : freeOnly
+      ? await pickTextModel({ preferFree: true, prefer: (m) => (m.supportedParameters || []).includes('tools') })
+      : OPENROUTER_TEXT_MODEL);
   if (resolved.provider === 'nvidia' && !model.includes('/')) model = NVIDIA_TEXT_MODEL;
 
   if (resolved.provider === 'openrouter' && req.user?.id) {
@@ -212,15 +215,23 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   let fallbackModels: string[] | undefined;
   if (resolved.provider === 'openrouter') {
     if (requestedModel) {
-      fallbackModels = model === TEXT_FALLBACK ? [model] : [model, TEXT_FALLBACK];
-    } else {
+      // Pinned model: keep it primary; add the cheap paid net (unless free-only).
+      fallbackModels = freeOnly || model === TEXT_FALLBACK ? [model] : [model, TEXT_FALLBACK];
+    } else if (freeOnly) {
+      // Free-only: cooldown-aware FREE chain (a free model that just failed is skipped so we
+      // don't re-pay its ~15-20s fallback latency).
       const chain = await pickTextModelChain({
         preferFree: true,
         prefer: (m) => (m.supportedParameters || []).includes('tools'),
-        max: 3
-      }).catch(() => [model, TEXT_FALLBACK]);
-      // Keep the policy-resolved primary at the head, then the chain's alternates.
-      fallbackModels = Array.from(new Set([model, ...chain])).slice(0, 3);
+        freeOnly: true,
+        max: 2
+      }).catch(() => [model]);
+      fallbackModels = chain.length ? chain : [model];
+      model = fallbackModels[0] || model;
+    } else {
+      // Default: FAST. Lead with the quick capable model, gpt-4o-mini as the reliable net.
+      fallbackModels = Array.from(new Set([OPENROUTER_TEXT_MODEL, TEXT_FALLBACK]));
+      model = fallbackModels[0];
     }
   }
 
@@ -564,6 +575,9 @@ chatRouter.post('/', async (req, res, next) => {
 
     try {
       const result = await runChat(runChatParams(p));
+      if (p.resolved.provider === 'openrouter' && result.model && p.model && result.model !== p.model) {
+        markModelDown(p.model);
+      }
       const settled =
         reserve && reserve.allowed
           ? await settleReservedOperation({
@@ -658,6 +672,13 @@ chatRouter.post('/stream', async (req, res) => {
       // the next turn streams, so multi-step answers don't accumulate preamble on screen.
       onReset: () => send('reset', {})
     });
+
+    // Adaptive speed: if the served model differs from the (free) primary we led the chain
+    // with, that primary is currently unavailable/rate-limited — cool it down so the next
+    // requests skip it and respond fast instead of re-paying its fallback latency.
+    if (p.resolved.provider === 'openrouter' && result.model && p.model && result.model !== p.model) {
+      markModelDown(p.model);
+    }
 
     const settled =
       reserve && reserve.allowed
