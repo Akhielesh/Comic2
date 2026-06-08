@@ -23,6 +23,7 @@ import {
 } from '../ventures/repository.js';
 import { createGoal, createGoals, listGoals, listConnections } from '../ventures/controlPlane.js';
 import { runIntake } from '../ventures/intake.js';
+import { runOnce } from '../ventures/idempotency.js';
 import { studioStageComplete } from './studio.js';
 import { getKillSwitch, setKillSwitch } from '../ventures/killSwitch.js';
 import { budgetAlertLevel } from '../ventures/budget.js';
@@ -97,43 +98,58 @@ venturesRouter.post('/intake', async (req, res) => {
   const idea = typeof (req.body || {}).idea === 'string' ? (req.body as { idea: string }).idea.trim() : '';
   if (!idea) return badRequest(res, 'An "idea" describing the product is required.');
   if (idea.length > 8000) return badRequest(res, 'idea must be <= 8000 characters.');
+  // Idempotency (F2): de-dupe a double-submit (same user+idea, or an Idempotency-Key header) so it
+  // can't create two ventures + spend on two roadmaps. In-flight + 60s window.
+  const idemHeader = typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'] : '';
+  const idemKey = `intake:${req.user!.id}:${idemHeader || idea.slice(0, 200)}`;
   try {
-    const complete = await studioStageComplete(req as never, (req.body || {}) as never, 2500);
-    if (!complete) {
-      return res.status(400).json({
-        error: { message: 'No model key configured (add an OpenRouter or NVIDIA key in Settings).', code: 'NO_MODEL_KEY' }
+    const result = await runOnce(idemKey, 60_000, async () => {
+      const complete = await studioStageComplete(req as never, (req.body || {}) as never, 2500);
+      if (!complete) {
+        throw Object.assign(new Error('NO_MODEL_KEY'), {
+          http: 400,
+          publicCode: 'NO_MODEL_KEY',
+          publicMessage: 'No model key configured (add an OpenRouter or NVIDIA key in Settings).'
+        });
+      }
+      const roadmap = await runIntake(idea, complete);
+      if (!roadmap) {
+        throw Object.assign(new Error('VENTURE_INTAKE_INVALID'), {
+          http: 502,
+          publicCode: 'VENTURE_INTAKE_INVALID',
+          publicMessage: 'Could not draft a roadmap. Try rephrasing the idea.'
+        });
+      }
+      const { id } = await createVenture({
+        userId: req.user!.id,
+        name: roadmap.name,
+        summary: roadmap.summary,
+        scope: roadmap.scope
       });
-    }
-    const roadmap = await runIntake(idea, complete);
-    if (!roadmap) {
-      return res.status(502).json({
-        error: { message: 'Could not draft a roadmap. Try rephrasing the idea.', code: 'VENTURE_INTAKE_INVALID' }
+      await upsertBudget({
+        userId: req.user!.id,
+        ventureId: id,
+        usdPerDay: VENTURES_DEFAULT_USD_PER_DAY,
+        usdTotal: VENTURES_DEFAULT_USD_TOTAL
       });
-    }
-    const { id } = await createVenture({
-      userId: req.user!.id,
-      name: roadmap.name,
-      summary: roadmap.summary,
-      scope: roadmap.scope
+      await createGoals({ userId: req.user!.id, ventureId: id, goals: roadmap.goals });
+      await setVentureStatus(req.user!.id, id, 'roadmap_pending');
+      // Gate: the roadmap must be approved (checkpoint) before the loop works it.
+      await createCheckpoint({
+        userId: req.user!.id,
+        ventureId: id,
+        kind: 'roadmap_approval',
+        title: `Approve the roadmap for "${roadmap.name}"`,
+        detail: `${roadmap.goals.length} goals proposed.`
+      });
+      return { id, roadmap };
     });
-    await upsertBudget({
-      userId: req.user!.id,
-      ventureId: id,
-      usdPerDay: VENTURES_DEFAULT_USD_PER_DAY,
-      usdTotal: VENTURES_DEFAULT_USD_TOTAL
-    });
-    await createGoals({ userId: req.user!.id, ventureId: id, goals: roadmap.goals });
-    await setVentureStatus(req.user!.id, id, 'roadmap_pending');
-    // Gate: the roadmap must be approved (checkpoint) before the loop works it.
-    await createCheckpoint({
-      userId: req.user!.id,
-      ventureId: id,
-      kind: 'roadmap_approval',
-      title: `Approve the roadmap for "${roadmap.name}"`,
-      detail: `${roadmap.goals.length} goals proposed.`
-    });
-    res.status(201).json({ id, roadmap });
+    res.status(201).json(result);
   } catch (e) {
+    const err = e as { http?: number; publicCode?: string; publicMessage?: string };
+    if (err?.http) {
+      return res.status(err.http).json({ error: { message: err.publicMessage, code: err.publicCode } });
+    }
     serverError(res, e);
   }
 });
