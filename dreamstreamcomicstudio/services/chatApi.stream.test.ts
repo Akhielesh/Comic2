@@ -101,4 +101,22 @@ describe('sendChatMessageStream', () => {
     expect(res.text).toBe('real answer');
     expect(deltas).toContain('real answer');
   });
+
+  it('recovers a high-reasoning turn that TIMES OUT by retrying with light reasoning', async () => {
+    // Production case: reasoning:high on the auto model exceeds the request timeout (90s).
+    // Recovery must drop heavy reasoning so the buffered retry answers fast instead of
+    // timing out again.
+    postStreamMock.mockRejectedValue(new Error('The model took too long to respond (timed out after 90s).'));
+    postMock.mockResolvedValue({ text: 'fast answer', model: 'm' });
+
+    const res = await sendChatMessageStream(
+      { messages: [{ role: 'user', content: 'hi' }], reasoningLevel: 'high' } as never,
+      { onDelta: () => {} }
+    );
+
+    expect(postMock).toHaveBeenCalledTimes(1);
+    const retryReq = postMock.mock.calls[0][1] as { reasoningLevel?: string };
+    expect(retryReq.reasoningLevel).toBe('low');
+    expect(res.text).toBe('fast answer');
+  });
 });

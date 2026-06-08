@@ -237,10 +237,18 @@ export const sendChatMessageStream = async (
     //      "thinks but never answers" failure we see in production.
     // For (b) we re-run with reasoning DOWNGRADED so the model spends its budget
     // answering instead of thinking, which is what actually fixes the empty turn.
-    const emptyStream = err instanceof Error && /returned no response/i.test(err.message);
-    if (!receivedContent && !handlers.signal?.aborted && (isTransportError(err) || emptyStream)) {
+    //  (c) the turn TIMED OUT (took too long) — production telemetry shows reasoning:high
+    //      on the auto model regularly exceeding 90s. We recover those too, and since the
+    //      reasoning budget is the cause, the recovery ALWAYS drops heavy reasoning so the
+    //      retry answers fast instead of timing out again.
+    const msg = err instanceof Error ? err.message : '';
+    const emptyStream = /returned no response/i.test(msg);
+    const tookTooLong = /timed out|too long|timeout/i.test(msg);
+    if (!receivedContent && !handlers.signal?.aborted && (isTransportError(err) || emptyStream || tookTooLong)) {
       const highReasoning = req.reasoningLevel === 'high' || req.reasoningLevel === 'medium';
-      const retryReq: ChatRequest = emptyStream && highReasoning ? { ...req, reasoningLevel: 'low' } : req;
+      // Any recovery on a heavy-reasoning turn retries LIGHT — empty AND slow turns are
+      // both caused by the reasoning budget, so this is what actually gets an answer.
+      const retryReq: ChatRequest = highReasoning ? { ...req, reasoningLevel: 'low' } : req;
       let lastErr: unknown = err;
       for (let attempt = 0; attempt < 3; attempt++) {
         if (handlers.signal?.aborted) break;
