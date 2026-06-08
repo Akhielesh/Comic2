@@ -6,6 +6,16 @@
 
 **Last updated:** 2026-06-07 · **Updated by:** Claude · **Branch:** `claude/gracious-albattani-bDL8T`
 
+> Latest (2026-06-08): **SHIPPED TO PRODUCTION (inert) + READY TO VALIDATE.** Merged the full
+> Autopilot layer (A0–A4, A6, A8, F0–F2) into `Dreamstrream-v1` as a clean fast-forward — merged
+> prod in first, resolved the one `index.ts` conflict (kept both the ventures + invites routes),
+> re-verified the merged tree (client+server typecheck, frontend build, **810 tests pass**; only the
+> 3 pre-existing env-only `supabaseUrl` failures remain, in untouched files). Flag-gated OFF, so it's
+> inert in prod until the owner sets `VENTURES_ENABLED=true`. **Next: owner sets Railway env +
+> `ventures:worker`; then Claude validates the live loop via the Supabase tools** (seed an active
+> test venture → watch `venture_events`/`studio_versions` populate → confirm budget pause + kill).
+> See [`GO-LIVE-RUNBOOK.md`](./GO-LIVE-RUNBOOK.md).
+
 > Latest (2026-06-08): **A6 — SENSE LAYER v1 (the iterate loop closes).** `POST /api/ventures/:id/signals`
 > (error|feedback|health) records a `venture_event` and, for live ventures, auto-creates a **deduped**
 > fix/improve goal (`ventures/sense.ts`, pure + 8 tests) — so a runtime error or piece of feedback

@@ -272,6 +272,10 @@ export const VENTURES_ENABLED = parseBooleanEnv(process.env.VENTURES_ENABLED, fa
 // Global emergency stop: when true, the scheduler pauses ALL ventures (an admin can also flip
 // this at runtime via the in-process override in ventures/killSwitch.ts).
 export const VENTURES_KILL = parseBooleanEnv(process.env.VENTURES_KILL, false);
+// Pilot mode: run the autonomous loop IN-PROCESS on a timer inside the API (no separate worker,
+// no Redis/queue). Off by default. For validating a single instance; use the dedicated worker
+// (npm run ventures:worker + REDIS_URL) for real scale.
+export const VENTURES_PILOT_INLINE = parseBooleanEnv(process.env.VENTURES_PILOT_INLINE, false);
 // Global cap on concurrent autonomous ticks across all ventures (protects providers + spend).
 export const VENTURES_MAX_CONCURRENT_TICKS = parseIntegerEnv(
   process.env.VENTURES_MAX_CONCURRENT_TICKS,
