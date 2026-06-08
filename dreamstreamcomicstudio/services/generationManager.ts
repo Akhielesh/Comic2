@@ -3,6 +3,7 @@ import { generatePanelBreakdown, updateContinuitySummary } from "./geminiService
 import { generateImage } from "./imageService";
 import { buildImagePrompt } from "./imagePrompt";
 import { classifyStoryMood } from "./storyMood";
+import { stableHash, hashScenes, hashWorld, hasStaleDownstreamFingerprint } from "./pipelineFingerprint";
 import { resolveAspectRatio } from "./imageUtils";
 import { getGridTemplate } from "./panelLayout";
 import { normalizePanelDialogue } from "./dialogueUtils";
@@ -31,65 +32,6 @@ const generationCanceled = new Set<string>();
 const STRICT_STYLE_LOCK_ERROR = "STRICT_STYLE_LOCK_UNRESOLVED";
 const STRICT_REFERENCE_ERROR = "STRICT_REFERENCE_REQUIRED";
 const MULTI_FRAME_ERROR = "MULTI_FRAME_DESCRIPTION";
-
-const stableHash = (value: string) => {
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
-  }
-  return `h${Math.abs(hash >>> 0).toString(16)}`;
-};
-
-const hashScenes = (state: Project["state"]) =>
-  stableHash(
-    JSON.stringify(
-      (state.scenes || []).map((scene) => ({
-        id: scene.id,
-        rawText: scene.rawText || "",
-        synopsis: scene.synopsis || "",
-        setting: scene.setting || "",
-        characters: scene.characters || []
-      }))
-    )
-  );
-
-const hashWorld = (state: Project["state"]) =>
-  stableHash(
-    JSON.stringify({
-      characters: (state.characters || []).map((entry) => ({
-        id: entry.id,
-        name: entry.name,
-        description: entry.description,
-        bio: entry.bio,
-        referenceImageIds: entry.referenceImageIds || []
-      })),
-      items: (state.items || []).map((entry) => ({
-        id: entry.id,
-        name: entry.name,
-        description: entry.description,
-        referenceImageIds: entry.referenceImageIds || []
-      })),
-      locations: (state.locations || []).map((entry) => ({
-        id: entry.id,
-        name: entry.name,
-        description: entry.description,
-        referenceImageIds: entry.referenceImageIds || []
-      }))
-    })
-  );
-
-const hasStaleDownstreamFingerprint = (state: Project["state"]) => {
-  const expectedScriptHash = stableHash(state.script || "");
-  const expectedSceneHash = hashScenes(state);
-  const expectedWorldHash = hashWorld(state);
-  if (!state.scriptHash || !state.sceneHash || !state.worldHash) return true;
-  return (
-    state.scriptHash !== expectedScriptHash ||
-    state.sceneHash !== expectedSceneHash ||
-    state.worldHash !== expectedWorldHash
-  );
-};
 
 const countUngroundedEntities = (state: Project["state"]) =>
   (state.continuity?.validation?.issues || []).filter((issue) => issue.code === "ENTITY_NOT_FOUND").length;
@@ -241,12 +183,21 @@ export const startBackgroundGeneration = async (
       }
     }));
     if (strictMode && !validation.isValid) {
-      addLog(`Continuity validation failed (${validation.issues.length} issues).`);
+      addLog(`Continuity validation failed (${validation.issues.length} issue${validation.issues.length === 1 ? '' : 's'}).`);
+      // Name the specific blockers so the user knows exactly what to fix instead of a
+      // bare "Failed: Continuity". Missing reference images are the #1 cause.
+      const needsRefs = validation.issues
+        .filter((issue) => issue.code === 'ENTITY_REFERENCE_MISSING' || issue.code === 'ENTITY_NOT_FOUND')
+        .map((issue) => issue.message);
+      validation.issues.slice(0, 6).forEach((issue) => addLog(`• ${issue.message}`));
+      const refHint = needsRefs.length
+        ? ` Generate reference images for: ${[...new Set(needsRefs)].slice(0, 6).join('; ')}.`
+        : '';
       void createSystemNotification(
-        `Generation blocked: continuity validation failed (${validation.issues.length} issue${validation.issues.length === 1 ? '' : 's'}).`,
+        `Generation blocked: continuity needs attention (${validation.issues.length} issue${validation.issues.length === 1 ? '' : 's'}).${refHint} Fix in the World stage, then start again.`,
         { projectId: project.id, stage: 'generation' }
       );
-      stopWithStatus("Failed: Continuity");
+      stopWithStatus(needsRefs.length ? "Failed: missing reference images (see World stage)" : "Failed: Continuity");
       return;
     }
 
@@ -612,7 +563,11 @@ export const startBackgroundGeneration = async (
         }));
 
         if (batchHadStrictFailure) {
-          throw new Error(`${STRICT_REFERENCE_ERROR}: Strict continuity constraints were violated in this batch.`);
+          // Previously this threw and discarded the ENTIRE run for one bad panel. The
+          // offending panels are already saved with a failureReason, so instead we keep
+          // going and let the user retry just those from the Done stage — losing the whole
+          // comic over a single missing reference was the worst "comics keep failing" case.
+          addLog("Some panels couldn't satisfy strict continuity (missing references or multi-frame text). They're flagged — continuing with the rest.");
         }
 
         // Stop if billing limit hit — remaining panels would all fail
@@ -647,7 +602,16 @@ export const startBackgroundGeneration = async (
       `[METRICS] panel_ref_count=${averageRefCount} zero_ref_panel=${zeroRefPanelCount} mixed_model_in_run=${mixedModelInRun} multi_frame_description_detected=${multiFrameDetectedCount} style_lock_resolved=${initialStyleResolution.resolution.resolved ? 1 : 0} stale_downstream_fingerprint=${staleDownstreamFingerprint ? 1 : 0} dropped_entity_count=${droppedEntityCount} ungrounded_entity_count=${ungroundedEntityCount}`
     );
 
-    addLog("Build Complete!");
+    const flaggedPanels = freshPanels.filter((panel) => panel.failureReason && !panel.imageId);
+    if (flaggedPanels.length > 0) {
+      addLog(`Build complete with ${flaggedPanels.length} panel${flaggedPanels.length === 1 ? '' : 's'} to retry — open the Done stage to re-roll ${flaggedPanels.length === 1 ? 'it' : 'them'}.`);
+      void createSystemNotification(
+        `Comic finished — ${flaggedPanels.length} panel${flaggedPanels.length === 1 ? '' : 's'} need a retry (missing references or a description fix). Completed panels are saved.`,
+        { projectId: project.id, stage: 'generation' }
+      );
+    } else {
+      addLog("Build Complete!");
+    }
     updateStatus({
       isActive: false,
       progress: 100,

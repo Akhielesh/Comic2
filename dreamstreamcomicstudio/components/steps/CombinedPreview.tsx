@@ -5,6 +5,7 @@ import { generatePanelBreakdown } from '../../services/geminiService';
 import { Button } from '../Button';
 import { ensureDialogueBlocks, normalizePanelDialogue } from '../../services/dialogueUtils';
 import { buildDefaultContinuityState, resolvePanelContinuity, validateContinuityState } from '../../services/continuity';
+import { hasDownstreamDrift } from '../../services/pipelineFingerprint';
 import {
   DEFAULT_PRICING_CONFIG,
   normalizePricingConfig,
@@ -150,6 +151,9 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
     return (legacy.imagePerOutput || 0) * plannedPanelCount;
   })();
   const estimatedCt = Math.ceil(costSummary.totalProjected / 0.0001);
+  // True when the script/scenes/world were edited AFTER the panels were planned — generating
+  // now would bake stale references into the comic (a quiet but common corruption).
+  const downstreamDrift = useMemo(() => hasDownstreamDrift(state), [state]);
   const continuityValidation = useMemo(
     () => validateContinuityState(state),
     [state]
@@ -545,6 +549,23 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
             </div>
           </div>
         )}
+        {downstreamDrift && plannedPanelCount > 0 && (
+          <div className="mt-4 rounded-lg border-2 border-amber-400 bg-amber-50 p-3">
+            <div className="text-sm font-bold text-amber-800">Your script or world changed after these panels were planned.</div>
+            <div className="text-xs text-amber-700 mt-1">
+              Generating now can bake in stale character names or references. Re-plan the panels so they match your latest edits.
+            </div>
+            <div className="mt-2">
+              <button
+                onClick={generateAllPlans}
+                disabled={isPlanning}
+                className="text-xs font-bold border border-amber-500 text-amber-800 bg-white rounded px-2 py-1 hover:bg-amber-100 disabled:opacity-50"
+              >
+                Re-plan All Panels
+              </button>
+            </div>
+          </div>
+        )}
         {multiFramePanels.length > 0 && (
           <div className="mt-4 rounded-lg border-2 border-orange-300 bg-orange-50 p-3">
             <div className="text-sm font-bold text-orange-800">Multi-frame panel descriptions detected.</div>
@@ -553,27 +574,39 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
             </div>
           </div>
         )}
-        {!continuityValidation.isValid && (
-          <div className="mt-4 rounded-lg border-2 border-red-300 bg-red-50 p-3">
-            <div className="text-sm font-bold text-red-700">Continuity lock is blocking generation.</div>
-            <div className="text-xs text-red-700 mt-1">
-              Resolve required references or scene bindings first.
+        {!continuityValidation.isValid && (() => {
+          const refIssues = continuityValidation.issues.filter(
+            (issue) => issue.code === 'ENTITY_REFERENCE_MISSING' || issue.code === 'ENTITY_NOT_FOUND'
+          );
+          const missingRefCount = refIssues.length;
+          return (
+            <div className="mt-4 rounded-lg border-2 border-red-300 bg-red-50 p-3">
+              <div className="text-sm font-bold text-red-700">
+                {missingRefCount > 0
+                  ? `${missingRefCount} character/item${missingRefCount === 1 ? '' : 's'} need a reference image before generating.`
+                  : 'Continuity lock is blocking generation.'}
+              </div>
+              <div className="text-xs text-red-700 mt-1">
+                {missingRefCount > 0
+                  ? 'In strict mode, generation stops on any subject without a reference image (the #1 reason a comic fails). Generate their reference art in the World stage, then come back.'
+                  : 'Resolve required references or scene bindings first.'}
+              </div>
+              <div className="mt-2">
+                <button
+                  onClick={() => onStateUpdate({ step: AppStep.REFERENCE_BUILDER })}
+                  className="text-xs font-bold border border-red-400 text-red-700 bg-white rounded px-2 py-1 hover:bg-red-100"
+                >
+                  Fix In World Builder
+                </button>
+              </div>
+              <ul className="mt-2 space-y-1 text-xs text-red-700 list-disc pl-5">
+                {continuityValidation.issues.slice(0, 5).map((issue, index) => (
+                  <li key={`${issue.code}-${index}`}>{issue.message}</li>
+                ))}
+              </ul>
             </div>
-            <div className="mt-2">
-              <button
-                onClick={() => onStateUpdate({ step: AppStep.REFERENCE_BUILDER })}
-                className="text-xs font-bold border border-red-400 text-red-700 bg-white rounded px-2 py-1 hover:bg-red-100"
-              >
-                Fix In World Builder
-              </button>
-            </div>
-            <ul className="mt-2 space-y-1 text-xs text-red-700 list-disc pl-5">
-              {continuityValidation.issues.slice(0, 5).map((issue, index) => (
-                <li key={`${issue.code}-${index}`}>{issue.message}</li>
-              ))}
-            </ul>
-          </div>
-        )}
+          );
+        })()}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
