@@ -45,6 +45,7 @@ import { mcpRouter, mcpOutboundRouter } from './routes/mcp.js';
 import { modelsRouter } from './routes/models.js';
 import { prewarmCatalog, startCatalogRefreshLoop } from './services/modelCatalog.js';
 import { keysRouter } from './routes/keys.js';
+import { venturesRouter } from './routes/ventures.js';
 
 validateRuntimeConfig();
 
@@ -169,6 +170,8 @@ app.use('/api/studio', textRateLimit, studioRouter);
 app.use('/api/agents', systemRateLimit, agentsRouter);
 app.use('/api/recipes', textRateLimit, recipesRouter);
 app.use('/api/mcp', systemRateLimit, mcpRouter);
+// Autopilot control plane (Epic A1). Flag-gated + admin-only until GA (see ventures router).
+app.use('/api/ventures', systemRateLimit, venturesRouter);
 
 app.use(errorHandler);
 

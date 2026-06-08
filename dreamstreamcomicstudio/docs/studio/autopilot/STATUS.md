@@ -6,6 +6,18 @@
 
 **Last updated:** 2026-06-07 · **Updated by:** Claude · **Branch:** `claude/gracious-albattani-bDL8T`
 
+> Latest (2026-06-08): **A1 CONTROL PLANE SHIPPED + MIGRATIONS APPLIED TO SUPABASE.** Applied
+> `ventures_foundation.sql` + `ventures_control_plane.sql` to the **Comic** project
+> (`bdjfmxfmhqhzvgrhbbzm`) — 7 new tables (`ventures`, `venture_budgets`, `venture_checkpoints`,
+> `venture_events`, `venture_goals`, `venture_runs`, `venture_connections`), all RLS
+> owner-isolated; added nullable `venture_id` to `studio_projects`/`studio_deployments`.
+> **Strictly additive — no data deleted; all existing rows intact.** Shipped the persistence
+> (`repository.ts` + `controlPlane.ts`), pure input validators, and the `/api/ventures/*` router
+> (CRUD + budgets + checkpoints + events + connections + admin kill switch), mounted after global
+> `requireAuth`, **flag-gated + admin-only until GA**. 61 unit tests pass; server + client
+> typecheck + frontend build all green. (No Railway tool in this env — Railway env/worker steps
+> remain owner to-dos.)
+
 > Latest (2026-06-08): **BUILD STARTED — Epic A0 (brakes) core shipped (code, flag-gated).**
 > First real integration code, all under `VENTURES_ENABLED=false` so the live product is
 > untouched: `server/src/ventures/{budget,checkpoints,events,killSwitch}.ts` (pure governance
@@ -79,7 +91,7 @@ Build       ░░░░░░░░░░░░░░░░░░░░    0%  
 | Epic | Title | Status | Blocked by |
 |---|---|---|---|
 | A0 | Brakes first (budgets, kill-switch, checkpoints, audit) | 🟢 **core shipped** (pure logic + SQL + flags + 35 tests); repo/route/metering land with A1 | — |
-| A1 | Venture control plane (data + API) | 🟡 **persistence shipped** (`ventures/repository.ts`); routes + goals/runs migration + client API next | migration apply (owner) |
+| A1 | Venture control plane (data + API) | 🟢 **shipped** — migrations applied to Supabase, repo + controlPlane + `/api/ventures` routes (incl. admin kill) mounted, flag/admin-gated; client API + apiTypes land with A8 | — |
 | A2 | Autonomous loop engine (bounded, crash-safe; stub ACT) | 🟢 **DECIDE gate shipped** (`ventures/decide.ts`, pure + tested); scheduler/tick + worker next | `REDIS_URL` + worker service (owner) |
 | A3 | Intake → roadmap (idea → approved backlog) | 📋 planned | A2 |
 | A4 | Wire ACT/VERIFY to the real build engine | 📋 planned | A3; studio live flags (owner) |

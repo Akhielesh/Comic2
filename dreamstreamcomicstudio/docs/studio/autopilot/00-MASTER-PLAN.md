@@ -386,21 +386,23 @@ trail — but no autonomous work runs yet. Typecheck + server build + vitest gre
 **Goal:** full CRUD + state for ventures, goals, runs, connections — the substrate the loop
 will drive. Still no loop.
 
-- [ ] Migration `server/sql/ventures_control_plane.sql`: `venture_goals`, `venture_runs`,
-      `venture_connections`, `venture_deployments` (or add `venture_id` to existing
-      `studio_deployments`); add `venture_id` FK to `studio_projects`. RLS on all.
+- [x] Migration `server/sql/ventures_control_plane.sql`: `venture_goals`, `venture_runs`,
+      `venture_connections`; added `venture_id` to `studio_projects` + `studio_deployments`.
+      RLS on all. ✅ **applied to the Comic Supabase project** (additive; existing data untouched).
 - [x] Venture persistence repository — typed CRUD mirroring `studioRepository.ts` patterns,
       shipped as `server/src/ventures/repository.ts` (ventures + budgets + checkpoints + events:
       create/get/list/status, getBudget/upsertBudget/recordSpend, checkpoint create/list/
       approve-deny/expire, append/list events). Goals/runs/connections CRUD follow with their
       migration below.
-- [ ] `server/src/routes/ventures.ts` — `/api/ventures` (list/create/get/update/delete),
-      `/api/ventures/:id/goals`, `/checkpoints`, `/budget`, `/connections`, `/events`,
-      `/runs`. Auth + RLS + caps middleware.
-- [ ] Client API `services/venturesApi.ts` (mirror `studioApi.ts`).
+- [x] `server/src/routes/ventures.ts` — `/api/ventures` (list/create/get), `/:id/status`,
+      `/:id/goals`, `/:id/budget` (get/put), `/:id/checkpoints` (+ `/:cid/resolve`),
+      `/:id/events`, `/:id/connections`, and admin `/admin/kill`. Mounted in `index.ts` after
+      global `requireAuth`; flag-gated + admin-only until GA. ✅ shipped.
+- [ ] Client API `services/venturesApi.ts` (mirror `studioApi.ts`) — pending (lands with A8 UI).
 - [ ] Shared types in `apiTypes.ts` (Venture, VentureGoal, VentureRun, Checkpoint, Budget,
-      Connection, VentureEvent).
-- [ ] Tests: route validation, RLS isolation (user A can't read user B's venture), CRUD.
+      Connection, VentureEvent) — pending (lands with A8 UI).
+- [x] Tests: pure input validation (`ventures/validate.ts`, 14 tests) shipped. RLS-isolation +
+      CRUD integration tests deferred to F5 (no integration harness yet).
 
 **Acceptance:** an admin can fully manage a venture + its backlog + budget + connections
 over the API, owner-isolated. No loop yet. Verify suite green.
