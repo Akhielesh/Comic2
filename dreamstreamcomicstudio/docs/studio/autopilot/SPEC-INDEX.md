@@ -33,7 +33,7 @@
   enterprise bar. No filler.
 
 ## Progress
-**Sections complete: 45 / 55** · target ~200 pages. (Parts I–IV complete; Part V — Delivery — last.)
+**Sections complete: 47 / 55** · target ~200 pages. (Parts I–IV complete; Part V — Delivery — in progress.)
 
 Legend: ✅ written · ✍️ in progress · 📋 planned
 
@@ -103,8 +103,8 @@ Legend: ✅ written · ✍️ in progress · 📋 planned
 |---|---|---|---|
 | 45 | Foundations backlog F0–F10 (detailed) | spec/45-foundations-backlog.md | 📋 |
 | 46 | Autonomy backlog A0–A9 (detailed) | spec/46-autonomy-backlog.md | 📋 |
-| 47 | Roadmap, milestones & sequencing | spec/47-roadmap.md | 📋 |
-| 48 | Team, RACI & ways of working | spec/48-team-raci.md | 📋 |
+| 47 | Roadmap, milestones & sequencing | [spec/47-roadmap.md](./spec/47-roadmap.md) | ✅ |
+| 48 | Team, RACI & ways of working | [spec/48-team-raci.md](./spec/48-team-raci.md) | ✅ |
 | 49 | Owner actions & external dependencies | spec/49-owner-actions.md | 📋 |
 | 50 | Runbooks & operational procedures | spec/50-runbooks.md | 📋 |
 | 51 | Launch plan & GTM | spec/51-launch-gtm.md | 📋 |
