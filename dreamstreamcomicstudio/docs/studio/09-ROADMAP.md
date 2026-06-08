@@ -52,6 +52,16 @@ run alongside Phases 1–8.
 | 10 | Tools/MCP/sourcing upgrade | tools on all models (JSON fallback), server-side + OAuth + streaming MCP, curated marketplace, **outbound MCP server**, sourcing reliability | [PHASE-10](./phases/PHASE-10-tools-mcp.md) · [11-TOOLS-MCP-SOURCING](./11-TOOLS-MCP-SOURCING.md) |
 | 11 | Guardrails & personality | unified persona, output guardrail layer, code/agent safety, trust signals, audit log | [PHASE-11](./phases/PHASE-11-guardrails-personality.md) · [12-GUARDRAILS-PERSONALITY](./12-GUARDRAILS-PERSONALITY.md) |
 
+## Autopilot — the always-on autonomous layer (A-series, on top of Phases 0–11)
+
+A separate, sequenced workstream that turns the *interactive* studio into an **always-on
+autonomous product team**: idea → roadmap → continuous build/test/deploy/iterate, 24/7, with
+hard budgets + human checkpoints, hybrid hosting (managed previews + BYO accounts via Nango),
+and central Stripe billing. Full plan + epic backlog (A0–A9):
+[`autopilot/00-MASTER-PLAN.md`](./autopilot/00-MASTER-PLAN.md). Live status:
+[`autopilot/STATUS.md`](./autopilot/STATUS.md). **Build order is safety-first: A0 (brakes) →
+A1 (control plane) → A2 (loop engine) before any real autonomous building.**
+
 ## Milestones
 - **M1 — "It runs" (P0–P3):** a user clicks "Run live" in chat, the app opens in a new
   tab from a real container. *This is the proof the architecture works.*
