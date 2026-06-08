@@ -36,7 +36,7 @@ export type { DetectedServices, ServiceId } from './serviceDetect';
 export { InsightsPanel } from './InsightsPanel';
 export type { InsightsPanelProps } from './InsightsPanel';
 export {
-  analyzeProject, insightsSummary, issuesToFixPrompt, suggestNextSteps, insightsToMarkdown,
+  analyzeProject, applyRuntimeStatus, insightsSummary, issuesToFixPrompt, suggestNextSteps, insightsToMarkdown,
 } from './codeInsights';
 export type { CodeInsights, CodeIssue, InsightSeverity } from './codeInsights';
 export {
