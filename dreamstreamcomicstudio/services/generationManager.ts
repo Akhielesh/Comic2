@@ -272,6 +272,7 @@ export const startBackgroundGeneration = async (
             return {
               id: `s${scene.id}-p${idx}-${Date.now()}`,
               sceneId: scene.id,
+              title: panel.title,
               description: sanitized.text,
               prompt: sanitized.text,
               focalSubject: panel.focalSubject,

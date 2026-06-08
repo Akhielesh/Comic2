@@ -22,7 +22,7 @@ import { buildProjectReport } from '../../services/reporting';
 import { ApiError } from '../../services/apiClient';
 import { LimitExceededModal } from '../modals/LimitExceededModal';
 import { applyStyleLockResolution, resolveStyleLock } from '../../services/styleLock';
-import { hasMultiFrameLanguage, sanitizePanelDescription } from '../../services/panelDescription';
+import { hasMultiFrameLanguage, sanitizePanelDescription, derivePanelTitle } from '../../services/panelDescription';
 import { buildCostViewModel } from '../../services/costViewModel';
 
 interface CombinedPreviewProps {
@@ -65,7 +65,8 @@ const PanelWireframe: React.FC<{ panel: ComicPanel; textLayout: TextLayout }> = 
   const blocks = ensureDialogueBlocks(panel.dialogue, panel.dialogueBlocks, panel.description);
   return (
     <div className="relative border-2 border-black rounded-lg bg-white p-3 min-h-[140px]">
-      <div className="text-[10px] font-mono text-slate-500 mb-2">Prompt</div>
+      <div className="font-display text-sm leading-tight mb-1">{derivePanelTitle(panel)}</div>
+      <div className="text-[10px] font-mono text-slate-500 mb-1">Prompt</div>
       <div className="text-xs font-comic text-slate-700">{panel.description}</div>
       {textLayout !== 'none' && blocks.length > 0 && (
         <div className="mt-2 space-y-1">
@@ -280,6 +281,11 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
         })(),
         id: `s${scene.id}-p${index}-${Date.now()}`,
         sceneId: scene.id,
+        title: panel.title,
+        focalSubject: panel.focalSubject,
+        shotType: panel.shotType,
+        cameraAngle: panel.cameraAngle,
+        composition: panel.composition,
         dialogue: panel.dialogue || '',
         dialogueBlocks: panel.dialogueBlocks,
         imageIdHistory: [],
@@ -343,6 +349,11 @@ export const CombinedPreview: React.FC<CombinedPreviewProps> = ({ state, project
           allPanels.push(normalizePanel({
             id: `s${scene.id}-p${index}-${Date.now()}`,
             sceneId: scene.id,
+            title: panel.title,
+            focalSubject: panel.focalSubject,
+            shotType: panel.shotType,
+            cameraAngle: panel.cameraAngle,
+            composition: panel.composition,
             description: sanitized.text,
             prompt: sanitized.text,
             dialogue: panel.dialogue || '',

@@ -3,6 +3,7 @@ import { Project, ComicPanel, DialogueBlock, TextLayout } from '../types';
 import { CommentSection } from './CommentSection';
 import { X, ChevronLeft, ChevronRight, Maximize2, Minimize2, BookOpen, MessageSquareText } from 'lucide-react';
 import { PanelDialogue } from './PanelDialogue';
+import { derivePanelTitle } from '../services/panelDescription';
 import { loadReaderState, saveReaderState } from '../services/db';
 
 import { ReviewModal } from './modals/ReviewModal';
@@ -390,7 +391,7 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
                   {project.state.panels.map((panel, idx) => (
                     <div key={idx} className={`border-2 border-black shadow-sm relative ${getPanelClass(idx)}`}>
                       {panel.imageUrl ? (
-                        <img src={panel.imageUrl} alt={panel.description} loading="lazy" className="block w-full h-auto animate-fade-in" />
+                        <img src={panel.imageUrl} alt={derivePanelTitle(panel, idx)} loading="lazy" className="block w-full h-auto animate-fade-in" />
                       ) : (
                         <div className="w-full min-h-[280px] flex items-center justify-center bg-amber-50 text-amber-800 text-sm font-bold border-b-2 border-black">
                           Image missing for this panel
@@ -439,7 +440,7 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
                       {pages[pageIndex]?.imageUrl ? (
                         <img
                           src={pages[pageIndex].imageUrl}
-                          alt={pages[pageIndex]?.panel?.description || 'Comic page'}
+                          alt={pages[pageIndex]?.panel ? derivePanelTitle(pages[pageIndex].panel!, pageIndex) : 'Comic cover'}
                           className="block max-h-full max-w-full w-auto h-auto object-contain mx-auto border-2 border-black shadow-comic bg-white"
                         />
                       ) : (

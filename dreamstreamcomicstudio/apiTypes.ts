@@ -407,6 +407,7 @@ export type PanelBreakdownRequest = {
 };
 export type PanelBreakdownResponse = {
   panels: Array<{
+    title?: string;
     focalSubject?: string;
     description: string;
     shotType?: string;

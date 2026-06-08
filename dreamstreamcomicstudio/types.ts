@@ -733,6 +733,9 @@ export interface ComicPanel {
   isGenerating?: boolean;
   isPlanned?: boolean;
   continuity?: PanelContinuity;
+  /** Short, human-readable caption/title for this panel (e.g. "The Boat Departs"), from
+   *  the breakdown. Used as the panel's label/alt instead of the raw prose prompt. */
+  title?: string;
   /** Concrete subject of this panel (from the breakdown), so generation stays on-story. */
   focalSubject?: string;
   /** Camera/shot direction from the breakdown. */

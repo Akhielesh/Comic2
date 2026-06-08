@@ -23,6 +23,30 @@ export const hasMultiFrameLanguage = (description?: string) => {
   });
 };
 
+/**
+ * A short, human-readable label for a panel. Prefers the breakdown's `title`, then derives
+ * a concise caption from the focal subject / description so older comics (with no title)
+ * still get something meaningful instead of a wall of prompt text. Never returns a raw
+ * full-sentence prompt.
+ */
+export const derivePanelTitle = (
+  panel: { title?: string; focalSubject?: string; description?: string; prompt?: string },
+  index?: number
+): string => {
+  const clean = (value?: string) => normalizeWhitespace(value || "");
+  const title = clean(panel.title);
+  if (title) return title;
+
+  const source = clean(panel.focalSubject) || clean(panel.description) || clean(panel.prompt);
+  if (source) {
+    // First clause only, drop a leading article, cap to ~6 words.
+    let label = (source.split(/[.,;:\n]/)[0] || source).replace(/^(the|a|an)\s+/i, "");
+    label = label.split(" ").slice(0, 6).join(" ").trim();
+    if (label) return label.charAt(0).toUpperCase() + label.slice(1);
+  }
+  return `Panel ${(index ?? 0) + 1}`;
+};
+
 export const sanitizePanelDescription = (
   description?: string
 ): { text: string; changed: boolean; flagged: boolean } => {
