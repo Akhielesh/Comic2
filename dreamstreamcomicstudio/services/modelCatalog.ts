@@ -36,6 +36,9 @@ export interface CatalogModel {
   drawbacks: string[];
   possibilities: string[];
   editorialNote?: string;
+  /** Hosted-API callability: false = listed but download-only / not callable via the
+   *  hosted API (e.g. NVIDIA NIMs you must self-host). undefined = not yet probed. */
+  apiCallable?: boolean;
 }
 
 export interface CatalogResponse {

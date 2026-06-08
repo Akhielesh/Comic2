@@ -45,14 +45,54 @@ export const loadPersistedModels = async (source?: string): Promise<AnnotatedMod
   if (!getSupabaseCapabilityStatus().storagePersistenceEnabled) return [];
   try {
     const admin = getSupabaseAdmin();
-    let query = admin.from(TABLE).select('payload');
+    let query = admin.from(TABLE).select('payload, api_callable');
     if (source) query = query.eq('source', source);
     const { data, error } = await query;
     if (error || !Array.isArray(data)) return [];
     return data
-      .map((row: { payload?: unknown }) => row.payload as AnnotatedModel)
+      .map((row: { payload?: unknown; api_callable?: boolean | null }) => {
+        const m = row.payload as AnnotatedModel;
+        // Merge the separately-probed hosted-API callability into the served model.
+        if (m && typeof row.api_callable === 'boolean') m.apiCallable = row.api_callable;
+        return m;
+      })
       .filter((m): m is AnnotatedModel => Boolean(m && (m as AnnotatedModel).id));
   } catch {
     return [];
+  }
+};
+
+/** model_id → hosted-API callability (only rows that have been probed). */
+export const loadCallabilityMap = async (source: string): Promise<Map<string, boolean>> => {
+  const map = new Map<string, boolean>();
+  if (!getSupabaseCapabilityStatus().storagePersistenceEnabled) return map;
+  try {
+    const admin = getSupabaseAdmin();
+    const { data, error } = await admin.from(TABLE).select('model_id, api_callable').eq('source', source);
+    if (error || !Array.isArray(data)) return map;
+    for (const row of data as Array<{ model_id?: string; api_callable?: boolean | null }>) {
+      if (row.model_id && typeof row.api_callable === 'boolean') map.set(row.model_id, row.api_callable);
+    }
+    return map;
+  } catch {
+    return map;
+  }
+};
+
+/** Persist hosted-API callability results from a probe. Updates only api_callable. */
+export const persistCallability = async (
+  source: string,
+  results: Array<{ modelId: string; callable: boolean }>
+): Promise<void> => {
+  if (!getSupabaseCapabilityStatus().storagePersistenceEnabled || !results.length) return;
+  try {
+    const admin = getSupabaseAdmin();
+    await Promise.all(
+      results.map((r) =>
+        admin.from(TABLE).update({ api_callable: r.callable }).eq('source', source).eq('model_id', r.modelId)
+      )
+    );
+  } catch (err) {
+    console.warn('[catalog-cache] callability persist threw:', (err as Error)?.message);
   }
 };
