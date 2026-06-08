@@ -241,3 +241,18 @@ export const upsertConnection = async (input: {
     { onConflict: 'venture_id,provider' }
   );
 };
+
+// ---------------------------------------------------------------------------------------
+// Scheduler support: list ACTIVE ventures across all users (service-role, used by the
+// worker to fan out ticks). Not user-scoped — only the trusted worker calls this.
+// ---------------------------------------------------------------------------------------
+export const listActiveVentures = async (limit = 100): Promise<Array<{ id: string; userId: string }>> => {
+  const admin = getSupabaseAdmin();
+  const { data } = await admin
+    .from('ventures')
+    .select('id, user_id')
+    .eq('status', 'active')
+    .order('updated_at', { ascending: true })
+    .limit(limit);
+  return (data || []).map((v: any) => ({ id: v.id, userId: v.user_id }));
+};

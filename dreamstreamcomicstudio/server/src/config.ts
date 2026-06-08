@@ -261,6 +261,22 @@ export const VENTURES_MAX_CONCURRENT_TICKS = parseIntegerEnv(
 // Default per-venture budget caps (USD) applied when a venture has no explicit budget set.
 export const VENTURES_DEFAULT_USD_PER_DAY = Number(process.env.VENTURES_DEFAULT_USD_PER_DAY || '5');
 export const VENTURES_DEFAULT_USD_TOTAL = Number(process.env.VENTURES_DEFAULT_USD_TOTAL || '50');
+// Ventures worker/scheduler (Epic A2). The worker is a SEPARATE process (npm run ventures:worker)
+// and requires REDIS_URL; without it the queue is unavailable (the API is unaffected).
+export const VENTURES_QUEUE_PREFIX = (process.env.VENTURES_QUEUE_PREFIX || 'ventures').trim() || 'ventures';
+export const VENTURES_WORKER_CONCURRENCY = parseIntegerEnv(
+  process.env.VENTURES_WORKER_CONCURRENCY,
+  2,
+  'VENTURES_WORKER_CONCURRENCY',
+  1
+);
+// How often the scheduler fans out ticks to active ventures (ms). The heartbeat of the loop.
+export const VENTURES_TICK_INTERVAL_MS = parseIntegerEnv(
+  process.env.VENTURES_TICK_INTERVAL_MS,
+  60_000,
+  'VENTURES_TICK_INTERVAL_MS',
+  1_000
+);
 
 export const REQUIRED_RUNTIME_ENV_VARS = ['CORS_ORIGIN', 'VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY'] as const;
 type RequiredRuntimeEnv = (typeof REQUIRED_RUNTIME_ENV_VARS)[number];

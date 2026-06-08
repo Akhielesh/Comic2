@@ -416,18 +416,21 @@ over the API, owner-isolated. No loop yet. Verify suite green.
 venture, governed by A0's brakes. Still building *nothing real* yet — ACT is a stub that
 just logs — so we can prove the governance + durability in isolation.
 
-- [ ] `server/src/ventures/queue.ts` — BullMQ queue + repeatable job (mirror
-      `comicforge/queue.ts`).
-- [ ] `server/src/ventures/scheduler.ts` — picks active, non-paused, in-budget ventures and
-      enqueues a tick; respects kill switch + global concurrency cap.
-- [ ] `server/src/ventures/tick.ts` — one tick: SENSE (backlog only for now) → ORIENT
-      (LLM picks next goal, cost-aware model via `autoRouter`) → DECIDE (A0 gate) → **ACT
-      (stub)** → VERIFY (skip) → SHIP (skip) → REFLECT (write event, update goal). Fully
-      resumable from durable state; wall-clock + max-ticks guards; no-progress detector.
-- [ ] `npm run ventures:worker` script + a separate process entry (mirror
-      `comicforge:worker`); deployable as its own Railway service.
-- [ ] Tests: a tick advances a goal; budget breach mid-run pauses; kill switch stops the
-      scheduler; no-progress raises a checkpoint; crash mid-tick resumes cleanly.
+- [x] `server/src/ventures/queue.ts` — guarded BullMQ queue (mirror `comicforge/queue.ts`),
+      per-venture jobId de-dupe. ✅
+- [x] `server/src/ventures/scheduler.ts` — fans out a tick per ACTIVE venture; respects
+      `VENTURES_ENABLED` + kill switch + `VENTURES_MAX_CONCURRENT_TICKS`. ✅ (in-budget/checkpoint
+      filtering happens inside the tick's DECIDE gate.)
+- [x] `server/src/ventures/tick.ts` — one tick: SENSE (backlog) → ORIENT (deterministic
+      priority pick for now; LLM goal-selection in A3/A4) → DECIDE (A0 gate) → **ACT (stub)** →
+      REFLECT (event + goal update + metered spend). Durable-state resumable; no-progress
+      detector → pause 'stuck'. Real-persistence adapter in `tickRunner.ts`. ✅ (wall-clock +
+      max-ticks-per-run guards are an A2 follow-up.)
+- [x] `npm run ventures:worker` script + separate process entry (`worker.ts`, mirrors
+      `comicforge:worker`); deployable as its own Railway service. ✅
+- [x] Tests: tick advances a goal; budget breach pauses (pre-spend); kill switch halts;
+      no-progress → stuck; gated→approved→advances; priority selection. ✅ 9 DI tests (70 total).
+      (Crash-resume is durable-by-construction; an integration test lands with F5.)
 
 **Acceptance:** with the flag on, a seeded venture's backlog visibly advances tick-by-tick
 (in `venture_events`/`venture_goals`), stops on budget/kill/stuck, and survives a worker

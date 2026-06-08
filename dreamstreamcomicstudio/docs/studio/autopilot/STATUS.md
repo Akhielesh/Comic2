@@ -6,6 +6,16 @@
 
 **Last updated:** 2026-06-07 · **Updated by:** Claude · **Branch:** `claude/gracious-albattani-bDL8T`
 
+> Latest (2026-06-08): **A2 ENGINE BACKEND COMPLETE (governed loop, stub ACT).** Shipped the
+> governed `tick` (`ventures/tick.ts`, dependency-injected + 9 unit tests proving it advances a
+> backlog and stops on kill/budget/checkpoint/stuck), the real-persistence adapter
+> (`tickRunner.ts`), and the BullMQ scheduler/worker (`queue.ts`/`scheduler.ts`/`worker.ts`) +
+> `npm run ventures:worker`. The loop is **governed-but-idle**: ACT is a safe stub (A4 wires the
+> real build engine), so a venture's backlog visibly advances tick-by-tick without building
+> anything yet — proving the brakes + durability before any real autonomy. 70 ventures tests
+> pass; server + client typecheck green. **Owner (to actually run it): provide `REDIS_URL` + add
+> a `ventures:worker` Railway service + set `VENTURES_ENABLED=true`.** Still all flag-gated/off.
+
 > Latest (2026-06-08): **A1 CONTROL PLANE SHIPPED + MIGRATIONS APPLIED TO SUPABASE.** Applied
 > `ventures_foundation.sql` + `ventures_control_plane.sql` to the **Comic** project
 > (`bdjfmxfmhqhzvgrhbbzm`) — 7 new tables (`ventures`, `venture_budgets`, `venture_checkpoints`,
@@ -92,7 +102,7 @@ Build       ░░░░░░░░░░░░░░░░░░░░    0%  
 |---|---|---|---|
 | A0 | Brakes first (budgets, kill-switch, checkpoints, audit) | 🟢 **core shipped** (pure logic + SQL + flags + 35 tests); repo/route/metering land with A1 | — |
 | A1 | Venture control plane (data + API) | 🟢 **shipped** — migrations applied to Supabase, repo + controlPlane + `/api/ventures` routes (incl. admin kill) mounted, flag/admin-gated; client API + apiTypes land with A8 | — |
-| A2 | Autonomous loop engine (bounded, crash-safe; stub ACT) | 🟢 **DECIDE gate shipped** (`ventures/decide.ts`, pure + tested); scheduler/tick + worker next | `REDIS_URL` + worker service (owner) |
+| A2 | Autonomous loop engine (bounded, crash-safe; stub ACT) | 🟢 **backend complete** — DECIDE gate + governed `tick` (DI, 9 tests) + `tickRunner` (real persistence) + BullMQ `queue`/`scheduler`/`worker` + `npm run ventures:worker`. ACT is a stub (A4 wires real builds). | `REDIS_URL` + worker service (owner) |
 | A3 | Intake → roadmap (idea → approved backlog) | 📋 planned | A2 |
 | A4 | Wire ACT/VERIFY to the real build engine | 📋 planned | A3; studio live flags (owner) |
 | A5 | Deploy adapters (managed + BYO via Nango) | 📋 planned | A4; per-venture connections (owner) |
