@@ -8,7 +8,7 @@ import { makeImageTool, imageGenAvailable, type ImageKeys } from '../ai/tools/im
 import { sanitizeCustomAgents } from '../ai/agents/registry.js';
 import type { AgentDefinition } from '../ai/agents/registry.js';
 import { loadCustomAgentDefinitions } from '../services/customAgents.js';
-import { pickTextModel, TEXT_FALLBACK } from '../ai/autoRouter.js';
+import { pickTextModel, pickTextModelChain, TEXT_FALLBACK } from '../ai/autoRouter.js';
 import { NVIDIA_TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS, JSON_TOOL_PROTOCOL_ENABLED } from '../config.js';
 import type { AIProviderId, ChatMessage, MessagePart } from '../ai/providers/types.js';
 import { assertModelAllowedForUser } from '../services/modelAccessPolicy.js';
@@ -137,6 +137,8 @@ type PreparedChat = {
   reasoningLevel: ChatReasoningLevel;
   webSearch: boolean;
   systemPrompt?: string;
+  /** OpenRouter server-side fallback chain (≤3) so dead/rate-limited models don't yield empty. */
+  fallbackModels?: string[];
   dreamstreamContextJson?: string;
   tools: ChatTool[];
   clientContext?: ChatClientContext;
@@ -200,6 +202,25 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
       }
     } catch {
       /* keep requested model */
+    }
+  }
+
+  // Build a SERVER-SIDE fallback chain (≤3) so a dead/rate-limited free model never yields
+  // "no response": OpenRouter routes to the first available model in the list. The primary
+  // is first; the cheap paid TEXT_FALLBACK is the guaranteed last resort. This is the fix
+  // for free models being 404 (retired) / 429 (rate-limited), which left chats empty.
+  let fallbackModels: string[] | undefined;
+  if (resolved.provider === 'openrouter') {
+    if (requestedModel) {
+      fallbackModels = model === TEXT_FALLBACK ? [model] : [model, TEXT_FALLBACK];
+    } else {
+      const chain = await pickTextModelChain({
+        preferFree: true,
+        prefer: (m) => (m.supportedParameters || []).includes('tools'),
+        max: 3
+      }).catch(() => [model, TEXT_FALLBACK]);
+      // Keep the policy-resolved primary at the head, then the chain's alternates.
+      fallbackModels = Array.from(new Set([model, ...chain])).slice(0, 3);
     }
   }
 
@@ -348,7 +369,7 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   }
 
   return {
-    prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, systemPrompt, dreamstreamContextJson, tools: [...builtinTools, ...metaTools, ...mcpTools], clientContext, customAgents }
+    prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, systemPrompt, fallbackModels, dreamstreamContextJson, tools: [...builtinTools, ...metaTools, ...mcpTools], clientContext, customAgents }
   };
 };
 
@@ -398,6 +419,7 @@ const runChatParams = (p: PreparedChat) => ({
   tools: p.tools,
   clientContext: p.clientContext,
   fallbackModel: p.resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+  fallbackModels: p.fallbackModels,
   timeoutMs: TEXT_REQUEST_TIMEOUT_MS
 });
 

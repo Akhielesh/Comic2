@@ -54,6 +54,8 @@ export interface RunChatParams {
   reasoningLevel?: ChatReasoningLevel;
   webSearch?: boolean;
   fallbackModel?: string;
+  /** Ordered fallback chain (≤3) → OpenRouter routes past dead/rate-limited models. */
+  fallbackModels?: string[];
   timeoutMs?: number;
   /**
    * Pre-sanitized DreamStream workspace context (JSON string). Present only when the
@@ -245,6 +247,7 @@ export const runChat = async (
     timeoutMs: params.timeoutMs,
     retries: 2,
     fallbackModel: params.fallbackModel,
+    ...(params.provider === 'openrouter' && params.fallbackModels?.length ? { models: params.fallbackModels } : {}),
     ...(useReasoning ? { reasoningEffort: params.reasoningLevel as 'low' | 'medium' | 'high' } : {}),
     ...(useWeb ? { webSearch: true } : {})
   };

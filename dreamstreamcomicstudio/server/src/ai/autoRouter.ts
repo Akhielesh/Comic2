@@ -154,6 +154,43 @@ export const pickTextModel = async (opts?: PickOpts): Promise<string> => {
   }
 };
 
+/**
+ * An ordered fallback CHAIN of text models for OpenRouter's `models` array (≤3), so a
+ * single dead/rate-limited free model never means "no response": OpenRouter routes to the
+ * first available one server-side. Free-first; unless `freeOnly`, the cheap paid
+ * TEXT_FALLBACK is appended as the guaranteed last resort.
+ */
+export const pickTextModelChain = async (
+  opts?: PickOpts & { freeOnly?: boolean; max?: number }
+): Promise<string[]> => {
+  const max = Math.min(opts?.max ?? 3, 3);
+  const gate = opts?.filter ?? (() => true);
+  let models: AnnotatedModel[] = [];
+  try {
+    ({ models } = await getCatalog());
+  } catch {
+    return [TEXT_FALLBACK];
+  }
+  let text = models.filter(isTextModel).filter(gate);
+  if (opts?.prefer) {
+    const preferred = text.filter(opts.prefer);
+    if (preferred.length) text = preferred;
+  }
+  const free = text.filter(isFreeVerified);
+  const ranked: string[] = [];
+  const push = (id: string) => { if (id && !ranked.includes(id)) ranked.push(id); };
+  for (const needle of (opts?.rankOrder ?? FREE_TEXT_PRIORITY)) {
+    for (const m of free) if (m.id.toLowerCase().includes(needle)) push(m.id);
+  }
+  for (const m of free) push(m.id);
+  // Reserve the last slot for the paid safety net unless we're strictly free-only.
+  const freeSlots = opts?.freeOnly ? max : Math.max(1, max - 1);
+  const chain = ranked.slice(0, freeSlots);
+  if (!opts?.freeOnly) chain.push(TEXT_FALLBACK);
+  if (chain.length === 0) chain.push(TEXT_FALLBACK);
+  return Array.from(new Set(chain)).slice(0, max);
+};
+
 // Strong coding-model families, best-first — used by Code Studio (generation + the agentic build
 // loop's FIX stage), where code quality matters most. Free-first still applies (strong-open default;
 // frontier coders via BYOK), but among eligible models these are preferred AND ranked in this order.

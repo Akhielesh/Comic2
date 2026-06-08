@@ -246,6 +246,12 @@ const buildBaseBody = (req: GenerateTextRequest): Record<string, unknown> => {
     model: req.model,
     usage: { include: true }
   };
+  // Server-side fallback chain: OpenRouter routes to the first available model in this
+  // ordered list, skipping any that 404 (retired) or 429 (rate-limited) — which is what
+  // makes the chat resilient to free models being dead/throttled. Capped at 3 by the API.
+  if (req.models && req.models.length > 1) {
+    baseBody.models = Array.from(new Set(req.models)).slice(0, 3);
+  }
   if (typeof req.temperature === 'number') baseBody.temperature = req.temperature;
   if (typeof req.maxTokens === 'number') baseBody.max_tokens = req.maxTokens;
   if (req.jsonSchema) {
