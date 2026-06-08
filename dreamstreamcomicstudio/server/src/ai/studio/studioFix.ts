@@ -9,6 +9,7 @@
 import { extractJson } from '../json.js';
 import type { BuildObservation } from './observation.js';
 import { DESIGN_FIX_NOTE } from './designSystem.js';
+import { STUDIO_FIX_CONSTITUTION } from './constitution.js';
 
 export type StudioFiles = Record<string, string>;
 
@@ -63,7 +64,9 @@ export const buildFixPrompt = (files: StudioFiles, observation: BuildObservation
     .map(([p, c]) => `FILE: ${p}\n\`\`\`\n${c}\n\`\`\``)
     .join('\n\n');
 
-  return `You are a senior engineer fixing an app that failed to build or run in a sandbox. Diagnose from the OBSERVED ERRORS and return the MINIMAL set of changed files needed to make it build and run cleanly.
+  return `${STUDIO_FIX_CONSTITUTION}
+
+You are a senior engineer fixing an app that failed to build or run in a sandbox. Diagnose from the OBSERVED ERRORS and return the MINIMAL set of changed files needed to make it build and run cleanly.
 
 OBSERVED ERRORS (phase: ${observation.phase}):
 ${renderErrors(observation)}
