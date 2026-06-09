@@ -14,7 +14,9 @@ import { BrandConfig, resolveBrand } from './theme.js';
 import {
   button,
   codeBadge,
+  divider,
   escapeHtml,
+  featureCard,
   heading,
   infoBox,
   linkFallback,
@@ -81,6 +83,35 @@ export const isEmailTemplateName = (value: unknown): value is EmailTemplateName 
   typeof value === 'string' && Object.prototype.hasOwnProperty.call(TEMPLATE_KIND, value);
 
 export const isMarketing = (name: EmailTemplateName): boolean => TEMPLATE_KIND[name] === 'marketing';
+
+/**
+ * Which role mailbox a template sends FROM. Lets each kind of mail come from a fitting
+ * sender so replies + filtering make sense, and automated mail is clearly no-reply:
+ *   - 'no-reply'      → fully automated links/codes (auth, double-opt-in). Shows a don't-reply notice.
+ *   - 'notifications' → transactional notices + updates. Replies route to support.
+ *   - 'hello'         → warm, human-feeling mail (welcome, invites). Replies route to support.
+ */
+export type SenderRole = 'no-reply' | 'notifications' | 'hello';
+
+export const SENDER_ROLE: Record<EmailTemplateName, SenderRole> = {
+  'newsletter-confirm': 'no-reply',
+  'newsletter-welcome': 'notifications',
+  'product-update': 'notifications',
+  announcement: 'notifications',
+  'beta-invite': 'hello',
+  'access-requested': 'notifications',
+  welcome: 'hello',
+  'signin-alert': 'notifications',
+  'auth-confirm-signup': 'no-reply',
+  'auth-magic-link': 'no-reply',
+  'auth-recovery': 'no-reply',
+  'auth-email-change': 'no-reply',
+  'auth-reauthentication': 'no-reply',
+  'auth-invite': 'no-reply'
+};
+
+export const senderRoleFor = (name: EmailTemplateName): SenderRole => SENDER_ROLE[name];
+export const isNoReply = (name: EmailTemplateName): boolean => SENDER_ROLE[name] === 'no-reply';
 
 interface TemplateOutput {
   subject: string;
@@ -247,25 +278,45 @@ const accessRequested: Renderer = (params, brand) => ({
   ].join('\n')
 });
 
-// ── Post-signup welcome ─────────────────────────────────────────────────────────
+// ── Post-signup welcome (the fuller, feature-rich onboarding email) ─────────────
 const welcome: Renderer = (params, brand) => {
   const cta = params.ctaUrl || brand.appUrl;
+  const features =
+    featureCard('🎬', 'Comic Studio', 'Turn a script into a cinematic, fully-styled comic — pick a style, generate panels, export.') +
+    featureCard('💬', 'AI Chat', 'Build, brainstorm and research with 100+ models. Bring your own key or use the free tier.') +
+    featureCard('🧩', 'Rich tools', 'Live charts, maps, finance, news and more render right inside chat.') +
+    featureCard('🛠️', 'Code Studio', 'Spin up real apps in a live cloud container — coming soon to your account.');
   return {
-    subject: `Welcome to ${brand.productName} 🎬`,
-    preheader: 'Your account is ready — start creating.',
+    subject: `Welcome to ${brand.productName} — let's make something 🎬`,
+    preheader: 'Your account is ready. Here’s everything you can do.',
     content:
-      heading(`Welcome to ${brand.productName}!`) +
-      paragraph(`${greetName(params)} your account is ready to roll.`) +
-      paragraph('Turn scripts into cinematic comics, build with 100+ AI models in Chat, and more — all from one studio.') +
-      button('Start creating', cta, 'yellow') +
-      muted(`Questions? Just reply to this email and we'll help you out.`),
+      heading(`Welcome aboard, ${params.firstName || 'creator'}! 🎉`) +
+      paragraph(
+        `You're in. ${escapeHtml(
+          brand.productName
+        )} is one studio with three superpowers — here's the quick tour.`
+      ) +
+      button('Open the studio', cta, 'yellow') +
+      divider() +
+      features +
+      divider() +
+      infoBox(
+        '<strong>Pro tip:</strong> start in Comic Studio with a short script — even a paragraph. You’ll have styled panels in a couple of minutes.'
+      ) +
+      paragraph('Got stuck or have an idea? Just reply — a real human reads every message. 💛'),
     text: [
       greetNameText(params),
       '',
-      `Welcome to ${brand.productName}! Your account is ready.`,
-      `Start creating: ${cta}`,
+      `Welcome to ${brand.productName}! One studio, three superpowers:`,
+      '• Comic Studio — scripts into cinematic comics',
+      '• AI Chat — build with 100+ models',
+      '• Rich tools — charts, maps, finance, news in chat',
+      '• Code Studio — live app containers (coming soon)',
       '',
-      'Questions? Reply to this email.'
+      `Open the studio: ${cta}`,
+      '',
+      'Pro tip: start in Comic Studio with a short script — styled panels in minutes.',
+      'Questions or ideas? Just reply — a real human reads every message.'
     ].join('\n')
   };
 };
@@ -463,21 +514,25 @@ export const renderEmail = (
   const out = renderer(params, brand);
   const marketing = isMarketing(name);
 
+  const noReply = isNoReply(name);
   const html = wrapHtml({
     brand,
     preheader: out.preheader,
     content: out.content,
     unsubscribeUrl: marketing ? params.unsubscribeUrl : undefined,
     essential: !marketing,
-    pixelUrl: params.pixelUrl
+    pixelUrl: params.pixelUrl,
+    noReply
   });
 
-  // Plain-text footer mirrors the HTML one (sign-off + unsubscribe / required notice).
-  const textFooter = marketing
-    ? params.unsubscribeUrl
-      ? `\n\nUnsubscribe: ${params.unsubscribeUrl}\nYou're receiving this because you subscribed to ${brand.productName} updates.`
-      : ''
-    : `\n\nThis is a required ${brand.productName} account notification.`;
+  // Plain-text footer mirrors the HTML one (sign-off + unsubscribe / required notice + reply policy).
+  const textFooter =
+    (marketing
+      ? params.unsubscribeUrl
+        ? `\n\nUnsubscribe: ${params.unsubscribeUrl}\nYou're receiving this because you subscribed to ${brand.productName} updates.`
+        : ''
+      : `\n\nThis is a required ${brand.productName} account notification.`) +
+    (noReply ? `\nThis mailbox isn't monitored — please don't reply. Need help? ${brand.supportEmail}` : '');
 
   return { subject: out.subject, html, text: `${out.text}\n\n— ${brand.productName}${textFooter}` };
 };

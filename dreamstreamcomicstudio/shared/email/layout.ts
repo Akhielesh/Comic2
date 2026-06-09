@@ -41,6 +41,22 @@ export const infoBox = (html: string): string =>
     <tr><td style="background:${COLORS.boxBg};border:2px solid ${COLORS.black};border-radius:10px;padding:16px 18px;font-family:${FONT_BODY};font-size:15px;line-height:1.6;color:${COLORS.ink};">${html}</td></tr>
   </table>`;
 
+/** A feature row: emoji + bold title + muted description. Email-safe (table-based). */
+export const featureCard = (emoji: string, title: string, desc: string): string =>
+  `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 14px;border-collapse:separate;">
+    <tr>
+      <td width="46" valign="top" style="font-size:26px;line-height:1;padding-top:2px;">${emoji}</td>
+      <td valign="top" style="font-family:${FONT_BODY};color:${COLORS.ink};">
+        <div style="font-weight:bold;font-size:16px;margin:0 0 2px;">${escapeHtml(title)}</div>
+        <div style="font-size:14px;line-height:1.5;color:${COLORS.muted};">${escapeHtml(desc)}</div>
+      </td>
+    </tr>
+  </table>`;
+
+/** A thin divider rule. */
+export const divider = (): string =>
+  `<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td style="border-top:2px solid ${COLORS.black};font-size:0;line-height:0;height:0;">&nbsp;</td></tr></table><div style="height:18px;line-height:18px;">&nbsp;</div>`;
+
 /** A big monospace verification code / token badge. */
 export const codeBadge = (code: string): string =>
   `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px;border-collapse:separate;">
@@ -90,10 +106,12 @@ interface LayoutInput {
   essential?: boolean;
   /** Optional 1x1 read-receipt pixel URL embedded before </body>. */
   pixelUrl?: string;
+  /** True for automated mail sent from a no-reply address — adds a "don't reply" notice. */
+  noReply?: boolean;
 }
 
 /** Wrap card content in the full responsive, comic-branded HTML document. */
-export const wrapHtml = ({ brand, preheader, content, unsubscribeUrl, essential, pixelUrl }: LayoutInput): string => {
+export const wrapHtml = ({ brand, preheader, content, unsubscribeUrl, essential, pixelUrl, noReply }: LayoutInput): string => {
   const year = new Date().getUTCFullYear();
   const logo = brand.logoUrl
     ? `<img src="${safeUrl(brand.logoUrl)}" width="220" alt="${escapeHtml(
@@ -126,6 +144,12 @@ export const wrapHtml = ({ brand, preheader, content, unsubscribeUrl, essential,
           brand.productName
         )} updates.</div>`
       : '';
+
+  const replyNotice = noReply
+    ? `<div style="margin-top:8px;color:${COLORS.footerText};font-size:11px;">This mailbox isn't monitored, so please don't reply. Need a hand? <a href="mailto:${escapeHtml(
+        brand.supportEmail
+      )}" style="color:${COLORS.footerLink};text-decoration:none;">${escapeHtml(brand.supportEmail)}</a></div>`
+    : '';
 
   const addressLine = brand.companyAddress
     ? `<div style="margin-top:8px;color:${COLORS.footerText};font-size:11px;">${escapeHtml(brand.companyAddress)}</div>`
@@ -179,6 +203,7 @@ export const wrapHtml = ({ brand, preheader, content, unsubscribeUrl, essential,
               <div style="margin-bottom:6px;">${footerLinks}</div>
               <div>© ${year} ${escapeHtml(brand.companyName)}. All rights reserved.</div>
               ${noticeLine}
+              ${replyNotice}
               ${addressLine}
             </td></tr>
           </table>
