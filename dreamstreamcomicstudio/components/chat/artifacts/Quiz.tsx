@@ -8,12 +8,23 @@ import { quizIdFor, loadQuizAttempt, saveQuizAttempt, clearQuizAttempt } from '.
 // round-trip — grading happens here so a learner gets instant feedback + explanations.
 
 const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-const isCorrect = (q: QuizQuestion, answer: string[] | string): boolean => {
+export const isCorrect = (q: QuizQuestion, answer: string[] | string): boolean => {
   const correct = q.correct || [];
   if (q.type === 'short') {
+    // Forgiving grading: accept an exact (normalized) match, OR an answer that contains
+    // the expected term as whole words — so "the chloroplast" / "it's oxygen gas" count
+    // for "chloroplast" / "oxygen". Kept conservative (term must be ≥3 chars and appear
+    // on word boundaries) so it doesn't loosely mark wrong answers correct.
     const a = norm(typeof answer === 'string' ? answer : (answer[0] || ''));
-    return a.length > 0 && correct.some((c) => norm(c) === a);
+    if (!a) return false;
+    return correct.some((c) => {
+      const cc = norm(c);
+      if (!cc) return false;
+      if (cc === a) return true;
+      return cc.length >= 3 && new RegExp(`(^|\\s)${escapeRe(cc)}($|\\s)`).test(a);
+    });
   }
   if (q.type === 'multi') {
     const picked = new Set(Array.isArray(answer) ? answer : [answer]);
