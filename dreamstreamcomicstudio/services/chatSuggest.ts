@@ -58,6 +58,12 @@ const TOOL_KW = {
  * catalogue's keyword scorer, so the full free-API library is reachable in Auto
  * mode. Web search is the default backstop for anything current/factual.
  */
+// Study/learning intent: when the user is learning or prepping, make the learning
+// tools AVAILABLE so the AI can PROACTIVELY offer a quiz, flashcards or a downloadable
+// study guide (their descriptions tell the model to do so after explaining) — and pull
+// a relevant image for visual concepts. Available ≠ always used; the model decides.
+const STUDY_INTENT = /\b(teach me|help me (learn|study|understand|memoriz|memoris|revis|prepare)|i'?m (learning|studying|revising)|study(ing)?|revis(e|ing|ion)|for (my|the|an|a) (exam|test|quiz|interview|class|course|midterm|final)|prepare for|cram|walk me through|explain (how|why|the)|tutorial|lesson|flashcards?|quiz me|practice (problems|questions))\b/i;
+
 export const detectTools = (text: string): string[] => {
   const tools = new Set<string>();
   // Curated, high-signal intents (these encode precedence the generic scorer can't).
@@ -68,6 +74,12 @@ export const detectTools = (text: string): string[] => {
   if (TOOL_KW.get_stock.test(text)) tools.add('get_stock');
   if (TOOL_KW.video_search.test(text)) tools.add('video_search');
   if (TOOL_KW.image_search.test(text)) tools.add('image_search');
+  if (STUDY_INTENT.test(text)) {
+    tools.add('generate_quiz');
+    tools.add('generate_flashcards');
+    tools.add('generate_document');
+    tools.add('image_search'); // visual concepts benefit from a relevant image
+  }
   // Catalogue scorer: add the top keyword-matched free-API tools (capped).
   for (const { name } of scoreTools(text).slice(0, 6)) tools.add(name);
   // Web search backstop when the message looks like it needs current/factual info.
