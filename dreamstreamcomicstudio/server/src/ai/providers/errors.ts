@@ -13,12 +13,17 @@ export type TaggedError = Error & {
   publicMessage?: string;
 };
 
-export const modelTimeoutError = (timeoutMs: number): TaggedError => {
-  const seconds = Math.round(timeoutMs / 1000);
-  const message = `The model took too long to respond (timed out after ${seconds}s). Please try again, or pick a faster model.`;
+// Build a tagged 504 timeout error. `message` is kept for logs; `publicMessage`
+// (defaults to `message`) is what the user sees — keep it free of internal labels.
+export const makeTimeoutError = (message: string, publicMessage?: string): TaggedError => {
   const err = new Error(message) as TaggedError;
   err.status = 504;
   err.publicCode = 'MODEL_TIMEOUT';
-  err.publicMessage = message;
+  err.publicMessage = publicMessage ?? message;
   return err;
+};
+
+export const modelTimeoutError = (timeoutMs: number): TaggedError => {
+  const seconds = Math.round(timeoutMs / 1000);
+  return makeTimeoutError(`The model took too long to respond (timed out after ${seconds}s). Please try again, or pick a faster model.`);
 };
