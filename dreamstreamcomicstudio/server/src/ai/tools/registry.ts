@@ -594,6 +594,36 @@ const quizTool: ChatTool = {
   }
 };
 
+// Author a downloadable document (study guide, cheat sheet, notes, report, plan) the
+// user can keep as a real resource. Pure + local — the client renders it with
+// .md / .html / PDF download buttons.
+const documentTool: ChatTool = {
+  name: 'generate_document',
+  description:
+    'Create a downloadable document the user can keep — a study guide, cheat sheet, notes, report, plan, summary, worksheet, or reference. Use this whenever the user asks you to "make/write/create a document / guide / cheat sheet / notes / report / handout" or would benefit from a saved resource rather than an ephemeral chat reply. Provide a clear `title` and the full document body as Markdown in `content` (headings, lists, tables, code blocks all supported). The user gets an inline card with Download .md / .html / PDF buttons. Keep your chat prose brief — put the substance in the document.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      subtitle: { type: 'string' },
+      filename: { type: 'string', description: 'Optional base filename (no extension).' },
+      content: { type: 'string', description: 'The full document body as Markdown.' }
+    },
+    required: ['title', 'content']
+  },
+  execute: async (args) => {
+    const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined);
+    const title = str(args?.title) || 'Document';
+    const content = str(args?.content);
+    if (!content) return { content: 'No document content was provided.' };
+    const data = { title, subtitle: str(args?.subtitle), filename: str(args?.filename), content };
+    return {
+      content: `Created the document "${title}". A downloadable document card (.md / .html / PDF) is shown to the user.`,
+      artifacts: [{ type: 'document', data }]
+    };
+  }
+};
+
 // Flatten the free-API tool packs into a name→tool map. These are all context-free
 // (they take explicit args), so they live alongside the original built-ins.
 const FREE_API_TOOLS: ChatTool[] = [
@@ -624,6 +654,7 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   render_chart: chartTool,
   show_metrics: metricsTool,
   generate_quiz: quizTool,
+  generate_document: documentTool,
   generate_app: generateAppTool,
   ...Object.fromEntries(FREE_API_TOOLS.map((t) => [t.name, t]))
 };

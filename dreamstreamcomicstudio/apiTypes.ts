@@ -833,6 +833,19 @@ export interface QuizArtifact {
   questions: QuizQuestion[];
 }
 
+// --- Downloadable document artifact ---
+// Emitted by the `generate_document` tool so the AI can author a custom resource
+// (study guide, cheat sheet, notes, report, plan) the user can read inline and
+// download as Markdown / HTML or print to PDF.
+export interface DocumentArtifact {
+  title: string;
+  subtitle?: string;
+  /** Markdown body of the document. */
+  content: string;
+  /** Suggested base filename (no extension). */
+  filename?: string;
+}
+
 // --- Code Studio artifact ---
 // Emitted by the `generate_app` tool. Carries a complete multi-file project
 // that the client renders in the live, editable Code Studio side panel.

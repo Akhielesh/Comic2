@@ -17,13 +17,35 @@ import { RecipeCard } from './artifacts/RecipeCard';
 import { RecipeRunCard } from './artifacts/RecipeRunCard';
 import { ResearchReport } from './artifacts/ResearchReport';
 import { Quiz } from './artifacts/Quiz';
+import { DocumentCard } from './artifacts/DocumentCard';
 import type {
   WeatherArtifact, NewsResultsArtifact, StockQuoteArtifact,
   VideoResultsArtifact, PlacesResultsArtifact, SwarmTraceArtifact,
   ChartArtifact, MetricBoardArtifact, MapArtifact,
   DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact,
-  RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact
+  RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact
 } from '../../apiTypes';
+
+const documentDemo: DocumentArtifact = {
+  title: 'SQL JOINs — Cheat Sheet',
+  subtitle: 'Quick reference · with examples',
+  filename: 'sql-joins-cheatsheet',
+  content: [
+    '## The four core joins',
+    '- **INNER JOIN** — rows with a match in *both* tables.',
+    '- **LEFT JOIN** — all left rows + matches (NULLs where none).',
+    '- **RIGHT JOIN** — all right rows + matches.',
+    '- **FULL OUTER JOIN** — everything from both sides.',
+    '',
+    '```sql',
+    'SELECT o.id, c.name',
+    'FROM orders o',
+    'LEFT JOIN customers c ON c.id = o.customer_id;',
+    '```',
+    '',
+    '> Tip: start from the table you want *all* rows of, then LEFT JOIN the rest.'
+  ].join('\n')
+};
 
 const quizDemo: QuizArtifact = {
   title: 'Photosynthesis — quick check',
@@ -380,6 +402,7 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Recipe run (params · structured output · follow-ups)', type: 'recipe_run', node: <RecipeRunCard data={recipeRunDemo} /> },
   { title: 'Research report (questions · sources read · grounded brief header)', type: 'research_report', node: <ResearchReport data={researchReportDemo} /> },
   { title: 'Quiz (MCQ · multi-select · true/false · short answer · self-grading)', type: 'quiz', node: <Quiz data={quizDemo} /> },
+  { title: 'Document (custom resource · download .md / .html / PDF)', type: 'document', node: <DocumentCard data={documentDemo} /> },
   { title: 'Markdown table (inline)', node: <ChatMarkdown text={tableMd} /> }
 ];
 

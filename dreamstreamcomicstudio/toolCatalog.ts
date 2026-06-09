@@ -470,6 +470,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['quiz', 'quiz me', 'test me', 'practice questions', 'practice problems', 'mcq', 'multiple choice', 'flashcards', 'assess', 'check my understanding', 'study', 'exam', 'review questions']
   },
   {
+    name: 'generate_document', label: 'Document / resource', category: 'learning', kind: 'builtin', provider: 'DreamStream (in-app, downloadable)',
+    description: 'Author a downloadable document — study guide, cheat sheet, notes, report, plan, worksheet or reference — that the user can save as Markdown / HTML or print to PDF.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Document card with the rendered resource + .md / .html / PDF download buttons.', docsUrl: 'https://dreamstream.app',
+    keywords: ['document', 'make a document', 'write a', 'cheat sheet', 'cheatsheet', 'study guide', 'guide', 'notes', 'handout', 'worksheet', 'report', 'summary document', 'pdf', 'downloadable', 'reference sheet', 'one-pager']
+  },
+  {
     name: 'render_table', label: 'Data table', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app)',
     description: 'Render a sortable, typed data table from rows the model provides — currency, percent, signed-delta, sparkline and badge cells. For watchlists, holdings, fundamentals grids, screeners and comparisons.',
     auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
