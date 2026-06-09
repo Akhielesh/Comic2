@@ -16,6 +16,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Loader2, Wand2, Sparkles, Hammer, ShieldCheck, Wrench, AlertTriangle } from 'lucide-react';
 import { useStudioTheme } from '../kit';
+import { usePrefersReducedMotion } from '../kit/motion';
 import { useStudioLogs, type LogLevel } from './logsStore';
 import { useStudioActivity } from './activityStore';
 
@@ -83,6 +84,7 @@ export interface LiveProgressProps {
 
 export const LiveProgress: React.FC<LiveProgressProps> = ({ phase, active, variant = 'strip', error, onFix, className }) => {
   const t = useStudioTheme();
+  const reduced = usePrefersReducedMotion();
   const meta = PHASE_META[phase];
   const caption = useRollingCaption(meta.captions, active);
   const ticker = useTicker(variant === 'screen' ? 5 : 1);
@@ -133,7 +135,7 @@ export const LiveProgress: React.FC<LiveProgressProps> = ({ phase, active, varia
     <div className={`flex h-full min-h-[16rem] flex-col items-center justify-center gap-5 p-6 text-center ${className ?? ''}`}>
       {/* Glowing orb */}
       <div className="relative">
-        <div className={`absolute -inset-4 rounded-full ${t.accentGrad} opacity-30 blur-2xl ${active ? 'animate-pulse' : ''}`} aria-hidden />
+        <div className={`absolute -inset-4 rounded-full ${t.accentGrad} opacity-30 blur-2xl ${active && !reduced ? 'animate-pulse' : ''}`} aria-hidden />
         <div className={`relative flex h-16 w-16 items-center justify-center rounded-2xl border ${t.edgeStrong} ${t.glass} ${t.glow}`}>
           {active ? <Loader2 className={`h-7 w-7 animate-spin ${t.accent}`} /> : <Icon className={`h-7 w-7 ${t.accent}`} />}
         </div>
@@ -155,7 +157,7 @@ export const LiveProgress: React.FC<LiveProgressProps> = ({ phase, active, varia
             const newest = idx === ticker.length - 1;
             return (
               <div key={e.id} className={`flex items-center gap-2 text-[11px] ${newest ? t.text : t.textFaint} ${newest ? '' : 'opacity-60'}`}>
-                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${LEVEL_DOT[e.level]} ${newest && active ? 'animate-pulse' : ''}`} />
+                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${LEVEL_DOT[e.level]} ${newest && active && !reduced ? 'animate-pulse' : ''}`} />
                 <span className="min-w-0 flex-1 truncate font-mono">{e.text}</span>
               </div>
             );
