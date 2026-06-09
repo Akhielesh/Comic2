@@ -49,6 +49,7 @@ import { topDomains, domainStrength, DOMAIN_META, FILTERABLE_DOMAINS, type Domai
 import { getModelBenchmarks, BENCHMARK_METRICS, formatScore, type BenchmarkMetricId } from '../services/modelBenchmarks';
 import { DomainTags, ModelInsightsPanel } from './models/ModelInsights';
 import { CodingLeaderboard } from './models/CodingLeaderboard';
+import { ImageModelRanking } from './models/ImageModelRanking';
 import { InfoDot } from './common/InfoTooltip';
 import type { GLOSSARY } from '../services/modelGlossary';
 import { describeCost, classBadge } from '../shared/pricing';
@@ -1025,6 +1026,9 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
                 </div>
                 <div className="text-[10px] text-slate-500 mt-2">Ranked by Arena-Elo accuracy per dollar of output. Free models can rate-limit; verify pricing at the source.</div>
               </div>
+            )}
+            {activeFilterCount === 0 && !query.trim() && (
+              <div className="mt-4"><ImageModelRanking /></div>
             )}
             <div className="mt-4 text-xs font-bold uppercase text-slate-500 flex items-center gap-2">
               {visible.length} models
