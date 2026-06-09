@@ -21,12 +21,13 @@ import { DocumentCard } from './artifacts/DocumentCard';
 import { Flashcards } from './artifacts/Flashcards';
 import { SqlPlayground } from './artifacts/SqlPlayground';
 import { ResourceBundle } from './artifacts/ResourceBundle';
+import { CodePlayground } from './artifacts/CodePlayground';
 import type {
   WeatherArtifact, NewsResultsArtifact, StockQuoteArtifact,
   VideoResultsArtifact, PlacesResultsArtifact, SwarmTraceArtifact,
   ChartArtifact, MetricBoardArtifact, MapArtifact,
   DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact,
-  RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact
+  RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact, CodeExerciseArtifact
 } from '../../apiTypes';
 
 const sqlExerciseDemo: SqlExerciseArtifact = {
@@ -68,6 +69,22 @@ const documentDemo: DocumentArtifact = {
     '',
     '> Tip: start from the table you want *all* rows of, then LEFT JOIN the rest.'
   ].join('\n')
+};
+
+const codeExerciseDemo: CodeExerciseArtifact = {
+  title: 'Array practice — map & filter',
+  instructions: 'Use array methods to transform the data, then log the result.',
+  task: 'Log the names of users aged 18 or over, uppercased.',
+  language: 'javascript',
+  starterCode: "const users = [\n  { name: 'ana', age: 20 },\n  { name: 'bo', age: 16 },\n  { name: 'cy', age: 31 },\n];\n\nconst adults = users\n  .filter(u => u.age >= 18)\n  .map(u => u.name.toUpperCase());\n\nconsole.log(adults);"
+};
+
+const pythonExerciseDemo: CodeExerciseArtifact = {
+  title: 'Python practice — list comprehension',
+  instructions: 'Use a list comprehension, then print the result.',
+  task: 'Print the squares of the even numbers from 0 to 9.',
+  language: 'python',
+  starterCode: 'squares = [n * n for n in range(10) if n % 2 == 0]\nprint(squares)'
 };
 
 const resourceBundleDemo: ResourceBundleArtifact = {
@@ -438,6 +455,8 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Document (custom resource · download .md / .html / PDF)', type: 'document', node: <DocumentCard data={documentDemo} /> },
   { title: 'Flashcards (flip · known/review · shuffle · progress)', type: 'flashcards', node: <Flashcards data={flashcardsDemo} /> },
   { title: 'SQL playground (real sandboxed execution · results · errors)', type: 'sql_exercise', node: <SqlPlayground data={sqlExerciseDemo} /> },
+  { title: 'Code playground (run real JS · console + errors)', type: 'code_exercise', node: <CodePlayground data={codeExerciseDemo} /> },
+  { title: 'Code playground — Python (Pyodide · real tracebacks)', type: 'code_exercise', node: <CodePlayground data={pythonExerciseDemo} /> },
   { title: 'Resource bundle (per-file download + all as .zip)', type: 'resource_bundle', node: <ResourceBundle data={resourceBundleDemo} /> },
   { title: 'Markdown table (inline)', node: <ChatMarkdown text={tableMd} /> }
 ];

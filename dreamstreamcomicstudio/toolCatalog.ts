@@ -477,6 +477,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['sql', 'sql exercise', 'practice sql', 'sql query', 'database', 'sqlite', 'joins', 'select query', 'learn sql', 'query practice', 'where clause', 'group by']
   },
   {
+    name: 'code_exercise', label: 'Code playground (JS / Python)', category: 'learning', kind: 'builtin', provider: 'DreamStream (sandboxed Web Worker; Python via Pyodide)',
+    description: 'Interactive JavaScript or Python practice — the user writes and runs real code in a sandboxed in-browser terminal, seeing real output and real errors/tracebacks. For learning JS or Python, methods, algorithms and general programming.',
+    auth: 'none', rateLimit: 'Unlimited (runs locally in a sandboxed worker with a timeout; Python runtime lazy-loads once).',
+    dataShape: 'Runnable JS/Python editor + task; live console output or error with stack/traceback.', docsUrl: 'https://dreamstream.app',
+    keywords: ['javascript', 'js', 'python', 'py', 'code exercise', 'coding exercise', 'practice coding', 'practice javascript', 'practice python', 'run code', 'code playground', 'try it', 'algorithm practice', 'array methods', 'programming practice', 'leetcode']
+  },
+  {
     name: 'generate_flashcards', label: 'Flashcards', category: 'learning', kind: 'builtin', provider: 'DreamStream (in-app)',
     description: 'Create an interactive flip-card study deck (term → definition) for memorizing vocabulary, formulas or facts — with shuffle, known/review marking and progress.',
     auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',

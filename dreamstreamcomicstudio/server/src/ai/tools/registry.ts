@@ -680,6 +680,39 @@ const sqlExerciseTool: ChatTool = {
   }
 };
 
+// Build an interactive JavaScript practice playground. The model provides a task +
+// starter code; the user edits and RUNS it in a sandboxed Web Worker (real console
+// output, real JS errors). Pure + local.
+const codeExerciseTool: ChatTool = {
+  name: 'code_exercise',
+  description:
+    'Create an interactive coding playground where the user writes and RUNS real code in a sandboxed in-browser terminal (real output, real errors/tracebacks). JavaScript and Python run live (set `language` to "javascript" or "python"). Use this whenever the user is learning/practicing JS or Python or general programming ("teach me Python", "practice array methods", "give me a coding exercise", "let me try it"). Provide a clear `task`, optional `instructions`, and `starterCode` to prefill the editor (use console.log / print to show output). Keep prose brief — the playground is interactive. (For SQL use sql_exercise.)',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      instructions: { type: 'string', description: 'What the user is learning / context.' },
+      task: { type: 'string', description: 'The coding challenge for the user to solve.' },
+      language: { type: 'string', description: '"javascript" or "python" — both run live. Default "javascript".' },
+      starterCode: { type: 'string', description: 'Starter code to prefill the editor (use console.log / print for output).' }
+    },
+    required: ['task']
+  },
+  execute: async (args) => {
+    const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined);
+    const task = str(args?.task);
+    if (!task) return { content: 'A code exercise needs a task.' };
+    const data = {
+      title: str(args?.title) || 'Code practice',
+      instructions: str(args?.instructions),
+      task,
+      language: str(args?.language) || 'javascript',
+      starterCode: str(args?.starterCode)
+    };
+    return { content: `Created an interactive code exercise${data.title ? ` ("${data.title}")` : ''}. A runnable, sandboxed ${data.language === 'python' ? 'Python' : 'JavaScript'} playground is shown to the user.`, artifacts: [{ type: 'code_exercise', data }] };
+  }
+};
+
 // Package several generated files into one downloadable bundle (.zip). Pure + local —
 // the client renders per-file download buttons plus a "download all as .zip" action.
 const bundleTool: ChatTool = {
@@ -765,6 +798,7 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   generate_document: documentTool,
   generate_bundle: bundleTool,
   sql_exercise: sqlExerciseTool,
+  code_exercise: codeExerciseTool,
   generate_app: generateAppTool,
   ...Object.fromEntries(FREE_API_TOOLS.map((t) => [t.name, t]))
 };
