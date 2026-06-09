@@ -78,7 +78,13 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
           <div className="font-display text-lg leading-none truncate">{data.title || 'Flashcards'}</div>
           {data.topic && <div className="text-[11px] font-bold uppercase tracking-wide text-white/70">{data.topic}</div>}
         </div>
-        <span className="text-[11px] font-bold">{known.size}/{cards.length} known</span>
+        <span className="text-[11px] font-bold">{known.size === cards.length ? '✓ mastered' : `${known.size}/${cards.length} known`}</span>
+      </div>
+
+      {/* Mastery bar: green = known, amber = flagged for review, slate track = remaining. */}
+      <div className="flex h-1.5 bg-slate-100" aria-hidden="true">
+        <div className="bg-green-500 transition-all" style={{ width: `${(known.size / cards.length) * 100}%` }} />
+        <div className="bg-amber-400 transition-all" style={{ width: `${(review.size / cards.length) * 100}%` }} />
       </div>
 
       {/* Resumed-progress hint (only when there was saved progress to restore). */}
