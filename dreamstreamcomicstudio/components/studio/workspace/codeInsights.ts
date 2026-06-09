@@ -263,16 +263,17 @@ export const issuesToFixPrompt = (issues: CodeIssue[]): string => {
   return `Fix these issues found by the studio's verifier and return the COMPLETE corrected project so it runs cleanly. Address the ROOT CAUSE; do not reintroduce any of them:\n${list}`;
 };
 
-/** Heuristic, model-free "what next" suggestions derived from the current code (actionable chips). */
-export const suggestNextSteps = (ins: CodeInsights): string[] => {
+/** Heuristic, model-free "what next" suggestions derived from the current code (actionable chips).
+ *  Pass `hasBackend` so the chips reflect whether a real DB is wired (use it vs. connect one). */
+export const suggestNextSteps = (ins: CodeInsights, opts?: { hasBackend?: boolean }): string[] => {
   const out: string[] = [];
   if (ins.imports.dangling > 0) out.push('Resolve missing imports so every file loads.');
   const big = ins.largest.find((f) => f.loc > OVERSIZE_LOC);
   if (big) out.push(`Split ${big.path.split('/').pop()} (${big.loc} lines) into smaller components.`);
   if (ins.counts.info > 0 && ins.issues.some((i) => /alt text/.test(i.message))) out.push('Add alt text and ARIA labels for accessibility.');
-  if (!ins.hasManifest && ins.languages.some((l) => l.language === 'TypeScript' || l.language === 'JavaScript')) {
-    // web apps are fine without one; only suggest when it looks like a node/script project
-  }
+  // Backend-aware: use the connected DB, or suggest connecting one for real persistence.
+  if (opts?.hasBackend) out.push('Persist the app’s data to the connected Supabase backend (replace any mock/in-memory data).');
+  else out.push('Connect a Supabase backend so the app saves real data instead of resetting on reload.');
   // Always-useful product polish prompts.
   out.push('Add empty, loading and error states to every view.');
   out.push('Polish the visual design — spacing, typography, color and alignment.');
