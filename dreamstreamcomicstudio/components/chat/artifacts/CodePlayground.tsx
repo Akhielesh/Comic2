@@ -1,19 +1,23 @@
 import React, { useState } from 'react';
 import { Terminal, Play, Loader2, AlertTriangle } from 'lucide-react';
 import { runJavaScript, type JsRunResult } from '../../../services/jsRunner';
+import { runPython, isPythonRuntimeLoaded } from '../../../services/pyRunner';
 import type { CodeExerciseArtifact } from '../../../apiTypes';
 
-// An interactive code playground the AI generates for learning. The user writes JS and
-// runs it in a sandboxed Web Worker — real console output, real JS errors — so they
-// actually practise rather than just read. JavaScript executes live; other languages
-// render the starter read-only with a note (live run is JS today).
+// An interactive code playground the AI generates for learning. The user writes code and
+// runs it in a sandboxed Web Worker — real output, real errors — so they actually
+// practise rather than just read. JavaScript and Python execute live (Python via Pyodide,
+// lazy-loaded on first run); other languages render the starter read-only with a note.
 
-const LIVE_LANGS = new Set(['javascript', 'js', 'node', 'nodejs', '']);
+const JS_LANGS = new Set(['javascript', 'js', 'node', 'nodejs', '']);
+const PY_LANGS = new Set(['python', 'py', 'python3']);
 
 export const CodePlayground: React.FC<{ data: CodeExerciseArtifact }> = ({ data }) => {
   const lang = (data.language || 'javascript').toLowerCase();
-  const canRun = LIVE_LANGS.has(lang);
-  const [code, setCode] = useState(data.starterCode || '// write JavaScript here\nconsole.log("hello");');
+  const isPython = PY_LANGS.has(lang);
+  const canRun = JS_LANGS.has(lang) || isPython;
+  const defaultStarter = isPython ? '# write Python here\nprint("hello")' : '// write JavaScript here\nconsole.log("hello");';
+  const [code, setCode] = useState(data.starterCode || defaultStarter);
   const [result, setResult] = useState<JsRunResult | null>(null);
   const [running, setRunning] = useState(false);
 
@@ -22,7 +26,7 @@ export const CodePlayground: React.FC<{ data: CodeExerciseArtifact }> = ({ data 
     setRunning(true);
     setResult(null);
     try {
-      setResult(await runJavaScript(code));
+      setResult(await (isPython ? runPython(code) : runJavaScript(code)));
     } catch (e) {
       setResult({ logs: [], error: (e as Error)?.message || 'Could not run the code.' });
     } finally {
@@ -39,7 +43,7 @@ export const CodePlayground: React.FC<{ data: CodeExerciseArtifact }> = ({ data 
       <div className="bg-emerald-700 text-white px-4 py-2.5 flex items-center gap-2">
         <Terminal className="w-5 h-5" />
         <div className="font-display text-lg leading-none truncate flex-1">{data.title || 'Code practice'}</div>
-        <span className="text-[10px] font-bold uppercase tracking-wide bg-white/20 px-1.5 py-0.5 rounded">{canRun ? 'JavaScript · sandboxed' : `${data.language} · read-only`}</span>
+        <span className="text-[10px] font-bold uppercase tracking-wide bg-white/20 px-1.5 py-0.5 rounded">{isPython ? 'Python · Pyodide' : canRun ? 'JavaScript · sandboxed' : `${data.language} · read-only`}</span>
       </div>
 
       <div className="p-4 space-y-3">
@@ -70,7 +74,11 @@ export const CodePlayground: React.FC<{ data: CodeExerciseArtifact }> = ({ data 
             >
               {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />} Run
             </button>
-            <span className="text-[11px] text-slate-400">⌘/Ctrl + Enter</span>
+            {running && isPython && !isPythonRuntimeLoaded() ? (
+              <span className="text-[11px] text-slate-500">Downloading Python runtime (first run, ~6MB)…</span>
+            ) : (
+              <span className="text-[11px] text-slate-400">⌘/Ctrl + Enter</span>
+            )}
           </div>
         ) : (
           <p className="text-[12px] text-slate-500">Live run currently supports JavaScript. This {data.language} snippet is shown as a reference.</p>

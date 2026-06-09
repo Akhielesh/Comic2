@@ -686,15 +686,15 @@ const sqlExerciseTool: ChatTool = {
 const codeExerciseTool: ChatTool = {
   name: 'code_exercise',
   description:
-    'Create an interactive JavaScript playground where the user writes and RUNS real JS in a sandboxed in-browser terminal (real console output, real errors). Use this whenever the user is learning/practicing JavaScript or general programming concepts ("teach me JS", "practice array methods", "give me a coding exercise", "let me try it"). Provide a clear `task`, optional `instructions`, and `starterCode` to prefill the editor (use console.log to show output). Keep prose brief — the playground is interactive. (Live execution is JavaScript; for SQL use sql_exercise.)',
+    'Create an interactive coding playground where the user writes and RUNS real code in a sandboxed in-browser terminal (real output, real errors/tracebacks). JavaScript and Python run live (set `language` to "javascript" or "python"). Use this whenever the user is learning/practicing JS or Python or general programming ("teach me Python", "practice array methods", "give me a coding exercise", "let me try it"). Provide a clear `task`, optional `instructions`, and `starterCode` to prefill the editor (use console.log / print to show output). Keep prose brief — the playground is interactive. (For SQL use sql_exercise.)',
   parameters: {
     type: 'object',
     properties: {
       title: { type: 'string' },
       instructions: { type: 'string', description: 'What the user is learning / context.' },
       task: { type: 'string', description: 'The coding challenge for the user to solve.' },
-      language: { type: 'string', description: 'Language label; default "javascript" (the one that runs live).' },
-      starterCode: { type: 'string', description: 'Starter code to prefill the editor (use console.log for output).' }
+      language: { type: 'string', description: '"javascript" or "python" — both run live. Default "javascript".' },
+      starterCode: { type: 'string', description: 'Starter code to prefill the editor (use console.log / print for output).' }
     },
     required: ['task']
   },
@@ -709,7 +709,7 @@ const codeExerciseTool: ChatTool = {
       language: str(args?.language) || 'javascript',
       starterCode: str(args?.starterCode)
     };
-    return { content: `Created an interactive code exercise${data.title ? ` ("${data.title}")` : ''}. A runnable, sandboxed JavaScript playground is shown to the user.`, artifacts: [{ type: 'code_exercise', data }] };
+    return { content: `Created an interactive code exercise${data.title ? ` ("${data.title}")` : ''}. A runnable, sandboxed ${data.language === 'python' ? 'Python' : 'JavaScript'} playground is shown to the user.`, artifacts: [{ type: 'code_exercise', data }] };
   }
 };
 

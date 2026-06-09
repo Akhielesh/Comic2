@@ -79,6 +79,14 @@ const codeExerciseDemo: CodeExerciseArtifact = {
   starterCode: "const users = [\n  { name: 'ana', age: 20 },\n  { name: 'bo', age: 16 },\n  { name: 'cy', age: 31 },\n];\n\nconst adults = users\n  .filter(u => u.age >= 18)\n  .map(u => u.name.toUpperCase());\n\nconsole.log(adults);"
 };
 
+const pythonExerciseDemo: CodeExerciseArtifact = {
+  title: 'Python practice — list comprehension',
+  instructions: 'Use a list comprehension, then print the result.',
+  task: 'Print the squares of the even numbers from 0 to 9.',
+  language: 'python',
+  starterCode: 'squares = [n * n for n in range(10) if n % 2 == 0]\nprint(squares)'
+};
+
 const resourceBundleDemo: ResourceBundleArtifact = {
   title: 'Photosynthesis study pack',
   description: 'Everything to revise the topic — guide, practice, flashcards.',
@@ -448,6 +456,7 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Flashcards (flip · known/review · shuffle · progress)', type: 'flashcards', node: <Flashcards data={flashcardsDemo} /> },
   { title: 'SQL playground (real sandboxed execution · results · errors)', type: 'sql_exercise', node: <SqlPlayground data={sqlExerciseDemo} /> },
   { title: 'Code playground (run real JS · console + errors)', type: 'code_exercise', node: <CodePlayground data={codeExerciseDemo} /> },
+  { title: 'Code playground — Python (Pyodide · real tracebacks)', type: 'code_exercise', node: <CodePlayground data={pythonExerciseDemo} /> },
   { title: 'Resource bundle (per-file download + all as .zip)', type: 'resource_bundle', node: <ResourceBundle data={resourceBundleDemo} /> },
   { title: 'Markdown table (inline)', node: <ChatMarkdown text={tableMd} /> }
 ];
