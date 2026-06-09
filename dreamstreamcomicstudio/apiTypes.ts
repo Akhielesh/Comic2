@@ -748,6 +748,9 @@ export type CustomAgentDef = {
   toolNames: string[];
 };
 
+/** A user-attached file sent with a chat turn (image, CSV, JSON, text, …) for tools like run_python to read. */
+export type ChatAttachmentInput = { name: string; mimeType: string; dataUri: string };
+
 export type ChatRequest = {
   messages: ChatRequestMessage[];
   /** Explicit catalog model id; falls back to the X-Text-Model header, then an auto pick. */
@@ -779,6 +782,8 @@ export type ChatRequest = {
   swarm?: boolean;
   /** User-defined agents the swarm may deploy in addition to the built-ins. */
   customAgents?: CustomAgentDef[];
+  /** Files attached to the CURRENT user turn, decoded server-side for tools like run_python. */
+  attachments?: ChatAttachmentInput[];
 };
 
 export type ChatToolEvent = { tool: string; query?: string; ok: boolean; summary?: string };

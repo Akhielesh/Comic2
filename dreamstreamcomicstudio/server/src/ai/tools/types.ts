@@ -14,6 +14,8 @@ export interface ToolContext {
   locale?: string;
   units?: 'metric' | 'imperial';
   location?: { city?: string; region?: string; country?: string; lat?: number; lng?: number };
+  /** Files attached to the current user turn (base64 data URIs) — read by run_python. */
+  attachments?: { name: string; mimeType: string; dataUri: string }[];
 }
 
 export interface ToolExecResult {
