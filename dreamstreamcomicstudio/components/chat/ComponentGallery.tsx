@@ -22,12 +22,14 @@ import { Flashcards } from './artifacts/Flashcards';
 import { SqlPlayground } from './artifacts/SqlPlayground';
 import { ResourceBundle } from './artifacts/ResourceBundle';
 import { CodePlayground } from './artifacts/CodePlayground';
+import { GenerativeUICard } from './artifacts/GenerativeUICard';
 import type {
   WeatherArtifact, NewsResultsArtifact, StockQuoteArtifact,
   VideoResultsArtifact, PlacesResultsArtifact, SwarmTraceArtifact,
   ChartArtifact, MetricBoardArtifact, MapArtifact,
   DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact,
-  RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact, CodeExerciseArtifact
+  RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact, CodeExerciseArtifact,
+  GenerativeUIArtifact
 } from '../../apiTypes';
 
 const sqlExerciseDemo: SqlExerciseArtifact = {
@@ -433,6 +435,43 @@ const researchReportDemo: ResearchReportArtifact = {
   ]
 };
 
+// Agent-composed bespoke layout from the whitelisted block tree (reuses the existing
+// barChart demo as an embedded chart block).
+const generativeUiDemo: GenerativeUIArtifact = {
+  title: 'Q3 performance — composed layout',
+  subtitle: 'Agent-built from blocks · grid · metrics · chart · callout',
+  palette: 'brand',
+  accent: '#3B82F6',
+  root: {
+    kind: 'stack',
+    gap: 3,
+    children: [
+      {
+        kind: 'grid',
+        columns: 3,
+        gap: 2,
+        children: [
+          { kind: 'metric', label: 'Revenue', value: 1284000, unit: 'USD', deltaPercent: 12.4, spark: [9, 10, 11, 10, 12, 13, 14] },
+          { kind: 'metric', label: 'Active users', value: 84230, delta: 5200, spark: [70, 72, 75, 78, 80, 82, 84] },
+          { kind: 'metric', label: 'Churn', value: '2.1%', deltaPercent: -0.4 }
+        ]
+      },
+      { kind: 'chart', chart: barChart },
+      {
+        kind: 'row',
+        gap: 2,
+        wrap: true,
+        children: [
+          { kind: 'badge', text: 'On track', tone: 'good' },
+          { kind: 'badge', text: 'EU launch', tone: 'info' },
+          { kind: 'pill', label: 'MoM', changePercent: 8.3 }
+        ]
+      },
+      { kind: 'callout', tone: 'good', title: 'Takeaway', text: 'Revenue beat plan by 12%, driven by the EU launch; churn is down for the third straight month.' }
+    ]
+  }
+};
+
 export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Weather station (animated · gauges · map)', type: 'weather', node: <WeatherStation data={weather} /> },
   { title: 'Market card (hover · range timeline · candlesticks)', type: 'stock_quote', node: <MarketCard data={stock} /> },
@@ -445,6 +484,7 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Chart — donut', node: <ChartCard data={donutChart} /> },
   { title: 'Metric board (KPIs · sparklines · rings)', type: 'metric_board', node: <MetricBoard data={board} /> },
   { title: 'Data table (typed cells · sortable · sparklines)', type: 'data_table', node: <DataTableCard data={dataTable} /> },
+  { title: 'Generative UI (agent-composed layout · grid · metrics · chart · callout)', type: 'generative_ui', node: <GenerativeUICard data={generativeUiDemo} /> },
   { title: 'Market heatmap (sectors · cap-weighted tiles)', type: 'market_heatmap', node: <HeatmapCard data={heatmap} /> },
   { title: 'Finance Terminal (composite: quote · KPIs · table · heatmap · news)', type: 'finance_terminal', node: <FinanceTerminal data={terminal} /> },
   { title: 'Code Studio card (multi-file app · live preview)', type: 'code_studio', node: <CodeStudioCard data={codeStudioDemo} /> },

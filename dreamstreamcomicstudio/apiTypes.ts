@@ -1378,6 +1378,51 @@ export interface HeatmapArtifact {
   caption?: string;
 }
 
+// --- Generative UI (agent-composed layouts) ---
+// A safe, WHITELISTED block tree the model emits to compose a BESPOKE in-chat layout
+// when no fixed card fits ("custom-build structures, alignments"). Rendered by
+// GenerativeUICard from the Primitive Kit only — no raw HTML, no code execution. The
+// renderer normalizes/validates first (depth + node caps, prop coercion, src
+// allowlisting), so a malformed or oversized tree degrades gracefully instead of
+// throwing. This is also the canonical render target the code sandbox emits into.
+export type UIBlockGap = 0 | 1 | 2 | 3 | 4;
+export type UIAlign = 'start' | 'center' | 'end' | 'stretch' | 'baseline';
+
+export interface UIStackBlock { kind: 'stack'; gap?: UIBlockGap; align?: UIAlign; children: UIBlock[] }
+export interface UIRowBlock { kind: 'row'; gap?: UIBlockGap; align?: UIAlign; wrap?: boolean; children: UIBlock[] }
+export interface UIGridBlock { kind: 'grid'; columns?: 1 | 2 | 3 | 4; gap?: UIBlockGap; children: UIBlock[] }
+export interface UISectionBlock { kind: 'section'; title?: string; accent?: string; children: UIBlock[] }
+export interface UIDividerBlock { kind: 'divider' }
+export interface UIHeadingBlock { kind: 'heading'; text: string; level?: 1 | 2 | 3 }
+export interface UITextBlock { kind: 'text'; text: string; tone?: 'default' | 'muted' | 'strong'; align?: 'left' | 'center' | 'right' }
+export interface UIBadgeBlock { kind: 'badge'; text: string; tone?: 'neutral' | 'good' | 'warn' | 'bad' | 'info' }
+export interface UIPillBlock { kind: 'pill'; label?: string; change?: number; changePercent?: number }
+export interface UIKeyValueBlock { kind: 'keyValue'; items: { label: string; value: string }[] }
+export interface UICalloutBlock { kind: 'callout'; tone?: 'info' | 'good' | 'warn' | 'bad'; title?: string; text: string }
+export interface UIImageBlock { kind: 'image'; src: string; alt?: string; caption?: string; ratio?: '1:1' | '4:3' | '16:9' }
+export interface UIProgressBlock { kind: 'progress'; value: number; max?: number; label?: string; color?: string }
+export interface UIMetricBlock { kind: 'metric'; label: string; value: string | number; unit?: string; delta?: number; deltaPercent?: number; spark?: number[] }
+export interface UISparklineBlock { kind: 'sparkline'; values: number[]; color?: string }
+export interface UIChartBlock { kind: 'chart'; chart: ChartArtifact }
+export interface UITableBlock { kind: 'table'; table: DataTableArtifact }
+
+export type UIBlock =
+  | UIStackBlock | UIRowBlock | UIGridBlock | UISectionBlock | UIDividerBlock
+  | UIHeadingBlock | UITextBlock | UIBadgeBlock | UIPillBlock | UIKeyValueBlock
+  | UICalloutBlock | UIImageBlock | UIProgressBlock
+  | UIMetricBlock | UISparklineBlock | UIChartBlock | UITableBlock;
+
+export interface GenerativeUIArtifact {
+  title?: string;
+  subtitle?: string;
+  /** Accent hex for the card strip. */
+  accent?: string;
+  /** A named kit palette ("brand" | "ocean" | "sunset" | "violet" | "bull" | "bear" | "mono"). */
+  palette?: string;
+  /** The block tree. */
+  root: UIBlock;
+}
+
 // --- Finance terminal ---
 // The flagship composite: a single artifact that assembles a focus quote, a KPI
 // ribbon, a watchlist/movers table, a sector heatmap, supporting charts and a news

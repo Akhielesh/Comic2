@@ -27,6 +27,7 @@ import { NANGO_TOOLS } from './nango.js';
 import { VIDEO_TOOLS } from './videoRender.js';
 import { LIVE_TEMPLATE_TOOLS } from './liveTemplateTool.js';
 import { generateAppTool } from './codeStudio.js';
+import { generativeUiTool } from './generativeUi.js';
 
 export type { ChatTool, ToolExecResult, ToolContext } from './types.js';
 
@@ -793,6 +794,7 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   get_stock: stockTool,
   render_chart: chartTool,
   show_metrics: metricsTool,
+  render_ui: generativeUiTool,
   generate_quiz: quizTool,
   generate_flashcards: flashcardsTool,
   generate_document: documentTool,
