@@ -49,5 +49,6 @@ revoke all on public.email_suppressions from anon, authenticated;
 alter table public.waitlist_signups
   add column if not exists confirmed boolean not null default false,
   add column if not exists confirm_token text,
+  add column if not exists confirm_sent_at timestamptz,
   add column if not exists confirmed_at timestamptz,
   add column if not exists unsubscribed_at timestamptz;
