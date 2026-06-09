@@ -26,6 +26,7 @@ export type ToolCategory =
   | 'dataviz'
   | 'codegen'
   | 'learning'
+  | 'media'
   | 'agents';
 
 export type ToolAuth = 'none' | 'optional' | 'required';
@@ -77,6 +78,7 @@ export const CATEGORY_META: CategoryMeta[] = [
   { id: 'entertainment', label: 'Entertainment & fun', icon: 'Gamepad2', blurb: 'TV, anime, games, trivia, jokes.' },
   { id: 'dev', label: 'Developer & utility', icon: 'Code2', blurb: 'GitHub, packages, QR codes, demographics.' },
   { id: 'dataviz', label: 'Data & charts', icon: 'BarChart3', blurb: 'Turn data into charts and KPI boards.' },
+  { id: 'media', label: 'Media & images', icon: 'Image', blurb: 'Convert and resize images (deterministic, non-AI).' },
   { id: 'codegen', label: 'App builder', icon: 'AppWindow', blurb: 'Generate full multi-file apps with a live preview.' },
   { id: 'learning', label: 'Learning', icon: 'GraduationCap', blurb: 'Interactive quizzes and practice for studying any topic.' },
   { id: 'agents', label: 'Agents', icon: 'Network', blurb: 'Delegate complex tasks to a swarm.' }
@@ -482,6 +484,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
     auth: 'none', rateLimit: 'Unlimited (transforms locally, no API)',
     dataShape: 'The reshaped data + a table preview.', docsUrl: 'https://dreamstream.app',
     keywords: ['filter', 'sort', 'select', 'top', 'limit', 'reshape', 'where', 'order by', 'columns', 'rows', 'narrow', 'clean', 'wrangle', 'subset']
+  },
+  {
+    name: 'convert_image', label: 'Convert image', category: 'media', kind: 'builtin', provider: 'DreamStream (sharp, non-AI)',
+    description: 'Deterministically convert or resize an image (PNG/JPEG/WebP/AVIF) with sharp — no AI touches the pixels. Takes an https URL or a data:image URI. For "convert this jpg to png", "make a webp", "resize to 512px".',
+    auth: 'none', rateLimit: 'Unlimited (local libvips, no API)',
+    dataShape: 'The converted image, shown inline.', docsUrl: 'https://dreamstream.app',
+    keywords: ['convert image', 'jpg', 'jpeg', 'png', 'webp', 'avif', 'resize', 'thumbnail', 'image format', 'compress image', 'shrink image', 'to png', 'to jpg']
   },
   {
     name: 'show_metrics', label: 'Metric board', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app SVG)',
