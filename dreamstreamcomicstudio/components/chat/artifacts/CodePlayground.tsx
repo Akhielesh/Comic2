@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Terminal, Play, Loader2, AlertTriangle } from 'lucide-react';
+import { Terminal, Play, Loader2, AlertTriangle, RotateCcw, Copy, Check } from 'lucide-react';
 import { runJavaScript, type JsRunResult } from '../../../services/jsRunner';
 import { runPython, isPythonRuntimeLoaded } from '../../../services/pyRunner';
 import type { CodeExerciseArtifact } from '../../../apiTypes';
@@ -20,6 +20,12 @@ export const CodePlayground: React.FC<{ data: CodeExerciseArtifact }> = ({ data 
   const [code, setCode] = useState(data.starterCode || defaultStarter);
   const [result, setResult] = useState<JsRunResult | null>(null);
   const [running, setRunning] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const starter = data.starterCode || defaultStarter;
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* clipboard unavailable */ }
+  };
 
   const run = async () => {
     if (!code.trim() || running || !canRun) return;
@@ -79,6 +85,12 @@ export const CodePlayground: React.FC<{ data: CodeExerciseArtifact }> = ({ data 
             ) : (
               <span className="text-[11px] text-slate-400">⌘/Ctrl + Enter</span>
             )}
+            <button onClick={copy} title="Copy code" className="ml-auto flex items-center gap-1 text-[11px] font-bold border-2 border-black rounded-md px-2 py-1 bg-white hover:bg-slate-100">
+              {copied ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
+            </button>
+            <button onClick={() => setCode(starter)} title="Reset to starter code" className="flex items-center gap-1 text-[11px] font-bold border-2 border-black rounded-md px-2 py-1 bg-white hover:bg-slate-100">
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
           </div>
         ) : (
           <p className="text-[12px] text-slate-500">Live run currently supports JavaScript. This {data.language} snippet is shown as a reference.</p>
