@@ -506,8 +506,10 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       if (artifact) succeed(artifact);
       else failWith(streamError || 'The model did not return a valid app. Try rephrasing your idea.');
     } catch (err) {
+      // Friendly, classified message (cold start / rate-limit / server) instead of a raw error —
+      // the activity feed already exposes a Retry, so the user gets a clear cause + a way forward.
       if (signal.aborted) cancelled();
-      else failWith((err as Error)?.message || 'Generation failed.');
+      else failWith(describeApiError(err));
     } finally {
       setGenerating(false);
       genAbortRef.current = null;
