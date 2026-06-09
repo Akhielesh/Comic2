@@ -47,6 +47,7 @@ import { resolveStudioAgentIds, studioAgentName } from '../../services/studioAge
 import { createStudioSession } from '../../services/studioSessions';
 import { getOpenRouterKey } from '../../services/appSettings';
 import { getDeployUrl, setDeployUrl } from '../../services/studioDeployUrl';
+import { ensureSupabaseDependency } from '../../services/studioBackend';
 import { isProviderEnabled } from '../../services/sourceGovernance';
 import { isLiveStudioEnabled } from '../../services/studioFlags';
 import { downloadArtifactZip } from '../../services/studioLauncher';
@@ -933,8 +934,15 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
           <BackendPanel
             projectId={wsProjectId}
             onConnect={(injected) => {
-              injected.forEach((f) => useStudioWorkspace.getState().addFile(f.path, f.content));
-              appendLog('success', 'Connected Supabase — added /.env.local + /lib/supabaseClient.ts. Refine to read/write your data.');
+              const ws = useStudioWorkspace.getState();
+              injected.forEach((f) => ws.addFile(f.path, f.content));
+              // Ensure the scaffolded client's dependency resolves (else the preview breaks).
+              const pkg = currentArtifact.files.find((f) => f.path === '/package.json');
+              if (pkg) {
+                const patched = ensureSupabaseDependency(pkg.content);
+                if (patched !== pkg.content) ws.addFile('/package.json', patched);
+              }
+              appendLog('success', 'Connected Supabase — added /.env.local + /lib/supabaseClient.ts (and @supabase/supabase-js). Refine to read/write your data.');
               if (focus === 'preview') setFocus('code');
             }}
           />
