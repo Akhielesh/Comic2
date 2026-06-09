@@ -303,3 +303,46 @@ export const getSessionTimeline = async (sessionId: string) => {
     return { sessionId, events: [], feedback: [] };
   }
 };
+
+// Per-model typical latency from chat_turn telemetry — powers the speed indicator in
+// the model picker so users don't unknowingly pick a slow (often free/queued) model.
+// Tool-using turns are excluded (tools dominate latency); only models with a few
+// samples are reported. Cached.
+const modelSpeedCache = new TtlCache<Record<string, { p50Ms: number; samples: number }>>(120_000, 4);
+
+export const getModelLatency = (daysInput?: unknown): Promise<Record<string, { p50Ms: number; samples: number }>> => {
+  const days = clampInt(daysInput, 7, 1, 30);
+  return modelSpeedCache.getOrSet(`speed:${days}`, async () => {
+    if (!storageReady()) return {};
+    try {
+      const admin = getSupabaseAdmin();
+      const { data, error } = await admin
+        .from('telemetry_events')
+        .select('metadata')
+        .eq('event_type', 'chat_turn')
+        .gte('created_at', sinceIso(days))
+        .limit(8000);
+      if (error || !Array.isArray(data)) return {};
+      const byModel = new Map<string, number[]>();
+      for (const row of data as Array<{ metadata?: Record<string, unknown> }>) {
+        const m = row.metadata || {};
+        if (Number(m.toolCount) > 0) continue; // pure model speed only
+        const model = typeof m.model === 'string' ? m.model : '';
+        const lat = Number(m.latencyMs);
+        if (!model || !Number.isFinite(lat) || lat < 0) continue;
+        const arr = byModel.get(model) || [];
+        arr.push(lat);
+        byModel.set(model, arr);
+      }
+      const out: Record<string, { p50Ms: number; samples: number }> = {};
+      for (const [model, lats] of byModel) {
+        if (lats.length < 3) continue; // need a few samples to be meaningful
+        lats.sort((a, b) => a - b);
+        out[model] = { p50Ms: Math.round(lats[Math.floor(lats.length * 0.5)]), samples: lats.length };
+      }
+      return out;
+    } catch {
+      return {};
+    }
+  });
+};
