@@ -475,8 +475,11 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       useStudioActivity.getState().finish('done', `✓ ${summary}`);
       appendLog('success', `${summary}. Live preview is below; press Build to run it in a cloud container.`);
       outcome = { ok: true };
-      // The agent team reviews a brand-new app (always for the build flow; opt-in otherwise).
-      if (!refining && enabled && (opts?.autoReview || getStudioAutoRunAgents())) {
+      // The agent team reviews a brand-new app. This is a PURE-LLM refinement (it does not need the
+      // cloud worker), so it runs for everyone — not just admins/live-flag users. That admin gate was
+      // a big reason the agents "didn't deploy automatically". The server returns a clean error if no
+      // coding model is configured, so decoupling it from `enabled` is safe.
+      if (!refining && (opts?.autoReview || getStudioAutoRunAgents())) {
         appendLog('system', 'The agent team is reviewing your new app…');
         setTimeout(() => runAgentsRef.current(), 80);
       }
@@ -929,11 +932,23 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
             <MessageSquarePlus className="w-3.5 h-3.5" />
             {askBeforeBuild ? 'Asks before big changes' : 'Builds immediately'}
           </button>
-          {gateLoading && (
-            <span className={`inline-flex items-center gap-1.5 text-[11px] ${t.textFaint}`}>
-              <Loader2 className="w-3 h-3 animate-spin" /> Thinking about your change…
-            </span>
-          )}
+          <div className="flex items-center gap-2">
+            {gateLoading && (
+              <span className={`inline-flex items-center gap-1.5 text-[11px] ${t.textFaint}`}>
+                <Loader2 className="w-3 h-3 animate-spin" /> Thinking…
+              </span>
+            )}
+            {/* Explicit agentic control — run the full specialist team on demand (also auto-runs on
+                new builds). Discoverable here, not only in the command palette. */}
+            <button
+              onClick={() => void runAgents()}
+              disabled={generating}
+              title={`Run the specialist agent team (${ctxAgents} agents — architecture, code, UI, security, QA…) to review & harden the current app`}
+              className={`inline-flex items-center gap-1.5 text-[11px] font-semibold rounded-full border ${t.edge} px-2.5 py-1 ${t.textDim} ${t.hover} disabled:opacity-50 ${t.focusRing}`}
+            >
+              <Users className="w-3.5 h-3.5" /> Review with agents
+            </button>
+          </div>
         </div>
       </div>
     </section>
