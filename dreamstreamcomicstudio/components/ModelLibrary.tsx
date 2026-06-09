@@ -51,6 +51,7 @@ import { DomainTags, ModelInsightsPanel } from './models/ModelInsights';
 import { CodingLeaderboard } from './models/CodingLeaderboard';
 import { ImageModelRanking } from './models/ImageModelRanking';
 import { ProviderAggregatorTable } from './models/ProviderAggregatorTable';
+import { ModelDataSources } from './models/ModelDataSources';
 import { InfoDot } from './common/InfoTooltip';
 import type { GLOSSARY } from '../services/modelGlossary';
 import { describeCost, classBadge } from '../shared/pricing';
@@ -798,7 +799,10 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
         {view === 'leaderboard' ? (
           <CodingLeaderboard models={models} onStartChat={onStartChat} />
         ) : view === 'table' ? (
-          <ProviderAggregatorTable models={models} />
+          <>
+            <ProviderAggregatorTable models={models} />
+            <ModelDataSources />
+          </>
         ) : (
         <>
         {/* Smart auto-pick — the app's own reasoning picks the best model per stage. */}
