@@ -19,6 +19,7 @@ import type { AIProviderId } from '../ai/providers/types.js';
 import type { StudioBuildPlan, StudioAnswer } from '../../../apiTypes.js';
 import { getSupabaseAdmin } from '../services/supabase.js';
 import { callStudioWorker, studioConfigured } from '../services/studioWorker.js';
+import { normalizeTarget, deployViaWorker, recordDeployment } from '../services/studioDeploy.js';
 import { createWorkerRun, createStudioFix } from '../services/studioBuildService.js';
 import { evaluateLaunchAllowed } from '../services/studioCaps.js';
 import { sanitizeFiles, deriveProjectName } from '../services/studioFiles.js';
@@ -951,18 +952,35 @@ studioRouter.get('/:id/logs', async (req, res, next) => {
   }
 });
 
-// POST /api/studio/deploy — one-click deploy to a public URL (Phase 6). The build/publish
-// step runs in the Cloudflare Worker, so until the owner deploys it (Phase 0/1) this is
-// honestly pending rather than pretending to deploy. GitHub sync (above) works today.
-studioRouter.post('/deploy', (_req, res) => {
-  res.status(501).json({
-    error: {
-      message: notConfigured()
-        ? 'One-click deploy lands with the Cloudflare Worker (deploy it to enable). Until then, push to GitHub and deploy from there.'
-        : 'Deploy publishing is not wired in this build yet; push to GitHub and connect Pages/Workers to that repo.',
-      code: 'STUDIO_DEPLOY_PENDING'
+// POST /api/studio/deploy — one-click deploy to a public, permanent URL. The build + publish runs
+// in the Studio Worker (it has wrangler + the Cloudflare token in its container); this route
+// validates, derives a safe project name, delegates, persists, and returns an HONEST status. When
+// the worker isn't configured it returns `unavailable` (200) so the client shows the working manual
+// path (deploy bundle + commands) instead of a hard 501.
+studioRouter.post('/deploy', async (req, res, next) => {
+  try {
+    const body = (req.body || {}) as { projectId?: string; title?: string; target?: string; files?: unknown };
+    const target = normalizeTarget(body.target);
+    const files = sanitizeFiles(body.files).map((f) => ({ path: f.path, content: f.content }));
+    if (!files.length) return res.json({ status: 'error', message: 'No files to deploy — build an app first.' });
+
+    if (!studioConfigured()) {
+      return res.json({
+        status: 'unavailable',
+        message: 'One-click deploy needs the Studio Worker configured (STUDIO_WORKER_URL + STUDIO_HMAC_SECRET) with a Cloudflare token. Use the deploy bundle + the commands shown — they work today.'
+      });
     }
-  });
+    if (target !== 'cloudflare') {
+      return res.json({ status: 'unavailable', message: `${target} one-click deploy is coming soon — use the deploy bundle + commands for now.` });
+    }
+
+    await recordDeployment(body.projectId, target, 'building');
+    const result = await deployViaWorker({ userId: req.user!.id, projectId: body.projectId, title: body.title, target, files });
+    await recordDeployment(body.projectId, target, result.status, result.url);
+    return res.json(result);
+  } catch (err) {
+    next(err);
+  }
 });
 
 // --- Saved projects (Phase 5 persistence) -----------------------------------------
