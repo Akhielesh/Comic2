@@ -103,6 +103,10 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       .catch(() => { /* leave undefined → badge stays hidden rather than guessing */ });
     return () => { alive = false; };
   }, []);
+  // The live agentic build is available when the server Worker is actually configured (the honest
+  // signal) OR the user is an admin / has the live flag (so admins keep it before status resolves).
+  // Additive: nobody who had the build loses it; a configured server now gets it by default.
+  const liveAvailable = enabled || liveConfigured === true;
   const loadArtifact = useStudioWorkspace((s) => s.loadArtifact);
   const wsTitle = useStudioWorkspace((s) => s.title);
   const wsTemplate = useStudioWorkspace((s) => s.template);
@@ -338,7 +342,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     stage === 'done' ? 'success' : stage === 'stopped' || stage === 'observe' ? 'warn' : 'info' as const;
 
   const runBuild = async () => {
-    if (!hasFiles || !enabled || status === 'starting') return;
+    if (!hasFiles || !liveAvailable || status === 'starting') return;
     setStatus('starting');
     setError(null);
     setPreviewUrl(null);
@@ -648,7 +652,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       setFlow({ phase: 'idle', prompt: '', answers: [] });
       // Run it in the REAL sandbox (cloud worker, self-healing). Soft-falls back to the in-browser
       // preview when the worker isn't available. Skipped if the agent review is already running.
-      if (res.ok && enabled && getStudioRuntime() !== 'browser' && !autoReview) {
+      if (res.ok && liveAvailable && getStudioRuntime() !== 'browser' && !autoReview) {
         setTimeout(() => runBuildRef.current(), 150);
       }
     } else {
@@ -756,7 +760,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
 
   // Command palette actions (filtered + run by the ⌘K palette).
   const commands: Command[] = [];
-  if (hasFiles && enabled) commands.push({ id: 'build', label: status === 'live' ? 'Re-build & run' : 'Build & run', hint: '⏎', icon: <Wand2 className="w-4 h-4" />, keywords: 'run agent compile heal', run: runBuild });
+  if (hasFiles && liveAvailable) commands.push({ id: 'build', label: status === 'live' ? 'Re-build & run' : 'Build & run', hint: '⏎', icon: <Wand2 className="w-4 h-4" />, keywords: 'run agent compile heal', run: runBuild });
   if (status === 'live') commands.push({ id: 'stop', label: 'Stop run', icon: <Square className="w-4 h-4" />, keywords: 'halt kill end', run: stopLive });
   if (dirtyCount > 0) commands.push({ id: 'revert', label: `Revert all changes (${dirtyCount})`, icon: <Undo2 className="w-4 h-4" />, keywords: 'undo discard reset', run: () => dirtyList.forEach((p) => revertFile(p)) });
   if (hasFiles) commands.push({ id: 'zip', label: 'Download .zip', icon: <Download className="w-4 h-4" />, keywords: 'export save download', run: () => void downloadArtifactZip(currentArtifact) });
@@ -1137,8 +1141,8 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
         </div>
       )}
 
-      {/* Non-admin private-preview banner */}
-      {!enabled && (
+      {/* Instant-preview banner — shown only when the live agentic build truly isn't available. */}
+      {!liveAvailable && (
         <div className={`px-4 py-2.5 text-sm ${t.accentSoft} border-b ${t.edge} flex flex-wrap items-center gap-2`}>
           <Lock className={`w-4 h-4 ${t.accent}`} />
           <span className={`${t.text} font-semibold`}>You're building in instant-preview mode.</span>
