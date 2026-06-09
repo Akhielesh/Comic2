@@ -48,6 +48,7 @@ import { newsletterRouter } from './routes/newsletter.js';
 import { emailRouter } from './routes/email.js';
 import { invitesRouter } from './routes/invites.js';
 import { accountRouter } from './routes/account.js';
+import { learnRouter } from './routes/learn.js';
 import { prewarmCatalog, startCatalogRefreshLoop } from './services/modelCatalog.js';
 import { keysRouter } from './routes/keys.js';
 import { venturesRouter } from './routes/ventures.js';
@@ -191,6 +192,8 @@ app.use('/api/ventures', systemRateLimit, venturesRouter);
 app.use('/api/invites', systemRateLimit, invitesRouter);
 // Account: server-side encrypted BYOK key storage (authenticated).
 app.use('/api/account', systemRateLimit, accountRouter);
+// Learning execution (sandboxed SQL playground). Auth'd + text-tier rate limited.
+app.use('/api/learn', textRateLimit, learnRouter);
 
 app.use(errorHandler);
 

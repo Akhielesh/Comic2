@@ -470,6 +470,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['quiz', 'quiz me', 'test me', 'practice questions', 'practice problems', 'mcq', 'multiple choice', 'flashcards', 'assess', 'check my understanding', 'study', 'exam', 'review questions']
   },
   {
+    name: 'sql_exercise', label: 'SQL playground', category: 'learning', kind: 'builtin', provider: 'DreamStream (sandboxed SQLite / sql.js)',
+    description: 'Interactive SQL practice — the user writes and runs real queries against a sandboxed in-memory database, seeing real results and SQLite errors. For learning SQL, joins, aggregations and database basics.',
+    auth: 'none', rateLimit: 'Auth + rate-limited; runs in an ephemeral in-memory DB (no filesystem/network).',
+    dataShape: 'Runnable SQL editor + schema + task; live result table or error.', docsUrl: 'https://dreamstream.app',
+    keywords: ['sql', 'sql exercise', 'practice sql', 'sql query', 'database', 'sqlite', 'joins', 'select query', 'learn sql', 'query practice', 'where clause', 'group by']
+  },
+  {
     name: 'generate_flashcards', label: 'Flashcards', category: 'learning', kind: 'builtin', provider: 'DreamStream (in-app)',
     description: 'Create an interactive flip-card study deck (term → definition) for memorizing vocabulary, formulas or facts — with shuffle, known/review marking and progress.',
     auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',

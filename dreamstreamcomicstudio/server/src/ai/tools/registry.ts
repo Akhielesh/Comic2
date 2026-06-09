@@ -653,6 +653,33 @@ const flashcardsTool: ChatTool = {
   }
 };
 
+// Build an interactive SQL practice exercise. The model provides a schema + task; the
+// user runs real queries against a sandboxed in-memory SQLite (server-side sql.js).
+const sqlExerciseTool: ChatTool = {
+  name: 'sql_exercise',
+  description:
+    'Create an interactive SQL practice playground where the user writes and RUNS real SQL against a sandboxed in-memory SQLite database (real results, real errors). Use this whenever the user is learning/practicing SQL or databases ("teach me SQL", "practice joins", "give me a SQL exercise"). Provide `schema` = the SQL that sets up the practice tables (CREATE TABLE … plus a few INSERT rows of realistic seed data), a clear `task` describing what to query, optional `instructions`, and an optional `starterSql` to prefill the editor. Keep prose brief — the playground is interactive.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      instructions: { type: 'string', description: 'What the user is learning / context.' },
+      schema: { type: 'string', description: 'SQL that creates the practice tables AND inserts a few seed rows.' },
+      task: { type: 'string', description: 'The query challenge for the user to solve.' },
+      starterSql: { type: 'string', description: 'Optional starter query to prefill the editor.' }
+    },
+    required: ['schema', 'task']
+  },
+  execute: async (args) => {
+    const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined);
+    const schema = str(args?.schema);
+    const task = str(args?.task);
+    if (!schema || !task) return { content: 'A SQL exercise needs a schema (CREATE + seed) and a task.' };
+    const data = { title: str(args?.title) || 'SQL practice', instructions: str(args?.instructions), schema, task, starterSql: str(args?.starterSql) };
+    return { content: `Created an interactive SQL exercise${data.title ? ` ("${data.title}")` : ''}. A runnable, sandboxed SQL playground is shown to the user.`, artifacts: [{ type: 'sql_exercise', data }] };
+  }
+};
+
 // Flatten the free-API tool packs into a name→tool map. These are all context-free
 // (they take explicit args), so they live alongside the original built-ins.
 const FREE_API_TOOLS: ChatTool[] = [
@@ -685,6 +712,7 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   generate_quiz: quizTool,
   generate_flashcards: flashcardsTool,
   generate_document: documentTool,
+  sql_exercise: sqlExerciseTool,
   generate_app: generateAppTool,
   ...Object.fromEntries(FREE_API_TOOLS.map((t) => [t.name, t]))
 };

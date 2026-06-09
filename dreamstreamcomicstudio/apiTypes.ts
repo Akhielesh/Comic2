@@ -846,6 +846,20 @@ export interface FlashcardsArtifact {
   cards: Flashcard[];
 }
 
+// --- SQL exercise / playground artifact (run real SQL while learning) ---
+// Emitted by the `sql_exercise` tool. The AI provides a schema (CREATE + seed) and a
+// task; the user writes SQL and runs it against a sandboxed in-memory DB (server-side
+// sql.js) to see real results / errors.
+export interface SqlExerciseArtifact {
+  title?: string;
+  instructions?: string;
+  /** SQL that sets up the practice database (CREATE TABLE … + INSERT …). */
+  schema: string;
+  task?: string;
+  /** Optional starter query to prefill the editor. */
+  starterSql?: string;
+}
+
 // --- Downloadable document artifact ---
 // Emitted by the `generate_document` tool so the AI can author a custom resource
 // (study guide, cheat sheet, notes, report, plan) the user can read inline and

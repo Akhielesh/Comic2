@@ -19,13 +19,22 @@ import { ResearchReport } from './artifacts/ResearchReport';
 import { Quiz } from './artifacts/Quiz';
 import { DocumentCard } from './artifacts/DocumentCard';
 import { Flashcards } from './artifacts/Flashcards';
+import { SqlPlayground } from './artifacts/SqlPlayground';
 import type {
   WeatherArtifact, NewsResultsArtifact, StockQuoteArtifact,
   VideoResultsArtifact, PlacesResultsArtifact, SwarmTraceArtifact,
   ChartArtifact, MetricBoardArtifact, MapArtifact,
   DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact,
-  RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact
+  RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact
 } from '../../apiTypes';
+
+const sqlExerciseDemo: SqlExerciseArtifact = {
+  title: 'SQL practice — filter & sort',
+  instructions: 'Practice a SELECT with a WHERE filter and ORDER BY against a small employees table.',
+  schema: "CREATE TABLE employees (id INTEGER, name TEXT, dept TEXT, salary INTEGER);\nINSERT INTO employees VALUES\n  (1,'Ann','Eng',120000),(2,'Bob','Sales',80000),\n  (3,'Cy','Eng',135000),(4,'Di','Sales',95000);",
+  task: 'List the names and salaries of Engineering employees earning over 125k, highest first.',
+  starterSql: 'SELECT name, salary\nFROM employees\nWHERE ...'
+};
 
 const flashcardsDemo: FlashcardsArtifact = {
   title: 'Spanish — common verbs',
@@ -417,6 +426,7 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Quiz (MCQ · multi-select · true/false · short answer · self-grading)', type: 'quiz', node: <Quiz data={quizDemo} /> },
   { title: 'Document (custom resource · download .md / .html / PDF)', type: 'document', node: <DocumentCard data={documentDemo} /> },
   { title: 'Flashcards (flip · known/review · shuffle · progress)', type: 'flashcards', node: <Flashcards data={flashcardsDemo} /> },
+  { title: 'SQL playground (real sandboxed execution · results · errors)', type: 'sql_exercise', node: <SqlPlayground data={sqlExerciseDemo} /> },
   { title: 'Markdown table (inline)', node: <ChatMarkdown text={tableMd} /> }
 ];
 
