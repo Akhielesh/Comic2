@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { deckIdFor, loadProgress, saveProgress, clearProgress } from './studyProgress';
+import {
+  deckIdFor, loadProgress, saveProgress, clearProgress,
+  quizIdFor, loadQuizAttempt, saveQuizAttempt, clearQuizAttempt
+} from './studyProgress';
 
 const cards = [
   { front: 'ser', back: 'to be (permanent)' },
@@ -35,5 +38,28 @@ describe('studyProgress', () => {
     const id = deckIdFor(cards);
     localStorage.setItem(`ds_flashcards_${id}`, '{not json');
     expect(loadProgress(id)).toBeNull();
+  });
+});
+
+const questions = [
+  { id: 'q1', prompt: 'Where does photosynthesis occur?' },
+  { id: 'q2', prompt: 'Name an input.' }
+];
+
+describe('quiz attempt persistence', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('derives a stable id from questions + title', () => {
+    expect(quizIdFor(questions, 'Bio')).toBe(quizIdFor(questions, 'Bio'));
+    expect(quizIdFor(questions, 'Bio')).not.toBe(quizIdFor(questions, 'Chem'));
+  });
+
+  it('round-trips an attempt and clears it', () => {
+    const id = quizIdFor(questions, 'Bio');
+    expect(loadQuizAttempt(id)).toBeNull();
+    saveQuizAttempt(id, { answers: { q1: ['b'] }, text: { q2: 'water' }, checked: true, updatedAt: 5 });
+    expect(loadQuizAttempt(id)).toEqual({ answers: { q1: ['b'] }, text: { q2: 'water' }, checked: true, updatedAt: 5 });
+    clearQuizAttempt(id);
+    expect(loadQuizAttempt(id)).toBeNull();
   });
 });
