@@ -37,6 +37,24 @@ pixel only records the open timestamp against our own log row — no third-party
 profile, no cross-site cookies. To disable tracking entirely, leave `EMAIL_PUBLIC_BASE_URL`
 unset (no pixel URL is generated) or strip `params.pixelUrl` in the mailer.
 
+## Bot protection — Cloudflare Turnstile
+
+Turnstile guards the public, abuse-prone entry points. **Fully dormant until keys are set** —
+no widget renders and no endpoint is gated, so nothing changes for anyone until you turn it on.
+
+- **Where:** the auth form (`AuthPage` → sign-in / sign-up / magic-link / password-reset, via
+  Supabase `captchaToken`) and the public newsletter / request-access form (`WaitlistForm` →
+  `/api/newsletter/subscribe`, verified server-side).
+- **Client:** `components/Turnstile.tsx`, gated by `VITE_TURNSTILE_SITE_KEY`. Tokens are
+  single-use; the widget resets after every attempt.
+- **Server:** `server/src/services/turnstile.ts` verifies tokens against Cloudflare's
+  siteverify, gated by `TURNSTILE_SECRET_KEY`. **Fails open when unconfigured** (no gate),
+  **fails closed when configured** (a network error during verification denies the request).
+
+**Owner setup:** create a Turnstile widget in the Cloudflare dashboard → set
+`VITE_TURNSTILE_SITE_KEY` (client) + `TURNSTILE_SECRET_KEY` (server) → and enable Turnstile in
+**Supabase → Authentication → bot/abuse protection** so the auth `captchaToken` is validated.
+
 ## Failure posture
 
 The mailer **never throws** and email is **best-effort**: a down worker, missing config, or

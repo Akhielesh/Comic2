@@ -9,6 +9,7 @@
 
 import crypto from 'crypto';
 import { getSupabaseAdmin } from './supabase.js';
+import { NEWSLETTER_CONFIRM_TTL_HOURS } from '../config.js';
 
 export type EmailKind = 'essential' | 'marketing';
 export type EmailStatus = 'queued' | 'sent' | 'failed' | 'suppressed' | 'rate_limited' | 'skipped';
@@ -201,11 +202,13 @@ export const upsertSubscriber = async (
     .limit(1)
     .maybeSingle();
 
+  const now = new Date().toISOString();
   if (existing) {
     if ((existing as { confirmed?: boolean }).confirmed) return { outcome: 'already_confirmed' };
+    // Re-issue a fresh token + restart the expiry clock.
     await db
       .from('waitlist_signups')
-      .update({ confirm_token: token, unsubscribed_at: null })
+      .update({ confirm_token: token, confirm_sent_at: now, unsubscribed_at: null })
       .eq('id', (existing as { id: string }).id);
     return { outcome: 'pending' };
   }
@@ -216,7 +219,8 @@ export const upsertSubscriber = async (
     source: typeof metadata.source === 'string' ? metadata.source : null,
     metadata,
     confirmed: false,
-    confirm_token: token
+    confirm_token: token,
+    confirm_sent_at: now
   });
   return { outcome: 'new' };
 };
@@ -228,18 +232,27 @@ export const confirmSubscriber = async (email: string, token: string): Promise<b
   const normalized = normalizeEmail(email);
   const { data } = await db
     .from('waitlist_signups')
-    .select('id, confirm_token, confirmed')
+    .select('id, confirm_token, confirmed, confirm_sent_at')
     .eq('email', normalized)
     .eq('kind', 'updates')
     .limit(1)
     .maybeSingle();
   if (!data) return false;
-  const row = data as { id: string; confirm_token: string | null; confirmed: boolean };
+  const row = data as { id: string; confirm_token: string | null; confirmed: boolean; confirm_sent_at: string | null };
   if (row.confirmed) return true; // already confirmed — treat as success (idempotent link)
   // Constant-time token comparison.
   const a = Buffer.from(row.confirm_token || '');
   const b = Buffer.from(token);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+  // Strict link timeout: reject an expired confirm link (0 hours = never expires).
+  if (NEWSLETTER_CONFIRM_TTL_HOURS > 0 && row.confirm_sent_at) {
+    const ageMs = Date.now() - new Date(row.confirm_sent_at).getTime();
+    if (ageMs > NEWSLETTER_CONFIRM_TTL_HOURS * 3_600_000) {
+      // Expired — clear the stale token so it can't be retried.
+      await db.from('waitlist_signups').update({ confirm_token: null }).eq('id', row.id);
+      return false;
+    }
+  }
   await db
     .from('waitlist_signups')
     .update({ confirmed: true, confirmed_at: new Date().toISOString(), confirm_token: null })

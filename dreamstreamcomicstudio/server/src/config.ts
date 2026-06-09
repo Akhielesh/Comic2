@@ -277,6 +277,17 @@ export const EMAIL_REQUEST_TIMEOUT_MS = parseIntegerEnv(
 // emitted to the server logs. See docs/email/cloudflare-email-cost-and-limits.md.
 export const EMAIL_MAX_PER_DAY = parseIntegerEnv(process.env.EMAIL_MAX_PER_DAY, 200, 'EMAIL_MAX_PER_DAY', 0);
 export const EMAIL_MAX_PER_MONTH = parseIntegerEnv(process.env.EMAIL_MAX_PER_MONTH, 2_500, 'EMAIL_MAX_PER_MONTH', 0);
+// Double opt-in confirm links expire after this many hours (strict link timeout). 0 = never.
+export const NEWSLETTER_CONFIRM_TTL_HOURS = parseIntegerEnv(
+  process.env.NEWSLETTER_CONFIRM_TTL_HOURS,
+  168,
+  'NEWSLETTER_CONFIRM_TTL_HOURS',
+  0
+);
+
+// Cloudflare Turnstile (bot protection). Empty ⇒ gating is dormant (endpoints aren't enforced).
+// Set the secret here (server) and VITE_TURNSTILE_SITE_KEY on the client to turn it on.
+export const TURNSTILE_SECRET_KEY = (process.env.TURNSTILE_SECRET_KEY || '').trim();
 
 // --- Phase 10: tools/MCP/sourcing -------------------------------------------------
 // JSON tool-protocol fallback: lets non-OpenRouter models (NVIDIA, free models without
