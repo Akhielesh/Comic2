@@ -47,7 +47,7 @@ import { resolveStudioAgentIds, studioAgentName } from '../../services/studioAge
 import { createStudioSession } from '../../services/studioSessions';
 import { getOpenRouterKey } from '../../services/appSettings';
 import { getDeployUrl, setDeployUrl } from '../../services/studioDeployUrl';
-import { ensureSupabaseDependency } from '../../services/studioBackend';
+import { ensureSupabaseDependency, getBackend } from '../../services/studioBackend';
 import { isProviderEnabled } from '../../services/sourceGovernance';
 import { isLiveStudioEnabled } from '../../services/studioFlags';
 import { downloadArtifactZip } from '../../services/studioLauncher';
@@ -444,8 +444,15 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     useStudioActivity.getState().begin();
     appendLog('system', refining ? `Refining: ${prompt}` : `Generating app: ${prompt}`);
 
+    // If the user connected a real backend, tell the model to USE it (not mocks) on refines — this
+    // is what makes "connect a backend" actually flow into the AI's work. Only the API payload is
+    // augmented; the chat bubble keeps the user's original words.
+    const backendConn = getBackend(useStudioWorkspace.getState().projectId);
+    const apiPrompt = refining && !opts?.autofix && backendConn?.provider === 'supabase'
+      ? `${prompt}\n\n(This app is connected to a Supabase backend — import { supabase } from './lib/supabaseClient'. Use it for data persistence/auth instead of mock/in-memory data.)`
+      : prompt;
     const input = {
-      prompt,
+      prompt: apiPrompt,
       template: tmpl ?? template,
       files: refining ? currentArtifact.files.map((f) => ({ path: f.path, content: f.content })) : undefined,
       title: refining ? wsTitle : undefined,
