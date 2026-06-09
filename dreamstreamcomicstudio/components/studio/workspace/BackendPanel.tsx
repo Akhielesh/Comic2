@@ -84,6 +84,10 @@ export const BackendPanel: React.FC<BackendPanelProps> = ({ projectId, onConnect
                 value={url}
                 onChange={(e) => { setUrl(e.target.value); setError(null); }}
                 placeholder="https://your-project.supabase.co"
+                aria-label="Supabase project URL"
+                aria-invalid={!!error}
+                autoComplete="off"
+                spellCheck={false}
                 className={`w-full rounded-lg border ${t.edge} ${t.panelAlt} ${t.text} text-xs px-2.5 py-2 ${t.focusRing}`}
               />
               <input
@@ -91,6 +95,9 @@ export const BackendPanel: React.FC<BackendPanelProps> = ({ projectId, onConnect
                 onChange={(e) => { setAnonKey(e.target.value); setError(null); }}
                 placeholder="anon public key"
                 type="password"
+                aria-label="Supabase anon (public) key"
+                aria-invalid={!!error}
+                autoComplete="off"
                 className={`w-full rounded-lg border ${t.edge} ${t.panelAlt} ${t.text} text-xs px-2.5 py-2 ${t.focusRing}`}
               />
               {error && <p className="text-[11px] font-medium text-rose-500">{error}</p>}

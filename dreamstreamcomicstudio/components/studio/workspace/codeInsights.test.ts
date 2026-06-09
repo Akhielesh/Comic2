@@ -137,6 +137,12 @@ describe('helpers', () => {
     expect(steps.some((s) => /missing imports/i.test(s))).toBe(true);
   });
 
+  it('suggestNextSteps is backend-aware (connect vs. use)', () => {
+    const ins = analyzeProject([f('/App.tsx', 'export default () => null;')], 'react-ts');
+    expect(suggestNextSteps(ins).some((s) => /connect a supabase backend/i.test(s))).toBe(true);
+    expect(suggestNextSteps(ins, { hasBackend: true }).some((s) => /connected supabase backend/i.test(s))).toBe(true);
+  });
+
   it('insightsToMarkdown includes identity + verification results', () => {
     const ins = analyzeProject([f('/App.tsx', 'export default () => null;')], 'react-ts');
     const md = insightsToMarkdown(ins, { title: 'My App', projectId: 'proj_1', sessionId: 'sess_1' });
