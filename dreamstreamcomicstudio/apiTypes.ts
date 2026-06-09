@@ -962,6 +962,22 @@ export interface StudioAnswer {
   answer: string;
 }
 
+/** One AI-generated "what to build next" recommendation, shown under the iterate composer. */
+export interface StudioSuggestion {
+  /** Short chip/card label (e.g. "Add user accounts"). */
+  label: string;
+  /** The full refine prompt this suggestion runs when picked. */
+  prompt: string;
+  /** One-line rationale — why this is worth doing next. */
+  why?: string;
+  /** Coarse grouping so the UI can tag it (feature / polish / fix / data / ship). */
+  kind?: 'feature' | 'polish' | 'fix' | 'data' | 'ship';
+}
+
+export interface StudioSuggestResult {
+  suggestions: StudioSuggestion[];
+}
+
 export interface StudioPlanFile {
   path: string;
   purpose: string;

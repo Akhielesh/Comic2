@@ -11,12 +11,12 @@ import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useStat
 import {
   ArrowLeft, Wand2, Square, Share2, Download, FileCode, Cloud,
   Sparkles, Cpu, Lock, Mail, Loader2, Command as CommandIcon, Moon, Sun, Palette, Undo2, MessageSquarePlus, Check,
-  Columns, Eye, FilePlus, Users, Maximize2, Minimize2, Video, Terminal, ChevronUp, Fingerprint, ShieldCheck,
+  Columns, Eye, FilePlus, Users, Maximize2, Minimize2, Video, Terminal, ChevronUp, Fingerprint, ShieldCheck, Gauge,
 } from 'lucide-react';
 
 /** Short, display-friendly id (last 6 chars) for the identity chip. */
 const shortId = (id?: string | null): string => (id ? id.slice(-6) : '—');
-import type { CodeStudioArtifact, CodeStudioTemplate, StudioBuildPlan, StudioAnswer } from '../../apiTypes';
+import type { CodeStudioArtifact, CodeStudioTemplate, StudioBuildPlan, StudioAnswer, StudioClarifyResult } from '../../apiTypes';
 import {
   Reveal, Skeleton, StatusPulse, ThemeSwitcher, FocusToggle, ResizableSplit, Confetti, CommandPalette, ShortcutsHelp,
   StudioAurora, useIsWide, useStudioTheme, useStudioThemeStore, useStudioFocus,
@@ -24,11 +24,14 @@ import {
 import type { RunStatus, Command } from './kit';
 import {
   CodeWorkspace, LogsConsole, PreviewFrame, BuildTrace, ChangesPanel, HistoryPanel, PromptComposer,
-  ConversationThread, ActivityFeed, ServicesPanel, InsightsPanel, useStudioConversation, useStudioActivity, useStudioBuild,
+  ConversationThread, ActivityFeed, ServicesPanel, ClarifyPanel, LiveProgress, SuggestionsPanel, ContextUsageBar,
+  useStudioConversation, useStudioActivity, useStudioBuild,
   useStudioWorkspace, useStudioLogs, isPathDirty, workspaceCurrentArtifact,
   detectProjectKind, projectKindLabel, isWebProject, runHint, diffLines, diffStat,
   analyzeProject, applyRuntimeStatus, insightsSummary, insightsToMarkdown, issuesToFixPrompt,
+  suggestNextSteps, computeContextUsage,
 } from './workspace';
+import type { ProgressPhase } from './workspace';
 import { StudioStart } from './StudioStart';
 import { StudioBuildFlow, type StudioFlowState } from './StudioBuildFlow';
 import { clarifyStudioApp, planStudioApp } from '../../services/studioPlanApi';
@@ -64,15 +67,6 @@ export interface CodeStudioViewProps {
   onBack: () => void;
   onNavigate: (view: string) => void;
 }
-
-// One-click refine prompts (Lovable-style "what next") shown under the iterate composer.
-const QUICK_ACTIONS: { label: string; prompt: string }[] = [
-  { label: '✨ Polish UI', prompt: 'Polish the visual design — spacing, typography, colors, and overall aesthetics. Keep all behavior.' },
-  { label: '🌙 Dark mode', prompt: 'Add a dark mode toggle and make the styling adapt to it.' },
-  { label: '📱 Responsive', prompt: 'Make the layout fully responsive and great on mobile.' },
-  { label: '🎬 Animations', prompt: 'Add tasteful, smooth animations and transitions.' },
-  { label: '🧪 Sample data', prompt: 'Pre-fill the app with realistic sample data so it looks alive on first load.' },
-];
 
 const PaneFrame: React.FC<{ title: React.ReactNode; icon: React.ReactNode; className?: string; actions?: React.ReactNode; children: React.ReactNode }>
   = ({ title, icon, className, actions, children }) => {
@@ -212,6 +206,23 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const [shareCopied, setShareCopied] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
+  // The agent team is reviewing (drives the "reviewing" progress phase, distinct from a plain build).
+  const [reviewing, setReviewing] = useState(false);
+  // Conversational refine: when an iterate prompt is genuinely ambiguous, the agent asks a couple of
+  // questions INLINE in the chat (multi-choice or free text) before building — gated so it never
+  // bombards (off for trivial changes, and the server is tuned to usually ask nothing).
+  const [iterateGate, setIterateGate] = useState<{ prompt: string; tmpl?: CodeStudioTemplate; clarify: StudioClarifyResult } | null>(null);
+  const [gateLoading, setGateLoading] = useState(false);
+  const [askBeforeBuild, setAskBeforeBuild] = useState<boolean>(() => {
+    try { return window.localStorage.getItem('studio.askBeforeBuild') !== '0'; } catch { return true; }
+  });
+  const toggleAskBeforeBuild = useCallback(() => {
+    setAskBeforeBuild((v) => {
+      const next = !v;
+      try { window.localStorage.setItem('studio.askBeforeBuild', next ? '1' : '0'); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
   // undefined = "Auto" — the AI picks the best stack from the prompt (no forced choice).
   // Seed from the studio's saved default scaffold (Settings) when the user set one.
   const [template, setTemplate] = useState<CodeStudioTemplate | undefined>(
@@ -528,6 +539,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     setGenerating(true);
     setGenError(null);
     setPreviewError(null); setTries(0);
+    setReviewing(true);
     const convo = useStudioConversation.getState();
     convo.pushUser(`Refine with agents: ${names}`);
     convo.pushAssistant('Your agent team is refining the app…', 'pending');
@@ -608,6 +620,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       }
     } finally {
       setGenerating(false);
+      setReviewing(false);
       genAbortRef.current = null;
     }
   };
@@ -673,6 +686,45 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     if (last && !generating) void handleGenerate(last.prompt, last.tmpl);
   };
 
+  // Fold the user's clarify answers into the refine request.
+  const composeRefinePrompt = (prompt: string, answers: StudioAnswer[]): string =>
+    answers.length
+      ? `${prompt}\n\nMy answers:\n${answers.map((a) => `- ${a.question} → ${a.answer}`).join('\n')}`
+      : prompt;
+
+  // The iterate composer's submit. For a substantial change we let the agent ask a couple of sharp
+  // questions first (conversational refine, rendered inline in the chat); trivial changes go straight
+  // to building. Best-effort: any clarify hiccup just falls through and builds — never blocks.
+  const onComposerSubmit = async (prompt: string, tmpl?: CodeStudioTemplate) => {
+    const p = prompt.trim();
+    if (!p || generating || gateLoading) return;
+    const trivial = p.length < 18;
+    if (!askBeforeBuild || trivial || !hasFiles) { void handleGenerate(p, tmpl); return; }
+    setGateLoading(true);
+    try {
+      const res = await clarifyStudioApp(p, { files: currentArtifact.files.map((f) => ({ path: f.path, content: f.content })) });
+      if (res.questions.length) { setIterateGate({ prompt: p, tmpl, clarify: res }); return; }
+    } catch {
+      /* clarify is best-effort — fall through and just build */
+    } finally {
+      setGateLoading(false);
+    }
+    void handleGenerate(p, tmpl);
+  };
+
+  const submitIterateAnswers = (answers: StudioAnswer[]) => {
+    const gate = iterateGate;
+    if (!gate) return;
+    setIterateGate(null);
+    void handleGenerate(composeRefinePrompt(gate.prompt, answers), gate.tmpl);
+  };
+  const skipIterateGate = () => {
+    const gate = iterateGate;
+    if (!gate) return;
+    setIterateGate(null);
+    void handleGenerate(gate.prompt, gate.tmpl);
+  };
+
   // Export a shareable verification report (markdown) stamped with the project + session id.
   const exportReport = () => {
     const md = insightsToMarkdown(insights, { title: wsTitle, projectId: wsProjectId, sessionId: wsSessionId });
@@ -712,13 +764,13 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   // Jump from an activity-feed file row straight into the editor (and reveal the Code pane).
   const openFileInEditor = (path: string) => {
     useStudioWorkspace.getState().openFile(path);
-    if (focus === 'preview') setFocus('split');
+    if (focus === 'preview') setFocus('code');
   };
 
   // Scaffold /.env.example with the env vars the AI's code references (Services panel).
   const addEnvExample = (content: string) => {
     useStudioWorkspace.getState().addFile('/.env.example', content);
-    if (focus === 'preview') setFocus('split');
+    if (focus === 'preview') setFocus('code');
     appendLog('success', 'Added /.env.example with the variables this app expects.');
   };
 
@@ -772,9 +824,8 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   commands.push({ id: 'theme-white', label: 'Theme: White', icon: <Sun className="w-4 h-4" />, keywords: 'light appearance theme', run: () => setTheme('light') });
   commands.push({ id: 'theme-brand', label: 'Theme: DreamStream', icon: <Palette className="w-4 h-4" />, keywords: 'brand comic appearance theme', run: () => setTheme('brand') });
   if (hasFiles) {
-    commands.push({ id: 'focus-code', label: 'Focus: Code', icon: <FileCode className="w-4 h-4" />, keywords: 'layout maximize editor review code real estate', run: () => setFocus('code') });
-    commands.push({ id: 'focus-split', label: 'Focus: Split', icon: <Columns className="w-4 h-4" />, keywords: 'layout three pane default code preview', run: () => setFocus('split') });
-    commands.push({ id: 'focus-preview', label: 'Focus: Preview', icon: <Eye className="w-4 h-4" />, keywords: 'layout maximize preview review running app real estate', run: () => setFocus('preview') });
+    commands.push({ id: 'focus-preview', label: 'View: Preview', icon: <Eye className="w-4 h-4" />, keywords: 'layout preview running app toggle right pane', run: () => setFocus('preview') });
+    commands.push({ id: 'focus-code', label: 'View: Code', icon: <FileCode className="w-4 h-4" />, keywords: 'layout editor code toggle right pane review', run: () => setFocus('code') });
   }
   if (hasFiles) commands.push({ id: 'new', label: 'New project', icon: <FilePlus className="w-4 h-4" />, keywords: 'new reset start over fresh blank clear', run: newProject });
   commands.push({ id: 'chat', label: 'Build from chat', icon: <MessageSquarePlus className="w-4 h-4" />, keywords: 'new prompt generate describe', run: () => onNavigate('chat') });
@@ -795,14 +846,30 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const ctxAgents = resolveStudioAgentIds(studioModel.agents ?? null).length;
   const ctxStatus = generating ? 'working…' : status === 'live' ? 'live' : status === 'starting' ? 'starting…' : status === 'error' ? 'error' : 'ready';
 
+  // Live context-window usage for the next refine (project files + conversation vs the model's window).
+  const pinnedModel = studioModel.mode === 'specific' ? studioModel.model : null;
+  const ctxUsage = useMemo(
+    () => computeContextUsage(currentArtifact.files, convoMessages, pinnedModel),
+    [currentArtifact.files, convoMessages, pinnedModel]
+  );
+  // Which "working" phase the calm live-progress surface should show.
+  const progressActive = generating || status === 'starting';
+  const progressPhase: ProgressPhase = reviewing ? 'reviewing' : status === 'starting' ? 'building' : previewError ? 'fixing' : 'generating';
+  // Heuristic next-step suggestions (instant fallback while the AI suggestion call resolves).
+  const fallbackSuggestions = useMemo(() => suggestNextSteps(insights), [insights]);
+
   // ---- Panes (defined once, placed into the resizable or stacked layout) ----
   // Chat pane — full height on the left. The conversation history scrolls and fills the column;
   // the composer is pinned at the bottom (like a real chat), so the build history is always visible.
   const promptPane = (
     <section className={`flex h-full w-full min-h-0 flex-col rounded-lg border ${t.edge} ${t.panel} overflow-hidden`}>
-      <header className={`flex items-center gap-2 px-3 py-2 border-b ${t.edge} ${t.panelAlt}`}>
-        <span className={t.accent}><Sparkles className="w-4 h-4" /></span>
-        <span className={`text-xs font-semibold tracking-wide ${t.textDim} uppercase`}>Chat · Build</span>
+      <header className={`flex flex-col gap-1.5 px-3 py-2 border-b ${t.edge} ${t.panelAlt}`}>
+        <div className="flex items-center gap-2">
+          <span className={t.accent}><Sparkles className="w-4 h-4" /></span>
+          <span className={`text-xs font-semibold tracking-wide ${t.textDim} uppercase`}>Chat · Build</span>
+        </div>
+        {/* Context-usage limits bar — how full the coding model's window is for the next refine. */}
+        {hasFiles && <ContextUsageBar usage={ctxUsage} />}
       </header>
       {/* Scrollable history — conversation first, then live activity + supporting panels. */}
       <div ref={chatScrollRef} className="min-h-0 flex-1 overflow-auto p-3 space-y-3">
@@ -812,20 +879,9 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
         {/* Live, synchronous activity — files appearing as the AI writes them (Sprint 1).
             Rows are clickable: jump straight to the file in the editor. */}
         <ActivityFeed onOpenFile={openFileInEditor} onRetry={retryLastGenerate} />
-        {/* Live code verification — health score, real metrics, fixable issues + smart suggestions. */}
-        {hasFiles && (
-          <InsightsPanel
-            insights={insights}
-            onOpenFile={openFileInEditor}
-            onFix={(p) => void handleGenerate(p)}
-            onSuggest={(p) => void handleGenerate(p)}
-            onExport={exportReport}
-            busy={generating}
-          />
-        )}
-        {/* The manual "Refine with agent team" button was removed: quality work now runs
-            automatically (strong model + the server's completeness self-review + auto error-fix).
-            The full specialist team is still available via the command palette when wanted. */}
+        {/* The old "Code health" panel was removed from the chat — it was noise the user didn't want.
+            Fixing issues + exporting a report still live in the command palette (⌘K) and the report
+            export. The agent team review runs automatically; the full team is in the palette too. */}
         <BuildTrace />
         {/* What backends/connections the AI's code expects + a one-click .env scaffold (S4.1). */}
         <ServicesPanel
@@ -839,26 +895,50 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       </div>
       {/* Pinned composer — iterate by prompt, refining the current app in place (no chat hand-off). */}
       <div className={`shrink-0 border-t ${t.edge} ${t.panelAlt} p-3 space-y-2`}>
-        <PromptComposer mode="inline" onSubmit={handleGenerate} onCancel={cancelGenerate} busy={generating} error={genError} />
-        <div className="flex flex-wrap gap-1.5">
-          {QUICK_ACTIONS.map((a) => (
-            <button
-              key={a.label}
-              onClick={() => handleGenerate(a.prompt)}
-              disabled={generating}
-              title={a.prompt}
-              className={`rounded-full border ${t.edge} px-2.5 py-1 text-[11px] font-medium ${t.textDim} ${t.hover} disabled:opacity-50 ${t.focusRing}`}
-            >
-              {a.label}
-            </button>
-          ))}
+        {/* Real, app-specific "what to build next" recommendations — replaces the hardcoded chips. */}
+        {hasFiles && (
+          <SuggestionsPanel
+            files={currentArtifact.files}
+            title={wsTitle}
+            fallback={fallbackSuggestions}
+            busy={generating || gateLoading}
+            onPick={(p) => void handleGenerate(p)}
+          />
+        )}
+        {/* Conversational refine — the agent asks a couple of sharp questions before a big change. */}
+        {iterateGate && (
+          <ClarifyPanel
+            questions={iterateGate.clarify.questions}
+            assumptions={iterateGate.clarify.assumptions}
+            onSubmit={submitIterateAnswers}
+            onSkip={skipIterateGate}
+            busy={generating}
+          />
+        )}
+        <PromptComposer mode="inline" onSubmit={onComposerSubmit} onCancel={cancelGenerate} busy={generating || gateLoading} error={genError} />
+        <div className="flex items-center justify-between gap-2">
+          <button
+            onClick={toggleAskBeforeBuild}
+            title={askBeforeBuild
+              ? 'The agent may ask a quick question before a big change, then build. Click to turn off.'
+              : 'The agent builds your changes immediately. Click to let it ask a question first when useful.'}
+            className={`inline-flex items-center gap-1.5 text-[11px] font-medium ${t.textDim} ${t.hover} rounded-full px-2 py-1 ${t.focusRing}`}
+          >
+            <MessageSquarePlus className="w-3.5 h-3.5" />
+            {askBeforeBuild ? 'Asks before big changes' : 'Builds immediately'}
+          </button>
+          {gateLoading && (
+            <span className={`inline-flex items-center gap-1.5 text-[11px] ${t.textFaint}`}>
+              <Loader2 className="w-3 h-3 animate-spin" /> Thinking about your change…
+            </span>
+          )}
         </div>
       </div>
     </section>
   );
 
   const codePane = (
-    <PaneFrame title="Code" icon={<FileCode className="w-4 h-4" />}>
+    <PaneFrame title="Code" icon={<FileCode className="w-4 h-4" />} actions={<FocusToggle labels />}>
       {hasFiles ? (
         <CodeWorkspace readOnly={!enabled} />
       ) : (
@@ -876,6 +956,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       className={previewFull ? 'fixed inset-0 z-[60] rounded-none' : ''}
       actions={
         <>
+          <FocusToggle labels className="mr-1" />
           {screenRecordingSupported() && (
             <button
               onClick={() => void togglePreviewRecording()}
@@ -895,29 +976,17 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
         </>
       }
     >
-      {/* Calm "auto-fixing" bar while we still have budget OR a fix is actively streaming — the error
-          is sticky underneath, so this never flips back to a red banner mid-loop (no flashing). */}
-      {hasFiles && !previewUrl && previewError && (generating || autofixTries < MAX_AUTOFIX) && (
-        <div className="flex items-center gap-2 px-3 py-2 border-b border-violet-500/20 bg-violet-500/10 text-xs">
-          <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin text-violet-400" />
-          <span className="min-w-0 flex-1 text-violet-200/90">
-            Auto-fixing errors so it runs cleanly…{autofixTries > 0 ? ` (attempt ${autofixTries}/${MAX_AUTOFIX})` : ''}
-          </span>
-        </div>
-      )}
-      {/* Only a PERSISTENT, clickable error once auto-fix is exhausted — always reachable (no flashing,
-          easy to hit). "Fix with AI" resets the budget and re-engages the loop. */}
-      {hasFiles && !previewUrl && previewError && !generating && autofixTries >= MAX_AUTOFIX && (
-        <div className="flex items-start gap-2 px-3 py-2 border-b border-rose-500/20 bg-rose-500/10 text-xs">
-          <span className="mt-0.5 shrink-0 font-semibold text-rose-400">⚠ Error</span>
-          <span className="min-w-0 flex-1 truncate text-rose-200/90" title={previewError}>{previewError}</span>
-          <button
-            onClick={() => handleAutofix(previewError, true)}
-            className="shrink-0 inline-flex items-center gap-1 rounded-full bg-violet-500 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-violet-400"
-          >
-            <Wand2 className="w-3 h-3" /> Fix with AI
-          </button>
-        </div>
+      {/* Calm, rolling live-progress strip — REPLACES the old flashing auto-fix / ⚠ error banners.
+          While working it shows the real, rolling status; once work stops with an unresolved error it
+          shows a single calm "couldn't fully resolve — Fix with AI" notice (no strobing). */}
+      {hasFiles && (
+        <LiveProgress
+          variant="strip"
+          phase={progressPhase}
+          active={progressActive}
+          error={!previewUrl ? previewError : null}
+          onFix={previewError ? () => handleAutofix(previewError, true) : undefined}
+        />
       )}
       {previewUrl ? (
         <PreviewFrame url={previewUrl} />
@@ -1124,12 +1193,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
           <span className={t.textFaint}>·</span>
           <span className="inline-flex items-center gap-1"><Users className="w-3 h-3" /> {ctxAgents} agents</span>
           <span className={t.textFaint}>·</span>
-          <span
-            className={`inline-flex items-center gap-1 font-semibold ${insights.score >= 75 ? 'text-emerald-500' : insights.score >= 55 ? 'text-amber-500' : 'text-rose-500'}`}
-            title={`Code health ${insights.score}/100 — ${insights.counts.error} errors, ${insights.counts.warn} warnings`}
-          >
-            <ShieldCheck className="w-3 h-3" /> {insights.score} {insights.grade}
-          </span>
+          <span className="inline-flex items-center gap-1"><Gauge className="w-3 h-3" /> {Math.round(ctxUsage.pct * 100)}% context</span>
           <span className={t.textFaint}>·</span>
           <span className={`inline-flex items-center gap-1 font-semibold ${status === 'live' ? 'text-emerald-500' : status === 'error' ? 'text-rose-500' : t.textDim}`}>{ctxStatus}</span>
         </button>
@@ -1183,32 +1247,21 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
           />
         )
       ) : wide ? (
-        // Chat is a FULL-HEIGHT column on the left; the console docks to the RIGHT, under the preview
-        // (collapsible). Each focus keeps its own resize state via a distinct storageKey.
+        // 30/70 two-pane workspace: a full-height chat on the LEFT (~30%) and ONE workspace pane on
+        // the RIGHT (~70%) that toggles between the live Preview and the Code editor — no third column.
+        // The console docks under the right pane (collapsible). The 3/7 weights are the 30/70 default;
+        // the gutter is draggable and the chosen ratio persists.
         <div className="flex-1 min-h-0 p-3">
-          {focus === 'code' ? (
-            <ResizableSplit direction="horizontal" storageKey="studio.split.main.code" initial={[3.4, 8]} minPx={280}>
-              {promptPane}
-              {withLogsDock(codePane, 'studio.split.dock.code')}
-            </ResizableSplit>
-          ) : focus === 'preview' ? (
-            <ResizableSplit direction="horizontal" storageKey="studio.split.main.preview" initial={[3.4, 8]} minPx={280}>
-              {promptPane}
-              {withLogsDock(previewPane, 'studio.split.dock.preview')}
-            </ResizableSplit>
-          ) : (
-            <ResizableSplit direction="horizontal" storageKey="studio.split.main.split" initial={[3.2, 3.4, 3.4]} minPx={240}>
-              {promptPane}
-              {codePane}
-              {withLogsDock(previewPane, 'studio.split.dock.split')}
-            </ResizableSplit>
-          )}
+          <ResizableSplit direction="horizontal" storageKey="studio.split.main" initial={[3, 7]} minPx={300}>
+            {promptPane}
+            {withLogsDock(focus === 'code' ? codePane : previewPane, 'studio.split.dock')}
+          </ResizableSplit>
         </div>
       ) : (
+        // Stacked on small screens: chat, then the toggled workspace pane, then the console.
         <div className="flex-1 min-h-0 overflow-auto flex flex-col gap-3 p-3">
           <div className="min-h-[18rem] flex">{promptPane}</div>
-          {focus !== 'preview' && <div className="min-h-[22rem] flex">{codePane}</div>}
-          {focus !== 'code' && <div className="min-h-[18rem] flex">{previewPane}</div>}
+          <div className="min-h-[22rem] flex">{focus === 'code' ? codePane : previewPane}</div>
           {logsOpen ? <div className="min-h-[12rem] flex">{logsDock}</div> : collapsedLogsBar}
         </div>
       )}

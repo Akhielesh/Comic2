@@ -39,6 +39,13 @@ export {
   analyzeProject, applyRuntimeStatus, insightsSummary, issuesToFixPrompt, suggestNextSteps, insightsToMarkdown,
 } from './codeInsights';
 export type { CodeInsights, CodeIssue, InsightSeverity } from './codeInsights';
+export { LiveProgress } from './LiveProgress';
+export type { LiveProgressProps, ProgressPhase } from './LiveProgress';
+export { SuggestionsPanel } from './SuggestionsPanel';
+export type { SuggestionsPanelProps } from './SuggestionsPanel';
+export { ContextUsageBar } from './ContextUsageBar';
+export { computeContextUsage, contextWindowFor, estimateTokens, formatTokens } from './contextUsage';
+export type { ContextUsage } from './contextUsage';
 export {
   useStudioWorkspace,
   isPathDirty,

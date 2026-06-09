@@ -8,7 +8,14 @@
 import { extractJson } from '../json.js';
 import type { StudioClarifyResult, StudioClarifyQuestion, StudioClarifyOption, StudioQuestionKind } from '../../../../apiTypes.js';
 
-export const buildClarifyPrompt = (prompt: string): string =>
+/** Optional context so clarify can ask the RIGHT questions when iterating on an existing app. */
+export interface ClarifyContext {
+  mode?: 'build' | 'refine';
+  /** Current project file paths (refine mode) — so questions are grounded in the real app. */
+  files?: { path: string }[];
+}
+
+const buildClarifyPromptNew = (prompt: string): string =>
   `You are a senior product engineer kicking off a new build in a code studio. Before writing any code, decide what you GENUINELY need to know from the user to build the RIGHT application — the way a thoughtful engineer would ask a few sharp questions, not a long form.
 
 USER'S IDEA:
@@ -23,6 +30,27 @@ Rules:
 
 Return ONLY a JSON object — no prose, no markdown:
 {"questions":[{"id":"scope","question":"...","kind":"single","options":[{"label":"...","value":"...","hint":"..."}],"allowCustom":true}],"assumptions":["..."]}`;
+
+const buildClarifyPromptRefine = (prompt: string, files?: { path: string }[]): string =>
+  `You are a senior engineer iterating on an EXISTING app in a code studio. The user just asked for a change. Decide whether you need to clarify anything before making it — but DO NOT bombard them. Most changes are clear; ask nothing and just proceed.
+
+CURRENT FILES:
+${(files || []).map((f) => `- ${f.path}`).join('\n') || '(unknown)'}
+
+USER'S REQUESTED CHANGE:
+${prompt}
+
+Rules:
+- Ask AT MOST 2 questions, and ONLY if the change is genuinely ambiguous in a way that would change the result (e.g. "dark mode: follow the OS or a manual toggle?", "which data should this chart show?"). Otherwise return an empty "questions" array.
+- Each question offers 2–4 concrete options; set "allowCustom": true so the user can type their own.
+- Use "kind":"single" or "multi". List any assumptions you'll make under "assumptions".
+- Bias HARD toward asking nothing. A clear request like "add a footer" needs no questions.
+
+Return ONLY a JSON object — no prose, no markdown:
+{"questions":[{"id":"...","question":"...","kind":"single","options":[{"label":"...","value":"...","hint":"..."}],"allowCustom":true}],"assumptions":["..."]}`;
+
+export const buildClarifyPrompt = (prompt: string, ctx?: ClarifyContext): string =>
+  ctx?.mode === 'refine' ? buildClarifyPromptRefine(prompt, ctx.files) : buildClarifyPromptNew(prompt);
 
 const KINDS: StudioQuestionKind[] = ['single', 'multi'];
 
@@ -73,5 +101,6 @@ export const parseClarify = (text: string): StudioClarifyResult => {
 /** Compose prompt → model → parsed clarify result. `complete` is the injected model call. */
 export const runClarify = async (
   prompt: string,
-  complete: (prompt: string) => Promise<string>
-): Promise<StudioClarifyResult> => parseClarify(await complete(buildClarifyPrompt(prompt)));
+  complete: (prompt: string) => Promise<string>,
+  ctx?: ClarifyContext
+): Promise<StudioClarifyResult> => parseClarify(await complete(buildClarifyPrompt(prompt, ctx)));

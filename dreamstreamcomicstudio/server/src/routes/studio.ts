@@ -26,6 +26,7 @@ import { saveProject, listProjects, getProjectWithFiles, deleteProject, listVers
 import { runBuildAgent } from '../ai/studio/buildAgent.js';
 import { runGenerate, buildGeneratePrompt, parseGeneratedApp, STRICT_JSON_REMINDER, reviewCompleteness, repairUntilClean } from '../ai/studio/studioGenerate.js';
 import { runClarify } from '../ai/studio/studioClarify.js';
+import { runSuggest } from '../ai/studio/studioSuggest.js';
 import { runPlan } from '../ai/studio/studioPlan.js';
 import { runStudioAgentsParallel, sanitizeAgentIds, studioAgentCatalog, STUDIO_AGENTS } from '../ai/studio/studioAgents.js';
 import { resolveTools } from '../ai/tools/registry.js';
@@ -225,17 +226,42 @@ const NO_MODEL_KEY = {
 // assumptions it will otherwise make. Pure LLM; fast.
 studioRouter.post('/clarify', async (req, res, next) => {
   try {
-    const body = (req.body || {}) as { prompt?: string; source?: string; model?: string; costPref?: string };
+    const body = (req.body || {}) as { prompt?: string; files?: unknown; source?: string; model?: string; costPref?: string };
     const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
     if (!prompt) return res.status(400).json({ error: { message: 'A prompt describing the app is required.' } });
     const complete = await studioStageComplete(req, body, 1200);
     if (!complete) return res.status(400).json(NO_MODEL_KEY);
+    // Refine mode: when the client sends the current files, clarify asks app-aware follow-ups
+    // (and is tuned to ask nothing for clear changes) instead of new-build questions.
+    const files = sanitizeFiles(body.files);
+    const ctx = files.length ? { mode: 'refine' as const, files: files.map((f) => ({ path: f.path })) } : undefined;
     try {
-      const result = await runClarify(prompt, complete);
+      const result = await runClarify(prompt, complete, ctx);
       return res.json(result);
     } catch {
-      // Never block the build on a clarify hiccup — just skip straight to planning.
+      // Never block the build on a clarify hiccup — just skip straight to building.
       return res.json({ questions: [], assumptions: [] });
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/studio/suggest — the SUGGEST stage: real, app-specific "what to build next"
+// recommendations derived from the ACTUAL code (replaces the old hardcoded chips). Pure LLM; fast.
+// Any hiccup returns an empty list so the client falls back to its local heuristic — never blocks.
+studioRouter.post('/suggest', async (req, res, next) => {
+  try {
+    const body = (req.body || {}) as { title?: string; files?: unknown; source?: string; model?: string; costPref?: string };
+    const files = sanitizeFiles(body.files).map((f) => ({ path: f.path, content: f.content }));
+    if (!files.length) return res.json({ suggestions: [] });
+    const complete = await studioStageComplete(req, body, 1100);
+    if (!complete) return res.json({ suggestions: [] });
+    try {
+      const result = await runSuggest({ title: typeof body.title === 'string' ? body.title : undefined, files }, complete);
+      return res.json(result);
+    } catch {
+      return res.json({ suggestions: [] });
     }
   } catch (err) {
     next(err);
