@@ -463,6 +463,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['layout', 'dashboard', 'compose', 'custom', 'arrange', 'panel', 'structure', 'align', 'build ui', 'overview', 'summary card', 'side by side', 'comparison layout']
   },
   {
+    name: 'convert_data', label: 'Convert data', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app, deterministic)',
+    description: 'Deterministically parse and convert raw tabular data (CSV / TSV / JSON) between formats and preview it as a table — no hand-transcription. For "turn this into a CSV", "parse this data", "convert this JSON to a table", or reshaping pasted data before charting.',
+    auth: 'none', rateLimit: 'Unlimited (parses locally, no API)',
+    dataShape: 'Converted text + a sortable table preview.', docsUrl: 'https://dreamstream.app',
+    keywords: ['convert', 'csv', 'tsv', 'json', 'parse', 'reshape', 'transform', 'to csv', 'to json', 'tabular', 'spreadsheet', 'clean data', 'format data']
+  },
+  {
     name: 'show_metrics', label: 'Metric board', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app SVG)',
     description: 'Show a board of KPI / stat tiles (value, delta, sparkline, progress ring, status) from data the model provides — dashboards, scorecards and at-a-glance summaries.',
     auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
@@ -611,6 +618,7 @@ export const CORE_ALWAYS_TOOLS: string[] = [
   'show_metrics',
   'render_heatmap',
   'render_ui',
+  'convert_data',
   'get_news',
   'wiki_lookup',
   // The app builder must ALWAYS be on the table: "build me X" is phrased a thousand

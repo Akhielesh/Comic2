@@ -28,6 +28,7 @@ import { VIDEO_TOOLS } from './videoRender.js';
 import { LIVE_TEMPLATE_TOOLS } from './liveTemplateTool.js';
 import { generateAppTool } from './codeStudio.js';
 import { generativeUiTool } from './generativeUi.js';
+import { convertDataTool } from './convertData.js';
 
 export type { ChatTool, ToolExecResult, ToolContext } from './types.js';
 
@@ -795,6 +796,7 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   render_chart: chartTool,
   show_metrics: metricsTool,
   render_ui: generativeUiTool,
+  convert_data: convertDataTool,
   generate_quiz: quizTool,
   generate_flashcards: flashcardsTool,
   generate_document: documentTool,
