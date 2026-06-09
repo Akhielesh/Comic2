@@ -248,7 +248,7 @@ export const sendChatMessageStream = async (
       const highReasoning = req.reasoningLevel === 'high' || req.reasoningLevel === 'medium';
       // Any recovery on a heavy-reasoning turn retries LIGHT — empty AND slow turns are
       // both caused by the reasoning budget, so this is what actually gets an answer.
-      const retryReq: ChatRequest = highReasoning ? { ...req, reasoningLevel: 'low' } : req;
+      const retryReq: ChatRequest = highReasoning ? { ...req, reasoningLevel: 'none' } : req;
       let lastErr: unknown = err;
       for (let attempt = 0; attempt < 3; attempt++) {
         if (handlers.signal?.aborted) break;
@@ -309,7 +309,7 @@ export const runSwarmStream = async (
     // downgraded if it was heavy) rather than failing the turn outright.
     if (!handlers.signal?.aborted) {
       const highReasoning = req.reasoningLevel === 'high' || req.reasoningLevel === 'medium';
-      const fallbackReq: ChatRequest = highReasoning ? { ...req, reasoningLevel: 'low' } : req;
+      const fallbackReq: ChatRequest = highReasoning ? { ...req, reasoningLevel: 'none' } : req;
       try {
         const fallback = await sendChatMessage(fallbackReq, { signal: handlers.signal });
         if (fallback.text && fallback.text.trim()) {

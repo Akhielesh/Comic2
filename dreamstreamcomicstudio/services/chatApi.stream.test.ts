@@ -97,7 +97,7 @@ describe('sendChatMessageStream', () => {
     // Reasoning is downgraded on the retry so the model spends its budget answering.
     // sendChatMessage calls post('/api/chat', req, …) → the request body is arg index 1.
     const retryReq = postMock.mock.calls[0][1] as { reasoningLevel?: string };
-    expect(retryReq.reasoningLevel).toBe('low');
+    expect(retryReq.reasoningLevel).toBe('none');
     expect(res.text).toBe('real answer');
     expect(deltas).toContain('real answer');
   });
@@ -116,7 +116,7 @@ describe('sendChatMessageStream', () => {
 
     expect(postMock).toHaveBeenCalledTimes(1);
     const retryReq = postMock.mock.calls[0][1] as { reasoningLevel?: string };
-    expect(retryReq.reasoningLevel).toBe('low');
+    expect(retryReq.reasoningLevel).toBe('none');
     expect(res.text).toBe('fast answer');
   });
 });
