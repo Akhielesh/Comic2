@@ -64,13 +64,15 @@ export interface PublishPanelProps {
   onClose: () => void;
   title: string;
   previewUrl: string | null;
+  /** The project's last successful deploy URL (permanent link), if any. */
+  deployedUrl?: string | null;
   /** Download the project as a deploy-ready .zip. */
   onDownloadZip: () => void;
   /** Attempt the server one-click deploy for a provider (best-effort; reports honest status). */
   onDeploy: (target: DeployTarget) => Promise<DeployResult>;
 }
 
-export const PublishPanel: React.FC<PublishPanelProps> = ({ open, onClose, title, previewUrl, onDownloadZip, onDeploy }) => {
+export const PublishPanel: React.FC<PublishPanelProps> = ({ open, onClose, title, previewUrl, deployedUrl, onDownloadZip, onDeploy }) => {
   const t = useStudioTheme();
   const [provider, setProvider] = useState<DeployTarget>('cloudflare');
   const [copied, setCopied] = useState<string | null>(null);
@@ -116,6 +118,24 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ open, onClose, title
         </div>
 
         <div className="p-4 space-y-4">
+          {/* Already deployed → the permanent link, front and center. */}
+          {deployedUrl && (
+            <section className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
+              <p className="text-[11px] font-bold uppercase tracking-wide text-emerald-500 mb-2">Deployed · live</p>
+              <div className="flex items-center gap-2">
+                <code className={`min-w-0 flex-1 truncate rounded-md border ${t.edge} ${t.panel} px-2.5 py-1.5 font-mono text-[11px] ${t.textDim}`}>{deployedUrl}</code>
+                <button
+                  onClick={() => copy('deployed', deployedUrl)}
+                  className="shrink-0 inline-flex items-center gap-1 rounded-full bg-emerald-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-500"
+                >
+                  {copied === 'deployed' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />} {copied === 'deployed' ? 'Copied' : 'Copy'}
+                </button>
+                <a href={deployedUrl} target="_blank" rel="noreferrer" className={`shrink-0 rounded-full border ${t.edge} p-1.5 ${t.textDim} ${t.hover} ${t.focusRing}`} title="Open the live app">
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              </div>
+            </section>
+          )}
           {/* Share the live preview link */}
           <section className={`rounded-lg border ${t.edge} ${t.panelAlt} p-3`}>
             <p className={`text-[11px] font-bold uppercase tracking-wide ${t.textFaint} mb-2`}>Share the live preview</p>
