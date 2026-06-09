@@ -5,10 +5,10 @@ describe('email templates', () => {
   it('renders every template with subject, html and text', () => {
     for (const name of EMAIL_TEMPLATE_NAMES) {
       const out = renderEmail(name, {
-        confirmUrl: 'https://dreamstream.studio/confirm?t=abc',
-        actionUrl: 'https://dreamstream.studio/auth/verify?t=abc',
-        unsubscribeUrl: 'https://dreamstream.studio/unsub?t=abc',
-        secureUrl: 'https://dreamstream.studio/security',
+        confirmUrl: 'https://dreamstreamstudio.ai/confirm?t=abc',
+        actionUrl: 'https://dreamstreamstudio.ai/auth/verify?t=abc',
+        unsubscribeUrl: 'https://dreamstreamstudio.ai/unsub?t=abc',
+        secureUrl: 'https://dreamstreamstudio.ai/security',
         firstName: 'Ada',
         token: '123456',
         newEmail: 'new@example.com',

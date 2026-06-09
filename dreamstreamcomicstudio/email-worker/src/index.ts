@@ -55,7 +55,7 @@ export interface Env {
   SUPABASE_AUTH_HOOK_SECRET?: string;
 
   // ── Vars (wrangler.jsonc `vars`) ──
-  /** Verified sender, e.g. notifications@dreamstream.studio. */
+  /** Verified sender, e.g. notifications@dreamstreamstudio.ai. */
   EMAIL_FROM: string;
   EMAIL_FROM_NAME?: string;
   EMAIL_REPLY_TO?: string;
