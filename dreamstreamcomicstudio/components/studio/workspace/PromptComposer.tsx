@@ -10,7 +10,7 @@
 // glow. ⌘/Ctrl+Enter or Enter submits; Shift+Enter inserts a newline.
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Sparkles, ArrowUp, Loader2, Wand2, Square } from 'lucide-react';
+import { Sparkles, ArrowUp, Loader2, Wand2, Square, Undo2 } from 'lucide-react';
 import type { CodeStudioTemplate } from '../../../apiTypes';
 import { Button } from '../../ui/button';
 import { Textarea } from '../../ui/textarea';
@@ -65,9 +65,43 @@ export const PromptComposer: React.FC<PromptComposerProps> = ({
 }) => {
   const [value, setValue] = useState('');
   const [focused, setFocused] = useState(false);
+  const [enhancing, setEnhancing] = useState(false);
+  // The pre-enhance draft, kept so the user can undo a rewrite they don't like (opt-in, reversible).
+  const [beforeEnhance, setBeforeEnhance] = useState<string | null>(null);
   const ref = useRef<HTMLTextAreaElement>(null);
   const isHero = mode === 'hero';
   const canSubmit = value.trim().length > 0 && !busy && !disabled;
+  const canEnhance = value.trim().length > 2 && !busy && !disabled && !enhancing;
+
+  // "Improve prompt": rewrite the rough idea into a stronger, more specific brief BEFORE planning —
+  // only when the user asks for it. Intent is preserved; the original is kept for one-click undo.
+  const handleEnhance = async () => {
+    if (!canEnhance) return;
+    const prev = value;
+    setEnhancing(true);
+    try {
+      // Dynamic import keeps the apiClient/supabase chain out of this component's module graph
+      // (so it loads in tests/SSR without env), pulling it in only when the user clicks Improve.
+      const { enhancePrompt } = await import('../../../services/chatApi');
+      const { enhanced } = await enhancePrompt(prev);
+      const next = (enhanced || '').trim();
+      if (next && next !== prev.trim()) {
+        setBeforeEnhance(prev);
+        setValue(next);
+        requestAnimationFrame(() => ref.current?.focus());
+      }
+    } catch {
+      /* best-effort — leave the draft untouched on failure */
+    } finally {
+      setEnhancing(false);
+    }
+  };
+
+  const undoEnhance = () => {
+    if (beforeEnhance === null) return;
+    setValue(beforeEnhance);
+    setBeforeEnhance(null);
+  };
 
   // Auto-grow the textarea to fit its content (bounded).
   useEffect(() => {
@@ -81,6 +115,7 @@ export const PromptComposer: React.FC<PromptComposerProps> = ({
     if (!canSubmit) return;
     onSubmit(value.trim(), template);
     setValue('');
+    setBeforeEnhance(null);
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -126,7 +161,7 @@ export const PromptComposer: React.FC<PromptComposerProps> = ({
           <Textarea
             ref={ref}
             value={value}
-            onChange={(e) => setValue(e.target.value)}
+            onChange={(e) => { setValue(e.target.value); if (beforeEnhance !== null) setBeforeEnhance(null); }}
             onKeyDown={onKeyDown}
             onFocus={() => setFocused(true)}
             onBlur={() => setFocused(false)}
@@ -165,6 +200,31 @@ export const PromptComposer: React.FC<PromptComposerProps> = ({
 
             <div className="ml-auto flex items-center gap-2">
               {isHero && !busy && <span className="hidden text-[11px] text-slate-500 sm:inline">⏎ to generate</span>}
+              {!busy &&
+                (beforeEnhance !== null ? (
+                  <button
+                    type="button"
+                    onClick={undoEnhance}
+                    title="Undo improve — restore your original wording"
+                    aria-label="Undo improve prompt"
+                    className="inline-flex items-center gap-1 rounded-full border border-white/10 px-2.5 py-1 text-[11px] font-medium text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-slate-200"
+                  >
+                    <Undo2 className="h-3.5 w-3.5" />
+                    {isHero && <span>Undo</span>}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleEnhance}
+                    disabled={!canEnhance}
+                    title="Improve prompt — rewrite your idea into a stronger, more specific brief before building"
+                    aria-label="Improve prompt"
+                    className="inline-flex items-center gap-1 rounded-full border border-violet-400/20 px-2.5 py-1 text-[11px] font-medium text-violet-200/90 transition-colors hover:border-violet-400/40 hover:bg-violet-500/10 disabled:opacity-40"
+                  >
+                    {enhancing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                    {isHero && <span>{enhancing ? 'Improving…' : 'Improve'}</span>}
+                  </button>
+                ))}
               {busy && onCancel ? (
                 <Button
                   onClick={onCancel}
