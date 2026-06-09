@@ -11,7 +11,7 @@ import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useStat
 import {
   ArrowLeft, Wand2, Square, Share2, Download, FileCode, Cloud,
   Sparkles, Cpu, Lock, Mail, Loader2, Command as CommandIcon, Moon, Sun, Palette, Undo2, MessageSquarePlus, Check,
-  Columns, Eye, FilePlus, Users, Maximize2, Minimize2, Video, Terminal, ChevronUp, Fingerprint, ShieldCheck, Gauge,
+  Columns, Eye, FilePlus, Users, Maximize2, Minimize2, Video, Terminal, ChevronUp, ChevronRight, Fingerprint, ShieldCheck,
 } from 'lucide-react';
 
 /** Short, display-friendly id (last 6 chars) for the identity chip. */
@@ -250,6 +250,10 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     try { return window.localStorage.getItem('studio.logs.open') !== '0'; } catch { return true; }
   });
   useEffect(() => { try { window.localStorage.setItem('studio.logs.open', logsOpen ? '1' : '0'); } catch { /* ignore */ } }, [logsOpen]);
+  // The noisy build internals (live file stream, self-heal trace, services, changes, history) live
+  // in ONE collapsible disclosure so the chat reads cleanly at rest (the AI-Studio pattern). It
+  // opens automatically while a build is running so live progress stays visible.
+  const [detailsOpen, setDetailsOpen] = useState(false);
   // Fullscreen the live preview (covers the studio) when the user wants maximum real estate.
   const [previewFull, setPreviewFull] = useState(false);
   // Client-side screen recording of the preview → downloadable video (no server / no egress).
@@ -292,6 +296,10 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
 
   // Keep a ref of `generating` so the (stable-identity) preview-error callback can gate autofix.
   useEffect(() => { generatingRef.current = generating; }, [generating]);
+
+  // Auto-open the build-details disclosure while a build runs (so the live trace/changes are
+  // visible); it stays where the user leaves it once idle.
+  useEffect(() => { if (generating) setDetailsOpen(true); }, [generating]);
 
   // Auto-fix watchdog: whenever a persistent preview error is showing, nothing else is generating,
   // and we still have budget, kick off an automatic fix after a short settle (long enough for the
@@ -487,12 +495,13 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       useStudioActivity.getState().finish('done', `✓ ${summary}`);
       appendLog('success', `${summary}. Live preview is below; press Build to run it in a cloud container.`);
       outcome = { ok: true };
-      // The agent team reviews a brand-new app. This is a PURE-LLM refinement (it does not need the
-      // cloud worker), so it runs for everyone — not just admins/live-flag users. That admin gate was
-      // a big reason the agents "didn't deploy automatically". The server returns a clean error if no
-      // coding model is configured, so decoupling it from `enabled` is safe.
-      if (!refining && (opts?.autoReview || getStudioAutoRunAgents())) {
-        appendLog('system', 'The agent team is reviewing your new app…');
+      // The agent team reviews EVERY build — new apps and refines alike — so nothing ships on the
+      // model's first answer (it's a baked-in pipeline stage, not an optional button). It's a
+      // PURE-LLM pass (no cloud worker), so it runs for everyone, not just admins/live-flag users.
+      // The one exception is an AUTOMATIC fix: re-reviewing on top of the autofix watchdog would
+      // loop and churn, so a silent self-heal never triggers the team.
+      if (!opts?.autofix && (opts?.autoReview || getStudioAutoRunAgents())) {
+        appendLog('system', refining ? 'The agent team is reviewing your changes…' : 'The agent team is reviewing your new app…');
         setTimeout(() => runAgentsRef.current(), 80);
       }
     };
@@ -884,14 +893,6 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   // Build model tier: BYOK (your OpenRouter key → frontier models) vs. free-first auto.
   const hasByok = isProviderEnabled('openrouter') && !!getOpenRouterKey();
 
-  // Context bar labels (model · runtime · agents · status) — all from the live studio selection.
-  const ctxModel = studioModel.mode === 'specific' && studioModel.model
-    ? studioModel.model.split('/').pop()!.replace(/:free$/i, '')
-    : (hasByok ? 'auto · your key' : 'auto · free');
-  const ctxRuntime = { auto: 'Auto runtime', worker: 'Cloud worker', browser: 'In-browser' }[studioModel.runtime ?? 'auto'];
-  const ctxAgents = resolveStudioAgentIds(studioModel.agents ?? null).length;
-  const ctxStatus = generating ? 'working…' : status === 'live' ? 'live' : status === 'starting' ? 'starting…' : status === 'error' ? 'error' : 'ready';
-
   // Live context-window usage for the next refine (project files + conversation vs the model's window).
   const pinnedModel = studioModel.mode === 'specific' ? studioModel.model : null;
   const ctxUsage = useMemo(
@@ -919,45 +920,66 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
         {/* Context-usage limits bar — how full the coding model's window is for the next refine. */}
         {hasFiles && <ContextUsageBar usage={ctxUsage} />}
       </header>
-      {/* Scrollable history — conversation first, then live activity + supporting panels. */}
+      {/* Scrollable history — the build conversation stays primary and clean (like Google AI
+          Studio); the noisy build internals collapse into a single on-demand disclosure. */}
       <div ref={chatScrollRef} className="min-h-0 flex-1 overflow-auto p-3 space-y-3">
         {/* The build conversation (your prompts + the agent's outcomes) — the full history.
             Bubbles are interactive: copy any message, or re-send one of your prompts. */}
         <ConversationThread onResend={(text) => void handleGenerate(text)} />
-        {/* Live, synchronous activity — files appearing as the AI writes them (Sprint 1).
-            Rows are clickable: jump straight to the file in the editor. */}
-        <ActivityFeed onOpenFile={openFileInEditor} onRetry={retryLastGenerate} />
-        {/* The old "Code health" panel was removed from the chat — it was noise the user didn't want.
-            Fixing issues + exporting a report still live in the command palette (⌘K) and the report
-            export. The agent team review runs automatically; the full team is in the palette too. */}
-        <BuildTrace />
-        {/* What backends/connections the AI's code expects + a one-click .env scaffold (S4.1). */}
-        <ServicesPanel
-          files={currentArtifact.files}
-          hasEnvExample={wsPaths.includes('/.env.example')}
-          onAddEnvExample={addEnvExample}
-          onConnect={() => onNavigate('settings')}
-        />
-        {/* Bring-your-own backend: wire a real Supabase DB into the app (env + typed client). */}
+        {/* Build details — collapsed at rest so the chat reads cleanly; auto-opens while building so
+            the live file stream, self-heal trace, services, changes and history stay visible. The
+            old always-on "Code health" panel was already removed as noise; this finishes the job by
+            folding the remaining six stacked panels into one disclosure. */}
         {hasFiles && (
-          <BackendPanel
-            projectId={wsProjectId}
-            onConnect={(injected) => {
-              const ws = useStudioWorkspace.getState();
-              injected.forEach((f) => ws.addFile(f.path, f.content));
-              // Ensure the scaffolded client's dependency resolves (else the preview breaks).
-              const pkg = currentArtifact.files.find((f) => f.path === '/package.json');
-              if (pkg) {
-                const patched = ensureSupabaseDependency(pkg.content);
-                if (patched !== pkg.content) ws.addFile('/package.json', patched);
-              }
-              appendLog('success', 'Connected Supabase — added /.env.local + /lib/supabaseClient.ts (and @supabase/supabase-js). Refine to read/write your data.');
-              if (focus === 'preview') setFocus('code');
-            }}
-          />
+          <div className={`rounded-lg border ${t.edge} ${t.panel} overflow-hidden`}>
+            <button
+              type="button"
+              onClick={() => setDetailsOpen((o) => !o)}
+              aria-expanded={detailsOpen}
+              className={`flex w-full items-center gap-2 px-3 py-2 ${t.panelAlt} ${t.hover} ${t.focusRing}`}
+            >
+              <ChevronRight className={`w-3.5 h-3.5 shrink-0 ${t.textFaint} transition-transform ${detailsOpen ? 'rotate-90' : ''}`} />
+              <span className={`text-[11px] font-semibold uppercase tracking-wide ${t.textDim}`}>Activity &amp; changes</span>
+              {generating && <Loader2 className={`w-3 h-3 animate-spin ${t.accent}`} />}
+              {dirtyCount > 0 && (
+                <span className={`ml-auto rounded-full ${t.accentSoft} ${t.accent} px-1.5 text-[10px] font-bold`}>{dirtyCount}</span>
+              )}
+            </button>
+            {detailsOpen && (
+              <div className={`border-t ${t.edge} p-3 space-y-3`}>
+                {/* Live, synchronous activity — files appearing as the AI writes them. Rows jump to file. */}
+                <ActivityFeed onOpenFile={openFileInEditor} onRetry={retryLastGenerate} />
+                {/* The agentic self-heal build trace (plan → run → observe → fix). */}
+                <BuildTrace />
+                {/* What backends/connections the AI's code expects + a one-click .env scaffold. */}
+                <ServicesPanel
+                  files={currentArtifact.files}
+                  hasEnvExample={wsPaths.includes('/.env.example')}
+                  onAddEnvExample={addEnvExample}
+                  onConnect={() => onNavigate('settings')}
+                />
+                {/* Bring-your-own backend: wire a real Supabase DB into the app (env + typed client). */}
+                <BackendPanel
+                  projectId={wsProjectId}
+                  onConnect={(injected) => {
+                    const ws = useStudioWorkspace.getState();
+                    injected.forEach((f) => ws.addFile(f.path, f.content));
+                    // Ensure the scaffolded client's dependency resolves (else the preview breaks).
+                    const pkg = currentArtifact.files.find((f) => f.path === '/package.json');
+                    if (pkg) {
+                      const patched = ensureSupabaseDependency(pkg.content);
+                      if (patched !== pkg.content) ws.addFile('/package.json', patched);
+                    }
+                    appendLog('success', 'Connected Supabase — added /.env.local + /lib/supabaseClient.ts (and @supabase/supabase-js). Refine to read/write your data.');
+                    if (focus === 'preview') setFocus('code');
+                  }}
+                />
+                <ChangesPanel />
+                <HistoryPanel />
+              </div>
+            )}
+          </div>
         )}
-        <ChangesPanel />
-        <HistoryPanel />
       </div>
       {/* Pinned composer — iterate by prompt, refining the current app in place (no chat hand-off). */}
       <div className={`shrink-0 border-t ${t.edge} ${t.panelAlt} p-3 space-y-2`}>
@@ -993,23 +1015,14 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
             <MessageSquarePlus className="w-3.5 h-3.5" />
             {askBeforeBuild ? 'Asks before big changes' : 'Builds immediately'}
           </button>
-          <div className="flex items-center gap-2">
-            {gateLoading && (
-              <span className={`inline-flex items-center gap-1.5 text-[11px] ${t.textFaint}`}>
-                <Loader2 className="w-3 h-3 animate-spin" /> Thinking…
-              </span>
-            )}
-            {/* Explicit agentic control — run the full specialist team on demand (also auto-runs on
-                new builds). Discoverable here, not only in the command palette. */}
-            <button
-              onClick={() => void runAgents()}
-              disabled={generating}
-              title={`Run the specialist agent team (${ctxAgents} agents — architecture, code, UI, security, QA…) to review & harden the current app`}
-              className={`inline-flex items-center gap-1.5 text-[11px] font-semibold rounded-full border ${t.edge} px-2.5 py-1 ${t.textDim} ${t.hover} disabled:opacity-50 ${t.focusRing}`}
-            >
-              <Users className="w-3.5 h-3.5" /> Review with agents
-            </button>
-          </div>
+          {/* No "Review with agents" button — the specialist team now reviews EVERY build by
+              default (a baked-in pipeline stage, not an opt-in). An explicit re-run is still in the
+              command palette (⌘K → "Refine with agent team") for when you want another pass. */}
+          {gateLoading && (
+            <span className={`inline-flex items-center gap-1.5 text-[11px] ${t.textFaint}`}>
+              <Loader2 className="w-3 h-3 animate-spin" /> Thinking…
+            </span>
+          )}
         </div>
       </div>
     </section>
@@ -1279,24 +1292,9 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
         </div>
       </Reveal>
 
-      {/* Context bar — at-a-glance: which model, runtime, agent team and build status are in play. */}
-      {hasFiles && (
-        <button
-          onClick={() => setSettingsOpen(true)}
-          title="Code Studio context — model · runtime · agents · status. Click to change in Settings."
-          className={`flex items-center gap-2 px-4 py-1 border-b ${t.edge} ${t.panelAlt} text-[11px] ${t.textDim} ${t.hover} ${t.focusRing} overflow-x-auto whitespace-nowrap`}
-        >
-          <span className="inline-flex items-center gap-1"><Cpu className="w-3 h-3" /> {ctxModel}</span>
-          <span className={t.textFaint}>·</span>
-          <span className="inline-flex items-center gap-1"><Cloud className="w-3 h-3" /> {ctxRuntime}</span>
-          <span className={t.textFaint}>·</span>
-          <span className="inline-flex items-center gap-1"><Users className="w-3 h-3" /> {ctxAgents} agents</span>
-          <span className={t.textFaint}>·</span>
-          <span className="inline-flex items-center gap-1"><Gauge className="w-3 h-3" /> {Math.round(ctxUsage.pct * 100)}% context</span>
-          <span className={t.textFaint}>·</span>
-          <span className={`inline-flex items-center gap-1 font-semibold ${status === 'live' ? 'text-emerald-500' : status === 'error' ? 'text-rose-500' : t.textDim}`}>{ctxStatus}</span>
-        </button>
-      )}
+      {/* The old "context bar" (model · runtime · agents · context% · status) was removed — it was
+          a permanent second toolbar of internals. That info still lives one click away: the project
+          title opens Settings (coding model · runtime · agents), and ⌘K surfaces the rest. */}
 
       {error && (
         <div className="px-4 py-2 text-xs font-semibold text-rose-500 bg-rose-500/10 border-b border-rose-500/20">

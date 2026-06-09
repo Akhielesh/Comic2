@@ -7,7 +7,7 @@
 // genuinely useful, app-aware suggestions — never an empty or broken row.
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Sparkles, RefreshCw, ArrowUpRight, Wrench, Database, Rocket, Wand2, Plus } from 'lucide-react';
+import { Sparkles, X, ArrowUpRight, Wrench, Database, Rocket, Wand2, Plus } from 'lucide-react';
 import { useStudioTheme } from '../kit';
 import type { StudioSuggestion } from '../../../apiTypes';
 
@@ -43,6 +43,8 @@ export const SuggestionsPanel: React.FC<SuggestionsPanelProps> = ({ files, title
   const [suggestions, setSuggestions] = useState<StudioSuggestion[]>([]);
   const [loading, setLoading] = useState(false);
   const [source, setSource] = useState<'ai' | 'heuristic' | null>(null);
+  // Dismissed for the current app state (like AI Studio's ✕). Re-shows when the code changes.
+  const [dismissed, setDismissed] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   // A cheap, stable signature of the project so we only re-fetch when the code actually changes
@@ -85,48 +87,46 @@ export const SuggestionsPanel: React.FC<SuggestionsPanelProps> = ({ files, title
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
+  // Re-show suggestions whenever the app actually changes (a fresh code state = fresh ideas).
+  useEffect(() => { setDismissed(false); }, [signature]);
+
   // Show heuristic immediately on first paint so the row is never empty while the AI thinks.
   const shown = suggestions.length ? suggestions : heuristic;
-  if (!shown.length) return null;
+  if (!shown.length || dismissed) return null;
 
+  // A single, compact, dismissible chip row — NOT a stacked card. This is the AI-Studio pattern:
+  // the model's next-step ideas sit quietly above the composer as flat pills, not a panel that
+  // owns a third of the column. Capped at three so it never crowds the input.
   return (
-    <div className={`rounded-lg border ${t.edge} ${t.panel} overflow-hidden ${className ?? ''}`}>
-      <div className={`flex items-center gap-2 px-3 py-2 ${t.panelAlt} border-b ${t.edge}`}>
-        <Sparkles className={`h-3.5 w-3.5 ${t.accent}`} />
-        <span className={`text-[11px] font-bold uppercase tracking-wide ${t.textDim}`}>Suggested next</span>
-        <span className={`text-[10px] ${t.textFaint}`}>{source === 'ai' ? 'AI · for this app' : 'ideas'}</span>
-        <button
-          onClick={() => void fetchSuggestions(signature)}
-          disabled={loading || busy}
-          title="Refresh suggestions"
-          aria-label="Refresh suggestions"
-          className={`ml-auto rounded p-1 ${t.hover} ${t.textFaint} disabled:opacity-50 ${t.focusRing}`}
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-        </button>
-      </div>
-      <div className="p-2 space-y-1.5">
-        {shown.map((s, i) => {
-          const meta = s.kind ? KIND_META[s.kind] : undefined;
-          const Icon = meta?.Icon ?? ArrowUpRight;
-          return (
-            <button
-              key={`${s.label}-${i}`}
-              onClick={() => onPick(s.prompt)}
-              disabled={busy}
-              title={s.prompt}
-              className={`group flex w-full items-start gap-2.5 rounded-lg border ${t.edge} ${t.panelAlt} px-2.5 py-2 text-left ${t.hover} disabled:opacity-50 ${t.focusRing} transition-colors`}
-            >
-              <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${meta?.tint ?? t.accent}`} />
-              <span className="min-w-0 flex-1">
-                <span className={`block truncate text-xs font-semibold ${t.text}`}>{s.label}</span>
-                {s.why && <span className={`block truncate text-[11px] ${t.textFaint}`}>{s.why}</span>}
-              </span>
-              <Wand2 className={`mt-0.5 h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 ${t.accent}`} />
-            </button>
-          );
-        })}
-      </div>
+    <div className={`flex flex-wrap items-center gap-1.5 ${className ?? ''}`} aria-label="Suggested next steps">
+      <Sparkles className={`h-3.5 w-3.5 shrink-0 ${t.accent}`} />
+      <span className={`text-[10px] font-semibold uppercase tracking-wide ${t.textFaint}`} title={source === 'ai' ? 'AI suggestions for this app' : 'Ideas'}>
+        Suggested next
+      </span>
+      {shown.slice(0, 3).map((s, i) => {
+        const meta = s.kind ? KIND_META[s.kind] : undefined;
+        const Icon = meta?.Icon ?? ArrowUpRight;
+        return (
+          <button
+            key={`${s.label}-${i}`}
+            onClick={() => onPick(s.prompt)}
+            disabled={busy}
+            title={s.why || s.prompt}
+            className={`inline-flex max-w-[15rem] items-center gap-1.5 rounded-full border ${t.edge} ${t.panelAlt} px-2.5 py-1 text-[11px] font-medium ${t.text} ${t.hover} disabled:opacity-50 ${t.focusRing} transition-colors`}
+          >
+            <Icon className={`h-3 w-3 shrink-0 ${meta?.tint ?? t.accent}`} />
+            <span className="truncate">{s.label}</span>
+          </button>
+        );
+      })}
+      <button
+        onClick={() => setDismissed(true)}
+        title="Hide suggestions"
+        aria-label="Hide suggestions"
+        className={`ml-auto shrink-0 rounded-full p-0.5 ${t.hover} ${t.textFaint} ${t.focusRing}`}
+      >
+        <X className="h-3 w-3" />
+      </button>
     </div>
   );
 };

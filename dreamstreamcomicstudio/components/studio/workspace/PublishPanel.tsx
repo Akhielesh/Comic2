@@ -258,22 +258,26 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ open, onClose, title
               </div>
             )}
 
-            {/* Real, copy-able manual steps — always work. */}
-            <div className={`rounded-md border ${t.edge} ${t.panel} overflow-hidden`}>
-              <div className={`flex items-center gap-2 px-2.5 py-1.5 ${t.panelAlt} border-b ${t.edge}`}>
+            {/* Raw CLI steps are an ADVANCED / self-host path — tucked behind a disclosure so the
+                share flow stays clean for non-technical users. Most people use the one-click deploy
+                or the bundle above; this is here for people who want to run the commands themselves. */}
+            <details className={`group rounded-md border ${t.edge} ${t.panel} overflow-hidden`}>
+              <summary className={`flex cursor-pointer list-none items-center gap-2 px-2.5 py-1.5 ${t.panelAlt} ${t.hover} ${t.focusRing}`}>
                 <Terminal className={`w-3.5 h-3.5 ${t.textFaint}`} />
-                <span className={`text-[10px] font-bold uppercase tracking-wide ${t.textFaint}`}>Deploy steps</span>
+                <span className={`text-[10px] font-bold uppercase tracking-wide ${t.textFaint}`}>Deploy steps · advanced / self-host</span>
+                <span className={`ml-auto text-[10px] ${t.textFaint} group-open:hidden`}>show</span>
                 <button
-                  onClick={() => copy('steps', meta.steps.join('\n'))}
-                  className={`ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ${t.textDim} ${t.hover} ${t.focusRing}`}
+                  type="button"
+                  onClick={(e) => { e.preventDefault(); copy('steps', meta.steps.join('\n')); }}
+                  className={`ml-auto hidden group-open:inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] ${t.textDim} ${t.hover} ${t.focusRing}`}
                 >
                   {copied === 'steps' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />} Copy
                 </button>
-              </div>
-              <pre className={`px-3 py-2 font-mono text-[11px] ${t.textDim} whitespace-pre-wrap`}>
+              </summary>
+              <pre className={`border-t ${t.edge} px-3 py-2 font-mono text-[11px] ${t.textDim} whitespace-pre-wrap`}>
 {meta.steps.map((s) => `$ ${s}`).join('\n')}
               </pre>
-            </div>
+            </details>
           </section>
 
           {/* Deploy history (most recent first) — appears once the project has deployments. */}
