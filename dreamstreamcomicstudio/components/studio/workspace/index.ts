@@ -44,6 +44,8 @@ export type { LiveProgressProps, ProgressPhase } from './LiveProgress';
 export { SuggestionsPanel } from './SuggestionsPanel';
 export type { SuggestionsPanelProps } from './SuggestionsPanel';
 export { ContextUsageBar } from './ContextUsageBar';
+export { PublishPanel } from './PublishPanel';
+export type { PublishPanelProps } from './PublishPanel';
 export { computeContextUsage, contextWindowFor, estimateTokens, formatTokens } from './contextUsage';
 export type { ContextUsage } from './contextUsage';
 export {

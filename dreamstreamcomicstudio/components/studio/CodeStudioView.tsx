@@ -24,7 +24,7 @@ import {
 import type { RunStatus, Command } from './kit';
 import {
   CodeWorkspace, LogsConsole, PreviewFrame, BuildTrace, ChangesPanel, HistoryPanel, PromptComposer,
-  ConversationThread, ActivityFeed, ServicesPanel, ClarifyPanel, LiveProgress, SuggestionsPanel, ContextUsageBar,
+  ConversationThread, ActivityFeed, ServicesPanel, ClarifyPanel, LiveProgress, SuggestionsPanel, ContextUsageBar, PublishPanel,
   useStudioConversation, useStudioActivity, useStudioBuild,
   useStudioWorkspace, useStudioLogs, isPathDirty, workspaceCurrentArtifact,
   detectProjectKind, projectKindLabel, isWebProject, runHint, diffLines, diffStat,
@@ -204,6 +204,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const [error, setError] = useState<string | null>(null);
   const [celebrate, setCelebrate] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
+  const [publishOpen, setPublishOpen] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
   // The agent team is reviewing (drives the "reviewing" progress phase, distinct from a plain build).
@@ -815,6 +816,29 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     }
   };
 
+  // Attempt a one-click deploy to the chosen provider (best-effort). The client normalizes a
+  // not-yet-wired server into an honest "unavailable" so the Publish panel guides the manual path
+  // instead of pretending the app shipped. Dynamic import keeps the apiClient chain lazy.
+  const handleDeploy = async (target: 'cloudflare' | 'vercel' | 'supabase') => {
+    appendLog('system', `Deploying to ${target}…`);
+    try {
+      const { deployStudioApp } = await import('../../services/studioDeployApi');
+      const res = await deployStudioApp({
+        projectId: wsProjectId,
+        title: wsTitle,
+        target,
+        files: currentArtifact.files.map((f) => ({ path: f.path, content: f.content })),
+      });
+      appendLog(res.status === 'live' ? 'success' : res.status === 'error' ? 'error' : 'info',
+        `Deploy ${res.status}${res.url ? ` — ${res.url}` : ''}${res.message ? ` — ${res.message}` : ''}`);
+      return res;
+    } catch (err) {
+      const message = (err as Error)?.message || 'Deploy failed.';
+      appendLog('error', message);
+      return { status: 'error' as const, message };
+    }
+  };
+
   // Command palette actions (filtered + run by the ⌘K palette).
   const commands: Command[] = [];
   if (hasFiles && liveAvailable) commands.push({ id: 'build', label: status === 'live' ? 'Re-build & run' : 'Build & run', hint: '⏎', icon: <Wand2 className="w-4 h-4" />, keywords: 'run agent compile heal', run: runBuild });
@@ -835,6 +859,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   if (hasFiles) commands.push({ id: 'new', label: 'New project', icon: <FilePlus className="w-4 h-4" />, keywords: 'new reset start over fresh blank clear', run: newProject });
   commands.push({ id: 'chat', label: 'Build from chat', icon: <MessageSquarePlus className="w-4 h-4" />, keywords: 'new prompt generate describe', run: () => onNavigate('chat') });
   if (hasFiles) commands.push({ id: 'agents', label: 'Refine with agent team', icon: <Users className="w-4 h-4" />, keywords: 'agents multi specialist architecture security verification data design refine improve review team', run: runAgents });
+  if (hasFiles) commands.push({ id: 'publish', label: 'Publish & share', icon: <Share2 className="w-4 h-4" />, keywords: 'deploy share publish cloudflare vercel supabase host link ship bundle', run: () => setPublishOpen(true) });
   commands.push({ id: 'studio-settings', label: 'Code Studio settings (coding model & agents)', icon: <Cpu className="w-4 h-4" />, keywords: 'model coding source openrouter nvidia settings configure preferences creativity iterations agents', run: () => setSettingsOpen(true) });
   commands.push({ id: 'help', label: 'Keyboard shortcuts', icon: <CommandIcon className="w-4 h-4" />, keywords: 'keys help cheatsheet', run: () => setHelpOpen(true) });
   commands.push({ id: 'back', label: 'Back', icon: <ArrowLeft className="w-4 h-4" />, keywords: 'exit leave close', run: leaveStudio });
@@ -1091,6 +1116,14 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       {celebrate && <Confetti onDone={() => setCelebrate(false)} />}
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={commands} />
       <ShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
+      <PublishPanel
+        open={publishOpen}
+        onClose={() => setPublishOpen(false)}
+        title={wsTitle}
+        previewUrl={previewUrl}
+        onDownloadZip={() => void downloadArtifactZip(currentArtifact)}
+        onDeploy={handleDeploy}
+      />
       {settingsOpen && (
         <Suspense fallback={null}>
           <StudioSettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
@@ -1175,15 +1208,15 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
                 <Square className="w-3.5 h-3.5" /> Stop
               </button>
             )}
-            <button
-              onClick={copyShare}
-              disabled={!previewUrl}
-              title={previewUrl ? 'Copy the live preview link' : 'Build & run first to share the live app'}
-              className={`hidden md:flex items-center gap-1.5 text-sm font-semibold rounded-full border ${t.edge} px-3 py-1.5 ${t.focusRing} ${previewUrl ? `${t.textDim} ${t.hover}` : `${t.textFaint} cursor-not-allowed`}`}
-            >
-              {shareCopied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Share2 className="w-3.5 h-3.5" />}
-              {shareCopied ? 'Copied!' : 'Share'}
-            </button>
+            {hasFiles && (
+              <button
+                onClick={() => setPublishOpen(true)}
+                title="Publish & share — live link, deploy bundle, and one-click deploy to Cloudflare / Vercel / Supabase"
+                className={`hidden md:flex items-center gap-1.5 text-sm font-semibold rounded-full border ${t.edge} px-3 py-1.5 ${t.textDim} ${t.hover} ${t.focusRing}`}
+              >
+                <Share2 className="w-3.5 h-3.5" /> Share
+              </button>
+            )}
             {hasFiles && (
               <button
                 onClick={() => void downloadArtifactZip(currentArtifact)}

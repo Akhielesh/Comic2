@@ -16,6 +16,7 @@ import {
   fetchModelCatalog, loadCachedCatalog, sourceLabel, type CatalogModel
 } from '../../services/modelCatalog';
 import { domainStrength } from '../../services/modelDomains';
+import { curateCoders } from '../../services/studioCoderAllowlist';
 import {
   getStudioModelSelection, setStudioModel, setStudioAuto, setStudioSource,
   setStudioCostPref, setStudioMaxIterations, setStudioDefaultTemplate, setStudioDesignPreset,
@@ -102,7 +103,10 @@ export const StudioSettingsPanel: React.FC<{ open: boolean; onClose: () => void 
   }, [open]);
 
   const coders = useMemo(() => {
-    const list = models.filter(isCoderText);
+    // Curated, API-callable coders only — hide download-only/dead models and ones we can't truly
+    // recommend (the picker no longer lets you pin a model that will just fail). Power users can
+    // still pin anything from the full ModelLibrary page.
+    const list = curateCoders(models.filter(isCoderText));
     const q = query.trim().toLowerCase();
     const filtered = q ? list.filter((m) => `${m.name} ${m.id}`.toLowerCase().includes(q)) : list;
     return [...filtered].sort((a, b) => {
