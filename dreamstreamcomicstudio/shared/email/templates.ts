@@ -36,6 +36,8 @@ export type EmailTemplateName =
   | 'newsletter-confirm'
   | 'newsletter-welcome'
   | 'product-update'
+  | 'announcement'
+  | 'beta-invite'
   | 'access-requested'
   | 'welcome'
   | 'signin-alert'
@@ -57,6 +59,11 @@ export const TEMPLATE_KIND: Record<EmailTemplateName, EmailKind> = {
   'newsletter-confirm': 'essential', // a double opt-in confirm is transactional (they just asked)
   'newsletter-welcome': 'marketing',
   'product-update': 'marketing',
+  // Admin-composed product/account notice (no unsubscribe). For promotional blasts, use the
+  // marketing `product-update` template instead so recipients get a working unsubscribe.
+  announcement: 'essential',
+  // A one-to-one beta invite/referral someone deliberately sends — transactional, not a list.
+  'beta-invite': 'essential',
   'access-requested': 'essential',
   welcome: 'essential',
   'signin-alert': 'essential',
@@ -92,6 +99,19 @@ const greetNameText = (params: EmailParams): string => {
   const name = (params.firstName || params.name || '').trim();
   return name ? `Hey ${name},` : 'Hey there,';
 };
+
+/**
+ * Turn admin-typed plain text (the structured composer's body) into safe paragraph HTML:
+ * blank lines split paragraphs, single newlines become <br>. Everything is escaped — no raw
+ * HTML is ever trusted from the composer.
+ */
+const textToParagraphs = (text: string): string =>
+  String(text || '')
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    .map((block) => paragraph(escapeHtml(block).replace(/\n/g, '<br/>')))
+    .join('');
 
 // ── Newsletter: double opt-in confirmation ──────────────────────────────────────
 const newsletterConfirm: Renderer = (params, brand) => {
@@ -152,6 +172,58 @@ const productUpdate: Renderer = (params, brand) => {
     preheader: params.preheader || title,
     content: heading(title) + paragraph(`${greetName(params)}`) + bodyHtml + button(ctaLabel, cta, 'yellow'),
     text: [greetNameText(params), '', params.body || 'We shipped some new things.', '', `${ctaLabel}: ${cta}`].join('\n')
+  };
+};
+
+// ── Announcement / custom notice (admin "structured composer") ──────────────────
+const announcement: Renderer = (params, brand) => {
+  const head = params.heading || 'An update from ' + brand.productName;
+  const bodyHtml = params.body ? textToParagraphs(params.body) : '';
+  const cta = params.ctaUrl && params.ctaLabel ? button(params.ctaLabel, params.ctaUrl, 'yellow') : '';
+  const greeting = params.firstName ? paragraph(greetName(params)) : '';
+  return {
+    subject: params.subject || head,
+    preheader: params.preheader || head,
+    content: heading(head) + greeting + bodyHtml + cta,
+    text: [
+      params.firstName ? greetNameText(params) + '\n' : '',
+      params.body || '',
+      params.ctaUrl && params.ctaLabel ? `\n${params.ctaLabel}: ${params.ctaUrl}` : ''
+    ]
+      .filter(Boolean)
+      .join('\n')
+  };
+};
+
+// ── Beta invite / referral (one-to-one, sent by an admin or a user) ─────────────
+const betaInvite: Renderer = (params, brand) => {
+  const url = params.inviteUrl || brand.appUrl;
+  const inviter = (params.inviterName || '').trim();
+  const intro = inviter
+    ? `${escapeHtml(inviter)} thinks you'd love ${escapeHtml(brand.productName)} and invited you to the beta.`
+    : `You've been invited to the ${escapeHtml(brand.productName)} beta.`;
+  const note = params.personalNote
+    ? infoBox(`<em>&ldquo;${escapeHtml(params.personalNote)}&rdquo;</em>${inviter ? ` — ${escapeHtml(inviter)}` : ''}`)
+    : '';
+  return {
+    subject: inviter ? `${inviter} invited you to ${brand.productName}` : `You're invited to the ${brand.productName} beta`,
+    preheader: 'Your beta invite is inside — claim your spot.',
+    content:
+      heading("You're invited! 🎟️") +
+      paragraph(intro) +
+      note +
+      paragraph('Turn scripts into cinematic comics, build with 100+ AI models in Chat, and more. Tap below to claim your spot.') +
+      button('Accept your invite', url, 'yellow') +
+      linkFallback(url) +
+      (params.code ? muted(`Or enter this invite code at sign-up: <strong>${escapeHtml(params.code)}</strong>`) : ''),
+    text: [
+      intro,
+      params.personalNote ? `\n"${params.personalNote}"${inviter ? ` — ${inviter}` : ''}` : '',
+      `\nAccept your invite: ${url}`,
+      params.code ? `Invite code: ${params.code}` : ''
+    ]
+      .filter(Boolean)
+      .join('\n')
   };
 };
 
@@ -359,6 +431,8 @@ const RENDERERS: Record<EmailTemplateName, Renderer> = {
   'newsletter-confirm': newsletterConfirm,
   'newsletter-welcome': newsletterWelcome,
   'product-update': productUpdate,
+  announcement,
+  'beta-invite': betaInvite,
   'access-requested': accessRequested,
   welcome,
   'signin-alert': signinAlert,

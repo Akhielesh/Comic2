@@ -158,6 +158,22 @@ export const getUsage = async (): Promise<EmailUsage> => {
   return { day, month };
 };
 
+/** Recent send-log rows for the admin Email Console (delivery + opens). Service-role only. */
+export const recentLog = async (limit = 50): Promise<Array<Record<string, unknown>>> => {
+  const db = adminOrNull();
+  if (!db) return [];
+  try {
+    const { data } = await db
+      .from('email_log')
+      .select('id, to_email, template, kind, status, message_id, error, opened_at, created_at')
+      .order('created_at', { ascending: false })
+      .limit(Math.min(200, Math.max(1, Math.floor(limit))));
+    return (data as Array<Record<string, unknown>>) || [];
+  } catch {
+    return [];
+  }
+};
+
 // ── Newsletter double opt-in ────────────────────────────────────────────────────
 export const newConfirmToken = (): string => crypto.randomBytes(24).toString('hex');
 

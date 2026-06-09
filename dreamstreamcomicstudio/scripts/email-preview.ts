@@ -26,9 +26,14 @@ const SAMPLE: EmailParams = {
   location: 'Austin, Texas, US',
   ip: '203.0.113.42',
   title: 'New: 8 fresh comic styles ✨',
-  body: 'We just dropped woodcut, dieselpunk, ink-wash and 5 more styles. Try them on your next page.',
+  body: 'We just dropped woodcut, dieselpunk, ink-wash and 5 more styles.\n\nTry them on your next page — pick a style in the Style panel and regenerate.',
   ctaUrl: 'https://dreamstreamstudio.ai/studio',
-  ctaLabel: 'Try the new styles'
+  ctaLabel: 'Try the new styles',
+  heading: 'Scheduled maintenance this Sunday',
+  inviteUrl: 'https://dreamstreamstudio.ai/?invite=DS-7K9F-Q3MX',
+  inviterName: 'Akhielesh',
+  personalNote: 'You have to try this — built our last comic in an afternoon.',
+  code: 'DS-7K9F-Q3MX'
 };
 
 mkdirSync(OUT_DIR, { recursive: true });
