@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle2, XCircle, RotateCcw, Lightbulb, GraduationCap } from 'lucide-react';
+import { CheckCircle2, XCircle, RotateCcw, RefreshCw, Lightbulb, GraduationCap } from 'lucide-react';
 import type { QuizArtifact, QuizQuestion } from '../../../apiTypes';
 import { quizIdFor, loadQuizAttempt, saveQuizAttempt, clearQuizAttempt } from '../../../services/studyProgress';
 
@@ -69,6 +69,15 @@ export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
   const unanswered = questions.length - answeredCount;
 
   const reset = () => { clearQuizAttempt(quizId); setAnswers({}); setText({}); setChecked(false); setRevealed({}); };
+  // Focus the retry on what was missed: clear only the wrong answers, keep the correct
+  // ones, and drop back into answering mode — the proven "study your mistakes" loop.
+  const retryIncorrect = () => {
+    const wrong = new Set(graded.filter((g) => !g.ok).map((g) => g.q.id));
+    setAnswers((p) => { const n = { ...p }; for (const id of wrong) delete n[id]; return n; });
+    setText((p) => { const n = { ...p }; for (const id of wrong) delete n[id]; return n; });
+    setRevealed({});
+    setChecked(false);
+  };
 
   return (
     <div className="border-2 border-black rounded-xl bg-white shadow-comic overflow-hidden animate-fade-in">
@@ -153,9 +162,16 @@ export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
           {checked ? (
             <>
               <div className="font-display text-lg">Score: {score}/{questions.length} <span className="text-sm text-slate-500">({Math.round((score / questions.length) * 100)}%)</span></div>
-              <button onClick={reset} className="flex items-center gap-1.5 text-sm font-bold border-2 border-black rounded-md px-3 py-1.5 bg-white hover:bg-slate-100">
-                <RotateCcw className="w-4 h-4" /> Try again
-              </button>
+              <div className="flex items-center gap-2">
+                {score < questions.length && (
+                  <button onClick={retryIncorrect} className="flex items-center gap-1.5 text-sm font-bold border-2 border-black rounded-md px-3 py-1.5 bg-brand-yellow hover:bg-black hover:text-brand-yellow transition-colors">
+                    <RefreshCw className="w-4 h-4" /> Retry incorrect ({questions.length - score})
+                  </button>
+                )}
+                <button onClick={reset} className="flex items-center gap-1.5 text-sm font-bold border-2 border-black rounded-md px-3 py-1.5 bg-white hover:bg-slate-100">
+                  <RotateCcw className="w-4 h-4" /> Try again
+                </button>
+              </div>
             </>
           ) : (
             <>
