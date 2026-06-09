@@ -31,6 +31,7 @@ import { generativeUiTool } from './generativeUi.js';
 import { convertDataTool } from './convertData.js';
 import { analyzeDataTool } from './analyzeData.js';
 import { transformDataTool } from './transformData.js';
+import { convertImageTool } from './convertImage.js';
 
 export type { ChatTool, ToolExecResult, ToolContext } from './types.js';
 
@@ -801,6 +802,7 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   convert_data: convertDataTool,
   analyze_data: analyzeDataTool,
   transform_data: transformDataTool,
+  convert_image: convertImageTool,
   generate_quiz: quizTool,
   generate_flashcards: flashcardsTool,
   generate_document: documentTool,
