@@ -833,6 +833,19 @@ export interface QuizArtifact {
   questions: QuizQuestion[];
 }
 
+// --- Flashcards artifact (study/memorization mode for guided learning) ---
+// Emitted by the `generate_flashcards` tool. A flip-card deck the user studies,
+// marking each card known/review, with shuffle + progress.
+export interface Flashcard {
+  front: string;
+  back: string;
+}
+export interface FlashcardsArtifact {
+  title?: string;
+  topic?: string;
+  cards: Flashcard[];
+}
+
 // --- Downloadable document artifact ---
 // Emitted by the `generate_document` tool so the AI can author a custom resource
 // (study guide, cheat sheet, notes, report, plan) the user can read inline and

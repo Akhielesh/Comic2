@@ -624,6 +624,35 @@ const documentTool: ChatTool = {
   }
 };
 
+// Build a flip-card study deck the user can drill — for memorization/vocab. Pure + local.
+const flashcardsTool: ChatTool = {
+  name: 'generate_flashcards',
+  description:
+    'Create a deck of study flashcards (flip cards) to help the user memorize terms, definitions, vocabulary, formulas or facts. Use it when the user wants to MEMORIZE/DRILL something ("flashcards", "help me memorize", "vocab", "study cards"), or proactively alongside an explanation of definition-heavy material. Each card has a `front` (term/question) and `back` (definition/answer). The user gets an interactive deck they can flip, shuffle and mark known/review.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      topic: { type: 'string' },
+      cards: {
+        type: 'array',
+        description: 'The cards (aim for 5–20).',
+        items: { type: 'object', properties: { front: { type: 'string' }, back: { type: 'string' } }, required: ['front', 'back'] }
+      }
+    },
+    required: ['cards']
+  },
+  execute: async (args) => {
+    const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined);
+    const cards = (Array.isArray(args?.cards) ? (args!.cards as unknown[]) : [])
+      .map((c) => { const co = c as Record<string, unknown>; return { front: str(co?.front) || '', back: str(co?.back) || '' }; })
+      .filter((c) => c.front && c.back);
+    if (!cards.length) return { content: 'No usable flashcards were provided (each needs a front and back).' };
+    const data = { title: str(args?.title) || 'Flashcards', topic: str(args?.topic), cards };
+    return { content: `Created a ${cards.length}-card flashcard deck${data.topic ? ` on ${data.topic}` : ''}. An interactive deck is shown to the user.`, artifacts: [{ type: 'flashcards', data }] };
+  }
+};
+
 // Flatten the free-API tool packs into a name→tool map. These are all context-free
 // (they take explicit args), so they live alongside the original built-ins.
 const FREE_API_TOOLS: ChatTool[] = [
@@ -654,6 +683,7 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   render_chart: chartTool,
   show_metrics: metricsTool,
   generate_quiz: quizTool,
+  generate_flashcards: flashcardsTool,
   generate_document: documentTool,
   generate_app: generateAppTool,
   ...Object.fromEntries(FREE_API_TOOLS.map((t) => [t.name, t]))

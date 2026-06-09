@@ -18,13 +18,26 @@ import { RecipeRunCard } from './artifacts/RecipeRunCard';
 import { ResearchReport } from './artifacts/ResearchReport';
 import { Quiz } from './artifacts/Quiz';
 import { DocumentCard } from './artifacts/DocumentCard';
+import { Flashcards } from './artifacts/Flashcards';
 import type {
   WeatherArtifact, NewsResultsArtifact, StockQuoteArtifact,
   VideoResultsArtifact, PlacesResultsArtifact, SwarmTraceArtifact,
   ChartArtifact, MetricBoardArtifact, MapArtifact,
   DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact,
-  RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact
+  RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact
 } from '../../apiTypes';
+
+const flashcardsDemo: FlashcardsArtifact = {
+  title: 'Spanish — common verbs',
+  topic: 'Vocabulary',
+  cards: [
+    { front: 'ser', back: 'to be (permanent)' },
+    { front: 'estar', back: 'to be (temporary / location)' },
+    { front: 'tener', back: 'to have' },
+    { front: 'hacer', back: 'to do / to make' },
+    { front: 'poder', back: 'to be able to / can' }
+  ]
+};
 
 const documentDemo: DocumentArtifact = {
   title: 'SQL JOINs — Cheat Sheet',
@@ -403,6 +416,7 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Research report (questions · sources read · grounded brief header)', type: 'research_report', node: <ResearchReport data={researchReportDemo} /> },
   { title: 'Quiz (MCQ · multi-select · true/false · short answer · self-grading)', type: 'quiz', node: <Quiz data={quizDemo} /> },
   { title: 'Document (custom resource · download .md / .html / PDF)', type: 'document', node: <DocumentCard data={documentDemo} /> },
+  { title: 'Flashcards (flip · known/review · shuffle · progress)', type: 'flashcards', node: <Flashcards data={flashcardsDemo} /> },
   { title: 'Markdown table (inline)', node: <ChatMarkdown text={tableMd} /> }
 ];
 

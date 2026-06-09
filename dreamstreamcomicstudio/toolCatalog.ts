@@ -470,6 +470,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['quiz', 'quiz me', 'test me', 'practice questions', 'practice problems', 'mcq', 'multiple choice', 'flashcards', 'assess', 'check my understanding', 'study', 'exam', 'review questions']
   },
   {
+    name: 'generate_flashcards', label: 'Flashcards', category: 'learning', kind: 'builtin', provider: 'DreamStream (in-app)',
+    description: 'Create an interactive flip-card study deck (term → definition) for memorizing vocabulary, formulas or facts — with shuffle, known/review marking and progress.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Flip-card deck: front/back cards, shuffle, known/review, progress.', docsUrl: 'https://dreamstream.app',
+    keywords: ['flashcards', 'flash cards', 'memorize', 'memorise', 'study cards', 'vocab', 'vocabulary', 'drill', 'spaced repetition', 'anki']
+  },
+  {
     name: 'generate_document', label: 'Document / resource', category: 'learning', kind: 'builtin', provider: 'DreamStream (in-app, downloadable)',
     description: 'Author a downloadable document — study guide, cheat sheet, notes, report, plan, worksheet or reference — that the user can save as Markdown / HTML or print to PDF.',
     auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
