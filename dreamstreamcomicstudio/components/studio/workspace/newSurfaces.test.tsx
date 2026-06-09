@@ -54,7 +54,7 @@ describe('PublishPanel', () => {
   });
   it('shows provider choices and deploy steps when open', () => {
     render(
-      <PublishPanel open onClose={vi.fn()} title="App" previewUrl={null} onDownloadZip={vi.fn()} onDeploy={vi.fn(async () => ({ status: 'unavailable' }))} />
+      <PublishPanel open onClose={vi.fn()} title="App" previewUrl={null} onDownloadZip={vi.fn()} onDeploy={vi.fn(async () => ({ status: 'unavailable' as const }))} />
     );
     expect(screen.getByText('Cloudflare Pages')).toBeInTheDocument();
     expect(screen.getByText('Vercel')).toBeInTheDocument();
