@@ -13,6 +13,7 @@ import {
   normalizeEmail,
   upsertSubscriber
 } from '../services/emailStore.js';
+import { verifyTurnstile } from '../services/turnstile.js';
 
 // Public, logged-out newsletter + waitlist capture with double opt-in. Mounted with
 // optionalAuth BEFORE the global requireAuth (like /api/telemetry), so the marketing site
@@ -42,6 +43,12 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
     if (!email) return res.status(400).json({ ok: false, message: 'Please enter your email address.' });
     if (!EMAIL_REGEX.test(email) || email.length > 320) {
       return res.status(400).json({ ok: false, message: 'That email doesn’t look right — please check it.' });
+    }
+
+    // Bot protection (no-op unless TURNSTILE_SECRET_KEY is configured).
+    const captchaToken = typeof req.body?.captchaToken === 'string' ? req.body.captchaToken : undefined;
+    if (!(await verifyTurnstile(captchaToken, req.ip))) {
+      return res.status(400).json({ ok: false, message: 'Please complete the verification challenge and try again.' });
     }
 
     if (kind === 'access') {

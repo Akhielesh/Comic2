@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Loader2, ArrowRight, Check, Mail } from 'lucide-react';
 import { submitWaitlistEmail, WaitlistKind } from '../services/waitlist';
+import { Turnstile, resetTurnstile } from './Turnstile';
+import { turnstileEnabled } from '../services/clientConfig';
 
 interface WaitlistFormProps {
   /** 'updates' = stay-in-the-loop, 'access' = request early access. */
@@ -27,16 +29,22 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
   const [email, setEmail] = useState('');
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [message, setMessage] = useState<string | null>(null);
+  const [captchaToken, setCaptchaToken] = useState('');
 
   const isDark = variant === 'dark';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (status === 'loading') return;
+    if (turnstileEnabled() && !captchaToken) {
+      setStatus('error');
+      setMessage('Please complete the verification challenge.');
+      return;
+    }
     setStatus('loading');
     setMessage(null);
 
-    const result = await submitWaitlistEmail(email, kind, source ? { source } : {});
+    const result = await submitWaitlistEmail(email, kind, source ? { source } : {}, captchaToken || undefined);
     if (result.ok) {
       setStatus('success');
       setMessage(result.message);
@@ -44,6 +52,8 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
     } else {
       setStatus('error');
       setMessage(result.message);
+      setCaptchaToken('');
+      resetTurnstile();
     }
   };
 
@@ -105,6 +115,11 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
           )}
         </button>
       </div>
+      {turnstileEnabled() && (
+        <div className="mt-3">
+          <Turnstile onToken={setCaptchaToken} onExpire={() => setCaptchaToken('')} action="waitlist" />
+        </div>
+      )}
       {status === 'error' && message && (
         <p className={`mt-2 text-xs font-bold ${isDark ? 'text-red-400' : 'text-red-600'}`}>{message}</p>
       )}
