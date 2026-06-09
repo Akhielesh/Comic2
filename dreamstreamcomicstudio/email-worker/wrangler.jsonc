@@ -14,12 +14,12 @@
   //   EMAIL_HMAC_SECRET          — shared with the Railway backend (signs /send calls)
   //   SUPABASE_AUTH_HOOK_SECRET  — Supabase "Send Email Hook" secret (v1,whsec_…); omit to disable /auth-hook
   "vars": {
-    "EMAIL_FROM": "notifications@dreamstream.studio",
+    "EMAIL_FROM": "notifications@dreamstreamstudio.ai",
     "EMAIL_FROM_NAME": "DreamStream Studio",
-    "EMAIL_REPLY_TO": "support@dreamstream.studio",
+    "EMAIL_REPLY_TO": "support@dreamstreamstudio.ai",
     "PRODUCT_NAME": "DreamStream Studio",
-    "APP_URL": "https://dreamstream.studio",
-    "SUPPORT_EMAIL": "support@dreamstream.studio",
+    "APP_URL": "https://dreamstreamstudio.ai",
+    "SUPPORT_EMAIL": "support@dreamstreamstudio.ai",
     "COMPANY_NAME": "DreamStream Studio",
     "COMPANY_ADDRESS": "",
     "LOGO_URL": "",

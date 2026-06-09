@@ -14,11 +14,11 @@ const OUT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'docs', '
 // Sample params shared across templates — only the relevant ones are read per template.
 const SAMPLE: EmailParams = {
   firstName: 'Ada',
-  confirmUrl: 'https://dreamstream.studio/api/newsletter/confirm?e=ada@example.com&t=sample',
-  actionUrl: 'https://dreamstream.studio/auth/v1/verify?token=sample&type=signup',
-  unsubscribeUrl: 'https://dreamstream.studio/api/newsletter/unsubscribe?e=ada@example.com&t=sample',
-  secureUrl: 'https://dreamstream.studio/account/security',
-  pixelUrl: 'https://dreamstream.studio/api/email/o/sample.gif',
+  confirmUrl: 'https://dreamstreamstudio.ai/api/newsletter/confirm?e=ada@example.com&t=sample',
+  actionUrl: 'https://dreamstreamstudio.ai/auth/v1/verify?token=sample&type=signup',
+  unsubscribeUrl: 'https://dreamstreamstudio.ai/api/newsletter/unsubscribe?e=ada@example.com&t=sample',
+  secureUrl: 'https://dreamstreamstudio.ai/account/security',
+  pixelUrl: 'https://dreamstreamstudio.ai/api/email/o/sample.gif',
   token: '123456',
   newEmail: 'ada.new@example.com',
   time: 'Jun 8, 2026, 10:24 AM UTC',
@@ -27,7 +27,7 @@ const SAMPLE: EmailParams = {
   ip: '203.0.113.42',
   title: 'New: 8 fresh comic styles ✨',
   body: 'We just dropped woodcut, dieselpunk, ink-wash and 5 more styles. Try them on your next page.',
-  ctaUrl: 'https://dreamstream.studio/studio',
+  ctaUrl: 'https://dreamstreamstudio.ai/studio',
   ctaLabel: 'Try the new styles'
 };
 
