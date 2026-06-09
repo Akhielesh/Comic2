@@ -1,23 +1,27 @@
-// Studio layout focus (Sprint 2): which pane the user wants to dedicate the screen to —
-// "split" (prompt · code · preview, the default), "code" (review/edit the code), or "preview"
-// (review the running app). Persisted to localStorage so the choice sticks across reloads.
-// Lets the user maximize the real estate for whatever they're doing. Dependency-free.
+// Studio right-pane view: the workspace is a fixed 30/70 two-pane layout — a full-height chat
+// on the LEFT and a single workspace pane on the RIGHT that toggles between the live Preview and
+// the Code editor. (The old three-pane "split" was retired: users wanted 30/70 with one toggle,
+// not three columns fighting for room.) Persisted to localStorage so the choice sticks.
+// Dependency-free.
 
 import { create } from 'zustand';
 
-export type StudioFocus = 'split' | 'code' | 'preview';
+/** Which view the right (70%) pane shows. */
+export type StudioFocus = 'preview' | 'code';
 
-export const STUDIO_FOCUS_ORDER: StudioFocus[] = ['code', 'split', 'preview'];
+/** Toggle order for the segmented control. Preview-first — most people want to see the app. */
+export const STUDIO_FOCUS_ORDER: StudioFocus[] = ['preview', 'code'];
 
 const STORAGE_KEY = 'studio.focus';
-const DEFAULT_FOCUS: StudioFocus = 'split';
+const DEFAULT_FOCUS: StudioFocus = 'preview';
 
-const isFocus = (v: unknown): v is StudioFocus => v === 'split' || v === 'code' || v === 'preview';
+const isFocus = (v: unknown): v is StudioFocus => v === 'preview' || v === 'code';
 
 const readInitial = (): StudioFocus => {
   if (typeof window === 'undefined') return DEFAULT_FOCUS;
   try {
     const v = window.localStorage.getItem(STORAGE_KEY);
+    // Migrate the retired 'split' value to the new default rather than crashing on it.
     return isFocus(v) ? v : DEFAULT_FOCUS;
   } catch {
     return DEFAULT_FOCUS;

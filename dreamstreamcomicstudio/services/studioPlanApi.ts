@@ -11,9 +11,20 @@ import type { StudioClarifyResult, StudioBuildPlan, StudioAnswer } from '../apiT
 // "Couldn't reach the AI server" error on the user the moment the backend is waking up.
 const PLAN_RETRY = { attempts: 3 } as const;
 
-/** Ask the AI what (if anything) it needs to know before building. */
-export const clarifyStudioApp = async (prompt: string, signal?: AbortSignal): Promise<StudioClarifyResult> =>
-  post<{ prompt: string }, StudioClarifyResult>('/api/studio/clarify', { ...studioModelRequest(), prompt }, { signal, retry: PLAN_RETRY });
+/**
+ * Ask the AI what (if anything) it needs to know before building. Pass `files` to clarify a change
+ * to an EXISTING app (refine mode) — the AI then asks app-aware follow-ups, tuned to ask nothing for
+ * clear changes so the user is never bombarded.
+ */
+export const clarifyStudioApp = async (
+  prompt: string,
+  opts?: { files?: { path: string; content: string }[]; signal?: AbortSignal }
+): Promise<StudioClarifyResult> =>
+  post<Record<string, unknown>, StudioClarifyResult>(
+    '/api/studio/clarify',
+    { ...studioModelRequest(), prompt, ...(opts?.files?.length ? { files: opts.files } : {}) },
+    { signal: opts?.signal, retry: PLAN_RETRY }
+  );
 
 /** Turn the idea (+ answers) into a concrete, reviewable build plan. */
 export const planStudioApp = async (

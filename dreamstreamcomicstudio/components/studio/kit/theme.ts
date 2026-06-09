@@ -53,6 +53,18 @@ export interface StudioThemeTokens {
   accentText: string;
   /** Focus ring. */
   focusRing: string;
+
+  // ---- Next-gen surface kit (AI-studio aesthetic) ----
+  /** Frosted-glass surface (translucent bg + blur) for floating headers/cards. */
+  glass: string;
+  /** Accent glow shadow for primary/active/“thinking” surfaces. */
+  glow: string;
+  /** Subtle top-down gradient wash for headers/hero strips. */
+  gradient: string;
+  /** Chip/pill surface (bg + border together). */
+  chip: string;
+  /** Multi-stop accent gradient (for progress bars, active rails, brand marks). */
+  accentGrad: string;
 }
 
 export const STUDIO_THEMES: Record<StudioThemeId, StudioThemeTokens> = {
@@ -80,29 +92,40 @@ export const STUDIO_THEMES: Record<StudioThemeId, StudioThemeTokens> = {
     accentBgHover: 'hover:bg-violet-400',
     accentText: 'text-white',
     focusRing: 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/60',
+    glass: 'bg-white/[0.045] backdrop-blur-xl',
+    glow: 'shadow-[0_0_50px_-14px_rgba(139,92,246,0.55)]',
+    gradient: 'bg-gradient-to-b from-white/[0.05] to-transparent',
+    chip: 'bg-white/[0.05] border-white/10',
+    accentGrad: 'bg-gradient-to-r from-violet-500 via-fuchsia-500 to-cyan-400',
   },
   // ---- White (light) ----
+  // ---- White (light) — refined, AI-centric (cohesive violet accent, soft depth) ----
   light: {
     id: 'light',
-    label: 'White',
+    label: 'Light',
     isDark: false,
     monaco: 'studio-light',
-    bg: 'bg-slate-50',
+    bg: 'bg-[#F6F7FB]',
     panel: 'bg-white',
-    panelAlt: 'bg-slate-100',
+    panelAlt: 'bg-slate-50',
     editorBg: 'bg-white',
-    edge: 'border-slate-200',
+    edge: 'border-slate-200/80',
     edgeStrong: 'border-slate-300',
-    hover: 'hover:bg-slate-100',
-    text: 'text-slate-800',
+    hover: 'hover:bg-slate-100/80',
+    text: 'text-slate-900',
     textDim: 'text-slate-500',
     textFaint: 'text-slate-400',
-    accent: 'text-sky-600',
-    accentSoft: 'bg-sky-500/10',
-    accentBg: 'bg-sky-500',
-    accentBgHover: 'hover:bg-sky-400',
+    accent: 'text-violet-600',
+    accentSoft: 'bg-violet-500/10',
+    accentBg: 'bg-violet-600',
+    accentBgHover: 'hover:bg-violet-500',
     accentText: 'text-white',
-    focusRing: 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/50',
+    focusRing: 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50',
+    glass: 'bg-white/75 backdrop-blur-xl',
+    glow: 'shadow-[0_12px_44px_-16px_rgba(124,58,237,0.35)]',
+    gradient: 'bg-gradient-to-b from-white to-slate-50',
+    chip: 'bg-white border-slate-200',
+    accentGrad: 'bg-gradient-to-r from-violet-600 via-fuchsia-500 to-sky-500',
   },
   // ---- DreamStream brand (comic look) ----
   brand: {
@@ -126,6 +149,11 @@ export const STUDIO_THEMES: Record<StudioThemeId, StudioThemeTokens> = {
     accentBgHover: 'hover:bg-yellow-300',
     accentText: 'text-black',
     focusRing: 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-blue/50',
+    glass: 'bg-white/80 backdrop-blur',
+    glow: 'shadow-comic',
+    gradient: 'bg-gradient-to-b from-amber-50 to-white',
+    chip: 'bg-white border-black',
+    accentGrad: 'bg-gradient-to-r from-brand-yellow via-amber-300 to-brand-blue',
   },
 };
 

@@ -43,9 +43,11 @@ vi.mock('@monaco-editor/react', () => ({
 
 import { CodeStudioView } from './CodeStudioView';
 import { useStudioWorkspace } from './workspace';
+import { useStudioFocus } from './kit';
 
 beforeEach(() => {
   useStudioWorkspace.getState().reset();
+  useStudioFocus.setState({ focus: 'preview' }); // default right-pane view
 });
 
 const artifact: CodeStudioArtifact = {
@@ -59,21 +61,29 @@ const artifact: CodeStudioArtifact = {
 };
 
 describe('CodeStudioView', () => {
-  it('renders the workspace shell for admins (Run live enabled, files listed)', () => {
+  it('renders the 30/70 workspace shell for admins (preview by default + a Code/Preview toggle)', () => {
     render(<CodeStudioView artifact={artifact} isAdmin onBack={vi.fn()} onNavigate={vi.fn()} />);
-    // Shell panes
-    expect(screen.getByText('Code')).toBeInTheDocument();
+    // The right (70%) pane defaults to the live Preview.
     expect(screen.getByText('Live preview')).toBeInTheDocument();
-    // Hand-off project name + files from the explorer tree (App.tsx also appears as a tab)
+    // The two-view toggle is present (it controls the right pane — no third "split" column).
+    expect(screen.getAllByRole('radio', { name: /preview view/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('radio', { name: /code view/i }).length).toBeGreaterThan(0);
+    // Hand-off project name.
     expect(screen.getByText('Counter App')).toBeInTheDocument();
-    expect(screen.getAllByText('App.tsx').length).toBeGreaterThan(0);
-    expect(screen.getByText('index.tsx')).toBeInTheDocument();
     // Back is contextual — with a project open it returns to the projects list.
     expect(screen.getByRole('button', { name: /projects/i })).toBeInTheDocument();
     // There is no redundant top "Build" button (building happens via the prompt).
     expect(screen.queryByRole('button', { name: /^build$/i })).not.toBeInTheDocument();
     // Admins aren't shown the private-preview banner.
     expect(screen.queryByText(/instant-preview mode/i)).not.toBeInTheDocument();
+  });
+
+  it('toggling to the Code view reveals the editor + file tree', () => {
+    useStudioFocus.setState({ focus: 'code' });
+    render(<CodeStudioView artifact={artifact} isAdmin onBack={vi.fn()} onNavigate={vi.fn()} />);
+    // The file explorer only renders in the Code view (App.tsx also appears as an editor tab).
+    expect(screen.getAllByText('App.tsx').length).toBeGreaterThan(0);
+    expect(screen.getByText('index.tsx')).toBeInTheDocument();
   });
 
   it('gates non-admins behind a private-preview notice with Run live disabled', () => {
