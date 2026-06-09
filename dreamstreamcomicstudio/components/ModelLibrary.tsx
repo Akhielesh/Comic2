@@ -57,6 +57,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { modelLinks, SOURCE_HOSTING_NOTE } from '../services/modelLinks';
 import { getModelVendor, getModelVendorId, availableVendors } from '../services/modelVendors';
 import { recommendModels, accuracyElo } from '../services/modelRecommendations';
+import { getModelSize } from '../services/modelParams';
 import type { ModelSource } from '../services/modelCatalog';
 
 interface ModelLibraryProps {
@@ -176,7 +177,7 @@ const matchesFilter = (model: CatalogModel, filters: Set<FilterKey>, domains: Se
     const capLabels = capabilityBadges(model).map((b) => b.label).join(' ');
     const vendor = getModelVendor(model);
     const haystack = [
-      model.id, model.name, model.description, model.source, vendor.label, vendor.id,
+      model.id, model.name, model.description, model.source, vendor.label, vendor.id, getModelSize(model.id)?.params,
       model.roles?.join(' '), model.possibilities?.join(' '), model.drawbacks?.join(' '),
       model.editorialNote, capLabels
     ].filter(Boolean).join(' ').toLowerCase();
@@ -292,6 +293,11 @@ const ModelCard: React.FC<{
         <div className="flex items-center gap-1.5 mb-0.5">
           <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-black ${getModelVendor(model).color}`}>{getModelVendor(model).label}</span>
           <span className="text-[10px] font-bold uppercase text-slate-500">{sourceLabel(providerOrigin(model))}</span>
+          {getModelVendor(model).url && (
+            <a href={getModelVendor(model).url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-slate-400 hover:text-brand-blue" title={`${getModelVendor(model).label} — more info`}>
+              <ExternalLink className="w-3 h-3" />
+            </a>
+          )}
         </div>
         <div className="font-bold leading-tight truncate">{model.name}</div>
       </div>
@@ -302,6 +308,10 @@ const ModelCard: React.FC<{
       {model.apiCallable === false && (
         <Badge className="bg-amber-100 text-amber-800 border-amber-400" >Download-only</Badge>
       )}
+      {(() => {
+        const size = getModelSize(model.id);
+        return size ? <Badge className="bg-slate-800 text-white" >{size.params}</Badge> : null;
+      })()}
       {capabilityBadges(model).map((b) => <Badge key={b.label} className={TONE_CLASS[b.tone]}>{b.label}</Badge>)}
     </div>
 
