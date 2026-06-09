@@ -55,6 +55,7 @@ import { describeCost, classBadge } from '../shared/pricing';
 import { useAuth } from '../contexts/AuthContext';
 import { modelLinks, SOURCE_HOSTING_NOTE } from '../services/modelLinks';
 import { getModelVendor, getModelVendorId, availableVendors } from '../services/modelVendors';
+import { recommendModels, accuracyElo } from '../services/modelRecommendations';
 import type { ModelSource } from '../services/modelCatalog';
 
 interface ModelLibraryProps {
@@ -720,6 +721,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
   }, [models, filters, domainFilters, vendorFilters, query, minContextK, sortBy]);
   const compareModels = useMemo(() => compareIds.map((id) => models.find((m) => m.id === id)).filter((m): m is CatalogModel => !!m), [compareIds, models]);
   const vendorOptions = useMemo(() => availableVendors(models), [models]);
+  const picks = useMemo(() => recommendModels(models, 2), [models]);
 
   const activeFilterCount = filters.size + domainFilters.size + vendorFilters.size + (minContextK > 0 ? 1 : 0);
   const resetFilters = () => { setFilters(new Set()); setDomainFilters(new Set()); setVendorFilters(new Set()); setMinContextK(0); };
@@ -989,6 +991,41 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
           <div className="mt-8 text-center text-slate-500 py-16">No models match your filters.</div>
         ) : (
           <>
+            {activeFilterCount === 0 && !query.trim() && picks.bestValue.length > 0 && (
+              <div className="mt-4 border-2 border-black rounded-xl bg-brand-yellow/15 p-4 shadow-comic">
+                <div className="flex items-center gap-2 mb-2">
+                  <Sparkles className="w-4 h-4" />
+                  <span className="font-display text-lg">Top picks — best accuracy for the price</span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  {picks.bestValue.map((m, i) => (
+                    <button key={m.id} onClick={() => setSelected(m)} className="text-left bg-white border-2 border-black rounded-lg p-3 hover:shadow-comic-hover hover:translate-x-[1px] hover:translate-y-[1px] transition-all">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span className="text-[9px] font-bold uppercase px-1 py-0.5 rounded bg-brand-blue text-white">#{i + 1} value</span>
+                        <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-black ${getModelVendor(m).color}`}>{getModelVendor(m).label}</span>
+                      </div>
+                      <div className="font-bold text-sm leading-tight truncate">{m.name}</div>
+                      <div className="text-[11px] text-slate-600 mt-1 flex items-center gap-2 flex-wrap">
+                        <span title="Arena Elo (LMArena)">★ {accuracyElo(m)} Elo</span>
+                        <span>·</span>
+                        <span>{costLabel(m)}</span>
+                      </div>
+                    </button>
+                  ))}
+                  {picks.topImage && (
+                    <button onClick={() => setSelected(picks.topImage!)} className="text-left bg-white border-2 border-black rounded-lg p-3 hover:shadow-comic-hover hover:translate-x-[1px] hover:translate-y-[1px] transition-all">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span className="text-[9px] font-bold uppercase px-1 py-0.5 rounded bg-fuchsia-600 text-white">Top image</span>
+                        <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-black ${getModelVendor(picks.topImage).color}`}>{getModelVendor(picks.topImage).label}</span>
+                      </div>
+                      <div className="font-bold text-sm leading-tight truncate">{picks.topImage.name}</div>
+                      <div className="text-[11px] text-slate-600 mt-1">{costLabel(picks.topImage)}{picks.topImage.supportsImageInput ? ' · reference-capable' : ''}</div>
+                    </button>
+                  )}
+                </div>
+                <div className="text-[10px] text-slate-500 mt-2">Ranked by Arena-Elo accuracy per dollar of output. Free models can rate-limit; verify pricing at the source.</div>
+              </div>
+            )}
             <div className="mt-4 text-xs font-bold uppercase text-slate-500 flex items-center gap-2">
               {visible.length} models
               {refreshing && <span className="flex items-center gap-1 text-slate-400 normal-case font-normal"><Loader2 className="w-3 h-3 animate-spin" /> refreshing…</span>}
