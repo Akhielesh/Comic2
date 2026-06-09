@@ -74,8 +74,8 @@ describe('CodeStudioView', () => {
     expect(screen.getByRole('button', { name: /projects/i })).toBeInTheDocument();
     // There is no redundant top "Build" button (building happens via the prompt).
     expect(screen.queryByRole('button', { name: /^build$/i })).not.toBeInTheDocument();
-    // Admins aren't shown the private-preview banner.
-    expect(screen.queryByText(/instant-preview mode/i)).not.toBeInTheDocument();
+    // Admins aren't shown the instant-preview notice.
+    expect(screen.queryByText(/your app runs right here in the browser/i)).not.toBeInTheDocument();
   });
 
   it('toggling to the Code view reveals the editor + file tree', () => {
@@ -89,7 +89,7 @@ describe('CodeStudioView', () => {
   it('gates non-admins behind a private-preview notice with Run live disabled', () => {
     render(<CodeStudioView artifact={null} isAdmin={false} onBack={vi.fn()} onNavigate={vi.fn()} />);
     // Non-admins build with the instant in-browser preview; there's no top "Build" button.
-    expect(screen.getByText(/instant-preview mode/i)).toBeInTheDocument();
+    expect(screen.getByText(/your app runs right here in the browser/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^build$/i })).not.toBeInTheDocument();
   });
 
