@@ -75,7 +75,12 @@ export const deployViaWorker = async (input: {
 }): Promise<DeployResult> => {
   const projectName = deployProjectName(input.title, input.projectId);
   const sandboxId = deploySandboxId(input.userId, input.projectId);
-  const r = await callStudioWorker({ action: 'deploy', sandboxId, target: input.target, projectName, files: input.files });
+  // Deploy = npm install + build + wrangler/vercel publish — minutes, not seconds.
+  const DEPLOY_TIMEOUT_MS = 9 * 60_000;
+  const r = await callStudioWorker(
+    { action: 'deploy', sandboxId, target: input.target, projectName, files: input.files },
+    DEPLOY_TIMEOUT_MS,
+  );
   if (!r.ok) {
     return { status: 'error', message: r.json?.message || r.json?.error || `Deploy worker returned ${r.status}.` };
   }
