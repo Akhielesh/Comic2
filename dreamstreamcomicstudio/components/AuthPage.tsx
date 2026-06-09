@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { getAuthPersistMode, getAuthRedirectUrl, setAuthPersistMode, supabase } from '../services/supabase';
 import { Loader2, ArrowRight, Eye, EyeOff, CheckSquare, Lock } from 'lucide-react';
 import { WaitlistForm } from './WaitlistForm';
+import { Turnstile, resetTurnstile } from './Turnstile';
+import { turnstileEnabled } from '../services/clientConfig';
 
 // New registrations are invite-only for now: existing accounts can still sign in,
 // while everyone else can leave their email to request access. Flip this to true
@@ -25,6 +27,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [message, setMessage] = useState<string | null>(null);
+    const [captchaToken, setCaptchaToken] = useState('');
 
     // Fields
     const [email, setEmail] = useState('');
@@ -100,6 +103,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
         setIsLoading(true);
 
         try {
+            // Bot protection (no-op unless a Turnstile site key is configured).
+            if (turnstileEnabled() && !captchaToken) {
+                throw new Error('Please complete the verification challenge.');
+            }
             if (mode === 'signup') {
                 if (!SIGNUPS_ENABLED) {
                     throw new Error('New sign-ups are invite-only right now. Request access and we’ll be in touch.');
@@ -155,6 +162,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                     password,
                     options: {
                         emailRedirectTo: authRedirectUrl,
+                        captchaToken: captchaToken || undefined,
                         data: {
                             username: normalizedUsername,
                             first_name: normalizedFirstName,
@@ -209,6 +217,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
                     email: signInEmail,
                     password,
+                    options: { captchaToken: captchaToken || undefined },
                 });
                 if (signInError) {
                     const signInMessage = String(signInError.message || '').toLowerCase();
@@ -241,7 +250,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 const { error } = await supabase.auth.signInWithOtp({
                     email: normalizedEmail,
                     options: {
-                        emailRedirectTo: authRedirectUrl
+                        emailRedirectTo: authRedirectUrl,
+                        captchaToken: captchaToken || undefined
                     }
                 });
                 if (error) throw error;
@@ -255,7 +265,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 }
                 // Forgot Password
                 const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
-                    redirectTo: authRedirectUrl
+                    redirectTo: authRedirectUrl,
+                    captchaToken: captchaToken || undefined
                 });
                 if (error) throw error;
                 setMessage("Password reset link sent! Check your email.");
@@ -265,6 +276,11 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
             setError(err?.message || "Authentication failed.");
         } finally {
             setIsLoading(false);
+            // Turnstile tokens are single-use — clear + reset so the next attempt gets a fresh one.
+            if (turnstileEnabled()) {
+                setCaptchaToken('');
+                resetTurnstile();
+            }
         }
     };
 
@@ -535,6 +551,12 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                             <button type="button" onClick={() => { setMode('signin'); setError(null); setMessage(null); setPendingVerificationEmail(null); }} className="text-xs font-bold text-slate-500 hover:text-black hover:underline block mx-auto">
                                 Back to Sign In
                             </button>
+                        )}
+
+                        {turnstileEnabled() && (
+                            <div className="flex justify-center">
+                                <Turnstile onToken={setCaptchaToken} onExpire={() => setCaptchaToken('')} action={mode} />
+                            </div>
                         )}
 
                         <button

@@ -30,7 +30,8 @@ const DEFAULT_SUCCESS: Record<WaitlistKind, string> = {
 const subscribeViaApi = async (
   email: string,
   kind: WaitlistKind,
-  metadata: Record<string, unknown>
+  metadata: Record<string, unknown>,
+  captchaToken?: string
 ): Promise<WaitlistResult | null> => {
   if (!API_BASE_URL) return null;
   try {
@@ -40,6 +41,7 @@ const subscribeViaApi = async (
       body: JSON.stringify({
         email,
         kind,
+        captchaToken,
         source: typeof window !== 'undefined' ? window.location.pathname : undefined,
         ...(typeof metadata.source === 'string' ? { source: metadata.source } : {})
       })
@@ -62,7 +64,8 @@ const subscribeViaApi = async (
 export const submitWaitlistEmail = async (
   rawEmail: string,
   kind: WaitlistKind = 'updates',
-  metadata: Record<string, unknown> = {}
+  metadata: Record<string, unknown> = {},
+  captchaToken?: string
 ): Promise<WaitlistResult> => {
   const email = rawEmail.trim().toLowerCase();
   if (!email) {
@@ -73,7 +76,7 @@ export const submitWaitlistEmail = async (
   }
 
   // Preferred path: the backend (sends the confirmation email + logs the capture).
-  const apiResult = await subscribeViaApi(email, kind, metadata);
+  const apiResult = await subscribeViaApi(email, kind, metadata, captchaToken);
   if (apiResult) return apiResult;
 
   // Fallback: write directly to Supabase (no email, but the lead is still captured).
