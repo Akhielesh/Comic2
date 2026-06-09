@@ -18,9 +18,9 @@ preview script use, so the inbox matches the product UI.
 ## Prerequisites (one-time, owner)
 
 1. **Workers Paid plan** — Email Sending needs it ($5/mo). It also covers the Studio worker.
-2. **A verified sending domain** in Cloudflare Email → Sending (e.g. `dreamstream.studio`).
+2. **A verified sending domain** in Cloudflare Email → Sending (e.g. `dreamstreamstudio.ai`).
    Cloudflare walks you through the **SPF / DKIM / DMARC** DNS records; add them and verify.
-3. Pick a `from` address on that domain, e.g. `notifications@dreamstream.studio`.
+3. Pick a `from` address on that domain, e.g. `notifications@dreamstreamstudio.ai`.
 
 ## Configure
 

@@ -1,21 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { renderEmail, EMAIL_TEMPLATE_NAMES, isEmailTemplateName, isMarketing, TEMPLATE_KIND } from './index.js';
+import { renderEmail, EMAIL_TEMPLATE_NAMES, isEmailTemplateName, isMarketing, isNoReply, TEMPLATE_KIND } from './index.js';
 
 describe('email templates', () => {
   it('renders every template with subject, html and text', () => {
     for (const name of EMAIL_TEMPLATE_NAMES) {
       const out = renderEmail(name, {
-        confirmUrl: 'https://dreamstream.studio/confirm?t=abc',
-        actionUrl: 'https://dreamstream.studio/auth/verify?t=abc',
-        unsubscribeUrl: 'https://dreamstream.studio/unsub?t=abc',
-        secureUrl: 'https://dreamstream.studio/security',
+        confirmUrl: 'https://dreamstreamstudio.ai/confirm?t=abc',
+        actionUrl: 'https://dreamstreamstudio.ai/auth/verify?t=abc',
+        unsubscribeUrl: 'https://dreamstreamstudio.ai/unsub?t=abc',
+        secureUrl: 'https://dreamstreamstudio.ai/security',
         firstName: 'Ada',
         token: '123456',
         newEmail: 'new@example.com',
         time: 'Jun 8, 2026 10:00 UTC',
         device: 'Chrome on macOS',
         location: 'Austin, US',
-        ip: '203.0.113.7'
+        ip: '203.0.113.7',
+        heading: 'Heads up',
+        body: 'First paragraph.\n\nSecond paragraph.',
+        inviteUrl: 'https://dreamstreamstudio.ai/?invite=DS-AAAA-BBBB',
+        inviterName: 'Sam',
+        personalNote: 'Join me!',
+        code: 'DS-AAAA-BBBB'
       });
       expect(out.subject.length).toBeGreaterThan(0);
       expect(out.html).toContain('<!DOCTYPE html>');
@@ -90,5 +96,48 @@ describe('email templates', () => {
     expect(isMarketing('product-update')).toBe(true);
     // Every template is classified.
     expect(Object.keys(TEMPLATE_KIND).sort()).toEqual([...EMAIL_TEMPLATE_NAMES].sort());
+  });
+
+  it('renders a beta-invite with inviter, note and link', () => {
+    const out = renderEmail('beta-invite', {
+      inviterName: 'Sam',
+      personalNote: 'Join me!',
+      inviteUrl: 'https://dreamstreamstudio.ai/?invite=DS-AAAA-BBBB',
+      code: 'DS-AAAA-BBBB'
+    });
+    expect(out.subject).toContain('Sam');
+    expect(out.html).toContain('DS-AAAA-BBBB');
+    expect(out.html).toContain('Join me!');
+    expect(out.html).toContain('invite=DS-AAAA-BBBB');
+  });
+
+  it('automated mail is no-reply with a do-not-reply notice; warm mail is not', () => {
+    const auto = renderEmail('auth-magic-link', { actionUrl: 'https://dreamstreamstudio.ai/v' });
+    expect(auto.html).toContain("isn't monitored");
+    expect(auto.text).toContain("please don't reply");
+    expect(isNoReply('auth-magic-link')).toBe(true);
+    expect(isNoReply('welcome')).toBe(false);
+    expect(renderEmail('welcome', {}).html).not.toContain("isn't monitored");
+  });
+
+  it('welcome email is fuller — shows the feature sections', () => {
+    const out = renderEmail('welcome', { firstName: 'Akhielesh' });
+    expect(out.html).toContain('Comic Studio');
+    expect(out.html).toContain('AI Chat');
+    expect(out.html).toContain('Code Studio');
+    expect(out.subject).toContain('Welcome');
+  });
+
+  it('announcement escapes the composed body (no raw HTML) and keeps paragraphs', () => {
+    const out = renderEmail('announcement', {
+      heading: 'Title',
+      body: 'Para one with <b>tags</b>.\n\nPara two.',
+      ctaLabel: 'Open',
+      ctaUrl: 'https://dreamstreamstudio.ai/x'
+    });
+    expect(out.html).not.toContain('<b>tags</b>');
+    expect(out.html).toContain('&lt;b&gt;tags&lt;/b&gt;');
+    expect(out.html).toContain('Para two.');
+    expect(out.html).toContain('Open');
   });
 });

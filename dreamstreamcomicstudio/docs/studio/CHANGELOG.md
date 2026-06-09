@@ -645,9 +645,9 @@ build flag / a hardcoded "Soon", with no admin bypass.
 - `CodeStudioCard.tsx` — "Run live" now shows when `isLiveStudioEnabled() || isAdmin`.
 - `StaticSiteHeader.tsx` — admins get a real **Open Code Studio** nav entry (→ chat) instead
   of the "Soon" coming-soon capture; `App.tsx` passes `isAdmin`.
-- Confirmed `akhieleshsrirangam@gmail.com` has role `admin`, so this unblocks the owner to
-  exercise the live container path. Server still needs `STUDIO_WORKER_URL` set for a launch
-  to succeed (else a clear "not configured" error).
+- Confirmed the owner account has role `admin` (configured via the `ADMIN_EMAILS` env var, not
+  hardcoded), so this unblocks the owner to exercise the live container path. Server still needs
+  `STUDIO_WORKER_URL` set for a launch to succeed (else a clear "not configured" error).
 - Findings logged: the in-chat preview is **Sandpack** (in-browser, no Vite) which mis-renders
   Vite-style projects as "Hello world"; the Cloudflare container ("Run live") is the correct
   engine. Making it the canonical Code Studio preview + improving generate_app model routing

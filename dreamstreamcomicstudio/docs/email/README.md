@@ -15,14 +15,35 @@ Email Sending** (the send half of Cloudflare Email Service, public beta since Ap
 | Newsletter confirm (double opt-in) | `newsletter-confirm` | essential | `POST /api/newsletter/subscribe` (kind=updates) |
 | Newsletter welcome | `newsletter-welcome` | marketing | clicking the confirm link |
 | Product update / broadcast | `product-update` | marketing | `sendProductUpdate(...)` |
+| Admin announcement / notice | `announcement` | essential | admin Email Console / `sendAnnouncement(...)` |
+| Beta invite / referral | `beta-invite` | essential | `/api/admin/email/invite`, `/api/invites/referral/send` |
 | Early-access acknowledgement | `access-requested` | essential | `POST /api/newsletter/subscribe` (kind=access) |
-| Account welcome | `welcome` | essential | `sendWelcome(...)` |
+| Account welcome (fuller onboarding) | `welcome` | essential | `sendWelcome(...)` |
 | New sign-in alert | `signin-alert` | essential | `sendSigninAlert(...)` |
 | Confirm signup / magic link / reset / email-change / invite / reauth | `auth-*` | essential | Supabase **Send Email Hook** |
 
 **Essential** mail (account, security, transactional) is always sent and **can never be
 unsubscribed**. **Marketing** mail carries a working one-click unsubscribe and honors the
 suppression list.
+
+## Sender addresses & reply policy
+
+Each template sends from a fitting **role mailbox** on the verified domain (set in
+`shared/email/templates.ts` → `SENDER_ROLE`). With Cloudflare Email Sending you verify the
+**domain** once, then any address on it is allowed — no per-address setup:
+
+| Role | From | Used for | Reply notice |
+|------|------|----------|--------------|
+| `no-reply` | `no-reply@<domain>` | auth links/codes, double-opt-in confirm | "this mailbox isn't monitored — don't reply" |
+| `notifications` | `notifications@<domain>` | transactional notices, updates, sign-in alerts | replies route to support |
+| `hello` | `hello@<domain>` | welcome, beta invites | replies route to support |
+
+`Reply-To` is always the support mailbox (`EMAIL_REPLY_TO`), so even if someone replies to a
+no-reply message it lands somewhere a human can see.
+
+> **Owner action for replies:** to actually *receive* mail at `support@<domain>`, add a
+> Cloudflare **Email Routing** rule (`support@dreamstreamstudio.ai` → your inbox). Sending
+> from these addresses needs nothing extra.
 
 ## Architecture
 
