@@ -14,7 +14,18 @@ import {
 } from 'lucide-react';
 import { useStudioTheme } from '../kit';
 import { useDialogA11y } from '../kit/useDialogA11y';
-import type { DeployTarget, DeployResult } from '../../../services/studioDeployApi';
+import type { DeployTarget, DeployResult, StudioDeploymentRecord } from '../../../services/studioDeployApi';
+
+/** Compact relative time for deployment timestamps. */
+const relTime = (iso: string): string => {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '';
+  const s = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (s < 60) return 'just now';
+  const m = Math.floor(s / 60); if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60); if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+};
 
 interface ProviderMeta {
   id: DeployTarget;
@@ -65,6 +76,8 @@ export interface PublishPanelProps {
   onClose: () => void;
   title: string;
   previewUrl: string | null;
+  /** Saved project id — enables fetching deploy history. */
+  projectId?: string | null;
   /** The project's last successful deploy URL (permanent link), if any. */
   deployedUrl?: string | null;
   /** Download the project as a deploy-ready .zip. */
@@ -73,7 +86,7 @@ export interface PublishPanelProps {
   onDeploy: (target: DeployTarget) => Promise<DeployResult>;
 }
 
-export const PublishPanel: React.FC<PublishPanelProps> = ({ open, onClose, title, previewUrl, deployedUrl, onDownloadZip, onDeploy }) => {
+export const PublishPanel: React.FC<PublishPanelProps> = ({ open, onClose, title, previewUrl, projectId, deployedUrl, onDownloadZip, onDeploy }) => {
   const t = useStudioTheme();
   const dialogRef = useRef<HTMLDivElement>(null);
   useDialogA11y(open, onClose); // Esc closes + restores focus
@@ -82,6 +95,21 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ open, onClose, title
   const [copied, setCopied] = useState<string | null>(null);
   const [deploying, setDeploying] = useState(false);
   const [result, setResult] = useState<DeployResult | null>(null);
+  const [history, setHistory] = useState<StudioDeploymentRecord[]>([]);
+
+  // Load deploy history when the panel opens (best-effort; dynamic import keeps apiClient lazy).
+  useEffect(() => {
+    if (!open || !projectId) return;
+    let alive = true;
+    void (async () => {
+      try {
+        const { listStudioDeployments } = await import('../../../services/studioDeployApi');
+        const list = await listStudioDeployments(projectId);
+        if (alive) setHistory(list);
+      } catch { /* best-effort */ }
+    })();
+    return () => { alive = false; };
+  }, [open, projectId, result]);
 
   if (!open) return null;
   const meta = PROVIDERS.find((p) => p.id === provider)!;
@@ -247,6 +275,27 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ open, onClose, title
               </pre>
             </div>
           </section>
+
+          {/* Deploy history (most recent first) — appears once the project has deployments. */}
+          {history.length > 0 && (
+            <section className={`rounded-lg border ${t.edge} ${t.panelAlt} p-3`}>
+              <p className={`text-[11px] font-bold uppercase tracking-wide ${t.textFaint} mb-2`}>Recent deployments</p>
+              <ul className="space-y-1.5">
+                {history.map((d) => (
+                  <li key={d.id} className="flex items-center gap-2 text-[11px]">
+                    <span className={`shrink-0 rounded-full px-1.5 py-0.5 font-semibold ${d.status === 'live' ? 'bg-emerald-500/15 text-emerald-500' : d.status === 'failed' || d.status === 'error' ? 'bg-rose-500/15 text-rose-500' : `${t.panel} ${t.textDim}`}`}>{d.status}</span>
+                    <span className={`shrink-0 ${t.textDim}`}>{d.target}</span>
+                    {d.url ? (
+                      <a href={d.url} target="_blank" rel="noreferrer" className={`min-w-0 flex-1 truncate ${t.accent} hover:underline`}>{d.url.replace(/^https?:\/\//, '')}</a>
+                    ) : (
+                      <span className={`min-w-0 flex-1 truncate ${t.textFaint}`}>—</span>
+                    )}
+                    <span className={`shrink-0 ${t.textFaint}`}>{relTime(d.createdAt)}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
         </div>
       </div>
     </div>

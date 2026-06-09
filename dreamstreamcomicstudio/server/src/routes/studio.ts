@@ -23,7 +23,7 @@ import { normalizeTarget, deployViaWorker, recordDeployment } from '../services/
 import { createWorkerRun, createStudioFix } from '../services/studioBuildService.js';
 import { evaluateLaunchAllowed } from '../services/studioCaps.js';
 import { sanitizeFiles, deriveProjectName } from '../services/studioFiles.js';
-import { saveProject, listProjects, getProjectWithFiles, deleteProject, listVersions, getVersionFiles } from '../services/studioRepository.js';
+import { saveProject, listProjects, getProjectWithFiles, deleteProject, listVersions, getVersionFiles, listDeployments } from '../services/studioRepository.js';
 import { runBuildAgent } from '../ai/studio/buildAgent.js';
 import { runGenerate, buildGeneratePrompt, parseGeneratedApp, STRICT_JSON_REMINDER, reviewCompleteness, repairUntilClean } from '../ai/studio/studioGenerate.js';
 import { runClarify } from '../ai/studio/studioClarify.js';
@@ -1011,6 +1011,15 @@ studioRouter.get('/projects/:id', async (req, res, next) => {
 });
 
 // GET /api/studio/projects/:id/versions — version history (most recent first).
+// GET /api/studio/projects/:id/deployments — the project's deploy history (most recent first).
+studioRouter.get('/projects/:id/deployments', async (req, res, next) => {
+  try {
+    res.json({ deployments: await listDeployments(req.user!.id, req.params.id) });
+  } catch (err) {
+    next(err);
+  }
+});
+
 studioRouter.get('/projects/:id/versions', async (req, res, next) => {
   try {
     const versions = await listVersions(req.user!.id, req.params.id);

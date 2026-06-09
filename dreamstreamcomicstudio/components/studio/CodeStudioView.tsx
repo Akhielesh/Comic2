@@ -1140,6 +1140,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
         onClose={() => setPublishOpen(false)}
         title={wsTitle}
         previewUrl={previewUrl}
+        projectId={wsProjectId}
         deployedUrl={deployUrl}
         onDownloadZip={() => void downloadArtifactZip(currentArtifact)}
         onDeploy={handleDeploy}
