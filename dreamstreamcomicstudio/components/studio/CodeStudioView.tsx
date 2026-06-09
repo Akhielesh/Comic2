@@ -901,8 +901,10 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   // Which "working" phase the calm live-progress surface should show.
   const progressActive = generating || status === 'starting';
   const progressPhase: ProgressPhase = reviewing ? 'reviewing' : status === 'starting' ? 'building' : previewError ? 'fixing' : 'generating';
-  // Heuristic next-step suggestions (instant fallback while the AI suggestion call resolves).
-  const fallbackSuggestions = useMemo(() => suggestNextSteps(insights), [insights]);
+  // Heuristic next-step suggestions (instant fallback while the AI suggestion call resolves) —
+  // backend-aware: reflects whether this project already has a connected DB.
+  const hasBackend = !!getBackend(wsProjectId);
+  const fallbackSuggestions = useMemo(() => suggestNextSteps(insights, { hasBackend }), [insights, hasBackend]);
 
   // ---- Panes (defined once, placed into the resizable or stacked layout) ----
   // Chat pane — full height on the left. The conversation history scrolls and fills the column;
