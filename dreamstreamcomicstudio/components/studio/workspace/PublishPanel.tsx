@@ -160,7 +160,7 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ open, onClose, title
                 <code className={`min-w-0 flex-1 truncate rounded-md border ${t.edge} ${t.panel} px-2.5 py-1.5 font-mono text-[11px] ${t.textDim}`}>{deployedUrl}</code>
                 <button
                   onClick={() => copy('deployed', deployedUrl)}
-                  className="shrink-0 inline-flex items-center gap-1 rounded-full bg-emerald-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-500"
+                  className={`shrink-0 inline-flex items-center gap-1 rounded-full bg-emerald-600 px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-emerald-500 ${t.focusRing}`}
                 >
                   {copied === 'deployed' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />} {copied === 'deployed' ? 'Copied' : 'Copy'}
                 </button>
@@ -178,7 +178,7 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ open, onClose, title
                 <code className={`min-w-0 flex-1 truncate rounded-md border ${t.edge} ${t.panel} px-2.5 py-1.5 font-mono text-[11px] ${t.textDim}`}>{previewUrl}</code>
                 <button
                   onClick={() => copy('link', previewUrl)}
-                  className={`shrink-0 inline-flex items-center gap-1 rounded-full ${t.accentBg} ${t.accentText} px-2.5 py-1.5 text-[11px] font-bold ${t.accentBgHover}`}
+                  className={`shrink-0 inline-flex items-center gap-1 rounded-full ${t.accentBg} ${t.accentText} px-2.5 py-1.5 text-[11px] font-bold ${t.accentBgHover} ${t.focusRing}`}
                 >
                   {copied === 'link' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />} {copied === 'link' ? 'Copied' : 'Copy link'}
                 </button>
@@ -229,7 +229,7 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ open, onClose, title
               <button
                 onClick={() => void runDeploy()}
                 disabled={deploying}
-                className={`inline-flex items-center gap-1.5 rounded-full ${t.accentBg} ${t.accentText} px-3 py-1.5 text-xs font-bold ${t.accentBgHover} disabled:opacity-50`}
+                className={`inline-flex items-center gap-1.5 rounded-full ${t.accentBg} ${t.accentText} px-3 py-1.5 text-xs font-bold ${t.accentBgHover} disabled:opacity-50 ${t.focusRing}`}
               >
                 {deploying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Rocket className="w-3.5 h-3.5" />}
                 {deploying ? 'Deploying…' : `Deploy to ${meta.name}`}
