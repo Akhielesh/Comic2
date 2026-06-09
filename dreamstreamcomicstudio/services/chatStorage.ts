@@ -55,6 +55,8 @@ export interface ChatTurnVariant {
   artifacts?: ChatArtifact[];
   notices?: CapabilityNotice[];
   createdAt: number;
+  /** Wall-clock time the model took to produce this answer, in ms (shown as a timer). */
+  durationMs?: number;
   error?: boolean;
 }
 
@@ -86,6 +88,10 @@ export interface ChatTurn {
   /** Capability gaps surfaced this turn (degraded/failed/missing tools). */
   notices?: CapabilityNotice[];
   createdAt: number;
+  /** When generation started (ms epoch) — drives the live "thinking" timer. */
+  startedAt?: number;
+  /** How long the answer took to generate, in ms — shown as a timer on the turn. */
+  durationMs?: number;
   /** True when this assistant turn is an error placeholder. */
   error?: boolean;
 }

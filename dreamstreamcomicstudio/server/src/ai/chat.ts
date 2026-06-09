@@ -20,6 +20,13 @@ import { JSON_TOOL_PROTOCOL_ENABLED, CHAT_MAX_OUTPUT_TOKENS } from '../config.js
 
 export type ChatReasoningLevel = 'none' | 'low' | 'medium' | 'high';
 
+/** A file the user attached to the current turn (base64 data URI). */
+export interface ChatAttachmentInput {
+  name: string;
+  mimeType: string;
+  dataUri: string;
+}
+
 export interface ChatToolEvent {
   tool: string;
   query?: string;
@@ -68,6 +75,13 @@ export interface RunChatParams {
   tools?: ChatTool[];
   /** Runtime situational context (date/timezone/locale/units/location). */
   clientContext?: ChatClientContext;
+  /**
+   * Files attached to the CURRENT user turn. Images already ride along as image
+   * parts in the message (vision); these are surfaced to the model as a manifest +
+   * inlined text so it can actually READ and reference them instead of claiming it
+   * "can't open the file". Heavy/binary processing still flows through run_python.
+   */
+  attachments?: ChatAttachmentInput[];
   /** Abort signal for in-flight tool calls. */
   signal?: AbortSignal;
   /** When set, stream content/reasoning deltas as they arrive (SSE). */
@@ -171,6 +185,121 @@ ${lines.join('\n')}
 - Report measurements in the user's preferred units. Do not claim you don't know the date or the user's general location — it is given above.`;
 };
 
+// How much of each attached text/data file we inline into the system prompt so the
+// model can READ it directly, and the total budget across all files. Beyond this the
+// model is pointed at run_python to stream the rest from /input/<name>.
+const ATTACH_PER_FILE_CHARS = 8_000;
+const ATTACH_TOTAL_CHARS = 24_000;
+
+const isTextLikeAttachment = (mimeType: string, name: string): boolean =>
+  /^text\//i.test(mimeType) ||
+  /^application\/(json|xml|csv|x-ndjson|x-yaml|yaml|x-www-form-urlencoded)/i.test(mimeType) ||
+  /\.(csv|tsv|json|ndjson|txt|md|markdown|log|xml|yaml|yml|ini|toml|tex)$/i.test(name);
+
+// Decode a base64 (or percent-encoded) data URI into UTF-8 text. Returns null when the
+// input isn't a data URI we can read. FileReader.readAsDataURL always emits base64.
+const decodeTextDataUri = (dataUri: string): string | null => {
+  const m = /^data:([^;,]*)((?:;[^,]*)*),(.*)$/s.exec(dataUri);
+  if (!m) return null;
+  try {
+    const params = m[2] || '';
+    const payload = m[3] ?? '';
+    return /;base64/i.test(params)
+      ? Buffer.from(payload, 'base64').toString('utf8')
+      : decodeURIComponent(payload);
+  } catch {
+    return null;
+  }
+};
+
+// Rough decoded byte size of a data URI, for a human-readable size hint only.
+const approxAttachmentBytes = (dataUri: string): number => {
+  const comma = dataUri.indexOf(',');
+  const payload = comma >= 0 ? dataUri.slice(comma + 1) : dataUri;
+  return /;base64/i.test(dataUri.slice(0, comma >= 0 ? comma : 0))
+    ? Math.floor((payload.length * 3) / 4)
+    : payload.length;
+};
+
+const humanBytes = (bytes: number): string =>
+  bytes >= 1_000_000 ? `${(bytes / 1_000_000).toFixed(1)} MB` : bytes >= 1_000 ? `${Math.round(bytes / 1_000)} KB` : `${bytes} B`;
+
+// Surface the user's attached files to the model. Without this the model was never
+// even TOLD a file was attached (non-image files only reached the run_python sandbox),
+// so it would insist it "can't access the attachment". Here we hand it a manifest plus
+// the inlined text of any text/data files, and point it at run_python for the rest.
+export const buildAttachmentsBlock = (
+  attachments?: ChatAttachmentInput[],
+  opts?: { canRunPython?: boolean }
+): string => {
+  if (!attachments || attachments.length === 0) return '';
+  const canRunPython = opts?.canRunPython !== false;
+  const manifest: string[] = [];
+  const inlined: string[] = [];
+  let budget = ATTACH_TOTAL_CHARS;
+
+  for (const att of attachments) {
+    if (!att || typeof att.name !== 'string' || typeof att.dataUri !== 'string') continue;
+    const size = humanBytes(approxAttachmentBytes(att.dataUri));
+    const mime = att.mimeType || 'application/octet-stream';
+
+    if (/^image\//i.test(mime)) {
+      manifest.push(`- ${att.name} (${mime}, ${size}) — provided to you as an image in this message; look at it directly to describe/analyze/extract from it.`);
+      continue;
+    }
+
+    if (isTextLikeAttachment(mime, att.name) && budget > 0) {
+      const text = decodeTextDataUri(att.dataUri);
+      if (text != null) {
+        const slice = text.slice(0, Math.min(ATTACH_PER_FILE_CHARS, budget));
+        budget -= slice.length;
+        const truncatedNote = slice.length < text.length ? `\n…(truncated — the full file is available to run_python at /input/${att.name})` : '';
+        manifest.push(`- ${att.name} (${mime}, ${size}) — contents included below.`);
+        inlined.push(`--- ${att.name} ---\n${slice}${truncatedNote}`);
+        continue;
+      }
+    }
+
+    manifest.push(
+      canRunPython
+        ? `- ${att.name} (${mime}, ${size}) — binary/large file; read or process it by writing code with the run_python tool (mounted read-only at /input/${att.name}).`
+        : `- ${att.name} (${mime}, ${size}) — binary file; its contents can't be inlined here.`
+    );
+  }
+
+  if (!manifest.length) return '';
+
+  let block = `\n\nATTACHED FILES — the user attached the following file(s) to THIS message. You CAN access them. NEVER tell the user you can't open, read, or reference an attachment.
+${manifest.join('\n')}`;
+  if (inlined.length) {
+    block += `\n\nAttached file contents:\n${inlined.join('\n\n')}`;
+  }
+  block += canRunPython
+    ? `\n\nUse these files to answer. For analysis, conversion, parsing, or any processing beyond the text shown above, write Python with the run_python tool — the files are mounted read-only at /input/<name>.`
+    : `\n\nUse the file contents shown above to answer.`;
+  return block;
+};
+
+// A clearly trivial / conversational message that needs no live web grounding:
+// greetings, thanks, acknowledgements, or a bare arithmetic ask. Used to skip the
+// always-on web plugin (which fires a search round-trip on EVERY message) for inputs
+// like "hi"/"thanks"/"2+2" — the single biggest reason the SIMPLEST chats felt slow.
+// The model still keeps the web_search TOOL, so a real question grounds the instant it
+// needs to; we're only dropping the reflexive search on inputs that can't benefit.
+const TRIVIAL_CHAT_RE =
+  /^(?:hi+|hey+|hello+|yo|sup|hiya|howdy|gm|gn|good (?:morning|afternoon|evening|night)|thanks?|thank you|thank you so much|thx|ty|tysm|ok(?:ay)?|k|cool|nice|great|awesome|perfect|got it|gotcha|sounds good|understood|lol|haha|hehe|np|no problem|yw|you're welcome|please|yes|no|yep|yup|nope|nah|sure|right|bye|goodbye|see ya|cya|later|cheers)[\s!.?,]*$/i;
+const PURE_ARITHMETIC_RE = /^[\d\s().,+\-*/×÷%^]+\??$/;
+const ARITHMETIC_ASK_RE = /^(?:what(?:'s| is| are)?|calc(?:ulate)?|compute|solve|how much is)\s+[\d\s().,+\-*/×÷%^]+\s*\??$/i;
+
+export const isTrivialChat = (text: string): boolean => {
+  const t = (text || '').trim();
+  if (!t) return true;
+  if (t.length <= 80 && TRIVIAL_CHAT_RE.test(t)) return true;
+  if (t.length <= 40 && PURE_ARITHMETIC_RE.test(t)) return true;
+  if (t.length <= 60 && ARITHMETIC_ASK_RE.test(t)) return true;
+  return false;
+};
+
 // Output-token budget for a chat answer. The old flat 2048 cap truncated long answers and —
 // worse — cut off generate_app/render_chart tool-call arguments mid-JSON (the entire app or
 // chart rides inside those arguments), so "build me an app/chart" silently produced nothing.
@@ -224,6 +353,12 @@ export const runChat = async (
   systemContent += buildContextBlock(params.clientContext);
   if (params.dreamstreamContextJson) {
     systemContent += dreamstreamBlock(params.dreamstreamContextJson);
+  }
+  // Make the user's attached files visible to the model (manifest + inlined text), so it
+  // can actually read/reference them instead of claiming it can't open the attachment.
+  if (params.attachments?.length) {
+    const canRunPython = (params.tools || []).some((t) => t.name === 'run_python');
+    systemContent += buildAttachmentsBlock(params.attachments, { canRunPython });
   }
   // When tools are available this turn, make it explicit the model HAS live web access —
   // otherwise weak models default to "I can't browse" even while results are fetched.
