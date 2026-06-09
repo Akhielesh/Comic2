@@ -24,7 +24,7 @@ import {
 import type { RunStatus, Command } from './kit';
 import {
   CodeWorkspace, LogsConsole, PreviewFrame, BuildTrace, ChangesPanel, HistoryPanel, PromptComposer,
-  ConversationThread, ActivityFeed, ServicesPanel, ClarifyPanel, LiveProgress, SuggestionsPanel, ContextUsageBar, PublishPanel,
+  ConversationThread, ActivityFeed, ServicesPanel, ClarifyPanel, LiveProgress, SuggestionsPanel, ContextUsageBar, PublishPanel, BackendPanel,
   useStudioConversation, useStudioActivity, useStudioBuild,
   useStudioWorkspace, useStudioLogs, isPathDirty, workspaceCurrentArtifact,
   detectProjectKind, projectKindLabel, isWebProject, runHint, diffLines, diffStat,
@@ -928,6 +928,17 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
           onAddEnvExample={addEnvExample}
           onConnect={() => onNavigate('settings')}
         />
+        {/* Bring-your-own backend: wire a real Supabase DB into the app (env + typed client). */}
+        {hasFiles && (
+          <BackendPanel
+            projectId={wsProjectId}
+            onConnect={(injected) => {
+              injected.forEach((f) => useStudioWorkspace.getState().addFile(f.path, f.content));
+              appendLog('success', 'Connected Supabase — added /.env.local + /lib/supabaseClient.ts. Refine to read/write your data.');
+              if (focus === 'preview') setFocus('code');
+            }}
+          />
+        )}
         <ChangesPanel />
         <HistoryPanel />
       </div>
