@@ -26,6 +26,9 @@ export interface Env {
    * real site. Falls back to the incoming request host (dev / single-domain setups).
    */
   STUDIO_PREVIEW_DOMAIN?: string;
+  /** Cloudflare API token + account id used by `wrangler pages deploy` (the `deploy` action). */
+  CLOUDFLARE_API_TOKEN?: string;
+  CLOUDFLARE_ACCOUNT_ID?: string;
 }
 
 interface StudioFile {
@@ -34,7 +37,7 @@ interface StudioFile {
 }
 
 interface RequestBody {
-  action: 'launch' | 'stop' | 'logs';
+  action: 'launch' | 'stop' | 'logs' | 'deploy';
   /** `u_<userId>_<projectId>` — ALWAYS scope per authenticated user (set by Railway). */
   sandboxId: string;
   files?: StudioFile[];
@@ -42,6 +45,10 @@ interface RequestBody {
   dev?: string;
   /** App port (1024–65535, not 3000, which the SDK reserves). */
   port?: number;
+  /** Cloudflare Pages project name (`deploy` action). */
+  projectName?: string;
+  /** Deploy target — currently 'cloudflare'. */
+  target?: string;
 }
 
 // Deterministic id for the dev server process, so the `logs` action can read its output
@@ -162,6 +169,52 @@ export default {
         const hostname = env.STUDIO_PREVIEW_DOMAIN || new URL(req.url).host;
         const exposed = await sandbox.exposePort(port, { hostname });
         return json({ status: 'starting', previewUrl: exposed.url, sandboxId: body.sandboxId, port });
+      }
+
+      if (body.action === 'deploy') {
+        // Build (if needed) + publish the project to Cloudflare Pages → a permanent *.pages.dev URL.
+        const files = Array.isArray(body.files) ? body.files : [];
+        if (!files.length) return json({ status: 'error', message: 'no files provided' }, 400);
+        if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID) {
+          return json({ status: 'error', message: 'Cloudflare token not set on the worker (CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID).' });
+        }
+        const projectName =
+          (body.projectName || body.sandboxId).toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 58) || 'ds-app';
+
+        // 1. Write the project into the container's workspace.
+        for (const f of files) {
+          const rel = f.path.startsWith('/') ? f.path : `/${f.path}`;
+          await sandbox.writeFile(`/workspace${rel}`, f.content);
+        }
+
+        // 2. Build when there's a package.json (Vite/React/etc.); pick the produced output dir.
+        //    Static projects (no package.json) deploy the workspace root as-is.
+        let outDir = '.';
+        if (files.some((f) => /(^|\/)package\.json$/.test(f.path))) {
+          const install = await sandbox.exec('npm install', { cwd: '/workspace', timeout: 300_000 });
+          if (!install.success) return json({ status: 'error', message: ('install failed: ' + (install.stderr || install.stdout || '')).slice(-2000) });
+          const build = await sandbox.exec('npm run build --if-present', { cwd: '/workspace', timeout: 300_000 });
+          if (!build.success) return json({ status: 'error', message: ('build failed: ' + (build.stderr || build.stdout || '')).slice(-2000) });
+          for (const d of ['dist', 'build', 'out', 'public']) {
+            const probe = await sandbox.exec(`test -d ${d} && echo __yes__`, { cwd: '/workspace', timeout: 15_000 }).catch(() => null);
+            if (probe && /__yes__/.test(probe.stdout || '')) { outDir = d; break; }
+          }
+        }
+
+        // 3. Ensure the Pages project exists, then deploy it. Creds are passed inline to wrangler
+        //    (the container shell, never logged). `project create` is idempotent (ignore "exists").
+        const creds = `CLOUDFLARE_API_TOKEN='${env.CLOUDFLARE_API_TOKEN}' CLOUDFLARE_ACCOUNT_ID='${env.CLOUDFLARE_ACCOUNT_ID}'`;
+        await sandbox
+          .exec(`${creds} npx --yes wrangler@latest pages project create ${projectName} --production-branch=production`, { cwd: '/workspace', timeout: 120_000 })
+          .catch(() => null);
+        const deploy = await sandbox.exec(
+          `${creds} npx --yes wrangler@latest pages deploy ${outDir} --project-name=${projectName} --branch=production`,
+          { cwd: '/workspace', timeout: 300_000 }
+        );
+        const out = `${deploy.stdout || ''}\n${deploy.stderr || ''}`;
+        const match = out.match(/https:\/\/[^\s'"]+\.pages\.dev/);
+        if (!deploy.success || !match) return json({ status: 'error', message: ('deploy failed: ' + out).slice(-2000) });
+        return json({ status: 'live', url: match[0], projectName });
       }
 
       return json({ error: 'unknown action' }, 400);
