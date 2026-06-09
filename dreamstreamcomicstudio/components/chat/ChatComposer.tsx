@@ -208,9 +208,13 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
 
   const handleFiles = async (files: FileList | null) => {
     if (!files) return;
-    // Images need a vision model; PDFs are always accepted (viewer-only).
+    // Images need a vision model; PDFs are always accepted (viewer-only); CSV/JSON/text
+    // data files are accepted so tools like run_python can read/convert/process them.
+    const DATA_TYPES = ['text/csv', 'application/json', 'text/plain'];
+    const DATA_EXTS = /\.(csv|tsv|json|txt)$/i;
+    const isDataFile = (f: File) => DATA_TYPES.includes(f.type) || DATA_EXTS.test(f.name);
     const accepted = Array.from(files).filter(
-      (f) => (features.vision && f.type.startsWith('image/')) || f.type === 'application/pdf'
+      (f) => (features.vision && f.type.startsWith('image/')) || f.type === 'application/pdf' || isDataFile(f)
     );
     const next: ChatAttachment[] = [];
     for (const file of accepted.slice(0, MAX_ATTACHMENTS - attachments.length)) {
@@ -356,7 +360,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
             <input
               ref={fileInputRef}
               type="file"
-              accept={features.vision ? 'image/*,application/pdf' : 'application/pdf'}
+              accept={`${features.vision ? 'image/*,' : ''}application/pdf,text/csv,application/json,text/plain,.csv,.tsv,.json,.txt`}
               multiple
               className="hidden"
               onChange={(e) => handleFiles(e.target.files)}

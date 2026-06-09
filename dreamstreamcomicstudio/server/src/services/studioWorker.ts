@@ -27,11 +27,16 @@ export const isValidStudioWorkerUrl = (value: string | undefined): boolean => {
 /** True once the owner has wired STUDIO_WORKER_URL (a valid URL) + STUDIO_HMAC_SECRET. */
 export const studioConfigured = (): boolean => Boolean(STUDIO_HMAC_SECRET) && isValidStudioWorkerUrl(STUDIO_WORKER_URL);
 
-/** Signed POST to the Studio Worker. Browsers never reach the Worker directly. */
-export const callStudioWorker = async (payload: Record<string, unknown>): Promise<WorkerCallResult> => {
+/** Signed POST to the Studio Worker. Browsers never reach the Worker directly. `timeoutMs`
+ *  defaults to the standard request budget; long operations (e.g. deploy = install+build+publish)
+ *  pass a larger value so they don't abort mid-build. */
+export const callStudioWorker = async (
+  payload: Record<string, unknown>,
+  timeoutMs: number = STUDIO_REQUEST_TIMEOUT_MS
+): Promise<WorkerCallResult> => {
   const raw = JSON.stringify(payload);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), STUDIO_REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(STUDIO_WORKER_URL, {
       method: 'POST',

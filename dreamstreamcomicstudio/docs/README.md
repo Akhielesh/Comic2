@@ -12,6 +12,7 @@ agent** can get oriented quickly and avoid re-deriving context.
 | `decisions/` | **ADRs** (Architecture Decision Records) — one file per significant decision, numbered. | Whenever you make a non-obvious, hard-to-reverse, or cross-cutting choice. |
 | `SOLUTION_LOG.md` | Chronological **problem → root cause → fix** log, with files + commit. | Every time you fix a real bug or land a feature worth explaining later. |
 | `features/` | One doc per feature: what it does, key files, flows, gotchas. | When you ship or materially change a feature. |
+| `email/` | Transactional + newsletter email (Cloudflare Email Sending): cost/limits, setup, security, design previews. | When email templates, routes, or the worker change. |
 | `production/` | Runbooks, go-live checklist, alerting, scaling (pre-existing). | Ops changes. |
 | `OVERHAUL_PLAN.md` | The original product/tech overhaul strategy (historical context). | Read-only history. |
 | `ai_flow_documentation.md` | Deep dive on the AI generation pipeline. | When the pipeline changes. |

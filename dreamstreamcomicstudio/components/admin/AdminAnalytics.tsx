@@ -154,6 +154,27 @@ export const AdminAnalytics: React.FC = () => {
             <Chips title="Feedback category" data={overview.feedbackByCategory} />
           </div>
 
+          {overview.chatPerformance && overview.chatPerformance.turns > 0 && (
+            <div className="border-2 border-black rounded-xl bg-white p-3">
+              <div className="text-xs font-bold uppercase tracking-wide text-slate-500 mb-2">Chat performance ({overview.chatPerformance.turns.toLocaleString()} turns)</div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+                <div><div className="text-lg font-display tabular-nums">{(overview.chatPerformance.avgLatencyMs / 1000).toFixed(1)}s</div><div className="text-[10px] font-bold uppercase text-slate-500">Avg latency</div></div>
+                <div><div className="text-lg font-display tabular-nums">{(overview.chatPerformance.p95LatencyMs / 1000).toFixed(1)}s</div><div className="text-[10px] font-bold uppercase text-slate-500">p95 latency</div></div>
+                <div><div className={`text-lg font-display tabular-nums ${overview.chatPerformance.emptyRate > 0.05 ? 'text-brand-red' : ''}`}>{(overview.chatPerformance.emptyRate * 100).toFixed(1)}%</div><div className="text-[10px] font-bold uppercase text-slate-500">Empty answers</div></div>
+                <div><div className={`text-lg font-display tabular-nums ${overview.chatPerformance.toolFailureRate > 0.1 ? 'text-amber-600' : ''}`}>{(overview.chatPerformance.toolFailureRate * 100).toFixed(1)}%</div><div className="text-[10px] font-bold uppercase text-slate-500">Tool failures</div></div>
+              </div>
+              {overview.chatPerformance.topModels.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {overview.chatPerformance.topModels.map((m) => (
+                    <span key={m.model} className="text-[11px] font-bold border-2 border-black rounded-full px-2 py-0.5 bg-white">
+                      {m.model} <span className="text-slate-500 tabular-nums">{m.count}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {overview.topIssues && overview.topIssues.length > 0 && (
             <div>
               <div className="text-xs font-bold uppercase tracking-wide text-slate-500 mb-1">Top issues (same failure, grouped)</div>

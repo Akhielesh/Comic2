@@ -49,11 +49,17 @@ import { topDomains, domainStrength, DOMAIN_META, FILTERABLE_DOMAINS, type Domai
 import { getModelBenchmarks, BENCHMARK_METRICS, formatScore, type BenchmarkMetricId } from '../services/modelBenchmarks';
 import { DomainTags, ModelInsightsPanel } from './models/ModelInsights';
 import { CodingLeaderboard } from './models/CodingLeaderboard';
+import { ImageModelRanking } from './models/ImageModelRanking';
+import { ProviderAggregatorTable } from './models/ProviderAggregatorTable';
+import { ModelDataSources } from './models/ModelDataSources';
 import { InfoDot } from './common/InfoTooltip';
 import type { GLOSSARY } from '../services/modelGlossary';
 import { describeCost, classBadge } from '../shared/pricing';
 import { useAuth } from '../contexts/AuthContext';
 import { modelLinks, SOURCE_HOSTING_NOTE } from '../services/modelLinks';
+import { getModelVendor, getModelVendorId, availableVendors } from '../services/modelVendors';
+import { recommendModels, accuracyElo } from '../services/modelRecommendations';
+import { getModelSize } from '../services/modelParams';
 import type { ModelSource } from '../services/modelCatalog';
 
 interface ModelLibraryProps {
@@ -147,13 +153,17 @@ const FILTER_PREDICATES: Record<Exclude<FilterKey, 'all'>, (m: CatalogModel, c: 
   nvidia: (m) => m.source === 'nvidia'
 };
 
-const matchesFilter = (model: CatalogModel, filters: Set<FilterKey>, domains: Set<DomainId>, query: string): boolean => {
+const matchesFilter = (model: CatalogModel, filters: Set<FilterKey>, domains: Set<DomainId>, vendors: Set<string>, query: string): boolean => {
   const caps = getCapabilities(model);
   for (const f of filters) {
     if (f === 'all') continue;
     const predicate = FILTER_PREDICATES[f];
     if (predicate && !predicate(model, caps)) return false;
   }
+
+  // Vendor filters (OR among themselves, ANDs with everything else): keep models whose maker is
+  // one of the selected vendors — so "Anthropic" + "OpenAI" shows both, narrowed by the rest.
+  if (vendors.size > 0 && !vendors.has(getModelVendorId(model))) return false;
 
   // Domain filters (benchmark-backed): a model must be at least "Capable" (≥55) in each selected
   // domain. ANDs with everything else, so "Coding" + "Free" finds free models that can actually code.
@@ -167,8 +177,9 @@ const matchesFilter = (model: CatalogModel, filters: Set<FilterKey>, domains: Se
   const tokens = query.trim().toLowerCase().split(/[\s,]+/).filter(Boolean);
   if (tokens.length) {
     const capLabels = capabilityBadges(model).map((b) => b.label).join(' ');
+    const vendor = getModelVendor(model);
     const haystack = [
-      model.id, model.name, model.description, model.source,
+      model.id, model.name, model.description, model.source, vendor.label, vendor.id, getModelSize(model.id)?.params,
       model.roles?.join(' '), model.possibilities?.join(' '), model.drawbacks?.join(' '),
       model.editorialNote, capLabels
     ].filter(Boolean).join(' ').toLowerCase();
@@ -281,7 +292,15 @@ const ModelCard: React.FC<{
   >
     <div className="flex items-start justify-between gap-2">
       <div className="min-w-0">
-        <div className="text-[10px] font-bold uppercase text-slate-500">{sourceLabel(providerOrigin(model))}</div>
+        <div className="flex items-center gap-1.5 mb-0.5">
+          <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-black ${getModelVendor(model).color}`}>{getModelVendor(model).label}</span>
+          <span className="text-[10px] font-bold uppercase text-slate-500">{sourceLabel(providerOrigin(model))}</span>
+          {getModelVendor(model).url && (
+            <a href={getModelVendor(model).url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-slate-400 hover:text-brand-blue" title={`${getModelVendor(model).label} — more info`}>
+              <ExternalLink className="w-3 h-3" />
+            </a>
+          )}
+        </div>
         <div className="font-bold leading-tight truncate">{model.name}</div>
       </div>
       <Badge className={COST_CLASS_COLOR[model.costClass]}>{COST_CLASS_LABEL[model.costClass] ?? classBadge(model.costClass)}</Badge>
@@ -291,6 +310,10 @@ const ModelCard: React.FC<{
       {model.apiCallable === false && (
         <Badge className="bg-amber-100 text-amber-800 border-amber-400" >Download-only</Badge>
       )}
+      {(() => {
+        const size = getModelSize(model.id);
+        return size ? <Badge className="bg-slate-800 text-white" >{size.params}</Badge> : null;
+      })()}
       {capabilityBadges(model).map((b) => <Badge key={b.label} className={TONE_CLASS[b.tone]}>{b.label}</Badge>)}
     </div>
 
@@ -659,6 +682,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState<Set<FilterKey>>(new Set());
   const [domainFilters, setDomainFilters] = useState<Set<DomainId>>(new Set());
+  const [vendorFilters, setVendorFilters] = useState<Set<string>>(new Set());
   const [minContextK, setMinContextK] = useState(0); // context-length slider, in thousands of tokens
   const [sortBy, setSortBy] = useState<SortKey>('relevance');
   const [showFilters, setShowFilters] = useState(false);
@@ -668,7 +692,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
   const [compareIds, setCompareIds] = useState<string[]>([]);
   const [showCompare, setShowCompare] = useState(false);
   const [smartTeam, setSmartTeam] = useState<SmartTeam | null>(null);
-  const [view, setView] = useState<'library' | 'leaderboard'>('library');
+  const [view, setView] = useState<'library' | 'leaderboard' | 'table'>('library');
   const [domainPick, setDomainPick] = useState<{ domain: DomainId; best: ReturnType<typeof pickBestForDomain>; mode: SmartMode } | null>(null);
 
   useEffect(() => {
@@ -704,14 +728,16 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
   }, [reloadKey]);
 
   const visible = useMemo(() => {
-    let list = models.filter((model) => matchesFilter(model, filters, domainFilters, query));
+    let list = models.filter((model) => matchesFilter(model, filters, domainFilters, vendorFilters, query));
     if (minContextK > 0) list = list.filter((m) => (m.contextLength || 0) >= minContextK * 1000);
     return sortModels(list, sortBy);
-  }, [models, filters, domainFilters, query, minContextK, sortBy]);
+  }, [models, filters, domainFilters, vendorFilters, query, minContextK, sortBy]);
   const compareModels = useMemo(() => compareIds.map((id) => models.find((m) => m.id === id)).filter((m): m is CatalogModel => !!m), [compareIds, models]);
+  const vendorOptions = useMemo(() => availableVendors(models), [models]);
+  const picks = useMemo(() => recommendModels(models, 2), [models]);
 
-  const activeFilterCount = filters.size + domainFilters.size + (minContextK > 0 ? 1 : 0);
-  const resetFilters = () => { setFilters(new Set()); setDomainFilters(new Set()); setMinContextK(0); };
+  const activeFilterCount = filters.size + domainFilters.size + vendorFilters.size + (minContextK > 0 ? 1 : 0);
+  const resetFilters = () => { setFilters(new Set()); setDomainFilters(new Set()); setVendorFilters(new Set()); setMinContextK(0); };
 
   const useModel = (model: CatalogModel, slot: ModelSlot) => setSelectedModel(slot, model.id, 'specific', model.source);
 
@@ -766,11 +792,17 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
         {/* View: curated Library vs the technical coding leaderboard (OpenRouter-style ranking). */}
         <div className="mt-4 inline-flex rounded-xl border-2 border-black overflow-hidden">
           <button onClick={() => setView('library')} className={`px-4 py-2 text-sm font-bold ${view === 'library' ? 'bg-black text-white' : 'bg-white hover:bg-slate-100'}`}>Library</button>
+          <button onClick={() => setView('table')} className={`px-4 py-2 text-sm font-bold border-l-2 border-black inline-flex items-center gap-1.5 ${view === 'table' ? 'bg-brand-blue text-white' : 'bg-white hover:bg-slate-100'}`}><SlidersHorizontal className="w-4 h-4" /> Providers table</button>
           <button onClick={() => setView('leaderboard')} className={`px-4 py-2 text-sm font-bold border-l-2 border-black inline-flex items-center gap-1.5 ${view === 'leaderboard' ? 'bg-emerald-600 text-white' : 'bg-white hover:bg-slate-100'}`}><Code2 className="w-4 h-4" /> Coding leaderboard</button>
         </div>
 
         {view === 'leaderboard' ? (
           <CodingLeaderboard models={models} onStartChat={onStartChat} />
+        ) : view === 'table' ? (
+          <>
+            <ProviderAggregatorTable models={models} />
+            <ModelDataSources />
+          </>
         ) : (
         <>
         {/* Smart auto-pick — the app's own reasoning picks the best model per stage. */}
@@ -865,7 +897,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
             </label>
             <button
               onClick={() => setShowFilters((v) => !v)}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border-2 border-black text-sm font-bold transition-colors ${showFilters || activeFilterCount > 0 ? 'bg-brand-blue text-white' : 'bg-white hover:bg-brand-yellow/60'}`}
+              className={`xl:hidden flex items-center gap-1.5 px-3 py-2 rounded-lg border-2 border-black text-sm font-bold transition-colors ${showFilters || activeFilterCount > 0 ? 'bg-brand-blue text-white' : 'bg-white hover:bg-brand-yellow/60'}`}
             >
               <SlidersHorizontal className="w-4 h-4" /> Filters
               {activeFilterCount > 0 && <span className="ml-0.5 rounded-full bg-white text-brand-blue text-[10px] font-bold w-4 h-4 flex items-center justify-center border border-black">{activeFilterCount}</span>}
@@ -873,9 +905,9 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
           </div>
         </div>
 
-        {/* Collapsible filter panel */}
-        {showFilters && (
-          <div className="mt-3 border-2 border-black rounded-xl bg-white p-4 shadow-comic space-y-4">
+        <div className="mt-3 xl:flex xl:gap-6 xl:items-start">
+          {/* Filter rail — left sidebar on xl, collapsible panel below the search bar on smaller screens */}
+          <aside className={`${showFilters ? 'block' : 'hidden'} xl:block xl:w-72 xl:shrink-0 xl:sticky xl:top-4 border-2 border-black rounded-xl bg-white p-4 shadow-comic space-y-4 mb-4 xl:mb-0`}>
             <div>
               <div className="text-[10px] font-bold uppercase text-slate-500 mb-1.5">Type &amp; capabilities</div>
               <div className="flex flex-wrap gap-2">
@@ -893,6 +925,32 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
                 })}
               </div>
             </div>
+
+            {vendorOptions.length > 0 && (
+              <div>
+                <div className="text-[10px] font-bold uppercase text-slate-500 mb-1.5">Provider / maker</div>
+                <div className="flex flex-wrap gap-2">
+                  {vendorOptions.map(({ vendor, count }) => {
+                    const active = vendorFilters.has(vendor.id);
+                    const toggle = () => setVendorFilters((prev) => {
+                      const next = new Set(prev);
+                      next.has(vendor.id) ? next.delete(vendor.id) : next.add(vendor.id);
+                      return next;
+                    });
+                    return (
+                      <button
+                        key={vendor.id}
+                        onClick={toggle}
+                        className={`text-[11px] font-bold px-2.5 py-1 rounded border-2 border-black transition-colors flex items-center gap-1.5 ${active ? vendor.color : 'bg-white hover:bg-slate-100'}`}
+                      >
+                        {vendor.label}
+                        <span className={`text-[9px] font-mono rounded-full px-1 ${active ? 'bg-white/25' : 'bg-slate-200 text-slate-600'}`}>{count}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <div>
               <div className="text-[10px] font-bold uppercase text-slate-500 mb-1.5 flex items-center gap-1">
@@ -928,9 +986,9 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
               <span className="text-[11px] font-bold text-slate-500">{visible.length} match{visible.length === 1 ? '' : 'es'}</span>
               <button onClick={resetFilters} disabled={activeFilterCount === 0} className="text-[11px] font-bold px-2.5 py-1 rounded border-2 border-black bg-white hover:bg-slate-100 disabled:opacity-40 flex items-center gap-1"><RotateCcw className="w-3 h-3" /> Reset filters</button>
             </div>
-          </div>
-        )}
+          </aside>
 
+          <div className="flex-1 min-w-0">
         {degraded && (
           <div className="mt-4 bg-amber-100 border-2 border-black rounded-lg p-3 text-sm flex gap-2">
             <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
@@ -952,6 +1010,44 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
           <div className="mt-8 text-center text-slate-500 py-16">No models match your filters.</div>
         ) : (
           <>
+            {activeFilterCount === 0 && !query.trim() && picks.bestValue.length > 0 && (
+              <div className="mt-4 border-2 border-black rounded-xl bg-brand-yellow/15 p-4 shadow-comic">
+                <div className="flex items-center gap-2 mb-2">
+                  <Sparkles className="w-4 h-4" />
+                  <span className="font-display text-lg">Top picks — best accuracy for the price</span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  {picks.bestValue.map((m, i) => (
+                    <button key={m.id} onClick={() => setSelected(m)} className="text-left bg-white border-2 border-black rounded-lg p-3 hover:shadow-comic-hover hover:translate-x-[1px] hover:translate-y-[1px] transition-all">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span className="text-[9px] font-bold uppercase px-1 py-0.5 rounded bg-brand-blue text-white">#{i + 1} value</span>
+                        <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-black ${getModelVendor(m).color}`}>{getModelVendor(m).label}</span>
+                      </div>
+                      <div className="font-bold text-sm leading-tight truncate">{m.name}</div>
+                      <div className="text-[11px] text-slate-600 mt-1 flex items-center gap-2 flex-wrap">
+                        <span title="Arena Elo (LMArena)">★ {accuracyElo(m)} Elo</span>
+                        <span>·</span>
+                        <span>{costLabel(m)}</span>
+                      </div>
+                    </button>
+                  ))}
+                  {picks.topImage && (
+                    <button onClick={() => setSelected(picks.topImage!)} className="text-left bg-white border-2 border-black rounded-lg p-3 hover:shadow-comic-hover hover:translate-x-[1px] hover:translate-y-[1px] transition-all">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <span className="text-[9px] font-bold uppercase px-1 py-0.5 rounded bg-fuchsia-600 text-white">Top image</span>
+                        <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-black ${getModelVendor(picks.topImage).color}`}>{getModelVendor(picks.topImage).label}</span>
+                      </div>
+                      <div className="font-bold text-sm leading-tight truncate">{picks.topImage.name}</div>
+                      <div className="text-[11px] text-slate-600 mt-1">{costLabel(picks.topImage)}{picks.topImage.supportsImageInput ? ' · reference-capable' : ''}</div>
+                    </button>
+                  )}
+                </div>
+                <div className="text-[10px] text-slate-500 mt-2">Ranked by Arena-Elo accuracy per dollar of output. Free models can rate-limit; verify pricing at the source.</div>
+              </div>
+            )}
+            {activeFilterCount === 0 && !query.trim() && (
+              <div className="mt-4"><ImageModelRanking /></div>
+            )}
             <div className="mt-4 text-xs font-bold uppercase text-slate-500 flex items-center gap-2">
               {visible.length} models
               {refreshing && <span className="flex items-center gap-1 text-slate-400 normal-case font-normal"><Loader2 className="w-3 h-3 animate-spin" /> refreshing…</span>}
@@ -972,6 +1068,8 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
             </div>
           </>
         )}
+          </div>
+        </div>
         </>
         )}
       </div>

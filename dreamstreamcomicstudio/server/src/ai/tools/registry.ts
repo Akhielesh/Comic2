@@ -27,6 +27,12 @@ import { NANGO_TOOLS } from './nango.js';
 import { VIDEO_TOOLS } from './videoRender.js';
 import { LIVE_TEMPLATE_TOOLS } from './liveTemplateTool.js';
 import { generateAppTool } from './codeStudio.js';
+import { generativeUiTool } from './generativeUi.js';
+import { convertDataTool } from './convertData.js';
+import { analyzeDataTool } from './analyzeData.js';
+import { transformDataTool } from './transformData.js';
+import { convertImageTool } from './convertImage.js';
+import { makeRunPythonTool, runPythonTool } from './runPython.js';
 
 export type { ChatTool, ToolExecResult, ToolContext } from './types.js';
 
@@ -530,6 +536,240 @@ const metricsTool: ChatTool = {
   }
 };
 
+// Build an interactive, self-grading quiz from questions the model authors — for
+// on-demand learning/practice. Pure + local (no external API).
+const quizTool: ChatTool = {
+  name: 'generate_quiz',
+  description:
+    'Generate an interactive, self-grading quiz to help the user learn or test a topic. Use it whenever the user is studying/learning and would benefit from practice ("quiz me", "test me", "practice questions"), or PROACTIVELY right after explaining a concept. Mix question types: "single" (one correct choice), "multi" (several correct), "true_false", and "short" (typed answer). For single/multi/true_false provide `choices` (each with an id + text) and put the correct choice id(s) in `correct`; for "short" put accepted answer strings in `correct`. Add a brief `explanation` per question (shown after grading) and an optional `hint`. The interactive quiz card is shown to the user — keep prose brief.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      topic: { type: 'string', description: 'Subject area, e.g. "Biology" or "SQL joins".' },
+      description: { type: 'string' },
+      questions: {
+        type: 'array',
+        description: 'The quiz questions (aim for 3–8, varied types and difficulty).',
+        items: {
+          type: 'object',
+          properties: {
+            type: { type: 'string', enum: ['single', 'multi', 'true_false', 'short'] },
+            prompt: { type: 'string', description: 'The question text.' },
+            choices: {
+              type: 'array',
+              description: 'For single/multi/true_false. Omit for "short".',
+              items: { type: 'object', properties: { id: { type: 'string' }, text: { type: 'string' } }, required: ['id', 'text'] }
+            },
+            correct: { type: 'array', items: { type: 'string' }, description: 'Choice id(s) for single/multi/true_false; accepted answer strings for "short".' },
+            explanation: { type: 'string', description: 'Shown after the user checks answers.' },
+            hint: { type: 'string' }
+          },
+          required: ['type', 'prompt', 'correct']
+        }
+      }
+    },
+    required: ['title', 'questions']
+  },
+  execute: async (args) => {
+    const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined);
+    const types = new Set(['single', 'multi', 'true_false', 'short']);
+    const rawQs = Array.isArray(args?.questions) ? (args!.questions as unknown[]) : [];
+    const questions = rawQs
+      .map((raw, i) => {
+        const q = raw as Record<string, unknown>;
+        const type = types.has(String(q?.type)) ? String(q.type) : 'single';
+        const choices = Array.isArray(q?.choices)
+          ? (q.choices as unknown[])
+              .map((c, ci) => {
+                const co = c as Record<string, unknown>;
+                return { id: str(co?.id) || String.fromCharCode(97 + ci), text: str(co?.text) || '' };
+              })
+              .filter((c) => c.text)
+          : undefined;
+        const correct = Array.isArray(q?.correct) ? (q.correct as unknown[]).map((x) => String(x)).filter(Boolean) : [];
+        return { id: str(q?.id) || `q${i + 1}`, type, prompt: str(q?.prompt) || '', choices, correct, explanation: str(q?.explanation), hint: str(q?.hint) };
+      })
+      .filter((q) => q.prompt && q.correct.length > 0);
+    if (!questions.length) return { content: 'No usable quiz questions were provided (each needs a prompt and at least one correct answer).' };
+    const data = { title: str(args?.title) || 'Quiz', topic: str(args?.topic), description: str(args?.description), questions };
+    return {
+      content: `Created a ${questions.length}-question quiz${data.topic ? ` on ${data.topic}` : ''}. An interactive, self-grading quiz card is shown to the user.`,
+      artifacts: [{ type: 'quiz', data }]
+    };
+  }
+};
+
+// Author a downloadable document (study guide, cheat sheet, notes, report, plan) the
+// user can keep as a real resource. Pure + local — the client renders it with
+// .md / .html / PDF download buttons.
+const documentTool: ChatTool = {
+  name: 'generate_document',
+  description:
+    'Create a downloadable document the user can keep — a study guide, cheat sheet, notes, report, plan, summary, worksheet, or reference. Use this whenever the user asks you to "make/write/create a document / guide / cheat sheet / notes / report / handout" or would benefit from a saved resource rather than an ephemeral chat reply. Provide a clear `title` and the full document body as Markdown in `content` (headings, lists, tables, code blocks all supported). The user gets an inline card with Download .md / .html / PDF buttons. Keep your chat prose brief — put the substance in the document.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      subtitle: { type: 'string' },
+      filename: { type: 'string', description: 'Optional base filename (no extension).' },
+      content: { type: 'string', description: 'The full document body as Markdown.' }
+    },
+    required: ['title', 'content']
+  },
+  execute: async (args) => {
+    const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined);
+    const title = str(args?.title) || 'Document';
+    const content = str(args?.content);
+    if (!content) return { content: 'No document content was provided.' };
+    const data = { title, subtitle: str(args?.subtitle), filename: str(args?.filename), content };
+    return {
+      content: `Created the document "${title}". A downloadable document card (.md / .html / PDF) is shown to the user.`,
+      artifacts: [{ type: 'document', data }]
+    };
+  }
+};
+
+// Build a flip-card study deck the user can drill — for memorization/vocab. Pure + local.
+const flashcardsTool: ChatTool = {
+  name: 'generate_flashcards',
+  description:
+    'Create a deck of study flashcards (flip cards) to help the user memorize terms, definitions, vocabulary, formulas or facts. Use it when the user wants to MEMORIZE/DRILL something ("flashcards", "help me memorize", "vocab", "study cards"), or proactively alongside an explanation of definition-heavy material. Each card has a `front` (term/question) and `back` (definition/answer). The user gets an interactive deck they can flip, shuffle and mark known/review.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      topic: { type: 'string' },
+      cards: {
+        type: 'array',
+        description: 'The cards (aim for 5–20).',
+        items: { type: 'object', properties: { front: { type: 'string' }, back: { type: 'string' } }, required: ['front', 'back'] }
+      }
+    },
+    required: ['cards']
+  },
+  execute: async (args) => {
+    const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined);
+    const cards = (Array.isArray(args?.cards) ? (args!.cards as unknown[]) : [])
+      .map((c) => { const co = c as Record<string, unknown>; return { front: str(co?.front) || '', back: str(co?.back) || '' }; })
+      .filter((c) => c.front && c.back);
+    if (!cards.length) return { content: 'No usable flashcards were provided (each needs a front and back).' };
+    const data = { title: str(args?.title) || 'Flashcards', topic: str(args?.topic), cards };
+    return { content: `Created a ${cards.length}-card flashcard deck${data.topic ? ` on ${data.topic}` : ''}. An interactive deck is shown to the user.`, artifacts: [{ type: 'flashcards', data }] };
+  }
+};
+
+// Build an interactive SQL practice exercise. The model provides a schema + task; the
+// user runs real queries against a sandboxed in-memory SQLite (server-side sql.js).
+const sqlExerciseTool: ChatTool = {
+  name: 'sql_exercise',
+  description:
+    'Create an interactive SQL practice playground where the user writes and RUNS real SQL against a sandboxed in-memory SQLite database (real results, real errors). Use this whenever the user is learning/practicing SQL or databases ("teach me SQL", "practice joins", "give me a SQL exercise"). Provide `schema` = the SQL that sets up the practice tables (CREATE TABLE … plus a few INSERT rows of realistic seed data), a clear `task` describing what to query, optional `instructions`, and an optional `starterSql` to prefill the editor. Keep prose brief — the playground is interactive.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      instructions: { type: 'string', description: 'What the user is learning / context.' },
+      schema: { type: 'string', description: 'SQL that creates the practice tables AND inserts a few seed rows.' },
+      task: { type: 'string', description: 'The query challenge for the user to solve.' },
+      starterSql: { type: 'string', description: 'Optional starter query to prefill the editor.' }
+    },
+    required: ['schema', 'task']
+  },
+  execute: async (args) => {
+    const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined);
+    const schema = str(args?.schema);
+    const task = str(args?.task);
+    if (!schema || !task) return { content: 'A SQL exercise needs a schema (CREATE + seed) and a task.' };
+    const data = { title: str(args?.title) || 'SQL practice', instructions: str(args?.instructions), schema, task, starterSql: str(args?.starterSql) };
+    return { content: `Created an interactive SQL exercise${data.title ? ` ("${data.title}")` : ''}. A runnable, sandboxed SQL playground is shown to the user.`, artifacts: [{ type: 'sql_exercise', data }] };
+  }
+};
+
+// Build an interactive JavaScript practice playground. The model provides a task +
+// starter code; the user edits and RUNS it in a sandboxed Web Worker (real console
+// output, real JS errors). Pure + local.
+const codeExerciseTool: ChatTool = {
+  name: 'code_exercise',
+  description:
+    'Create an interactive coding playground where the user writes and RUNS real code in a sandboxed in-browser terminal (real output, real errors/tracebacks). JavaScript and Python run live (set `language` to "javascript" or "python"). Use this whenever the user is learning/practicing JS or Python or general programming ("teach me Python", "practice array methods", "give me a coding exercise", "let me try it"). Provide a clear `task`, optional `instructions`, and `starterCode` to prefill the editor (use console.log / print to show output). Keep prose brief — the playground is interactive. (For SQL use sql_exercise.)',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      instructions: { type: 'string', description: 'What the user is learning / context.' },
+      task: { type: 'string', description: 'The coding challenge for the user to solve.' },
+      language: { type: 'string', description: '"javascript" or "python" — both run live. Default "javascript".' },
+      starterCode: { type: 'string', description: 'Starter code to prefill the editor (use console.log / print for output).' }
+    },
+    required: ['task']
+  },
+  execute: async (args) => {
+    const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined);
+    const task = str(args?.task);
+    if (!task) return { content: 'A code exercise needs a task.' };
+    const data = {
+      title: str(args?.title) || 'Code practice',
+      instructions: str(args?.instructions),
+      task,
+      language: str(args?.language) || 'javascript',
+      starterCode: str(args?.starterCode)
+    };
+    return { content: `Created an interactive code exercise${data.title ? ` ("${data.title}")` : ''}. A runnable, sandboxed ${data.language === 'python' ? 'Python' : 'JavaScript'} playground is shown to the user.`, artifacts: [{ type: 'code_exercise', data }] };
+  }
+};
+
+// Package several generated files into one downloadable bundle (.zip). Pure + local —
+// the client renders per-file download buttons plus a "download all as .zip" action.
+const bundleTool: ChatTool = {
+  name: 'generate_bundle',
+  description:
+    'Package a SET of files into one downloadable bundle the user can keep — they get per-file downloads plus a single "download all (.zip)" button. Use this when the user wants a KIT / PACK / BUNDLE of resources rather than a single document: e.g. a study pack (guide + practice questions + flashcards as files), a starter project (multiple code/config files), or data + notes (a CSV plus a README). Provide a `title` and a `files` array — each file has a `name` WITH extension (e.g. "study-guide.md", "data.csv", "starter.py") and its full text `content`. Keep chat prose brief; put the substance in the files.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      description: { type: 'string' },
+      files: {
+        type: 'array',
+        description: 'The files to bundle (2–12). Each has a name with extension and text content.',
+        items: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Filename with extension, e.g. "notes.md".' },
+            content: { type: 'string' },
+            label: { type: 'string', description: 'Optional short description of the file.' }
+          },
+          required: ['name', 'content']
+        }
+      }
+    },
+    required: ['title', 'files']
+  },
+  execute: async (args) => {
+    const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined);
+    const MAX_FILES = 12;
+    const MAX_FILE_CHARS = 60_000;
+    const files = (Array.isArray(args?.files) ? (args!.files as unknown[]) : [])
+      .flatMap((f) => {
+        const fo = f as Record<string, unknown>;
+        const name = str(fo?.name);
+        const content = typeof fo?.content === 'string' ? fo.content : undefined;
+        if (!name || content === undefined) return [];
+        // Sanitize the path: no directory traversal / leading slashes in zip entry names.
+        const safe = name.replace(/^[/\\]+/, '').replace(/\.\.[/\\]/g, '').slice(0, 120);
+        return [{ name: safe || 'file.txt', content: content.slice(0, MAX_FILE_CHARS), label: str(fo?.label) }];
+      })
+      .slice(0, MAX_FILES);
+    if (!files.length) return { content: 'No usable files were provided for the bundle (each needs a name and content).' };
+    const data = { title: str(args?.title) || 'Resource bundle', description: str(args?.description), files };
+    return {
+      content: `Built a resource bundle "${data.title}" with ${files.length} file(s). A downloadable card (per-file + .zip) is shown to the user.`,
+      artifacts: [{ type: 'resource_bundle', data }]
+    };
+  }
+};
+
 // Flatten the free-API tool packs into a name→tool map. These are all context-free
 // (they take explicit args), so they live alongside the original built-ins.
 const FREE_API_TOOLS: ChatTool[] = [
@@ -559,6 +799,18 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   get_stock: stockTool,
   render_chart: chartTool,
   show_metrics: metricsTool,
+  render_ui: generativeUiTool,
+  convert_data: convertDataTool,
+  analyze_data: analyzeDataTool,
+  transform_data: transformDataTool,
+  convert_image: convertImageTool,
+  run_python: runPythonTool,
+  generate_quiz: quizTool,
+  generate_flashcards: flashcardsTool,
+  generate_document: documentTool,
+  generate_bundle: bundleTool,
+  sql_exercise: sqlExerciseTool,
+  code_exercise: codeExerciseTool,
   generate_app: generateAppTool,
   ...Object.fromEntries(FREE_API_TOOLS.map((t) => [t.name, t]))
 };
@@ -587,6 +839,11 @@ export const resolveTools = (names: string[] | undefined, ctx?: ToolContext): Ch
     }
     if (name === 'find_places') {
       tools.push(makePlacesTool(ctx));
+      continue;
+    }
+    if (name === 'run_python') {
+      // Built per-request so the current turn's attachments (on ctx) reach the sandbox.
+      tools.push(makeRunPythonTool(ctx));
       continue;
     }
     const tool = STATIC_TOOLS[name];

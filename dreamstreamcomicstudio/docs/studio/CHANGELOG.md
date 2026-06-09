@@ -5,6 +5,35 @@ pick up cold. Format: date · author · summary · files · follow-ups.
 
 ---
 
+## 2026-06-08 · Claude — FEAT: studio agent constitution (onboarded, customized + wired into build prompts)
+Owner uploaded a 17-file "agent constitution" (a generic prompt-to-app-builder rule set) and asked to
+assess it, onboard it, customize it, and implement it into the app. Assessment: genuinely strong
+(prompts-are-probabilistic / gates-are-deterministic, anti-over-engineering, recovery-first,
+model-agnostic) but **generic** — it assumed Next.js/shadcn/Supabase and a fictional tool surface
+(`fs.*`/`preview.*`/`db.*`). The work was customization + wiring, not a rewrite.
+- **Docs:** new `docs/studio/agent-constitution/` (00–16) — every file rewritten against DreamStream's
+  real stack (React/Vite/TS, Express, Supabase, studio-worker sandbox), real tool surface, and the
+  controls we already ship (`verifyApp`, `buildGuards`, `assistantPolicy`, `sourceGovernance`,
+  `mcpClient` SSRF, `sanitizeStudioCommand`, `usageEnforcer`). Each file ends with a "Wired into" footer
+  naming the enforcing module. Indexed in `README.md` + `AGENTS.md`.
+- **Code:** new pure, tested `server/src/ai/studio/constitution.ts` — a COMPACT always-resident charter
+  (`STUDIO_CONSTITUTION`) + phase notes (`STUDIO_PLAN_CONSTITUTION`, `STUDIO_FIX_CONSTITUTION`) +
+  `studioConstitutionFor(phase)` + `composeStudioSystemPrompt` (built on `persona.composePersona`).
+  Kept tight on purpose (load-by-phase) so it adds discipline without bloating tokens / diluting
+  free-first models.
+- **Wiring (additive, same pattern as `designSystem.ts`):** charter injected into
+  `studioPlan.buildPlanPrompt` (plan note), all three `studioGenerate.buildGeneratePrompt` branches
+  (charter), and `studioFix.buildFixPrompt` (recovery note, next to `DESIGN_FIX_NOTE`).
+Files: `server/src/ai/studio/constitution.ts` (+`.test.ts`, 8 tests), `studio/studioPlan.ts`,
+`studio/studioGenerate.ts`, `studio/studioFix.ts`, `docs/studio/agent-constitution/*` (17),
+`docs/studio/README.md`, `docs/studio/AGENTS.md`. Server + client typecheck green; **843 tests pass**;
+frontend build green. (3 suites fail only because Supabase env is unset — environmental, pre-existing.)
+
+> Follow-ups (deliberately out of scope): compose the constitution into the chat/swarm/assistant system
+> prompts too (currently studio-build-only); add an output-level guardrail pass (PHASE-11 §B).
+
+---
+
 ## 2026-06-06 · Claude — FEAT: stronger generation quality bar (production-grade code prompt)
 Owner: "the code is not even good." Raised the generation contract with explicit senior-engineer
 standards baked into `buildGeneratePrompt`/`OUTPUT_CONTRACT`: every relative import must resolve to an
@@ -616,9 +645,9 @@ build flag / a hardcoded "Soon", with no admin bypass.
 - `CodeStudioCard.tsx` — "Run live" now shows when `isLiveStudioEnabled() || isAdmin`.
 - `StaticSiteHeader.tsx` — admins get a real **Open Code Studio** nav entry (→ chat) instead
   of the "Soon" coming-soon capture; `App.tsx` passes `isAdmin`.
-- Confirmed `akhieleshsrirangam@gmail.com` has role `admin`, so this unblocks the owner to
-  exercise the live container path. Server still needs `STUDIO_WORKER_URL` set for a launch
-  to succeed (else a clear "not configured" error).
+- Confirmed the owner account has role `admin` (configured via the `ADMIN_EMAILS` env var, not
+  hardcoded), so this unblocks the owner to exercise the live container path. Server still needs
+  `STUDIO_WORKER_URL` set for a launch to succeed (else a clear "not configured" error).
 - Findings logged: the in-chat preview is **Sandpack** (in-browser, no Vite) which mis-renders
   Vite-style projects as "Hello world"; the Cloudflare container ("Run live") is the correct
   engine. Making it the canonical Code Studio preview + improving generate_app model routing

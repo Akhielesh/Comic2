@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import type { ChatRequest, ChatResponse, ChatClientContext } from '../../../apiTypes.js';
-import { runChat, type ChatReasoningLevel } from '../ai/chat.js';
+import { runChat, isStudyIntent, isTrivialChat, type ChatReasoningLevel, type ChatAttachmentInput } from '../ai/chat.js';
 import { runSwarm } from '../ai/agents/orchestrator.js';
 import { makeSwarmTool, SWARM_TOOL_NAME } from '../ai/agents/swarmTool.js';
+import { makeDelegateTool } from '../ai/agents/delegateTool.js';
 import { makeDeepResearchTool } from '../ai/research/deepResearchTool.js';
 import { resolveClientGeo, clientIpFromReq } from '../ai/clientGeo.js';
 import { makeImageTool, imageGenAvailable, type ImageKeys } from '../ai/tools/imageGen.js';
@@ -150,6 +151,8 @@ type PreparedChat = {
   tools: ChatTool[];
   clientContext?: ChatClientContext;
   customAgents: AgentDefinition[];
+  /** Files attached to the current turn — surfaced to the model so it can read them. */
+  attachments: ChatAttachmentInput[];
 };
 
 type PrepResult = { error: { status: number; body: unknown } } | { prepared: PreparedChat };
@@ -188,6 +191,16 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   if (messages[messages.length - 1].role !== 'user') {
     return { error: { status: 400, body: { error: { message: 'The last message must be from the user.' } } } };
   }
+
+  // The latest user message, flattened to text — drives web-search gating, tool routing
+  // and study-intent detection below, so it's computed once here.
+  const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
+  const lastUserText =
+    typeof lastUserMessage?.content === 'string'
+      ? lastUserMessage.content
+      : Array.isArray(lastUserMessage?.content)
+        ? lastUserMessage!.content.map((p) => ('text' in p ? p.text : '')).join(' ')
+        : '';
 
   const requestedModel = (typeof body.model === 'string' ? body.model.trim() : '') || (req.header('X-Text-Model') || '').trim();
   // Free-only is a user choice (header). When ON we use the cooldown-aware FREE chain (slower
@@ -246,9 +259,12 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   }
 
   const reasoningLevel = isReasoningLevel(body.reasoningLevel) ? body.reasoningLevel : 'none';
-  // Internet access is a backend default, not a user toggle: every OpenRouter chat
-  // gets live web grounding (the model must source from the internet).
-  const webSearch = resolved.provider === 'openrouter';
+  // Internet access is a backend default, not a user toggle: OpenRouter chats get live web
+  // grounding. BUT skip the always-on web plugin on trivial/conversational turns (greetings,
+  // thanks, bare arithmetic) — that reflexive search round-trip fires on EVERY message and is
+  // the single biggest reason the SIMPLEST chats felt slow ("hi" shouldn't trigger a search).
+  // The web_search TOOL stays on the table, so any real question still grounds live on demand.
+  const webSearch = resolved.provider === 'openrouter' && !isTrivialChat(lastUserText);
   const systemPrompt =
     typeof body.systemPrompt === 'string' && body.systemPrompt.trim() ? body.systemPrompt.trim().slice(0, 8000) : undefined;
 
@@ -281,35 +297,66 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   }
   const requestCustomAgents = sanitizeCustomAgents(body.customAgents);
 
-  const toolContext = clientContext
-    ? {
-        timezone: clientContext.timezone,
-        locale: clientContext.locale,
-        units: clientContext.units,
-        location: clientContext.location
-      }
-    : undefined;
+  // Files attached to the CURRENT user turn (images, CSV/JSON/text) for tools like
+  // run_python. Cap to 6 items; each must be a base64 data URI under ~16MB encoded.
+  const MAX_ATTACHMENTS = 6;
+  const MAX_DATA_URI_LEN = 16_000_000;
+  const attachments = Array.isArray(body.attachments)
+    ? body.attachments
+        .filter(
+          (a): a is { name: string; mimeType: string; dataUri: string } =>
+            !!a &&
+            typeof a === 'object' &&
+            typeof (a as { name?: unknown }).name === 'string' &&
+            typeof (a as { mimeType?: unknown }).mimeType === 'string' &&
+            typeof (a as { dataUri?: unknown }).dataUri === 'string' &&
+            (a as { dataUri: string }).dataUri.startsWith('data:') &&
+            (a as { dataUri: string }).dataUri.length <= MAX_DATA_URI_LEN
+        )
+        .slice(0, MAX_ATTACHMENTS)
+        .map((a) => ({ name: a.name.slice(0, 200), mimeType: a.mimeType.slice(0, 120), dataUri: a.dataUri }))
+    : [];
+
+  const toolContext =
+    clientContext || attachments.length
+      ? {
+          timezone: clientContext?.timezone,
+          locale: clientContext?.locale,
+          units: clientContext?.units,
+          location: clientContext?.location,
+          ...(attachments.length ? { attachments } : {})
+        }
+      : undefined;
 
   // Tools are a BACKEND DEFAULT, not a user setting: the model always has the full
   // free-API tool suite available (OpenRouter only — NVIDIA can't tool-call). The
   // user never enables/sees individual tools. To avoid handing the model dozens of
   // specs at once, smart-route to the handful most relevant to THIS message by
   // keyword scoring; web_search is always retained as the internet backstop.
-  const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
-  const lastUserText =
-    typeof lastUserMessage?.content === 'string'
-      ? lastUserMessage.content
-      : Array.isArray(lastUserMessage?.content)
-        ? lastUserMessage!.content.map((p) => ('text' in p ? p.text : '')).join(' ')
-        : '';
+  // (`lastUserText` is computed once near the top of prepareChat.)
   const MAX_MODEL_TOOLS = 20;
   // OpenRouter gets native function-calling; other providers get the same tools through
   // the JSON protocol when it's enabled (Phase 10). Either way, smart-route to the most
   // relevant handful for this message rather than handing over the whole suite.
   const toolsEnabledForProvider = resolved.provider === 'openrouter' || JSON_TOOL_PROTOCOL_ENABLED;
-  const routedToolNames = toolsEnabledForProvider
+  let routedToolNames = toolsEnabledForProvider
     ? selectRelevantTools(lastUserText, ROUTABLE_TOOL_NAMES, MAX_MODEL_TOOLS)
     : [];
+  // On study/exam intent, guarantee the core learning tools are on the table so the
+  // EXAM/STUDY guidance can actually deliver practice (quiz/flashcards/guide) even when
+  // the message didn't literally say "quiz" (e.g. "explain how recursion works for my exam").
+  if (toolsEnabledForProvider && isStudyIntent(lastUserText)) {
+    // The full study toolkit: practice (quiz/flashcards), a written guide, a downloadable
+    // study pack (bundle), and a relevant image for visual concepts.
+    routedToolNames = Array.from(
+      new Set(['generate_quiz', 'generate_flashcards', 'generate_document', 'generate_bundle', 'image_search', ...routedToolNames])
+    ).slice(0, MAX_MODEL_TOOLS);
+  }
+  // When the user attached files, force run_python onto the table so the model can
+  // actually read/convert/process them with real code (its keywords may not match).
+  if (toolsEnabledForProvider && attachments.length) {
+    routedToolNames = Array.from(new Set(['run_python', ...routedToolNames])).slice(0, MAX_MODEL_TOOLS);
+  }
   const builtinTools = toolsEnabledForProvider ? resolveTools(routedToolNames, toolContext) : [];
 
   // The agent-swarm meta-tool needs provider credentials, so it's built here (not in
@@ -375,6 +422,29 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
     );
   }
 
+  // Task delegation (gather → verify → aggregate via parallel helper agents) is offered
+  // AUTOMATICALLY when the message looks like it needs several independent lookups or
+  // cross-verification — no swarm toggle required (that's the user-facing ask: "let the
+  // agent delegate without activating swarm"). Skipped when the user already turned the
+  // heavier swarm on (that's the explicit, broader path). OpenRouter only (helpers are
+  // web-grounded). Intent-gated so ordinary single-answer turns don't pay for it.
+  const delegationIntent =
+    /\b(verify|cross[\s-]?check|fact[\s-]?check|double[\s-]?check|confirm (whether|if|that)|is it true|gather|compile|aggregate|cross[\s-]?reference|reconcile|each of (these|them|the)|for each|multiple sources|several (sources|claims|things|items)|compare\b[^.?!]*\b(and|vs\.?|versus)\b)/i;
+  if (resolved.provider === 'openrouter' && !swarmRequested && delegationIntent.test(lastUserText)) {
+    metaTools.push(
+      makeDelegateTool({
+        provider: resolved.provider,
+        apiKey: resolved.apiKey,
+        model,
+        messages,
+        systemPrompt,
+        clientContext,
+        fallbackModel: TEXT_FALLBACK,
+        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+      })
+    );
+  }
+
   // NOTE: recipes are invoked by the USER via `/` slash-commands (see the chat
   // composer command palette), not pushed at the model on every turn. Forcing
   // run_recipe/save_recipe onto every chat both (a) added object-typed tool params
@@ -409,7 +479,7 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   }
 
   return {
-    prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, systemPrompt, fallbackModels, dreamstreamContextJson, tools: [...builtinTools, ...metaTools, ...mcpTools], clientContext, customAgents }
+    prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, systemPrompt, fallbackModels, dreamstreamContextJson, tools: [...builtinTools, ...metaTools, ...mcpTools], clientContext, customAgents, attachments }
   };
 };
 
@@ -458,6 +528,7 @@ const runChatParams = (p: PreparedChat) => ({
   dreamstreamContextJson: p.dreamstreamContextJson,
   tools: p.tools,
   clientContext: p.clientContext,
+  attachments: p.attachments,
   fallbackModel: p.resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
   fallbackModels: p.fallbackModels,
   timeoutMs: TEXT_REQUEST_TIMEOUT_MS
@@ -569,6 +640,104 @@ chatRouter.post('/memory', async (req, res, next) => {
     });
     const updated = (result.text || '').trim().slice(0, MAX_MEMORY_CHARS);
     res.json({ memory: updated || existing });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Proactive follow-ups: after an answer, suggest the few things THIS user is most
+// likely to actually want next — so the assistant feels helpful and forward-looking
+// instead of waiting passively. Deliberately context-disciplined: it must NOT invent a
+// persona, profession or scenario the conversation doesn't support (the user flagged
+// "fake context" — e.g. assuming a 10-year job search for a student — as a real harm).
+const FOLLOWUPS_SYSTEM_PROMPT = `You generate short follow-up suggestions for a chat user: the next things THIS user is genuinely likely to ask, based ONLY on the conversation so far.
+
+You are given the recent conversation. Output 3 suggestions as a JSON array of strings.
+
+Rules:
+- Phrase each in the FIRST PERSON, exactly as the user would type it to the assistant ("Show me a worked example", "Turn this into steps I can follow", "Make it shorter").
+- Make them SPECIFIC to what was just discussed — reference the actual topic. A good suggestion moves the user forward: go deeper, see an example, apply it, compare options, visualize it, practice it, or get a downloadable resource.
+- Stay strictly RELEVANT to this conversation and this user. NEVER invent a different persona, profession, age, or life situation the conversation doesn't clearly support (do not assume a job hunt, years of experience, a company, or interests that were never shown). If the context is thin, keep the suggestions close to the literal topic.
+- Each under ~8 words. No numbering, no markdown, no surrounding quotes inside the strings.
+- If there's no useful follow-up (a plain greeting, a goodbye, or the request is fully resolved), return [].
+- Return ONLY the JSON array, nothing else.`;
+
+// Best-effort parse of a model's JSON-array reply into ≤3 short suggestion strings.
+const parseFollowUps = (raw: string): string[] => {
+  const text = (raw || '').trim();
+  if (!text) return [];
+  let arr: unknown;
+  const start = text.indexOf('[');
+  const end = text.lastIndexOf(']');
+  if (start >= 0 && end > start) {
+    try {
+      arr = JSON.parse(text.slice(start, end + 1));
+    } catch {
+      arr = undefined;
+    }
+  }
+  // Fallback: a bulleted/numbered list instead of JSON.
+  const items = Array.isArray(arr)
+    ? arr
+    : text.split('\n').map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim());
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of items) {
+    const s = String(item || '').replace(/^["']|["']$/g, '').trim().slice(0, 100);
+    if (!s || s.length < 3) continue;
+    const key = s.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+    if (out.length >= 3) break;
+  }
+  return out;
+};
+
+chatRouter.post('/followups', async (req, res, next) => {
+  try {
+    const body = (req.body || {}) as { messages?: unknown; source?: string };
+    const incoming = Array.isArray(body.messages) ? body.messages : [];
+    const turns = incoming
+      .map(sanitizeMessage)
+      .filter((m): m is ChatMessage => m !== null)
+      .slice(-6);
+    // Need at least one assistant answer to suggest follow-ups for.
+    if (turns.length === 0 || !turns.some((t) => t.role === 'assistant')) {
+      return res.json({ suggestions: [] });
+    }
+
+    const resolved = resolveChatProvider(req, body.source);
+    if (!resolved) return res.json({ suggestions: [] }); // silent no-op without a key
+
+    const transcript = turns
+      .map((t) => {
+        const text =
+          typeof t.content === 'string'
+            ? t.content
+            : Array.isArray(t.content)
+              ? t.content.map((p) => ('text' in p ? p.text : '')).join(' ')
+              : '';
+        return `${t.role === 'user' ? 'User' : 'Assistant'}: ${text}`;
+      })
+      .join('\n')
+      .slice(0, 6000);
+
+    // Fast, reliable model + no tools — this runs after every answer, so it must be cheap.
+    const model = resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;
+    const result = await runChat({
+      provider: resolved.provider,
+      apiKey: resolved.apiKey,
+      model,
+      messages: [{ role: 'user', content: `Conversation so far:\n${transcript}\n\nSuggest the follow-ups.` }],
+      systemOverride: FOLLOWUPS_SYSTEM_PROMPT,
+      temperature: 0.5,
+      maxTokens: 200,
+      fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+      fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
+      timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+    });
+    res.json({ suggestions: parseFollowUps(result.text || ''), model: result.model });
   } catch (err) {
     next(err);
   }

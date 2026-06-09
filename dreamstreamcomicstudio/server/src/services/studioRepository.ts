@@ -168,6 +168,37 @@ export const getVersionFiles = async (
   return Object.entries(map).map(([path, content]) => ({ path, content: String(content) }));
 };
 
+export interface StudioDeploymentSummary {
+  id: string;
+  target: string;
+  url: string | null;
+  status: string;
+  createdAt: string;
+}
+
+/** List a project's deployments (most recent first). Returns [] if none / not the user's / no DB. */
+export const listDeployments = async (userId: string, projectId: string): Promise<StudioDeploymentSummary[]> => {
+  try {
+    const admin = getSupabaseAdmin();
+    const { data: project } = await admin
+      .from('studio_projects')
+      .select('id')
+      .eq('id', projectId)
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (!project) return [];
+    const { data } = await admin
+      .from('studio_deployments')
+      .select('id, target, url, status, created_at')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false })
+      .limit(20);
+    return (data || []).map((d) => ({ id: d.id, target: d.target, url: d.url, status: d.status, createdAt: d.created_at }));
+  } catch {
+    return [];
+  }
+};
+
 export const deleteProject = async (userId: string, projectId: string): Promise<boolean> => {
   const admin = getSupabaseAdmin();
   const { data } = await admin

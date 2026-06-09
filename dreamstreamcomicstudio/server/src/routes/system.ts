@@ -359,9 +359,26 @@ systemRouter.get('/image-url', async (req, res, next) => {
 
     const transform = parseImageTransform(req.query as Record<string, unknown>);
     let finalPath = imagePath;
-    let { data, error } = await supabaseAdmin.storage
-      .from(STORAGE_BUCKET)
-      .createSignedUrl(finalPath, SIGNED_URL_TTL_SECONDS, transform ? { transform } : undefined);
+
+    // Sign with a hard timeout. Without it, a slow/stalled Storage call holds the
+    // connection until the platform gateway kills it (~30–60s) and surfaces an opaque
+    // 504 — telemetry showed exactly that. Fail fast (~12s) with a clear, retryable
+    // STORAGE_TIMEOUT instead, so the client can retry and the connection is released.
+    const SIGN_TIMEOUT_MS = 12_000;
+    const signUrl = async (p: string) => {
+      try {
+        return await Promise.race([
+          supabaseAdmin.storage.from(STORAGE_BUCKET).createSignedUrl(p, SIGNED_URL_TTL_SECONDS, transform ? { transform } : undefined),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(Object.assign(new Error('Storage sign timed out'), { status: 504, publicCode: 'STORAGE_TIMEOUT' })), SIGN_TIMEOUT_MS)
+          )
+        ]);
+      } catch (e) {
+        return { data: null, error: e as { status?: number; statusCode?: number; message?: string } };
+      }
+    };
+
+    let { data, error } = await signUrl(finalPath);
 
     if (error || !data?.signedUrl) {
       const fallbackPath = buildLegacyFallbackPath(imagePath);
@@ -374,9 +391,7 @@ systemRouter.get('/image-url', async (req, res, next) => {
       }
 
       finalPath = fallbackPath;
-      const fallbackResult = await supabaseAdmin.storage
-        .from(STORAGE_BUCKET)
-        .createSignedUrl(finalPath, SIGNED_URL_TTL_SECONDS, transform ? { transform } : undefined);
+      const fallbackResult = await signUrl(finalPath);
       data = fallbackResult.data;
       error = fallbackResult.error;
     }
@@ -393,6 +408,11 @@ systemRouter.get('/image-url', async (req, res, next) => {
     });
   } catch (error) {
     const maybeError = error as { publicCode?: string; status?: number; message?: string };
+    if (maybeError?.publicCode === 'STORAGE_TIMEOUT') {
+      return res.status(504).json({
+        error: { code: 'STORAGE_TIMEOUT', message: 'The image is taking too long to load right now. Please try again.' }
+      });
+    }
     if (maybeError?.publicCode === 'MISSING_SUPABASE_CONFIG') {
       return res.status(503).json({
         error: {

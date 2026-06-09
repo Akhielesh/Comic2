@@ -1,0 +1,42 @@
+name: Probe NVIDIA Availability
+
+# NVIDIA Build's /models lists many "download-only" NIMs that are NOT served on the hosted
+# API (integrate.api.nvidia.com) — calling them returns 404 "not found for account". The
+# catalog metadata gives no signal, so this job VERIFIES each model with a tiny probe request
+# and persists the result (model_catalog_cache.api_callable). The UI uses that flag to flag
+# and DISABLE download-only models (ModelSelectionPanel / ModelLibrary / studioCoderAllowlist),
+# so users can't pin a model that will 404. Without this scheduled run, api_callable is never
+# populated and every NVIDIA model looks selectable even when it can't be called.
+#
+# Requires repo secrets: VITE_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, NVIDIA_API_KEY.
+# Runs daily (the probe makes one request per NVIDIA model, so it is heavier than the hourly
+# catalog refresh — daily keeps it cheap while staying current).
+
+on:
+  schedule:
+    - cron: '15 6 * * *' # daily at 06:15 UTC, offset from other jobs
+  workflow_dispatch:
+
+jobs:
+  probe-nvidia:
+    runs-on: ubuntu-latest
+    env:
+      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Probe NVIDIA hosted-API callability
+        run: npm run nvidia:probe

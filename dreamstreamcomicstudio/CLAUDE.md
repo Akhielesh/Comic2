@@ -39,8 +39,10 @@ no charting libraries.
 
 - Client typecheck: `npm run typecheck`
 - Server typecheck: `npm run build:server`
-- Tests: `npx vitest run`  (a few suites fail locally only because Supabase env vars
-  are unset — that's environmental, not a regression.)
+- Tests: `npx vitest run`  (the SessionStart hook writes placeholder Supabase env vars,
+  so the full suite runs out of the box on Claude Code on the web. Running elsewhere
+  without those vars set, a few suites fail at import on `supabaseUrl is required` —
+  environmental, not a regression; set dummy `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`.)
 - Frontend build: `npm run build`
 
 ## Deploy

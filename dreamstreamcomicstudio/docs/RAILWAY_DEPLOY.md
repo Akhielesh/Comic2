@@ -28,7 +28,7 @@ Secrets you must provide (never committed):
 ```
 SUPABASE_SERVICE_ROLE_KEY=<Supabase dashboard → Project Settings → API → service_role>
 OPENROUTER_API_KEY=<your OpenRouter key>      # funds paid-tier generation
-CORS_ORIGIN=<your frontend origin, e.g. https://dreamstream.studio>
+CORS_ORIGIN=<your frontend origin, e.g. https://dreamstreamstudio.ai>
 ```
 
 Optional / has-defaults:

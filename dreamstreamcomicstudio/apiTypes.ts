@@ -748,6 +748,9 @@ export type CustomAgentDef = {
   toolNames: string[];
 };
 
+/** A user-attached file sent with a chat turn (image, CSV, JSON, text, …) for tools like run_python to read. */
+export type ChatAttachmentInput = { name: string; mimeType: string; dataUri: string };
+
 export type ChatRequest = {
   messages: ChatRequestMessage[];
   /** Explicit catalog model id; falls back to the X-Text-Model header, then an auto pick. */
@@ -779,6 +782,8 @@ export type ChatRequest = {
   swarm?: boolean;
   /** User-defined agents the swarm may deploy in addition to the built-ins. */
   customAgents?: CustomAgentDef[];
+  /** Files attached to the CURRENT user turn, decoded server-side for tools like run_python. */
+  attachments?: ChatAttachmentInput[];
 };
 
 export type ChatToolEvent = { tool: string; query?: string; ok: boolean; summary?: string };
@@ -806,6 +811,104 @@ export type CapabilityNotice = {
 // (weather cards, maps, video grids…) instead of plain text. `type` keys the
 // client-side renderer; new artifact types are added without touching the loop.
 export type ChatArtifact = { type: string; data: unknown };
+
+// --- Quiz / assessment artifact (on-demand learning components) ---
+// Emitted by the `generate_quiz` tool so the AI can build interactive practice
+// questions when a user is learning a topic. The client self-grades — no round-trip.
+export type QuizQuestionType = 'single' | 'multi' | 'short' | 'true_false';
+export interface QuizChoice {
+  id: string;
+  text: string;
+}
+export interface QuizQuestion {
+  id: string;
+  type: QuizQuestionType;
+  prompt: string;
+  /** Choices for single / multi / true_false questions. */
+  choices?: QuizChoice[];
+  /** Correct answer(s): choice id(s) for single/multi/true_false; accepted answer strings for short. */
+  correct: string[];
+  explanation?: string;
+  hint?: string;
+}
+export interface QuizArtifact {
+  title: string;
+  topic?: string;
+  description?: string;
+  questions: QuizQuestion[];
+}
+
+// --- Flashcards artifact (study/memorization mode for guided learning) ---
+// Emitted by the `generate_flashcards` tool. A flip-card deck the user studies,
+// marking each card known/review, with shuffle + progress.
+export interface Flashcard {
+  front: string;
+  back: string;
+}
+export interface FlashcardsArtifact {
+  title?: string;
+  topic?: string;
+  cards: Flashcard[];
+}
+
+// --- SQL exercise / playground artifact (run real SQL while learning) ---
+// Emitted by the `sql_exercise` tool. The AI provides a schema (CREATE + seed) and a
+// task; the user writes SQL and runs it against a sandboxed in-memory DB (server-side
+// sql.js) to see real results / errors.
+export interface SqlExerciseArtifact {
+  title?: string;
+  instructions?: string;
+  /** SQL that sets up the practice database (CREATE TABLE … + INSERT …). */
+  schema: string;
+  task?: string;
+  /** Optional starter query to prefill the editor. */
+  starterSql?: string;
+}
+
+// --- Code exercise / playground artifact (run real JavaScript while learning) ---
+// Emitted by the `code_exercise` tool. The AI provides a task + starter code; the user
+// edits and RUNS it in a sandboxed Web Worker, seeing real console output and real
+// JS errors (with stack). A small, safe "terminal with legit execution errors".
+export interface CodeExerciseArtifact {
+  title?: string;
+  instructions?: string;
+  task?: string;
+  /** Language label. JavaScript runs live; other labels render as read-only starters. */
+  language?: string;
+  /** Starter code to prefill the editor. */
+  starterCode?: string;
+}
+
+// --- Downloadable document artifact ---
+// Emitted by the `generate_document` tool so the AI can author a custom resource
+// (study guide, cheat sheet, notes, report, plan) the user can read inline and
+// download as Markdown / HTML or print to PDF.
+export interface DocumentArtifact {
+  title: string;
+  subtitle?: string;
+  /** Markdown body of the document. */
+  content: string;
+  /** Suggested base filename (no extension). */
+  filename?: string;
+}
+
+// --- Downloadable resource bundle artifact (.zip of custom-built resources) ---
+// Emitted by the `generate_bundle` tool. Packages several generated files (e.g. a study
+// guide, practice questions, a data CSV, starter code) into one card the user can
+// download individually or all at once as a .zip — "custom-built resources" they keep.
+export interface BundleFile {
+  /** Filename WITH extension, e.g. "study-guide.md", "data.csv", "starter.py". */
+  name: string;
+  /** Text content of the file. */
+  content: string;
+  /** Optional human-friendly label shown next to the file. */
+  label?: string;
+}
+export interface ResourceBundleArtifact {
+  title: string;
+  description?: string;
+  files: BundleFile[];
+}
 
 // --- Code Studio artifact ---
 // Emitted by the `generate_app` tool. Carries a complete multi-file project
@@ -862,6 +965,22 @@ export interface StudioClarifyResult {
 export interface StudioAnswer {
   question: string;
   answer: string;
+}
+
+/** One AI-generated "what to build next" recommendation, shown under the iterate composer. */
+export interface StudioSuggestion {
+  /** Short chip/card label (e.g. "Add user accounts"). */
+  label: string;
+  /** The full refine prompt this suggestion runs when picked. */
+  prompt: string;
+  /** One-line rationale — why this is worth doing next. */
+  why?: string;
+  /** Coarse grouping so the UI can tag it (feature / polish / fix / data / ship). */
+  kind?: 'feature' | 'polish' | 'fix' | 'data' | 'ship';
+}
+
+export interface StudioSuggestResult {
+  suggestions: StudioSuggestion[];
 }
 
 export interface StudioPlanFile {
@@ -1262,6 +1381,51 @@ export interface HeatmapArtifact {
   /** Unit appended to the value in tiles (default '%'). */
   unit?: string;
   caption?: string;
+}
+
+// --- Generative UI (agent-composed layouts) ---
+// A safe, WHITELISTED block tree the model emits to compose a BESPOKE in-chat layout
+// when no fixed card fits ("custom-build structures, alignments"). Rendered by
+// GenerativeUICard from the Primitive Kit only — no raw HTML, no code execution. The
+// renderer normalizes/validates first (depth + node caps, prop coercion, src
+// allowlisting), so a malformed or oversized tree degrades gracefully instead of
+// throwing. This is also the canonical render target the code sandbox emits into.
+export type UIBlockGap = 0 | 1 | 2 | 3 | 4;
+export type UIAlign = 'start' | 'center' | 'end' | 'stretch' | 'baseline';
+
+export interface UIStackBlock { kind: 'stack'; gap?: UIBlockGap; align?: UIAlign; children: UIBlock[] }
+export interface UIRowBlock { kind: 'row'; gap?: UIBlockGap; align?: UIAlign; wrap?: boolean; children: UIBlock[] }
+export interface UIGridBlock { kind: 'grid'; columns?: 1 | 2 | 3 | 4; gap?: UIBlockGap; children: UIBlock[] }
+export interface UISectionBlock { kind: 'section'; title?: string; accent?: string; children: UIBlock[] }
+export interface UIDividerBlock { kind: 'divider' }
+export interface UIHeadingBlock { kind: 'heading'; text: string; level?: 1 | 2 | 3 }
+export interface UITextBlock { kind: 'text'; text: string; tone?: 'default' | 'muted' | 'strong'; align?: 'left' | 'center' | 'right' }
+export interface UIBadgeBlock { kind: 'badge'; text: string; tone?: 'neutral' | 'good' | 'warn' | 'bad' | 'info' }
+export interface UIPillBlock { kind: 'pill'; label?: string; change?: number; changePercent?: number }
+export interface UIKeyValueBlock { kind: 'keyValue'; items: { label: string; value: string }[] }
+export interface UICalloutBlock { kind: 'callout'; tone?: 'info' | 'good' | 'warn' | 'bad'; title?: string; text: string }
+export interface UIImageBlock { kind: 'image'; src: string; alt?: string; caption?: string; ratio?: '1:1' | '4:3' | '16:9' }
+export interface UIProgressBlock { kind: 'progress'; value: number; max?: number; label?: string; color?: string }
+export interface UIMetricBlock { kind: 'metric'; label: string; value: string | number; unit?: string; delta?: number; deltaPercent?: number; spark?: number[] }
+export interface UISparklineBlock { kind: 'sparkline'; values: number[]; color?: string }
+export interface UIChartBlock { kind: 'chart'; chart: ChartArtifact }
+export interface UITableBlock { kind: 'table'; table: DataTableArtifact }
+
+export type UIBlock =
+  | UIStackBlock | UIRowBlock | UIGridBlock | UISectionBlock | UIDividerBlock
+  | UIHeadingBlock | UITextBlock | UIBadgeBlock | UIPillBlock | UIKeyValueBlock
+  | UICalloutBlock | UIImageBlock | UIProgressBlock
+  | UIMetricBlock | UISparklineBlock | UIChartBlock | UITableBlock;
+
+export interface GenerativeUIArtifact {
+  title?: string;
+  subtitle?: string;
+  /** Accent hex for the card strip. */
+  accent?: string;
+  /** A named kit palette ("brand" | "ocean" | "sunset" | "violet" | "bull" | "bear" | "mono"). */
+  palette?: string;
+  /** The block tree. */
+  root: UIBlock;
 }
 
 // --- Finance terminal ---

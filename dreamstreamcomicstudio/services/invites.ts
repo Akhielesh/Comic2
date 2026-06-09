@@ -43,3 +43,22 @@ export const redeemInvite = async (code: string): Promise<RedeemResult> => {
 
 export const getInviteStatus = (): Promise<{ isTester: boolean; redemptions: Array<Record<string, unknown>> }> =>
   get('/api/invites/me');
+
+// ── Referrals (any signed-in user) ───────────────────────────────────────────
+export interface ReferralInfo {
+  code: string;
+  url: string;
+  used: number;
+  max: number;
+}
+
+/** The user's personal, shareable referral link (get-or-create). */
+export const getReferral = (): Promise<ReferralInfo> => get('/api/invites/referral');
+
+/** Email the user's referral link to friends (≤10). */
+export const sendReferral = (
+  emails: string,
+  note?: string,
+  inviterName?: string
+): Promise<{ url: string; code: string; sent: number; results: Array<{ to: string; ok: boolean; skipped?: string; error?: string }> }> =>
+  post('/api/invites/referral/send', { emails, note, inviterName });

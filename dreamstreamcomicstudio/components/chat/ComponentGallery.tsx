@@ -16,13 +16,125 @@ import { CodeStudioCard } from './artifacts/CodeStudioCard';
 import { RecipeCard } from './artifacts/RecipeCard';
 import { RecipeRunCard } from './artifacts/RecipeRunCard';
 import { ResearchReport } from './artifacts/ResearchReport';
+import { Quiz } from './artifacts/Quiz';
+import { DocumentCard } from './artifacts/DocumentCard';
+import { Flashcards } from './artifacts/Flashcards';
+import { SqlPlayground } from './artifacts/SqlPlayground';
+import { ResourceBundle } from './artifacts/ResourceBundle';
+import { CodePlayground } from './artifacts/CodePlayground';
+import { GenerativeUICard } from './artifacts/GenerativeUICard';
 import type {
   WeatherArtifact, NewsResultsArtifact, StockQuoteArtifact,
   VideoResultsArtifact, PlacesResultsArtifact, SwarmTraceArtifact,
   ChartArtifact, MetricBoardArtifact, MapArtifact,
   DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact,
-  RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact
+  RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact, CodeExerciseArtifact,
+  GenerativeUIArtifact
 } from '../../apiTypes';
+
+const sqlExerciseDemo: SqlExerciseArtifact = {
+  title: 'SQL practice — filter & sort',
+  instructions: 'Practice a SELECT with a WHERE filter and ORDER BY against a small employees table.',
+  schema: "CREATE TABLE employees (id INTEGER, name TEXT, dept TEXT, salary INTEGER);\nINSERT INTO employees VALUES\n  (1,'Ann','Eng',120000),(2,'Bob','Sales',80000),\n  (3,'Cy','Eng',135000),(4,'Di','Sales',95000);",
+  task: 'List the names and salaries of Engineering employees earning over 125k, highest first.',
+  starterSql: 'SELECT name, salary\nFROM employees\nWHERE ...'
+};
+
+const flashcardsDemo: FlashcardsArtifact = {
+  title: 'Spanish — common verbs',
+  topic: 'Vocabulary',
+  cards: [
+    { front: 'ser', back: 'to be (permanent)' },
+    { front: 'estar', back: 'to be (temporary / location)' },
+    { front: 'tener', back: 'to have' },
+    { front: 'hacer', back: 'to do / to make' },
+    { front: 'poder', back: 'to be able to / can' }
+  ]
+};
+
+const documentDemo: DocumentArtifact = {
+  title: 'SQL JOINs — Cheat Sheet',
+  subtitle: 'Quick reference · with examples',
+  filename: 'sql-joins-cheatsheet',
+  content: [
+    '## The four core joins',
+    '- **INNER JOIN** — rows with a match in *both* tables.',
+    '- **LEFT JOIN** — all left rows + matches (NULLs where none).',
+    '- **RIGHT JOIN** — all right rows + matches.',
+    '- **FULL OUTER JOIN** — everything from both sides.',
+    '',
+    '```sql',
+    'SELECT o.id, c.name',
+    'FROM orders o',
+    'LEFT JOIN customers c ON c.id = o.customer_id;',
+    '```',
+    '',
+    '> Tip: start from the table you want *all* rows of, then LEFT JOIN the rest.'
+  ].join('\n')
+};
+
+const codeExerciseDemo: CodeExerciseArtifact = {
+  title: 'Array practice — map & filter',
+  instructions: 'Use array methods to transform the data, then log the result.',
+  task: 'Log the names of users aged 18 or over, uppercased.',
+  language: 'javascript',
+  starterCode: "const users = [\n  { name: 'ana', age: 20 },\n  { name: 'bo', age: 16 },\n  { name: 'cy', age: 31 },\n];\n\nconst adults = users\n  .filter(u => u.age >= 18)\n  .map(u => u.name.toUpperCase());\n\nconsole.log(adults);"
+};
+
+const pythonExerciseDemo: CodeExerciseArtifact = {
+  title: 'Python practice — list comprehension',
+  instructions: 'Use a list comprehension, then print the result.',
+  task: 'Print the squares of the even numbers from 0 to 9.',
+  language: 'python',
+  starterCode: 'squares = [n * n for n in range(10) if n % 2 == 0]\nprint(squares)'
+};
+
+const resourceBundleDemo: ResourceBundleArtifact = {
+  title: 'Photosynthesis study pack',
+  description: 'Everything to revise the topic — guide, practice, flashcards.',
+  files: [
+    { name: 'study-guide.md', label: 'The full guide', content: '# Photosynthesis\n\n6CO2 + 6H2O + light → C6H12O6 + 6O2.\n\n- **Light reactions** (thylakoid): make ATP + NADPH.\n- **Calvin cycle** (stroma): fix CO2 into sugar.' },
+    { name: 'practice-questions.md', label: '5 questions', content: '1. Where do the light reactions occur?\n2. Name the two inputs.\n3. What gas is released?\n4. What does the Calvin cycle produce?\n5. Which pigment captures light?' },
+    { name: 'flashcards.csv', label: 'Import into Anki', content: 'front,back\nChloroplast,Site of photosynthesis\nChlorophyll,Green pigment that captures light\nStroma,Where the Calvin cycle runs' }
+  ]
+};
+
+const quizDemo: QuizArtifact = {
+  title: 'Photosynthesis — quick check',
+  topic: 'Biology',
+  description: 'A short mixed-format quiz to test the basics.',
+  questions: [
+    {
+      id: 'q1', type: 'single', prompt: 'Where in the cell does photosynthesis occur?',
+      choices: [
+        { id: 'a', text: 'Mitochondria' },
+        { id: 'b', text: 'Chloroplast' },
+        { id: 'c', text: 'Nucleus' },
+        { id: 'd', text: 'Ribosome' }
+      ],
+      correct: ['b'], explanation: 'Chloroplasts contain chlorophyll, which captures light energy.', hint: 'It is green.'
+    },
+    {
+      id: 'q2', type: 'multi', prompt: 'Which are INPUTS to photosynthesis? (select all)',
+      choices: [
+        { id: 'a', text: 'Carbon dioxide' },
+        { id: 'b', text: 'Water' },
+        { id: 'c', text: 'Oxygen' },
+        { id: 'd', text: 'Sunlight' }
+      ],
+      correct: ['a', 'b', 'd'], explanation: 'CO₂, water and light are inputs; oxygen is an output.'
+    },
+    {
+      id: 'q3', type: 'true_false', prompt: 'Photosynthesis releases oxygen.',
+      choices: [{ id: 't', text: 'True' }, { id: 'f', text: 'False' }],
+      correct: ['t']
+    },
+    {
+      id: 'q4', type: 'short', prompt: 'What gas do plants release as a by-product?',
+      correct: ['oxygen', 'o2'], explanation: 'Oxygen (O₂) is released during the light reactions.'
+    }
+  ]
+};
 
 // A living gallery of the chat's rich-output components, each with sample data, so
 // the UI library can be seen and sanity-checked in one place.
@@ -323,6 +435,43 @@ const researchReportDemo: ResearchReportArtifact = {
   ]
 };
 
+// Agent-composed bespoke layout from the whitelisted block tree (reuses the existing
+// barChart demo as an embedded chart block).
+const generativeUiDemo: GenerativeUIArtifact = {
+  title: 'Q3 performance — composed layout',
+  subtitle: 'Agent-built from blocks · grid · metrics · chart · callout',
+  palette: 'brand',
+  accent: '#3B82F6',
+  root: {
+    kind: 'stack',
+    gap: 3,
+    children: [
+      {
+        kind: 'grid',
+        columns: 3,
+        gap: 2,
+        children: [
+          { kind: 'metric', label: 'Revenue', value: 1284000, unit: 'USD', deltaPercent: 12.4, spark: [9, 10, 11, 10, 12, 13, 14] },
+          { kind: 'metric', label: 'Active users', value: 84230, delta: 5200, spark: [70, 72, 75, 78, 80, 82, 84] },
+          { kind: 'metric', label: 'Churn', value: '2.1%', deltaPercent: -0.4 }
+        ]
+      },
+      { kind: 'chart', chart: barChart },
+      {
+        kind: 'row',
+        gap: 2,
+        wrap: true,
+        children: [
+          { kind: 'badge', text: 'On track', tone: 'good' },
+          { kind: 'badge', text: 'EU launch', tone: 'info' },
+          { kind: 'pill', label: 'MoM', changePercent: 8.3 }
+        ]
+      },
+      { kind: 'callout', tone: 'good', title: 'Takeaway', text: 'Revenue beat plan by 12%, driven by the EU launch; churn is down for the third straight month.' }
+    ]
+  }
+};
+
 export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Weather station (animated · gauges · map)', type: 'weather', node: <WeatherStation data={weather} /> },
   { title: 'Market card (hover · range timeline · candlesticks)', type: 'stock_quote', node: <MarketCard data={stock} /> },
@@ -335,12 +484,20 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Chart — donut', node: <ChartCard data={donutChart} /> },
   { title: 'Metric board (KPIs · sparklines · rings)', type: 'metric_board', node: <MetricBoard data={board} /> },
   { title: 'Data table (typed cells · sortable · sparklines)', type: 'data_table', node: <DataTableCard data={dataTable} /> },
+  { title: 'Generative UI (agent-composed layout · grid · metrics · chart · callout)', type: 'generative_ui', node: <GenerativeUICard data={generativeUiDemo} /> },
   { title: 'Market heatmap (sectors · cap-weighted tiles)', type: 'market_heatmap', node: <HeatmapCard data={heatmap} /> },
   { title: 'Finance Terminal (composite: quote · KPIs · table · heatmap · news)', type: 'finance_terminal', node: <FinanceTerminal data={terminal} /> },
   { title: 'Code Studio card (multi-file app · live preview)', type: 'code_studio', node: <CodeStudioCard data={codeStudioDemo} /> },
   { title: 'Recipe card (reusable agent workflow · params · tools)', type: 'recipe_card', node: <RecipeCard data={recipeDemo} /> },
   { title: 'Recipe run (params · structured output · follow-ups)', type: 'recipe_run', node: <RecipeRunCard data={recipeRunDemo} /> },
   { title: 'Research report (questions · sources read · grounded brief header)', type: 'research_report', node: <ResearchReport data={researchReportDemo} /> },
+  { title: 'Quiz (MCQ · multi-select · true/false · short answer · self-grading)', type: 'quiz', node: <Quiz data={quizDemo} /> },
+  { title: 'Document (custom resource · download .md / .html / PDF)', type: 'document', node: <DocumentCard data={documentDemo} /> },
+  { title: 'Flashcards (flip · known/review · shuffle · progress)', type: 'flashcards', node: <Flashcards data={flashcardsDemo} /> },
+  { title: 'SQL playground (real sandboxed execution · results · errors)', type: 'sql_exercise', node: <SqlPlayground data={sqlExerciseDemo} /> },
+  { title: 'Code playground (run real JS · console + errors)', type: 'code_exercise', node: <CodePlayground data={codeExerciseDemo} /> },
+  { title: 'Code playground — Python (Pyodide · real tracebacks)', type: 'code_exercise', node: <CodePlayground data={pythonExerciseDemo} /> },
+  { title: 'Resource bundle (per-file download + all as .zip)', type: 'resource_bundle', node: <ResourceBundle data={resourceBundleDemo} /> },
   { title: 'Markdown table (inline)', node: <ChatMarkdown text={tableMd} /> }
 ];
 

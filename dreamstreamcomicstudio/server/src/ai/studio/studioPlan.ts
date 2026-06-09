@@ -6,6 +6,7 @@
 // code is written, and the build stage is driven by it (so the output is structured, not one file).
 
 import { extractJson } from '../json.js';
+import { studioConstitutionFor } from './constitution.js';
 import type { StudioBuildPlan, StudioPlanFile, StudioAnswer } from '../../../../apiTypes.js';
 
 const renderAnswers = (answers?: StudioAnswer[]): string => {
@@ -16,7 +17,9 @@ const renderAnswers = (answers?: StudioAnswer[]): string => {
 };
 
 export const buildPlanPrompt = (prompt: string, answers?: StudioAnswer[]): string =>
-  `You are the tech lead planning a new build in a code studio. Produce a concrete plan for a COMPLETE application — the GOAL and scope you'd hand to a senior engineer. Define WHAT to build (product, features, stack, data); leave the HOW (the exact files, structure and implementation) to the build step, which has FULL freedom to create, organize and customize files as it sees fit. Be specific and ambitious but realistic.
+  `${studioConstitutionFor('plan')}
+
+You are the tech lead planning a new build in a code studio. Produce a concrete plan for a COMPLETE application — the GOAL and scope you'd hand to a senior engineer. Define WHAT to build (product, features, stack, data); leave the HOW (the exact files, structure and implementation) to the build step, which has FULL freedom to create, organize and customize files as it sees fit. Be specific and ambitious but realistic.
 
 USER'S IDEA:
 ${prompt}${renderAnswers(answers)}

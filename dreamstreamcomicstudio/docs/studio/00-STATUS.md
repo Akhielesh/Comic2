@@ -4,7 +4,18 @@
 > DreamStream Studio. Every agent/PR that changes anything **must** update this file and
 > `CHANGELOG.md`. If this file and reality disagree, fix this file.
 
-**Last updated:** 2026-06-07 · **Updated by:** Claude · **Branch:** `claude/gracious-albattani-bDL8T` (draft PR)
+**Last updated:** 2026-06-08 · **Updated by:** Claude · **Branch:** `claude/focused-dijkstra-wnf70q` (draft PR)
+
+> Latest (2026-06-08): **STUDIO AGENT CONSTITUTION (onboarded + wired).** Onboarded a 17-file agent
+> constitution (scope · grounding · completeness · architecture · design · flow · frontend · backend ·
+> data · security · privacy · code-quality · tool-protocol · verification · recovery · perf),
+> **customized** from a generic original to DreamStream's real stack, tool surface and existing
+> controls (`verifyApp`, `buildGuards`, `assistantPolicy`, `sourceGovernance`, `mcpClient` SSRF,
+> `sanitizeStudioCommand`). Docs in [`agent-constitution/`](./agent-constitution/00_README_AND_WIRING.md).
+> **Implemented** as `server/src/ai/studio/constitution.ts` (compact charter + phase notes + persona
+> composer, tested) and composed into the live PLAN/GENERATE/FIX prompts (same pattern as
+> `persona.ts`/`designSystem.ts`). Additive + low-risk. Server+client typecheck green; **843 tests
+> pass** (8 new); frontend build green. (3 suites fail only because Supabase env is unset — environmental.)
 
 > Latest (2026-06-07): **AUTOPILOT WORKSTREAM PLANNED (always-on autonomous ventures).** New
 > layer on top of the studio: user describes a business/product idea → agents continuously

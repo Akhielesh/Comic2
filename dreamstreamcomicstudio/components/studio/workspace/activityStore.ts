@@ -112,9 +112,10 @@ export const useStudioActivity = create<ActivityState>((set) => ({
       return { items };
     }),
 
-  // On success, auto-collapse to the summary line (it "can be collapsed later"); keep errors open.
+  // Stay expanded when a run finishes — auto-collapsing the build the moment it succeeded was a
+  // top annoyance (the record people most want to read vanished). The user can collapse it.
   finish: (status, summary) =>
-    set({ status, summary, collapsed: status === 'done', endedAt: Date.now() }),
+    set({ status, summary, collapsed: false, endedAt: Date.now() }),
 
   setCollapsed: (collapsed) => set({ collapsed }),
 

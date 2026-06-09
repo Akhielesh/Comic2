@@ -9,7 +9,8 @@
 import React from 'react';
 import { Loader2, Check, Brain, ListChecks, Hammer, ShieldCheck, AlertTriangle, RotateCcw, ArrowLeft } from 'lucide-react';
 import { useStudioTheme } from './kit';
-import { ClarifyPanel, PlanPanel, ActivityFeed } from './workspace';
+import { ClarifyPanel, PlanPanel, ActivityFeed, LiveProgress } from './workspace';
+import { StudioPlanThinking } from './StudioPlanThinking';
 import type { StudioClarifyResult, StudioBuildPlan, StudioAnswer } from '../../apiTypes';
 
 export type StudioFlowPhase = 'idle' | 'clarifying' | 'questions' | 'planning' | 'plan' | 'building' | 'error';
@@ -112,23 +113,20 @@ export const StudioBuildFlow: React.FC<StudioBuildFlowProps> = ({
           />
         )}
 
-        {state.phase === 'planning' && (
-          <Loading label="Drafting the build plan…" sub="The tech lead is turning your answers into a concrete, multi-file plan." />
-        )}
+        {state.phase === 'planning' && <StudioPlanThinking />}
 
         {state.phase === 'plan' && state.plan && (
           <PlanPanel plan={state.plan} onBuild={onBuild} onRegenerate={onRegeneratePlan} onBack={onBack} busy={busy} />
         )}
 
         {state.phase === 'building' && (
-          <div className={`rounded-xl border ${t.edgeStrong} ${t.panel} p-4 space-y-3`}>
-            <div className="flex items-center gap-2">
-              <Hammer className={`w-5 h-5 ${t.accent}`} />
-              <h2 className="font-display text-lg">Building your app…</h2>
-              <Loader2 className={`ml-auto w-4 h-4 animate-spin ${t.accent}`} />
+          <div className={`rounded-xl border ${t.edgeStrong} ${t.panel} overflow-hidden`}>
+            {/* Premium loading screen with a live, rolling status ticker (no opaque spinner). */}
+            <LiveProgress phase="generating" active variant="screen" />
+            <div className={`border-t ${t.edge} p-4 space-y-2`}>
+              <p className={`text-xs ${t.textFaint}`}>Writing the planned files. The preview opens automatically once the app is ready — then the agent team reviews it.</p>
+              <ActivityFeed onRetry={onRetry} />
             </div>
-            <p className={`text-xs ${t.textFaint}`}>Writing the planned files. The preview opens automatically once the app is ready — then the agent team reviews it.</p>
-            <ActivityFeed onRetry={onRetry} />
           </div>
         )}
 

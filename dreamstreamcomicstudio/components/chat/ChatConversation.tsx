@@ -13,6 +13,7 @@ import { ChatComposer } from './ChatComposer';
 import { CHAT_SKILLS, type ChatSkill } from '../../services/chatSkills';
 import { ChatContextMeter } from './ChatContextMeter';
 import { ChatModelSuggester } from './ChatModelSuggester';
+import { FollowUpChips } from './FollowUpChips';
 
 interface ChatConversationProps {
   session: ChatSession;
@@ -315,6 +316,11 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
               isLast={i === session.turns.length - 1}
             />
           ))
+        )}
+
+        {/* Proactive follow-up suggestions after the latest completed answer. */}
+        {session.turns.length > 0 && (
+          <FollowUpChips session={session} busy={busy} onSend={(text) => onSend(text, [])} />
         )}
 
       </div>

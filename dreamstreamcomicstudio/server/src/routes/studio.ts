@@ -19,13 +19,15 @@ import type { AIProviderId } from '../ai/providers/types.js';
 import type { StudioBuildPlan, StudioAnswer } from '../../../apiTypes.js';
 import { getSupabaseAdmin } from '../services/supabase.js';
 import { callStudioWorker, studioConfigured } from '../services/studioWorker.js';
+import { normalizeTarget, deployViaWorker, recordDeployment } from '../services/studioDeploy.js';
 import { createWorkerRun, createStudioFix } from '../services/studioBuildService.js';
 import { evaluateLaunchAllowed } from '../services/studioCaps.js';
 import { sanitizeFiles, deriveProjectName } from '../services/studioFiles.js';
-import { saveProject, listProjects, getProjectWithFiles, deleteProject, listVersions, getVersionFiles } from '../services/studioRepository.js';
+import { saveProject, listProjects, getProjectWithFiles, deleteProject, listVersions, getVersionFiles, listDeployments } from '../services/studioRepository.js';
 import { runBuildAgent } from '../ai/studio/buildAgent.js';
 import { runGenerate, buildGeneratePrompt, parseGeneratedApp, STRICT_JSON_REMINDER, reviewCompleteness, repairUntilClean } from '../ai/studio/studioGenerate.js';
 import { runClarify } from '../ai/studio/studioClarify.js';
+import { runSuggest } from '../ai/studio/studioSuggest.js';
 import { runPlan } from '../ai/studio/studioPlan.js';
 import { runStudioAgentsParallel, sanitizeAgentIds, studioAgentCatalog, STUDIO_AGENTS } from '../ai/studio/studioAgents.js';
 import { resolveTools } from '../ai/tools/registry.js';
@@ -44,6 +46,14 @@ export const studioRouter = Router();
 
 // GitHub two-way sync (Phase 6) — /api/studio/github/{repos,push,pull}.
 studioRouter.use('/github', studioGithubRouter);
+
+// GET /api/studio/status — does the live agentic build path actually work on THIS server?
+// The client's mode badge reads this to honestly show "Agentic · live" vs "One-shot mode" instead
+// of trusting only the build-time flag (which can be on while the Worker is still unconfigured).
+// Read-only, no side effects.
+studioRouter.get('/status', (_req, res) => {
+  res.json({ liveConfigured: studioConfigured() });
+});
 
 const notConfigured = (): boolean => !studioConfigured();
 
@@ -217,17 +227,42 @@ const NO_MODEL_KEY = {
 // assumptions it will otherwise make. Pure LLM; fast.
 studioRouter.post('/clarify', async (req, res, next) => {
   try {
-    const body = (req.body || {}) as { prompt?: string; source?: string; model?: string; costPref?: string };
+    const body = (req.body || {}) as { prompt?: string; files?: unknown; source?: string; model?: string; costPref?: string };
     const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
     if (!prompt) return res.status(400).json({ error: { message: 'A prompt describing the app is required.' } });
     const complete = await studioStageComplete(req, body, 1200);
     if (!complete) return res.status(400).json(NO_MODEL_KEY);
+    // Refine mode: when the client sends the current files, clarify asks app-aware follow-ups
+    // (and is tuned to ask nothing for clear changes) instead of new-build questions.
+    const files = sanitizeFiles(body.files);
+    const ctx = files.length ? { mode: 'refine' as const, files: files.map((f) => ({ path: f.path })) } : undefined;
     try {
-      const result = await runClarify(prompt, complete);
+      const result = await runClarify(prompt, complete, ctx);
       return res.json(result);
     } catch {
-      // Never block the build on a clarify hiccup — just skip straight to planning.
+      // Never block the build on a clarify hiccup — just skip straight to building.
       return res.json({ questions: [], assumptions: [] });
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/studio/suggest — the SUGGEST stage: real, app-specific "what to build next"
+// recommendations derived from the ACTUAL code (replaces the old hardcoded chips). Pure LLM; fast.
+// Any hiccup returns an empty list so the client falls back to its local heuristic — never blocks.
+studioRouter.post('/suggest', async (req, res, next) => {
+  try {
+    const body = (req.body || {}) as { title?: string; files?: unknown; source?: string; model?: string; costPref?: string };
+    const files = sanitizeFiles(body.files).map((f) => ({ path: f.path, content: f.content }));
+    if (!files.length) return res.json({ suggestions: [] });
+    const complete = await studioStageComplete(req, body, 1100);
+    if (!complete) return res.json({ suggestions: [] });
+    try {
+      const result = await runSuggest({ title: typeof body.title === 'string' ? body.title : undefined, files }, complete);
+      return res.json(result);
+    } catch {
+      return res.json({ suggestions: [] });
     }
   } catch (err) {
     next(err);
@@ -527,6 +562,20 @@ studioRouter.post('/launch', async (req, res, next) => {
     }
 
     const previewUrl: string | undefined = worker.json?.previewUrl;
+    // A "live" run with no preview URL is the silent failure behind "users never see the live
+    // link": the worker reported success but returned nothing to open. Treat that as an error
+    // (don't record a bogus `live` run) so the client surfaces a real message instead of a
+    // running app with no way to reach it.
+    if (!previewUrl) {
+      return res.status(502).json({
+        error: {
+          message:
+            worker.json?.message ||
+            'The preview started but returned no URL. The studio worker may be misconfigured (no public preview domain). Try again, or use Download / Publish to ship the app.',
+          code: 'STUDIO_NO_PREVIEW_URL'
+        }
+      });
+    }
     let runId: string | undefined;
     try {
       const admin = getSupabaseAdmin();
@@ -917,18 +966,40 @@ studioRouter.get('/:id/logs', async (req, res, next) => {
   }
 });
 
-// POST /api/studio/deploy — one-click deploy to a public URL (Phase 6). The build/publish
-// step runs in the Cloudflare Worker, so until the owner deploys it (Phase 0/1) this is
-// honestly pending rather than pretending to deploy. GitHub sync (above) works today.
-studioRouter.post('/deploy', (_req, res) => {
-  res.status(501).json({
-    error: {
-      message: notConfigured()
-        ? 'One-click deploy lands with the Cloudflare Worker (deploy it to enable). Until then, push to GitHub and deploy from there.'
-        : 'Deploy publishing is not wired in this build yet; push to GitHub and connect Pages/Workers to that repo.',
-      code: 'STUDIO_DEPLOY_PENDING'
+// POST /api/studio/deploy — one-click deploy to a public, permanent URL. The build + publish runs
+// in the Studio Worker (it has wrangler + the Cloudflare token in its container); this route
+// validates, derives a safe project name, delegates, persists, and returns an HONEST status. When
+// the worker isn't configured it returns `unavailable` (200) so the client shows the working manual
+// path (deploy bundle + commands) instead of a hard 501.
+studioRouter.post('/deploy', async (req, res, next) => {
+  try {
+    const body = (req.body || {}) as { projectId?: string; title?: string; target?: string; files?: unknown };
+    const target = normalizeTarget(body.target);
+    const files = sanitizeFiles(body.files).map((f) => ({ path: f.path, content: f.content }));
+    if (!files.length) return res.json({ status: 'error', message: 'No files to deploy — build an app first.' });
+
+    if (!studioConfigured()) {
+      return res.json({
+        status: 'unavailable',
+        message: 'One-click deploy needs the Studio Worker configured (STUDIO_WORKER_URL + STUDIO_HMAC_SECRET) with a Cloudflare token. Use the deploy bundle + the commands shown — they work today.'
+      });
     }
-  });
+    // Cloudflare Pages + Vercel both publish via the worker. Supabase is a backend/DB, not a static
+    // host — guide the user to the (working) CLI steps + a frontend host instead of faking a deploy.
+    if (target === 'supabase') {
+      return res.json({
+        status: 'unavailable',
+        message: 'Supabase is a backend/DB, not a static host — provision it with the `supabase` CLI steps shown, then deploy the frontend to Cloudflare or Vercel.'
+      });
+    }
+
+    await recordDeployment(body.projectId, target, 'building');
+    const result = await deployViaWorker({ userId: req.user!.id, projectId: body.projectId, title: body.title, target, files });
+    await recordDeployment(body.projectId, target, result.status, result.url);
+    return res.json(result);
+  } catch (err) {
+    next(err);
+  }
 });
 
 // --- Saved projects (Phase 5 persistence) -----------------------------------------
@@ -954,6 +1025,15 @@ studioRouter.get('/projects/:id', async (req, res, next) => {
 });
 
 // GET /api/studio/projects/:id/versions — version history (most recent first).
+// GET /api/studio/projects/:id/deployments — the project's deploy history (most recent first).
+studioRouter.get('/projects/:id/deployments', async (req, res, next) => {
+  try {
+    res.json({ deployments: await listDeployments(req.user!.id, req.params.id) });
+  } catch (err) {
+    next(err);
+  }
+});
+
 studioRouter.get('/projects/:id/versions', async (req, res, next) => {
   try {
     const versions = await listVersions(req.user!.id, req.params.id);

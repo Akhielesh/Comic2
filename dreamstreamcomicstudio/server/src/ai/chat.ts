@@ -11,6 +11,7 @@ import type { ChatArtifact, ChatClientContext, CapabilityNotice } from '../../..
 import { logCapabilityNotice } from './capabilities.js';
 import { composePersona } from './persona.js';
 import { getProvider, resolveProviderContext } from './gateway.js';
+import { markModelDown, TEXT_FALLBACK } from './autoRouter.js';
 import { buildUsage } from './usage.js';
 import type { AIProviderId } from './providers/types.js';
 import { toToolSpec, type ChatTool } from './tools/registry.js';
@@ -18,6 +19,13 @@ import { buildJsonToolSystemBlock, extractToolCall, stripToolCallJson, formatToo
 import { JSON_TOOL_PROTOCOL_ENABLED, CHAT_MAX_OUTPUT_TOKENS } from '../config.js';
 
 export type ChatReasoningLevel = 'none' | 'low' | 'medium' | 'high';
+
+/** A file the user attached to the current turn (base64 data URI). */
+export interface ChatAttachmentInput {
+  name: string;
+  mimeType: string;
+  dataUri: string;
+}
 
 export interface ChatToolEvent {
   tool: string;
@@ -67,6 +75,13 @@ export interface RunChatParams {
   tools?: ChatTool[];
   /** Runtime situational context (date/timezone/locale/units/location). */
   clientContext?: ChatClientContext;
+  /**
+   * Files attached to the CURRENT user turn. Images already ride along as image
+   * parts in the message (vision); these are surfaced to the model as a manifest +
+   * inlined text so it can actually READ and reference them instead of claiming it
+   * "can't open the file". Heavy/binary processing still flows through run_python.
+   */
+  attachments?: ChatAttachmentInput[];
   /** Abort signal for in-flight tool calls. */
   signal?: AbortSignal;
   /** When set, stream content/reasoning deltas as they arrive (SSE). */
@@ -104,6 +119,7 @@ const CHAT_BEHAVIOR = `You are operating as DreamStream Chat: live internet acce
 
 CORE BEHAVIOR — read carefully:
 - Be CONCISE and direct. Lead with the answer in the first sentence. Do NOT bombard the user with long preambles, caveats, or filler. Match the length of the answer to the question — short questions get short answers.
+- CALIBRATE to the question type and the user's apparent level. A quick factual question gets a tight, sourced answer; a "how/why" or learning question gets a clear, structured explanation (and, when they're studying, proactively offer a quiz, flashcards, a downloadable guide, or a runnable playground); a complex analytical ask gets real reasoning and structure; a casual aside gets a casual reply. Don't over-engineer simple questions or under-serve hard ones. Infer the user's level and intent only from the conversation itself — never assume facts about them (job, years of experience, age, situation) that the conversation doesn't actually support.
 - No padding. Do NOT add empty/"TBD"/"not retrieved" table rows, generic disclaimers, or suggestions to "check a real-time source", "open a terminal", or visit another site — you have live tools, so either use them or, if one genuinely failed, say so in one short line and move on. For news, give 2–4 sharp takeaways in your own words; don't re-list every headline, since the news card already shows the list.
 - Be ACCURATE. For anything factual, current, numeric, or that you're not 100% sure of, CALL A TOOL and answer from the result. Never guess at facts you can verify. If you still don't know, say so plainly.
 - NEVER fabricate. If a search/tool returns nothing useful, do NOT invent facts, prices, specs, dates, or links, and do NOT emit a table full of "TBD"/placeholder cells. Say clearly what you could not find, then answer from your own knowledge with an explicit caveat that it isn't from a live source and may be outdated.
@@ -118,6 +134,27 @@ Formatting (use only what helps — never pad):
 Prefer signal over length. A tight, sourced, well-structured answer beats a long one.`;
 
 export const CHAT_SYSTEM_PROMPT = composePersona(CHAT_BEHAVIOR);
+
+// Study / exam-prep intent. When a real chat turn looks like learning or test prep, we
+// layer on EXAM/STUDY guidance so the answer carries genuine exam-ready DEPTH and routes
+// the user into practice — a direct response to "need more in-depth information to
+// prepare for exam" feedback. Kept deliberately specific so it doesn't fire on casual
+// "what is X" asks.
+const EXAM_STUDY_INTENT =
+  /\b(exam|midterm|final exam|finals|test prep|quiz me|interview prep|study(ing)?|revis(e|ing|ion)|prepare for (?:my|the|an|a)|cram|memoriz|memoris|teach me|help me (?:learn|study|understand|prepare|revise)|for (?:my|the|an|a) (?:exam|test|quiz|midterm|final|interview|class|course)|practice (?:problems|questions))\b/i;
+
+export const isStudyIntent = (text: string): boolean => Boolean(text) && EXAM_STUDY_INTENT.test(text);
+
+export const studyGuidanceBlock = (lastUserText: string): string => {
+  if (!lastUserText || !EXAM_STUDY_INTENT.test(lastUserText)) return '';
+  return `\n\nEXAM / STUDY MODE — the user is learning or preparing for a test. Give genuinely exam-ready DEPTH, not a shallow summary:
+- Explain the CORE concepts clearly, then the key details, definitions and formulas they'd actually be tested on.
+- Call out the common pitfalls, misconceptions, and the fine distinctions examiners probe.
+- Include at least one concrete worked example or application when it aids understanding.
+- For VISUAL concepts (anatomy, diagrams, geometry, processes), pull a relevant image to anchor understanding.
+- Then help them PRACTICE: proactively offer or build a quick quiz, flashcards, a runnable code/SQL exercise, a downloadable study guide, or a complete study pack (guide + practice + flashcards bundled as a downloadable .zip) so they can drill it (use the learning tools when available).
+- Stay accurate and grounded — verify facts you're unsure of rather than guessing. Calibrate the rigor to the level implied by the question; don't assume background the conversation doesn't support.`;
+};
 
 // Render the user's runtime context as a compact, authoritative block so the model
 // stops being "situationally blind": it knows the real current date/time, the
@@ -146,6 +183,121 @@ export const buildContextBlock = (ctx?: ChatClientContext): string => {
 ${lines.join('\n')}
 - When the user says "today", "now", "latest", "near me", "my area", or omits a place/date, resolve it from this context.
 - Report measurements in the user's preferred units. Do not claim you don't know the date or the user's general location — it is given above.`;
+};
+
+// How much of each attached text/data file we inline into the system prompt so the
+// model can READ it directly, and the total budget across all files. Beyond this the
+// model is pointed at run_python to stream the rest from /input/<name>.
+const ATTACH_PER_FILE_CHARS = 8_000;
+const ATTACH_TOTAL_CHARS = 24_000;
+
+const isTextLikeAttachment = (mimeType: string, name: string): boolean =>
+  /^text\//i.test(mimeType) ||
+  /^application\/(json|xml|csv|x-ndjson|x-yaml|yaml|x-www-form-urlencoded)/i.test(mimeType) ||
+  /\.(csv|tsv|json|ndjson|txt|md|markdown|log|xml|yaml|yml|ini|toml|tex)$/i.test(name);
+
+// Decode a base64 (or percent-encoded) data URI into UTF-8 text. Returns null when the
+// input isn't a data URI we can read. FileReader.readAsDataURL always emits base64.
+const decodeTextDataUri = (dataUri: string): string | null => {
+  const m = /^data:([^;,]*)((?:;[^,]*)*),(.*)$/s.exec(dataUri);
+  if (!m) return null;
+  try {
+    const params = m[2] || '';
+    const payload = m[3] ?? '';
+    return /;base64/i.test(params)
+      ? Buffer.from(payload, 'base64').toString('utf8')
+      : decodeURIComponent(payload);
+  } catch {
+    return null;
+  }
+};
+
+// Rough decoded byte size of a data URI, for a human-readable size hint only.
+const approxAttachmentBytes = (dataUri: string): number => {
+  const comma = dataUri.indexOf(',');
+  const payload = comma >= 0 ? dataUri.slice(comma + 1) : dataUri;
+  return /;base64/i.test(dataUri.slice(0, comma >= 0 ? comma : 0))
+    ? Math.floor((payload.length * 3) / 4)
+    : payload.length;
+};
+
+const humanBytes = (bytes: number): string =>
+  bytes >= 1_000_000 ? `${(bytes / 1_000_000).toFixed(1)} MB` : bytes >= 1_000 ? `${Math.round(bytes / 1_000)} KB` : `${bytes} B`;
+
+// Surface the user's attached files to the model. Without this the model was never
+// even TOLD a file was attached (non-image files only reached the run_python sandbox),
+// so it would insist it "can't access the attachment". Here we hand it a manifest plus
+// the inlined text of any text/data files, and point it at run_python for the rest.
+export const buildAttachmentsBlock = (
+  attachments?: ChatAttachmentInput[],
+  opts?: { canRunPython?: boolean }
+): string => {
+  if (!attachments || attachments.length === 0) return '';
+  const canRunPython = opts?.canRunPython !== false;
+  const manifest: string[] = [];
+  const inlined: string[] = [];
+  let budget = ATTACH_TOTAL_CHARS;
+
+  for (const att of attachments) {
+    if (!att || typeof att.name !== 'string' || typeof att.dataUri !== 'string') continue;
+    const size = humanBytes(approxAttachmentBytes(att.dataUri));
+    const mime = att.mimeType || 'application/octet-stream';
+
+    if (/^image\//i.test(mime)) {
+      manifest.push(`- ${att.name} (${mime}, ${size}) — provided to you as an image in this message; look at it directly to describe/analyze/extract from it.`);
+      continue;
+    }
+
+    if (isTextLikeAttachment(mime, att.name) && budget > 0) {
+      const text = decodeTextDataUri(att.dataUri);
+      if (text != null) {
+        const slice = text.slice(0, Math.min(ATTACH_PER_FILE_CHARS, budget));
+        budget -= slice.length;
+        const truncatedNote = slice.length < text.length ? `\n…(truncated — the full file is available to run_python at /input/${att.name})` : '';
+        manifest.push(`- ${att.name} (${mime}, ${size}) — contents included below.`);
+        inlined.push(`--- ${att.name} ---\n${slice}${truncatedNote}`);
+        continue;
+      }
+    }
+
+    manifest.push(
+      canRunPython
+        ? `- ${att.name} (${mime}, ${size}) — binary/large file; read or process it by writing code with the run_python tool (mounted read-only at /input/${att.name}).`
+        : `- ${att.name} (${mime}, ${size}) — binary file; its contents can't be inlined here.`
+    );
+  }
+
+  if (!manifest.length) return '';
+
+  let block = `\n\nATTACHED FILES — the user attached the following file(s) to THIS message. You CAN access them. NEVER tell the user you can't open, read, or reference an attachment.
+${manifest.join('\n')}`;
+  if (inlined.length) {
+    block += `\n\nAttached file contents:\n${inlined.join('\n\n')}`;
+  }
+  block += canRunPython
+    ? `\n\nUse these files to answer. For analysis, conversion, parsing, or any processing beyond the text shown above, write Python with the run_python tool — the files are mounted read-only at /input/<name>.`
+    : `\n\nUse the file contents shown above to answer.`;
+  return block;
+};
+
+// A clearly trivial / conversational message that needs no live web grounding:
+// greetings, thanks, acknowledgements, or a bare arithmetic ask. Used to skip the
+// always-on web plugin (which fires a search round-trip on EVERY message) for inputs
+// like "hi"/"thanks"/"2+2" — the single biggest reason the SIMPLEST chats felt slow.
+// The model still keeps the web_search TOOL, so a real question grounds the instant it
+// needs to; we're only dropping the reflexive search on inputs that can't benefit.
+const TRIVIAL_CHAT_RE =
+  /^(?:hi+|hey+|hello+|yo|sup|hiya|howdy|gm|gn|good (?:morning|afternoon|evening|night)|thanks?|thank you|thank you so much|thx|ty|tysm|ok(?:ay)?|k|cool|nice|great|awesome|perfect|got it|gotcha|sounds good|understood|lol|haha|hehe|np|no problem|yw|you're welcome|please|yes|no|yep|yup|nope|nah|sure|right|bye|goodbye|see ya|cya|later|cheers)[\s!.?,]*$/i;
+const PURE_ARITHMETIC_RE = /^[\d\s().,+\-*/×÷%^]+\??$/;
+const ARITHMETIC_ASK_RE = /^(?:what(?:'s| is| are)?|calc(?:ulate)?|compute|solve|how much is)\s+[\d\s().,+\-*/×÷%^]+\s*\??$/i;
+
+export const isTrivialChat = (text: string): boolean => {
+  const t = (text || '').trim();
+  if (!t) return true;
+  if (t.length <= 80 && TRIVIAL_CHAT_RE.test(t)) return true;
+  if (t.length <= 40 && PURE_ARITHMETIC_RE.test(t)) return true;
+  if (t.length <= 60 && ARITHMETIC_ASK_RE.test(t)) return true;
+  return false;
 };
 
 // Output-token budget for a chat answer. The old flat 2048 cap truncated long answers and —
@@ -202,6 +354,12 @@ export const runChat = async (
   if (params.dreamstreamContextJson) {
     systemContent += dreamstreamBlock(params.dreamstreamContextJson);
   }
+  // Make the user's attached files visible to the model (manifest + inlined text), so it
+  // can actually read/reference them instead of claiming it can't open the attachment.
+  if (params.attachments?.length) {
+    const canRunPython = (params.tools || []).some((t) => t.name === 'run_python');
+    systemContent += buildAttachmentsBlock(params.attachments, { canRunPython });
+  }
   // When tools are available this turn, make it explicit the model HAS live web access —
   // otherwise weak models default to "I can't browse" even while results are fetched.
   const hasTools = params.provider === 'openrouter' && (params.tools?.length || 0) > 0;
@@ -227,6 +385,19 @@ export const runChat = async (
     params.provider !== 'openrouter' && JSON_TOOL_PROTOCOL_ENABLED && (params.tools?.length || 0) > 0;
   if (useJsonTools) {
     systemContent += `\n\n${buildJsonToolSystemBlock(params.tools as ChatTool[])}`;
+  }
+
+  // Exam/study depth guidance — only on real chat turns (utility/sub-agent calls use a
+  // systemOverride and must stay unflavored). Looks at the latest user message.
+  if (!params.systemOverride) {
+    const lastUser = [...params.messages].reverse().find((m) => m.role === 'user');
+    const lastUserText =
+      typeof lastUser?.content === 'string'
+        ? lastUser.content
+        : Array.isArray(lastUser?.content)
+          ? lastUser!.content.map((p) => ('text' in p ? p.text : '')).join(' ')
+          : '';
+    systemContent += studyGuidanceBlock(lastUserText);
   }
 
   const messages: ChatMessage[] = [{ role: 'system', content: systemContent }, ...params.messages];
@@ -266,11 +437,57 @@ export const runChat = async (
   // supports it (intermediate tool-call turns emit no content, so streaming the final
   // answer "just works"); otherwise a normal request.
   const provider = getProvider(params.provider);
-  const callModel = (msgs: ChatMessage[], withTools: boolean) => {
-    const r = { ...baseReq, messages: msgs, ...(withTools && toolSpecs ? { tools: toolSpecs } : {}) };
-    return params.onDelta && provider.generateTextStream
-      ? provider.generateTextStream(r, ctx, params.onDelta)
+  // Track whether any content/reasoning has streamed yet. If a slow model times out
+  // BEFORE producing any output (the common free-tier "queued for 90s" case), we can
+  // safely retry on a fast model without the client seeing duplicate text.
+  let streamedAny = false;
+  const trackedOnDelta = params.onDelta
+    ? (d: { content?: string; reasoning?: string }) => {
+        if (d.content || d.reasoning) streamedAny = true;
+        params.onDelta!(d);
+      }
+    : undefined;
+  const callModel = (msgs: ChatMessage[], withTools: boolean, modelOverride?: string) => {
+    const r = {
+      ...baseReq,
+      messages: msgs,
+      ...(withTools && toolSpecs ? { tools: toolSpecs } : {}),
+      // On a timeout-triggered retry, pin a single fast model and drop reasoning so the
+      // reply actually fits the budget (no `models` chain, no reasoning effort).
+      ...(modelOverride ? { model: modelOverride, models: undefined, reasoningEffort: undefined } : {})
+    };
+    return trackedOnDelta && provider.generateTextStream
+      ? provider.generateTextStream(r, ctx, trackedOnDelta)
       : provider.generateText(r, ctx);
+  };
+
+  // OpenRouter only: when the chosen model is merely SLOW (not erroring), OpenRouter's
+  // server-side `models` fallback never triggers — our AbortController fires at timeoutMs
+  // and the whole turn fails with MODEL_TIMEOUT (the dominant production chat error: a
+  // 550B :free reasoner queued for minutes). The honest recovery is exactly what the error
+  // tells the user to do ("pick a faster model") — so do it for them: retry once on the
+  // fast fallback, mark the slow model down so Auto skips it, and surface a notice.
+  const isTimeoutError = (e: unknown): boolean =>
+    (e as { publicCode?: string })?.publicCode === 'MODEL_TIMEOUT' ||
+    /timed out|took too long/i.test(String((e as Error)?.message || ''));
+  const callModelResilient = async (msgs: ChatMessage[], withTools: boolean) => {
+    try {
+      return await callModel(msgs, withTools);
+    } catch (err) {
+      const canFallback =
+        params.provider === 'openrouter' &&
+        isTimeoutError(err) &&
+        params.model !== TEXT_FALLBACK &&
+        !streamedAny;
+      if (!canFallback) throw err;
+      markModelDown(params.model);
+      addNotice({
+        tool: 'agent',
+        level: 'warn',
+        message: `Your selected model (${params.model}) was too slow and timed out, so this reply used a faster model (${TEXT_FALLBACK}). Pick a faster model in the switcher to avoid this.`
+      });
+      return await callModel(msgs, withTools, TEXT_FALLBACK);
+    }
   };
 
   const lastUserSeed = (): string => {
@@ -337,7 +554,7 @@ export const runChat = async (
 
   // Agentic loop: call the model, run any tools it asks for, feed results back, repeat.
   // A single call (no tools enabled) collapses to one iteration with no tool round-trips.
-  let result = await callModel(messages, true);
+  let result = await callModelResilient(messages, true);
 
   let iterations = 0;
   while (result.toolCalls && result.toolCalls.length && iterations < MAX_TOOL_ITERATIONS) {
@@ -400,7 +617,7 @@ export const runChat = async (
     // Discard the just-streamed pre-tool narration on the client before the next turn
     // streams, so the live view doesn't accumulate "let me check…" preambles.
     params.onReset?.();
-    result = await callModel(messages, allowMoreTools);
+    result = await callModelResilient(messages, allowMoreTools);
   }
 
   // If we exhausted the tool-round budget, the model was forced to answer mid-plan —

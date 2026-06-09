@@ -18,6 +18,7 @@ import {
   REASONING_EFFORT
 } from '../../config.js';
 import { withRetry } from '../utils.js';
+import { modelTimeoutError } from './errors.js';
 import { coerceJson, coerceJsonOrNull } from '../jsonCoerce.js';
 import { classifyModel, hasFreeSuffix } from '../../../../shared/pricing.js';
 import type {
@@ -72,7 +73,7 @@ const openRouterFetch = async <T = any>(
     // Map our own timeout abort (a bare DOMException "This operation was aborted") to an
     // actionable message instead of leaking that opaque string all the way to the user.
     if (controller.signal.aborted) {
-      throw new Error(`The model took too long to respond (timed out after ${Math.round(timeoutMs / 1000)}s). Please try again, or pick a faster model.`);
+      throw modelTimeoutError(timeoutMs);
     }
     throw err;
   } finally {
@@ -267,13 +268,22 @@ const buildBaseBody = (req: GenerateTextRequest): Record<string, unknown> => {
     baseBody.response_format = { type: 'json_object' };
   }
 
-  // Engage step-by-step reasoning on reasoning-capable models. A per-request
-  // `reasoningEffort` (set by the chat platform's reasoning control) wins; otherwise
-  // fall back to the global REASONING_EFFORT default for known reasoning families.
+  // Engage step-by-step reasoning on reasoning-capable models, but BOUND the thinking
+  // budget so chat stays responsive. Unbounded `effort: 'high'` was running 55-109s in
+  // production (the model rambling in its thinking phase). A capped reasoning token
+  // budget keeps small/medium turns fast (they finish well under the ceiling) while
+  // still allowing meaningful reasoning; genuinely deep work uses the agent swarm,
+  // whose depth comes from running many agents rather than one giant reasoning call.
+  // (Env-overridable via REASONING_BUDGET_* if a deployment wants more headroom.)
+  const reasoningBudget = (effort: 'low' | 'medium' | 'high'): number => {
+    const defaults = { low: 1024, medium: 2048, high: 4096 };
+    const raw = Number(process.env[`REASONING_BUDGET_${effort.toUpperCase()}`]);
+    return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : defaults[effort];
+  };
   if (req.reasoningEffort) {
-    baseBody.reasoning = { effort: req.reasoningEffort };
+    baseBody.reasoning = { max_tokens: reasoningBudget(req.reasoningEffort) };
   } else if (REASONING_EFFORT !== 'off' && REASONING_MODEL_RE.test(req.model)) {
-    baseBody.reasoning = { effort: REASONING_EFFORT };
+    baseBody.reasoning = { max_tokens: reasoningBudget(REASONING_EFFORT as 'low' | 'medium' | 'high') };
   }
 
   // Live web search: OpenRouter's `web` plugin grounds the answer in current results.

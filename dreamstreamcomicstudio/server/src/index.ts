@@ -44,8 +44,13 @@ import { recipesRouter } from './routes/recipes.js';
 import { mcpRouter, mcpOutboundRouter } from './routes/mcp.js';
 import { modelsRouter } from './routes/models.js';
 import { telemetryRouter } from './routes/telemetry.js';
+import { newsletterRouter } from './routes/newsletter.js';
+import { emailRouter } from './routes/email.js';
+import { adminEmailRouter } from './routes/adminEmail.js';
+import { requireAdmin } from './middleware/requireAdmin.js';
 import { invitesRouter } from './routes/invites.js';
 import { accountRouter } from './routes/account.js';
+import { learnRouter } from './routes/learn.js';
 import { prewarmCatalog, startCatalogRefreshLoop } from './services/modelCatalog.js';
 import { keysRouter } from './routes/keys.js';
 import { venturesRouter } from './routes/ventures.js';
@@ -150,6 +155,11 @@ app.use('/api/keys', systemRateLimit, keysRouter);
 // while logged-out (or while auth itself is failing) are still recorded; userId
 // is attached when a valid session is present.
 app.use('/api/telemetry', systemRateLimit, optionalAuth, telemetryRouter);
+// Newsletter / waitlist capture with double opt-in (public, logged-out). optionalAuth so a
+// signed-in user's id is attached when present; mounted before requireAuth.
+app.use('/api/newsletter', systemRateLimit, optionalAuth, newsletterRouter);
+// Email open-tracking pixel (public — fetched by the recipient's mail client, no session).
+app.use('/api/email', systemRateLimit, optionalAuth, emailRouter);
 app.use('/api/assistant', optionalAuth, assistantLimits, assistantRouter);
 app.use('/api/billing', systemRateLimit, optionalAuth, billingRouter);
 
@@ -166,6 +176,8 @@ app.use('/api', requireAuth);
 
 app.use('/api/admin', adminRateLimit, adminRouter);
 app.use('/api/admin/verification', adminRateLimit, verificationRouter);
+// Admin Email Console (templates/preview/test/send/invite). Admin-only.
+app.use('/api/admin/email', adminRateLimit, requireAdmin, adminEmailRouter);
 app.use('/api/moderation', moderationRateLimit, moderationRouter);
 app.use('/api/text', textRateLimit, textRouter);
 app.use('/api/chat', textRateLimit, chatRouter);
@@ -184,6 +196,8 @@ app.use('/api/ventures', systemRateLimit, venturesRouter);
 app.use('/api/invites', systemRateLimit, invitesRouter);
 // Account: server-side encrypted BYOK key storage (authenticated).
 app.use('/api/account', systemRateLimit, accountRouter);
+// Learning execution (sandboxed SQL playground). Auth'd + text-tier rate limited.
+app.use('/api/learn', textRateLimit, learnRouter);
 
 app.use(errorHandler);
 

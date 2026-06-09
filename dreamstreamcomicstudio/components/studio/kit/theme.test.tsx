@@ -60,7 +60,7 @@ describe('ThemeSwitcher', () => {
     expect(radios.length).toBe(3);
     // the premium dark theme is active by default
     expect(screen.getByRole('radio', { checked: true })).toHaveAttribute('title', 'Dark theme');
-    fireEvent.click(screen.getByRole('radio', { name: /White/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /Light/i }));
     expect(useStudioThemeStore.getState().id).toBe('light');
   });
 });

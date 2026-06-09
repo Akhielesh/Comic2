@@ -82,7 +82,10 @@ const DEFAULTS: StudioModelSelection = {
   designPreset: null,
   agents: null,
   agentPreferences: '',
-  autoRunAgents: false,
+  // Default ON: the agent team reviews/hardens every new build so code isn't shipped on the
+  // model's first answer. (This was effectively OFF before — the sanitizer forced it false even
+  // though the docs/getter intended ON — which is why agents "didn't deploy automatically".)
+  autoRunAgents: true,
   runtime: 'auto'
 };
 
@@ -103,7 +106,8 @@ const sanitize = (raw: Partial<StudioModelSelection>): StudioModelSelection => {
     designPreset: typeof merged.designPreset === 'string' && merged.designPreset.trim() ? merged.designPreset : null,
     agents: Array.isArray(merged.agents) ? merged.agents.filter((x): x is string => typeof x === 'string') : null,
     agentPreferences: typeof merged.agentPreferences === 'string' ? merged.agentPreferences : '',
-    autoRunAgents: merged.autoRunAgents === true,
+    // Default ON: only an explicit `false` disables the auto-review (undefined → ON).
+    autoRunAgents: merged.autoRunAgents !== false,
     runtime: merged.runtime === 'worker' || merged.runtime === 'browser' ? merged.runtime : 'auto'
   };
 };

@@ -16,6 +16,19 @@ import type { CheckRecord, CheckKind, Severity, TargetFeature } from '../verific
 export const verificationRouter = Router();
 verificationRouter.use(requireAdmin);
 
+// The verification tables are created by a migration that may not be applied yet. When
+// they're absent, PostgREST returns a "missing relation" error (PGRST205 / 42P01). Rather
+// than 500 the admin dashboard, the read endpoints degrade to an empty, "not configured"
+// state so the UI can show a clear setup prompt instead of an error.
+const isMissingRelation = (err: unknown): boolean => {
+  const e = err as { code?: string; message?: string } | undefined;
+  return (
+    e?.code === 'PGRST205' ||
+    e?.code === '42P01' ||
+    /could not find the table|does not exist|schema cache/i.test(String(e?.message || ''))
+  );
+};
+
 const STATUSES = new Set([
   'open',
   'confirmed',
@@ -62,6 +75,7 @@ verificationRouter.get('/checks', async (_req: Request, res: Response, next) => 
     if (error) throw error;
     res.json({ checks: data || [] });
   } catch (err) {
+    if (isMissingRelation(err)) return res.json({ checks: [], configured: false });
     next(err);
   }
 });
@@ -186,6 +200,7 @@ verificationRouter.get('/findings', async (req: Request, res: Response, next) =>
     if (error) throw error;
     res.json({ findings: data || [] });
   } catch (err) {
+    if (isMissingRelation(err)) return res.json({ findings: [], configured: false });
     next(err);
   }
 });
@@ -265,6 +280,7 @@ verificationRouter.get('/health', async (_req: Request, res: Response, next) => 
       runs_last_24h: runs24h || 0
     });
   } catch (err) {
+    if (isMissingRelation(err)) return res.json({ open_findings: 0, critical_open: 0, runs_last_24h: 0, configured: false });
     next(err);
   }
 });

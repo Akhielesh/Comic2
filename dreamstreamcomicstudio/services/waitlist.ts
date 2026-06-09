@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { API_BASE_URL, buildApiUrl } from './clientConfig';
 
 /**
  * Two intents share one table:
@@ -22,6 +23,40 @@ const DEFAULT_SUCCESS: Record<WaitlistKind, string> = {
 };
 
 /**
+ * When the backend is configured, route signups through it so we can send a confirmation
+ * email (double opt-in for 'updates') and log the capture. Returns null on any failure so the
+ * caller falls back to the direct Supabase insert below — capturing the lead must never fail.
+ */
+const subscribeViaApi = async (
+  email: string,
+  kind: WaitlistKind,
+  metadata: Record<string, unknown>,
+  captchaToken?: string
+): Promise<WaitlistResult | null> => {
+  if (!API_BASE_URL) return null;
+  try {
+    const res = await fetch(buildApiUrl('/api/newsletter/subscribe'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        email,
+        kind,
+        captchaToken,
+        source: typeof window !== 'undefined' ? window.location.pathname : undefined,
+        ...(typeof metadata.source === 'string' ? { source: metadata.source } : {})
+      })
+    });
+    const data = (await res.json().catch(() => null)) as WaitlistResult | null;
+    if (res.ok && data?.ok) return { ok: true, alreadyJoined: data.alreadyJoined, message: data.message };
+    // Validation errors (400) are authoritative — surface them rather than falling back.
+    if (res.status === 400 && data?.message) return { ok: false, message: data.message };
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+/**
  * Add an email to the public waitlist. Never throws: callers get a friendly
  * { ok, message } back regardless of network / RLS / migration state so a
  * marketing form can render the outcome inline.
@@ -29,7 +64,8 @@ const DEFAULT_SUCCESS: Record<WaitlistKind, string> = {
 export const submitWaitlistEmail = async (
   rawEmail: string,
   kind: WaitlistKind = 'updates',
-  metadata: Record<string, unknown> = {}
+  metadata: Record<string, unknown> = {},
+  captchaToken?: string
 ): Promise<WaitlistResult> => {
   const email = rawEmail.trim().toLowerCase();
   if (!email) {
@@ -39,6 +75,11 @@ export const submitWaitlistEmail = async (
     return { ok: false, message: 'That email doesn’t look right — please check it.' };
   }
 
+  // Preferred path: the backend (sends the confirmation email + logs the capture).
+  const apiResult = await subscribeViaApi(email, kind, metadata, captchaToken);
+  if (apiResult) return apiResult;
+
+  // Fallback: write directly to Supabase (no email, but the lead is still captured).
   try {
     // No .select() on purpose: RLS exposes write-only access, so asking for the
     // row back would fail. We only care whether the insert was accepted.

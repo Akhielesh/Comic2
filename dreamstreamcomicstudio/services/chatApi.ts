@@ -84,6 +84,22 @@ export const updateChatMemory = (
     options
   );
 
+/**
+ * After an answer, fetch a few proactive follow-up suggestions the user is likely to
+ * want next (rendered as clickable chips). Best-effort — callers ignore failures, and
+ * the server returns an empty list when there's nothing useful or no key is configured.
+ */
+export const fetchFollowUps = (
+  messages: ChatRequest['messages'],
+  source?: string,
+  options?: { signal?: AbortSignal }
+): Promise<{ suggestions: string[]; model?: string }> =>
+  post<{ messages: ChatRequest['messages']; source?: string }, { suggestions: string[]; model?: string }>(
+    '/api/chat/followups',
+    { messages, source },
+    options
+  );
+
 export interface ChatStreamHandlers {
   /** Incremental answer text. */
   onDelta?: (content: string) => void;
@@ -237,10 +253,18 @@ export const sendChatMessageStream = async (
     //      "thinks but never answers" failure we see in production.
     // For (b) we re-run with reasoning DOWNGRADED so the model spends its budget
     // answering instead of thinking, which is what actually fixes the empty turn.
-    const emptyStream = err instanceof Error && /returned no response/i.test(err.message);
-    if (!receivedContent && !handlers.signal?.aborted && (isTransportError(err) || emptyStream)) {
+    //  (c) the turn TIMED OUT (took too long) — production telemetry shows reasoning:high
+    //      on the auto model regularly exceeding 90s. We recover those too, and since the
+    //      reasoning budget is the cause, the recovery ALWAYS drops heavy reasoning so the
+    //      retry answers fast instead of timing out again.
+    const msg = err instanceof Error ? err.message : '';
+    const emptyStream = /returned no response/i.test(msg);
+    const tookTooLong = /timed out|too long|timeout/i.test(msg);
+    if (!receivedContent && !handlers.signal?.aborted && (isTransportError(err) || emptyStream || tookTooLong)) {
       const highReasoning = req.reasoningLevel === 'high' || req.reasoningLevel === 'medium';
-      const retryReq: ChatRequest = emptyStream && highReasoning ? { ...req, reasoningLevel: 'low' } : req;
+      // Any recovery on a heavy-reasoning turn retries LIGHT — empty AND slow turns are
+      // both caused by the reasoning budget, so this is what actually gets an answer.
+      const retryReq: ChatRequest = highReasoning ? { ...req, reasoningLevel: 'none' } : req;
       let lastErr: unknown = err;
       for (let attempt = 0; attempt < 3; attempt++) {
         if (handlers.signal?.aborted) break;
@@ -295,6 +319,24 @@ export const runSwarmStream = async (
     else if (event === 'error') streamError = String(parsed.message || 'The swarm failed.');
   });
   if (streamError) throw new Error(streamError);
-  if (!final) throw new Error('The swarm returned no response.');
+  if (!final) {
+    // The swarm synthesized no answer (e.g. reasoning-only / agents produced nothing).
+    // There's no buffered-swarm endpoint, so recover with a regular completion (reasoning
+    // downgraded if it was heavy) rather than failing the turn outright.
+    if (!handlers.signal?.aborted) {
+      const highReasoning = req.reasoningLevel === 'high' || req.reasoningLevel === 'medium';
+      const fallbackReq: ChatRequest = highReasoning ? { ...req, reasoningLevel: 'none' } : req;
+      try {
+        const fallback = await sendChatMessage(fallbackReq, { signal: handlers.signal });
+        if (fallback.text && fallback.text.trim()) {
+          handlers.onDelta?.(fallback.text);
+          return fallback;
+        }
+      } catch (fallbackErr) {
+        if (!isTransportError(fallbackErr)) throw fallbackErr;
+      }
+    }
+    throw new Error('The swarm returned no response.');
+  }
   return final;
 };

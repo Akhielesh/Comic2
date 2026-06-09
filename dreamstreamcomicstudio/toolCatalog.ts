@@ -25,6 +25,8 @@ export type ToolCategory =
   | 'dev'
   | 'dataviz'
   | 'codegen'
+  | 'learning'
+  | 'media'
   | 'agents';
 
 export type ToolAuth = 'none' | 'optional' | 'required';
@@ -76,7 +78,9 @@ export const CATEGORY_META: CategoryMeta[] = [
   { id: 'entertainment', label: 'Entertainment & fun', icon: 'Gamepad2', blurb: 'TV, anime, games, trivia, jokes.' },
   { id: 'dev', label: 'Developer & utility', icon: 'Code2', blurb: 'GitHub, packages, QR codes, demographics.' },
   { id: 'dataviz', label: 'Data & charts', icon: 'BarChart3', blurb: 'Turn data into charts and KPI boards.' },
+  { id: 'media', label: 'Media & images', icon: 'Image', blurb: 'Convert and resize images (deterministic, non-AI).' },
   { id: 'codegen', label: 'App builder', icon: 'AppWindow', blurb: 'Generate full multi-file apps with a live preview.' },
+  { id: 'learning', label: 'Learning', icon: 'GraduationCap', blurb: 'Interactive quizzes and practice for studying any topic.' },
   { id: 'agents', label: 'Agents', icon: 'Network', blurb: 'Delegate complex tasks to a swarm.' }
 ];
 
@@ -454,11 +458,88 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['chart', 'graph', 'plot', 'visualize', 'visualise', 'bar chart', 'line chart', 'pie chart', 'donut', 'scatter', 'trend', 'breakdown', 'distribution']
   },
   {
+    name: 'render_ui', label: 'Generative UI', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app SVG)',
+    description: 'Compose a bespoke in-chat layout from building blocks (stack/row/grid + text, metrics, charts, tables, images, callouts) when no single fixed card fits — a mini dashboard or a structured, well-aligned response.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'A composed card built from the Primitive Kit (whitelisted blocks).', docsUrl: 'https://dreamstream.app',
+    keywords: ['layout', 'dashboard', 'compose', 'custom', 'arrange', 'panel', 'structure', 'align', 'build ui', 'overview', 'summary card', 'side by side', 'comparison layout']
+  },
+  {
+    name: 'convert_data', label: 'Convert data', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app, deterministic)',
+    description: 'Deterministically parse and convert raw tabular data (CSV / TSV / JSON) between formats and preview it as a table — no hand-transcription. For "turn this into a CSV", "parse this data", "convert this JSON to a table", or reshaping pasted data before charting.',
+    auth: 'none', rateLimit: 'Unlimited (parses locally, no API)',
+    dataShape: 'Converted text + a sortable table preview.', docsUrl: 'https://dreamstream.app',
+    keywords: ['convert', 'csv', 'tsv', 'json', 'parse', 'reshape', 'transform', 'to csv', 'to json', 'tabular', 'spreadsheet', 'clean data', 'format data']
+  },
+  {
+    name: 'analyze_data', label: 'Analyze data', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app, deterministic)',
+    description: 'Deterministically compute statistics or group-by aggregations over raw tabular data (CSV/TSV/JSON) — descriptive stats per numeric column, or sum/avg/count/min/max grouped by a column. No model arithmetic. Returns a results table to chart.',
+    auth: 'none', rateLimit: 'Unlimited (computes locally, no API)',
+    dataShape: 'A statistics / aggregation results table.', docsUrl: 'https://dreamstream.app',
+    keywords: ['analyze', 'analyse', 'statistics', 'stats', 'average', 'mean', 'median', 'sum', 'total', 'aggregate', 'group by', 'summarize', 'summarise', 'count by', 'min', 'max']
+  },
+  {
+    name: 'transform_data', label: 'Transform data', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app, deterministic)',
+    description: 'Reshape tabular data deterministically — filter rows, sort, select/drop columns, limit. Clean or narrow raw CSV/TSV/JSON before charting or analyzing it (e.g. "top 10 by revenue", "only active rows", "keep name + score sorted desc"). Returns the reshaped data to chain into render_chart / analyze_data.',
+    auth: 'none', rateLimit: 'Unlimited (transforms locally, no API)',
+    dataShape: 'The reshaped data + a table preview.', docsUrl: 'https://dreamstream.app',
+    keywords: ['filter', 'sort', 'select', 'top', 'limit', 'reshape', 'where', 'order by', 'columns', 'rows', 'narrow', 'clean', 'wrangle', 'subset']
+  },
+  {
+    name: 'convert_image', label: 'Convert image', category: 'media', kind: 'builtin', provider: 'DreamStream (sharp, non-AI)',
+    description: 'Deterministically convert or resize an image (PNG/JPEG/WebP/AVIF) with sharp — no AI touches the pixels. Takes an https URL or a data:image URI. For "convert this jpg to png", "make a webp", "resize to 512px".',
+    auth: 'none', rateLimit: 'Unlimited (local libvips, no API)',
+    dataShape: 'The converted image, shown inline.', docsUrl: 'https://dreamstream.app',
+    keywords: ['convert image', 'jpg', 'jpeg', 'png', 'webp', 'avif', 'resize', 'thumbnail', 'image format', 'compress image', 'shrink image', 'to png', 'to jpg']
+  },
+  {
     name: 'show_metrics', label: 'Metric board', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app SVG)',
     description: 'Show a board of KPI / stat tiles (value, delta, sparkline, progress ring, status) from data the model provides — dashboards, scorecards and at-a-glance summaries.',
     auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
     dataShape: 'KPI board: tiles with deltas, sparklines, rings.', docsUrl: 'https://dreamstream.app',
     keywords: ['dashboard', 'kpi', 'kpis', 'metrics', 'scorecard', 'stat board', 'at a glance', 'summary stats', 'overview']
+  },
+  {
+    name: 'generate_quiz', label: 'Quiz / practice', category: 'learning', kind: 'builtin', provider: 'DreamStream (in-app, self-grading)',
+    description: 'Generate an interactive, self-grading quiz (single-select, multi-select, true/false, short answer) to help the user learn or test a topic — with per-question explanations and hints.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Interactive quiz card: mixed-format questions, instant grading, score + explanations.', docsUrl: 'https://dreamstream.app',
+    keywords: ['quiz', 'quiz me', 'test me', 'practice questions', 'practice problems', 'mcq', 'multiple choice', 'flashcards', 'assess', 'check my understanding', 'study', 'exam', 'review questions']
+  },
+  {
+    name: 'sql_exercise', label: 'SQL playground', category: 'learning', kind: 'builtin', provider: 'DreamStream (sandboxed SQLite / sql.js)',
+    description: 'Interactive SQL practice — the user writes and runs real queries against a sandboxed in-memory database, seeing real results and SQLite errors. For learning SQL, joins, aggregations and database basics.',
+    auth: 'none', rateLimit: 'Auth + rate-limited; runs in an ephemeral in-memory DB (no filesystem/network).',
+    dataShape: 'Runnable SQL editor + schema + task; live result table or error.', docsUrl: 'https://dreamstream.app',
+    keywords: ['sql', 'sql exercise', 'practice sql', 'sql query', 'database', 'sqlite', 'joins', 'select query', 'learn sql', 'query practice', 'where clause', 'group by']
+  },
+  {
+    name: 'code_exercise', label: 'Code playground (JS / Python)', category: 'learning', kind: 'builtin', provider: 'DreamStream (sandboxed Web Worker; Python via Pyodide)',
+    description: 'Interactive JavaScript or Python practice — the user writes and runs real code in a sandboxed in-browser terminal, seeing real output and real errors/tracebacks. For learning JS or Python, methods, algorithms and general programming.',
+    auth: 'none', rateLimit: 'Unlimited (runs locally in a sandboxed worker with a timeout; Python runtime lazy-loads once).',
+    dataShape: 'Runnable JS/Python editor + task; live console output or error with stack/traceback.', docsUrl: 'https://dreamstream.app',
+    keywords: ['javascript', 'js', 'python', 'py', 'code exercise', 'coding exercise', 'practice coding', 'practice javascript', 'practice python', 'run code', 'code playground', 'try it', 'algorithm practice', 'array methods', 'programming practice', 'leetcode']
+  },
+  {
+    name: 'generate_flashcards', label: 'Flashcards', category: 'learning', kind: 'builtin', provider: 'DreamStream (in-app)',
+    description: 'Create an interactive flip-card study deck (term → definition) for memorizing vocabulary, formulas or facts — with shuffle, known/review marking and progress.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Flip-card deck: front/back cards, shuffle, known/review, progress.', docsUrl: 'https://dreamstream.app',
+    keywords: ['flashcards', 'flash cards', 'memorize', 'memorise', 'study cards', 'vocab', 'vocabulary', 'drill', 'spaced repetition', 'anki']
+  },
+  {
+    name: 'generate_document', label: 'Document / resource', category: 'learning', kind: 'builtin', provider: 'DreamStream (in-app, downloadable)',
+    description: 'Author a downloadable document — study guide, cheat sheet, notes, report, plan, worksheet or reference — that the user can save as Markdown / HTML or print to PDF.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Document card with the rendered resource + .md / .html / PDF download buttons.', docsUrl: 'https://dreamstream.app',
+    keywords: ['document', 'make a document', 'write a', 'cheat sheet', 'cheatsheet', 'study guide', 'guide', 'notes', 'handout', 'worksheet', 'report', 'summary document', 'pdf', 'downloadable', 'reference sheet', 'one-pager']
+  },
+  {
+    name: 'generate_bundle', label: 'Resource bundle (.zip)', category: 'learning', kind: 'builtin', provider: 'DreamStream (in-app, downloadable .zip)',
+    description: 'Package a SET of generated files (study guide + practice questions + flashcards, a starter project, data + a README) into one card the user can download per-file or all at once as a .zip — custom-built resources they keep.',
+    auth: 'none', rateLimit: 'Unlimited (zipped locally in the browser, no API)',
+    dataShape: 'Bundle card: list of named files with per-file download + a single download-all .zip.', docsUrl: 'https://dreamstream.app',
+    keywords: ['bundle', 'zip', 'zip file', 'package', 'pack', 'kit', 'resources', 'download all', 'study pack', 'starter project', 'set of files', 'multiple files', 'toolkit', 'templates']
   },
   {
     name: 'render_table', label: 'Data table', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app)',
@@ -475,6 +556,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['heatmap', 'heat map', 'market map', 'sector map', 'treemap', 'breadth', 'gainers and losers', 'sector performance', 'movers map']
   },
   // --------------------------------------------------------------- codegen ------
+  {
+    name: 'run_python', label: 'Run Python (sandbox)', category: 'codegen', kind: 'builtin', provider: 'DreamStream (Pyodide sandbox)',
+    description: 'Write and run Python in a sandboxed Pyodide (CPython/WASM) runtime to compute, convert/transform data, or convert/resize/modify images. Pillow, numpy and pandas are available. Reads attached files from /input/, writes results to /output/, and returns stdout plus any images/files produced.',
+    auth: 'none', rateLimit: 'Runs in a memory-sandboxed WASM runtime (no host filesystem/network); a single instance serializes runs with a per-run timeout.',
+    dataShape: 'stdout text + produced images (shown inline) and small text/data files (echoed inline).', docsUrl: 'https://pyodide.org',
+    keywords: ['run python', 'python', 'code', 'convert image', 'process file', 'compute', 'script', 'pillow', 'numpy', 'pandas']
+  },
   {
     name: 'generate_app', label: 'App builder', category: 'codegen', kind: 'builtin', provider: 'DreamStream Code Studio',
     description: 'Build a complete multi-file app (React, vanilla JS, HTML/CSS) and open it in the live Code Studio panel with a real-time preview the user can edit and run.',
@@ -559,6 +647,11 @@ export const CORE_ALWAYS_TOOLS: string[] = [
   'render_table',
   'show_metrics',
   'render_heatmap',
+  'render_ui',
+  'convert_data',
+  'analyze_data',
+  'transform_data',
+  'run_python',
   'get_news',
   'wiki_lookup',
   // The app builder must ALWAYS be on the table: "build me X" is phrased a thousand

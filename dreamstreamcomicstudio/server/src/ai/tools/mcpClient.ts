@@ -90,6 +90,16 @@ const assertResolvedHostSafe = async (url: string, allowInternal: boolean): Prom
   }
 };
 
+// Reusable SSRF gate for outbound fetches of USER/MODEL-supplied URLs (e.g. fetching an
+// image to convert): requires https + a public hostname AND verifies every resolved IP
+// is public (defeats DNS rebinding). Throws on anything unsafe. Combines the two guards
+// above so callers don't reimplement SSRF protection.
+export const assertSafePublicUrl = async (url: string): Promise<void> => {
+  const r = isSafeMcpUrl(url);
+  if (!r.ok) throw new Error(r.reason || 'unsafe URL');
+  await assertResolvedHostSafe(url, false);
+};
+
 // Parse a JSON-RPC result from a JSON body or a (single-event) SSE body.
 const parseRpcBody = (text: string): any => {
   const trimmed = text.trim();

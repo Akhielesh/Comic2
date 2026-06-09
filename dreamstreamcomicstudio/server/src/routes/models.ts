@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import { getCatalog, filterCatalog, getProviderModels, type CatalogFilters } from '../services/modelCatalog.js';
 import { fetchOpenRouterKeyStatus, fetchOpenRouterCredits } from '../ai/providers/openrouter.js';
 import { persistHarvestedModels, loadPersistedModels, loadCallabilityMap } from '../services/modelCatalogStore.js';
+import { getModelLatency } from '../services/telemetryAnalytics.js';
 import type { AnnotatedModel } from '../ai/catalogAnnotations.js';
 
 export const modelsRouter = Router();
@@ -66,6 +67,16 @@ modelsRouter.get('/catalog', async (req: Request, res: Response) => {
     degraded: result.degraded,
     message: result.message
   });
+});
+
+// GET /api/models/speed — per-model typical latency (from chat_turn telemetry) so the
+// model picker can flag slow models. Public + non-sensitive (aggregate timings only).
+modelsRouter.get('/speed', async (req: Request, res: Response, next) => {
+  try {
+    res.json({ models: await getModelLatency(req.query.days) });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // GET /api/models/verify

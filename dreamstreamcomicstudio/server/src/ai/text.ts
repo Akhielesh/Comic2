@@ -14,7 +14,7 @@ import {
 import { createClient } from './client.js';
 import { extractJson, ensureArray, isString } from './json.js';
 import { buildUsage } from './usage.js';
-import { withRetry, withTimeout } from './utils.js';
+import { withRetry, withModelTimeout } from './utils.js';
 import { TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS } from '../config.js';
 import { ScriptSegment, segmentScript } from './scriptSegmentation.js';
 
@@ -645,7 +645,7 @@ ${creativeDirection && creativeDirection.trim() ? `
   `;
 
   const response = await withRetry(
-    () => withTimeout(
+    () => withModelTimeout(
       ai.models.generateContent({
         model,
         contents: prompt,
@@ -725,7 +725,7 @@ export const generateStoryOutline = async (
   `;
 
   const response = await withRetry(
-    () => withTimeout(
+    () => withModelTimeout(
       ai.models.generateContent({ model, contents: prompt }),
       TEXT_REQUEST_TIMEOUT_MS,
       'Story outline'
@@ -769,7 +769,7 @@ export const generateStoryDraft = async (
   `;
 
   const response = await withRetry(
-    () => withTimeout(
+    () => withModelTimeout(
       ai.models.generateContent({ model, contents: prompt }),
       TEXT_REQUEST_TIMEOUT_MS,
       'Story draft'
@@ -809,7 +809,7 @@ export const runStoryToolPrompt = async (
   `;
 
   const response = await withRetry(
-    () => withTimeout(
+    () => withModelTimeout(
       ai.models.generateContent({
         model,
         contents: [
@@ -1220,7 +1220,7 @@ ${JSON.stringify(payload.panels || [])}
   `;
 
   const response = await withRetry(
-    () => withTimeout(
+    () => withModelTimeout(
       ai.models.generateContent({
         model,
         contents: prompt,
@@ -1345,7 +1345,7 @@ ${JSON.stringify(report, null, 2)}
   `;
 
   const response = await withRetry(
-    () => withTimeout(
+    () => withModelTimeout(
       ai.models.generateContent({
         model,
         contents: prompt
