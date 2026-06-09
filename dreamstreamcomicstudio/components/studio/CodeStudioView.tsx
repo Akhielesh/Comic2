@@ -46,6 +46,7 @@ import { streamStudioAgents } from '../../services/studioAgentsApi';
 import { resolveStudioAgentIds, studioAgentName } from '../../services/studioAgents';
 import { createStudioSession } from '../../services/studioSessions';
 import { getOpenRouterKey } from '../../services/appSettings';
+import { getDeployUrl, setDeployUrl } from '../../services/studioDeployUrl';
 import { isProviderEnabled } from '../../services/sourceGovernance';
 import { isLiveStudioEnabled } from '../../services/studioFlags';
 import { downloadArtifactZip } from '../../services/studioLauncher';
@@ -205,6 +206,8 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const [celebrate, setCelebrate] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
+  // The project's last successful deploy URL (permanent link), remembered across reloads.
+  const [deployUrl, setDeployUrlState] = useState<string | null>(() => getDeployUrl(useStudioWorkspace.getState().projectId));
   const [generating, setGenerating] = useState(false);
   const [genError, setGenError] = useState<string | null>(null);
   // The agent team is reviewing (drives the "reviewing" progress phase, distinct from a plain build).
@@ -819,6 +822,9 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   // Attempt a one-click deploy to the chosen provider (best-effort). The client normalizes a
   // not-yet-wired server into an honest "unavailable" so the Publish panel guides the manual path
   // instead of pretending the app shipped. Dynamic import keeps the apiClient chain lazy.
+  // Surface the project's remembered deploy URL whenever the open project changes.
+  useEffect(() => { setDeployUrlState(getDeployUrl(wsProjectId)); }, [wsProjectId]);
+
   const handleDeploy = async (target: 'cloudflare' | 'vercel' | 'supabase') => {
     appendLog('system', `Deploying to ${target}…`);
     try {
@@ -829,6 +835,8 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
         target,
         files: currentArtifact.files.map((f) => ({ path: f.path, content: f.content })),
       });
+      // Remember a successful deploy's permanent URL so it sticks in the header + Publish panel.
+      if (res.status === 'live' && res.url) { setDeployUrl(wsProjectId, res.url); setDeployUrlState(res.url); }
       appendLog(res.status === 'live' ? 'success' : res.status === 'error' ? 'error' : 'info',
         `Deploy ${res.status}${res.url ? ` — ${res.url}` : ''}${res.message ? ` — ${res.message}` : ''}`);
       return res;
@@ -1121,6 +1129,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
         onClose={() => setPublishOpen(false)}
         title={wsTitle}
         previewUrl={previewUrl}
+        deployedUrl={deployUrl}
         onDownloadZip={() => void downloadArtifactZip(currentArtifact)}
         onDeploy={handleDeploy}
       />
@@ -1207,6 +1216,17 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
               >
                 <Square className="w-3.5 h-3.5" /> Stop
               </button>
+            )}
+            {deployUrl && (
+              <a
+                href={deployUrl}
+                target="_blank"
+                rel="noreferrer"
+                title={`Deployed — open the live app\n${deployUrl}`}
+                className="hidden lg:inline-flex items-center gap-1.5 text-xs font-bold rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-emerald-500 hover:bg-emerald-500/20"
+              >
+                <Cloud className="w-3.5 h-3.5" /> Live
+              </a>
             )}
             {hasFiles && (
               <button
