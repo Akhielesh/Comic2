@@ -219,6 +219,20 @@ export const setStudioAutoRunAgents = (on: boolean) => {
   write(next);
 };
 
+// --- Live key status (cached) — the project budget is enforced against the REAL key ----------
+// Set from the studio (fetchKeyStatus → setStudioKeyStatus) so the build request builder + the
+// clamp use the key's actual remaining credit + free-tier flag without needing live context.
+let keyStatusCache: { remainingUsd: number | null; isFreeTier: boolean } = { remainingUsd: null, isFreeTier: false };
+
+export const getStudioKeyStatus = () => keyStatusCache;
+
+export const setStudioKeyStatus = (remainingUsd: number | null, isFreeTier: boolean): void => {
+  keyStatusCache = { remainingUsd, isFreeTier };
+  // Re-clamp any existing project limit down to the (possibly smaller) key remaining.
+  const cur = getStudioProjectLimit();
+  if (cur != null && remainingUsd != null && cur > remainingUsd) setStudioProjectLimit(remainingUsd, remainingUsd);
+};
+
 // --- Per-project spend limit (the inline cap the user sets in the studio) -----------------
 /** The user's project spend cap in USD (null = no cap, use the key's remaining credit). */
 export const getStudioProjectLimit = (): number | null => {
@@ -226,9 +240,12 @@ export const getStudioProjectLimit = (): number | null => {
   return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
 };
 
-/** Set the project spend cap. Pass the key's remaining credit so it's clamped (a project can never
- *  be allowed to outspend the key). Returns the clamped value actually stored. */
-export const setStudioProjectLimit = (usd: number | null, keyRemainingUsd: number | null = null): number | null => {
+/** Set the project spend cap, HARD-clamped to the key's remaining credit (defaults to the cached
+ *  live key remaining) so a project can never be allowed to outspend the key. Returns what was stored. */
+export const setStudioProjectLimit = (
+  usd: number | null,
+  keyRemainingUsd: number | null = keyStatusCache.remainingUsd
+): number | null => {
   const { limitUsd } = clampProjectLimit(usd, keyRemainingUsd);
   const next = read();
   next.projectLimitUsd = limitUsd;
@@ -238,10 +255,14 @@ export const setStudioProjectLimit = (usd: number | null, keyRemainingUsd: numbe
 
 /**
  * The effective cost preference a build should use, honoring the project limit + the key's nature:
- * a free-tier key or an exhausted/zero project budget → 'free'; an explicit funded cap → 'quality';
- * no cap → the user's standing costPref. This is what makes the AI use models within the limit.
+ * a free-tier key (defaults from the cached live key) or an exhausted/zero project budget → 'free';
+ * a funded cap → 'quality'; no cap → the user's standing costPref. This is what makes the AI use
+ * models within the limit AND respect a free-tier key automatically.
  */
-export const getStudioBuildCostPref = (keyIsFreeTier = false, spentUsd = 0): StudioCostPref => {
+export const getStudioBuildCostPref = (
+  keyIsFreeTier: boolean = keyStatusCache.isFreeTier,
+  spentUsd = 0
+): StudioCostPref => {
   const limit = getStudioProjectLimit();
   if (limit == null) return keyIsFreeTier ? 'free' : read().costPref;
   return resolveBuildTier({ projectLimitUsd: limit, spentUsd, keyIsFreeTier }) === 'free' ? 'free' : 'quality';

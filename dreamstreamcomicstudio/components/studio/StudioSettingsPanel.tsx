@@ -20,10 +20,11 @@ import {
   getStudioModelSelection, setStudioModel, setStudioAuto, setStudioSource,
   setStudioCostPref, setStudioMaxIterations, setStudioDefaultTemplate, setStudioDesignPreset,
   setStudioAgents, setStudioAgentPreferences, setStudioAutoRunAgents, setStudioRuntime,
-  setStudioProjectLimit,
+  setStudioProjectLimit, setStudioKeyStatus,
   resetStudioModelSelection, STUDIO_MODEL_CHANGED, STUDIO_MAX_ITERATIONS_CEILING,
   type StudioModelSelection, type StudioCostPref
 } from '../../services/studioModelSelection';
+import { fetchKeyStatus, type KeyStatus } from '../../services/keyStatus';
 import { STUDIO_AGENT_CATALOG, STUDIO_AGENT_ORDER, DEFAULT_STUDIO_AGENT_IDS } from '../../services/studioAgents';
 import { DESIGN_PRESETS as DESIGN_PRESET_OPTIONS } from '../../services/designPresets';
 import { CODING_RECOMMENDATIONS, TIER_LABEL, type CodingPick } from '../../services/codingRecommendations';
@@ -98,6 +99,21 @@ export const StudioSettingsPanel: React.FC<{ open: boolean; onClose: () => void 
     if (!open) return;
     let active = true;
     fetchModelCatalog().then((res) => { if (active) setModels(res.models); }).catch(() => {});
+    return () => { active = false; };
+  }, [open]);
+
+  // Live key status (real remaining credit + free-tier) so the project limit is clamped to the key
+  // and a free-tier key auto-restricts builds to free models. Cached for the build request builder.
+  const [keyStatus, setKeyStatus] = useState<KeyStatus>({ connected: false, isFreeTier: false, remainingUsd: null });
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    fetchKeyStatus().then((s) => {
+      if (!active) return;
+      setKeyStatus(s);
+      setStudioKeyStatus(s.remainingUsd, s.isFreeTier);
+      setSel(getStudioModelSelection()); // reflect any auto-clamp
+    });
     return () => { active = false; };
   }, [open]);
 
@@ -282,33 +298,51 @@ export const StudioSettingsPanel: React.FC<{ open: boolean; onClose: () => void 
             </div>
           </section>
 
-          {/* Project spend limit — the AI builds within this; $0 = free models only. */}
+          {/* Project spend limit — clamped to the REAL key, the AI builds within it. */}
           <section className={card}>
-            <div className="text-sm font-bold mb-2">Project spend limit</div>
-            <div className="flex items-center gap-2">
-              <span className={`text-sm ${t.textFaint}`}>$</span>
-              <input
-                type="number"
-                min={0}
-                step={1}
-                value={sel.projectLimitUsd ?? ''}
-                placeholder="No cap"
-                onChange={(e) => {
-                  const v = e.target.value.trim();
-                  setStudioProjectLimit(v === '' ? null : Math.max(0, Number(v) || 0));
-                }}
-                className="w-28 rounded border border-white/10 bg-black/20 px-2 py-1 text-sm focus:outline-none focus:border-violet-500"
-              />
-              {sel.projectLimitUsd != null && (
-                <button onClick={() => setStudioProjectLimit(null)} className={`text-[11px] underline ${t.textFaint}`}>
-                  clear
-                </button>
-              )}
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-sm font-bold">Project spend limit</div>
+              <div className={`text-[11px] ${t.textFaint}`}>
+                {models.filter((m) => m.isFree).length} free · {models.filter((m) => !m.isFree).length} paid models
+              </div>
             </div>
-            <p className={`mt-2 text-[11px] ${t.textFaint}`}>
-              <b>$0</b> = free models only · <b>&gt; $0</b> = paid/frontier allowed up to this cap · <b>empty</b> = no
-              cap (bounded by your key's remaining credit). The build picks models within this limit.
-            </p>
+            {keyStatus.isFreeTier ? (
+              <p className="text-[12px] text-amber-300">
+                Your key is <b>free-tier</b> (no paid credit) → builds use <b>free models only</b>, regardless of this limit.
+              </p>
+            ) : (
+              <>
+                <div className="flex items-center gap-2">
+                  <span className={`text-sm ${t.textFaint}`}>$</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    max={keyStatus.remainingUsd ?? undefined}
+                    value={sel.projectLimitUsd ?? ''}
+                    placeholder="No cap"
+                    onChange={(e) => {
+                      const raw = e.target.value.trim();
+                      setStudioProjectLimit(raw === '' ? null : Math.max(0, Number(raw) || 0), keyStatus.remainingUsd);
+                      setSel(getStudioModelSelection());
+                    }}
+                    className="w-28 rounded border border-white/10 bg-black/20 px-2 py-1 text-sm focus:outline-none focus:border-violet-500"
+                  />
+                  {keyStatus.remainingUsd != null && (
+                    <span className={`text-[11px] ${t.textFaint}`}>max ${keyStatus.remainingUsd.toFixed(2)} (your key)</span>
+                  )}
+                  {sel.projectLimitUsd != null && (
+                    <button onClick={() => { setStudioProjectLimit(null); setSel(getStudioModelSelection()); }} className={`text-[11px] underline ${t.textFaint}`}>
+                      clear
+                    </button>
+                  )}
+                </div>
+                <p className={`mt-2 text-[11px] ${t.textFaint}`}>
+                  <b>$0</b> = free models only · <b>&gt; $0</b> = paid/frontier allowed up to this cap · <b>empty</b> = no
+                  cap (bounded by your key). Can never exceed your key's remaining credit; the build picks models within it.
+                </p>
+              </>
+            )}
           </section>
 
           {/* Self-heal iterations (creativity is now a fixed, ambitious server default — no knob). */}
