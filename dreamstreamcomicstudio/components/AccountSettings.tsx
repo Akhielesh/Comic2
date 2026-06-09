@@ -73,6 +73,8 @@ import { isFreeOnly, setFreeOnly, onFreeOnlyChanged } from '../services/freeOnly
 import { VerificationCenter } from './VerificationCenter';
 import { AdminAnalytics } from './admin/AdminAnalytics';
 import { InviteManager } from './admin/InviteManager';
+import { EmailConsole } from './admin/EmailConsole';
+import { InviteFriends } from './InviteFriends';
 import { RedeemInvite } from './RedeemInvite';
 
 type SettingsTab = 'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin' | 'preferences' | 'security';
@@ -1161,6 +1163,11 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                     {isSavingProfile ? "Saving..." : "Save Changes"}
                 </Button>
             </div>
+
+            <div className="border-2 border-black rounded-xl bg-white">
+                <div className="px-4 py-3 font-display text-lg border-b-2 border-black">Invite Friends</div>
+                <InviteFriends />
+            </div>
         </div>
     );
 
@@ -1655,6 +1662,13 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                     <summary className="px-4 py-3 cursor-pointer font-display text-lg">Tester Invites</summary>
                     <div className="border-t-2 border-black">
                         <InviteManager />
+                    </div>
+                </details>
+
+                <details className="border-2 border-black rounded-xl bg-white">
+                    <summary className="px-4 py-3 cursor-pointer font-display text-lg">Email Console</summary>
+                    <div className="border-t-2 border-black">
+                        <EmailConsole />
                     </div>
                 </details>
 
