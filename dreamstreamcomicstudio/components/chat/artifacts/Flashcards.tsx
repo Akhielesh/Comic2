@@ -1,7 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Layers, RotateCcw, Shuffle, Check, RefreshCw, ChevronLeft, ChevronRight, Target } from 'lucide-react';
+import { Layers, RotateCcw, Shuffle, Check, RefreshCw, ChevronLeft, ChevronRight, Target, Download } from 'lucide-react';
 import type { FlashcardsArtifact } from '../../../apiTypes';
 import { deckIdFor, loadProgress, saveProgress, clearProgress } from '../../../services/studyProgress';
+import { downloadTextFile } from '../../../services/chatUtils';
+
+// CSV field quoting (Anki/Quizlet import friendly): quote fields containing commas,
+// quotes or newlines, doubling embedded quotes.
+const csvField = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
 
 // A flip-card study deck the AI generates on demand. The learner flips each card,
 // marks it "known" or "review", can shuffle, and sees progress. Progress (known/review)
@@ -52,16 +57,44 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
     setPos(0); setFlipped(false);
   };
   const studyAll = () => { setUnknownOnly(false); setOrder(cards.map((_, i) => i)); setPos(0); setFlipped(false); };
+  const exportCsv = () => {
+    const csv = 'front,back\n' + cards.map((c) => `${csvField(c.front)},${csvField(c.back)}`).join('\n');
+    const base = (data.title || 'flashcards').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50) || 'flashcards';
+    downloadTextFile(`${base}.csv`, csv, 'text/csv');
+  };
+
+  // Keyboard drilling: once the deck is focused, space/enter flips, ← → navigate, and
+  // ↑/k · ↓/j mark known/review — so a learner can rip through a deck without the mouse.
+  const onKey = (e: React.KeyboardEvent) => {
+    const k = e.key;
+    if (k === ' ' || k === 'Enter') { e.preventDefault(); setFlipped((f) => !f); }
+    else if (k === 'ArrowRight') { e.preventDefault(); go(1); }
+    else if (k === 'ArrowLeft') { e.preventDefault(); go(-1); }
+    else if (k === 'ArrowUp' || k === 'k' || k === 'K') { e.preventDefault(); mark(true); }
+    else if (k === 'ArrowDown' || k === 'j' || k === 'J') { e.preventDefault(); mark(false); }
+  };
 
   return (
-    <div className="border-2 border-black rounded-xl bg-white shadow-comic overflow-hidden animate-fade-in">
+    <div
+      className="border-2 border-black rounded-xl bg-white shadow-comic overflow-hidden animate-fade-in focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
+      tabIndex={0}
+      role="group"
+      aria-label={`Flashcard deck: ${data.title || 'Flashcards'}. Use space to flip, arrow keys to navigate.`}
+      onKeyDown={onKey}
+    >
       <div className="bg-violet-600 text-white px-4 py-2.5 flex items-center gap-2">
         <Layers className="w-5 h-5" />
         <div className="min-w-0 flex-1">
           <div className="font-display text-lg leading-none truncate">{data.title || 'Flashcards'}</div>
           {data.topic && <div className="text-[11px] font-bold uppercase tracking-wide text-white/70">{data.topic}</div>}
         </div>
-        <span className="text-[11px] font-bold">{known.size}/{cards.length} known</span>
+        <span className="text-[11px] font-bold">{known.size === cards.length ? '✓ mastered' : `${known.size}/${cards.length} known`}</span>
+      </div>
+
+      {/* Mastery bar: green = known, amber = flagged for review, slate track = remaining. */}
+      <div className="flex h-1.5 bg-slate-100" aria-hidden="true">
+        <div className="bg-green-500 transition-all" style={{ width: `${(known.size / cards.length) * 100}%` }} />
+        <div className="bg-amber-400 transition-all" style={{ width: `${(review.size / cards.length) * 100}%` }} />
       </div>
 
       {/* Resumed-progress hint (only when there was saved progress to restore). */}
@@ -72,18 +105,18 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
       )}
 
       <div className="p-4">
-        {/* The card — click to flip. */}
-        <button
-          type="button"
+        {/* The card — click (or space, when the deck is focused) to flip. */}
+        <div
+          role="button"
           onClick={() => setFlipped((f) => !f)}
-          className={`w-full min-h-[150px] rounded-xl border-2 border-black flex items-center justify-center text-center p-5 transition-colors ${flipped ? 'bg-violet-50' : 'bg-brand-yellow'}`}
+          className={`w-full min-h-[150px] rounded-xl border-2 border-black flex items-center justify-center text-center p-5 transition-colors cursor-pointer ${flipped ? 'bg-violet-50' : 'bg-brand-yellow'}`}
         >
           <div>
             <div className="text-[10px] font-bold uppercase tracking-wide text-black/50 mb-1">{flipped ? 'Answer' : 'Term'}</div>
             <div className="text-lg font-bold whitespace-pre-wrap">{flipped ? card.back : card.front}</div>
-            {!flipped && <div className="text-[11px] text-black/50 mt-2">Click to flip</div>}
+            {!flipped && <div className="text-[11px] text-black/50 mt-2">Click to flip · or focus the deck and use <kbd>space</kbd> / <kbd>←</kbd> <kbd>→</kbd></div>}
           </div>
-        </button>
+        </div>
 
         {/* Nav + progress */}
         <div className="flex items-center justify-between mt-3">
@@ -106,7 +139,8 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
           ) : (
             <button onClick={studyUnknown} disabled={known.size >= cards.length} className="flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-violet-100 hover:bg-violet-200 disabled:opacity-40" title="Study only the cards you haven't marked known"><Target className="w-3.5 h-3.5" /> Study {cards.length - known.size} left</button>
           )}
-          <button onClick={reshuffle} className="ml-auto flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-white hover:bg-slate-100"><Shuffle className="w-3.5 h-3.5" /> Shuffle</button>
+          <button onClick={exportCsv} title="Download as CSV (import into Anki / Quizlet)" className="ml-auto flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-white hover:bg-slate-100"><Download className="w-3.5 h-3.5" /> CSV</button>
+          <button onClick={reshuffle} className="flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-white hover:bg-slate-100"><Shuffle className="w-3.5 h-3.5" /> Shuffle</button>
           <button onClick={reset} className="flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-white hover:bg-slate-100" title="Clear saved progress"><RotateCcw className="w-3.5 h-3.5" /> Reset</button>
         </div>
       </div>

@@ -1,19 +1,31 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle2, XCircle, RotateCcw, Lightbulb, GraduationCap } from 'lucide-react';
+import { CheckCircle2, XCircle, RotateCcw, RefreshCw, Lightbulb, GraduationCap, Download } from 'lucide-react';
 import type { QuizArtifact, QuizQuestion } from '../../../apiTypes';
 import { quizIdFor, loadQuizAttempt, saveQuizAttempt, clearQuizAttempt } from '../../../services/studyProgress';
+import { downloadTextFile } from '../../../services/chatUtils';
 
 // Interactive, self-grading quiz the AI generates on demand for learning. Supports
 // single-select, multi-select, true/false and short-answer questions. No server
 // round-trip — grading happens here so a learner gets instant feedback + explanations.
 
 const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-const isCorrect = (q: QuizQuestion, answer: string[] | string): boolean => {
+export const isCorrect = (q: QuizQuestion, answer: string[] | string): boolean => {
   const correct = q.correct || [];
   if (q.type === 'short') {
+    // Forgiving grading: accept an exact (normalized) match, OR an answer that contains
+    // the expected term as whole words — so "the chloroplast" / "it's oxygen gas" count
+    // for "chloroplast" / "oxygen". Kept conservative (term must be ≥3 chars and appear
+    // on word boundaries) so it doesn't loosely mark wrong answers correct.
     const a = norm(typeof answer === 'string' ? answer : (answer[0] || ''));
-    return a.length > 0 && correct.some((c) => norm(c) === a);
+    if (!a) return false;
+    return correct.some((c) => {
+      const cc = norm(c);
+      if (!cc) return false;
+      if (cc === a) return true;
+      return cc.length >= 3 && new RegExp(`(^|\\s)${escapeRe(cc)}($|\\s)`).test(a);
+    });
   }
   if (q.type === 'multi') {
     const picked = new Set(Array.isArray(answer) ? answer : [answer]);
@@ -52,8 +64,50 @@ export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
   const answerFor = (q: QuizQuestion): string[] | string => (q.type === 'short' ? (text[q.id] || '') : (answers[q.id] || []));
   const graded = questions.map((q) => ({ q, ok: isCorrect(q, answerFor(q)) }));
   const score = graded.filter((g) => g.ok).length;
+  const isAnswered = (q: QuizQuestion): boolean =>
+    q.type === 'short' ? Boolean((text[q.id] || '').trim()) : (answers[q.id] || []).length > 0;
+  const answeredCount = questions.filter(isAnswered).length;
+  const unanswered = questions.length - answeredCount;
 
   const reset = () => { clearQuizAttempt(quizId); setAnswers({}); setText({}); setChecked(false); setRevealed({}); };
+  // Focus the retry on what was missed: clear only the wrong answers, keep the correct
+  // ones, and drop back into answering mode — the proven "study your mistakes" loop.
+  const retryIncorrect = () => {
+    const wrong = new Set(graded.filter((g) => !g.ok).map((g) => g.q.id));
+    setAnswers((p) => { const n = { ...p }; for (const id of wrong) delete n[id]; return n; });
+    setText((p) => { const n = { ...p }; for (const id of wrong) delete n[id]; return n; });
+    setRevealed({});
+    setChecked(false);
+  };
+
+  // Export a printable Markdown sheet: the questions (with lettered options / a blank for
+  // short answers) plus a separate answer key with explanations.
+  const exportMd = () => {
+    const L = 'ABCDEFGH';
+    const out: string[] = [`# ${data.title || 'Quiz'}`];
+    if (data.topic) out.push(`_${data.topic}_`);
+    if (data.description) out.push('', data.description);
+    out.push('');
+    questions.forEach((q, i) => {
+      out.push(`${i + 1}. ${q.prompt}`);
+      if (q.type === 'short') out.push('   - Answer: ____________________');
+      else (q.choices || []).forEach((c, ci) => out.push(`   - ${L[ci] || '-'}) ${c.text}`));
+      out.push('');
+    });
+    out.push('---', '', '## Answer key', '');
+    questions.forEach((q, i) => {
+      const ans = q.type === 'short'
+        ? (q.correct || []).join(' / ')
+        : (q.correct || []).map((id) => {
+            const idx = (q.choices || []).findIndex((c) => c.id === id);
+            const c = (q.choices || [])[idx];
+            return c ? `${L[idx] || ''}) ${c.text}` : id;
+          }).join(', ');
+      out.push(`${i + 1}. **${ans}**${q.explanation ? ` — ${q.explanation}` : ''}`);
+    });
+    const base = (data.title || 'quiz').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50) || 'quiz';
+    downloadTextFile(`${base}.md`, out.join('\n'), 'text/markdown');
+  };
 
   return (
     <div className="border-2 border-black rounded-xl bg-white shadow-comic overflow-hidden animate-fade-in">
@@ -63,7 +117,10 @@ export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
           <div className="font-display text-lg leading-none truncate">{data.title || 'Quiz'}</div>
           {data.topic && <div className="text-[11px] font-bold uppercase tracking-wide text-black/60">{data.topic}</div>}
         </div>
-        <span className="ml-auto text-[11px] font-bold">{questions.length} Q{questions.length === 1 ? '' : 's'}</span>
+        <button onClick={exportMd} title="Download as a printable Markdown sheet + answer key" className="ml-auto flex items-center gap-1 text-[11px] font-bold border-2 border-black rounded-md px-2 py-1 bg-white/70 hover:bg-white">
+          <Download className="w-3.5 h-3.5" />
+        </button>
+        <span className="text-[11px] font-bold">{questions.length} Q{questions.length === 1 ? '' : 's'}</span>
       </div>
 
       <div className="p-4 space-y-4">
@@ -138,14 +195,26 @@ export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
           {checked ? (
             <>
               <div className="font-display text-lg">Score: {score}/{questions.length} <span className="text-sm text-slate-500">({Math.round((score / questions.length) * 100)}%)</span></div>
-              <button onClick={reset} className="flex items-center gap-1.5 text-sm font-bold border-2 border-black rounded-md px-3 py-1.5 bg-white hover:bg-slate-100">
-                <RotateCcw className="w-4 h-4" /> Try again
-              </button>
+              <div className="flex items-center gap-2">
+                {score < questions.length && (
+                  <button onClick={retryIncorrect} className="flex items-center gap-1.5 text-sm font-bold border-2 border-black rounded-md px-3 py-1.5 bg-brand-yellow hover:bg-black hover:text-brand-yellow transition-colors">
+                    <RefreshCw className="w-4 h-4" /> Retry incorrect ({questions.length - score})
+                  </button>
+                )}
+                <button onClick={reset} className="flex items-center gap-1.5 text-sm font-bold border-2 border-black rounded-md px-3 py-1.5 bg-white hover:bg-slate-100">
+                  <RotateCcw className="w-4 h-4" /> Try again
+                </button>
+              </div>
             </>
           ) : (
-            <button onClick={() => setChecked(true)} className="ml-auto flex items-center gap-1.5 text-sm font-bold border-2 border-black rounded-md px-4 py-1.5 bg-brand-yellow hover:bg-black hover:text-brand-yellow transition-colors">
-              <CheckCircle2 className="w-4 h-4" /> Check answers
-            </button>
+            <>
+              <span className="text-xs font-bold text-slate-500 tabular-nums">
+                {answeredCount}/{questions.length} answered{unanswered > 0 ? <span className="text-amber-600"> · {unanswered} left</span> : ''}
+              </span>
+              <button onClick={() => setChecked(true)} className="ml-auto flex items-center gap-1.5 text-sm font-bold border-2 border-black rounded-md px-4 py-1.5 bg-brand-yellow hover:bg-black hover:text-brand-yellow transition-colors">
+                <CheckCircle2 className="w-4 h-4" /> Check{unanswered > 0 ? ' anyway' : ' answers'}
+              </button>
+            </>
           )}
         </div>
       </div>

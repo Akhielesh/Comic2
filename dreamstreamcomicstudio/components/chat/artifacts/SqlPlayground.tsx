@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Database, Play, Loader2, AlertTriangle, Table2, ChevronDown, ChevronUp } from 'lucide-react';
+import { Database, Play, Loader2, AlertTriangle, Table2, ChevronDown, ChevronUp, RotateCcw, Copy, Check } from 'lucide-react';
 import { runSqlExercise, type SqlRunResult } from '../../../services/learnApi';
 import type { SqlExerciseArtifact } from '../../../apiTypes';
 
@@ -12,6 +12,12 @@ export const SqlPlayground: React.FC<{ data: SqlExerciseArtifact }> = ({ data })
   const [result, setResult] = useState<SqlRunResult | null>(null);
   const [running, setRunning] = useState(false);
   const [showSchema, setShowSchema] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const starter = data.starterSql || 'SELECT * FROM ';
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(query); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* clipboard unavailable */ }
+  };
 
   const run = async () => {
     if (!query.trim() || running) return;
@@ -72,6 +78,12 @@ export const SqlPlayground: React.FC<{ data: SqlExerciseArtifact }> = ({ data })
             {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />} Run
           </button>
           <span className="text-[11px] text-slate-400">⌘/Ctrl + Enter</span>
+          <button onClick={copy} title="Copy SQL" className="ml-auto flex items-center gap-1 text-[11px] font-bold border-2 border-black rounded-md px-2 py-1 bg-white hover:bg-slate-100">
+            {copied ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
+          </button>
+          <button onClick={() => setQuery(starter)} title="Reset to starter query" className="flex items-center gap-1 text-[11px] font-bold border-2 border-black rounded-md px-2 py-1 bg-white hover:bg-slate-100">
+            <RotateCcw className="w-3.5 h-3.5" />
+          </button>
         </div>
 
         {/* Result: error, a table, or "no rows". */}
