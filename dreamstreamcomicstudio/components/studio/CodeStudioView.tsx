@@ -1252,7 +1252,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
                 target="_blank"
                 rel="noreferrer"
                 title={`Deployed — open the live app\n${deployUrl}`}
-                className="hidden lg:inline-flex items-center gap-1.5 text-xs font-bold rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-emerald-500 hover:bg-emerald-500/20"
+                className={`hidden lg:inline-flex items-center gap-1.5 text-xs font-bold rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-emerald-500 hover:bg-emerald-500/20 ${t.focusRing}`}
               >
                 <Cloud className="w-3.5 h-3.5" /> Live
               </a>
