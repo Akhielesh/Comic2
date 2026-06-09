@@ -3,6 +3,7 @@ import type { ChatRequest, ChatResponse, ChatClientContext } from '../../../apiT
 import { runChat, type ChatReasoningLevel } from '../ai/chat.js';
 import { runSwarm } from '../ai/agents/orchestrator.js';
 import { makeSwarmTool, SWARM_TOOL_NAME } from '../ai/agents/swarmTool.js';
+import { makeDelegateTool } from '../ai/agents/delegateTool.js';
 import { makeDeepResearchTool } from '../ai/research/deepResearchTool.js';
 import { resolveClientGeo, clientIpFromReq } from '../ai/clientGeo.js';
 import { makeImageTool, imageGenAvailable, type ImageKeys } from '../ai/tools/imageGen.js';
@@ -363,6 +364,29 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   if (resolved.provider === 'openrouter' && researchIntent) {
     metaTools.push(
       makeDeepResearchTool({
+        provider: resolved.provider,
+        apiKey: resolved.apiKey,
+        model,
+        messages,
+        systemPrompt,
+        clientContext,
+        fallbackModel: TEXT_FALLBACK,
+        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+      })
+    );
+  }
+
+  // Task delegation (gather → verify → aggregate via parallel helper agents) is offered
+  // AUTOMATICALLY when the message looks like it needs several independent lookups or
+  // cross-verification — no swarm toggle required (that's the user-facing ask: "let the
+  // agent delegate without activating swarm"). Skipped when the user already turned the
+  // heavier swarm on (that's the explicit, broader path). OpenRouter only (helpers are
+  // web-grounded). Intent-gated so ordinary single-answer turns don't pay for it.
+  const delegationIntent =
+    /\b(verify|cross[\s-]?check|fact[\s-]?check|double[\s-]?check|confirm (whether|if|that)|is it true|gather|compile|aggregate|cross[\s-]?reference|reconcile|each of (these|them|the)|for each|multiple sources|several (sources|claims|things|items)|compare\b[^.?!]*\b(and|vs\.?|versus)\b)/i;
+  if (resolved.provider === 'openrouter' && !swarmRequested && delegationIntent.test(lastUserText)) {
+    metaTools.push(
+      makeDelegateTool({
         provider: resolved.provider,
         apiKey: resolved.apiKey,
         model,
