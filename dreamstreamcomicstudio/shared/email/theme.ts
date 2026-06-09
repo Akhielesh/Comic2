@@ -11,7 +11,7 @@ export interface BrandConfig {
   productName: string;
   /** One-liner used as the email preheader fallback. */
   tagline: string;
-  /** Public app/marketing origin, e.g. https://dreamstream.studio (no trailing slash). */
+  /** Public app/marketing origin, e.g. https://dreamstreamstudio.ai (no trailing slash). */
   appUrl: string;
   /** Where "reply" / "need help?" points. */
   supportEmail: string;
@@ -49,8 +49,8 @@ export const FONT_BODY = "'Comic Neue', 'Inter', -apple-system, BlinkMacSystemFo
 export const DEFAULT_BRAND: BrandConfig = {
   productName: 'DreamStream Studio',
   tagline: 'Comics, AI Chat & Code — one studio.',
-  appUrl: 'https://dreamstream.studio',
-  supportEmail: 'support@dreamstream.studio',
+  appUrl: 'https://dreamstreamstudio.ai',
+  supportEmail: 'support@dreamstreamstudio.ai',
   companyName: 'DreamStream Studio',
   companyAddress: '',
   logoUrl: ''

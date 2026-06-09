@@ -8,6 +8,9 @@ export {
   isEmailTemplateName,
   isMarketing,
   EMAIL_TEMPLATE_NAMES,
-  TEMPLATE_KIND
+  TEMPLATE_KIND,
+  SENDER_ROLE,
+  senderRoleFor,
+  isNoReply
 } from './templates.js';
-export type { EmailTemplateName, EmailKind, EmailParams, RenderedEmail } from './templates.js';
+export type { EmailTemplateName, EmailKind, EmailParams, RenderedEmail, SenderRole } from './templates.js';

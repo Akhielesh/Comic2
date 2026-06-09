@@ -50,6 +50,32 @@ export const generateInvites = async (input: GenerateInput) => {
   return data || [];
 };
 
+/**
+ * One persistent personal referral code per user (get-or-create). Reuses access_invites with
+ * label 'referral' and a generous max_uses so a user can invite multiple friends from one link.
+ */
+export const getOrCreateReferral = async (userId: string): Promise<{ code: string; use_count: number; max_uses: number }> => {
+  const admin = getSupabaseAdmin();
+  const { data: existing } = await admin
+    .from('access_invites')
+    .select('code, use_count, max_uses')
+    .eq('created_by', userId)
+    .eq('label', 'referral')
+    .eq('status', 'active')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (existing) {
+    return {
+      code: String(existing.code),
+      use_count: Number(existing.use_count) || 0,
+      max_uses: Number(existing.max_uses) || 0
+    };
+  }
+  const [created] = await generateInvites({ createdBy: userId, label: 'referral', maxUses: 25, count: 1 });
+  return { code: String(created.code), use_count: 0, max_uses: 25 };
+};
+
 export const listInvites = async (opts: { limit?: number; offset?: number; status?: string } = {}) => {
   const limit = Math.max(1, Math.min(200, Math.floor(Number(opts.limit) || 100)));
   const offset = Math.max(0, Math.floor(Number(opts.offset) || 0));

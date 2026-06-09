@@ -169,7 +169,7 @@ export const OPENROUTER_API_KEYS = [OPENROUTER_API_KEY, ...(process.env.OPENROUT
   .map((k) => k.trim())
   .filter(Boolean);
 export const OPENROUTER_BASE_URL = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
-export const OPENROUTER_APP_URL = process.env.OPENROUTER_APP_URL || 'https://dreamstream.studio';
+export const OPENROUTER_APP_URL = process.env.OPENROUTER_APP_URL || 'https://dreamstreamstudio.ai';
 export const OPENROUTER_APP_TITLE = process.env.OPENROUTER_APP_TITLE || 'DreamStream Comic Studio';
 // Default model IDs (overridable). These intentionally route Gemini-family models THROUGH OpenRouter.
 export const OPENROUTER_TEXT_MODEL = process.env.OPENROUTER_TEXT_MODEL || 'google/gemini-2.5-flash';
@@ -261,10 +261,10 @@ export const STUDIO_COST_PER_AWAKE_SEC = Number(process.env.STUDIO_COST_PER_AWAK
 export const EMAIL_WORKER_URL = process.env.EMAIL_WORKER_URL || '';
 export const EMAIL_HMAC_SECRET = process.env.EMAIL_HMAC_SECRET || '';
 // Public origin of THIS backend, used to build absolute unsubscribe + read-receipt links
-// embedded in mail (e.g. https://api.dreamstream.studio). Required for marketing mail.
+// embedded in mail (e.g. https://api.dreamstreamstudio.ai). Required for marketing mail.
 export const EMAIL_PUBLIC_BASE_URL = (process.env.EMAIL_PUBLIC_BASE_URL || '').replace(/\/+$/, '');
 // Public app origin used for post-confirm redirects + in-email app links.
-export const APP_PUBLIC_URL = (process.env.APP_PUBLIC_URL || 'https://dreamstream.studio').replace(/\/+$/, '');
+export const APP_PUBLIC_URL = (process.env.APP_PUBLIC_URL || 'https://dreamstreamstudio.ai').replace(/\/+$/, '');
 export const EMAIL_REQUEST_TIMEOUT_MS = parseIntegerEnv(
   process.env.EMAIL_REQUEST_TIMEOUT_MS,
   15_000,

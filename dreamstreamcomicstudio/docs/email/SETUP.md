@@ -17,11 +17,11 @@ Checklist:
 ## 1. Cloudflare: plan, domain, DNS
 
 1. Upgrade the Cloudflare account to the **Workers Paid** plan ($5/mo).
-2. Dashboard → **Email → Sending** → **Add a domain** (e.g. `dreamstream.studio`).
+2. Dashboard → **Email → Sending** → **Add a domain** (e.g. `dreamstreamstudio.ai`).
 3. Cloudflare generates **SPF, DKIM and DMARC** DNS records. If the domain's DNS is on
    Cloudflare they can be added automatically; otherwise copy them to your DNS host. Wait for
    **Verified**.
-4. Choose a `from` address on that domain, e.g. `notifications@dreamstream.studio`.
+4. Choose a `from` address on that domain, e.g. `notifications@dreamstreamstudio.ai`.
 
 > Good deliverability needs all three of SPF/DKIM/DMARC passing. A reasonable starter DMARC is
 > `v=DMARC1; p=none; rua=mailto:dmarc@yourdomain.com` — tighten to `quarantine`/`reject` later.
@@ -55,8 +55,8 @@ Set these on the API service (see [`.env.example`](../../.env.example)):
 ```bash
 EMAIL_WORKER_URL=https://dreamstream-email.<account>.workers.dev
 EMAIL_HMAC_SECRET=<the SAME value you put on the worker in step 3>
-EMAIL_PUBLIC_BASE_URL=https://api.dreamstream.studio   # public origin of THIS backend
-APP_PUBLIC_URL=https://dreamstream.studio              # app origin (post-confirm redirect)
+EMAIL_PUBLIC_BASE_URL=https://api.dreamstreamstudio.ai   # public origin of THIS backend
+APP_PUBLIC_URL=https://dreamstreamstudio.ai              # app origin (post-confirm redirect)
 EMAIL_MAX_PER_DAY=200
 EMAIL_MAX_PER_MONTH=2500     # keep < 3000 to stay free; raising it past 3000 risks charges
 ```

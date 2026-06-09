@@ -198,3 +198,15 @@ export const sendProductUpdate = (
   content: { title?: string; body?: string; bodyHtml?: string; ctaUrl?: string; ctaLabel?: string; subject?: string; firstName?: string },
   req?: Parameters<typeof meta>[0]
 ) => sendEmail({ to: email, template: 'product-update', params: { ...content }, ...meta(req) });
+
+export const sendAnnouncement = (
+  email: string,
+  content: { heading?: string; body?: string; ctaUrl?: string; ctaLabel?: string; subject?: string; preheader?: string; firstName?: string },
+  req?: Parameters<typeof meta>[0]
+) => sendEmail({ to: email, template: 'announcement', params: { ...content }, ...meta(req) });
+
+export const sendBetaInvite = (
+  email: string,
+  invite: { inviteUrl: string; inviterName?: string; personalNote?: string; code?: string },
+  req?: Parameters<typeof meta>[0]
+) => sendEmail({ to: email, template: 'beta-invite', params: { ...invite }, ...meta(req) });

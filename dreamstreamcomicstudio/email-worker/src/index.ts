@@ -17,6 +17,7 @@ import {
   renderEmail,
   isEmailTemplateName,
   isMarketing,
+  senderRoleFor,
   type BrandConfig,
   type EmailParams,
   type EmailTemplateName,
@@ -55,7 +56,7 @@ export interface Env {
   SUPABASE_AUTH_HOOK_SECRET?: string;
 
   // ── Vars (wrangler.jsonc `vars`) ──
-  /** Verified sender, e.g. notifications@dreamstream.studio. */
+  /** Verified sender, e.g. notifications@dreamstreamstudio.ai. */
   EMAIL_FROM: string;
   EMAIL_FROM_NAME?: string;
   EMAIL_REPLY_TO?: string;
@@ -131,12 +132,24 @@ async function verifyStandardWebhook(secret: string, headers: Headers, body: str
     .some((candidate) => timingSafeEqual(candidate, expected));
 }
 
+// Pick the FROM mailbox for a template's sender role (no-reply@ / hello@ / notifications@),
+// all on the verified sending domain. Any address on that domain is allowed once the domain
+// is onboarded — no per-address verification needed.
+function senderFrom(env: Env, template: EmailTemplateName): EmailAddress {
+  const [defaultLocal, domain] = env.EMAIL_FROM.split('@');
+  const zone = (domain || 'dreamstreamstudio.ai').trim();
+  const role = senderRoleFor(template);
+  const email =
+    role === 'no-reply' ? `no-reply@${zone}` : role === 'hello' ? `hello@${zone}` : `${defaultLocal || 'notifications'}@${zone}`;
+  return env.EMAIL_FROM_NAME ? { email, name: env.EMAIL_FROM_NAME } : { email };
+}
+
 // ── Sending ───────────────────────────────────────────────────────────────────
 async function dispatch(
   env: Env,
   to: string | EmailAddress,
   rendered: RenderedEmail,
-  opts: { replyTo?: string; unsubscribeUrl?: string } = {}
+  opts: { replyTo?: string; unsubscribeUrl?: string; from?: EmailAddress } = {}
 ) {
   // RFC 8058 one-click unsubscribe — only set for marketing mail, so Gmail/Apple show a
   // native "Unsubscribe" affordance that POSTs to our backend.
@@ -146,11 +159,13 @@ async function dispatch(
     headers['List-Unsubscribe-Post'] = 'List-Unsubscribe=One-Click';
   }
   const result = await env.EMAIL.send({
-    from: env.EMAIL_FROM_NAME ? { email: env.EMAIL_FROM, name: env.EMAIL_FROM_NAME } : env.EMAIL_FROM,
+    from: opts.from || (env.EMAIL_FROM_NAME ? { email: env.EMAIL_FROM, name: env.EMAIL_FROM_NAME } : env.EMAIL_FROM),
     to,
     subject: rendered.subject,
     html: rendered.html,
     text: rendered.text,
+    // Replies always route to the support mailbox, even for no-reply senders (the body tells
+    // recipients not to reply, but if they do, it lands somewhere a human can see).
     replyTo: opts.replyTo || env.EMAIL_REPLY_TO,
     headers: Object.keys(headers).length ? headers : undefined
   });
@@ -218,7 +233,7 @@ async function handleAuthHook(req: Request, env: Env): Promise<Response> {
 
   try {
     const rendered = renderEmail(template, params, brandFromEnv(env));
-    const messageId = await dispatch(env, to, rendered);
+    const messageId = await dispatch(env, to, rendered, { from: senderFrom(env, template) });
     return json({ ok: true, messageId });
   } catch (err) {
     // Returning 200 here would tell Supabase the mail was sent. Surface the failure so
@@ -251,7 +266,11 @@ async function handleSend(req: Request, env: Env): Promise<Response> {
     if (parsed.subject) rendered.subject = parsed.subject;
     // Only marketing mail gets a one-click unsubscribe header.
     const unsubscribeUrl = isMarketing(parsed.template) ? params.unsubscribeUrl : undefined;
-    const messageId = await dispatch(env, parsed.to, rendered, { replyTo: parsed.replyTo, unsubscribeUrl });
+    const messageId = await dispatch(env, parsed.to, rendered, {
+      replyTo: parsed.replyTo,
+      unsubscribeUrl,
+      from: senderFrom(env, parsed.template)
+    });
     return json({ ok: true, messageId });
   } catch (err) {
     return json({ error: (err as Error)?.message || 'send failed' }, 502);
