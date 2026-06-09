@@ -3,7 +3,7 @@
 
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { ContextUsageBar } from './ContextUsageBar';
 import { LiveProgress } from './LiveProgress';
 import { SuggestionsPanel } from './SuggestionsPanel';
@@ -60,5 +60,19 @@ describe('PublishPanel', () => {
     expect(screen.getByText('Vercel')).toBeInTheDocument();
     expect(screen.getByText('Supabase')).toBeInTheDocument();
     expect(screen.getByText(/Deploy steps/i)).toBeInTheDocument();
+  });
+  it('closes on Escape (keyboard accessible)', () => {
+    const onClose = vi.fn();
+    render(
+      <PublishPanel open onClose={onClose} title="App" previewUrl={null} onDownloadZip={vi.fn()} onDeploy={vi.fn(async () => ({ status: 'unavailable' as const }))} />
+    );
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalled();
+  });
+  it('shows the deployed link when a URL is known', () => {
+    render(
+      <PublishPanel open onClose={vi.fn()} title="App" previewUrl={null} deployedUrl="https://app.pages.dev" onDownloadZip={vi.fn()} onDeploy={vi.fn(async () => ({ status: 'live' as const }))} />
+    );
+    expect(screen.getByText(/Deployed · live/i)).toBeInTheDocument();
   });
 });

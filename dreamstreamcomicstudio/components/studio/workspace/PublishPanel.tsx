@@ -8,11 +8,12 @@
 // It never claims a deploy happened that didn't: the one-click button reports the server's true
 // status (live / queued / not-enabled-yet), and the manual commands always work as a fallback.
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   X, Share2, Check, Download, Cloud, Rocket, Database, Copy, ExternalLink, Loader2, Terminal,
 } from 'lucide-react';
 import { useStudioTheme } from '../kit';
+import { useDialogA11y } from '../kit/useDialogA11y';
 import type { DeployTarget, DeployResult } from '../../../services/studioDeployApi';
 
 interface ProviderMeta {
@@ -74,6 +75,9 @@ export interface PublishPanelProps {
 
 export const PublishPanel: React.FC<PublishPanelProps> = ({ open, onClose, title, previewUrl, deployedUrl, onDownloadZip, onDeploy }) => {
   const t = useStudioTheme();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogA11y(open, onClose); // Esc closes + restores focus
+  useEffect(() => { if (open) dialogRef.current?.focus(); }, [open]);
   const [provider, setProvider] = useState<DeployTarget>('cloudflare');
   const [copied, setCopied] = useState<string | null>(null);
   const [deploying, setDeploying] = useState(false);
@@ -103,11 +107,13 @@ export const PublishPanel: React.FC<PublishPanelProps> = ({ open, onClose, title
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/50" onClick={onClose}>
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-label="Publish & share"
-        className={`w-full max-w-xl max-h-[88vh] overflow-auto rounded-xl border ${t.edgeStrong} ${t.panel} ${t.text} shadow-2xl`}
+        className={`w-full max-w-xl max-h-[88vh] overflow-auto rounded-xl border ${t.edgeStrong} ${t.panel} ${t.text} shadow-2xl focus:outline-none`}
       >
         <div className={`sticky top-0 z-10 flex items-center gap-2 px-4 py-3 border-b ${t.edge} ${t.panel}`}>
           <Share2 className={`w-4 h-4 ${t.accent}`} />
