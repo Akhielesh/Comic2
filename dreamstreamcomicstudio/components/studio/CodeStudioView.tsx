@@ -32,6 +32,7 @@ import {
 import { StudioStart } from './StudioStart';
 import { StudioBuildFlow, type StudioFlowState } from './StudioBuildFlow';
 import { clarifyStudioApp, planStudioApp } from '../../services/studioPlanApi';
+import { describeApiError } from '../../services/apiErrors';
 import { saveStudioChat, loadStudioChat } from '../../services/studioChatHistory';
 import { getStudioModelSelection, getStudioAgents, getStudioAutoRunAgents, getStudioRuntime, STUDIO_MODEL_CHANGED } from '../../services/studioModelSelection';
 import { stopLiveStudio } from '../../services/studioApi';
@@ -604,7 +605,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       const plan = await planStudioApp(prompt, answers);
       setFlow((f) => ({ ...f, phase: 'plan', plan, answers }));
     } catch (err) {
-      setFlow((f) => ({ ...f, phase: 'error', error: (err as Error)?.message || 'Could not draft a build plan.' }));
+      setFlow((f) => ({ ...f, phase: 'error', error: describeApiError(err) }));
     }
   };
 
