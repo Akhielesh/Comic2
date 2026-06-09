@@ -491,6 +491,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['document', 'make a document', 'write a', 'cheat sheet', 'cheatsheet', 'study guide', 'guide', 'notes', 'handout', 'worksheet', 'report', 'summary document', 'pdf', 'downloadable', 'reference sheet', 'one-pager']
   },
   {
+    name: 'generate_bundle', label: 'Resource bundle (.zip)', category: 'learning', kind: 'builtin', provider: 'DreamStream (in-app, downloadable .zip)',
+    description: 'Package a SET of generated files (study guide + practice questions + flashcards, a starter project, data + a README) into one card the user can download per-file or all at once as a .zip — custom-built resources they keep.',
+    auth: 'none', rateLimit: 'Unlimited (zipped locally in the browser, no API)',
+    dataShape: 'Bundle card: list of named files with per-file download + a single download-all .zip.', docsUrl: 'https://dreamstream.app',
+    keywords: ['bundle', 'zip', 'zip file', 'package', 'pack', 'kit', 'resources', 'download all', 'study pack', 'starter project', 'set of files', 'multiple files', 'toolkit', 'templates']
+  },
+  {
     name: 'render_table', label: 'Data table', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app)',
     description: 'Render a sortable, typed data table from rows the model provides — currency, percent, signed-delta, sparkline and badge cells. For watchlists, holdings, fundamentals grids, screeners and comparisons.',
     auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',

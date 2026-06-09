@@ -680,6 +680,57 @@ const sqlExerciseTool: ChatTool = {
   }
 };
 
+// Package several generated files into one downloadable bundle (.zip). Pure + local —
+// the client renders per-file download buttons plus a "download all as .zip" action.
+const bundleTool: ChatTool = {
+  name: 'generate_bundle',
+  description:
+    'Package a SET of files into one downloadable bundle the user can keep — they get per-file downloads plus a single "download all (.zip)" button. Use this when the user wants a KIT / PACK / BUNDLE of resources rather than a single document: e.g. a study pack (guide + practice questions + flashcards as files), a starter project (multiple code/config files), or data + notes (a CSV plus a README). Provide a `title` and a `files` array — each file has a `name` WITH extension (e.g. "study-guide.md", "data.csv", "starter.py") and its full text `content`. Keep chat prose brief; put the substance in the files.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      description: { type: 'string' },
+      files: {
+        type: 'array',
+        description: 'The files to bundle (2–12). Each has a name with extension and text content.',
+        items: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Filename with extension, e.g. "notes.md".' },
+            content: { type: 'string' },
+            label: { type: 'string', description: 'Optional short description of the file.' }
+          },
+          required: ['name', 'content']
+        }
+      }
+    },
+    required: ['title', 'files']
+  },
+  execute: async (args) => {
+    const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined);
+    const MAX_FILES = 12;
+    const MAX_FILE_CHARS = 60_000;
+    const files = (Array.isArray(args?.files) ? (args!.files as unknown[]) : [])
+      .flatMap((f) => {
+        const fo = f as Record<string, unknown>;
+        const name = str(fo?.name);
+        const content = typeof fo?.content === 'string' ? fo.content : undefined;
+        if (!name || content === undefined) return [];
+        // Sanitize the path: no directory traversal / leading slashes in zip entry names.
+        const safe = name.replace(/^[/\\]+/, '').replace(/\.\.[/\\]/g, '').slice(0, 120);
+        return [{ name: safe || 'file.txt', content: content.slice(0, MAX_FILE_CHARS), label: str(fo?.label) }];
+      })
+      .slice(0, MAX_FILES);
+    if (!files.length) return { content: 'No usable files were provided for the bundle (each needs a name and content).' };
+    const data = { title: str(args?.title) || 'Resource bundle', description: str(args?.description), files };
+    return {
+      content: `Built a resource bundle "${data.title}" with ${files.length} file(s). A downloadable card (per-file + .zip) is shown to the user.`,
+      artifacts: [{ type: 'resource_bundle', data }]
+    };
+  }
+};
+
 // Flatten the free-API tool packs into a name→tool map. These are all context-free
 // (they take explicit args), so they live alongside the original built-ins.
 const FREE_API_TOOLS: ChatTool[] = [
@@ -712,6 +763,7 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   generate_quiz: quizTool,
   generate_flashcards: flashcardsTool,
   generate_document: documentTool,
+  generate_bundle: bundleTool,
   sql_exercise: sqlExerciseTool,
   generate_app: generateAppTool,
   ...Object.fromEntries(FREE_API_TOOLS.map((t) => [t.name, t]))
