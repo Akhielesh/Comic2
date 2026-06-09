@@ -860,6 +860,20 @@ export interface SqlExerciseArtifact {
   starterSql?: string;
 }
 
+// --- Code exercise / playground artifact (run real JavaScript while learning) ---
+// Emitted by the `code_exercise` tool. The AI provides a task + starter code; the user
+// edits and RUNS it in a sandboxed Web Worker, seeing real console output and real
+// JS errors (with stack). A small, safe "terminal with legit execution errors".
+export interface CodeExerciseArtifact {
+  title?: string;
+  instructions?: string;
+  task?: string;
+  /** Language label. JavaScript runs live; other labels render as read-only starters. */
+  language?: string;
+  /** Starter code to prefill the editor. */
+  starterCode?: string;
+}
+
 // --- Downloadable document artifact ---
 // Emitted by the `generate_document` tool so the AI can author a custom resource
 // (study guide, cheat sheet, notes, report, plan) the user can read inline and
