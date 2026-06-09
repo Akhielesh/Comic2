@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { ChatRequest, ChatResponse, ChatClientContext } from '../../../apiTypes.js';
-import { runChat, isStudyIntent, type ChatReasoningLevel } from '../ai/chat.js';
+import { runChat, isStudyIntent, isTrivialChat, type ChatReasoningLevel, type ChatAttachmentInput } from '../ai/chat.js';
 import { runSwarm } from '../ai/agents/orchestrator.js';
 import { makeSwarmTool, SWARM_TOOL_NAME } from '../ai/agents/swarmTool.js';
 import { makeDelegateTool } from '../ai/agents/delegateTool.js';
@@ -151,6 +151,8 @@ type PreparedChat = {
   tools: ChatTool[];
   clientContext?: ChatClientContext;
   customAgents: AgentDefinition[];
+  /** Files attached to the current turn — surfaced to the model so it can read them. */
+  attachments: ChatAttachmentInput[];
 };
 
 type PrepResult = { error: { status: number; body: unknown } } | { prepared: PreparedChat };
@@ -189,6 +191,16 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   if (messages[messages.length - 1].role !== 'user') {
     return { error: { status: 400, body: { error: { message: 'The last message must be from the user.' } } } };
   }
+
+  // The latest user message, flattened to text — drives web-search gating, tool routing
+  // and study-intent detection below, so it's computed once here.
+  const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
+  const lastUserText =
+    typeof lastUserMessage?.content === 'string'
+      ? lastUserMessage.content
+      : Array.isArray(lastUserMessage?.content)
+        ? lastUserMessage!.content.map((p) => ('text' in p ? p.text : '')).join(' ')
+        : '';
 
   const requestedModel = (typeof body.model === 'string' ? body.model.trim() : '') || (req.header('X-Text-Model') || '').trim();
   // Free-only is a user choice (header). When ON we use the cooldown-aware FREE chain (slower
@@ -247,9 +259,12 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   }
 
   const reasoningLevel = isReasoningLevel(body.reasoningLevel) ? body.reasoningLevel : 'none';
-  // Internet access is a backend default, not a user toggle: every OpenRouter chat
-  // gets live web grounding (the model must source from the internet).
-  const webSearch = resolved.provider === 'openrouter';
+  // Internet access is a backend default, not a user toggle: OpenRouter chats get live web
+  // grounding. BUT skip the always-on web plugin on trivial/conversational turns (greetings,
+  // thanks, bare arithmetic) — that reflexive search round-trip fires on EVERY message and is
+  // the single biggest reason the SIMPLEST chats felt slow ("hi" shouldn't trigger a search).
+  // The web_search TOOL stays on the table, so any real question still grounds live on demand.
+  const webSearch = resolved.provider === 'openrouter' && !isTrivialChat(lastUserText);
   const systemPrompt =
     typeof body.systemPrompt === 'string' && body.systemPrompt.trim() ? body.systemPrompt.trim().slice(0, 8000) : undefined;
 
@@ -318,13 +333,7 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   // user never enables/sees individual tools. To avoid handing the model dozens of
   // specs at once, smart-route to the handful most relevant to THIS message by
   // keyword scoring; web_search is always retained as the internet backstop.
-  const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user');
-  const lastUserText =
-    typeof lastUserMessage?.content === 'string'
-      ? lastUserMessage.content
-      : Array.isArray(lastUserMessage?.content)
-        ? lastUserMessage!.content.map((p) => ('text' in p ? p.text : '')).join(' ')
-        : '';
+  // (`lastUserText` is computed once near the top of prepareChat.)
   const MAX_MODEL_TOOLS = 20;
   // OpenRouter gets native function-calling; other providers get the same tools through
   // the JSON protocol when it's enabled (Phase 10). Either way, smart-route to the most
@@ -470,7 +479,7 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   }
 
   return {
-    prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, systemPrompt, fallbackModels, dreamstreamContextJson, tools: [...builtinTools, ...metaTools, ...mcpTools], clientContext, customAgents }
+    prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, systemPrompt, fallbackModels, dreamstreamContextJson, tools: [...builtinTools, ...metaTools, ...mcpTools], clientContext, customAgents, attachments }
   };
 };
 
@@ -519,6 +528,7 @@ const runChatParams = (p: PreparedChat) => ({
   dreamstreamContextJson: p.dreamstreamContextJson,
   tools: p.tools,
   clientContext: p.clientContext,
+  attachments: p.attachments,
   fallbackModel: p.resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
   fallbackModels: p.fallbackModels,
   timeoutMs: TEXT_REQUEST_TIMEOUT_MS

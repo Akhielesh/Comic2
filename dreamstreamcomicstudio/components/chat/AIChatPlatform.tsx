@@ -110,6 +110,7 @@ const applyVariant = (turn: ChatTurn, v: ChatTurnVariant): ChatTurn => ({
   images: v.images,
   artifacts: v.artifacts,
   notices: v.notices,
+  durationMs: v.durationMs,
   error: v.error
 });
 
@@ -530,12 +531,14 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     if (regenerateTurnId) {
       setSessionState((s) => ({
         ...s,
-        turns: s.turns.map((t) => (t.id === aiTurnId ? { ...t, content: '', reasoning: undefined, error: false } : t))
+        turns: s.turns.map((t) =>
+          t.id === aiTurnId ? { ...t, content: '', reasoning: undefined, error: false, startedAt: turnStartedAt, durationMs: undefined } : t
+        )
       }));
     } else {
       setSessionState((s) => ({
         ...s,
-        turns: [...s.turns, { id: aiTurnId, role: 'assistant', content: '', createdAt: Date.now() }]
+        turns: [...s.turns, { id: aiTurnId, role: 'assistant', content: '', createdAt: turnStartedAt, startedAt: turnStartedAt }]
       }));
     }
 
@@ -650,6 +653,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
             images: res.images,
             artifacts: res.artifacts,
             notices: res.notices,
+            durationMs: Date.now() - turnStartedAt,
             createdAt: Date.now()
           };
           const variants = [...(t.variants || []), variant];

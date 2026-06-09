@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Copy, Check, GitBranch, AlertTriangle, Sparkles, User, Globe, Brain,
   Download, FileArchive, ChevronDown, ChevronUp, ExternalLink, Search, Cpu, Play,
-  RefreshCw, Pencil, ChevronLeft, ChevronRight, X, Info
+  RefreshCw, Pencil, ChevronLeft, ChevronRight, X, Info, Clock
 } from 'lucide-react';
 import JSZip from 'jszip';
 import { FileText } from 'lucide-react';
@@ -15,6 +15,25 @@ import { useChatPanel } from './panelContext';
 import type { ChatTurn } from '../../services/chatStorage';
 import { extractCodeBlocks, codeBlockFilename, downloadTextFile, triggerDownload, buildPlaygroundFiles, buildStudioArtifact } from '../../services/chatUtils';
 import { FeedbackButtons } from '../feedback/FeedbackButtons';
+
+/** Format an elapsed duration compactly: "0.8s", "12.3s", "1m 04s". */
+const formatDuration = (ms: number): string => {
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const totalSeconds = Math.round(ms / 1000);
+  return `${Math.floor(totalSeconds / 60)}m ${String(totalSeconds % 60).padStart(2, '0')}s`;
+};
+
+/** A live, ticking elapsed-time counter shown while the model is generating. */
+const LiveDuration: React.FC<{ startedAt?: number }> = ({ startedAt }) => {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 100);
+    return () => window.clearInterval(id);
+  }, []);
+  if (!startedAt) return null;
+  return <span className="tabular-nums">{formatDuration(now - startedAt)}</span>;
+};
 
 interface ChatMessageViewProps {
   turn: ChatTurn;
@@ -216,6 +235,14 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
           )}
         </div>
 
+        {/* Live response timer — counts up while the model is generating this turn. */}
+        {!isUser && busy && isLast && !turn.error && (
+          <div className="mt-1 px-1 text-[11px] text-slate-400 flex items-center gap-1" title="Time elapsed generating this answer">
+            <Clock className="w-3 h-3 animate-pulse" />
+            <LiveDuration startedAt={turn.startedAt} />
+          </div>
+        )}
+
         {/* User message actions: copy + edit & resend. */}
         {isUser && !editing && (
           <div className="flex items-center gap-2 mt-1 px-1 text-[11px] text-slate-400 hover-reveal">
@@ -317,6 +344,9 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
         {!isUser && !turn.error && (
           <div className="flex flex-wrap items-center gap-2 mt-1 px-1 text-[11px] text-slate-500">
             {turn.model && <span className="font-bold truncate max-w-[160px]">{turn.model}</span>}
+            {typeof turn.durationMs === 'number' && turn.durationMs >= 0 && (
+              <span className="flex items-center gap-0.5" title="Response time"><Clock className="w-3 h-3" /> {formatDuration(turn.durationMs)}</span>
+            )}
             {turn.reasoningLevel && turn.reasoningLevel !== 'none' && (
               <span className="flex items-center gap-0.5"><Brain className="w-3 h-3" /> {turn.reasoningLevel}</span>
             )}
