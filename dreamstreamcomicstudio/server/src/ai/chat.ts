@@ -11,6 +11,7 @@ import type { ChatArtifact, ChatClientContext, CapabilityNotice } from '../../..
 import { logCapabilityNotice } from './capabilities.js';
 import { composePersona } from './persona.js';
 import { getProvider, resolveProviderContext } from './gateway.js';
+import { markModelDown, TEXT_FALLBACK } from './autoRouter.js';
 import { buildUsage } from './usage.js';
 import type { AIProviderId } from './providers/types.js';
 import { toToolSpec, type ChatTool } from './tools/registry.js';
@@ -301,11 +302,57 @@ export const runChat = async (
   // supports it (intermediate tool-call turns emit no content, so streaming the final
   // answer "just works"); otherwise a normal request.
   const provider = getProvider(params.provider);
-  const callModel = (msgs: ChatMessage[], withTools: boolean) => {
-    const r = { ...baseReq, messages: msgs, ...(withTools && toolSpecs ? { tools: toolSpecs } : {}) };
-    return params.onDelta && provider.generateTextStream
-      ? provider.generateTextStream(r, ctx, params.onDelta)
+  // Track whether any content/reasoning has streamed yet. If a slow model times out
+  // BEFORE producing any output (the common free-tier "queued for 90s" case), we can
+  // safely retry on a fast model without the client seeing duplicate text.
+  let streamedAny = false;
+  const trackedOnDelta = params.onDelta
+    ? (d: { content?: string; reasoning?: string }) => {
+        if (d.content || d.reasoning) streamedAny = true;
+        params.onDelta!(d);
+      }
+    : undefined;
+  const callModel = (msgs: ChatMessage[], withTools: boolean, modelOverride?: string) => {
+    const r = {
+      ...baseReq,
+      messages: msgs,
+      ...(withTools && toolSpecs ? { tools: toolSpecs } : {}),
+      // On a timeout-triggered retry, pin a single fast model and drop reasoning so the
+      // reply actually fits the budget (no `models` chain, no reasoning effort).
+      ...(modelOverride ? { model: modelOverride, models: undefined, reasoningEffort: undefined } : {})
+    };
+    return trackedOnDelta && provider.generateTextStream
+      ? provider.generateTextStream(r, ctx, trackedOnDelta)
       : provider.generateText(r, ctx);
+  };
+
+  // OpenRouter only: when the chosen model is merely SLOW (not erroring), OpenRouter's
+  // server-side `models` fallback never triggers — our AbortController fires at timeoutMs
+  // and the whole turn fails with MODEL_TIMEOUT (the dominant production chat error: a
+  // 550B :free reasoner queued for minutes). The honest recovery is exactly what the error
+  // tells the user to do ("pick a faster model") — so do it for them: retry once on the
+  // fast fallback, mark the slow model down so Auto skips it, and surface a notice.
+  const isTimeoutError = (e: unknown): boolean =>
+    (e as { publicCode?: string })?.publicCode === 'MODEL_TIMEOUT' ||
+    /timed out|took too long/i.test(String((e as Error)?.message || ''));
+  const callModelResilient = async (msgs: ChatMessage[], withTools: boolean) => {
+    try {
+      return await callModel(msgs, withTools);
+    } catch (err) {
+      const canFallback =
+        params.provider === 'openrouter' &&
+        isTimeoutError(err) &&
+        params.model !== TEXT_FALLBACK &&
+        !streamedAny;
+      if (!canFallback) throw err;
+      markModelDown(params.model);
+      addNotice({
+        tool: 'agent',
+        level: 'warn',
+        message: `Your selected model (${params.model}) was too slow and timed out, so this reply used a faster model (${TEXT_FALLBACK}). Pick a faster model in the switcher to avoid this.`
+      });
+      return await callModel(msgs, withTools, TEXT_FALLBACK);
+    }
   };
 
   const lastUserSeed = (): string => {
@@ -372,7 +419,7 @@ export const runChat = async (
 
   // Agentic loop: call the model, run any tools it asks for, feed results back, repeat.
   // A single call (no tools enabled) collapses to one iteration with no tool round-trips.
-  let result = await callModel(messages, true);
+  let result = await callModelResilient(messages, true);
 
   let iterations = 0;
   while (result.toolCalls && result.toolCalls.length && iterations < MAX_TOOL_ITERATIONS) {
@@ -435,7 +482,7 @@ export const runChat = async (
     // Discard the just-streamed pre-tool narration on the client before the next turn
     // streams, so the live view doesn't accumulate "let me check…" preambles.
     params.onReset?.();
-    result = await callModel(messages, allowMoreTools);
+    result = await callModelResilient(messages, allowMoreTools);
   }
 
   // If we exhausted the tool-round budget, the model was forced to answer mid-plan —

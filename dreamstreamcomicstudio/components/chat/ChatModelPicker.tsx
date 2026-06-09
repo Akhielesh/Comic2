@@ -10,7 +10,7 @@ import {
 } from '../../services/modelCatalog';
 import { getCapabilities } from '../../services/modelCapabilities';
 import { isProviderEnabled } from '../../services/sourceGovernance';
-import { fetchModelSpeed, speedTier, speedLabel, type ModelSpeed } from '../../services/modelSpeed';
+import { fetchModelSpeed, speedTier, speedLabel, isTimeoutProneFreeModel, type ModelSpeed } from '../../services/modelSpeed';
 
 // Measured-latency badge (from real chat telemetry) so slow models are obvious before
 // you pick one — the durable fix for getting stuck on a 60-250s free model.
@@ -56,9 +56,20 @@ const FACETS: { key: Facet; label: string }[] = [
 
 const CapabilityChips: React.FC<{ model: CatalogModel; speed?: ModelSpeed }> = ({ model, speed }) => {
   const caps = getCapabilities(model);
+  // No measured speed yet AND it's a very large free model → warn it may time out. This is the
+  // gap the SpeedBadge can't cover: a model that always times out leaves no latency samples.
+  const timeoutProne = !speed && isTimeoutProneFreeModel(model.id, caps.isFree);
   return (
     <div className="flex flex-wrap items-center gap-1">
       <SpeedBadge speed={speed} />
+      {timeoutProne && (
+        <span
+          className="text-[10px] font-bold px-1.5 py-0.5 rounded border-2 border-black bg-red-200 flex items-center gap-0.5"
+          title="Very large free model — it often queues on the free tier and can time out. Prefer a smaller/faster model, or use Auto."
+        >
+          <Gauge className="w-2.5 h-2.5" /> May time out
+        </span>
+      )}
       {caps.isFree && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border-2 border-black bg-green-200">Free</span>}
       {caps.reasoning && (
         <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border-2 border-black bg-indigo-200 flex items-center gap-0.5"><Brain className="w-2.5 h-2.5" /> Reason</span>
