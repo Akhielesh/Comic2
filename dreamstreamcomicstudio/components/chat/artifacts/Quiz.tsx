@@ -63,6 +63,10 @@ export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
   const answerFor = (q: QuizQuestion): string[] | string => (q.type === 'short' ? (text[q.id] || '') : (answers[q.id] || []));
   const graded = questions.map((q) => ({ q, ok: isCorrect(q, answerFor(q)) }));
   const score = graded.filter((g) => g.ok).length;
+  const isAnswered = (q: QuizQuestion): boolean =>
+    q.type === 'short' ? Boolean((text[q.id] || '').trim()) : (answers[q.id] || []).length > 0;
+  const answeredCount = questions.filter(isAnswered).length;
+  const unanswered = questions.length - answeredCount;
 
   const reset = () => { clearQuizAttempt(quizId); setAnswers({}); setText({}); setChecked(false); setRevealed({}); };
 
@@ -154,9 +158,14 @@ export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
               </button>
             </>
           ) : (
-            <button onClick={() => setChecked(true)} className="ml-auto flex items-center gap-1.5 text-sm font-bold border-2 border-black rounded-md px-4 py-1.5 bg-brand-yellow hover:bg-black hover:text-brand-yellow transition-colors">
-              <CheckCircle2 className="w-4 h-4" /> Check answers
-            </button>
+            <>
+              <span className="text-xs font-bold text-slate-500 tabular-nums">
+                {answeredCount}/{questions.length} answered{unanswered > 0 ? <span className="text-amber-600"> · {unanswered} left</span> : ''}
+              </span>
+              <button onClick={() => setChecked(true)} className="ml-auto flex items-center gap-1.5 text-sm font-bold border-2 border-black rounded-md px-4 py-1.5 bg-brand-yellow hover:bg-black hover:text-brand-yellow transition-colors">
+                <CheckCircle2 className="w-4 h-4" /> Check{unanswered > 0 ? ' anyway' : ' answers'}
+              </button>
+            </>
           )}
         </div>
       </div>
