@@ -16,6 +16,9 @@ import {
 
 /** Short, display-friendly id (last 6 chars) for the identity chip. */
 const shortId = (id?: string | null): string => (id ? id.slice(-6) : '—');
+/** Normalized error signature for self-heal loop detection — collapse whitespace and cap length so
+ *  trivially-different-but-same errors (shifted line numbers etc.) compare equal across attempts. */
+const errSig = (e: string): string => e.replace(/\s+/g, ' ').trim().slice(0, 160);
 import type { CodeStudioArtifact, CodeStudioTemplate, StudioBuildPlan, StudioAnswer, StudioClarifyResult } from '../../apiTypes';
 import {
   Reveal, Skeleton, StatusPulse, ThemeSwitcher, FocusToggle, ResizableSplit, Confetti, CommandPalette, ShortcutsHelp,
@@ -242,6 +245,12 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const [autofixTries, setAutofixTries] = useState(0);
   const autofixTriesRef = useRef(0);
   const setTries = useCallback((n: number) => { autofixTriesRef.current = n; setAutofixTries(n); }, []);
+  // Error signatures already auto-fixed in the CURRENT episode. The watchdog stops escalating the
+  // moment an error recurs unchanged (the previous fix made no progress) — this is what makes a
+  // higher attempt budget safe: we self-heal while genuinely making progress, and bail when stuck
+  // instead of churning full-project rewrites on the same error.
+  const attemptedErrorsRef = useRef<Set<string>>(new Set());
+  const clearAutofix = useCallback(() => { setTries(0); attemptedErrorsRef.current.clear(); }, [setTries]);
   // Displayed insights = static analysis WITH the real preview error folded in, so "code health"
   // is honest: a preview that fails to run shows as failing (F), never 100/A.
   const insights = useMemo(() => applyRuntimeStatus(baseInsights, previewError), [baseInsights, previewError]);
@@ -269,13 +278,14 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   // That single debounce is what stops the flashing in both directions. Stable identity (deps: []) so
   // the Sandpack ErrorWatcher effect doesn't re-subscribe on every render.
   const previewErrTimer = useRef<number | null>(null);
-  // Autonomous autofix budget per error episode. Once spent, we STOP auto-retrying and leave a
-  // clickable "Fix with AI" error (which resets the budget). The loop itself is driven by the
-  // watchdog effect below — not by Sandpack re-emitting — so it never silently stalls.
-  // ONE automatic fix attempt per error episode, then stop and surface a manual "Fix with AI"
-  // button. Auto-rebuilding repeatedly (the old value was 4) just churned full-project rewrites on
-  // every preview hiccup — worse than letting the user decide. Manual retry is always available.
-  const MAX_AUTOFIX = 1;
+  // Autonomous autofix budget per error episode. The loop is driven by the watchdog effect below
+  // (not by Sandpack re-emitting), so it never silently stalls, and it ALWAYS terminates at a
+  // clickable "Fix with AI" error once spent. The budget is a hard ceiling; in practice the loop
+  // self-limits via progress detection (attemptedErrorsRef): it only escalates while each fix
+  // changes the error, and stops immediately when the same error recurs. That is the difference
+  // from the old blind MAX=4 (which churned full rewrites on the same hiccup) and the over-cautious
+  // MAX=1 (which gave up before a 2-step fix could land). Manual retry is always available.
+  const MAX_AUTOFIX = 3;
   const autofixRef = useRef<(msg: string) => void>(() => {});
   const generatingRef = useRef(false);
   const onPreviewError = useCallback((e: string | null) => {
@@ -304,13 +314,17 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   // Auto-fix watchdog: whenever a persistent preview error is showing, nothing else is generating,
   // and we still have budget, kick off an automatic fix after a short settle (long enough for the
   // preview to re-render and report a recovery first, so we never "fix" an already-fixed app). This
-  // effect — not Sandpack's error event — drives the loop, so it continues across identical errors
-  // and always terminates at the clickable error once the budget is spent.
+  // effect — not Sandpack's error event — drives the loop, so it continues across DIFFERENT errors
+  // (real progress) but bails the moment an error recurs unchanged, and always terminates at the
+  // clickable error once the budget is spent.
   useEffect(() => {
     if (!hasFiles || previewUrl || !previewError || generating) return;
     if (autofixTriesRef.current >= MAX_AUTOFIX) return;
+    // No progress since the last fix (same error) → stop auto-retrying; surface the manual button.
+    if (attemptedErrorsRef.current.has(errSig(previewError))) return;
     const id = window.setTimeout(() => {
       if (generatingRef.current || !previewError || autofixTriesRef.current >= MAX_AUTOFIX) return;
+      if (attemptedErrorsRef.current.has(errSig(previewError))) return;
       setTries(autofixTriesRef.current + 1);
       autofixRef.current(previewError);
     }, 700);
@@ -435,7 +449,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     // A user-initiated build/refine clears the current error and resets the auto-fix budget. An
     // AUTOMATIC fix keeps the sticky error (so the calm "auto-fixing…" bar stays put and never
     // flashes back to a clickable error mid-loop) until the preview genuinely recovers.
-    if (!opts?.autofix) { setPreviewError(null); setTries(0); }
+    if (!opts?.autofix) { setPreviewError(null); clearAutofix(); }
     const convo = useStudioConversation.getState();
     if (!refining) {
       convo.clear(); // a brand-new app starts a fresh thread
@@ -564,7 +578,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     const names = agentIds.map(studioAgentName).join(', ');
     setGenerating(true);
     setGenError(null);
-    setPreviewError(null); setTries(0);
+    setPreviewError(null); clearAutofix();
     setReviewing(true);
     const convo = useStudioConversation.getState();
     convo.pushUser(`Refine with agents: ${names}`);
@@ -778,7 +792,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     useStudioActivity.getState().reset();
     setFlow({ phase: 'idle', prompt: '', answers: [] });
     setStatus('idle'); setRunId(null); setPreviewUrl(null);
-    setError(null); setGenError(null); setPreviewError(null); setTries(0);
+    setError(null); setGenError(null); setPreviewError(null); clearAutofix();
   };
 
   // Leave Code Studio entirely — pause any live sandbox first.
@@ -805,7 +819,11 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   // button resets the budget so the loop re-engages from scratch.
   const handleAutofix = (errorMsg: string, manual = false) => {
     if (!errorMsg || generating) return;
-    if (manual) setTries(1); // manual retry resets + spends one attempt, then the loop continues
+    // Manual retry = "try this exact error again": clear the loop guard so the watchdog re-engages,
+    // and spend one attempt now. The automatic path arrives with the budget already incremented.
+    if (manual) { attemptedErrorsRef.current.clear(); setTries(1); }
+    // Mark this error as attempted so a fix that leaves it unchanged stops the loop (see watchdog).
+    attemptedErrorsRef.current.add(errSig(errorMsg));
     appendLog('warn', `Auto-fixing the preview error… (attempt ${autofixTriesRef.current || 1}/${MAX_AUTOFIX})`);
     void handleGenerate(
       `The live preview shows this error — find the ROOT CAUSE and fix it so the app runs cleanly. Return the full corrected files; do not reintroduce the error:\n\n${errorMsg}`,
