@@ -29,6 +29,8 @@ export interface Env {
   /** Cloudflare API token + account id used by `wrangler pages deploy` (the `deploy` action). */
   CLOUDFLARE_API_TOKEN?: string;
   CLOUDFLARE_ACCOUNT_ID?: string;
+  /** Vercel token used by `vercel deploy --prod` (the `deploy` action, target=vercel). */
+  VERCEL_TOKEN?: string;
 }
 
 interface StudioFile {
@@ -172,23 +174,39 @@ export default {
       }
 
       if (body.action === 'deploy') {
-        // Build (if needed) + publish the project to Cloudflare Pages → a permanent *.pages.dev URL.
+        // Build (if needed) + publish the project to a permanent URL on the chosen provider.
         const files = Array.isArray(body.files) ? body.files : [];
         if (!files.length) return json({ status: 'error', message: 'no files provided' }, 400);
-        if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID) {
-          return json({ status: 'error', message: 'Cloudflare token not set on the worker (CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID).' });
-        }
+        const target = (body.target || 'cloudflare').toLowerCase();
         const projectName =
           (body.projectName || body.sandboxId).toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 58) || 'ds-app';
 
-        // 1. Write the project into the container's workspace.
+        // Write the project into the container's workspace (common to all providers).
         for (const f of files) {
           const rel = f.path.startsWith('/') ? f.path : `/${f.path}`;
           await sandbox.writeFile(`/workspace${rel}`, f.content);
         }
 
-        // 2. Build when there's a package.json (Vite/React/etc.); pick the produced output dir.
-        //    Static projects (no package.json) deploy the workspace root as-is.
+        // ---- Vercel: upload the source; Vercel builds + hosts it, returns a *.vercel.app URL. ----
+        if (target === 'vercel') {
+          if (!env.VERCEL_TOKEN) return json({ status: 'error', message: 'Vercel token not set on the worker (VERCEL_TOKEN).' });
+          const deploy = await sandbox.exec(
+            `VERCEL_TOKEN='${env.VERCEL_TOKEN}' npx --yes vercel@latest deploy --prod --yes --token='${env.VERCEL_TOKEN}'`,
+            { cwd: '/workspace', timeout: 420_000 }
+          );
+          const out = `${deploy.stdout || ''}\n${deploy.stderr || ''}`;
+          const match = out.match(/https:\/\/[^\s'"]+\.vercel\.app/);
+          if (!deploy.success || !match) return json({ status: 'error', message: ('deploy failed: ' + out).slice(-2000) });
+          return json({ status: 'live', url: match[0], projectName });
+        }
+
+        // ---- Cloudflare Pages (default): build locally, then `wrangler pages deploy`. ----
+        if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID) {
+          return json({ status: 'error', message: 'Cloudflare token not set on the worker (CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID).' });
+        }
+
+        // Build when there's a package.json (Vite/React/etc.); pick the produced output dir.
+        // Static projects (no package.json) deploy the workspace root as-is.
         let outDir = '.';
         if (files.some((f) => /(^|\/)package\.json$/.test(f.path))) {
           const install = await sandbox.exec('npm install', { cwd: '/workspace', timeout: 300_000 });
