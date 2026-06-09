@@ -7,6 +7,8 @@ type ErrorLike = {
   message?: string;
   name?: string;
   publicCode?: string;
+  /** A message safe to show the user even in production (e.g. an upstream model timeout). */
+  publicMessage?: string;
   stack?: string;
   status?: number;
 };
@@ -36,6 +38,11 @@ const getPublicErrorCode = (status: number, err: ErrorLike): string => {
 };
 
 const getClientMessage = (status: number, err: ErrorLike): string => {
+  // An explicitly user-safe message (e.g. "the model was too slow") is shown as-is, even
+  // in production — it carries no internal detail and is actionable for the user.
+  if (typeof err.publicMessage === 'string' && err.publicMessage.trim()) {
+    return err.publicMessage;
+  }
   if (isProduction && status >= 500) {
     return 'Unexpected server error';
   }
@@ -80,8 +87,10 @@ export const errorHandler = (err: ErrorLike, req: Request, res: Response, _next:
 
   // Persist genuine server failures (5xx) to the telemetry store so "every failed
   // request" lands alongside client-reported failures for triage. Fire-and-forget:
-  // routine 4xx (auth/validation) are skipped to avoid flooding the table.
-  if (status >= 500) {
+  // routine 4xx (auth/validation) are skipped to avoid flooding the table. A model
+  // timeout is an UPSTREAM/model condition (already captured client-side as chat_failed),
+  // not a server fault — excluding it keeps server_error meaningful for real bugs.
+  if (status >= 500 && err.publicCode !== 'MODEL_TIMEOUT') {
     recordServerError({
       requestId: req.requestId,
       path: req.originalUrl,

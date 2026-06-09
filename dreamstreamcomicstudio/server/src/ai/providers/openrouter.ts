@@ -18,6 +18,7 @@ import {
   REASONING_EFFORT
 } from '../../config.js';
 import { withRetry } from '../utils.js';
+import { modelTimeoutError } from './errors.js';
 import { coerceJson, coerceJsonOrNull } from '../jsonCoerce.js';
 import { classifyModel, hasFreeSuffix } from '../../../../shared/pricing.js';
 import type {
@@ -72,7 +73,7 @@ const openRouterFetch = async <T = any>(
     // Map our own timeout abort (a bare DOMException "This operation was aborted") to an
     // actionable message instead of leaking that opaque string all the way to the user.
     if (controller.signal.aborted) {
-      throw new Error(`The model took too long to respond (timed out after ${Math.round(timeoutMs / 1000)}s). Please try again, or pick a faster model.`);
+      throw modelTimeoutError(timeoutMs);
     }
     throw err;
   } finally {
