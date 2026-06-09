@@ -477,6 +477,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['analyze', 'analyse', 'statistics', 'stats', 'average', 'mean', 'median', 'sum', 'total', 'aggregate', 'group by', 'summarize', 'summarise', 'count by', 'min', 'max']
   },
   {
+    name: 'transform_data', label: 'Transform data', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app, deterministic)',
+    description: 'Reshape tabular data deterministically — filter rows, sort, select/drop columns, limit. Clean or narrow raw CSV/TSV/JSON before charting or analyzing it (e.g. "top 10 by revenue", "only active rows", "keep name + score sorted desc"). Returns the reshaped data to chain into render_chart / analyze_data.',
+    auth: 'none', rateLimit: 'Unlimited (transforms locally, no API)',
+    dataShape: 'The reshaped data + a table preview.', docsUrl: 'https://dreamstream.app',
+    keywords: ['filter', 'sort', 'select', 'top', 'limit', 'reshape', 'where', 'order by', 'columns', 'rows', 'narrow', 'clean', 'wrangle', 'subset']
+  },
+  {
     name: 'show_metrics', label: 'Metric board', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app SVG)',
     description: 'Show a board of KPI / stat tiles (value, delta, sparkline, progress ring, status) from data the model provides — dashboards, scorecards and at-a-glance summaries.',
     auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
@@ -627,6 +634,7 @@ export const CORE_ALWAYS_TOOLS: string[] = [
   'render_ui',
   'convert_data',
   'analyze_data',
+  'transform_data',
   'get_news',
   'wiki_lookup',
   // The app builder must ALWAYS be on the table: "build me X" is phrased a thousand
