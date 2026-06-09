@@ -120,6 +120,27 @@ Prefer signal over length. A tight, sourced, well-structured answer beats a long
 
 export const CHAT_SYSTEM_PROMPT = composePersona(CHAT_BEHAVIOR);
 
+// Study / exam-prep intent. When a real chat turn looks like learning or test prep, we
+// layer on EXAM/STUDY guidance so the answer carries genuine exam-ready DEPTH and routes
+// the user into practice — a direct response to "need more in-depth information to
+// prepare for exam" feedback. Kept deliberately specific so it doesn't fire on casual
+// "what is X" asks.
+const EXAM_STUDY_INTENT =
+  /\b(exam|midterm|final exam|finals|test prep|quiz me|interview prep|study(ing)?|revis(e|ing|ion)|prepare for (?:my|the|an|a)|cram|memoriz|memoris|teach me|help me (?:learn|study|understand|prepare|revise)|for (?:my|the|an|a) (?:exam|test|quiz|midterm|final|interview|class|course)|practice (?:problems|questions))\b/i;
+
+export const isStudyIntent = (text: string): boolean => Boolean(text) && EXAM_STUDY_INTENT.test(text);
+
+export const studyGuidanceBlock = (lastUserText: string): string => {
+  if (!lastUserText || !EXAM_STUDY_INTENT.test(lastUserText)) return '';
+  return `\n\nEXAM / STUDY MODE — the user is learning or preparing for a test. Give genuinely exam-ready DEPTH, not a shallow summary:
+- Explain the CORE concepts clearly, then the key details, definitions and formulas they'd actually be tested on.
+- Call out the common pitfalls, misconceptions, and the fine distinctions examiners probe.
+- Include at least one concrete worked example or application when it aids understanding.
+- For VISUAL concepts (anatomy, diagrams, geometry, processes), pull a relevant image to anchor understanding.
+- Then help them PRACTICE: proactively offer or build a quick quiz, flashcards, a runnable code/SQL exercise, a downloadable study guide, or a complete study pack (guide + practice + flashcards bundled as a downloadable .zip) so they can drill it (use the learning tools when available).
+- Stay accurate and grounded — verify facts you're unsure of rather than guessing. Calibrate the rigor to the level implied by the question; don't assume background the conversation doesn't support.`;
+};
+
 // Render the user's runtime context as a compact, authoritative block so the model
 // stops being "situationally blind": it knows the real current date/time, the
 // timezone, the locale, the unit system, and (when granted) the coarse location.
@@ -228,6 +249,19 @@ export const runChat = async (
     params.provider !== 'openrouter' && JSON_TOOL_PROTOCOL_ENABLED && (params.tools?.length || 0) > 0;
   if (useJsonTools) {
     systemContent += `\n\n${buildJsonToolSystemBlock(params.tools as ChatTool[])}`;
+  }
+
+  // Exam/study depth guidance — only on real chat turns (utility/sub-agent calls use a
+  // systemOverride and must stay unflavored). Looks at the latest user message.
+  if (!params.systemOverride) {
+    const lastUser = [...params.messages].reverse().find((m) => m.role === 'user');
+    const lastUserText =
+      typeof lastUser?.content === 'string'
+        ? lastUser.content
+        : Array.isArray(lastUser?.content)
+          ? lastUser!.content.map((p) => ('text' in p ? p.text : '')).join(' ')
+          : '';
+    systemContent += studyGuidanceBlock(lastUserText);
   }
 
   const messages: ChatMessage[] = [{ role: 'system', content: systemContent }, ...params.messages];

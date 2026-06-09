@@ -64,13 +64,14 @@ describe('activityStore', () => {
     expect(useStudioActivity.getState().endedAt).not.toBeNull();
   });
 
-  it('finish("done") collapses to the summary; finish("error") stays expanded', () => {
+  it('finish stays expanded for both done + error (no annoying auto-collapse)', () => {
     const s = useStudioActivity.getState();
     s.begin();
     s.finish('done', '✓ Built "X" — 3 files');
     let st = useStudioActivity.getState();
     expect(st.status).toBe('done');
-    expect(st.collapsed).toBe(true);
+    // The build record people most want to read no longer vanishes the moment it succeeds.
+    expect(st.collapsed).toBe(false);
     expect(st.summary).toContain('Built');
 
     s.begin();
