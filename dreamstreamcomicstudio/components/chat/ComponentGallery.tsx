@@ -20,12 +20,13 @@ import { Quiz } from './artifacts/Quiz';
 import { DocumentCard } from './artifacts/DocumentCard';
 import { Flashcards } from './artifacts/Flashcards';
 import { SqlPlayground } from './artifacts/SqlPlayground';
+import { ResourceBundle } from './artifacts/ResourceBundle';
 import type {
   WeatherArtifact, NewsResultsArtifact, StockQuoteArtifact,
   VideoResultsArtifact, PlacesResultsArtifact, SwarmTraceArtifact,
   ChartArtifact, MetricBoardArtifact, MapArtifact,
   DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact,
-  RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact
+  RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact
 } from '../../apiTypes';
 
 const sqlExerciseDemo: SqlExerciseArtifact = {
@@ -67,6 +68,16 @@ const documentDemo: DocumentArtifact = {
     '',
     '> Tip: start from the table you want *all* rows of, then LEFT JOIN the rest.'
   ].join('\n')
+};
+
+const resourceBundleDemo: ResourceBundleArtifact = {
+  title: 'Photosynthesis study pack',
+  description: 'Everything to revise the topic — guide, practice, flashcards.',
+  files: [
+    { name: 'study-guide.md', label: 'The full guide', content: '# Photosynthesis\n\n6CO2 + 6H2O + light → C6H12O6 + 6O2.\n\n- **Light reactions** (thylakoid): make ATP + NADPH.\n- **Calvin cycle** (stroma): fix CO2 into sugar.' },
+    { name: 'practice-questions.md', label: '5 questions', content: '1. Where do the light reactions occur?\n2. Name the two inputs.\n3. What gas is released?\n4. What does the Calvin cycle produce?\n5. Which pigment captures light?' },
+    { name: 'flashcards.csv', label: 'Import into Anki', content: 'front,back\nChloroplast,Site of photosynthesis\nChlorophyll,Green pigment that captures light\nStroma,Where the Calvin cycle runs' }
+  ]
 };
 
 const quizDemo: QuizArtifact = {
@@ -427,6 +438,7 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Document (custom resource · download .md / .html / PDF)', type: 'document', node: <DocumentCard data={documentDemo} /> },
   { title: 'Flashcards (flip · known/review · shuffle · progress)', type: 'flashcards', node: <Flashcards data={flashcardsDemo} /> },
   { title: 'SQL playground (real sandboxed execution · results · errors)', type: 'sql_exercise', node: <SqlPlayground data={sqlExerciseDemo} /> },
+  { title: 'Resource bundle (per-file download + all as .zip)', type: 'resource_bundle', node: <ResourceBundle data={resourceBundleDemo} /> },
   { title: 'Markdown table (inline)', node: <ChatMarkdown text={tableMd} /> }
 ];
 

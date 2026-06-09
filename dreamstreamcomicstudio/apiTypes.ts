@@ -873,6 +873,24 @@ export interface DocumentArtifact {
   filename?: string;
 }
 
+// --- Downloadable resource bundle artifact (.zip of custom-built resources) ---
+// Emitted by the `generate_bundle` tool. Packages several generated files (e.g. a study
+// guide, practice questions, a data CSV, starter code) into one card the user can
+// download individually or all at once as a .zip — "custom-built resources" they keep.
+export interface BundleFile {
+  /** Filename WITH extension, e.g. "study-guide.md", "data.csv", "starter.py". */
+  name: string;
+  /** Text content of the file. */
+  content: string;
+  /** Optional human-friendly label shown next to the file. */
+  label?: string;
+}
+export interface ResourceBundleArtifact {
+  title: string;
+  description?: string;
+  files: BundleFile[];
+}
+
 // --- Code Studio artifact ---
 // Emitted by the `generate_app` tool. Carries a complete multi-file project
 // that the client renders in the live, editable Code Studio side panel.
