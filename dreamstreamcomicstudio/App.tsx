@@ -32,6 +32,7 @@ import { AuthCallbackPage } from './components/AuthCallbackPage';
 import { supabase } from './services/supabase';
 import { getPrivateProfile, getPublicProject, incrementViewCount } from './services/db';
 import { setPendingChatModel } from './services/chatStorage';
+import { persistUiState } from './services/viewState';
 import { useStudioHandoff } from './services/studioHandoff';
 import { Project } from './types';
 import { Loader2 } from 'lucide-react';
@@ -85,6 +86,21 @@ type PendingReaderTarget = {
   id: string;
   returnView: AppView;
 };
+
+// Calm full-screen loader. The old solid-blue flash made every lazy-route switch and
+// auth check look like a hard reload; this matches the app surface so transitions read
+// as "loading content", not "losing the app".
+const AppLoader: React.FC<{ label?: string }> = ({ label }) => (
+  <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-slate-50">
+    <div className="w-14 h-14 rounded-2xl bg-brand-yellow border-4 border-black shadow-comic flex items-center justify-center font-display text-2xl animate-pulse">
+      DS
+    </div>
+    <div className="flex items-center gap-2 text-slate-500 text-sm font-bold">
+      <Loader2 className="w-4 h-4 animate-spin" />
+      {label || 'Loading…'}
+    </div>
+  </div>
+);
 
 const App: React.FC = () => {
   const { user, loading: authLoading } = useAuth();
@@ -166,6 +182,19 @@ const App: React.FC = () => {
     setCurrentView('home');
     setActiveProjectId(null);
     clearReaderUrlParams();
+  };
+
+  // Single entry point for opening Settings on a specific tab. Writes the tab into the
+  // continuity layers FIRST so an explicit intent ("open Security") always beats the
+  // remembered last-visited tab when AccountSettings mounts.
+  const openSettings = (tab?: SettingsTab, returnTo: AppView = currentView) => {
+    if (tab) {
+      setSettingsTab(tab);
+      persistUiState('settings.tab', 'tab', tab);
+      if (tab !== 'security') setOpenSecurityPasswordReset(false);
+    }
+    setSettingsReturnView(returnTo);
+    setCurrentView('settings');
   };
 
   const handleOpenFaq = () => {
@@ -503,9 +532,7 @@ const App: React.FC = () => {
     if (immersive.includes(currentView)) return;
 
     setHasPromptedDobThisSession(true);
-    setSettingsTab('profile');
-    setSettingsReturnView(currentView);
-    setCurrentView('settings');
+    openSettings('profile');
   }, [user?.id, authLoading, isCheckingKey, needsDobCompletion, hasPromptedDobThisSession, currentView]);
 
   useEffect(() => {
@@ -523,10 +550,8 @@ const App: React.FC = () => {
     }
 
     if (authCallbackFlow === 'recovery') {
-      setSettingsTab('security');
-      setSettingsReturnView('home');
       setOpenSecurityPasswordReset(true);
-      setCurrentView('settings');
+      openSettings('security', 'home');
       setAuthCallbackStatus('idle');
       setAuthCallbackMessage(null);
       return;
@@ -559,12 +584,7 @@ const App: React.FC = () => {
 
     if (view === 'settings') {
       clearReaderUrlParams();
-      if (isSettingsTab(id)) {
-        setSettingsTab(id);
-        if (id !== 'security') setOpenSecurityPasswordReset(false);
-      }
-      setSettingsReturnView(currentView);
-      setCurrentView('settings');
+      openSettings(isSettingsTab(id) ? id : undefined);
       return;
     }
 
@@ -705,11 +725,7 @@ const App: React.FC = () => {
   }
 
   if (isCheckingKey || isHydratingProject || authLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-brand-blue">
-        <Loader2 className="w-12 h-12 text-white animate-spin" />
-      </div>
-    );
+    return <AppLoader label={isHydratingProject ? 'Opening project…' : 'Loading…'} />;
   }
 
   // Protection: studio/creation views require an authenticated user. Reading stays open to all.
@@ -750,11 +766,7 @@ const App: React.FC = () => {
               onSignIn={() => goToAuth('signin')}
               onRequestAccess={() => goToAuth('request-access')}
               onNotify={goToStayUpdated}
-              onOpenProfile={() => {
-                setSettingsTab('profile');
-                setSettingsReturnView(currentView);
-                setCurrentView('settings');
-              }}
+              onOpenProfile={() => openSettings('profile')}
               onNavigate={handleNavigate}
             />
           );
@@ -773,7 +785,7 @@ const App: React.FC = () => {
           return header;
         })()}
 
-        <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-brand-blue"><Loader2 className="w-12 h-12 text-white animate-spin" /></div>}>
+        <Suspense fallback={<AppLoader />}>
           {/* Views */}
           {effectiveView === 'home' && (
             <HomePage

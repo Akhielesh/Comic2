@@ -221,10 +221,15 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
 
   // Bootstrap sessions + any pending "Chat with this model" handoff from the Library.
   //
+  // LOCAL-FIRST: the chat opens from IndexedDB immediately (sub-second) and the user's
+  // last-open session is restored; cloud sync runs in the BACKGROUND and merges in any
+  // remote sessions when it lands. The old flow blocked the whole screen on cloud sync
+  // for up to 6s — that "loads… then resets" feeling on every entry.
+  //
   // CRITICAL: this must ALWAYS finish (set `initialized`) within a few seconds, even if
-  // cloud sync or IndexedDB hangs/fails — otherwise the render gate below (`!initialized`)
-  // strands the user on the loading spinner forever (the long-standing "chat never loads"
-  // bug). So every await is time-bounded, writes are fire-and-forget, and a finally block
+  // IndexedDB hangs/fails — otherwise the render gate below (`!initialized`) strands the
+  // user on the loading spinner forever (the long-standing "chat never loads" bug). So
+  // every await is time-bounded, writes are fire-and-forget, and a finally block
   // guarantees we open at least an empty local chat.
   useEffect(() => {
     let active = true;
@@ -234,14 +239,9 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
 
     (async () => {
       try {
-        // Best-effort, time-bounded cloud sync (no-op when signed out / table missing).
-        await Promise.race([
-          syncFromCloud().catch(() => {}),
-          new Promise<void>((r) => setTimeout(r, 6000))
-        ]);
         const [stored, storedProjects] = await Promise.all([
-          settleWithin(listChatSessions(), 6000, [] as ChatSession[]),
-          settleWithin(listChatProjects(), 6000, [] as ChatProject[])
+          settleWithin(listChatSessions(), 4000, [] as ChatSession[]),
+          settleWithin(listChatProjects(), 4000, [] as ChatProject[])
         ]);
         if (!active) return;
         setMemory(getChatMemory(user?.id));
@@ -280,6 +280,36 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         }
       } finally {
         if (active) setInitialized(true);
+      }
+
+      // Background cloud sync (no-op when signed out / table missing): merge remote
+      // sessions/projects into the open list without touching the user's active chat.
+      try {
+        await settleWithin(syncFromCloud().then(() => true), 12_000, false);
+        if (!active) return;
+        const [merged, mergedProjects] = await Promise.all([
+          settleWithin(listChatSessions(), 4000, null as ChatSession[] | null),
+          settleWithin(listChatProjects(), 4000, null as ChatProject[] | null)
+        ]);
+        if (!active) return;
+        if (merged && merged.length > 0) {
+          setSessions((prev) => {
+            // Never regress what the user can see: keep the in-memory copy when it is at
+            // least as new (covers a chat that is streaming right now), keep local-only
+            // sessions that haven't flushed yet, and add everything new from the cloud.
+            const prevById = new Map(prev.map((s) => [s.id, s] as const));
+            const mergedIds = new Set(merged.map((s) => s.id));
+            const reconciled = merged.map((remote) => {
+              const local = prevById.get(remote.id);
+              return local && local.updatedAt >= remote.updatedAt ? local : remote;
+            });
+            const localOnly = prev.filter((s) => !mergedIds.has(s.id));
+            return [...localOnly, ...reconciled];
+          });
+        }
+        if (mergedProjects) setProjectsList(mergedProjects);
+      } catch {
+        /* cloud sync is best-effort; local chat already works */
       }
     })();
     return () => {
