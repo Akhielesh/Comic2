@@ -10,18 +10,16 @@
 import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft, Wand2, Square, Share2, Download, FileCode, Cloud,
-  Sparkles, Cpu, Lock, Mail, Loader2, Command as CommandIcon, Moon, Sun, Palette, Undo2, MessageSquarePlus, Check,
-  Columns, Eye, FilePlus, Users, Maximize2, Minimize2, Video, Terminal, ChevronUp, ChevronRight, Fingerprint, ShieldCheck,
+  Sparkles, Cpu, Mail, Loader2, Command as CommandIcon, Moon, Sun, Palette, Undo2, MessageSquarePlus, Check,
+  Eye, FilePlus, Users, Maximize2, Minimize2, Video, Terminal, ChevronUp, ChevronRight, Fingerprint, ShieldCheck,
 } from 'lucide-react';
 
-/** Short, display-friendly id (last 6 chars) for the identity chip. */
-const shortId = (id?: string | null): string => (id ? id.slice(-6) : '—');
 /** Normalized error signature for self-heal loop detection — collapse whitespace and cap length so
  *  trivially-different-but-same errors (shifted line numbers etc.) compare equal across attempts. */
 const errSig = (e: string): string => e.replace(/\s+/g, ' ').trim().slice(0, 160);
 import type { CodeStudioArtifact, CodeStudioTemplate, StudioBuildPlan, StudioAnswer, StudioClarifyResult } from '../../apiTypes';
 import {
-  Reveal, Skeleton, StatusPulse, ThemeSwitcher, FocusToggle, ResizableSplit, Confetti, CommandPalette, ShortcutsHelp,
+  Reveal, Skeleton, StatusPulse, FocusToggle, ResizableSplit, Confetti, CommandPalette, ShortcutsHelp,
   StudioAurora, useIsWide, useStudioTheme, useStudioThemeStore, useStudioFocus,
 } from './kit';
 import type { RunStatus, Command } from './kit';
@@ -175,6 +173,14 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   useEffect(() => {
     useStudioConversation.getState().clear();
     useStudioActivity.getState().reset();
+  }, []);
+
+  // Warm the instant-preview runtime (the heavy lazy Sandpack chunk) shortly after mount, so the
+  // FIRST preview paints immediately instead of stalling on a ~1MB download when files arrive.
+  // The quick view should feel ever-present — this is what makes it so.
+  useEffect(() => {
+    const id = window.setTimeout(() => { void import('../chat/CodeStudioPanel'); }, 1200);
+    return () => window.clearTimeout(id);
   }, []);
 
   // Always have an identity to reference: ensure a session id (and a project id) the moment the
@@ -673,7 +679,10 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
       const plan = await planStudioApp(prompt, answers);
       setFlow((f) => ({ ...f, phase: 'plan', plan, answers }));
     } catch (err) {
-      setFlow((f) => ({ ...f, phase: 'error', error: describeApiError(err) }));
+      // The plan is ADVISORY — generate works fine without one. So a plan failure must never
+      // dead-end the flow at an error screen: log it honestly and build directly from the idea.
+      appendLog('warn', `Couldn't draft a build plan (${describeApiError(err)}) — building directly from your idea.`);
+      await runFlowBuild(undefined, answers, prompt);
     }
   };
 
@@ -695,12 +704,13 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const skipQuestions = () => { void goToPlan(flow.prompt, []); };
   const regeneratePlan = () => { void goToPlan(flow.prompt, flow.answers); };
 
-  const buildFromPlan = async () => {
-    if (!flow.plan) return;
-    setFlow((f) => ({ ...f, phase: 'building' }));
+  // Run the BUILD stage of the flow — from a reviewed plan, or (when planning failed) directly
+  // from the idea with no plan. Shared by buildFromPlan and goToPlan's graceful degrade.
+  const runFlowBuild = async (plan: StudioBuildPlan | undefined, answers: StudioAnswer[], prompt: string) => {
+    setFlow((f) => ({ ...f, phase: 'building', prompt, answers }));
     // Opt-in deep agent review; otherwise the worker self-heal loop (below) is the primary "run".
     const autoReview = getStudioAutoRunAgents();
-    const res = await handleGenerate(flow.prompt, flowTmplRef.current, { plan: flow.plan, answers: flow.answers, autoReview });
+    const res = await handleGenerate(prompt, flowTmplRef.current, { plan, answers, autoReview });
     if (res.ok || res.error === 'cancelled') {
       setFlow({ phase: 'idle', prompt: '', answers: [] });
       // Run it in the REAL sandbox (cloud worker, self-healing). Soft-falls back to the in-browser
@@ -711,6 +721,11 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
     } else {
       setFlow((f) => ({ ...f, phase: 'error', error: res.error || 'Build failed.' }));
     }
+  };
+
+  const buildFromPlan = async () => {
+    if (!flow.plan) return;
+    await runFlowBuild(flow.plan, flow.answers, flow.prompt);
   };
 
   const resetFlow = () => { genAbortRef.current?.abort(); setFlow({ phase: 'idle', prompt: '', answers: [] }); };
@@ -892,6 +907,16 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   if (hasFiles) commands.push({ id: 'print-pdf', label: 'Print / Save as PDF', icon: <FileCode className="w-4 h-4" />, keywords: 'print pdf export save preview', run: () => printPreview(previewUrl) });
   if (hasFiles && (insights.counts.error + insights.counts.warn) > 0) commands.push({ id: 'fix-issues', label: `Fix ${insights.counts.error + insights.counts.warn} code issue(s) with AI`, icon: <ShieldCheck className="w-4 h-4" />, keywords: 'verify fix repair lint errors issues health quality', run: () => void handleGenerate(issuesToFixPrompt(insights.issues)) });
   if (hasFiles) commands.push({ id: 'report', label: 'Export project report', icon: <Download className="w-4 h-4" />, keywords: 'report insights health verify metrics export markdown', run: exportReport });
+  if (wsProjectId || wsSessionId) commands.push({
+    id: 'copy-ids', label: 'Copy project & session IDs', icon: <Fingerprint className="w-4 h-4" />,
+    keywords: 'id identity session project reference fingerprint support copy',
+    run: () => {
+      try {
+        void navigator.clipboard?.writeText(`project: ${wsProjectId ?? '—'}\nsession: ${wsSessionId ?? '—'}`);
+        appendLog('info', 'Copied project & session id to clipboard.');
+      } catch { /* clipboard unavailable */ }
+    },
+  });
   commands.push({ id: 'theme-black', label: 'Theme: Black', icon: <Moon className="w-4 h-4" />, keywords: 'dark oled appearance theme', run: () => setTheme('black') });
   commands.push({ id: 'theme-white', label: 'Theme: White', icon: <Sun className="w-4 h-4" />, keywords: 'light appearance theme', run: () => setTheme('light') });
   commands.push({ id: 'theme-brand', label: 'Theme: DreamStream', icon: <Palette className="w-4 h-4" />, keywords: 'brand comic appearance theme', run: () => setTheme('brand') });
@@ -1231,41 +1256,20 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
                 ● {dirtyCount} unsaved
               </span>
             )}
-            {(wsProjectId || wsSessionId) && (
-              <button
-                onClick={() => {
-                  try {
-                    void navigator.clipboard?.writeText(`project: ${wsProjectId ?? '—'}\nsession: ${wsSessionId ?? '—'}`);
-                    appendLog('info', 'Copied project & session id to clipboard.');
-                  } catch { /* clipboard unavailable */ }
-                }}
-                title={`Project ID: ${wsProjectId ?? '—'}\nSession ID: ${wsSessionId ?? '—'}\nClick to copy`}
-                className={`hidden lg:inline-flex items-center gap-1 text-[10px] font-mono rounded-full border ${t.edge} px-2 py-0.5 ${t.textFaint} ${t.hover} ${t.focusRing}`}
-              >
-                <Fingerprint className="w-3 h-3" /> {shortId(wsProjectId ?? wsSessionId)}
-              </button>
-            )}
+            {/* Identity (project/session ids), theme, shortcuts help and the view toggle moved out
+                of the header chrome and into the ⌘K palette — the AI-Studio bar keeps only what a
+                user reaches for constantly: Back · Title · model · status · Share · download. */}
           </div>
 
           <div className="ml-auto flex items-center gap-2">
             <button
               onClick={() => setPaletteOpen(true)}
-              title="Command palette (⌘K)"
+              title="Command palette (⌘K) — everything else lives here: themes, shortcuts, exports, IDs"
               className={`hidden md:inline-flex items-center gap-1 text-[11px] font-semibold rounded-full border ${t.edge} px-2 py-1 ${t.textDim} ${t.hover} ${t.focusRing}`}
             >
               <CommandIcon className="w-3 h-3" /> K
             </button>
-            <button
-              onClick={() => setHelpOpen(true)}
-              title="Keyboard shortcuts"
-              aria-label="Keyboard shortcuts"
-              className={`hidden md:inline-flex items-center justify-center h-6 w-6 rounded-full border ${t.edge} ${t.textDim} ${t.hover} ${t.focusRing}`}
-            >
-              <span className="text-[11px] font-bold">?</span>
-            </button>
-            {hasFiles && <FocusToggle className="hidden lg:inline-flex" />}
             <StudioModeBadge liveConfigured={liveConfigured} className="hidden sm:block mr-1" />
-            <ThemeSwitcher className="hidden sm:inline-flex" />
             <StatusPulse status={status} className="mr-1" />
             {/* No top "Build" button — building happens through the prompt/chat. A live cloud run
                 (when enabled) is available via ⌘K → "Build & run". Stop appears only while live. */}
@@ -1320,17 +1324,19 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
         </div>
       )}
 
-      {/* Instant-preview banner — shown only when the live agentic build truly isn't available. */}
+      {/* Instant-preview notice — shown only when the live agentic build truly isn't available.
+          Framed as what the user HAS (an instant in-browser preview), not an apology for what's
+          gated; cloud runs are a quiet upgrade, not a lock on the door. */}
       {!liveAvailable && (
-        <div className={`px-4 py-2.5 text-sm ${t.accentSoft} border-b ${t.edge} flex flex-wrap items-center gap-2`}>
-          <Lock className={`w-4 h-4 ${t.accent}`} />
-          <span className={`${t.text} font-semibold`}>You're building in instant-preview mode.</span>
-          <span className={t.textDim}>Generate and edit apps with a live in-browser preview now — one-click cloud runs &amp; sharing are rolling out.</span>
+        <div className={`px-4 py-2 text-xs border-b ${t.edge} ${t.panelAlt} flex flex-wrap items-center gap-2`}>
+          <Sparkles className={`w-3.5 h-3.5 ${t.accent}`} />
+          <span className={`${t.text} font-semibold`}>Instant preview</span>
+          <span className={t.textDim}>— your app runs right here in the browser. One-click cloud runs &amp; sharing are rolling out.</span>
           <button
             onClick={() => onNavigate('home')}
-            className={`ml-auto inline-flex items-center gap-1.5 text-xs font-bold rounded-full border ${t.edgeStrong} px-3 py-1 ${t.accent} ${t.hover}`}
+            className={`ml-auto inline-flex items-center gap-1.5 text-[11px] font-bold rounded-full border ${t.edge} px-2.5 py-0.5 ${t.accent} ${t.hover} ${t.focusRing}`}
           >
-            <Mail className="w-3.5 h-3.5" /> Get notified
+            <Mail className="w-3 h-3" /> Get notified
           </button>
         </div>
       )}

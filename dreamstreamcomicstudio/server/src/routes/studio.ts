@@ -277,11 +277,15 @@ studioRouter.post('/plan', async (req, res, next) => {
     const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
     if (!prompt) return res.status(400).json({ error: { message: 'A prompt describing the app is required.' } });
     // The planning stage researches real APIs/packages/repos with tools (incl. the user's MCPs).
+    // maxTokens is the OUTPUT budget: 2000 truncated the plan JSON after chatty research rounds
+    // (the #1 cause of "first pass of the plan fails"), so give the answer real room.
     const mcp = await studioMcpTools(req, body);
-    const complete = await studioStageComplete(req, body, 2000, PLAN_RESEARCH_TOOLS, mcp);
+    const complete = await studioStageComplete(req, body, 3000, PLAN_RESEARCH_TOOLS, mcp);
     if (!complete) return res.status(400).json(NO_MODEL_KEY);
+    // Tool-less completion for the recovery pass — fast and reliably JSON (no research spiral).
+    const completeStrict = await studioStageComplete(req, body, 3000);
     const answers = Array.isArray(body.answers) ? body.answers : undefined;
-    const plan = await runPlan(prompt, answers, complete);
+    const plan = await runPlan(prompt, answers, complete, completeStrict ?? undefined);
     if (!plan) {
       return res.status(502).json({ error: { message: 'Could not draft a build plan. Try rephrasing your idea.', code: 'STUDIO_PLAN_INVALID' } });
     }

@@ -16,17 +16,21 @@ const renderAnswers = (answers?: StudioAnswer[]): string => {
     .join('\n')}`;
 };
 
-export const buildPlanPrompt = (prompt: string, answers?: StudioAnswer[]): string =>
+export const buildPlanPrompt = (prompt: string, answers?: StudioAnswer[], opts?: { research?: boolean }): string =>
   `${studioConstitutionFor('plan')}
 
 You are the tech lead planning a new build in a code studio. Produce a concrete plan for a COMPLETE application — the GOAL and scope you'd hand to a senior engineer. Define WHAT to build (product, features, stack, data); leave the HOW (the exact files, structure and implementation) to the build step, which has FULL freedom to create, organize and customize files as it sees fit. Be specific and ambitious but realistic.
 
 USER'S IDEA:
 ${prompt}${renderAnswers(answers)}
-
-FIRST, RESEARCH (use your tools before deciding): study how this kind of app is built well — use the
-DeepWiki tools to read/ask about RELEVANT, POPULAR GitHub repos in this domain and borrow their proven
-structure and patterns, and verify real packages/APIs (npm/pypi/web). Reference what you learned in "notes".
+${opts?.research === false
+    ? `
+Do NOT use tools. Plan from your own knowledge and answer immediately.`
+    : `
+RESEARCH BRIEFLY (optional, a few tool calls at most): you may check how this kind of app is built well —
+read a relevant popular repo or verify a real package/API (npm/pypi/web) — and reference what you learned
+in "notes". If tools are slow, fail, or add nothing, SKIP them and plan from your own knowledge. After any
+research, your FINAL message must be ONLY the JSON object below — never end on a tool call or prose.`}
 
 Produce:
 - title: a short product name.
@@ -103,16 +107,30 @@ export const renderPlanForBuild = (plan: StudioBuildPlan): string => {
   return lines.join('\n');
 };
 
-/** Compose prompt → model → parsed plan, with one stricter retry when the first answer is unusable. */
+/**
+ * Compose prompt → model → parsed plan, with a CHEAP, RELIABLE recovery pass when the first answer
+ * is unusable. The first pass may research with tools; the recovery pass deliberately does NOT
+ * re-run that slow pipeline — it uses a research-free, JSON-only prompt (and `completeStrict`, a
+ * tool-less completion, when provided) so recovery is fast and parseable instead of failing the
+ * same slow way twice. This is what stops "the first pass of the plan keeps failing".
+ */
 export const runPlan = async (
   prompt: string,
   answers: StudioAnswer[] | undefined,
-  complete: (prompt: string) => Promise<string>
+  complete: (prompt: string) => Promise<string>,
+  completeStrict?: (prompt: string) => Promise<string>
 ): Promise<StudioBuildPlan | null> => {
-  const p = buildPlanPrompt(prompt, answers);
-  let plan = parsePlan(await complete(p));
+  let plan: StudioBuildPlan | null = null;
+  try {
+    plan = parsePlan(await complete(buildPlanPrompt(prompt, answers)));
+  } catch {
+    // First (research) pass timed out or errored — fall through to the lean recovery pass.
+  }
   if (!plan) {
-    plan = parsePlan(await complete(`${p}\n\nIMPORTANT: Output ONLY the JSON object — begin with "{" and end with "}".`));
+    const lean = `${buildPlanPrompt(prompt, answers, { research: false })}
+
+IMPORTANT: Output ONLY the JSON object — begin with "{" and end with "}".`;
+    plan = parsePlan(await (completeStrict ?? complete)(lean));
   }
   return plan;
 };
