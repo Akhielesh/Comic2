@@ -54,6 +54,7 @@ import type { GLOSSARY } from '../services/modelGlossary';
 import { describeCost, classBadge } from '../shared/pricing';
 import { useAuth } from '../contexts/AuthContext';
 import { modelLinks, SOURCE_HOSTING_NOTE } from '../services/modelLinks';
+import { getModelVendor, getModelVendorId, availableVendors } from '../services/modelVendors';
 import type { ModelSource } from '../services/modelCatalog';
 
 interface ModelLibraryProps {
@@ -147,13 +148,17 @@ const FILTER_PREDICATES: Record<Exclude<FilterKey, 'all'>, (m: CatalogModel, c: 
   nvidia: (m) => m.source === 'nvidia'
 };
 
-const matchesFilter = (model: CatalogModel, filters: Set<FilterKey>, domains: Set<DomainId>, query: string): boolean => {
+const matchesFilter = (model: CatalogModel, filters: Set<FilterKey>, domains: Set<DomainId>, vendors: Set<string>, query: string): boolean => {
   const caps = getCapabilities(model);
   for (const f of filters) {
     if (f === 'all') continue;
     const predicate = FILTER_PREDICATES[f];
     if (predicate && !predicate(model, caps)) return false;
   }
+
+  // Vendor filters (OR among themselves, ANDs with everything else): keep models whose maker is
+  // one of the selected vendors — so "Anthropic" + "OpenAI" shows both, narrowed by the rest.
+  if (vendors.size > 0 && !vendors.has(getModelVendorId(model))) return false;
 
   // Domain filters (benchmark-backed): a model must be at least "Capable" (≥55) in each selected
   // domain. ANDs with everything else, so "Coding" + "Free" finds free models that can actually code.
@@ -167,8 +172,9 @@ const matchesFilter = (model: CatalogModel, filters: Set<FilterKey>, domains: Se
   const tokens = query.trim().toLowerCase().split(/[\s,]+/).filter(Boolean);
   if (tokens.length) {
     const capLabels = capabilityBadges(model).map((b) => b.label).join(' ');
+    const vendor = getModelVendor(model);
     const haystack = [
-      model.id, model.name, model.description, model.source,
+      model.id, model.name, model.description, model.source, vendor.label, vendor.id,
       model.roles?.join(' '), model.possibilities?.join(' '), model.drawbacks?.join(' '),
       model.editorialNote, capLabels
     ].filter(Boolean).join(' ').toLowerCase();
@@ -281,7 +287,10 @@ const ModelCard: React.FC<{
   >
     <div className="flex items-start justify-between gap-2">
       <div className="min-w-0">
-        <div className="text-[10px] font-bold uppercase text-slate-500">{sourceLabel(providerOrigin(model))}</div>
+        <div className="flex items-center gap-1.5 mb-0.5">
+          <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-black ${getModelVendor(model).color}`}>{getModelVendor(model).label}</span>
+          <span className="text-[10px] font-bold uppercase text-slate-500">{sourceLabel(providerOrigin(model))}</span>
+        </div>
         <div className="font-bold leading-tight truncate">{model.name}</div>
       </div>
       <Badge className={COST_CLASS_COLOR[model.costClass]}>{COST_CLASS_LABEL[model.costClass] ?? classBadge(model.costClass)}</Badge>
@@ -659,6 +668,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState<Set<FilterKey>>(new Set());
   const [domainFilters, setDomainFilters] = useState<Set<DomainId>>(new Set());
+  const [vendorFilters, setVendorFilters] = useState<Set<string>>(new Set());
   const [minContextK, setMinContextK] = useState(0); // context-length slider, in thousands of tokens
   const [sortBy, setSortBy] = useState<SortKey>('relevance');
   const [showFilters, setShowFilters] = useState(false);
@@ -704,14 +714,15 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
   }, [reloadKey]);
 
   const visible = useMemo(() => {
-    let list = models.filter((model) => matchesFilter(model, filters, domainFilters, query));
+    let list = models.filter((model) => matchesFilter(model, filters, domainFilters, vendorFilters, query));
     if (minContextK > 0) list = list.filter((m) => (m.contextLength || 0) >= minContextK * 1000);
     return sortModels(list, sortBy);
-  }, [models, filters, domainFilters, query, minContextK, sortBy]);
+  }, [models, filters, domainFilters, vendorFilters, query, minContextK, sortBy]);
   const compareModels = useMemo(() => compareIds.map((id) => models.find((m) => m.id === id)).filter((m): m is CatalogModel => !!m), [compareIds, models]);
+  const vendorOptions = useMemo(() => availableVendors(models), [models]);
 
-  const activeFilterCount = filters.size + domainFilters.size + (minContextK > 0 ? 1 : 0);
-  const resetFilters = () => { setFilters(new Set()); setDomainFilters(new Set()); setMinContextK(0); };
+  const activeFilterCount = filters.size + domainFilters.size + vendorFilters.size + (minContextK > 0 ? 1 : 0);
+  const resetFilters = () => { setFilters(new Set()); setDomainFilters(new Set()); setVendorFilters(new Set()); setMinContextK(0); };
 
   const useModel = (model: CatalogModel, slot: ModelSlot) => setSelectedModel(slot, model.id, 'specific', model.source);
 
@@ -893,6 +904,32 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
                 })}
               </div>
             </div>
+
+            {vendorOptions.length > 0 && (
+              <div>
+                <div className="text-[10px] font-bold uppercase text-slate-500 mb-1.5">Provider / maker</div>
+                <div className="flex flex-wrap gap-2">
+                  {vendorOptions.map(({ vendor, count }) => {
+                    const active = vendorFilters.has(vendor.id);
+                    const toggle = () => setVendorFilters((prev) => {
+                      const next = new Set(prev);
+                      next.has(vendor.id) ? next.delete(vendor.id) : next.add(vendor.id);
+                      return next;
+                    });
+                    return (
+                      <button
+                        key={vendor.id}
+                        onClick={toggle}
+                        className={`text-[11px] font-bold px-2.5 py-1 rounded border-2 border-black transition-colors flex items-center gap-1.5 ${active ? vendor.color : 'bg-white hover:bg-slate-100'}`}
+                      >
+                        {vendor.label}
+                        <span className={`text-[9px] font-mono rounded-full px-1 ${active ? 'bg-white/25' : 'bg-slate-200 text-slate-600'}`}>{count}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <div>
               <div className="text-[10px] font-bold uppercase text-slate-500 mb-1.5 flex items-center gap-1">
