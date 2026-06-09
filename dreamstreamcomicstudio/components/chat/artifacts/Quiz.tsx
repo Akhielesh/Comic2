@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle2, XCircle, RotateCcw, Lightbulb, GraduationCap } from 'lucide-react';
 import type { QuizArtifact, QuizQuestion } from '../../../apiTypes';
+import { quizIdFor, loadQuizAttempt, saveQuizAttempt, clearQuizAttempt } from '../../../services/studyProgress';
 
 // Interactive, self-grading quiz the AI generates on demand for learning. Supports
 // single-select, multi-select, true/false and short-answer questions. No server
@@ -25,10 +26,18 @@ const isCorrect = (q: QuizQuestion, answer: string[] | string): boolean => {
 
 export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
   const questions = Array.isArray(data?.questions) ? data.questions : [];
-  const [answers, setAnswers] = useState<Record<string, string[]>>({});
-  const [text, setText] = useState<Record<string, string>>({});
-  const [checked, setChecked] = useState(false);
+  const quizId = useMemo(() => quizIdFor(questions, data?.title), [questions, data?.title]);
+  // Restore the learner's last attempt (answers + graded state) for this quiz.
+  const saved = useRef(loadQuizAttempt(quizId));
+  const [answers, setAnswers] = useState<Record<string, string[]>>(() => saved.current?.answers || {});
+  const [text, setText] = useState<Record<string, string>>(() => saved.current?.text || {});
+  const [checked, setChecked] = useState(() => Boolean(saved.current?.checked));
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
+
+  // Persist the attempt as it changes (best-effort).
+  useEffect(() => {
+    saveQuizAttempt(quizId, { answers, text, checked, updatedAt: Date.now() });
+  }, [quizId, answers, text, checked]);
 
   if (questions.length === 0) return null;
 
@@ -44,7 +53,7 @@ export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
   const graded = questions.map((q) => ({ q, ok: isCorrect(q, answerFor(q)) }));
   const score = graded.filter((g) => g.ok).length;
 
-  const reset = () => { setAnswers({}); setText({}); setChecked(false); setRevealed({}); };
+  const reset = () => { clearQuizAttempt(quizId); setAnswers({}); setText({}); setChecked(false); setRevealed({}); };
 
   return (
     <div className="border-2 border-black rounded-xl bg-white shadow-comic overflow-hidden animate-fade-in">

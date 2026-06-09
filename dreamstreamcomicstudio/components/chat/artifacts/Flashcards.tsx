@@ -1,9 +1,12 @@
-import React, { useMemo, useState } from 'react';
-import { Layers, RotateCcw, Shuffle, Check, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Layers, RotateCcw, Shuffle, Check, RefreshCw, ChevronLeft, ChevronRight, Target } from 'lucide-react';
 import type { FlashcardsArtifact } from '../../../apiTypes';
+import { deckIdFor, loadProgress, saveProgress, clearProgress } from '../../../services/studyProgress';
 
 // A flip-card study deck the AI generates on demand. The learner flips each card,
-// marks it "known" or "review", can shuffle, and sees progress. Pure + local.
+// marks it "known" or "review", can shuffle, and sees progress. Progress (known/review)
+// PERSISTS per deck across reloads/sessions (spaced-repetition lite), so studying picks
+// up where it left off and the learner can drill just the cards they haven't mastered.
 
 const shuffled = (n: number): number[] => {
   const a = Array.from({ length: n }, (_, i) => i);
@@ -12,11 +15,22 @@ const shuffled = (n: number): number[] => {
 };
 
 export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => {
-  const cards = Array.isArray(data?.cards) ? data.cards.filter((c) => c && (c.front || c.back)) : [];
+  const cards = useMemo(() => (Array.isArray(data?.cards) ? data.cards.filter((c) => c && (c.front || c.back)) : []), [data]);
+  const deckId = useMemo(() => deckIdFor(cards, data?.title), [cards, data?.title]);
+  // Restore any saved progress for this deck on first render.
+  const saved = useRef(loadProgress(deckId));
   const [order, setOrder] = useState<number[]>(() => cards.map((_, i) => i));
   const [pos, setPos] = useState(0);
   const [flipped, setFlipped] = useState(false);
-  const [known, setKnown] = useState<Set<number>>(new Set());
+  const [known, setKnown] = useState<Set<number>>(() => new Set(saved.current?.known || []));
+  const [review, setReview] = useState<Set<number>>(() => new Set(saved.current?.review || []));
+  const [unknownOnly, setUnknownOnly] = useState(false);
+  const resumed = (saved.current?.known.length || 0) + (saved.current?.review.length || 0) > 0;
+
+  // Persist whenever mastery changes (best-effort; debounced via React batching).
+  useEffect(() => {
+    saveProgress(deckId, { known: [...known], review: [...review], updatedAt: Date.now() });
+  }, [deckId, known, review]);
 
   if (cards.length === 0) return null;
 
@@ -25,10 +39,19 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
   const go = (delta: number) => { setPos((p) => Math.max(0, Math.min(order.length - 1, p + delta))); setFlipped(false); };
   const mark = (isKnown: boolean) => {
     setKnown((prev) => { const n = new Set(prev); isKnown ? n.add(cardIndex) : n.delete(cardIndex); return n; });
+    setReview((prev) => { const n = new Set(prev); isKnown ? n.delete(cardIndex) : n.add(cardIndex); return n; });
     if (pos < order.length - 1) go(1); else setFlipped(false);
   };
-  const reshuffle = () => { setOrder(shuffled(cards.length)); setPos(0); setFlipped(false); };
-  const reset = () => { setOrder(cards.map((_, i) => i)); setPos(0); setFlipped(false); setKnown(new Set()); };
+  const reshuffle = () => { setOrder(shuffled(cards.length).filter((i) => !unknownOnly || !known.has(i))); setPos(0); setFlipped(false); };
+  const reset = () => { clearProgress(deckId); setOrder(cards.map((_, i) => i)); setPos(0); setFlipped(false); setKnown(new Set()); setReview(new Set()); setUnknownOnly(false); };
+  // Drill only the cards not yet marked "known" — the core spaced-repetition move.
+  const studyUnknown = () => {
+    const remaining = cards.map((_, i) => i).filter((i) => !known.has(i));
+    setUnknownOnly(true);
+    setOrder(remaining.length ? remaining : cards.map((_, i) => i));
+    setPos(0); setFlipped(false);
+  };
+  const studyAll = () => { setUnknownOnly(false); setOrder(cards.map((_, i) => i)); setPos(0); setFlipped(false); };
 
   return (
     <div className="border-2 border-black rounded-xl bg-white shadow-comic overflow-hidden animate-fade-in">
@@ -40,6 +63,13 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
         </div>
         <span className="text-[11px] font-bold">{known.size}/{cards.length} known</span>
       </div>
+
+      {/* Resumed-progress hint (only when there was saved progress to restore). */}
+      {resumed && (
+        <div className="bg-violet-50 border-b-2 border-violet-200 px-4 py-1 text-[11px] text-violet-700 font-semibold">
+          Resumed your saved progress{review.size ? ` · ${review.size} flagged for review` : ''}.
+        </div>
+      )}
 
       <div className="p-4">
         {/* The card — click to flip. */}
@@ -70,8 +100,14 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
         <div className="flex items-center gap-2 mt-3 flex-wrap">
           <button onClick={() => mark(true)} className="flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-green-100 hover:bg-green-200"><Check className="w-3.5 h-3.5" /> Got it</button>
           <button onClick={() => mark(false)} className="flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-amber-100 hover:bg-amber-200"><RefreshCw className="w-3.5 h-3.5" /> Review</button>
+          {/* Spaced-repetition: drill just the not-yet-known cards (toggle back to all). */}
+          {unknownOnly ? (
+            <button onClick={studyAll} className="flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-violet-100 hover:bg-violet-200"><Layers className="w-3.5 h-3.5" /> All cards</button>
+          ) : (
+            <button onClick={studyUnknown} disabled={known.size >= cards.length} className="flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-violet-100 hover:bg-violet-200 disabled:opacity-40" title="Study only the cards you haven't marked known"><Target className="w-3.5 h-3.5" /> Study {cards.length - known.size} left</button>
+          )}
           <button onClick={reshuffle} className="ml-auto flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-white hover:bg-slate-100"><Shuffle className="w-3.5 h-3.5" /> Shuffle</button>
-          <button onClick={reset} className="flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-white hover:bg-slate-100"><RotateCcw className="w-3.5 h-3.5" /> Reset</button>
+          <button onClick={reset} className="flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-white hover:bg-slate-100" title="Clear saved progress"><RotateCcw className="w-3.5 h-3.5" /> Reset</button>
         </div>
       </div>
     </div>
