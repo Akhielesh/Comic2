@@ -29,6 +29,7 @@ import { LIVE_TEMPLATE_TOOLS } from './liveTemplateTool.js';
 import { generateAppTool } from './codeStudio.js';
 import { generativeUiTool } from './generativeUi.js';
 import { convertDataTool } from './convertData.js';
+import { analyzeDataTool } from './analyzeData.js';
 
 export type { ChatTool, ToolExecResult, ToolContext } from './types.js';
 
@@ -797,6 +798,7 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   show_metrics: metricsTool,
   render_ui: generativeUiTool,
   convert_data: convertDataTool,
+  analyze_data: analyzeDataTool,
   generate_quiz: quizTool,
   generate_flashcards: flashcardsTool,
   generate_document: documentTool,

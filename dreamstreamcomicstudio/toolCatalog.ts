@@ -470,6 +470,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['convert', 'csv', 'tsv', 'json', 'parse', 'reshape', 'transform', 'to csv', 'to json', 'tabular', 'spreadsheet', 'clean data', 'format data']
   },
   {
+    name: 'analyze_data', label: 'Analyze data', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app, deterministic)',
+    description: 'Deterministically compute statistics or group-by aggregations over raw tabular data (CSV/TSV/JSON) — descriptive stats per numeric column, or sum/avg/count/min/max grouped by a column. No model arithmetic. Returns a results table to chart.',
+    auth: 'none', rateLimit: 'Unlimited (computes locally, no API)',
+    dataShape: 'A statistics / aggregation results table.', docsUrl: 'https://dreamstream.app',
+    keywords: ['analyze', 'analyse', 'statistics', 'stats', 'average', 'mean', 'median', 'sum', 'total', 'aggregate', 'group by', 'summarize', 'summarise', 'count by', 'min', 'max']
+  },
+  {
     name: 'show_metrics', label: 'Metric board', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app SVG)',
     description: 'Show a board of KPI / stat tiles (value, delta, sparkline, progress ring, status) from data the model provides — dashboards, scorecards and at-a-glance summaries.',
     auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
@@ -619,6 +626,7 @@ export const CORE_ALWAYS_TOOLS: string[] = [
   'render_heatmap',
   'render_ui',
   'convert_data',
+  'analyze_data',
   'get_news',
   'wiki_lookup',
   // The app builder must ALWAYS be on the table: "build me X" is phrased a thousand
