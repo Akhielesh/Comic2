@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { ChatRequest, ChatResponse, ChatClientContext } from '../../../apiTypes.js';
-import { runChat, type ChatReasoningLevel } from '../ai/chat.js';
+import { runChat, isStudyIntent, type ChatReasoningLevel } from '../ai/chat.js';
 import { runSwarm } from '../ai/agents/orchestrator.js';
 import { makeSwarmTool, SWARM_TOOL_NAME } from '../ai/agents/swarmTool.js';
 import { makeDelegateTool } from '../ai/agents/delegateTool.js';
@@ -308,9 +308,17 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   // the JSON protocol when it's enabled (Phase 10). Either way, smart-route to the most
   // relevant handful for this message rather than handing over the whole suite.
   const toolsEnabledForProvider = resolved.provider === 'openrouter' || JSON_TOOL_PROTOCOL_ENABLED;
-  const routedToolNames = toolsEnabledForProvider
+  let routedToolNames = toolsEnabledForProvider
     ? selectRelevantTools(lastUserText, ROUTABLE_TOOL_NAMES, MAX_MODEL_TOOLS)
     : [];
+  // On study/exam intent, guarantee the core learning tools are on the table so the
+  // EXAM/STUDY guidance can actually deliver practice (quiz/flashcards/guide) even when
+  // the message didn't literally say "quiz" (e.g. "explain how recursion works for my exam").
+  if (toolsEnabledForProvider && isStudyIntent(lastUserText)) {
+    routedToolNames = Array.from(
+      new Set(['generate_quiz', 'generate_flashcards', 'generate_document', ...routedToolNames])
+    ).slice(0, MAX_MODEL_TOOLS);
+  }
   const builtinTools = toolsEnabledForProvider ? resolveTools(routedToolNames, toolContext) : [];
 
   // The agent-swarm meta-tool needs provider credentials, so it's built here (not in

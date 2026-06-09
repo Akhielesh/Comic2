@@ -128,6 +128,8 @@ export const CHAT_SYSTEM_PROMPT = composePersona(CHAT_BEHAVIOR);
 const EXAM_STUDY_INTENT =
   /\b(exam|midterm|final exam|finals|test prep|quiz me|interview prep|study(ing)?|revis(e|ing|ion)|prepare for (?:my|the|an|a)|cram|memoriz|memoris|teach me|help me (?:learn|study|understand|prepare|revise)|for (?:my|the|an|a) (?:exam|test|quiz|midterm|final|interview|class|course)|practice (?:problems|questions))\b/i;
 
+export const isStudyIntent = (text: string): boolean => Boolean(text) && EXAM_STUDY_INTENT.test(text);
+
 export const studyGuidanceBlock = (lastUserText: string): string => {
   if (!lastUserText || !EXAM_STUDY_INTENT.test(lastUserText)) return '';
   return `\n\nEXAM / STUDY MODE — the user is learning or preparing for a test. Give genuinely exam-ready DEPTH, not a shallow summary:
