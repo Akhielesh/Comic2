@@ -10,6 +10,7 @@ import React from 'react';
 import { Loader2, Check, Brain, ListChecks, Hammer, ShieldCheck, AlertTriangle, RotateCcw, ArrowLeft } from 'lucide-react';
 import { useStudioTheme } from './kit';
 import { ClarifyPanel, PlanPanel, ActivityFeed } from './workspace';
+import { StudioPlanThinking } from './StudioPlanThinking';
 import type { StudioClarifyResult, StudioBuildPlan, StudioAnswer } from '../../apiTypes';
 
 export type StudioFlowPhase = 'idle' | 'clarifying' | 'questions' | 'planning' | 'plan' | 'building' | 'error';
@@ -112,9 +113,7 @@ export const StudioBuildFlow: React.FC<StudioBuildFlowProps> = ({
           />
         )}
 
-        {state.phase === 'planning' && (
-          <Loading label="Drafting the build plan…" sub="The tech lead is turning your answers into a concrete, multi-file plan." />
-        )}
+        {state.phase === 'planning' && <StudioPlanThinking />}
 
         {state.phase === 'plan' && state.plan && (
           <PlanPanel plan={state.plan} onBuild={onBuild} onRegenerate={onRegeneratePlan} onBack={onBack} busy={busy} />
