@@ -53,8 +53,25 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
   };
   const studyAll = () => { setUnknownOnly(false); setOrder(cards.map((_, i) => i)); setPos(0); setFlipped(false); };
 
+  // Keyboard drilling: once the deck is focused, space/enter flips, ← → navigate, and
+  // ↑/k · ↓/j mark known/review — so a learner can rip through a deck without the mouse.
+  const onKey = (e: React.KeyboardEvent) => {
+    const k = e.key;
+    if (k === ' ' || k === 'Enter') { e.preventDefault(); setFlipped((f) => !f); }
+    else if (k === 'ArrowRight') { e.preventDefault(); go(1); }
+    else if (k === 'ArrowLeft') { e.preventDefault(); go(-1); }
+    else if (k === 'ArrowUp' || k === 'k' || k === 'K') { e.preventDefault(); mark(true); }
+    else if (k === 'ArrowDown' || k === 'j' || k === 'J') { e.preventDefault(); mark(false); }
+  };
+
   return (
-    <div className="border-2 border-black rounded-xl bg-white shadow-comic overflow-hidden animate-fade-in">
+    <div
+      className="border-2 border-black rounded-xl bg-white shadow-comic overflow-hidden animate-fade-in focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
+      tabIndex={0}
+      role="group"
+      aria-label={`Flashcard deck: ${data.title || 'Flashcards'}. Use space to flip, arrow keys to navigate.`}
+      onKeyDown={onKey}
+    >
       <div className="bg-violet-600 text-white px-4 py-2.5 flex items-center gap-2">
         <Layers className="w-5 h-5" />
         <div className="min-w-0 flex-1">
@@ -72,18 +89,18 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
       )}
 
       <div className="p-4">
-        {/* The card — click to flip. */}
-        <button
-          type="button"
+        {/* The card — click (or space, when the deck is focused) to flip. */}
+        <div
+          role="button"
           onClick={() => setFlipped((f) => !f)}
-          className={`w-full min-h-[150px] rounded-xl border-2 border-black flex items-center justify-center text-center p-5 transition-colors ${flipped ? 'bg-violet-50' : 'bg-brand-yellow'}`}
+          className={`w-full min-h-[150px] rounded-xl border-2 border-black flex items-center justify-center text-center p-5 transition-colors cursor-pointer ${flipped ? 'bg-violet-50' : 'bg-brand-yellow'}`}
         >
           <div>
             <div className="text-[10px] font-bold uppercase tracking-wide text-black/50 mb-1">{flipped ? 'Answer' : 'Term'}</div>
             <div className="text-lg font-bold whitespace-pre-wrap">{flipped ? card.back : card.front}</div>
-            {!flipped && <div className="text-[11px] text-black/50 mt-2">Click to flip</div>}
+            {!flipped && <div className="text-[11px] text-black/50 mt-2">Click to flip · or focus the deck and use <kbd>space</kbd> / <kbd>←</kbd> <kbd>→</kbd></div>}
           </div>
-        </button>
+        </div>
 
         {/* Nav + progress */}
         <div className="flex items-center justify-between mt-3">
