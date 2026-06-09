@@ -562,6 +562,20 @@ studioRouter.post('/launch', async (req, res, next) => {
     }
 
     const previewUrl: string | undefined = worker.json?.previewUrl;
+    // A "live" run with no preview URL is the silent failure behind "users never see the live
+    // link": the worker reported success but returned nothing to open. Treat that as an error
+    // (don't record a bogus `live` run) so the client surfaces a real message instead of a
+    // running app with no way to reach it.
+    if (!previewUrl) {
+      return res.status(502).json({
+        error: {
+          message:
+            worker.json?.message ||
+            'The preview started but returned no URL. The studio worker may be misconfigured (no public preview domain). Try again, or use Download / Publish to ship the app.',
+          code: 'STUDIO_NO_PREVIEW_URL'
+        }
+      });
+    }
     let runId: string | undefined;
     try {
       const admin = getSupabaseAdmin();
