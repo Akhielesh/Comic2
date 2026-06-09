@@ -893,7 +893,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
             </label>
             <button
               onClick={() => setShowFilters((v) => !v)}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border-2 border-black text-sm font-bold transition-colors ${showFilters || activeFilterCount > 0 ? 'bg-brand-blue text-white' : 'bg-white hover:bg-brand-yellow/60'}`}
+              className={`xl:hidden flex items-center gap-1.5 px-3 py-2 rounded-lg border-2 border-black text-sm font-bold transition-colors ${showFilters || activeFilterCount > 0 ? 'bg-brand-blue text-white' : 'bg-white hover:bg-brand-yellow/60'}`}
             >
               <SlidersHorizontal className="w-4 h-4" /> Filters
               {activeFilterCount > 0 && <span className="ml-0.5 rounded-full bg-white text-brand-blue text-[10px] font-bold w-4 h-4 flex items-center justify-center border border-black">{activeFilterCount}</span>}
@@ -901,9 +901,9 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
           </div>
         </div>
 
-        {/* Collapsible filter panel */}
-        {showFilters && (
-          <div className="mt-3 border-2 border-black rounded-xl bg-white p-4 shadow-comic space-y-4">
+        <div className="mt-3 xl:flex xl:gap-6 xl:items-start">
+          {/* Filter rail — left sidebar on xl, collapsible panel below the search bar on smaller screens */}
+          <aside className={`${showFilters ? 'block' : 'hidden'} xl:block xl:w-72 xl:shrink-0 xl:sticky xl:top-4 border-2 border-black rounded-xl bg-white p-4 shadow-comic space-y-4 mb-4 xl:mb-0`}>
             <div>
               <div className="text-[10px] font-bold uppercase text-slate-500 mb-1.5">Type &amp; capabilities</div>
               <div className="flex flex-wrap gap-2">
@@ -982,9 +982,9 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
               <span className="text-[11px] font-bold text-slate-500">{visible.length} match{visible.length === 1 ? '' : 'es'}</span>
               <button onClick={resetFilters} disabled={activeFilterCount === 0} className="text-[11px] font-bold px-2.5 py-1 rounded border-2 border-black bg-white hover:bg-slate-100 disabled:opacity-40 flex items-center gap-1"><RotateCcw className="w-3 h-3" /> Reset filters</button>
             </div>
-          </div>
-        )}
+          </aside>
 
+          <div className="flex-1 min-w-0">
         {degraded && (
           <div className="mt-4 bg-amber-100 border-2 border-black rounded-lg p-3 text-sm flex gap-2">
             <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
@@ -1064,6 +1064,8 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
             </div>
           </>
         )}
+          </div>
+        </div>
         </>
         )}
       </div>
