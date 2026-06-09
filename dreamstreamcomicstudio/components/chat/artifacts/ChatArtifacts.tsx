@@ -1,5 +1,6 @@
 import React from 'react';
-import type { ChatArtifact, WeatherArtifact, VideoResultsArtifact, MapArtifact, NewsResultsArtifact, StockQuoteArtifact, SwarmTraceArtifact, PlacesResultsArtifact, ChartArtifact, MetricBoardArtifact, DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact, RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact, CodeExerciseArtifact } from '../../../apiTypes';
+import type { ChatArtifact, WeatherArtifact, VideoResultsArtifact, MapArtifact, NewsResultsArtifact, StockQuoteArtifact, SwarmTraceArtifact, PlacesResultsArtifact, ChartArtifact, MetricBoardArtifact, DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact, RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact, CodeExerciseArtifact, GenerativeUIArtifact } from '../../../apiTypes';
+import { ArtifactBoundary } from './ArtifactBoundary';
 import { WeatherStation } from './WeatherStation';
 import { VideoResults } from './VideoResults';
 import { MapArtifactCard } from './MapArtifactCard';
@@ -22,6 +23,7 @@ import { Flashcards } from './Flashcards';
 import { SqlPlayground } from './SqlPlayground';
 import { ResourceBundle } from './ResourceBundle';
 import { CodePlayground } from './CodePlayground';
+import { GenerativeUICard } from './GenerativeUICard';
 
 // Renderer registry for typed rich-output artifacts. Adding a new rich component is
 // a single entry here — the chat loop and storage never change.
@@ -52,20 +54,26 @@ const ARTIFACT_RENDERERS: Record<string, (data: unknown, key: number) => React.R
   flashcards: (d, k) => <Flashcards key={k} data={d as FlashcardsArtifact} />,
   sql_exercise: (d, k) => <SqlPlayground key={k} data={d as SqlExerciseArtifact} />,
   resource_bundle: (d, k) => <ResourceBundle key={k} data={d as ResourceBundleArtifact} />,
-  code_exercise: (d, k) => <CodePlayground key={k} data={d as CodeExerciseArtifact} />
+  code_exercise: (d, k) => <CodePlayground key={k} data={d as CodeExerciseArtifact} />,
+  generative_ui: (d, k) => <GenerativeUICard key={k} data={d as GenerativeUIArtifact} />
 };
 
 /** Every artifact type the renderer can display. Cross-checked against the gallery. */
 export const ARTIFACT_TYPES: string[] = Object.keys(ARTIFACT_RENDERERS);
 
-const renderArtifact = (artifact: ChatArtifact, key: number): React.ReactNode =>
-  ARTIFACT_RENDERERS[artifact.type]?.(artifact.data, key) ?? null;
+const renderArtifact = (artifact: ChatArtifact, key: number): React.ReactNode => {
+  const node = ARTIFACT_RENDERERS[artifact.type]?.(artifact.data, key) ?? null;
+  if (node === null) return null;
+  // Every artifact is wrapped so a malformed `data` payload (artifact.data is `unknown`)
+  // can't blank the whole message — it degrades to a small inline notice instead.
+  return <ArtifactBoundary key={key} label={artifact.type}>{node}</ArtifactBoundary>;
+};
 
 // Large/interactive artifacts span the full width; compact cards (market quotes,
 // charts, KPI boards, news) pack two-up so the model can aggregate several data
 // sources side by side — e.g. "compare gold, oil and the S&P" → three quote cards
 // laid out in a grid instead of a tall stack.
-const FULL_WIDTH = new Set(['weather', 'map', 'places_results', 'video_results', 'swarm_trace', 'code_studio', 'recipe_card', 'recipe_run', 'research_report', 'quiz', 'document', 'flashcards', 'sql_exercise', 'resource_bundle', 'code_exercise']);
+const FULL_WIDTH = new Set(['weather', 'map', 'places_results', 'video_results', 'swarm_trace', 'code_studio', 'recipe_card', 'recipe_run', 'research_report', 'quiz', 'document', 'flashcards', 'sql_exercise', 'resource_bundle', 'code_exercise', 'generative_ui']);
 
 export const ChatArtifacts: React.FC<{ artifacts?: ChatArtifact[] }> = ({ artifacts }) => {
   if (!artifacts || artifacts.length === 0) return null;

@@ -456,6 +456,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['chart', 'graph', 'plot', 'visualize', 'visualise', 'bar chart', 'line chart', 'pie chart', 'donut', 'scatter', 'trend', 'breakdown', 'distribution']
   },
   {
+    name: 'render_ui', label: 'Generative UI', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app SVG)',
+    description: 'Compose a bespoke in-chat layout from building blocks (stack/row/grid + text, metrics, charts, tables, images, callouts) when no single fixed card fits — a mini dashboard or a structured, well-aligned response.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'A composed card built from the Primitive Kit (whitelisted blocks).', docsUrl: 'https://dreamstream.app',
+    keywords: ['layout', 'dashboard', 'compose', 'custom', 'arrange', 'panel', 'structure', 'align', 'build ui', 'overview', 'summary card', 'side by side', 'comparison layout']
+  },
+  {
     name: 'show_metrics', label: 'Metric board', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app SVG)',
     description: 'Show a board of KPI / stat tiles (value, delta, sparkline, progress ring, status) from data the model provides — dashboards, scorecards and at-a-glance summaries.',
     auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
@@ -603,6 +610,7 @@ export const CORE_ALWAYS_TOOLS: string[] = [
   'render_table',
   'show_metrics',
   'render_heatmap',
+  'render_ui',
   'get_news',
   'wiki_lookup',
   // The app builder must ALWAYS be on the table: "build me X" is phrased a thousand
