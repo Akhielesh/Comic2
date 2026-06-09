@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle2, XCircle, RotateCcw, RefreshCw, Lightbulb, GraduationCap } from 'lucide-react';
+import { CheckCircle2, XCircle, RotateCcw, RefreshCw, Lightbulb, GraduationCap, Download } from 'lucide-react';
 import type { QuizArtifact, QuizQuestion } from '../../../apiTypes';
 import { quizIdFor, loadQuizAttempt, saveQuizAttempt, clearQuizAttempt } from '../../../services/studyProgress';
+import { downloadTextFile } from '../../../services/chatUtils';
 
 // Interactive, self-grading quiz the AI generates on demand for learning. Supports
 // single-select, multi-select, true/false and short-answer questions. No server
@@ -79,6 +80,35 @@ export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
     setChecked(false);
   };
 
+  // Export a printable Markdown sheet: the questions (with lettered options / a blank for
+  // short answers) plus a separate answer key with explanations.
+  const exportMd = () => {
+    const L = 'ABCDEFGH';
+    const out: string[] = [`# ${data.title || 'Quiz'}`];
+    if (data.topic) out.push(`_${data.topic}_`);
+    if (data.description) out.push('', data.description);
+    out.push('');
+    questions.forEach((q, i) => {
+      out.push(`${i + 1}. ${q.prompt}`);
+      if (q.type === 'short') out.push('   - Answer: ____________________');
+      else (q.choices || []).forEach((c, ci) => out.push(`   - ${L[ci] || '-'}) ${c.text}`));
+      out.push('');
+    });
+    out.push('---', '', '## Answer key', '');
+    questions.forEach((q, i) => {
+      const ans = q.type === 'short'
+        ? (q.correct || []).join(' / ')
+        : (q.correct || []).map((id) => {
+            const idx = (q.choices || []).findIndex((c) => c.id === id);
+            const c = (q.choices || [])[idx];
+            return c ? `${L[idx] || ''}) ${c.text}` : id;
+          }).join(', ');
+      out.push(`${i + 1}. **${ans}**${q.explanation ? ` — ${q.explanation}` : ''}`);
+    });
+    const base = (data.title || 'quiz').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50) || 'quiz';
+    downloadTextFile(`${base}.md`, out.join('\n'), 'text/markdown');
+  };
+
   return (
     <div className="border-2 border-black rounded-xl bg-white shadow-comic overflow-hidden animate-fade-in">
       <div className="bg-brand-yellow border-b-2 border-black px-4 py-2.5 flex items-center gap-2">
@@ -87,7 +117,10 @@ export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
           <div className="font-display text-lg leading-none truncate">{data.title || 'Quiz'}</div>
           {data.topic && <div className="text-[11px] font-bold uppercase tracking-wide text-black/60">{data.topic}</div>}
         </div>
-        <span className="ml-auto text-[11px] font-bold">{questions.length} Q{questions.length === 1 ? '' : 's'}</span>
+        <button onClick={exportMd} title="Download as a printable Markdown sheet + answer key" className="ml-auto flex items-center gap-1 text-[11px] font-bold border-2 border-black rounded-md px-2 py-1 bg-white/70 hover:bg-white">
+          <Download className="w-3.5 h-3.5" />
+        </button>
+        <span className="text-[11px] font-bold">{questions.length} Q{questions.length === 1 ? '' : 's'}</span>
       </div>
 
       <div className="p-4 space-y-4">
