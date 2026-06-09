@@ -6,6 +6,7 @@
 // palette all read/write the same state without prop-drilling.
 
 import { create } from 'zustand';
+import { createJSONStorage, persist } from 'zustand/middleware';
 import type { CodeStudioArtifact } from '../../../apiTypes';
 
 const PREFERRED_ENTRY = /\/(App|index|main)\.(t|j)sx?$/;
@@ -83,7 +84,12 @@ export const renameInDir = (path: string, newName: string): string => {
   return normalizeStudioPath(`${dir}/${newName.trim()}`);
 };
 
-export const useStudioWorkspace = create<WorkspaceState>((set, get) => ({
+// Persisted to sessionStorage (continuity, not durability): a reload — F5, Chrome
+// discarding the background tab, a crashed renderer — restores the working copy, open
+// tabs and session identity instead of dumping the user back on the start screen with
+// their in-progress app gone. Session-scoped on purpose: closing the tab still starts
+// clean, and projects' durable home remains the server (saved on Build).
+export const useStudioWorkspace = create<WorkspaceState>()(persist((set, get) => ({
   loadedKey: null,
   projectId: null,
   sessionId: null,
@@ -199,6 +205,21 @@ export const useStudioWorkspace = create<WorkspaceState>((set, get) => ({
   }),
 
   reset: () => set({ loadedKey: null, projectId: null, sessionId: null, title: '', template: 'react-ts', files: {}, baseline: {}, paths: [], openPaths: [], activePath: null }),
+}), {
+  name: 'dreamstream_studio_workspace',
+  storage: createJSONStorage(() => sessionStorage),
+  partialize: (s) => ({
+    loadedKey: s.loadedKey,
+    projectId: s.projectId,
+    sessionId: s.sessionId,
+    title: s.title,
+    template: s.template,
+    files: s.files,
+    baseline: s.baseline,
+    paths: s.paths,
+    openPaths: s.openPaths,
+    activePath: s.activePath,
+  }),
 }));
 
 // ---- Pure selectors / helpers (unit-testable without React) ----------------------------

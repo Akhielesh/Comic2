@@ -29,12 +29,46 @@ const AuthContext = createContext<AuthContextType>({
     changePassword: async () => ({ success: false, message: 'Unavailable' })
 });
 
+// Supabase fires onAuthStateChange(TOKEN_REFRESHED) on every window refocus with a
+// brand-new user/session object even when nothing meaningful changed. Swapping React
+// state to those fresh identities re-ran every consumer keyed on `user`/`session`
+// (profile reloads, billing refetches, form resets) each time the user switched browser
+// tabs. These guards keep the SAME object identity unless something real changed.
+const isSameUser = (prev: User | null, next: User | null): boolean => {
+    if (prev === next) return true;
+    if (!prev || !next) return false;
+    return (
+        prev.id === next.id &&
+        prev.email === next.email &&
+        prev.updated_at === next.updated_at &&
+        prev.email_confirmed_at === next.email_confirmed_at
+    );
+};
+
+const isSameSession = (prev: Session | null, next: Session | null): boolean => {
+    if (prev === next) return true;
+    if (!prev || !next) return false;
+    return (
+        prev.access_token === next.access_token &&
+        prev.expires_at === next.expires_at &&
+        isSameUser(prev.user, next.user)
+    );
+};
+
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const [user, setUser] = useState<User | null>(null);
     const [session, setSession] = useState<Session | null>(null);
     const [loading, setLoading] = useState(true);
     const userIdRef = useRef<string | null>(null);
     const syncedUserRef = useRef<string | null>(null);
+
+    const applyAuthState = (nextSession: Session | null) => {
+        setSession((prev) => (isSameSession(prev, nextSession) ? prev : nextSession));
+        setUser((prev) => {
+            const nextUser = nextSession?.user ?? null;
+            return isSameUser(prev, nextUser) ? prev : nextUser;
+        });
+    };
 
     useEffect(() => {
         // Mirror every local key/setting change up to the signed-in user's account.
@@ -56,16 +90,14 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
         // Check active session
         supabase.auth.getSession().then(({ data: { session } }) => {
-            setSession(session);
-            setUser(session?.user ?? null);
+            applyAuthState(session);
             setLoading(false);
             if (session?.user) onSignedIn(session.user.id);
         });
 
         // Listen for changes (login, logout, refresh)
         const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-            setSession(session);
-            setUser(session?.user ?? null);
+            applyAuthState(session);
             setLoading(false);
             if (session?.user && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED')) {
                 onSignedIn(session.user.id);
@@ -141,8 +173,16 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         return { success: true, message: 'Password updated successfully.' };
     };
 
+    // Stable context value: without this, every AuthProvider render hands consumers a new
+    // object and re-renders the entire tree below it (the methods only depend on `user`).
+    const value = React.useMemo(
+        () => ({ user, session, loading, signOut, signOutAll, signOutOthers, resendVerificationEmail, changePassword }),
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [user, session, loading]
+    );
+
     return (
-        <AuthContext.Provider value={{ user, session, loading, signOut, signOutAll, signOutOthers, resendVerificationEmail, changePassword }}>
+        <AuthContext.Provider value={value}>
             {children}
         </AuthContext.Provider>
     );

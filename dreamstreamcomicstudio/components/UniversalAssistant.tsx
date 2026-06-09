@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Bot, Loader2, Send, Sparkles, X } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Bot, BookmarkPlus, Check, RotateCcw, Send, Sparkles, X } from 'lucide-react';
 import { AssistantMessage, AssistantLimitInfo, UniversalAssistantContext } from '../apiTypes';
 import { MessageCard } from './MessageCard';
 import { queryUniversalAssistant } from '../services/geminiService';
@@ -45,14 +46,10 @@ const buildRateLimitMessage = (error: ApiError) => {
     : undefined;
 
   return [
-    '**Summary:** You reached the current assistant usage limit.',
-    '**Warnings:** Please wait for the limit window to reset before sending another message.',
-    '**Next:**',
-    retryAt
-      ? `1. Try again after ${retryAt}.`
-      : '1. Try again once the rate limit window resets.',
-    `2. Current limit scope: ${scope}.`
-  ].join('\n');
+    'You reached the current assistant usage limit.',
+    retryAt ? `Try again after ${retryAt}.` : 'Try again once the rate limit window resets.',
+    `Limit scope: ${scope}.`
+  ].join(' ');
 };
 
 const getArtifactSummary = (artifacts: Array<{ stage?: string; type?: string; model?: string }>) => {
@@ -75,6 +72,25 @@ const getArtifactSummary = (artifacts: Array<{ stage?: string; type?: string; mo
   };
 };
 
+const SUGGESTIONS: Array<{ label: string; prompt: string }> = [
+  { label: 'What can I do here?', prompt: 'Give me a quick tour: what can I do in DreamStream Comic Studio?' },
+  { label: 'Tokens & limits', prompt: 'How do tokens, plans, and usage limits work on my account?' },
+  { label: 'Fix my API keys', prompt: 'Help me check and fix my API key configuration.' }
+];
+
+/** Three-dot typing indicator (chat-native, replaces the old "Processing..." chip). */
+const TypingDots: React.FC = () => (
+  <div className="flex items-center gap-1 px-3.5 py-2.5 bg-white border-2 border-black rounded-2xl rounded-bl-md w-fit" aria-label="Assistant is typing">
+    {[0, 1, 2].map((i) => (
+      <span
+        key={i}
+        className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce"
+        style={{ animationDelay: `${i * 0.15}s`, animationDuration: '0.9s' }}
+      />
+    ))}
+  </div>
+);
+
 export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
   currentView,
   activeProject,
@@ -87,16 +103,11 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
   const [isMobile, setIsMobile] = useState(false);
   const [input, setInput] = useState('');
   const [savedMsgIds, setSavedMsgIds] = useState<Set<string>>(new Set());
-  const [messages, setMessages] = useState<ChatItem[]>([
-    {
-      id: crypto.randomUUID(),
-      role: 'model',
-      text: '**Summary:** I can help with DreamStream Comic Studio setup, projects, account, and troubleshooting.\n**Warnings:** I only answer DreamStream platform-specific questions.\n**Next:** 1. Ask what you need help with in the app.'
-    }
-  ]);
+  const [messages, setMessages] = useState<ChatItem[]>([]);
   const [lastLimitInfo, setLastLimitInfo] = useState<AssistantLimitInfo | undefined>(undefined);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const isAuthenticated = !!user;
 
@@ -110,6 +121,10 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isOpen, isSending]);
+
+  useEffect(() => {
+    if (isOpen && !isMobile) inputRef.current?.focus();
+  }, [isOpen, isMobile]);
 
   const assistantHistory: AssistantMessage[] = useMemo(
     () => messages.map((message) => ({ role: message.role, text: message.text })),
@@ -187,8 +202,8 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
     };
   };
 
-  const handleSend = async () => {
-    const message = input.trim();
+  const handleSend = async (overrideText?: string) => {
+    const message = (overrideText ?? input).trim();
     if (!message || isSending) return;
 
     const userMessage: ChatItem = {
@@ -254,7 +269,7 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
           {
             id: crypto.randomUUID(),
             role: 'model',
-            text: '**Summary:** Assistant request failed.\n**Warnings:** I could not process that request right now.\n**Next:** 1. Try again in a moment. 2. Check API key and network status in Settings.'
+            text: 'I could not process that request right now. Try again in a moment, or check your API key and network status in Settings.'
           }
         ]);
       }
@@ -270,127 +285,206 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
     }
   };
 
+  const clearConversation = () => {
+    setMessages([]);
+    setSavedMsgIds(new Set());
+    setStatusMessage(null);
+  };
+
+  const showEmptyState = messages.length === 0 && !isSending;
+
   const containerClassName = isMobile
-    ? 'fixed inset-x-0 bottom-0 z-50 h-[78vh] bg-white border-t-4 border-black rounded-t-2xl shadow-2xl flex flex-col'
-    : 'fixed bottom-6 left-6 z-50 w-[420px] h-[580px] bg-white border-4 border-black rounded-2xl shadow-[8px_8px_0px_0px_rgba(0,0,0,0.45)] flex flex-col';
+    ? 'fixed inset-x-0 bottom-0 z-50 h-[78vh] bg-slate-50 border-t-4 border-black rounded-t-2xl shadow-2xl flex flex-col overflow-hidden'
+    : 'fixed bottom-6 left-6 z-50 w-[400px] h-[600px] max-h-[calc(100vh-3rem)] bg-slate-50 border-4 border-black rounded-2xl shadow-[8px_8px_0px_0px_rgba(0,0,0,0.45)] flex flex-col overflow-hidden';
 
   return (
     <>
-      {!isOpen && (
-        <button
-          type="button"
-          onClick={() => setIsOpen(true)}
-          className="fixed bottom-6 left-6 z-50 w-14 h-14 bg-black text-brand-yellow border-4 border-white rounded-full shadow-comic hover:scale-105 transition-transform flex items-center justify-center"
-          aria-label="Open Universal Assistant"
-        >
-          <Sparkles className="w-7 h-7" />
-        </button>
-      )}
+      <AnimatePresence>
+        {!isOpen && (
+          <motion.button
+            type="button"
+            initial={{ opacity: 0, scale: 0.6 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.6 }}
+            transition={{ type: 'spring', stiffness: 420, damping: 28 }}
+            onClick={() => setIsOpen(true)}
+            className="fixed bottom-6 left-6 z-50 w-14 h-14 bg-black text-brand-yellow border-4 border-white rounded-full shadow-comic hover:scale-105 active:scale-95 transition-transform flex items-center justify-center"
+            aria-label="Open assistant"
+          >
+            <Sparkles className="w-6 h-6" />
+          </motion.button>
+        )}
+      </AnimatePresence>
 
-      {isOpen && (
-        <div className={containerClassName}>
-          <div className="bg-black text-brand-yellow px-4 py-3 flex items-center justify-between shrink-0">
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-full bg-brand-yellow text-black border-2 border-white flex items-center justify-center">
-                <Bot size={18} />
-              </div>
-              <div>
-                <p className="font-display text-lg leading-none">Universal Assistant</p>
-                <p className="text-[10px] uppercase tracking-wide text-white/80">Platform scope only</p>
-              </div>
-            </div>
-            <button type="button" onClick={() => setIsOpen(false)} className="text-white hover:text-brand-red">
-              <X size={22} />
-            </button>
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-slate-50">
-            {messages.map((message) => (
-              <div key={message.id} className={message.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
-                {message.role === 'user' ? (
-                  <div className="max-w-[85%] px-3 py-2 rounded-lg border-2 border-black bg-white text-sm font-medium whitespace-pre-wrap">
-                    {message.text}
-                  </div>
-                ) : (
-                  <div className="max-w-[92%] space-y-1">
-                    {message.offTopicBlocked && (
-                      <div className="text-[10px] font-bold uppercase tracking-wide text-brand-red">
-                        Platform scope enforced
-                      </div>
-                    )}
-                    <MessageCard text={message.text} />
-                    <div className="flex items-center justify-between gap-2 flex-wrap">
-                      {onSaveCreativeDirection && message.text.trim() ? (
-                        <button
-                          onClick={() => { onSaveCreativeDirection(message.text); setSavedMsgIds((prev) => new Set(prev).add(message.id)); }}
-                          className="text-[10px] font-bold text-brand-blue hover:underline"
-                        >
-                          {savedMsgIds.has(message.id) ? '✓ Saved to story context' : '+ Save to story context'}
-                        </button>
-                      ) : <span />}
-                      <FeedbackButtons
-                        targetType="universal_assistant"
-                        targetId={message.id}
-                        source="universal_assistant"
-                        surface={currentView}
-                        compact
-                        metadata={{ offTopicBlocked: Boolean(message.offTopicBlocked) }}
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
-
-            {isSending && (
-              <div className="flex justify-start">
-                <div className="inline-flex items-center gap-2 text-xs border border-slate-300 rounded-md px-2 py-1 bg-white">
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                  Processing...
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div
+            initial={{ opacity: 0, y: 24, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 24, scale: 0.96 }}
+            transition={{ type: 'spring', stiffness: 380, damping: 32 }}
+            className={containerClassName}
+            role="dialog"
+            aria-label="DreamStream assistant"
+          >
+            {/* Header: identity + two quiet actions. Status lives here, not in the footer. */}
+            <div className="bg-black text-white px-4 py-3 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="relative w-9 h-9 rounded-full bg-brand-yellow text-black border-2 border-white flex items-center justify-center shrink-0">
+                  <Bot size={18} />
+                  <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-green-400 border-2 border-black" aria-hidden />
+                </div>
+                <div className="min-w-0">
+                  <p className="font-display text-lg leading-none truncate">Assistant</p>
+                  <p className="text-[10px] text-white/60 truncate">
+                    {isAuthenticated ? 'Knows your projects & account' : 'Guest mode'}
+                  </p>
                 </div>
               </div>
-            )}
-            <div ref={messagesEndRef} />
-          </div>
-
-          <div className="border-t-2 border-black p-3 bg-white shrink-0">
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                value={input}
-                onChange={(event) => setInput(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    void handleSend();
-                  }
-                }}
-                placeholder="Ask about DreamStream features or your current project..."
-                className="flex-1 border-2 border-black rounded-md px-3 py-2 text-sm bg-slate-50 focus:bg-white focus:outline-none"
-              />
-              <button
-                type="button"
-                onClick={() => void handleSend()}
-                disabled={isSending || !input.trim()}
-                className="h-10 w-10 rounded-md border-2 border-black bg-brand-yellow hover:bg-black hover:text-brand-yellow transition-colors disabled:opacity-50 flex items-center justify-center"
-              >
-                <Send size={16} />
-              </button>
+              <div className="flex items-center gap-1 shrink-0">
+                {messages.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={clearConversation}
+                    title="New conversation"
+                    aria-label="New conversation"
+                    className="p-2 rounded-lg text-white/60 hover:text-white hover:bg-white/10 transition-colors"
+                  >
+                    <RotateCcw size={16} />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setIsOpen(false)}
+                  aria-label="Close assistant"
+                  className="p-2 rounded-lg text-white/60 hover:text-white hover:bg-white/10 transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              </div>
             </div>
 
-            <div className="mt-2 text-[11px] text-slate-500 flex items-center justify-between gap-3">
-              <span>{isAuthenticated ? 'Signed-in mode' : 'Guest mode'}</span>
-              {lastLimitInfo?.scope !== 'bypass' && typeof lastLimitInfo?.remaining === 'number' && typeof lastLimitInfo?.limit === 'number' && (
-                <span>{lastLimitInfo.remaining}/{lastLimitInfo.limit} remaining</span>
+            {/* Conversation */}
+            <div className="flex-1 overflow-y-auto px-3 py-4 space-y-3">
+              {showEmptyState && (
+                <div className="h-full flex flex-col items-center justify-center text-center px-4 animate-fade-in">
+                  <div className="w-14 h-14 rounded-2xl bg-brand-yellow border-2 border-black shadow-comic flex items-center justify-center mb-4">
+                    <Sparkles size={24} />
+                  </div>
+                  <p className="font-display text-2xl">How can I help?</p>
+                  <p className="text-xs text-slate-500 mt-1 mb-5 max-w-[15rem]">
+                    Ask about your projects, account, generation setup, or anything DreamStream.
+                  </p>
+                  <div className="flex flex-col gap-2 w-full max-w-[16rem]">
+                    {SUGGESTIONS.map((suggestion) => (
+                      <button
+                        key={suggestion.label}
+                        onClick={() => void handleSend(suggestion.prompt)}
+                        className="w-full text-left text-sm font-bold border-2 border-black rounded-xl px-3.5 py-2.5 bg-white hover:bg-brand-yellow hover:-translate-y-0.5 transition-all shadow-comic-hover"
+                      >
+                        {suggestion.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {messages.map((message) => (
+                <motion.div
+                  key={message.id}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.16, ease: 'easeOut' }}
+                  className={message.role === 'user' ? 'flex justify-end' : 'flex justify-start'}
+                >
+                  {message.role === 'user' ? (
+                    <div className="max-w-[85%] px-3.5 py-2.5 rounded-2xl rounded-br-md bg-black text-white text-sm font-medium whitespace-pre-wrap">
+                      {message.text}
+                    </div>
+                  ) : (
+                    <div className="max-w-[90%] group">
+                      <div className="bg-white border-2 border-black rounded-2xl rounded-bl-md px-1 py-0.5">
+                        {message.offTopicBlocked && (
+                          <div className="text-[10px] font-bold uppercase tracking-wide text-brand-red px-2.5 pt-2">
+                            Platform scope enforced
+                          </div>
+                        )}
+                        <MessageCard text={message.text} />
+                      </div>
+                      {/* Actions appear on hover/focus — the conversation stays clean. */}
+                      <div className="flex items-center gap-2 mt-1 px-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
+                        {onSaveCreativeDirection && message.text.trim() && (
+                          <button
+                            onClick={() => { onSaveCreativeDirection(message.text); setSavedMsgIds((prev) => new Set(prev).add(message.id)); }}
+                            className="inline-flex items-center gap-1 text-[11px] font-bold text-brand-blue hover:underline"
+                          >
+                            {savedMsgIds.has(message.id)
+                              ? <><Check size={12} /> Saved to story</>
+                              : <><BookmarkPlus size={12} /> Save to story</>}
+                          </button>
+                        )}
+                        <FeedbackButtons
+                          targetType="universal_assistant"
+                          targetId={message.id}
+                          source="universal_assistant"
+                          surface={currentView}
+                          compact
+                          metadata={{ offTopicBlocked: Boolean(message.offTopicBlocked) }}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </motion.div>
+              ))}
+
+              {isSending && (
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex justify-start">
+                  <TypingDots />
+                </motion.div>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+
+            {/* Composer: one calm row; meta only when it matters. */}
+            <div className="border-t-2 border-black p-3 bg-white shrink-0">
+              <div className="flex items-center gap-2">
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      void handleSend();
+                    }
+                  }}
+                  placeholder="Ask anything about DreamStream…"
+                  className="flex-1 border-2 border-black rounded-xl px-3.5 py-2.5 text-sm bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-yellow transition-shadow"
+                />
+                <button
+                  type="button"
+                  onClick={() => void handleSend()}
+                  disabled={isSending || !input.trim()}
+                  aria-label="Send message"
+                  className="h-11 w-11 shrink-0 rounded-xl border-2 border-black bg-brand-yellow hover:bg-black hover:text-brand-yellow active:scale-95 transition-all disabled:opacity-40 disabled:hover:bg-brand-yellow disabled:hover:text-black flex items-center justify-center"
+                >
+                  <Send size={16} />
+                </button>
+              </div>
+
+              {(statusMessage || (lastLimitInfo?.scope !== 'bypass' && typeof lastLimitInfo?.remaining === 'number' && lastLimitInfo.remaining <= 5)) && (
+                <div className="mt-1.5 flex items-center justify-between gap-3 text-[11px]">
+                  <span className="text-brand-red truncate">{statusMessage}</span>
+                  {lastLimitInfo?.scope !== 'bypass' && typeof lastLimitInfo?.remaining === 'number' && typeof lastLimitInfo?.limit === 'number' && lastLimitInfo.remaining <= 5 && (
+                    <span className="text-slate-500 shrink-0">{lastLimitInfo.remaining}/{lastLimitInfo.limit} left</span>
+                  )}
+                </div>
               )}
             </div>
-
-            {statusMessage && (
-              <div className="mt-1 text-[11px] text-brand-red">{statusMessage}</div>
-            )}
-          </div>
-        </div>
-      )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </>
   );
 };

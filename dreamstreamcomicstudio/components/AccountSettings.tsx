@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { UserPrivateProfile, UserProfile } from '../types';
 import { supabase } from '../services/supabase';
 import {
@@ -10,28 +10,19 @@ import {
     updateUserProfile,
     upsertPrivateProfile
 } from '../services/db';
-import { getAllModelKeys, getSettingsState, setSettingsState as persistSettingsState } from '../services/appSettings';
+import { getSettingsState, setSettingsState as persistSettingsState } from '../services/appSettings';
 import { Button } from './Button';
 import { ApiConfiguration } from './ApiConfiguration';
-import { AlertTriangle, CheckCircle2, CreditCard, LogOut, Mail, Monitor, Save, Settings, Shield, Trash2, Upload, User as UserIcon, X } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { AlertTriangle, Bell, CheckCircle2, ChevronLeft, CreditCard, FileText, KeyRound, LifeBuoy, LogOut, Mail, Monitor, Save, Settings, Shield, ShieldCheck, Trash2, Upload, User as UserIcon, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { patchUrlParams, persistUiState, resolveInitialUiState } from '../services/viewState';
 import { listDevices, removeDevice, currentDeviceId, type UserDevice } from '../services/deviceSessions';
 import { useSearchParams } from 'react-router-dom';
-import {
-    getAllowedImageModelsForPlan,
-    isImageModelAllowedForPlan
-} from '../services/imageModels';
-import {
-    TEXT_MODEL,
-    TEXT_MODELS,
-    getAllowedTextModelIdsForPlan
-} from '../services/modelPolicy';
+import { isImageModelAllowedForPlan } from '../services/imageModels';
+import { TEXT_MODEL } from '../services/modelPolicy';
 import type {
     AdminAccessResponse,
-    AdminCouponAssignment,
-    AdminCouponDefinition,
-    AdminCouponRedemptionEvent,
-    AdminUserRecord,
     BillingInterval,
     BillingPlanDefinition,
     BillingPlanTier,
@@ -39,41 +30,27 @@ import type {
     BillingSummaryResponse,
     CouponPreviewResult,
     CreditPackId,
-    ProjectModerationQueueItem,
     PurchasablePlanTier
 } from '../shared/types/billing';
 import {
     addCredits,
-    approveProjectRepublish,
     cancelSubscription,
     confirmCheckoutSession,
-    createAdminCouponDefinition,
     createBillingPortal,
     createCheckoutSession,
-    forceProjectPrivate,
     getAdminAccess,
     getBillingSummary,
     getPricingCatalog,
-    listAdminUsers,
-    listAdminCoupons,
-    listAdminCouponsByCursor,
-    listModerationQueue,
-    moderateUser,
     previewCoupon,
     redeemCoupon,
     reactivateSubscription,
     setupPaymentMethod,
     setSpendCap,
-    updateAdminUserPlan,
-    updateAdminUserRole,
     updateAutoReload
 } from '../services/billing';
 import { buildModelEntitlements } from '../services/modelEntitlements';
 import { isFreeOnly, setFreeOnly, onFreeOnlyChanged } from '../services/freeOnlyMode';
-import { VerificationCenter } from './VerificationCenter';
-import { AdminAnalytics } from './admin/AdminAnalytics';
-import { InviteManager } from './admin/InviteManager';
-import { EmailConsole } from './admin/EmailConsole';
+import { AdminConsole } from './admin/AdminConsole';
 import { InviteFriends } from './InviteFriends';
 import { RedeemInvite } from './RedeemInvite';
 
@@ -95,6 +72,9 @@ type BillingIntervalOption = BillingInterval;
 
 const USERNAME_REGEX = /^[A-Za-z0-9_]{3,20}$/;
 const normalizeText = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
+
+const SETTINGS_TAB_IDS: readonly SettingsTab[] = ['profile', 'settings', 'billing', 'preferences', 'security', 'legal', 'contact', 'admin'];
+const isSettingsTabValue = (value: string): value is SettingsTab => (SETTINGS_TAB_IDS as readonly string[]).includes(value);
 
 const ContactSection = () => {
     const { user } = useAuth();
@@ -200,7 +180,11 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     onNavigate
 }) => {
     const { user, signOut, signOutAll, signOutOthers, resendVerificationEmail, changePassword } = useAuth();
-    const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
+    // Tab continuity: a reload (or Chrome discarding this tab in the background) restores
+    // the exact settings tab from ?tab= / session memory instead of bouncing to Profile.
+    const [activeTab, setActiveTab] = useState<SettingsTab>(() =>
+        resolveInitialUiState<SettingsTab>('settings.tab', 'tab', isSettingsTabValue, initialTab)
+    );
     const [searchParams] = useSearchParams();
     const [previewAvatar, setPreviewAvatar] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
@@ -224,21 +208,6 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     const [billingBusy, setBillingBusy] = useState(false);
     const [spendCapInput, setSpendCapInput] = useState<string>('');
     const [selectedBillingInterval, setSelectedBillingInterval] = useState<BillingIntervalOption>('month');
-
-    const [adminCouponDefinitions, setAdminCouponDefinitions] = useState<AdminCouponDefinition[]>([]);
-    const [adminCouponAssignments, setAdminCouponAssignments] = useState<AdminCouponAssignment[]>([]);
-    const [adminCouponEvents, setAdminCouponEvents] = useState<AdminCouponRedemptionEvent[]>([]);
-    const [adminActionMessage, setAdminActionMessage] = useState<MessageState>(null);
-    const [adminBusy, setAdminBusy] = useState(false);
-    const [newCouponTokenAmount, setNewCouponTokenAmount] = useState('10000');
-    const [newCouponValidForHours, setNewCouponValidForHours] = useState('168');
-    const [createdAdminCoupon, setCreatedAdminCoupon] = useState<AdminCouponDefinition | null>(null);
-    const [adminLastRefreshedAt, setAdminLastRefreshedAt] = useState<string | null>(null);
-    const [adminUsers, setAdminUsers] = useState<AdminUserRecord[]>([]);
-    const [moderationQueue, setModerationQueue] = useState<ProjectModerationQueueItem[]>([]);
-    const [adminUserQuery, setAdminUserQuery] = useState('');
-    const [moderationReasonByProject, setModerationReasonByProject] = useState<Record<string, string>>({});
-    const [moderationReasonByUser, setModerationReasonByUser] = useState<Record<string, string>>({});
 
     const [username, setUsername] = useState('');
     const [avatarUrl, setAvatarUrl] = useState('');
@@ -292,9 +261,24 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         }
     }, [searchParams]);
 
+    // Respond to in-app navigation (e.g. header → "Billing") after mount. The first run is
+    // skipped so it can't clobber a tab just restored from the URL/session memory.
+    const skippedFirstTabSyncRef = useRef(false);
     useEffect(() => {
+        if (!skippedFirstTabSyncRef.current) {
+            skippedFirstTabSyncRef.current = true;
+            return;
+        }
         setActiveTab(initialTab);
     }, [initialTab]);
+
+    // Keep both continuity layers in sync with the live tab; drop the URL param on exit
+    // so other views don't carry a stale ?tab= around (session memory is kept on purpose —
+    // reopening Settings later in this browser tab returns to where the user left off).
+    useEffect(() => {
+        persistUiState('settings.tab', 'tab', activeTab);
+    }, [activeTab]);
+    useEffect(() => () => patchUrlParams({ tab: null }), []);
 
     useEffect(() => {
         if (!openPasswordReset) return;
@@ -332,66 +316,9 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         return () => {
             active = false;
         };
-    }, [user]);
-
-    const loadAdminCouponState = async () => {
-        const firstPage = await listAdminCoupons(200);
-        const definitionRows = [...firstPage.definitions];
-        let cursor = firstPage.nextCursor;
-        let pageCount = 0;
-        while (cursor && pageCount < 25) {
-            const nextPage = await listAdminCouponsByCursor({ limit: 200, cursor });
-            definitionRows.push(...nextPage.definitions);
-            cursor = nextPage.nextCursor;
-            pageCount += 1;
-        }
-        setAdminCouponDefinitions(definitionRows);
-        setAdminCouponAssignments(firstPage.assignments);
-        setAdminCouponEvents(firstPage.events);
-        setAdminLastRefreshedAt(new Date().toISOString());
-    };
-
-    const loadGovernanceState = async () => {
-        const [userResult, queueResult] = await Promise.all([
-            listAdminUsers({ q: adminUserQuery.trim() || undefined, limit: 100 }),
-            listModerationQueue({ limit: 100 })
-        ]);
-        setAdminUsers(userResult.items || []);
-        setModerationQueue(queueResult.items || []);
-        setAdminLastRefreshedAt(new Date().toISOString());
-    };
-
-    useEffect(() => {
-        if (activeTab !== 'admin' || (!isAdmin && !isModerator)) return;
-        let alive = true;
-        let inFlight = false;
-
-        const loadAdminData = async () => {
-            if (inFlight) return;
-            inFlight = true;
-            try {
-                await loadGovernanceState();
-                if (isAdmin) {
-                    await loadAdminCouponState();
-                }
-            } catch (err: any) {
-                if (!alive) return;
-                setAdminActionMessage({ type: 'error', text: err?.message || 'Failed to load moderation/admin data.' });
-            } finally {
-                inFlight = false;
-            }
-        };
-
-        void loadAdminData();
-        const timer = window.setInterval(() => {
-            void loadAdminData();
-        }, 15_000);
-
-        return () => {
-            alive = false;
-            window.clearInterval(timer);
-        };
-    }, [activeTab, isAdmin, isModerator, adminUserQuery]);
+        // Keyed on the user id, not the user object: Supabase mints a fresh user object on
+        // every token refresh (each tab refocus), which used to re-run this needlessly.
+    }, [user?.id]);
 
     useEffect(() => {
         if ((activeTab !== 'billing' && activeTab !== 'settings' && activeTab !== 'admin') || !user) return;
@@ -420,7 +347,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         return () => {
             alive = false;
         };
-    }, [activeTab, user]);
+    }, [activeTab, user?.id]);
 
     useEffect(() => {
         if (!billingSummary) return;
@@ -445,8 +372,14 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         }
     }, [billingSummary, settingsState]);
 
+    // Latest callback without making it an effect dependency — App may re-render for any
+    // reason, and re-running the profile loader used to blank the whole settings page and
+    // wipe in-progress form edits every time.
+    const onDobCompletionStatusChangeRef = useRef(onDobCompletionStatusChange);
+    onDobCompletionStatusChangeRef.current = onDobCompletionStatusChange;
+
     useEffect(() => {
-        if (!user) return;
+        if (!user?.id) return;
 
         let active = true;
         const loadProfiles = async () => {
@@ -486,7 +419,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
 
             setEmailPrefProductUpdates(privateData?.email_pref_product_updates ?? true);
             setEmailPrefMarketing(privateData?.email_pref_marketing ?? Boolean(publicProfile?.marketing_consent));
-            onDobCompletionStatusChange?.(!privateData?.dob);
+            onDobCompletionStatusChangeRef.current?.(!privateData?.dob);
             setLoading(false);
         };
 
@@ -494,7 +427,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         return () => {
             active = false;
         };
-    }, [user, onDobCompletionStatusChange]);
+    }, [user?.id]);
 
     const handlePreviewCoupon = async () => {
         const normalizedCode = couponCode.trim();
@@ -526,145 +459,10 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
             } else {
                 await refreshBillingSummary();
             }
-            if ((isAdmin || isModerator) && activeTab === 'admin') {
-                await loadGovernanceState();
-                if (isAdmin) {
-                    await loadAdminCouponState();
-                }
-            }
         } catch (err: any) {
             setRedeemMsg({ type: 'error', text: err?.message || 'Unable to redeem coupon.' });
         } finally {
             setBillingBusy(false);
-        }
-    };
-
-    const parsePositiveInteger = (value: string, fieldName: string, min = 1) => {
-        const normalized = value.trim();
-        if (!normalized) throw new Error(`${fieldName} is required.`);
-        const parsed = Number(normalized);
-        if (!Number.isFinite(parsed) || Math.floor(parsed) !== parsed || parsed < min) {
-            throw new Error(`${fieldName} must be an integer >= ${min}.`);
-        }
-        return Math.floor(parsed);
-    };
-
-    const handleCreateAdminCoupon = async () => {
-        setAdminActionMessage(null);
-        setAdminBusy(true);
-        try {
-            const tokenAmountCt = parsePositiveInteger(newCouponTokenAmount, 'Token amount');
-            const validForHours = parsePositiveInteger(newCouponValidForHours, 'Validity (hours)');
-
-            const created = await createAdminCouponDefinition({
-                tokenAmountCt,
-                validForHours
-            });
-            setCreatedAdminCoupon(created);
-            setAdminActionMessage({ type: 'success', text: `Coupon ${created.code} created.` });
-            await loadAdminCouponState();
-        } catch (err: any) {
-            setAdminActionMessage({ type: 'error', text: err?.message || 'Failed to create coupon.' });
-        } finally {
-            setAdminBusy(false);
-        }
-    };
-
-    const handleAdminUserPlanChange = async (userId: string, planTier: BillingPlanTier) => {
-        setAdminBusy(true);
-        setAdminActionMessage(null);
-        try {
-            await updateAdminUserPlan({ userId, planTier });
-            setAdminActionMessage({ type: 'success', text: `Updated plan for ${userId} to ${planTier}.` });
-            await loadGovernanceState();
-            await refreshBillingSummary();
-        } catch (err: any) {
-            setAdminActionMessage({ type: 'error', text: err?.message || 'Failed to update user plan.' });
-        } finally {
-            setAdminBusy(false);
-        }
-    };
-
-    const handleAdminRemovePlanStatus = async (userId: string) => {
-        setAdminBusy(true);
-        setAdminActionMessage(null);
-        try {
-            await updateAdminUserPlan({ userId, removePlanStatus: true });
-            setAdminActionMessage({ type: 'success', text: `Removed paid plan status for ${userId}.` });
-            await loadGovernanceState();
-        } catch (err: any) {
-            setAdminActionMessage({ type: 'error', text: err?.message || 'Failed to remove plan status.' });
-        } finally {
-            setAdminBusy(false);
-        }
-    };
-
-    const handleAdminRoleChange = async (userId: string, role: 'admin' | 'moderator', action: 'grant' | 'revoke') => {
-        setAdminBusy(true);
-        setAdminActionMessage(null);
-        try {
-            await updateAdminUserRole({ userId, role, action });
-            setAdminActionMessage({ type: 'success', text: `${action === 'grant' ? 'Granted' : 'Revoked'} ${role} role for ${userId}.` });
-            await loadGovernanceState();
-        } catch (err: any) {
-            setAdminActionMessage({ type: 'error', text: err?.message || 'Failed to update role.' });
-        } finally {
-            setAdminBusy(false);
-        }
-    };
-
-    const handleForcePrivateProject = async (projectId: string) => {
-        const reason = normalizeText(moderationReasonByProject[projectId]);
-        if (!reason) {
-            setAdminActionMessage({ type: 'error', text: 'Reason is required to force private.' });
-            return;
-        }
-        setAdminBusy(true);
-        setAdminActionMessage(null);
-        try {
-            await forceProjectPrivate({ projectId, reason });
-            setAdminActionMessage({ type: 'success', text: `Project ${projectId} is now private.` });
-            setModerationReasonByProject((prev) => ({ ...prev, [projectId]: '' }));
-            await loadGovernanceState();
-        } catch (err: any) {
-            setAdminActionMessage({ type: 'error', text: err?.message || 'Failed to force private.' });
-        } finally {
-            setAdminBusy(false);
-        }
-    };
-
-    const handleReviewRepublish = async (projectId: string, approve: boolean) => {
-        const reason = normalizeText(moderationReasonByProject[projectId]);
-        setAdminBusy(true);
-        setAdminActionMessage(null);
-        try {
-            await approveProjectRepublish({ projectId, approve, reason: reason || undefined });
-            setAdminActionMessage({ type: 'success', text: `${approve ? 'Approved' : 'Rejected'} republish for ${projectId}.` });
-            setModerationReasonByProject((prev) => ({ ...prev, [projectId]: '' }));
-            await loadGovernanceState();
-        } catch (err: any) {
-            setAdminActionMessage({ type: 'error', text: err?.message || 'Failed to review republish request.' });
-        } finally {
-            setAdminBusy(false);
-        }
-    };
-
-    const handleModerateUser = async (
-        userId: string,
-        status: 'active' | 'restricted' | 'suspended'
-    ) => {
-        const reason = normalizeText(moderationReasonByUser[userId]);
-        setAdminBusy(true);
-        setAdminActionMessage(null);
-        try {
-            await moderateUser({ userId, status, reason: reason || undefined });
-            setAdminActionMessage({ type: 'success', text: `Set moderation status for ${userId} to ${status}.` });
-            setModerationReasonByUser((prev) => ({ ...prev, [userId]: '' }));
-            await loadGovernanceState();
-        } catch (err: any) {
-            setAdminActionMessage({ type: 'error', text: err?.message || 'Failed to update moderation status.' });
-        } finally {
-            setAdminBusy(false);
         }
     };
 
@@ -1637,464 +1435,14 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         );
     };
 
-    const renderAdmin = () => {
-        const planOptions: BillingPlanTier[] = ['free', 'creator', 'studio', 'custom', 'admin'];
-
-        return (
-            <div className="space-y-6 animate-fade-in">
-                {renderMessage(adminActionMessage)}
-
-                <details className="border-2 border-black rounded-xl bg-white" open>
-                    <summary className="px-4 py-3 cursor-pointer font-display text-lg">Verification Center</summary>
-                    <div className="border-t-2 border-black">
-                        <VerificationCenter />
-                    </div>
-                </details>
-
-                <details className="border-2 border-black rounded-xl bg-white" open>
-                    <summary className="px-4 py-3 cursor-pointer font-display text-lg">Feedback &amp; Telemetry Analytics</summary>
-                    <div className="border-t-2 border-black">
-                        <AdminAnalytics />
-                    </div>
-                </details>
-
-                <details className="border-2 border-black rounded-xl bg-white">
-                    <summary className="px-4 py-3 cursor-pointer font-display text-lg">Tester Invites</summary>
-                    <div className="border-t-2 border-black">
-                        <InviteManager />
-                    </div>
-                </details>
-
-                <details className="border-2 border-black rounded-xl bg-white">
-                    <summary className="px-4 py-3 cursor-pointer font-display text-lg">Email Console</summary>
-                    <div className="border-t-2 border-black">
-                        <EmailConsole />
-                    </div>
-                </details>
-
-                <div className="border-2 border-black bg-slate-50 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
-                    <div className="text-sm">
-                        <div className="font-bold">Access Level</div>
-                        <div className="flex flex-wrap gap-2 mt-1">
-                            <span className={`px-2 py-1 rounded-full text-xs font-bold ${isAdmin ? 'bg-green-100 text-green-700' : 'bg-slate-200 text-slate-700'}`}>Admin {isAdmin ? 'Enabled' : 'No'}</span>
-                            <span className={`px-2 py-1 rounded-full text-xs font-bold ${isModerator ? 'bg-blue-100 text-blue-700' : 'bg-slate-200 text-slate-700'}`}>Moderator {isModerator ? 'Enabled' : 'No'}</span>
-                            {adminAccess?.bootstrapAdmin && (
-                                <span className="px-2 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-700">Bootstrap Admin</span>
-                            )}
-                        </div>
-                    </div>
-                    <div className="text-xs text-slate-500 flex items-center gap-3">
-                        <span>{adminLastRefreshedAt ? `Last refreshed: ${new Date(adminLastRefreshedAt).toLocaleTimeString()}` : 'Not refreshed yet'}</span>
-                        <Button
-                            variant="outline"
-                            disabled={adminBusy}
-                            onClick={async () => {
-                                setAdminBusy(true);
-                                try {
-                                    await loadGovernanceState();
-                                    if (isAdmin) {
-                                        await loadAdminCouponState();
-                                    }
-                                } catch (err: any) {
-                                    setAdminActionMessage({ type: 'error', text: err?.message || 'Failed to refresh admin data.' });
-                                } finally {
-                                    setAdminBusy(false);
-                                }
-                            }}
-                        >
-                            Refresh
-                        </Button>
-                    </div>
-                </div>
-
-                <div className="border-4 border-purple-500 bg-purple-50 rounded-xl p-6 flex flex-col md:flex-row items-center justify-between gap-6 shadow-sm">
-                    <div>
-                        <h3 className="font-display text-2xl text-purple-900">Test Lab</h3>
-                        <p className="text-sm text-purple-800 font-bold mt-1">
-                            Restricted environment for model consistency testing.
-                        </p>
-                        <ul className="mt-2 text-xs text-purple-700 space-y-1 list-disc list-inside">
-                            <li>Strict limits (max 2 chars/items/locations)</li>
-                            <li>No token burn (uses guardrail or test key)</li>
-                            <li>Full raw metadata & AI audit</li>
-                        </ul>
-                    </div>
-                    <div>
-                        <Button
-                            onClick={() => onNavigate?.('test')}
-                            className="bg-purple-600 hover:bg-purple-700 text-white border-purple-900 shadow-md"
-                            icon={<Settings size={18} />}
-                        >
-                            Launch Test Lab
-                        </Button>
-                    </div>
-                </div>
-
-                <div className="border-2 border-slate-200 rounded-xl p-4 space-y-4">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                            <h3 className="font-display text-2xl">User Directory</h3>
-                            <p className="text-xs text-slate-500">Search users, manage plans, and apply moderation controls.</p>
-                        </div>
-                        <input
-                            value={adminUserQuery}
-                            onChange={(e) => setAdminUserQuery(e.target.value)}
-                            placeholder="Search by username or email"
-                            className="w-full md:w-72 border-2 border-black rounded-lg px-3 py-2 font-mono text-sm"
-                        />
-                    </div>
-
-                    <div className="space-y-3">
-                        {adminUsers.length === 0 && (
-                            <div className="text-sm text-slate-500 border border-slate-200 rounded-lg px-3 py-3">No users found.</div>
-                        )}
-                        {adminUsers.map((adminUser) => {
-                            const isTargetAdmin = adminUser.roles.includes('admin');
-                            const canModerateTarget = isAdmin || !isTargetAdmin;
-                            return (
-                                <div key={adminUser.userId} className="border-2 border-slate-200 rounded-xl p-4 space-y-3">
-                                    <div className="flex flex-wrap items-center justify-between gap-2">
-                                        <div>
-                                            <div className="font-bold">{adminUser.username || '(no username)'}</div>
-                                            <div className="text-xs text-slate-500">
-                                                {adminUser.email || adminUser.maskedEmail || adminUser.userId}
-                                            </div>
-                                        </div>
-                                        <div className="text-xs text-slate-600">
-                                            Created: {adminUser.createdAt ? new Date(adminUser.createdAt).toLocaleDateString() : 'n/a'}
-                                        </div>
-                                    </div>
-
-                                    <div className="grid md:grid-cols-3 gap-3">
-                                        <div className="border border-slate-200 rounded-lg p-3 space-y-2">
-                                            <div className="text-xs font-bold uppercase text-slate-500">Plan</div>
-                                            <div className="text-sm font-semibold uppercase">{adminUser.planTier}</div>
-                                            {isAdmin ? (
-                                                <>
-                                                    <select
-                                                        value={adminUser.planTier}
-                                                        onChange={(e) => handleAdminUserPlanChange(adminUser.userId, e.target.value as BillingPlanTier)}
-                                                        className="w-full border-2 border-black rounded px-2 py-1 text-sm bg-white"
-                                                        disabled={adminBusy}
-                                                    >
-                                                        {adminUser.planTier === 'pro' && (
-                                                            <option value="pro">pro (legacy)</option>
-                                                        )}
-                                                        {planOptions.map((planTier) => (
-                                                            <option key={planTier} value={planTier}>{planTier}</option>
-                                                        ))}
-                                                    </select>
-                                                    <Button
-                                                        variant="outline"
-                                                        disabled={adminBusy || adminUser.planTier === 'free'}
-                                                        onClick={() => handleAdminRemovePlanStatus(adminUser.userId)}
-                                                    >
-                                                        Remove Plan Status
-                                                    </Button>
-                                                </>
-                                            ) : (
-                                                <div className="text-xs text-slate-500">Only admins can change plans.</div>
-                                            )}
-                                        </div>
-
-                                        <div className="border border-slate-200 rounded-lg p-3 space-y-2">
-                                            <div className="text-xs font-bold uppercase text-slate-500">Roles</div>
-                                            <div className="flex flex-wrap gap-1">
-                                                {adminUser.roles.length === 0 && <span className="text-xs text-slate-500">No elevated roles</span>}
-                                                {adminUser.roles.map((role) => (
-                                                    <span key={role} className={`px-2 py-1 rounded-full text-xs font-bold ${role === 'admin' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
-                                                        {role}
-                                                    </span>
-                                                ))}
-                                            </div>
-                                            {isAdmin ? (
-                                                <div className="flex gap-2 flex-wrap">
-                                                    <Button
-                                                        variant="outline"
-                                                        disabled={adminBusy}
-                                                        onClick={() => handleAdminRoleChange(adminUser.userId, 'moderator', adminUser.roles.includes('moderator') ? 'revoke' : 'grant')}
-                                                    >
-                                                        {adminUser.roles.includes('moderator') ? 'Revoke Moderator' : 'Grant Moderator'}
-                                                    </Button>
-                                                    <Button
-                                                        variant="outline"
-                                                        disabled={adminBusy}
-                                                        onClick={() => handleAdminRoleChange(adminUser.userId, 'admin', adminUser.roles.includes('admin') ? 'revoke' : 'grant')}
-                                                    >
-                                                        {adminUser.roles.includes('admin') ? 'Revoke Admin' : 'Grant Admin'}
-                                                    </Button>
-                                                </div>
-                                            ) : (
-                                                <div className="text-xs text-slate-500">Moderators cannot assign roles.</div>
-                                            )}
-                                        </div>
-
-                                        <div className="border border-slate-200 rounded-lg p-3 space-y-2">
-                                            <div className="text-xs font-bold uppercase text-slate-500">User Moderation</div>
-                                            <div className="text-sm font-semibold capitalize">{adminUser.moderationStatus}</div>
-                                            <input
-                                                value={moderationReasonByUser[adminUser.userId] || ''}
-                                                onChange={(e) => setModerationReasonByUser((prev) => ({ ...prev, [adminUser.userId]: e.target.value }))}
-                                                placeholder="Reason (optional)"
-                                                className="w-full border-2 border-black rounded px-2 py-1 text-xs"
-                                            />
-                                            {canModerateTarget ? (
-                                                <div className="flex gap-2 flex-wrap">
-                                                    <Button variant="outline" disabled={adminBusy} onClick={() => handleModerateUser(adminUser.userId, 'active')}>Set Active</Button>
-                                                    <Button variant="outline" disabled={adminBusy} onClick={() => handleModerateUser(adminUser.userId, 'restricted')}>Restrict</Button>
-                                                    <Button variant="outline" disabled={adminBusy} onClick={() => handleModerateUser(adminUser.userId, 'suspended')}>Suspend</Button>
-                                                </div>
-                                            ) : (
-                                                <div className="text-xs text-slate-500">Only admins can moderate admin accounts.</div>
-                                            )}
-                                        </div>
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
-                </div>
-
-                <div className="border-2 border-slate-200 rounded-xl p-4 space-y-3">
-                    <h3 className="font-display text-2xl">Moderation Queue</h3>
-                    <p className="text-xs text-slate-500">Force projects private with reason and review republish requests.</p>
-                    <div className="space-y-3">
-                        {moderationQueue.length === 0 && (
-                            <div className="text-sm text-slate-500 border border-slate-200 rounded-lg px-3 py-3">No moderation items in queue.</div>
-                        )}
-                        {moderationQueue.map((item) => (
-                            <div key={item.projectId} className="border-2 border-slate-200 rounded-xl p-4 space-y-3">
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                    <div>
-                                        <div className="font-bold">{item.projectName || item.projectId}</div>
-                                        <div className="text-xs text-slate-500">Owner: {item.ownerUserId}</div>
-                                    </div>
-                                    <div className="flex flex-wrap gap-2">
-                                        <span className={`px-2 py-1 rounded-full text-xs font-bold ${item.isForcedPrivate ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
-                                            {item.isForcedPrivate ? 'Forced Private' : item.isPublic ? 'Public' : 'Private'}
-                                        </span>
-                                        <span className={`px-2 py-1 rounded-full text-xs font-bold ${item.republishRequestStatus === 'pending' ? 'bg-amber-100 text-amber-700' : 'bg-slate-200 text-slate-700'}`}>
-                                            Republish: {item.republishRequestStatus}
-                                        </span>
-                                    </div>
-                                </div>
-
-                                <input
-                                    value={moderationReasonByProject[item.projectId] || ''}
-                                    onChange={(e) => setModerationReasonByProject((prev) => ({ ...prev, [item.projectId]: e.target.value }))}
-                                    placeholder="Moderation reason (required for force private)"
-                                    className="w-full border-2 border-black rounded-lg px-3 py-2 text-sm"
-                                />
-
-                                <div className="flex gap-2 flex-wrap">
-                                    {!item.isForcedPrivate && (
-                                        <Button
-                                            variant="outline"
-                                            disabled={adminBusy || !normalizeText(moderationReasonByProject[item.projectId])}
-                                            onClick={() => handleForcePrivateProject(item.projectId)}
-                                        >
-                                            Force Private
-                                        </Button>
-                                    )}
-                                    {item.republishRequestStatus === 'pending' && (
-                                        <>
-                                            <Button variant="secondary" disabled={adminBusy} onClick={() => handleReviewRepublish(item.projectId, true)}>
-                                                Approve Republish
-                                            </Button>
-                                            <Button variant="outline" disabled={adminBusy} onClick={() => handleReviewRepublish(item.projectId, false)}>
-                                                Reject Republish
-                                            </Button>
-                                        </>
-                                    )}
-                                </div>
-
-                                {item.forcedPrivateReason && (
-                                    <div className="text-xs text-slate-600">Force-private reason: {item.forcedPrivateReason}</div>
-                                )}
-                                {item.republishRequestReason && (
-                                    <div className="text-xs text-slate-600">Republish request: {item.republishRequestReason}</div>
-                                )}
-                                {item.republishReviewReason && (
-                                    <div className="text-xs text-slate-600">Republish review: {item.republishReviewReason}</div>
-                                )}
-                            </div>
-                        ))}
-                    </div>
-                </div>
-
-                {isAdmin && (
-                    <>
-                        <div className="bg-slate-100 p-6 rounded-xl border-4 border-black space-y-4">
-                            <h3 className="font-display text-2xl">Create Coupon</h3>
-                            <p className="text-xs text-slate-600">
-                                Admin-only flow: enter token amount and validity duration. Code is securely generated and single-use global.
-                            </p>
-                            <div className="grid md:grid-cols-3 gap-3 items-end">
-                                <div className="space-y-1">
-                                    <label className="text-xs font-bold uppercase text-slate-500">Token Amount (CT)</label>
-                                    <input
-                                        value={newCouponTokenAmount}
-                                        onChange={(e) => setNewCouponTokenAmount(e.target.value)}
-                                        placeholder="10000"
-                                        className="border-2 border-black rounded-lg px-3 py-2 font-mono text-sm"
-                                    />
-                                </div>
-                                <div className="space-y-1">
-                                    <label className="text-xs font-bold uppercase text-slate-500">Valid For (Hours)</label>
-                                    <input
-                                        value={newCouponValidForHours}
-                                        onChange={(e) => setNewCouponValidForHours(e.target.value)}
-                                        placeholder="168"
-                                        className="border-2 border-black rounded-lg px-3 py-2 font-mono text-sm"
-                                    />
-                                </div>
-                                <Button onClick={handleCreateAdminCoupon} disabled={adminBusy}>
-                                    {adminBusy ? 'Saving...' : 'Save'}
-                                </Button>
-                            </div>
-
-                            {createdAdminCoupon && (
-                                <div className="border-2 border-green-500 bg-green-50 rounded-lg p-4 space-y-2">
-                                    <div className="text-sm font-bold text-green-800">Coupon created</div>
-                                    <div className="text-sm">
-                                        Code: <span className="font-mono font-bold">{createdAdminCoupon.code}</span>
-                                    </div>
-                                    <div className="text-xs text-slate-700">
-                                        {createdAdminCoupon.tokenAmountCt.toLocaleString()} CT · Expires {new Date(createdAdminCoupon.endsAt).toLocaleString()}
-                                    </div>
-                                    <div>
-                                        <Button
-                                            variant="outline"
-                                            onClick={async () => {
-                                                try {
-                                                    await navigator.clipboard.writeText(createdAdminCoupon.code);
-                                                    setAdminActionMessage({ type: 'success', text: `Copied ${createdAdminCoupon.code} to clipboard.` });
-                                                } catch {
-                                                    setAdminActionMessage({ type: 'error', text: 'Unable to copy automatically. Copy the code manually.' });
-                                                }
-                                            }}
-                                        >
-                                            Copy Code
-                                        </Button>
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-
-                        <div className="bg-white border-2 border-slate-200 rounded-xl overflow-auto">
-                            <table className="w-full text-sm text-left min-w-[900px]">
-                                <thead className="bg-slate-50 border-b-2 border-slate-200">
-                                    <tr>
-                                        <th className="p-3 font-bold">Code</th>
-                                        <th className="p-3 font-bold">Mode</th>
-                                        <th className="p-3 font-bold">Token CT</th>
-                                        <th className="p-3 font-bold">Validity</th>
-                                        <th className="p-3 font-bold">Usage</th>
-                                        <th className="p-3 font-bold">Status</th>
-                                        <th className="p-3 font-bold">First/Last Redeemed By</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {adminCouponDefinitions.length === 0 && (
-                                        <tr>
-                                            <td className="p-3 text-slate-500 text-sm" colSpan={7}>No coupon history found.</td>
-                                        </tr>
-                                    )}
-                                    {adminCouponDefinitions.map((definition) => (
-                                        <tr key={definition.id} className="border-b border-slate-100 last:border-0">
-                                            <td className="p-3 font-mono font-bold">{definition.code}</td>
-                                            <td className="p-3 text-xs uppercase">{definition.couponMode}</td>
-                                            <td className="p-3 text-xs">{definition.tokenAmountCt.toLocaleString()}</td>
-                                            <td className="p-3 text-xs text-slate-500">{new Date(definition.startsAt).toLocaleString()} → {new Date(definition.endsAt).toLocaleString()}</td>
-                                            <td className="p-3 text-xs">{definition.redemptionCount}/{definition.maxRedemptions}</td>
-                                            <td className="p-3 text-xs">
-                                                <span className={`inline-flex px-2 py-1 rounded-full font-semibold uppercase ${definition.status === 'active' ? 'bg-green-100 text-green-700' : definition.status === 'expired' || definition.status === 'exhausted' ? 'bg-slate-200 text-slate-700' : 'bg-amber-100 text-amber-700'}`}>
-                                                    {definition.status}
-                                                </span>
-                                                {definition.warningExpiresSoon && (
-                                                    <span className="ml-2 text-amber-700 font-semibold">Expires &lt; 72h</span>
-                                                )}
-                                            </td>
-                                            <td className="p-3 text-xs text-slate-600">
-                                                <div>{definition.firstRedeemedBy || '-'}</div>
-                                                <div>{definition.lastRedeemedBy || '-'}</div>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-
-                        <div className="bg-white border-2 border-slate-200 rounded-xl overflow-auto">
-                            <table className="w-full text-sm text-left min-w-[760px]">
-                                <thead className="bg-slate-50 border-b-2 border-slate-200">
-                                    <tr>
-                                        <th className="p-3 font-bold">When</th>
-                                        <th className="p-3 font-bold">Code</th>
-                                        <th className="p-3 font-bold">Outcome</th>
-                                        <th className="p-3 font-bold">User</th>
-                                        <th className="p-3 font-bold">Token CT</th>
-                                        <th className="p-3 font-bold">Reason</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {adminCouponEvents.length === 0 && (
-                                        <tr>
-                                            <td className="p-3 text-slate-500 text-sm" colSpan={6}>No redemption events yet.</td>
-                                        </tr>
-                                    )}
-                                    {adminCouponEvents.slice(0, 300).map((event) => (
-                                        <tr key={event.id} className="border-b border-slate-100 last:border-0">
-                                            <td className="p-3 text-xs">{new Date(event.createdAt).toLocaleString()}</td>
-                                            <td className="p-3 font-mono">{event.couponCode}</td>
-                                            <td className="p-3 text-xs">{event.outcome}</td>
-                                            <td className="p-3 text-xs text-slate-600">{event.userId || event.email || '-'}</td>
-                                            <td className="p-3 text-xs">{event.tokenAmountCt?.toLocaleString?.() || '-'}</td>
-                                            <td className="p-3 text-xs text-slate-500">{event.reason || '-'}</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-
-                        {adminCouponAssignments.length > 0 && (
-                            <div className="bg-white border-2 border-slate-200 rounded-xl overflow-auto">
-                                <div className="px-4 py-3 text-xs font-bold uppercase border-b border-slate-200 bg-slate-50">Legacy Assignments (Read-only)</div>
-                                <table className="w-full text-sm text-left min-w-[760px]">
-                                    <thead className="bg-slate-50 border-b-2 border-slate-200">
-                                        <tr>
-                                            <th className="p-3 font-bold">Coupon</th>
-                                            <th className="p-3 font-bold">Target</th>
-                                            <th className="p-3 font-bold">Window</th>
-                                            <th className="p-3 font-bold">Status</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {adminCouponAssignments.map((assignment) => (
-                                            <tr key={assignment.id} className="border-b border-slate-100 last:border-0">
-                                                <td className="p-3 font-mono">{assignment.couponCode}</td>
-                                                <td className="p-3 text-xs text-slate-600">{assignment.userId || assignment.email || '-'}</td>
-                                                <td className="p-3 text-xs text-slate-600">
-                                                    {new Date(assignment.startsAt).toLocaleString()} → {new Date(assignment.endsAt).toLocaleString()}
-                                                </td>
-                                                <td className="p-3 text-xs">
-                                                    {assignment.revokedAt
-                                                        ? 'Revoked'
-                                                        : assignment.isRedeemed
-                                                            ? `Redeemed ${assignment.redeemedAt ? new Date(assignment.redeemedAt).toLocaleString() : ''}`
-                                                            : assignment.isActive ? 'Assigned' : 'Inactive'}
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        )}
-                    </>
-                )}
-            </div>
-        );
-    };
+    const renderAdmin = () => (
+        <AdminConsole
+            isAdmin={isAdmin}
+            isModerator={isModerator}
+            adminAccess={adminAccess}
+            onNavigate={onNavigate}
+        />
+    );
 
     const renderLegal = () => (
         <div className="space-y-6 animate-fade-in max-w-3xl">
@@ -2129,84 +1477,162 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         </div>
     );
 
-    const renderSettings = () => {
-        const modelKeys = getAllModelKeys();
-        const entitlements = buildModelEntitlements(billingSummary);
-        const imageModelOptions = getAllowedImageModelsForPlan(entitlements.planTier);
-        const textModelLabelMap = new Map(TEXT_MODELS.map((model) => [model.id, model.label]));
-        const textModelOptions = getAllowedTextModelIdsForPlan(entitlements.planTier);
-        const imageModelIds = new Set(imageModelOptions.map((model) => model.id));
-        const textModelIds = new Set(textModelOptions);
-        const selectedImageModel = imageModelIds.has(settingsState.defaultImageModel || '')
-            ? settingsState.defaultImageModel
-            : entitlements.defaultImageModelId;
-        const requestedTextModel = settingsState.defaultTextModel || settingsState.defaultTextModelKey || TEXT_MODEL;
-        const selectedTextModel = textModelIds.has(requestedTextModel) ? requestedTextModel : entitlements.defaultTextModelId;
+    const renderSettings = () => (
+        <div className="space-y-6 max-w-3xl">
+            <RedeemInvite />
+            <ApiConfiguration />
+        </div>
+    );
 
-        const saveSettings = (next: ReturnType<typeof getSettingsState>) => {
-            setSettingsState(next);
-            persistSettingsState(next);
-        };
+    const navGroups: Array<{ label: string; items: Array<{ id: SettingsTab; label: string; icon: React.ReactNode; show?: boolean }> }> = [
+        {
+            label: 'Account',
+            items: [
+                { id: 'profile', label: 'Profile', icon: <UserIcon size={17} /> },
+                { id: 'security', label: 'Security', icon: <ShieldCheck size={17} /> },
+                { id: 'preferences', label: 'Preferences', icon: <Bell size={17} /> }
+            ]
+        },
+        {
+            label: 'Workspace',
+            items: [
+                { id: 'settings', label: 'API & Models', icon: <KeyRound size={17} /> },
+                { id: 'billing', label: 'Billing & Credits', icon: <CreditCard size={17} /> }
+            ]
+        },
+        {
+            label: 'Support',
+            items: [
+                { id: 'contact', label: 'Contact', icon: <LifeBuoy size={17} /> },
+                { id: 'legal', label: 'Legal', icon: <FileText size={17} /> }
+            ]
+        },
+        {
+            label: 'Platform',
+            items: [
+                { id: 'admin', label: 'Admin Console', icon: <Shield size={17} />, show: isAdmin || isModerator }
+            ]
+        }
+    ];
 
-        return (
-            <div className="space-y-6 animate-fade-in max-w-3xl">
-                <RedeemInvite />
-                <ApiConfiguration />
-            </div>
-        );
+    const tabMeta: Record<SettingsTab, { title: string; description: string }> = {
+        profile: { title: 'Profile', description: 'Your public identity and personal details.' },
+        security: { title: 'Security', description: 'Verification, password, and signed-in devices.' },
+        preferences: { title: 'Preferences', description: 'Generation cost policy and email preferences.' },
+        settings: { title: 'API & Models', description: 'Bring-your-own keys, allowed sources, MCP servers, and default models.' },
+        billing: { title: 'Billing & Credits', description: 'Plan, credits, payment methods, and coupons.' },
+        contact: { title: 'Contact', description: 'Reach the DreamStream team.' },
+        legal: { title: 'Legal', description: 'Privacy policy and terms of service.' },
+        admin: { title: 'Admin Console', description: 'Platform operations: users, moderation, email, analytics.' }
     };
+
+    const isFirstLoad = loading && !profile;
 
     return (
         <div className="min-h-screen bg-slate-50 pb-20">
-            <div className="bg-white border-b-4 border-black sticky top-0 z-30">
-                <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-black text-white rounded-lg flex items-center justify-center font-display text-xl">S</div>
-                        <h1 className="font-display text-2xl">Account Settings</h1>
+            <div className="bg-white/95 backdrop-blur border-b-4 border-black sticky top-0 z-30">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                        <button
+                            onClick={onClose}
+                            aria-label="Back"
+                            className="w-9 h-9 shrink-0 border-2 border-black rounded-lg bg-white hover:bg-brand-yellow transition-colors flex items-center justify-center shadow-comic hover:shadow-comic-hover hover:translate-y-[1px]"
+                        >
+                            <ChevronLeft size={18} />
+                        </button>
+                        <div className="min-w-0">
+                            <h1 className="font-display text-2xl leading-none">Settings</h1>
+                            <p className="text-[11px] text-slate-500 truncate">{tabMeta[activeTab].description}</p>
+                        </div>
                     </div>
-                    <button onClick={onClose} className="font-bold hover:underline">Exit</button>
+                    <div className="flex items-center gap-2 shrink-0">
+                        <div className="hidden sm:flex items-center gap-2 border-2 border-black rounded-full pl-1 pr-3 py-1 bg-white">
+                            <div className="w-7 h-7 rounded-full border-2 border-black bg-brand-yellow flex items-center justify-center font-display text-sm overflow-hidden">
+                                {avatarUrl
+                                    ? <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
+                                    : (username || user?.email || '?').slice(0, 1).toUpperCase()}
+                            </div>
+                            <span className="text-xs font-bold max-w-[14rem] truncate">{username || user?.email}</span>
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <div className="max-w-7xl mx-auto px-6 py-8 grid grid-cols-1 md:grid-cols-4 gap-8">
-                <div className="space-y-2">
-                    <NavButton icon={<UserIcon size={18} />} label="Profile" active={activeTab === 'profile'} onClick={() => setActiveTab('profile')} />
-                    <NavButton icon={<Settings size={18} />} label="API Configuration" active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
-                    <NavButton icon={<Mail size={18} />} label="Preferences" active={activeTab === 'preferences'} onClick={() => setActiveTab('preferences')} />
-                    <NavButton icon={<Shield size={18} />} label="Security" active={activeTab === 'security'} onClick={() => setActiveTab('security')} />
-                    <NavButton icon={<Shield size={18} />} label="Legal" active={activeTab === 'legal'} onClick={() => setActiveTab('legal')} />
-                    <NavButton icon={<Mail size={18} />} label="Contact" active={activeTab === 'contact'} onClick={() => setActiveTab('contact')} />
-                    {(isAdmin || isModerator) && (
-                        <NavButton icon={<Shield size={18} />} label="Admin" active={activeTab === 'admin'} onClick={() => setActiveTab('admin')} />
-                    )}
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 md:py-8 grid grid-cols-1 md:grid-cols-4 gap-6 md:gap-8">
+                <nav className="space-y-5 md:sticky md:top-24 self-start" aria-label="Settings sections">
+                    {navGroups.map((group) => {
+                        const items = group.items.filter((item) => item.show !== false);
+                        if (items.length === 0) return null;
+                        return (
+                            <div key={group.label}>
+                                <div className="px-4 pb-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-400">{group.label}</div>
+                                <div className="space-y-1">
+                                    {items.map((item) => {
+                                        const active = activeTab === item.id;
+                                        return (
+                                            <button
+                                                key={item.id}
+                                                onClick={() => setActiveTab(item.id)}
+                                                aria-current={active ? 'page' : undefined}
+                                                className={`relative w-full flex items-center gap-3 px-4 py-2.5 rounded-xl font-bold text-sm transition-colors ${active ? 'text-white' : 'text-slate-500 hover:text-black hover:bg-slate-200/70'}`}
+                                            >
+                                                {active && (
+                                                    <motion.span
+                                                        layoutId="settings-nav-pill"
+                                                        className="absolute inset-0 rounded-xl bg-black shadow-comic"
+                                                        transition={{ type: 'spring', stiffness: 500, damping: 38 }}
+                                                    />
+                                                )}
+                                                <span className="relative z-10 flex items-center gap-3">{item.icon} {item.label}</span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        );
+                    })}
 
-                    <div className="pt-8">
+                    <div className="pt-2 border-t-2 border-slate-200">
                         <button
                             onClick={async () => {
                                 await signOut();
                                 onSignedOut?.();
                             }}
-                            className="w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-red-600 hover:bg-red-50 transition-colors"
+                            className="w-full flex items-center gap-3 px-4 py-2.5 rounded-xl font-bold text-sm text-red-600 hover:bg-red-50 transition-colors"
                         >
-                            <LogOut size={18} /> Sign Out
+                            <LogOut size={17} /> Sign Out
                         </button>
                     </div>
-                </div>
+                </nav>
 
-                <div className="md:col-span-3 bg-white border-4 border-black rounded-2xl p-8 shadow-comic min-h-[600px]">
-                    {loading ? (
-                        <div className="flex items-center justify-center h-full">Loading...</div>
+                <div className="md:col-span-3 bg-white border-4 border-black rounded-2xl p-5 md:p-8 shadow-comic min-h-[600px]">
+                    {isFirstLoad ? (
+                        <div className="space-y-4 animate-pulse" aria-label="Loading settings">
+                            <div className="h-8 w-48 bg-slate-200 rounded-lg" />
+                            <div className="h-4 w-72 bg-slate-100 rounded" />
+                            <div className="h-40 bg-slate-100 rounded-2xl" />
+                            <div className="h-24 bg-slate-100 rounded-2xl" />
+                        </div>
                     ) : (
-                        <>
-                            <h2 className="font-display text-3xl mb-6 capitalize">{activeTab}</h2>
-                            {activeTab === 'profile' && renderProfile()}
-                            {activeTab === 'settings' && renderSettings()}
-                            {activeTab === 'preferences' && renderPreferences()}
-                            {activeTab === 'security' && renderSecurity()}
-                            {activeTab === 'legal' && renderLegal()}
-                            {activeTab === 'contact' && <ContactSection />}
-                            {activeTab === 'admin' && renderAdmin()}
-                        </>
+                        <AnimatePresence mode="wait">
+                            <motion.div
+                                key={activeTab}
+                                initial={{ opacity: 0, y: 10 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: -8 }}
+                                transition={{ duration: 0.18, ease: 'easeOut' }}
+                            >
+                                <h2 className="font-display text-3xl mb-6">{tabMeta[activeTab].title}</h2>
+                                {activeTab === 'profile' && renderProfile()}
+                                {activeTab === 'settings' && renderSettings()}
+                                {activeTab === 'billing' && renderBilling()}
+                                {activeTab === 'preferences' && renderPreferences()}
+                                {activeTab === 'security' && renderSecurity()}
+                                {activeTab === 'legal' && renderLegal()}
+                                {activeTab === 'contact' && <ContactSection />}
+                                {activeTab === 'admin' && renderAdmin()}
+                            </motion.div>
+                        </AnimatePresence>
                     )}
                 </div>
             </div>
@@ -2227,22 +1653,3 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         </div>
     );
 };
-
-const NavButton = ({
-    icon,
-    label,
-    active,
-    onClick
-}: {
-    icon: React.ReactNode;
-    label: string;
-    active: boolean;
-    onClick: () => void;
-}) => (
-    <button
-        onClick={onClick}
-        className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold transition-all ${active ? 'bg-black text-white shadow-comic transform -translate-y-1' : 'bg-transparent text-slate-500 hover:bg-slate-200'}`}
-    >
-        {icon} {label}
-    </button>
-);

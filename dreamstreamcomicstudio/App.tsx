@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, Suspense } from 'react';
+import React, { useCallback, useEffect, useRef, useState, Suspense } from 'react';
 import { HomePage } from './components/HomePage';
 import { lazyImportWithRetry } from './services/lazyImportWithRetry';
 // Lazy Load Heavy Components
@@ -252,7 +252,16 @@ const App: React.FC = () => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('view') === 'read') return; // reader deep-link handled separately
     const v = params.get('view');
-    if (v && RESTORABLE_VIEWS.has(v as AppView)) setCurrentView(v as AppView);
+    if (v && RESTORABLE_VIEWS.has(v as AppView)) {
+      setCurrentView(v as AppView);
+      // Deep continuity: ?view=settings&tab=admin restores the exact settings tab too,
+      // so a reload (or Chrome discarding the background tab) doesn't bounce the user
+      // back to the first tab. AccountSettings keeps ?tab= in sync from then on.
+      if (v === 'settings') {
+        const tab = params.get('tab');
+        if (isSettingsTab(tab ?? undefined)) setSettingsTab(tab as SettingsTab);
+      }
+    }
   }, []);
 
   // Keep the URL's ?view= in sync with the active view so a refresh restores it. Views that manage
@@ -384,7 +393,8 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (!user) {
+    const userId = user?.id;
+    if (!userId) {
       setNeedsDobCompletion(false);
       setHasPromptedDobThisSession(false);
       hasWarnedDobProfileCheckRef.current = false;
@@ -394,12 +404,14 @@ const App: React.FC = () => {
     let active = true;
     const checkDob = async () => {
       try {
-        const profile = await getPrivateProfile(user.id);
+        const profile = await getPrivateProfile(userId);
         if (!active) return;
         setNeedsDobCompletion(!profile?.dob);
       } catch (err) {
         if (!active) return;
-        setNeedsDobCompletion(true);
+        // Transient fetch failure ≠ missing DOB. Treating errors as "incomplete" used to
+        // yank users out of whatever they were doing into Settings → Profile every time
+        // the profile endpoint hiccuped (e.g. right after a token refresh on tab focus).
         if (!hasWarnedDobProfileCheckRef.current) {
           hasWarnedDobProfileCheckRef.current = true;
           console.warn('Failed to check DOB completion status', err);
@@ -411,7 +423,7 @@ const App: React.FC = () => {
     return () => {
       active = false;
     };
-  }, [user]);
+  }, [user?.id]);
 
   // Open shared links (?view=read&id=...) straight into the reader — no login required.
   useEffect(() => {
@@ -482,16 +494,19 @@ const App: React.FC = () => {
   // Login is only required for creating/saving and for social actions (like, comment, share).
 
   // Prompt existing users to complete DOB in profile settings (non-blocking).
+  // Never interrupts immersive work surfaces — losing an in-progress chat/canvas to a
+  // forced settings redirect is worse than a delayed DOB nag.
   useEffect(() => {
     if (!user || authLoading || isCheckingKey) return;
     if (!needsDobCompletion || hasPromptedDobThisSession) return;
-    if (currentView === 'auth' || currentView === 'settings') return;
+    const immersive = ['auth', 'auth-callback', 'settings', 'chat', 'codestudio', 'editor', 'comicforge', 'pagestudio', 'reader', 'ventures'];
+    if (immersive.includes(currentView)) return;
 
     setHasPromptedDobThisSession(true);
     setSettingsTab('profile');
     setSettingsReturnView(currentView);
     setCurrentView('settings');
-  }, [user, authLoading, isCheckingKey, needsDobCompletion, hasPromptedDobThisSession, currentView]);
+  }, [user?.id, authLoading, isCheckingKey, needsDobCompletion, hasPromptedDobThisSession, currentView]);
 
   useEffect(() => {
     if (!needsDobCompletion) {
@@ -639,6 +654,14 @@ const App: React.FC = () => {
     setActiveProjectId(null);
     clearReaderUrlParams();
   };
+
+  // Stable identities: AccountSettings keys data-loading effects on these callbacks, so
+  // inline arrows here would re-trigger its profile fetch (and a full content blank) on
+  // every App re-render.
+  const handleDobCompletionStatusChange = useCallback((needsCompletion: boolean) => {
+    setNeedsDobCompletion(needsCompletion);
+  }, []);
+  const handlePasswordResetHandled = useCallback(() => setOpenSecurityPasswordReset(false), []);
 
   const handleSignedOut = () => {
     setActiveProjectId(null);
@@ -927,11 +950,9 @@ const App: React.FC = () => {
               initialTab={settingsTab}
               onSignedOut={handleSignedOut}
               requireDobCompletion={needsDobCompletion}
-              onDobCompletionStatusChange={(needsCompletion) => {
-                setNeedsDobCompletion(needsCompletion);
-              }}
+              onDobCompletionStatusChange={handleDobCompletionStatusChange}
               openPasswordReset={openSecurityPasswordReset}
-              onPasswordResetHandled={() => setOpenSecurityPasswordReset(false)}
+              onPasswordResetHandled={handlePasswordResetHandled}
               onNavigate={handleNavigate}
             />
           )}

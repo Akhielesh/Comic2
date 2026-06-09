@@ -42,11 +42,13 @@ import {
   deleteChatSession,
   deriveSessionTitle,
   getChatMemory,
+  getLastActiveChatSessionId,
   listChatProjects,
   listChatSessions,
   saveChatProject,
   saveChatSession,
   setChatMemory,
+  setLastActiveChatSessionId,
   syncFromCloud,
   type ChatAttachment,
   type ChatProject,
@@ -258,7 +260,11 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           setActiveId(session.id);
         } else if (stored.length > 0) {
           setSessions(stored);
-          setActiveId(stored[0].id);
+          // Reopen the chat the user was last in (reload/tab-discard continuity);
+          // fall back to the most recent session only when that one no longer exists.
+          const lastId = getLastActiveChatSessionId();
+          const restored = lastId && stored.some((s) => s.id === lastId) ? lastId : stored[0].id;
+          setActiveId(restored);
         } else {
           const session = createEmptySession();
           void saveChatSession(session).catch(() => {});
@@ -294,6 +300,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   const activeIdRef = useRef(activeId);
   useEffect(() => {
     activeIdRef.current = activeId;
+    // Persist which chat is open so a reload restores it instead of the newest session.
+    if (activeId) setLastActiveChatSessionId(activeId);
   }, [activeId]);
 
   const resolvedModel = activeSession?.modelId ? catalog.get(activeSession.modelId) || null : null;

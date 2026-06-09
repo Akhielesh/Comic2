@@ -409,6 +409,31 @@ export const consumePendingChatModel = (): PendingChatModel | null => {
   }
 };
 
+// --- Session continuity ---------------------------------------------------------
+//
+// Which chat was open last. Without this, every reload (F5, Chrome discarding the
+// background tab, navigating away and back) dropped the user into the newest session
+// instead of the one they were reading — "the chat keeps resetting to the start".
+
+const LAST_SESSION_KEY = 'dreamstream_chat_last_session';
+
+export const getLastActiveChatSessionId = (): string | null => {
+  try {
+    return localStorage.getItem(LAST_SESSION_KEY);
+  } catch {
+    return null;
+  }
+};
+
+export const setLastActiveChatSessionId = (id: string | null): void => {
+  try {
+    if (id) localStorage.setItem(LAST_SESSION_KEY, id);
+    else localStorage.removeItem(LAST_SESSION_KEY);
+  } catch {
+    /* ignore */
+  }
+};
+
 // --- Durable per-user memory --------------------------------------------------
 
 const MEMORY_KEY = 'dreamstream_chat_memory';

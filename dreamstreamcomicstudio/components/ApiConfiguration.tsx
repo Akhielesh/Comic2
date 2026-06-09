@@ -342,18 +342,33 @@ export const ApiConfiguration: React.FC = () => {
     return () => clearInterval(id);
   }, []);
 
+  const enabledProviders = ALL_PROVIDERS.filter(isProviderEnabled).length;
+  const validKeys = keys.filter((k) => k.validation === 'valid').length;
+
   return (
     <div className="space-y-3">
-      <div>
-        <h3 className="font-display text-2xl">API Configuration</h3>
-        <p className="text-sm text-slate-600 mt-1 max-w-2xl">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <p className="text-sm text-slate-600 max-w-xl">
           Bring your own keys. Click a provider to add keys, pick the{' '}
           <span className="font-bold">active</span> one, and set an optional monthly limit
           (generation is blocked on a key once it hits its limit). Keys stay on this device.
         </p>
+        <div className="flex items-center gap-2 text-[11px] font-bold shrink-0" aria-label="Configuration summary">
+          <span className={`px-2.5 py-1 rounded-full border-2 border-black ${enabledProviders > 0 ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-700'}`}>
+            {enabledProviders}/{ALL_PROVIDERS.length} sources on
+          </span>
+          <span className="px-2.5 py-1 rounded-full border-2 border-black bg-slate-100 text-slate-700">
+            {keys.length} key{keys.length === 1 ? '' : 's'}
+          </span>
+          <span className={`px-2.5 py-1 rounded-full border-2 border-black ${validKeys > 0 ? 'bg-green-100 text-green-800' : 'bg-slate-100 text-slate-500'}`}>
+            {validKeys} valid
+          </span>
+        </div>
       </div>
 
       <SourceGovernancePanel onChange={() => setGovVersion((v) => v + 1)} />
+
+      <div className="pt-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Provider keys</div>
 
       {ALL_PROVIDERS.map((provider) => {
         const meta = PROVIDER_META[provider];
@@ -409,8 +424,10 @@ export const ApiConfiguration: React.FC = () => {
         );
       })}
 
+      <div className="pt-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Connectors</div>
       <McpServersPanel />
 
+      <div className="pt-2 text-[10px] font-bold uppercase tracking-widest text-slate-400">Default models</div>
       <ModelSelectionPanel />
     </div>
   );
