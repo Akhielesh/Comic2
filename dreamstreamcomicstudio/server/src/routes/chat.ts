@@ -574,6 +574,104 @@ chatRouter.post('/memory', async (req, res, next) => {
   }
 });
 
+// Proactive follow-ups: after an answer, suggest the few things THIS user is most
+// likely to actually want next — so the assistant feels helpful and forward-looking
+// instead of waiting passively. Deliberately context-disciplined: it must NOT invent a
+// persona, profession or scenario the conversation doesn't support (the user flagged
+// "fake context" — e.g. assuming a 10-year job search for a student — as a real harm).
+const FOLLOWUPS_SYSTEM_PROMPT = `You generate short follow-up suggestions for a chat user: the next things THIS user is genuinely likely to ask, based ONLY on the conversation so far.
+
+You are given the recent conversation. Output 3 suggestions as a JSON array of strings.
+
+Rules:
+- Phrase each in the FIRST PERSON, exactly as the user would type it to the assistant ("Show me a worked example", "Turn this into steps I can follow", "Make it shorter").
+- Make them SPECIFIC to what was just discussed — reference the actual topic. A good suggestion moves the user forward: go deeper, see an example, apply it, compare options, visualize it, practice it, or get a downloadable resource.
+- Stay strictly RELEVANT to this conversation and this user. NEVER invent a different persona, profession, age, or life situation the conversation doesn't clearly support (do not assume a job hunt, years of experience, a company, or interests that were never shown). If the context is thin, keep the suggestions close to the literal topic.
+- Each under ~8 words. No numbering, no markdown, no surrounding quotes inside the strings.
+- If there's no useful follow-up (a plain greeting, a goodbye, or the request is fully resolved), return [].
+- Return ONLY the JSON array, nothing else.`;
+
+// Best-effort parse of a model's JSON-array reply into ≤3 short suggestion strings.
+const parseFollowUps = (raw: string): string[] => {
+  const text = (raw || '').trim();
+  if (!text) return [];
+  let arr: unknown;
+  const start = text.indexOf('[');
+  const end = text.lastIndexOf(']');
+  if (start >= 0 && end > start) {
+    try {
+      arr = JSON.parse(text.slice(start, end + 1));
+    } catch {
+      arr = undefined;
+    }
+  }
+  // Fallback: a bulleted/numbered list instead of JSON.
+  const items = Array.isArray(arr)
+    ? arr
+    : text.split('\n').map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim());
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of items) {
+    const s = String(item || '').replace(/^["']|["']$/g, '').trim().slice(0, 100);
+    if (!s || s.length < 3) continue;
+    const key = s.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+    if (out.length >= 3) break;
+  }
+  return out;
+};
+
+chatRouter.post('/followups', async (req, res, next) => {
+  try {
+    const body = (req.body || {}) as { messages?: unknown; source?: string };
+    const incoming = Array.isArray(body.messages) ? body.messages : [];
+    const turns = incoming
+      .map(sanitizeMessage)
+      .filter((m): m is ChatMessage => m !== null)
+      .slice(-6);
+    // Need at least one assistant answer to suggest follow-ups for.
+    if (turns.length === 0 || !turns.some((t) => t.role === 'assistant')) {
+      return res.json({ suggestions: [] });
+    }
+
+    const resolved = resolveChatProvider(req, body.source);
+    if (!resolved) return res.json({ suggestions: [] }); // silent no-op without a key
+
+    const transcript = turns
+      .map((t) => {
+        const text =
+          typeof t.content === 'string'
+            ? t.content
+            : Array.isArray(t.content)
+              ? t.content.map((p) => ('text' in p ? p.text : '')).join(' ')
+              : '';
+        return `${t.role === 'user' ? 'User' : 'Assistant'}: ${text}`;
+      })
+      .join('\n')
+      .slice(0, 6000);
+
+    // Fast, reliable model + no tools — this runs after every answer, so it must be cheap.
+    const model = resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;
+    const result = await runChat({
+      provider: resolved.provider,
+      apiKey: resolved.apiKey,
+      model,
+      messages: [{ role: 'user', content: `Conversation so far:\n${transcript}\n\nSuggest the follow-ups.` }],
+      systemOverride: FOLLOWUPS_SYSTEM_PROMPT,
+      temperature: 0.5,
+      maxTokens: 200,
+      fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+      fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
+      timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+    });
+    res.json({ suggestions: parseFollowUps(result.text || ''), model: result.model });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Link unfurl for source hover-cards (OG/meta preview). SSRF-guarded + cached.
 chatRouter.get('/unfurl', async (req, res) => {
   const url = String(req.query.url || '');

@@ -84,6 +84,22 @@ export const updateChatMemory = (
     options
   );
 
+/**
+ * After an answer, fetch a few proactive follow-up suggestions the user is likely to
+ * want next (rendered as clickable chips). Best-effort — callers ignore failures, and
+ * the server returns an empty list when there's nothing useful or no key is configured.
+ */
+export const fetchFollowUps = (
+  messages: ChatRequest['messages'],
+  source?: string,
+  options?: { signal?: AbortSignal }
+): Promise<{ suggestions: string[]; model?: string }> =>
+  post<{ messages: ChatRequest['messages']; source?: string }, { suggestions: string[]; model?: string }>(
+    '/api/chat/followups',
+    { messages, source },
+    options
+  );
+
 export interface ChatStreamHandlers {
   /** Incremental answer text. */
   onDelta?: (content: string) => void;
