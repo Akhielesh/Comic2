@@ -214,7 +214,8 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
 
     const history = assistantHistory.slice(-24);
     setMessages((prev) => [...prev, userMessage]);
-    setInput('');
+    // A suggestion chip sends its own prompt — it must not eat a draft the user typed.
+    if (overrideText === undefined) setInput('');
     setStatusMessage(null);
     setIsSending(true);
 
@@ -411,8 +412,9 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
                         )}
                         <MessageCard text={message.text} />
                       </div>
-                      {/* Actions appear on hover/focus — the conversation stays clean. */}
-                      <div className="flex items-center gap-2 mt-1 px-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
+                      {/* Actions: always visible on touch screens (no hover there); on
+                          pointer devices they reveal on hover/focus to keep the thread clean. */}
+                      <div className="flex items-center gap-2 mt-1 px-1 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
                         {onSaveCreativeDirection && message.text.trim() && (
                           <button
                             onClick={() => { onSaveCreativeDirection(message.text); setSavedMsgIds((prev) => new Set(prev).add(message.id)); }}
@@ -473,11 +475,13 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
                 </button>
               </div>
 
-              {(statusMessage || (lastLimitInfo?.scope !== 'bypass' && typeof lastLimitInfo?.remaining === 'number' && lastLimitInfo.remaining <= 5)) && (
+              {(statusMessage || (lastLimitInfo?.scope !== 'bypass' && typeof lastLimitInfo?.remaining === 'number' && typeof lastLimitInfo?.limit === 'number')) && (
                 <div className="mt-1.5 flex items-center justify-between gap-3 text-[11px]">
                   <span className="text-brand-red truncate">{statusMessage}</span>
-                  {lastLimitInfo?.scope !== 'bypass' && typeof lastLimitInfo?.remaining === 'number' && typeof lastLimitInfo?.limit === 'number' && lastLimitInfo.remaining <= 5 && (
-                    <span className="text-slate-500 shrink-0">{lastLimitInfo.remaining}/{lastLimitInfo.limit} left</span>
+                  {lastLimitInfo?.scope !== 'bypass' && typeof lastLimitInfo?.remaining === 'number' && typeof lastLimitInfo?.limit === 'number' && (
+                    <span className={`shrink-0 ${lastLimitInfo.remaining <= 5 ? 'text-brand-red font-bold' : 'text-slate-400'}`}>
+                      {lastLimitInfo.remaining}/{lastLimitInfo.limit} left
+                    </span>
                   )}
                 </div>
               )}

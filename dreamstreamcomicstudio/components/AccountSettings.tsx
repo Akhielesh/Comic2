@@ -51,14 +51,16 @@ import {
 import { buildModelEntitlements } from '../services/modelEntitlements';
 import { isFreeOnly, setFreeOnly, onFreeOnlyChanged } from '../services/freeOnlyMode';
 import { AdminConsole } from './admin/AdminConsole';
+import { isSettingsTab, type SettingsTab } from './settingsTabs';
 import { InviteFriends } from './InviteFriends';
 import { RedeemInvite } from './RedeemInvite';
-
-type SettingsTab = 'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin' | 'preferences' | 'security';
 
 interface AccountSettingsProps {
     onClose: () => void;
     initialTab?: SettingsTab;
+    /** Bumped by App on every explicit tab navigation, so re-requesting the SAME tab
+     *  (e.g. header → Profile while the user sits on Billing) still applies. */
+    initialTabRequestId?: number;
     onSignedOut?: () => void;
     requireDobCompletion?: boolean;
     onDobCompletionStatusChange?: (needsCompletion: boolean) => void;
@@ -72,9 +74,6 @@ type BillingIntervalOption = BillingInterval;
 
 const USERNAME_REGEX = /^[A-Za-z0-9_]{3,20}$/;
 const normalizeText = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
-
-const SETTINGS_TAB_IDS: readonly SettingsTab[] = ['profile', 'settings', 'billing', 'preferences', 'security', 'legal', 'contact', 'admin'];
-const isSettingsTabValue = (value: string): value is SettingsTab => (SETTINGS_TAB_IDS as readonly string[]).includes(value);
 
 const ContactSection = () => {
     const { user } = useAuth();
@@ -172,6 +171,7 @@ const ContactSection = () => {
 export const AccountSettings: React.FC<AccountSettingsProps> = ({
     onClose,
     initialTab = 'profile',
+    initialTabRequestId = 0,
     onSignedOut,
     requireDobCompletion = false,
     onDobCompletionStatusChange,
@@ -183,7 +183,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     // Tab continuity: a reload (or Chrome discarding this tab in the background) restores
     // the exact settings tab from ?tab= / session memory instead of bouncing to Profile.
     const [activeTab, setActiveTab] = useState<SettingsTab>(() =>
-        resolveInitialUiState<SettingsTab>('settings.tab', 'tab', isSettingsTabValue, initialTab)
+        resolveInitialUiState<SettingsTab>('settings.tab', 'tab', (v): v is SettingsTab => isSettingsTab(v), initialTab)
     );
     const [searchParams] = useSearchParams();
     const [previewAvatar, setPreviewAvatar] = useState<string | null>(null);
@@ -199,6 +199,10 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     const [isAdmin, setIsAdmin] = useState(false);
     const [isModerator, setIsModerator] = useState(false);
     const [adminAccess, setAdminAccess] = useState<AdminAccessResponse | null>(null);
+    // Whether the /api/admin/me probe has settled (success OR failure). The admin tab
+    // renders a "checking access" state until then, so the console never mounts with a
+    // not-yet-true isAdmin and silently downgrades a deep-linked admin-only section.
+    const [accessChecked, setAccessChecked] = useState(false);
     const [settingsState, setSettingsState] = useState(() => getSettingsState());
     const [billingSummary, setBillingSummary] = useState<BillingSummaryResponse | null>(null);
     const [planPricing, setPlanPricing] = useState<BillingPlanPricing[]>([]);
@@ -261,16 +265,18 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         }
     }, [searchParams]);
 
-    // Respond to in-app navigation (e.g. header → "Billing") after mount. The first run is
-    // skipped so it can't clobber a tab just restored from the URL/session memory.
-    const skippedFirstTabSyncRef = useRef(false);
+    // Respond to in-app navigation (e.g. header → "Billing") after mount. Driven by the
+    // request id, not the tab value, so re-requesting the same tab still applies; the
+    // previous-value compare (not a boolean "first run" flag) keeps this correct under
+    // StrictMode's mount→unmount→mount, where refs persist and a flag would mis-fire and
+    // clobber the tab just restored from URL/session memory.
+    const seenTabRequestRef = useRef(initialTabRequestId);
     useEffect(() => {
-        if (!skippedFirstTabSyncRef.current) {
-            skippedFirstTabSyncRef.current = true;
-            return;
+        if (seenTabRequestRef.current !== initialTabRequestId) {
+            seenTabRequestRef.current = initialTabRequestId;
+            setActiveTab(initialTab);
         }
-        setActiveTab(initialTab);
-    }, [initialTab]);
+    }, [initialTabRequestId, initialTab]);
 
     // Keep both continuity layers in sync with the live tab; drop the URL param on exit
     // so other views don't carry a stale ?tab= around (session memory is kept on purpose —
@@ -292,9 +298,11 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
             setIsAdmin(false);
             setIsModerator(false);
             setAdminAccess(null);
+            setAccessChecked(true);
             return;
         }
 
+        setAccessChecked(false);
         let active = true;
         const loadAccess = async () => {
             try {
@@ -309,6 +317,8 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                 setIsAdmin(fallbackAdmin);
                 setIsModerator(fallbackAdmin);
                 setAdminAccess(null);
+            } finally {
+                if (active) setAccessChecked(true);
             }
         };
 
@@ -388,6 +398,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
 
             let publicProfile: UserProfile | null = null;
             let privateData: UserPrivateProfile | null = null;
+            let privateLoadFailed = false;
 
             try {
                 publicProfile = await getUserProfile(user.id);
@@ -398,6 +409,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
             try {
                 privateData = await getPrivateProfile(user.id);
             } catch (err) {
+                privateLoadFailed = true;
                 console.warn('Failed to load private profile', err);
                 if (active) {
                     setPrivateProfileWarning('Private profile data is unavailable right now. Public profile editing still works.');
@@ -419,7 +431,12 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
 
             setEmailPrefProductUpdates(privateData?.email_pref_product_updates ?? true);
             setEmailPrefMarketing(privateData?.email_pref_marketing ?? Boolean(publicProfile?.marketing_consent));
-            onDobCompletionStatusChangeRef.current?.(!privateData?.dob);
+            // Only report DOB status from a SUCCESSFUL fetch — reporting "incomplete" on a
+            // transient failure would re-arm App's settings-redirect nag for users whose
+            // DOB is actually saved (mirrors the same guard in App's own check).
+            if (!privateLoadFailed) {
+                onDobCompletionStatusChangeRef.current?.(!privateData?.dob);
+            }
             setLoading(false);
         };
 
@@ -1435,14 +1452,33 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         );
     };
 
-    const renderAdmin = () => (
-        <AdminConsole
-            isAdmin={isAdmin}
-            isModerator={isModerator}
-            adminAccess={adminAccess}
-            onNavigate={onNavigate}
-        />
-    );
+    const renderAdmin = () => {
+        // Gate hard: the console (and its admin API polling) must never mount for users
+        // without access — a deep-linked ?tab=admin or stale session memory used to give
+        // any signed-in user the console shell with a perpetual 403 error banner.
+        if (!isAdmin && !isModerator) {
+            return accessChecked ? (
+                <div className="border-2 border-dashed border-slate-300 rounded-xl px-6 py-12 text-center">
+                    <Shield size={28} className="mx-auto text-slate-300" />
+                    <p className="font-display text-xl mt-3">No admin access</p>
+                    <p className="text-sm text-slate-500 mt-1">This area is for platform admins and moderators.</p>
+                </div>
+            ) : (
+                <div className="flex items-center justify-center gap-2 py-16 text-slate-500 text-sm font-bold">
+                    <span className="w-4 h-4 border-2 border-slate-300 border-t-black rounded-full animate-spin" /> Checking access…
+                </div>
+            );
+        }
+        return (
+            <AdminConsole
+                isAdmin={isAdmin}
+                isModerator={isModerator}
+                adminAccess={adminAccess}
+                onNavigate={onNavigate}
+                onBillingShouldRefresh={() => void refreshBillingSummary()}
+            />
+        );
+    };
 
     const renderLegal = () => (
         <div className="space-y-6 animate-fade-in max-w-3xl">

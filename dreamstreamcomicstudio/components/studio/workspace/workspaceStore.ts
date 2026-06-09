@@ -6,7 +6,7 @@
 // palette all read/write the same state without prop-drilling.
 
 import { create } from 'zustand';
-import { createJSONStorage, persist } from 'zustand/middleware';
+import { persist, type PersistStorage, type StorageValue } from 'zustand/middleware';
 import type { CodeStudioArtifact } from '../../../apiTypes';
 
 const PREFERRED_ENTRY = /\/(App|index|main)\.(t|j)sx?$/;
@@ -82,6 +82,65 @@ export const normalizeStudioPath = (raw: string): string => {
 export const renameInDir = (path: string, newName: string): string => {
   const dir = path.slice(0, path.lastIndexOf('/'));
   return normalizeStudioPath(`${dir}/${newName.trim()}`);
+};
+
+// Write-behind sessionStorage adapter. Two hard requirements the default JSON storage
+// can't meet here:
+//   1. NEVER throw into store actions — zustand's persist calls setItem synchronously
+//      inside every set(), so an unguarded QuotaExceededError (large app + ~5MB session
+//      quota, or storage blocked) would crash typing/loading instead of just degrading
+//      reload-continuity.
+//   2. Don't serialize the whole workspace per keystroke — Monaco routes every keypress
+//      through updateContent; stringifying files+baseline each time is real input lag on
+//      big projects. Writes coalesce (~600ms) and flush when the page hides/unloads,
+//      which is exactly when the persisted copy matters.
+const writeBehindSessionStorage = <S,>(delayMs: number): PersistStorage<S> => {
+  let pending: { name: string; value: StorageValue<S> } | null = null;
+  let timer: number | null = null;
+
+  const flush = () => {
+    if (timer !== null) {
+      window.clearTimeout(timer);
+      timer = null;
+    }
+    if (!pending) return;
+    try {
+      window.sessionStorage.setItem(pending.name, JSON.stringify(pending.value));
+    } catch {
+      /* quota exceeded / storage blocked: editing must keep working; continuity degrades */
+    }
+    pending = null;
+  };
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') flush();
+    });
+  }
+
+  return {
+    getItem: (name) => {
+      try {
+        const raw = window.sessionStorage.getItem(name);
+        return raw ? (JSON.parse(raw) as StorageValue<S>) : null;
+      } catch {
+        return null;
+      }
+    },
+    setItem: (name, value) => {
+      pending = { name, value };
+      if (timer === null) timer = window.setTimeout(flush, delayMs);
+    },
+    removeItem: (name) => {
+      if (pending?.name === name) pending = null;
+      try {
+        window.sessionStorage.removeItem(name);
+      } catch {
+        /* ignore */
+      }
+    },
+  };
 };
 
 // Persisted to sessionStorage (continuity, not durability): a reload — F5, Chrome
@@ -207,9 +266,11 @@ export const useStudioWorkspace = create<WorkspaceState>()(persist((set, get) =>
   reset: () => set({ loadedKey: null, projectId: null, sessionId: null, title: '', template: 'react-ts', files: {}, baseline: {}, paths: [], openPaths: [], activePath: null }),
 }), {
   name: 'dreamstream_studio_workspace',
-  storage: createJSONStorage(() => sessionStorage),
+  storage: writeBehindSessionStorage(600),
+  // loadedKey is deliberately NOT persisted: it's loadArtifact's dedup key, and restoring
+  // it made the first chat→studio hand-off after a reload a silent no-op whenever the
+  // regenerated app kept the same title and file count (stale code shown, new code lost).
   partialize: (s) => ({
-    loadedKey: s.loadedKey,
     projectId: s.projectId,
     sessionId: s.sessionId,
     title: s.title,

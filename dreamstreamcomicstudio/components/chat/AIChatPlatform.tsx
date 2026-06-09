@@ -50,6 +50,7 @@ import {
   setChatMemory,
   setLastActiveChatSessionId,
   syncFromCloud,
+  wasDeletedThisSession,
   type ChatAttachment,
   type ChatProject,
   type ChatSession,
@@ -266,8 +267,11 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           const restored = lastId && stored.some((s) => s.id === lastId) ? lastId : stored[0].id;
           setActiveId(restored);
         } else {
+          // In-memory placeholder ONLY — deliberately not written to storage/cloud.
+          // A new device with cloud history would otherwise mint an empty "New chat"
+          // and push it to every other device before sync even ran; an untouched
+          // placeholder gets saved on the first real message (updateSession) instead.
           const session = createEmptySession();
-          void saveChatSession(session).catch(() => {});
           setSessions([session]);
           setActiveId(session.id);
         }
@@ -287,27 +291,38 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       try {
         await settleWithin(syncFromCloud().then(() => true), 12_000, false);
         if (!active) return;
-        const [merged, mergedProjects] = await Promise.all([
+        const [mergedRaw, mergedProjects] = await Promise.all([
           settleWithin(listChatSessions(), 4000, null as ChatSession[] | null),
           settleWithin(listChatProjects(), 4000, null as ChatProject[] | null)
         ]);
         if (!active) return;
+        const merged = mergedRaw?.filter((s) => !wasDeletedThisSession(s.id)) ?? null;
         if (merged && merged.length > 0) {
           setSessions((prev) => {
             // Never regress what the user can see: keep the in-memory copy when it is at
             // least as new (covers a chat that is streaming right now), keep local-only
-            // sessions that haven't flushed yet, and add everything new from the cloud.
+            // sessions the user actually USED, and add everything new from the cloud.
+            // Untouched placeholders (zero turns) are dropped the moment real history
+            // arrives — the invariant-repair effect below moves the user into it.
             const prevById = new Map(prev.map((s) => [s.id, s] as const));
             const mergedIds = new Set(merged.map((s) => s.id));
             const reconciled = merged.map((remote) => {
               const local = prevById.get(remote.id);
               return local && local.updatedAt >= remote.updatedAt ? local : remote;
             });
-            const localOnly = prev.filter((s) => !mergedIds.has(s.id));
+            const localOnly = prev.filter((s) => !mergedIds.has(s.id) && s.turns.length > 0);
             return [...localOnly, ...reconciled];
           });
         }
-        if (mergedProjects) setProjectsList(mergedProjects);
+        if (mergedProjects && mergedProjects.length > 0) {
+          // Union by id — never wipe a project that exists only in memory (e.g. its
+          // IndexedDB write failed silently); cloud copies win for shared ids.
+          setProjectsList((prev) => {
+            const mergedIds = new Set(mergedProjects.map((p) => p.id));
+            const localOnly = prev.filter((p) => !mergedIds.has(p.id) && !wasDeletedThisSession(p.id));
+            return [...mergedProjects.filter((p) => !wasDeletedThisSession(p.id)), ...localOnly];
+          });
+        }
       } catch {
         /* cloud sync is best-effort; local chat already works */
       }
@@ -333,6 +348,16 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     // Persist which chat is open so a reload restores it instead of the newest session.
     if (activeId) setLastActiveChatSessionId(activeId);
   }, [activeId]);
+
+  // Invariant repair: the open chat must exist in the list. Covers every path that can
+  // remove it (background cloud merge dropping an untouched placeholder, deletes) by
+  // moving the user to their last-open session, else the newest one.
+  useEffect(() => {
+    if (!initialized || sessions.length === 0) return;
+    if (activeId && sessions.some((s) => s.id === activeId)) return;
+    const lastId = getLastActiveChatSessionId();
+    setActiveId(lastId && sessions.some((s) => s.id === lastId) ? lastId : sessions[0].id);
+  }, [initialized, sessions, activeId]);
 
   const resolvedModel = activeSession?.modelId ? catalog.get(activeSession.modelId) || null : null;
   const features = useMemo(() => deriveModelFeatures(resolvedModel), [resolvedModel]);

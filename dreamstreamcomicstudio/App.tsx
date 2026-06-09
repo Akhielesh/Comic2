@@ -33,6 +33,7 @@ import { supabase } from './services/supabase';
 import { getPrivateProfile, getPublicProject, incrementViewCount } from './services/db';
 import { setPendingChatModel } from './services/chatStorage';
 import { persistUiState } from './services/viewState';
+import { isSettingsTab, type SettingsTab } from './components/settingsTabs';
 import { useStudioHandoff } from './services/studioHandoff';
 import { Project } from './types';
 import { Loader2 } from 'lucide-react';
@@ -77,7 +78,6 @@ const RESTORABLE_VIEWS = new Set<AppView>([
   'dashboard', 'chat', 'codestudio', 'ventures', 'gallery', 'learn', 'test', 'how-it-works', 'privacy', 'terms', 'settings',
 ]);
 
-type SettingsTab = 'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin' | 'preferences' | 'security';
 
 type AuthCallbackStatus = 'idle' | 'verifying' | 'success' | 'error';
 type AuthCallbackFlow = 'magiclink' | 'recovery' | 'signup' | 'unknown';
@@ -114,6 +114,10 @@ const App: React.FC = () => {
   const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnosticsResponse | null>(null);
   const [isHydratingProject, setIsHydratingProject] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>('profile');
+  // Bumped on every EXPLICIT settings-tab navigation, so AccountSettings applies the
+  // request even when the tab value itself didn't change (state alone can't signal
+  // "navigate to Profile again" while the user sits on a different inner tab).
+  const [settingsTabRequestId, setSettingsTabRequestId] = useState(0);
   const [returnView, setReturnView] = useState<AppView>('dashboard');
   const [settingsReturnView, setSettingsReturnView] = useState<AppView>('home');
   const [needsDobCompletion, setNeedsDobCompletion] = useState(false);
@@ -167,17 +171,6 @@ const App: React.FC = () => {
     window.history.replaceState({}, '', url);
   };
 
-  const isSettingsTab = (value?: string): value is SettingsTab => (
-    value === 'profile' ||
-    value === 'settings' ||
-    value === 'billing' ||
-    value === 'legal' ||
-    value === 'contact' ||
-    value === 'admin' ||
-    value === 'preferences' ||
-    value === 'security'
-  );
-
   const handleBackToHome = () => {
     setCurrentView('home');
     setActiveProjectId(null);
@@ -190,6 +183,7 @@ const App: React.FC = () => {
   const openSettings = (tab?: SettingsTab, returnTo: AppView = currentView) => {
     if (tab) {
       setSettingsTab(tab);
+      setSettingsTabRequestId((n) => n + 1);
       persistUiState('settings.tab', 'tab', tab);
       if (tab !== 'security') setOpenSecurityPasswordReset(false);
     }
@@ -288,7 +282,7 @@ const App: React.FC = () => {
       // back to the first tab. AccountSettings keeps ?tab= in sync from then on.
       if (v === 'settings') {
         const tab = params.get('tab');
-        if (isSettingsTab(tab ?? undefined)) setSettingsTab(tab as SettingsTab);
+        if (isSettingsTab(tab)) setSettingsTab(tab);
       }
     }
   }, []);
@@ -960,6 +954,7 @@ const App: React.FC = () => {
                 setCurrentView(settingsReturnView);
               }}
               initialTab={settingsTab}
+              initialTabRequestId={settingsTabRequestId}
               onSignedOut={handleSignedOut}
               requireDobCompletion={needsDobCompletion}
               onDobCompletionStatusChange={handleDobCompletionStatusChange}

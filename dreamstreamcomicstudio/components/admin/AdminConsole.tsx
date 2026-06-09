@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Activity,
@@ -63,7 +63,9 @@ const SECTIONS: Array<{ id: AdminSection; label: string; icon: React.ReactNode; 
     { id: 'moderation', label: 'Moderation', icon: <ShieldAlert size={15} /> },
     { id: 'invites', label: 'Invites', icon: <Ticket size={15} />, adminOnly: true },
     { id: 'email', label: 'Email', icon: <Mail size={15} />, adminOnly: true },
-    { id: 'analytics', label: 'Analytics', icon: <Activity size={15} /> },
+    // adminOnly: the server mounts /api/admin/analytics/* behind requireAdmin, so the
+    // section would render nothing but 403s for moderators.
+    { id: 'analytics', label: 'Analytics', icon: <Activity size={15} />, adminOnly: true },
     { id: 'coupons', label: 'Coupons', icon: <BadgeCheck size={15} />, adminOnly: true },
     { id: 'verification', label: 'Verification', icon: <CheckCircle2 size={15} />, adminOnly: true }
 ];
@@ -80,6 +82,9 @@ interface AdminConsoleProps {
     isModerator: boolean;
     adminAccess: AdminAccessResponse | null;
     onNavigate?: (view: string) => void;
+    /** Called after actions that change billing-relevant state (e.g. the operator's own
+     *  plan), so the host can refresh its billing summary/entitlements immediately. */
+    onBillingShouldRefresh?: () => void;
 }
 
 /** Small framed stat used across the console. */
@@ -118,7 +123,7 @@ const sectionMotion = {
     transition: { duration: 0.18, ease: 'easeOut' as const }
 };
 
-export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator, adminAccess, onNavigate }) => {
+export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator, adminAccess, onNavigate, onBillingShouldRefresh }) => {
     const visibleSections = useMemo(
         () => SECTIONS.filter((section) => isAdmin || !section.adminOnly),
         [isAdmin]
@@ -143,6 +148,15 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
     const [adminUsers, setAdminUsers] = useState<AdminUserRecord[]>([]);
     const [moderationQueue, setModerationQueue] = useState<ProjectModerationQueueItem[]>([]);
     const [adminUserQuery, setAdminUserQuery] = useState('');
+    // Debounced copy of the search box: data loads key on this, so typing doesn't fire a
+    // request pair per keystroke (and tear down / re-arm the polling interval each time).
+    const [debouncedUserQuery, setDebouncedUserQuery] = useState('');
+    useEffect(() => {
+        const id = window.setTimeout(() => setDebouncedUserQuery(adminUserQuery), 350);
+        return () => window.clearTimeout(id);
+    }, [adminUserQuery]);
+    const userQueryRef = useRef(adminUserQuery);
+    userQueryRef.current = adminUserQuery;
     const [moderationReasonByProject, setModerationReasonByProject] = useState<Record<string, string>>({});
     const [moderationReasonByUser, setModerationReasonByUser] = useState<Record<string, string>>({});
     const [message, setMessage] = useState<MessageState>(null);
@@ -164,14 +178,19 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
     const [failures24h, setFailures24h] = useState<number | null>(null);
 
     const loadGovernance = useCallback(async () => {
+        const requestedQuery = debouncedUserQuery.trim();
         const [userResult, queueResult] = await Promise.all([
-            listAdminUsers({ q: adminUserQuery.trim() || undefined, limit: 100 }),
+            listAdminUsers({ q: requestedQuery || undefined, limit: 100 }),
             listModerationQueue({ limit: 100 })
         ]);
-        setAdminUsers(userResult.items || []);
+        // Stale-response guard: a slow response for an old prefix must not clobber the
+        // list the user is currently filtering for.
+        if (requestedQuery === userQueryRef.current.trim()) {
+            setAdminUsers(userResult.items || []);
+        }
         setModerationQueue(queueResult.items || []);
         setLastRefreshedAt(new Date().toISOString());
-    }, [adminUserQuery]);
+    }, [debouncedUserQuery]);
 
     const loadCoupons = useCallback(async () => {
         const firstPage = await listAdminCoupons(200);
@@ -213,22 +232,24 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
         }
     }, [isAdmin]);
 
-    // Load + poll only the data the open section needs, and pause entirely while the
-    // browser tab is hidden — background polling was both wasteful and a source of
-    // surprise state changes when returning to the tab.
+    // Load + poll only the data the open section needs, and pause while the browser tab
+    // is hidden — with an immediate catch-up tick on refocus, so returning to the tab
+    // shows fresh data instead of waiting out the interval. Governance (users + queue)
+    // loads in EVERY section: it's two light requests and it keeps the pending-moderation
+    // badge on the section rail honest while the operator works elsewhere.
     useEffect(() => {
+        if (!isAdmin && !isModerator) return; // defense in depth — host also gates mount
         let alive = true;
         let inFlight = false;
 
-        const needsGovernance = section === 'overview' || section === 'users' || section === 'moderation';
-        const needsCoupons = isAdmin && (section === 'coupons' || section === 'overview');
+        const needsCoupons = isAdmin && section === 'coupons';
         const needsHealth = isAdmin && section === 'overview';
 
         const tick = async () => {
             if (inFlight || document.hidden) return;
             inFlight = true;
             try {
-                if (needsGovernance) await loadGovernance();
+                await loadGovernance();
                 if (needsCoupons) await loadCoupons();
                 if (needsHealth) await loadHealth();
             } catch (err: any) {
@@ -240,11 +261,16 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
 
         void tick();
         const timer = window.setInterval(() => void tick(), 20_000);
+        const onVisible = () => {
+            if (!document.hidden) void tick();
+        };
+        document.addEventListener('visibilitychange', onVisible);
         return () => {
             alive = false;
             window.clearInterval(timer);
+            document.removeEventListener('visibilitychange', onVisible);
         };
-    }, [section, isAdmin, loadGovernance, loadCoupons, loadHealth]);
+    }, [section, isAdmin, isModerator, loadGovernance, loadCoupons, loadHealth]);
 
     const refreshNow = async () => {
         setBusy(true);
@@ -279,12 +305,16 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
         runAction(async () => {
             await updateAdminUserPlan({ userId, planTier });
             await loadGovernance();
+            // The operator may have changed their OWN plan — refresh the host's billing
+            // summary so entitlements (default models, limits) re-validate immediately.
+            onBillingShouldRefresh?.();
         }, 'Plan updated.');
 
     const handleRemovePlanStatus = (userId: string) =>
         runAction(async () => {
             await updateAdminUserPlan({ userId, removePlanStatus: true });
             await loadGovernance();
+            onBillingShouldRefresh?.();
         }, 'Plan status removed.');
 
     const handleRoleChange = (userId: string, role: 'admin' | 'moderator', action: 'grant' | 'revoke') =>
@@ -293,21 +323,27 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
             await loadGovernance();
         }, `Role ${action === 'grant' ? 'granted' : 'revoked'}.`);
 
+    // Each action consumes its reason input: a stale reason left in the box would
+    // otherwise be silently attached to the NEXT action on the same user/project,
+    // corrupting the moderation audit trail.
     const handleModerateUser = (userId: string, status: 'active' | 'restricted' | 'suspended') =>
         runAction(async () => {
             await moderateUser({ userId, status, reason: normalizeText(moderationReasonByUser[userId]) || undefined });
+            setModerationReasonByUser((prev) => ({ ...prev, [userId]: '' }));
             await loadGovernance();
         }, `User set to ${status}.`);
 
     const handleForcePrivate = (projectId: string) =>
         runAction(async () => {
             await forceProjectPrivate({ projectId, reason: normalizeText(moderationReasonByProject[projectId]) });
+            setModerationReasonByProject((prev) => ({ ...prev, [projectId]: '' }));
             await loadGovernance();
         }, 'Project forced private.');
 
     const handleReviewRepublish = (projectId: string, approve: boolean) =>
         runAction(async () => {
             await approveProjectRepublish({ projectId, approve, reason: normalizeText(moderationReasonByProject[projectId]) || undefined });
+            setModerationReasonByProject((prev) => ({ ...prev, [projectId]: '' }));
             await loadGovernance();
         }, approve ? 'Republish approved.' : 'Republish rejected.');
 

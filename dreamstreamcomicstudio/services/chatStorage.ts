@@ -229,7 +229,17 @@ export const saveChatSession = async (session: ChatSession): Promise<void> => {
   void pushSession(session).catch(() => {});
 };
 
+// Session-lifetime tombstones: ids deleted in THIS browsing session. Cloud sync now runs
+// in the background after the UI is up, so a pull snapshot taken before a delete (or a
+// remote delete still in flight) could re-insert the row and "resurrect" the chat — in
+// the UI, in IndexedDB, and then back up to the cloud via the local→remote push.
+const deletedThisSession = new Set<string>();
+
+/** Ids of sessions/projects deleted during this browsing session (resurrection guard). */
+export const wasDeletedThisSession = (id: string): boolean => deletedThisSession.has(id);
+
 export const deleteChatSession = async (id: string): Promise<void> => {
+  deletedThisSession.add(id);
   try {
     await runTransaction('readwrite', (store) => store.delete(id));
   } catch {
@@ -265,6 +275,7 @@ export const createChatProject = (name: string, icon: string, color: string): Ch
 
 /** Delete a project. Its chats are reassigned to "unfiled" (projectId = null). */
 export const deleteChatProject = async (id: string): Promise<void> => {
+  deletedThisSession.add(id);
   try {
     await runTransaction('readwrite', (store) => store.delete(id), PROJECTS_STORE);
     const sessions = await listChatSessions();
@@ -291,13 +302,17 @@ export const syncFromCloud = async (): Promise<void> => {
   const localP = new Map(localProjects.map((p) => [p.id, p]));
 
   // Remote → local: write newer remote rows into IndexedDB (without re-pushing).
+  // Rows deleted during this browsing session are never re-inserted, even if the pull
+  // snapshot predates the delete — otherwise a just-deleted chat resurrects everywhere.
   for (const rs of remote.sessions) {
+    if (deletedThisSession.has(rs.id)) continue;
     const l = localS.get(rs.id);
     if (!l || (rs.updatedAt || 0) > (l.updatedAt || 0)) {
       try { await runTransaction('readwrite', (store) => store.put(rs)); } catch { /* ignore */ }
     }
   }
   for (const rp of remote.projects) {
+    if (deletedThisSession.has(rp.id)) continue;
     const l = localP.get(rp.id);
     if (!l || (rp.updatedAt || 0) > (l.updatedAt || 0)) {
       try { await runTransaction('readwrite', (store) => store.put(rp), PROJECTS_STORE); } catch { /* ignore */ }
