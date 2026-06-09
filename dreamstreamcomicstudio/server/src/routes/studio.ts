@@ -970,8 +970,13 @@ studioRouter.post('/deploy', async (req, res, next) => {
         message: 'One-click deploy needs the Studio Worker configured (STUDIO_WORKER_URL + STUDIO_HMAC_SECRET) with a Cloudflare token. Use the deploy bundle + the commands shown — they work today.'
       });
     }
-    if (target !== 'cloudflare') {
-      return res.json({ status: 'unavailable', message: `${target} one-click deploy is coming soon — use the deploy bundle + commands for now.` });
+    // Cloudflare Pages + Vercel both publish via the worker. Supabase is a backend/DB, not a static
+    // host — guide the user to the (working) CLI steps + a frontend host instead of faking a deploy.
+    if (target === 'supabase') {
+      return res.json({
+        status: 'unavailable',
+        message: 'Supabase is a backend/DB, not a static host — provision it with the `supabase` CLI steps shown, then deploy the frontend to Cloudflare or Vercel.'
+      });
     }
 
     await recordDeployment(body.projectId, target, 'building');
