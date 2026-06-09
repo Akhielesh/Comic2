@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Search, X, Loader2, Check, Sparkles, Globe, Eye, Brain, AlertTriangle, EyeOff, Wand2 } from 'lucide-react';
+import { Search, X, Loader2, Check, Sparkles, Globe, Eye, Brain, AlertTriangle, EyeOff, Wand2, Zap, Gauge } from 'lucide-react';
 import { ModalPortal } from '../modals/ModalPortal';
 import {
   fetchModelCatalog,
@@ -10,6 +10,24 @@ import {
 } from '../../services/modelCatalog';
 import { getCapabilities } from '../../services/modelCapabilities';
 import { isProviderEnabled } from '../../services/sourceGovernance';
+import { fetchModelSpeed, speedTier, speedLabel, type ModelSpeed } from '../../services/modelSpeed';
+
+// Measured-latency badge (from real chat telemetry) so slow models are obvious before
+// you pick one — the durable fix for getting stuck on a 60-250s free model.
+const SpeedBadge: React.FC<{ speed?: ModelSpeed }> = ({ speed }) => {
+  if (!speed) return null;
+  const tier = speedTier(speed.p50Ms);
+  const cls = tier === 'fast' ? 'bg-green-200' : tier === 'ok' ? 'bg-slate-100' : 'bg-red-200';
+  const Icon = tier === 'slow' ? Gauge : Zap;
+  return (
+    <span
+      className={`text-[10px] font-bold px-1.5 py-0.5 rounded border-2 border-black flex items-center gap-0.5 ${cls}`}
+      title={`Typical response time, measured from ${speed.samples} recent chats${tier === 'slow' ? ' — this model is slow' : ''}`}
+    >
+      <Icon className="w-2.5 h-2.5" /> {speedLabel(speed.p50Ms)}
+    </span>
+  );
+};
 
 type LockSource = 'openrouter' | 'nvidia' | null;
 
@@ -36,10 +54,11 @@ const FACETS: { key: Facet; label: string }[] = [
   { key: 'web', label: 'Web-capable' }
 ];
 
-const CapabilityChips: React.FC<{ model: CatalogModel }> = ({ model }) => {
+const CapabilityChips: React.FC<{ model: CatalogModel; speed?: ModelSpeed }> = ({ model, speed }) => {
   const caps = getCapabilities(model);
   return (
     <div className="flex flex-wrap items-center gap-1">
+      <SpeedBadge speed={speed} />
       {caps.isFree && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border-2 border-black bg-green-200">Free</span>}
       {caps.reasoning && (
         <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border-2 border-black bg-indigo-200 flex items-center gap-0.5"><Brain className="w-2.5 h-2.5" /> Reason</span>
@@ -63,6 +82,9 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [facet, setFacet] = useState<Facet>('all');
+  const [speed, setSpeed] = useState<Record<string, ModelSpeed>>({});
+  // Measured per-model latency (best-effort) so the picker can flag slow models.
+  useEffect(() => { let on = true; fetchModelSpeed().then((s) => { if (on) setSpeed(s); }); return () => { on = false; }; }, []);
 
   useEffect(() => {
     let active = true;
@@ -221,7 +243,7 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
                             <span className="text-[11px] font-bold text-slate-600 shrink-0">{costLabel(model)}</span>
                           </div>
                           <div className="mt-2">
-                            <CapabilityChips model={model} />
+                            <CapabilityChips model={model} speed={speed[model.id]} />
                           </div>
                           {model.description && (
                             <p className="text-[11px] text-slate-600 mt-1.5 line-clamp-2">{model.description}</p>

@@ -807,6 +807,72 @@ export type CapabilityNotice = {
 // client-side renderer; new artifact types are added without touching the loop.
 export type ChatArtifact = { type: string; data: unknown };
 
+// --- Quiz / assessment artifact (on-demand learning components) ---
+// Emitted by the `generate_quiz` tool so the AI can build interactive practice
+// questions when a user is learning a topic. The client self-grades — no round-trip.
+export type QuizQuestionType = 'single' | 'multi' | 'short' | 'true_false';
+export interface QuizChoice {
+  id: string;
+  text: string;
+}
+export interface QuizQuestion {
+  id: string;
+  type: QuizQuestionType;
+  prompt: string;
+  /** Choices for single / multi / true_false questions. */
+  choices?: QuizChoice[];
+  /** Correct answer(s): choice id(s) for single/multi/true_false; accepted answer strings for short. */
+  correct: string[];
+  explanation?: string;
+  hint?: string;
+}
+export interface QuizArtifact {
+  title: string;
+  topic?: string;
+  description?: string;
+  questions: QuizQuestion[];
+}
+
+// --- Flashcards artifact (study/memorization mode for guided learning) ---
+// Emitted by the `generate_flashcards` tool. A flip-card deck the user studies,
+// marking each card known/review, with shuffle + progress.
+export interface Flashcard {
+  front: string;
+  back: string;
+}
+export interface FlashcardsArtifact {
+  title?: string;
+  topic?: string;
+  cards: Flashcard[];
+}
+
+// --- SQL exercise / playground artifact (run real SQL while learning) ---
+// Emitted by the `sql_exercise` tool. The AI provides a schema (CREATE + seed) and a
+// task; the user writes SQL and runs it against a sandboxed in-memory DB (server-side
+// sql.js) to see real results / errors.
+export interface SqlExerciseArtifact {
+  title?: string;
+  instructions?: string;
+  /** SQL that sets up the practice database (CREATE TABLE … + INSERT …). */
+  schema: string;
+  task?: string;
+  /** Optional starter query to prefill the editor. */
+  starterSql?: string;
+}
+
+// --- Downloadable document artifact ---
+// Emitted by the `generate_document` tool so the AI can author a custom resource
+// (study guide, cheat sheet, notes, report, plan) the user can read inline and
+// download as Markdown / HTML or print to PDF.
+export interface DocumentArtifact {
+  title: string;
+  subtitle?: string;
+  /** Markdown body of the document. */
+  content: string;
+  /** Suggested base filename (no extension). */
+  filename?: string;
+}
+
 // --- Code Studio artifact ---
 // Emitted by the `generate_app` tool. Carries a complete multi-file project
 // that the client renders in the live, editable Code Studio side panel.

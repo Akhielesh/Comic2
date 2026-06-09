@@ -31,6 +31,14 @@ export interface AnalyticsOverview {
   }>;
   recentFailures: TelemetryEventRow[];
   recentDislikes: FeedbackRow[];
+  chatPerformance: {
+    turns: number;
+    avgLatencyMs: number;
+    p95LatencyMs: number;
+    emptyRate: number;
+    toolFailureRate: number;
+    topModels: Array<{ model: string; count: number }>;
+  };
 }
 
 export interface TelemetryEventRow {

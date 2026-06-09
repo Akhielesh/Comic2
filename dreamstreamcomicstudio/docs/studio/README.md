@@ -35,6 +35,7 @@ can pick up the work cold.
 | [10-AGENTS-SWARM.md](./10-AGENTS-SWARM.md) | Multi-agent swarm — analysis + redesign (guardrails, personality, legitimacy, usability) |
 | [11-TOOLS-MCP-SOURCING.md](./11-TOOLS-MCP-SOURCING.md) | Tools, MCP & sourcing — analysis + redesign (access for all models/agents) |
 | [12-GUARDRAILS-PERSONALITY.md](./12-GUARDRAILS-PERSONALITY.md) | Safety + one coherent brand voice across every surface |
+| [agent-constitution/](./agent-constitution/00_README_AND_WIRING.md) | The **studio build agents' constitution** (17 files): scope, grounding, completeness, security, verification, recovery. Implemented in `server/src/ai/studio/constitution.ts`. |
 | [CLOUDFLARE_STUDIO_PLAN.md](./CLOUDFLARE_STUDIO_PLAN.md) | Compute/cost/sandbox design — verified Cloudflare pricing |
 | [PRODUCT_BLUEPRINT.md](./PRODUCT_BLUEPRINT.md) | Condensed product blueprint (superseded in detail by 01–07) |
 | [09-ROADMAP.md](./09-ROADMAP.md) | Phase-by-phase plan + links to each phase doc |

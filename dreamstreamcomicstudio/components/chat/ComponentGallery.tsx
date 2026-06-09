@@ -16,13 +16,95 @@ import { CodeStudioCard } from './artifacts/CodeStudioCard';
 import { RecipeCard } from './artifacts/RecipeCard';
 import { RecipeRunCard } from './artifacts/RecipeRunCard';
 import { ResearchReport } from './artifacts/ResearchReport';
+import { Quiz } from './artifacts/Quiz';
+import { DocumentCard } from './artifacts/DocumentCard';
+import { Flashcards } from './artifacts/Flashcards';
+import { SqlPlayground } from './artifacts/SqlPlayground';
 import type {
   WeatherArtifact, NewsResultsArtifact, StockQuoteArtifact,
   VideoResultsArtifact, PlacesResultsArtifact, SwarmTraceArtifact,
   ChartArtifact, MetricBoardArtifact, MapArtifact,
   DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact,
-  RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact
+  RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact
 } from '../../apiTypes';
+
+const sqlExerciseDemo: SqlExerciseArtifact = {
+  title: 'SQL practice — filter & sort',
+  instructions: 'Practice a SELECT with a WHERE filter and ORDER BY against a small employees table.',
+  schema: "CREATE TABLE employees (id INTEGER, name TEXT, dept TEXT, salary INTEGER);\nINSERT INTO employees VALUES\n  (1,'Ann','Eng',120000),(2,'Bob','Sales',80000),\n  (3,'Cy','Eng',135000),(4,'Di','Sales',95000);",
+  task: 'List the names and salaries of Engineering employees earning over 125k, highest first.',
+  starterSql: 'SELECT name, salary\nFROM employees\nWHERE ...'
+};
+
+const flashcardsDemo: FlashcardsArtifact = {
+  title: 'Spanish — common verbs',
+  topic: 'Vocabulary',
+  cards: [
+    { front: 'ser', back: 'to be (permanent)' },
+    { front: 'estar', back: 'to be (temporary / location)' },
+    { front: 'tener', back: 'to have' },
+    { front: 'hacer', back: 'to do / to make' },
+    { front: 'poder', back: 'to be able to / can' }
+  ]
+};
+
+const documentDemo: DocumentArtifact = {
+  title: 'SQL JOINs — Cheat Sheet',
+  subtitle: 'Quick reference · with examples',
+  filename: 'sql-joins-cheatsheet',
+  content: [
+    '## The four core joins',
+    '- **INNER JOIN** — rows with a match in *both* tables.',
+    '- **LEFT JOIN** — all left rows + matches (NULLs where none).',
+    '- **RIGHT JOIN** — all right rows + matches.',
+    '- **FULL OUTER JOIN** — everything from both sides.',
+    '',
+    '```sql',
+    'SELECT o.id, c.name',
+    'FROM orders o',
+    'LEFT JOIN customers c ON c.id = o.customer_id;',
+    '```',
+    '',
+    '> Tip: start from the table you want *all* rows of, then LEFT JOIN the rest.'
+  ].join('\n')
+};
+
+const quizDemo: QuizArtifact = {
+  title: 'Photosynthesis — quick check',
+  topic: 'Biology',
+  description: 'A short mixed-format quiz to test the basics.',
+  questions: [
+    {
+      id: 'q1', type: 'single', prompt: 'Where in the cell does photosynthesis occur?',
+      choices: [
+        { id: 'a', text: 'Mitochondria' },
+        { id: 'b', text: 'Chloroplast' },
+        { id: 'c', text: 'Nucleus' },
+        { id: 'd', text: 'Ribosome' }
+      ],
+      correct: ['b'], explanation: 'Chloroplasts contain chlorophyll, which captures light energy.', hint: 'It is green.'
+    },
+    {
+      id: 'q2', type: 'multi', prompt: 'Which are INPUTS to photosynthesis? (select all)',
+      choices: [
+        { id: 'a', text: 'Carbon dioxide' },
+        { id: 'b', text: 'Water' },
+        { id: 'c', text: 'Oxygen' },
+        { id: 'd', text: 'Sunlight' }
+      ],
+      correct: ['a', 'b', 'd'], explanation: 'CO₂, water and light are inputs; oxygen is an output.'
+    },
+    {
+      id: 'q3', type: 'true_false', prompt: 'Photosynthesis releases oxygen.',
+      choices: [{ id: 't', text: 'True' }, { id: 'f', text: 'False' }],
+      correct: ['t']
+    },
+    {
+      id: 'q4', type: 'short', prompt: 'What gas do plants release as a by-product?',
+      correct: ['oxygen', 'o2'], explanation: 'Oxygen (O₂) is released during the light reactions.'
+    }
+  ]
+};
 
 // A living gallery of the chat's rich-output components, each with sample data, so
 // the UI library can be seen and sanity-checked in one place.
@@ -341,6 +423,10 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Recipe card (reusable agent workflow · params · tools)', type: 'recipe_card', node: <RecipeCard data={recipeDemo} /> },
   { title: 'Recipe run (params · structured output · follow-ups)', type: 'recipe_run', node: <RecipeRunCard data={recipeRunDemo} /> },
   { title: 'Research report (questions · sources read · grounded brief header)', type: 'research_report', node: <ResearchReport data={researchReportDemo} /> },
+  { title: 'Quiz (MCQ · multi-select · true/false · short answer · self-grading)', type: 'quiz', node: <Quiz data={quizDemo} /> },
+  { title: 'Document (custom resource · download .md / .html / PDF)', type: 'document', node: <DocumentCard data={documentDemo} /> },
+  { title: 'Flashcards (flip · known/review · shuffle · progress)', type: 'flashcards', node: <Flashcards data={flashcardsDemo} /> },
+  { title: 'SQL playground (real sandboxed execution · results · errors)', type: 'sql_exercise', node: <SqlPlayground data={sqlExerciseDemo} /> },
   { title: 'Markdown table (inline)', node: <ChatMarkdown text={tableMd} /> }
 ];
 

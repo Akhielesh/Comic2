@@ -25,6 +25,7 @@ export type ToolCategory =
   | 'dev'
   | 'dataviz'
   | 'codegen'
+  | 'learning'
   | 'agents';
 
 export type ToolAuth = 'none' | 'optional' | 'required';
@@ -77,6 +78,7 @@ export const CATEGORY_META: CategoryMeta[] = [
   { id: 'dev', label: 'Developer & utility', icon: 'Code2', blurb: 'GitHub, packages, QR codes, demographics.' },
   { id: 'dataviz', label: 'Data & charts', icon: 'BarChart3', blurb: 'Turn data into charts and KPI boards.' },
   { id: 'codegen', label: 'App builder', icon: 'AppWindow', blurb: 'Generate full multi-file apps with a live preview.' },
+  { id: 'learning', label: 'Learning', icon: 'GraduationCap', blurb: 'Interactive quizzes and practice for studying any topic.' },
   { id: 'agents', label: 'Agents', icon: 'Network', blurb: 'Delegate complex tasks to a swarm.' }
 ];
 
@@ -459,6 +461,34 @@ export const TOOL_CATALOG: ToolMeta[] = [
     auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
     dataShape: 'KPI board: tiles with deltas, sparklines, rings.', docsUrl: 'https://dreamstream.app',
     keywords: ['dashboard', 'kpi', 'kpis', 'metrics', 'scorecard', 'stat board', 'at a glance', 'summary stats', 'overview']
+  },
+  {
+    name: 'generate_quiz', label: 'Quiz / practice', category: 'learning', kind: 'builtin', provider: 'DreamStream (in-app, self-grading)',
+    description: 'Generate an interactive, self-grading quiz (single-select, multi-select, true/false, short answer) to help the user learn or test a topic — with per-question explanations and hints.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Interactive quiz card: mixed-format questions, instant grading, score + explanations.', docsUrl: 'https://dreamstream.app',
+    keywords: ['quiz', 'quiz me', 'test me', 'practice questions', 'practice problems', 'mcq', 'multiple choice', 'flashcards', 'assess', 'check my understanding', 'study', 'exam', 'review questions']
+  },
+  {
+    name: 'sql_exercise', label: 'SQL playground', category: 'learning', kind: 'builtin', provider: 'DreamStream (sandboxed SQLite / sql.js)',
+    description: 'Interactive SQL practice — the user writes and runs real queries against a sandboxed in-memory database, seeing real results and SQLite errors. For learning SQL, joins, aggregations and database basics.',
+    auth: 'none', rateLimit: 'Auth + rate-limited; runs in an ephemeral in-memory DB (no filesystem/network).',
+    dataShape: 'Runnable SQL editor + schema + task; live result table or error.', docsUrl: 'https://dreamstream.app',
+    keywords: ['sql', 'sql exercise', 'practice sql', 'sql query', 'database', 'sqlite', 'joins', 'select query', 'learn sql', 'query practice', 'where clause', 'group by']
+  },
+  {
+    name: 'generate_flashcards', label: 'Flashcards', category: 'learning', kind: 'builtin', provider: 'DreamStream (in-app)',
+    description: 'Create an interactive flip-card study deck (term → definition) for memorizing vocabulary, formulas or facts — with shuffle, known/review marking and progress.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Flip-card deck: front/back cards, shuffle, known/review, progress.', docsUrl: 'https://dreamstream.app',
+    keywords: ['flashcards', 'flash cards', 'memorize', 'memorise', 'study cards', 'vocab', 'vocabulary', 'drill', 'spaced repetition', 'anki']
+  },
+  {
+    name: 'generate_document', label: 'Document / resource', category: 'learning', kind: 'builtin', provider: 'DreamStream (in-app, downloadable)',
+    description: 'Author a downloadable document — study guide, cheat sheet, notes, report, plan, worksheet or reference — that the user can save as Markdown / HTML or print to PDF.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Document card with the rendered resource + .md / .html / PDF download buttons.', docsUrl: 'https://dreamstream.app',
+    keywords: ['document', 'make a document', 'write a', 'cheat sheet', 'cheatsheet', 'study guide', 'guide', 'notes', 'handout', 'worksheet', 'report', 'summary document', 'pdf', 'downloadable', 'reference sheet', 'one-pager']
   },
   {
     name: 'render_table', label: 'Data table', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app)',

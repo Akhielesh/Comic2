@@ -30,7 +30,7 @@ import { isProviderEnabled } from '../../services/sourceGovernance';
 import type { ModelSourceId } from '../../services/modelSelection';
 import { listMcpServers, getMcpServersByIds, onMcpServersChanged } from '../../services/mcpServers';
 import { recordToolEvents } from '../../services/toolAnalytics';
-import { captureError } from '../../services/telemetry';
+import { captureError, captureEvent } from '../../services/telemetry';
 import { isLegacyStudioEnabled } from '../../services/studioFlags';
 import type { McpServerConfig } from '../../apiTypes';
 import {
@@ -116,7 +116,15 @@ const applyVariant = (turn: ChatTurn, v: ChatTurnVariant): ChatTurn => ({
 const composeSystemPrompt = (memory: string, persona?: string): string | undefined => {
   const parts: string[] = [];
   if (persona && persona.trim()) parts.push(persona.trim());
-  if (memory && memory.trim()) parts.push(`Durable facts to remember about the user:\n${memory.trim()}`);
+  if (memory && memory.trim()) {
+    // Inject stored memory WITH a relevance guard. Without this the model forced every
+    // stored fact onto every question — e.g. applying a stale "10 years of job-search
+    // experience" note to a student's biology question. Memory is background, not a lens.
+    parts.push(
+      `Background facts about the user (from earlier conversations) — use ONLY when they are clearly relevant to the current question:\n${memory.trim()}\n\n` +
+        `Relevance rules: treat these as optional background, never a frame. If a fact does not obviously apply to what the user is asking right now, ignore it — do NOT bend the answer to fit it, and do not assume the user's profile/role/experience unless the current message implies it. If stored facts seem to contradict the current message, trust the current message.`
+    );
+  }
   return parts.length ? parts.join('\n\n') : undefined;
 };
 
@@ -511,6 +519,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     markBusy(sessionId, true);
     const controller = new AbortController();
     abortMap.current.set(sessionId, controller);
+    // Per-turn timing for observability (the chat_turn telemetry event below).
+    const turnStartedAt = Date.now();
 
     const setSessionState = (updater: (s: ChatSession) => ChatSession) =>
       setSessions((prev) => prev.map((s) => (s.id === sessionId ? updater(s) : s)));
@@ -640,6 +650,31 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       }));
       // Fold the tools that ran into local usage analytics (Settings → Tools).
       recordToolEvents(res.toolEvents);
+      // Per-turn observability: capture a COMPACT success event (no message content) so
+      // chat quality/latency/model/tool patterns are analyzable in the admin dashboard.
+      captureEvent({
+        eventType: 'chat_turn',
+        severity: 'info',
+        source: 'ai_chat',
+        sessionId,
+        metadata: {
+          model: res.model,
+          requestedModel: res.requestedModel || reqModel,
+          source: reqSource,
+          reasoningLevel: session.reasoningLevel,
+          webSearch: Boolean(session.webSearch),
+          swarm: Boolean(session.swarm),
+          recipe: recipeRun?.recipeId,
+          regenerate: Boolean(regenerateTurnId),
+          latencyMs: Date.now() - turnStartedAt,
+          toolCount: res.toolEvents?.length || 0,
+          toolsFailed: res.toolEvents?.filter((e) => !e.ok).length || 0,
+          citations: res.citations?.length || 0,
+          notices: res.notices?.length || 0,
+          contentLength: (res.text || '').length,
+          empty: !((res.text || '').trim())
+        }
+      });
       // Only pop the side panel if this chat is the one being viewed — a background
       // chat finishing shouldn't yank a map open over the chat you're reading.
       const mapArtifact = res.artifacts?.find((a) => a.type === 'map');
@@ -666,7 +701,15 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         source: 'ai_chat',
         sessionId,
         message: friendly,
-        metadata: { turnId: aiTurnId }
+        metadata: {
+          turnId: aiTurnId,
+          requestedModel: reqModel,
+          source: reqSource,
+          reasoningLevel: session.reasoningLevel,
+          webSearch: Boolean(session.webSearch),
+          swarm: Boolean(session.swarm),
+          latencyMs: Date.now() - turnStartedAt
+        }
       });
       updateSession(sessionId, (s) => ({
         ...s,
