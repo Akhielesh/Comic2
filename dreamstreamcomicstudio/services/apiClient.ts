@@ -5,6 +5,8 @@ import { getSelectedTextModel, getModelForStage, getSelectedTextSource, getSourc
 import { supabase } from './supabase';
 import { isFreeOnly } from './freeOnlyMode';
 import { isProviderEnabled, allowedSourcesHeader } from './sourceGovernance';
+import { withRetry, type RetryOptions } from './retry';
+import { isRetryableError } from './apiErrors';
 
 let cachedAccessToken: string | undefined;
 
@@ -105,17 +107,22 @@ const buildRequestHeaders = async (options?: { apiKey?: string; modelId?: string
   };
 };
 
-export const post = async <TReq, TRes>(path: string, body: TReq, options?: { signal?: AbortSignal; apiKey?: string; modelId?: string; stage?: string }): Promise<TRes> => {
-  const headers = await buildRequestHeaders(options);
-  const res = await safeFetch(buildApiUrl(path), {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-    signal: options?.signal
-  });
+export const post = async <TReq, TRes>(path: string, body: TReq, options?: { signal?: AbortSignal; apiKey?: string; modelId?: string; stage?: string; retry?: RetryOptions }): Promise<TRes> => {
+  const attempt = async (): Promise<TRes> => {
+    const headers = await buildRequestHeaders(options);
+    const res = await safeFetch(buildApiUrl(path), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: options?.signal
+    });
 
-  if (!res.ok) throw await parseError(res);
-  return res.json() as Promise<TRes>;
+    if (!res.ok) throw await parseError(res);
+    return res.json() as Promise<TRes>;
+  };
+  // Opt-in automatic retry (idempotent calls only) — recovers from a backend cold start or a
+  // transient network blip instead of surfacing "Couldn't reach the AI server" on the first miss.
+  return options?.retry ? withRetry(attempt, isRetryableError, options.retry) : attempt();
 };
 
 /** POST that returns the raw Response for streaming (SSE) reads. Throws ApiError on non-OK. */
