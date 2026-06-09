@@ -1,7 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Layers, RotateCcw, Shuffle, Check, RefreshCw, ChevronLeft, ChevronRight, Target } from 'lucide-react';
+import { Layers, RotateCcw, Shuffle, Check, RefreshCw, ChevronLeft, ChevronRight, Target, Download } from 'lucide-react';
 import type { FlashcardsArtifact } from '../../../apiTypes';
 import { deckIdFor, loadProgress, saveProgress, clearProgress } from '../../../services/studyProgress';
+import { downloadTextFile } from '../../../services/chatUtils';
+
+// CSV field quoting (Anki/Quizlet import friendly): quote fields containing commas,
+// quotes or newlines, doubling embedded quotes.
+const csvField = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
 
 // A flip-card study deck the AI generates on demand. The learner flips each card,
 // marks it "known" or "review", can shuffle, and sees progress. Progress (known/review)
@@ -52,6 +57,11 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
     setPos(0); setFlipped(false);
   };
   const studyAll = () => { setUnknownOnly(false); setOrder(cards.map((_, i) => i)); setPos(0); setFlipped(false); };
+  const exportCsv = () => {
+    const csv = 'front,back\n' + cards.map((c) => `${csvField(c.front)},${csvField(c.back)}`).join('\n');
+    const base = (data.title || 'flashcards').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50) || 'flashcards';
+    downloadTextFile(`${base}.csv`, csv, 'text/csv');
+  };
 
   // Keyboard drilling: once the deck is focused, space/enter flips, ← → navigate, and
   // ↑/k · ↓/j mark known/review — so a learner can rip through a deck without the mouse.
@@ -129,7 +139,8 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
           ) : (
             <button onClick={studyUnknown} disabled={known.size >= cards.length} className="flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-violet-100 hover:bg-violet-200 disabled:opacity-40" title="Study only the cards you haven't marked known"><Target className="w-3.5 h-3.5" /> Study {cards.length - known.size} left</button>
           )}
-          <button onClick={reshuffle} className="ml-auto flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-white hover:bg-slate-100"><Shuffle className="w-3.5 h-3.5" /> Shuffle</button>
+          <button onClick={exportCsv} title="Download as CSV (import into Anki / Quizlet)" className="ml-auto flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-white hover:bg-slate-100"><Download className="w-3.5 h-3.5" /> CSV</button>
+          <button onClick={reshuffle} className="flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-white hover:bg-slate-100"><Shuffle className="w-3.5 h-3.5" /> Shuffle</button>
           <button onClick={reset} className="flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-white hover:bg-slate-100" title="Clear saved progress"><RotateCcw className="w-3.5 h-3.5" /> Reset</button>
         </div>
       </div>
