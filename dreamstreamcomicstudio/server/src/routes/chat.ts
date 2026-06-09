@@ -315,8 +315,10 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   // EXAM/STUDY guidance can actually deliver practice (quiz/flashcards/guide) even when
   // the message didn't literally say "quiz" (e.g. "explain how recursion works for my exam").
   if (toolsEnabledForProvider && isStudyIntent(lastUserText)) {
+    // The full study toolkit: practice (quiz/flashcards), a written guide, a downloadable
+    // study pack (bundle), and a relevant image for visual concepts.
     routedToolNames = Array.from(
-      new Set(['generate_quiz', 'generate_flashcards', 'generate_document', ...routedToolNames])
+      new Set(['generate_quiz', 'generate_flashcards', 'generate_document', 'generate_bundle', 'image_search', ...routedToolNames])
     ).slice(0, MAX_MODEL_TOOLS);
   }
   const builtinTools = toolsEnabledForProvider ? resolveTools(routedToolNames, toolContext) : [];

@@ -136,7 +136,8 @@ export const studyGuidanceBlock = (lastUserText: string): string => {
 - Explain the CORE concepts clearly, then the key details, definitions and formulas they'd actually be tested on.
 - Call out the common pitfalls, misconceptions, and the fine distinctions examiners probe.
 - Include at least one concrete worked example or application when it aids understanding.
-- Then help them PRACTICE: proactively offer or build a quick quiz, flashcards, a runnable code/SQL exercise, or a downloadable study guide so they can drill it (use the learning tools when available).
+- For VISUAL concepts (anatomy, diagrams, geometry, processes), pull a relevant image to anchor understanding.
+- Then help them PRACTICE: proactively offer or build a quick quiz, flashcards, a runnable code/SQL exercise, a downloadable study guide, or a complete study pack (guide + practice + flashcards bundled as a downloadable .zip) so they can drill it (use the learning tools when available).
 - Stay accurate and grounded — verify facts you're unsure of rather than guessing. Calibrate the rigor to the level implied by the question; don't assume background the conversation doesn't support.`;
 };
 
