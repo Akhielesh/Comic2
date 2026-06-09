@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { getBackend, setBackend, isValidSupabaseUrl, supabaseScaffold } from './studioBackend';
+import { getBackend, setBackend, isValidSupabaseUrl, supabaseScaffold, ensureSupabaseDependency } from './studioBackend';
 
 describe('studioBackend', () => {
   beforeEach(() => { try { window.localStorage.clear(); } catch { /* ignore */ } });
@@ -28,5 +28,16 @@ describe('studioBackend', () => {
     expect(env.content).toContain('VITE_SUPABASE_ANON_KEY=anon-123');
     expect(client.content).toContain("from '@supabase/supabase-js'");
     expect(client.content).toContain('createClient');
+  });
+
+  it('adds @supabase/supabase-js to package.json when missing, and is a no-op when present/invalid', () => {
+    const added = ensureSupabaseDependency('{"name":"app","dependencies":{"react":"^19.0.0"}}');
+    expect(JSON.parse(added).dependencies['@supabase/supabase-js']).toBeTruthy();
+    expect(JSON.parse(added).dependencies.react).toBe('^19.0.0');
+
+    const already = '{"dependencies":{"@supabase/supabase-js":"^2.0.0"}}';
+    expect(ensureSupabaseDependency(already)).toBe(already);
+
+    expect(ensureSupabaseDependency('not json')).toBe('not json');
   });
 });

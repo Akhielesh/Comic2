@@ -43,6 +43,25 @@ export const setBackend = (projectId: string | null | undefined, conn: StudioBac
   }
 };
 
+/**
+ * Ensure a project's package.json lists `@supabase/supabase-js` so the scaffolded client actually
+ * resolves (otherwise the in-browser preview/build fails on an unresolved import). Returns the
+ * updated JSON (2-space indent) or the original string unchanged if it's not parseable or already
+ * present. Pure.
+ */
+export const ensureSupabaseDependency = (packageJson: string, version = '^2.95.3'): string => {
+  let pkg: Record<string, unknown>;
+  try {
+    pkg = JSON.parse(packageJson) as Record<string, unknown>;
+  } catch {
+    return packageJson; // leave a non-JSON manifest untouched
+  }
+  const deps = (pkg.dependencies && typeof pkg.dependencies === 'object' ? pkg.dependencies : {}) as Record<string, string>;
+  if (deps['@supabase/supabase-js']) return packageJson; // already declared
+  pkg.dependencies = { ...deps, '@supabase/supabase-js': version };
+  return `${JSON.stringify(pkg, null, 2)}\n`;
+};
+
 /** The files to drop into the workspace to wire a Supabase backend (env + a typed client). Pure. */
 export const supabaseScaffold = (url: string, anonKey: string): { path: string; content: string }[] => [
   {

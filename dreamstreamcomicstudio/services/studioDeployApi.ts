@@ -5,9 +5,27 @@
 // manual path — a deploy-ready bundle + real provider commands. This client normalizes both cases
 // into a single honest result so the UI never lies about whether the app actually shipped.
 
-import { post } from './apiClient';
+import { post, get } from './apiClient';
 
 export type DeployTarget = 'cloudflare' | 'vercel' | 'supabase';
+
+export interface StudioDeploymentRecord {
+  id: string;
+  target: string;
+  url: string | null;
+  status: string;
+  createdAt: string;
+}
+
+/** A project's deploy history (most recent first). Best-effort: returns [] on any failure. */
+export const listStudioDeployments = async (projectId: string, signal?: AbortSignal): Promise<StudioDeploymentRecord[]> => {
+  try {
+    const res = await get<{ deployments: StudioDeploymentRecord[] }>(`/api/studio/projects/${encodeURIComponent(projectId)}/deployments`, { signal });
+    return Array.isArray(res?.deployments) ? res.deployments : [];
+  } catch {
+    return [];
+  }
+};
 
 export interface DeployResult {
   status: 'live' | 'queued' | 'unavailable' | 'error';
