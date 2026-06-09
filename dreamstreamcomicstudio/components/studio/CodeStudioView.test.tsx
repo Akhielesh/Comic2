@@ -11,6 +11,7 @@ import type { CodeStudioArtifact } from '../../apiTypes';
 vi.mock('../../services/studioApi', () => ({
   launchLiveStudio: vi.fn(async () => ({ sandboxId: 's', projectId: 'p' })),
   stopLiveStudio: vi.fn(async () => ({ status: 'stopped' })),
+  getStudioStatus: vi.fn(async () => ({ liveConfigured: false })),
   listStudioProjects: vi.fn(async () => []),
   getStudioProject: vi.fn(async () => ({ id: 'p', title: 'P', template: 'react-ts', files: [] })),
   deleteStudioProject: vi.fn(async () => {}),

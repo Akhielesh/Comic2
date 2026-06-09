@@ -33,6 +33,13 @@ export const launchLiveStudio = async (
 export const stopLiveStudio = async (runId: string): Promise<{ status: string; awakeSeconds?: number }> =>
   post<Record<string, never>, { status: string; awakeSeconds?: number }>(`/api/studio/${runId}/stop`, {});
 
+/**
+ * Whether the live agentic Studio (the cloud Worker that runs the app + the PLAN→RUN→OBSERVE→FIX
+ * loop) is actually configured on the server — the honest signal behind the studio mode badge.
+ */
+export const getStudioStatus = async (): Promise<{ liveConfigured: boolean }> =>
+  get<{ liveConfigured: boolean }>('/api/studio/status');
+
 // --- Saved projects (Phase 5 persistence) ------------------------------------------------
 
 export interface StudioProjectSummary {

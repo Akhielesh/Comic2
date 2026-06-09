@@ -45,6 +45,14 @@ export const studioRouter = Router();
 // GitHub two-way sync (Phase 6) — /api/studio/github/{repos,push,pull}.
 studioRouter.use('/github', studioGithubRouter);
 
+// GET /api/studio/status — does the live agentic build path actually work on THIS server?
+// The client's mode badge reads this to honestly show "Agentic · live" vs "One-shot mode" instead
+// of trusting only the build-time flag (which can be on while the Worker is still unconfigured).
+// Read-only, no side effects.
+studioRouter.get('/status', (_req, res) => {
+  res.json({ liveConfigured: studioConfigured() });
+});
+
 const notConfigured = (): boolean => !studioConfigured();
 
 const notConfiguredResponse = {

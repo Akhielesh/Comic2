@@ -35,7 +35,8 @@ import { clarifyStudioApp, planStudioApp } from '../../services/studioPlanApi';
 import { describeApiError } from '../../services/apiErrors';
 import { saveStudioChat, loadStudioChat } from '../../services/studioChatHistory';
 import { getStudioModelSelection, getStudioAgents, getStudioAutoRunAgents, getStudioRuntime, STUDIO_MODEL_CHANGED } from '../../services/studioModelSelection';
-import { stopLiveStudio } from '../../services/studioApi';
+import { stopLiveStudio, getStudioStatus } from '../../services/studioApi';
+import { StudioModeBadge } from './StudioModeBadge';
 import { generateStudioApp, streamGenerateStudioApp } from '../../services/studioGenerateApi';
 import { streamStudioBuild, type BuildStage } from '../../services/studioBuildApi';
 import { streamStudioAgents } from '../../services/studioAgentsApi';
@@ -92,6 +93,16 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
   const t = useStudioTheme();
   const wide = useIsWide();
   const enabled = isAdmin || isLiveStudioEnabled();
+  // Honest build-mode signal from the SERVER (is the live agentic Worker actually configured?),
+  // independent of the client flag — so the header badge never claims "agentic" while builds 503.
+  const [liveConfigured, setLiveConfigured] = useState<boolean | undefined>(undefined);
+  useEffect(() => {
+    let alive = true;
+    getStudioStatus()
+      .then((s) => { if (alive) setLiveConfigured(s.liveConfigured); })
+      .catch(() => { /* leave undefined → badge stays hidden rather than guessing */ });
+    return () => { alive = false; };
+  }, []);
   const loadArtifact = useStudioWorkspace((s) => s.loadArtifact);
   const wsTitle = useStudioWorkspace((s) => s.title);
   const wsTemplate = useStudioWorkspace((s) => s.template);
@@ -1061,6 +1072,7 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
               <span className="text-[11px] font-bold">?</span>
             </button>
             {hasFiles && <FocusToggle className="hidden lg:inline-flex" />}
+            <StudioModeBadge liveConfigured={liveConfigured} className="hidden sm:block mr-1" />
             <ThemeSwitcher className="hidden sm:inline-flex" />
             <StatusPulse status={status} className="mr-1" />
             {/* No top "Build" button — building happens through the prompt/chat. A live cloud run
