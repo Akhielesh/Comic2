@@ -282,14 +282,36 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   }
   const requestCustomAgents = sanitizeCustomAgents(body.customAgents);
 
-  const toolContext = clientContext
-    ? {
-        timezone: clientContext.timezone,
-        locale: clientContext.locale,
-        units: clientContext.units,
-        location: clientContext.location
-      }
-    : undefined;
+  // Files attached to the CURRENT user turn (images, CSV/JSON/text) for tools like
+  // run_python. Cap to 6 items; each must be a base64 data URI under ~16MB encoded.
+  const MAX_ATTACHMENTS = 6;
+  const MAX_DATA_URI_LEN = 16_000_000;
+  const attachments = Array.isArray(body.attachments)
+    ? body.attachments
+        .filter(
+          (a): a is { name: string; mimeType: string; dataUri: string } =>
+            !!a &&
+            typeof a === 'object' &&
+            typeof (a as { name?: unknown }).name === 'string' &&
+            typeof (a as { mimeType?: unknown }).mimeType === 'string' &&
+            typeof (a as { dataUri?: unknown }).dataUri === 'string' &&
+            (a as { dataUri: string }).dataUri.startsWith('data:') &&
+            (a as { dataUri: string }).dataUri.length <= MAX_DATA_URI_LEN
+        )
+        .slice(0, MAX_ATTACHMENTS)
+        .map((a) => ({ name: a.name.slice(0, 200), mimeType: a.mimeType.slice(0, 120), dataUri: a.dataUri }))
+    : [];
+
+  const toolContext =
+    clientContext || attachments.length
+      ? {
+          timezone: clientContext?.timezone,
+          locale: clientContext?.locale,
+          units: clientContext?.units,
+          location: clientContext?.location,
+          ...(attachments.length ? { attachments } : {})
+        }
+      : undefined;
 
   // Tools are a BACKEND DEFAULT, not a user setting: the model always has the full
   // free-API tool suite available (OpenRouter only — NVIDIA can't tool-call). The
@@ -320,6 +342,11 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
     routedToolNames = Array.from(
       new Set(['generate_quiz', 'generate_flashcards', 'generate_document', 'generate_bundle', 'image_search', ...routedToolNames])
     ).slice(0, MAX_MODEL_TOOLS);
+  }
+  // When the user attached files, force run_python onto the table so the model can
+  // actually read/convert/process them with real code (its keywords may not match).
+  if (toolsEnabledForProvider && attachments.length) {
+    routedToolNames = Array.from(new Set(['run_python', ...routedToolNames])).slice(0, MAX_MODEL_TOOLS);
   }
   const builtinTools = toolsEnabledForProvider ? resolveTools(routedToolNames, toolContext) : [];
 

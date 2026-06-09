@@ -32,6 +32,7 @@ import { convertDataTool } from './convertData.js';
 import { analyzeDataTool } from './analyzeData.js';
 import { transformDataTool } from './transformData.js';
 import { convertImageTool } from './convertImage.js';
+import { makeRunPythonTool, runPythonTool } from './runPython.js';
 
 export type { ChatTool, ToolExecResult, ToolContext } from './types.js';
 
@@ -803,6 +804,7 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   analyze_data: analyzeDataTool,
   transform_data: transformDataTool,
   convert_image: convertImageTool,
+  run_python: runPythonTool,
   generate_quiz: quizTool,
   generate_flashcards: flashcardsTool,
   generate_document: documentTool,
@@ -837,6 +839,11 @@ export const resolveTools = (names: string[] | undefined, ctx?: ToolContext): Ch
     }
     if (name === 'find_places') {
       tools.push(makePlacesTool(ctx));
+      continue;
+    }
+    if (name === 'run_python') {
+      // Built per-request so the current turn's attachments (on ctx) reach the sandbox.
+      tools.push(makeRunPythonTool(ctx));
       continue;
     }
     const tool = STATIC_TOOLS[name];

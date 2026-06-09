@@ -544,6 +544,14 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       // Situational context (date/timezone/locale/units/coarse location) so the model
       // isn't flying blind on "today"/"latest"/"near me". Never prompts for permission.
       const clientContext = await gatherClientContext().catch(() => undefined);
+      // Files attached to the CURRENT user turn — sent so server-side tools (run_python)
+      // can read/convert/process them. Only THIS turn's files, not the whole history.
+      const currentUserTurn = [...baseTurns].reverse().find((t) => t.role === 'user');
+      const turnAttachments = (currentUserTurn?.attachments || []).map((a) => ({
+        name: a.name,
+        mimeType: a.mimeType,
+        dataUri: a.dataUrl
+      }));
       const reqBody = {
         messages: reqMessages,
         model: reqModel,
@@ -556,6 +564,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         // Custom agents only matter to the swarm (mode or tool); send them only then.
         ...((session.swarm || reqTools.includes('run_agent_swarm')) && customAgents.length ? { customAgents } : {}),
         ...((session.mcpServers || []).length ? { mcpServers: getMcpServersByIds(session.mcpServers || []) } : {}),
+        ...(turnAttachments.length ? { attachments: turnAttachments } : {}),
         ...(session.dreamstreamAccess ? { dreamstreamContext: buildDreamStreamContext(projects) } : {})
       };
       const onDelta = (chunk: string) =>

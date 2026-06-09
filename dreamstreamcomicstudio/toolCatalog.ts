@@ -557,6 +557,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
   },
   // --------------------------------------------------------------- codegen ------
   {
+    name: 'run_python', label: 'Run Python (sandbox)', category: 'codegen', kind: 'builtin', provider: 'DreamStream (Pyodide sandbox)',
+    description: 'Write and run Python in a sandboxed Pyodide (CPython/WASM) runtime to compute, convert/transform data, or convert/resize/modify images. Pillow, numpy and pandas are available. Reads attached files from /input/, writes results to /output/, and returns stdout plus any images/files produced.',
+    auth: 'none', rateLimit: 'Runs in a memory-sandboxed WASM runtime (no host filesystem/network); a single instance serializes runs with a per-run timeout.',
+    dataShape: 'stdout text + produced images (shown inline) and small text/data files (echoed inline).', docsUrl: 'https://pyodide.org',
+    keywords: ['run python', 'python', 'code', 'convert image', 'process file', 'compute', 'script', 'pillow', 'numpy', 'pandas']
+  },
+  {
     name: 'generate_app', label: 'App builder', category: 'codegen', kind: 'builtin', provider: 'DreamStream Code Studio',
     description: 'Build a complete multi-file app (React, vanilla JS, HTML/CSS) and open it in the live Code Studio panel with a real-time preview the user can edit and run.',
     auth: 'none', rateLimit: 'Unlimited (runs in-browser, no API)',
@@ -644,6 +651,7 @@ export const CORE_ALWAYS_TOOLS: string[] = [
   'convert_data',
   'analyze_data',
   'transform_data',
+  'run_python',
   'get_news',
   'wiki_lookup',
   // The app builder must ALWAYS be on the table: "build me X" is phrased a thousand
