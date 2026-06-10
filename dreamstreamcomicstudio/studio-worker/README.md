@@ -84,3 +84,4 @@ so the bare apex `dreamstreamstudio.ai` is never touched by the worker and is fr
 <!-- deploy marker: 2026-06-10T15:44:24Z — trigger worker redeploy after token update -->
 <!-- deploy marker: 2026-06-10T16:17:19Z — verify rotated Cloudflare token -->
 <!-- deploy marker: 2026-06-10T16:23:13Z — token permissions updated -->
+<!-- deploy marker: 2026-06-10T16:31:06Z — workers-scripts-edit added -->
