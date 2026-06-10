@@ -8,9 +8,10 @@
 // science, MATH for math, MMLU for knowledge, Arena Elo for writing); the FRAME —
 // header, filters, rank, provider icon, score bar, actions — is identical everywhere.
 
-import React, { useMemo, useState } from 'react';
-import { Trophy, Crown, Star, Cpu, Type as TypeIcon, ArrowUpDown, Check, Zap, MessageSquare } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Trophy, Crown, Star, Cpu, Type as TypeIcon, ArrowUpDown, Check, Zap, MessageSquare, Gauge, AlertTriangle } from 'lucide-react';
 import { sourceLabel, type CatalogModel, type ModelSource } from '../../services/modelCatalog';
+import { fetchModelSpeed, speedTier, speedLabel, isTimeoutProneFreeModel, type ModelSpeed } from '../../services/modelSpeed';
 import { getModelBenchmarks, formatScore, BENCHMARK_METRICS, type BenchmarkMetricId } from '../../services/modelBenchmarks';
 import { domainStrength, DOMAIN_META, type DomainId } from '../../services/modelDomains';
 import { setStudioModel } from '../../services/studioModelSelection';
@@ -78,6 +79,9 @@ export const DomainLeaderboard: React.FC<DomainLeaderboardProps> = ({ models, on
   const [freeOnly, setFreeOnly] = useState(false);
   const [source, setSource] = useState<SourceFilter>('all');
   const [recent, setRecent] = useState<{ id: string; kind: 'studio' | 'text' } | null>(null);
+  // Real measured latency (median from chat telemetry) — the "is it actually usable" stat.
+  const [speed, setSpeed] = useState<Record<string, ModelSpeed>>({});
+  useEffect(() => { let on = true; fetchModelSpeed().then((s) => { if (on) setSpeed(s); }); return () => { on = false; }; }, []);
 
   const tab = LEADERBOARD_DOMAINS[domainIdx];
   const meta = DOMAIN_META[tab.domain];
@@ -207,12 +211,13 @@ export const DomainLeaderboard: React.FC<DomainLeaderboardProps> = ({ models, on
               ))}
               <SortHeader k="context" label="Context" />
               <SortHeader k="price" label="$/M out" />
+              <th className="px-2 py-2 font-bold text-right whitespace-nowrap" title="Median observed response time from real chat telemetry">Speed</th>
               <th className="px-2 py-2 font-bold text-right">Use</th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr><td colSpan={6 + tab.metrics.length} className="px-3 py-6 text-center text-slate-500">No {meta.label.toLowerCase()}-capable models match these filters yet.</td></tr>
+              <tr><td colSpan={7 + tab.metrics.length} className="px-3 py-6 text-center text-slate-500">No {meta.label.toLowerCase()}-capable models match these filters yet.</td></tr>
             )}
             {rows.map((r, i) => {
               const rec = tab.domain === 'coding' ? recommendedCodingMatch(r.model.id) : null;
@@ -244,6 +249,20 @@ export const DomainLeaderboard: React.FC<DomainLeaderboardProps> = ({ models, on
                   ))}
                   <td className="px-2 py-2 tabular-nums text-right">{r.contextK ? `${r.contextK}K` : <span className="text-slate-300">—</span>}</td>
                   <td className="px-2 py-2 tabular-nums text-right">{r.pricePerM === 0 ? <span className="text-green-600 font-bold">free</span> : r.pricePerM != null ? `$${r.pricePerM.toFixed(2)}` : <span className="text-slate-300">—</span>}</td>
+                  <td className="px-2 py-2 tabular-nums text-right whitespace-nowrap">
+                    {(() => {
+                      const sp = speed[r.model.id];
+                      if (sp && sp.samples > 0) {
+                        const tier = speedTier(sp.p50Ms);
+                        const tone = tier === 'fast' ? 'text-green-600' : tier === 'ok' ? 'text-slate-600' : 'text-amber-600';
+                        return <span className={`inline-flex items-center gap-1 font-semibold ${tone}`} title={`Median ${speedLabel(sp.p50Ms)} over ${sp.samples} real chats`}><Gauge className="w-3 h-3" />{speedLabel(sp.p50Ms)}</span>;
+                      }
+                      if (isTimeoutProneFreeModel(r.model.id, r.model.isFree)) {
+                        return <span className="inline-flex items-center gap-1 text-amber-600 font-semibold" title="Very large free-tier model — routinely queues/times out"><AlertTriangle className="w-3 h-3" />slow</span>;
+                      }
+                      return <span className="text-slate-300">—</span>;
+                    })()}
+                  </td>
                   <td className="px-2 py-2">
                     <div className="flex items-center justify-end gap-1">
                       {tab.domain === 'coding' && (
