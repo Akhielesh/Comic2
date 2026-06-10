@@ -103,3 +103,22 @@ export const ACTIVE_ROW = `${RADIUS_CONTROL} ${ACCENT_SOFT_BG} text-[var(--ds-in
 
 /** Floating dropdown/context menu. */
 export const MENU = `bg-[var(--ds-surface-strong)] backdrop-blur-md ${HAIRLINE} ${SHADOW_SOFT} ${RADIUS_CONTROL}`;
+
+/** Row inside a floating menu (icon + label, quiet hover). */
+export const MENU_ITEM = `w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-left hover:bg-[var(--ds-hover)] ${TRANSITION}`;
+
+// ---------------------------------------------------------------------------
+// Sidebar rail (Claude-style compact navigation)
+// ---------------------------------------------------------------------------
+
+/** Quiet top-level nav row in the sidebar rail (icon + label). */
+export const NAV_ROW = `w-full flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${TRANSITION}`;
+
+/** Active nav row — soft accent tint, same geometry as NAV_ROW. */
+export const NAV_ROW_ACTIVE = `w-full flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-[var(--ds-ink)] bg-[#D97757]/10 ${TRANSITION}`;
+
+/** Compact session row in the rail (single-line truncated title). */
+export const RAIL_ROW = `rounded-lg px-2.5 py-1.5 text-[13px] hover:bg-[var(--ds-hover)] ${TRANSITION}`;
+
+/** Active session row — soft accent tint. */
+export const RAIL_ROW_ACTIVE = `rounded-lg px-2.5 py-1.5 text-[13px] bg-[#D97757]/10 text-[var(--ds-ink)] ${TRANSITION}`;

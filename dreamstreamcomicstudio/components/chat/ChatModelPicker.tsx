@@ -22,7 +22,7 @@ import {
 const SpeedBadge: React.FC<{ speed?: ModelSpeed }> = ({ speed }) => {
   if (!speed) return null;
   const tier = speedTier(speed.p50Ms);
-  const cls = tier === 'fast' ? 'bg-green-50 text-green-700' : tier === 'ok' ? 'bg-black/5 text-[var(--ds-muted)]' : 'bg-red-50 text-red-600';
+  const cls = tier === 'fast' ? 'bg-green-500/10 text-green-600' : tier === 'ok' ? 'bg-[var(--ds-well-strong)] text-[var(--ds-muted)]' : 'bg-red-500/10 text-red-600';
   const Icon = tier === 'slow' ? Gauge : Zap;
   return (
     <span
@@ -69,24 +69,24 @@ const CapabilityChips: React.FC<{ model: CatalogModel; speed?: ModelSpeed }> = (
       <SpeedBadge speed={speed} />
       {timeoutProne && (
         <span
-          className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-red-50 text-red-600 flex items-center gap-0.5`}
+          className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-red-500/10 text-red-600 flex items-center gap-0.5`}
           title="Very large free model — it often queues on the free tier and can time out. Prefer a smaller/faster model, or use Auto."
         >
           <Gauge className="w-2.5 h-2.5" /> May time out
         </span>
       )}
-      {caps.isFree && <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-green-50 text-green-700`}>Free</span>}
+      {caps.isFree && <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-green-500/10 text-green-600`}>Free</span>}
       {caps.reasoning && (
-        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-indigo-50 text-indigo-600 flex items-center gap-0.5`}><Brain className="w-2.5 h-2.5" /> Reason</span>
+        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-indigo-500/10 text-indigo-500 flex items-center gap-0.5`}><Brain className="w-2.5 h-2.5" /> Reason</span>
       )}
       {caps.imageInput && (
-        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-amber-50 text-amber-700 flex items-center gap-0.5`}><Eye className="w-2.5 h-2.5" /> Vision</span>
+        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-amber-500/10 text-amber-600 flex items-center gap-0.5`}><Eye className="w-2.5 h-2.5" /> Vision</span>
       )}
       {model.source === 'openrouter' && (
-        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-sky-50 text-sky-700 flex items-center gap-0.5`}><Globe className="w-2.5 h-2.5" /> Web</span>
+        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-sky-500/10 text-sky-600 flex items-center gap-0.5`}><Globe className="w-2.5 h-2.5" /> Web</span>
       )}
       {typeof model.contextLength === 'number' && model.contextLength > 0 && (
-        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-black/5 text-[var(--ds-muted)]`}>{Math.round(model.contextLength / 1000)}K ctx</span>
+        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-[var(--ds-well-strong)] text-[var(--ds-muted)]`}>{Math.round(model.contextLength / 1000)}K ctx</span>
       )}
     </div>
   );
@@ -174,7 +174,7 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
           </div>
 
           {hasMessages && (
-            <div className="mx-4 mt-3 -mb-1 flex items-start gap-2 text-[11px] bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+            <div className="mx-4 mt-3 -mb-1 flex items-start gap-2 text-[11px] bg-amber-500/10 border border-amber-500/30 rounded-xl px-3 py-2">
               <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
               <span>
                 <span className="font-bold">Switching model mid-chat.</span> The new model picks up this same conversation, but tone, style and capabilities can change — and reasoning/web/vision options adjust to what it supports.
@@ -217,7 +217,7 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
 
           <div className="flex-1 overflow-y-auto p-4">
             {loading ? (
-              <div className="flex items-center justify-center py-16 text-slate-500"><Loader2 className="w-6 h-6 animate-spin" /></div>
+              <div className="flex items-center justify-center py-16 text-[var(--ds-muted)]"><Loader2 className="w-6 h-6 animate-spin" /></div>
             ) : (
               <>
                 {error && <p className="text-xs text-red-600 font-semibold mb-3">{error}</p>}
@@ -237,7 +237,7 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
                           disabled={incompatible}
                           className={`text-left rounded-xl p-3 transition-all duration-200 ${
                             incompatible
-                              ? `${HAIRLINE} bg-black/5 opacity-60 cursor-not-allowed`
+                              ? `${HAIRLINE} bg-[var(--ds-well-strong)] opacity-60 cursor-not-allowed`
                               : isSelected
                                 ? `border border-[#D97757]/40 ${ACCENT_SOFT_BG} ${SHADOW_SOFT}`
                                 : `${HAIRLINE} bg-[var(--ds-surface-soft)] ${SHADOW_SOFT} hover:bg-[var(--ds-raised)] ${HOVER_LIFT}`

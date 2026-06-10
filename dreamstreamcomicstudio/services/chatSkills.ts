@@ -4,7 +4,14 @@
 // values to run it with. The composer shows a live menu as you type `/`, and the run is
 // streamed back into the conversation via /api/recipes/run.
 //
+// Curation rule: every skill is a real feature with its own backing recipe — no thin
+// parameter presets. (The old /deepresearch, /science and /stock variants were folded
+// into /research and /market: `research` now reads depth cues like "deep …" from the
+// argument itself, and `market` takes the ticker directly.)
+//
 // Adding a skill is a single entry here.
+
+export type SkillCategory = 'create' | 'research' | 'learn' | 'life' | 'build';
 
 export interface ChatSkill {
   /** Canonical command typed after `/` (lowercase, no spaces). */
@@ -15,6 +22,8 @@ export interface ChatSkill {
   description: string;
   /** A simple glyph shown in the menu (kept dependency-free). */
   emoji: string;
+  /** Which shelf the skill sits on (Skills page sections, menu badge). */
+  category: SkillCategory;
   /** The built-in recipe id this skill runs. */
   recipeId: string;
   /** Human name of the main argument (used as the input hint). */
@@ -25,13 +34,23 @@ export interface ChatSkill {
   buildValues: (arg: string) => Record<string, unknown>;
 }
 
+/** Display order + labels for the Skills page sections. */
+export const SKILL_CATEGORIES: { id: SkillCategory; label: string }[] = [
+  { id: 'create', label: 'Create' },
+  { id: 'research', label: 'Research' },
+  { id: 'learn', label: 'Learn' },
+  { id: 'life', label: 'Life' },
+  { id: 'build', label: 'Build' }
+];
+
 export const CHAT_SKILLS: ChatSkill[] = [
   {
     command: 'learn',
     aliases: ['course', 'teach', 'study'],
     label: 'Guided learning',
-    description: 'Build a progress-tracked course: modules · lessons · practice · checkpoints',
+    description: 'Turn any topic into a progress-tracked course — modules, lessons, hands-on practice, quiz checkpoints',
     emoji: '🎓',
+    category: 'learn',
     recipeId: 'guided-learning-course',
     argName: 'topic',
     argRequired: true,
@@ -40,9 +59,10 @@ export const CHAT_SKILLS: ChatSkill[] = [
   {
     command: 'trip',
     aliases: ['travel', 'itinerary', 'vacation'],
-    label: 'Travel planner',
-    description: 'Day-by-day itinerary with live map, weather, budget & packing list',
+    label: 'Trip planner',
+    description: 'A researched day-by-day itinerary with live map, real weather, budget in local currency & packing list',
     emoji: '🧳',
+    category: 'life',
     recipeId: 'travel-planner',
     argName: 'destination (e.g. "Tokyo, 5 days")',
     argRequired: true,
@@ -60,62 +80,54 @@ export const CHAT_SKILLS: ChatSkill[] = [
   },
   {
     command: 'research',
-    label: 'Research',
-    description: 'Multi-agent research → a sourced brief',
-    emoji: '🔬',
-    recipeId: 'deep-research-brief',
-    argName: 'topic',
-    argRequired: true,
-    buildValues: (arg) => ({ topic: arg, depth: 'standard' })
-  },
-  {
-    command: 'deepresearch',
-    aliases: ['deep', 'dr'],
+    aliases: ['deepresearch', 'deep', 'dr', 'investigate'],
     label: 'Deep research',
-    description: 'Exhaustive multi-agent research dossier',
-    emoji: '🧠',
+    description: 'Multi-agent investigation that reads real sources → a cited, decision-ready brief. Say "deep …" for the exhaustive dossier',
+    emoji: '🔬',
+    category: 'research',
     recipeId: 'deep-research-brief',
-    argName: 'topic',
+    argName: 'topic (prefix "deep" or "quick" to set depth)',
     argRequired: true,
-    buildValues: (arg) => ({ topic: arg, depth: 'exhaustive' })
-  },
-  {
-    command: 'science',
-    label: 'Science',
-    description: 'Technical/scientific deep-dive with sources',
-    emoji: '⚗️',
-    recipeId: 'deep-research-brief',
-    argName: 'topic',
-    argRequired: true,
-    buildValues: (arg) => ({ topic: arg, audience: 'a scientific / technical reader', depth: 'exhaustive' })
+    buildValues: (arg) => {
+      // Depth cues live in the argument: "/research deep dive on fusion" → exhaustive,
+      // "/research quick look at fusion" → quick. Default stays 'standard'.
+      const DEEP = /^(?:deep(?:[\s-]?dive)?|deeply|exhaustive(?:ly)?|thorough(?:ly)?|comprehensive|in[\s-]?depth)\b[:,]?\s*/i;
+      const QUICK = /^(?:quick(?:ly)?|brief(?:ly)?|fast)\b[:,]?\s*/i;
+      let topic = arg.trim();
+      let depth: 'quick' | 'standard' | 'exhaustive' = 'standard';
+      if (DEEP.test(topic)) {
+        depth = 'exhaustive';
+        topic = topic.replace(DEEP, '');
+      } else if (QUICK.test(topic)) {
+        depth = 'quick';
+        topic = topic.replace(QUICK, '');
+      }
+      if (depth !== 'standard') {
+        // Strip the leftover connector: "deep research on X" → "X", "quick look at Y" → "Y".
+        topic = topic.replace(/^(?:research|dive|dig|look)?\s*(?:into|on|about|at)\s+/i, '').trim();
+      }
+      return { topic: topic || arg.trim(), depth };
+    }
   },
   {
     command: 'market',
-    aliases: ['markets', 'financial', 'finance'],
+    aliases: ['markets', 'stock', 'stocks', 'ticker', 'quote', 'finance', 'financial'],
     label: 'Market pulse',
-    description: 'Live markets terminal: quote · indices · watchlist · heatmap · news',
+    description: 'A live markets terminal — focus quote, index ribbon, watchlist, sector heatmap & the news behind the moves',
     emoji: '📈',
+    category: 'research',
     recipeId: 'market-pulse',
-    argName: 'focus ticker (optional)',
+    argName: 'ticker (optional, e.g. NVDA)',
     argRequired: false,
-    buildValues: (arg) => (arg ? { focus: arg } : {})
-  },
-  {
-    command: 'stock',
-    aliases: ['ticker', 'quote'],
-    label: 'Stock',
-    description: 'Deep-dive a single ticker with live data',
-    emoji: '💹',
-    recipeId: 'market-pulse',
-    argName: 'ticker',
-    argRequired: true,
-    buildValues: (arg) => ({ focus: arg, watchlist: arg })
+    buildValues: (arg) => (arg ? { focus: arg.trim() } : {})
   },
   {
     command: 'comic',
-    label: 'Comic concept',
-    description: 'Forge a comic concept: logline · world · cast · beats',
+    aliases: ['concept', 'series'],
+    label: 'Comic concept forge',
+    description: 'Forge a complete series concept — logline, world bible, cast with consistent visual signatures, first-arc beats',
     emoji: '💥',
+    category: 'create',
     recipeId: 'comic-concept-forge',
     argName: 'premise',
     argRequired: true,
@@ -123,10 +135,11 @@ export const CHAT_SKILLS: ChatSkill[] = [
   },
   {
     command: 'script',
-    aliases: ['panels'],
+    aliases: ['panels', 'page'],
     label: 'Panel script',
-    description: 'Turn a beat into a panel-by-panel comic script',
+    description: 'Direct a story beat into a shot-listed page — SHOT, ART and DIALOGUE for every panel, continuity kept',
     emoji: '🎬',
+    category: 'create',
     recipeId: 'panel-script-from-beat',
     argName: 'beat',
     argRequired: true,
@@ -134,21 +147,23 @@ export const CHAT_SKILLS: ChatSkill[] = [
   },
   {
     command: 'audit',
-    aliases: ['consistency'],
-    label: 'Consistency audit',
-    description: 'Find continuity breaks in a story bundle',
+    aliases: ['consistency', 'continuity'],
+    label: 'Continuity audit',
+    description: 'Hunt down continuity breaks — character drift, contradicted world rules, timeline errors — each with its smallest fix',
     emoji: '🔎',
+    category: 'create',
     recipeId: 'world-consistency-audit',
-    argName: 'material',
+    argName: 'material to audit',
     argRequired: true,
     buildValues: (arg) => ({ material: arg })
   },
   {
     command: 'build',
-    aliases: ['app', 'code'],
-    label: 'Build',
-    description: 'Implement a small app/feature as runnable code',
+    aliases: ['app', 'code', 'ship'],
+    label: 'Ship a feature',
+    description: 'Implement a small app or feature as complete, runnable code — full files, no placeholders, notes on key decisions',
     emoji: '⚙️',
+    category: 'build',
     recipeId: 'ship-ready-feature',
     argName: 'spec',
     argRequired: true,

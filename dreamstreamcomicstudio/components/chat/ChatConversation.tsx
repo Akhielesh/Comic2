@@ -213,8 +213,11 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
 
   return (
     <div className={`flex-1 flex flex-col min-w-0 min-h-0 h-full ${CANVAS_BG}`}>
-      {/* Header */}
-      <div className={`flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-3 border-b border-[var(--ds-hairline)] ${GLASS}`}>
+      {/* Header. `relative z-20` is load-bearing: GLASS's backdrop-blur creates a
+          stacking context, and without an explicit z-index the positioned messages
+          container below paints OVER the header's dropdowns (session/debug menu,
+          context meter popover) — they open but appear "covered" by the thread. */}
+      <div className={`relative z-20 flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-3 border-b border-[var(--ds-hairline)] ${GLASS}`}>
         <button
           onClick={onToggleSidebar}
           className={`${CONTROL_BTN} p-2 sm:p-1.5 tap-target`}

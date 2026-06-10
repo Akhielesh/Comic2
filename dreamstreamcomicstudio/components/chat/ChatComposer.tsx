@@ -9,7 +9,7 @@ import type { McpServerConfig } from '../../apiTypes';
 import { type ChatSkill, isSlashQuery, slashQuery, filterSkills, parseSkillInput } from '../../services/chatSkills';
 import { DictationButton } from './DictationButton';
 import {
-  CANVAS_BG, GLASS_STRONG, HAIRLINE, MENU, MUTED, LABEL, TRANSITION, SHADOW_SOFT,
+  CANVAS_BG, GLASS_STRONG, HAIRLINE, MUTED, LABEL, TRANSITION, SHADOW_SOFT,
   RADIUS_PANEL, PILL, CONTROL_BTN, ACCENT_BG, ACCENT_BG_HOVER, ACCENT_TEXT, ACCENT_SOFT_BG
 } from './studioDesign';
 
@@ -365,13 +365,12 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
       )}
 
       <div className="relative flex items-end gap-2">
-        {/* Slash-command (skills) menu */}
+        {/* Slash-command (skills) menu — refined palette style */}
         {menuOpen && (
-          <div className={`absolute bottom-full left-0 right-0 z-20 mb-2 overflow-hidden ${MENU} animate-fade-in`}>
-            <div className={`flex items-center gap-1 border-b border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 py-1.5 ${LABEL}`}>
-              <Slash className="h-3 w-3" /> Skills — ↑↓ choose · Enter to pick · Esc to dismiss
-            </div>
-            <ul className="max-h-64 overflow-y-auto">
+          <div
+            className={`absolute bottom-full left-0 right-0 z-20 mb-2 overflow-hidden rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] backdrop-blur-md shadow-[0_2px_4px_rgba(0,0,0,0.04),0_16px_40px_var(--ds-hairline)] animate-fade-in`}
+          >
+            <ul className="max-h-72 overflow-y-auto p-1.5">
               {skillMatches.map((s, i) => {
                 const active = i === Math.min(skillIndex, skillMatches.length - 1);
                 return (
@@ -383,21 +382,56 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                         acceptSkill(s);
                       }}
                       onMouseEnter={() => setSkillIndex(i)}
-                      className={`flex w-full items-start gap-2 px-3 py-2 text-left ${TRANSITION} ${active ? 'bg-[#D97757]/10' : 'hover:bg-[var(--ds-hover)]'}`}
+                      className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left ${TRANSITION} ${active ? 'bg-[#D97757]/10' : 'hover:bg-[var(--ds-hover)]'}`}
                     >
-                      <span className="mt-0.5 text-base leading-none">{s.emoji}</span>
+                      <span
+                        aria-hidden
+                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-base leading-none ${TRANSITION} ${active ? 'bg-[#D97757]/10' : 'bg-[var(--ds-well)]'}`}
+                      >
+                        {s.emoji}
+                      </span>
                       <span className="min-w-0 flex-1">
-                        <span className="flex items-center gap-1.5">
-                          <code className="text-[12px] font-semibold">/{s.command}</code>
-                          <span className={`text-[11px] ${MUTED}`}>{s.argRequired ? `<${s.argName}>` : `[${s.argName}]`}</span>
+                        <span className="flex items-baseline gap-1.5">
+                          <code className="text-[12px] font-semibold text-[var(--ds-ink)]">/{s.command}</code>
+                          <span className={`truncate text-[11px] ${MUTED}`}>
+                            {s.argRequired ? `<${s.argName}>` : `[${s.argName}]`}
+                          </span>
                         </span>
-                        <span className={`block text-[11px] ${MUTED}`}>{s.description}</span>
+                        <span className={`block truncate text-[11px] ${MUTED}`}>{s.description}</span>
+                      </span>
+                      <span
+                        className={`ml-2 shrink-0 self-start pt-0.5 text-[9px] font-semibold uppercase tracking-wider ${
+                          active ? ACCENT_TEXT : MUTED
+                        }`}
+                      >
+                        {s.category}
                       </span>
                     </button>
                   </li>
                 );
               })}
             </ul>
+            <div
+              className={`flex items-center justify-between border-t border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] px-3 py-1.5 ${LABEL}`}
+            >
+              <span className="flex items-center gap-1">
+                <Slash className="h-3 w-3" /> Skills
+              </span>
+              <span className="flex items-center gap-2 normal-case tracking-normal">
+                <span className="flex items-center gap-1">
+                  <kbd className={`rounded border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-1 py-px font-sans text-[9px] ${MUTED}`}>↑↓</kbd>
+                  choose
+                </span>
+                <span className="flex items-center gap-1">
+                  <kbd className={`rounded border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-1 py-px font-sans text-[9px] ${MUTED}`}>↵</kbd>
+                  pick
+                </span>
+                <span className="flex items-center gap-1">
+                  <kbd className={`rounded border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-1 py-px font-sans text-[9px] ${MUTED}`}>esc</kbd>
+                  dismiss
+                </span>
+              </span>
+            </div>
           </div>
         )}
         {(

@@ -61,7 +61,7 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({ code, lang }) => {
   );
 
   return (
-    <div className="my-2 rounded-lg border-2 border-black overflow-hidden">
+    <div className="my-2 rounded-lg border border-[var(--ds-hairline)] overflow-hidden">
       <div className="flex items-center justify-between px-3 py-1 bg-zinc-800 text-zinc-200 text-[11px] font-mono">
         <div className="flex items-center gap-2">
           <span className="uppercase tracking-wide">{lang || 'code'}</span>

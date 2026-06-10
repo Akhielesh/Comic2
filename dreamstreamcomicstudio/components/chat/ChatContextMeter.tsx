@@ -38,7 +38,7 @@ export const ChatContextMeter: React.FC<ChatContextMeterProps> = ({ usedTokens, 
   return (
     <div
       className={`group relative hidden md:flex items-center gap-1.5 text-[11px] font-semibold ${HAIRLINE} rounded-full px-2.5 py-1 cursor-default transition-all duration-200 ${
-        critical ? 'bg-red-50 text-red-600' : warn ? 'bg-amber-50 text-amber-700' : `bg-[var(--ds-surface-soft)] ${MUTED}`
+        critical ? 'bg-red-500/10 text-red-600' : warn ? 'bg-amber-500/10 text-amber-600' : `bg-[var(--ds-surface-soft)] ${MUTED}`
       }`}
       title={tooltip}
     >
@@ -47,7 +47,7 @@ export const ChatContextMeter: React.FC<ChatContextMeterProps> = ({ usedTokens, 
         {known ? `${fmt(usedTokens)}/${fmt(contextLength)}` : `~${fmt(usedTokens)}`}
       </span>
       {known && (
-        <span className="w-14 h-1.5 rounded-full bg-black/10 overflow-hidden">
+        <span className="w-14 h-1.5 rounded-full bg-[var(--ds-hairline)] overflow-hidden">
           <span className={`block h-full ${barColor}`} style={{ width: `${pct}%` }} />
         </span>
       )}

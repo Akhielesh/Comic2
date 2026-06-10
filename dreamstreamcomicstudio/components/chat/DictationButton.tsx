@@ -47,18 +47,70 @@ const MODEL_OPTIONS: { id: WhisperModelSize; label: string; hint: string }[] = [
 
 const formatClock = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 
-/** Animated 5-bar level meter driven by the live mic loudness. */
-const LevelMeter: React.FC<{ level: number }> = ({ level }) => (
-  <div className="flex h-5 items-center gap-[3px]" aria-hidden>
-    {[0.5, 0.8, 1, 0.7, 0.45].map((w, i) => (
-      <span
-        key={i}
-        className="w-[3px] rounded-full bg-[var(--ds-accent)] transition-all duration-100"
-        style={{ height: `${Math.max(18, Math.min(100, level * 100 * w + 12))}%` }}
-      />
-    ))}
-  </div>
-);
+// --- Waveform -----------------------------------------------------------------
+// A smooth voice waveform: slim accent bars whose heights chase the live mic level
+// with per-bar phase offsets and critically-damped smoothing. Heights are animated
+// imperatively inside one requestAnimationFrame loop (lerp toward a moving target
+// each frame) instead of CSS transitions on prop changes, so the wave undulates
+// organically rather than jittering. Idle bars settle into a quiet row of dots.
+
+const WAVE_BARS = 14;
+const WAVE_HEIGHT = 20; // px — matches the h-5 row
+const WAVE_REST = 3; // px — the resting "dot" height
+
+/** Per-bar gain + opacity falloff: full at center, soft at the edges. */
+const waveFalloff = (i: number) => {
+  const x = (i - (WAVE_BARS - 1) / 2) / ((WAVE_BARS - 1) / 2); // -1..1
+  return 0.35 + 0.65 * Math.cos(x * (Math.PI / 2.4));
+};
+
+const Waveform: React.FC<{ level: number }> = ({ level }) => {
+  const levelRef = useRef(level);
+  levelRef.current = level;
+  const barsRef = useRef<(HTMLSpanElement | null)[]>([]);
+
+  useEffect(() => {
+    const phases = Array.from({ length: WAVE_BARS }, (_, i) => i * 1.7 + Math.random() * Math.PI);
+    const speeds = Array.from({ length: WAVE_BARS }, () => 2.4 + Math.random() * 1.8);
+    const heights = new Array<number>(WAVE_BARS).fill(0);
+    let raf = 0;
+    let last = performance.now();
+    const tick = (now: number) => {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      const t = now / 1000;
+      const amp = Math.min(1, levelRef.current * 1.9);
+      for (let i = 0; i < WAVE_BARS; i++) {
+        // Target: live level, shaped by the center falloff and a slow per-bar wobble.
+        const wobble = 0.55 + 0.45 * Math.sin(t * speeds[i] + phases[i]);
+        const target = amp * waveFalloff(i) * wobble;
+        // Critically-damped chase — quick attack, gentle release.
+        const rate = target > heights[i] ? 22 : 9;
+        heights[i] += (target - heights[i]) * (1 - Math.exp(-dt * rate));
+        const el = barsRef.current[i];
+        if (el) el.style.height = `${WAVE_REST + heights[i] * (WAVE_HEIGHT - WAVE_REST)}px`;
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  return (
+    <div className="flex h-5 items-center gap-[2px]" aria-hidden>
+      {Array.from({ length: WAVE_BARS }, (_, i) => (
+        <span
+          key={i}
+          ref={(el) => {
+            barsRef.current[i] = el;
+          }}
+          className="w-[2px] rounded-full bg-[var(--ds-accent)]"
+          style={{ height: WAVE_REST, opacity: 0.3 + 0.7 * waveFalloff(i) }}
+        />
+      ))}
+    </div>
+  );
+};
 
 export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPartial, onFinal, onStart }) => {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -127,7 +179,7 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
       {/* Recording / transcribing bar floats above the composer row. */}
       {busy && (
         <div
-          className={`absolute bottom-full right-0 z-30 mb-2 flex w-[min(20rem,78vw)] items-center gap-2.5 ${GLASS_STRONG} ${HAIRLINE} ${SHADOW_SOFT} rounded-2xl px-3 py-2 animate-fade-in`}
+          className={`absolute bottom-full right-0 z-30 mb-2 flex w-[min(21rem,80vw)] items-center gap-3 ${GLASS_STRONG} ${HAIRLINE} ${SHADOW_SOFT} rounded-2xl px-3.5 py-2 animate-fade-in`}
         >
           {status === 'transcribing' ? (
             <>
@@ -153,7 +205,7 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-60" />
                 <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
               </span>
-              <LevelMeter level={level} />
+              <Waveform level={level} />
               <span className="flex-1 text-[12px] font-semibold tabular-nums text-[var(--ds-ink)]">{formatClock(elapsed)}</span>
               <span className={`hidden text-[10px] sm:block ${MUTED}`}>
                 {settings.engine === 'whisper' ? 'on-device' : 'browser'}
