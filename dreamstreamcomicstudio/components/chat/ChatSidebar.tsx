@@ -68,10 +68,10 @@ const SessionRow: React.FC<{
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setEditing(false); }}
-          className="flex-1 min-w-0 text-sm outline-none bg-transparent font-medium"
+          className="flex-1 min-w-0 text-base sm:text-sm outline-none bg-transparent font-medium"
         />
-        <button onClick={commitRename} className="text-green-600 hover:scale-110"><Check className="w-4 h-4" /></button>
-        <button onClick={() => setEditing(false)} className="text-slate-500 hover:scale-110"><X className="w-4 h-4" /></button>
+        <button onClick={commitRename} className="tap-target p-1 text-green-600 hover:scale-110"><Check className="w-4 h-4" /></button>
+        <button onClick={() => setEditing(false)} className="tap-target p-1 text-slate-500 hover:scale-110"><X className="w-4 h-4" /></button>
       </div>
     );
   }
@@ -95,7 +95,7 @@ const SessionRow: React.FC<{
       <div ref={menuRef} className="relative">
         <button
           onClick={(e) => { e.stopPropagation(); setMenuOpen((v) => !v); }}
-          className={`p-1 rounded-lg hover:bg-black/5 ${TRANSITION} ${menuOpen ? 'opacity-100' : 'hover-reveal'}`}
+          className={`tap-target p-1.5 sm:p-1 rounded-lg hover:bg-black/5 ${TRANSITION} ${menuOpen ? 'opacity-100' : 'hover-reveal'}`}
           title="Options"
         >
           <MoreVertical className="w-4 h-4" />
@@ -172,7 +172,7 @@ const ProjectGroup: React.FC<{
           <span className="text-[10px] text-[#6e6a60]/70 shrink-0">{sessions.length}</span>
         </button>
         <div ref={menuRef} className="relative">
-          <button onClick={() => setMenuOpen((v) => !v)} className={`p-1 rounded-lg hover:bg-black/5 ${TRANSITION} ${menuOpen ? 'opacity-100' : 'hover-reveal'}`}><MoreVertical className="w-4 h-4" /></button>
+          <button onClick={() => setMenuOpen((v) => !v)} className={`tap-target p-1.5 sm:p-1 rounded-lg hover:bg-black/5 ${TRANSITION} ${menuOpen ? 'opacity-100' : 'hover-reveal'}`}><MoreVertical className="w-4 h-4" /></button>
           {menuOpen && (
             <div className={`absolute right-0 top-7 z-30 w-36 ${MENU} py-1`}>
               <button onClick={() => { setMenuOpen(false); onEdit(); }} className="w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-black/5 text-left"><Pencil className="w-3.5 h-3.5" /> Edit</button>
@@ -279,7 +279,7 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
   }
 
   return (
-    <div className={`w-72 shrink-0 h-full flex flex-col border-r border-black/10 ${SIDEBAR_BG} transition-all duration-200`}>
+    <div className={`w-72 max-w-[85vw] shrink-0 h-full flex flex-col border-r border-black/10 ${SIDEBAR_BG} transition-all duration-200`}>
       <div className="p-3 border-b border-black/10 space-y-2">
         <div className="flex items-center justify-between">
           <button onClick={onBack} className={`flex items-center gap-1 text-xs font-medium ${MUTED} hover:text-[#1a1915] ${TRANSITION}`}>
@@ -299,7 +299,9 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-2 space-y-2">
+      {/* The drawer panel scrolls here (not the page); overscroll-contain stops the
+          rubber-band from bleeding into the conversation behind it on phones. */}
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain [-webkit-overflow-scrolling:touch] p-2 space-y-2">
         {/* Projects */}
         {projects.map((project) => (
           <ProjectGroup
@@ -338,7 +340,8 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
         </div>
       </div>
 
-      <div className="p-3 border-t border-black/10 space-y-2">
+      {/* Footer respects the home-indicator safe area when shown as a mobile drawer. */}
+      <div className="p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t border-black/10 space-y-2">
         <button onClick={onEditMemory} className={`w-full flex items-center gap-2 ${CONTROL_BTN} px-3 py-1.5 text-sm font-medium ${hasMemory ? 'bg-[#D97757]/10' : ''}`} title="Memory, agents and tools">
           <SlidersHorizontal className="w-4 h-4" /> Settings {hasMemory ? '· memory on' : ''}
         </button>

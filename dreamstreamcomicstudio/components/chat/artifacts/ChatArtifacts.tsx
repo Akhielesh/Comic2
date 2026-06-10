@@ -2,6 +2,7 @@ import React from 'react';
 import type { ChatArtifact, WeatherArtifact, VideoResultsArtifact, MapArtifact, NewsResultsArtifact, StockQuoteArtifact, SwarmTraceArtifact, PlacesResultsArtifact, ChartArtifact, MetricBoardArtifact, DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact, RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact, CodeExerciseArtifact, GenerativeUIArtifact } from '../../../apiTypes';
 import type { DashboardArtifact } from '../../../apiTypes';
 import { ArtifactBoundary } from './ArtifactBoundary';
+import { WidgetFrame } from './WidgetFrame';
 import { WeatherStation } from './WeatherStation';
 import { VideoResults } from './VideoResults';
 import { MapArtifactCard } from './MapArtifactCard';
@@ -64,12 +65,45 @@ const ARTIFACT_RENDERERS: Record<string, (data: unknown, key: number) => React.R
 /** Every artifact type the renderer can display. Cross-checked against the gallery. */
 export const ARTIFACT_TYPES: string[] = Object.keys(ARTIFACT_RENDERERS);
 
+// Cards that implement a bespoke compact ("glance") layout via useDensity(). Cards
+// not listed here still get a working compact mode — the WidgetFrame clamps them to
+// a short faded preview. Keep this in sync when a card learns a real compact layout.
+export const DENSITY_AWARE_TYPES = new Set([
+  'weather',
+  'stock_quote',
+  'news_results',
+  'chart',
+  'metric_board',
+  'data_table',
+  'market_heatmap',
+  'finance_terminal',
+  'places_results',
+  'video_results',
+  'research_report',
+  'swarm_trace',
+  'flashcards',
+  'document',
+  'map'
+]);
+
 const renderArtifact = (artifact: ChatArtifact, key: number): React.ReactNode => {
   const node = ARTIFACT_RENDERERS[artifact.type]?.(artifact.data, key) ?? null;
   if (node === null) return null;
+  // The AI can pre-pick a glance card by emitting `density: 'compact'` in the data.
+  const hint = (artifact.data as { density?: string } | null | undefined)?.density;
   // Every artifact is wrapped so a malformed `data` payload (artifact.data is `unknown`)
   // can't blank the whole message — it degrades to a small inline notice instead.
-  return <ArtifactBoundary key={key} label={artifact.type}>{node}</ArtifactBoundary>;
+  return (
+    <ArtifactBoundary key={key} label={artifact.type}>
+      <WidgetFrame
+        type={artifact.type}
+        densityHint={hint === 'compact' || hint === 'detailed' ? hint : undefined}
+        densityAware={DENSITY_AWARE_TYPES.has(artifact.type)}
+      >
+        {node}
+      </WidgetFrame>
+    </ArtifactBoundary>
+  );
 };
 
 // Large/interactive artifacts span the full width; compact cards (market quotes,

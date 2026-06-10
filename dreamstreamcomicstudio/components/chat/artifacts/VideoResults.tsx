@@ -1,13 +1,17 @@
 import React from 'react';
 import { PlayCircle, Video, ExternalLink } from 'lucide-react';
 import type { VideoResultsArtifact, VideoResult } from '../../../apiTypes';
+import { Surface, SurfaceTitle, SurfaceSubtitle, useCompact } from './kit';
 import { useChatPanel } from '../panelContext';
 import { toVideoEmbed } from '../videoEmbed';
 
-// Responsive video grid — 1 col on phones, up to 3 on wide screens. Clicking a
-// playable video (YouTube/Vimeo) opens it inline in the side panel; everything
-// else opens the original in a new tab. A small ↗ always opens the original.
+// Video results in two densities:
+//  • compact — a 2-up row of small thumbnails: the glance version.
+//  • detailed — the responsive grid (1 col on phones, up to 3 wide). Clicking a
+//    playable video (YouTube/Vimeo) opens it inline in the side panel; everything
+//    else opens the original in a new tab. A small ↗ always opens the original.
 export const VideoResults: React.FC<{ data: VideoResultsArtifact }> = ({ data }) => {
+  const compact = useCompact();
   const openPanel = useChatPanel();
 
   const play = (v: VideoResult) => {
@@ -20,12 +24,51 @@ export const VideoResults: React.FC<{ data: VideoResultsArtifact }> = ({ data })
   };
 
   if (!data.results?.length) return null;
+
+  const header = (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <Video className="h-4 w-4 shrink-0 text-[#6e6a60]" />
+      <SurfaceTitle>Videos · “{data.query}”</SurfaceTitle>
+    </span>
+  );
+
+  // ── Compact: a 2-up row of small thumbnails. ────────────────────────────────
+  if (compact) {
+    return (
+      <Surface header={header} right={<SurfaceSubtitle>{data.results.length} videos</SurfaceSubtitle>}>
+        <div className="grid grid-cols-2 gap-2 px-3 pb-3 pt-1">
+          {data.results.slice(0, 2).map((v, i) => (
+            <button
+              key={`${v.url}-${i}`}
+              onClick={() => play(v)}
+              className="group min-w-0 text-left"
+              title={v.title}
+            >
+              <div className="relative aspect-video overflow-hidden rounded-lg bg-black/[0.06] ring-1 ring-black/5">
+                {v.thumbnail ? (
+                  <img src={v.thumbnail} alt={v.title} loading="lazy" className="h-full w-full object-cover" />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center text-[#6e6a60]/50"><Video className="h-5 w-5" /></div>
+                )}
+                <div className="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors duration-200 group-hover:bg-black/20">
+                  <PlayCircle className="h-7 w-7 text-white opacity-90 drop-shadow" />
+                </div>
+                {v.duration && (
+                  <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1 py-0.5 text-[9px] font-semibold text-white">{v.duration}</span>
+                )}
+              </div>
+              <div className="mt-1 truncate text-[11px] font-medium text-[#1a1915]">{v.title}</div>
+            </button>
+          ))}
+        </div>
+      </Surface>
+    );
+  }
+
+  // ── Detailed: the full grid. ────────────────────────────────────────────────
   return (
-    <div className="my-2">
-      <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase text-slate-500 mb-1.5">
-        <Video className="w-3.5 h-3.5" /> Videos for “{data.query}”
-      </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+    <Surface header={header} right={<SurfaceSubtitle>{data.results.length} videos</SurfaceSubtitle>}>
+      <div className="grid grid-cols-1 gap-2 px-3 pb-3 pt-1 sm:grid-cols-2 lg:grid-cols-3">
         {data.results.map((v, i) => {
           const playable = Boolean(toVideoEmbed(v.url));
           return (
@@ -40,37 +83,37 @@ export const VideoResults: React.FC<{ data: VideoResultsArtifact }> = ({ data })
                   play(v);
                 }
               }}
-              className="group relative border-2 border-black rounded-lg overflow-hidden bg-white shadow-comic hover:translate-y-[1px] hover:shadow-comic-hover transition-all cursor-pointer"
+              className="group min-w-0 cursor-pointer overflow-hidden rounded-xl border border-black/10 bg-white transition-colors duration-200 hover:bg-black/[0.02]"
             >
-              <div className="relative aspect-video bg-slate-200">
+              <div className="relative aspect-video bg-black/[0.06]">
                 {v.thumbnail ? (
-                  <img src={v.thumbnail} alt={v.title} loading="lazy" className="w-full h-full object-cover" />
+                  <img src={v.thumbnail} alt={v.title} loading="lazy" className="h-full w-full object-cover" />
                 ) : (
-                  <div className="w-full h-full flex items-center justify-center text-slate-400"><Video className="w-6 h-6" /></div>
+                  <div className="flex h-full w-full items-center justify-center text-[#6e6a60]/50"><Video className="h-6 w-6" /></div>
                 )}
-                <div className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/20 transition-colors">
-                  <PlayCircle className="w-9 h-9 text-white drop-shadow opacity-90 group-hover:scale-110 transition-transform" />
+                <div className="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors duration-200 group-hover:bg-black/20">
+                  <PlayCircle className="h-9 w-9 text-white opacity-90 drop-shadow transition-transform duration-200 group-hover:scale-110" />
                 </div>
                 {v.duration && (
-                  <span className="absolute bottom-1 right-1 text-[10px] font-bold bg-black/80 text-white px-1.5 py-0.5 rounded">{v.duration}</span>
+                  <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold text-white">{v.duration}</span>
                 )}
                 {playable && (
-                  <span className="absolute top-1 left-1 text-[9px] font-extrabold uppercase tracking-wide bg-red-600 text-white px-1.5 py-0.5 rounded">Play here</span>
+                  <span className="absolute left-1 top-1 rounded-full bg-black/60 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-white backdrop-blur-sm">Play here</span>
                 )}
                 <a
                   href={v.url}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}
-                  className="absolute top-1 right-1 p-1 rounded bg-black/60 text-white hover-reveal hover:bg-black/80"
+                  className="absolute right-1 top-1 rounded-lg bg-black/60 p-1 text-white opacity-0 transition-opacity duration-200 hover:bg-black/80 focus-visible:opacity-100 group-hover:opacity-100"
                   title="Open original"
                 >
-                  <ExternalLink className="w-3 h-3" />
+                  <ExternalLink className="h-3 w-3" />
                 </a>
               </div>
               <div className="p-2">
-                <div className="text-[11px] font-bold leading-snug line-clamp-2">{v.title}</div>
-                <div className="text-[10px] text-slate-500 mt-0.5 truncate">
+                <div className="text-[11px] font-medium leading-snug text-[#1a1915] line-clamp-2">{v.title}</div>
+                <div className="mt-0.5 truncate text-[10px] text-[#6e6a60]">
                   {[v.publisher, v.views].filter(Boolean).join(' · ')}
                 </div>
               </div>
@@ -78,6 +121,6 @@ export const VideoResults: React.FC<{ data: VideoResultsArtifact }> = ({ data })
           );
         })}
       </div>
-    </div>
+    </Surface>
   );
 };

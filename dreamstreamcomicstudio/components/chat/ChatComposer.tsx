@@ -7,6 +7,7 @@ import { REASONING_LEVELS, type ChatModelFeatures } from '../../services/chatFea
 import type { ChatConnector } from '../../services/chatConnectors';
 import type { McpServerConfig } from '../../apiTypes';
 import { type ChatSkill, isSlashQuery, slashQuery, filterSkills, parseSkillInput } from '../../services/chatSkills';
+import { DictationButton } from './DictationButton';
 import {
   CANVAS_BG, GLASS_STRONG, HAIRLINE, MENU, MUTED, LABEL, TRANSITION, SHADOW_SOFT,
   RADIUS_PANEL, PILL, CONTROL_BTN, ACCENT_BG, ACCENT_BG_HOVER, ACCENT_TEXT, ACCENT_SOFT_BG
@@ -90,6 +91,23 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   const [menuDismissed, setMenuDismissed] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Draft snapshot taken when a dictation take starts, so streamed partials replace
+  // only the dictated segment instead of clobbering typed text.
+  const dictationBaseRef = useRef('');
+
+  const applyDictation = (spoken: string) => {
+    if (!spoken) return;
+    const base = dictationBaseRef.current;
+    const joined = base ? `${base.replace(/\s+$/, '')} ${spoken}` : spoken;
+    setText(joined);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        autoGrow(el);
+        el.setSelectionRange(el.value.length, el.value.length);
+      }
+    });
+  };
 
   // Prefill from a clicked suggestion (e.g. a skill chip), then focus the box.
   useEffect(() => {
@@ -238,7 +256,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   };
 
   return (
-    <div className={`${CANVAS_BG} px-3 pb-3 pt-1`}>
+    <div className={`${CANVAS_BG} px-3 pt-1 pb-[max(0.75rem,env(safe-area-inset-bottom))]`}>
       <div className={`${GLASS_STRONG} ${HAIRLINE} ${SHADOW_SOFT} ${RADIUS_PANEL} p-3`}>
       {/* Feature toggles */}
       <div className="flex flex-wrap items-center gap-2 mb-2">
@@ -381,11 +399,22 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
             <button
               onClick={handleEnhance}
               disabled={!canEnhance}
-              className={`shrink-0 ${CONTROL_BTN} p-2.5 ${MUTED} hover:text-[#1a1915] disabled:opacity-40`}
+              className={`hidden sm:block shrink-0 ${CONTROL_BTN} p-2.5 ${MUTED} hover:text-[#1a1915] disabled:opacity-40`}
               title="Improve my prompt (keeps your intent — review before sending)"
             >
               {enhancing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
             </button>
+            <DictationButton
+              disabled={busy}
+              onStart={() => {
+                dictationBaseRef.current = text;
+              }}
+              onPartial={applyDictation}
+              onFinal={(spoken) => {
+                applyDictation(spoken);
+                textareaRef.current?.focus();
+              }}
+            />
           </>
         )}
 
@@ -403,7 +432,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
           onKeyDown={handleKeyDown}
           rows={1}
           placeholder="Message the model…  (type / for skills · Enter to send)"
-          className="flex-1 resize-none bg-transparent rounded-xl px-3 py-2.5 text-sm text-[#1a1915] placeholder:text-[#6e6a60]/70 outline-none max-h-[200px]"
+          className="flex-1 resize-none bg-transparent rounded-xl px-3 py-2.5 text-base sm:text-sm text-[#1a1915] placeholder:text-[#6e6a60]/70 outline-none max-h-[200px]"
         />
 
         {busy ? (

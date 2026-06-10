@@ -58,8 +58,8 @@ export const Chip: React.FC<{
   <button
     onClick={onClick}
     aria-pressed={active}
-    className={`rounded-full border-2 px-2.5 py-0.5 text-[11px] font-bold transition-colors ${
-      active ? 'border-black text-white' : 'border-black/15 text-slate-600 hover:border-black/40'
+    className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors duration-200 ${
+      active ? 'border-transparent text-white shadow-sm' : 'border-black/10 bg-white/70 text-[#6e6a60] hover:bg-black/5'
     }`}
     style={active ? { backgroundColor: accent } : undefined}
   >

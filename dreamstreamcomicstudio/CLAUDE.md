@@ -30,10 +30,27 @@ renderer without a gallery demo, that test fails. **Do not skip the gallery demo
 ### Shared visual kit
 
 Build new visuals from the dependency-free Primitive Kit in
-`components/chat/artifacts/kit/` (Surface, Chart, Sparkline, gauges, RangeTabs,
-TrendPill, theme/palette, formatters). Match the house style: `border-2 border-black`,
-`shadow-comic`, `font-display`/`font-comic`, `animate-fade-in`. Charts are inline SVG —
-no charting libraries.
+`components/chat/artifacts/kit/` (Surface, SurfaceTitle/Subtitle, Chart, Sparkline,
+gauges, RangeTabs, TrendPill, theme/palette, formatters, density). Charts are inline
+SVG — no charting libraries.
+
+**House style for widgets is the macOS "calm studio" glass language** (same family
+as `components/chat/studioDesign.ts`): `Surface` shell (rounded-2xl, hairline
+`border-black/10`, frosted `bg-white/85 backdrop-blur`, soft ambient shadow), ink
+`#1a1915` / muted `#6e6a60` text, hairline dividers `divide-black/5`, recessed wells
+`bg-black/[0.03]`, `tabular-nums` for columnar numbers. **Never** use the legacy
+comic styles inside chat widgets: no `border-2 border-black`, no `shadow-comic`,
+no `font-display`/`font-comic`.
+
+### Two versions per widget (density)
+
+Every artifact is wrapped by `components/chat/artifacts/WidgetFrame.tsx`, which
+provides resize (drag handle, persisted per type) and a compact ⇄ detailed density
+toggle. Cards read the mode with `useCompact()`/`useDensity()` from the kit and
+should render a real glance layout when compact. When a card gains a bespoke
+compact layout, add its type to `DENSITY_AWARE_TYPES` in `ChatArtifacts.tsx`
+(unlisted cards get an automatic clamped preview instead). The AI can pre-pick a
+mode by emitting `density: 'compact' | 'detailed'` in the artifact data.
 
 ## Build / verify
 

@@ -2,7 +2,9 @@
 // any AI-authored component) composes. Import from '@/components/chat/artifacts/kit'
 // to get the house style, charts, and formatters for free.
 
-export { Surface, Expandable } from './Surface';
+export { Surface, SurfaceTitle, SurfaceSubtitle, Expandable } from './Surface';
+export { DensityProvider, useDensity, useCompact } from './density';
+export type { WidgetDensity } from './density';
 export { Chart } from './Chart';
 export type { ChartPoint, Candle, ChartVariant } from './Chart';
 export { Sparkline } from './Sparkline';

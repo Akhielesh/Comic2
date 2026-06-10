@@ -18,7 +18,9 @@ export const applySecurityHeaders = (req: Request, res: Response, next: NextFunc
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('Permissions-Policy', 'camera=(), geolocation=(), microphone=()');
+  // microphone=(self): voice dictation captures audio in-page and transcribes it
+  // on-device (services/dictation) — no audio ever leaves the browser.
+  res.setHeader('Permissions-Policy', 'camera=(), geolocation=(), microphone=(self)');
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
   res.setHeader('Cross-Origin-Resource-Policy', 'same-site');
   res.setHeader('X-DNS-Prefetch-Control', 'off');

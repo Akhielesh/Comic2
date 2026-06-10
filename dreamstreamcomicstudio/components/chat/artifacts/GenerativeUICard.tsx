@@ -1,6 +1,6 @@
 import React from 'react';
 import type { GenerativeUIArtifact, ChartArtifact, DataTableArtifact } from '../../../apiTypes';
-import { Surface, Sparkline, TrendPill, Badge, LinearGauge, compactNumber } from './kit';
+import { Surface, SurfaceTitle, SurfaceSubtitle, Sparkline, TrendPill, Badge, LinearGauge, compactNumber } from './kit';
 import { ChartCard } from './ChartCard';
 import { DataTableCard } from './DataTableCard';
 
@@ -178,9 +178,9 @@ const GAP: Record<number, string> = { 0: 'gap-0', 1: 'gap-1', 2: 'gap-2', 3: 'ga
 const ALIGN: Record<string, string> = { start: 'items-start', center: 'items-center', end: 'items-end', stretch: 'items-stretch', baseline: 'items-baseline' };
 const COLS: Record<number, string> = { 1: 'sm:grid-cols-1', 2: 'sm:grid-cols-2', 3: 'sm:grid-cols-3', 4: 'sm:grid-cols-4' };
 const RATIO: Record<string, string> = { '1:1': 'aspect-square', '4:3': 'aspect-[4/3]', '16:9': 'aspect-video' };
-const TONE_COLOR: Record<string, string> = { neutral: '#64748b', good: '#059669', warn: '#d97706', bad: '#dc2626', info: '#3B82F6' };
+const TONE_COLOR: Record<string, string> = { neutral: '#6e6a60', good: '#059669', warn: '#d97706', bad: '#dc2626', info: '#3B82F6' };
 const HEADING: Record<number, string> = { 1: 'text-lg', 2: 'text-base', 3: 'text-sm' };
-const TEXT_TONE: Record<string, string> = { default: 'text-slate-700', muted: 'text-slate-400', strong: 'text-slate-900 font-bold' };
+const TEXT_TONE: Record<string, string> = { default: 'text-[#1a1915]', muted: 'text-[#6e6a60]', strong: 'text-[#1a1915] font-semibold' };
 const TEXT_ALIGN: Record<string, string> = { left: 'text-left', center: 'text-center', right: 'text-right' };
 
 const formatMetric = (v: string | number): string =>
@@ -189,7 +189,7 @@ const formatMetric = (v: string | number): string =>
 const Block: React.FC<{ block: NormBlock }> = ({ block }) => {
   switch (block.kind) {
     case '_invalid':
-      return <span className="inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-400">unsupported block</span>;
+      return <span className="inline-block rounded-md bg-black/[0.04] px-1.5 py-0.5 text-[10px] font-semibold text-[#6e6a60]">unsupported block</span>;
 
     case 'stack':
       return (
@@ -211,21 +211,21 @@ const Block: React.FC<{ block: NormBlock }> = ({ block }) => {
       );
     case 'section':
       return (
-        <div className="rounded-lg border-2 border-black/10 bg-white p-3">
+        <div className="rounded-xl border border-black/10 bg-white/70 p-3">
           {block.title && (
             <div className="mb-2 flex items-center gap-2">
               {block.accent && <span className="h-3 w-1 rounded-full" style={{ backgroundColor: block.accent }} />}
-              <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500">{block.title}</div>
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">{block.title}</div>
             </div>
           )}
           <div className="flex flex-col gap-2">{block.children.map((c, i) => <Block key={i} block={c} />)}</div>
         </div>
       );
     case 'divider':
-      return <hr className="border-t-2 border-black/5" />;
+      return <hr className="border-t border-black/5" />;
 
     case 'heading':
-      return <div className={`font-display font-extrabold ${HEADING[block.level]}`}>{block.text}</div>;
+      return <div className={`font-semibold tracking-tight text-[#1a1915] ${HEADING[block.level]}`}>{block.text}</div>;
     case 'text':
       return <p className={`text-sm ${TEXT_TONE[block.tone]} ${TEXT_ALIGN[block.align]} whitespace-pre-wrap break-words`}>{block.text}</p>;
     case 'badge':
@@ -233,7 +233,7 @@ const Block: React.FC<{ block: NormBlock }> = ({ block }) => {
     case 'pill':
       return (
         <span className="inline-flex items-center gap-1.5">
-          {block.label && <span className="text-xs font-bold text-slate-600">{block.label}</span>}
+          {block.label && <span className="text-xs font-semibold text-[#1a1915]">{block.label}</span>}
           <TrendPill change={block.change} changePercent={block.changePercent} size="sm" />
         </span>
       );
@@ -242,8 +242,8 @@ const Block: React.FC<{ block: NormBlock }> = ({ block }) => {
         <dl className="divide-y divide-black/5">
           {block.items.map((it, i) => (
             <div key={i} className="flex items-baseline justify-between gap-3 py-1">
-              <dt className="text-xs font-bold uppercase tracking-wide text-slate-500">{it.label}</dt>
-              <dd className="text-right text-sm font-semibold text-slate-800">{it.value}</dd>
+              <dt className="text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">{it.label}</dt>
+              <dd className="text-right text-sm font-semibold text-[#1a1915]">{it.value}</dd>
             </div>
           ))}
         </dl>
@@ -251,17 +251,17 @@ const Block: React.FC<{ block: NormBlock }> = ({ block }) => {
     case 'callout': {
       const c = TONE_COLOR[block.tone];
       return (
-        <div className="rounded-lg border-l-4 p-3" style={{ borderColor: c, backgroundColor: `${c}12` }}>
-          {block.title && <div className="text-xs font-extrabold" style={{ color: c }}>{block.title}</div>}
-          <div className="text-sm text-slate-700 whitespace-pre-wrap break-words">{block.text}</div>
+        <div className="rounded-xl border-l-4 p-3" style={{ borderColor: c, backgroundColor: `${c}12` }}>
+          {block.title && <div className="text-xs font-semibold" style={{ color: c }}>{block.title}</div>}
+          <div className="text-sm text-[#1a1915] whitespace-pre-wrap break-words">{block.text}</div>
         </div>
       );
     }
     case 'image':
       return (
-        <figure className="overflow-hidden rounded-lg border-2 border-black/10">
+        <figure className="overflow-hidden rounded-xl border border-black/10">
           <img src={block.src} alt={block.alt ?? ''} loading="lazy" className={`w-full object-cover ${RATIO[block.ratio]}`} />
-          {block.caption && <figcaption className="bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-500">{block.caption}</figcaption>}
+          {block.caption && <figcaption className="bg-black/[0.03] px-2 py-1 text-[11px] text-[#6e6a60]">{block.caption}</figcaption>}
         </figure>
       );
     case 'progress': {
@@ -269,8 +269,8 @@ const Block: React.FC<{ block: NormBlock }> = ({ block }) => {
       return (
         <div>
           <div className="mb-1 flex items-baseline justify-between gap-2">
-            {block.label && <span className="text-xs font-bold text-slate-600">{block.label}</span>}
-            <span className="text-xs font-bold text-slate-500">{pct}%</span>
+            {block.label && <span className="text-xs font-semibold text-[#1a1915]">{block.label}</span>}
+            <span className="text-xs font-semibold text-[#6e6a60] tabular-nums">{pct}%</span>
           </div>
           <LinearGauge value={block.value} max={block.max} color={block.color ?? '#3B82F6'} height={8} />
         </div>
@@ -280,11 +280,11 @@ const Block: React.FC<{ block: NormBlock }> = ({ block }) => {
       const trend = typeof block.delta === 'number' ? block.delta : block.deltaPercent;
       const sparkColor = typeof trend === 'number' ? (trend >= 0 ? '#059669' : '#dc2626') : '#3B82F6';
       return (
-        <div className="rounded-lg border-2 border-black/10 bg-white p-3">
-          <div className="truncate text-[11px] font-bold uppercase tracking-wide text-slate-500">{block.label}</div>
+        <div className="rounded-xl border border-black/10 bg-white/70 p-3">
+          <div className="truncate text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">{block.label}</div>
           <div className="mt-0.5 flex items-baseline gap-1">
-            <span className="font-display text-2xl leading-none">{formatMetric(block.value)}</span>
-            {block.unit && <span className="text-xs font-bold text-slate-400">{block.unit}</span>}
+            <span className="text-2xl font-semibold tracking-tight leading-none text-[#1a1915] tabular-nums">{formatMetric(block.value)}</span>
+            {block.unit && <span className="text-xs font-medium text-[#6e6a60]">{block.unit}</span>}
           </div>
           {(typeof block.delta === 'number' || typeof block.deltaPercent === 'number') && (
             <div className="mt-1"><TrendPill change={block.delta} changePercent={block.deltaPercent} size="sm" /></div>
@@ -320,8 +320,8 @@ export const GenerativeUICard: React.FC<{ data: GenerativeUIArtifact }> = ({ dat
   if (!ui) return null;
   const header = ui.title ? (
     <div>
-      <div className="text-sm font-extrabold">{ui.title}</div>
-      {ui.subtitle && <div className="text-xs font-semibold text-slate-500">{ui.subtitle}</div>}
+      <SurfaceTitle>{ui.title}</SurfaceTitle>
+      {ui.subtitle && <SurfaceSubtitle>{ui.subtitle}</SurfaceSubtitle>}
     </div>
   ) : undefined;
   return (

@@ -6,6 +6,9 @@ import { ArrowUpDown, ArrowUp, ArrowDown, Search, Copy, Check, BarChart3 } from 
 // column sort, free-text filter, numeric-aware alignment + in-cell magnitude bars,
 // CSV copy, and pagination — instead of a static table. Inline emphasis is flattened
 // to text for sort/search; links are preserved for display.
+//
+// Styled as a macOS list view: rounded hairline container, sticky hairline header,
+// tabular-nums right-aligned numbers, hover row tint, hairline dividers (no zebra).
 
 interface Cell {
   text: string;
@@ -132,16 +135,16 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
         <div className="mb-1.5 flex flex-wrap items-center gap-2">
           {showSearch && (
             <div className="relative max-w-xs flex-1">
-              <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+              <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#9b968c]" />
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder={`Filter ${rows.length} rows…`}
-                className="w-full rounded-lg border-2 border-black bg-white py-1 pl-7 pr-2 text-xs focus:outline-none focus:ring-2 focus:ring-brand-blue/40"
+                className="w-full rounded-lg border border-black/10 bg-white/80 py-1 pl-7 pr-2 text-xs text-[#1a1915] placeholder:text-[#9b968c] transition-colors duration-200 focus:border-black/20 focus:outline-none focus:ring-2 focus:ring-black/5"
               />
             </div>
           )}
-          <span className="text-[11px] font-semibold text-slate-500">
+          <span className="text-[11px] tabular-nums text-[#6e6a60]">
             {query ? `${filtered.length} of ${rows.length}` : `${rows.length} rows`}
           </span>
           <div className="ml-auto flex items-center gap-1">
@@ -150,8 +153,10 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
                 onClick={() => setShowBars((v) => !v)}
                 aria-pressed={showBars}
                 title="Toggle magnitude bars"
-                className={`flex items-center gap-1 rounded-md border-2 px-1.5 py-0.5 text-[11px] font-bold transition-colors ${
-                  showBars ? 'border-black bg-slate-900 text-white' : 'border-black/15 text-slate-500 hover:border-black/40'
+                className={`flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-semibold transition-colors duration-200 ${
+                  showBars
+                    ? 'border-black/20 bg-black/[0.06] text-[#1a1915]'
+                    : 'border-black/10 text-[#6e6a60] hover:bg-black/[0.03] hover:text-[#1a1915]'
                 }`}
               >
                 <BarChart3 className="h-3 w-3" />
@@ -160,7 +165,7 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
             <button
               onClick={copyCsv}
               title="Copy as CSV"
-              className="flex items-center gap-1 rounded-md border-2 border-black/15 px-1.5 py-0.5 text-[11px] font-bold text-slate-500 transition-colors hover:border-black/40"
+              className="flex items-center gap-1 rounded-md border border-black/10 px-1.5 py-0.5 text-[11px] font-semibold text-[#6e6a60] transition-colors duration-200 hover:bg-black/[0.03] hover:text-[#1a1915]"
             >
               {copied ? <Check className="h-3 w-3 text-emerald-600" /> : <Copy className="h-3 w-3" />}
               {copied ? 'Copied' : 'CSV'}
@@ -169,7 +174,7 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
         </div>
       )}
 
-      <div className="max-h-[420px] overflow-auto rounded-lg border-2 border-black shadow-comic">
+      <div className="max-h-[420px] overflow-auto rounded-xl border border-black/10 bg-white/85 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
         <table className="w-full border-collapse text-sm">
           <thead className="sticky top-0 z-10">
             <tr>
@@ -177,16 +182,16 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
                 const active = sort?.col === i;
                 const Icon = !active ? ArrowUpDown : sort!.dir === 'asc' ? ArrowUp : ArrowDown;
                 return (
-                  <th key={i} className="border-b-2 border-black bg-brand-yellow p-0">
+                  <th key={i} className="border-b border-black/10 bg-white/95 p-0 backdrop-blur-sm">
                     <button
                       onClick={() => toggleSort(i)}
-                      className={`flex w-full items-center gap-1 px-2.5 py-1.5 font-extrabold transition-colors hover:bg-amber-300 ${
-                        colStats[i].isNumeric ? 'justify-end text-right' : 'text-left'
-                      }`}
+                      className={`flex w-full items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wider transition-colors duration-200 ${
+                        active ? 'text-[#1a1915]' : 'text-[#6e6a60] hover:text-[#1a1915]'
+                      } ${colStats[i].isNumeric ? 'justify-end text-right' : 'text-left'}`}
                       title="Sort"
                     >
                       <span className="truncate">{h}</span>
-                      <Icon className={`h-3 w-3 shrink-0 ${active ? 'text-black' : 'text-black/40'}`} />
+                      <Icon className={`h-3 w-3 shrink-0 ${active ? 'text-[#1a1915]' : 'text-black/30'}`} />
                     </button>
                   </th>
                 );
@@ -195,7 +200,7 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
           </thead>
           <tbody>
             {visible.map((row, ri) => (
-              <tr key={ri} className="odd:bg-white even:bg-slate-50/70 hover:bg-brand-yellow/20">
+              <tr key={ri} className="border-b border-black/5 transition-colors duration-200 last:border-0 hover:bg-black/[0.03]">
                 {headers.map((_, ci) => {
                   const cell = row[ci];
                   const stat = colStats[ci];
@@ -204,18 +209,20 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
                   return (
                     <td
                       key={ci}
-                      className={`relative border-b border-slate-200 px-2.5 py-1.5 align-top ${stat.isNumeric ? 'text-right font-semibold tabular-nums' : ''}`}
+                      className={`relative px-2.5 py-1.5 align-top ${
+                        stat.isNumeric ? 'text-right font-medium tabular-nums text-[#1a1915]' : 'text-[#3c3a33]'
+                      }`}
                     >
                       {showBars && n !== null && (
                         <span
-                          className="pointer-events-none absolute inset-y-1 left-1 rounded-sm bg-brand-blue/15"
+                          className="pointer-events-none absolute inset-y-1 left-1 rounded-sm bg-blue-500/10"
                           style={{ width: `calc(${pct * 100}% - 4px)` }}
                           aria-hidden
                         />
                       )}
                       <span className="relative">
                         {cell?.href ? (
-                          <a href={cell.href} target="_blank" rel="noopener noreferrer" className="text-brand-blue underline">
+                          <a href={cell.href} target="_blank" rel="noopener noreferrer" className="text-blue-600 transition-colors duration-200 hover:underline">
                             {cell.text}
                           </a>
                         ) : (
@@ -234,7 +241,7 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
       {filtered.length > DEFAULT_VISIBLE && (
         <button
           onClick={() => setShowAll((v) => !v)}
-          className="mt-1.5 w-full rounded-lg border-2 border-black/10 bg-slate-50 py-1 text-[11px] font-bold text-slate-600 transition-colors hover:bg-slate-100"
+          className="mt-1.5 w-full rounded-lg border border-black/10 bg-black/[0.02] py-1 text-[11px] font-semibold text-[#6e6a60] transition-colors duration-200 hover:bg-black/[0.05] hover:text-[#1a1915]"
         >
           {showAll ? 'Show less' : `Show all ${filtered.length} rows`}
         </button>

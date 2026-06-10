@@ -1,5 +1,7 @@
 import React from 'react';
 import { ChatMarkdown } from './ChatMarkdown';
+import { WidgetFrame } from './artifacts/WidgetFrame';
+import { DENSITY_AWARE_TYPES } from './artifacts/ChatArtifacts';
 import { WeatherStation } from './artifacts/WeatherStation';
 import { NewsDigest } from './artifacts/NewsDigest';
 import { MarketCard } from './artifacts/MarketCard';
@@ -359,8 +361,18 @@ export interface GalleryDemo {
   title: string;
   /** The ChatArtifact `type` this demo covers, when it renders a typed artifact. */
   type?: string;
+  /** Gallery section the demo is grouped under. */
+  category?: GalleryCategory;
   node: React.ReactNode;
 }
+
+export type GalleryCategory =
+  | 'Data & charts'
+  | 'Finance'
+  | 'News & knowledge'
+  | 'World & media'
+  | 'Learning'
+  | 'Agents & code';
 
 const codeStudioDemo: CodeStudioArtifact = {
   title: 'Counter App',
@@ -492,46 +504,108 @@ const dashboardDemo: DashboardArtifact = {
 };
 
 export const GALLERY_DEMOS: GalleryDemo[] = [
-  { title: 'Weather station (animated · gauges · map)', type: 'weather', node: <WeatherStation data={weather} /> },
-  { title: 'Market card (hover · range timeline · candlesticks)', type: 'stock_quote', node: <MarketCard data={stock} /> },
-  { title: 'News digest (compact · source-branded · snippets)', type: 'news_results', node: <NewsDigest data={news} /> },
-  { title: 'Places (local) card', type: 'places_results', node: <PlacesResults data={places} /> },
-  { title: 'Map (markers · route)', type: 'map', node: <MapArtifactCard data={mapArtifact} /> },
-  { title: 'Video results', type: 'video_results', node: <VideoResults data={videos} /> },
-  { title: 'Agent swarm trace', type: 'swarm_trace', node: <SwarmTraceCard data={swarm} /> },
-  { title: 'Chart — grouped bars (legend · hover)', type: 'chart', node: <ChartCard data={barChart} /> },
-  { title: 'Chart — donut', node: <ChartCard data={donutChart} /> },
-  { title: 'Metric board (KPIs · sparklines · rings)', type: 'metric_board', node: <MetricBoard data={board} /> },
-  { title: 'Data table (typed cells · sortable · sparklines)', type: 'data_table', node: <DataTableCard data={dataTable} /> },
-  { title: 'Generative UI (agent-composed layout · grid · metrics · chart · callout)', type: 'generative_ui', node: <GenerativeUICard data={generativeUiDemo} /> },
-  { title: 'Glass dashboard (drag-drop widgets · clock · countdown · globe · chart · checklist)', type: 'dashboard', node: <DashboardCard data={dashboardDemo} /> },
-  { title: 'Market heatmap (sectors · cap-weighted tiles)', type: 'market_heatmap', node: <HeatmapCard data={heatmap} /> },
-  { title: 'Finance Terminal (composite: quote · KPIs · table · heatmap · news)', type: 'finance_terminal', node: <FinanceTerminal data={terminal} /> },
-  { title: 'Code Studio card (multi-file app · live preview)', type: 'code_studio', node: <CodeStudioCard data={codeStudioDemo} /> },
-  { title: 'Recipe card (reusable agent workflow · params · tools)', type: 'recipe_card', node: <RecipeCard data={recipeDemo} /> },
-  { title: 'Recipe run (params · structured output · follow-ups)', type: 'recipe_run', node: <RecipeRunCard data={recipeRunDemo} /> },
-  { title: 'Research report (questions · sources read · grounded brief header)', type: 'research_report', node: <ResearchReport data={researchReportDemo} /> },
-  { title: 'Quiz (MCQ · multi-select · true/false · short answer · self-grading)', type: 'quiz', node: <Quiz data={quizDemo} /> },
-  { title: 'Document (custom resource · download .md / .html / PDF)', type: 'document', node: <DocumentCard data={documentDemo} /> },
-  { title: 'Flashcards (flip · known/review · shuffle · progress)', type: 'flashcards', node: <Flashcards data={flashcardsDemo} /> },
-  { title: 'SQL playground (real sandboxed execution · results · errors)', type: 'sql_exercise', node: <SqlPlayground data={sqlExerciseDemo} /> },
-  { title: 'Code playground (run real JS · console + errors)', type: 'code_exercise', node: <CodePlayground data={codeExerciseDemo} /> },
-  { title: 'Code playground — Python (Pyodide · real tracebacks)', type: 'code_exercise', node: <CodePlayground data={pythonExerciseDemo} /> },
-  { title: 'Resource bundle (per-file download + all as .zip)', type: 'resource_bundle', node: <ResourceBundle data={resourceBundleDemo} /> },
-  { title: 'Markdown table (inline)', node: <ChatMarkdown text={tableMd} /> }
+  { title: 'Weather station (animated · gauges · map)', type: 'weather', category: 'World & media', node: <WeatherStation data={weather} /> },
+  { title: 'Market card (hover · range timeline · candlesticks)', type: 'stock_quote', category: 'Finance', node: <MarketCard data={stock} /> },
+  { title: 'News digest (compact · source-branded · snippets)', type: 'news_results', category: 'News & knowledge', node: <NewsDigest data={news} /> },
+  { title: 'Places (local) card', type: 'places_results', category: 'World & media', node: <PlacesResults data={places} /> },
+  { title: 'Map (markers · route)', type: 'map', category: 'World & media', node: <MapArtifactCard data={mapArtifact} /> },
+  { title: 'Video results', type: 'video_results', category: 'World & media', node: <VideoResults data={videos} /> },
+  { title: 'Agent swarm trace', type: 'swarm_trace', category: 'Agents & code', node: <SwarmTraceCard data={swarm} /> },
+  { title: 'Chart — grouped bars (legend · hover)', type: 'chart', category: 'Data & charts', node: <ChartCard data={barChart} /> },
+  { title: 'Chart — donut', category: 'Data & charts', node: <ChartCard data={donutChart} /> },
+  { title: 'Metric board (KPIs · sparklines · rings)', type: 'metric_board', category: 'Data & charts', node: <MetricBoard data={board} /> },
+  { title: 'Data table (typed cells · sortable · sparklines)', type: 'data_table', category: 'Data & charts', node: <DataTableCard data={dataTable} /> },
+  { title: 'Generative UI (agent-composed layout · grid · metrics · chart · callout)', type: 'generative_ui', category: 'Data & charts', node: <GenerativeUICard data={generativeUiDemo} /> },
+  { title: 'Glass dashboard (drag-drop widgets · clock · countdown · globe · chart · checklist)', type: 'dashboard', category: 'Data & charts', node: <DashboardCard data={dashboardDemo} /> },
+  { title: 'Market heatmap (sectors · cap-weighted tiles)', type: 'market_heatmap', category: 'Finance', node: <HeatmapCard data={heatmap} /> },
+  { title: 'Finance Terminal (composite: quote · KPIs · table · heatmap · news)', type: 'finance_terminal', category: 'Finance', node: <FinanceTerminal data={terminal} /> },
+  { title: 'Code Studio card (multi-file app · live preview)', type: 'code_studio', category: 'Agents & code', node: <CodeStudioCard data={codeStudioDemo} /> },
+  { title: 'Recipe card (reusable agent workflow · params · tools)', type: 'recipe_card', category: 'Agents & code', node: <RecipeCard data={recipeDemo} /> },
+  { title: 'Recipe run (params · structured output · follow-ups)', type: 'recipe_run', category: 'Agents & code', node: <RecipeRunCard data={recipeRunDemo} /> },
+  { title: 'Research report (questions · sources read · grounded brief header)', type: 'research_report', category: 'News & knowledge', node: <ResearchReport data={researchReportDemo} /> },
+  { title: 'Quiz (MCQ · multi-select · true/false · short answer · self-grading)', type: 'quiz', category: 'Learning', node: <Quiz data={quizDemo} /> },
+  { title: 'Document (custom resource · download .md / .html / PDF)', type: 'document', category: 'News & knowledge', node: <DocumentCard data={documentDemo} /> },
+  { title: 'Flashcards (flip · known/review · shuffle · progress)', type: 'flashcards', category: 'Learning', node: <Flashcards data={flashcardsDemo} /> },
+  { title: 'SQL playground (real sandboxed execution · results · errors)', type: 'sql_exercise', category: 'Learning', node: <SqlPlayground data={sqlExerciseDemo} /> },
+  { title: 'Code playground (run real JS · console + errors)', type: 'code_exercise', category: 'Learning', node: <CodePlayground data={codeExerciseDemo} /> },
+  { title: 'Code playground — Python (Pyodide · real tracebacks)', type: 'code_exercise', category: 'Learning', node: <CodePlayground data={pythonExerciseDemo} /> },
+  { title: 'Resource bundle (per-file download + all as .zip)', type: 'resource_bundle', category: 'News & knowledge', node: <ResourceBundle data={resourceBundleDemo} /> },
+  { title: 'Markdown table (inline)', category: 'Data & charts', node: <ChatMarkdown text={tableMd} /> }
 ];
 
 /** Artifact types that have a live demo in the gallery (used by the coverage test). */
 export const GALLERY_DEMO_TYPES: string[] = GALLERY_DEMOS.filter((d) => d.type).map((d) => d.type as string);
 
-export const ComponentGallery: React.FC = () => (
-  <div className="space-y-4">
-    <p className="text-sm text-slate-600">Every rich-output component rendered with sample data — the live UI library.</p>
-    {GALLERY_DEMOS.map((d) => (
-      <div key={d.title}>
-        <div className="text-[11px] font-bold uppercase text-slate-500 mb-1">{d.title}</div>
-        {d.node}
+const CATEGORY_ORDER: GalleryCategory[] = [
+  'Data & charts',
+  'Finance',
+  'News & knowledge',
+  'World & media',
+  'Learning',
+  'Agents & code'
+];
+
+// The live component library: every widget in both of its versions. The segmented
+// control switches the whole gallery between the compact (glance) and detailed
+// (expansive) builds, rendered through the same WidgetFrame the chat uses.
+export const ComponentGallery: React.FC = () => {
+  const [density, setDensity] = React.useState<'compact' | 'detailed'>('detailed');
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-[#6e6a60]">
+          Every rich-output widget, live with sample data. Each one ships in two versions — a compact glance card and a
+          detailed expansive view — and is resizable in chat.
+        </p>
+        <div className="inline-flex shrink-0 rounded-lg border border-black/10 bg-black/[0.04] p-0.5 text-[11px] font-semibold">
+          {(['compact', 'detailed'] as const).map((d) => (
+            <button
+              key={d}
+              onClick={() => setDensity(d)}
+              aria-pressed={density === d}
+              className={`rounded-md px-2.5 py-1 capitalize transition-all duration-200 ${
+                density === d ? 'bg-white text-[#1a1915] shadow-[0_1px_2px_rgba(0,0,0,0.12)]' : 'text-[#6e6a60] hover:text-[#1a1915]'
+              }`}
+            >
+              {d}
+            </button>
+          ))}
+        </div>
       </div>
-    ))}
-  </div>
-);
+      {CATEGORY_ORDER.map((cat) => {
+        const demos = GALLERY_DEMOS.filter((d) => (d.category ?? 'Data & charts') === cat);
+        if (demos.length === 0) return null;
+        return (
+          <section key={cat}>
+            <h3 className="mb-2 border-b border-black/5 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-[#6e6a60]">
+              {cat}
+            </h3>
+            <div className="space-y-4">
+              {demos.map((d) => (
+                <div key={d.title}>
+                  <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-[#6e6a60]">
+                    <span className="truncate">{d.title}</span>
+                    {d.type && (
+                      <code className="shrink-0 rounded bg-black/[0.04] px-1 py-px text-[10px] text-[#6e6a60]">{d.type}</code>
+                    )}
+                  </div>
+                  {d.type ? (
+                    <WidgetFrame
+                      type={d.type}
+                      densityAware={DENSITY_AWARE_TYPES.has(d.type)}
+                      forcedDensity={density}
+                    >
+                      {d.node}
+                    </WidgetFrame>
+                  ) : (
+                    d.node
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        );
+      })}
+    </div>
+  );
+};

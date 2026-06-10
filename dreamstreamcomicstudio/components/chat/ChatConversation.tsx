@@ -92,7 +92,7 @@ const ChatDebugMenu: React.FC<{ session: ChatSession }> = ({ session }) => {
         onClick={() => copy('id')}
         title={`Copy chat ID (${session.id})`}
         aria-label="Copy chat ID"
-        className={`flex items-center gap-1 rounded-l-xl border border-r-0 border-black/10 bg-white/70 px-2 py-1 text-[11px] font-semibold ${MUTED} ${TRANSITION} hover:bg-black/5 hover:text-[#1a1915]`}
+        className={`flex items-center gap-1 rounded-l-xl border border-r-0 border-black/10 bg-white/70 px-2 py-1.5 sm:py-1 text-[11px] font-semibold ${MUTED} ${TRANSITION} hover:bg-black/5 hover:text-[#1a1915]`}
       >
         {done === 'id' ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Hash className="h-3.5 w-3.5" />}
         {done === 'id' ? 'Copied' : 'ID'}
@@ -102,7 +102,7 @@ const ChatDebugMenu: React.FC<{ session: ChatSession }> = ({ session }) => {
         onClick={() => setOpen((v) => !v)}
         title="More copy options"
         aria-label="More copy options"
-        className={`flex items-center rounded-r-xl border border-black/10 bg-white/70 px-1 py-1 ${MUTED} ${TRANSITION} hover:bg-black/5 hover:text-[#1a1915]`}
+        className={`flex items-center rounded-r-xl border border-black/10 bg-white/70 px-1.5 sm:px-1 py-1.5 sm:py-1 ${MUTED} ${TRANSITION} hover:bg-black/5 hover:text-[#1a1915]`}
       >
         <ChevronDown className="h-3.5 w-3.5" />
       </button>
@@ -183,6 +183,21 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
     if (el && isNearBottom(el)) scrollToBottom();
   }, [session.turns.length, lastTurnContent, busy]);
 
+  // Keyboard handling (phones): when the on-screen keyboard opens/closes the visual
+  // viewport resizes — keep the thread pinned to the latest message if the user was
+  // already at the bottom, so the conversation doesn't end up "stuck" behind the
+  // keyboard mid-thread.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const onResize = () => {
+      const el = scrollRef.current;
+      if (el && isNearBottom(el)) scrollToBottom('auto');
+    };
+    vv.addEventListener('resize', onResize);
+    return () => vv.removeEventListener('resize', onResize);
+  }, []);
+
   const modelLabel = session.modelName || session.modelId || 'Auto (free)';
 
   const usedTokens = useMemo(
@@ -197,12 +212,12 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
   };
 
   return (
-    <div className={`flex-1 flex flex-col min-w-0 h-full ${CANVAS_BG}`}>
+    <div className={`flex-1 flex flex-col min-w-0 min-h-0 h-full ${CANVAS_BG}`}>
       {/* Header */}
-      <div className={`flex items-center gap-3 px-4 py-3 border-b border-black/10 ${GLASS}`}>
+      <div className={`flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-3 border-b border-black/10 ${GLASS}`}>
         <button
           onClick={onToggleSidebar}
-          className={`${CONTROL_BTN} p-1.5`}
+          className={`${CONTROL_BTN} p-2 sm:p-1.5 tap-target`}
           title={sidebarOpen ? 'Hide chats' : 'Show chats'}
         >
           {sidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
@@ -210,11 +225,11 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
 
         <button
           onClick={onOpenModelPicker}
-          className={`flex items-center gap-2 ${CONTROL_BTN} px-3 py-1.5 min-w-0 shrink-0`}
+          className={`flex items-center gap-2 ${CONTROL_BTN} px-3 py-2 sm:py-1.5 min-w-0`}
           title="Switch model"
         >
           <Cpu className={`w-4 h-4 shrink-0 ${ACCENT_TEXT}`} />
-          <span className={`font-semibold text-sm truncate max-w-[180px] ${INK}`}>{modelLabel}</span>
+          <span className={`font-semibold text-sm truncate max-w-[120px] sm:max-w-[180px] ${INK}`}>{modelLabel}</span>
           <ChevronDown className="w-4 h-4 shrink-0 text-[#6e6a60]" />
         </button>
 
@@ -260,7 +275,13 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
 
       {/* Messages */}
       <div className="flex-1 relative min-h-0">
-      <div ref={scrollRef} className={`absolute inset-0 overflow-y-auto px-4 py-5 space-y-5 ${CANVAS_BG}`}>
+      {/* Thread is the ONLY vertical scroller; overscroll-contain stops the rubber-band
+          from bleeding into the page, overflow-x-hidden stops wide artifacts/code from
+          causing page-level horizontal scroll on phones. */}
+      <div
+        ref={scrollRef}
+        className={`absolute inset-0 overflow-y-auto overflow-x-hidden overscroll-contain [-webkit-overflow-scrolling:touch] px-3 sm:px-4 py-5 space-y-5 ${CANVAS_BG}`}
+      >
         {session.turns.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto">
             <div className={`w-16 h-16 ${GLASS} ${HAIRLINE} ${SHADOW_SOFT} rounded-2xl flex items-center justify-center mb-4`}>
@@ -333,7 +354,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
       {!atBottom && session.turns.length > 0 && (
         <button
           onClick={() => scrollToBottom()}
-          className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 ${PILL} ${SHADOW_SOFT} px-3 py-1.5 text-xs font-semibold hover:bg-white animate-fade-in`}
+          className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 ${PILL} ${SHADOW_SOFT} px-3 py-2 sm:py-1.5 text-xs font-semibold hover:bg-white animate-fade-in`}
           title="Jump to latest"
         >
           <ChevronDown className="w-4 h-4" /> Latest

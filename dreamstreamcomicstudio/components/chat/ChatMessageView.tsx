@@ -129,16 +129,18 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
   };
 
   return (
-    <div className={`group flex gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
+    <div className={`group flex gap-2 sm:gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
       <div
-        className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${
+        className={`shrink-0 w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center ${
           isUser ? `${ACCENT_BG} text-white` : turn.error ? 'bg-red-50 border border-red-200' : `${GLASS} ${HAIRLINE}`
         }`}
       >
         {isUser ? <User className="w-4 h-4" /> : turn.error ? <AlertTriangle className="w-4 h-4 text-red-500" /> : <Sparkles className={`w-4 h-4 ${ACCENT_TEXT}`} />}
       </div>
 
-      <div className={`min-w-0 max-w-[80%] flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
+      {/* On phones the bubble takes nearly the full width (assistant turns especially,
+          so artifacts/tables/code get room); the 80% cap only applies from sm up. */}
+      <div className={`min-w-0 ${isUser ? 'max-w-[88%]' : 'max-w-[92%]'} sm:max-w-[80%] flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
         <div
           className={`w-full ${
             isUser
@@ -193,7 +195,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
                   if (e.key === 'Escape') cancelEdit();
                 }}
                 rows={Math.min(10, Math.max(2, editDraft.split('\n').length))}
-                className={`w-full text-sm ${HAIRLINE} rounded-xl bg-white/70 p-2 outline-none focus:ring-2 focus:ring-[#D97757]/30 resize-y`}
+                className={`w-full text-base sm:text-sm ${HAIRLINE} rounded-xl bg-white/70 p-2 outline-none focus:ring-2 focus:ring-[#D97757]/30 resize-y`}
               />
               <div className="flex items-center justify-end gap-2 mt-1.5">
                 <button onClick={cancelEdit} className={`flex items-center gap-1 text-[11px] font-semibold ${MUTED} hover:text-[#1a1915]`}><X className="w-3.5 h-3.5" /> Cancel</button>
@@ -253,13 +255,13 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
 
         {/* User message actions: copy + edit & resend. */}
         {isUser && !editing && (
-          <div className="flex items-center gap-2 mt-1 px-1 text-[11px] text-slate-400 hover-reveal">
-            <button onClick={handleCopy} className="flex items-center gap-0.5 hover:text-black font-bold" title="Copy message">
+          <div className="flex items-center gap-3 sm:gap-2 mt-1 px-1 text-[11px] text-slate-400 hover-reveal">
+            <button onClick={handleCopy} className="tap-target flex items-center gap-0.5 hover:text-black font-bold" title="Copy message">
               {copied ? <Check className="w-3 h-3 text-green-600" /> : <Copy className="w-3 h-3" />}
               {copied ? 'Copied' : 'Copy'}
             </button>
             {onEdit && (
-              <button onClick={startEdit} disabled={busy} className="flex items-center gap-0.5 hover:text-black font-bold disabled:opacity-40" title="Edit & resend">
+              <button onClick={startEdit} disabled={busy} className="tap-target flex items-center gap-0.5 hover:text-black font-bold disabled:opacity-40" title="Edit & resend">
                 <Pencil className="w-3 h-3" /> Edit
               </button>
             )}
@@ -269,7 +271,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
         {/* Retry for a failed assistant turn. */}
         {!isUser && turn.error && onRegenerate && (
           <div className="flex items-center gap-2 mt-1 px-1">
-            <button onClick={onRegenerate} disabled={busy} className="flex items-center gap-0.5 text-[11px] font-semibold text-red-500 hover:text-[#1a1915] disabled:opacity-40" title="Try again">
+            <button onClick={onRegenerate} disabled={busy} className="tap-target flex items-center gap-0.5 text-[11px] font-semibold text-red-500 hover:text-[#1a1915] disabled:opacity-40" title="Try again">
               <RefreshCw className="w-3 h-3" /> Try again
             </button>
           </div>
@@ -305,7 +307,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
           <div className="w-full mt-1">
             <button
               onClick={() => setShowDetails((v) => !v)}
-              className={`flex items-center gap-1 text-[11px] font-semibold ${MUTED} hover:text-[#1a1915] ${PILL} px-2.5 py-0.5 hover:bg-white`}
+              className={`tap-target flex items-center gap-1 text-[11px] font-semibold ${MUTED} hover:text-[#1a1915] ${PILL} px-2.5 py-1 sm:py-0.5 hover:bg-white`}
             >
               {showDetails ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
               How it answered
@@ -350,7 +352,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
         )}
 
         {!isUser && !turn.error && (
-          <div className="flex flex-wrap items-center gap-2 mt-1 px-1 text-[11px] text-slate-500">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 sm:gap-2 mt-1 px-1 text-[11px] text-slate-500">
             {turn.model && <span className="font-bold truncate max-w-[160px]">{turn.model}</span>}
             {typeof turn.durationMs === 'number' && turn.durationMs >= 0 && (
               <span className="flex items-center gap-0.5" title="Response time"><Clock className="w-3 h-3" /> {formatDuration(turn.durationMs)}</span>
@@ -365,32 +367,32 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
                 <button
                   onClick={() => onSelectVariant?.(activeVariant - 1)}
                   disabled={activeVariant <= 0}
-                  className="hover:text-black disabled:opacity-30"
+                  className="tap-target hover:text-black disabled:opacity-30"
                   title="Previous version"
                 ><ChevronLeft className="w-3.5 h-3.5" /></button>
                 <span className="tabular-nums">{activeVariant + 1}/{variantCount}</span>
                 <button
                   onClick={() => onSelectVariant?.(activeVariant + 1)}
                   disabled={activeVariant >= variantCount - 1}
-                  className="hover:text-black disabled:opacity-30"
+                  className="tap-target hover:text-black disabled:opacity-30"
                   title="Next version"
                 ><ChevronRight className="w-3.5 h-3.5" /></button>
               </span>
             )}
             {onRegenerate && (
-              <button onClick={onRegenerate} disabled={busy} className="flex items-center gap-0.5 hover:text-black font-bold disabled:opacity-40" title="Regenerate answer">
+              <button onClick={onRegenerate} disabled={busy} className="tap-target flex items-center gap-0.5 hover:text-black font-bold disabled:opacity-40" title="Regenerate answer">
                 <RefreshCw className="w-3 h-3" /> Retry
               </button>
             )}
-            <button onClick={handleCopy} className="flex items-center gap-0.5 hover:text-black font-bold" title="Copy answer">
+            <button onClick={handleCopy} className="tap-target flex items-center gap-0.5 hover:text-black font-bold" title="Copy answer">
               {copied ? <Check className="w-3 h-3 text-green-600" /> : <Copy className="w-3 h-3" />}
               {copied ? 'Copied' : 'Copy'}
             </button>
-            <button onClick={downloadMarkdown} className="flex items-center gap-0.5 hover:text-black font-bold" title="Download answer as Markdown">
+            <button onClick={downloadMarkdown} className="tap-target flex items-center gap-0.5 hover:text-black font-bold" title="Download answer as Markdown">
               <Download className="w-3 h-3" /> .md
             </button>
             {codeBlocks.length > 1 && (
-              <button onClick={downloadZip} className="flex items-center gap-0.5 hover:text-black font-bold" title={`Download ${codeBlocks.length} files as a .zip`}>
+              <button onClick={downloadZip} className="tap-target flex items-center gap-0.5 hover:text-black font-bold" title={`Download ${codeBlocks.length} files as a .zip`}>
                 <FileArchive className="w-3 h-3" /> .zip ({codeBlocks.length})
               </button>
             )}
@@ -400,7 +402,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
                   const { files, template } = buildPlaygroundFiles(codeBlocks);
                   openPanel({ type: 'playground', data: { files, template, title: 'Playground' } });
                 }}
-                className="flex items-center gap-0.5 hover:text-black font-bold"
+                className="tap-target flex items-center gap-0.5 hover:text-black font-bold"
                 title="Open all files in a runnable playground"
               >
                 <Play className="w-3 h-3" /> Playground
@@ -408,7 +410,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
             )}
             {onBranch && (
               <div ref={branchRef} className="relative">
-                <button onClick={() => setBranchOpen((v) => !v)} className="flex items-center gap-0.5 hover:text-black font-bold" title="Branch a new chat from here">
+                <button onClick={() => setBranchOpen((v) => !v)} className="tap-target flex items-center gap-0.5 hover:text-black font-bold" title="Branch a new chat from here">
                   <GitBranch className="w-3 h-3" /> Branch
                 </button>
                 {branchOpen && (

@@ -1,7 +1,8 @@
 import React from 'react';
 
-// A compact segmented control — the timeline selector for finance/data ranges.
+// A macOS-style segmented control — the timeline selector for finance/data ranges.
 // Renders only the options it's given, so callers hide ranges that have no data.
+// The active segment is a raised white pill on a recessed track, like AppKit.
 
 interface RangeTabsProps<T extends string> {
   options: readonly T[];
@@ -12,7 +13,7 @@ interface RangeTabsProps<T extends string> {
 
 export function RangeTabs<T extends string>({ options, value, accent = '#3B82F6', onChange }: RangeTabsProps<T>) {
   return (
-    <div className="inline-flex rounded-lg border-2 border-black/10 bg-slate-50 p-0.5 text-[11px] font-bold">
+    <div className="inline-flex rounded-lg border border-black/10 bg-black/[0.04] p-0.5 text-[11px] font-semibold">
       {options.map((opt) => {
         const active = opt === value;
         return (
@@ -20,8 +21,10 @@ export function RangeTabs<T extends string>({ options, value, accent = '#3B82F6'
             key={opt}
             onClick={() => onChange(opt)}
             aria-pressed={active}
-            className={`rounded-md px-2 py-0.5 transition-colors ${active ? 'text-white' : 'text-slate-500 hover:text-slate-800'}`}
-            style={active ? { backgroundColor: accent } : undefined}
+            className={`rounded-md px-2 py-0.5 transition-all duration-200 ${
+              active ? 'bg-white shadow-[0_1px_2px_rgba(0,0,0,0.12)]' : 'text-[#6e6a60] hover:text-[#1a1915]'
+            }`}
+            style={active ? { color: accent } : undefined}
           >
             {opt}
           </button>

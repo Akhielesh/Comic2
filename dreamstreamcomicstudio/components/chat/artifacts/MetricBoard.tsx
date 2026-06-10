@@ -1,6 +1,6 @@
 import React from 'react';
 import type { MetricBoardArtifact, MetricTile } from '../../../apiTypes';
-import { Surface, Sparkline, RadialGauge, TrendPill, compactNumber } from './kit';
+import { Surface, SurfaceTitle, Sparkline, RadialGauge, TrendPill, compactNumber, useCompact } from './kit';
 import { ChartCard } from './ChartCard';
 
 // A large KPI value: compact giant numbers (≥1M) so they don't overflow the tile,
@@ -12,13 +12,14 @@ const formatTileValue = (v: string | number): string => {
 
 // A board of KPI tiles — the "at a glance" data-viz surface. Each tile is a stat with
 // an optional delta pill, sparkline, progress ring, or a fully embedded ChartCard.
-// Composes the kit so it stays on-style and dependency-free.
+// Two densities: compact shows the first three headline stats in one hairline-divided
+// row; detailed renders the full tile grid (sparklines, rings, embedded charts).
 
 const STATUS: Record<NonNullable<MetricTile['status']>, { bar: string; text: string }> = {
   good: { bar: '#059669', text: 'text-emerald-600' },
   warn: { bar: '#d97706', text: 'text-amber-600' },
   bad: { bar: '#dc2626', text: 'text-red-600' },
-  neutral: { bar: '#64748b', text: 'text-slate-500' }
+  neutral: { bar: '#64748b', text: 'text-[#6e6a60]' }
 };
 
 const COLS: Record<number, string> = {
@@ -37,21 +38,21 @@ const Tile: React.FC<{ tile: MetricTile }> = ({ tile }) => {
 
   if (tile.chart) {
     return (
-      <div className="rounded-lg border-2 border-black/10 bg-white p-1">
+      <div className="rounded-xl bg-black/[0.03] p-1">
         <ChartCard data={tile.chart} />
       </div>
     );
   }
 
   return (
-    <div className="relative overflow-hidden rounded-lg border-2 border-black/10 bg-white p-3">
+    <div className="relative overflow-hidden rounded-xl bg-black/[0.03] p-3">
       {status && <span className="absolute inset-y-0 left-0 w-1" style={{ backgroundColor: status.bar }} />}
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="truncate text-[11px] font-bold uppercase tracking-wide text-slate-500">{tile.label}</div>
+          <div className="truncate text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">{tile.label}</div>
           <div className="mt-0.5 flex items-baseline gap-1">
-            <span className="font-display text-2xl leading-none">{formatTileValue(tile.value)}</span>
-            {tile.unit && <span className="text-xs font-bold text-slate-400">{tile.unit}</span>}
+            <span className="text-2xl font-semibold tracking-tight tabular-nums leading-none text-[#1a1915]">{formatTileValue(tile.value)}</span>
+            {tile.unit && <span className="text-xs font-medium text-[#6e6a60]">{tile.unit}</span>}
           </div>
           {hasTrend && (
             <div className="mt-1">
@@ -79,11 +80,45 @@ const Tile: React.FC<{ tile: MetricTile }> = ({ tile }) => {
 };
 
 export const MetricBoard: React.FC<{ data: MetricBoardArtifact }> = ({ data }) => {
+  const compact = useCompact();
   if (!data.tiles?.length) return null;
+
+  // ── Compact: one hairline-divided row of headline stats, no charts/controls. ──
+  if (compact) {
+    const statTiles = data.tiles.filter((t) => !t.chart);
+    const glance = (statTiles.length ? statTiles : data.tiles).slice(0, 3);
+    const more = data.tiles.length - glance.length;
+    return (
+      <Surface
+        header={data.title ? <SurfaceTitle>{data.title}</SurfaceTitle> : undefined}
+        footer={more > 0 ? <div className="text-[11px] text-[#6e6a60]">+{more} more metrics</div> : undefined}
+      >
+        <div className={`flex divide-x divide-black/5 px-1 pb-2.5 ${data.title ? '' : 'pt-2.5'}`}>
+          {glance.map((tile, i) => (
+            <div key={i} className="min-w-0 flex-1 px-2.5">
+              <div className="truncate text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">{tile.label}</div>
+              <div className="mt-0.5 flex items-baseline gap-1">
+                <span className="truncate text-lg font-semibold tracking-tight tabular-nums leading-none text-[#1a1915]">
+                  {formatTileValue(tile.value)}
+                </span>
+                {tile.unit && <span className="text-[11px] font-medium text-[#6e6a60]">{tile.unit}</span>}
+              </div>
+              {(typeof tile.delta === 'number' || typeof tile.deltaPercent === 'number') && (
+                <div className="mt-1">
+                  <TrendPill change={tile.delta} changePercent={tile.deltaPercent} size="sm" />
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </Surface>
+    );
+  }
+
   const cols = COLS[data.columns ?? Math.min(4, data.tiles.length)] ?? 'sm:grid-cols-3';
   return (
-    <Surface header={data.title ? <div className="text-sm font-extrabold">{data.title}</div> : undefined}>
-      <div className={`grid grid-cols-2 gap-2 p-3 ${cols}`}>
+    <Surface header={data.title ? <SurfaceTitle>{data.title}</SurfaceTitle> : undefined}>
+      <div className={`grid grid-cols-2 gap-2 p-3 ${data.title ? 'pt-1' : ''} ${cols}`}>
         {data.tiles.map((tile, i) => (
           <Tile key={i} tile={tile} />
         ))}

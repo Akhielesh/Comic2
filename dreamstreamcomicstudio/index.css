@@ -48,6 +48,23 @@
   .hover-reveal:focus-visible { opacity: 1; }
 }
 
+/* Enlarged hit area for small inline action buttons (message actions, sidebar row
+   actions, header icon buttons) on touch devices ONLY — the visual size stays the
+   same, but an invisible pseudo-element grows the tappable region to ~40px so tiny
+   text/icon buttons stop being miss-tap roulette on phones. Buttons need their own
+   stacking position for the pseudo-element to anchor to (hence position:relative). */
+@media (pointer: coarse) {
+  .tap-target { position: relative; }
+  .tap-target::after {
+    content: '';
+    position: absolute;
+    top: -10px;
+    bottom: -10px;
+    left: -4px;
+    right: -4px;
+  }
+}
+
 /* Mobile drawer entrance (e.g. the chat session sidebar on phones). End state is fully
    in-place so content is never stuck off-screen if the animation is throttled/blocked. */
 @keyframes slideInLeft {

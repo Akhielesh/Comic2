@@ -3,9 +3,12 @@ import { FileText, Download, Printer, Check, ChevronDown, ChevronUp } from 'luci
 import { ChatMarkdown } from '../ChatMarkdown';
 import { downloadTextFile } from '../../../services/chatUtils';
 import type { DocumentArtifact } from '../../../apiTypes';
+import { Surface, SurfaceTitle, SurfaceSubtitle, useCompact } from './kit';
 
-// A custom document the AI authored, rendered inline with download/print actions so
-// the user can keep it as a real resource (.md / .html / PDF).
+// A custom document the AI authored, in two densities:
+//  • compact — title + subtitle + word count/preview line + a download affordance.
+//  • detailed — the full document rendered inline with download/print actions so the
+//    user keeps it as a real resource (.md / .html / PDF).
 
 const safeName = (s: string) =>
   (s || 'document').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'document';
@@ -18,7 +21,30 @@ const buildHtml = (title: string, bodyHtml: string): string =>
   `blockquote{border-left:4px solid #ddd;margin:0;padding-left:16px;color:#555}img{max-width:100%}</style></head>` +
   `<body><h1>${title.replace(/</g, '&lt;')}</h1>${bodyHtml}</body></html>`;
 
+/** Approximate word count of the markdown body. */
+const wordCount = (content: string): number => (content.trim() ? content.trim().split(/\s+/).length : 0);
+
+/** First plain-text line of the document for the compact preview. */
+const previewLine = (content: string): string => {
+  const line = (content || '')
+    .split('\n')
+    .map((l) => l.replace(/[#>*_`~\-[\]()!]/g, ' ').replace(/\s+/g, ' ').trim())
+    .find((l) => l.length > 0);
+  return line || '';
+};
+
+const ActionButton: React.FC<{ onClick: () => void; title?: string; children: React.ReactNode }> = ({ onClick, title, children }) => (
+  <button
+    onClick={onClick}
+    title={title}
+    className="flex items-center gap-1 rounded-lg border border-black/10 bg-white px-2 py-1 text-[11px] font-semibold text-[#1a1915] transition-colors duration-200 hover:bg-black/[0.03]"
+  >
+    {children}
+  </button>
+);
+
 export const DocumentCard: React.FC<{ data: DocumentArtifact }> = ({ data }) => {
+  const compact = useCompact();
   const bodyRef = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(true);
   const [copied, setCopied] = useState(false);
@@ -46,32 +72,72 @@ export const DocumentCard: React.FC<{ data: DocumentArtifact }> = ({ data }) => 
     try { await navigator.clipboard.writeText(`# ${data.title}\n\n${data.content || ''}`); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* noop */ }
   };
 
-  return (
-    <div className="border-2 border-black rounded-xl bg-white shadow-comic overflow-hidden animate-fade-in">
-      <div className="bg-slate-900 text-white px-4 py-2.5 flex items-center gap-2">
-        <FileText className="w-5 h-5 shrink-0" />
-        <div className="min-w-0 flex-1">
-          <div className="font-display text-lg leading-tight truncate">{data.title}</div>
-          {data.subtitle && <div className="text-[11px] text-white/70 truncate">{data.subtitle}</div>}
-        </div>
-        <button onClick={() => setExpanded((v) => !v)} className="text-white/80 hover:text-white" title={expanded ? 'Collapse' : 'Expand'}>
-          {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-        </button>
+  const header = (
+    <div className="flex min-w-0 items-center gap-2">
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-black/[0.05] text-[#1a1915]">
+        <FileText className="h-4 w-4" />
+      </span>
+      <div className="min-w-0">
+        <SurfaceTitle>{data.title}</SurfaceTitle>
+        {data.subtitle && <SurfaceSubtitle>{data.subtitle}</SurfaceSubtitle>}
       </div>
+    </div>
+  );
 
+  // ── Compact: title + preview + word count + download. ───────────────────────
+  if (compact) {
+    const preview = previewLine(data.content || '');
+    return (
+      <Surface
+        header={header}
+        right={
+          <button
+            onClick={downloadMd}
+            title={`Download ${base}.md`}
+            className="flex items-center gap-1 rounded-lg border border-black/10 bg-white px-2 py-1 text-[11px] font-semibold text-[#1a1915] transition-colors duration-200 hover:bg-black/[0.03]"
+          >
+            <Download className="h-3.5 w-3.5" /> .md
+          </button>
+        }
+      >
+        <div className="px-3 pb-3 pt-0.5">
+          {preview && <p className="text-[11px] leading-snug text-[#6e6a60] line-clamp-2">{preview}</p>}
+          <p className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">
+            {wordCount(data.content || '').toLocaleString()} words
+          </p>
+        </div>
+      </Surface>
+    );
+  }
+
+  // ── Detailed: the full document + download/print/copy actions. ──────────────
+  return (
+    <Surface
+      header={header}
+      right={
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="rounded-lg p-1 text-[#6e6a60] transition-colors duration-200 hover:bg-black/[0.03] hover:text-[#1a1915]"
+          title={expanded ? 'Collapse' : 'Expand'}
+        >
+          {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+        </button>
+      }
+      footer={
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="mr-auto text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">Download</span>
+          <ActionButton onClick={downloadMd}><Download className="h-3.5 w-3.5" /> .md</ActionButton>
+          <ActionButton onClick={downloadHtml}><Download className="h-3.5 w-3.5" /> .html</ActionButton>
+          <ActionButton onClick={printPdf}><Printer className="h-3.5 w-3.5" /> PDF</ActionButton>
+          <ActionButton onClick={copyMd}>{copied ? <Check className="h-3.5 w-3.5 text-green-600" /> : <FileText className="h-3.5 w-3.5" />} {copied ? 'Copied' : 'Copy'}</ActionButton>
+        </div>
+      }
+    >
       {expanded && (
-        <div ref={bodyRef} className="p-4 max-h-[28rem] overflow-y-auto text-sm">
+        <div ref={bodyRef} className="max-h-[28rem] overflow-y-auto border-t border-black/5 p-4 text-sm">
           <ChatMarkdown text={data.content || ''} />
         </div>
       )}
-
-      <div className="border-t-2 border-black bg-slate-50 px-3 py-2 flex flex-wrap items-center gap-2">
-        <span className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mr-auto">Download</span>
-        <button onClick={downloadMd} className="flex items-center gap-1 text-[11px] font-bold border-2 border-black rounded-md px-2 py-1 bg-white hover:bg-slate-100"><Download className="w-3.5 h-3.5" /> .md</button>
-        <button onClick={downloadHtml} className="flex items-center gap-1 text-[11px] font-bold border-2 border-black rounded-md px-2 py-1 bg-white hover:bg-slate-100"><Download className="w-3.5 h-3.5" /> .html</button>
-        <button onClick={printPdf} className="flex items-center gap-1 text-[11px] font-bold border-2 border-black rounded-md px-2 py-1 bg-white hover:bg-slate-100"><Printer className="w-3.5 h-3.5" /> PDF</button>
-        <button onClick={copyMd} className="flex items-center gap-1 text-[11px] font-bold border-2 border-black rounded-md px-2 py-1 bg-white hover:bg-slate-100">{copied ? <Check className="w-3.5 h-3.5 text-green-600" /> : <FileText className="w-3.5 h-3.5" />} {copied ? 'Copied' : 'Copy'}</button>
-      </div>
-    </div>
+    </Surface>
   );
 };

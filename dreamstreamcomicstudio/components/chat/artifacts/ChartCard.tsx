@@ -1,12 +1,15 @@
 import React, { useMemo, useState } from 'react';
 import type { ChartArtifact, DataChartSeries } from '../../../apiTypes';
-import { Surface, resolveTheme, withAlpha, compactNumber } from './kit';
+import { Surface, SurfaceTitle, SurfaceSubtitle, Sparkline, resolveTheme, withAlpha, compactNumber, useCompact } from './kit';
 import type { PaletteName } from './kit';
 
 // The universal, schema-driven data-viz card. One artifact shape renders line, area,
 // bar (plain / grouped / stacked), pie, donut and scatter — with a toggleable legend,
 // hover tooltips, and axes. Dependency-free SVG so it adds nothing to the bundle and
 // gives the model a structured way to visualize ANY data (not just markets).
+//
+// Two densities: compact reduces the chart to a glance card (headline values per
+// series + one sparkline, or top slices for pie/donut); detailed is the full chart.
 
 const W = 560;
 // Currency-like units read as a PREFIX ("$1.2K"), everything else as a suffix ("12%").
@@ -39,6 +42,7 @@ const arcPath = (cx: number, cy: number, r: number, a0: number, a1: number, inne
 };
 
 export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
+  const compact = useCompact();
   const theme = resolveTheme({ palette: (data.palette as PaletteName) || 'brand' });
   const colorOf = (s: DataChartSeries, i: number) => s.color || theme.series[i % theme.series.length];
   const [hidden, setHidden] = useState<Set<number>>(new Set());
@@ -77,6 +81,71 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
 
   if (!series.length) return null;
 
+  // ── Compact: a glance card — headline numbers + one sparkline, no toolbars. ──
+  if (compact) {
+    const header = (data.title || data.subtitle) ? (
+      <>
+        {data.title && <SurfaceTitle>{data.title}</SurfaceTitle>}
+        {data.subtitle && <SurfaceSubtitle>{data.subtitle}</SurfaceSubtitle>}
+      </>
+    ) : undefined;
+
+    if (isRadial) {
+      const pts = series[0]?.points ?? [];
+      const total = pts.reduce((a, p) => a + Math.max(0, p.y), 0) || 1;
+      const top = [...pts].sort((a, b) => b.y - a.y).slice(0, 3);
+      return (
+        <Surface accent={theme.accent} header={header}>
+          <div className="space-y-1 px-3 pb-3">
+            {top.map((p, i) => {
+              const idx = pts.indexOf(p);
+              return (
+                <div key={i} className="flex items-center justify-between gap-2 text-xs">
+                  <span className="flex min-w-0 items-center gap-1.5 font-medium text-[#1a1915]">
+                    <span className="h-2 w-2 shrink-0 rounded-sm" style={{ backgroundColor: theme.series[idx % theme.series.length] }} />
+                    <span className="truncate">{niceLabel(p.x)}</span>
+                  </span>
+                  <span className="shrink-0 font-semibold tabular-nums text-[#1a1915]">
+                    {fmt(p.y, data.unit)}
+                    <span className="ml-1 font-normal text-[#6e6a60]">{Math.round((Math.max(0, p.y) / total) * 100)}%</span>
+                  </span>
+                </div>
+              );
+            })}
+            {pts.length > 3 && <div className="text-[11px] text-[#6e6a60]">+{pts.length - 3} more</div>}
+          </div>
+        </Surface>
+      );
+    }
+
+    const glance = series.slice(0, 3);
+    const sparkValues = (series[0]?.points ?? []).map((p) => p.y);
+    return (
+      <Surface accent={theme.accent} header={header}>
+        <div className="space-y-1 px-3 pb-2.5">
+          {glance.map((s, i) => {
+            const last = s.points[s.points.length - 1];
+            return (
+              <div key={i} className="flex items-center justify-between gap-2 text-xs">
+                <span className="flex min-w-0 items-center gap-1.5 font-medium text-[#1a1915]">
+                  <span className="h-2 w-2 shrink-0 rounded-sm" style={{ backgroundColor: colorOf(s, i) }} />
+                  <span className="truncate">{s.name || `Series ${i + 1}`}</span>
+                </span>
+                <span className="shrink-0 font-semibold tabular-nums text-[#1a1915]">{last ? fmt(last.y, data.unit) : '—'}</span>
+              </div>
+            );
+          })}
+          {series.length > 3 && <div className="text-[11px] text-[#6e6a60]">+{series.length - 3} more series</div>}
+          {sparkValues.length > 1 && (
+            <div className="pt-1">
+              <Sparkline values={sparkValues} color={colorOf(series[0], 0)} height={40} />
+            </div>
+          )}
+        </div>
+      </Surface>
+    );
+  }
+
   // --- Cartesian geometry ---
   const padL = 42;
   const padB = 28;
@@ -96,7 +165,7 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
           <button
             key={i}
             onClick={() => !isRadial && setHidden((prev) => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; })}
-            className={`flex items-center gap-1 text-[11px] font-bold transition-opacity ${off ? 'opacity-40' : ''} ${isRadial ? 'cursor-default' : ''}`}
+            className={`flex items-center gap-1 text-[11px] font-medium text-[#3c3a33] transition-opacity duration-200 ${off ? 'opacity-40' : ''} ${isRadial ? 'cursor-default' : ''}`}
           >
             <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: col }} />
             {name}
@@ -111,10 +180,10 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
       accent={theme.accent}
       header={
         data.title ? (
-          <div>
-            <div className="text-sm font-extrabold">{data.title}</div>
-            {data.subtitle && <div className="text-[11px] font-semibold text-slate-500">{data.subtitle}</div>}
-          </div>
+          <>
+            <SurfaceTitle>{data.title}</SurfaceTitle>
+            {data.subtitle && <SurfaceSubtitle>{data.subtitle}</SurfaceSubtitle>}
+          </>
         ) : undefined
       }
     >
@@ -154,7 +223,7 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
                   );
                 })}
                 {hover && pts[hover.cat] && (
-                  <text x={cx} y={cy} textAnchor="middle" className="font-display" fontSize="18" fill="#0f172a">
+                  <text x={cx} y={cy} textAnchor="middle" fontSize="18" fontWeight="600" fill="#1a1915">
                     {Math.round((Math.max(0, pts[hover.cat].y) / total) * 100)}%
                   </text>
                 )}
@@ -170,8 +239,8 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
               const y = yTo(v);
               return (
                 <g key={i}>
-                  <line x1={padL} x2={W - padR} y1={y} y2={y} stroke="#e2e8f0" strokeWidth="1" />
-                  <text x={padL - 4} y={y + 3} textAnchor="end" fontSize="9" fill="#94a3b8">{fmt(v, data.unit)}</text>
+                  <line x1={padL} x2={W - padR} y1={y} y2={y} stroke="rgba(0,0,0,0.06)" strokeWidth="1" />
+                  <text x={padL - 4} y={y + 3} textAnchor="end" fontSize="9" fill="#9a968c">{fmt(v, data.unit)}</text>
                 </g>
               );
             })}
@@ -186,7 +255,7 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
                 let stackTop = yTo(0);
                 return (
                   <g key={ci}>
-                    <rect x={groupX} y={padT} width={slot} height={plotH} fill={hover?.cat === ci ? '#0f172a' : 'transparent'} fillOpacity={hover?.cat === ci ? 0.04 : 0} onMouseEnter={() => setHover({ i: 0, cat: ci })} />
+                    <rect x={groupX} y={padT} width={slot} height={plotH} fill={hover?.cat === ci ? '#1a1915' : 'transparent'} fillOpacity={hover?.cat === ci ? 0.04 : 0} onMouseEnter={() => setHover({ i: 0, cat: ci })} />
                     {visible.map(({ s, i }, vi) => {
                       const val = s.points[ci]?.y ?? 0;
                       if (isStacked) {
@@ -242,31 +311,31 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
                 return <rect key={ci} x={x - stepX / 2} y={padT} width={stepX} height={plotH} fill="transparent" onMouseEnter={() => setHover({ i: 0, cat: ci })} />;
               })}
             {hover && !isScatter && !isBar && (
-              <line x1={padL + (plotW / Math.max(1, cats.length - 1)) * hover.cat} x2={padL + (plotW / Math.max(1, cats.length - 1)) * hover.cat} y1={padT} y2={padT + plotH} stroke="#0f172a" strokeOpacity="0.2" strokeWidth="1" />
+              <line x1={padL + (plotW / Math.max(1, cats.length - 1)) * hover.cat} x2={padL + (plotW / Math.max(1, cats.length - 1)) * hover.cat} y1={padT} y2={padT + plotH} stroke="#1a1915" strokeOpacity="0.2" strokeWidth="1" />
             )}
 
             {/* x labels */}
             {cats.map((cat, ci) => {
               if (cats.length > 12 && ci % Math.ceil(cats.length / 8) !== 0) return null;
               const x = isBar ? padL + (plotW / cats.length) * (ci + 0.5) : padL + (plotW / Math.max(1, cats.length - 1)) * ci;
-              return <text key={ci} x={x} y={H - 10} textAnchor="middle" fontSize="9" fill="#64748b">{cat.length > 8 ? `${cat.slice(0, 7)}…` : cat}</text>;
+              return <text key={ci} x={x} y={H - 10} textAnchor="middle" fontSize="9" fill="#8a867c">{cat.length > 8 ? `${cat.slice(0, 7)}…` : cat}</text>;
             })}
           </svg>
         )}
 
         {/* Tooltip */}
         {hover && !isScatter && (
-          <div className="pointer-events-none absolute left-1/2 top-1 -translate-x-1/2 rounded-md border-2 border-black bg-white px-2 py-1 text-[11px] shadow-comic-hover">
-            <div className="font-bold text-slate-500">
+          <div className="pointer-events-none absolute left-1/2 top-1 -translate-x-1/2 rounded-lg border border-black/10 bg-white/95 px-2 py-1 text-[11px] shadow-[0_4px_16px_rgba(0,0,0,0.12)] backdrop-blur-sm">
+            <div className="font-medium text-[#6e6a60]">
               {isRadial ? niceLabel(series[0].points[hover.cat]?.x) : cats[hover.cat]}
             </div>
             {isRadial ? (
-              <div className="font-extrabold">{fmt(series[0].points[hover.cat]?.y ?? 0, data.unit)}</div>
+              <div className="font-semibold tabular-nums text-[#1a1915]">{fmt(series[0].points[hover.cat]?.y ?? 0, data.unit)}</div>
             ) : (
               visible.map(({ s, i }) => (
-                <div key={i} className="flex items-center gap-1 font-semibold">
+                <div key={i} className="flex items-center gap-1 text-[#3c3a33]">
                   <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: colorOf(s, i) }} />
-                  {s.name || `S${i + 1}`}: <span className="font-extrabold">{fmt(s.points[hover.cat]?.y ?? 0, data.unit)}</span>
+                  {s.name || `S${i + 1}`}: <span className="font-semibold tabular-nums text-[#1a1915]">{fmt(s.points[hover.cat]?.y ?? 0, data.unit)}</span>
                 </div>
               ))
             )}
@@ -275,7 +344,7 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
       </div>
 
       {(data.xLabel || data.yLabel) && (
-        <div className="flex justify-between px-3 pb-2 text-[10px] font-bold uppercase tracking-wide text-slate-400">
+        <div className="flex justify-between px-3 pb-2 text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">
           <span>{data.yLabel}</span>
           <span>{data.xLabel}</span>
         </div>

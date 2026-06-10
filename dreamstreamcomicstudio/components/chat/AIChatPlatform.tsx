@@ -11,7 +11,7 @@ import { ChatPanelContext } from './panelContext';
 import { MediaPanel, type MediaPanelData } from './MediaPanel';
 import type { PlaygroundData } from './MultiFilePlayground';
 import type { ChatArtifact, CodeStudioArtifact, MapArtifact } from '../../apiTypes';
-import { CANVAS_BG, GLASS, INK, ACCENT_TEXT, CONTROL_BTN, TRANSITION } from './studioDesign';
+import { CANVAS_BG, SIDEBAR_BG, GLASS, INK, ACCENT_TEXT, CONTROL_BTN, TRANSITION } from './studioDesign';
 
 const MapPanel = lazy(() => import('./MapPanel'));
 const MultiFilePlayground = lazy(() => import('./MultiFilePlayground'));
@@ -179,6 +179,39 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     mq.addEventListener('change', onChange);
     return () => mq.removeEventListener('change', onChange);
   }, []);
+
+  // Live viewport height (URL-bar collapse / rotation / keyboard) so any px-based
+  // sizing below follows the REAL viewport instead of a stale innerHeight snapshot —
+  // a one-render-old innerHeight is what made the fullscreen code panel jump/overflow
+  // on phones when the browser chrome collapsed.
+  const [viewportH, setViewportH] = useState(() => (typeof window !== 'undefined' ? window.innerHeight : 800));
+  useEffect(() => {
+    const onResize = () => setViewportH(window.innerHeight);
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('orientationchange', onResize);
+    };
+  }, []);
+
+  // Lock body scroll while any overlay (mobile sidebar drawer, modals, mobile/fullscreen
+  // side panel) is open — otherwise iOS lets the page behind keep scrolling ("scroll
+  // bleed") and the drawer feels glitchy.
+  const overlayOpen =
+    (sidebarOpen && !isDesktop) ||
+    showModelPicker ||
+    Boolean(projectModal) ||
+    Boolean(settingsTab) ||
+    Boolean(panel && (!isDesktop || panelFullscreen));
+  useEffect(() => {
+    if (!overlayOpen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [overlayOpen]);
 
   useEffect(() => onMcpServersChanged(() => setMcpServers(listMcpServers())), []);
 
@@ -1027,8 +1060,10 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
   };
 
   // editorHeight is responsive to fullscreen: fill more of the viewport when expanded.
+  // Derived from the tracked viewport height (not window.innerHeight read at render
+  // time) so it follows URL-bar collapse/rotation instead of jumping or overflowing.
   const codeEditorHeight = panelFullscreen
-    ? Math.max(480, Math.round(window.innerHeight * 0.75))
+    ? Math.max(Math.min(480, viewportH - 96), Math.round(viewportH * 0.75))
     : 520;
 
   const panelContent = panel && (
@@ -1117,8 +1152,18 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
         if (isDesktop) return sidebar;
         return (
           <div className="fixed inset-0 z-40 flex md:hidden">
-            <div className="absolute inset-0 bg-black/40 animate-fade-in" onClick={() => setSidebarOpen(false)} aria-hidden />
-            <div className="relative z-10 h-full shadow-2xl animate-slide-in-left">{sidebar}</div>
+            <div
+              className="absolute inset-0 bg-black/40 animate-fade-in touch-none"
+              onClick={() => setSidebarOpen(false)}
+              aria-hidden
+            />
+            {/* Drawer panel: paints the top notch area (safe-area inset) in the sidebar
+                color and scrolls internally — the page behind is scroll-locked. */}
+            <div
+              className={`relative z-10 h-full max-w-[85vw] shadow-2xl animate-slide-in-left overscroll-contain pt-[env(safe-area-inset-top)] ${SIDEBAR_BG}`}
+            >
+              {sidebar}
+            </div>
           </div>
         );
       })()}
@@ -1172,7 +1217,9 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
         </>
       )}
       {panel && (!isDesktop || panelFullscreen) && (
-        <div className={`fixed inset-0 z-50 flex flex-col ${CANVAS_BG}`}>
+        <div
+          className={`fixed inset-0 z-50 flex flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] ${CANVAS_BG}`}
+        >
           {panelContent}
         </div>
       )}

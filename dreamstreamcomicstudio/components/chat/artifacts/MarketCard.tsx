@@ -3,8 +3,11 @@ import { CandlestickChart, LineChart, AreaChart } from 'lucide-react';
 import type { StockQuoteArtifact, StockRange, StockPoint, MarketState } from '../../../apiTypes';
 import {
   Surface,
+  SurfaceTitle,
+  SurfaceSubtitle,
   Expandable,
   Chart,
+  Sparkline,
   RangeTabs,
   TrendPill,
   Badge,
@@ -13,14 +16,15 @@ import {
   formatPercent,
   compactNumber,
   shortDate,
-  relativeTime
+  relativeTime,
+  useCompact
 } from './kit';
 import type { ChartVariant, ChartPoint } from './kit';
 
-// Flagship finance card. Replaces the read-only StockCard with an interactive,
-// themeable chart: crosshair hover tooltip, a range timeline, area/line/candlestick
-// toggle, a key-stats grid, and an expandable fundamentals + headlines drawer.
-// Built entirely from the shared kit so it stays on-style and dependency-free.
+// Flagship finance card in the calm-studio glass language. Two densities:
+// - compact: name/symbol + price + trend pill + one sparkline (a glance card)
+// - detailed: interactive chart (crosshair, range timeline, area/line/candlestick
+//   toggle), key-stats footer, and an expandable fundamentals + headlines drawer.
 
 const RANGE_ORDER: StockRange[] = ['1D', '5D', '1M', '6M', '1Y', '5Y', 'MAX'];
 // How many trailing sessions each range approximates when we have to derive it
@@ -69,12 +73,13 @@ const toChartPoints = (series: StockPoint[]): ChartPoint[] =>
 
 const Stat: React.FC<{ label: string; value?: string }> = ({ label, value }) =>
   value ? (
-    <span className="text-[11px] text-slate-500">
-      {label} <span className="font-bold text-slate-800">{value}</span>
+    <span className="text-[11px] text-[#6e6a60]">
+      {label} <span className="font-semibold tabular-nums text-[#1a1915]">{value}</span>
     </span>
   ) : null;
 
 export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => {
+  const compact = useCompact();
   const theme = resolveTheme({ trend: data.change });
   const currency = data.currency ?? 'USD';
 
@@ -93,6 +98,43 @@ export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => 
     : undefined;
 
   const market = data.marketState ? MARKET_BADGE[data.marketState] : null;
+
+  // ── Compact: a glance card — headline price + trend + one sparkline. ──
+  if (compact) {
+    const sparkValues = (points[defaultRange] ?? data.series ?? []).map((p) => p.close);
+    return (
+      <Surface
+        accent={theme.accent}
+        header={
+          <>
+            <SurfaceTitle>{data.name || data.symbol}</SurfaceTitle>
+            <SurfaceSubtitle>
+              {data.symbol}
+              {data.exchange ? ` · ${data.exchange}` : ''}
+              {market ? ` · ${market.label}` : ''}
+            </SurfaceSubtitle>
+          </>
+        }
+        right={
+          <>
+            <div className="text-xl font-semibold tracking-tight tabular-nums leading-none text-[#1a1915]">
+              {formatPrice(data.price, currency)}
+            </div>
+            <div className="mt-1 flex justify-end">
+              <TrendPill change={data.change} changePercent={data.changePercent} size="sm" />
+            </div>
+          </>
+        }
+      >
+        {sparkValues.length > 1 && (
+          <div className="px-3 pb-2.5">
+            <Sparkline values={sparkValues} color={theme.accent} height={44} />
+          </div>
+        )}
+      </Surface>
+    );
+  }
+
   const stats = data.stats;
   const week52 =
     stats && typeof stats.week52Low === 'number' && typeof stats.week52High === 'number'
@@ -112,19 +154,21 @@ export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => 
       header={
         <div className="flex items-center gap-2">
           <div className="min-w-0">
-            <div className="truncate text-sm font-extrabold">{data.name || data.symbol}</div>
-            <div className="text-[11px] font-semibold text-slate-500">
+            <SurfaceTitle>{data.name || data.symbol}</SurfaceTitle>
+            <SurfaceSubtitle>
               {data.symbol}
               {data.exchange ? ` · ${data.exchange}` : ''}
               {data.asOf ? ` · ${data.asOf}` : ''}
-            </div>
+            </SurfaceSubtitle>
           </div>
           {market && <Badge color={market.color}>{market.label}</Badge>}
         </div>
       }
       right={
         <>
-          <div className="font-display text-xl leading-none">{formatPrice(data.price, currency)}</div>
+          <div className="text-xl font-semibold tracking-tight tabular-nums leading-none text-[#1a1915]">
+            {formatPrice(data.price, currency)}
+          </div>
           <div className="mt-1 flex justify-end">
             <TrendPill change={data.change} changePercent={data.changePercent} size="sm" />
           </div>
@@ -147,7 +191,7 @@ export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => 
         ) : (
           <span />
         )}
-        <div className="inline-flex gap-1">
+        <div className="inline-flex rounded-lg border border-black/10 bg-black/[0.04] p-0.5">
           {variants
             .filter((v) => v.show)
             .map(({ id, Icon }) => (
@@ -156,8 +200,10 @@ export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => 
                 onClick={() => setVariant(id)}
                 aria-pressed={effectiveVariant === id}
                 title={id}
-                className={`rounded-md border-2 p-1 transition-colors ${
-                  effectiveVariant === id ? 'border-black bg-slate-900 text-white' : 'border-black/15 text-slate-500 hover:border-black/40'
+                className={`rounded-md p-1 transition-all duration-200 ${
+                  effectiveVariant === id
+                    ? 'bg-white text-[#1a1915] shadow-[0_1px_2px_rgba(0,0,0,0.12)]'
+                    : 'text-[#6e6a60] hover:text-[#1a1915]'
                 }`}
               >
                 <Icon className="h-3.5 w-3.5" />
@@ -182,7 +228,7 @@ export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => 
 
       {/* Expanded fundamentals + headlines + peers */}
       {(stats || (data.headlines && data.headlines.length > 0) || (data.related && data.related.length > 0)) && (
-        <Expandable>
+        <Expandable defaultOpen>
           <div className="space-y-3 p-3">
             {stats && (
               <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-[11px] sm:grid-cols-3">
@@ -197,11 +243,11 @@ export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => 
 
             {week52 && week52Pct != null && (
               <div>
-                <div className="mb-1 flex justify-between text-[10px] font-bold uppercase text-slate-400">
+                <div className="mb-1 flex justify-between text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">
                   <span>52-wk low {formatPrice(week52.low, currency)}</span>
                   <span>52-wk high {formatPrice(week52.high, currency)}</span>
                 </div>
-                <div className="relative h-1.5 rounded-full bg-slate-200">
+                <div className="relative h-1.5 rounded-full bg-black/10">
                   <div
                     className="absolute -top-1 h-3.5 w-1.5 -translate-x-1/2 rounded-full border border-white"
                     style={{ left: `${Math.min(100, Math.max(0, week52Pct))}%`, backgroundColor: theme.accent }}
@@ -212,18 +258,18 @@ export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => 
 
             {data.headlines && data.headlines.length > 0 && (
               <div className="space-y-1.5">
-                <div className="text-[10px] font-bold uppercase text-slate-400">Latest headlines</div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">Latest headlines</div>
                 {data.headlines.slice(0, 3).map((h) => (
                   <a
                     key={h.url}
                     href={h.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="block text-xs font-semibold text-slate-700 hover:text-blue-600"
+                    className="block text-xs font-medium text-[#1a1915] transition-colors duration-200 hover:text-blue-600"
                   >
                     {h.title}
                     {(h.source || h.publishedAt) && (
-                      <span className="ml-1 font-normal text-slate-400">
+                      <span className="ml-1 font-normal text-[#6e6a60]">
                         · {h.source}
                         {h.publishedAt ? ` · ${relativeTime(h.publishedAt)}` : ''}
                       </span>
@@ -235,20 +281,24 @@ export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => 
 
             {data.related && data.related.length > 0 && (
               <div className="space-y-1">
-                <div className="text-[10px] font-bold uppercase text-slate-400">Related</div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">Related</div>
                 <div className="grid grid-cols-2 gap-1.5">
                   {data.related.slice(0, 4).map((p) => {
                     const pos = (p.changePercent ?? 0) >= 0;
                     return (
-                      <div key={p.symbol} className="flex items-center justify-between gap-2 rounded-lg border border-black/5 bg-slate-50 px-2 py-1">
+                      <div key={p.symbol} className="flex items-center justify-between gap-2 rounded-lg bg-black/[0.03] px-2 py-1">
                         <div className="min-w-0">
-                          <div className="truncate text-[11px] font-bold">{p.name || p.symbol}</div>
-                          <div className="text-[10px] text-slate-400">{p.symbol}</div>
+                          <div className="truncate text-[11px] font-semibold text-[#1a1915]">{p.name || p.symbol}</div>
+                          <div className="text-[10px] text-[#6e6a60]">{p.symbol}</div>
                         </div>
                         <div className="shrink-0 text-right">
-                          <div className="text-[11px] font-bold">{p.price != null ? formatPrice(p.price, p.currency || currency) : '—'}</div>
+                          <div className="text-[11px] font-semibold tabular-nums text-[#1a1915]">
+                            {p.price != null ? formatPrice(p.price, p.currency || currency) : '—'}
+                          </div>
                           {p.changePercent != null && (
-                            <div className={`text-[10px] font-bold ${pos ? 'text-emerald-600' : 'text-red-600'}`}>{formatPercent(p.changePercent)}</div>
+                            <div className={`text-[10px] font-semibold tabular-nums ${pos ? 'text-emerald-600' : 'text-red-600'}`}>
+                              {formatPercent(p.changePercent)}
+                            </div>
                           )}
                         </div>
                       </div>

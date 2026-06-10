@@ -158,11 +158,11 @@ export const Chart: React.FC<ChartProps> = ({
       {/* Tooltip */}
       {hover != null && hoveredValue != null && (
         <div
-          className="pointer-events-none absolute top-1 z-10 -translate-x-1/2 rounded-md border-2 border-black bg-white px-2 py-1 text-center shadow-comic-hover"
+          className="pointer-events-none absolute top-1 z-10 -translate-x-1/2 rounded-lg border border-black/10 bg-white/95 px-2 py-1 text-center shadow-[0_2px_8px_rgba(0,0,0,0.12)] backdrop-blur-sm"
           style={{ left: `${Math.min(92, Math.max(8, hoverFrac * 100))}%` }}
         >
-          <div className="text-[10px] font-bold text-slate-500">{hoveredLabel}</div>
-          <div className="text-xs font-extrabold">{formatValue(hoveredValue)}</div>
+          <div className="text-[10px] font-medium text-[#6e6a60]">{hoveredLabel}</div>
+          <div className="text-xs font-semibold text-[#1a1915]">{formatValue(hoveredValue)}</div>
         </div>
       )}
     </div>

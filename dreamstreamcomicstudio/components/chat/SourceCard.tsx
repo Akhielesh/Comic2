@@ -23,9 +23,10 @@ interface SourceCardProps {
   title?: string;
 }
 
-// A compact source chip — favicon + title + domain. Deliberately NO hover
-// preview/unfurl: the popup thumbnails were cumbersome and fired a network request
-// per link on hover. A source list should be a quiet reference, not a hover game.
+// A compact source chip — favicon + title + domain, in the calm-studio language.
+// Deliberately NO hover preview/unfurl: the popup thumbnails were cumbersome and
+// fired a network request per link on hover. A source list should be a quiet
+// reference, not a hover game.
 export const SourceCard: React.FC<SourceCardProps> = ({ index, url, title }) => {
   const domain = domainOf(url);
   const favicon = faviconOf(url);
@@ -35,13 +36,13 @@ export const SourceCard: React.FC<SourceCardProps> = ({ index, url, title }) => 
       target="_blank"
       rel="noopener noreferrer"
       title={title || url}
-      className="group flex items-center gap-2 rounded-lg border border-black/10 bg-white px-2 py-1 hover:border-black/30 hover:bg-slate-50"
+      className="group flex items-center gap-2 rounded-lg border border-black/10 bg-white/85 px-2 py-1 transition-colors duration-200 hover:bg-black/[0.03]"
     >
-      <span className="w-3.5 shrink-0 text-[10px] font-bold text-slate-400">{index}</span>
-      {favicon && <img src={favicon} alt="" className="h-3.5 w-3.5 shrink-0 rounded" loading="lazy" />}
-      <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-slate-700 group-hover:text-blue-700">{title || domain}</span>
-      <span className="hidden shrink-0 text-[10px] text-slate-400 sm:inline">{domain}</span>
-      <ExternalLink className="h-3 w-3 shrink-0 text-slate-300 group-hover:text-slate-500" />
+      <span className="w-3.5 shrink-0 text-[10px] font-semibold text-[#6e6a60]">{index}</span>
+      {favicon && <img src={favicon} alt="" className="h-3.5 w-3.5 shrink-0 rounded ring-1 ring-black/5" loading="lazy" />}
+      <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-[#1a1915]">{title || domain}</span>
+      <span className="hidden shrink-0 text-[10px] text-[#6e6a60] sm:inline">{domain}</span>
+      <ExternalLink className="h-3 w-3 shrink-0 text-black/20 transition-colors duration-200 group-hover:text-[#6e6a60]" />
     </a>
   );
 };

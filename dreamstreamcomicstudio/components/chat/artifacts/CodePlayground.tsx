@@ -3,6 +3,7 @@ import { Terminal, Play, Loader2, AlertTriangle, RotateCcw, Copy, Check } from '
 import { runJavaScript, type JsRunResult } from '../../../services/jsRunner';
 import { runPython, isPythonRuntimeLoaded } from '../../../services/pyRunner';
 import type { CodeExerciseArtifact } from '../../../apiTypes';
+import { Surface, SurfaceTitle, Badge } from './kit';
 
 // An interactive code playground the AI generates for learning. The user writes code and
 // runs it in a sandboxed Web Worker — real output, real errors — so they actually
@@ -45,18 +46,23 @@ export const CodePlayground: React.FC<{ data: CodeExerciseArtifact }> = ({ data 
   };
 
   return (
-    <div className="border-2 border-black rounded-xl bg-white shadow-comic overflow-hidden animate-fade-in">
-      <div className="bg-emerald-700 text-white px-4 py-2.5 flex items-center gap-2">
-        <Terminal className="w-5 h-5" />
-        <div className="font-display text-lg leading-none truncate flex-1">{data.title || 'Code practice'}</div>
-        <span className="text-[10px] font-bold uppercase tracking-wide bg-white/20 px-1.5 py-0.5 rounded">{isPython ? 'Python · Pyodide' : canRun ? 'JavaScript · sandboxed' : `${data.language} · read-only`}</span>
-      </div>
-
-      <div className="p-4 space-y-3">
-        {data.instructions && <p className="text-sm text-slate-600">{data.instructions}</p>}
+    <Surface
+      accent="#059669"
+      header={
+        <div className="flex items-start gap-2">
+          <span className="mt-0.5 shrink-0 rounded-lg bg-black/[0.04] p-1.5 text-[#6e6a60]">
+            <Terminal className="w-4 h-4" />
+          </span>
+          <SurfaceTitle>{data.title || 'Code practice'}</SurfaceTitle>
+        </div>
+      }
+      right={<Badge color="#059669">{isPython ? 'Python · Pyodide' : canRun ? 'JavaScript · sandboxed' : `${data.language} · read-only`}</Badge>}
+    >
+      <div className="px-3 pb-3 space-y-3">
+        {data.instructions && <p className="text-sm text-[#6e6a60]">{data.instructions}</p>}
         {data.task && (
-          <div className="text-sm bg-emerald-50 border-2 border-emerald-200 rounded-lg p-2.5">
-            <span className="font-bold text-emerald-800">Task:</span> {data.task}
+          <div className="text-sm text-[#1a1915] rounded-xl bg-black/[0.03] p-2.5">
+            <span className="font-semibold text-emerald-800">Task:</span> {data.task}
           </div>
         )}
 
@@ -67,7 +73,7 @@ export const CodePlayground: React.FC<{ data: CodeExerciseArtifact }> = ({ data 
           rows={Math.min(16, Math.max(4, code.split('\n').length))}
           spellCheck={false}
           readOnly={!canRun}
-          className="w-full font-mono text-[13px] border-2 border-black rounded-lg p-2.5 bg-slate-900 text-slate-100 focus:outline-none resize-y"
+          className="w-full font-mono text-[13px] border border-black/10 rounded-xl p-2.5 bg-slate-900 text-slate-100 focus:outline-none focus:border-black/25 resize-y"
           placeholder="Write code here…"
         />
 
@@ -76,30 +82,30 @@ export const CodePlayground: React.FC<{ data: CodeExerciseArtifact }> = ({ data 
             <button
               onClick={() => void run()}
               disabled={running || !code.trim()}
-              className="flex items-center gap-1.5 text-sm font-bold border-2 border-black rounded-md px-4 py-1.5 bg-brand-yellow hover:bg-black hover:text-brand-yellow transition-colors disabled:opacity-40"
+              className="flex items-center gap-1.5 text-sm font-semibold rounded-lg px-4 py-1.5 bg-[#D97757] text-white transition-colors duration-200 hover:bg-[#c2643f] disabled:opacity-40"
             >
               {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />} Run
             </button>
             {running && isPython && !isPythonRuntimeLoaded() ? (
-              <span className="text-[11px] text-slate-500">Downloading Python runtime (first run, ~6MB)…</span>
+              <span className="text-[11px] text-[#6e6a60]">Downloading Python runtime (first run, ~6MB)…</span>
             ) : (
-              <span className="text-[11px] text-slate-400">⌘/Ctrl + Enter</span>
+              <span className="text-[11px] text-[#6e6a60]">⌘/Ctrl + Enter</span>
             )}
-            <button onClick={copy} title="Copy code" className="ml-auto flex items-center gap-1 text-[11px] font-bold border-2 border-black rounded-md px-2 py-1 bg-white hover:bg-slate-100">
-              {copied ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
+            <button onClick={copy} title="Copy code" className="ml-auto flex items-center gap-1 rounded-lg border border-black/10 bg-white/70 px-2 py-1 text-[11px] font-semibold text-[#6e6a60] transition-colors duration-200 hover:bg-black/5 hover:text-[#1a1915]">
+              {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
             </button>
-            <button onClick={() => setCode(starter)} title="Reset to starter code" className="flex items-center gap-1 text-[11px] font-bold border-2 border-black rounded-md px-2 py-1 bg-white hover:bg-slate-100">
+            <button onClick={() => setCode(starter)} title="Reset to starter code" className="flex items-center gap-1 rounded-lg border border-black/10 bg-white/70 px-2 py-1 text-[11px] font-semibold text-[#6e6a60] transition-colors duration-200 hover:bg-black/5 hover:text-[#1a1915]">
               <RotateCcw className="w-3.5 h-3.5" />
             </button>
           </div>
         ) : (
-          <p className="text-[12px] text-slate-500">Live run currently supports JavaScript. This {data.language} snippet is shown as a reference.</p>
+          <p className="text-[12px] text-[#6e6a60]">Live run currently supports JavaScript. This {data.language} snippet is shown as a reference.</p>
         )}
 
         {/* Console output: captured logs + any thrown error. */}
         {result && (
-          <div className="border-2 border-black rounded-lg overflow-hidden">
-            <div className="bg-slate-100 px-2.5 py-1.5 text-[11px] font-bold border-b-2 border-black flex items-center gap-1.5">
+          <div className="border border-black/10 rounded-xl overflow-hidden">
+            <div className="bg-black/[0.03] px-2.5 py-1.5 text-[11px] font-semibold text-[#6e6a60] border-b border-black/5 flex items-center gap-1.5">
               <Terminal className="w-3.5 h-3.5" /> Console
             </div>
             <div className="bg-slate-900 max-h-72 overflow-y-auto p-2.5 font-mono text-[12px] leading-relaxed">
@@ -116,6 +122,6 @@ export const CodePlayground: React.FC<{ data: CodeExerciseArtifact }> = ({ data 
           </div>
         )}
       </div>
-    </div>
+    </Surface>
   );
 };

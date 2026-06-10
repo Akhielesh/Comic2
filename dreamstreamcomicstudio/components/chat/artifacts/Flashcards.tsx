@@ -3,6 +3,7 @@ import { Layers, RotateCcw, Shuffle, Check, RefreshCw, ChevronLeft, ChevronRight
 import type { FlashcardsArtifact } from '../../../apiTypes';
 import { deckIdFor, loadProgress, saveProgress, clearProgress } from '../../../services/studyProgress';
 import { downloadTextFile } from '../../../services/chatUtils';
+import { Surface, SurfaceTitle, SurfaceSubtitle, useCompact } from './kit';
 
 // CSV field quoting (Anki/Quizlet import friendly): quote fields containing commas,
 // quotes or newlines, doubling embedded quotes.
@@ -12,6 +13,9 @@ const csvField = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"`
 // marks it "known" or "review", can shuffle, and sees progress. Progress (known/review)
 // PERSISTS per deck across reloads/sessions (spaced-repetition lite), so studying picks
 // up where it left off and the learner can drill just the cards they haven't mastered.
+//
+// TWO VERSIONS: compact (deck title + count + first-card teaser, no flipping UI) and
+// detailed (the full study experience), selected via the WidgetFrame density context.
 
 const shuffled = (n: number): number[] => {
   const a = Array.from({ length: n }, (_, i) => i);
@@ -20,6 +24,7 @@ const shuffled = (n: number): number[] => {
 };
 
 export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => {
+  const compact = useCompact();
   const cards = useMemo(() => (Array.isArray(data?.cards) ? data.cards.filter((c) => c && (c.front || c.back)) : []), [data]);
   const deckId = useMemo(() => deckIdFor(cards, data?.title), [cards, data?.title]);
   // Restore any saved progress for this deck on first render.
@@ -38,6 +43,42 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
   }, [deckId, known, review]);
 
   if (cards.length === 0) return null;
+
+  // ── Compact: a quiet glance card — deck identity, size, mastery and a teaser of the
+  //    first card's front. No flipping UI; expand the widget to study.
+  if (compact) {
+    return (
+      <Surface
+        accent="#8b5cf6"
+        header={
+          <div className="flex items-start gap-2">
+            <span className="mt-0.5 shrink-0 rounded-lg bg-black/[0.04] p-1.5 text-[#6e6a60]">
+              <Layers className="w-4 h-4" />
+            </span>
+            <div className="min-w-0">
+              <SurfaceTitle>{data.title || 'Flashcards'}</SurfaceTitle>
+              {data.topic && <SurfaceSubtitle>{data.topic}</SurfaceSubtitle>}
+            </div>
+          </div>
+        }
+        right={
+          <span className="text-[11px] text-[#6e6a60] tabular-nums">
+            {known.size === cards.length ? 'mastered' : `${known.size}/${cards.length} known`}
+          </span>
+        }
+      >
+        <div className="px-3 pb-3">
+          <div className="rounded-xl bg-black/[0.03] px-3 py-2.5">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60] mb-0.5">First card</div>
+            <div className="text-sm text-[#1a1915] line-clamp-2 whitespace-pre-wrap">{cards[0].front}</div>
+          </div>
+          <div className="mt-1.5 text-[11px] text-[#6e6a60]">
+            {cards.length} card{cards.length === 1 ? '' : 's'}{review.size ? ` · ${review.size} flagged for review` : ''}
+          </div>
+        </div>
+      </Surface>
+    );
+  }
 
   const cardIndex = order[Math.min(pos, order.length - 1)];
   const card = cards[cardIndex];
@@ -74,76 +115,91 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
     else if (k === 'ArrowDown' || k === 'j' || k === 'J') { e.preventDefault(); mark(false); }
   };
 
+  const secondaryBtn = 'flex items-center gap-1 text-[12px] font-semibold rounded-lg border border-black/10 bg-white/70 px-2.5 py-1 text-[#1a1915] transition-colors duration-200 hover:bg-black/5';
+
   return (
     <div
-      className="border-2 border-black rounded-xl bg-white shadow-comic overflow-hidden animate-fade-in focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
       tabIndex={0}
       role="group"
       aria-label={`Flashcard deck: ${data.title || 'Flashcards'}. Use space to flip, arrow keys to navigate.`}
       onKeyDown={onKey}
+      className="focus:outline-none focus-visible:ring-2 focus-visible:ring-[#8b5cf6]/50 rounded-2xl"
     >
-      <div className="bg-violet-600 text-white px-4 py-2.5 flex items-center gap-2">
-        <Layers className="w-5 h-5" />
-        <div className="min-w-0 flex-1">
-          <div className="font-display text-lg leading-none truncate">{data.title || 'Flashcards'}</div>
-          {data.topic && <div className="text-[11px] font-bold uppercase tracking-wide text-white/70">{data.topic}</div>}
+      <Surface
+        accent="#8b5cf6"
+        header={
+          <div className="flex items-start gap-2">
+            <span className="mt-0.5 shrink-0 rounded-lg bg-black/[0.04] p-1.5 text-[#6e6a60]">
+              <Layers className="w-4 h-4" />
+            </span>
+            <div className="min-w-0">
+              <SurfaceTitle>{data.title || 'Flashcards'}</SurfaceTitle>
+              {data.topic && <SurfaceSubtitle>{data.topic}</SurfaceSubtitle>}
+            </div>
+          </div>
+        }
+        right={
+          <span className="text-[11px] text-[#6e6a60] tabular-nums">
+            {known.size === cards.length ? '✓ mastered' : `${known.size}/${cards.length} known`}
+          </span>
+        }
+      >
+        {/* Mastery bar: green = known, amber = flagged for review, quiet track = remaining. */}
+        <div className="mx-3 flex h-1 overflow-hidden rounded-full bg-black/5" aria-hidden="true">
+          <div className="bg-emerald-500 transition-all" style={{ width: `${(known.size / cards.length) * 100}%` }} />
+          <div className="bg-amber-400 transition-all" style={{ width: `${(review.size / cards.length) * 100}%` }} />
         </div>
-        <span className="text-[11px] font-bold">{known.size === cards.length ? '✓ mastered' : `${known.size}/${cards.length} known`}</span>
-      </div>
 
-      {/* Mastery bar: green = known, amber = flagged for review, slate track = remaining. */}
-      <div className="flex h-1.5 bg-slate-100" aria-hidden="true">
-        <div className="bg-green-500 transition-all" style={{ width: `${(known.size / cards.length) * 100}%` }} />
-        <div className="bg-amber-400 transition-all" style={{ width: `${(review.size / cards.length) * 100}%` }} />
-      </div>
+        {/* Resumed-progress hint (only when there was saved progress to restore). */}
+        {resumed && (
+          <div className="mx-3 mt-2 rounded-lg bg-violet-50 px-2.5 py-1 text-[11px] font-medium text-violet-700">
+            Resumed your saved progress{review.size ? ` · ${review.size} flagged for review` : ''}.
+          </div>
+        )}
 
-      {/* Resumed-progress hint (only when there was saved progress to restore). */}
-      {resumed && (
-        <div className="bg-violet-50 border-b-2 border-violet-200 px-4 py-1 text-[11px] text-violet-700 font-semibold">
-          Resumed your saved progress{review.size ? ` · ${review.size} flagged for review` : ''}.
-        </div>
-      )}
+        <div className="p-3">
+          {/* The card — click (or space, when the deck is focused) to flip. */}
+          <div
+            role="button"
+            onClick={() => setFlipped((f) => !f)}
+            className={`w-full min-h-[150px] rounded-xl border flex items-center justify-center text-center p-5 transition-colors duration-200 cursor-pointer ${
+              flipped ? 'border-violet-200 bg-violet-50/70' : 'border-black/10 bg-black/[0.03] hover:bg-black/5'
+            }`}
+          >
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60] mb-1">{flipped ? 'Answer' : 'Term'}</div>
+              <div className="text-lg font-semibold tracking-tight text-[#1a1915] whitespace-pre-wrap">{flipped ? card.back : card.front}</div>
+              {!flipped && <div className="text-[11px] text-[#6e6a60] mt-2">Click to flip · or focus the deck and use <kbd>space</kbd> / <kbd>←</kbd> <kbd>→</kbd></div>}
+            </div>
+          </div>
 
-      <div className="p-4">
-        {/* The card — click (or space, when the deck is focused) to flip. */}
-        <div
-          role="button"
-          onClick={() => setFlipped((f) => !f)}
-          className={`w-full min-h-[150px] rounded-xl border-2 border-black flex items-center justify-center text-center p-5 transition-colors cursor-pointer ${flipped ? 'bg-violet-50' : 'bg-brand-yellow'}`}
-        >
-          <div>
-            <div className="text-[10px] font-bold uppercase tracking-wide text-black/50 mb-1">{flipped ? 'Answer' : 'Term'}</div>
-            <div className="text-lg font-bold whitespace-pre-wrap">{flipped ? card.back : card.front}</div>
-            {!flipped && <div className="text-[11px] text-black/50 mt-2">Click to flip · or focus the deck and use <kbd>space</kbd> / <kbd>←</kbd> <kbd>→</kbd></div>}
+          {/* Nav + progress */}
+          <div className="flex items-center justify-between mt-3">
+            <button onClick={() => go(-1)} disabled={pos === 0} className="flex items-center gap-1 text-sm font-semibold text-[#6e6a60] transition-colors duration-200 disabled:opacity-30 hover:text-[#1a1915]">
+              <ChevronLeft className="w-4 h-4" /> Prev
+            </button>
+            <span className="text-[11px] text-[#6e6a60] tabular-nums">{pos + 1} / {order.length}{known.has(cardIndex) ? ' · ✓' : ''}</span>
+            <button onClick={() => go(1)} disabled={pos >= order.length - 1} className="flex items-center gap-1 text-sm font-semibold text-[#6e6a60] transition-colors duration-200 disabled:opacity-30 hover:text-[#1a1915]">
+              Next <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Mark known / review + deck controls */}
+          <div className="flex items-center gap-2 mt-3 flex-wrap">
+            <button onClick={() => mark(true)} className="flex items-center gap-1 text-[12px] font-semibold rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-emerald-700 transition-colors duration-200 hover:bg-emerald-100"><Check className="w-3.5 h-3.5" /> Got it</button>
+            <button onClick={() => mark(false)} className="flex items-center gap-1 text-[12px] font-semibold rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-amber-700 transition-colors duration-200 hover:bg-amber-100"><RefreshCw className="w-3.5 h-3.5" /> Review</button>
+            {/* Spaced-repetition: drill just the not-yet-known cards (toggle back to all). */}
+            {unknownOnly ? (
+              <button onClick={studyAll} className="flex items-center gap-1 text-[12px] font-semibold rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1 text-violet-700 transition-colors duration-200 hover:bg-violet-100"><Layers className="w-3.5 h-3.5" /> All cards</button>
+            ) : (
+              <button onClick={studyUnknown} disabled={known.size >= cards.length} className="flex items-center gap-1 text-[12px] font-semibold rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1 text-violet-700 transition-colors duration-200 hover:bg-violet-100 disabled:opacity-40" title="Study only the cards you haven't marked known"><Target className="w-3.5 h-3.5" /> Study {cards.length - known.size} left</button>
+            )}
+            <button onClick={exportCsv} title="Download as CSV (import into Anki / Quizlet)" className={`ml-auto ${secondaryBtn}`}><Download className="w-3.5 h-3.5" /> CSV</button>
+            <button onClick={reshuffle} className={secondaryBtn}><Shuffle className="w-3.5 h-3.5" /> Shuffle</button>
+            <button onClick={reset} className={secondaryBtn} title="Clear saved progress"><RotateCcw className="w-3.5 h-3.5" /> Reset</button>
           </div>
         </div>
-
-        {/* Nav + progress */}
-        <div className="flex items-center justify-between mt-3">
-          <button onClick={() => go(-1)} disabled={pos === 0} className="flex items-center gap-1 text-sm font-bold disabled:opacity-30 hover:text-black">
-            <ChevronLeft className="w-4 h-4" /> Prev
-          </button>
-          <span className="text-xs font-bold text-slate-500 tabular-nums">{pos + 1} / {order.length}{known.has(cardIndex) ? ' · ✓' : ''}</span>
-          <button onClick={() => go(1)} disabled={pos >= order.length - 1} className="flex items-center gap-1 text-sm font-bold disabled:opacity-30 hover:text-black">
-            Next <ChevronRight className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Mark known / review + deck controls */}
-        <div className="flex items-center gap-2 mt-3 flex-wrap">
-          <button onClick={() => mark(true)} className="flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-green-100 hover:bg-green-200"><Check className="w-3.5 h-3.5" /> Got it</button>
-          <button onClick={() => mark(false)} className="flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-amber-100 hover:bg-amber-200"><RefreshCw className="w-3.5 h-3.5" /> Review</button>
-          {/* Spaced-repetition: drill just the not-yet-known cards (toggle back to all). */}
-          {unknownOnly ? (
-            <button onClick={studyAll} className="flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-violet-100 hover:bg-violet-200"><Layers className="w-3.5 h-3.5" /> All cards</button>
-          ) : (
-            <button onClick={studyUnknown} disabled={known.size >= cards.length} className="flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-violet-100 hover:bg-violet-200 disabled:opacity-40" title="Study only the cards you haven't marked known"><Target className="w-3.5 h-3.5" /> Study {cards.length - known.size} left</button>
-          )}
-          <button onClick={exportCsv} title="Download as CSV (import into Anki / Quizlet)" className="ml-auto flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-white hover:bg-slate-100"><Download className="w-3.5 h-3.5" /> CSV</button>
-          <button onClick={reshuffle} className="flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-white hover:bg-slate-100"><Shuffle className="w-3.5 h-3.5" /> Shuffle</button>
-          <button onClick={reset} className="flex items-center gap-1 text-[12px] font-bold border-2 border-black rounded-md px-2.5 py-1 bg-white hover:bg-slate-100" title="Clear saved progress"><RotateCcw className="w-3.5 h-3.5" /> Reset</button>
-        </div>
-      </div>
+      </Surface>
     </div>
   );
 };

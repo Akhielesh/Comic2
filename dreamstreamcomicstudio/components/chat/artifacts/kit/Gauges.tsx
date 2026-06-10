@@ -44,16 +44,16 @@ export const RadialGauge: React.FC<{
             style={{ transition: 'stroke-dasharray 0.7s ease-out' }}
           />
         </g>
-        <text x={cx} y={cy - 1} textAnchor="middle" className="font-display" fontSize={size * 0.3} fill="#0f172a">
+        <text x={cx} y={cy - 1} textAnchor="middle" fontSize={size * 0.26} fontWeight="600" fill="#1a1915" style={{ letterSpacing: '-0.02em' }}>
           {display ?? Math.round(value)}
         </text>
         {unit && (
-          <text x={cx} y={cy + size * 0.16} textAnchor="middle" fontSize={size * 0.13} fill="#64748b" fontWeight="700">
+          <text x={cx} y={cy + size * 0.16} textAnchor="middle" fontSize={size * 0.13} fill="#6e6a60" fontWeight="600">
             {unit}
           </text>
         )}
       </svg>
-      {label && <span className="-mt-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">{label}</span>}
+      {label && <span className="-mt-1 text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">{label}</span>}
     </div>
   );
 };

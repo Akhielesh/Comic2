@@ -52,7 +52,7 @@ const ClockWidget: React.FC<{ w: DashboardWidget }> = ({ w }) => {
         return (
           <div key={z.label}>
             <div className="text-[28px] font-semibold tabular-nums leading-none tracking-tight">{time}</div>
-            <div className="text-[11px] text-slate-500 mt-1">{z.label} · {date}</div>
+            <div className="text-[11px] text-[#6e6a60] mt-1">{z.label} · {date}</div>
           </div>
         );
       })}
@@ -65,7 +65,7 @@ const pad2 = (n: number) => String(Math.max(0, n)).padStart(2, '0');
 const CountdownWidget: React.FC<{ w: DashboardWidget }> = ({ w }) => {
   const now = useNow(1000);
   const target = w.target ? new Date(w.target) : null;
-  if (!target || Number.isNaN(target.getTime())) return <div className="text-sm text-slate-500">No target date.</div>;
+  if (!target || Number.isNaN(target.getTime())) return <div className="text-sm text-[#6e6a60]">No target date.</div>;
   const ms = target.getTime() - now.getTime();
   const past = ms <= 0;
   const s = Math.floor(Math.abs(ms) / 1000);
@@ -73,12 +73,12 @@ const CountdownWidget: React.FC<{ w: DashboardWidget }> = ({ w }) => {
   return (
     <div>
       <div className="flex items-baseline gap-2 tabular-nums">
-        {d > 0 && <span className="text-[26px] font-semibold">{d}<span className="text-[12px] text-slate-500 ml-0.5">d</span></span>}
-        <span className="text-[26px] font-semibold">{pad2(h)}<span className="text-[12px] text-slate-500 ml-0.5">h</span></span>
-        <span className="text-[26px] font-semibold">{pad2(m)}<span className="text-[12px] text-slate-500 ml-0.5">m</span></span>
-        <span className="text-[26px] font-semibold">{pad2(sec)}<span className="text-[12px] text-slate-500 ml-0.5">s</span></span>
+        {d > 0 && <span className="text-[26px] font-semibold">{d}<span className="text-[12px] text-[#6e6a60] ml-0.5">d</span></span>}
+        <span className="text-[26px] font-semibold">{pad2(h)}<span className="text-[12px] text-[#6e6a60] ml-0.5">h</span></span>
+        <span className="text-[26px] font-semibold">{pad2(m)}<span className="text-[12px] text-[#6e6a60] ml-0.5">m</span></span>
+        <span className="text-[26px] font-semibold">{pad2(sec)}<span className="text-[12px] text-[#6e6a60] ml-0.5">s</span></span>
       </div>
-      <div className="text-[11px] text-slate-500 mt-1">
+      <div className="text-[11px] text-[#6e6a60] mt-1">
         {past ? 'since ' : 'until '}{target.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
       </div>
     </div>
@@ -89,7 +89,7 @@ const StatWidget: React.FC<{ w: DashboardWidget }> = ({ w }) => (
   <div>
     <div className="flex items-baseline gap-1.5">
       <span className="text-[30px] font-semibold tabular-nums leading-none tracking-tight">{w.value ?? '—'}</span>
-      {w.unit && <span className="text-[13px] text-slate-500">{w.unit}</span>}
+      {w.unit && <span className="text-[13px] text-[#6e6a60]">{w.unit}</span>}
       {(w.delta != null || w.deltaPercent != null) && <TrendPill change={w.delta} changePercent={w.deltaPercent} />}
     </div>
     {Array.isArray(w.spark) && w.spark.length > 1 && (
@@ -108,10 +108,10 @@ const ListWidget: React.FC<{ w: DashboardWidget }> = ({ w }) => {
           <button
             onClick={() => toggle(i)}
             aria-label={done.has(i) ? 'Mark not done' : 'Mark done'}
-            className={`mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full border transition-colors ${done.has(i) ? 'bg-emerald-500 border-emerald-500' : 'border-slate-400 hover:border-emerald-500'}`}
+            className={`mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full border transition-colors ${done.has(i) ? 'bg-emerald-500 border-emerald-500' : 'border-black/25 hover:border-emerald-500'}`}
           />
-          <span className={done.has(i) ? 'line-through text-slate-400' : ''}>{it.text}</span>
-          {it.meta && <span className="ml-auto text-[11px] text-slate-400 shrink-0 tabular-nums">{it.meta}</span>}
+          <span className={done.has(i) ? 'line-through text-[#6e6a60]/70' : ''}>{it.text}</span>
+          {it.meta && <span className="ml-auto text-[11px] text-[#6e6a60] shrink-0 tabular-nums">{it.meta}</span>}
         </li>
       ))}
     </ul>
@@ -218,17 +218,17 @@ const WidgetBody: React.FC<{ w: DashboardWidget }> = ({ w }) => {
     case 'stat': return <StatWidget w={w} />;
     case 'progress': {
       const p = w.progress;
-      if (!p || !Number.isFinite(p.value) || !Number.isFinite(p.max) || p.max <= 0) return <div className="text-sm text-slate-500">No progress data.</div>;
+      if (!p || !Number.isFinite(p.value) || !Number.isFinite(p.max) || p.max <= 0) return <div className="text-sm text-[#6e6a60]">No progress data.</div>;
       return (
         <div className="flex items-center gap-3">
           <RadialGauge value={p.value} max={p.max} size={72} />
-          <div className="text-[13px] text-slate-600">{p.label ?? `${Math.round((p.value / p.max) * 100)}% of ${p.max}`}</div>
+          <div className="text-[13px] text-[#6e6a60]">{p.label ?? `${Math.round((p.value / p.max) * 100)}% of ${p.max}`}</div>
         </div>
       );
     }
     case 'chart': {
       const pts = (w.points ?? []).filter((p) => Number.isFinite(p.y));
-      if (pts.length < 2) return <div className="text-sm text-slate-500">Not enough data to chart.</div>;
+      if (pts.length < 2) return <div className="text-sm text-[#6e6a60]">Not enough data to chart.</div>;
       return <Chart points={pts.map((p) => ({ label: String(p.x), value: p.y }))} variant={w.chartVariant === 'line' ? 'line' : 'area'} color="#3B82F6" height={120} />;
     }
     case 'list': return <ListWidget w={w} />;
@@ -273,7 +273,7 @@ export const DashboardCard: React.FC<{ data: DashboardArtifact }> = ({ data }) =
   if (!widgets.length) return null;
 
   return (
-    <div className="animate-fade-in relative overflow-hidden rounded-2xl border-2 border-black shadow-comic">
+    <div className="my-2 animate-fade-in relative overflow-hidden rounded-2xl border border-black/10 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.06)]">
       {/* aurora backdrop — slow, GPU-cheap, behind everything */}
       <div className="absolute inset-0 bg-gradient-to-br from-sky-100 via-indigo-50 to-rose-100" aria-hidden />
       <div className="absolute -top-20 -left-16 h-64 w-64 rounded-full bg-sky-300/40 blur-3xl" aria-hidden />
@@ -282,13 +282,13 @@ export const DashboardCard: React.FC<{ data: DashboardArtifact }> = ({ data }) =
       <div className="relative p-4">
         <div className="flex items-start justify-between gap-3 mb-3">
           <div className="min-w-0">
-            <h3 className="font-display text-xl leading-tight">{data.title}</h3>
-            {data.subtitle && <p className="text-[12px] text-slate-600 mt-0.5">{data.subtitle}</p>}
+            <h3 className="text-sm font-semibold tracking-tight text-[#1a1915] leading-tight">{data.title}</h3>
+            {data.subtitle && <p className="text-[11px] text-[#6e6a60] mt-0.5">{data.subtitle}</p>}
           </div>
           {customized && (
             <button
               onClick={() => { setOrder(widgets.map((w) => w.id)); saveOrder(key, widgets.map((w) => w.id)); }}
-              className="shrink-0 inline-flex items-center gap-1 text-[11px] font-bold px-2 py-1 rounded-lg border border-black/20 bg-white/60 backdrop-blur hover:bg-white/80"
+              className="shrink-0 inline-flex items-center gap-1 text-[11px] font-semibold text-[#1a1915] px-2 py-1 rounded-lg border border-black/10 bg-white/70 backdrop-blur transition-colors duration-200 hover:bg-white/90"
               title="Reset to the original layout"
             >
               <RotateCcw className="w-3 h-3" /> Reset layout
@@ -310,17 +310,17 @@ export const DashboardCard: React.FC<{ data: DashboardArtifact }> = ({ data }) =
                 onDragEnd={() => { setDragId(null); setOverId(null); }}
                 className={`group rounded-xl border border-white/70 bg-white/55 backdrop-blur-md shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_4px_16px_rgba(15,23,42,0.08)] p-3 transition-all duration-200 ${spanClass(w)} ${dragId === w.id ? 'opacity-50 scale-[0.98]' : ''} ${overId === w.id && dragId && dragId !== w.id ? 'ring-2 ring-blue-400 ring-offset-1' : ''}`}
               >
-                <header className="flex items-center gap-1.5 mb-2 text-slate-600">
+                <header className="flex items-center gap-1.5 mb-2 text-[#6e6a60]">
                   {Icon && <Icon className="w-3.5 h-3.5" />}
-                  <span className="text-[10px] font-bold uppercase tracking-wider truncate">{w.title ?? w.kind}</span>
-                  <GripVertical className="w-3.5 h-3.5 ml-auto text-slate-300 group-hover:text-slate-500 cursor-grab" aria-label="Drag to rearrange" />
+                  <span className="text-[10px] font-semibold uppercase tracking-wider truncate">{w.title ?? w.kind}</span>
+                  <GripVertical className="w-3.5 h-3.5 ml-auto text-black/20 group-hover:text-black/40 cursor-grab" aria-label="Drag to rearrange" />
                 </header>
                 <WidgetBody w={w} />
               </section>
             );
           })}
         </div>
-        <p className="mt-2 text-[10px] text-slate-500">Drag any card to rearrange — your layout is remembered on this device.</p>
+        <p className="mt-2 text-[10px] text-[#6e6a60]">Drag any card to rearrange — your layout is remembered on this device.</p>
       </div>
     </div>
   );
