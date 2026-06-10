@@ -1,0 +1,48 @@
+# Root-level copy of dreamstreamcomicstudio/.github/workflows/probe-nvidia-availability.yml.
+# GitHub Actions only scans the REPO ROOT .github/workflows — the nested app copy NEVER
+# ran, so model_catalog_cache.api_callable was never populated and every download-only
+# NVIDIA NIM looked selectable (then 404'd on use). Same job, adjusted paths.
+#
+# NVIDIA Build's /models lists many "download-only" NIMs that are NOT served on the hosted
+# API (integrate.api.nvidia.com) — calling them returns 404 "not found for account". This
+# job VERIFIES each model with a tiny probe request and persists the result so the UI can
+# flag and DISABLE models that can't actually be called.
+# Requires repo secrets: VITE_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, NVIDIA_API_KEY.
+
+name: Probe NVIDIA Availability
+
+on:
+  schedule:
+    - cron: '15 6 * * *' # daily at 06:15 UTC, offset from other jobs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe-nvidia:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dreamstreamcomicstudio
+    env:
+      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: dreamstreamcomicstudio/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Probe NVIDIA hosted-API callability
+        run: npm run nvidia:probe

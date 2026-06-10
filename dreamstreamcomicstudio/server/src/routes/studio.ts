@@ -24,6 +24,7 @@ import { createWorkerRun, createStudioFix } from '../services/studioBuildService
 import { evaluateLaunchAllowed } from '../services/studioCaps.js';
 import { sanitizeFiles, deriveProjectName } from '../services/studioFiles.js';
 import { saveProject, listProjects, getProjectWithFiles, deleteProject, listVersions, getVersionFiles, listDeployments } from '../services/studioRepository.js';
+import { normalizeStudioId, normalizeStudioIdOrNew } from '../services/studioIds.js';
 import { runBuildAgent } from '../ai/studio/buildAgent.js';
 import { runGenerate, buildGeneratePrompt, parseGeneratedApp, STRICT_JSON_REMINDER, reviewCompleteness, repairUntilClean } from '../ai/studio/studioGenerate.js';
 import { runClarify } from '../ai/studio/studioClarify.js';
@@ -533,10 +534,7 @@ studioRouter.post('/launch', async (req, res, next) => {
     if (!files.length) {
       return res.status(400).json({ error: { message: 'files[] (with path + content) is required.' } });
     }
-    const projectId =
-      typeof body.projectId === 'string' && body.projectId.trim()
-        ? body.projectId.trim().slice(0, 80)
-        : crypto.randomUUID();
+    const projectId = normalizeStudioIdOrNew(body.projectId);
     const port = Number.isInteger(body.port) && (body.port as number) > 1024 && body.port !== 3000 ? (body.port as number) : 3001;
 
     // Per-user caps (defensive: if the DB is unavailable in dev, log + allow rather than block).
@@ -620,6 +618,10 @@ studioRouter.post('/launch', async (req, res, next) => {
 // done/stopped) so the Code Studio UI renders the build as it happens. Auth + caps + run
 // metering apply, same as launch. Safe to ship: nothing calls it until the Studio UI lands.
 studioRouter.post('/build', async (req, res, next) => {
+  // Hoisted so the catch below can close the run row — otherwise a crash mid-build
+  // leaves the row stuck in 'starting' forever (it then shadows the concurrency cap
+  // until the active-run window expires it).
+  let buildRunId: string | undefined;
   try {
     if (notConfigured()) return res.status(503).json(notConfiguredResponse);
     const userId = req.user!.id;
@@ -656,10 +658,7 @@ studioRouter.post('/build', async (req, res, next) => {
       console.warn('[studio] cap check skipped:', (err as Error)?.message);
     }
 
-    const projectId =
-      typeof body.projectId === 'string' && body.projectId.trim()
-        ? body.projectId.trim().slice(0, 80)
-        : crypto.randomUUID();
+    const projectId = normalizeStudioIdOrNew(body.projectId);
     const port =
       Number.isInteger(body.port) && (body.port as number) > 1024 && body.port !== 3000 ? (body.port as number) : 3001;
     const sandboxId = `u_${userId}_${projectId}`;
@@ -704,6 +703,7 @@ studioRouter.post('/build', async (req, res, next) => {
         .select('id')
         .single();
       runId = data?.id;
+      buildRunId = runId;
     } catch (err) {
       console.warn('[studio] run record skipped:', (err as Error)?.message);
     }
@@ -758,6 +758,15 @@ studioRouter.post('/build', async (req, res, next) => {
     });
     res.end();
   } catch (err) {
+    // Close the run row so a crashed build never lingers as 'starting'.
+    if (buildRunId) {
+      try {
+        await getSupabaseAdmin()
+          .from('studio_runs')
+          .update({ status: 'error', ended_at: new Date().toISOString() })
+          .eq('id', buildRunId);
+      } catch { /* best-effort */ }
+    }
     if (res.headersSent) {
       res.write(`event: error\ndata: ${JSON.stringify({ message: (err as Error)?.message || 'Build failed.' })}\n\n`);
       res.end();
@@ -876,7 +885,7 @@ studioRouter.post('/agents', async (req, res, next) => {
     try {
       await saveProject({
         userId,
-        projectId: typeof body.projectId === 'string' && body.projectId.trim() ? body.projectId.trim().slice(0, 80) : crypto.randomUUID(),
+        projectId: normalizeStudioIdOrNew(body.projectId),
         name: deriveProjectName(body.title, files),
         template: typeof body.template === 'string' ? body.template : 'react-ts',
         files: Object.entries(result.files).map(([path, content]) => ({ path, content })),
@@ -997,9 +1006,27 @@ studioRouter.post('/deploy', async (req, res, next) => {
       });
     }
 
-    await recordDeployment(body.projectId, target, 'building');
-    const result = await deployViaWorker({ userId: req.user!.id, projectId: body.projectId, title: body.title, target, files });
-    await recordDeployment(body.projectId, target, result.status, result.url);
+    // Make sure the project row exists BEFORE recording the deployment: the history row
+    // has an FK to studio_projects, and deploying is exactly the moment a snapshot of
+    // what shipped is worth keeping anyway.
+    const projectId = normalizeStudioIdOrNew(body.projectId);
+    try {
+      await saveProject({
+        userId: req.user!.id,
+        projectId,
+        name: deriveProjectName(body.title, files),
+        template: 'react-ts',
+        files,
+        versionLabel: `deploy → ${target}`,
+        createdBy: 'agent'
+      });
+    } catch (err) {
+      console.warn('[studio] deploy project save skipped:', (err as Error)?.message);
+    }
+
+    await recordDeployment(projectId, target, 'building');
+    const result = await deployViaWorker({ userId: req.user!.id, projectId, title: body.title, target, files });
+    await recordDeployment(projectId, target, result.status, result.url);
     return res.json(result);
   } catch (err) {
     next(err);
@@ -1020,7 +1047,7 @@ studioRouter.get('/projects', async (req, res, next) => {
 // GET /api/studio/projects/:id — a project with its current file tree.
 studioRouter.get('/projects/:id', async (req, res, next) => {
   try {
-    const data = await getProjectWithFiles(req.user!.id, req.params.id);
+    const data = await getProjectWithFiles(req.user!.id, normalizeStudioId(req.params.id) ?? req.params.id);
     if (!data) return res.status(404).json({ error: { message: 'Project not found.' } });
     res.json(data);
   } catch (err) {
@@ -1032,7 +1059,7 @@ studioRouter.get('/projects/:id', async (req, res, next) => {
 // GET /api/studio/projects/:id/deployments — the project's deploy history (most recent first).
 studioRouter.get('/projects/:id/deployments', async (req, res, next) => {
   try {
-    res.json({ deployments: await listDeployments(req.user!.id, req.params.id) });
+    res.json({ deployments: await listDeployments(req.user!.id, normalizeStudioId(req.params.id) ?? req.params.id) });
   } catch (err) {
     next(err);
   }
@@ -1040,7 +1067,7 @@ studioRouter.get('/projects/:id/deployments', async (req, res, next) => {
 
 studioRouter.get('/projects/:id/versions', async (req, res, next) => {
   try {
-    const versions = await listVersions(req.user!.id, req.params.id);
+    const versions = await listVersions(req.user!.id, normalizeStudioId(req.params.id) ?? req.params.id);
     if (versions === null) return res.status(404).json({ error: { message: 'Project not found.' } });
     res.json({ versions });
   } catch (err) {
@@ -1051,7 +1078,7 @@ studioRouter.get('/projects/:id/versions', async (req, res, next) => {
 // GET /api/studio/projects/:id/versions/:versionId — a version's file tree (for restore).
 studioRouter.get('/projects/:id/versions/:versionId', async (req, res, next) => {
   try {
-    const files = await getVersionFiles(req.user!.id, req.params.id, req.params.versionId);
+    const files = await getVersionFiles(req.user!.id, normalizeStudioId(req.params.id) ?? req.params.id, req.params.versionId);
     if (files === null) return res.status(404).json({ error: { message: 'Version not found.' } });
     res.json({ files });
   } catch (err) {
@@ -1062,7 +1089,7 @@ studioRouter.get('/projects/:id/versions/:versionId', async (req, res, next) => 
 // DELETE /api/studio/projects/:id
 studioRouter.delete('/projects/:id', async (req, res, next) => {
   try {
-    const ok = await deleteProject(req.user!.id, req.params.id);
+    const ok = await deleteProject(req.user!.id, normalizeStudioId(req.params.id) ?? req.params.id);
     if (!ok) return res.status(404).json({ error: { message: 'Project not found.' } });
     res.json({ deleted: true });
   } catch (err) {

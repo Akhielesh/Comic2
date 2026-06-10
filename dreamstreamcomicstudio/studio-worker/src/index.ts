@@ -38,8 +38,12 @@ interface StudioFile {
   content: string;
 }
 
+// Bump whenever the action surface changes — the control plane can probe `capabilities`
+// to detect a stale deployment (the cause of "deploy fails with unknown action").
+const WORKER_VERSION = 2;
+
 interface RequestBody {
-  action: 'launch' | 'stop' | 'logs' | 'deploy';
+  action: 'launch' | 'stop' | 'logs' | 'deploy' | 'capabilities';
   /** `u_<userId>_<projectId>` — ALWAYS scope per authenticated user (set by Railway). */
   sandboxId: string;
   files?: StudioFile[];
@@ -112,6 +116,19 @@ export default {
     const sandbox = getSandbox(env.Sandbox, body.sandboxId);
 
     try {
+      if (body.action === 'capabilities') {
+        return json({
+          status: 'ok',
+          version: WORKER_VERSION,
+          actions: ['launch', 'stop', 'logs', 'deploy', 'capabilities'],
+          deployTargets: {
+            cloudflare: Boolean(env.CLOUDFLARE_API_TOKEN && env.CLOUDFLARE_ACCOUNT_ID),
+            vercel: Boolean(env.VERCEL_TOKEN)
+          },
+          previewDomain: env.STUDIO_PREVIEW_DOMAIN || null
+        });
+      }
+
       if (body.action === 'stop') {
         await sandbox.stop();
         return json({ status: 'stopped', sandboxId: body.sandboxId });

@@ -1,8 +1,9 @@
 // ActivityFeed (Sprint 1): the live, synchronous record of what the AI is doing while it
 // generates/refines an app. Phases stream in as muted steps; each file appears as a row that
-// spins while writing and checks off (with its size) when done. On success it auto-collapses to
-// a one-line summary ("✓ 6 files · view") the user can re-open — so a long build doesn't bury the
-// composer. Driven by activityStore via the SSE generate stream.
+// spins while writing and checks off (with its size) when done. The detail pane is compact by
+// default and NEVER auto-expands (the header line carries live progress); the user's
+// expand/collapse choice is sticky across runs, and only a failure pops it open.
+// Driven by activityStore via the SSE generate stream.
 
 import React, { useEffect, useRef } from 'react';
 import { Loader2, Check, FileCode2, ChevronRight, AlertTriangle, Sparkles, RotateCcw } from 'lucide-react';
