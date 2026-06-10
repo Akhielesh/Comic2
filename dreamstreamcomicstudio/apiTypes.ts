@@ -1299,6 +1299,62 @@ export interface MetricBoardArtifact {
   tiles: MetricTile[];
 }
 
+// --- Customizable dashboard (glass widget board) ---
+// A drag-to-rearrange board of live widgets the model composes for ANY field — study
+// plans, market watch, trip itineraries, fitness, project status. Rendered with the
+// macOS-glass treatment (frosted cards over a soft gradient); layout edits persist
+// locally per dashboard. Emitted by the `create_dashboard` tool.
+export type DashboardWidgetKind =
+  | 'clock'      // live time in one or more time zones
+  | 'countdown'  // live countdown to a date/time (exam, launch, flight)
+  | 'stat'       // big value + delta + sparkline
+  | 'chart'      // line/area/bar chart
+  | 'progress'   // goal progress ring
+  | 'list'       // checklist / watchlist / steps
+  | 'globe'      // minimalist globe with plotted points + great-circle arcs (flights, offices)
+  | 'note'       // freeform markdown-ish note / quote
+  | 'links';     // quick links
+
+export interface DashboardGlobePoint { label: string; lat: number; lon: number; }
+export interface DashboardWidget {
+  id: string;
+  kind: DashboardWidgetKind;
+  title?: string;
+  /** Grid footprint: sm = 1 cell, md = 2 cells wide, lg = full row. */
+  size?: 'sm' | 'md' | 'lg';
+  /** clock */
+  timeZones?: { label: string; tz: string }[];
+  /** countdown */
+  target?: string; // ISO datetime
+  /** stat */
+  value?: string | number;
+  unit?: string;
+  delta?: number;
+  deltaPercent?: number;
+  spark?: number[];
+  /** chart */
+  points?: { x: string | number; y: number }[];
+  chartVariant?: 'line' | 'area' | 'bar';
+  /** progress */
+  progress?: { value: number; max: number; label?: string };
+  /** list */
+  items?: { text: string; done?: boolean; meta?: string }[];
+  /** globe */
+  globePoints?: DashboardGlobePoint[];
+  /** Arcs drawn between point labels, e.g. [["SFO","NRT"]] for a flight path. */
+  globeArcs?: [string, string][];
+  /** note */
+  text?: string;
+  /** links */
+  links?: { label: string; url: string }[];
+}
+
+export interface DashboardArtifact {
+  title: string;
+  subtitle?: string;
+  widgets: DashboardWidget[];
+}
+
 // --- Generic data table ---
 // A schema-driven, sortable, typed table — the workhorse for any tabular/financial
 // data (watchlists, holdings, fundamentals, comparisons, screeners). Each column

@@ -23,6 +23,8 @@ import { SqlPlayground } from './artifacts/SqlPlayground';
 import { ResourceBundle } from './artifacts/ResourceBundle';
 import { CodePlayground } from './artifacts/CodePlayground';
 import { GenerativeUICard } from './artifacts/GenerativeUICard';
+import { DashboardCard } from './artifacts/DashboardCard';
+import type { DashboardArtifact } from '../../apiTypes';
 import type {
   WeatherArtifact, NewsResultsArtifact, StockQuoteArtifact,
   VideoResultsArtifact, PlacesResultsArtifact, SwarmTraceArtifact,
@@ -472,6 +474,23 @@ const generativeUiDemo: GenerativeUIArtifact = {
   }
 };
 
+
+// Glass dashboard demo — one widget of each major kind, realistic trip+study mix.
+const dashboardDemo: DashboardArtifact = {
+  title: 'Tokyo trip · launch week',
+  subtitle: 'Flight, prep checklist, budget and countdown in one board — drag cards to rearrange.',
+  widgets: [
+    { id: 'w-clock', kind: 'clock', title: 'Time zones', size: 'md', timeZones: [{ label: 'New York', tz: 'America/New_York' }, { label: 'Tokyo', tz: 'Asia/Tokyo' }] },
+    { id: 'w-count', kind: 'countdown', title: 'Departure', target: new Date(Date.now() + 9 * 86400e3 + 5 * 3600e3).toISOString() },
+    { id: 'w-stat', kind: 'stat', title: 'Budget left', value: '$1,840', delta: -120, spark: [2400, 2300, 2240, 2100, 2050, 1960, 1840] },
+    { id: 'w-globe', kind: 'globe', title: 'Flight path', size: 'md', globePoints: [{ label: 'JFK', lat: 40.64, lon: -73.78 }, { label: 'HND', lat: 35.55, lon: 139.78 }], globeArcs: [['JFK', 'HND']] },
+    { id: 'w-prog', kind: 'progress', title: 'JLPT N5 prep', progress: { value: 34, max: 50, label: '34 of 50 lessons done' } },
+    { id: 'w-list', kind: 'list', title: 'Before you fly', items: [{ text: 'Renew passport', done: true }, { text: 'Book Shinkansen seats', meta: 'Fri' }, { text: 'Travel insurance' }, { text: 'Download offline maps' }] },
+    { id: 'w-chart', kind: 'chart', title: 'Yen per dollar (30d)', size: 'md', chartVariant: 'area', points: [{ x: 'May 12', y: 151.2 }, { x: 'May 19', y: 152.8 }, { x: 'May 26', y: 154.1 }, { x: 'Jun 2', y: 153.4 }, { x: 'Jun 9', y: 155.0 }] },
+    { id: 'w-note', kind: 'note', title: 'Note', text: 'Hotel check-in after 3pm. Ghibli Museum tickets release on the 10th — set an alarm.' }
+  ]
+};
+
 export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Weather station (animated · gauges · map)', type: 'weather', node: <WeatherStation data={weather} /> },
   { title: 'Market card (hover · range timeline · candlesticks)', type: 'stock_quote', node: <MarketCard data={stock} /> },
@@ -485,6 +504,7 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Metric board (KPIs · sparklines · rings)', type: 'metric_board', node: <MetricBoard data={board} /> },
   { title: 'Data table (typed cells · sortable · sparklines)', type: 'data_table', node: <DataTableCard data={dataTable} /> },
   { title: 'Generative UI (agent-composed layout · grid · metrics · chart · callout)', type: 'generative_ui', node: <GenerativeUICard data={generativeUiDemo} /> },
+  { title: 'Glass dashboard (drag-drop widgets · clock · countdown · globe · chart · checklist)', type: 'dashboard', node: <DashboardCard data={dashboardDemo} /> },
   { title: 'Market heatmap (sectors · cap-weighted tiles)', type: 'market_heatmap', node: <HeatmapCard data={heatmap} /> },
   { title: 'Finance Terminal (composite: quote · KPIs · table · heatmap · news)', type: 'finance_terminal', node: <FinanceTerminal data={terminal} /> },
   { title: 'Code Studio card (multi-file app · live preview)', type: 'code_studio', node: <CodeStudioCard data={codeStudioDemo} /> },

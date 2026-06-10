@@ -80,3 +80,5 @@ base, so the preview URL is `https://<port>-<id>-<token>.dreamstreamstudio.ai`. 
 the right container. No per-preview DNS records. Control POSTs come in on the worker's
 `*.workers.dev` URL (Railway's `STUDIO_WORKER_URL`), which is independent of the preview domain —
 so the bare apex `dreamstreamstudio.ai` is never touched by the worker and is free for your site.
+
+<!-- deploy marker: 2026-06-10T15:44:24Z — trigger worker redeploy after token update -->
