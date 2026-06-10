@@ -82,3 +82,4 @@ the right container. No per-preview DNS records. Control POSTs come in on the wo
 so the bare apex `dreamstreamstudio.ai` is never touched by the worker and is free for your site.
 
 <!-- deploy marker: 2026-06-10T15:44:24Z — trigger worker redeploy after token update -->
+<!-- deploy marker: 2026-06-10T16:17:19Z — verify rotated Cloudflare token -->
