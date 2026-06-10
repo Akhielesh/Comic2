@@ -16,6 +16,7 @@ export interface EventMeta {
   segMs: number;
   status: StreamStatus;
   createdAt: number;
+  scheduledAt: number | null;
   startedAt: number | null;
   endedAt: number | null;
   firstSeq: number;

@@ -75,3 +75,23 @@ describe('metrics helpers', () => {
     expect(fmtDuration(3725)).toBe('1:02:05');
   });
 });
+
+describe('schedule helpers', async () => {
+  const { formatCountdown, buildIcs } = await import('./schedule');
+
+  it('formats countdowns at every magnitude', () => {
+    expect(formatCountdown(10_000)).toBe('any moment now');
+    expect(formatCountdown(5 * 60_000)).toBe('in 5m');
+    expect(formatCountdown(90 * 60_000)).toBe('in 1h 30m');
+    expect(formatCountdown(50 * 60 * 60_000)).toBe('in 2d 2h');
+  });
+
+  it('builds a valid ICS with escaped text and the watch URL', () => {
+    const ics = buildIcs({ title: 'Inking; live, draw-along', startMs: Date.UTC(2026, 5, 19, 18, 0, 0), url: 'https://x.test/live.html?e=abc' });
+    expect(ics).toContain('BEGIN:VCALENDAR');
+    expect(ics).toContain('DTSTART:20260619T180000Z');
+    expect(ics).toContain('SUMMARY:Inking\\; live\\, draw-along');
+    expect(ics).toContain('URL:https://x.test/live.html?e=abc');
+    expect(ics).toContain('END:VEVENT');
+  });
+});

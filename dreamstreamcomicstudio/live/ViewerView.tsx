@@ -5,6 +5,7 @@ import { Ema, fmtBps, fmtDuration } from './metrics';
 import { MetricsOverlay } from './MetricsOverlay';
 import { SegmentPlayer } from './player';
 import type { ChatMsg, EventMeta, StreamStatus } from './protocol';
+import { formatCountdown } from './schedule';
 
 type Phase = 'join' | 'waiting' | 'watching' | 'denied' | 'kicked' | 'error';
 
@@ -260,7 +261,20 @@ export function ViewerView({ eventId }: { eventId: string }) {
             </div>
             <video ref={videoRef} autoPlay muted={muted} playsInline />
             {status === 'paused' && <div className="lv-slate">Be right back</div>}
-            {status === 'idle' && <div className="lv-slate">Waiting for the host to go live…</div>}
+            {status === 'idle' && (
+              <div className="lv-slate">
+                {meta?.scheduledAt && meta.scheduledAt > Date.now() ? (
+                  <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: 13, opacity: 0.7, marginBottom: 6 }}>
+                      {new Date(meta.scheduledAt).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                    </div>
+                    <div style={{ fontSize: 18 }}>Starts {formatCountdown(meta.scheduledAt - Date.now())}</div>
+                  </div>
+                ) : (
+                  'Waiting for the host to go live…'
+                )}
+              </div>
+            )}
             {status === 'ended' && replayOffered && (
               <div className="lv-slate">
                 <div style={{ textAlign: 'center' }}>

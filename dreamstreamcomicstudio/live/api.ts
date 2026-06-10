@@ -13,12 +13,17 @@ export async function createEvent(opts: {
   access: 'open' | 'approval';
   quality: string;
   segMs: number;
+  scheduledAt?: number | null;
 }): Promise<CreatedEvent> {
   const res = await fetch(`${WORKER_BASE}/api/events`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(opts),
   });
+  if (res.status === 405 || res.headers.get('content-type')?.includes('text/html')) {
+    // 405/HTML means the request reached the static website, not the live-worker.
+    throw new Error('Streaming backend not deployed yet — the request hit the website instead of the live-worker. Deploy live-worker/ (see its README).');
+  }
   if (!res.ok) throw new Error(`create failed (${res.status})`);
   return res.json();
 }

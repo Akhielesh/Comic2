@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { createEvent } from './api';
 import { DEFAULT_PRESET_ID, LIMITS, QUALITY_PRESETS, SEGMENT_MS } from './config';
+import { downloadIcs } from './schedule';
 
 function LinkBox({ url, label }: { url: string; label: string }) {
   const [copied, setCopied] = useState(false);
@@ -25,9 +26,12 @@ export function CreateEventView() {
   const [title, setTitle] = useState('');
   const [access, setAccess] = useState<'open' | 'approval'>('open');
   const [presetId, setPresetId] = useState(DEFAULT_PRESET_ID);
+  const [when, setWhen] = useState(''); // datetime-local value; empty = go live anytime
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<{ id: string; hostKey: string } | null>(null);
+
+  const scheduledMs = when ? new Date(when).getTime() : null;
 
   const base = `${location.origin}${location.pathname}`;
   const hostUrl = created ? `${base}?e=${created.id}&k=${created.hostKey}` : '';
@@ -42,6 +46,7 @@ export function CreateEventView() {
         access,
         quality: presetId,
         segMs: SEGMENT_MS,
+        scheduledAt: scheduledMs && scheduledMs > Date.now() ? scheduledMs : null,
       });
       setCreated(res);
     } catch (e) {
@@ -92,6 +97,10 @@ export function CreateEventView() {
                   </button>
                 </div>
               </div>
+              <div className="lv-field">
+                <label>Schedule (optional — viewers see a countdown until you go live)</label>
+                <input type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
+              </div>
               {error && <div className="lv-banner err">{error}</div>}
               <button className="lv-btn lv-btn-primary" onClick={submit} disabled={busy}>
                 {busy ? 'Creating…' : 'Create event'}
@@ -114,6 +123,14 @@ export function CreateEventView() {
                 <a className="lv-btn lv-btn-ghost" style={{ textDecoration: 'none' }} href={shareUrl} target="_blank" rel="noreferrer">
                   Preview viewer page
                 </a>
+                {scheduledMs && scheduledMs > Date.now() && (
+                  <button
+                    className="lv-btn lv-btn-ghost"
+                    onClick={() => downloadIcs({ title: title.trim() || 'DreamStream Live', startMs: scheduledMs, url: shareUrl })}
+                  >
+                    Add to calendar (.ics)
+                  </button>
+                )}
               </div>
             </>
           )}
