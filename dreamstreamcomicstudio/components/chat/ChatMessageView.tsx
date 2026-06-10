@@ -15,6 +15,10 @@ import { useChatPanel } from './panelContext';
 import type { ChatTurn } from '../../services/chatStorage';
 import { extractCodeBlocks, codeBlockFilename, downloadTextFile, triggerDownload, buildPlaygroundFiles, buildStudioArtifact } from '../../services/chatUtils';
 import { FeedbackButtons } from '../feedback/FeedbackButtons';
+import {
+  GLASS, HAIRLINE, MENU, MUTED, TRANSITION, PILL,
+  ACCENT_BG, ACCENT_BG_HOVER, ACCENT_TEXT
+} from './studioDesign';
 
 /** Format an elapsed duration compactly: "0.8s", "12.3s", "1m 04s". */
 const formatDuration = (ms: number): string => {
@@ -127,17 +131,21 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
   return (
     <div className={`group flex gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
       <div
-        className={`shrink-0 w-9 h-9 rounded-full border-2 border-black flex items-center justify-center ${
-          isUser ? 'bg-brand-blue text-white' : turn.error ? 'bg-red-100' : 'bg-brand-yellow'
+        className={`shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${
+          isUser ? `${ACCENT_BG} text-white` : turn.error ? 'bg-red-50 border border-red-200' : `${GLASS} ${HAIRLINE}`
         }`}
       >
-        {isUser ? <User className="w-4 h-4" /> : turn.error ? <AlertTriangle className="w-4 h-4 text-brand-red" /> : <Sparkles className="w-4 h-4" />}
+        {isUser ? <User className="w-4 h-4" /> : turn.error ? <AlertTriangle className="w-4 h-4 text-red-500" /> : <Sparkles className={`w-4 h-4 ${ACCENT_TEXT}`} />}
       </div>
 
       <div className={`min-w-0 max-w-[80%] flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
         <div
-          className={`border-2 border-black rounded-xl px-4 py-2.5 shadow-comic w-full ${
-            isUser ? 'bg-white' : turn.error ? 'bg-red-50' : 'bg-slate-50'
+          className={`w-full ${
+            isUser
+              ? 'bg-[#EDE9DE] rounded-2xl px-4 py-2.5'
+              : turn.error
+                ? 'bg-red-50 border border-red-200 rounded-2xl px-4 py-2.5'
+                : 'px-0.5 py-1'
           }`}
         >
           {turn.attachments && turn.attachments.length > 0 && (
@@ -147,11 +155,11 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
                   <button
                     key={att.id}
                     onClick={() => openPanel?.({ type: 'media', data: { kind: 'pdf', url: att.dataUrl, title: att.name } })}
-                    className="w-28 h-20 rounded-lg border-2 border-black bg-white flex flex-col items-center justify-center p-1 hover:bg-slate-50"
+                    className={`w-28 h-20 rounded-xl ${HAIRLINE} bg-white/70 flex flex-col items-center justify-center p-1 hover:bg-white ${TRANSITION}`}
                     title="Open document"
                   >
-                    <FileText className="w-6 h-6 text-brand-red" />
-                    <span className="text-[9px] font-bold text-slate-600 truncate w-full text-center mt-1">{att.name}</span>
+                    <FileText className={`w-6 h-6 ${ACCENT_TEXT}`} />
+                    <span className={`text-[9px] font-medium ${MUTED} truncate w-full text-center mt-1`}>{att.name}</span>
                   </button>
                 ) : (
                   <button
@@ -160,7 +168,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
                     className="block"
                     title="Open image"
                   >
-                    <img src={att.dataUrl} alt={att.name} className="w-20 h-20 object-cover rounded-lg border-2 border-black hover:opacity-90" />
+                    <img src={att.dataUrl} alt={att.name} className={`w-20 h-20 object-cover rounded-xl ${HAIRLINE} hover:opacity-90 ${TRANSITION}`} />
                   </button>
                 )
               )}
@@ -185,11 +193,11 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
                   if (e.key === 'Escape') cancelEdit();
                 }}
                 rows={Math.min(10, Math.max(2, editDraft.split('\n').length))}
-                className="w-full text-sm border-2 border-black rounded-lg p-2 outline-none focus:ring-2 focus:ring-brand-blue/40 resize-y"
+                className={`w-full text-sm ${HAIRLINE} rounded-xl bg-white/70 p-2 outline-none focus:ring-2 focus:ring-[#D97757]/30 resize-y`}
               />
               <div className="flex items-center justify-end gap-2 mt-1.5">
-                <button onClick={cancelEdit} className="flex items-center gap-1 text-[11px] font-bold text-slate-500 hover:text-black"><X className="w-3.5 h-3.5" /> Cancel</button>
-                <button onClick={commitEdit} className="flex items-center gap-1 text-[11px] font-bold border-2 border-black rounded-full px-2.5 py-0.5 bg-brand-yellow hover:translate-y-[1px]"><Check className="w-3.5 h-3.5" /> Save & send</button>
+                <button onClick={cancelEdit} className={`flex items-center gap-1 text-[11px] font-semibold ${MUTED} hover:text-[#1a1915]`}><X className="w-3.5 h-3.5" /> Cancel</button>
+                <button onClick={commitEdit} className={`flex items-center gap-1 text-[11px] font-semibold rounded-full px-2.5 py-0.5 ${ACCENT_BG} ${ACCENT_BG_HOVER} text-white ${TRANSITION}`}><Check className="w-3.5 h-3.5" /> Save & send</button>
               </div>
             </div>
           ) : isUser ? (
@@ -227,7 +235,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
                     src={img.thumbnail || img.url}
                     alt={img.title || 'image result'}
                     loading="lazy"
-                    className="w-full h-24 object-cover rounded-lg border-2 border-black hover:opacity-90"
+                    className={`w-full h-24 object-cover rounded-xl ${HAIRLINE} hover:opacity-90 ${TRANSITION}`}
                   />
                 </button>
               ))}
@@ -261,7 +269,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
         {/* Retry for a failed assistant turn. */}
         {!isUser && turn.error && onRegenerate && (
           <div className="flex items-center gap-2 mt-1 px-1">
-            <button onClick={onRegenerate} disabled={busy} className="flex items-center gap-0.5 text-[11px] font-bold text-brand-red hover:text-black disabled:opacity-40" title="Try again">
+            <button onClick={onRegenerate} disabled={busy} className="flex items-center gap-0.5 text-[11px] font-semibold text-red-500 hover:text-[#1a1915] disabled:opacity-40" title="Try again">
               <RefreshCw className="w-3 h-3" /> Try again
             </button>
           </div>
@@ -297,7 +305,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
           <div className="w-full mt-1">
             <button
               onClick={() => setShowDetails((v) => !v)}
-              className="flex items-center gap-1 text-[11px] font-bold text-slate-600 hover:text-black border-2 border-black rounded-full px-2.5 py-0.5 bg-white"
+              className={`flex items-center gap-1 text-[11px] font-semibold ${MUTED} hover:text-[#1a1915] ${PILL} px-2.5 py-0.5 hover:bg-white`}
             >
               {showDetails ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
               How it answered
@@ -306,14 +314,14 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
               {turn.citations && turn.citations.length > 0 && <Globe className="w-3 h-3" />}
             </button>
             {showDetails && (
-              <div className="mt-1.5 border-2 border-black rounded-lg bg-white p-3 space-y-3">
+              <div className={`mt-1.5 ${GLASS} ${HAIRLINE} rounded-2xl p-3 space-y-3`}>
                 {turn.toolEvents && turn.toolEvents.length > 0 && (
                   <div>
                     <div className="text-[11px] font-bold uppercase text-emerald-700 flex items-center gap-1 mb-1"><Search className="w-3.5 h-3.5" /> Tools used</div>
                     <ul className="space-y-1">
                       {turn.toolEvents.map((ev, i) => (
                         <li key={i} className="text-[11px] flex items-start gap-1.5">
-                          <span className={`mt-0.5 w-1.5 h-1.5 rounded-full shrink-0 ${ev.ok ? 'bg-emerald-500' : 'bg-brand-red'}`} />
+                          <span className={`mt-0.5 w-1.5 h-1.5 rounded-full shrink-0 ${ev.ok ? 'bg-emerald-500' : 'bg-red-500'}`} />
                           <span><span className="font-bold">{ev.tool}</span>{ev.query ? `: “${ev.query}”` : ''}{!ev.ok && ev.summary ? ` — ${ev.summary}` : ''}</span>
                         </li>
                       ))}
@@ -404,16 +412,16 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
                   <GitBranch className="w-3 h-3" /> Branch
                 </button>
                 {branchOpen && (
-                  <div className="absolute left-0 bottom-6 z-20 w-44 bg-white border-2 border-black rounded-lg shadow-comic py-1">
+                  <div className={`absolute left-0 bottom-6 z-20 w-44 ${MENU} py-1`}>
                     <button
                       onClick={() => { setBranchOpen(false); onBranch(false); }}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-[11px] hover:bg-slate-100 text-left"
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-[11px] hover:bg-black/5 text-left"
                     >
                       <GitBranch className="w-3.5 h-3.5" /> Same model
                     </button>
                     <button
                       onClick={() => { setBranchOpen(false); onBranch(true); }}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-[11px] hover:bg-slate-100 text-left"
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-[11px] hover:bg-black/5 text-left"
                     >
                       <Cpu className="w-3.5 h-3.5" /> Pick a new model…
                     </button>

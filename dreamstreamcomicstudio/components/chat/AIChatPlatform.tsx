@@ -11,6 +11,7 @@ import { ChatPanelContext } from './panelContext';
 import { MediaPanel, type MediaPanelData } from './MediaPanel';
 import type { PlaygroundData } from './MultiFilePlayground';
 import type { ChatArtifact, CodeStudioArtifact, MapArtifact } from '../../apiTypes';
+import { CANVAS_BG, GLASS, INK, ACCENT_TEXT, CONTROL_BTN, TRANSITION } from './studioDesign';
 
 const MapPanel = lazy(() => import('./MapPanel'));
 const MultiFilePlayground = lazy(() => import('./MultiFilePlayground'));
@@ -957,8 +958,8 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
 
   if (!initialized || !activeSession) {
     return (
-      <div className="h-[100dvh] flex items-center justify-center bg-slate-50">
-        <Loader2 className="w-8 h-8 animate-spin text-brand-blue" />
+      <div className={`h-[100dvh] flex items-center justify-center ${CANVAS_BG}`}>
+        <Loader2 className={`w-8 h-8 animate-spin ${ACCENT_TEXT}`} />
       </div>
     );
   }
@@ -1033,14 +1034,12 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
   const panelContent = panel && (
     <>
       <div
-        className={`flex items-center justify-between px-3 py-2 border-b-2 border-black shrink-0 ${
-          isCodeStudio ? 'bg-lime-100' : 'bg-sky-100'
-        }`}
+        className={`flex items-center justify-between px-3 py-2 border-b border-black/10 shrink-0 ${GLASS}`}
       >
-        <span className="font-bold text-sm flex items-center gap-1.5 min-w-0">
+        <span className={`font-semibold text-sm flex items-center gap-1.5 min-w-0 ${INK}`}>
           {isCodeStudio
-            ? <Code2 className="w-4 h-4 shrink-0 text-lime-700" />
-            : <MapIcon className="w-4 h-4 shrink-0" />}
+            ? <Code2 className={`w-4 h-4 shrink-0 ${ACCENT_TEXT}`} />
+            : <MapIcon className={`w-4 h-4 shrink-0 ${ACCENT_TEXT}`} />}
           <span className="truncate">{panelTitle}</span>
         </span>
         <div className="flex items-center gap-1 shrink-0">
@@ -1049,14 +1048,14 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
               <button
                 onClick={handleOpenNewTab}
                 title="Open static preview in new tab"
-                className="border-2 border-black rounded p-1 bg-white hover:bg-lime-200"
+                className={`${CONTROL_BTN} p-1`}
               >
                 <ExternalLink className="w-3.5 h-3.5" />
               </button>
               <button
                 onClick={() => setPanelFullscreen((v) => !v)}
                 title={panelFullscreen ? 'Exit full screen' : 'Full screen'}
-                className="border-2 border-black rounded p-1 bg-white hover:bg-lime-200"
+                className={`${CONTROL_BTN} p-1`}
               >
                 {panelFullscreen
                   ? <Minimize2 className="w-3.5 h-3.5" />
@@ -1064,16 +1063,16 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
               </button>
             </>
           )}
-          <button onClick={closePanel} className="border-2 border-black rounded p-1 bg-white hover:bg-brand-yellow">
+          <button onClick={closePanel} className={`${CONTROL_BTN} p-1`}>
             <X className="w-4 h-4" />
           </button>
         </div>
       </div>
-      <div className="flex-1 min-h-0 bg-slate-100">
+      <div className={`flex-1 min-h-0 ${CANVAS_BG}`}>
         {panel.type === 'media' ? (
           <MediaPanel data={panel.data as MediaPanelData} />
         ) : (
-          <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className="w-6 h-6 animate-spin text-brand-blue" /></div>}>
+          <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 className={`w-6 h-6 animate-spin ${ACCENT_TEXT}`} /></div>}>
             {panel.type === 'map' && <MapPanel data={panel.data as MapArtifact} />}
             {panel.type === 'playground' && <MultiFilePlayground data={panel.data as PlaygroundData} />}
             {panel.type === 'code_studio' && (
@@ -1090,7 +1089,7 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
 
   return (
     <ChatPanelContext.Provider value={setPanel}>
-    <div className="h-[100dvh] flex overflow-hidden bg-white">
+    <div className={`h-[100dvh] flex overflow-hidden ${CANVAS_BG} ${INK}`}>
       {sidebarOpen && (() => {
         // On phones the sidebar floats over the conversation as a drawer (with a tap-to-close
         // backdrop) instead of stealing a 288px column; selecting a chat closes it. On desktop
@@ -1166,14 +1165,14 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
       {/* Resizable side panel — sibling on desktop (unless fullscreen), overlay on mobile. */}
       {panel && isDesktop && !panelFullscreen && (
         <>
-          <div onMouseDown={startResize} className="w-1.5 cursor-col-resize bg-black/10 hover:bg-brand-blue shrink-0" title="Drag to resize" />
-          <div className="flex flex-col shrink-0 border-l-4 border-black bg-white" style={{ width: panelWidth }}>
+          <div onMouseDown={startResize} className={`w-1.5 cursor-col-resize bg-black/10 hover:bg-[#D97757] shrink-0 ${TRANSITION}`} title="Drag to resize" />
+          <div className={`flex flex-col shrink-0 border-l border-black/10 ${CANVAS_BG}`} style={{ width: panelWidth }}>
             {panelContent}
           </div>
         </>
       )}
       {panel && (!isDesktop || panelFullscreen) && (
-        <div className="fixed inset-0 z-50 flex flex-col bg-white">
+        <div className={`fixed inset-0 z-50 flex flex-col ${CANVAS_BG}`}>
           {panelContent}
         </div>
       )}

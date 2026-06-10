@@ -1,5 +1,6 @@
 import React from 'react';
 import { Gauge, AlertTriangle } from 'lucide-react';
+import { HAIRLINE, MENU, MUTED } from './studioDesign';
 
 interface ChatContextMeterProps {
   usedTokens: number;
@@ -15,7 +16,7 @@ export const ChatContextMeter: React.FC<ChatContextMeterProps> = ({ usedTokens, 
   const warn = known && pct >= 75;
   const critical = known && pct >= 90;
 
-  const barColor = critical ? 'bg-brand-red' : warn ? 'bg-amber-400' : 'bg-brand-blue';
+  const barColor = critical ? 'bg-red-500' : warn ? 'bg-amber-400' : 'bg-[#D97757]';
 
   const tooltip = [
     known
@@ -36,25 +37,25 @@ export const ChatContextMeter: React.FC<ChatContextMeterProps> = ({ usedTokens, 
 
   return (
     <div
-      className={`group relative hidden md:flex items-center gap-1.5 text-[11px] font-bold border-2 border-black rounded-full px-2.5 py-1 cursor-default ${
-        critical ? 'bg-red-100' : warn ? 'bg-amber-100' : 'bg-white'
+      className={`group relative hidden md:flex items-center gap-1.5 text-[11px] font-semibold ${HAIRLINE} rounded-full px-2.5 py-1 cursor-default transition-all duration-200 ${
+        critical ? 'bg-red-50 text-red-600' : warn ? 'bg-amber-50 text-amber-700' : `bg-white/70 ${MUTED}`
       }`}
       title={tooltip}
     >
-      {critical ? <AlertTriangle className="w-3.5 h-3.5 text-brand-red" /> : <Gauge className="w-3.5 h-3.5" />}
+      {critical ? <AlertTriangle className="w-3.5 h-3.5 text-red-500" /> : <Gauge className="w-3.5 h-3.5" />}
       <span className="tabular-nums">
         {known ? `${fmt(usedTokens)}/${fmt(contextLength)}` : `~${fmt(usedTokens)}`}
       </span>
       {known && (
-        <span className="w-14 h-1.5 rounded-full bg-slate-200 overflow-hidden">
+        <span className="w-14 h-1.5 rounded-full bg-black/10 overflow-hidden">
           <span className={`block h-full ${barColor}`} style={{ width: `${pct}%` }} />
         </span>
       )}
 
       {/* Hover card */}
-      <div className="absolute right-0 top-9 z-30 hidden group-hover:block w-64 bg-white border-2 border-black rounded-lg shadow-comic p-3 text-left font-normal normal-case">
-        <div className="text-xs font-bold mb-1 flex items-center gap-1"><Gauge className="w-3.5 h-3.5" /> Context usage</div>
-        <p className="text-[11px] text-slate-700 whitespace-pre-line">{tooltip}</p>
+      <div className={`absolute right-0 top-9 z-30 hidden group-hover:block w-64 ${MENU} p-3 text-left font-normal normal-case`}>
+        <div className="text-xs font-semibold mb-1 flex items-center gap-1 text-[#1a1915]"><Gauge className="w-3.5 h-3.5" /> Context usage</div>
+        <p className={`text-[11px] ${MUTED} whitespace-pre-line`}>{tooltip}</p>
       </div>
     </div>
   );

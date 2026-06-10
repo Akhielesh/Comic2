@@ -14,6 +14,10 @@ import { CHAT_SKILLS, type ChatSkill } from '../../services/chatSkills';
 import { ChatContextMeter } from './ChatContextMeter';
 import { ChatModelSuggester } from './ChatModelSuggester';
 import { FollowUpChips } from './FollowUpChips';
+import {
+  CANVAS_BG, GLASS, HAIRLINE, MENU, MUTED, INK, LABEL, TRANSITION, SHADOW_SOFT,
+  CONTROL_BTN, PILL, HEADING, ACCENT_TEXT, ACCENT_SOFT_BG, HOVER_LIFT
+} from './studioDesign';
 
 interface ChatConversationProps {
   session: ChatSession;
@@ -88,7 +92,7 @@ const ChatDebugMenu: React.FC<{ session: ChatSession }> = ({ session }) => {
         onClick={() => copy('id')}
         title={`Copy chat ID (${session.id})`}
         aria-label="Copy chat ID"
-        className="flex items-center gap-1 rounded-l-lg border-2 border-r-0 border-black/15 px-2 py-1 text-[11px] font-bold text-slate-500 transition-colors hover:border-black/40 hover:text-black"
+        className={`flex items-center gap-1 rounded-l-xl border border-r-0 border-black/10 bg-white/70 px-2 py-1 text-[11px] font-semibold ${MUTED} ${TRANSITION} hover:bg-black/5 hover:text-[#1a1915]`}
       >
         {done === 'id' ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Hash className="h-3.5 w-3.5" />}
         {done === 'id' ? 'Copied' : 'ID'}
@@ -98,20 +102,20 @@ const ChatDebugMenu: React.FC<{ session: ChatSession }> = ({ session }) => {
         onClick={() => setOpen((v) => !v)}
         title="More copy options"
         aria-label="More copy options"
-        className="flex items-center rounded-r-lg border-2 border-black/15 px-1 py-1 text-slate-400 transition-colors hover:border-black/40 hover:text-black"
+        className={`flex items-center rounded-r-xl border border-black/10 bg-white/70 px-1 py-1 ${MUTED} ${TRANSITION} hover:bg-black/5 hover:text-[#1a1915]`}
       >
         <ChevronDown className="h-3.5 w-3.5" />
       </button>
       {open && (
-        <div className="absolute right-0 top-full z-30 mt-1 w-56 overflow-hidden rounded-lg border-2 border-black bg-white shadow-comic animate-fade-in">
-          <button onClick={() => copy('id')} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-bold hover:bg-brand-yellow/30">
+        <div className={`absolute right-0 top-full z-30 mt-1 w-56 overflow-hidden ${MENU} animate-fade-in`}>
+          <button onClick={() => copy('id')} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold hover:bg-black/5">
             <Hash className="h-3.5 w-3.5 shrink-0" /> Copy chat ID
           </button>
-          <button onClick={() => copy('bundle')} className="flex w-full items-center gap-2 border-t border-black/10 px-3 py-2 text-left text-xs font-bold hover:bg-brand-yellow/30">
+          <button onClick={() => copy('bundle')} className="flex w-full items-center gap-2 border-t border-black/10 px-3 py-2 text-left text-xs font-semibold hover:bg-black/5">
             <Braces className="h-3.5 w-3.5 shrink-0" /> Copy full debug bundle
-            <span className="ml-auto text-[9px] font-normal text-slate-400">large</span>
+            <span className="ml-auto text-[9px] font-normal text-[#6e6a60]">large</span>
           </button>
-          <div className="border-t border-black/10 bg-slate-50 px-3 py-1.5 text-[10px] leading-snug text-slate-500">
+          <div className={`border-t border-black/10 bg-black/[0.03] px-3 py-1.5 text-[10px] leading-snug ${MUTED}`}>
             The ID alone is enough to look up a synced chat. The bundle is for unsynced chats.
           </div>
         </div>
@@ -193,12 +197,12 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col min-w-0 h-full">
+    <div className={`flex-1 flex flex-col min-w-0 h-full ${CANVAS_BG}`}>
       {/* Header */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b-4 border-black bg-white">
+      <div className={`flex items-center gap-3 px-4 py-3 border-b border-black/10 ${GLASS}`}>
         <button
           onClick={onToggleSidebar}
-          className="border-2 border-black rounded-lg p-1.5 bg-white hover:bg-brand-yellow"
+          className={`${CONTROL_BTN} p-1.5`}
           title={sidebarOpen ? 'Hide chats' : 'Show chats'}
         >
           {sidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
@@ -206,12 +210,12 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
 
         <button
           onClick={onOpenModelPicker}
-          className="flex items-center gap-2 border-2 border-black rounded-lg px-3 py-1.5 bg-white hover:bg-slate-50 min-w-0 shrink-0"
+          className={`flex items-center gap-2 ${CONTROL_BTN} px-3 py-1.5 min-w-0 shrink-0`}
           title="Switch model"
         >
-          <Cpu className="w-4 h-4 shrink-0 text-brand-blue" />
-          <span className="font-bold text-sm truncate max-w-[180px]">{modelLabel}</span>
-          <ChevronDown className="w-4 h-4 shrink-0 text-slate-500" />
+          <Cpu className={`w-4 h-4 shrink-0 ${ACCENT_TEXT}`} />
+          <span className={`font-semibold text-sm truncate max-w-[180px] ${INK}`}>{modelLabel}</span>
+          <ChevronDown className="w-4 h-4 shrink-0 text-[#6e6a60]" />
         </button>
 
         {/* Editable session title */}
@@ -226,7 +230,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
                   if (e.key === 'Enter') commitTitle();
                   if (e.key === 'Escape') setEditingTitle(false);
                 }}
-                className="flex-1 min-w-0 text-sm font-bold border-2 border-black rounded px-2 py-1 outline-none"
+                className={`flex-1 min-w-0 text-sm font-semibold ${HAIRLINE} rounded-xl bg-white/70 px-2 py-1 outline-none focus:border-[#D97757]/40`}
               />
               <button onClick={commitTitle} className="text-green-600 hover:scale-110"><Check className="w-4 h-4" /></button>
               <button onClick={() => setEditingTitle(false)} className="text-slate-500 hover:scale-110"><X className="w-4 h-4" /></button>
@@ -234,10 +238,10 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
           ) : (
             <button
               onClick={() => { setTitleDraft(session.title); setEditingTitle(true); }}
-              className="group flex items-center gap-1.5 min-w-0 text-slate-700 hover:text-black"
+              className={`group flex items-center gap-1.5 min-w-0 ${MUTED} hover:text-[#1a1915] ${TRANSITION}`}
               title="Rename this chat"
             >
-              <span className="font-bold text-sm truncate">{session.title}</span>
+              <span className="font-semibold text-sm truncate">{session.title}</span>
               <Pencil className="w-3.5 h-3.5 shrink-0 hover-reveal" />
             </button>
           )}
@@ -246,25 +250,25 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
         <div className="ml-auto flex items-center gap-2 shrink-0">
           <ChatDebugMenu session={session} />
           <ChatContextMeter usedTokens={usedTokens} contextLength={features.contextLength} features={features} />
-          <div className="hidden lg:flex items-center gap-1.5 text-[11px] text-slate-500">
-            {session.dreamstreamAccess && <span className="px-1.5 py-0.5 rounded border-2 border-black bg-brand-yellow font-bold text-black">DreamStream</span>}
-            {features.vision && <span className="px-1.5 py-0.5 rounded border border-slate-300">Vision</span>}
-            {features.reasoning && <span className="px-1.5 py-0.5 rounded border border-slate-300">Reasoning</span>}
+          <div className={`hidden lg:flex items-center gap-1.5 text-[11px] ${MUTED}`}>
+            {session.dreamstreamAccess && <span className={`px-1.5 py-0.5 rounded-full ${HAIRLINE} ${ACCENT_SOFT_BG} font-semibold ${ACCENT_TEXT}`}>DreamStream</span>}
+            {features.vision && <span className={`px-1.5 py-0.5 rounded-full ${HAIRLINE}`}>Vision</span>}
+            {features.reasoning && <span className={`px-1.5 py-0.5 rounded-full ${HAIRLINE}`}>Reasoning</span>}
           </div>
         </div>
       </div>
 
       {/* Messages */}
       <div className="flex-1 relative min-h-0">
-      <div ref={scrollRef} className="absolute inset-0 overflow-y-auto px-4 py-5 space-y-5 bg-slate-50">
+      <div ref={scrollRef} className={`absolute inset-0 overflow-y-auto px-4 py-5 space-y-5 ${CANVAS_BG}`}>
         {session.turns.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto">
-            <div className="w-16 h-16 rounded-2xl border-4 border-black bg-brand-yellow flex items-center justify-center shadow-comic mb-4">
-              <Sparkles className="w-8 h-8" />
+            <div className={`w-16 h-16 ${GLASS} ${HAIRLINE} ${SHADOW_SOFT} rounded-2xl flex items-center justify-center mb-4`}>
+              <Sparkles className={`w-8 h-8 ${ACCENT_TEXT}`} />
             </div>
-            <h2 className="font-display text-3xl mb-1">Chat Studio</h2>
-            <p className="text-slate-600 text-sm mb-5">
-              Chat with <span className="font-bold">{modelLabel}</span>. Ask anything — answers render with
+            <h2 className={`text-3xl ${HEADING} mb-1`}>Chat Studio</h2>
+            <p className={`${MUTED} text-sm mb-5`}>
+              Chat with <span className={`font-semibold ${INK}`}>{modelLabel}</span>. Ask anything — answers render with
               tables, code, links and images. Switch models anytime.
             </p>
             <div className="grid sm:grid-cols-2 gap-2 w-full">
@@ -272,7 +276,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
                 <button
                   key={s}
                   onClick={() => onSend(s, [])}
-                  className="text-left text-xs font-semibold border-2 border-black rounded-lg px-3 py-2 bg-white shadow-comic hover:bg-brand-yellow/40 hover:translate-y-[1px]"
+                  className={`text-left text-xs font-medium ${GLASS} ${HAIRLINE} ${SHADOW_SOFT} rounded-xl px-3 py-2 ${TRANSITION} hover:bg-white ${HOVER_LIFT}`}
                 >
                   {s}
                 </button>
@@ -281,8 +285,8 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
 
             {/* Skills: type `/` in the box, or tap one to get started. */}
             <div className="w-full mt-4">
-              <div className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-400">
-                Skills — type <code className="rounded bg-slate-100 px-1">/</code> in the box
+              <div className={`mb-1.5 ${LABEL}`}>
+                Skills — type <code className="rounded bg-black/5 px-1">/</code> in the box
               </div>
               <div className="flex flex-wrap justify-center gap-1.5">
                 {CHAT_SKILLS.slice(0, 7).map((s) => (
@@ -290,7 +294,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
                     key={s.command}
                     onClick={() => onPickSkill(s)}
                     title={s.description}
-                    className="flex items-center gap-1 rounded-full border-2 border-black bg-white px-2.5 py-1 text-[11px] font-bold shadow-comic hover:bg-fuchsia-100 hover:translate-y-[1px]"
+                    className={`flex items-center gap-1 ${PILL} px-2.5 py-1 text-[11px] font-medium hover:bg-white ${HOVER_LIFT}`}
                   >
                     <span>{s.emoji}</span> /{s.command}
                   </button>
@@ -329,7 +333,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
       {!atBottom && session.turns.length > 0 && (
         <button
           onClick={() => scrollToBottom()}
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 border-2 border-black rounded-full bg-white shadow-comic px-3 py-1.5 text-xs font-bold hover:bg-brand-yellow animate-fade-in"
+          className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 ${PILL} ${SHADOW_SOFT} px-3 py-1.5 text-xs font-semibold hover:bg-white animate-fade-in`}
           title="Jump to latest"
         >
           <ChevronDown className="w-4 h-4" /> Latest

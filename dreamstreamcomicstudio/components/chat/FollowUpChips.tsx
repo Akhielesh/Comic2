@@ -3,6 +3,7 @@ import { Lightbulb } from 'lucide-react';
 import type { ChatSession } from '../../services/chatStorage';
 import { fetchFollowUps } from '../../services/chatApi';
 import type { ChatRequest } from '../../apiTypes';
+import { PILL, LABEL, HOVER_LIFT } from './studioDesign';
 
 // Proactive follow-up suggestions. After the assistant finishes an answer, we ask a
 // fast model what THIS user is most likely to want next and render those as clickable
@@ -55,7 +56,7 @@ export const FollowUpChips: React.FC<{
 
   return (
     <div className="flex flex-wrap items-center gap-1.5 pt-1 animate-fade-in" aria-label="Suggested follow-ups">
-      <span className="flex items-center gap-1 text-[11px] font-bold uppercase tracking-wide text-slate-400">
+      <span className={`flex items-center gap-1 ${LABEL}`}>
         <Lightbulb className="h-3.5 w-3.5" /> You might ask
       </span>
       {suggestions.map((s) => (
@@ -65,7 +66,7 @@ export const FollowUpChips: React.FC<{
             setSuggestions([]); // consume — don't leave it lingering after sending
             onSend(s);
           }}
-          className="rounded-full border-2 border-black bg-white px-3 py-1 text-[12px] font-semibold shadow-comic transition-colors hover:bg-brand-yellow/50 hover:translate-y-[1px]"
+          className={`${PILL} px-3 py-1 text-[12px] font-medium hover:bg-white ${HOVER_LIFT}`}
         >
           {s}
         </button>

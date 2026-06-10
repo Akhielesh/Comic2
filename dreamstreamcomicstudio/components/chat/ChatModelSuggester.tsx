@@ -2,6 +2,10 @@ import React, { useState } from 'react';
 import { Wand2, ArrowRight, Sparkles } from 'lucide-react';
 import { recommendModels, type ModelSuggestion } from '../../services/chatSuggest';
 import { sourceLabel, providerOrigin, costLabel, type CatalogModel } from '../../services/modelCatalog';
+import {
+  GLASS, HAIRLINE, MUTED, INK, TRANSITION, SHADOW_SOFT,
+  ACCENT_BG, ACCENT_BG_HOVER, ACCENT_SOFT_BG, HOVER_LIFT
+} from './studioDesign';
 
 interface ChatModelSuggesterProps {
   models: CatalogModel[];
@@ -23,7 +27,7 @@ export const ChatModelSuggester: React.FC<ChatModelSuggesterProps> = ({ models, 
     return (
       <button
         onClick={() => setOpen(true)}
-        className="flex items-center gap-2 text-xs font-bold border-2 border-black rounded-lg px-3 py-2 bg-white shadow-comic hover:bg-brand-yellow/40 hover:translate-y-[1px]"
+        className={`flex items-center gap-2 text-xs font-medium ${GLASS} ${HAIRLINE} ${SHADOW_SOFT} rounded-xl px-3 py-2 ${TRANSITION} hover:bg-white ${HOVER_LIFT}`}
       >
         <Wand2 className="w-4 h-4" /> Not sure which model? Describe your goal
       </button>
@@ -31,8 +35,8 @@ export const ChatModelSuggester: React.FC<ChatModelSuggesterProps> = ({ models, 
   }
 
   return (
-    <div className="w-full border-2 border-black rounded-xl bg-white shadow-comic p-3 text-left">
-      <div className="flex items-center gap-2 mb-2 text-sm font-bold"><Wand2 className="w-4 h-4" /> Find the right model</div>
+    <div className={`w-full ${GLASS} ${HAIRLINE} ${SHADOW_SOFT} rounded-2xl p-3 text-left`}>
+      <div className={`flex items-center gap-2 mb-2 text-sm font-semibold tracking-tight ${INK}`}><Wand2 className="w-4 h-4" /> Find the right model</div>
       <textarea
         autoFocus
         value={goal}
@@ -40,41 +44,41 @@ export const ChatModelSuggester: React.FC<ChatModelSuggesterProps> = ({ models, 
         onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) suggest(); }}
         rows={2}
         placeholder="e.g. debug a React component / research the latest on a topic / read a screenshot"
-        className="w-full resize-none border-2 border-black rounded-lg px-3 py-2 text-sm outline-none focus:shadow-comic-hover"
+        className={`w-full resize-none ${HAIRLINE} rounded-xl bg-white/70 px-3 py-2 text-sm outline-none focus:border-[#D97757]/40 ${TRANSITION}`}
       />
       <div className="flex justify-between items-center mt-2">
-        <button onClick={() => { setOpen(false); setSuggestions(null); }} className="text-[11px] font-bold text-slate-500 hover:text-black">Cancel</button>
+        <button onClick={() => { setOpen(false); setSuggestions(null); }} className={`text-[11px] font-semibold ${MUTED} hover:text-[#1a1915]`}>Cancel</button>
         <button
           onClick={suggest}
           disabled={!goal.trim() || models.length === 0}
-          className="flex items-center gap-1.5 text-xs font-bold border-2 border-black rounded-lg px-3 py-1.5 bg-brand-yellow shadow-comic hover:translate-y-[1px] disabled:opacity-40"
+          className={`flex items-center gap-1.5 text-xs font-semibold rounded-full px-3 py-1.5 ${ACCENT_BG} ${ACCENT_BG_HOVER} text-white ${TRANSITION} disabled:opacity-40`}
         >
           <Sparkles className="w-3.5 h-3.5" /> Suggest models
         </button>
       </div>
 
       {models.length === 0 && (
-        <p className="text-[11px] text-slate-500 mt-2">The model catalog is still loading — try again in a moment.</p>
+        <p className={`text-[11px] ${MUTED} mt-2`}>The model catalog is still loading — try again in a moment.</p>
       )}
 
       {suggestions && (
         <div className="mt-3 space-y-2">
           {suggestions.length === 0 ? (
-            <p className="text-[11px] text-slate-500">No strong match — pick any model from the switcher above.</p>
+            <p className={`text-[11px] ${MUTED}`}>No strong match — pick any model from the switcher above.</p>
           ) : (
             suggestions.map(({ model, reasons }, i) => (
-              <div key={model.id} className={`border-2 border-black rounded-lg p-2.5 ${i === 0 ? 'bg-brand-yellow/20' : 'bg-white'}`}>
+              <div key={model.id} className={`${HAIRLINE} rounded-xl p-2.5 ${i === 0 ? ACCENT_SOFT_BG : 'bg-white/70'}`}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="text-[10px] font-bold uppercase text-slate-500">{sourceLabel(providerOrigin(model))}{i === 0 ? ' · Best match' : ''}</div>
-                    <div className="font-bold text-sm leading-tight truncate">{model.name}</div>
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">{sourceLabel(providerOrigin(model))}{i === 0 ? ' · Best match' : ''}</div>
+                    <div className={`font-semibold text-sm leading-tight truncate ${INK}`}>{model.name}</div>
                   </div>
-                  <span className="text-[11px] font-bold text-slate-600 shrink-0">{costLabel(model)}</span>
+                  <span className={`text-[11px] font-semibold ${MUTED} shrink-0`}>{costLabel(model)}</span>
                 </div>
-                <p className="text-[11px] text-slate-600 mt-1">{reasons.slice(0, 3).join(' · ')}</p>
+                <p className={`text-[11px] ${MUTED} mt-1`}>{reasons.slice(0, 3).join(' · ')}</p>
                 <button
                   onClick={() => onStart(model, goal.trim())}
-                  className="mt-2 w-full flex items-center justify-center gap-1.5 text-xs font-bold border-2 border-black rounded-lg px-3 py-1.5 bg-brand-blue text-white hover:bg-blue-600"
+                  className={`mt-2 w-full flex items-center justify-center gap-1.5 text-xs font-semibold rounded-full px-3 py-1.5 ${ACCENT_BG} ${ACCENT_BG_HOVER} text-white ${TRANSITION}`}
                 >
                   Start chat with this model <ArrowRight className="w-3.5 h-3.5" />
                 </button>

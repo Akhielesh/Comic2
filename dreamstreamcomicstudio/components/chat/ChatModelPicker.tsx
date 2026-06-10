@@ -12,17 +12,21 @@ import { getCapabilities } from '../../services/modelCapabilities';
 import { searchModels } from '../../services/modelSearch';
 import { isProviderEnabled } from '../../services/sourceGovernance';
 import { fetchModelSpeed, speedTier, speedLabel, isTimeoutProneFreeModel, type ModelSpeed } from '../../services/modelSpeed';
+import {
+  GLASS_STRONG, HAIRLINE, MUTED, INK, HEADING, TRANSITION, SHADOW_SOFT,
+  CONTROL_BTN, ACCENT_BG, ACCENT_BG_HOVER, ACCENT_TEXT, ACCENT_SOFT_BG, HOVER_LIFT
+} from './studioDesign';
 
 // Measured-latency badge (from real chat telemetry) so slow models are obvious before
 // you pick one — the durable fix for getting stuck on a 60-250s free model.
 const SpeedBadge: React.FC<{ speed?: ModelSpeed }> = ({ speed }) => {
   if (!speed) return null;
   const tier = speedTier(speed.p50Ms);
-  const cls = tier === 'fast' ? 'bg-green-200' : tier === 'ok' ? 'bg-slate-100' : 'bg-red-200';
+  const cls = tier === 'fast' ? 'bg-green-50 text-green-700' : tier === 'ok' ? 'bg-black/5 text-[#6e6a60]' : 'bg-red-50 text-red-600';
   const Icon = tier === 'slow' ? Gauge : Zap;
   return (
     <span
-      className={`text-[10px] font-bold px-1.5 py-0.5 rounded border-2 border-black flex items-center gap-0.5 ${cls}`}
+      className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} flex items-center gap-0.5 ${cls}`}
       title={`Typical response time, measured from ${speed.samples} recent chats${tier === 'slow' ? ' — this model is slow' : ''}`}
     >
       <Icon className="w-2.5 h-2.5" /> {speedLabel(speed.p50Ms)}
@@ -65,24 +69,24 @@ const CapabilityChips: React.FC<{ model: CatalogModel; speed?: ModelSpeed }> = (
       <SpeedBadge speed={speed} />
       {timeoutProne && (
         <span
-          className="text-[10px] font-bold px-1.5 py-0.5 rounded border-2 border-black bg-red-200 flex items-center gap-0.5"
+          className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-red-50 text-red-600 flex items-center gap-0.5`}
           title="Very large free model — it often queues on the free tier and can time out. Prefer a smaller/faster model, or use Auto."
         >
           <Gauge className="w-2.5 h-2.5" /> May time out
         </span>
       )}
-      {caps.isFree && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border-2 border-black bg-green-200">Free</span>}
+      {caps.isFree && <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-green-50 text-green-700`}>Free</span>}
       {caps.reasoning && (
-        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border-2 border-black bg-indigo-200 flex items-center gap-0.5"><Brain className="w-2.5 h-2.5" /> Reason</span>
+        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-indigo-50 text-indigo-600 flex items-center gap-0.5`}><Brain className="w-2.5 h-2.5" /> Reason</span>
       )}
       {caps.imageInput && (
-        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border-2 border-black bg-amber-200 flex items-center gap-0.5"><Eye className="w-2.5 h-2.5" /> Vision</span>
+        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-amber-50 text-amber-700 flex items-center gap-0.5`}><Eye className="w-2.5 h-2.5" /> Vision</span>
       )}
       {model.source === 'openrouter' && (
-        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border-2 border-black bg-sky-200 flex items-center gap-0.5"><Globe className="w-2.5 h-2.5" /> Web</span>
+        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-sky-50 text-sky-700 flex items-center gap-0.5`}><Globe className="w-2.5 h-2.5" /> Web</span>
       )}
       {typeof model.contextLength === 'number' && model.contextLength > 0 && (
-        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border-2 border-black bg-slate-100">{Math.round(model.contextLength / 1000)}K ctx</span>
+        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-black/5 text-[#6e6a60]`}>{Math.round(model.contextLength / 1000)}K ctx</span>
       )}
     </div>
   );
@@ -135,19 +139,19 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
 
   return (
     <ModalPortal>
-      <div className="fixed inset-0 z-[70] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="fixed inset-0 z-[70] bg-black/30 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
         <div
-          className="bg-white border-4 border-black rounded-2xl shadow-comic w-full max-w-2xl max-h-[85vh] flex flex-col"
+          className={`${GLASS_STRONG} ${HAIRLINE} ${SHADOW_SOFT} rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col`}
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="flex items-center justify-between px-5 py-3 border-b-4 border-black bg-brand-blue text-white rounded-t-xl">
-            <h2 className="font-display text-xl flex items-center gap-2"><Sparkles className="w-5 h-5" /> Choose a model</h2>
-            <button onClick={onClose} className="border-2 border-black rounded p-1 bg-white text-black hover:bg-brand-yellow"><X className="w-4 h-4" /></button>
+          <div className="flex items-center justify-between px-5 py-3 border-b border-black/10 rounded-t-2xl">
+            <h2 className={`${HEADING} text-xl flex items-center gap-2`}><Sparkles className={`w-5 h-5 ${ACCENT_TEXT}`} /> Choose a model</h2>
+            <button onClick={onClose} className={`${CONTROL_BTN} p-1`}><X className="w-4 h-4" /></button>
           </div>
 
-          <div className="p-4 border-b-2 border-black space-y-3">
-            <div className="flex items-center gap-2 border-2 border-black rounded-lg px-3 py-2 bg-white">
-              <Search className="w-4 h-4 text-slate-500" />
+          <div className="p-4 border-b border-black/10 space-y-3">
+            <div className={`flex items-center gap-2 ${HAIRLINE} rounded-xl px-3 py-2 bg-white/70`}>
+              <Search className="w-4 h-4 text-[#6e6a60]" />
               <input
                 autoFocus
                 value={query}
@@ -161,7 +165,7 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
                 <button
                   key={f.key}
                   onClick={() => setFacet(f.key)}
-                  className={`text-[11px] font-bold px-2.5 py-1 rounded-full border-2 border-black ${facet === f.key ? 'bg-brand-yellow' : 'bg-white hover:bg-slate-100'}`}
+                  className={`text-[11px] font-semibold px-2.5 py-1 rounded-full ${TRANSITION} ${facet === f.key ? `${ACCENT_BG} ${ACCENT_BG_HOVER} text-white border border-transparent` : `${HAIRLINE} bg-white/70 ${MUTED} hover:bg-black/5`}`}
                 >
                   {f.label}
                 </button>
@@ -170,7 +174,7 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
           </div>
 
           {hasMessages && (
-            <div className="mx-4 mt-3 -mb-1 flex items-start gap-2 text-[11px] bg-amber-50 border-2 border-black rounded-lg px-3 py-2">
+            <div className="mx-4 mt-3 -mb-1 flex items-start gap-2 text-[11px] bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
               <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
               <span>
                 <span className="font-bold">Switching model mid-chat.</span> The new model picks up this same conversation, but tone, style and capabilities can change — and reasoning/web/vision options adjust to what it supports.
@@ -180,18 +184,18 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
           )}
 
           {/* Auto mode */}
-          <div className="mx-4 mt-3 border-2 border-black rounded-lg p-3 bg-indigo-50">
+          <div className={`mx-4 mt-3 ${HAIRLINE} rounded-2xl p-3 ${autoMode ? ACCENT_SOFT_BG : 'bg-white/60'}`}>
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 min-w-0">
-                <Wand2 className="w-4 h-4 shrink-0" />
+                <Wand2 className={`w-4 h-4 shrink-0 ${ACCENT_TEXT}`} />
                 <div className="min-w-0">
-                  <div className="font-bold text-sm flex items-center gap-1.5">Auto {autoMode && <Check className="w-3.5 h-3.5 text-green-600" />}</div>
-                  <div className="text-[11px] text-slate-600">Best model + tools chosen per message.</div>
+                  <div className={`font-semibold text-sm flex items-center gap-1.5 ${INK}`}>Auto {autoMode && <Check className={`w-3.5 h-3.5 ${ACCENT_TEXT}`} />}</div>
+                  <div className={`text-[11px] ${MUTED}`}>Best model + tools chosen per message.</div>
                 </div>
               </div>
             </div>
             <div className="flex items-center gap-1.5 mt-2">
-              <span className="text-[10px] font-bold uppercase text-slate-500">Lock source:</span>
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">Lock source:</span>
               {([
                 { key: null, label: 'Any' },
                 { key: 'openrouter', label: 'OpenRouter' },
@@ -202,7 +206,7 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
                   <button
                     key={String(opt.key)}
                     onClick={() => onSelectAuto(opt.key)}
-                    className={`text-[11px] font-bold px-2 py-0.5 rounded-full border-2 border-black ${active ? 'bg-indigo-300' : 'bg-white hover:bg-slate-100'}`}
+                    className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${TRANSITION} ${active ? `${ACCENT_BG} ${ACCENT_BG_HOVER} text-white border border-transparent` : `${HAIRLINE} bg-white/70 ${MUTED} hover:bg-black/5`}`}
                   >
                     {opt.label}
                   </button>
@@ -216,9 +220,9 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
               <div className="flex items-center justify-center py-16 text-slate-500"><Loader2 className="w-6 h-6 animate-spin" /></div>
             ) : (
               <>
-                {error && <p className="text-xs text-brand-red font-bold mb-3">{error}</p>}
+                {error && <p className="text-xs text-red-600 font-semibold mb-3">{error}</p>}
                 {filtered.length === 0 ? (
-                  <p className="text-sm text-slate-500 text-center py-10">No models match your search.</p>
+                  <p className={`text-sm ${MUTED} text-center py-10`}>No models match your search.</p>
                 ) : (
                   <div className="grid gap-2">
                     {filtered.map((model) => {
@@ -231,35 +235,35 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
                           key={`${model.source}:${model.id}`}
                           onClick={() => !incompatible && onSelect(model)}
                           disabled={incompatible}
-                          className={`text-left border-2 border-black rounded-lg p-3 transition-all ${
+                          className={`text-left rounded-xl p-3 transition-all duration-200 ${
                             incompatible
-                              ? 'bg-slate-100 opacity-60 cursor-not-allowed'
+                              ? `${HAIRLINE} bg-black/5 opacity-60 cursor-not-allowed`
                               : isSelected
-                                ? 'bg-brand-yellow/40 shadow-comic-hover'
-                                : 'bg-white shadow-comic hover:bg-slate-50 hover:translate-x-[1px] hover:translate-y-[1px]'
+                                ? `border border-[#D97757]/40 ${ACCENT_SOFT_BG} ${SHADOW_SOFT}`
+                                : `${HAIRLINE} bg-white/70 ${SHADOW_SOFT} hover:bg-white ${HOVER_LIFT}`
                           }`}
                           title={sourceOff ? `${sourceLabel(providerOrigin(model))} is turned off in Settings → API Configuration` : visionIncompatible ? 'This model can’t read the images already in this chat' : undefined}
                         >
                           <div className="flex items-start justify-between gap-2">
                             <div className="min-w-0">
-                              <div className="text-[10px] font-bold uppercase text-slate-500">{sourceLabel(providerOrigin(model))}</div>
-                              <div className="font-bold leading-tight truncate flex items-center gap-1.5">
-                                {isSelected && <Check className="w-4 h-4 text-green-600 shrink-0" />}
+                              <div className="text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">{sourceLabel(providerOrigin(model))}</div>
+                              <div className={`font-semibold leading-tight truncate flex items-center gap-1.5 ${INK}`}>
+                                {isSelected && <Check className={`w-4 h-4 ${ACCENT_TEXT} shrink-0`} />}
                                 {model.name}
                               </div>
                             </div>
-                            <span className="text-[11px] font-bold text-slate-600 shrink-0">{costLabel(model)}</span>
+                            <span className={`text-[11px] font-semibold ${MUTED} shrink-0`}>{costLabel(model)}</span>
                           </div>
                           <div className="mt-2">
                             <CapabilityChips model={model} speed={speed[model.id]} />
                           </div>
                           {model.description && (
-                            <p className="text-[11px] text-slate-600 mt-1.5 line-clamp-2">{model.description}</p>
+                            <p className={`text-[11px] ${MUTED} mt-1.5 line-clamp-2`}>{model.description}</p>
                           )}
                           {sourceOff ? (
-                            <p className="text-[11px] font-bold text-slate-500 mt-1.5 flex items-center gap-1"><EyeOff className="w-3 h-3" /> {sourceLabel(providerOrigin(model))} is turned off in Settings</p>
+                            <p className={`text-[11px] font-semibold ${MUTED} mt-1.5 flex items-center gap-1`}><EyeOff className="w-3 h-3" /> {sourceLabel(providerOrigin(model))} is turned off in Settings</p>
                           ) : visionIncompatible && (
-                            <p className="text-[11px] font-bold text-brand-red mt-1.5 flex items-center gap-1"><EyeOff className="w-3 h-3" /> No vision — can’t read this chat’s images</p>
+                            <p className="text-[11px] font-semibold text-red-600 mt-1.5 flex items-center gap-1"><EyeOff className="w-3 h-3" /> No vision — can’t read this chat’s images</p>
                           )}
                         </button>
                       );
