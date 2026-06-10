@@ -126,6 +126,28 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seedText]);
 
+  // Widgets deep in the artifact tree (learning steps, follow-up actions) can hand the
+  // composer a ready-to-send draft without prop drilling: they dispatch
+  // `dreamstream:compose` with { detail: { text } } and the box fills + focuses.
+  useEffect(() => {
+    const onCompose = (e: Event) => {
+      const draft = (e as CustomEvent<{ text?: string }>).detail?.text;
+      if (!draft) return;
+      setText(draft);
+      setMenuDismissed(true);
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (el) {
+          el.focus();
+          autoGrow(el);
+          el.setSelectionRange(el.value.length, el.value.length);
+        }
+      });
+    };
+    window.addEventListener('dreamstream:compose', onCompose);
+    return () => window.removeEventListener('dreamstream:compose', onCompose);
+  }, []);
+
   const skillMatches = isSlashQuery(text) && !menuDismissed ? filterSkills(slashQuery(text)) : [];
   const menuOpen = skillMatches.length > 0;
   const activeSkill = menuOpen ? skillMatches[Math.min(skillIndex, skillMatches.length - 1)] : null;
