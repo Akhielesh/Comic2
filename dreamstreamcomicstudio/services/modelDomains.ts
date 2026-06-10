@@ -83,7 +83,10 @@ export const getModelDomains = (model: CatalogModel): DomainStrength[] => {
     if (strength != null && strength > 0) out.push({ id: domainId, strength: Math.min(100, Math.round(strength)), basis });
   };
 
-  if (bm) {
+  // Text-domain benchmarks only apply to models that can actually answer in text.
+  // Image-only variants (e.g. gemini-…-flash-image) share a family regex with their
+  // text siblings and would otherwise inherit coding/math scores they can't deliver.
+  if (bm && caps.textOutput) {
     let coding = bench(bm.scores, ['humaneval', 'swebench']);
     if (coding != null && CODER_RE.test(id)) coding = Math.min(100, coding + 10); // purpose-built coder bonus
     push('coding', coding, 'benchmark');

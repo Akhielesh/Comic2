@@ -66,6 +66,9 @@ export const getModelVendor = (model: { id: string }): VendorMeta => {
 
 export const getModelVendorId = (model: { id: string }): string => getModelVendor(model).id;
 
+/** Look a vendor up by its canonical id (falls back to "Other"). */
+export const getVendorById = (id: string): VendorMeta => VENDOR_META.find((v) => v.id === id) ?? OTHER;
+
 /** Vendors actually present in a model list, with counts, most-common first (for filter chips). */
 export const availableVendors = (models: { id: string }[]): { vendor: VendorMeta; count: number }[] => {
   const counts = new Map<string, number>();
