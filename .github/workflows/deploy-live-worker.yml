@@ -1,0 +1,55 @@
+name: Deploy Live Worker
+
+# Keeps the dreamstream-live Cloudflare worker (DreamStream Live streaming backend)
+# in sync with live-worker/ source, same pattern as deploy-studio-worker.yml.
+# Requires repo secrets: CLOUDFLARE_API_TOKEN (Workers Scripts:Edit + Workers R2
+# Storage:Edit), CLOUDFLARE_ACCOUNT_ID.
+#
+# PREREQUISITE (one-time, dashboard only): enable R2 on the Cloudflare account.
+# Until R2 is enabled, the bucket step and deploy will fail with a clear error;
+# re-run this workflow (workflow_dispatch) after enabling.
+
+on:
+  push:
+    branches: [Dreamstrream-v1]
+    paths:
+      - 'dreamstreamcomicstudio/live-worker/**'
+      - '.github/workflows/deploy-live-worker.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # wrangler 4.98+ requires Node >= 22.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install worker dependencies
+        working-directory: dreamstreamcomicstudio/live-worker
+        run: npm ci
+
+      - name: Ensure R2 bucket exists
+        working-directory: dreamstreamcomicstudio/live-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        # Idempotent: succeeds if the bucket is new, tolerates "already exists".
+        run: |
+          npx --yes wrangler@latest r2 bucket create dreamstream-live 2>&1 | tee bucket.log \
+            || grep -qi "already exists" bucket.log
+
+      - name: Deploy with wrangler
+        working-directory: dreamstreamcomicstudio/live-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@latest deploy

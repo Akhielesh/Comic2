@@ -67,7 +67,9 @@ export default {
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
 
     const url = new URL(req.url);
-    const m = url.pathname.match(/^\/api\/events(?:\/([a-z0-9]+))?(?:\/(ws|segments))?(?:\/(\d+))?$/);
+    // Behind the site route the worker is mounted at /live-api/* — strip the prefix.
+    const pathname = url.pathname.replace(/^\/live-api(?=\/)/, '');
+    const m = pathname.match(/^\/api\/events(?:\/([a-z0-9]+))?(?:\/(ws|segments))?(?:\/(\d+))?$/);
     if (!m) return withCors(json({ error: 'not found' }, 404), cors);
     const [, id, sub, seqStr] = m;
 

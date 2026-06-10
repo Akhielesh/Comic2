@@ -45,5 +45,11 @@ export const LIMITS: { label: string; value: string }[] = [
   { label: 'Cost', value: '≈ $0.10 per 100-viewer hour on this rail (R2 has zero egress fees)' },
 ];
 
-export const WORKER_BASE: string =
-  ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_LIVE_WORKER_URL || 'http://127.0.0.1:8788').replace(/\/$/, '');
+const explicitBase = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_LIVE_WORKER_URL;
+const isLocalhost = typeof location !== 'undefined' && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+
+/** Worker base: explicit env override → local wrangler dev → the production route
+ *  (live-worker is mounted at dreamstreamstudio.ai/live-api via a Workers route). */
+export const WORKER_BASE: string = (
+  explicitBase || (isLocalhost ? 'http://127.0.0.1:8788' : 'https://dreamstreamstudio.ai/live-api')
+).replace(/\/$/, '');
