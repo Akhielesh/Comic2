@@ -160,6 +160,53 @@ const RAW: Recipe[] = [
   },
   {
     version: RECIPE_SCHEMA_VERSION,
+    id: 'guided-learning-course',
+    title: 'Guided Learning Course',
+    description: 'Design a complete, progress-tracked course on any topic — modules, lessons, practice and checkpoints.',
+    swarm: false,
+    agents: [],
+    instructions:
+      'Design a guided learning course on: {{ topic }}. Learner level: {{ level | default("beginner") }}. ' +
+      'Time budget: {{ timeframe | default("2 weeks, ~30 min/day") }}.\n' +
+      'First, briefly assess what mastering this topic requires. Then call create_learning_path with 3–6 modules of ' +
+      '3–6 steps each: rich markdown lessons in read steps, hands-on practice steps, and quiz/flashcards checkpoints ' +
+      'with a ready-to-send `prompt` (e.g. "Quiz me on module 2 of {{ topic }}"). Make outcomes concrete and the ' +
+      'pacing realistic for the time budget. After the tool call, add a short paragraph on how to use the course.',
+    prompt: 'Teach me {{ topic }} — build me a guided course.',
+    parameters: [
+      { key: 'topic', input_type: 'string', requirement: 'required', description: 'What to learn.' },
+      { key: 'level', input_type: 'select', requirement: 'optional', description: 'Starting level.', default: 'beginner', options: ['beginner', 'intermediate', 'advanced'] },
+      { key: 'timeframe', input_type: 'string', requirement: 'optional', description: 'Time budget, e.g. "1 month, 1h/day".', default: '2 weeks, ~30 min/day' }
+    ],
+    activities: ['Start module 1 with me now', 'Quiz me on the first module', 'Adapt the course to weekends only'],
+    author: AUTHOR
+  },
+  {
+    version: RECIPE_SCHEMA_VERSION,
+    id: 'travel-planner',
+    title: 'Travel Planner',
+    description: 'Plan a complete trip — researched day-by-day itinerary with live map, weather, budget and packing list.',
+    swarm: false,
+    agents: [],
+    instructions:
+      'Plan a trip to {{ destination }} for {{ days | default("3") }} days. Style: {{ style | default("balanced") }}. ' +
+      'Budget hint: {{ budget | default("mid-range") }}.\n' +
+      'Ground the plan in live data first: use get_weather for the destination and find_places for standout food and ' +
+      'sights. Then call plan_trip with realistic days (logical geography, opening hours, 3–6 stops/day with times and ' +
+      'short notes), budget lines in the local currency, useful tips and a packing list informed by the live forecast. ' +
+      'After the tool call, summarize the trip in 2–3 sentences and flag anything to book early.',
+    prompt: 'Plan {{ days | default("3") }} days in {{ destination }}.',
+    parameters: [
+      { key: 'destination', input_type: 'string', requirement: 'required', description: 'Where to go, e.g. "Tokyo".' },
+      { key: 'days', input_type: 'string', requirement: 'optional', description: 'Trip length in days.', default: '3' },
+      { key: 'style', input_type: 'select', requirement: 'optional', description: 'Travel style.', default: 'balanced', options: ['balanced', 'foodie', 'culture', 'outdoors', 'family', 'budget', 'luxury'] },
+      { key: 'budget', input_type: 'string', requirement: 'optional', description: 'Budget hint, e.g. "$1500 total".', default: 'mid-range' }
+    ],
+    activities: ['Swap day 2 for a day trip', 'Find me flights and a hotel shortlist', 'Make a kid-friendly version'],
+    author: AUTHOR
+  },
+  {
+    version: RECIPE_SCHEMA_VERSION,
     id: 'self-retrospective',
     title: 'Agent Self-Retrospective',
     description: 'Review a completed run, score it, and propose a reusable recipe + durable learnings — the self-improvement loop.',

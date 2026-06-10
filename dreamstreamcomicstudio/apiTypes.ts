@@ -810,7 +810,107 @@ export type CapabilityNotice = {
 // Tools can emit typed artifacts that the client renders as real components
 // (weather cards, maps, video grids…) instead of plain text. `type` keys the
 // client-side renderer; new artifact types are added without touching the loop.
-export type ChatArtifact = { type: string; data: unknown };
+export type ChatArtifact = {
+  type: string;
+  data: unknown;
+  /**
+   * Which tool call produced this artifact (stamped by the server's agentic loop).
+   * Lets the client re-execute the same call to refresh the widget with live data.
+   */
+  origin?: { tool: string; args: Record<string, unknown> };
+};
+
+/**
+ * Tools whose artifacts are pure live-data snapshots, safe to re-execute on demand
+ * from the widget's refresh control. Enforced server-side by /api/chat/tool-refresh
+ * and mirrored client-side to decide when to show the refresh button.
+ */
+export const REFRESHABLE_TOOLS = [
+  'get_weather',
+  'get_news',
+  'get_stock',
+  'find_places',
+  'get_crypto_price',
+  'get_forex_pair',
+  'show_map',
+  'video_search'
+] as const;
+
+// --- Guided learning path artifact (structured multi-module course in chat) ---
+// Emitted by the `create_learning_path` tool. Progress is tracked client-side
+// (localStorage, keyed by `id`) — no server round-trip.
+export type LearningStepKind = 'read' | 'practice' | 'quiz' | 'flashcards' | 'project' | 'checkpoint' | 'resource';
+export interface LearningStep {
+  id: string;
+  kind: LearningStepKind;
+  title: string;
+  /** Markdown lesson body (for `read` steps) or task description. */
+  content?: string;
+  /** External resource URL (for `resource` steps). */
+  url?: string;
+  /** A ready-to-send chat prompt ("Quiz me on…") the user can run with one click. */
+  prompt?: string;
+  estMinutes?: number;
+}
+export interface LearningModule {
+  id: string;
+  title: string;
+  summary?: string;
+  estMinutes?: number;
+  steps: LearningStep[];
+}
+export interface LearningPathArtifact {
+  /** Stable id for progress tracking across sessions. */
+  id: string;
+  title: string;
+  topic?: string;
+  description?: string;
+  level?: 'beginner' | 'intermediate' | 'advanced';
+  estMinutes?: number;
+  outcomes?: string[];
+  modules: LearningModule[];
+  palette?: string;
+  density?: 'compact' | 'detailed';
+}
+
+// --- Travel itinerary artifact (trip plan with map, budget and live context) ---
+// Emitted by the `plan_trip` tool. The server enriches the model-composed plan with
+// geocoded stop coordinates and a live weather snapshot for the destination.
+export type ItineraryStopKind = 'flight' | 'transit' | 'hotel' | 'food' | 'sight' | 'activity' | 'shopping' | 'other';
+export interface ItineraryStop {
+  name: string;
+  kind?: ItineraryStopKind;
+  time?: string;
+  durationMin?: number;
+  lat?: number;
+  lng?: number;
+  address?: string;
+  notes?: string;
+  cost?: number;
+  url?: string;
+}
+export interface ItineraryDay {
+  label?: string;
+  date?: string;
+  summary?: string;
+  stops: ItineraryStop[];
+}
+export interface ItineraryArtifact {
+  title: string;
+  destination?: string;
+  startDate?: string;
+  endDate?: string;
+  travelers?: number;
+  currency?: string;
+  budget?: { total?: number; lines?: { label: string; amount: number }[] };
+  days: ItineraryDay[];
+  tips?: string[];
+  packing?: string[];
+  /** Live destination weather snapshot, attached server-side at plan time. */
+  weather?: { description?: string; tempC?: number; tempF?: number; daily?: { date: string; minC?: number; maxC?: number; description?: string; precipProb?: number }[] };
+  palette?: string;
+  density?: 'compact' | 'detailed';
+}
 
 // --- Quiz / assessment artifact (on-demand learning components) ---
 // Emitted by the `generate_quiz` tool so the AI can build interactive practice

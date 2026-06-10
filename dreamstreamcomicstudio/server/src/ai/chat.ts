@@ -540,7 +540,9 @@ export const runChat = async (
         const out = await toolDef.execute(call.arguments, params.signal);
         if (out.images) images.push(...out.images);
         if (out.citations) citations.push(...out.citations);
-        if (out.artifacts) artifacts.push(...out.artifacts);
+        // Stamp each artifact with the call that produced it so the client's widget
+        // refresh control can re-execute the same tool for live data.
+        if (out.artifacts) artifacts.push(...out.artifacts.map((a) => ({ ...a, origin: { tool: call.name, args: call.arguments } })));
         if (out.notice) addNotice({ tool: call.name, ...out.notice });
         toolEvents.push({ tool: call.name, query, ok: true, summary: out.content.slice(0, 160) });
         convo.push({ role: 'user', content: formatToolResult(call.name, out.content) });
@@ -608,14 +610,14 @@ export const runChat = async (
         }
         const query = typeof parsed.query === 'string' ? parsed.query : undefined;
         if (!tool) {
-          return { call, query, ok: false as const, content: `Unknown tool: ${call.name}`, summary: 'Unknown tool' };
+          return { call, query, args: parsed, ok: false as const, content: `Unknown tool: ${call.name}`, summary: 'Unknown tool' };
         }
         try {
           const out = await tool.execute(parsed, params.signal);
-          return { call, query, ok: true as const, out, content: out.content, summary: out.content.slice(0, 160) };
+          return { call, query, args: parsed, ok: true as const, out, content: out.content, summary: out.content.slice(0, 160) };
         } catch (err) {
           const message = (err as Error)?.message || 'tool failed';
-          return { call, query, ok: false as const, content: `Error: ${message}`, summary: message };
+          return { call, query, args: parsed, ok: false as const, content: `Error: ${message}`, summary: message };
         }
       })
     );
@@ -624,7 +626,8 @@ export const runChat = async (
       if (r.ok && r.out) {
         if (r.out.images) images.push(...r.out.images);
         if (r.out.citations) citations.push(...r.out.citations);
-        if (r.out.artifacts) artifacts.push(...r.out.artifacts);
+        // Stamp origins so widgets can re-run the producing call for live refresh.
+        if (r.out.artifacts) artifacts.push(...r.out.artifacts.map((a) => ({ ...a, origin: { tool: r.call.name, args: r.args ?? {} } })));
         // A tool can flag a degraded/missing-data situation it wants surfaced.
         if (r.out.notice) addNotice({ tool: r.call.name, ...r.out.notice });
       } else if (!r.ok) {

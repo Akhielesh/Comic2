@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import type { ChatRequest, ChatResponse, ChatClientContext } from '../../../apiTypes.js';
+import { REFRESHABLE_TOOLS } from '../../../apiTypes.js';
 import { runChat, isStudyIntent, isTrivialChat, type ChatReasoningLevel, type ChatAttachmentInput } from '../ai/chat.js';
 import { runSwarm } from '../ai/agents/orchestrator.js';
 import { makeSwarmTool, SWARM_TOOL_NAME } from '../ai/agents/swarmTool.js';
@@ -740,6 +741,49 @@ chatRouter.post('/followups', async (req, res, next) => {
     res.json({ suggestions: parseFollowUps(result.text || ''), model: result.model });
   } catch (err) {
     next(err);
+  }
+});
+
+// Live widget refresh: re-execute the single whitelisted tool call that produced an
+// artifact (its `origin`), so the client updates the widget in place with fresh data.
+// No model round-trip, no billing reservation — these are keyless data tools.
+const REFRESHABLE = new Set<string>(REFRESHABLE_TOOLS);
+chatRouter.post('/tool-refresh', async (req, res) => {
+  const body = (req.body ?? {}) as { tool?: unknown; args?: unknown; clientContext?: unknown };
+  const tool = typeof body.tool === 'string' ? body.tool : '';
+  if (!REFRESHABLE.has(tool)) {
+    return res.status(400).json({ error: { message: 'This widget cannot be refreshed.' } });
+  }
+  const args =
+    body.args && typeof body.args === 'object' && !Array.isArray(body.args)
+      ? (body.args as Record<string, unknown>)
+      : {};
+  let clientContext = sanitizeClientContext(body.clientContext);
+  if (!clientContext?.location) {
+    const geo = await resolveClientGeo(clientIpFromReq(req)).catch(() => null);
+    if (geo && (geo.city || geo.country)) {
+      clientContext = {
+        ...(clientContext || {}),
+        location: { city: geo.city, region: geo.region, country: geo.country, lat: geo.lat, lng: geo.lng, approximate: true }
+      };
+    }
+  }
+  const impl = resolveTools([tool], {
+    timezone: clientContext?.timezone,
+    locale: clientContext?.locale,
+    units: clientContext?.units,
+    location: clientContext?.location
+  })[0];
+  if (!impl) return res.status(400).json({ error: { message: 'Tool unavailable.' } });
+  try {
+    const signal = AbortSignal.timeout(20_000);
+    const out = await impl.execute(args, signal);
+    res.json({
+      artifacts: (out.artifacts ?? []).map((a) => ({ ...a, origin: { tool, args } })),
+      asOf: new Date().toISOString()
+    });
+  } catch (err) {
+    res.status(502).json({ error: { message: (err as Error)?.message || 'Refresh failed.' } });
   }
 });
 

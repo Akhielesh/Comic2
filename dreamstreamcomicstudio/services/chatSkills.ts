@@ -27,6 +27,38 @@ export interface ChatSkill {
 
 export const CHAT_SKILLS: ChatSkill[] = [
   {
+    command: 'learn',
+    aliases: ['course', 'teach', 'study'],
+    label: 'Guided learning',
+    description: 'Build a progress-tracked course: modules · lessons · practice · checkpoints',
+    emoji: '🎓',
+    recipeId: 'guided-learning-course',
+    argName: 'topic',
+    argRequired: true,
+    buildValues: (arg) => ({ topic: arg })
+  },
+  {
+    command: 'trip',
+    aliases: ['travel', 'itinerary', 'vacation'],
+    label: 'Travel planner',
+    description: 'Day-by-day itinerary with live map, weather, budget & packing list',
+    emoji: '🧳',
+    recipeId: 'travel-planner',
+    argName: 'destination (e.g. "Tokyo, 5 days")',
+    argRequired: true,
+    buildValues: (arg) => {
+      // "Tokyo, 5 days" / "5 days in Tokyo" → destination + days
+      const m = arg.match(/(\d+)\s*(?:days?|d)\b/i);
+      const destination = arg
+        .replace(/(\d+)\s*(?:days?|d)\b/i, '')
+        .replace(/\b(in|for|to)\b/gi, ' ')
+        .replace(/[,·]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      return { destination: destination || arg, ...(m ? { days: m[1] } : {}) };
+    }
+  },
+  {
     command: 'research',
     label: 'Research',
     description: 'Multi-agent research → a sourced brief',

@@ -5,6 +5,8 @@
 export { Surface, SurfaceTitle, SurfaceSubtitle, Expandable } from './Surface';
 export { DensityProvider, useDensity, useCompact } from './density';
 export type { WidgetDensity } from './density';
+export { LiveDataContext, useLiveData } from './liveData';
+export type { LiveDataApi } from './liveData';
 export { Chart } from './Chart';
 export type { ChartPoint, Candle, ChartVariant } from './Chart';
 export { Sparkline } from './Sparkline';

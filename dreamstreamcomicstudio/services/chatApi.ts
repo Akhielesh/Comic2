@@ -1,5 +1,5 @@
 import { get, post, postStream, ApiError } from './apiClient';
-import type { ChatRequest, ChatResponse, SwarmTraceArtifact, SystemDashboard } from '../apiTypes';
+import type { ChatArtifact, ChatRequest, ChatResponse, SwarmTraceArtifact, SystemDashboard } from '../apiTypes';
 
 /**
  * True when an error looks like a transport/connectivity failure rather than a
@@ -60,6 +60,23 @@ export const sendChatMessage = (
   req: ChatRequest,
   options?: { signal?: AbortSignal }
 ): Promise<ChatResponse> => post<ChatRequest, ChatResponse>('/api/chat', req, options);
+
+/**
+ * Re-execute the tool call that produced a live-data widget (its `origin`) and get
+ * fresh artifacts back. Server-whitelisted to pure data tools — no model involved.
+ * `args` may patch the original call (e.g. a news widget switching topic).
+ */
+export const refreshArtifact = async (
+  tool: string,
+  args: Record<string, unknown>
+): Promise<{ artifacts: ChatArtifact[]; asOf?: string }> => {
+  const { gatherClientContext } = await import('./clientContext');
+  const clientContext = await gatherClientContext().catch(() => undefined);
+  return post<{ tool: string; args: Record<string, unknown>; clientContext?: unknown }, { artifacts: ChatArtifact[]; asOf?: string }>(
+    '/api/chat/tool-refresh',
+    { tool, args, ...(clientContext ? { clientContext } : {}) }
+  );
+};
 
 /**
  * Improve a rough prompt draft without changing the user's intent. Returns the

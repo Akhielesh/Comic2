@@ -13,6 +13,8 @@ import { fetchNews } from './news.js';
 import { getStockQuote } from './stocks.js';
 import { findPlaces, osmFilters } from './places.js';
 import { foursquareEnabled, findPlacesFoursquare } from './foursquare.js';
+import { learningPathTool } from './learningPath.js';
+import { planTripTool } from './travel.js';
 import type { ChatTool, ToolExecResult, ToolContext } from './types.js';
 // Free-API tool packs (see services/toolCatalog metadata). Each is a list of
 // keyless (or key-optional) public-API ChatTools grouped by domain.
@@ -882,6 +884,8 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   generate_bundle: bundleTool,
   sql_exercise: sqlExerciseTool,
   code_exercise: codeExerciseTool,
+  create_learning_path: learningPathTool,
+  plan_trip: planTripTool,
   generate_app: generateAppTool,
   ...Object.fromEntries(FREE_API_TOOLS.map((t) => [t.name, t]))
 };

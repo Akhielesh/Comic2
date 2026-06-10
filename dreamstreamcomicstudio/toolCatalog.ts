@@ -528,6 +528,20 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['javascript', 'js', 'python', 'py', 'code exercise', 'coding exercise', 'practice coding', 'practice javascript', 'practice python', 'run code', 'code playground', 'try it', 'algorithm practice', 'array methods', 'programming practice', 'leetcode']
   },
   {
+    name: 'create_learning_path', label: 'Guided learning path', category: 'learning', kind: 'builtin', provider: 'DreamStream (in-app, progress tracked locally)',
+    description: 'Build a guided, multi-module course the user follows inside chat: lessons, practice tasks, quiz/flashcard checkpoints and one-click practice prompts, with progress tracked across sessions. For "teach me X", study plans, curricula and skill roadmaps.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Interactive course card: modules → steps (read/practice/quiz/flashcards/project), per-step completion, progress ring.', docsUrl: 'https://dreamstream.app',
+    keywords: ['learn', 'teach me', 'course', 'curriculum', 'study plan', 'roadmap', 'learning path', 'lesson plan', 'syllabus', 'get good at', 'master', 'bootcamp', 'guided learning']
+  },
+  {
+    name: 'plan_trip', label: 'Travel planner', category: 'places', kind: 'builtin', provider: 'DreamStream (plan) + OpenStreetMap geocoding + Open-Meteo weather',
+    description: 'Create an interactive day-by-day travel itinerary: timeline of stops with a live map (auto-geocoded), budget lines, packing list and live destination weather. For trip planning, weekend getaways, road trips and multi-city journeys.',
+    auth: 'none', rateLimit: 'Fair use (Nominatim + Open-Meteo public APIs)',
+    dataShape: 'Itinerary widget: day tabs, stop timeline with kind icons, map with numbered pins + route, budget + packing, weather strip.', docsUrl: 'https://dreamstream.app',
+    keywords: ['trip', 'travel', 'itinerary', 'vacation', 'holiday', 'plan my trip', 'days in', 'weekend in', 'road trip', 'visit', 'travel plan', 'getaway', 'tour']
+  },
+  {
     name: 'generate_flashcards', label: 'Flashcards', category: 'learning', kind: 'builtin', provider: 'DreamStream (in-app)',
     description: 'Create an interactive flip-card study deck (term → definition) for memorizing vocabulary, formulas or facts — with shuffle, known/review marking and progress.',
     auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',

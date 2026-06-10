@@ -26,7 +26,9 @@ import { ResourceBundle } from './artifacts/ResourceBundle';
 import { CodePlayground } from './artifacts/CodePlayground';
 import { GenerativeUICard } from './artifacts/GenerativeUICard';
 import { DashboardCard } from './artifacts/DashboardCard';
-import type { DashboardArtifact } from '../../apiTypes';
+import { LearningPathCard } from './artifacts/LearningPathCard';
+import { ItineraryCard } from './artifacts/ItineraryCard';
+import type { DashboardArtifact, LearningPathArtifact, ItineraryArtifact } from '../../apiTypes';
 import type {
   WeatherArtifact, NewsResultsArtifact, StockQuoteArtifact,
   VideoResultsArtifact, PlacesResultsArtifact, SwarmTraceArtifact,
@@ -503,7 +505,77 @@ const dashboardDemo: DashboardArtifact = {
   ]
 };
 
+const learningPathDemo: LearningPathArtifact = {
+  id: 'spanish-2-weeks',
+  title: 'Spanish in 2 weeks — survival course',
+  topic: 'Spanish',
+  level: 'beginner',
+  description: 'Daily 30-minute path from zero to ordering food, asking directions and small talk.',
+  outcomes: ['Hold a 2-minute introduction', 'Order food and ask prices', 'Navigate a city in Spanish'],
+  modules: [
+    {
+      id: 'm1',
+      title: 'Sounds & survival phrases',
+      summary: 'Pronunciation, greetings, numbers 1–20.',
+      estMinutes: 90,
+      steps: [
+        { id: 'm1-s1', kind: 'read', title: 'How Spanish vowels work', content: 'Spanish has **5 pure vowel sounds** — a, e, i, o, u — always pronounced the same…', estMinutes: 10 },
+        { id: 'm1-s2', kind: 'practice', title: 'Say the 10 survival phrases out loud', prompt: 'Drill me on 10 Spanish survival phrases with pronunciation tips.', estMinutes: 15 },
+        { id: 'm1-s3', kind: 'quiz', title: 'Checkpoint: greetings & numbers', prompt: 'Quiz me on Spanish greetings and numbers 1–20.', estMinutes: 10 }
+      ]
+    },
+    {
+      id: 'm2',
+      title: 'Ordering & paying',
+      summary: 'Restaurant vocabulary, polite requests, money.',
+      estMinutes: 120,
+      steps: [
+        { id: 'm2-s1', kind: 'read', title: 'The polite request pattern', content: 'Use **"Quisiera…"** (I would like…) — it works everywhere…', estMinutes: 10 },
+        { id: 'm2-s2', kind: 'flashcards', title: 'Food vocabulary deck', prompt: 'Make me flashcards for the 30 most useful Spanish food words.', estMinutes: 20 },
+        { id: 'm2-s3', kind: 'checkpoint', title: 'Role-play: order a full meal', prompt: 'Role-play a Madrid waiter; I will order a full meal in Spanish and you correct me.', estMinutes: 15 }
+      ]
+    }
+  ],
+  palette: 'violet'
+};
+
+const itineraryDemo: ItineraryArtifact = {
+  title: 'Tokyo in 3 days',
+  destination: 'Tokyo, Japan',
+  startDate: '2026-07-10',
+  endDate: '2026-07-12',
+  travelers: 2,
+  currency: 'USD',
+  budget: { total: 1400, lines: [{ label: 'Hotel (2 nights)', amount: 520 }, { label: 'Food', amount: 360 }, { label: 'Transit & passes', amount: 120 }, { label: 'Tickets & museums', amount: 180 }] },
+  days: [
+    {
+      label: 'Day 1 — Classic east side', date: '2026-07-10', summary: 'Asakusa to the river, then electric town.',
+      stops: [
+        { time: '09:00', name: 'Sensō-ji Temple', kind: 'sight', lat: 35.7148, lng: 139.7967, notes: 'Arrive early to beat crowds; Nakamise street for snacks.', durationMin: 90 },
+        { time: '12:00', name: 'Ichiran Asakusa', kind: 'food', lat: 35.7115, lng: 139.7966, cost: 14, notes: 'Solo-booth tonkotsu ramen.' },
+        { time: '14:00', name: 'Akihabara Electric Town', kind: 'activity', lat: 35.7022, lng: 139.7741, durationMin: 150 },
+        { time: '18:30', name: 'Tokyo Skytree at sunset', kind: 'sight', lat: 35.7101, lng: 139.8107, cost: 21 }
+      ]
+    },
+    {
+      label: 'Day 2 — Shibuya & Harajuku', date: '2026-07-11', summary: 'Pop culture west side loop.',
+      stops: [
+        { time: '09:30', name: 'Meiji Jingu Shrine', kind: 'sight', lat: 35.6764, lng: 139.6993, durationMin: 90 },
+        { time: '11:30', name: 'Takeshita Street', kind: 'shopping', lat: 35.6716, lng: 139.7031, notes: 'Crepes + vintage shops.' },
+        { time: '15:00', name: 'Shibuya Crossing & Sky', kind: 'sight', lat: 35.6595, lng: 139.7005, cost: 18 },
+        { time: '19:00', name: 'Omoide Yokocho izakaya crawl', kind: 'food', lat: 35.6938, lng: 139.6995, cost: 40 }
+      ]
+    }
+  ],
+  tips: ['Get a Suica card in Apple/Google Wallet before landing', 'Most small izakaya are cash-only', 'Trains stop ~midnight — plan the last leg'],
+  packing: ['Compact umbrella (July showers)', 'Cash (¥20–30k)', 'Comfortable walking shoes'],
+  weather: { description: 'Partly cloudy', tempC: 28, tempF: 82, daily: [{ date: '2026-07-10', minC: 24, maxC: 31, description: 'Humid, afternoon shower risk', precipProb: 40 }, { date: '2026-07-11', minC: 24, maxC: 30, description: 'Partly cloudy', precipProb: 20 }] },
+  palette: 'ocean'
+};
+
 export const GALLERY_DEMOS: GalleryDemo[] = [
+  { title: 'Guided learning path (modules · tracked progress · practice prompts)', type: 'learning_path', category: 'Learning', node: <LearningPathCard data={learningPathDemo} /> },
+  { title: 'Travel itinerary (day tabs · map · budget · live weather)', type: 'itinerary', category: 'World & media', node: <ItineraryCard data={itineraryDemo} /> },
   { title: 'Weather station (animated · gauges · map)', type: 'weather', category: 'World & media', node: <WeatherStation data={weather} /> },
   { title: 'Market card (hover · range timeline · candlesticks)', type: 'stock_quote', category: 'Finance', node: <MarketCard data={stock} /> },
   { title: 'News digest (compact · source-branded · snippets)', type: 'news_results', category: 'News & knowledge', node: <NewsDigest data={news} /> },

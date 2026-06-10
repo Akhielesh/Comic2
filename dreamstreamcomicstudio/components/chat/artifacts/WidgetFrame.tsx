@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Maximize2, Minimize2 } from 'lucide-react';
-import { DensityProvider, type WidgetDensity } from './kit';
+import { Maximize2, Minimize2, RefreshCw } from 'lucide-react';
+import { DensityProvider, useLiveData, type WidgetDensity } from './kit';
 
 // Universal widget chrome: wraps every artifact card with the two capabilities the
 // component system promises —
@@ -73,6 +73,7 @@ export const WidgetFrame: React.FC<WidgetFrameProps> = ({ type, densityHint, den
   const bodyRef = useRef<HTMLDivElement>(null);
   const dragState = useRef<{ startY: number; startH: number } | null>(null);
   const density = forcedDensity ?? ownDensity;
+  const live = useLiveData();
 
   const toggleDensity = () => {
     const next: WidgetDensity = density === 'compact' ? 'detailed' : 'compact';
@@ -132,6 +133,19 @@ export const WidgetFrame: React.FC<WidgetFrameProps> = ({ type, densityHint, den
 
   return (
     <div className="group/widget relative">
+      {/* Refresh (live-data widgets) — floats left of the density toggle. */}
+      {live.canRefresh && (
+        <button
+          onClick={() => void live.refresh()}
+          disabled={live.refreshing}
+          title={live.asOf ? `Refresh live data (updated ${new Date(live.asOf).toLocaleTimeString()})` : 'Refresh live data'}
+          aria-label="Refresh widget data"
+          className={`absolute right-10 top-3 z-20 flex h-6 w-6 items-center justify-center rounded-lg border border-black/10 bg-white/90 text-[#6e6a60] shadow-[0_1px_3px_rgba(0,0,0,0.1)] backdrop-blur-sm transition-all duration-200 hover:text-[#1a1915] focus-visible:opacity-100 group-hover/widget:opacity-100 group-focus-within/widget:opacity-100 [@media(pointer:coarse)]:opacity-70 ${live.refreshing ? 'opacity-100' : 'opacity-0'}`}
+        >
+          <RefreshCw className={`h-3 w-3 ${live.refreshing ? 'animate-spin' : ''}`} />
+        </button>
+      )}
+
       {/* Density toggle — floats over the card's top-right corner. */}
       {!forcedDensity && <button
         onClick={toggleDensity}
