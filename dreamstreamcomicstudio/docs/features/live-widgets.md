@@ -40,9 +40,17 @@ export const REFRESHABLE_TOOLS = [
   'crypto_price', 'exchange_rate', 'show_map', 'video_search',
   // live widget-platform tools
   'get_ticker_tape', 'get_market_sentiment', 'get_yield_curve',
-  'build_portfolio', 'convert_currency'
+  'build_portfolio', 'convert_currency',
+  // key-optional live tools (read-only; live when the env key is set,
+  // model-supplied otherwise — see docs/features/data-connectors.md)
+  'get_national_debt', 'show_macro_tiles', 'get_econ_calendar',
+  'get_earnings_calendar', 'get_flight_status'
 ] as const;
 ```
+
+The original rule was "keyless only"; it is now **keyless or key-optional,
+read-only, idempotent** — a key-optional tool refreshed without its key simply
+re-returns the model-supplied snapshot, which is safe.
 
 (Historical note: the list once said `get_crypto_price` / `get_forex_pair`, which never
 matched the real tool names `crypto_price` / `exchange_rate` — crypto cards silently had

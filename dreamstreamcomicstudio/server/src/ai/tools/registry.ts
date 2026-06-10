@@ -29,9 +29,10 @@ import { NANGO_TOOLS } from './nango.js';
 import { VIDEO_TOOLS } from './videoRender.js';
 import { LIVE_TEMPLATE_TOOLS } from './liveTemplateTool.js';
 import { MARKET_WIDGET_TOOLS } from './marketWidgets.js';
+import { MACRO_WIDGET_TOOLS } from './macroData.js';
 import { TRAVEL_WIDGET_TOOLS } from './travelWidgets.js';
 import { PRODUCTIVITY_TOOLS } from './productivity.js';
-import { REFRESHABLE_TOOLS } from '../../../../apiTypes.js';
+import { REFRESHABLE_TOOLS, type ChatArtifact } from '../../../../apiTypes.js';
 import { generateAppTool } from './codeStudio.js';
 import { generativeUiTool } from './generativeUi.js';
 import { convertDataTool } from './convertData.js';
@@ -911,6 +912,80 @@ const monitorTool: ChatTool = {
   }
 };
 
+// Apple-style SMART STACK: execute up to four refreshable live-data calls and
+// embed their snapshots in one rotating widget. Like create_monitor, this lives
+// in the registry because it resolves other tools at execute time.
+const stackTool: ChatTool = {
+  name: 'create_widget_stack',
+  description:
+    'Create a SMART STACK — one widget that auto-rotates between 2–4 live cards (Apple-watch-style): e.g. a stock + the weather + headlines in one slot. Use when the user wants several things "in one widget", a glanceable morning slot, or a rotating dashboard tile. Each item is one refreshable live-data tool call (' +
+    REFRESHABLE_TOOLS.join(', ') +
+    ') with its exact args. The stack rotates every `intervalSec` seconds (4–60, default 8), pauses on hover, and each card refreshes live through its own source.',
+  parameters: {
+    type: 'object',
+    properties: {
+      label: { type: 'string', description: 'Short stack label, e.g. "Morning glance".' },
+      intervalSec: { type: 'number', description: 'Rotation cadence in seconds (4–60, default 8).' },
+      items: {
+        type: 'array',
+        description: '2–4 live cards.',
+        items: {
+          type: 'object',
+          properties: {
+            tool: { type: 'string', enum: [...REFRESHABLE_TOOLS] },
+            args: { type: 'object', description: 'Arguments for that tool, exactly as it expects them.' }
+          },
+          required: ['tool']
+        }
+      }
+    },
+    required: ['items']
+  },
+  execute: async (args, signal) => {
+    const raw = Array.isArray(args?.items) ? (args.items as Record<string, unknown>[]) : [];
+    const specs = raw
+      .map((it) => ({
+        tool: String(it?.tool ?? '').trim(),
+        args: it?.args && typeof it.args === 'object' && !Array.isArray(it.args) ? (it.args as Record<string, unknown>) : {}
+      }))
+      .filter((it) => (REFRESHABLE_TOOLS as readonly string[]).includes(it.tool))
+      .slice(0, 4);
+    if (specs.length < 2) {
+      return { content: `A widget stack needs 2–4 items, each using a refreshable tool (${REFRESHABLE_TOOLS.join(', ')}).` };
+    }
+    const settled = await Promise.allSettled(
+      specs.map(async (spec) => {
+        const impl = resolveTools([spec.tool])[0];
+        if (!impl) throw new Error(`${spec.tool} unavailable`);
+        const out = await impl.execute(spec.args, signal);
+        const inner = out.artifacts?.[0];
+        if (!inner) throw new Error(`${spec.tool} produced no widget`);
+        return { ...inner, origin: { tool: spec.tool, args: spec.args } };
+      })
+    );
+    const items = settled.filter((r) => r.status === 'fulfilled').map((r) => (r as PromiseFulfilledResult<ChatArtifact>).value);
+    if (items.length < 2) {
+      return {
+        content: 'Could not assemble the stack — fewer than two of the requested live calls produced a widget. Check the per-tool args and try again.',
+        notice: { level: 'warn' as const, message: 'Widget stack setup failed (not enough live cards).' }
+      };
+    }
+    const intervalSec = Math.max(4, Math.min(60, typeof args?.intervalSec === 'number' && Number.isFinite(args.intervalSec) ? Math.round(args.intervalSec) : 8));
+    const data = {
+      label: typeof args?.label === 'string' && args.label.trim() ? args.label.trim().slice(0, 80) : undefined,
+      intervalSec,
+      items
+    };
+    return {
+      content: `Smart stack assembled: ${items.length} live cards (${items.map((i) => i.type).join(' → ')}), rotating every ${intervalSec}s. One short line is enough — the stack speaks for itself.`,
+      artifacts: [{ type: 'widget_stack', data }],
+      ...(items.length < specs.length
+        ? { notice: { level: 'info' as const, message: `${specs.length - items.length} stack item(s) failed to load and were dropped.` } }
+        : {})
+    };
+  }
+};
+
 // Flatten the free-API tool packs into a name→tool map. These are all context-free
 // (they take explicit args), so they live alongside the original built-ins.
 const FREE_API_TOOLS: ChatTool[] = [
@@ -919,6 +994,8 @@ const FREE_API_TOOLS: ChatTool[] = [
   ...FINANCE_TERMINAL_TOOLS,
   // Live finance widgets (ticker tape, sentiment, yield curve, portfolio, FX card).
   ...MARKET_WIDGET_TOOLS,
+  // Macro & calendar widgets (tiles, econ/earnings calendars, debt clock, CB watch).
+  ...MACRO_WIDGET_TOOLS,
   // Travel widgets (boarding pass, world clocks, packing list, trip countdown).
   ...TRAVEL_WIDGET_TOOLS,
   // Productivity widgets (/goal, /code-review, what-changed) + GitHub PR fetcher.
@@ -962,6 +1039,7 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   create_learning_path: learningPathTool,
   plan_trip: planTripTool,
   create_monitor: monitorTool,
+  create_widget_stack: stackTool,
   generate_app: generateAppTool,
   ...Object.fromEntries(FREE_API_TOOLS.map((t) => [t.name, t]))
 };

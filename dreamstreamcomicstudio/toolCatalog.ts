@@ -193,6 +193,41 @@ export const TOOL_CATALOG: ToolMeta[] = [
     dataShape: 'Converter card: rate, amount ⇄, 30-day sparkline, verdict.', docsUrl: 'https://www.frankfurter.app',
     keywords: ['convert currency', 'currency converter', 'exchange rate widget', 'good time to exchange', 'fx trend', 'money for trip', 'convert money']
   },
+  {
+    name: 'show_macro_tiles', label: 'Macro indicator tiles', category: 'finance', kind: 'builtin', provider: 'DreamStream (+ FRED when keyed)',
+    description: 'A wall of macro indicator tiles (CPI, unemployment, GDP, Fed funds…) with change, sparkline and next-release countdown. Tiles with a FRED series id fill live when a key is set.',
+    auth: 'optional', authEnv: 'FRED_API_KEY', rateLimit: 'FRED free tier is generous (120 req/min)',
+    dataShape: 'Tile wall: value + delta + spark + release countdown.', docsUrl: 'https://fred.stlouisfed.org/docs/api/fred/',
+    keywords: ['macro', 'cpi', 'inflation', 'unemployment', 'gdp', 'economy', 'economic indicators', 'fed funds', 'jobs report', 'pmi', 'macro dashboard']
+  },
+  {
+    name: 'get_econ_calendar', label: 'Economic calendar', category: 'finance', kind: 'builtin', provider: 'DreamStream (+ Finnhub when keyed)',
+    description: 'The week\'s economic releases on a timeline — importance dots, beat/miss coloring for past events, a "now" line. Live with a Finnhub key (tier-dependent); model-supplied otherwise.',
+    auth: 'optional', authEnv: 'FINNHUB_API_KEY', rateLimit: 'Finnhub free: 60 calls/min (verify econ-calendar tier)',
+    dataShape: 'Timeline strip + day-grouped event rows with actual/forecast/previous.', docsUrl: 'https://finnhub.io/docs/api/economic-calendar',
+    keywords: ['economic calendar', 'econ calendar', 'fomc', 'nfp', 'cpi release', 'data this week', 'releases', 'economic events', 'jobs friday']
+  },
+  {
+    name: 'get_earnings_calendar', label: 'Earnings countdown', category: 'finance', kind: 'builtin', provider: 'DreamStream (+ Finnhub when keyed)',
+    description: 'Upcoming earnings as a countdown carousel — report date, before/after the bell, EPS estimates, implied move and an agent preview per company. Live dates with a Finnhub key.',
+    auth: 'optional', authEnv: 'FINNHUB_API_KEY', rateLimit: 'Finnhub free: 60 calls/min',
+    dataShape: 'Carousel cards: countdown, session, EPS est, implied move, preview.', docsUrl: 'https://finnhub.io/docs/api/earnings-calendar',
+    keywords: ['earnings', 'earnings calendar', 'who reports', 'earnings this week', 'reports after close', 'eps estimate', 'earnings season', 'implied move']
+  },
+  {
+    name: 'get_national_debt', label: 'National debt clock', category: 'finance', kind: 'api', provider: 'US Treasury FiscalData',
+    description: 'The live US national debt as a running odometer, ticking per second from the recent drift ("Debt to the Penny", keyless).',
+    auth: 'none', rateLimit: 'Fair use (public API)',
+    dataShape: 'Odometer: live amount + $/second drift + Δ since previous record.', docsUrl: 'https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/',
+    keywords: ['national debt', 'debt clock', 'us debt', 'deficit', 'debt to the penny', 'how much debt']
+  },
+  {
+    name: 'render_central_banks', label: 'Central bank watch', category: 'finance', kind: 'builtin', provider: 'DreamStream (in-app)',
+    description: 'A card per central bank (Fed, ECB, BoJ…) — current policy rate, days to the next meeting, market-implied path and the latest communication read.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Bank rows: rate, meeting countdown, implied-path mini chart.', docsUrl: 'https://dreamstream.app',
+    keywords: ['fed', 'central bank', 'ecb', 'boj', 'rate decision', 'fomc meeting', 'interest rate', 'rate cut', 'rate hike', 'monetary policy', 'when does the fed meet']
+  },
   // ----------------------------------------------------------------- places -----
   {
     name: 'find_places', label: 'Places / local', category: 'places', kind: 'builtin', provider: 'OpenStreetMap / Foursquare',
@@ -236,6 +271,34 @@ export const TOOL_CATALOG: ToolMeta[] = [
     auth: 'none', rateLimit: 'Weather fair use (Open-Meteo, keyless)',
     dataShape: 'Countdown hero: D/H/M/S, weather strip, checklist.', docsUrl: 'https://dreamstream.app',
     keywords: ['countdown', 'days until', 'how long until my trip', 'trip countdown', 'departure countdown', 'days to go', 'upcoming trip']
+  },
+  {
+    name: 'get_flight_status', label: 'Flight tracker', category: 'travel', kind: 'builtin', provider: 'DreamStream (+ aviationstack when keyed)',
+    description: 'Track a flight — status, delays, terminal/gate and a route-progress arc. Live with an aviationstack key; renders the known schedule otherwise.',
+    auth: 'optional', authEnv: 'AVIATIONSTACK_API_KEY', rateLimit: 'aviationstack free: 100 req/month',
+    dataShape: 'Tracker card: route arc with plane position, times, delays, gates.', docsUrl: 'https://aviationstack.com/documentation',
+    keywords: ['flight status', 'track flight', 'is my flight on time', 'flight delayed', 'where is flight', 'arrival time', 'departure status', 'flight tracker']
+  },
+  {
+    name: 'render_trip_budget', label: 'Trip budget burn', category: 'travel', kind: 'builtin', provider: 'DreamStream (in-app)',
+    description: 'A budget fuel-gauge for a trip — spent vs total with banded warning zones, per-category bars, and a pace verdict computed from the trip dates.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Fuel gauge + category bars + "exceed by day N" pace verdict.', docsUrl: 'https://dreamstream.app',
+    keywords: ['trip budget', 'travel budget', 'am i on budget', 'spending on trip', 'budget burn', 'overspend', 'travel expenses', 'vacation budget']
+  },
+  {
+    name: 'render_cheatsheet', label: 'Destination cheat-sheet', category: 'travel', kind: 'builtin', provider: 'DreamStream (in-app)',
+    description: 'A per-city survival card — emergency numbers, tipping, plug type & voltage, cash norms, tap water, key phrases with pronunciation, scam warnings, etiquette.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Facts grid + phrases + warnings + etiquette.', docsUrl: 'https://dreamstream.app',
+    keywords: ['cheat sheet', 'what should i know about', 'emergency number', 'tipping in', 'plug type', 'local customs', 'phrases', 'scams in', 'travel tips for']
+  },
+  {
+    name: 'render_loyalty_wallet', label: 'Loyalty wallet', category: 'travel', kind: 'builtin', provider: 'DreamStream (in-app)',
+    description: 'Stacked airline/hotel membership cards — points balances, tier progress to the next status, expiries and the agent\'s best redemption suggestion.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Stacked brand cards: points, tier progress, redemption tip.', docsUrl: 'https://dreamstream.app',
+    keywords: ['loyalty', 'miles', 'points balance', 'frequent flyer', 'hotel points', 'status tier', 'redeem points', 'membership', 'rewards']
   },
   // -------------------------------------------------------------- knowledge -----
   {
@@ -665,6 +728,20 @@ export const TOOL_CATALOG: ToolMeta[] = [
     auth: 'none', rateLimit: 'Inherits the looped tool\'s limits',
     dataShape: 'Self-refreshing wrapper around a live widget + cadence chip.', docsUrl: 'https://dreamstream.app',
     keywords: ['monitor', 'watch', 'keep an eye on', 'track live', 'loop', 'every 5 minutes', 'auto refresh', 'live updates', 'poll']
+  },
+  {
+    name: 'create_widget_stack', label: 'Smart stack', category: 'productivity', kind: 'builtin', provider: 'DreamStream (rotates refreshable live tools)',
+    description: 'One widget that auto-rotates between 2–4 live cards (stock + weather + news…), Apple-watch style — pauses on hover, each card refreshes through its own live source.',
+    auth: 'none', rateLimit: 'Inherits the stacked tools\' limits',
+    dataShape: 'Rotating stack with dots/arrows around live widget snapshots.', docsUrl: 'https://dreamstream.app',
+    keywords: ['stack', 'smart stack', 'rotate', 'combine widgets', 'all in one widget', 'morning glance', 'rotating dashboard', 'carousel widget']
+  },
+  {
+    name: 'render_pnl_calendar', label: 'Calendar heatmap (P&L)', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app)',
+    description: 'A GitHub-style calendar heatmap of any signed daily series — trading P&L, savings, workout minutes — with total, win-rate and best/worst footer.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Week-column heatmap grid + totals footer.', docsUrl: 'https://dreamstream.app',
+    keywords: ['pnl calendar', 'p&l calendar', 'daily pnl', 'contribution graph', 'calendar heatmap', 'green days', 'trading journal', 'streak calendar', 'daily tracker']
   },
   // --------------------------------------------------------------- codegen ------
   {

@@ -3,6 +3,7 @@ import { REFRESHABLE_TOOLS } from '../../../apiTypes';
 import { LiveDataContext } from './kit';
 import type { ChatArtifact, WeatherArtifact, VideoResultsArtifact, MapArtifact, NewsResultsArtifact, StockQuoteArtifact, SwarmTraceArtifact, PlacesResultsArtifact, ChartArtifact, MetricBoardArtifact, DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact, RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact, CodeExerciseArtifact, GenerativeUIArtifact, LearningPathArtifact, ItineraryArtifact } from '../../../apiTypes';
 import type { DashboardArtifact, TickerTapeArtifact, MarketSentimentArtifact, YieldCurveArtifact, PortfolioArtifact, WhatsChangedArtifact, BoardingPassArtifact, CurrencyConverterArtifact, WorldClocksArtifact, PackingListArtifact, TripCountdownArtifact, GoalTrackerArtifact, CodeReviewArtifact, LiveMonitorArtifact } from '../../../apiTypes';
+import type { MacroTilesArtifact, EconCalendarArtifact, EarningsCalendarArtifact, CentralBankWatchArtifact, PnlCalendarArtifact, DebtClockArtifact, FlightStatusArtifact, TripBudgetArtifact, LocalCheatsheetArtifact, LoyaltyWalletArtifact, WidgetStackArtifact } from '../../../apiTypes';
 import { ArtifactBoundary } from './ArtifactBoundary';
 import { WidgetFrame } from './WidgetFrame';
 import { WeatherStation } from './WeatherStation';
@@ -44,6 +45,17 @@ import { TripCountdown } from './TripCountdown';
 import { GoalTracker } from './GoalTracker';
 import { CodeReviewCard } from './CodeReviewCard';
 import { LiveMonitorCard } from './LiveMonitorCard';
+import { MacroTiles } from './MacroTiles';
+import { EconCalendar } from './EconCalendar';
+import { EarningsCountdown } from './EarningsCountdown';
+import { CentralBankWatch } from './CentralBankWatch';
+import { PnlCalendar } from './PnlCalendar';
+import { DebtClock } from './DebtClock';
+import { FlightStatus } from './FlightStatus';
+import { TripBudget } from './TripBudget';
+import { LocalCheatsheet } from './LocalCheatsheet';
+import { LoyaltyWallet } from './LoyaltyWallet';
+import { WidgetStack } from './WidgetStack';
 
 // Renderer registry for typed rich-output artifacts. Adding a new rich component is
 // a single entry here — the chat loop and storage never change.
@@ -91,7 +103,18 @@ const ARTIFACT_RENDERERS: Record<string, (data: unknown, key: number) => React.R
   trip_countdown: (d, k) => <TripCountdown key={k} data={d as TripCountdownArtifact} />,
   goal_tracker: (d, k) => <GoalTracker key={k} data={d as GoalTrackerArtifact} />,
   code_review: (d, k) => <CodeReviewCard key={k} data={d as CodeReviewArtifact} />,
-  live_monitor: (d, k) => <LiveMonitorCard key={k} data={d as LiveMonitorArtifact} renderEmbedded={renderArtifactNode} />
+  live_monitor: (d, k) => <LiveMonitorCard key={k} data={d as LiveMonitorArtifact} renderEmbedded={renderArtifactNode} />,
+  macro_tiles: (d, k) => <MacroTiles key={k} data={d as MacroTilesArtifact} />,
+  econ_calendar: (d, k) => <EconCalendar key={k} data={d as EconCalendarArtifact} />,
+  earnings_calendar: (d, k) => <EarningsCountdown key={k} data={d as EarningsCalendarArtifact} />,
+  central_bank_watch: (d, k) => <CentralBankWatch key={k} data={d as CentralBankWatchArtifact} />,
+  pnl_calendar: (d, k) => <PnlCalendar key={k} data={d as PnlCalendarArtifact} />,
+  debt_clock: (d, k) => <DebtClock key={k} data={d as DebtClockArtifact} />,
+  flight_status: (d, k) => <FlightStatus key={k} data={d as FlightStatusArtifact} />,
+  trip_budget: (d, k) => <TripBudget key={k} data={d as TripBudgetArtifact} />,
+  local_cheatsheet: (d, k) => <LocalCheatsheet key={k} data={d as LocalCheatsheetArtifact} />,
+  loyalty_wallet: (d, k) => <LoyaltyWallet key={k} data={d as LoyaltyWalletArtifact} />,
+  widget_stack: (d, k) => <WidgetStack key={k} data={d as WidgetStackArtifact} renderEmbedded={renderArtifactNode} />
 };
 
 /** Render an artifact's bare card via the registry (no frame/boundary). Used by the
@@ -136,7 +159,18 @@ export const DENSITY_AWARE_TYPES = new Set([
   'trip_countdown',
   'goal_tracker',
   'code_review',
-  'live_monitor'
+  'live_monitor',
+  'macro_tiles',
+  'econ_calendar',
+  'earnings_calendar',
+  'central_bank_watch',
+  'pnl_calendar',
+  'debt_clock',
+  'flight_status',
+  'trip_budget',
+  'local_cheatsheet',
+  'loyalty_wallet',
+  'widget_stack'
 ]);
 
 // Holds the freshest version of a single artifact. When the server stamped an
@@ -203,7 +237,7 @@ const renderArtifact = (artifact: ChatArtifact, key: number): React.ReactNode =>
 // charts, KPI boards, news) pack two-up so the model can aggregate several data
 // sources side by side — e.g. "compare gold, oil and the S&P" → three quote cards
 // laid out in a grid instead of a tall stack.
-const FULL_WIDTH = new Set(['weather', 'map', 'places_results', 'video_results', 'swarm_trace', 'code_studio', 'recipe_card', 'recipe_run', 'research_report', 'quiz', 'document', 'flashcards', 'sql_exercise', 'resource_bundle', 'code_exercise', 'generative_ui', 'dashboard', 'learning_path', 'itinerary', 'ticker_tape', 'portfolio', 'goal_tracker', 'code_review', 'live_monitor']);
+const FULL_WIDTH = new Set(['weather', 'map', 'places_results', 'video_results', 'swarm_trace', 'code_studio', 'recipe_card', 'recipe_run', 'research_report', 'quiz', 'document', 'flashcards', 'sql_exercise', 'resource_bundle', 'code_exercise', 'generative_ui', 'dashboard', 'learning_path', 'itinerary', 'ticker_tape', 'portfolio', 'goal_tracker', 'code_review', 'live_monitor', 'macro_tiles', 'econ_calendar', 'earnings_calendar', 'central_bank_watch', 'pnl_calendar', 'flight_status', 'local_cheatsheet', 'widget_stack']);
 
 export const ChatArtifacts: React.FC<{ artifacts?: ChatArtifact[] }> = ({ artifacts }) => {
   if (!artifacts || artifacts.length === 0) return null;
