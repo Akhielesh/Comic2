@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Newspaper } from 'lucide-react';
 import type { NewsResultsArtifact, NewsItem } from '../../../apiTypes';
-import { Surface, SurfaceTitle, SurfaceSubtitle, relativeTime, useCompact } from './kit';
+import { Surface, SurfaceTitle, SurfaceSubtitle, relativeTime, useCompact, useLiveData } from './kit';
 
 // News digest, rebuilt in the calm-studio language.
 //  • compact — the top 3 headlines with source + time. No images, no controls:
@@ -9,6 +9,9 @@ import { Surface, SurfaceTitle, SurfaceSubtitle, relativeTime, useCompact } from
 //  • detailed — a lead story (with image when available) above clean divided rows:
 //    headline, source favicon, relative time, a tiny tinted sentiment dot + label,
 //    and read minutes. "Show all" expansion preserved.
+//  • live — when the live-data context can re-run the producing get_news call,
+//    the detailed view grows a topic chip row: clicking a chip re-queries the tool
+//    with that topic (no model round-trip) and the card re-renders with fresh data.
 
 const hostOf = (url: string): string => {
   try {
@@ -85,11 +88,34 @@ const MetaLine: React.FC<{ item: NewsItem; showSentiment?: boolean }> = ({ item,
 
 const PREVIEW = 5;
 
+// Topic chips mirror the server's get_news `topic` enum (the subset that maps to a
+// stable Google News section). Label is display-only; id is the tool argument.
+const TOPICS: { id: string; label: string }[] = [
+  { id: 'top', label: 'Top' },
+  { id: 'world', label: 'World' },
+  { id: 'business', label: 'Business' },
+  { id: 'technology', label: 'Tech' },
+  { id: 'science', label: 'Science' },
+  { id: 'sports', label: 'Sports' },
+  { id: 'health', label: 'Health' }
+];
+
 export const NewsDigest: React.FC<{ data: NewsResultsArtifact }> = ({ data }) => {
   const compact = useCompact();
+  const live = useLiveData();
   const items = data.items ?? [];
   const [showAll, setShowAll] = useState(false);
   if (!items.length) return null;
+
+  const updated = live.asOf ? relativeTime(live.asOf) : '';
+  // Only a topical feed (no free-text query) lights up a chip.
+  const activeTopic = !data.query && data.topic ? data.topic.toLowerCase() : undefined;
+  const headerRight = (
+    <span className="flex flex-col items-end">
+      <SurfaceSubtitle>{items.length} stories</SurfaceSubtitle>
+      {updated && <span className="text-[9px] text-[#6e6a60]/80">Updated {updated}</span>}
+    </span>
+  );
 
   // ── Compact: top 3 headlines, source + time. ────────────────────────────────
   if (compact) {
@@ -101,7 +127,7 @@ export const NewsDigest: React.FC<{ data: NewsResultsArtifact }> = ({ data }) =>
             <SurfaceTitle>{heading(data)}</SurfaceTitle>
           </span>
         }
-        right={<SurfaceSubtitle>{items.length} stories</SurfaceSubtitle>}
+        right={headerRight}
       >
         <ul className="divide-y divide-black/5 border-t border-black/5">
           {items.slice(0, 3).map((n, i) => (
@@ -135,8 +161,34 @@ export const NewsDigest: React.FC<{ data: NewsResultsArtifact }> = ({ data }) =>
           <SurfaceTitle>{heading(data)}</SurfaceTitle>
         </span>
       }
-      right={<SurfaceSubtitle>{items.length} stories</SurfaceSubtitle>}
+      right={headerRight}
     >
+      {/* Topic chips — live re-query of the producing get_news call, no model round-trip. */}
+      {live.canRefresh && (
+        <div className="flex flex-wrap gap-1 px-3 pb-2">
+          {TOPICS.map((t) => {
+            const active = t.id === activeTopic;
+            return (
+              <button
+                key={t.id}
+                disabled={live.refreshing}
+                onClick={() => void live.refresh({ topic: t.id, query: undefined })}
+                className={`rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors duration-200 disabled:cursor-default disabled:opacity-60 ${
+                  active
+                    ? 'border-transparent bg-[#1a1915] text-white'
+                    : 'border-black/10 bg-white/70 text-[#6e6a60] hover:bg-black/5 hover:text-[#1a1915]'
+                }`}
+                aria-pressed={active}
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Subtle shimmer while a topic refresh is in flight. */}
+      <div className={`transition-opacity duration-200 ${live.refreshing ? 'pointer-events-none animate-pulse opacity-50' : ''}`}>
       {/* Lead story */}
       <a href={lead.url} target="_blank" rel="noopener noreferrer" className="block px-3 pb-2.5 pt-1 transition-colors duration-200 hover:bg-black/[0.03]">
         {lead.image && (
@@ -179,6 +231,7 @@ export const NewsDigest: React.FC<{ data: NewsResultsArtifact }> = ({ data }) =>
           {showAll ? 'Show less' : `Show all ${items.length}`}
         </button>
       )}
+      </div>
     </Surface>
   );
 };

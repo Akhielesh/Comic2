@@ -15,14 +15,40 @@ import {
 import { listMcpServers, onMcpServersChanged, addMcpServer } from '../../services/mcpServers';
 import type { McpServerConfig } from '../../apiTypes';
 
-// Curated MCP marketplace — a few vetted, keyless https servers a user can connect in one
-// click (mirrors server/src/ai/tools/mcpCatalog.ts). Connecting adds the server to the
-// local MCP store, which already flows into the agent's tool loop.
-const MCP_MARKETPLACE: { id: string; name: string; url: string; blurb: string }[] = [
-  { id: 'deepwiki', name: 'DeepWiki', url: 'https://mcp.deepwiki.com/mcp', blurb: 'Ask questions about any public GitHub repo — docs, architecture, code.' },
-  { id: 'context7', name: 'Context7', url: 'https://mcp.context7.com/mcp', blurb: 'Up-to-date docs + code examples for thousands of libraries.' },
-  { id: 'huggingface', name: 'Hugging Face', url: 'https://huggingface.co/mcp', blurb: 'Search models, datasets and Spaces on the Hugging Face Hub.' }
+// Curated MCP marketplace — vetted, keyless https servers a user can connect in one
+// click (mirrors server/src/ai/tools/mcpCatalog.ts — keep the two lists in sync).
+// Connecting adds the server to the local MCP store, which already flows into the
+// agent's tool loop.
+type McpMarketCategory = 'docs' | 'dev' | 'data' | 'travel';
+interface McpMarketEntry {
+  id: string;
+  name: string;
+  url: string;
+  blurb: string;
+  category: McpMarketCategory;
+}
+const MCP_MARKETPLACE: McpMarketEntry[] = [
+  { id: 'deepwiki', name: 'DeepWiki', url: 'https://mcp.deepwiki.com/mcp', blurb: 'Ask questions about any public GitHub repo — docs, architecture, code.', category: 'docs' },
+  { id: 'context7', name: 'Context7', url: 'https://mcp.context7.com/mcp', blurb: 'Up-to-date docs + code examples for thousands of libraries.', category: 'docs' },
+  { id: 'microsoft-learn', name: 'Microsoft Learn', url: 'https://learn.microsoft.com/api/mcp', blurb: 'Q&A over official Microsoft and Azure documentation.', category: 'docs' },
+  { id: 'cloudflare-docs', name: 'Cloudflare Docs', url: 'https://docs.mcp.cloudflare.com/sse', blurb: 'Cloudflare platform docs — Workers, R2, DNS and more.', category: 'docs' },
+  { id: 'astro-docs', name: 'Astro Docs', url: 'https://mcp.docs.astro.build/mcp', blurb: 'Official documentation for the Astro web framework.', category: 'docs' },
+  { id: 'aws-knowledge', name: 'AWS Knowledge', url: 'https://knowledge-mcp.global.api.aws', blurb: 'AWS documentation, API references and guidance.', category: 'docs' },
+  { id: 'gitmcp', name: 'GitMCP', url: 'https://gitmcp.io/docs', blurb: "Explore any public GitHub repository's docs and code.", category: 'dev' },
+  { id: 'semgrep', name: 'Semgrep', url: 'https://mcp.semgrep.ai/sse', blurb: 'Static code analysis — scan code for bugs and security issues.', category: 'dev' },
+  { id: 'huggingface', name: 'Hugging Face', url: 'https://huggingface.co/mcp', blurb: 'Search models, datasets and Spaces on the Hugging Face Hub.', category: 'data' },
+  { id: 'manifold-markets', name: 'Manifold Markets', url: 'https://api.manifold.markets/v0/mcp', blurb: 'Prediction market data — live forecast probabilities.', category: 'data' },
+  { id: 'livescore', name: 'LiveScore', url: 'https://livescoremcp.com/sse', blurb: 'Live sports scores, fixtures and league standings.', category: 'data' },
+  { id: 'ferryhopper', name: 'Ferryhopper', url: 'https://mcp.ferryhopper.com/mcp', blurb: 'Ferry routes, schedules and booking information.', category: 'travel' },
+  { id: 'subwayinfo-nyc', name: 'SubwayInfo NYC', url: 'https://subwayinfo.nyc/mcp', blurb: 'NYC subway and transit status — lines, delays, alerts.', category: 'travel' }
 ];
+const MCP_CATEGORY_ORDER: McpMarketCategory[] = ['docs', 'dev', 'data', 'travel'];
+const MCP_CATEGORY_LABELS: Record<McpMarketCategory, string> = {
+  docs: 'Docs & reference',
+  dev: 'Developer',
+  data: 'Data',
+  travel: 'Travel & transit'
+};
 
 const CAT_ICONS: Record<string, LucideIcon> = {
   Search, Newspaper, CloudSun, LineChart, MapPin, BookOpen, Type, Globe, Rocket,
@@ -32,18 +58,18 @@ const CAT_ICONS: Record<string, LucideIcon> = {
 // --- small presentational helpers ----------------------------------------------
 const KindBadge: React.FC<{ kind: ToolKind }> = ({ kind }) => {
   const map: Record<ToolKind, { label: string; cls: string }> = {
-    api: { label: 'API', cls: 'border-sky-400 text-sky-700 bg-sky-50' },
-    mcp: { label: 'MCP', cls: 'border-violet-400 text-violet-700 bg-violet-50' },
-    builtin: { label: 'BUILT-IN', cls: 'border-slate-400 text-slate-600 bg-slate-50' }
+    api: { label: 'API', cls: 'border-sky-500/20 text-sky-700 bg-sky-50' },
+    mcp: { label: 'MCP', cls: 'border-violet-500/20 text-violet-700 bg-violet-50' },
+    builtin: { label: 'BUILT-IN', cls: 'border-black/10 text-[#6e6a60] bg-black/[0.03]' }
   };
   const m = map[kind];
-  return <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${m.cls}`}>{m.label}</span>;
+  return <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-md border ${m.cls}`}>{m.label}</span>;
 };
 
 const AuthBadge: React.FC<{ auth: ToolAuth; env?: string }> = ({ auth, env }) => {
   if (auth === 'none')
     return (
-      <span className="inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded border border-emerald-300 text-emerald-700 bg-emerald-50">
+      <span className="inline-flex items-center gap-0.5 text-[9px] font-semibold px-1.5 py-0.5 rounded-md border border-emerald-500/20 text-emerald-700 bg-emerald-50">
         <Unlock className="w-2.5 h-2.5" /> KEYLESS
       </span>
     );
@@ -51,7 +77,7 @@ const AuthBadge: React.FC<{ auth: ToolAuth; env?: string }> = ({ auth, env }) =>
     return (
       <span
         title={env ? `Runs keyless; set ${env} to raise limits` : undefined}
-        className="inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded border border-amber-300 text-amber-700 bg-amber-50"
+        className="inline-flex items-center gap-0.5 text-[9px] font-semibold px-1.5 py-0.5 rounded-md border border-amber-500/20 text-amber-700 bg-amber-50"
       >
         <KeyRound className="w-2.5 h-2.5" /> KEY OPTIONAL
       </span>
@@ -59,7 +85,7 @@ const AuthBadge: React.FC<{ auth: ToolAuth; env?: string }> = ({ auth, env }) =>
   return (
     <span
       title={env ? `Requires ${env}` : undefined}
-      className="inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded border border-rose-300 text-rose-700 bg-rose-50"
+      className="inline-flex items-center gap-0.5 text-[9px] font-semibold px-1.5 py-0.5 rounded-md border border-rose-500/20 text-rose-700 bg-rose-50"
     >
       <KeyRound className="w-2.5 h-2.5" /> KEY REQUIRED
     </span>
@@ -77,15 +103,24 @@ const relativeTime = (ts: number): string => {
   return `${Math.round(h / 24)}d ago`;
 };
 
+/** Section label in the calm-studio voice. */
+const SectionLabel: React.FC<{ icon?: LucideIcon; children: React.ReactNode; blurb?: string }> = ({ icon: Icon, children, blurb }) => (
+  <div className="flex items-center gap-1.5 mb-1.5">
+    {Icon && <Icon className="w-3.5 h-3.5 text-[#6e6a60]" />}
+    <span className="text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">{children}</span>
+    {blurb && <span className="text-[10px] text-[#6e6a60]/70">{blurb}</span>}
+  </div>
+);
+
 const StatCard: React.FC<{ icon: LucideIcon; label: string; value: string; sub?: string; accent?: string }> = ({
-  icon: Icon, label, value, sub, accent = 'text-brand-blue'
+  icon: Icon, label, value, sub, accent = 'text-[#6e6a60]'
 }) => (
-  <div className="border-2 border-black rounded-lg bg-white px-3 py-2 flex items-center gap-2.5">
+  <div className="rounded-xl border border-black/10 bg-white/85 shadow-[0_1px_2px_rgba(0,0,0,0.04)] px-3 py-2 flex items-center gap-2.5">
     <Icon className={`w-5 h-5 ${accent} shrink-0`} />
     <div className="min-w-0">
-      <div className="text-lg font-display leading-none">{value}</div>
-      <div className="text-[10px] font-bold uppercase text-slate-500 leading-tight">{label}</div>
-      {sub && <div className="text-[10px] text-slate-400 truncate">{sub}</div>}
+      <div className="text-lg font-semibold tracking-tight leading-none text-[#1a1915] tabular-nums">{value}</div>
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60] leading-tight">{label}</div>
+      {sub && <div className="text-[10px] text-[#6e6a60]/80 truncate">{sub}</div>}
     </div>
   </div>
 );
@@ -93,37 +128,37 @@ const StatCard: React.FC<{ icon: LucideIcon; label: string; value: string; sub?:
 const ToolRow: React.FC<{ tool: ToolMeta; stat?: ToolStat }> = ({ tool, stat }) => {
   const successRate = stat && stat.calls ? Math.round((stat.ok / stat.calls) * 100) : null;
   return (
-    <div className="border-2 border-black rounded-lg bg-white p-2.5">
+    <div className="rounded-xl border border-black/10 bg-white p-2.5">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="font-bold text-sm">{tool.label}</span>
+            <span className="font-semibold text-sm text-[#1a1915]">{tool.label}</span>
             <KindBadge kind={tool.kind} />
             <AuthBadge auth={tool.auth} env={tool.authEnv} />
-            <code className="text-[9px] text-slate-400">{tool.name}</code>
+            <code className="text-[9px] text-[#6e6a60]/70">{tool.name}</code>
           </div>
-          <div className="text-[11px] text-slate-600 mt-0.5">{tool.description}</div>
+          <div className="text-[11px] text-[#6e6a60] mt-0.5">{tool.description}</div>
         </div>
         <a
           href={tool.docsUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="shrink-0 text-slate-400 hover:text-black"
+          className="shrink-0 text-[#6e6a60]/60 hover:text-[#1a1915] transition-colors duration-200"
           title={`${tool.provider} — open docs`}
         >
           <ExternalLink className="w-3.5 h-3.5" />
         </a>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-1 mt-2 text-[10px]">
-        <div><span className="font-bold text-slate-500">Provider:</span> {tool.provider}</div>
-        <div><span className="font-bold text-slate-500">Limit:</span> {tool.rateLimit}</div>
-        <div className="truncate" title={tool.dataShape}><span className="font-bold text-slate-500">Returns:</span> {tool.dataShape}</div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-1 mt-2 text-[10px] text-[#1a1915]">
+        <div><span className="font-semibold text-[#6e6a60]">Provider:</span> {tool.provider}</div>
+        <div><span className="font-semibold text-[#6e6a60]">Limit:</span> {tool.rateLimit}</div>
+        <div className="truncate" title={tool.dataShape}><span className="font-semibold text-[#6e6a60]">Returns:</span> {tool.dataShape}</div>
       </div>
 
       {/* Usage analytics (real, from this device). */}
-      <div className="flex items-center gap-3 mt-2 pt-2 border-t border-slate-100 text-[10px]">
-        <span className="inline-flex items-center gap-1 font-bold text-slate-600">
+      <div className="flex items-center gap-3 mt-2 pt-2 border-t border-black/5 text-[10px]">
+        <span className="inline-flex items-center gap-1 font-semibold text-[#6e6a60]">
           <Activity className="w-3 h-3" /> {stat?.calls || 0} call{(stat?.calls || 0) === 1 ? '' : 's'}
         </span>
         {successRate != null && (
@@ -131,9 +166,9 @@ const ToolRow: React.FC<{ tool: ToolMeta; stat?: ToolStat }> = ({ tool, stat }) 
             {successRate}% ok
           </span>
         )}
-        <span className="text-slate-400">last: {relativeTime(stat?.lastUsedAt || 0)}</span>
+        <span className="text-[#6e6a60]/70">last: {relativeTime(stat?.lastUsedAt || 0)}</span>
         {stat?.recentQueries?.length ? (
-          <span className="text-slate-400 truncate" title={stat.recentQueries.join(' · ')}>
+          <span className="text-[#6e6a60]/70 truncate" title={stat.recentQueries.join(' · ')}>
             “{stat.recentQueries[0]}”
           </span>
         ) : null}
@@ -184,13 +219,22 @@ export const ToolsDashboard: React.FC = () => {
     return CATEGORY_META.filter((c) => map.has(c.id)).map((c) => ({ cat: c, tools: map.get(c.id)! }));
   }, [filtered]);
 
+  const marketplaceGroups = useMemo(
+    () =>
+      MCP_CATEGORY_ORDER.map((cat) => ({
+        cat,
+        entries: MCP_MARKETPLACE.filter((m) => m.category === cat)
+      })).filter((g) => g.entries.length > 0),
+    []
+  );
+
   return (
     <div className="space-y-4">
       {/* Summary band */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         <StatCard icon={Boxes} label="Live tools" value={String(counts.total)} sub={`${counts.api} API · ${counts.builtin} built-in`} />
         <StatCard icon={Unlock} label="Keyless" value={String(counts.keyless)} sub={`of ${counts.total} run with no key`} accent="text-emerald-600" />
-        <StatCard icon={Activity} label="Total calls" value={summary.totalCalls.toLocaleString()} sub={`${summary.distinctToolsUsed} tools used`} accent="text-fuchsia-600" />
+        <StatCard icon={Activity} label="Total calls" value={summary.totalCalls.toLocaleString()} sub={`${summary.distinctToolsUsed} tools used`} accent="text-[#D97757]" />
         <StatCard
           icon={CheckCircle2}
           label="Success rate"
@@ -200,28 +244,28 @@ export const ToolsDashboard: React.FC = () => {
         />
       </div>
 
-      <p className="text-[11px] text-slate-500 flex items-start gap-1.5">
+      <p className="text-[11px] text-[#6e6a60] flex items-start gap-1.5">
         <Zap className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
-        These are <span className="font-bold">automatic backend tools</span> — the AI always has them and picks the right
-        ones for each message (it <span className="font-bold">smart-routes</span> by relevance instead of calling everything).
+        These are <span className="font-semibold text-[#1a1915]">automatic backend tools</span> — the AI always has them and picks the right
+        ones for each message (it <span className="font-semibold text-[#1a1915]">smart-routes</span> by relevance instead of calling everything).
         You don’t need to enable anything; this view is just for transparency. Usage analytics below are recorded locally on this device.
       </p>
 
       {/* Controls */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative flex-1 min-w-[180px]">
-          <Search className="w-4 h-4 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+          <Search className="w-4 h-4 text-[#6e6a60]/60 absolute left-2.5 top-1/2 -translate-y-1/2" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search tools, providers, capabilities…"
-            className="w-full border-2 border-black rounded-lg pl-8 pr-3 py-1.5 text-sm outline-none focus:shadow-comic-hover"
+            className="w-full rounded-lg border border-black/10 bg-white/70 pl-8 pr-3 py-1.5 text-sm text-[#1a1915] outline-none transition-colors duration-200 focus:border-black/20 focus:bg-white"
           />
         </div>
         {summary.totalCalls > 0 && (
           <button
             onClick={() => { if (confirm('Reset local tool usage analytics?')) resetToolStats(); }}
-            className="flex items-center gap-1 text-[11px] font-bold border-2 border-black rounded-lg px-2.5 py-1.5 bg-white hover:bg-slate-100"
+            className="flex items-center gap-1 text-[11px] font-semibold text-[#1a1915] rounded-lg border border-black/10 bg-white/70 px-2.5 py-1.5 transition-colors duration-200 hover:bg-black/5"
           >
             <RotateCcw className="w-3.5 h-3.5" /> Reset stats
           </button>
@@ -232,7 +276,11 @@ export const ToolsDashboard: React.FC = () => {
       <div className="flex flex-wrap gap-1.5">
         <button
           onClick={() => setActiveCat('all')}
-          className={`text-[11px] font-bold px-2.5 py-1 rounded-full border-2 ${activeCat === 'all' ? 'border-black bg-brand-yellow' : 'border-slate-300 bg-white hover:border-black'}`}
+          className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-colors duration-200 ${
+            activeCat === 'all'
+              ? 'border-transparent bg-[#1a1915] text-white'
+              : 'border-black/10 bg-white/70 text-[#6e6a60] hover:bg-black/5 hover:text-[#1a1915]'
+          }`}
         >
           All ({TOOL_CATALOG.length})
         </button>
@@ -243,7 +291,11 @@ export const ToolsDashboard: React.FC = () => {
             <button
               key={c.id}
               onClick={() => setActiveCat(c.id)}
-              className={`flex items-center gap-1 text-[11px] font-bold px-2.5 py-1 rounded-full border-2 ${activeCat === c.id ? 'border-black bg-brand-yellow' : 'border-slate-300 bg-white hover:border-black'}`}
+              className={`flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-colors duration-200 ${
+                activeCat === c.id
+                  ? 'border-transparent bg-[#1a1915] text-white'
+                  : 'border-black/10 bg-white/70 text-[#6e6a60] hover:bg-black/5 hover:text-[#1a1915]'
+              }`}
             >
               <Icon className="w-3.5 h-3.5" /> {c.label} ({n})
             </button>
@@ -257,11 +309,7 @@ export const ToolsDashboard: React.FC = () => {
           const Icon = CAT_ICONS[cat.icon] || Wrench;
           return (
             <div key={cat.id}>
-              <div className="flex items-center gap-1.5 mb-1.5">
-                <Icon className="w-4 h-4 text-brand-blue" />
-                <span className="font-bold text-sm">{cat.label}</span>
-                <span className="text-[10px] text-slate-400">{cat.blurb}</span>
-              </div>
+              <SectionLabel icon={Icon} blurb={cat.blurb}>{cat.label}</SectionLabel>
               <div className="grid sm:grid-cols-2 gap-2">
                 {tools.map((t) => <ToolRow key={t.name} tool={t} stat={stats[t.name]} />)}
               </div>
@@ -269,72 +317,77 @@ export const ToolsDashboard: React.FC = () => {
           );
         })}
         {grouped.length === 0 && (
-          <div className="text-sm text-slate-400 text-center py-8 border-2 border-dashed border-slate-200 rounded-lg">
+          <div className="text-sm text-[#6e6a60]/70 text-center py-8 border border-dashed border-black/10 rounded-xl bg-black/[0.02]">
             No tools match “{query}”.
           </div>
         )}
       </div>
 
-      {/* Curated MCP marketplace — one-click connect (Phase 10) */}
-      <div>
-        <div className="flex items-center gap-1.5 mb-1.5">
+      {/* Curated MCP marketplace — one-click connect (Phase 10), grouped by category */}
+      <div className="rounded-2xl border border-black/10 bg-white/70 p-3 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.06)]">
+        <div className="flex items-center gap-1.5 mb-2">
           <Boxes className="w-4 h-4 text-violet-600" />
-          <span className="font-bold text-sm">MCP marketplace</span>
-          <span className="text-[10px] text-slate-400">Vetted servers — connect one in a click to expose its tools to the AI</span>
+          <span className="font-semibold text-sm text-[#1a1915]">MCP marketplace</span>
+          <span className="text-[10px] text-[#6e6a60]">Vetted free servers — connect one in a click to expose its tools to the AI</span>
         </div>
-        <div className="grid sm:grid-cols-2 gap-2">
-          {MCP_MARKETPLACE.map((m) => {
-            const connected = mcpServers.some((s) => s.url === m.url);
-            return (
-              <div key={m.id} className="border-2 border-black rounded-lg bg-white p-2.5 flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <Server className="w-4 h-4 text-violet-600 shrink-0" />
-                    <span className="font-bold text-sm truncate">{m.name}</span>
-                    <KindBadge kind="mcp" />
-                    <AuthBadge auth="none" />
-                  </div>
-                  <div className="text-[11px] text-slate-600 mt-0.5">{m.blurb}</div>
-                  <div className="text-[10px] text-slate-400 mt-0.5 truncate" title={m.url}>{m.url}</div>
-                </div>
-                <button
-                  disabled={connected}
-                  onClick={() => addMcpServer({ name: m.name, url: m.url })}
-                  className={`shrink-0 inline-flex items-center gap-1 text-[11px] font-bold border-2 border-black rounded-lg px-2 py-1 ${
-                    connected ? 'bg-emerald-50 text-emerald-700 cursor-default' : 'bg-brand-yellow hover:shadow-comic-hover'
-                  }`}
-                >
-                  {connected ? <><CheckCircle2 className="w-3.5 h-3.5" /> Connected</> : <><Plug className="w-3.5 h-3.5" /> Connect</>}
-                </button>
+        <div className="space-y-3">
+          {marketplaceGroups.map(({ cat, entries }) => (
+            <div key={cat}>
+              <SectionLabel>{MCP_CATEGORY_LABELS[cat]}</SectionLabel>
+              <div className="grid sm:grid-cols-2 gap-2">
+                {entries.map((m) => {
+                  const connected = mcpServers.some((s) => s.url === m.url);
+                  return (
+                    <div key={m.id} className="rounded-xl border border-black/10 bg-white p-2.5 flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <Server className="w-4 h-4 text-violet-600 shrink-0" />
+                          <span className="font-semibold text-sm text-[#1a1915] truncate">{m.name}</span>
+                          <KindBadge kind="mcp" />
+                          <AuthBadge auth="none" />
+                        </div>
+                        <div className="text-[11px] text-[#6e6a60] mt-0.5">{m.blurb}</div>
+                        <div className="text-[10px] text-[#6e6a60]/70 mt-0.5 truncate" title={m.url}>{m.url}</div>
+                      </div>
+                      <button
+                        disabled={connected}
+                        onClick={() => addMcpServer({ name: m.name, url: m.url })}
+                        className={`shrink-0 inline-flex items-center gap-1 text-[11px] font-semibold rounded-lg px-2 py-1 transition-colors duration-200 ${
+                          connected
+                            ? 'border border-emerald-500/20 bg-emerald-50 text-emerald-700 cursor-default'
+                            : 'bg-[#D97757] hover:bg-[#c2643f] text-white'
+                        }`}
+                      >
+                        {connected ? <><CheckCircle2 className="w-3.5 h-3.5" /> Connected</> : <><Plug className="w-3.5 h-3.5" /> Connect</>}
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
-            );
-          })}
+            </div>
+          ))}
         </div>
       </div>
 
       {/* Custom MCP servers */}
       <div>
-        <div className="flex items-center gap-1.5 mb-1.5">
-          <Plug className="w-4 h-4 text-violet-600" />
-          <span className="font-bold text-sm">Custom MCP servers</span>
-          <span className="text-[10px] text-slate-400">Model Context Protocol endpoints you’ve connected</span>
-        </div>
+        <SectionLabel icon={Plug} blurb="Model Context Protocol endpoints you’ve connected">Custom MCP servers</SectionLabel>
         {mcpServers.length === 0 ? (
-          <div className="text-[11px] text-slate-400 border-2 border-dashed border-slate-200 rounded-lg px-3 py-3">
+          <div className="text-[11px] text-[#6e6a60]/80 border border-dashed border-black/10 rounded-xl bg-black/[0.02] px-3 py-3">
             None connected. Add an MCP server from the chat toolbar to expose its tools to the agent — they’ll be tagged
             <span className="inline-flex items-center mx-1"><KindBadge kind="mcp" /></span> and routed like any other tool.
           </div>
         ) : (
           <div className="grid sm:grid-cols-2 gap-2">
             {mcpServers.map((s) => (
-              <div key={s.id} className="border-2 border-black rounded-lg bg-white p-2.5">
+              <div key={s.id} className="rounded-xl border border-black/10 bg-white p-2.5">
                 <div className="flex items-center gap-1.5">
                   <Server className="w-4 h-4 text-violet-600" />
-                  <span className="font-bold text-sm truncate">{s.name}</span>
+                  <span className="font-semibold text-sm text-[#1a1915] truncate">{s.name}</span>
                   <KindBadge kind="mcp" />
                   {s.headers?.Authorization && <AuthBadge auth="required" />}
                 </div>
-                <div className="text-[10px] text-slate-500 mt-0.5 truncate" title={s.url}>{s.url}</div>
+                <div className="text-[10px] text-[#6e6a60]/80 mt-0.5 truncate" title={s.url}>{s.url}</div>
               </div>
             ))}
           </div>

@@ -152,7 +152,7 @@ export const parseNewsRss = (xml: string, limit = 10): NewsItem[] => {
 export const fetchNews = async (
   q: NewsQuery,
   signal?: AbortSignal,
-  limit = 10
+  limit = 12
 ): Promise<NewsResultsArtifact> => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
@@ -169,7 +169,12 @@ export const fetchNews = async (
     if (!res.ok) throw new Error(`Google News returned ${res.status}`);
     const xml = await res.text();
     const items = parseNewsRss(xml, limit);
-    return { query: q.query || '', topic: q.topic, items };
+    // Emit the EFFECTIVE topic so the client's topic chips highlight correctly:
+    // a free-text query has no topic; a topical/headline feed normalizes to its
+    // section key, defaulting to 'top' for the plain top-headlines feed.
+    const query = (q.query || '').trim();
+    const topic = query ? undefined : (q.topic || '').trim().toLowerCase() || 'top';
+    return { query, topic, items };
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);
