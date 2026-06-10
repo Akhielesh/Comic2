@@ -207,6 +207,77 @@ const RAW: Recipe[] = [
   },
   {
     version: RECIPE_SCHEMA_VERSION,
+    id: 'goal-coach',
+    title: 'Goal Coach',
+    description: 'Turn any goal into a tracked plan — target date, measurable metric, checkable milestones and this week\'s next actions.',
+    swarm: false,
+    agents: [],
+    instructions:
+      'You are a pragmatic goal coach. The user\'s goal: {{ goal }}. Timeframe hint: {{ timeframe | default("none given — infer a realistic one") }}.\n' +
+      'First, restate the goal as one concrete, measurable outcome (pick the measurable yourself if the user was vague — distance, amount saved, words written). ' +
+      'If the goal involves something verifiable (a race date, an exam syllabus, typical training plans), you may use web_search to ground the plan. ' +
+      'Then call create_goal_tracker with: a sharp title, why it matters (from the user\'s words), a realistic targetDate, a cadence, the metric (start → target with unit), ' +
+      '4–8 sequenced milestones (the FIRST startable today, each verifiable, with due dates spread across the timeframe), and 2–3 nextActions for this week. ' +
+      'After the tool call, add 2–3 sentences: the single biggest risk to this goal and how the cadence beats it. No pep-talk filler.',
+    prompt: 'Coach me on this goal: {{ goal }}',
+    tools: ['create_goal_tracker', 'web_search'],
+    parameters: [
+      { key: 'goal', input_type: 'string', requirement: 'required', description: 'The goal in the user\'s words.' },
+      { key: 'timeframe', input_type: 'string', requirement: 'optional', description: 'When they want it done, e.g. "by October".' }
+    ],
+    activities: ['Make the milestones easier', 'Add a weekly check-in plan', 'What should I do today?'],
+    author: AUTHOR
+  },
+  {
+    version: RECIPE_SCHEMA_VERSION,
+    id: 'code-review',
+    title: 'Code Review',
+    description: 'Review code or a GitHub PR against the REAL diff — verdict card with severity-graded findings, file:line and suggested fixes.',
+    swarm: false,
+    agents: [],
+    instructions:
+      'You are a senior engineer doing a rigorous, kind code review. Focus: {{ focus | default("all") }}.\n' +
+      'The review target is below. If it is a GitHub PR / commit URL (or "owner/repo#123"), you MUST call fetch_github_pr first and review the REAL diff it returns — ' +
+      'never review a linked PR from memory. If it is pasted code/diff, review that text directly. Use web_search only to verify an API contract you are unsure about.\n' +
+      'Review for correctness first (bugs, edge cases, races), then security, performance, tests and readability. Cite the actual file and line for every finding and ' +
+      'propose the smallest concrete fix (as code) where you can. Be honest about severity — do not inflate nits.\n' +
+      'Finish by calling render_code_review with: verdict (approve / approve-with-nits / request-changes), a 2–3 sentence summary, dimension scores, the findings ' +
+      '(severity, title, detail, file, line, suggestion, category), diff stats when known, and at least one genuine positive. After the card, give your overall take in ≤2 sentences.\n\n' +
+      'Review target:\n{{ target }}',
+    prompt: 'Review this: {{ target }}',
+    tools: ['fetch_github_pr', 'render_code_review', 'web_search'],
+    parameters: [
+      { key: 'target', input_type: 'string', requirement: 'required', description: 'Pasted code/diff, or a GitHub PR / commit URL.' },
+      { key: 'focus', input_type: 'select', requirement: 'optional', description: 'What to weight most.', default: 'all', options: ['all', 'correctness', 'security', 'performance', 'readability', 'testing'] }
+    ],
+    activities: ['Apply the suggested fixes', 'Explain the most severe finding', 'Re-review after my changes'],
+    author: AUTHOR
+  },
+  {
+    version: RECIPE_SCHEMA_VERSION,
+    id: 'live-monitor',
+    title: 'Live Monitor',
+    description: 'Loop one live-data widget on an interval — the card keeps refreshing itself on screen (stocks, weather, news, crypto, sentiment…).',
+    swarm: false,
+    agents: [],
+    instructions:
+      'Set up a live monitor for: {{ request }}. Refresh cadence: every {{ interval_sec | default("300") }} seconds.\n' +
+      'Map the request to exactly ONE refreshable live-data tool and its args — get_stock {"symbol"} for an equity/index/commodity, crypto_price {"coin"} for a coin, ' +
+      'get_weather {"location"}, get_news {"query"} or {"topic"}, get_ticker_tape {"symbols":[…]} for several tickers, get_market_sentiment {} for fear & greed, ' +
+      'get_yield_curve {} for treasury yields, convert_currency {"from","to"} for an FX rate, build_portfolio {"holdings":[…]} for listed positions. ' +
+      'Then call create_monitor with that tool, those args, intervalSec = {{ interval_sec | default("300") }}, and a short label like "NVDA · every 5 min". ' +
+      'After the tool call, confirm what is being watched and the cadence in ONE sentence. If the request maps to no live tool, say so and suggest the closest watchable thing instead.',
+    prompt: 'Monitor {{ request }} for me.',
+    tools: ['create_monitor'],
+    parameters: [
+      { key: 'request', input_type: 'string', requirement: 'required', description: 'What to watch, e.g. "NVDA", "weather in Tokyo", "AI chip news".' },
+      { key: 'interval_sec', input_type: 'number', requirement: 'optional', description: 'Refresh cadence in seconds (30–3600).', default: 300 }
+    ],
+    activities: ['Make it refresh faster', 'Monitor something else too', 'Stop after an hour — remind me'],
+    author: AUTHOR
+  },
+  {
+    version: RECIPE_SCHEMA_VERSION,
     id: 'self-retrospective',
     title: 'Agent Self-Retrospective',
     description: 'Review a completed run, score it, and propose a reusable recipe + durable learnings — the self-improvement loop.',

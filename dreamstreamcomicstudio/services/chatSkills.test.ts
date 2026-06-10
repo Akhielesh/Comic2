@@ -70,4 +70,34 @@ describe('chat skills', () => {
     expect(p?.arg).toBe('');
     expect(p?.skill.argRequired).toBe(false);
   });
+
+  it('exposes the productivity skills (/goal, /code-review, /loop)', () => {
+    for (const cmd of ['goal', 'code-review', 'loop']) {
+      expect(findSkill(cmd), `missing /${cmd}`).toBeDefined();
+    }
+    expect(findSkill('goal')?.recipeId).toBe('goal-coach');
+    expect(findSkill('cr')?.command).toBe('code-review');
+    expect(findSkill('monitor')?.command).toBe('loop');
+  });
+
+  it('supports hyphenated commands end to end (/deep-research, /code-review)', () => {
+    expect(isSlashQuery('/deep-res')).toBe(true);
+    expect(isSlashQuery('/code-review src/app.ts')).toBe(false); // space → no longer a query
+    expect(findSkill('deep-research')?.command).toBe('research');
+    const p = parseSkillInput('/deep-research solid-state batteries');
+    expect(p?.skill.recipeId).toBe('deep-research-brief');
+    const cr = parseSkillInput('/code-review https://github.com/acme/app/pull/12');
+    expect(cr?.skill.recipeId).toBe('code-review');
+    expect(cr?.skill.buildValues(cr!.arg)).toEqual({ target: 'https://github.com/acme/app/pull/12' });
+  });
+
+  it('parses the loop interval prefix and clamps it to the monitor bounds', () => {
+    const loop = findSkill('loop')!;
+    expect(loop.buildValues('5m NVDA stock')).toEqual({ request: 'NVDA stock', interval_sec: 300 });
+    expect(loop.buildValues('30s bitcoin')).toEqual({ request: 'bitcoin', interval_sec: 30 });
+    expect(loop.buildValues('2h weather in Tokyo')).toEqual({ request: 'weather in Tokyo', interval_sec: 3600 }); // clamped to 1h
+    expect(loop.buildValues('5s btc')).toEqual({ request: 'btc', interval_sec: 30 }); // clamped to 30s floor
+    // No interval prefix → 5-minute default, full text kept as the request.
+    expect(loop.buildValues('gold price')).toEqual({ request: 'gold price', interval_sec: 300 });
+  });
 });

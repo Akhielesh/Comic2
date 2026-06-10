@@ -16,6 +16,7 @@ export type ToolCategory =
   | 'weather'
   | 'finance'
   | 'places'
+  | 'travel'
   | 'knowledge'
   | 'words'
   | 'geo'
@@ -26,6 +27,7 @@ export type ToolCategory =
   | 'dataviz'
   | 'codegen'
   | 'learning'
+  | 'productivity'
   | 'media'
   | 'agents';
 
@@ -70,6 +72,7 @@ export const CATEGORY_META: CategoryMeta[] = [
   { id: 'weather', label: 'Weather', icon: 'CloudSun', blurb: 'Current conditions and forecasts.' },
   { id: 'finance', label: 'Finance & markets', icon: 'LineChart', blurb: 'Stocks, crypto and currency rates.' },
   { id: 'places', label: 'Places & maps', icon: 'MapPin', blurb: 'Nearby places, geocoding and maps.' },
+  { id: 'travel', label: 'Travel widgets', icon: 'Plane', blurb: 'Boarding passes, countdowns, packing lists, world clocks.' },
   { id: 'knowledge', label: 'Knowledge & reference', icon: 'BookOpen', blurb: 'Encyclopedia, books, papers, tech news.' },
   { id: 'words', label: 'Words & language', icon: 'Type', blurb: 'Definitions and word associations.' },
   { id: 'geo', label: 'Geography & civic', icon: 'Globe', blurb: 'Countries, holidays, time, postal, IP.' },
@@ -81,6 +84,7 @@ export const CATEGORY_META: CategoryMeta[] = [
   { id: 'media', label: 'Media & images', icon: 'Image', blurb: 'Convert and resize images (deterministic, non-AI).' },
   { id: 'codegen', label: 'App builder', icon: 'AppWindow', blurb: 'Generate full multi-file apps with a live preview.' },
   { id: 'learning', label: 'Learning', icon: 'GraduationCap', blurb: 'Interactive quizzes and practice for studying any topic.' },
+  { id: 'productivity', label: 'Goals & monitors', icon: 'Target', blurb: 'Goal trackers, live monitors, what-changed briefs.' },
   { id: 'agents', label: 'Agents', icon: 'Network', blurb: 'Delegate complex tasks to a swarm.' }
 ];
 
@@ -154,6 +158,41 @@ export const TOOL_CATALOG: ToolMeta[] = [
     dataShape: 'Composite terminal: quote + KPIs + table + heatmap + news.', docsUrl: 'https://dreamstream.app',
     keywords: ['terminal', 'dashboard', 'watchlist', 'portfolio', 'markets today', 'market overview', 'track stocks', 'movers', 'indices', 'my stocks', 'finance dashboard']
   },
+  {
+    name: 'get_ticker_tape', label: 'Ticker tape', category: 'finance', kind: 'builtin', provider: 'Yahoo Finance (Stooq fallback)',
+    description: 'A live scrolling market strip — price, day change and sparkline for a set of symbols (or a default market tape). The at-a-glance companion to the full quote card.',
+    auth: 'none', rateLimit: 'Fair use (keyless quotes)',
+    dataShape: 'Marquee strip + rows: symbol, price, Δ%, sparkline.', docsUrl: 'https://finance.yahoo.com',
+    keywords: ['ticker tape', 'ticker', 'tape', 'market strip', 'watchlist strip', 'tickers', 'prices at a glance', 'marquee', 'how are markets']
+  },
+  {
+    name: 'get_market_sentiment', label: 'Fear & Greed', category: 'finance', kind: 'api', provider: 'CNN Fear & Greed · alternative.me',
+    description: 'Live Fear & Greed sentiment gauges for stocks (CNN, with component indicators) and crypto (alternative.me), with history.',
+    auth: 'none', rateLimit: 'Fair use (public endpoints)',
+    dataShape: 'Animated 0–100 gauges + history sparkline + components.', docsUrl: 'https://www.cnn.com/markets/fear-and-greed',
+    keywords: ['fear and greed', 'fear & greed', 'sentiment', 'market mood', 'greedy', 'fearful', 'risk appetite', 'market sentiment']
+  },
+  {
+    name: 'get_yield_curve', label: 'Yield curve', category: 'finance', kind: 'api', provider: 'US Treasury',
+    description: 'The live US Treasury par yield curve (1M–30Y) with 1-month / 1-year-ago comparison snapshots, the 10Y−2Y spread and an inversion flag.',
+    auth: 'none', rateLimit: 'Fair use (public XML feed)',
+    dataShape: 'Morphing curve chart + spread + inversion badge.', docsUrl: 'https://home.treasury.gov/resource-center/data-chart-center/interest-rates',
+    keywords: ['yield curve', 'treasury yields', 'inversion', 'inverted curve', '10 year', '2 year', 'bond yields', 'rates curve', 'recession signal']
+  },
+  {
+    name: 'build_portfolio', label: 'Portfolio (live-priced)', category: 'finance', kind: 'builtin', provider: 'DreamStream (Yahoo/Stooq quotes)',
+    description: 'Turn listed holdings into a live-priced portfolio card — the server quotes every position and computes value, day P&L, total P&L and allocation weights.',
+    auth: 'none', rateLimit: 'Fair use (keyless quotes)',
+    dataShape: 'Portfolio hero: totals, allocation donut, holdings table.', docsUrl: 'https://dreamstream.app',
+    keywords: ['portfolio', 'holdings', 'positions', 'i own', 'my stocks', 'allocation', 'p&l', 'pnl', 'gains', 'cost basis', 'net worth']
+  },
+  {
+    name: 'convert_currency', label: 'Currency converter (widget)', category: 'finance', kind: 'api', provider: 'Frankfurter (ECB)',
+    description: 'An interactive live currency converter card — current ECB rate, editable amount, 30-day trend and a "vs 30-day average" verdict.',
+    auth: 'none', rateLimit: 'Unlimited fair use (no key)',
+    dataShape: 'Converter card: rate, amount ⇄, 30-day sparkline, verdict.', docsUrl: 'https://www.frankfurter.app',
+    keywords: ['convert currency', 'currency converter', 'exchange rate widget', 'good time to exchange', 'fx trend', 'money for trip', 'convert money']
+  },
   // ----------------------------------------------------------------- places -----
   {
     name: 'find_places', label: 'Places / local', category: 'places', kind: 'builtin', provider: 'OpenStreetMap / Foursquare',
@@ -168,6 +207,35 @@ export const TOOL_CATALOG: ToolMeta[] = [
     auth: 'none', rateLimit: 'Nominatim ~1 req/s geocoding',
     dataShape: 'Interactive map artifact with markers/route.', docsUrl: 'https://leafletjs.com',
     keywords: ['map', 'where is', 'directions', 'route', 'navigate', 'located', 'location of']
+  },
+  // ----------------------------------------------------------------- travel -----
+  {
+    name: 'render_boarding_pass', label: 'Boarding pass', category: 'travel', kind: 'builtin', provider: 'DreamStream (in-app)',
+    description: 'A wallet-style boarding pass card — route, gate/seat/group, status glow, QR code, and a flip side with fare class, baggage and tips.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally; QR via goqr.me)',
+    dataShape: 'Flip card: pass front + details back, status-tinted.', docsUrl: 'https://dreamstream.app',
+    keywords: ['boarding pass', 'flight', 'my flight', 'gate', 'seat', 'departure', 'check in', 'flight details', 'plane ticket']
+  },
+  {
+    name: 'render_world_clocks', label: 'World clocks', category: 'travel', kind: 'builtin', provider: 'DreamStream (in-app, Intl)',
+    description: 'Live ticking clocks for several places with day/night + sleep shading and a "good time to call home?" indicator for two zones.',
+    auth: 'none', rateLimit: 'Unlimited (ticks locally, no API)',
+    dataShape: 'Analog + digital clocks per zone, call-window hint.', docsUrl: 'https://dreamstream.app',
+    keywords: ['world clock', 'time zones', 'timezone twins', 'time at home', 'call home', 'what time is it there', 'jet lag', 'time difference clock']
+  },
+  {
+    name: 'render_packing_list', label: 'Packing list', category: 'travel', kind: 'builtin', provider: 'DreamStream (in-app, progress saved locally)',
+    description: 'An interactive packing checklist generated from the trip (weather, length, activities) — grouped items the user checks off, progress persists.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Grouped checklist + progress ring + tips.', docsUrl: 'https://dreamstream.app',
+    keywords: ['packing list', 'what to pack', 'pack for', 'suitcase', 'luggage list', 'packing checklist', 'travel checklist']
+  },
+  {
+    name: 'render_trip_countdown', label: 'Trip countdown', category: 'travel', kind: 'builtin', provider: 'DreamStream + Open-Meteo weather',
+    description: 'A live ticking countdown to departure with destination, a live destination weather strip and a prep checklist.',
+    auth: 'none', rateLimit: 'Weather fair use (Open-Meteo, keyless)',
+    dataShape: 'Countdown hero: D/H/M/S, weather strip, checklist.', docsUrl: 'https://dreamstream.app',
+    keywords: ['countdown', 'days until', 'how long until my trip', 'trip countdown', 'departure countdown', 'days to go', 'upcoming trip']
   },
   // -------------------------------------------------------------- knowledge -----
   {
@@ -576,7 +644,43 @@ export const TOOL_CATALOG: ToolMeta[] = [
     dataShape: 'Colored tile grid (treemap-style) by value.', docsUrl: 'https://dreamstream.app',
     keywords: ['heatmap', 'heat map', 'market map', 'sector map', 'treemap', 'breadth', 'gainers and losers', 'sector performance', 'movers map']
   },
+  // ----------------------------------------------------------- productivity -----
+  {
+    name: 'create_goal_tracker', label: 'Goal tracker', category: 'productivity', kind: 'builtin', provider: 'DreamStream (in-app, progress saved locally)',
+    description: 'An interactive goal tracker — target date, measurable metric, sequenced milestones the user checks off (progress persists), and next actions. The /goal skill.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Goal card: progress ring, milestone timeline, next actions.', docsUrl: 'https://dreamstream.app',
+    keywords: ['goal', 'goals', 'resolution', 'habit', 'target', 'i want to', 'track my goal', 'milestones', 'okr', 'objective', 'accountability']
+  },
+  {
+    name: 'render_whats_changed', label: 'What changed', category: 'productivity', kind: 'builtin', provider: 'DreamStream (in-app)',
+    description: 'A prioritized "what changed since you last looked" changelog — price moves, fresh news, events — composed from live tool calls the agent just made.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Changelog rows with kind icons, weights and deltas.', docsUrl: 'https://dreamstream.app',
+    keywords: ['what changed', 'whats new', "what's new", 'since yesterday', 'catch me up', 'changelog', 'updates since', 'morning brief', 'recap']
+  },
+  {
+    name: 'create_monitor', label: 'Live monitor (loop)', category: 'productivity', kind: 'builtin', provider: 'DreamStream (loops a refreshable live tool)',
+    description: 'A widget that re-runs one live-data tool on an interval (30s–1h) so it stays fresh on screen — stocks, weather, news, crypto, sentiment. The /loop skill.',
+    auth: 'none', rateLimit: 'Inherits the looped tool\'s limits',
+    dataShape: 'Self-refreshing wrapper around a live widget + cadence chip.', docsUrl: 'https://dreamstream.app',
+    keywords: ['monitor', 'watch', 'keep an eye on', 'track live', 'loop', 'every 5 minutes', 'auto refresh', 'live updates', 'poll']
+  },
   // --------------------------------------------------------------- codegen ------
+  {
+    name: 'fetch_github_pr', label: 'GitHub PR diff', category: 'dev', kind: 'api', provider: 'GitHub',
+    description: 'Fetch a real pull-request or commit diff from public GitHub (title, stats, unified diff) so code reviews are grounded in the actual changes.',
+    auth: 'optional', authEnv: 'GITHUB_TOKEN', rateLimit: '60 req/hr keyless · 5,000/hr with token',
+    dataShape: 'PR meta + unified diff text (capped).', docsUrl: 'https://docs.github.com/rest/pulls',
+    keywords: ['pull request', 'pr', 'diff', 'review this pr', 'github pr', 'merge request', 'commit diff', 'code changes']
+  },
+  {
+    name: 'render_code_review', label: 'Code review card', category: 'dev', kind: 'builtin', provider: 'DreamStream (in-app)',
+    description: 'A structured code-review verdict card — approve/request-changes, dimension scores, severity-grouped findings with file:line and suggested fixes. The /code-review skill.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Verdict badge, score meters, findings with fix snippets.', docsUrl: 'https://dreamstream.app',
+    keywords: ['code review', 'review my code', 'review this', 'critique code', 'audit code', 'find bugs', 'security review', 'lint', 'feedback on code']
+  },
   {
     name: 'run_python', label: 'Run Python (sandbox)', category: 'codegen', kind: 'builtin', provider: 'DreamStream (Pyodide sandbox)',
     description: 'Write and run Python in a sandboxed Pyodide (CPython/WASM) runtime to compute, convert/transform data, or convert/resize/modify images. Pillow, numpy and pandas are available. Reads attached files from /input/, writes results to /output/, and returns stdout plus any images/files produced.',

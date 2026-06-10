@@ -28,7 +28,26 @@ import { GenerativeUICard } from './artifacts/GenerativeUICard';
 import { DashboardCard } from './artifacts/DashboardCard';
 import { LearningPathCard } from './artifacts/LearningPathCard';
 import { ItineraryCard } from './artifacts/ItineraryCard';
-import type { DashboardArtifact, LearningPathArtifact, ItineraryArtifact } from '../../apiTypes';
+import { TickerTape } from './artifacts/TickerTape';
+import { MarketSentiment } from './artifacts/MarketSentiment';
+import { YieldCurveCard } from './artifacts/YieldCurveCard';
+import { PortfolioCard } from './artifacts/PortfolioCard';
+import { WhatsChangedCard } from './artifacts/WhatsChangedCard';
+import { BoardingPass } from './artifacts/BoardingPass';
+import { CurrencyConverter } from './artifacts/CurrencyConverter';
+import { WorldClocks } from './artifacts/WorldClocks';
+import { PackingListCard } from './artifacts/PackingListCard';
+import { TripCountdown } from './artifacts/TripCountdown';
+import { GoalTracker } from './artifacts/GoalTracker';
+import { CodeReviewCard } from './artifacts/CodeReviewCard';
+import { LiveMonitorCard } from './artifacts/LiveMonitorCard';
+import { renderArtifactNode } from './artifacts/ChatArtifacts';
+import type {
+  DashboardArtifact, LearningPathArtifact, ItineraryArtifact,
+  TickerTapeArtifact, MarketSentimentArtifact, YieldCurveArtifact, PortfolioArtifact, WhatsChangedArtifact,
+  BoardingPassArtifact, CurrencyConverterArtifact, WorldClocksArtifact, PackingListArtifact, TripCountdownArtifact,
+  GoalTrackerArtifact, CodeReviewArtifact, LiveMonitorArtifact
+} from '../../apiTypes';
 import type {
   WeatherArtifact, NewsResultsArtifact, StockQuoteArtifact,
   VideoResultsArtifact, PlacesResultsArtifact, SwarmTraceArtifact,
@@ -373,6 +392,7 @@ export type GalleryCategory =
   | 'Finance'
   | 'News & knowledge'
   | 'World & media'
+  | 'Travel & life'
   | 'Learning'
   | 'Agents & code';
 
@@ -573,6 +593,289 @@ const itineraryDemo: ItineraryArtifact = {
   palette: 'ocean'
 };
 
+// ── Widget-platform demos: finance, travel and productivity cards. ─────────────
+
+const tickerTapeDemo: TickerTapeArtifact = {
+  title: 'Markets',
+  asOf: '2026-06-10T14:30:00Z',
+  items: [
+    { symbol: '^GSPC', name: 'S&P 500', price: 6712.4, change: 38.2, changePercent: 0.57, currency: 'USD', spark: [6630, 6655, 6648, 6674, 6661, 6690, 6705, 6712] },
+    { symbol: '^IXIC', name: 'Nasdaq Composite', price: 22418.9, change: -54.1, changePercent: -0.24, currency: 'USD', spark: [22510, 22460, 22490, 22440, 22473, 22431, 22405, 22419] },
+    { symbol: 'GC=F', name: 'Gold', price: 3286.5, change: 21.7, changePercent: 0.66, currency: 'USD', spark: [3198, 3220, 3215, 3241, 3236, 3262, 3270, 3287] },
+    { symbol: 'CL=F', name: 'Crude Oil (WTI)', price: 71.84, change: -1.12, changePercent: -1.53, currency: 'USD', spark: [74.5, 74.0, 73.2, 73.6, 72.8, 72.2, 72.9, 71.8] },
+    { symbol: 'BTC-USD', name: 'Bitcoin', price: 118240, change: 2210, changePercent: 1.9, currency: 'USD', spark: [109800, 112400, 111200, 114800, 113600, 116100, 116030, 118240] },
+    { symbol: 'EURUSD=X', name: 'EUR/USD', price: 1.1042, change: 0.0018, changePercent: 0.16, currency: 'USD', spark: [1.096, 1.098, 1.101, 1.099, 1.102, 1.1, 1.103, 1.104] }
+  ]
+};
+
+const sentimentDemo: MarketSentimentArtifact = {
+  asOf: '2026-06-10T14:30:00Z',
+  gauges: [
+    {
+      market: 'stocks',
+      score: 62,
+      rating: 'greed',
+      previous: [
+        { label: '1 day ago', score: 58 },
+        { label: '1 week ago', score: 49 },
+        { label: '1 month ago', score: 41 }
+      ],
+      history: [38, 41, 39, 44, 47, 45, 49, 52, 50, 55, 58, 62],
+      components: [
+        { label: 'Market momentum', score: 71, rating: 'greed' },
+        { label: 'Price strength', score: 64, rating: 'greed' },
+        { label: 'Price breadth', score: 55, rating: 'neutral' },
+        { label: 'Put/call options', score: 60, rating: 'greed' },
+        { label: 'Volatility (VIX)', score: 48, rating: 'neutral' },
+        { label: 'Safe haven demand', score: 67, rating: 'greed' }
+      ]
+    },
+    {
+      market: 'crypto',
+      score: 54,
+      rating: 'Neutral',
+      previous: [
+        { label: '1 day ago', score: 57 },
+        { label: '1 week ago', score: 63 }
+      ],
+      history: [70, 68, 66, 61, 63, 59, 57, 60, 58, 55, 57, 54]
+    }
+  ],
+  sources: [
+    { name: 'CNN Fear & Greed', url: 'https://www.cnn.com/markets/fear-and-greed' },
+    { name: 'alternative.me', url: 'https://alternative.me/crypto/fear-and-greed-index/' }
+  ]
+};
+
+const yieldCurveDemo: YieldCurveArtifact = {
+  latest: {
+    date: '2026-06-09',
+    points: [
+      { label: '1M', years: 1 / 12, yieldPct: 4.32 },
+      { label: '3M', years: 0.25, yieldPct: 4.24 },
+      { label: '6M', years: 0.5, yieldPct: 4.1 },
+      { label: '1Y', years: 1, yieldPct: 3.96 },
+      { label: '2Y', years: 2, yieldPct: 3.84 },
+      { label: '5Y', years: 5, yieldPct: 3.92 },
+      { label: '7Y', years: 7, yieldPct: 4.04 },
+      { label: '10Y', years: 10, yieldPct: 4.19 },
+      { label: '20Y', years: 20, yieldPct: 4.52 },
+      { label: '30Y', years: 30, yieldPct: 4.61 }
+    ]
+  },
+  monthAgo: {
+    date: '2026-05-08',
+    points: [
+      { label: '1M', years: 1 / 12, yieldPct: 4.36 },
+      { label: '3M', years: 0.25, yieldPct: 4.31 },
+      { label: '6M', years: 0.5, yieldPct: 4.2 },
+      { label: '1Y', years: 1, yieldPct: 4.08 },
+      { label: '2Y', years: 2, yieldPct: 3.97 },
+      { label: '5Y', years: 5, yieldPct: 4.0 },
+      { label: '7Y', years: 7, yieldPct: 4.1 },
+      { label: '10Y', years: 10, yieldPct: 4.22 },
+      { label: '20Y', years: 20, yieldPct: 4.5 },
+      { label: '30Y', years: 30, yieldPct: 4.58 }
+    ]
+  },
+  yearAgo: {
+    date: '2025-06-09',
+    points: [
+      { label: '1M', years: 1 / 12, yieldPct: 5.12 },
+      { label: '3M', years: 0.25, yieldPct: 5.08 },
+      { label: '6M', years: 0.5, yieldPct: 4.95 },
+      { label: '1Y', years: 1, yieldPct: 4.71 },
+      { label: '2Y', years: 2, yieldPct: 4.48 },
+      { label: '5Y', years: 5, yieldPct: 4.25 },
+      { label: '7Y', years: 7, yieldPct: 4.27 },
+      { label: '10Y', years: 10, yieldPct: 4.31 },
+      { label: '20Y', years: 20, yieldPct: 4.56 },
+      { label: '30Y', years: 30, yieldPct: 4.47 }
+    ]
+  },
+  spread10y2y: 0.35,
+  inverted: false
+};
+
+const portfolioDemo: PortfolioArtifact = {
+  title: 'Growth portfolio',
+  currency: 'USD',
+  asOf: '2026-06-10T14:30:00Z',
+  positions: [
+    { symbol: 'NVDA', name: 'NVIDIA', shares: 24, costBasis: 96.5, price: 187.4, change: 4.1, changePercent: 2.24, value: 4497.6, dayPnl: 98.4, totalPnl: 2181.6, totalPnlPercent: 94.2, weightPct: 34.4, spark: [168, 172, 170, 176, 181, 178, 183, 187] },
+    { symbol: 'AAPL', name: 'Apple', shares: 18, costBasis: 182.1, price: 224.7, change: -1.2, changePercent: -0.53, value: 4044.6, dayPnl: -21.6, totalPnl: 766.8, totalPnlPercent: 23.4, weightPct: 31.0, spark: [219, 221, 224, 222, 226, 225, 226, 225] },
+    { symbol: 'VTI', name: 'Vanguard Total Market', shares: 10, costBasis: 248.0, price: 312.2, change: 1.7, changePercent: 0.55, value: 3122.0, dayPnl: 17.0, totalPnl: 642.0, totalPnlPercent: 25.9, weightPct: 23.9, spark: [302, 305, 304, 308, 306, 310, 311, 312] },
+    { symbol: 'BTC-USD', name: 'Bitcoin', shares: 0.012, costBasis: 64200, price: 118240, change: 2210, changePercent: 1.9, value: 1418.9, dayPnl: 26.5, totalPnl: 648.5, totalPnlPercent: 84.2, weightPct: 10.8, spark: [109800, 112400, 111200, 114800, 113600, 116100, 116030, 118240] }
+  ],
+  totals: { value: 13083.1, dayPnl: 120.3, dayPnlPercent: 0.93, totalPnl: 4238.9, totalPnlPercent: 47.9 }
+};
+
+const whatsChangedDemo: WhatsChangedArtifact = {
+  since: 'since yesterday',
+  summary:
+    'Chips led the session — NVDA broke out on the hyperscaler capex headlines while crude slid on the inventory build. Your earnings calendar gets busy Thursday.',
+  changes: [
+    { kind: 'price', title: 'NVDA +4.2% — broke above its May high', detail: 'Volume 1.8× the 30-day average.', deltaPercent: 4.2, weight: 3 },
+    { kind: 'news', title: 'Hyperscalers guide AI capex up again', detail: 'Three outlets corroborate; bullish for accelerators.', weight: 3, url: 'https://news.google.com' },
+    { kind: 'price', title: 'Crude oil −1.5% on a surprise inventory build', deltaPercent: -1.5, weight: 2 },
+    { kind: 'event', title: 'AVGO earnings Thursday — implied move ±6%', weight: 2 },
+    { kind: 'metric', title: '10Y−2Y spread steepened to +0.35 pp', detail: 'Third straight week of steepening.', delta: 0.04, weight: 1 }
+  ]
+};
+
+const boardingPassDemo: BoardingPassArtifact = {
+  airline: 'United',
+  flightNumber: 'UA 2402',
+  from: { code: 'SFO', city: 'San Francisco', time: '09:15', date: 'Jul 10', terminal: 'I' },
+  to: { code: 'HND', city: 'Tokyo Haneda', time: '13:05 +1', date: 'Jul 11' },
+  gate: 'G92',
+  seat: '21A',
+  boardingGroup: '2',
+  boardingTime: '08:35',
+  passenger: 'A. Traveler',
+  status: 'on-time',
+  confirmation: 'K8X2QF',
+  fareClass: 'Economy Plus (W)',
+  baggage: '1 checked · 1 carry-on',
+  durationMin: 665,
+  aircraft: 'Boeing 787-9',
+  notes: ['Gate G92 is a 12-min walk from security — leave the lounge by 08:15', 'Mt. Fuji is on the LEFT side on this route'],
+  accent: '#1414D2'
+};
+
+const currencyDemo: CurrencyConverterArtifact = {
+  from: 'USD',
+  to: 'JPY',
+  rate: 146.82,
+  amount: 500,
+  converted: 73410,
+  date: '2026-06-09',
+  series: [
+    { date: '2026-05-11', rate: 143.1 }, { date: '2026-05-13', rate: 143.8 }, { date: '2026-05-15', rate: 144.4 },
+    { date: '2026-05-18', rate: 143.9 }, { date: '2026-05-20', rate: 144.8 }, { date: '2026-05-22', rate: 145.3 },
+    { date: '2026-05-25', rate: 144.9 }, { date: '2026-05-27', rate: 145.6 }, { date: '2026-05-29', rate: 146.1 },
+    { date: '2026-06-02', rate: 145.8 }, { date: '2026-06-04', rate: 146.4 }, { date: '2026-06-09', rate: 146.82 }
+  ],
+  avg30d: 145.2,
+  vsAvgPct: 1.12
+};
+
+const worldClocksDemo: WorldClocksArtifact = {
+  title: 'Home ↔ destination',
+  zones: [
+    { label: 'Home — San Francisco', tz: 'America/Los_Angeles' },
+    { label: 'Tokyo', tz: 'Asia/Tokyo' }
+  ]
+};
+
+const packingDemo: PackingListArtifact = {
+  id: 'demo-packing-tokyo',
+  title: 'Packing — 7 days in Japan',
+  destination: 'Tokyo & Kyoto',
+  context: '7 days · highs 29°C · rainy-season showers',
+  groups: [
+    { name: 'Clothing', items: ['Light rain shell', '5× breathable tees', 'Comfortable walking shoes', 'One smart-casual outfit'] },
+    { name: 'Documents', items: ['Passport', 'Rail pass voucher', 'Travel insurance PDF'] },
+    { name: 'Tech', items: ['Type-A plug adapter', 'Power bank', 'eSIM activated'] },
+    { name: 'Extras', items: ['Compact umbrella', 'Coin purse (cash country!)', 'Hand towel'] }
+  ],
+  tips: ['Laundry machines are common in hotels — pack for 5 days, not 7', 'Konbini sell umbrellas everywhere if you forget one']
+};
+
+const tripCountdownDemo: TripCountdownArtifact = {
+  destination: 'Kyoto, Japan',
+  startDate: '2026-07-10T09:15:00',
+  endDate: '2026-07-17',
+  title: 'Summer trip',
+  weather: {
+    description: 'Partly cloudy',
+    tempC: 28,
+    daily: [
+      { date: '2026-06-10', minC: 22, maxC: 29, description: 'Partly cloudy', precipProb: 20 },
+      { date: '2026-06-11', minC: 23, maxC: 30, description: 'Humid, shower risk', precipProb: 55 },
+      { date: '2026-06-12', minC: 22, maxC: 28, description: 'Light rain', precipProb: 70 },
+      { date: '2026-06-13', minC: 21, maxC: 27, description: 'Clearing', precipProb: 30 },
+      { date: '2026-06-14', minC: 22, maxC: 29, description: 'Sunny', precipProb: 10 }
+    ]
+  },
+  checklist: [
+    { text: 'Book Shinkansen seats', done: true },
+    { text: 'Reserve Fushimi Inari sunrise slot', done: false },
+    { text: 'Finish packing list', done: false }
+  ],
+  accent: '#0ea5e9'
+};
+
+const goalDemo: GoalTrackerArtifact = {
+  id: 'demo-goal-10k',
+  title: 'Run a 10k under 60 minutes',
+  why: 'Energy, sleep, and a finish line on the calendar.',
+  targetDate: '2026-10-04',
+  cadence: '3 runs / week',
+  metric: { label: 'Longest run', start: 3, target: 10, unit: 'km' },
+  milestones: [
+    { id: 'm1', title: 'Run 3 km without stopping', due: '2026-06-21' },
+    { id: 'm2', title: 'Complete week 4 of the plan (4×/wk)', due: '2026-07-12' },
+    { id: 'm3', title: 'Run 6 km at conversational pace', due: '2026-08-02', notes: 'If knees complain, swap one run for cycling.' },
+    { id: 'm4', title: 'Run 8 km — long-run Sunday', due: '2026-08-30' },
+    { id: 'm5', title: '10k race day 🏁', due: '2026-10-04' }
+  ],
+  nextActions: ['Schedule the three runs in your calendar tonight', 'Register for the October 4 race (early-bird closes June 20)']
+};
+
+const codeReviewDemo: CodeReviewArtifact = {
+  title: 'Review: add retry logic to the fetcher',
+  target: 'https://github.com/acme/fetcher/pull/482',
+  verdict: 'request-changes',
+  summary:
+    'The retry wrapper is well structured and the tests cover the happy path, but the backoff loop can hammer the upstream on non-retryable errors and a secret leaks into the debug log.',
+  scores: [
+    { label: 'Correctness', score: 6 },
+    { label: 'Security', score: 4 },
+    { label: 'Readability', score: 8 },
+    { label: 'Tests', score: 7 }
+  ],
+  stats: { files: 4, additions: 186, deletions: 42 },
+  findings: [
+    {
+      severity: 'critical',
+      title: 'API token logged on retry failure',
+      detail: 'The full request config — including the Authorization header — is serialized into the warn log.',
+      file: 'src/retry.ts',
+      line: 58,
+      suggestion: "log.warn('retry failed', { url: cfg.url, attempt }); // never log cfg.headers",
+      category: 'security'
+    },
+    {
+      severity: 'major',
+      title: 'Retries fire on 4xx responses',
+      detail: 'Only 408/429/5xx are worth retrying; a 401 will loop five times and mask the real error.',
+      file: 'src/retry.ts',
+      line: 31,
+      suggestion: 'const RETRYABLE = new Set([408, 429, 500, 502, 503, 504]);\nif (!RETRYABLE.has(res.status)) throw new HttpError(res);',
+      category: 'correctness'
+    },
+    {
+      severity: 'minor',
+      title: 'Backoff jitter is deterministic in tests but unseeded in prod',
+      file: 'src/backoff.ts',
+      line: 12,
+      category: 'correctness'
+    },
+    { severity: 'nit', title: 'Prefer `const` for `attempt` accumulator via reduce', file: 'src/retry.ts', line: 44, category: 'style' }
+  ],
+  positives: ['Clean separation of backoff policy from the fetch wrapper', 'Table-driven tests make the retry matrix easy to extend']
+};
+
+const liveMonitorDemo: LiveMonitorArtifact = {
+  label: 'AAPL · every 5 min',
+  tool: 'get_stock',
+  args: { symbol: 'AAPL' },
+  intervalSec: 300,
+  asOf: '2026-06-10T14:30:00Z',
+  artifact: { type: 'stock_quote', data: stock, origin: { tool: 'get_stock', args: { symbol: 'AAPL' } } }
+};
+
 export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Guided learning path (modules · tracked progress · practice prompts)', type: 'learning_path', category: 'Learning', node: <LearningPathCard data={learningPathDemo} /> },
   { title: 'Travel itinerary (day tabs · map · budget · live weather)', type: 'itinerary', category: 'World & media', node: <ItineraryCard data={itineraryDemo} /> },
@@ -602,7 +905,20 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Code playground (run real JS · console + errors)', type: 'code_exercise', category: 'Learning', node: <CodePlayground data={codeExerciseDemo} /> },
   { title: 'Code playground — Python (Pyodide · real tracebacks)', type: 'code_exercise', category: 'Learning', node: <CodePlayground data={pythonExerciseDemo} /> },
   { title: 'Resource bundle (per-file download + all as .zip)', type: 'resource_bundle', category: 'News & knowledge', node: <ResourceBundle data={resourceBundleDemo} /> },
-  { title: 'Markdown table (inline)', category: 'Data & charts', node: <ChatMarkdown text={tableMd} /> }
+  { title: 'Markdown table (inline)', category: 'Data & charts', node: <ChatMarkdown text={tableMd} /> },
+  { title: 'Ticker tape (live scrolling market strip · pause on hover)', type: 'ticker_tape', category: 'Finance', node: <TickerTape data={tickerTapeDemo} /> },
+  { title: 'Fear & Greed (live sentiment gauges · components · history)', type: 'market_sentiment', category: 'Finance', node: <MarketSentiment data={sentimentDemo} /> },
+  { title: 'Yield curve (morphs today ↔ 1M ↔ 1Y ago · inversion flag)', type: 'yield_curve', category: 'Finance', node: <YieldCurveCard data={yieldCurveDemo} /> },
+  { title: 'Portfolio (live-priced · allocation donut · P&L)', type: 'portfolio', category: 'Finance', node: <PortfolioCard data={portfolioDemo} /> },
+  { title: 'What changed (agent changelog · weighted · deltas)', type: 'whats_changed', category: 'News & knowledge', node: <WhatsChangedCard data={whatsChangedDemo} /> },
+  { title: 'Boarding pass (flip card · status glow · QR)', type: 'boarding_pass', category: 'Travel & life', node: <BoardingPass data={boardingPassDemo} /> },
+  { title: 'Currency converter (live ECB rate · 30-day verdict)', type: 'currency_converter', category: 'Travel & life', node: <CurrencyConverter data={currencyDemo} /> },
+  { title: 'World clocks (ticking · sleep shading · call window)', type: 'world_clocks', category: 'Travel & life', node: <WorldClocks data={worldClocksDemo} /> },
+  { title: 'Packing list (check-off · saved progress · tips)', type: 'packing_list', category: 'Travel & life', node: <PackingListCard data={packingDemo} /> },
+  { title: 'Trip countdown (live D/H/M/S · weather strip · prep list)', type: 'trip_countdown', category: 'Travel & life', node: <TripCountdown data={tripCountdownDemo} /> },
+  { title: 'Goal tracker (/goal · milestones · saved progress)', type: 'goal_tracker', category: 'Travel & life', node: <GoalTracker data={goalDemo} /> },
+  { title: 'Code review (/code-review · verdict · findings · fixes)', type: 'code_review', category: 'Agents & code', node: <CodeReviewCard data={codeReviewDemo} /> },
+  { title: 'Live monitor (/loop · auto-refreshing wrapped widget)', type: 'live_monitor', category: 'Agents & code', node: <LiveMonitorCard data={liveMonitorDemo} renderEmbedded={renderArtifactNode} /> }
 ];
 
 /** Artifact types that have a live demo in the gallery (used by the coverage test). */
@@ -613,6 +929,7 @@ const CATEGORY_ORDER: GalleryCategory[] = [
   'Finance',
   'News & knowledge',
   'World & media',
+  'Travel & life',
   'Learning',
   'Agents & code'
 ];

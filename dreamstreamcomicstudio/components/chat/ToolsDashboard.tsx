@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Search, Newspaper, CloudSun, LineChart, MapPin, BookOpen, Type, Globe, Rocket,
   UtensilsCrossed, Gamepad2, Code2, Network, Wrench, Server, ExternalLink, Activity,
-  KeyRound, Unlock, Zap, RotateCcw, Boxes, CheckCircle2, Plug
+  KeyRound, Unlock, Zap, RotateCcw, Boxes, CheckCircle2, Plug, Plane, Target
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import {
@@ -52,7 +52,7 @@ const MCP_CATEGORY_LABELS: Record<McpMarketCategory, string> = {
 
 const CAT_ICONS: Record<string, LucideIcon> = {
   Search, Newspaper, CloudSun, LineChart, MapPin, BookOpen, Type, Globe, Rocket,
-  UtensilsCrossed, Gamepad2, Code2, Network
+  UtensilsCrossed, Gamepad2, Code2, Network, Plane, Target
 };
 
 // --- small presentational helpers ----------------------------------------------

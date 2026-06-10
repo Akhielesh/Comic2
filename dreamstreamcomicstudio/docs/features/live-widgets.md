@@ -32,14 +32,26 @@ on old conversations, not just the live turn.
 
 Only tools whose artifacts are **pure live-data snapshots** — keyless, side-effect-free,
 safe to re-run on demand — may be refreshed. The list is declared once in
-`apiTypes.ts:828-837` and shared by client and server:
+`apiTypes.ts` (search `REFRESHABLE_TOOLS`) and shared by client and server:
 
 ```ts
 export const REFRESHABLE_TOOLS = [
   'get_weather', 'get_news', 'get_stock', 'find_places',
-  'get_crypto_price', 'get_forex_pair', 'show_map', 'video_search'
+  'crypto_price', 'exchange_rate', 'show_map', 'video_search',
+  // live widget-platform tools
+  'get_ticker_tape', 'get_market_sentiment', 'get_yield_curve',
+  'build_portfolio', 'convert_currency'
 ] as const;
 ```
+
+(Historical note: the list once said `get_crypto_price` / `get_forex_pair`, which never
+matched the real tool names `crypto_price` / `exchange_rate` — crypto cards silently had
+no refresh button. Fixed when the widget-platform tools landed.)
+
+The `create_monitor` tool (`/loop` skill) builds on this allowlist: it wraps ONE
+refreshable call into a `live_monitor` artifact, and the card re-runs the call through
+this same endpoint on an interval (30s–1h, clamped server-side) while it's on screen —
+see `components/chat/artifacts/LiveMonitorCard.tsx`.
 
 It is enforced server-side (the endpoint 400s for anything else) and mirrored
 client-side to decide when to show the refresh button

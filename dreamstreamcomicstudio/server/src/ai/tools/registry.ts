@@ -28,6 +28,10 @@ import { FINANCE_TERMINAL_TOOLS } from './financeTerminal.js';
 import { NANGO_TOOLS } from './nango.js';
 import { VIDEO_TOOLS } from './videoRender.js';
 import { LIVE_TEMPLATE_TOOLS } from './liveTemplateTool.js';
+import { MARKET_WIDGET_TOOLS } from './marketWidgets.js';
+import { TRAVEL_WIDGET_TOOLS } from './travelWidgets.js';
+import { PRODUCTIVITY_TOOLS } from './productivity.js';
+import { REFRESHABLE_TOOLS } from '../../../../apiTypes.js';
 import { generateAppTool } from './codeStudio.js';
 import { generativeUiTool } from './generativeUi.js';
 import { convertDataTool } from './convertData.js';
@@ -842,12 +846,83 @@ const bundleTool: ChatTool = {
   }
 };
 
+// Turn one refresh-whitelisted tool call into a LIVE MONITOR: the widget re-runs
+// the call on an interval client-side (via /api/chat/tool-refresh), so the embedded
+// card stays fresh without any model round-trip. This is the /loop skill's engine.
+// Defined here (not in a tool pack) because it resolves other tools at execute time.
+const MIN_MONITOR_SEC = 30;
+const MAX_MONITOR_SEC = 3600;
+export const clampMonitorInterval = (v: unknown): number => {
+  const n = typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : 300;
+  return Math.max(MIN_MONITOR_SEC, Math.min(MAX_MONITOR_SEC, n));
+};
+
+const monitorTool: ChatTool = {
+  name: 'create_monitor',
+  description:
+    'Create a LIVE MONITOR — a widget that re-runs one live-data tool on an interval so it stays fresh on screen (a loop, no model round-trip). Use when the user wants to watch/track/monitor something continuously ("keep an eye on NVDA", "watch the weather", "refresh BTC every minute"). `tool` must be one of the refreshable live-data tools: ' +
+    REFRESHABLE_TOOLS.join(', ') +
+    '. Pass the exact args that tool expects (e.g. get_stock → {"symbol":"NVDA"}, get_weather → {"location":"Tokyo"}, get_news → {"query":"AI chips"}, crypto_price → {"coin":"bitcoin"}). intervalSec is clamped to 30–3600 (default 300).',
+  parameters: {
+    type: 'object',
+    properties: {
+      tool: { type: 'string', enum: [...REFRESHABLE_TOOLS], description: 'The refreshable live-data tool to loop.' },
+      args: { type: 'object', description: 'Arguments for that tool, exactly as it expects them.' },
+      intervalSec: { type: 'number', description: 'Refresh cadence in seconds (30–3600, default 300).' },
+      label: { type: 'string', description: 'Short monitor label, e.g. "NVDA · every 5 min".' }
+    },
+    required: ['tool']
+  },
+  execute: async (args, signal) => {
+    const tool = String(args?.tool || '').trim();
+    if (!(REFRESHABLE_TOOLS as readonly string[]).includes(tool)) {
+      return {
+        content: `"${tool}" is not a refreshable live-data tool. Pick one of: ${REFRESHABLE_TOOLS.join(', ')} and pass its args.`
+      };
+    }
+    const toolArgs =
+      args?.args && typeof args.args === 'object' && !Array.isArray(args.args) ? (args.args as Record<string, unknown>) : {};
+    const intervalSec = clampMonitorInterval(args?.intervalSec);
+    const impl = resolveTools([tool])[0];
+    if (!impl) return { content: `Tool "${tool}" is unavailable right now.` };
+    // Take the initial snapshot so the monitor renders with real data immediately.
+    const out = await impl.execute(toolArgs, signal);
+    const inner = out.artifacts?.[0];
+    if (!inner) {
+      return {
+        content: `Could not start the monitor: ${tool} returned no widget (${out.content.slice(0, 200)}). Fix the args and try again.`,
+        notice: { level: 'warn' as const, message: `Monitor setup failed — ${tool} produced no artifact for those args.` }
+      };
+    }
+    const label = typeof args?.label === 'string' && args.label.trim() ? args.label.trim().slice(0, 80) : undefined;
+    const data = {
+      label,
+      tool,
+      args: toolArgs,
+      intervalSec,
+      artifact: { ...inner, origin: { tool, args: toolArgs } },
+      asOf: new Date().toISOString()
+    };
+    const mins = intervalSec % 60 === 0 ? `${intervalSec / 60} min` : `${intervalSec}s`;
+    return {
+      content: `Live monitor started: ${tool}(${JSON.stringify(toolArgs)}) refreshing every ${mins}. The widget updates itself while on screen — tell the user the cadence in one short line.`,
+      artifacts: [{ type: 'live_monitor', data }]
+    };
+  }
+};
+
 // Flatten the free-API tool packs into a name→tool map. These are all context-free
 // (they take explicit args), so they live alongside the original built-ins.
 const FREE_API_TOOLS: ChatTool[] = [
   ...KNOWLEDGE_TOOLS,
   ...FINANCE2_TOOLS,
   ...FINANCE_TERMINAL_TOOLS,
+  // Live finance widgets (ticker tape, sentiment, yield curve, portfolio, FX card).
+  ...MARKET_WIDGET_TOOLS,
+  // Travel widgets (boarding pass, world clocks, packing list, trip countdown).
+  ...TRAVEL_WIDGET_TOOLS,
+  // Productivity widgets (/goal, /code-review, what-changed) + GitHub PR fetcher.
+  ...PRODUCTIVITY_TOOLS,
   ...GEO_TOOLS,
   ...SPACE_TOOLS,
   ...CULTURE_TOOLS,
@@ -886,6 +961,7 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   code_exercise: codeExerciseTool,
   create_learning_path: learningPathTool,
   plan_trip: planTripTool,
+  create_monitor: monitorTool,
   generate_app: generateAppTool,
   ...Object.fromEntries(FREE_API_TOOLS.map((t) => [t.name, t]))
 };

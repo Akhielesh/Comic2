@@ -2,7 +2,7 @@ import React, { useCallback, useState } from 'react';
 import { REFRESHABLE_TOOLS } from '../../../apiTypes';
 import { LiveDataContext } from './kit';
 import type { ChatArtifact, WeatherArtifact, VideoResultsArtifact, MapArtifact, NewsResultsArtifact, StockQuoteArtifact, SwarmTraceArtifact, PlacesResultsArtifact, ChartArtifact, MetricBoardArtifact, DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact, RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact, CodeExerciseArtifact, GenerativeUIArtifact, LearningPathArtifact, ItineraryArtifact } from '../../../apiTypes';
-import type { DashboardArtifact } from '../../../apiTypes';
+import type { DashboardArtifact, TickerTapeArtifact, MarketSentimentArtifact, YieldCurveArtifact, PortfolioArtifact, WhatsChangedArtifact, BoardingPassArtifact, CurrencyConverterArtifact, WorldClocksArtifact, PackingListArtifact, TripCountdownArtifact, GoalTrackerArtifact, CodeReviewArtifact, LiveMonitorArtifact } from '../../../apiTypes';
 import { ArtifactBoundary } from './ArtifactBoundary';
 import { WidgetFrame } from './WidgetFrame';
 import { WeatherStation } from './WeatherStation';
@@ -31,6 +31,19 @@ import { GenerativeUICard } from './GenerativeUICard';
 import { DashboardCard } from './DashboardCard';
 import { LearningPathCard } from './LearningPathCard';
 import { ItineraryCard } from './ItineraryCard';
+import { TickerTape } from './TickerTape';
+import { MarketSentiment } from './MarketSentiment';
+import { YieldCurveCard } from './YieldCurveCard';
+import { PortfolioCard } from './PortfolioCard';
+import { WhatsChangedCard } from './WhatsChangedCard';
+import { BoardingPass } from './BoardingPass';
+import { CurrencyConverter } from './CurrencyConverter';
+import { WorldClocks } from './WorldClocks';
+import { PackingListCard } from './PackingListCard';
+import { TripCountdown } from './TripCountdown';
+import { GoalTracker } from './GoalTracker';
+import { CodeReviewCard } from './CodeReviewCard';
+import { LiveMonitorCard } from './LiveMonitorCard';
 
 // Renderer registry for typed rich-output artifacts. Adding a new rich component is
 // a single entry here — the chat loop and storage never change.
@@ -65,8 +78,27 @@ const ARTIFACT_RENDERERS: Record<string, (data: unknown, key: number) => React.R
   generative_ui: (d, k) => <GenerativeUICard key={k} data={d as GenerativeUIArtifact} />,
   dashboard: (d, k) => <DashboardCard key={k} data={d as DashboardArtifact} />,
   learning_path: (d, k) => <LearningPathCard key={k} data={d as LearningPathArtifact} />,
-  itinerary: (d, k) => <ItineraryCard key={k} data={d as ItineraryArtifact} />
+  itinerary: (d, k) => <ItineraryCard key={k} data={d as ItineraryArtifact} />,
+  ticker_tape: (d, k) => <TickerTape key={k} data={d as TickerTapeArtifact} />,
+  market_sentiment: (d, k) => <MarketSentiment key={k} data={d as MarketSentimentArtifact} />,
+  yield_curve: (d, k) => <YieldCurveCard key={k} data={d as YieldCurveArtifact} />,
+  portfolio: (d, k) => <PortfolioCard key={k} data={d as PortfolioArtifact} />,
+  whats_changed: (d, k) => <WhatsChangedCard key={k} data={d as WhatsChangedArtifact} />,
+  boarding_pass: (d, k) => <BoardingPass key={k} data={d as BoardingPassArtifact} />,
+  currency_converter: (d, k) => <CurrencyConverter key={k} data={d as CurrencyConverterArtifact} />,
+  world_clocks: (d, k) => <WorldClocks key={k} data={d as WorldClocksArtifact} />,
+  packing_list: (d, k) => <PackingListCard key={k} data={d as PackingListArtifact} />,
+  trip_countdown: (d, k) => <TripCountdown key={k} data={d as TripCountdownArtifact} />,
+  goal_tracker: (d, k) => <GoalTracker key={k} data={d as GoalTrackerArtifact} />,
+  code_review: (d, k) => <CodeReviewCard key={k} data={d as CodeReviewArtifact} />,
+  live_monitor: (d, k) => <LiveMonitorCard key={k} data={d as LiveMonitorArtifact} renderEmbedded={renderArtifactNode} />
 };
+
+/** Render an artifact's bare card via the registry (no frame/boundary). Used by the
+ * live monitor to draw its embedded widget and by the gallery — exported here so
+ * both share one lookup without creating an import cycle. */
+export const renderArtifactNode = (artifact: ChatArtifact): React.ReactNode =>
+  ARTIFACT_RENDERERS[artifact.type]?.(artifact.data, 0) ?? null;
 
 /** Every artifact type the renderer can display. Cross-checked against the gallery. */
 export const ARTIFACT_TYPES: string[] = Object.keys(ARTIFACT_RENDERERS);
@@ -91,7 +123,20 @@ export const DENSITY_AWARE_TYPES = new Set([
   'document',
   'map',
   'learning_path',
-  'itinerary'
+  'itinerary',
+  'ticker_tape',
+  'market_sentiment',
+  'yield_curve',
+  'portfolio',
+  'whats_changed',
+  'boarding_pass',
+  'currency_converter',
+  'world_clocks',
+  'packing_list',
+  'trip_countdown',
+  'goal_tracker',
+  'code_review',
+  'live_monitor'
 ]);
 
 // Holds the freshest version of a single artifact. When the server stamped an
@@ -158,7 +203,7 @@ const renderArtifact = (artifact: ChatArtifact, key: number): React.ReactNode =>
 // charts, KPI boards, news) pack two-up so the model can aggregate several data
 // sources side by side — e.g. "compare gold, oil and the S&P" → three quote cards
 // laid out in a grid instead of a tall stack.
-const FULL_WIDTH = new Set(['weather', 'map', 'places_results', 'video_results', 'swarm_trace', 'code_studio', 'recipe_card', 'recipe_run', 'research_report', 'quiz', 'document', 'flashcards', 'sql_exercise', 'resource_bundle', 'code_exercise', 'generative_ui', 'dashboard', 'learning_path', 'itinerary']);
+const FULL_WIDTH = new Set(['weather', 'map', 'places_results', 'video_results', 'swarm_trace', 'code_studio', 'recipe_card', 'recipe_run', 'research_report', 'quiz', 'document', 'flashcards', 'sql_exercise', 'resource_bundle', 'code_exercise', 'generative_ui', 'dashboard', 'learning_path', 'itinerary', 'ticker_tape', 'portfolio', 'goal_tracker', 'code_review', 'live_monitor']);
 
 export const ChatArtifacts: React.FC<{ artifacts?: ChatArtifact[] }> = ({ artifacts }) => {
   if (!artifacts || artifacts.length === 0) return null;
