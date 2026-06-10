@@ -95,7 +95,7 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({ code, lang }) => {
           title="code preview"
           sandbox="allow-scripts"
           srcDoc={previewDoc}
-          className="w-full h-72 bg-white border-0"
+          className="w-full h-72 bg-[var(--ds-raised)] border-0"
         />
       ) : view === 'run' && runnable ? (
         <Suspense fallback={<div className="flex items-center justify-center h-72 bg-zinc-900 text-zinc-300"><Loader2 className="w-6 h-6 animate-spin" /></div>}>

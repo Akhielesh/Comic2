@@ -37,7 +37,7 @@ export const CodeStudioCard: React.FC<{ data: CodeStudioArtifact }> = ({ data })
       accent="#84cc16"
       header={
         <div className="flex items-start gap-2">
-          <span className="mt-0.5 shrink-0 rounded-lg bg-black/[0.04] p-1.5 text-lime-700">
+          <span className="mt-0.5 shrink-0 rounded-lg bg-[var(--ds-well-strong)] p-1.5 text-lime-700">
             <Code2 className="w-4 h-4" />
           </span>
           <SurfaceTitle>{data.title}</SurfaceTitle>
@@ -47,7 +47,7 @@ export const CodeStudioCard: React.FC<{ data: CodeStudioArtifact }> = ({ data })
     >
       <div className="px-3 pb-3">
         {data.description && (
-          <p className="text-[12px] text-[#6e6a60] mb-2.5">{data.description}</p>
+          <p className="text-[12px] text-[var(--ds-muted)] mb-2.5">{data.description}</p>
         )}
 
         {/* File list */}
@@ -55,14 +55,14 @@ export const CodeStudioCard: React.FC<{ data: CodeStudioArtifact }> = ({ data })
           {data.files.slice(0, 6).map((f) => (
             <span
               key={f.path}
-              className="flex items-center gap-1 text-[10px] font-mono text-[#1a1915] bg-black/[0.03] border border-black/10 rounded-md px-1.5 py-0.5"
+              className="flex items-center gap-1 text-[10px] font-mono text-[var(--ds-ink)] bg-[var(--ds-well)] border border-[var(--ds-hairline)] rounded-md px-1.5 py-0.5"
             >
-              <FileCode className="w-2.5 h-2.5 text-[#6e6a60]" />
+              <FileCode className="w-2.5 h-2.5 text-[var(--ds-muted)]" />
               {f.path.split('/').filter(Boolean).pop() || f.path}
             </span>
           ))}
           {data.files.length > 6 && (
-            <span className="flex items-center gap-1 text-[10px] font-semibold bg-black/[0.03] border border-black/10 rounded-md px-1.5 py-0.5 text-[#6e6a60]">
+            <span className="flex items-center gap-1 text-[10px] font-semibold bg-[var(--ds-well)] border border-[var(--ds-hairline)] rounded-md px-1.5 py-0.5 text-[var(--ds-muted)]">
               <Layers className="w-2.5 h-2.5" />
               +{data.files.length - 6} more
             </span>
@@ -74,7 +74,7 @@ export const CodeStudioCard: React.FC<{ data: CodeStudioArtifact }> = ({ data })
           <button
             onClick={() => openInStudio(data)}
             title="Open this app in the Code Studio workspace"
-            className="group flex items-center gap-2 text-sm font-semibold rounded-lg pl-3.5 pr-3 py-1.5 bg-[#D97757] text-white transition-colors duration-200 hover:bg-[#c2643f]"
+            className="group flex items-center gap-2 text-sm font-semibold rounded-lg pl-3.5 pr-3 py-1.5 bg-[var(--ds-accent)] text-white transition-colors duration-200 hover:bg-[var(--ds-accent-hover)]"
           >
             <Sparkles className="w-3.5 h-3.5 transition-transform duration-300 group-hover:rotate-12 group-hover:scale-110" />
             Open in Code Studio
@@ -83,7 +83,7 @@ export const CodeStudioCard: React.FC<{ data: CodeStudioArtifact }> = ({ data })
           <button
             onClick={() => void downloadArtifactZip(data)}
             title="Download all files as a .zip"
-            className="flex items-center gap-1.5 text-xs font-semibold rounded-lg border border-black/10 bg-white/70 px-3 py-1.5 text-[#1a1915] transition-colors duration-200 hover:bg-black/5"
+            className="flex items-center gap-1.5 text-xs font-semibold rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 py-1.5 text-[var(--ds-ink)] transition-colors duration-200 hover:bg-[var(--ds-hover)]"
           >
             <Download className="w-3 h-3" />
             .zip

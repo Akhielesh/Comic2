@@ -22,7 +22,7 @@ import {
 const SpeedBadge: React.FC<{ speed?: ModelSpeed }> = ({ speed }) => {
   if (!speed) return null;
   const tier = speedTier(speed.p50Ms);
-  const cls = tier === 'fast' ? 'bg-green-50 text-green-700' : tier === 'ok' ? 'bg-black/5 text-[#6e6a60]' : 'bg-red-50 text-red-600';
+  const cls = tier === 'fast' ? 'bg-green-50 text-green-700' : tier === 'ok' ? 'bg-black/5 text-[var(--ds-muted)]' : 'bg-red-50 text-red-600';
   const Icon = tier === 'slow' ? Gauge : Zap;
   return (
     <span
@@ -86,7 +86,7 @@ const CapabilityChips: React.FC<{ model: CatalogModel; speed?: ModelSpeed }> = (
         <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-sky-50 text-sky-700 flex items-center gap-0.5`}><Globe className="w-2.5 h-2.5" /> Web</span>
       )}
       {typeof model.contextLength === 'number' && model.contextLength > 0 && (
-        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-black/5 text-[#6e6a60]`}>{Math.round(model.contextLength / 1000)}K ctx</span>
+        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-black/5 text-[var(--ds-muted)]`}>{Math.round(model.contextLength / 1000)}K ctx</span>
       )}
     </div>
   );
@@ -144,14 +144,14 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
           className={`${GLASS_STRONG} ${HAIRLINE} ${SHADOW_SOFT} rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col`}
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="flex items-center justify-between px-5 py-3 border-b border-black/10 rounded-t-2xl">
+          <div className="flex items-center justify-between px-5 py-3 border-b border-[var(--ds-hairline)] rounded-t-2xl">
             <h2 className={`${HEADING} text-xl flex items-center gap-2`}><Sparkles className={`w-5 h-5 ${ACCENT_TEXT}`} /> Choose a model</h2>
             <button onClick={onClose} className={`${CONTROL_BTN} p-1`}><X className="w-4 h-4" /></button>
           </div>
 
-          <div className="p-4 border-b border-black/10 space-y-3">
-            <div className={`flex items-center gap-2 ${HAIRLINE} rounded-xl px-3 py-2 bg-white/70`}>
-              <Search className="w-4 h-4 text-[#6e6a60]" />
+          <div className="p-4 border-b border-[var(--ds-hairline)] space-y-3">
+            <div className={`flex items-center gap-2 ${HAIRLINE} rounded-xl px-3 py-2 bg-[var(--ds-surface-soft)]`}>
+              <Search className="w-4 h-4 text-[var(--ds-muted)]" />
               <input
                 autoFocus
                 value={query}
@@ -165,7 +165,7 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
                 <button
                   key={f.key}
                   onClick={() => setFacet(f.key)}
-                  className={`text-[11px] font-semibold px-2.5 py-1 rounded-full ${TRANSITION} ${facet === f.key ? `${ACCENT_BG} ${ACCENT_BG_HOVER} text-white border border-transparent` : `${HAIRLINE} bg-white/70 ${MUTED} hover:bg-black/5`}`}
+                  className={`text-[11px] font-semibold px-2.5 py-1 rounded-full ${TRANSITION} ${facet === f.key ? `${ACCENT_BG} ${ACCENT_BG_HOVER} text-white border border-transparent` : `${HAIRLINE} bg-[var(--ds-surface-soft)] ${MUTED} hover:bg-[var(--ds-hover)]`}`}
                 >
                   {f.label}
                 </button>
@@ -184,7 +184,7 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
           )}
 
           {/* Auto mode */}
-          <div className={`mx-4 mt-3 ${HAIRLINE} rounded-2xl p-3 ${autoMode ? ACCENT_SOFT_BG : 'bg-white/60'}`}>
+          <div className={`mx-4 mt-3 ${HAIRLINE} rounded-2xl p-3 ${autoMode ? ACCENT_SOFT_BG : 'bg-[var(--ds-surface-soft)]'}`}>
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 min-w-0">
                 <Wand2 className={`w-4 h-4 shrink-0 ${ACCENT_TEXT}`} />
@@ -195,7 +195,7 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
               </div>
             </div>
             <div className="flex items-center gap-1.5 mt-2">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">Lock source:</span>
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Lock source:</span>
               {([
                 { key: null, label: 'Any' },
                 { key: 'openrouter', label: 'OpenRouter' },
@@ -206,7 +206,7 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
                   <button
                     key={String(opt.key)}
                     onClick={() => onSelectAuto(opt.key)}
-                    className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${TRANSITION} ${active ? `${ACCENT_BG} ${ACCENT_BG_HOVER} text-white border border-transparent` : `${HAIRLINE} bg-white/70 ${MUTED} hover:bg-black/5`}`}
+                    className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${TRANSITION} ${active ? `${ACCENT_BG} ${ACCENT_BG_HOVER} text-white border border-transparent` : `${HAIRLINE} bg-[var(--ds-surface-soft)] ${MUTED} hover:bg-[var(--ds-hover)]`}`}
                   >
                     {opt.label}
                   </button>
@@ -240,13 +240,13 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
                               ? `${HAIRLINE} bg-black/5 opacity-60 cursor-not-allowed`
                               : isSelected
                                 ? `border border-[#D97757]/40 ${ACCENT_SOFT_BG} ${SHADOW_SOFT}`
-                                : `${HAIRLINE} bg-white/70 ${SHADOW_SOFT} hover:bg-white ${HOVER_LIFT}`
+                                : `${HAIRLINE} bg-[var(--ds-surface-soft)] ${SHADOW_SOFT} hover:bg-[var(--ds-raised)] ${HOVER_LIFT}`
                           }`}
                           title={sourceOff ? `${sourceLabel(providerOrigin(model))} is turned off in Settings → API Configuration` : visionIncompatible ? 'This model can’t read the images already in this chat' : undefined}
                         >
                           <div className="flex items-start justify-between gap-2">
                             <div className="min-w-0">
-                              <div className="text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">{sourceLabel(providerOrigin(model))}</div>
+                              <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">{sourceLabel(providerOrigin(model))}</div>
                               <div className={`font-semibold leading-tight truncate flex items-center gap-1.5 ${INK}`}>
                                 {isSelected && <Check className={`w-4 h-4 ${ACCENT_TEXT} shrink-0`} />}
                                 {model.name}

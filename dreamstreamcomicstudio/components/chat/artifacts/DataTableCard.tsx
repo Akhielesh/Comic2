@@ -99,14 +99,14 @@ const CellBody: React.FC<{ col: DataTableColumn; raw: DataTableRowCell; accent: 
     const color = pos ? '#059669' : neg ? '#dc2626' : '#64748b';
     body = <span className="font-semibold tabular-nums" style={{ color }}>{kind === 'deltaPercent' ? formatPercent(num) : formatSigned(num)}</span>;
   } else if (kind === 'currency' && hasNum) {
-    body = <span className="font-medium tabular-nums text-[#1a1915]">{formatPriceCompact(num, currency)}</span>;
+    body = <span className="font-medium tabular-nums text-[var(--ds-ink)]">{formatPriceCompact(num, currency)}</span>;
   } else if (kind === 'percent' && hasNum) {
-    body = <span className="font-medium tabular-nums text-[#1a1915]">{`${num.toFixed(2)}%`}</span>;
+    body = <span className="font-medium tabular-nums text-[var(--ds-ink)]">{`${num.toFixed(2)}%`}</span>;
   } else if (kind === 'number' && hasNum) {
-    body = <span className="font-medium tabular-nums text-[#1a1915]">{Math.abs(num) >= 100000 ? compactNumber(num) : num.toLocaleString()}</span>;
+    body = <span className="font-medium tabular-nums text-[var(--ds-ink)]">{Math.abs(num) >= 100000 ? compactNumber(num) : num.toLocaleString()}</span>;
   } else {
     const text = cell.value == null || cell.value === '' ? '—' : String(cell.value);
-    body = <span className={cell.value == null || cell.value === '' ? 'text-black/20' : 'font-medium text-[#1a1915]'} style={cell.color ? { color: cell.color } : undefined}>{text}</span>;
+    body = <span className={cell.value == null || cell.value === '' ? 'text-black/20' : 'font-medium text-[var(--ds-ink)]'} style={cell.color ? { color: cell.color } : undefined}>{text}</span>;
   }
 
   const wrapped = cell.href ? (
@@ -116,7 +116,7 @@ const CellBody: React.FC<{ col: DataTableColumn; raw: DataTableRowCell; accent: 
   return (
     <div className="leading-tight">
       {wrapped}
-      {cell.sub && <div className="text-[10px] text-[#6e6a60]">{cell.sub}</div>}
+      {cell.sub && <div className="text-[10px] text-[var(--ds-muted)]">{cell.sub}</div>}
     </div>
   );
 };
@@ -185,7 +185,7 @@ export const DataTableCard: React.FC<{ data: DataTableArtifact }> = ({ data }) =
 
   const table = (
     <table className="w-full min-w-0 border-collapse text-xs">
-      <thead className={compact ? '' : 'sticky top-0 z-10 bg-white/95 backdrop-blur-sm'}>
+      <thead className={compact ? '' : 'sticky top-0 z-10 bg-[var(--ds-surface-strong)] backdrop-blur-sm'}>
         <tr>
           {columns.map((col, ci) => {
             const sortable = isSortable(col);
@@ -195,9 +195,9 @@ export const DataTableCard: React.FC<{ data: DataTableArtifact }> = ({ data }) =
                 key={ci}
                 onClick={() => onSort(ci)}
                 aria-sort={active ? (sort!.dir === 'asc' ? 'ascending' : 'descending') : undefined}
-                className={`whitespace-nowrap border-b border-black/10 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider ${alignClass(col)} ${
-                  active ? 'text-[#1a1915]' : 'text-[#6e6a60]'
-                } ${sortable && !compact ? 'cursor-pointer select-none transition-colors duration-200 hover:text-[#1a1915]' : ''}`}
+                className={`whitespace-nowrap border-b border-[var(--ds-hairline)] px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider ${alignClass(col)} ${
+                  active ? 'text-[var(--ds-ink)]' : 'text-[var(--ds-muted)]'
+                } ${sortable && !compact ? 'cursor-pointer select-none transition-colors duration-200 hover:text-[var(--ds-ink)]' : ''}`}
               >
                 <span className="inline-flex items-center gap-1">
                   {col.label}
@@ -210,7 +210,7 @@ export const DataTableCard: React.FC<{ data: DataTableArtifact }> = ({ data }) =
       </thead>
       <tbody>
         {visibleRows.map((row, ri) => (
-          <tr key={ri} className="border-b border-black/5 transition-colors duration-200 last:border-0 hover:bg-black/[0.03]">
+          <tr key={ri} className="border-b border-[var(--ds-hairline-soft)] transition-colors duration-200 last:border-0 hover:bg-[var(--ds-well)]">
             {columns.map((col, ci) => (
               <td key={ci} className={`px-2.5 py-1.5 align-middle ${alignClass(col)}`}>
                 <CellBody col={col} raw={row[ci] ?? null} accent={theme.accent} />
@@ -220,7 +220,7 @@ export const DataTableCard: React.FC<{ data: DataTableArtifact }> = ({ data }) =
         ))}
         {!compact && visibleRows.length === 0 && (
           <tr>
-            <td colSpan={columns.length} className="px-2.5 py-4 text-center text-[11px] text-[#6e6a60]">
+            <td colSpan={columns.length} className="px-2.5 py-4 text-center text-[11px] text-[var(--ds-muted)]">
               No rows match “{query.trim()}”
             </td>
           </tr>
@@ -235,7 +235,7 @@ export const DataTableCard: React.FC<{ data: DataTableArtifact }> = ({ data }) =
       <Surface
         accent={theme.accent}
         header={header}
-        footer={hiddenCount > 0 ? <div className="text-[11px] text-[#6e6a60]">+{hiddenCount} more rows</div> : undefined}
+        footer={hiddenCount > 0 ? <div className="text-[11px] text-[var(--ds-muted)]">+{hiddenCount} more rows</div> : undefined}
       >
         <div className="min-w-0 overflow-x-auto">{table}</div>
       </Surface>
@@ -248,10 +248,10 @@ export const DataTableCard: React.FC<{ data: DataTableArtifact }> = ({ data }) =
       header={header}
       footer={
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5">
-          <span className="text-[11px] tabular-nums text-[#6e6a60]">
+          <span className="text-[11px] tabular-nums text-[var(--ds-muted)]">
             {rows.length === allRows.length ? `${allRows.length} rows` : `${rows.length} of ${allRows.length} rows`}
           </span>
-          {data.caption && <span className="min-w-0 truncate text-[10px] text-[#6e6a60]">{data.caption}</span>}
+          {data.caption && <span className="min-w-0 truncate text-[10px] text-[var(--ds-muted)]">{data.caption}</span>}
         </div>
       }
     >
@@ -263,13 +263,13 @@ export const DataTableCard: React.FC<{ data: DataTableArtifact }> = ({ data }) =
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={`Filter ${allRows.length} rows…`}
-            className="w-full rounded-lg border border-black/10 bg-white/80 py-1 pl-7 pr-2 text-xs text-[#1a1915] placeholder:text-[#9b968c] transition-colors duration-200 focus:border-black/20 focus:outline-none focus:ring-2 focus:ring-black/5"
+            className="w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface)] py-1 pl-7 pr-2 text-xs text-[var(--ds-ink)] placeholder:text-[#9b968c] transition-colors duration-200 focus:border-black/20 focus:outline-none focus:ring-2 focus:ring-[var(--ds-hairline-soft)]"
           />
         </div>
         <button
           onClick={exportCsv}
           title="Download as CSV"
-          className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-lg border border-black/10 px-2 py-1 text-[11px] font-semibold text-[#6e6a60] transition-colors duration-200 hover:bg-black/[0.03] hover:text-[#1a1915]"
+          className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-lg border border-[var(--ds-hairline)] px-2 py-1 text-[11px] font-semibold text-[var(--ds-muted)] transition-colors duration-200 hover:bg-[var(--ds-well)] hover:text-[var(--ds-ink)]"
         >
           <Download className="h-3 w-3" />
           CSV

@@ -53,7 +53,7 @@ const LevelMeter: React.FC<{ level: number }> = ({ level }) => (
     {[0.5, 0.8, 1, 0.7, 0.45].map((w, i) => (
       <span
         key={i}
-        className="w-[3px] rounded-full bg-[#D97757] transition-all duration-100"
+        className="w-[3px] rounded-full bg-[var(--ds-accent)] transition-all duration-100"
         style={{ height: `${Math.max(18, Math.min(100, level * 100 * w + 12))}%` }}
       />
     ))}
@@ -91,18 +91,18 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
             <button
               key={o.id}
               onClick={() => setSettings({ ...settings, engine: o.id })}
-              className={`flex w-full items-start gap-2 px-3 py-2 text-left ${TRANSITION} ${settings.engine === o.id ? 'bg-[#D97757]/10' : 'hover:bg-black/5'}`}
+              className={`flex w-full items-start gap-2 px-3 py-2 text-left ${TRANSITION} ${settings.engine === o.id ? 'bg-[#D97757]/10' : 'hover:bg-[var(--ds-hover)]'}`}
             >
               <span className={`mt-0.5 ${settings.engine === o.id ? ACCENT_TEXT : MUTED}`}>{o.icon}</span>
               <span className="min-w-0">
-                <span className="block text-[12px] font-semibold text-[#1a1915]">{o.label}</span>
+                <span className="block text-[12px] font-semibold text-[var(--ds-ink)]">{o.label}</span>
                 <span className={`block text-[11px] ${MUTED}`}>{o.hint}</span>
               </span>
             </button>
           ))}
           {settings.engine === 'whisper' && (
             <>
-              <div className={`border-t border-black/5 px-3 pt-2 pb-1 ${LABEL}`}>Model (downloads once)</div>
+              <div className={`border-t border-[var(--ds-hairline-soft)] px-3 pt-2 pb-1 ${LABEL}`}>Model (downloads once)</div>
               <div className="flex gap-1 px-3 pb-2.5">
                 {MODEL_OPTIONS.map((m) => (
                   <button
@@ -111,8 +111,8 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
                     title={m.hint}
                     className={`flex-1 rounded-lg border px-1.5 py-1 text-[11px] font-semibold ${TRANSITION} ${
                       settings.model === m.id
-                        ? 'border-transparent bg-[#D97757] text-white'
-                        : `border-black/10 bg-white/70 ${MUTED} hover:bg-black/5`
+                        ? 'border-transparent bg-[var(--ds-accent)] text-white'
+                        : `border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] ${MUTED} hover:bg-[var(--ds-hover)]`
                     }`}
                   >
                     {m.label}
@@ -132,18 +132,18 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
           {status === 'transcribing' ? (
             <>
               <Loader2 className={`h-4 w-4 animate-spin ${ACCENT_TEXT}`} />
-              <span className="flex-1 truncate text-[12px] font-medium text-[#1a1915]">Transcribing on-device…</span>
+              <span className="flex-1 truncate text-[12px] font-medium text-[var(--ds-ink)]">Transcribing on-device…</span>
             </>
           ) : download ? (
             <>
               <Loader2 className={`h-4 w-4 animate-spin ${ACCENT_TEXT}`} />
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[12px] font-medium text-[#1a1915]">
+                <span className="block truncate text-[12px] font-medium text-[var(--ds-ink)]">
                   Preparing voice model… {Math.round(download.progress * 100)}%
                 </span>
                 <span className={`block text-[10px] ${MUTED}`}>One-time download, then it's instant & offline</span>
               </span>
-              <button onClick={cancel} className={`rounded-lg p-1.5 ${MUTED} hover:bg-black/5 ${TRANSITION}`} title="Cancel">
+              <button onClick={cancel} className={`rounded-lg p-1.5 ${MUTED} hover:bg-[var(--ds-hover)] ${TRANSITION}`} title="Cancel">
                 <X className="h-4 w-4" />
               </button>
             </>
@@ -154,20 +154,20 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
                 <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-red-500" />
               </span>
               <LevelMeter level={level} />
-              <span className="flex-1 text-[12px] font-semibold tabular-nums text-[#1a1915]">{formatClock(elapsed)}</span>
+              <span className="flex-1 text-[12px] font-semibold tabular-nums text-[var(--ds-ink)]">{formatClock(elapsed)}</span>
               <span className={`hidden text-[10px] sm:block ${MUTED}`}>
                 {settings.engine === 'whisper' ? 'on-device' : 'browser'}
               </span>
               <button
                 onClick={cancel}
-                className={`rounded-lg p-1.5 ${MUTED} hover:bg-black/5 ${TRANSITION}`}
+                className={`rounded-lg p-1.5 ${MUTED} hover:bg-[var(--ds-hover)] ${TRANSITION}`}
                 title="Discard recording"
               >
                 <X className="h-4 w-4" />
               </button>
               <button
                 onClick={stop}
-                className={`rounded-lg bg-[#D97757] p-1.5 text-white hover:bg-[#c2643f] ${TRANSITION}`}
+                className={`rounded-lg bg-[var(--ds-accent)] p-1.5 text-white hover:bg-[var(--ds-accent-hover)] ${TRANSITION}`}
                 title="Finish and insert text"
               >
                 <Check className="h-4 w-4" />
@@ -185,7 +185,7 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
         </div>
       )}
 
-      <div className={`flex items-stretch ${HAIRLINE} rounded-xl bg-white/70 ${TRANSITION} ${busy ? 'ring-1 ring-[#D97757]/40' : ''}`}>
+      <div className={`flex items-stretch ${HAIRLINE} rounded-xl bg-[var(--ds-surface-soft)] ${TRANSITION} ${busy ? 'ring-1 ring-[#D97757]/40' : ''}`}>
         <button
           onClick={() => {
             if (busy) {
@@ -197,7 +197,7 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
             }
           }}
           disabled={disabled && !busy}
-          className={`p-2.5 ${TRANSITION} disabled:opacity-40 ${busy ? ACCENT_TEXT : `${MUTED} hover:text-[#1a1915]`}`}
+          className={`p-2.5 ${TRANSITION} disabled:opacity-40 ${busy ? ACCENT_TEXT : `${MUTED} hover:text-[var(--ds-ink)]`}`}
           title={busy ? 'Finish dictation' : 'Dictate with your voice (on-device)'}
           aria-label={busy ? 'Finish dictation' : 'Start voice dictation'}
         >
@@ -206,7 +206,7 @@ export const DictationButton: React.FC<DictationButtonProps> = ({ disabled, onPa
         <button
           onClick={() => setMenuOpen((v) => !v)}
           disabled={busy}
-          className={`border-l border-black/5 px-1 ${MUTED} hover:text-[#1a1915] ${TRANSITION} disabled:opacity-40`}
+          className={`border-l border-[var(--ds-hairline-soft)] px-1 ${MUTED} hover:text-[var(--ds-ink)] ${TRANSITION} disabled:opacity-40`}
           title="Dictation settings"
           aria-label="Dictation settings"
         >

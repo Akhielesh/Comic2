@@ -24,10 +24,10 @@ const domainOf = (url: string): string => {
 };
 
 const Stat: React.FC<{ icon: React.ReactNode; value: React.ReactNode; label: string }> = ({ icon, value, label }) => (
-  <div className="flex items-center gap-2 rounded-xl border border-black/5 bg-black/[0.03] px-3 py-1.5">
-    <span className="text-[#6e6a60]">{icon}</span>
-    <span className="text-lg font-semibold leading-none tracking-tight text-[#1a1915]">{value}</span>
-    <span className="text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">{label}</span>
+  <div className="flex items-center gap-2 rounded-xl border border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] px-3 py-1.5">
+    <span className="text-[var(--ds-muted)]">{icon}</span>
+    <span className="text-lg font-semibold leading-none tracking-tight text-[var(--ds-ink)]">{value}</span>
+    <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">{label}</span>
   </div>
 );
 
@@ -53,15 +53,15 @@ export const ResearchReport: React.FC<{ data: ResearchReportArtifact }> = ({ dat
     return (
       <Surface accent="#6366f1" header={header}>
         <div className="space-y-2 px-3 pb-3 pt-0.5">
-          <div className="text-[11px] text-[#6e6a60]">
-            <span className="font-semibold text-[#1a1915]">{data.sourceCount}</span> sources
+          <div className="text-[11px] text-[var(--ds-muted)]">
+            <span className="font-semibold text-[var(--ds-ink)]">{data.sourceCount}</span> sources
             <span className="mx-1 text-black/20">·</span>
-            <span className="font-semibold text-[#1a1915]">{data.readCount}</span> read in full
+            <span className="font-semibold text-[var(--ds-ink)]">{data.readCount}</span> read in full
           </div>
           {data.questions?.length > 0 && (
             <ul className="space-y-1">
               {data.questions.slice(0, 2).map((q, i) => (
-                <li key={i} className="flex gap-2 text-xs text-[#1a1915]/80">
+                <li key={i} className="flex gap-2 text-xs text-[var(--ds-ink)] opacity-80">
                   <span className="shrink-0 font-semibold text-indigo-500">{i + 1}.</span>
                   <span className="min-w-0 truncate">{q}</span>
                 </li>
@@ -87,10 +87,10 @@ export const ResearchReport: React.FC<{ data: ResearchReportArtifact }> = ({ dat
         {/* Sub-questions investigated */}
         {data.questions?.length > 0 && (
           <div>
-            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">Questions investigated</div>
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Questions investigated</div>
             <ul className="space-y-1">
               {data.questions.map((q, i) => (
-                <li key={i} className="flex gap-2 text-xs text-[#1a1915]/85">
+                <li key={i} className="flex gap-2 text-xs text-[var(--ds-ink)] opacity-80">
                   <span className="shrink-0 font-semibold text-indigo-500">{i + 1}.</span>
                   <span className="min-w-0">{q}</span>
                 </li>
@@ -102,11 +102,11 @@ export const ResearchReport: React.FC<{ data: ResearchReportArtifact }> = ({ dat
         {/* Sources */}
         {sources.length > 0 && (
           <div>
-            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">Sources ({sources.length})</div>
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Sources ({sources.length})</div>
             <ol className="space-y-0.5">
               {sources.slice(0, 12).map((s, i) => (
                 <li key={i} className="flex items-baseline gap-1.5 text-xs">
-                  <span className="shrink-0 font-medium text-[#6e6a60]">[{i + 1}]</span>
+                  <span className="shrink-0 font-medium text-[var(--ds-muted)]">[{i + 1}]</span>
                   <a
                     href={s.url}
                     target="_blank"
@@ -116,11 +116,11 @@ export const ResearchReport: React.FC<{ data: ResearchReportArtifact }> = ({ dat
                   >
                     {s.title || domainOf(s.url)}
                   </a>
-                  <span className="shrink-0 text-[10px] text-[#6e6a60]/80">{domainOf(s.url)}</span>
+                  <span className="shrink-0 text-[10px] text-[var(--ds-muted)]">{domainOf(s.url)}</span>
                 </li>
               ))}
               {sources.length > 12 && (
-                <li className="text-[10px] font-semibold text-[#6e6a60]">+{sources.length - 12} more sources</li>
+                <li className="text-[10px] font-semibold text-[var(--ds-muted)]">+{sources.length - 12} more sources</li>
               )}
             </ol>
           </div>

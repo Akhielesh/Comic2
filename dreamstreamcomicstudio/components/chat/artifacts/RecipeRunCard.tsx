@@ -25,12 +25,12 @@ export const RecipeRunCard: React.FC<{ data: RecipeRunArtifact }> = ({ data }) =
       accent={ok ? '#16a34a' : '#dc2626'}
       header={
         <div className="flex items-start gap-2">
-          <span className="mt-0.5 shrink-0 rounded-lg bg-black/[0.04] p-1.5 text-[#6e6a60]">
+          <span className="mt-0.5 shrink-0 rounded-lg bg-[var(--ds-well-strong)] p-1.5 text-[var(--ds-muted)]">
             <ChefHat className="w-4 h-4" />
           </span>
           <span className="min-w-0">
             <span className="flex flex-wrap items-center gap-1.5">
-              <span className="text-sm font-semibold tracking-tight text-[#1a1915] leading-tight">{data.title}</span>
+              <span className="text-sm font-semibold tracking-tight text-[var(--ds-ink)] leading-tight">{data.title}</span>
               {isSwarm ? (
                 <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-fuchsia-700">
                   <Network className="w-3 h-3" /> swarm
@@ -45,14 +45,14 @@ export const RecipeRunCard: React.FC<{ data: RecipeRunArtifact }> = ({ data }) =
                 {ok ? 'ran' : 'failed'}
               </span>
             </span>
-            {data.recipeId && <code className="text-[10px] text-[#6e6a60]/70">{data.recipeId}</code>}
+            {data.recipeId && <code className="text-[10px] text-[var(--ds-muted)]">{data.recipeId}</code>}
           </span>
         </div>
       }
       footer={
         data.activities && data.activities.length > 0 ? (
           <div>
-            <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">
+            <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">
               <Sparkles className="w-3 h-3" /> Follow-ups
             </div>
             <div className="flex flex-wrap gap-1">
@@ -68,9 +68,9 @@ export const RecipeRunCard: React.FC<{ data: RecipeRunArtifact }> = ({ data }) =
         {data.params.length > 0 && (
           <div className="flex flex-wrap gap-1">
             {data.params.map((p) => (
-              <span key={p.key} className="inline-flex items-center gap-1 rounded-md border border-black/10 bg-black/[0.03] px-1.5 py-0.5 text-[10px]">
-                <span className="font-semibold text-[#6e6a60]">{p.key}</span>
-                <span className="max-w-[14rem] truncate text-[#1a1915]">{p.value}</span>
+              <span key={p.key} className="inline-flex items-center gap-1 rounded-md border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-1.5 py-0.5 text-[10px]">
+                <span className="font-semibold text-[var(--ds-muted)]">{p.key}</span>
+                <span className="max-w-[14rem] truncate text-[var(--ds-ink)]">{p.value}</span>
               </span>
             ))}
           </div>
@@ -80,10 +80,10 @@ export const RecipeRunCard: React.FC<{ data: RecipeRunArtifact }> = ({ data }) =
       {data.structured !== undefined && data.structured !== null && (
         <Expandable moreLabel="Show structured output" lessLabel="Hide structured output">
           <div className="px-3 py-2">
-            <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">
+            <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">
               <Braces className="w-3 h-3" /> JSON
             </div>
-            <pre className="max-h-72 overflow-auto rounded-xl border border-black/10 bg-slate-900 p-2 text-[10.5px] leading-relaxed text-emerald-200">
+            <pre className="max-h-72 overflow-auto rounded-xl border border-[var(--ds-hairline)] bg-slate-900 p-2 text-[10.5px] leading-relaxed text-emerald-200">
               {prettyJson(data.structured)}
             </pre>
           </div>

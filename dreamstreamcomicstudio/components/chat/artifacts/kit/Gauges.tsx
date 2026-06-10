@@ -44,16 +44,16 @@ export const RadialGauge: React.FC<{
             style={{ transition: 'stroke-dasharray 0.7s ease-out' }}
           />
         </g>
-        <text x={cx} y={cy - 1} textAnchor="middle" fontSize={size * 0.26} fontWeight="600" fill="#1a1915" style={{ letterSpacing: '-0.02em' }}>
+        <text x={cx} y={cy - 1} textAnchor="middle" fontSize={size * 0.26} fontWeight="600" fill="var(--ds-ink)" style={{ letterSpacing: '-0.02em' }}>
           {display ?? Math.round(value)}
         </text>
         {unit && (
-          <text x={cx} y={cy + size * 0.16} textAnchor="middle" fontSize={size * 0.13} fill="#6e6a60" fontWeight="600">
+          <text x={cx} y={cy + size * 0.16} textAnchor="middle" fontSize={size * 0.13} fill="var(--ds-muted)" fontWeight="600">
             {unit}
           </text>
         )}
       </svg>
-      {label && <span className="-mt-1 text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">{label}</span>}
+      {label && <span className="-mt-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">{label}</span>}
     </div>
   );
 };
@@ -138,10 +138,10 @@ export const Compass: React.FC<{
           </g>
         )}
         <circle cx={cx} cy={cy} r="13" fill="#fff" stroke="#cbd5e1" />
-        <text x={cx} y={cy - 1} textAnchor="middle" fontSize="11" fontWeight="800" fill="#0f172a">
+        <text x={cx} y={cy - 1} textAnchor="middle" fontSize="11" fontWeight="800" fill="var(--ds-ink)">
           {Math.round(speed)}
         </text>
-        <text x={cx} y={cy + 8} textAnchor="middle" fontSize="5.5" fill="#64748b" fontWeight="700">
+        <text x={cx} y={cy + 8} textAnchor="middle" fontSize="5.5" fill="var(--ds-muted)" fontWeight="700">
           {unit}
         </text>
       </svg>
@@ -172,8 +172,8 @@ export const SunArc: React.FC<{ sunrise?: string; sunset?: string; now?: number;
       <path d={`M${pad},${h - 6} Q${w / 2},${-h + 22} ${w - pad},${h - 6}`} fill="none" stroke="#e2e8f0" strokeWidth="2" strokeDasharray="3 4" />
       <line x1={pad} y1={h - 6} x2={w - pad} y2={h - 6} stroke="#cbd5e1" strokeWidth="1" />
       <circle cx={ax} cy={ay} r={isUp ? 6 : 4} fill={isUp ? color : '#cbd5e1'} stroke="#fff" strokeWidth="1.5" />
-      <text x={pad} y={h - 12} textAnchor="start" fontSize="9" fontWeight="700" fill="#64748b">↑ {fmt(rise)}</text>
-      <text x={w - pad} y={h - 12} textAnchor="end" fontSize="9" fontWeight="700" fill="#64748b">↓ {fmt(set)}</text>
+      <text x={pad} y={h - 12} textAnchor="start" fontSize="9" fontWeight="700" fill="var(--ds-muted)">↑ {fmt(rise)}</text>
+      <text x={w - pad} y={h - 12} textAnchor="end" fontSize="9" fontWeight="700" fill="var(--ds-muted)">↓ {fmt(set)}</text>
     </svg>
   );
 };

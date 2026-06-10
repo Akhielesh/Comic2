@@ -1,6 +1,7 @@
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { Code2, ExternalLink, Loader2, Map as MapIcon, Maximize2, Minimize2, X } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
+import { initTheme } from '../../services/theme';
 import { ChatSidebar } from './ChatSidebar';
 import { ChatConversation } from './ChatConversation';
 import { ChatModelPicker } from './ChatModelPicker';
@@ -135,6 +136,12 @@ const composeSystemPrompt = (memory: string, persona?: string): string | undefin
 
 export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects }) => {
   const { user } = useAuth();
+  // Apply the persisted light/dark theme to <html> as soon as the studio mounts,
+  // and take it off again when leaving so the rest of the app stays light.
+  useEffect(() => {
+    initTheme();
+    return () => document.documentElement.classList.remove('dark');
+  }, []);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [projectsList, setProjectsList] = useState<ChatProject[]>([]);
   const [projectModal, setProjectModal] = useState<{ editing: ChatProject | null } | null>(null);
@@ -1069,7 +1076,7 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
   const panelContent = panel && (
     <>
       <div
-        className={`flex items-center justify-between px-3 py-2 border-b border-black/10 shrink-0 ${GLASS}`}
+        className={`flex items-center justify-between px-3 py-2 border-b border-[var(--ds-hairline)] shrink-0 ${GLASS}`}
       >
         <span className={`font-semibold text-sm flex items-center gap-1.5 min-w-0 ${INK}`}>
           {isCodeStudio
@@ -1210,8 +1217,8 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
       {/* Resizable side panel — sibling on desktop (unless fullscreen), overlay on mobile. */}
       {panel && isDesktop && !panelFullscreen && (
         <>
-          <div onMouseDown={startResize} className={`w-1.5 cursor-col-resize bg-black/10 hover:bg-[#D97757] shrink-0 ${TRANSITION}`} title="Drag to resize" />
-          <div className={`flex flex-col shrink-0 border-l border-black/10 ${CANVAS_BG}`} style={{ width: panelWidth }}>
+          <div onMouseDown={startResize} className={`w-1.5 cursor-col-resize bg-black/10 hover:bg-[var(--ds-accent)] shrink-0 ${TRANSITION}`} title="Drag to resize" />
+          <div className={`flex flex-col shrink-0 border-l border-[var(--ds-hairline)] ${CANVAS_BG}`} style={{ width: panelWidth }}>
             {panelContent}
           </div>
         </>

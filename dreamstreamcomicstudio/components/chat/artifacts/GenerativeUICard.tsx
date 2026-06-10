@@ -180,7 +180,7 @@ const COLS: Record<number, string> = { 1: 'sm:grid-cols-1', 2: 'sm:grid-cols-2',
 const RATIO: Record<string, string> = { '1:1': 'aspect-square', '4:3': 'aspect-[4/3]', '16:9': 'aspect-video' };
 const TONE_COLOR: Record<string, string> = { neutral: '#6e6a60', good: '#059669', warn: '#d97706', bad: '#dc2626', info: '#3B82F6' };
 const HEADING: Record<number, string> = { 1: 'text-lg', 2: 'text-base', 3: 'text-sm' };
-const TEXT_TONE: Record<string, string> = { default: 'text-[#1a1915]', muted: 'text-[#6e6a60]', strong: 'text-[#1a1915] font-semibold' };
+const TEXT_TONE: Record<string, string> = { default: 'text-[var(--ds-ink)]', muted: 'text-[var(--ds-muted)]', strong: 'text-[var(--ds-ink)] font-semibold' };
 const TEXT_ALIGN: Record<string, string> = { left: 'text-left', center: 'text-center', right: 'text-right' };
 
 const formatMetric = (v: string | number): string =>
@@ -189,7 +189,7 @@ const formatMetric = (v: string | number): string =>
 const Block: React.FC<{ block: NormBlock }> = ({ block }) => {
   switch (block.kind) {
     case '_invalid':
-      return <span className="inline-block rounded-md bg-black/[0.04] px-1.5 py-0.5 text-[10px] font-semibold text-[#6e6a60]">unsupported block</span>;
+      return <span className="inline-block rounded-md bg-[var(--ds-well-strong)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--ds-muted)]">unsupported block</span>;
 
     case 'stack':
       return (
@@ -211,21 +211,21 @@ const Block: React.FC<{ block: NormBlock }> = ({ block }) => {
       );
     case 'section':
       return (
-        <div className="rounded-xl border border-black/10 bg-white/70 p-3">
+        <div className="rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] p-3">
           {block.title && (
             <div className="mb-2 flex items-center gap-2">
               {block.accent && <span className="h-3 w-1 rounded-full" style={{ backgroundColor: block.accent }} />}
-              <div className="text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">{block.title}</div>
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">{block.title}</div>
             </div>
           )}
           <div className="flex flex-col gap-2">{block.children.map((c, i) => <Block key={i} block={c} />)}</div>
         </div>
       );
     case 'divider':
-      return <hr className="border-t border-black/5" />;
+      return <hr className="border-t border-[var(--ds-hairline-soft)]" />;
 
     case 'heading':
-      return <div className={`font-semibold tracking-tight text-[#1a1915] ${HEADING[block.level]}`}>{block.text}</div>;
+      return <div className={`font-semibold tracking-tight text-[var(--ds-ink)] ${HEADING[block.level]}`}>{block.text}</div>;
     case 'text':
       return <p className={`text-sm ${TEXT_TONE[block.tone]} ${TEXT_ALIGN[block.align]} whitespace-pre-wrap break-words`}>{block.text}</p>;
     case 'badge':
@@ -233,17 +233,17 @@ const Block: React.FC<{ block: NormBlock }> = ({ block }) => {
     case 'pill':
       return (
         <span className="inline-flex items-center gap-1.5">
-          {block.label && <span className="text-xs font-semibold text-[#1a1915]">{block.label}</span>}
+          {block.label && <span className="text-xs font-semibold text-[var(--ds-ink)]">{block.label}</span>}
           <TrendPill change={block.change} changePercent={block.changePercent} size="sm" />
         </span>
       );
     case 'keyValue':
       return (
-        <dl className="divide-y divide-black/5">
+        <dl className="divide-y divide-[var(--ds-hairline-soft)]">
           {block.items.map((it, i) => (
             <div key={i} className="flex items-baseline justify-between gap-3 py-1">
-              <dt className="text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">{it.label}</dt>
-              <dd className="text-right text-sm font-semibold text-[#1a1915]">{it.value}</dd>
+              <dt className="text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">{it.label}</dt>
+              <dd className="text-right text-sm font-semibold text-[var(--ds-ink)]">{it.value}</dd>
             </div>
           ))}
         </dl>
@@ -253,15 +253,15 @@ const Block: React.FC<{ block: NormBlock }> = ({ block }) => {
       return (
         <div className="rounded-xl border-l-4 p-3" style={{ borderColor: c, backgroundColor: `${c}12` }}>
           {block.title && <div className="text-xs font-semibold" style={{ color: c }}>{block.title}</div>}
-          <div className="text-sm text-[#1a1915] whitespace-pre-wrap break-words">{block.text}</div>
+          <div className="text-sm text-[var(--ds-ink)] whitespace-pre-wrap break-words">{block.text}</div>
         </div>
       );
     }
     case 'image':
       return (
-        <figure className="overflow-hidden rounded-xl border border-black/10">
+        <figure className="overflow-hidden rounded-xl border border-[var(--ds-hairline)]">
           <img src={block.src} alt={block.alt ?? ''} loading="lazy" className={`w-full object-cover ${RATIO[block.ratio]}`} />
-          {block.caption && <figcaption className="bg-black/[0.03] px-2 py-1 text-[11px] text-[#6e6a60]">{block.caption}</figcaption>}
+          {block.caption && <figcaption className="bg-[var(--ds-well)] px-2 py-1 text-[11px] text-[var(--ds-muted)]">{block.caption}</figcaption>}
         </figure>
       );
     case 'progress': {
@@ -269,8 +269,8 @@ const Block: React.FC<{ block: NormBlock }> = ({ block }) => {
       return (
         <div>
           <div className="mb-1 flex items-baseline justify-between gap-2">
-            {block.label && <span className="text-xs font-semibold text-[#1a1915]">{block.label}</span>}
-            <span className="text-xs font-semibold text-[#6e6a60] tabular-nums">{pct}%</span>
+            {block.label && <span className="text-xs font-semibold text-[var(--ds-ink)]">{block.label}</span>}
+            <span className="text-xs font-semibold text-[var(--ds-muted)] tabular-nums">{pct}%</span>
           </div>
           <LinearGauge value={block.value} max={block.max} color={block.color ?? '#3B82F6'} height={8} />
         </div>
@@ -280,11 +280,11 @@ const Block: React.FC<{ block: NormBlock }> = ({ block }) => {
       const trend = typeof block.delta === 'number' ? block.delta : block.deltaPercent;
       const sparkColor = typeof trend === 'number' ? (trend >= 0 ? '#059669' : '#dc2626') : '#3B82F6';
       return (
-        <div className="rounded-xl border border-black/10 bg-white/70 p-3">
-          <div className="truncate text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">{block.label}</div>
+        <div className="rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] p-3">
+          <div className="truncate text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">{block.label}</div>
           <div className="mt-0.5 flex items-baseline gap-1">
-            <span className="text-2xl font-semibold tracking-tight leading-none text-[#1a1915] tabular-nums">{formatMetric(block.value)}</span>
-            {block.unit && <span className="text-xs font-medium text-[#6e6a60]">{block.unit}</span>}
+            <span className="text-2xl font-semibold tracking-tight leading-none text-[var(--ds-ink)] tabular-nums">{formatMetric(block.value)}</span>
+            {block.unit && <span className="text-xs font-medium text-[var(--ds-muted)]">{block.unit}</span>}
           </div>
           {(typeof block.delta === 'number' || typeof block.deltaPercent === 'number') && (
             <div className="mt-1"><TrendPill change={block.delta} changePercent={block.deltaPercent} size="sm" /></div>

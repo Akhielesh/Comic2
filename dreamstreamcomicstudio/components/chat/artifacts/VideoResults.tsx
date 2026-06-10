@@ -27,7 +27,7 @@ export const VideoResults: React.FC<{ data: VideoResultsArtifact }> = ({ data })
 
   const header = (
     <span className="flex min-w-0 items-center gap-1.5">
-      <Video className="h-4 w-4 shrink-0 text-[#6e6a60]" />
+      <Video className="h-4 w-4 shrink-0 text-[var(--ds-muted)]" />
       <SurfaceTitle>Videos · “{data.query}”</SurfaceTitle>
     </span>
   );
@@ -44,11 +44,11 @@ export const VideoResults: React.FC<{ data: VideoResultsArtifact }> = ({ data })
               className="group min-w-0 text-left"
               title={v.title}
             >
-              <div className="relative aspect-video overflow-hidden rounded-lg bg-black/[0.06] ring-1 ring-black/5">
+              <div className="relative aspect-video overflow-hidden rounded-lg bg-black/[0.06] ring-1 ring-[var(--ds-hairline-soft)]">
                 {v.thumbnail ? (
                   <img src={v.thumbnail} alt={v.title} loading="lazy" className="h-full w-full object-cover" />
                 ) : (
-                  <div className="flex h-full w-full items-center justify-center text-[#6e6a60]/50"><Video className="h-5 w-5" /></div>
+                  <div className="flex h-full w-full items-center justify-center text-[var(--ds-muted)] opacity-60"><Video className="h-5 w-5" /></div>
                 )}
                 <div className="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors duration-200 group-hover:bg-black/20">
                   <PlayCircle className="h-7 w-7 text-white opacity-90 drop-shadow" />
@@ -57,7 +57,7 @@ export const VideoResults: React.FC<{ data: VideoResultsArtifact }> = ({ data })
                   <span className="absolute bottom-1 right-1 rounded bg-black/70 px-1 py-0.5 text-[9px] font-semibold text-white">{v.duration}</span>
                 )}
               </div>
-              <div className="mt-1 truncate text-[11px] font-medium text-[#1a1915]">{v.title}</div>
+              <div className="mt-1 truncate text-[11px] font-medium text-[var(--ds-ink)]">{v.title}</div>
             </button>
           ))}
         </div>
@@ -83,13 +83,13 @@ export const VideoResults: React.FC<{ data: VideoResultsArtifact }> = ({ data })
                   play(v);
                 }
               }}
-              className="group min-w-0 cursor-pointer overflow-hidden rounded-xl border border-black/10 bg-white transition-colors duration-200 hover:bg-black/[0.02]"
+              className="group min-w-0 cursor-pointer overflow-hidden rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] transition-colors duration-200 hover:bg-black/[0.02]"
             >
               <div className="relative aspect-video bg-black/[0.06]">
                 {v.thumbnail ? (
                   <img src={v.thumbnail} alt={v.title} loading="lazy" className="h-full w-full object-cover" />
                 ) : (
-                  <div className="flex h-full w-full items-center justify-center text-[#6e6a60]/50"><Video className="h-6 w-6" /></div>
+                  <div className="flex h-full w-full items-center justify-center text-[var(--ds-muted)] opacity-60"><Video className="h-6 w-6" /></div>
                 )}
                 <div className="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors duration-200 group-hover:bg-black/20">
                   <PlayCircle className="h-9 w-9 text-white opacity-90 drop-shadow transition-transform duration-200 group-hover:scale-110" />
@@ -112,8 +112,8 @@ export const VideoResults: React.FC<{ data: VideoResultsArtifact }> = ({ data })
                 </a>
               </div>
               <div className="p-2">
-                <div className="text-[11px] font-medium leading-snug text-[#1a1915] line-clamp-2">{v.title}</div>
-                <div className="mt-0.5 truncate text-[10px] text-[#6e6a60]">
+                <div className="text-[11px] font-medium leading-snug text-[var(--ds-ink)] line-clamp-2">{v.title}</div>
+                <div className="mt-0.5 truncate text-[10px] text-[var(--ds-muted)]">
                   {[v.publisher, v.views].filter(Boolean).join(' · ')}
                 </div>
               </div>

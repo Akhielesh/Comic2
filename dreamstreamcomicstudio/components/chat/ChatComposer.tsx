@@ -299,7 +299,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
         {swarmSupported && (
           <button
             onClick={() => onSwarmToggle(!swarm)}
-            className={`flex items-center gap-1.5 text-[11px] font-medium ${PILL} px-2.5 py-1 ${swarm ? `${ACCENT_SOFT_BG} ${ACCENT_TEXT} border-[#D97757]/30` : `${MUTED} hover:bg-black/5`}`}
+            className={`flex items-center gap-1.5 text-[11px] font-medium ${PILL} px-2.5 py-1 ${swarm ? `${ACCENT_SOFT_BG} ${ACCENT_TEXT} border-[#D97757]/30` : `${MUTED} hover:bg-[var(--ds-hover)]`}`}
             title="Agent swarm: a planner splits your goal across specialized agents (news, finance, weather, research…) that work in parallel, then a lead agent synthesizes the answer."
           >
             <Network className="w-3.5 h-3.5" /> Swarm {swarm ? 'on' : 'off'}
@@ -307,7 +307,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
         )}
         <button
           onClick={() => onDreamstreamToggle(!dreamstreamAccess)}
-          className={`flex items-center gap-1.5 text-[11px] font-medium ${PILL} px-2.5 py-1 ${dreamstreamAccess ? `${ACCENT_SOFT_BG} ${ACCENT_TEXT} border-[#D97757]/30` : `${MUTED} hover:bg-black/5`}`}
+          className={`flex items-center gap-1.5 text-[11px] font-medium ${PILL} px-2.5 py-1 ${dreamstreamAccess ? `${ACCENT_SOFT_BG} ${ACCENT_TEXT} border-[#D97757]/30` : `${MUTED} hover:bg-[var(--ds-hover)]`}`}
           title="DreamStream connector: let this chat see your own projects, account and usage (read-only, sanitized). Off by default."
         >
           <LayoutGrid className="w-3.5 h-3.5" /> DreamStream {dreamstreamAccess ? 'on' : 'off'}
@@ -320,7 +320,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
               <button
                 key={server.id}
                 onClick={() => onToggleMcpServer(server.id, !on)}
-                className={`flex items-center gap-1.5 text-[11px] font-medium ${PILL} px-2.5 py-1 ${on ? `${ACCENT_SOFT_BG} ${ACCENT_TEXT} border-[#D97757]/30` : `${MUTED} hover:bg-black/5`}`}
+                className={`flex items-center gap-1.5 text-[11px] font-medium ${PILL} px-2.5 py-1 ${on ? `${ACCENT_SOFT_BG} ${ACCENT_TEXT} border-[#D97757]/30` : `${MUTED} hover:bg-[var(--ds-hover)]`}`}
                 title={`Custom MCP server: ${server.url}`}
               >
                 <Server className="w-3.5 h-3.5" /> {server.name} {on ? 'on' : 'off'}
@@ -335,7 +335,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
           {attachments.map((att) => (
             <div key={att.id} className="relative">
               {att.kind === 'document' ? (
-                <div className={`w-14 h-14 rounded-xl ${HAIRLINE} bg-white/70 flex flex-col items-center justify-center p-1`}>
+                <div className={`w-14 h-14 rounded-xl ${HAIRLINE} bg-[var(--ds-surface-soft)] flex flex-col items-center justify-center p-1`}>
                   <FileText className={`w-5 h-5 ${ACCENT_TEXT}`} />
                   <span className={`text-[8px] font-medium ${MUTED} truncate w-full text-center mt-0.5`}>{att.name}</span>
                 </div>
@@ -358,7 +358,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
           <Wand2 className="w-3.5 h-3.5" />
           <span className="font-semibold">Prompt enhanced.</span>
           <span className={MUTED}>Review it, then send — or</span>
-          <button onClick={undoEnhance} className="flex items-center gap-0.5 font-semibold hover:text-[#1a1915] underline">
+          <button onClick={undoEnhance} className="flex items-center gap-0.5 font-semibold hover:text-[var(--ds-ink)] underline">
             <Undo2 className="w-3 h-3" /> undo
           </button>
         </div>
@@ -368,7 +368,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
         {/* Slash-command (skills) menu */}
         {menuOpen && (
           <div className={`absolute bottom-full left-0 right-0 z-20 mb-2 overflow-hidden ${MENU} animate-fade-in`}>
-            <div className={`flex items-center gap-1 border-b border-black/10 bg-black/[0.03] px-3 py-1.5 ${LABEL}`}>
+            <div className={`flex items-center gap-1 border-b border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 py-1.5 ${LABEL}`}>
               <Slash className="h-3 w-3" /> Skills — ↑↓ choose · Enter to pick · Esc to dismiss
             </div>
             <ul className="max-h-64 overflow-y-auto">
@@ -383,7 +383,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                         acceptSkill(s);
                       }}
                       onMouseEnter={() => setSkillIndex(i)}
-                      className={`flex w-full items-start gap-2 px-3 py-2 text-left ${TRANSITION} ${active ? 'bg-[#D97757]/10' : 'hover:bg-black/5'}`}
+                      className={`flex w-full items-start gap-2 px-3 py-2 text-left ${TRANSITION} ${active ? 'bg-[#D97757]/10' : 'hover:bg-[var(--ds-hover)]'}`}
                     >
                       <span className="mt-0.5 text-base leading-none">{s.emoji}</span>
                       <span className="min-w-0 flex-1">
@@ -413,7 +413,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={attachments.length >= MAX_ATTACHMENTS}
-              className={`shrink-0 ${CONTROL_BTN} p-2.5 ${MUTED} hover:text-[#1a1915] disabled:opacity-40`}
+              className={`shrink-0 ${CONTROL_BTN} p-2.5 ${MUTED} hover:text-[var(--ds-ink)] disabled:opacity-40`}
               title={features.vision ? 'Attach images or PDFs' : 'Attach a PDF'}
             >
               <Paperclip className="w-4 h-4" />
@@ -421,7 +421,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
             <button
               onClick={handleEnhance}
               disabled={!canEnhance}
-              className={`hidden sm:block shrink-0 ${CONTROL_BTN} p-2.5 ${MUTED} hover:text-[#1a1915] disabled:opacity-40`}
+              className={`hidden sm:block shrink-0 ${CONTROL_BTN} p-2.5 ${MUTED} hover:text-[var(--ds-ink)] disabled:opacity-40`}
               title="Improve my prompt (keeps your intent — review before sending)"
             >
               {enhancing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
@@ -454,7 +454,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
           onKeyDown={handleKeyDown}
           rows={1}
           placeholder="Message the model…  (type / for skills · Enter to send)"
-          className="flex-1 resize-none bg-transparent rounded-xl px-3 py-2.5 text-base sm:text-sm text-[#1a1915] placeholder:text-[#6e6a60]/70 outline-none max-h-[200px]"
+          className="flex-1 resize-none bg-transparent rounded-xl px-3 py-2.5 text-base sm:text-sm text-[var(--ds-ink)] placeholder:text-[var(--ds-muted)] outline-none max-h-[200px]"
         />
 
         {busy ? (

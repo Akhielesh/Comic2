@@ -82,7 +82,7 @@ const ProgressRing: React.FC<{ fraction: number; accent: string; size?: number }
   const frac = Math.max(0, Math.min(1, fraction));
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={`${Math.round(frac * 100)}% complete`}>
-      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgba(0,0,0,0.07)" strokeWidth={stroke} />
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--ds-hairline-soft)" strokeWidth={stroke} />
       <circle
         cx={size / 2}
         cy={size / 2}
@@ -95,7 +95,7 @@ const ProgressRing: React.FC<{ fraction: number; accent: string; size?: number }
         transform={`rotate(-90 ${size / 2} ${size / 2})`}
         style={{ transition: 'stroke-dasharray 0.4s ease-out' }}
       />
-      <text x="50%" y="50%" dy="0.36em" textAnchor="middle" fontSize={size * 0.27} fontWeight="600" fill="#1a1915" style={{ letterSpacing: '-0.02em' }}>
+      <text x="50%" y="50%" dy="0.36em" textAnchor="middle" fontSize={size * 0.27} fontWeight="600" fill="var(--ds-ink)" style={{ letterSpacing: '-0.02em' }}>
         {Math.round(frac * 100)}%
       </text>
     </svg>
@@ -129,30 +129,30 @@ const StepRow: React.FC<{
           {done && <Check className="h-3 w-3 text-white" strokeWidth={3} />}
         </button>
 
-        <Icon className="h-3.5 w-3.5 shrink-0 text-[#6e6a60]" />
+        <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--ds-muted)]" />
 
         {expandable ? (
           <button
             onClick={() => setOpen((v) => !v)}
             aria-expanded={open}
-            className={`min-w-0 flex-1 text-left text-xs transition-colors duration-200 ${done ? 'text-[#6e6a60] line-through decoration-black/20' : 'text-[#1a1915]'}`}
+            className={`min-w-0 flex-1 text-left text-xs transition-colors duration-200 ${done ? 'text-[var(--ds-muted)] line-through decoration-[var(--ds-hairline)]' : 'text-[var(--ds-ink)]'}`}
           >
             <span className="truncate align-middle">{step.title}</span>
-            <ChevronDown className={`ml-1 inline h-3 w-3 align-middle text-[#6e6a60] transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
+            <ChevronDown className={`ml-1 inline h-3 w-3 align-middle text-[var(--ds-muted)] transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
           </button>
         ) : step.kind === 'resource' && step.url ? (
           <a
             href={step.url}
             target="_blank"
             rel="noopener noreferrer"
-            className={`min-w-0 flex-1 truncate text-xs font-medium transition-colors duration-200 hover:underline ${done ? 'text-[#6e6a60] line-through decoration-black/20' : ''}`}
+            className={`min-w-0 flex-1 truncate text-xs font-medium transition-colors duration-200 hover:underline ${done ? 'text-[var(--ds-muted)] line-through decoration-[var(--ds-hairline)]' : ''}`}
             style={done ? undefined : { color: accent }}
           >
             {step.title}
             <ExternalLink className="ml-1 inline h-3 w-3 align-[-1px] opacity-70" />
           </a>
         ) : (
-          <span className={`min-w-0 flex-1 truncate text-xs ${done ? 'text-[#6e6a60] line-through decoration-black/20' : 'text-[#1a1915]'}`}>
+          <span className={`min-w-0 flex-1 truncate text-xs ${done ? 'text-[var(--ds-muted)] line-through decoration-[var(--ds-hairline)]' : 'text-[var(--ds-ink)]'}`}>
             {step.title}
           </span>
         )}
@@ -169,12 +169,12 @@ const StepRow: React.FC<{
           </button>
         )}
         {typeof step.estMinutes === 'number' && (
-          <span className="shrink-0 text-[10px] tabular-nums text-[#6e6a60]">{step.estMinutes}m</span>
+          <span className="shrink-0 text-[10px] tabular-nums text-[var(--ds-muted)]">{step.estMinutes}m</span>
         )}
       </div>
 
       {expandable && open && (
-        <div className="animate-fade-in mx-3 mb-2 ml-[42px] rounded-xl border border-black/5 bg-black/[0.03] px-3 py-2">
+        <div className="animate-fade-in mx-3 mb-2 ml-[42px] rounded-xl border border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] px-3 py-2">
           <ChatMarkdown text={step.content!} className="text-xs" />
           {step.prompt && (
             <button
@@ -268,13 +268,13 @@ export const LearningPathCard: React.FC<{ data: LearningPathArtifact }> = ({ dat
         <div className="flex items-center gap-3 px-3 pb-3 pt-0.5">
           <ProgressRing fraction={totalSteps ? doneCount / totalSteps : 0} accent={accent} size={48} />
           <div className="min-w-0">
-            <p className="text-xs font-semibold tabular-nums text-[#1a1915]">
+            <p className="text-xs font-semibold tabular-nums text-[var(--ds-ink)]">
               {doneCount} of {totalSteps} steps
             </p>
-            <p className="truncate text-[11px] text-[#6e6a60]">
+            <p className="truncate text-[11px] text-[var(--ds-muted)]">
               {next ? (
                 <>
-                  Next up: <span className="font-medium text-[#1a1915]/80">{next.step.title}</span>
+                  Next up: <span className="font-medium text-[var(--ds-ink)] opacity-80">{next.step.title}</span>
                 </>
               ) : (
                 'Path complete — nice work.'
@@ -296,8 +296,8 @@ export const LearningPathCard: React.FC<{ data: LearningPathArtifact }> = ({ dat
           {data.level && <Badge color={levelColor}>{data.level}</Badge>}
           <div className="flex items-center gap-2">
             <ProgressRing fraction={totalSteps ? doneCount / totalSteps : 0} accent={accent} size={44} />
-            <span className="whitespace-nowrap text-[11px] tabular-nums text-[#6e6a60]">
-              <span className="font-semibold text-[#1a1915]">{doneCount}</span> of {totalSteps} steps
+            <span className="whitespace-nowrap text-[11px] tabular-nums text-[var(--ds-muted)]">
+              <span className="font-semibold text-[var(--ds-ink)]">{doneCount}</span> of {totalSteps} steps
             </span>
           </div>
         </div>
@@ -305,8 +305,8 @@ export const LearningPathCard: React.FC<{ data: LearningPathArtifact }> = ({ dat
       footer={
         next ? (
           <div className="flex items-center gap-2">
-            <span className="min-w-0 flex-1 truncate text-[11px] text-[#6e6a60]">
-              Next up: <span className="font-medium text-[#1a1915]">{next.step.title}</span>
+            <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--ds-muted)]">
+              Next up: <span className="font-medium text-[var(--ds-ink)]">{next.step.title}</span>
             </span>
             {next.step.prompt && (
               <button
@@ -320,7 +320,7 @@ export const LearningPathCard: React.FC<{ data: LearningPathArtifact }> = ({ dat
             )}
             <button
               onClick={() => setOpenModules((prev) => new Set(prev).add(next.module.id))}
-              className="inline-flex shrink-0 items-center gap-1 rounded-full border border-black/10 bg-white/70 px-2.5 py-1 text-[11px] font-semibold text-[#1a1915] transition-colors duration-200 hover:bg-black/5"
+              className="inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 py-1 text-[11px] font-semibold text-[var(--ds-ink)] transition-colors duration-200 hover:bg-[var(--ds-hover)]"
             >
               Continue
               <ArrowRight className="h-3 w-3" />
@@ -335,14 +335,14 @@ export const LearningPathCard: React.FC<{ data: LearningPathArtifact }> = ({ dat
       }
     >
       <div className="px-3 pb-3 pt-0.5">
-        {data.description && <p className="mb-2 text-xs leading-relaxed text-[#1a1915]/80">{data.description}</p>}
+        {data.description && <p className="mb-2 text-xs leading-relaxed text-[var(--ds-ink)] opacity-80">{data.description}</p>}
 
         {data.outcomes && data.outcomes.length > 0 && (
-          <div className="mb-3 rounded-xl border border-black/5 bg-black/[0.03] px-3 py-2">
-            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">You&rsquo;ll be able to…</div>
+          <div className="mb-3 rounded-xl border border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] px-3 py-2">
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">You&rsquo;ll be able to…</div>
             <ul className="space-y-0.5">
               {data.outcomes.map((o, i) => (
-                <li key={i} className="flex items-start gap-1.5 text-xs text-[#1a1915]/85">
+                <li key={i} className="flex items-start gap-1.5 text-xs text-[var(--ds-ink)] opacity-80">
                   <Check className="mt-0.5 h-3 w-3 shrink-0" style={{ color: accent }} strokeWidth={3} />
                   <span className="min-w-0">{o}</span>
                 </li>
@@ -351,7 +351,7 @@ export const LearningPathCard: React.FC<{ data: LearningPathArtifact }> = ({ dat
           </div>
         )}
 
-        <div className="overflow-hidden rounded-xl border border-black/5 divide-y divide-black/5">
+        <div className="overflow-hidden rounded-xl border border-[var(--ds-hairline-soft)] divide-y divide-[var(--ds-hairline-soft)]">
           {modules.map((m, mi) => {
             const open = openModules.has(m.id);
             const mDone = m.steps.filter((s) => done.has(s.id)).length;
@@ -361,7 +361,7 @@ export const LearningPathCard: React.FC<{ data: LearningPathArtifact }> = ({ dat
                 <button
                   onClick={() => toggleModule(m.id)}
                   aria-expanded={open}
-                  className="flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors duration-200 hover:bg-black/[0.025]"
+                  className="flex w-full items-center gap-2.5 px-3 py-2 text-left transition-colors duration-200 hover:bg-[var(--ds-well)]"
                 >
                   <span
                     className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[11px] font-semibold tabular-nums"
@@ -370,17 +370,17 @@ export const LearningPathCard: React.FC<{ data: LearningPathArtifact }> = ({ dat
                     {complete ? <Check className="h-3.5 w-3.5" strokeWidth={3} /> : mi + 1}
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px] font-semibold text-[#1a1915]">{m.title}</span>
-                    {m.summary && <span className="block truncate text-[11px] text-[#6e6a60]">{m.summary}</span>}
+                    <span className="block truncate text-[13px] font-semibold text-[var(--ds-ink)]">{m.title}</span>
+                    {m.summary && <span className="block truncate text-[11px] text-[var(--ds-muted)]">{m.summary}</span>}
                   </span>
-                  <span className="shrink-0 text-[10px] tabular-nums text-[#6e6a60]">
+                  <span className="shrink-0 text-[10px] tabular-nums text-[var(--ds-muted)]">
                     {mDone}/{m.steps.length}
                     {m.estMinutes ? ` · ${m.estMinutes}m` : ''}
                   </span>
-                  <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-[#6e6a60] transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
+                  <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-[var(--ds-muted)] transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
                 </button>
                 {open && (
-                  <ul className="animate-fade-in divide-y divide-black/5 border-t border-black/5 bg-black/[0.015]">
+                  <ul className="animate-fade-in divide-y divide-[var(--ds-hairline-soft)] border-t border-[var(--ds-hairline-soft)] bg-black/[0.015]">
                     {m.steps.map((s) => (
                       <StepRow key={s.id} step={s} done={done.has(s.id)} accent={accent} onToggle={() => toggleStep(s.id)} />
                     ))}

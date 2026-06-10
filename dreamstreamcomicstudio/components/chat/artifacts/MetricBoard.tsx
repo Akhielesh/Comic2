@@ -19,7 +19,7 @@ const STATUS: Record<NonNullable<MetricTile['status']>, { bar: string; text: str
   good: { bar: '#059669', text: 'text-emerald-600' },
   warn: { bar: '#d97706', text: 'text-amber-600' },
   bad: { bar: '#dc2626', text: 'text-red-600' },
-  neutral: { bar: '#64748b', text: 'text-[#6e6a60]' }
+  neutral: { bar: '#64748b', text: 'text-[var(--ds-muted)]' }
 };
 
 const COLS: Record<number, string> = {
@@ -38,21 +38,21 @@ const Tile: React.FC<{ tile: MetricTile }> = ({ tile }) => {
 
   if (tile.chart) {
     return (
-      <div className="rounded-xl bg-black/[0.03] p-1">
+      <div className="rounded-xl bg-[var(--ds-well)] p-1">
         <ChartCard data={tile.chart} />
       </div>
     );
   }
 
   return (
-    <div className="relative overflow-hidden rounded-xl bg-black/[0.03] p-3">
+    <div className="relative overflow-hidden rounded-xl bg-[var(--ds-well)] p-3">
       {status && <span className="absolute inset-y-0 left-0 w-1" style={{ backgroundColor: status.bar }} />}
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="truncate text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">{tile.label}</div>
+          <div className="truncate text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">{tile.label}</div>
           <div className="mt-0.5 flex items-baseline gap-1">
-            <span className="text-2xl font-semibold tracking-tight tabular-nums leading-none text-[#1a1915]">{formatTileValue(tile.value)}</span>
-            {tile.unit && <span className="text-xs font-medium text-[#6e6a60]">{tile.unit}</span>}
+            <span className="text-2xl font-semibold tracking-tight tabular-nums leading-none text-[var(--ds-ink)]">{formatTileValue(tile.value)}</span>
+            {tile.unit && <span className="text-xs font-medium text-[var(--ds-muted)]">{tile.unit}</span>}
           </div>
           {hasTrend && (
             <div className="mt-1">
@@ -91,17 +91,17 @@ export const MetricBoard: React.FC<{ data: MetricBoardArtifact }> = ({ data }) =
     return (
       <Surface
         header={data.title ? <SurfaceTitle>{data.title}</SurfaceTitle> : undefined}
-        footer={more > 0 ? <div className="text-[11px] text-[#6e6a60]">+{more} more metrics</div> : undefined}
+        footer={more > 0 ? <div className="text-[11px] text-[var(--ds-muted)]">+{more} more metrics</div> : undefined}
       >
-        <div className={`flex divide-x divide-black/5 px-1 pb-2.5 ${data.title ? '' : 'pt-2.5'}`}>
+        <div className={`flex divide-x divide-[var(--ds-hairline-soft)] px-1 pb-2.5 ${data.title ? '' : 'pt-2.5'}`}>
           {glance.map((tile, i) => (
             <div key={i} className="min-w-0 flex-1 px-2.5">
-              <div className="truncate text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">{tile.label}</div>
+              <div className="truncate text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">{tile.label}</div>
               <div className="mt-0.5 flex items-baseline gap-1">
-                <span className="truncate text-lg font-semibold tracking-tight tabular-nums leading-none text-[#1a1915]">
+                <span className="truncate text-lg font-semibold tracking-tight tabular-nums leading-none text-[var(--ds-ink)]">
                   {formatTileValue(tile.value)}
                 </span>
-                {tile.unit && <span className="text-[11px] font-medium text-[#6e6a60]">{tile.unit}</span>}
+                {tile.unit && <span className="text-[11px] font-medium text-[var(--ds-muted)]">{tile.unit}</span>}
               </div>
               {(typeof tile.delta === 'number' || typeof tile.deltaPercent === 'number') && (
                 <div className="mt-1">

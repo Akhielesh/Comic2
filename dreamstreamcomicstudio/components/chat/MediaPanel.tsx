@@ -16,7 +16,7 @@ export const MediaPanel: React.FC<{ data: MediaPanelData }> = ({ data }) => {
   if (data.kind === 'pdf') {
     return (
       <div className="w-full h-full flex flex-col">
-        <iframe title={data.title || 'PDF'} src={data.url} className="flex-1 w-full border-0 bg-white" />
+        <iframe title={data.title || 'PDF'} src={data.url} className="flex-1 w-full border-0 bg-[var(--ds-raised)]" />
       </div>
     );
   }
@@ -24,7 +24,7 @@ export const MediaPanel: React.FC<{ data: MediaPanelData }> = ({ data }) => {
   if (data.kind === 'video') {
     return (
       <div className="w-full h-full flex flex-col bg-black">
-        <div className="flex items-center gap-1 px-2 py-1 border-b-2 border-black bg-white">
+        <div className="flex items-center gap-1 px-2 py-1 border-b-2 border-black bg-[var(--ds-raised)]">
           {data.title && <span className="text-[11px] font-bold text-slate-600 truncate mr-auto">{data.title}</span>}
           <a
             href={data.sourceUrl || data.url}
@@ -50,7 +50,7 @@ export const MediaPanel: React.FC<{ data: MediaPanelData }> = ({ data }) => {
   // image
   return (
     <div className="w-full h-full flex flex-col">
-      <div className="flex items-center gap-1 px-2 py-1 border-b-2 border-black bg-white">
+      <div className="flex items-center gap-1 px-2 py-1 border-b-2 border-black bg-[var(--ds-raised)]">
         <button onClick={() => setZoom((z) => Math.min(5, z + 0.25))} className="p-1.5 border-2 border-black rounded hover:bg-brand-yellow" title="Zoom in"><ZoomIn className="w-3.5 h-3.5" /></button>
         <button onClick={() => setZoom((z) => Math.max(0.25, z - 0.25))} className="p-1.5 border-2 border-black rounded hover:bg-brand-yellow" title="Zoom out"><ZoomOut className="w-3.5 h-3.5" /></button>
         <button onClick={() => setZoom(1)} className="p-1.5 border-2 border-black rounded hover:bg-brand-yellow" title="Reset"><Maximize className="w-3.5 h-3.5" /></button>

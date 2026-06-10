@@ -92,7 +92,7 @@ const ChatDebugMenu: React.FC<{ session: ChatSession }> = ({ session }) => {
         onClick={() => copy('id')}
         title={`Copy chat ID (${session.id})`}
         aria-label="Copy chat ID"
-        className={`flex items-center gap-1 rounded-l-xl border border-r-0 border-black/10 bg-white/70 px-2 py-1.5 sm:py-1 text-[11px] font-semibold ${MUTED} ${TRANSITION} hover:bg-black/5 hover:text-[#1a1915]`}
+        className={`flex items-center gap-1 rounded-l-xl border border-r-0 border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2 py-1.5 sm:py-1 text-[11px] font-semibold ${MUTED} ${TRANSITION} hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]`}
       >
         {done === 'id' ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Hash className="h-3.5 w-3.5" />}
         {done === 'id' ? 'Copied' : 'ID'}
@@ -102,20 +102,20 @@ const ChatDebugMenu: React.FC<{ session: ChatSession }> = ({ session }) => {
         onClick={() => setOpen((v) => !v)}
         title="More copy options"
         aria-label="More copy options"
-        className={`flex items-center rounded-r-xl border border-black/10 bg-white/70 px-1.5 sm:px-1 py-1.5 sm:py-1 ${MUTED} ${TRANSITION} hover:bg-black/5 hover:text-[#1a1915]`}
+        className={`flex items-center rounded-r-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-1.5 sm:px-1 py-1.5 sm:py-1 ${MUTED} ${TRANSITION} hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]`}
       >
         <ChevronDown className="h-3.5 w-3.5" />
       </button>
       {open && (
         <div className={`absolute right-0 top-full z-30 mt-1 w-56 overflow-hidden ${MENU} animate-fade-in`}>
-          <button onClick={() => copy('id')} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold hover:bg-black/5">
+          <button onClick={() => copy('id')} className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold hover:bg-[var(--ds-hover)]">
             <Hash className="h-3.5 w-3.5 shrink-0" /> Copy chat ID
           </button>
-          <button onClick={() => copy('bundle')} className="flex w-full items-center gap-2 border-t border-black/10 px-3 py-2 text-left text-xs font-semibold hover:bg-black/5">
+          <button onClick={() => copy('bundle')} className="flex w-full items-center gap-2 border-t border-[var(--ds-hairline)] px-3 py-2 text-left text-xs font-semibold hover:bg-[var(--ds-hover)]">
             <Braces className="h-3.5 w-3.5 shrink-0" /> Copy full debug bundle
-            <span className="ml-auto text-[9px] font-normal text-[#6e6a60]">large</span>
+            <span className="ml-auto text-[9px] font-normal text-[var(--ds-muted)]">large</span>
           </button>
-          <div className={`border-t border-black/10 bg-black/[0.03] px-3 py-1.5 text-[10px] leading-snug ${MUTED}`}>
+          <div className={`border-t border-[var(--ds-hairline)] bg-[var(--ds-well)] px-3 py-1.5 text-[10px] leading-snug ${MUTED}`}>
             The ID alone is enough to look up a synced chat. The bundle is for unsynced chats.
           </div>
         </div>
@@ -214,7 +214,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
   return (
     <div className={`flex-1 flex flex-col min-w-0 min-h-0 h-full ${CANVAS_BG}`}>
       {/* Header */}
-      <div className={`flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-3 border-b border-black/10 ${GLASS}`}>
+      <div className={`flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-3 border-b border-[var(--ds-hairline)] ${GLASS}`}>
         <button
           onClick={onToggleSidebar}
           className={`${CONTROL_BTN} p-2 sm:p-1.5 tap-target`}
@@ -230,7 +230,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
         >
           <Cpu className={`w-4 h-4 shrink-0 ${ACCENT_TEXT}`} />
           <span className={`font-semibold text-sm truncate max-w-[120px] sm:max-w-[180px] ${INK}`}>{modelLabel}</span>
-          <ChevronDown className="w-4 h-4 shrink-0 text-[#6e6a60]" />
+          <ChevronDown className="w-4 h-4 shrink-0 text-[var(--ds-muted)]" />
         </button>
 
         {/* Editable session title */}
@@ -245,7 +245,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
                   if (e.key === 'Enter') commitTitle();
                   if (e.key === 'Escape') setEditingTitle(false);
                 }}
-                className={`flex-1 min-w-0 text-sm font-semibold ${HAIRLINE} rounded-xl bg-white/70 px-2 py-1 outline-none focus:border-[#D97757]/40`}
+                className={`flex-1 min-w-0 text-sm font-semibold ${HAIRLINE} rounded-xl bg-[var(--ds-surface-soft)] px-2 py-1 outline-none focus:border-[#D97757]/40`}
               />
               <button onClick={commitTitle} className="text-green-600 hover:scale-110"><Check className="w-4 h-4" /></button>
               <button onClick={() => setEditingTitle(false)} className="text-slate-500 hover:scale-110"><X className="w-4 h-4" /></button>
@@ -253,7 +253,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
           ) : (
             <button
               onClick={() => { setTitleDraft(session.title); setEditingTitle(true); }}
-              className={`group flex items-center gap-1.5 min-w-0 ${MUTED} hover:text-[#1a1915] ${TRANSITION}`}
+              className={`group flex items-center gap-1.5 min-w-0 ${MUTED} hover:text-[var(--ds-ink)] ${TRANSITION}`}
               title="Rename this chat"
             >
               <span className="font-semibold text-sm truncate">{session.title}</span>
@@ -297,7 +297,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
                 <button
                   key={s}
                   onClick={() => onSend(s, [])}
-                  className={`text-left text-xs font-medium ${GLASS} ${HAIRLINE} ${SHADOW_SOFT} rounded-xl px-3 py-2 ${TRANSITION} hover:bg-white ${HOVER_LIFT}`}
+                  className={`text-left text-xs font-medium ${GLASS} ${HAIRLINE} ${SHADOW_SOFT} rounded-xl px-3 py-2 ${TRANSITION} hover:bg-[var(--ds-raised)] ${HOVER_LIFT}`}
                 >
                   {s}
                 </button>
@@ -315,7 +315,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
                     key={s.command}
                     onClick={() => onPickSkill(s)}
                     title={s.description}
-                    className={`flex items-center gap-1 ${PILL} px-2.5 py-1 text-[11px] font-medium hover:bg-white ${HOVER_LIFT}`}
+                    className={`flex items-center gap-1 ${PILL} px-2.5 py-1 text-[11px] font-medium hover:bg-[var(--ds-raised)] ${HOVER_LIFT}`}
                   >
                     <span>{s.emoji}</span> /{s.command}
                   </button>
@@ -354,7 +354,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
       {!atBottom && session.turns.length > 0 && (
         <button
           onClick={() => scrollToBottom()}
-          className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 ${PILL} ${SHADOW_SOFT} px-3 py-2 sm:py-1.5 text-xs font-semibold hover:bg-white animate-fade-in`}
+          className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 ${PILL} ${SHADOW_SOFT} px-3 py-2 sm:py-1.5 text-xs font-semibold hover:bg-[var(--ds-raised)] animate-fade-in`}
           title="Jump to latest"
         >
           <ChevronDown className="w-4 h-4" /> Latest

@@ -157,7 +157,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
                   <button
                     key={att.id}
                     onClick={() => openPanel?.({ type: 'media', data: { kind: 'pdf', url: att.dataUrl, title: att.name } })}
-                    className={`w-28 h-20 rounded-xl ${HAIRLINE} bg-white/70 flex flex-col items-center justify-center p-1 hover:bg-white ${TRANSITION}`}
+                    className={`w-28 h-20 rounded-xl ${HAIRLINE} bg-[var(--ds-surface-soft)] flex flex-col items-center justify-center p-1 hover:bg-[var(--ds-raised)] ${TRANSITION}`}
                     title="Open document"
                   >
                     <FileText className={`w-6 h-6 ${ACCENT_TEXT}`} />
@@ -195,10 +195,10 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
                   if (e.key === 'Escape') cancelEdit();
                 }}
                 rows={Math.min(10, Math.max(2, editDraft.split('\n').length))}
-                className={`w-full text-base sm:text-sm ${HAIRLINE} rounded-xl bg-white/70 p-2 outline-none focus:ring-2 focus:ring-[#D97757]/30 resize-y`}
+                className={`w-full text-base sm:text-sm ${HAIRLINE} rounded-xl bg-[var(--ds-surface-soft)] p-2 outline-none focus:ring-2 focus:ring-[#D97757]/30 resize-y`}
               />
               <div className="flex items-center justify-end gap-2 mt-1.5">
-                <button onClick={cancelEdit} className={`flex items-center gap-1 text-[11px] font-semibold ${MUTED} hover:text-[#1a1915]`}><X className="w-3.5 h-3.5" /> Cancel</button>
+                <button onClick={cancelEdit} className={`flex items-center gap-1 text-[11px] font-semibold ${MUTED} hover:text-[var(--ds-ink)]`}><X className="w-3.5 h-3.5" /> Cancel</button>
                 <button onClick={commitEdit} className={`flex items-center gap-1 text-[11px] font-semibold rounded-full px-2.5 py-0.5 ${ACCENT_BG} ${ACCENT_BG_HOVER} text-white ${TRANSITION}`}><Check className="w-3.5 h-3.5" /> Save & send</button>
               </div>
             </div>
@@ -271,7 +271,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
         {/* Retry for a failed assistant turn. */}
         {!isUser && turn.error && onRegenerate && (
           <div className="flex items-center gap-2 mt-1 px-1">
-            <button onClick={onRegenerate} disabled={busy} className="tap-target flex items-center gap-0.5 text-[11px] font-semibold text-red-500 hover:text-[#1a1915] disabled:opacity-40" title="Try again">
+            <button onClick={onRegenerate} disabled={busy} className="tap-target flex items-center gap-0.5 text-[11px] font-semibold text-red-500 hover:text-[var(--ds-ink)] disabled:opacity-40" title="Try again">
               <RefreshCw className="w-3 h-3" /> Try again
             </button>
           </div>
@@ -307,7 +307,7 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
           <div className="w-full mt-1">
             <button
               onClick={() => setShowDetails((v) => !v)}
-              className={`tap-target flex items-center gap-1 text-[11px] font-semibold ${MUTED} hover:text-[#1a1915] ${PILL} px-2.5 py-1 sm:py-0.5 hover:bg-white`}
+              className={`tap-target flex items-center gap-1 text-[11px] font-semibold ${MUTED} hover:text-[var(--ds-ink)] ${PILL} px-2.5 py-1 sm:py-0.5 hover:bg-[var(--ds-raised)]`}
             >
               {showDetails ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
               How it answered
@@ -417,13 +417,13 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
                   <div className={`absolute left-0 bottom-6 z-20 w-44 ${MENU} py-1`}>
                     <button
                       onClick={() => { setBranchOpen(false); onBranch(false); }}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-[11px] hover:bg-black/5 text-left"
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-[11px] hover:bg-[var(--ds-hover)] text-left"
                     >
                       <GitBranch className="w-3.5 h-3.5" /> Same model
                     </button>
                     <button
                       onClick={() => { setBranchOpen(false); onBranch(true); }}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 text-[11px] hover:bg-black/5 text-left"
+                      className="w-full flex items-center gap-2 px-3 py-1.5 text-[11px] hover:bg-[var(--ds-hover)] text-left"
                     >
                       <Cpu className="w-3.5 h-3.5" /> Pick a new model…
                     </button>

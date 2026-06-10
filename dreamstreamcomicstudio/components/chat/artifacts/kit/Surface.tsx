@@ -25,7 +25,7 @@ interface SurfaceProps {
 
 export const Surface: React.FC<SurfaceProps> = ({ header, right, accent, footer, className = '', children }) => (
   <div
-    className={`my-2 rounded-2xl border border-black/10 bg-white/85 backdrop-blur-md shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.06)] overflow-hidden animate-fade-in ${className}`}
+    className={`my-2 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] backdrop-blur-md shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_var(--ds-hairline)] overflow-hidden animate-fade-in ${className}`}
   >
     {accent && (
       <div
@@ -40,18 +40,18 @@ export const Surface: React.FC<SurfaceProps> = ({ header, right, accent, footer,
       </div>
     )}
     {children}
-    {footer && <div className="border-t border-black/5 bg-black/[0.025] px-3 py-2">{footer}</div>}
+    {footer && <div className="border-t border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] px-3 py-2">{footer}</div>}
   </div>
 );
 
 // Standard widget header text: quiet semibold title + small muted subtitle, matching
 // the calm-studio HEADING/MUTED tokens. Use these instead of font-display headers.
 export const SurfaceTitle: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = '' }) => (
-  <h3 className={`text-sm font-semibold tracking-tight text-[#1a1915] truncate ${className}`}>{children}</h3>
+  <h3 className={`text-sm font-semibold tracking-tight text-[var(--ds-ink)] truncate ${className}`}>{children}</h3>
 );
 
 export const SurfaceSubtitle: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = '' }) => (
-  <p className={`text-[11px] text-[#6e6a60] truncate ${className}`}>{children}</p>
+  <p className={`text-[11px] text-[var(--ds-muted)] truncate ${className}`}>{children}</p>
 );
 
 // A reusable "More / Less detail" disclosure so every card expands the same way.
@@ -67,13 +67,13 @@ export const Expandable: React.FC<{
     <>
       <button
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center justify-center gap-1 border-t border-black/5 bg-black/[0.025] py-1.5 text-[11px] font-semibold text-[#6e6a60] hover:bg-black/5 transition-colors duration-200"
+        className="w-full flex items-center justify-center gap-1 border-t border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] py-1.5 text-[11px] font-semibold text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] transition-colors duration-200"
         aria-expanded={open}
       >
         {open ? lessLabel : moreLabel}
         <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
       </button>
-      {open && <div className="animate-fade-in border-t border-black/5">{children}</div>}
+      {open && <div className="animate-fade-in border-t border-[var(--ds-hairline-soft)]">{children}</div>}
     </>
   );
 };

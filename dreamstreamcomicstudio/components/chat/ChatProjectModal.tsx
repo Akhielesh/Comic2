@@ -30,10 +30,10 @@ export const ChatProjectModal: React.FC<ChatProjectModalProps> = ({ project, onS
   return (
     <ModalPortal>
       <div className="fixed inset-0 z-[70] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
-        <div className="bg-white border-4 border-black rounded-2xl shadow-comic w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+        <div className="bg-[var(--ds-raised)] border-4 border-black rounded-2xl shadow-comic w-full max-w-md" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-between px-5 py-3 border-b-4 border-black bg-brand-blue text-white rounded-t-xl">
             <h2 className="font-display text-xl">{project ? 'Edit project' : 'New project'}</h2>
-            <button onClick={onClose} className="border-2 border-black rounded p-1 bg-white text-black hover:bg-brand-yellow"><X className="w-4 h-4" /></button>
+            <button onClick={onClose} className="border-2 border-black rounded p-1 bg-[var(--ds-raised)] text-black hover:bg-brand-yellow"><X className="w-4 h-4" /></button>
           </div>
 
           <div className="p-5 space-y-4">
@@ -60,7 +60,7 @@ export const ChatProjectModal: React.FC<ChatProjectModalProps> = ({ project, onS
                   <button
                     key={iconName}
                     onClick={() => setIcon(iconName)}
-                    className={`aspect-square rounded-lg border-2 flex items-center justify-center ${icon === iconName ? 'border-black bg-brand-yellow' : 'border-slate-300 bg-white hover:border-black'}`}
+                    className={`aspect-square rounded-lg border-2 flex items-center justify-center ${icon === iconName ? 'border-black bg-brand-yellow' : 'border-slate-300 bg-[var(--ds-raised)] hover:border-black'}`}
                   >
                     <Icon className="w-4 h-4" />
                   </button>
@@ -87,7 +87,7 @@ export const ChatProjectModal: React.FC<ChatProjectModalProps> = ({ project, onS
           </div>
 
           <div className="flex justify-end gap-2 px-5 py-3 border-t-2 border-black">
-            <button onClick={onClose} className="px-4 py-2 text-sm font-bold border-2 border-black rounded-lg bg-white hover:bg-slate-100">Cancel</button>
+            <button onClick={onClose} className="px-4 py-2 text-sm font-bold border-2 border-black rounded-lg bg-[var(--ds-raised)] hover:bg-slate-100">Cancel</button>
             <button
               onClick={save}
               disabled={!name.trim()}

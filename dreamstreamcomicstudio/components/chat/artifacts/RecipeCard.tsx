@@ -22,15 +22,15 @@ const paramIcon = (t: RecipeParameterView['input_type']) => {
 
 const ParamRow: React.FC<{ p: RecipeParameterView }> = ({ p }) => (
   <li className="flex items-start gap-2 py-1">
-    <span className="mt-0.5 text-[#6e6a60]">{paramIcon(p.input_type)}</span>
+    <span className="mt-0.5 text-[var(--ds-muted)]">{paramIcon(p.input_type)}</span>
     <span className="min-w-0 flex-1">
       <span className="flex flex-wrap items-center gap-1.5">
-        <code className="text-[11px] font-semibold text-[#1a1915]">{p.key}</code>
+        <code className="text-[11px] font-semibold text-[var(--ds-ink)]">{p.key}</code>
         <Badge color={p.requirement === 'required' ? TONE.bad : TONE.neutral}>{p.requirement}</Badge>
-        <span className="text-[10px] uppercase tracking-wider text-[#6e6a60]">{p.input_type}</span>
-        {p.default !== undefined && <span className="text-[10px] text-[#6e6a60]">default: {String(p.default)}</span>}
+        <span className="text-[10px] uppercase tracking-wider text-[var(--ds-muted)]">{p.input_type}</span>
+        {p.default !== undefined && <span className="text-[10px] text-[var(--ds-muted)]">default: {String(p.default)}</span>}
       </span>
-      {p.description && <span className="block text-[11px] text-[#6e6a60]">{p.description}</span>}
+      {p.description && <span className="block text-[11px] text-[var(--ds-muted)]">{p.description}</span>}
       {p.options && p.options.length > 0 && (
         <span className="mt-0.5 flex flex-wrap gap-1">
           {p.options.map((o) => (
@@ -52,12 +52,12 @@ export const RecipeCard: React.FC<{ data: RecipeCardArtifact }> = ({ data }) => 
       accent={isSwarm ? '#c026d3' : '#0ea5e9'}
       header={
         <div className="flex items-start gap-2">
-          <span className="mt-0.5 shrink-0 rounded-lg bg-black/[0.04] p-1.5 text-[#6e6a60]">
+          <span className="mt-0.5 shrink-0 rounded-lg bg-[var(--ds-well-strong)] p-1.5 text-[var(--ds-muted)]">
             <BookOpen className="w-4 h-4" />
           </span>
           <span className="min-w-0">
             <span className="flex flex-wrap items-center gap-1.5">
-              <span className="text-sm font-semibold tracking-tight text-[#1a1915] leading-tight">{data.title}</span>
+              <span className="text-sm font-semibold tracking-tight text-[var(--ds-ink)] leading-tight">{data.title}</span>
               {data.builtin ? <Badge color={TONE.good}>built-in</Badge> : <Badge color={TONE.neutral}>saved</Badge>}
               {isSwarm ? (
                 <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-fuchsia-700">
@@ -69,8 +69,8 @@ export const RecipeCard: React.FC<{ data: RecipeCardArtifact }> = ({ data }) => 
                 </span>
               )}
             </span>
-            <span className="mt-0.5 block text-[12px] text-[#6e6a60]">{data.description}</span>
-            {data.id && <code className="text-[10px] text-[#6e6a60]/70">{data.id}</code>}
+            <span className="mt-0.5 block text-[12px] text-[var(--ds-muted)]">{data.description}</span>
+            {data.id && <code className="text-[10px] text-[var(--ds-muted)]">{data.id}</code>}
           </span>
         </div>
       }
@@ -95,8 +95,8 @@ export const RecipeCard: React.FC<{ data: RecipeCardArtifact }> = ({ data }) => 
 
         {params.length > 0 && (
           <div>
-            <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">Parameters</div>
-            <ul className="divide-y divide-black/5">
+            <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Parameters</div>
+            <ul className="divide-y divide-[var(--ds-hairline-soft)]">
               {params.map((p) => (
                 <ParamRow key={p.key} p={p} />
               ))}
@@ -110,13 +110,13 @@ export const RecipeCard: React.FC<{ data: RecipeCardArtifact }> = ({ data }) => 
           <div className="space-y-2 px-3 py-2">
             {data.instructions && (
               <div>
-                <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">Instructions</div>
-                <p className="whitespace-pre-wrap text-[11px] leading-relaxed text-[#6e6a60]">{data.instructions}</p>
+                <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Instructions</div>
+                <p className="whitespace-pre-wrap text-[11px] leading-relaxed text-[var(--ds-muted)]">{data.instructions}</p>
               </div>
             )}
             {data.activities && data.activities.length > 0 && (
               <div>
-                <div className="mb-0.5 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">
+                <div className="mb-0.5 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">
                   <Sparkles className="w-3 h-3" /> Follow-ups
                 </div>
                 <div className="flex flex-wrap gap-1">

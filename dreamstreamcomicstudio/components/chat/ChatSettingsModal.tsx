@@ -31,10 +31,10 @@ export const ChatSettingsModal: React.FC<ChatSettingsModalProps> = ({
   return (
     <ModalPortal>
       <div className="fixed inset-0 z-[70] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
-        <div className="bg-white border-4 border-black rounded-2xl shadow-comic w-full max-w-5xl max-h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="bg-[var(--ds-raised)] border-4 border-black rounded-2xl shadow-comic w-full max-w-5xl max-h-[92vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-between px-5 py-3 border-b-4 border-black bg-brand-blue text-white rounded-t-xl shrink-0">
             <h2 className="font-display text-xl flex items-center gap-2"><Sparkles className="w-5 h-5" /> Chat settings</h2>
-            <button onClick={onClose} className="border-2 border-black rounded p-1 bg-white text-black hover:bg-brand-yellow"><X className="w-4 h-4" /></button>
+            <button onClick={onClose} className="border-2 border-black rounded p-1 bg-[var(--ds-raised)] text-black hover:bg-brand-yellow"><X className="w-4 h-4" /></button>
           </div>
 
           {/* Tabs */}
@@ -192,7 +192,7 @@ const AgentsTab: React.FC<{ userId?: string; onAgentsChange: (a: CustomAgentDef[
         ) : (
           <div className="space-y-2">
             {custom.map((a) => (
-              <div key={a.id} className="border-2 border-black rounded-lg p-2.5 bg-white flex items-start gap-2">
+              <div key={a.id} className="border-2 border-black rounded-lg p-2.5 bg-[var(--ds-raised)] flex items-start gap-2">
                 <Bot className="w-4 h-4 text-fuchsia-600 shrink-0 mt-0.5" />
                 <div className="min-w-0 flex-1">
                   <div className="font-bold text-sm">{a.name}</div>
@@ -236,12 +236,12 @@ const AgentEditor: React.FC<{ agent: CustomAgentDef; onSave: (a: CustomAgentDef)
         <div className="text-[11px] font-bold uppercase text-slate-500 mb-1">Tools this agent can use</div>
         <div className="flex flex-wrap gap-1.5">
           {AGENT_TOOLS.map((t) => (
-            <button key={t.name} onClick={() => toggle(t.name)} className={`text-[11px] font-bold px-2 py-1 rounded-full border-2 ${tools.includes(t.name) ? 'border-black bg-emerald-300' : 'border-slate-300 bg-white hover:border-black'}`}>{t.label}</button>
+            <button key={t.name} onClick={() => toggle(t.name)} className={`text-[11px] font-bold px-2 py-1 rounded-full border-2 ${tools.includes(t.name) ? 'border-black bg-emerald-300' : 'border-slate-300 bg-[var(--ds-raised)] hover:border-black'}`}>{t.label}</button>
           ))}
         </div>
       </div>
       <div className="flex justify-end gap-2 pt-1">
-        <button onClick={onCancel} className="px-4 py-2 text-sm font-bold border-2 border-black rounded-lg bg-white hover:bg-slate-100">Cancel</button>
+        <button onClick={onCancel} className="px-4 py-2 text-sm font-bold border-2 border-black rounded-lg bg-[var(--ds-raised)] hover:bg-slate-100">Cancel</button>
         <button onClick={() => valid && onSave({ ...agent, name: name.trim(), description: description.trim(), systemPrompt: systemPrompt.trim(), toolNames: tools })} disabled={!valid} className="flex items-center gap-1 px-4 py-2 text-sm font-bold border-2 border-black rounded-lg bg-brand-yellow shadow-comic hover:translate-y-[1px] disabled:opacity-40"><Check className="w-4 h-4" /> Save agent</button>
       </div>
     </div>

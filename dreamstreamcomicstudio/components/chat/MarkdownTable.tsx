@@ -140,11 +140,11 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder={`Filter ${rows.length} rows…`}
-                className="w-full rounded-lg border border-black/10 bg-white/80 py-1 pl-7 pr-2 text-xs text-[#1a1915] placeholder:text-[#9b968c] transition-colors duration-200 focus:border-black/20 focus:outline-none focus:ring-2 focus:ring-black/5"
+                className="w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface)] py-1 pl-7 pr-2 text-xs text-[var(--ds-ink)] placeholder:text-[#9b968c] transition-colors duration-200 focus:border-black/20 focus:outline-none focus:ring-2 focus:ring-[var(--ds-hairline-soft)]"
               />
             </div>
           )}
-          <span className="text-[11px] tabular-nums text-[#6e6a60]">
+          <span className="text-[11px] tabular-nums text-[var(--ds-muted)]">
             {query ? `${filtered.length} of ${rows.length}` : `${rows.length} rows`}
           </span>
           <div className="ml-auto flex items-center gap-1">
@@ -155,8 +155,8 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
                 title="Toggle magnitude bars"
                 className={`flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-semibold transition-colors duration-200 ${
                   showBars
-                    ? 'border-black/20 bg-black/[0.06] text-[#1a1915]'
-                    : 'border-black/10 text-[#6e6a60] hover:bg-black/[0.03] hover:text-[#1a1915]'
+                    ? 'border-black/20 bg-black/[0.06] text-[var(--ds-ink)]'
+                    : 'border-[var(--ds-hairline)] text-[var(--ds-muted)] hover:bg-[var(--ds-well)] hover:text-[var(--ds-ink)]'
                 }`}
               >
                 <BarChart3 className="h-3 w-3" />
@@ -165,7 +165,7 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
             <button
               onClick={copyCsv}
               title="Copy as CSV"
-              className="flex items-center gap-1 rounded-md border border-black/10 px-1.5 py-0.5 text-[11px] font-semibold text-[#6e6a60] transition-colors duration-200 hover:bg-black/[0.03] hover:text-[#1a1915]"
+              className="flex items-center gap-1 rounded-md border border-[var(--ds-hairline)] px-1.5 py-0.5 text-[11px] font-semibold text-[var(--ds-muted)] transition-colors duration-200 hover:bg-[var(--ds-well)] hover:text-[var(--ds-ink)]"
             >
               {copied ? <Check className="h-3 w-3 text-emerald-600" /> : <Copy className="h-3 w-3" />}
               {copied ? 'Copied' : 'CSV'}
@@ -174,7 +174,7 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
         </div>
       )}
 
-      <div className="max-h-[420px] overflow-auto rounded-xl border border-black/10 bg-white/85 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+      <div className="max-h-[420px] overflow-auto rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
         <table className="w-full border-collapse text-sm">
           <thead className="sticky top-0 z-10">
             <tr>
@@ -182,16 +182,16 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
                 const active = sort?.col === i;
                 const Icon = !active ? ArrowUpDown : sort!.dir === 'asc' ? ArrowUp : ArrowDown;
                 return (
-                  <th key={i} className="border-b border-black/10 bg-white/95 p-0 backdrop-blur-sm">
+                  <th key={i} className="border-b border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] p-0 backdrop-blur-sm">
                     <button
                       onClick={() => toggleSort(i)}
                       className={`flex w-full items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wider transition-colors duration-200 ${
-                        active ? 'text-[#1a1915]' : 'text-[#6e6a60] hover:text-[#1a1915]'
+                        active ? 'text-[var(--ds-ink)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
                       } ${colStats[i].isNumeric ? 'justify-end text-right' : 'text-left'}`}
                       title="Sort"
                     >
                       <span className="truncate">{h}</span>
-                      <Icon className={`h-3 w-3 shrink-0 ${active ? 'text-[#1a1915]' : 'text-black/30'}`} />
+                      <Icon className={`h-3 w-3 shrink-0 ${active ? 'text-[var(--ds-ink)]' : 'text-black/30'}`} />
                     </button>
                   </th>
                 );
@@ -200,7 +200,7 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
           </thead>
           <tbody>
             {visible.map((row, ri) => (
-              <tr key={ri} className="border-b border-black/5 transition-colors duration-200 last:border-0 hover:bg-black/[0.03]">
+              <tr key={ri} className="border-b border-[var(--ds-hairline-soft)] transition-colors duration-200 last:border-0 hover:bg-[var(--ds-well)]">
                 {headers.map((_, ci) => {
                   const cell = row[ci];
                   const stat = colStats[ci];
@@ -210,7 +210,7 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
                     <td
                       key={ci}
                       className={`relative px-2.5 py-1.5 align-top ${
-                        stat.isNumeric ? 'text-right font-medium tabular-nums text-[#1a1915]' : 'text-[#3c3a33]'
+                        stat.isNumeric ? 'text-right font-medium tabular-nums text-[var(--ds-ink)]' : 'text-[#3c3a33]'
                       }`}
                     >
                       {showBars && n !== null && (
@@ -241,7 +241,7 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
       {filtered.length > DEFAULT_VISIBLE && (
         <button
           onClick={() => setShowAll((v) => !v)}
-          className="mt-1.5 w-full rounded-lg border border-black/10 bg-black/[0.02] py-1 text-[11px] font-semibold text-[#6e6a60] transition-colors duration-200 hover:bg-black/[0.05] hover:text-[#1a1915]"
+          className="mt-1.5 w-full rounded-lg border border-[var(--ds-hairline)] bg-black/[0.02] py-1 text-[11px] font-semibold text-[var(--ds-muted)] transition-colors duration-200 hover:bg-black/[0.05] hover:text-[var(--ds-ink)]"
         >
           {showAll ? 'Show less' : `Show all ${filtered.length} rows`}
         </button>

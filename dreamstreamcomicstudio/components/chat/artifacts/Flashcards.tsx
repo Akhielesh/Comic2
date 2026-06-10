@@ -52,7 +52,7 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
         accent="#8b5cf6"
         header={
           <div className="flex items-start gap-2">
-            <span className="mt-0.5 shrink-0 rounded-lg bg-black/[0.04] p-1.5 text-[#6e6a60]">
+            <span className="mt-0.5 shrink-0 rounded-lg bg-[var(--ds-well-strong)] p-1.5 text-[var(--ds-muted)]">
               <Layers className="w-4 h-4" />
             </span>
             <div className="min-w-0">
@@ -62,17 +62,17 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
           </div>
         }
         right={
-          <span className="text-[11px] text-[#6e6a60] tabular-nums">
+          <span className="text-[11px] text-[var(--ds-muted)] tabular-nums">
             {known.size === cards.length ? 'mastered' : `${known.size}/${cards.length} known`}
           </span>
         }
       >
         <div className="px-3 pb-3">
-          <div className="rounded-xl bg-black/[0.03] px-3 py-2.5">
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60] mb-0.5">First card</div>
-            <div className="text-sm text-[#1a1915] line-clamp-2 whitespace-pre-wrap">{cards[0].front}</div>
+          <div className="rounded-xl bg-[var(--ds-well)] px-3 py-2.5">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)] mb-0.5">First card</div>
+            <div className="text-sm text-[var(--ds-ink)] line-clamp-2 whitespace-pre-wrap">{cards[0].front}</div>
           </div>
-          <div className="mt-1.5 text-[11px] text-[#6e6a60]">
+          <div className="mt-1.5 text-[11px] text-[var(--ds-muted)]">
             {cards.length} card{cards.length === 1 ? '' : 's'}{review.size ? ` · ${review.size} flagged for review` : ''}
           </div>
         </div>
@@ -115,7 +115,7 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
     else if (k === 'ArrowDown' || k === 'j' || k === 'J') { e.preventDefault(); mark(false); }
   };
 
-  const secondaryBtn = 'flex items-center gap-1 text-[12px] font-semibold rounded-lg border border-black/10 bg-white/70 px-2.5 py-1 text-[#1a1915] transition-colors duration-200 hover:bg-black/5';
+  const secondaryBtn = 'flex items-center gap-1 text-[12px] font-semibold rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 py-1 text-[var(--ds-ink)] transition-colors duration-200 hover:bg-[var(--ds-hover)]';
 
   return (
     <div
@@ -129,7 +129,7 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
         accent="#8b5cf6"
         header={
           <div className="flex items-start gap-2">
-            <span className="mt-0.5 shrink-0 rounded-lg bg-black/[0.04] p-1.5 text-[#6e6a60]">
+            <span className="mt-0.5 shrink-0 rounded-lg bg-[var(--ds-well-strong)] p-1.5 text-[var(--ds-muted)]">
               <Layers className="w-4 h-4" />
             </span>
             <div className="min-w-0">
@@ -139,7 +139,7 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
           </div>
         }
         right={
-          <span className="text-[11px] text-[#6e6a60] tabular-nums">
+          <span className="text-[11px] text-[var(--ds-muted)] tabular-nums">
             {known.size === cards.length ? '✓ mastered' : `${known.size}/${cards.length} known`}
           </span>
         }
@@ -163,23 +163,23 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
             role="button"
             onClick={() => setFlipped((f) => !f)}
             className={`w-full min-h-[150px] rounded-xl border flex items-center justify-center text-center p-5 transition-colors duration-200 cursor-pointer ${
-              flipped ? 'border-violet-200 bg-violet-50/70' : 'border-black/10 bg-black/[0.03] hover:bg-black/5'
+              flipped ? 'border-violet-200 bg-violet-50/70' : 'border-[var(--ds-hairline)] bg-[var(--ds-well)] hover:bg-[var(--ds-hover)]'
             }`}
           >
             <div>
-              <div className="text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60] mb-1">{flipped ? 'Answer' : 'Term'}</div>
-              <div className="text-lg font-semibold tracking-tight text-[#1a1915] whitespace-pre-wrap">{flipped ? card.back : card.front}</div>
-              {!flipped && <div className="text-[11px] text-[#6e6a60] mt-2">Click to flip · or focus the deck and use <kbd>space</kbd> / <kbd>←</kbd> <kbd>→</kbd></div>}
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)] mb-1">{flipped ? 'Answer' : 'Term'}</div>
+              <div className="text-lg font-semibold tracking-tight text-[var(--ds-ink)] whitespace-pre-wrap">{flipped ? card.back : card.front}</div>
+              {!flipped && <div className="text-[11px] text-[var(--ds-muted)] mt-2">Click to flip · or focus the deck and use <kbd>space</kbd> / <kbd>←</kbd> <kbd>→</kbd></div>}
             </div>
           </div>
 
           {/* Nav + progress */}
           <div className="flex items-center justify-between mt-3">
-            <button onClick={() => go(-1)} disabled={pos === 0} className="flex items-center gap-1 text-sm font-semibold text-[#6e6a60] transition-colors duration-200 disabled:opacity-30 hover:text-[#1a1915]">
+            <button onClick={() => go(-1)} disabled={pos === 0} className="flex items-center gap-1 text-sm font-semibold text-[var(--ds-muted)] transition-colors duration-200 disabled:opacity-30 hover:text-[var(--ds-ink)]">
               <ChevronLeft className="w-4 h-4" /> Prev
             </button>
-            <span className="text-[11px] text-[#6e6a60] tabular-nums">{pos + 1} / {order.length}{known.has(cardIndex) ? ' · ✓' : ''}</span>
-            <button onClick={() => go(1)} disabled={pos >= order.length - 1} className="flex items-center gap-1 text-sm font-semibold text-[#6e6a60] transition-colors duration-200 disabled:opacity-30 hover:text-[#1a1915]">
+            <span className="text-[11px] text-[var(--ds-muted)] tabular-nums">{pos + 1} / {order.length}{known.has(cardIndex) ? ' · ✓' : ''}</span>
+            <button onClick={() => go(1)} disabled={pos >= order.length - 1} className="flex items-center gap-1 text-sm font-semibold text-[var(--ds-muted)] transition-colors duration-200 disabled:opacity-30 hover:text-[var(--ds-ink)]">
               Next <ChevronRight className="w-4 h-4" />
             </button>
           </div>

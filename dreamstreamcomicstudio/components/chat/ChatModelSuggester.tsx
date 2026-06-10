@@ -27,7 +27,7 @@ export const ChatModelSuggester: React.FC<ChatModelSuggesterProps> = ({ models, 
     return (
       <button
         onClick={() => setOpen(true)}
-        className={`flex items-center gap-2 text-xs font-medium ${GLASS} ${HAIRLINE} ${SHADOW_SOFT} rounded-xl px-3 py-2 ${TRANSITION} hover:bg-white ${HOVER_LIFT}`}
+        className={`flex items-center gap-2 text-xs font-medium ${GLASS} ${HAIRLINE} ${SHADOW_SOFT} rounded-xl px-3 py-2 ${TRANSITION} hover:bg-[var(--ds-raised)] ${HOVER_LIFT}`}
       >
         <Wand2 className="w-4 h-4" /> Not sure which model? Describe your goal
       </button>
@@ -44,10 +44,10 @@ export const ChatModelSuggester: React.FC<ChatModelSuggesterProps> = ({ models, 
         onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) suggest(); }}
         rows={2}
         placeholder="e.g. debug a React component / research the latest on a topic / read a screenshot"
-        className={`w-full resize-none ${HAIRLINE} rounded-xl bg-white/70 px-3 py-2 text-sm outline-none focus:border-[#D97757]/40 ${TRANSITION}`}
+        className={`w-full resize-none ${HAIRLINE} rounded-xl bg-[var(--ds-surface-soft)] px-3 py-2 text-sm outline-none focus:border-[#D97757]/40 ${TRANSITION}`}
       />
       <div className="flex justify-between items-center mt-2">
-        <button onClick={() => { setOpen(false); setSuggestions(null); }} className={`text-[11px] font-semibold ${MUTED} hover:text-[#1a1915]`}>Cancel</button>
+        <button onClick={() => { setOpen(false); setSuggestions(null); }} className={`text-[11px] font-semibold ${MUTED} hover:text-[var(--ds-ink)]`}>Cancel</button>
         <button
           onClick={suggest}
           disabled={!goal.trim() || models.length === 0}
@@ -67,10 +67,10 @@ export const ChatModelSuggester: React.FC<ChatModelSuggesterProps> = ({ models, 
             <p className={`text-[11px] ${MUTED}`}>No strong match — pick any model from the switcher above.</p>
           ) : (
             suggestions.map(({ model, reasons }, i) => (
-              <div key={model.id} className={`${HAIRLINE} rounded-xl p-2.5 ${i === 0 ? ACCENT_SOFT_BG : 'bg-white/70'}`}>
+              <div key={model.id} className={`${HAIRLINE} rounded-xl p-2.5 ${i === 0 ? ACCENT_SOFT_BG : 'bg-[var(--ds-surface-soft)]'}`}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">{sourceLabel(providerOrigin(model))}{i === 0 ? ' · Best match' : ''}</div>
+                    <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">{sourceLabel(providerOrigin(model))}{i === 0 ? ' · Best match' : ''}</div>
                     <div className={`font-semibold text-sm leading-tight truncate ${INK}`}>{model.name}</div>
                   </div>
                   <span className={`text-[11px] font-semibold ${MUTED} shrink-0`}>{costLabel(model)}</span>
