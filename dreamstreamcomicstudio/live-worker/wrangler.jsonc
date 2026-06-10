@@ -1,0 +1,32 @@
+{
+  // DreamStream Live Worker — owns the EventRoom Durable Object (chat, presence,
+  // lobby, stream state) and the R2-served segment rail (near-zero-cost delivery:
+  // R2 has no egress fees and segments are CDN-cached). See README.md.
+  "name": "dreamstream-live",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+
+  "durable_objects": {
+    "bindings": [{ "class_name": "EventRoom", "name": "EVENT_ROOM" }]
+  },
+  "migrations": [{ "new_sqlite_classes": ["EventRoom"], "tag": "v1" }],
+
+  "r2_buckets": [
+    // `wrangler dev` simulates this locally; create the real bucket before deploying:
+    //   npx wrangler r2 bucket create dreamstream-live
+    { "binding": "LIVE_BUCKET", "bucket_name": "dreamstream-live" }
+  ],
+
+  "vars": {
+    // Comma-separated list of origins allowed to call the API, or "*" while testing.
+    // Tighten to "https://dreamstream.example" before real events.
+    "ALLOWED_ORIGINS": "*"
+  },
+
+  // Public URL: https://dreamstreamstudio.ai/live-api/* (same zone the studio worker
+  // uses — Workers routes take precedence over Pages on matching paths, so the rest
+  // of the site is untouched). The worker strips the /live-api prefix on arrival.
+  "routes": [
+    { "pattern": "dreamstreamstudio.ai/live-api/*", "zone_name": "dreamstreamstudio.ai" }
+  ]
+}
