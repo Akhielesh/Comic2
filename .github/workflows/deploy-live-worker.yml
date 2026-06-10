@@ -42,10 +42,11 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        # Idempotent: succeeds if the bucket is new, tolerates "already exists".
-        run: |
-          npx --yes wrangler@latest r2 bucket create dreamstream-live 2>&1 | tee bucket.log \
-            || grep -qi "already exists" bucket.log
+        # Best-effort convenience: the bucket already exists in this account, and
+        # tokens scoped only to Workers Scripts can't create/list buckets. If the
+        # bucket is genuinely missing, the deploy step below fails with a clear error.
+        continue-on-error: true
+        run: npx --yes wrangler@latest r2 bucket create dreamstream-live
 
       - name: Deploy with wrangler
         working-directory: dreamstreamcomicstudio/live-worker

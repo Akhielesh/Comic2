@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Sparkles, Zap, Users, BookOpen, Check, HelpCircle, Mail, Info, ChevronRight, MessageSquare, Bot, Shield, Cpu, ArrowRight, Code2, Lock } from 'lucide-react';
+import { Sparkles, Zap, Users, BookOpen, Check, HelpCircle, Mail, Info, ChevronRight, MessageSquare, Bot, Shield, Cpu, ArrowRight, Code2, Lock, Radio } from 'lucide-react';
 import { Button } from './Button';
 import { WaitlistForm } from './WaitlistForm';
 import { getStudioStats, StudioStats } from '../services/stats';
@@ -141,13 +141,13 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
             <div className="inline-flex items-center gap-2 bg-black text-white px-4 py-2 rounded-full font-mono text-xs font-bold uppercase tracking-widest mb-4">
               <Sparkles size={12} className="text-brand-yellow" /> The DreamStream Studio suite
             </div>
-            <h2 className="text-4xl md:text-5xl font-display mb-4">Three products. One studio.</h2>
+            <h2 className="text-4xl md:text-5xl font-display mb-4">Four products. One studio.</h2>
             <p className="font-comic text-slate-600 max-w-xl mx-auto">
               Everything you need to dream up, build and ship your ideas — under a single account.
             </p>
           </div>
 
-          <div className="grid md:grid-cols-3 gap-6">
+          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
             {/* Comic Studio — live */}
             <div className="bg-white border-4 border-black rounded-2xl p-7 shadow-comic flex flex-col transition-transform duration-300 hover:-translate-y-1">
               <div className="flex items-center justify-between mb-5">
@@ -186,6 +186,26 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               >
                 {user ? 'Open Chat Studio' : 'Try Chat Studio'} <ArrowRight size={16} />
               </button>
+            </div>
+
+            {/* Stream Studio — beta */}
+            <div className="bg-white border-4 border-black rounded-2xl p-7 shadow-comic flex flex-col transition-transform duration-300 hover:-translate-y-1">
+              <div className="flex items-center justify-between mb-5">
+                <div className="w-14 h-14 bg-brand-red border-2 border-black rounded-xl flex items-center justify-center shadow-[3px_3px_0px_0px_rgba(0,0,0,0.8)] transform -rotate-2 text-white">
+                  <Radio size={26} />
+                </div>
+                <span className="text-[10px] font-extrabold uppercase tracking-wider bg-yellow-100 text-yellow-700 border-2 border-yellow-600 rounded-full px-2.5 py-1">Beta</span>
+              </div>
+              <h3 className="text-2xl font-display mb-2">Stream Studio</h3>
+              <p className="text-sm font-comic text-slate-600 leading-relaxed flex-1">
+                Go live from your phone or laptop — real camera lenses, live chat with your audience, a gated lobby, and full-quality recordings.
+              </p>
+              <a
+                href="/live.html"
+                className="mt-6 inline-flex items-center gap-2 font-bold text-sm text-brand-red hover:gap-3 transition-all"
+              >
+                Go live <ArrowRight size={16} />
+              </a>
             </div>
 
             {/* Code — coming soon */}
@@ -424,7 +444,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               </div>
             </div>
             <p className="text-zinc-400 font-comic max-w-sm">
-              One studio for AI-powered creation — comics, chat, and soon code. Built for creators who want control, from first idea to final ship.
+              One studio for AI-powered creation — comics, chat, live streams, and soon code. Built for creators who want control, from first idea to final ship.
             </p>
           </div>
           <div>
@@ -432,6 +452,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
             <ul className="space-y-4 text-sm font-bold">
               <li><button onClick={onEnterStudio} className="flex items-center gap-2 hover:text-brand-yellow text-left"><BookOpen size={16} /> Comic Studio</button></li>
               <li><button onClick={() => onNavigate?.('chat')} className="flex items-center gap-2 hover:text-brand-yellow text-left"><Bot size={16} /> Chat Studio</button></li>
+              <li><a href="/live.html" className="flex items-center gap-2 hover:text-brand-yellow text-left"><Radio size={16} /> Stream Studio <span className="text-[9px] uppercase tracking-wider bg-zinc-800 px-1.5 py-0.5 rounded">Beta</span></a></li>
               <li><button onClick={scrollToUpdates} className="flex items-center gap-2 text-zinc-500 hover:text-zinc-300 text-left"><Code2 size={16} /> Code <span className="text-[9px] uppercase tracking-wider bg-zinc-800 px-1.5 py-0.5 rounded">Soon</span></button></li>
             </ul>
           </div>
