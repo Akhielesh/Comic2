@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Plus, MoreVertical, Trash2, Pencil, MessageSquare, ArrowLeft, GitBranch, Check, X,
-  FolderPlus, ChevronDown, ChevronRight, FolderInput, SlidersHorizontal, Loader2
+  FolderPlus, ChevronDown, ChevronRight, FolderInput, SlidersHorizontal, Loader2,
+  PanelLeftClose, PanelLeftOpen
 } from 'lucide-react';
 import type { ChatSession, ChatProject } from '../../services/chatStorage';
 import { iconByName, colorByKey } from '../../services/chatProjectStyle';
@@ -193,6 +194,15 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
 }) => {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [dragOver, setDragOver] = useState<string | null>(null);
+  // Slim mode: the whole sidebar folds to an icon rail (persisted) so the conversation
+  // gets the width — the #1 "wasted space" complaint about the chat layout.
+  const [slim, setSlim] = useState<boolean>(() => {
+    try { return window.localStorage.getItem('ds_chat_sidebar_slim') === '1'; } catch { return false; }
+  });
+  const setSlimPersist = (v: boolean) => {
+    setSlim(v);
+    try { window.localStorage.setItem('ds_chat_sidebar_slim', v ? '1' : '0'); } catch { /* private mode */ }
+  };
 
   const byProject = useMemo(() => {
     const map = new Map<string, ChatSession[]>();
@@ -237,12 +247,41 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
     />
   );
 
-  return (
-    <div className="w-72 shrink-0 h-full flex flex-col border-r-4 border-black bg-slate-100">
-      <div className="p-3 border-b-2 border-black space-y-2">
-        <button onClick={onBack} className="flex items-center gap-1 text-xs font-bold text-slate-600 hover:text-black hover:underline">
-          <ArrowLeft className="w-3.5 h-3.5" /> Back
+  // Folded: a slim icon rail with the essentials; one click re-opens.
+  if (slim) {
+    return (
+      <div className="w-12 shrink-0 h-full flex flex-col items-center border-r-4 border-black bg-slate-100 py-3 gap-2 transition-all duration-200">
+        <button onClick={() => setSlimPersist(false)} title="Expand sidebar" className="border-2 border-black rounded-lg p-1.5 bg-white shadow-comic hover:translate-y-[1px]">
+          <PanelLeftOpen className="w-4 h-4" />
         </button>
+        <button onClick={onNew} title="New chat" className="border-2 border-black rounded-lg p-1.5 bg-brand-yellow shadow-comic hover:translate-y-[1px]">
+          <Plus className="w-4 h-4" />
+        </button>
+        <button onClick={onNewProject} title="New project" className="border-2 border-black rounded-lg p-1.5 bg-white shadow-comic hover:translate-y-[1px]">
+          <FolderPlus className="w-4 h-4" />
+        </button>
+        <div className="flex-1" />
+        <button onClick={onEditMemory} title="Settings, memory, agents & tools" className={`border-2 border-black rounded-lg p-1.5 shadow-comic hover:translate-y-[1px] ${hasMemory ? 'bg-indigo-100' : 'bg-white'}`}>
+          <SlidersHorizontal className="w-4 h-4" />
+        </button>
+        <button onClick={onBack} title="Back" className="border-2 border-black rounded-lg p-1.5 bg-white shadow-comic hover:translate-y-[1px]">
+          <ArrowLeft className="w-4 h-4" />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-72 shrink-0 h-full flex flex-col border-r-4 border-black bg-slate-100 transition-all duration-200">
+      <div className="p-3 border-b-2 border-black space-y-2">
+        <div className="flex items-center justify-between">
+          <button onClick={onBack} className="flex items-center gap-1 text-xs font-bold text-slate-600 hover:text-black hover:underline">
+            <ArrowLeft className="w-3.5 h-3.5" /> Back
+          </button>
+          <button onClick={() => setSlimPersist(true)} title="Collapse sidebar" className="text-slate-400 hover:text-black p-1 rounded">
+            <PanelLeftClose className="w-4 h-4" />
+          </button>
+        </div>
         <div className="flex gap-2">
           <button onClick={onNew} className="flex-1 flex items-center justify-center gap-2 border-2 border-black rounded-lg px-3 py-2 bg-brand-yellow font-bold text-sm shadow-comic hover:translate-y-[1px] hover:shadow-comic-hover">
             <Plus className="w-4 h-4" /> New chat
@@ -296,8 +335,8 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
         <button onClick={onEditMemory} className={`w-full flex items-center gap-2 border-2 border-black rounded-lg px-3 py-1.5 text-sm font-bold ${hasMemory ? 'bg-indigo-100' : 'bg-white hover:bg-slate-100'}`} title="Memory, agents and tools">
           <SlidersHorizontal className="w-4 h-4" /> Settings {hasMemory ? '· memory on' : ''}
         </button>
-        <p className="text-[10px] text-slate-500 leading-tight">
-          Drag a chat onto a project to file it, or use its ⋮ menu. Chats are stored on this device.
+        <p className="text-[10px] text-slate-400 leading-tight" title="Drag a chat onto a project to file it, or use its ⋮ menu.">
+          Chats are stored on this device.
         </p>
       </div>
     </div>

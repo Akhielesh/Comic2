@@ -493,6 +493,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['convert image', 'jpg', 'jpeg', 'png', 'webp', 'avif', 'resize', 'thumbnail', 'image format', 'compress image', 'shrink image', 'to png', 'to jpg']
   },
   {
+    name: 'create_dashboard', label: 'Glass dashboard', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app SVG)',
+    description: 'Compose a customizable, drag-to-rearrange dashboard of live widgets — clocks across time zones, countdowns, stats, charts, checklists, progress rings, a minimalist globe with flight arcs, notes and links. Built for trackers, trip plans, study boards and overviews.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Widget board: clock, countdown, stat, chart, progress, list, globe, note, links.', docsUrl: 'https://dreamstream.app',
+    keywords: ['dashboard', 'widgets', 'tracker', 'overview', 'planner', 'trip', 'flight', 'countdown', 'clock', 'study plan', 'watchlist', 'board', 'glass']
+  },
+  {
     name: 'show_metrics', label: 'Metric board', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app SVG)',
     description: 'Show a board of KPI / stat tiles (value, delta, sparkline, progress ring, status) from data the model provides — dashboards, scorecards and at-a-glance summaries.',
     auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
@@ -646,6 +653,7 @@ export const CORE_ALWAYS_TOOLS: string[] = [
   'render_chart',
   'render_table',
   'show_metrics',
+  'create_dashboard',
   'render_heatmap',
   'render_ui',
   'convert_data',

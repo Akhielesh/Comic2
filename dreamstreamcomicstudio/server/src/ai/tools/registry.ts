@@ -480,6 +480,76 @@ const chartTool: ChatTool = {
 };
 
 // Render a board of KPI tiles from model-provided metrics.
+
+// Compose a customizable glass dashboard of live widgets (clock, countdown, stats,
+// charts, checklist, progress, globe with flight arcs, notes, links). Pure + local —
+// the model supplies all data; the client renders, animates and lets the user
+// drag-rearrange. The go-to tool for "build me a dashboard / tracker / overview".
+const dashboardTool: ChatTool = {
+  name: 'create_dashboard',
+  description:
+    'Create a customizable, drag-to-rearrange DASHBOARD of live widgets for the user — study plans, trip/flight overviews, market watch, project status, fitness, exam prep. Widgets: "clock" (live time, multiple time zones), "countdown" (to an ISO date), "stat" (value + delta + spark), "chart" (points), "progress" (value/max ring), "list" (checklist items), "globe" (lat/lon points + arcs between labeled points — perfect for flight paths), "note", "links". Give every widget a unique id and a short title; use size "md"/"lg" for wide widgets (charts, globes). Use it PROACTIVELY when the user asks to track, plan or monitor anything multi-part.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string' },
+      subtitle: { type: 'string' },
+      widgets: {
+        type: 'array',
+        description: 'The dashboard widgets (3-10 is the sweet spot).',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            kind: { type: 'string', enum: ['clock', 'countdown', 'stat', 'chart', 'progress', 'list', 'globe', 'note', 'links'] },
+            title: { type: 'string' },
+            size: { type: 'string', enum: ['sm', 'md', 'lg'] },
+            timeZones: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, tz: { type: 'string', description: 'IANA zone, e.g. "Asia/Tokyo".' } }, required: ['label', 'tz'] } },
+            target: { type: 'string', description: 'ISO datetime for countdown.' },
+            value: { type: 'string' }, unit: { type: 'string' },
+            delta: { type: 'number' }, deltaPercent: { type: 'number' },
+            spark: { type: 'array', items: { type: 'number' } },
+            points: { type: 'array', items: { type: 'object', properties: { x: { type: 'string' }, y: { type: 'number' } }, required: ['x', 'y'] } },
+            chartVariant: { type: 'string', enum: ['line', 'area', 'bar'] },
+            progress: { type: 'object', properties: { value: { type: 'number' }, max: { type: 'number' }, label: { type: 'string' } }, required: ['value', 'max'] },
+            items: { type: 'array', items: { type: 'object', properties: { text: { type: 'string' }, done: { type: 'boolean' }, meta: { type: 'string' } }, required: ['text'] } },
+            globePoints: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, lat: { type: 'number' }, lon: { type: 'number' } }, required: ['label', 'lat', 'lon'] } },
+            globeArcs: { type: 'array', items: { type: 'array', items: { type: 'string' } }, description: 'Pairs of globePoint labels to connect, e.g. [["JFK","HND"]].' },
+            text: { type: 'string' },
+            links: { type: 'array', items: { type: 'object', properties: { label: { type: 'string' }, url: { type: 'string' } }, required: ['label', 'url'] } }
+          },
+          required: ['id', 'kind']
+        }
+      }
+    },
+    required: ['title', 'widgets']
+  },
+  execute: async (args) => {
+    const KINDS = new Set(['clock', 'countdown', 'stat', 'chart', 'progress', 'list', 'globe', 'note', 'links']);
+    const raw = Array.isArray(args?.widgets) ? (args!.widgets as Record<string, unknown>[]) : [];
+    const seen = new Set<string>();
+    const widgets = raw
+      .filter((w) => w && KINDS.has(String(w.kind)))
+      .slice(0, 12)
+      .map((w, i) => {
+        let id = typeof w.id === 'string' && w.id.trim() ? w.id.trim().slice(0, 40) : `w${i}`;
+        while (seen.has(id)) id = `${id}_`;
+        seen.add(id);
+        return { ...(w as Record<string, unknown>), id, kind: String(w.kind) };
+      });
+    if (!widgets.length) return { content: 'No usable widgets were provided (each needs an id and a valid kind).' };
+    const data = {
+      title: typeof args?.title === 'string' && args.title.trim() ? args.title.trim().slice(0, 120) : 'Dashboard',
+      subtitle: typeof args?.subtitle === 'string' ? args.subtitle.slice(0, 240) : undefined,
+      widgets
+    };
+    return {
+      content: `Built the "${data.title}" dashboard with ${widgets.length} widgets (${widgets.map((w) => w.kind).join(', ')}). It is shown to the user, live and drag-to-rearrange — keep your prose to one short line.`,
+      artifacts: [{ type: 'dashboard', data }]
+    };
+  }
+};
+
 const metricsTool: ChatTool = {
   name: 'show_metrics',
   description:
@@ -799,6 +869,7 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   get_stock: stockTool,
   render_chart: chartTool,
   show_metrics: metricsTool,
+  create_dashboard: dashboardTool,
   render_ui: generativeUiTool,
   convert_data: convertDataTool,
   analyze_data: analyzeDataTool,
