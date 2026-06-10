@@ -4,7 +4,10 @@
  * Owns everything that is "the room": stream state (idle/live/paused/ended),
  * chat (ring buffer, logged normally but NEVER part of any recording), emoji
  * reactions, presence/viewer count, the approval lobby (knock → admit/deny),
- * moderation (promote/kick/delete/pin) and new-segment fan-out to viewers.
+ * moderation (promote/kick/delete/pin), new-segment fan-out to viewers — and
+ * the event's durable memory: an activity log, viewer-curve samples (via the
+ * DO alarm while live), chat stats and RSVPs, so the dashboard, invite page
+ * and post-stream summary are all served from the cloud.
  *
  * Uses the WebSocket hibernation API so an idle room costs nothing between
  * messages. All durable facts live in storage; per-socket facts live in
@@ -17,6 +20,12 @@ export type StreamStatus = 'idle' | 'live' | 'paused' | 'ended';
 export interface EventMeta {
   id: string;
   title: string;
+  /** Display name of the host, shown on the invite page ("Hosted by …"). */
+  host: string;
+  /** Optional description for the invite page. */
+  desc: string;
+  /** Cover theme index (0–5) for the invite page gradient. */
+  cover: number;
   access: 'open' | 'approval';
   quality: string;
   mime: string;
@@ -29,7 +38,13 @@ export interface EventMeta {
   endedAt: number | null;
   firstSeq: number;
   latestSeq: number;
+  /** Wall-clock time the last segment arrived — lets clients judge stream health. */
+  lastIngestAt: number | null;
   pinned: string | null;
+  /** Viewers must wait this many seconds between chat messages (0 = off). */
+  slowSec: number;
+  /** Whether emoji reactions are accepted from viewers. */
+  reactionsOn: boolean;
 }
 
 export interface ChatMsg {
@@ -39,6 +54,25 @@ export interface ChatMsg {
   role: Role;
   text: string;
   at: number;
+}
+
+export interface LogEntry {
+  at: number;
+  kind: 'live' | 'scene' | 'join' | 'mod' | 'warn' | 'err' | 'rec' | 'sys';
+  tag: string;
+  msg: string;
+}
+
+interface Stats {
+  peakViewers: number;
+  peakAt: number | null;
+  chatTotal: number;
+  emojiTotal: number;
+  uniqueViewers: number;
+  /** Viewer-count samples while live (~30 s apart). */
+  curve: { at: number; n: number }[];
+  /** Chat messages per minute buckets. */
+  chatCurve: { at: number; n: number }[];
 }
 
 interface Attach {
@@ -56,7 +90,22 @@ interface Env {
 const CHAT_CAP = 200; // ring buffer — chat is logged, never rendered into video
 const CHAT_HELLO = 50; // recent messages sent on join
 const CHAT_MIN_INTERVAL_MS = 400;
+const LOG_CAP = 400;
+const CURVE_CAP = 1500; // ~12 h of 30 s samples
+const CURVE_SAMPLE_MS = 30_000;
+const RSVP_CAP = 500;
 const ALLOWED_EMOJI = new Set(['❤️', '🔥', '👏', '😂', '🤯', '🎉']);
+const MILESTONES = [10, 25, 50, 100, 250, 500, 1000];
+
+const emptyStats = (): Stats => ({
+  peakViewers: 0,
+  peakAt: null,
+  chatTotal: 0,
+  emojiTotal: 0,
+  uniqueViewers: 0,
+  curve: [],
+  chatCurve: [],
+});
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), {
@@ -79,8 +128,28 @@ export class EventRoom {
     return this.state.storage.put('meta', m);
   }
 
-  private publicMeta(m: EventMeta) {
-    return { ...m, viewers: this.viewerCount() };
+  private async getStats(): Promise<Stats> {
+    return (await this.state.storage.get<Stats>('stats')) ?? emptyStats();
+  }
+
+  private async publicMeta(m: EventMeta) {
+    const rsvps = (await this.state.storage.get<string[]>('rsvps')) ?? [];
+    return {
+      ...m,
+      viewers: this.viewerCount(),
+      rsvpCount: rsvps.length,
+      rsvpNames: rsvps.slice(0, 6),
+    };
+  }
+
+  /** Append to the durable activity log and stream it to host + mods live. */
+  private async addLog(kind: LogEntry['kind'], tag: string, msg: string): Promise<void> {
+    const entry: LogEntry = { at: Date.now(), kind, tag: tag.slice(0, 8), msg: msg.slice(0, 200) };
+    const log = (await this.state.storage.get<LogEntry[]>('log')) ?? [];
+    log.push(entry);
+    if (log.length > LOG_CAP) log.splice(0, log.length - LOG_CAP);
+    await this.state.storage.put('log', log);
+    this.broadcast({ t: 'log', entry }, (a) => a.role === 'host' || a.role === 'mod');
   }
 
   // ------------------------------------------------------------------ HTTP
@@ -94,6 +163,10 @@ export class EventRoom {
         return this.handleMeta();
       case '/ingest':
         return this.handleIngest(req);
+      case '/stats':
+        return this.handleStats(url);
+      case '/rsvp':
+        return this.handleRsvp(req);
       case '/ws':
         return this.handleUpgrade(req, url);
       default:
@@ -107,6 +180,9 @@ export class EventRoom {
     const meta: EventMeta = {
       id: String(body.id ?? ''),
       title: String(body.title ?? 'Untitled stream').slice(0, 120),
+      host: String(body.host ?? 'Host').slice(0, 40) || 'Host',
+      desc: String(body.desc ?? '').slice(0, 500),
+      cover: Math.min(5, Math.max(0, Math.floor(Number(body.cover)) || 0)),
       access: body.access === 'approval' ? 'approval' : 'open',
       quality: String(body.quality ?? '720p'),
       mime: String(body.mime ?? ''),
@@ -121,17 +197,71 @@ export class EventRoom {
       endedAt: null,
       firstSeq: 0,
       latestSeq: 0,
+      lastIngestAt: null,
       pinned: null,
+      slowSec: 0,
+      reactionsOn: true,
     };
     const hostKey = crypto.randomUUID();
-    await this.state.storage.put({ meta, hostKey, admitted: [] as string[], chat: [] as ChatMsg[] });
+    await this.state.storage.put({
+      meta,
+      hostKey,
+      admitted: [] as string[],
+      chat: [] as ChatMsg[],
+      stats: emptyStats(),
+      log: [] as LogEntry[],
+      rsvps: [] as string[],
+      chatters: {} as Record<string, number>,
+      seenNames: [] as string[],
+    });
+    await this.addLog(
+      'sys',
+      'SYS',
+      meta.scheduledAt
+        ? `Event created · scheduled for ${new Date(meta.scheduledAt).toISOString()}`
+        : 'Event created',
+    );
     return json({ hostKey });
   }
 
   private async handleMeta(): Promise<Response> {
     const meta = await this.getMeta();
     if (!meta) return json({ error: 'not found' }, 404);
-    return json(this.publicMeta(meta));
+    return json(await this.publicMeta(meta));
+  }
+
+  /** Host-gated rollup for the post-stream summary screen. */
+  private async handleStats(url: URL): Promise<Response> {
+    const meta = await this.getMeta();
+    if (!meta) return json({ error: 'not found' }, 404);
+    const hostKey = await this.state.storage.get<string>('hostKey');
+    if (url.searchParams.get('k') !== hostKey) return json({ error: 'forbidden' }, 403);
+    const [stats, log, chatters] = await Promise.all([
+      this.getStats(),
+      this.state.storage.get<LogEntry[]>('log'),
+      this.state.storage.get<Record<string, number>>('chatters'),
+    ]);
+    const top = Object.entries(chatters ?? {})
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([name, count]) => ({ name, count }));
+    return json({ meta: await this.publicMeta(meta), stats, log: log ?? [], topChatters: top });
+  }
+
+  /** Name-only "save my spot" from the invite page — no account needed. */
+  private async handleRsvp(req: Request): Promise<Response> {
+    const meta = await this.getMeta();
+    if (!meta) return json({ error: 'not found' }, 404);
+    const { name } = (await req.json().catch(() => ({}))) as { name?: string };
+    const clean = String(name ?? '').trim().slice(0, 24);
+    if (!clean) return json({ error: 'name required' }, 400);
+    const rsvps = (await this.state.storage.get<string[]>('rsvps')) ?? [];
+    if (!rsvps.includes(clean)) {
+      rsvps.push(clean);
+      await this.state.storage.put('rsvps', rsvps.slice(-RSVP_CAP));
+      await this.addLog('join', 'RSVP', `“${clean}” saved a spot`);
+    }
+    return json({ ok: true, rsvpCount: rsvps.length });
   }
 
   /** Called by the worker after it stored a segment in R2; broadcasts to viewers. */
@@ -143,12 +273,33 @@ export class EventRoom {
 
     const { seq, ms, at, mime } = (await req.json()) as { seq: number; ms: number; at: number; mime?: string };
     if (!Number.isFinite(seq) || seq <= 0) return json({ error: 'bad seq' }, 400);
+    const now = Date.now();
+    if (meta.status === 'live' && meta.lastIngestAt && now - meta.lastIngestAt > meta.segMs * 3) {
+      await this.addLog('warn', 'WARN', `Segment gap of ${((now - meta.lastIngestAt) / 1000).toFixed(1)}s — upload hiccup`);
+    }
     meta.firstSeq = meta.firstSeq || seq;
     meta.latestSeq = Math.max(meta.latestSeq, seq);
-    if (mime && !meta.mime) meta.mime = mime; // host's recorder decides the codec once
+    meta.lastIngestAt = now;
+    if (mime && !meta.mime) {
+      meta.mime = mime; // host's recorder decides the codec once
+      await this.addLog('sys', 'SYS', `First segment received · ${mime.split(';')[0]}`);
+    }
     await this.putMeta(meta);
     this.broadcast({ t: 'segment', seq, ms, at });
     return json({ ok: true });
+  }
+
+  // ------------------------------------------------------- alarm (sampling)
+
+  /** While live, sample the viewer count every 30 s for the analytics curve. */
+  async alarm(): Promise<void> {
+    const meta = await this.getMeta();
+    if (!meta || meta.status !== 'live') return;
+    const stats = await this.getStats();
+    stats.curve.push({ at: Date.now(), n: this.viewerCount() });
+    if (stats.curve.length > CURVE_CAP) stats.curve.splice(0, stats.curve.length - CURVE_CAP);
+    await this.state.storage.put('stats', stats);
+    await this.state.storage.setAlarm(Date.now() + CURVE_SAMPLE_MS);
   }
 
   // ------------------------------------------------------------- WebSocket
@@ -182,7 +333,9 @@ export class EventRoom {
       this.lobbySync();
     } else {
       await this.sendHello(server, attach);
-      this.broadcastViewers();
+      await this.trackViewerJoin(attach);
+      await this.broadcastViewers();
+      this.peopleSync();
     }
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
@@ -205,6 +358,10 @@ export class EventRoom {
         return this.onEmoji(me, String(msg.e ?? ''));
       case 'state':
         return this.onState(me, String(msg.status ?? ''));
+      case 'config':
+        return this.onConfig(me, msg);
+      case 'log':
+        return this.onHostLog(me, msg);
       case 'admit':
       case 'deny':
       case 'kick':
@@ -219,8 +376,9 @@ export class EventRoom {
 
   async webSocketClose(ws: WebSocket): Promise<void> {
     const me = ws.deserializeAttachment() as Attach | null;
-    this.broadcastViewers();
+    await this.broadcastViewers();
     if (me?.role === 'pending') this.lobbySync();
+    else this.peopleSync();
   }
 
   async webSocketError(ws: WebSocket): Promise<void> {
@@ -237,8 +395,11 @@ export class EventRoom {
     if (me.role === 'pending') return;
     const clean = text.trim().slice(0, 500);
     if (!clean) return;
+    const meta = await this.getMeta();
+    if (!meta) return;
     const now = Date.now();
-    if (now - (this.lastChatAt.get(me.sid) ?? 0) < CHAT_MIN_INTERVAL_MS) return;
+    const minGap = me.role === 'viewer' && meta.slowSec > 0 ? meta.slowSec * 1000 : CHAT_MIN_INTERVAL_MS;
+    if (now - (this.lastChatAt.get(me.sid) ?? 0) < minGap) return;
     this.lastChatAt.set(me.sid, now);
 
     const m: ChatMsg = {
@@ -249,15 +410,36 @@ export class EventRoom {
       text: clean,
       at: now,
     };
-    const chat = (await this.state.storage.get<ChatMsg[]>('chat')) ?? [];
+    const [chat, stats, chatters] = await Promise.all([
+      this.state.storage.get<ChatMsg[]>('chat').then((c) => c ?? []),
+      this.getStats(),
+      this.state.storage.get<Record<string, number>>('chatters').then((c) => c ?? {}),
+    ]);
     chat.push(m);
     if (chat.length > CHAT_CAP) chat.splice(0, chat.length - CHAT_CAP);
-    await this.state.storage.put('chat', chat);
+    stats.chatTotal += 1;
+    const bucket = Math.floor(now / 60_000) * 60_000;
+    const last = stats.chatCurve[stats.chatCurve.length - 1];
+    if (last && last.at === bucket) last.n += 1;
+    else {
+      stats.chatCurve.push({ at: bucket, n: 1 });
+      if (stats.chatCurve.length > CURVE_CAP) stats.chatCurve.splice(0, stats.chatCurve.length - CURVE_CAP);
+    }
+    if (Object.keys(chatters).length < 200 || chatters[me.name] != null) {
+      chatters[me.name] = (chatters[me.name] ?? 0) + 1;
+    }
+    await this.state.storage.put({ chat, stats, chatters });
     this.broadcast({ t: 'chat', m });
   }
 
-  private onEmoji(me: Attach, e: string): void {
+  private async onEmoji(me: Attach, e: string): Promise<void> {
     if (me.role === 'pending' || !ALLOWED_EMOJI.has(e)) return;
+    const meta = await this.getMeta();
+    if (!meta) return;
+    if (!meta.reactionsOn && me.role === 'viewer') return;
+    const stats = await this.getStats();
+    stats.emojiTotal += 1;
+    await this.state.storage.put('stats', stats);
     this.broadcast({ t: 'emoji', e, name: me.name });
   }
 
@@ -266,11 +448,42 @@ export class EventRoom {
     if (status !== 'live' && status !== 'paused' && status !== 'ended') return;
     const meta = await this.getMeta();
     if (!meta) return;
+    const prev = meta.status;
     meta.status = status;
     if (status === 'live' && !meta.startedAt) meta.startedAt = Date.now();
     if (status === 'ended') meta.endedAt = Date.now();
     await this.putMeta(meta);
     this.broadcast({ t: 'state', status, startedAt: meta.startedAt, endedAt: meta.endedAt });
+
+    if (status === 'live' && prev !== 'live') {
+      await this.addLog('live', 'LIVE', prev === 'paused' ? 'Resumed — back on the air' : `Stream started · ${meta.quality}`);
+      await this.state.storage.setAlarm(Date.now() + CURVE_SAMPLE_MS);
+    } else if (status === 'paused') {
+      await this.addLog('scene', 'SCENE', 'Cut to “Be right back” slate');
+    } else if (status === 'ended') {
+      await this.addLog('live', 'END', 'Stream ended by host');
+      await this.state.storage.deleteAlarm();
+    }
+  }
+
+  /** Host adjusts room behavior mid-stream: slow mode, reactions on/off. */
+  private async onConfig(me: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (me.role !== 'host') return;
+    const meta = await this.getMeta();
+    if (!meta) return;
+    if (msg.slow != null) meta.slowSec = Math.min(120, Math.max(0, Math.floor(Number(msg.slow)) || 0));
+    if (msg.reactions != null) meta.reactionsOn = Boolean(msg.reactions);
+    await this.putMeta(meta);
+    this.broadcast({ t: 'config', slow: meta.slowSec, reactions: meta.reactionsOn });
+  }
+
+  /** The studio reports client-side production events (scene cuts, recording)
+   *  so the durable activity log tells the whole story of the stream. */
+  private async onHostLog(me: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (me.role !== 'host' && me.role !== 'mod') return;
+    const kinds: LogEntry['kind'][] = ['live', 'scene', 'join', 'mod', 'warn', 'err', 'rec', 'sys'];
+    const kind = kinds.includes(msg.kind as LogEntry['kind']) ? (msg.kind as LogEntry['kind']) : 'sys';
+    await this.addLog(kind, String(msg.tag ?? 'SYS'), String(msg.msg ?? '').slice(0, 200));
   }
 
   private async onModeration(me: Attach, action: string, sid: string): Promise<void> {
@@ -292,25 +505,33 @@ export class EventRoom {
         ws.serializeAttachment(a);
         this.send(ws, { t: 'admitted', token });
         await this.sendHello(ws, a);
-        this.broadcastViewers();
+        await this.trackViewerJoin(a);
+        await this.broadcastViewers();
         this.lobbySync();
+        this.peopleSync();
+        await this.addLog('join', 'JOIN', `Admitted “${a.name}” from the lobby`);
       } else if (action === 'deny' && a.role === 'pending') {
         this.send(ws, { t: 'denied' });
         try {
           ws.close(4001, 'denied');
         } catch { /* closed */ }
         this.lobbySync();
+        await this.addLog('mod', 'MOD', `Denied entry to “${a.name}”`);
       } else if (action === 'kick') {
         this.send(ws, { t: 'kicked' });
         try {
           ws.close(4002, 'kicked');
         } catch { /* closed */ }
-        this.broadcastViewers();
+        await this.broadcastViewers();
+        this.peopleSync();
+        await this.addLog('mod', 'MOD', `Removed “${a.name}” from the stream`);
       } else if (action === 'promote' && a.role === 'viewer') {
         a.role = 'mod';
         ws.serializeAttachment(a);
         this.send(ws, { t: 'role', role: 'mod' });
         this.lobbySync();
+        this.peopleSync();
+        await this.addLog('mod', 'MOD', `Promoted “${a.name}” to moderator`);
       }
       return;
     }
@@ -341,13 +562,46 @@ export class EventRoom {
     const meta = await this.getMeta();
     if (!meta) return;
     const chat = (await this.state.storage.get<ChatMsg[]>('chat')) ?? [];
+    const isCrew = me.role === 'host' || me.role === 'mod';
+    const log = isCrew ? ((await this.state.storage.get<LogEntry[]>('log')) ?? []).slice(-100) : undefined;
     this.send(ws, {
       t: 'hello',
-      meta: this.publicMeta(meta),
+      meta: await this.publicMeta(meta),
       you: { sid: me.sid, role: me.role, name: me.name },
       chat: chat.slice(-CHAT_HELLO),
+      log,
     });
-    if (me.role === 'host' || me.role === 'mod') this.lobbySync();
+    if (isCrew) {
+      this.lobbySync();
+      this.peopleSync();
+    }
+  }
+
+  /** Track unique viewers + peak, and announce milestone crossings. */
+  private async trackViewerJoin(a: Attach): Promise<void> {
+    if (a.role === 'host') return;
+    const [stats, seen] = await Promise.all([
+      this.getStats(),
+      this.state.storage.get<string[]>('seenNames').then((s) => s ?? []),
+    ]);
+    if (!seen.includes(a.name) && seen.length < 2000) {
+      seen.push(a.name);
+      stats.uniqueViewers = seen.length;
+    }
+    const n = this.viewerCount();
+    let crossed: number | null = null;
+    if (n > stats.peakViewers) {
+      for (const m of MILESTONES) {
+        if (stats.peakViewers < m && n >= m) crossed = m;
+      }
+      stats.peakViewers = n;
+      stats.peakAt = Date.now();
+    }
+    await this.state.storage.put({ stats, seenNames: seen });
+    if (crossed != null) {
+      this.broadcast({ t: 'milestone', n: crossed });
+      await this.addLog('join', 'JOIN', `${crossed} viewers — new peak this session`);
+    }
   }
 
   private viewerCount(): number {
@@ -359,8 +613,16 @@ export class EventRoom {
     return n;
   }
 
-  private broadcastViewers(): void {
-    this.broadcast({ t: 'viewers', n: this.viewerCount() });
+  private async broadcastViewers(): Promise<void> {
+    const n = this.viewerCount();
+    this.broadcast({ t: 'viewers', n });
+    // Keep peak honest on rejoins too (joins go through trackViewerJoin).
+    const stats = await this.getStats();
+    if (n > stats.peakViewers) {
+      stats.peakViewers = n;
+      stats.peakAt = Date.now();
+      await this.state.storage.put('stats', stats);
+    }
   }
 
   private lobbySync(): void {
@@ -370,6 +632,18 @@ export class EventRoom {
       if (a?.role === 'pending') pending.push({ sid: a.sid, name: a.name });
     }
     this.broadcast({ t: 'lobby', pending }, (a) => a.role === 'host' || a.role === 'mod');
+  }
+
+  /** Who's in the room (viewers + mods) — host/mod only, capped. */
+  private peopleSync(): void {
+    const list: { sid: string; name: string; role: Role }[] = [];
+    for (const ws of this.state.getWebSockets()) {
+      const a = ws.deserializeAttachment() as Attach | null;
+      if (a && a.role !== 'pending' && a.role !== 'host' && list.length < 200) {
+        list.push({ sid: a.sid, name: a.name, role: a.role });
+      }
+    }
+    this.broadcast({ t: 'people', list }, (a) => a.role === 'host' || a.role === 'mod');
   }
 
   private broadcast(obj: unknown, filter?: (a: Attach) => boolean): void {

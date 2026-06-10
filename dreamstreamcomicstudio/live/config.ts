@@ -48,8 +48,20 @@ export const LIMITS: { label: string; value: string }[] = [
 const explicitBase = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_LIVE_WORKER_URL;
 const isLocalhost = typeof location !== 'undefined' && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
 
-/** Worker base: explicit env override → local wrangler dev → the production route
- *  (live-worker is mounted at dreamstreamstudio.ai/live-api via a Workers route). */
+/** Worker base: explicit env override → local wrangler dev → same-origin
+ *  `/live-api` (the live-worker is mounted on that path via a Workers route on
+ *  whatever domain serves the app, e.g. dreamstreamstudio.ai/live-api). Using
+ *  the page's own origin — instead of a hardcoded domain — keeps viewer links
+ *  working on any deployment of the site. */
 export const WORKER_BASE: string = (
-  explicitBase || (isLocalhost ? 'http://127.0.0.1:8788' : 'https://dreamstreamstudio.ai/live-api')
+  explicitBase ||
+  (isLocalhost
+    ? 'http://127.0.0.1:8788'
+    : typeof location !== 'undefined'
+      ? `${location.origin}/live-api`
+      : 'https://dreamstreamstudio.ai/live-api')
 ).replace(/\/$/, '');
+
+/** True when running on localhost — share links minted here won't work on
+ *  other devices; the studio shows a heads-up so hosts aren't surprised. */
+export const IS_LOCAL_DEV = isLocalhost;

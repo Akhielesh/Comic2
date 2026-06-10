@@ -1,6 +1,6 @@
 # Stream Studio — Live Streaming for DreamStream
 
-Status: **v1 implemented on the R2 rail** — see §9 for what shipped and how to test.
+Status: **v2 implemented on the R2 rail** — see §9 for what shipped and how to test.
 Scope: minimalist live streaming for up to ~100 concurrent viewers, hosted inside the
 DreamStream website, built entirely on the Cloudflare stack we already run
 (Workers, Durable Objects, R2) plus Supabase (auth, metadata) and Cloudflare Stream.
@@ -202,35 +202,83 @@ embeds/API → billing.
 
 ---
 
-## 9. v1 implementation (shipped)
+## 9. v2 implementation (shipped — full DreamStream Live redesign)
 
-What exists in the repo now:
+The whole surface was rebuilt around the warm, paper-clean "calm studio" design
+system (cream canvas, clay accent, hairline borders; light + warm-espresso dark,
+four accent choices, persisted per device).
 
-- **`live-worker/`** — `dreamstream-live` Cloudflare Worker: REST API + `EventRoom`
-  Durable Object (WebSocket hibernation) for chat / emoji reactions / presence /
-  approval lobby (admit/deny) / moderation (kick, promote, pin, delete) / stream
-  state / segment fan-out. Segments live in R2 (`LIVE_BUCKET`), served immutable
-  through `caches.default` so 100 viewers ≈ 1 R2 read per segment.
-- **`live/` + `live.html`** — standalone Stream Studio page (kept out of the main
-  app bundle): create event → host studio (camera/lens chips, zoom, go live, pause
-  slate, full-clarity local REC of the program feed only, metrics toggle) and the
-  viewer page (MSE segment player with live-edge chasing + gap skip + buffer
-  eviction for marathon sessions, chat, floating reactions, replay after end,
-  metrics toggle). Light/dark themes. Quality presets and platform limits are
-  declared in `live/config.ts` and rendered verbatim in the UI.
-- Delivery encoding: the studio rotates MediaRecorder instances every 3 s so each
-  segment is independently playable; MP4/H.264 preferred (plays everywhere via
-  MSE), WebM fallback. ~4–10 s glass-to-glass latency.
-- Tests: `live/live.unit.test.ts` (presets/codec/metrics logic) runs in CI; the
-  worker has a WS smoke flow (create → knock → admit → chat → live → segment →
-  kick) exercised during development.
+**Frontend (`live/` + `live.html`, hash/query-routed SPA):**
+
+- **Dashboard** — live-now hero, honest lifetime stats, your streams (hydrated
+  from the worker = cloud truth; id+hostKey live only in your browser), recording
+  downloads, tabs for live/scheduled/past.
+- **Create / schedule** — title, host name, go-live-now vs date+time, description,
+  cover theme, quality preset, open vs approval access, auto-record; produces the
+  viewer/invite link + private studio link, with .ics add-to-calendar.
+- **Invite page** (Luma-style, fully cloud-backed) — cover, date block, host,
+  description, RSVP ("save my spot", name only), countdown, share; flips to the
+  watch page the moment the host goes live.
+- **Host Studio** (the hero) — real camera through a **canvas program mixer**
+  (`live/studio/compositor.ts`): scenes (Solo / Screen+cam PiP / BRB slate) cut
+  seamlessly because the encoder records the canvas, never restarting; camera
+  looks (soften/warm/mono) and **digital zoom burned into the program**; hardware
+  zoom + lens switching where the device exposes them; transport bar; hotkeys
+  (G/Space/V/R/B/1–3/M//); collapsible four-tab right rail — **Chat** (pin,
+  delete, slow-mode aware), **People** (lobby admit/deny, viewer list,
+  promote-to-mod, kick), **Activity** (durable server-side log, filterable),
+  **Health** (uplink meter, encoded bitrate, failures, latency estimate, viewer
+  curve); metrics overlay; **phone broadcaster mode** (auto on small viewports,
+  desktop preview toggle) with thumb rail (mic/cam/flip/zoom/scene), chat peek +
+  sheet, go-live/end.
+- **Viewer** — name-only join gate (no account), desktop layout with chat rail +
+  **Theater** declutter, true mobile layout with fullscreen mode + one-thumb
+  reactions; status slates (starting-soon countdown, branded BRB, ended + replay);
+  reconnecting indicator; playback metrics overlay (incl. which player engine).
+- **Post-stream Summary** — peak/unique viewers, chat + reaction totals, RSVPs,
+  watch-time + chat/min curves, the full durable event log (filterable), top
+  chatters, recordings, export-as-JSON, replay link.
+- **Customize** — scenes & host name, camera looks, chat & reactions (slow mode),
+  quality & encoding (preset, bitrate override, MP4-vs-WebM preference, master
+  recording bitrate, auto-record), alerts (lobby knocks, milestones, chime),
+  hotkeys reference. Persisted in `localStorage`, applied when the studio opens.
+
+**Playback compatibility (the "viewers can't watch on mobile" fix):**
+
+- `live/player.ts` now picks per device: classic **MSE** → **ManagedMediaSource**
+  (iPhone Safari 17.1+) → **blob queue** (no MSE at all: each self-contained
+  segment plays back-to-back as an object URL) → a *specific* error naming the
+  codec when nothing can decode it.
+- Two start-up bugs fixed: the player used to be started before the `<video>`
+  element mounted (playback silently never began), and viewers who joined before
+  the host's first segment got a player initialized with the wrong container.
+  Player starts are now deferred until the element exists and the real mime is
+  known.
+- `WORKER_BASE` defaults to same-origin `/live-api` (not a hardcoded domain), and
+  the studio warns when it's running on localhost (links that can't work off-box).
+
+**Worker (`live-worker/`):** `EventRoom` now also stores event details (host,
+description, cover), RSVPs, a capped **activity log** (state changes, admits,
+kicks, milestones, segment-gap warnings — streamed live to the host and served in
+the recap), and **stats** (peak/unique viewers, chat + emoji totals, per-minute
+chat curve, 30-second viewer-curve samples via the DO alarm while live). New
+routes: `GET /api/events/:id/stats?k=hostKey` (host-gated recap) and
+`POST /api/events/:id/rsvp`. Hosts can set slow mode / toggle reactions over the
+socket (`config`), report production events into the log (`log`), and receive a
+live `people` roster for moderation.
+
+- Delivery encoding (unchanged rail): the studio rotates MediaRecorder instances
+  every 3 s so each segment is independently playable; MP4/H.264 preferred (plays
+  everywhere), WebM opt-in. ~4–10 s glass-to-glass latency.
+- Tests: `live/live.unit.test.ts` (presets/codec/playback-fallback/schedule/theme
+  logic) runs in CI.
 
 **Test locally:** `cd live-worker && npm install` once, then `npm run dev:live`
 from the app root and open `http://localhost:7000/live.html`. Deploy: see
 `live-worker/README.md` (R2 bucket + `wrangler deploy` + `VITE_LIVE_WORKER_URL`).
 
-Not yet built (next): scheduling UI with countdown/ICS (worker accepts any time —
-the event link is permanent), recording upload to R2/Drive, sub-second mode.
+Not yet built (next): multi-guest scenes (interview/grid — needs WebRTC ingest
+for guests), recording upload to R2/Drive, sub-second mode.
 
 ---
 

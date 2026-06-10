@@ -10,6 +10,9 @@ export type StreamStatus = 'idle' | 'live' | 'paused' | 'ended';
 export interface EventMeta {
   id: string;
   title: string;
+  host: string;
+  desc: string;
+  cover: number;
   access: 'open' | 'approval';
   quality: string;
   mime: string;
@@ -21,8 +24,13 @@ export interface EventMeta {
   endedAt: number | null;
   firstSeq: number;
   latestSeq: number;
+  lastIngestAt: number | null;
   pinned: string | null;
+  slowSec: number;
+  reactionsOn: boolean;
   viewers: number;
+  rsvpCount: number;
+  rsvpNames: string[];
 }
 
 export interface ChatMsg {
@@ -39,8 +47,40 @@ export interface LobbyEntry {
   name: string;
 }
 
+export interface PersonEntry {
+  sid: string;
+  name: string;
+  role: Role;
+}
+
+export type LogKind = 'live' | 'scene' | 'join' | 'mod' | 'warn' | 'err' | 'rec' | 'sys';
+
+export interface LogEntry {
+  at: number;
+  kind: LogKind;
+  tag: string;
+  msg: string;
+}
+
+export interface EventStats {
+  peakViewers: number;
+  peakAt: number | null;
+  chatTotal: number;
+  emojiTotal: number;
+  uniqueViewers: number;
+  curve: { at: number; n: number }[];
+  chatCurve: { at: number; n: number }[];
+}
+
+export interface StatsResponse {
+  meta: EventMeta;
+  stats: EventStats;
+  log: LogEntry[];
+  topChatters: { name: string; count: number }[];
+}
+
 export type ServerMsg =
-  | { t: 'hello'; meta: EventMeta; you: { sid: string; role: Role; name: string }; chat: ChatMsg[] }
+  | { t: 'hello'; meta: EventMeta; you: { sid: string; role: Role; name: string }; chat: ChatMsg[]; log?: LogEntry[] }
   | { t: 'pending' }
   | { t: 'admitted'; token: string }
   | { t: 'denied' }
@@ -53,6 +93,10 @@ export type ServerMsg =
   | { t: 'state'; status: StreamStatus; startedAt: number | null; endedAt: number | null }
   | { t: 'segment'; seq: number; ms: number; at: number }
   | { t: 'lobby'; pending: LobbyEntry[] }
+  | { t: 'people'; list: PersonEntry[] }
+  | { t: 'log'; entry: LogEntry }
+  | { t: 'config'; slow: number; reactions: boolean }
+  | { t: 'milestone'; n: number }
   | { t: 'pin'; text: string | null };
 
 export const EMOJI_SET = ['❤️', '🔥', '👏', '😂', '🤯', '🎉'] as const;

@@ -1,0 +1,111 @@
+/* ============================================================================
+   DreamStream Live — design tokens
+   Minimal, warm, paper-clean. Cream canvas, soft clay accent, warm-gray ink.
+   Flat surfaces, hairline borders, generous space. Light is the default room;
+   dark is a warm espresso, never neon.
+   ========================================================================== */
+
+:root,
+[data-theme='light'] {
+  --bg:        #f4f2ea;
+  --panel:     #fbfaf6;
+  --panel-2:   #f1efe6;
+  --panel-3:   #e9e6da;
+  --hover:     #efece2;
+  --line:      #e4e0d4;
+  --line-soft: #ece9df;
+  --text:      #29261f;
+  --muted:     #6f6a5f;
+  --faint:     #a39d8f;
+
+  --accent:     #c2603f;   /* clay — deep enough for text-on-bg */
+  --accent-2:   #d8795a;   /* warmer hover */
+  --accent-ink: #a64e30;
+  --accent-wash:#f3e3d8;   /* soft tint fill */
+
+  --green:  #5f8a5a;
+  --green-wash: #e2ebdc;
+  --amber:  #b5832c;
+  --amber-wash: #f1e6cf;
+  --blue:   #4f7396;
+  --blue-wash:  #dfe7ee;
+  --live:   #c5402f;       /* warm brick red for LIVE / REC */
+  --live-wash: #f4ddd6;
+
+  --on-accent: #fdfbf7;
+  --chip:      var(--accent-wash);
+
+  --shadow-sm: 0 1px 2px rgba(41,38,31,.05);
+  --shadow:    0 1px 2px rgba(41,38,31,.04), 0 8px 24px rgba(41,38,31,.06);
+  --shadow-lg: 0 24px 60px rgba(41,38,31,.12);
+  --ring:      0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+
+  --r-xs: 6px; --r-sm: 9px; --r-md: 12px; --r-lg: 18px; --r-xl: 26px;
+}
+
+[data-theme='dark'] {
+  --bg:        #211e1a;
+  --panel:     #2a2622;
+  --panel-2:   #312d28;
+  --panel-3:   #393530;
+  --hover:     #37322c;
+  --line:      #3c372f;
+  --line-soft: #332e29;
+  --text:      #ede9e0;
+  --muted:     #a8a294;
+  --faint:     #716b5f;
+
+  --accent:     #d8795a;
+  --accent-2:   #e08a6d;
+  --accent-ink: #e89c80;
+  --accent-wash:#3a2c25;
+
+  --green:  #7ca874;
+  --green-wash: #2c352a;
+  --amber:  #d0a253;
+  --amber-wash: #3a3120;
+  --blue:   #7ea0bf;
+  --blue-wash:  #28323c;
+  --live:   #e05a47;
+  --live-wash: #3c2723;
+
+  --on-accent: #211e1a;
+  --chip:      var(--accent-wash);
+
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.3);
+  --shadow:    0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.34);
+  --shadow-lg: 0 26px 64px rgba(0,0,0,.5);
+  --ring:      0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.serif { font-family: 'Newsreader', Georgia, serif; font-weight: 500; letter-spacing: -.01em; }
+.mono  { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+::selection { background: color-mix(in srgb, var(--accent) 26%, transparent); }
+
+/* Keyboard focus is always visible; pointer focus stays quiet. */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+:focus:not(:focus-visible) { outline: none; }
+
+/* Scrollbars — quiet */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { background: var(--line); border-radius: 99px; border: 3px solid transparent; background-clip: content-box; }
+*::-webkit-scrollbar-thumb:hover { background: var(--faint); background-clip: content-box; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+/* corner radius tweak hook */
+[data-corners='sharp'] { --r-xs: 2px; --r-sm: 3px; --r-md: 4px; --r-lg: 5px; --r-xl: 6px; }

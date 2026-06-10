@@ -39,6 +39,42 @@ describe('pickSupportedMime', () => {
   it('returns null when nothing is supported', () => {
     expect(pickSupportedMime(() => false)).toBeNull();
   });
+
+  it('can prefer webm when the host opts into it', () => {
+    const mime = pickSupportedMime(() => true, false);
+    expect(mime).toContain('video/webm');
+  });
+});
+
+describe('playbackSupport (viewer fallback chain)', async () => {
+  const { playbackSupport } = await import('./player');
+  const mime = 'video/mp4;codecs=avc1.42E01E,mp4a.40.2';
+
+  it('uses classic MSE when available', () => {
+    expect(playbackSupport(mime, { mse: () => true, mms: () => false, canPlayType: () => '' })).toBe('mse');
+  });
+
+  it('falls back to ManagedMediaSource on iPhone Safari', () => {
+    expect(playbackSupport(mime, { mse: () => false, mms: () => true, canPlayType: () => '' })).toBe('mms');
+  });
+
+  it('falls back to the blob queue when no MSE exists but the codec decodes', () => {
+    expect(playbackSupport(mime, { mse: () => false, mms: () => false, canPlayType: () => 'probably' })).toBe('blob');
+  });
+
+  it('reports none when the device cannot decode the codec at all', () => {
+    expect(playbackSupport('video/webm;codecs=vp9,opus', { mse: () => false, mms: () => false, canPlayType: () => '' })).toBe('none');
+  });
+});
+
+describe('cover themes', async () => {
+  const { COVER_THEMES, coverGradient } = await import('./theme');
+
+  it('clamps out-of-range cover indices instead of crashing the invite page', () => {
+    expect(coverGradient(-1)).toContain(COVER_THEMES[0][0]);
+    expect(coverGradient(99)).toContain(COVER_THEMES[COVER_THEMES.length - 1][0]);
+    expect(coverGradient(2)).toContain(COVER_THEMES[2][1]);
+  });
 });
 
 describe('lensLabel', () => {

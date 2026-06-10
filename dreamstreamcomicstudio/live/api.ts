@@ -1,15 +1,27 @@
 /** REST + WebSocket client for the dreamstream-live worker. */
 
 import { WORKER_BASE } from './config';
-import type { ServerMsg } from './protocol';
+import type { EventMeta, ServerMsg, StatsResponse } from './protocol';
 
 export interface CreatedEvent {
   id: string;
   hostKey: string;
 }
 
+/** 405/HTML responses mean we reached the static website, not the live-worker. */
+function assertWorkerResponse(res: Response): void {
+  if (res.status === 405 || res.headers.get('content-type')?.includes('text/html')) {
+    throw new Error(
+      'Streaming backend not reachable — the request hit the website instead of the live-worker. Deploy live-worker/ (see its README) or set VITE_LIVE_WORKER_URL.',
+    );
+  }
+}
+
 export async function createEvent(opts: {
   title: string;
+  host?: string;
+  desc?: string;
+  cover?: number;
   access: 'open' | 'approval';
   quality: string;
   segMs: number;
@@ -20,17 +32,35 @@ export async function createEvent(opts: {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(opts),
   });
-  if (res.status === 405 || res.headers.get('content-type')?.includes('text/html')) {
-    // 405/HTML means the request reached the static website, not the live-worker.
-    throw new Error('Streaming backend not deployed yet — the request hit the website instead of the live-worker. Deploy live-worker/ (see its README).');
-  }
+  assertWorkerResponse(res);
   if (!res.ok) throw new Error(`create failed (${res.status})`);
   return res.json();
 }
 
-export async function getEvent(id: string): Promise<Record<string, unknown>> {
+export async function getEvent(id: string): Promise<EventMeta> {
   const res = await fetch(`${WORKER_BASE}/api/events/${id}`);
+  assertWorkerResponse(res);
   if (!res.ok) throw new Error(`event not found (${res.status})`);
+  return res.json();
+}
+
+/** Host-gated analytics + activity log for the post-stream summary. */
+export async function getStats(id: string, hostKey: string): Promise<StatsResponse> {
+  const res = await fetch(`${WORKER_BASE}/api/events/${id}/stats?k=${encodeURIComponent(hostKey)}`);
+  assertWorkerResponse(res);
+  if (!res.ok) throw new Error(`stats unavailable (${res.status})`);
+  return res.json();
+}
+
+/** Name-only RSVP from the invite page. */
+export async function rsvpEvent(id: string, name: string): Promise<{ ok: boolean; rsvpCount: number }> {
+  const res = await fetch(`${WORKER_BASE}/api/events/${id}/rsvp`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  assertWorkerResponse(res);
+  if (!res.ok) throw new Error(`rsvp failed (${res.status})`);
   return res.json();
 }
 
@@ -72,6 +102,9 @@ export async function fetchSegment(
 
 /** Close codes the room uses for "you were removed on purpose — don't reconnect". */
 const NO_RECONNECT_CODES = new Set([4001, 4002]);
+const MAX_RECONNECT_ATTEMPTS = 8;
+
+export type SocketStatus = 'connected' | 'reconnecting';
 
 export interface RoomSocket {
   send(msg: Record<string, unknown>): void;
@@ -79,14 +112,16 @@ export interface RoomSocket {
 }
 
 /**
- * Opens the event room socket with simple backoff reconnect (network blips
- * shouldn't end a stream). Deliberate removals (deny/kick) never reconnect.
+ * Opens the event room socket with backoff reconnect (network blips and tab
+ * sleeps shouldn't end a stream). Deliberate removals (deny/kick) never
+ * reconnect. `onStatus` lets the UI show a quiet "reconnecting…" pill.
  */
 export function openRoomSocket(
   id: string,
   params: { name: string; k?: string; token?: string },
   onMsg: (m: ServerMsg) => void,
   onGone: (reason: 'denied' | 'kicked' | 'failed') => void,
+  onStatus?: (s: SocketStatus) => void,
 ): RoomSocket {
   let ws: WebSocket | null = null;
   let closedByUs = false;
@@ -101,6 +136,7 @@ export function openRoomSocket(
 
     ws.onopen = () => {
       attempts = 0;
+      onStatus?.('connected');
     };
     ws.onmessage = (ev) => {
       try {
@@ -117,7 +153,8 @@ export function openRoomSocket(
       if (ev.code === 4002) return onGone('kicked');
       if (NO_RECONNECT_CODES.has(ev.code)) return;
       attempts += 1;
-      if (attempts > 5) return onGone('failed');
+      if (attempts > MAX_RECONNECT_ATTEMPTS) return onGone('failed');
+      onStatus?.('reconnecting');
       setTimeout(connect, Math.min(8000, 500 * 2 ** attempts));
     };
   };

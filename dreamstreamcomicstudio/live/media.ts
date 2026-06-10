@@ -19,8 +19,12 @@ const MIME_CANDIDATES = [
 export function pickSupportedMime(
   isTypeSupported: (m: string) => boolean = (m) =>
     typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(m),
+  preferMp4 = true,
 ): string | null {
-  for (const m of MIME_CANDIDATES) {
+  const candidates = preferMp4
+    ? MIME_CANDIDATES
+    : [...MIME_CANDIDATES.filter((m) => m.startsWith('video/webm')), ...MIME_CANDIDATES.filter((m) => !m.startsWith('video/webm'))];
+  for (const m of candidates) {
     try {
       if (isTypeSupported(m)) return m;
     } catch {
@@ -38,6 +42,23 @@ export async function openCamera(preset: QualityPreset, deviceId?: string): Prom
       height: { ideal: preset.height },
       frameRate: { ideal: preset.frameRate },
       ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'user' }),
+    },
+  });
+}
+
+/** Video-only stream for live camera/lens switches: the mic track from the
+ *  original stream keeps feeding the program, so the encoder never restarts. */
+export async function openCameraVideo(
+  preset: QualityPreset,
+  by: { deviceId?: string; facingMode?: 'user' | 'environment' },
+): Promise<MediaStream> {
+  return navigator.mediaDevices.getUserMedia({
+    audio: false,
+    video: {
+      width: { ideal: preset.width },
+      height: { ideal: preset.height },
+      frameRate: { ideal: preset.frameRate },
+      ...(by.deviceId ? { deviceId: { exact: by.deviceId } } : { facingMode: by.facingMode || 'user' }),
     },
   });
 }
@@ -144,8 +165,8 @@ export class SegmentedRecorder {
 }
 
 /**
- * Full-clarity local recording of the PROGRAM FEED only (camera stream — never
- * the screen, never the chat). Runs at ~2.5× the streaming bitrate so the
+ * Full-clarity local recording of the PROGRAM FEED only (the mixed program —
+ * never the chat). Runs at ~2.5× the streaming bitrate by default so the
  * creator's master copy beats anything viewers saw.
  */
 export class LocalRecorder {
@@ -153,10 +174,10 @@ export class LocalRecorder {
   private chunks: Blob[] = [];
   bytes = 0;
 
-  constructor(stream: MediaStream, mimeType: string, streamVideoBps: number) {
+  constructor(stream: MediaStream, mimeType: string, streamVideoBps: number, factor = LOCAL_REC_BITRATE_FACTOR) {
     this.rec = new MediaRecorder(stream, {
       mimeType,
-      videoBitsPerSecond: Math.round(streamVideoBps * LOCAL_REC_BITRATE_FACTOR),
+      videoBitsPerSecond: Math.round(streamVideoBps * factor),
       audioBitsPerSecond: 192_000,
     });
     this.rec.ondataavailable = (e) => {

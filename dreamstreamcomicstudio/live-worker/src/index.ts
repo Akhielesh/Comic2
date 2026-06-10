@@ -13,6 +13,8 @@
  *   GET  /api/events/:id/ws                WebSocket → EventRoom
  *   POST /api/events/:id/segments?seq&ms   host uploads one segment (binary body)
  *   GET  /api/events/:id/segments/:seq     viewers fetch a segment (CDN-cached)
+ *   GET  /api/events/:id/stats?k=hostKey   host-gated analytics + activity log
+ *   POST /api/events/:id/rsvp              name-only "save my spot" from invites
  */
 
 import { EventRoom } from './eventRoom';
@@ -69,7 +71,7 @@ export default {
     const url = new URL(req.url);
     // Behind the site route the worker is mounted at /live-api/* — strip the prefix.
     const pathname = url.pathname.replace(/^\/live-api(?=\/)/, '');
-    const m = pathname.match(/^\/api\/events(?:\/([a-z0-9]+))?(?:\/(ws|segments))?(?:\/(\d+))?$/);
+    const m = pathname.match(/^\/api\/events(?:\/([a-z0-9]+))?(?:\/(ws|segments|stats|rsvp))?(?:\/(\d+))?$/);
     if (!m) return withCors(json({ error: 'not found' }, 404), cors);
     const [, id, sub, seqStr] = m;
 
@@ -98,6 +100,23 @@ export default {
       // GET /api/events/:id/ws — hand the socket to the room (no CORS on WS)
       if (sub === 'ws') {
         return room(env, id).fetch(new Request(`https://room.internal/ws${url.search}`, req));
+      }
+
+      // GET /api/events/:id/stats?k=hostKey — analytics + activity log (host only)
+      if (sub === 'stats' && req.method === 'GET') {
+        return withCors(await roomCall(env, id, `/stats${url.search}`), cors);
+      }
+
+      // POST /api/events/:id/rsvp — save a spot on the invite page (name only)
+      if (sub === 'rsvp' && req.method === 'POST') {
+        return withCors(
+          await roomCall(env, id, '/rsvp', {
+            method: 'POST',
+            body: await req.text(),
+            headers: { 'content-type': 'application/json' },
+          }),
+          cors,
+        );
       }
 
       // POST /api/events/:id/segments?seq=&ms= — host pushes one segment
