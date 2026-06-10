@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Bot, Mail, Sparkles, BookOpen, Compass, Palette, LayoutGrid, MessageSquare, Cpu, Code2, Menu, X } from 'lucide-react';
+import { Bot, Mail, Sparkles, BookOpen, Compass, Palette, LayoutGrid, MessageSquare, Cpu, Code2, Menu, X, Radio } from 'lucide-react';
 import { Button } from '../Button';
 import { BrandLockup } from './BrandLockup';
 import { NavDropdown } from './NavDropdown';
@@ -57,6 +57,9 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
     { heading: 'Code', items: isAdmin
       ? [{ label: 'Open Code Studio', onClick: () => onNavigate('codestudio') }]
       : [{ label: 'Get notified', onClick: notify }] },
+    { heading: 'Live', items: [
+      { label: 'Open Stream Studio', onClick: () => { window.location.href = '/live.html'; } },
+    ] },
     { heading: 'Models', items: [
       { label: 'Browse Models', onClick: () => onNavigate('models') },
     ] },
@@ -131,6 +134,15 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
                 ]}
               />
             )}
+            <NavDropdown
+              label="Live"
+              icon={<Radio size={14} />}
+              variant="blue"
+              badge="Beta"
+              items={[
+                { label: 'Open Stream Studio', description: 'Go live from your camera — chat, lobby & recording', icon: <Radio size={16} />, onClick: () => { window.location.href = '/live.html'; } },
+              ]}
+            />
             <NavDropdown
               label="Models"
               icon={<Cpu size={14} />}
