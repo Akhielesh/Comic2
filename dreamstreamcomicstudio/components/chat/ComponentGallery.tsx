@@ -625,18 +625,18 @@ export const ComponentGallery: React.FC = () => {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-[#6e6a60]">
+        <p className="text-sm text-[var(--ds-muted)]">
           Every rich-output widget, live with sample data. Each one ships in two versions — a compact glance card and a
           detailed expansive view — and is resizable in chat.
         </p>
-        <div className="inline-flex shrink-0 rounded-lg border border-black/10 bg-black/[0.04] p-0.5 text-[11px] font-semibold">
+        <div className="inline-flex shrink-0 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-well-strong)] p-0.5 text-[11px] font-semibold">
           {(['compact', 'detailed'] as const).map((d) => (
             <button
               key={d}
               onClick={() => setDensity(d)}
               aria-pressed={density === d}
               className={`rounded-md px-2.5 py-1 capitalize transition-all duration-200 ${
-                density === d ? 'bg-white text-[#1a1915] shadow-[0_1px_2px_rgba(0,0,0,0.12)]' : 'text-[#6e6a60] hover:text-[#1a1915]'
+                density === d ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-[0_1px_2px_rgba(0,0,0,0.12)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
               }`}
             >
               {d}
@@ -649,16 +649,16 @@ export const ComponentGallery: React.FC = () => {
         if (demos.length === 0) return null;
         return (
           <section key={cat}>
-            <h3 className="mb-2 border-b border-black/5 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-[#6e6a60]">
+            <h3 className="mb-2 border-b border-[var(--ds-hairline-soft)] pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">
               {cat}
             </h3>
             <div className="space-y-4">
               {demos.map((d) => (
                 <div key={d.title}>
-                  <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-[#6e6a60]">
+                  <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-[var(--ds-muted)]">
                     <span className="truncate">{d.title}</span>
                     {d.type && (
-                      <code className="shrink-0 rounded bg-black/[0.04] px-1 py-px text-[10px] text-[#6e6a60]">{d.type}</code>
+                      <code className="shrink-0 rounded bg-[var(--ds-well-strong)] px-1 py-px text-[10px] text-[var(--ds-muted)]">{d.type}</code>
                     )}
                   </div>
                   {d.type ? (

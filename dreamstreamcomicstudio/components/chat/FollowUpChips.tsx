@@ -66,7 +66,7 @@ export const FollowUpChips: React.FC<{
             setSuggestions([]); // consume — don't leave it lingering after sending
             onSend(s);
           }}
-          className={`${PILL} px-3 py-1 text-[12px] font-medium hover:bg-white ${HOVER_LIFT}`}
+          className={`${PILL} px-3 py-1 text-[12px] font-medium hover:bg-[var(--ds-raised)] ${HOVER_LIFT}`}
         >
           {s}
         </button>

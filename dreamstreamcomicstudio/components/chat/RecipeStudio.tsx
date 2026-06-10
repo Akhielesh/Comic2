@@ -35,11 +35,11 @@ const blankRecipe = (): RecipeCardArtifact => ({
 
 // Calm-studio form controls shared across the run panel + editor.
 const INPUT_CLS =
-  'w-full rounded-lg border border-black/10 bg-white px-3 py-2 text-sm text-[#1a1915] outline-none transition-colors duration-200 focus:border-black/20';
+  'w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-3 py-2 text-sm text-[var(--ds-ink)] outline-none transition-colors duration-200 focus:border-black/20';
 const BTN_PRIMARY =
-  'flex items-center gap-1 rounded-lg bg-[#D97757] px-4 py-2 text-sm font-semibold text-white transition-colors duration-200 hover:bg-[#c2643f] disabled:opacity-40';
+  'flex items-center gap-1 rounded-lg bg-[var(--ds-accent)] px-4 py-2 text-sm font-semibold text-white transition-colors duration-200 hover:bg-[var(--ds-accent-hover)] disabled:opacity-40';
 const BTN_SECONDARY =
-  'flex items-center gap-1 rounded-lg border border-black/10 bg-white/70 px-4 py-2 text-sm font-semibold text-[#1a1915] transition-colors duration-200 hover:bg-black/5';
+  'flex items-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-4 py-2 text-sm font-semibold text-[var(--ds-ink)] transition-colors duration-200 hover:bg-[var(--ds-hover)]';
 
 export const RecipeStudio: React.FC<{ userId?: string }> = ({ userId }) => {
   const [lib, setLib] = useState<RecipeLibrary>({ builtins: [], custom: [] });
@@ -77,21 +77,21 @@ export const RecipeStudio: React.FC<{ userId?: string }> = ({ userId }) => {
   return (
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-3">
-        <p className="text-sm text-[#6e6a60]">
-          <span className="font-semibold text-[#1a1915]">Recipes</span> are reusable, parameterized agent workflows. Run a built-in,
+        <p className="text-sm text-[var(--ds-muted)]">
+          <span className="font-semibold text-[var(--ds-ink)]">Recipes</span> are reusable, parameterized agent workflows. Run a built-in,
           save your own, and the agents can run &amp; create them mid-chat (<code className="text-[11px]">run_recipe</code> /
           <code className="text-[11px]">save_recipe</code>) — that's how they improve themselves.
         </p>
         <button
           onClick={() => setView({ kind: 'edit', recipe: blankRecipe() })}
-          className="flex shrink-0 items-center gap-1 rounded-lg bg-[#D97757] px-3 py-1.5 text-[12px] font-semibold text-white transition-colors duration-200 hover:bg-[#c2643f]"
+          className="flex shrink-0 items-center gap-1 rounded-lg bg-[var(--ds-accent)] px-3 py-1.5 text-[12px] font-semibold text-white transition-colors duration-200 hover:bg-[var(--ds-accent-hover)]"
         >
           <Plus className="h-4 w-4" /> New recipe
         </button>
       </div>
 
       {loading && (
-        <div className="flex items-center justify-center gap-2 py-10 text-sm text-[#6e6a60]/70">
+        <div className="flex items-center justify-center gap-2 py-10 text-sm text-[var(--ds-muted)]">
           <Loader2 className="h-4 w-4 animate-spin" /> Loading recipes…
         </div>
       )}
@@ -131,9 +131,9 @@ export const RecipeStudio: React.FC<{ userId?: string }> = ({ userId }) => {
 
 const Section: React.FC<{ title: string; empty?: string; children: React.ReactNode }> = ({ title, empty, children }) => (
   <div>
-    <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">{title}</div>
+    <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">{title}</div>
     {empty ? (
-      <div className="rounded-xl border border-dashed border-black/10 bg-black/[0.02] py-6 text-center text-sm text-[#6e6a60]/70">{empty}</div>
+      <div className="rounded-xl border border-dashed border-[var(--ds-hairline)] bg-black/[0.02] py-6 text-center text-sm text-[var(--ds-muted)]">{empty}</div>
     ) : (
       <div className="space-y-2">{children}</div>
     )}
@@ -146,25 +146,25 @@ const RecipeRow: React.FC<{
   onEdit?: () => void;
   onDelete?: () => void;
 }> = ({ recipe, onRun, onEdit, onDelete }) => (
-  <div className="overflow-hidden rounded-2xl border border-black/10 bg-white/85 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.06)]">
+  <div className="overflow-hidden rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_var(--ds-hairline)]">
     <RecipeCard data={recipe} />
-    <div className="flex items-center gap-2 border-t border-black/5 bg-black/[0.025] px-3 py-2">
+    <div className="flex items-center gap-2 border-t border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] px-3 py-2">
       <button
         onClick={onRun}
-        className="flex items-center gap-1 rounded-lg bg-[#D97757] px-3 py-1 text-[12px] font-semibold text-white transition-colors duration-200 hover:bg-[#c2643f]"
+        className="flex items-center gap-1 rounded-lg bg-[var(--ds-accent)] px-3 py-1 text-[12px] font-semibold text-white transition-colors duration-200 hover:bg-[var(--ds-accent-hover)]"
       >
         <Play className="h-3.5 w-3.5" /> Run
       </button>
       {onEdit && (
         <button
           onClick={onEdit}
-          className="flex items-center gap-1 rounded-lg border border-black/10 bg-white/70 px-2.5 py-1 text-[12px] font-semibold text-[#1a1915] transition-colors duration-200 hover:bg-black/5"
+          className="flex items-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 py-1 text-[12px] font-semibold text-[var(--ds-ink)] transition-colors duration-200 hover:bg-[var(--ds-hover)]"
         >
           <Pencil className="h-3.5 w-3.5" /> Edit
         </button>
       )}
       {onDelete && (
-        <button onClick={onDelete} className="ml-auto text-[#6e6a60]/50 transition-colors duration-200 hover:text-red-500">
+        <button onClick={onDelete} className="ml-auto text-[var(--ds-muted)] opacity-60 transition-colors duration-200 hover:text-red-500">
           <Trash2 className="h-4 w-4" />
         </button>
       )}
@@ -215,21 +215,21 @@ const RunPanel: React.FC<{ recipe: StoredRecipe; onBack: () => void }> = ({ reci
 
   return (
     <div className="space-y-3">
-      <button onClick={onBack} className="flex items-center gap-1 text-[12px] font-semibold text-[#6e6a60] transition-colors duration-200 hover:text-[#1a1915]">
+      <button onClick={onBack} className="flex items-center gap-1 text-[12px] font-semibold text-[var(--ds-muted)] transition-colors duration-200 hover:text-[var(--ds-ink)]">
         <ArrowLeft className="h-4 w-4" /> All recipes
       </button>
 
       <div className="flex items-center gap-2">
-        <span className="rounded-lg border border-black/10 bg-black/[0.03] p-1.5"><BookOpen className="h-4 w-4 text-[#6e6a60]" /></span>
+        <span className="rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-well)] p-1.5"><BookOpen className="h-4 w-4 text-[var(--ds-muted)]" /></span>
         <div>
-          <div className="text-lg font-semibold leading-tight tracking-tight text-[#1a1915]">{recipe.title}</div>
-          <div className="text-[12px] text-[#6e6a60]">{recipe.description}</div>
+          <div className="text-lg font-semibold leading-tight tracking-tight text-[var(--ds-ink)]">{recipe.title}</div>
+          <div className="text-[12px] text-[var(--ds-muted)]">{recipe.description}</div>
         </div>
       </div>
 
       {params.length > 0 && (
-        <div className="space-y-2 rounded-xl border border-black/10 bg-white p-3 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-          <div className="text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">Parameters</div>
+        <div className="space-y-2 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] p-3 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Parameters</div>
           {params.map((p) => (
             <ParamField key={p.key} param={p} value={values[p.key]} onChange={(v) => setValues((s) => ({ ...s, [p.key]: v }))} />
           ))}
@@ -251,7 +251,7 @@ const RunPanel: React.FC<{ recipe: StoredRecipe; onBack: () => void }> = ({ reci
             <X className="h-4 w-4" /> Stop
           </button>
         )}
-        {running && <span className="flex items-center gap-1 text-[12px] text-[#D97757]"><Loader2 className="h-3.5 w-3.5 animate-spin" /> running…</span>}
+        {running && <span className="flex items-center gap-1 text-[12px] text-[var(--ds-accent)]"><Loader2 className="h-3.5 w-3.5 animate-spin" /> running…</span>}
       </div>
 
       {error && (
@@ -261,8 +261,8 @@ const RunPanel: React.FC<{ recipe: StoredRecipe; onBack: () => void }> = ({ reci
       )}
 
       {(text || artifacts.length > 0) && (
-        <div className="rounded-xl border border-black/10 bg-white p-3 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
-          <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">
+        <div className="rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] p-3 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+          <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">
             <ChefHat className="h-3.5 w-3.5" /> Result
           </div>
           {text && <ChatMarkdown text={text} />}
@@ -276,17 +276,17 @@ const RunPanel: React.FC<{ recipe: StoredRecipe; onBack: () => void }> = ({ reci
 const ParamField: React.FC<{ param: RecipeParameterView; value: string | boolean | undefined; onChange: (v: string | boolean) => void }> = ({ param, value, onChange }) => {
   const label = (
     <div className="mb-0.5 flex items-center gap-1.5">
-      <code className="text-[12px] font-semibold text-[#1a1915]">{param.key}</code>
+      <code className="text-[12px] font-semibold text-[var(--ds-ink)]">{param.key}</code>
       {param.requirement === 'required' && <span className="text-[10px] font-semibold text-red-600">required</span>}
-      {param.description && <span className="text-[11px] text-[#6e6a60]/80">— {param.description}</span>}
+      {param.description && <span className="text-[11px] text-[var(--ds-muted)]">— {param.description}</span>}
     </div>
   );
   if (param.input_type === 'boolean') {
     return (
       <label className="flex items-center gap-2 text-sm">
         <input type="checkbox" checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} className="h-4 w-4 accent-[#D97757]" />
-        <code className="text-[12px] font-semibold text-[#1a1915]">{param.key}</code>
-        {param.description && <span className="text-[11px] text-[#6e6a60]/80">— {param.description}</span>}
+        <code className="text-[12px] font-semibold text-[var(--ds-ink)]">{param.key}</code>
+        {param.description && <span className="text-[11px] text-[var(--ds-muted)]">— {param.description}</span>}
       </label>
     );
   }
@@ -365,53 +365,53 @@ const RecipeEditor: React.FC<{ recipe: RecipeCardArtifact; onSave: (r: RecipeCar
 
   // Small editor inputs (param rows) share a tighter control style.
   const smallInput =
-    'rounded-md border border-black/10 bg-white px-2 py-1 text-[12px] text-[#1a1915] outline-none transition-colors duration-200 focus:border-black/20';
+    'rounded-md border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-2 py-1 text-[12px] text-[var(--ds-ink)] outline-none transition-colors duration-200 focus:border-black/20';
   const toggleChip = (active: boolean) =>
     `rounded-full border px-2 py-1 text-[11px] font-semibold transition-colors duration-200 ${
       active
         ? 'border-transparent bg-[#1a1915] text-white'
-        : 'border-black/10 bg-white/70 text-[#6e6a60] hover:bg-black/5 hover:text-[#1a1915]'
+        : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
     }`;
 
   return (
     <div className="space-y-3">
-      <button onClick={onCancel} className="flex items-center gap-1 text-[12px] font-semibold text-[#6e6a60] transition-colors duration-200 hover:text-[#1a1915]">
+      <button onClick={onCancel} className="flex items-center gap-1 text-[12px] font-semibold text-[var(--ds-muted)] transition-colors duration-200 hover:text-[var(--ds-ink)]">
         <ArrowLeft className="h-4 w-4" /> All recipes
       </button>
-      <div className="text-lg font-semibold tracking-tight text-[#1a1915]">{recipe.title ? 'Edit recipe' : 'New recipe'}</div>
+      <div className="text-lg font-semibold tracking-tight text-[var(--ds-ink)]">{recipe.title ? 'Edit recipe' : 'New recipe'}</div>
 
       <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title (e.g. Comic Concept Forge)" className={`font-semibold ${INPUT_CLS}`} />
       <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="One-line description of what it does" className={INPUT_CLS} />
 
       <div>
-        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">Instructions (use {'{{ parameter }}'} placeholders)</div>
+        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Instructions (use {'{{ parameter }}'} placeholders)</div>
         <textarea value={instructions} onChange={(e) => setInstructions(e.target.value)} rows={5} placeholder="You are a… Build {{ topic }} for {{ audience }}. Be concrete and cite sources." className={`resize-y ${INPUT_CLS}`} />
       </div>
       <div>
-        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">Initial prompt (optional)</div>
+        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Initial prompt (optional)</div>
         <input value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Kickoff message, e.g. Research {{ topic }} and write the brief." className={INPUT_CLS} />
       </div>
 
-      <label className="flex items-center gap-2 text-sm text-[#1a1915]">
+      <label className="flex items-center gap-2 text-sm text-[var(--ds-ink)]">
         <input type="checkbox" checked={swarm} onChange={(e) => setSwarm(e.target.checked)} className="h-4 w-4 accent-[#D97757]" />
-        <Network className="h-4 w-4 text-[#D97757]" /> Run through the agent <span className="font-semibold">swarm</span> (multi-agent)
+        <Network className="h-4 w-4 text-[var(--ds-accent)]" /> Run through the agent <span className="font-semibold">swarm</span> (multi-agent)
       </label>
 
       {/* Parameters editor */}
-      <div className="rounded-xl border border-black/10 bg-white p-3">
+      <div className="rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] p-3">
         <div className="mb-1.5 flex items-center justify-between">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">Parameters</span>
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Parameters</span>
           <button
             onClick={addParam}
-            className="flex items-center gap-1 rounded-full border border-black/10 bg-white/70 px-2 py-0.5 text-[11px] font-semibold text-[#1a1915] transition-colors duration-200 hover:bg-black/5"
+            className="flex items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2 py-0.5 text-[11px] font-semibold text-[var(--ds-ink)] transition-colors duration-200 hover:bg-[var(--ds-hover)]"
           >
             <Plus className="h-3.5 w-3.5" /> Add
           </button>
         </div>
-        {params.length === 0 && <div className="py-2 text-center text-[12px] text-[#6e6a60]/70">No parameters — the recipe runs as-is.</div>}
+        {params.length === 0 && <div className="py-2 text-center text-[12px] text-[var(--ds-muted)]">No parameters — the recipe runs as-is.</div>}
         <div className="space-y-2">
           {params.map((p, i) => (
-            <div key={i} className="flex flex-wrap items-center gap-1.5 rounded-lg border border-black/10 bg-black/[0.03] p-2">
+            <div key={i} className="flex flex-wrap items-center gap-1.5 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-well)] p-2">
               <input value={p.key} onChange={(e) => updateParam(i, { key: e.target.value })} placeholder="key" className={`w-28 font-semibold ${smallInput}`} />
               <select value={p.input_type} onChange={(e) => updateParam(i, { input_type: e.target.value as RecipeParameterView['input_type'] })} className={smallInput}>
                 {PARAM_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
@@ -421,7 +421,7 @@ const RecipeEditor: React.FC<{ recipe: RecipeCardArtifact; onSave: (r: RecipeCar
               </select>
               <input value={p.description || ''} onChange={(e) => updateParam(i, { description: e.target.value })} placeholder="description" className={`min-w-[8rem] flex-1 ${smallInput}`} />
               <input value={p.default !== undefined ? String(p.default) : ''} onChange={(e) => updateParam(i, { default: e.target.value })} placeholder="default" className={`w-20 ${smallInput}`} />
-              <button onClick={() => removeParam(i)} className="text-[#6e6a60]/50 transition-colors duration-200 hover:text-red-500"><Trash2 className="h-4 w-4" /></button>
+              <button onClick={() => removeParam(i)} className="text-[var(--ds-muted)] opacity-60 transition-colors duration-200 hover:text-red-500"><Trash2 className="h-4 w-4" /></button>
             </div>
           ))}
         </div>
@@ -430,7 +430,7 @@ const RecipeEditor: React.FC<{ recipe: RecipeCardArtifact; onSave: (r: RecipeCar
       {/* Agents (for swarm recipes) */}
       {swarm && (
         <div>
-          <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]"><Bot className="h-3.5 w-3.5" /> Specialist agents</div>
+          <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]"><Bot className="h-3.5 w-3.5" /> Specialist agents</div>
           <div className="flex flex-wrap gap-1.5">
             {BUILTIN_AGENTS.map((a) => (
               <button key={a.id} onClick={() => toggle(agents, a.id, setAgents)} className={toggleChip(agents.includes(a.id))}>{a.name}</button>
@@ -442,7 +442,7 @@ const RecipeEditor: React.FC<{ recipe: RecipeCardArtifact; onSave: (r: RecipeCar
       {/* Tools (for single-agent recipes) */}
       {!swarm && (
         <div>
-          <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]"><Wrench className="h-3.5 w-3.5" /> Tools the recipe may use</div>
+          <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]"><Wrench className="h-3.5 w-3.5" /> Tools the recipe may use</div>
           <div className="flex flex-wrap gap-1.5">
             {AGENT_TOOLS.map((t) => (
               <button key={t.name} onClick={() => toggle(tools, t.name, setTools)} className={toggleChip(tools.includes(t.name))}>{t.label}</button>
@@ -457,7 +457,7 @@ const RecipeEditor: React.FC<{ recipe: RecipeCardArtifact; onSave: (r: RecipeCar
           {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Save recipe
         </button>
       </div>
-      {!valid && <p className="text-right text-[11px] text-[#6e6a60]/70">A recipe needs a title and at least instructions or a prompt.</p>}
+      {!valid && <p className="text-right text-[11px] text-[var(--ds-muted)]">A recipe needs a title and at least instructions or a prompt.</p>}
     </div>
   );
 };

@@ -140,7 +140,7 @@ export const WidgetFrame: React.FC<WidgetFrameProps> = ({ type, densityHint, den
           disabled={live.refreshing}
           title={live.asOf ? `Refresh live data (updated ${new Date(live.asOf).toLocaleTimeString()})` : 'Refresh live data'}
           aria-label="Refresh widget data"
-          className={`absolute right-10 top-3 z-20 flex h-6 w-6 items-center justify-center rounded-lg border border-black/10 bg-white/90 text-[#6e6a60] shadow-[0_1px_3px_rgba(0,0,0,0.1)] backdrop-blur-sm transition-all duration-200 hover:text-[#1a1915] focus-visible:opacity-100 group-hover/widget:opacity-100 group-focus-within/widget:opacity-100 [@media(pointer:coarse)]:opacity-70 ${live.refreshing ? 'opacity-100' : 'opacity-0'}`}
+          className={`absolute right-10 top-3 z-20 flex h-6 w-6 items-center justify-center rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] text-[var(--ds-muted)] shadow-[0_1px_3px_rgba(0,0,0,0.1)] backdrop-blur-sm transition-all duration-200 hover:text-[var(--ds-ink)] focus-visible:opacity-100 group-hover/widget:opacity-100 group-focus-within/widget:opacity-100 [@media(pointer:coarse)]:opacity-70 ${live.refreshing ? 'opacity-100' : 'opacity-0'}`}
         >
           <RefreshCw className={`h-3 w-3 ${live.refreshing ? 'animate-spin' : ''}`} />
         </button>
@@ -151,7 +151,7 @@ export const WidgetFrame: React.FC<WidgetFrameProps> = ({ type, densityHint, den
         onClick={toggleDensity}
         title={density === 'compact' ? 'Expand: full detail' : 'Collapse: glance view'}
         aria-label={density === 'compact' ? 'Show detailed view' : 'Show compact view'}
-        className="absolute right-2 top-3 z-20 flex h-6 w-6 items-center justify-center rounded-lg border border-black/10 bg-white/90 text-[#6e6a60] opacity-0 shadow-[0_1px_3px_rgba(0,0,0,0.1)] backdrop-blur-sm transition-all duration-200 hover:text-[#1a1915] focus-visible:opacity-100 group-hover/widget:opacity-100 group-focus-within/widget:opacity-100 [@media(pointer:coarse)]:opacity-70"
+        className="absolute right-2 top-3 z-20 flex h-6 w-6 items-center justify-center rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] text-[var(--ds-muted)] opacity-0 shadow-[0_1px_3px_rgba(0,0,0,0.1)] backdrop-blur-sm transition-all duration-200 hover:text-[var(--ds-ink)] focus-visible:opacity-100 group-hover/widget:opacity-100 group-focus-within/widget:opacity-100 [@media(pointer:coarse)]:opacity-70"
       >
         {density === 'compact' ? <Maximize2 className="h-3 w-3" /> : <Minimize2 className="h-3 w-3" />}
       </button>}
@@ -171,7 +171,7 @@ export const WidgetFrame: React.FC<WidgetFrameProps> = ({ type, densityHint, den
         {clamped && (
           <button
             onClick={toggleDensity}
-            className="absolute inset-x-0 bottom-0 z-10 flex h-16 items-end justify-center bg-gradient-to-t from-[#FAF9F5] via-[#FAF9F5]/80 to-transparent pb-1.5 text-[11px] font-semibold text-[#6e6a60] transition-colors hover:text-[#1a1915]"
+            className="absolute inset-x-0 bottom-0 z-10 flex h-16 items-end justify-center bg-gradient-to-t from-[var(--ds-canvas)] via-[var(--ds-canvas)] to-transparent pb-1.5 text-[11px] font-semibold text-[var(--ds-muted)] transition-colors hover:text-[var(--ds-ink)]"
           >
             Show more
           </button>

@@ -9,7 +9,7 @@ import type { McpServerConfig } from '../../apiTypes';
 import { type ChatSkill, isSlashQuery, slashQuery, filterSkills, parseSkillInput } from '../../services/chatSkills';
 import { DictationButton } from './DictationButton';
 import {
-  CANVAS_BG, GLASS_STRONG, HAIRLINE, MENU, MUTED, LABEL, TRANSITION, SHADOW_SOFT,
+  CANVAS_BG, GLASS_STRONG, HAIRLINE, MUTED, LABEL, TRANSITION, SHADOW_SOFT,
   RADIUS_PANEL, PILL, CONTROL_BTN, ACCENT_BG, ACCENT_BG_HOVER, ACCENT_TEXT, ACCENT_SOFT_BG
 } from './studioDesign';
 
@@ -299,7 +299,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
         {swarmSupported && (
           <button
             onClick={() => onSwarmToggle(!swarm)}
-            className={`flex items-center gap-1.5 text-[11px] font-medium ${PILL} px-2.5 py-1 ${swarm ? `${ACCENT_SOFT_BG} ${ACCENT_TEXT} border-[#D97757]/30` : `${MUTED} hover:bg-black/5`}`}
+            className={`flex items-center gap-1.5 text-[11px] font-medium ${PILL} px-2.5 py-1 ${swarm ? `${ACCENT_SOFT_BG} ${ACCENT_TEXT} border-[#D97757]/30` : `${MUTED} hover:bg-[var(--ds-hover)]`}`}
             title="Agent swarm: a planner splits your goal across specialized agents (news, finance, weather, research…) that work in parallel, then a lead agent synthesizes the answer."
           >
             <Network className="w-3.5 h-3.5" /> Swarm {swarm ? 'on' : 'off'}
@@ -307,7 +307,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
         )}
         <button
           onClick={() => onDreamstreamToggle(!dreamstreamAccess)}
-          className={`flex items-center gap-1.5 text-[11px] font-medium ${PILL} px-2.5 py-1 ${dreamstreamAccess ? `${ACCENT_SOFT_BG} ${ACCENT_TEXT} border-[#D97757]/30` : `${MUTED} hover:bg-black/5`}`}
+          className={`flex items-center gap-1.5 text-[11px] font-medium ${PILL} px-2.5 py-1 ${dreamstreamAccess ? `${ACCENT_SOFT_BG} ${ACCENT_TEXT} border-[#D97757]/30` : `${MUTED} hover:bg-[var(--ds-hover)]`}`}
           title="DreamStream connector: let this chat see your own projects, account and usage (read-only, sanitized). Off by default."
         >
           <LayoutGrid className="w-3.5 h-3.5" /> DreamStream {dreamstreamAccess ? 'on' : 'off'}
@@ -320,7 +320,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
               <button
                 key={server.id}
                 onClick={() => onToggleMcpServer(server.id, !on)}
-                className={`flex items-center gap-1.5 text-[11px] font-medium ${PILL} px-2.5 py-1 ${on ? `${ACCENT_SOFT_BG} ${ACCENT_TEXT} border-[#D97757]/30` : `${MUTED} hover:bg-black/5`}`}
+                className={`flex items-center gap-1.5 text-[11px] font-medium ${PILL} px-2.5 py-1 ${on ? `${ACCENT_SOFT_BG} ${ACCENT_TEXT} border-[#D97757]/30` : `${MUTED} hover:bg-[var(--ds-hover)]`}`}
                 title={`Custom MCP server: ${server.url}`}
               >
                 <Server className="w-3.5 h-3.5" /> {server.name} {on ? 'on' : 'off'}
@@ -335,7 +335,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
           {attachments.map((att) => (
             <div key={att.id} className="relative">
               {att.kind === 'document' ? (
-                <div className={`w-14 h-14 rounded-xl ${HAIRLINE} bg-white/70 flex flex-col items-center justify-center p-1`}>
+                <div className={`w-14 h-14 rounded-xl ${HAIRLINE} bg-[var(--ds-surface-soft)] flex flex-col items-center justify-center p-1`}>
                   <FileText className={`w-5 h-5 ${ACCENT_TEXT}`} />
                   <span className={`text-[8px] font-medium ${MUTED} truncate w-full text-center mt-0.5`}>{att.name}</span>
                 </div>
@@ -358,20 +358,19 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
           <Wand2 className="w-3.5 h-3.5" />
           <span className="font-semibold">Prompt enhanced.</span>
           <span className={MUTED}>Review it, then send — or</span>
-          <button onClick={undoEnhance} className="flex items-center gap-0.5 font-semibold hover:text-[#1a1915] underline">
+          <button onClick={undoEnhance} className="flex items-center gap-0.5 font-semibold hover:text-[var(--ds-ink)] underline">
             <Undo2 className="w-3 h-3" /> undo
           </button>
         </div>
       )}
 
       <div className="relative flex items-end gap-2">
-        {/* Slash-command (skills) menu */}
+        {/* Slash-command (skills) menu — refined palette style */}
         {menuOpen && (
-          <div className={`absolute bottom-full left-0 right-0 z-20 mb-2 overflow-hidden ${MENU} animate-fade-in`}>
-            <div className={`flex items-center gap-1 border-b border-black/10 bg-black/[0.03] px-3 py-1.5 ${LABEL}`}>
-              <Slash className="h-3 w-3" /> Skills — ↑↓ choose · Enter to pick · Esc to dismiss
-            </div>
-            <ul className="max-h-64 overflow-y-auto">
+          <div
+            className={`absolute bottom-full left-0 right-0 z-20 mb-2 overflow-hidden rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] backdrop-blur-md shadow-[0_2px_4px_rgba(0,0,0,0.04),0_16px_40px_var(--ds-hairline)] animate-fade-in`}
+          >
+            <ul className="max-h-72 overflow-y-auto p-1.5">
               {skillMatches.map((s, i) => {
                 const active = i === Math.min(skillIndex, skillMatches.length - 1);
                 return (
@@ -383,21 +382,56 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                         acceptSkill(s);
                       }}
                       onMouseEnter={() => setSkillIndex(i)}
-                      className={`flex w-full items-start gap-2 px-3 py-2 text-left ${TRANSITION} ${active ? 'bg-[#D97757]/10' : 'hover:bg-black/5'}`}
+                      className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left ${TRANSITION} ${active ? 'bg-[#D97757]/10' : 'hover:bg-[var(--ds-hover)]'}`}
                     >
-                      <span className="mt-0.5 text-base leading-none">{s.emoji}</span>
+                      <span
+                        aria-hidden
+                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-base leading-none ${TRANSITION} ${active ? 'bg-[#D97757]/10' : 'bg-[var(--ds-well)]'}`}
+                      >
+                        {s.emoji}
+                      </span>
                       <span className="min-w-0 flex-1">
-                        <span className="flex items-center gap-1.5">
-                          <code className="text-[12px] font-semibold">/{s.command}</code>
-                          <span className={`text-[11px] ${MUTED}`}>{s.argRequired ? `<${s.argName}>` : `[${s.argName}]`}</span>
+                        <span className="flex items-baseline gap-1.5">
+                          <code className="text-[12px] font-semibold text-[var(--ds-ink)]">/{s.command}</code>
+                          <span className={`truncate text-[11px] ${MUTED}`}>
+                            {s.argRequired ? `<${s.argName}>` : `[${s.argName}]`}
+                          </span>
                         </span>
-                        <span className={`block text-[11px] ${MUTED}`}>{s.description}</span>
+                        <span className={`block truncate text-[11px] ${MUTED}`}>{s.description}</span>
+                      </span>
+                      <span
+                        className={`ml-2 shrink-0 self-start pt-0.5 text-[9px] font-semibold uppercase tracking-wider ${
+                          active ? ACCENT_TEXT : MUTED
+                        }`}
+                      >
+                        {s.category}
                       </span>
                     </button>
                   </li>
                 );
               })}
             </ul>
+            <div
+              className={`flex items-center justify-between border-t border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] px-3 py-1.5 ${LABEL}`}
+            >
+              <span className="flex items-center gap-1">
+                <Slash className="h-3 w-3" /> Skills
+              </span>
+              <span className="flex items-center gap-2 normal-case tracking-normal">
+                <span className="flex items-center gap-1">
+                  <kbd className={`rounded border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-1 py-px font-sans text-[9px] ${MUTED}`}>↑↓</kbd>
+                  choose
+                </span>
+                <span className="flex items-center gap-1">
+                  <kbd className={`rounded border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-1 py-px font-sans text-[9px] ${MUTED}`}>↵</kbd>
+                  pick
+                </span>
+                <span className="flex items-center gap-1">
+                  <kbd className={`rounded border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-1 py-px font-sans text-[9px] ${MUTED}`}>esc</kbd>
+                  dismiss
+                </span>
+              </span>
+            </div>
           </div>
         )}
         {(
@@ -413,7 +447,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={attachments.length >= MAX_ATTACHMENTS}
-              className={`shrink-0 ${CONTROL_BTN} p-2.5 ${MUTED} hover:text-[#1a1915] disabled:opacity-40`}
+              className={`shrink-0 ${CONTROL_BTN} p-2.5 ${MUTED} hover:text-[var(--ds-ink)] disabled:opacity-40`}
               title={features.vision ? 'Attach images or PDFs' : 'Attach a PDF'}
             >
               <Paperclip className="w-4 h-4" />
@@ -421,7 +455,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
             <button
               onClick={handleEnhance}
               disabled={!canEnhance}
-              className={`hidden sm:block shrink-0 ${CONTROL_BTN} p-2.5 ${MUTED} hover:text-[#1a1915] disabled:opacity-40`}
+              className={`hidden sm:block shrink-0 ${CONTROL_BTN} p-2.5 ${MUTED} hover:text-[var(--ds-ink)] disabled:opacity-40`}
               title="Improve my prompt (keeps your intent — review before sending)"
             >
               {enhancing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
@@ -454,7 +488,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
           onKeyDown={handleKeyDown}
           rows={1}
           placeholder="Message the model…  (type / for skills · Enter to send)"
-          className="flex-1 resize-none bg-transparent rounded-xl px-3 py-2.5 text-base sm:text-sm text-[#1a1915] placeholder:text-[#6e6a60]/70 outline-none max-h-[200px]"
+          className="flex-1 resize-none bg-transparent rounded-xl px-3 py-2.5 text-base sm:text-sm text-[var(--ds-ink)] placeholder:text-[var(--ds-muted)] outline-none max-h-[200px]"
         />
 
         {busy ? (

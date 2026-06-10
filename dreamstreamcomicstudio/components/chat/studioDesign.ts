@@ -12,26 +12,26 @@
 // ---------------------------------------------------------------------------
 
 /** Warm paper canvas behind the whole chat shell. */
-export const CANVAS_BG = 'bg-[#FAF9F5]';
+export const CANVAS_BG = 'bg-[var(--ds-canvas)]';
 
 /** Slightly deeper paper for the sidebar column. */
-export const SIDEBAR_BG = 'bg-[#F4F2EC]';
+export const SIDEBAR_BG = 'bg-[var(--ds-sidebar)]';
 
 /** Floating glass surface (panels, toolbars, menus). */
-export const GLASS = 'bg-white/70 backdrop-blur-md';
+export const GLASS = 'bg-[var(--ds-surface-soft)] backdrop-blur-md';
 
 /** Stronger glass for the composer bar and modals that sit over content. */
-export const GLASS_STRONG = 'bg-white/80 backdrop-blur-md';
+export const GLASS_STRONG = 'bg-[var(--ds-surface)] backdrop-blur-md';
 
 // ---------------------------------------------------------------------------
 // Lines, depth, shape
 // ---------------------------------------------------------------------------
 
 /** Hairline border — the ONLY border weight used inside Chat Studio. */
-export const HAIRLINE = 'border border-black/10';
+export const HAIRLINE = 'border border-[var(--ds-hairline)]';
 
 /** Soft ambient shadow — never the comic offset shadow. */
-export const SHADOW_SOFT = 'shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.06)]';
+export const SHADOW_SOFT = 'shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_var(--ds-hairline)]';
 
 /** Panel radius. */
 export const RADIUS_PANEL = 'rounded-2xl';
@@ -47,27 +47,27 @@ export const RADIUS_PILL = 'rounded-full';
 // ---------------------------------------------------------------------------
 
 /** Primary ink text. */
-export const INK = 'text-[#1a1915]';
+export const INK = 'text-[var(--ds-ink)]';
 
 /** Muted/secondary text. */
-export const MUTED = 'text-[#6e6a60]';
+export const MUTED = 'text-[var(--ds-muted)]';
 
 /** Terracotta accent hex values (for the rare inline-style need). */
 export const ACCENT_HEX = '#D97757';
 export const ACCENT_HOVER_HEX = '#c2643f';
 
 /** Terracotta accent utilities. */
-export const ACCENT_BG = 'bg-[#D97757]';
-export const ACCENT_BG_HOVER = 'hover:bg-[#c2643f]';
-export const ACCENT_TEXT = 'text-[#D97757]';
+export const ACCENT_BG = 'bg-[var(--ds-accent)]';
+export const ACCENT_BG_HOVER = 'hover:bg-[var(--ds-accent-hover)]';
+export const ACCENT_TEXT = 'text-[var(--ds-accent)]';
 /** Soft accent tint for active/selected rows. */
 export const ACCENT_SOFT_BG = 'bg-[#D97757]/10';
 
 /** Headings inside chat: quiet semibold, never comic display lettering. */
-export const HEADING = 'font-semibold tracking-tight text-[#1a1915]';
+export const HEADING = 'font-semibold tracking-tight text-[var(--ds-ink)]';
 
 /** Quiet small-caps label (section/group headers). */
-export const LABEL = 'text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]';
+export const LABEL = 'text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]';
 
 // ---------------------------------------------------------------------------
 // Motion
@@ -90,16 +90,35 @@ export const PANEL = `${GLASS} ${HAIRLINE} ${SHADOW_SOFT} ${RADIUS_PANEL}`;
 export const PRIMARY_BTN = `${ACCENT_BG} ${ACCENT_BG_HOVER} text-white ${TRANSITION}`;
 
 /** Quiet glass pill for toggles/chips. */
-export const PILL = `${HAIRLINE} ${RADIUS_PILL} bg-white/70 backdrop-blur-sm ${TRANSITION}`;
+export const PILL = `${HAIRLINE} ${RADIUS_PILL} bg-[var(--ds-surface-soft)] backdrop-blur-sm ${TRANSITION}`;
 
 /** Quiet icon/control button on glass. */
-export const CONTROL_BTN = `${HAIRLINE} ${RADIUS_CONTROL} bg-white/70 hover:bg-black/5 ${TRANSITION}`;
+export const CONTROL_BTN = `${HAIRLINE} ${RADIUS_CONTROL} bg-[var(--ds-surface-soft)] hover:bg-[var(--ds-hover)] ${TRANSITION}`;
 
 /** Soft hover row (sidebar sessions, menu items). */
-export const HOVER_ROW = `${RADIUS_CONTROL} hover:bg-black/5 ${TRANSITION}`;
+export const HOVER_ROW = `${RADIUS_CONTROL} hover:bg-[var(--ds-hover)] ${TRANSITION}`;
 
 /** Active sidebar row: soft terracotta tint with ink text. */
-export const ACTIVE_ROW = `${RADIUS_CONTROL} ${ACCENT_SOFT_BG} text-[#1a1915]`;
+export const ACTIVE_ROW = `${RADIUS_CONTROL} ${ACCENT_SOFT_BG} text-[var(--ds-ink)]`;
 
 /** Floating dropdown/context menu. */
-export const MENU = `bg-white/95 backdrop-blur-md ${HAIRLINE} ${SHADOW_SOFT} ${RADIUS_CONTROL}`;
+export const MENU = `bg-[var(--ds-surface-strong)] backdrop-blur-md ${HAIRLINE} ${SHADOW_SOFT} ${RADIUS_CONTROL}`;
+
+/** Row inside a floating menu (icon + label, quiet hover). */
+export const MENU_ITEM = `w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-left hover:bg-[var(--ds-hover)] ${TRANSITION}`;
+
+// ---------------------------------------------------------------------------
+// Sidebar rail (Claude-style compact navigation)
+// ---------------------------------------------------------------------------
+
+/** Quiet top-level nav row in the sidebar rail (icon + label). */
+export const NAV_ROW = `w-full flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] ${TRANSITION}`;
+
+/** Active nav row — soft accent tint, same geometry as NAV_ROW. */
+export const NAV_ROW_ACTIVE = `w-full flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-[var(--ds-ink)] bg-[#D97757]/10 ${TRANSITION}`;
+
+/** Compact session row in the rail (single-line truncated title). */
+export const RAIL_ROW = `rounded-lg px-2.5 py-1.5 text-[13px] hover:bg-[var(--ds-hover)] ${TRANSITION}`;
+
+/** Active session row — soft accent tint. */
+export const RAIL_ROW_ACTIVE = `rounded-lg px-2.5 py-1.5 text-[13px] bg-[#D97757]/10 text-[var(--ds-ink)] ${TRANSITION}`;

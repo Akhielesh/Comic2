@@ -147,7 +147,7 @@ export const Chart: React.FC<ChartProps> = ({
         {/* Crosshair */}
         {hover != null && (
           <>
-            <line x1={xAt(hover)} x2={xAt(hover)} y1="0" y2={height} stroke="#0f172a" strokeWidth="1" strokeOpacity="0.25" />
+            <line x1={xAt(hover)} x2={xAt(hover)} y1="0" y2={height} stroke="var(--ds-ink)" strokeWidth="1" strokeOpacity="0.25" />
             {!isCandle && hoveredValue != null && (
               <circle cx={xAt(hover)} cy={geom.y(hoveredValue)} r="3.5" fill={color} stroke="#fff" strokeWidth="1.5" />
             )}
@@ -158,11 +158,11 @@ export const Chart: React.FC<ChartProps> = ({
       {/* Tooltip */}
       {hover != null && hoveredValue != null && (
         <div
-          className="pointer-events-none absolute top-1 z-10 -translate-x-1/2 rounded-lg border border-black/10 bg-white/95 px-2 py-1 text-center shadow-[0_2px_8px_rgba(0,0,0,0.12)] backdrop-blur-sm"
+          className="pointer-events-none absolute top-1 z-10 -translate-x-1/2 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 py-1 text-center shadow-[0_2px_8px_rgba(0,0,0,0.12)] backdrop-blur-sm"
           style={{ left: `${Math.min(92, Math.max(8, hoverFrac * 100))}%` }}
         >
-          <div className="text-[10px] font-medium text-[#6e6a60]">{hoveredLabel}</div>
-          <div className="text-xs font-semibold text-[#1a1915]">{formatValue(hoveredValue)}</div>
+          <div className="text-[10px] font-medium text-[var(--ds-muted)]">{hoveredLabel}</div>
+          <div className="text-xs font-semibold text-[var(--ds-ink)]">{formatValue(hoveredValue)}</div>
         </div>
       )}
     </div>

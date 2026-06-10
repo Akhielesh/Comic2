@@ -101,18 +101,18 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
               const idx = pts.indexOf(p);
               return (
                 <div key={i} className="flex items-center justify-between gap-2 text-xs">
-                  <span className="flex min-w-0 items-center gap-1.5 font-medium text-[#1a1915]">
+                  <span className="flex min-w-0 items-center gap-1.5 font-medium text-[var(--ds-ink)]">
                     <span className="h-2 w-2 shrink-0 rounded-sm" style={{ backgroundColor: theme.series[idx % theme.series.length] }} />
                     <span className="truncate">{niceLabel(p.x)}</span>
                   </span>
-                  <span className="shrink-0 font-semibold tabular-nums text-[#1a1915]">
+                  <span className="shrink-0 font-semibold tabular-nums text-[var(--ds-ink)]">
                     {fmt(p.y, data.unit)}
-                    <span className="ml-1 font-normal text-[#6e6a60]">{Math.round((Math.max(0, p.y) / total) * 100)}%</span>
+                    <span className="ml-1 font-normal text-[var(--ds-muted)]">{Math.round((Math.max(0, p.y) / total) * 100)}%</span>
                   </span>
                 </div>
               );
             })}
-            {pts.length > 3 && <div className="text-[11px] text-[#6e6a60]">+{pts.length - 3} more</div>}
+            {pts.length > 3 && <div className="text-[11px] text-[var(--ds-muted)]">+{pts.length - 3} more</div>}
           </div>
         </Surface>
       );
@@ -127,15 +127,15 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
             const last = s.points[s.points.length - 1];
             return (
               <div key={i} className="flex items-center justify-between gap-2 text-xs">
-                <span className="flex min-w-0 items-center gap-1.5 font-medium text-[#1a1915]">
+                <span className="flex min-w-0 items-center gap-1.5 font-medium text-[var(--ds-ink)]">
                   <span className="h-2 w-2 shrink-0 rounded-sm" style={{ backgroundColor: colorOf(s, i) }} />
                   <span className="truncate">{s.name || `Series ${i + 1}`}</span>
                 </span>
-                <span className="shrink-0 font-semibold tabular-nums text-[#1a1915]">{last ? fmt(last.y, data.unit) : '—'}</span>
+                <span className="shrink-0 font-semibold tabular-nums text-[var(--ds-ink)]">{last ? fmt(last.y, data.unit) : '—'}</span>
               </div>
             );
           })}
-          {series.length > 3 && <div className="text-[11px] text-[#6e6a60]">+{series.length - 3} more series</div>}
+          {series.length > 3 && <div className="text-[11px] text-[var(--ds-muted)]">+{series.length - 3} more series</div>}
           {sparkValues.length > 1 && (
             <div className="pt-1">
               <Sparkline values={sparkValues} color={colorOf(series[0], 0)} height={40} />
@@ -223,7 +223,7 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
                   );
                 })}
                 {hover && pts[hover.cat] && (
-                  <text x={cx} y={cy} textAnchor="middle" fontSize="18" fontWeight="600" fill="#1a1915">
+                  <text x={cx} y={cy} textAnchor="middle" fontSize="18" fontWeight="600" fill="var(--ds-ink)">
                     {Math.round((Math.max(0, pts[hover.cat].y) / total) * 100)}%
                   </text>
                 )}
@@ -239,7 +239,7 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
               const y = yTo(v);
               return (
                 <g key={i}>
-                  <line x1={padL} x2={W - padR} y1={y} y2={y} stroke="rgba(0,0,0,0.06)" strokeWidth="1" />
+                  <line x1={padL} x2={W - padR} y1={y} y2={y} stroke="var(--ds-hairline)" strokeWidth="1" />
                   <text x={padL - 4} y={y + 3} textAnchor="end" fontSize="9" fill="#9a968c">{fmt(v, data.unit)}</text>
                 </g>
               );
@@ -325,17 +325,17 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
 
         {/* Tooltip */}
         {hover && !isScatter && (
-          <div className="pointer-events-none absolute left-1/2 top-1 -translate-x-1/2 rounded-lg border border-black/10 bg-white/95 px-2 py-1 text-[11px] shadow-[0_4px_16px_rgba(0,0,0,0.12)] backdrop-blur-sm">
-            <div className="font-medium text-[#6e6a60]">
+          <div className="pointer-events-none absolute left-1/2 top-1 -translate-x-1/2 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] px-2 py-1 text-[11px] shadow-[0_4px_16px_rgba(0,0,0,0.12)] backdrop-blur-sm">
+            <div className="font-medium text-[var(--ds-muted)]">
               {isRadial ? niceLabel(series[0].points[hover.cat]?.x) : cats[hover.cat]}
             </div>
             {isRadial ? (
-              <div className="font-semibold tabular-nums text-[#1a1915]">{fmt(series[0].points[hover.cat]?.y ?? 0, data.unit)}</div>
+              <div className="font-semibold tabular-nums text-[var(--ds-ink)]">{fmt(series[0].points[hover.cat]?.y ?? 0, data.unit)}</div>
             ) : (
               visible.map(({ s, i }) => (
                 <div key={i} className="flex items-center gap-1 text-[#3c3a33]">
                   <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: colorOf(s, i) }} />
-                  {s.name || `S${i + 1}`}: <span className="font-semibold tabular-nums text-[#1a1915]">{fmt(s.points[hover.cat]?.y ?? 0, data.unit)}</span>
+                  {s.name || `S${i + 1}`}: <span className="font-semibold tabular-nums text-[var(--ds-ink)]">{fmt(s.points[hover.cat]?.y ?? 0, data.unit)}</span>
                 </div>
               ))
             )}
@@ -344,7 +344,7 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
       </div>
 
       {(data.xLabel || data.yLabel) && (
-        <div className="flex justify-between px-3 pb-2 text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">
+        <div className="flex justify-between px-3 pb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">
           <span>{data.yLabel}</span>
           <span>{data.xLabel}</span>
         </div>

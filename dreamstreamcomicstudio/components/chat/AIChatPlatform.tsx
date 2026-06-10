@@ -1,6 +1,7 @@
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { Code2, ExternalLink, Loader2, Map as MapIcon, Maximize2, Minimize2, X } from 'lucide-react';
+import { Code2, ExternalLink, Loader2, Map as MapIcon, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, X } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
+import { initTheme } from '../../services/theme';
 import { ChatSidebar } from './ChatSidebar';
 import { ChatConversation } from './ChatConversation';
 import { ChatModelPicker } from './ChatModelPicker';
@@ -11,11 +12,50 @@ import { ChatPanelContext } from './panelContext';
 import { MediaPanel, type MediaPanelData } from './MediaPanel';
 import type { PlaygroundData } from './MultiFilePlayground';
 import type { ChatArtifact, CodeStudioArtifact, MapArtifact } from '../../apiTypes';
-import { CANVAS_BG, SIDEBAR_BG, GLASS, INK, ACCENT_TEXT, CONTROL_BTN, TRANSITION } from './studioDesign';
+import { CANVAS_BG, SIDEBAR_BG, GLASS, HEADING, INK, ACCENT_TEXT, CONTROL_BTN, TRANSITION } from './studioDesign';
 
 const MapPanel = lazy(() => import('./MapPanel'));
 const MultiFilePlayground = lazy(() => import('./MultiFilePlayground'));
 const CodeStudioPanel = lazy(() => import('./CodeStudioPanel'));
+
+// ---------------------------------------------------------------------------
+// Studio views (built in parallel — exact prop contracts, see each file).
+// `pickExport` tolerates both default and named exports from those modules.
+// ---------------------------------------------------------------------------
+
+type StudioView = 'chat' | 'home' | 'skills' | 'dashboards';
+
+interface ChatHomeProps {
+  userName?: string;
+  sessions: ChatSession[];
+  skills: ChatSkill[];
+  onResume: (sessionId: string) => void;
+  onStartChat: (seedText?: string) => void;
+  onRunSkill: (skill: ChatSkill, arg: string) => void;
+  onOpenDashboards: () => void;
+}
+interface SkillsViewProps {
+  skills: ChatSkill[];
+  onRunSkill: (skill: ChatSkill, arg: string) => void;
+}
+interface CommandPaletteProps {
+  open: boolean;
+  onClose: () => void;
+  sessions: ChatSession[];
+  skills: ChatSkill[];
+  onResume: (id: string) => void;
+  onRunSkill: (skill: ChatSkill, arg: string) => void;
+  onNavigate: (view: 'home' | 'skills' | 'dashboards') => void;
+}
+
+const pickExport = <P,>(m: Record<string, unknown>, name: string): { default: React.ComponentType<P> } => ({
+  default: ((m as { default?: unknown }).default ?? m[name]) as React.ComponentType<P>
+});
+
+const ChatHome = lazy(() => import('./ChatHome').then((m) => pickExport<ChatHomeProps>(m, 'ChatHome')));
+const SkillsView = lazy(() => import('./SkillsView').then((m) => pickExport<SkillsViewProps>(m, 'SkillsView')));
+const DashboardsView = lazy(() => import('./DashboardsView').then((m) => pickExport<Record<string, never>>(m, 'DashboardsView')));
+const CommandPalette = lazy(() => import('./CommandPalette').then((m) => pickExport<CommandPaletteProps>(m, 'CommandPalette')));
 import { deriveModelFeatures } from '../../services/chatFeatures';
 import { getCapabilities } from '../../services/modelCapabilities';
 import { fetchModelCatalog, type CatalogModel } from '../../services/modelCatalog';
@@ -23,7 +63,7 @@ import type { ChatReasoningLevel, ChatRequestMessage, ChatMessagePart, Universal
 import type { Project } from '../../types';
 import { sendChatMessageStream, runSwarmStream, updateChatMemory, friendlyChatError } from '../../services/chatApi';
 import { runRecipe } from '../../services/recipes';
-import type { ChatSkill } from '../../services/chatSkills';
+import { CHAT_SKILLS, type ChatSkill } from '../../services/chatSkills';
 import { gatherClientContext } from '../../services/clientContext';
 import { toggleConnector, type ChatConnector } from '../../services/chatConnectors';
 import { recommendModels, detectTools } from '../../services/chatSuggest';
@@ -135,10 +175,20 @@ const composeSystemPrompt = (memory: string, persona?: string): string | undefin
 
 export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects }) => {
   const { user } = useAuth();
+  // Apply the persisted light/dark theme to <html> as soon as the studio mounts,
+  // and take it off again when leaving so the rest of the app stays light.
+  useEffect(() => {
+    initTheme();
+    return () => document.documentElement.classList.remove('dark');
+  }, []);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [projectsList, setProjectsList] = useState<ChatProject[]>([]);
   const [projectModal, setProjectModal] = useState<{ editing: ChatProject | null } | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
+  // Which main view fills the area right of the sidebar. Selecting/creating a chat
+  // always lands back on 'chat'; a null active session falls back to 'home'.
+  const [view, setView] = useState<StudioView>('chat');
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const [catalog, setCatalog] = useState<Map<string, CatalogModel>>(new Map());
   // Per-session generation state, so several chats can stream at the same time and a
   // busy chat never blocks (or gets stopped by) another. `busyIds` = sessions whose
@@ -154,7 +204,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   const [memory, setMemory] = useState('');
   // Text to prefill the composer with (e.g. clicking a skill chip in the empty state).
   const [composerSeed, setComposerSeed] = useState('');
-  const [settingsTab, setSettingsTab] = useState<'memory' | 'agents' | 'tools' | null>(null);
+  const [settingsTab, setSettingsTab] = useState<'memory' | 'agents' | 'tools' | 'gallery' | null>(null);
   const [customAgents, setCustomAgents] = useState(() => listCustomAgents());
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(() => listMcpServers());
   const [panel, setPanel] = useState<ChatArtifact | null>(null);
@@ -214,6 +264,18 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   }, [overlayOpen]);
 
   useEffect(() => onMcpServersChanged(() => setMcpServers(listMcpServers())), []);
+
+  // ⌘K / Ctrl-K toggles the command palette from anywhere in the studio.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const handleToggleMcpServer = (id: string, on: boolean) => {
     if (!activeId) return;
@@ -428,6 +490,19 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     void saveChatSession(base);
     setSessions((prev) => [base, ...prev]);
     setActiveId(base.id);
+    setView('chat');
+  };
+
+  // Start a brand-new chat from Home (optionally with seed text for the composer).
+  // The compose event is dispatched a frame later so ChatConversation/ChatComposer
+  // have mounted and registered their `dreamstream:compose` listener.
+  const handleStartChat = (seedText?: string) => {
+    handleNew();
+    if (seedText) {
+      requestAnimationFrame(() => {
+        window.dispatchEvent(new CustomEvent('dreamstream:compose', { detail: { text: seedText } }));
+      });
+    }
   };
 
   const handleDelete = (id: string) => {
@@ -908,6 +983,31 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     });
   };
 
+  // Run a skill from outside the conversation (Home / Skills view / command palette):
+  // make sure a session exists and is active first, then reuse the exact composer
+  // skill-run path. When a session has to be created, the run is queued until React
+  // flushes the new session into state (handleRunSkill reads `activeSession`).
+  const pendingSkillRef = useRef<{ skill: ChatSkill; arg: string } | null>(null);
+  const handleRunSkillFrom = (skill: ChatSkill, arg: string) => {
+    setView('chat');
+    if (activeSession) {
+      void handleRunSkill(skill, arg);
+      return;
+    }
+    pendingSkillRef.current = { skill, arg };
+    const base = createEmptySession();
+    void saveChatSession(base);
+    setSessions((prev) => [base, ...prev]);
+    setActiveId(base.id);
+  };
+  useEffect(() => {
+    if (!pendingSkillRef.current || !activeSession) return;
+    const { skill, arg } = pendingSkillRef.current;
+    pendingSkillRef.current = null;
+    void handleRunSkill(skill, arg);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSession]);
+
   // Click a skill chip: no-arg skills run immediately; otherwise prefill the composer
   // with the command so the user can type the argument.
   const handlePickSkill = (skill: ChatSkill) => {
@@ -989,13 +1089,21 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     }));
   };
 
-  if (!initialized || !activeSession) {
+  if (!initialized) {
     return (
       <div className={`h-[100dvh] flex items-center justify-center ${CANVAS_BG}`}>
         <Loader2 className={`w-8 h-8 animate-spin ${ACCENT_TEXT}`} />
       </div>
     );
   }
+
+  // No open session → land on Home (also covers the brief tick after a delete).
+  const resolvedView: StudioView = view === 'chat' && !activeSession ? 'home' : view;
+  const accountName =
+    (user?.user_metadata?.full_name as string | undefined) ||
+    (user?.user_metadata?.name as string | undefined) ||
+    user?.email?.split('@')[0] ||
+    undefined;
 
   const isCodeStudio = panel?.type === 'code_studio';
   const panelTitle = (panel?.data as { title?: string } | undefined)?.title
@@ -1069,7 +1177,7 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
   const panelContent = panel && (
     <>
       <div
-        className={`flex items-center justify-between px-3 py-2 border-b border-black/10 shrink-0 ${GLASS}`}
+        className={`flex items-center justify-between px-3 py-2 border-b border-[var(--ds-hairline)] shrink-0 ${GLASS}`}
       >
         <span className={`font-semibold text-sm flex items-center gap-1.5 min-w-0 ${INK}`}>
           {isCodeStudio
@@ -1137,7 +1245,10 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
             activeId={activeId}
             generatingIds={busyIds}
             hasMemory={Boolean(memory.trim())}
-            onSelect={(id) => { setActiveId(id); closeOnMobile(); }}
+            view={resolvedView}
+            userName={accountName}
+            userEmail={user?.email || undefined}
+            onSelect={(id) => { setActiveId(id); setView('chat'); closeOnMobile(); }}
             onNew={() => { handleNew(); closeOnMobile(); }}
             onDelete={handleDelete}
             onRename={handleRename}
@@ -1147,6 +1258,11 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
             onDeleteProject={handleDeleteProject}
             onEditMemory={handleEditMemory}
             onBack={onBack}
+            onOpenSearch={() => { setPaletteOpen(true); closeOnMobile(); }}
+            onOpenSkills={() => { setView('skills'); closeOnMobile(); }}
+            onOpenDashboards={() => { setView('dashboards'); closeOnMobile(); }}
+            onOpenGallery={() => { setSettingsTab('gallery'); closeOnMobile(); }}
+            onOpenTools={() => { setSettingsTab('tools'); closeOnMobile(); }}
           />
         );
         if (isDesktop) return sidebar;
@@ -1168,6 +1284,7 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
         );
       })()}
 
+      {resolvedView === 'chat' && activeSession ? (
       <ChatConversation
         session={activeSession}
         features={features}
@@ -1206,12 +1323,55 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
         suggestModels={suggestModels}
         onStartWithModel={handleStartWithModel}
       />
+      ) : (
+      <div className={`flex-1 flex flex-col min-w-0 min-h-0 h-full ${CANVAS_BG}`}>
+        {/* Slim header for the non-chat views — keeps the sidebar toggle reachable.
+            `relative z-20` lifts it above the scrolling content below. */}
+        <div className={`relative z-20 flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-3 border-b border-[var(--ds-hairline)] ${GLASS}`}>
+          <button
+            onClick={() => setSidebarOpen((v) => !v)}
+            className={`${CONTROL_BTN} p-2 sm:p-1.5 tap-target`}
+            title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+          >
+            {sidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
+          </button>
+          <span className={`text-sm ${HEADING}`}>
+            {resolvedView === 'skills' ? 'Skills' : resolvedView === 'dashboards' ? 'Dashboards' : 'Home'}
+          </span>
+        </div>
+        <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain [-webkit-overflow-scrolling:touch]">
+          <Suspense
+            fallback={
+              <div className="h-full flex items-center justify-center">
+                <Loader2 className={`w-6 h-6 animate-spin ${ACCENT_TEXT}`} />
+              </div>
+            }
+          >
+            {resolvedView === 'home' && (
+              <ChatHome
+                userName={accountName}
+                sessions={sessions}
+                skills={CHAT_SKILLS}
+                onResume={(sessionId) => { setActiveId(sessionId); setView('chat'); }}
+                onStartChat={handleStartChat}
+                onRunSkill={handleRunSkillFrom}
+                onOpenDashboards={() => setView('dashboards')}
+              />
+            )}
+            {resolvedView === 'skills' && (
+              <SkillsView skills={CHAT_SKILLS} onRunSkill={handleRunSkillFrom} />
+            )}
+            {resolvedView === 'dashboards' && <DashboardsView />}
+          </Suspense>
+        </div>
+      </div>
+      )}
 
       {/* Resizable side panel — sibling on desktop (unless fullscreen), overlay on mobile. */}
       {panel && isDesktop && !panelFullscreen && (
         <>
-          <div onMouseDown={startResize} className={`w-1.5 cursor-col-resize bg-black/10 hover:bg-[#D97757] shrink-0 ${TRANSITION}`} title="Drag to resize" />
-          <div className={`flex flex-col shrink-0 border-l border-black/10 ${CANVAS_BG}`} style={{ width: panelWidth }}>
+          <div onMouseDown={startResize} className={`w-1.5 cursor-col-resize bg-[var(--ds-hairline)] hover:bg-[var(--ds-accent)] shrink-0 ${TRANSITION}`} title="Drag to resize" />
+          <div className={`flex flex-col shrink-0 border-l border-[var(--ds-hairline)] ${CANVAS_BG}`} style={{ width: panelWidth }}>
             {panelContent}
           </div>
         </>
@@ -1224,7 +1384,22 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
         </div>
       )}
 
-      {showModelPicker && (
+      {/* Command palette — platform-level, opened via ⌘K/Ctrl-K or the sidebar Search row. */}
+      {paletteOpen && (
+        <Suspense fallback={null}>
+          <CommandPalette
+            open={paletteOpen}
+            onClose={() => setPaletteOpen(false)}
+            sessions={sessions}
+            skills={CHAT_SKILLS}
+            onResume={(id) => { setActiveId(id); setView('chat'); setPaletteOpen(false); }}
+            onRunSkill={(skill, arg) => { setPaletteOpen(false); handleRunSkillFrom(skill, arg); }}
+            onNavigate={(v) => { setView(v); setPaletteOpen(false); }}
+          />
+        </Suspense>
+      )}
+
+      {showModelPicker && activeSession && (
         <ChatModelPicker
           selectedModelId={activeSession.modelId}
           hasMessages={activeSession.turns.length > 0}

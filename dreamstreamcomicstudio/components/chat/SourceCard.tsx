@@ -36,13 +36,13 @@ export const SourceCard: React.FC<SourceCardProps> = ({ index, url, title }) => 
       target="_blank"
       rel="noopener noreferrer"
       title={title || url}
-      className="group flex items-center gap-2 rounded-lg border border-black/10 bg-white/85 px-2 py-1 transition-colors duration-200 hover:bg-black/[0.03]"
+      className="group flex items-center gap-2 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-2 py-1 transition-colors duration-200 hover:bg-[var(--ds-well)]"
     >
-      <span className="w-3.5 shrink-0 text-[10px] font-semibold text-[#6e6a60]">{index}</span>
-      {favicon && <img src={favicon} alt="" className="h-3.5 w-3.5 shrink-0 rounded ring-1 ring-black/5" loading="lazy" />}
-      <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-[#1a1915]">{title || domain}</span>
-      <span className="hidden shrink-0 text-[10px] text-[#6e6a60] sm:inline">{domain}</span>
-      <ExternalLink className="h-3 w-3 shrink-0 text-black/20 transition-colors duration-200 group-hover:text-[#6e6a60]" />
+      <span className="w-3.5 shrink-0 text-[10px] font-semibold text-[var(--ds-muted)]">{index}</span>
+      {favicon && <img src={favicon} alt="" className="h-3.5 w-3.5 shrink-0 rounded ring-1 ring-[var(--ds-hairline-soft)]" loading="lazy" />}
+      <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-[var(--ds-ink)]">{title || domain}</span>
+      <span className="hidden shrink-0 text-[10px] text-[var(--ds-muted)] sm:inline">{domain}</span>
+      <ExternalLink className="h-3 w-3 shrink-0 text-black/20 transition-colors duration-200 group-hover:text-[var(--ds-muted)]" />
     </a>
   );
 };

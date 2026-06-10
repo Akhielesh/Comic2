@@ -37,7 +37,7 @@ const ActionButton: React.FC<{ onClick: () => void; title?: string; children: Re
   <button
     onClick={onClick}
     title={title}
-    className="flex items-center gap-1 rounded-lg border border-black/10 bg-white px-2 py-1 text-[11px] font-semibold text-[#1a1915] transition-colors duration-200 hover:bg-black/[0.03]"
+    className="flex items-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-2 py-1 text-[11px] font-semibold text-[var(--ds-ink)] transition-colors duration-200 hover:bg-[var(--ds-well)]"
   >
     {children}
   </button>
@@ -74,7 +74,7 @@ export const DocumentCard: React.FC<{ data: DocumentArtifact }> = ({ data }) => 
 
   const header = (
     <div className="flex min-w-0 items-center gap-2">
-      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-black/[0.05] text-[#1a1915]">
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-black/[0.05] text-[var(--ds-ink)]">
         <FileText className="h-4 w-4" />
       </span>
       <div className="min-w-0">
@@ -94,15 +94,15 @@ export const DocumentCard: React.FC<{ data: DocumentArtifact }> = ({ data }) => 
           <button
             onClick={downloadMd}
             title={`Download ${base}.md`}
-            className="flex items-center gap-1 rounded-lg border border-black/10 bg-white px-2 py-1 text-[11px] font-semibold text-[#1a1915] transition-colors duration-200 hover:bg-black/[0.03]"
+            className="flex items-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-2 py-1 text-[11px] font-semibold text-[var(--ds-ink)] transition-colors duration-200 hover:bg-[var(--ds-well)]"
           >
             <Download className="h-3.5 w-3.5" /> .md
           </button>
         }
       >
         <div className="px-3 pb-3 pt-0.5">
-          {preview && <p className="text-[11px] leading-snug text-[#6e6a60] line-clamp-2">{preview}</p>}
-          <p className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">
+          {preview && <p className="text-[11px] leading-snug text-[var(--ds-muted)] line-clamp-2">{preview}</p>}
+          <p className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">
             {wordCount(data.content || '').toLocaleString()} words
           </p>
         </div>
@@ -117,7 +117,7 @@ export const DocumentCard: React.FC<{ data: DocumentArtifact }> = ({ data }) => 
       right={
         <button
           onClick={() => setExpanded((v) => !v)}
-          className="rounded-lg p-1 text-[#6e6a60] transition-colors duration-200 hover:bg-black/[0.03] hover:text-[#1a1915]"
+          className="rounded-lg p-1 text-[var(--ds-muted)] transition-colors duration-200 hover:bg-[var(--ds-well)] hover:text-[var(--ds-ink)]"
           title={expanded ? 'Collapse' : 'Expand'}
         >
           {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
@@ -125,7 +125,7 @@ export const DocumentCard: React.FC<{ data: DocumentArtifact }> = ({ data }) => 
       }
       footer={
         <div className="flex flex-wrap items-center gap-2">
-          <span className="mr-auto text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">Download</span>
+          <span className="mr-auto text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Download</span>
           <ActionButton onClick={downloadMd}><Download className="h-3.5 w-3.5" /> .md</ActionButton>
           <ActionButton onClick={downloadHtml}><Download className="h-3.5 w-3.5" /> .html</ActionButton>
           <ActionButton onClick={printPdf}><Printer className="h-3.5 w-3.5" /> PDF</ActionButton>
@@ -134,7 +134,7 @@ export const DocumentCard: React.FC<{ data: DocumentArtifact }> = ({ data }) => 
       }
     >
       {expanded && (
-        <div ref={bodyRef} className="max-h-[28rem] overflow-y-auto border-t border-black/5 p-4 text-sm">
+        <div ref={bodyRef} className="max-h-[28rem] overflow-y-auto border-t border-[var(--ds-hairline-soft)] p-4 text-sm">
           <ChatMarkdown text={data.content || ''} />
         </div>
       )}

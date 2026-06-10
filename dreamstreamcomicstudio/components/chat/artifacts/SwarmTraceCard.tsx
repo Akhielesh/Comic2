@@ -66,7 +66,7 @@ export const SwarmTraceCard: React.FC<{ data: SwarmTraceArtifact }> = ({ data })
         accent="#c026d3"
         header={
           <div className="flex items-start gap-2">
-            <span className="mt-0.5 shrink-0 rounded-lg bg-black/[0.04] p-1.5 text-fuchsia-700">
+            <span className="mt-0.5 shrink-0 rounded-lg bg-[var(--ds-well-strong)] p-1.5 text-fuchsia-700">
               <Network className="w-4 h-4" />
             </span>
             <div className="min-w-0">
@@ -76,7 +76,7 @@ export const SwarmTraceCard: React.FC<{ data: SwarmTraceArtifact }> = ({ data })
           </div>
         }
         right={
-          <span className="text-[11px] text-[#6e6a60] tabular-nums">
+          <span className="text-[11px] text-[var(--ds-muted)] tabular-nums">
             {done}/{data.agents.length} done
           </span>
         }
@@ -89,7 +89,7 @@ export const SwarmTraceCard: React.FC<{ data: SwarmTraceArtifact }> = ({ data })
               className={`h-2 w-2 rounded-full ${STATUS_DOT[a.status] ?? 'bg-black/15'}`}
             />
           ))}
-          {running && <span className="ml-1 text-[11px] text-[#6e6a60]">working…</span>}
+          {running && <span className="ml-1 text-[11px] text-[var(--ds-muted)]">working…</span>}
         </div>
       </Surface>
     );
@@ -100,7 +100,7 @@ export const SwarmTraceCard: React.FC<{ data: SwarmTraceArtifact }> = ({ data })
       accent="#c026d3"
       header={
         <div className="flex items-start gap-2">
-          <span className="mt-0.5 shrink-0 rounded-lg bg-black/[0.04] p-1.5 text-fuchsia-700">
+          <span className="mt-0.5 shrink-0 rounded-lg bg-[var(--ds-well-strong)] p-1.5 text-fuchsia-700">
             <Network className="w-4 h-4" />
           </span>
           <div className="min-w-0">
@@ -121,12 +121,12 @@ export const SwarmTraceCard: React.FC<{ data: SwarmTraceArtifact }> = ({ data })
         </div>
       }
       right={
-        <span className="text-[11px] text-[#6e6a60] tabular-nums">
+        <span className="text-[11px] text-[var(--ds-muted)] tabular-nums">
           {running ? `${done}/${data.agents.length} done` : `${data.agents.length} agent${data.agents.length === 1 ? '' : 's'}`}
         </span>
       }
     >
-      <ul className="divide-y divide-black/5 border-t border-black/5">
+      <ul className="divide-y divide-[var(--ds-hairline-soft)] border-t border-[var(--ds-hairline-soft)]">
         {data.agents.map((a, i) => {
           const expanded = open[a.id + i];
           const flags = a.flags || [];
@@ -135,12 +135,12 @@ export const SwarmTraceCard: React.FC<{ data: SwarmTraceArtifact }> = ({ data })
             <li key={a.id + i}>
               <button
                 onClick={() => canExpand && setOpen((o) => ({ ...o, [a.id + i]: !expanded }))}
-                className={`w-full flex items-start gap-2 px-3 py-2 text-left transition-colors duration-200 ${canExpand ? 'hover:bg-black/[0.03]' : ''}`}
+                className={`w-full flex items-start gap-2 px-3 py-2 text-left transition-colors duration-200 ${canExpand ? 'hover:bg-[var(--ds-well)]' : ''}`}
               >
                 <span className="mt-0.5 shrink-0">{statusIcon(a.status)}</span>
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-1.5">
-                    <span className="text-[12px] font-semibold text-[#1a1915]">{a.name}</span>
+                    <span className="text-[12px] font-semibold text-[var(--ds-ink)]">{a.name}</span>
                     {typeof a.confidence === 'number' && a.status === 'done' && (
                       <span className={`rounded-md border px-1 py-px text-[10px] font-semibold ${confidenceStyle(a.confidence)}`}>
                         {Math.round(a.confidence * 100)}%
@@ -150,13 +150,13 @@ export const SwarmTraceCard: React.FC<{ data: SwarmTraceArtifact }> = ({ data })
                       <span className="flex items-center gap-0.5 text-[10px] text-emerald-700"><Search className="w-3 h-3" />{a.toolEvents.length}</span>
                     )}
                   </span>
-                  <span className="block text-[11px] text-[#6e6a60] truncate">{a.task}</span>
+                  <span className="block text-[11px] text-[var(--ds-muted)] truncate">{a.task}</span>
                 </span>
-                {canExpand && <ChevronDown className={`w-3.5 h-3.5 shrink-0 text-[#6e6a60] transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`} />}
+                {canExpand && <ChevronDown className={`w-3.5 h-3.5 shrink-0 text-[var(--ds-muted)] transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`} />}
               </button>
               {expanded && (
                 <div className="px-3 pb-2 pl-9 space-y-1.5">
-                  {a.summary && <p className="text-[11px] text-[#6e6a60] whitespace-pre-wrap">{a.summary}</p>}
+                  {a.summary && <p className="text-[11px] text-[var(--ds-muted)] whitespace-pre-wrap">{a.summary}</p>}
                   {flags.length > 0 && (
                     <div className="flex flex-wrap gap-1">
                       {flags.map((f, j) => (

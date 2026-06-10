@@ -61,7 +61,7 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({ code, lang }) => {
   );
 
   return (
-    <div className="my-2 rounded-lg border-2 border-black overflow-hidden">
+    <div className="my-2 rounded-lg border border-[var(--ds-hairline)] overflow-hidden">
       <div className="flex items-center justify-between px-3 py-1 bg-zinc-800 text-zinc-200 text-[11px] font-mono">
         <div className="flex items-center gap-2">
           <span className="uppercase tracking-wide">{lang || 'code'}</span>
@@ -95,7 +95,7 @@ export const CodeBlock: React.FC<CodeBlockProps> = ({ code, lang }) => {
           title="code preview"
           sandbox="allow-scripts"
           srcDoc={previewDoc}
-          className="w-full h-72 bg-white border-0"
+          className="w-full h-72 bg-[var(--ds-raised)] border-0"
         />
       ) : view === 'run' && runnable ? (
         <Suspense fallback={<div className="flex items-center justify-center h-72 bg-zinc-900 text-zinc-300"><Loader2 className="w-6 h-6 animate-spin" /></div>}>

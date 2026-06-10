@@ -17,7 +17,7 @@ export const MapArtifactCard: React.FC<{ data: MapArtifact }> = ({ data }) => {
 
   const header = (
     <span className="flex min-w-0 items-center gap-1.5">
-      <MapIcon className="h-4 w-4 shrink-0 text-[#6e6a60]" />
+      <MapIcon className="h-4 w-4 shrink-0 text-[var(--ds-muted)]" />
       <SurfaceTitle>{data.title || countLabel}</SurfaceTitle>
     </span>
   );
@@ -36,7 +36,7 @@ export const MapArtifactCard: React.FC<{ data: MapArtifact }> = ({ data }) => {
     <Surface header={header} right={<SurfaceSubtitle>{countLabel}</SurfaceSubtitle>}>
       <div className="px-3 pb-3 pt-1">
         <InlineMap data={data} height={240} />
-        {places && <div className="mt-1.5 truncate text-[11px] text-[#6e6a60]">{places}</div>}
+        {places && <div className="mt-1.5 truncate text-[11px] text-[var(--ds-muted)]">{places}</div>}
       </div>
     </Surface>
   );

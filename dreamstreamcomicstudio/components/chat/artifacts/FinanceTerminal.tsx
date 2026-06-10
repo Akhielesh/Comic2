@@ -19,7 +19,7 @@ import type { PaletteName } from './kit';
 // metrics in one row; detailed renders every section in full.
 
 const SectionLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div className="mb-1 mt-1 text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">{children}</div>
+  <div className="mb-1 mt-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">{children}</div>
 );
 
 export const FinanceTerminal: React.FC<{ data: FinanceTerminalArtifact }> = ({ data }) => {
@@ -53,8 +53,8 @@ export const FinanceTerminal: React.FC<{ data: FinanceTerminalArtifact }> = ({ d
         right={
           focus ? (
             <>
-              <div className="text-[11px] font-semibold text-[#6e6a60]">{focus.symbol}</div>
-              <div className="text-lg font-semibold tracking-tight tabular-nums leading-none text-[#1a1915]">
+              <div className="text-[11px] font-semibold text-[var(--ds-muted)]">{focus.symbol}</div>
+              <div className="text-lg font-semibold tracking-tight tabular-nums leading-none text-[var(--ds-ink)]">
                 {formatPrice(focus.price, focus.currency ?? 'USD')}
               </div>
               <div className="mt-1 flex justify-end">
@@ -65,13 +65,13 @@ export const FinanceTerminal: React.FC<{ data: FinanceTerminalArtifact }> = ({ d
         }
       >
         {tiles.length > 0 && (
-          <div className="flex divide-x divide-black/5 px-1 pb-2.5">
+          <div className="flex divide-x divide-[var(--ds-hairline-soft)] px-1 pb-2.5">
             {tiles.map((tile, i) => (
               <div key={i} className="min-w-0 flex-1 px-2.5">
-                <div className="truncate text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">{tile.label}</div>
-                <div className="mt-0.5 truncate text-sm font-semibold tabular-nums text-[#1a1915]">
+                <div className="truncate text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">{tile.label}</div>
+                <div className="mt-0.5 truncate text-sm font-semibold tabular-nums text-[var(--ds-ink)]">
                   {typeof tile.value === 'number' ? tile.value.toLocaleString() : tile.value}
-                  {tile.unit ? <span className="ml-0.5 text-[11px] font-medium text-[#6e6a60]">{tile.unit}</span> : null}
+                  {tile.unit ? <span className="ml-0.5 text-[11px] font-medium text-[var(--ds-muted)]">{tile.unit}</span> : null}
                 </div>
                 {typeof tile.deltaPercent === 'number' && (
                   <div className={`text-[10px] font-semibold tabular-nums ${tile.deltaPercent >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
@@ -87,14 +87,14 @@ export const FinanceTerminal: React.FC<{ data: FinanceTerminalArtifact }> = ({ d
   }
 
   return (
-    <div className="my-2 overflow-hidden rounded-2xl border border-black/10 bg-white/70 backdrop-blur-md shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.06)] animate-fade-in">
+    <div className="my-2 overflow-hidden rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] backdrop-blur-md shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_var(--ds-hairline)] animate-fade-in">
       <div className="h-[3px]" style={{ background: `linear-gradient(90deg, ${theme.accent}, ${theme.accent}66)` }} />
-      <div className="flex items-center justify-between gap-2 border-b border-black/5 bg-white/80 px-3 py-2">
+      <div className="flex items-center justify-between gap-2 border-b border-[var(--ds-hairline-soft)] bg-[var(--ds-surface)] px-3 py-2">
         <div className="min-w-0">
-          <div className="truncate text-sm font-semibold tracking-tight text-[#1a1915]">{data.title || 'Finance Terminal'}</div>
-          {data.subtitle && <div className="truncate text-[11px] text-[#6e6a60]">{data.subtitle}</div>}
+          <div className="truncate text-sm font-semibold tracking-tight text-[var(--ds-ink)]">{data.title || 'Finance Terminal'}</div>
+          {data.subtitle && <div className="truncate text-[11px] text-[var(--ds-muted)]">{data.subtitle}</div>}
         </div>
-        <div className="shrink-0 rounded-full border border-black/10 bg-black/[0.04] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">
+        <div className="shrink-0 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-well-strong)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">
           {data.asOf ? `As of ${data.asOf}` : 'Live'}
         </div>
       </div>
@@ -140,15 +140,15 @@ export const FinanceTerminal: React.FC<{ data: FinanceTerminalArtifact }> = ({ d
         {news.length > 0 && (
           <div>
             <SectionLabel>News</SectionLabel>
-            <div className="divide-y divide-black/5 rounded-xl border border-black/10 bg-white/85">
+            <div className="divide-y divide-[var(--ds-hairline-soft)] rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)]">
               {news.slice(0, 6).map((n, i) => {
                 const inner = (
                   <>
                     <Newspaper className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#9b968c]" />
                     <div className="min-w-0">
-                      <div className="truncate text-xs font-semibold text-[#1a1915] transition-colors duration-200 group-hover:text-blue-600">{n.title}</div>
+                      <div className="truncate text-xs font-semibold text-[var(--ds-ink)] transition-colors duration-200 group-hover:text-blue-600">{n.title}</div>
                       {(n.source || n.publishedAt) && (
-                        <div className="text-[10px] text-[#6e6a60]">
+                        <div className="text-[10px] text-[var(--ds-muted)]">
                           {n.source}
                           {n.source && n.publishedAt ? ' · ' : ''}
                           {n.publishedAt ? relativeTime(n.publishedAt) : ''}
@@ -158,7 +158,7 @@ export const FinanceTerminal: React.FC<{ data: FinanceTerminalArtifact }> = ({ d
                   </>
                 );
                 return n.url ? (
-                  <a key={i} href={n.url} target="_blank" rel="noopener noreferrer" className="group flex items-start gap-2 px-3 py-2 transition-colors duration-200 hover:bg-black/[0.03]">
+                  <a key={i} href={n.url} target="_blank" rel="noopener noreferrer" className="group flex items-start gap-2 px-3 py-2 transition-colors duration-200 hover:bg-[var(--ds-well)]">
                     {inner}
                   </a>
                 ) : (

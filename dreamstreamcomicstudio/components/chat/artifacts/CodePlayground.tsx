@@ -50,7 +50,7 @@ export const CodePlayground: React.FC<{ data: CodeExerciseArtifact }> = ({ data 
       accent="#059669"
       header={
         <div className="flex items-start gap-2">
-          <span className="mt-0.5 shrink-0 rounded-lg bg-black/[0.04] p-1.5 text-[#6e6a60]">
+          <span className="mt-0.5 shrink-0 rounded-lg bg-[var(--ds-well-strong)] p-1.5 text-[var(--ds-muted)]">
             <Terminal className="w-4 h-4" />
           </span>
           <SurfaceTitle>{data.title || 'Code practice'}</SurfaceTitle>
@@ -59,9 +59,9 @@ export const CodePlayground: React.FC<{ data: CodeExerciseArtifact }> = ({ data 
       right={<Badge color="#059669">{isPython ? 'Python · Pyodide' : canRun ? 'JavaScript · sandboxed' : `${data.language} · read-only`}</Badge>}
     >
       <div className="px-3 pb-3 space-y-3">
-        {data.instructions && <p className="text-sm text-[#6e6a60]">{data.instructions}</p>}
+        {data.instructions && <p className="text-sm text-[var(--ds-muted)]">{data.instructions}</p>}
         {data.task && (
-          <div className="text-sm text-[#1a1915] rounded-xl bg-black/[0.03] p-2.5">
+          <div className="text-sm text-[var(--ds-ink)] rounded-xl bg-[var(--ds-well)] p-2.5">
             <span className="font-semibold text-emerald-800">Task:</span> {data.task}
           </div>
         )}
@@ -73,7 +73,7 @@ export const CodePlayground: React.FC<{ data: CodeExerciseArtifact }> = ({ data 
           rows={Math.min(16, Math.max(4, code.split('\n').length))}
           spellCheck={false}
           readOnly={!canRun}
-          className="w-full font-mono text-[13px] border border-black/10 rounded-xl p-2.5 bg-slate-900 text-slate-100 focus:outline-none focus:border-black/25 resize-y"
+          className="w-full font-mono text-[13px] border border-[var(--ds-hairline)] rounded-xl p-2.5 bg-slate-900 text-slate-100 focus:outline-none focus:border-black/25 resize-y"
           placeholder="Write code here…"
         />
 
@@ -82,30 +82,30 @@ export const CodePlayground: React.FC<{ data: CodeExerciseArtifact }> = ({ data 
             <button
               onClick={() => void run()}
               disabled={running || !code.trim()}
-              className="flex items-center gap-1.5 text-sm font-semibold rounded-lg px-4 py-1.5 bg-[#D97757] text-white transition-colors duration-200 hover:bg-[#c2643f] disabled:opacity-40"
+              className="flex items-center gap-1.5 text-sm font-semibold rounded-lg px-4 py-1.5 bg-[var(--ds-accent)] text-white transition-colors duration-200 hover:bg-[var(--ds-accent-hover)] disabled:opacity-40"
             >
               {running ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />} Run
             </button>
             {running && isPython && !isPythonRuntimeLoaded() ? (
-              <span className="text-[11px] text-[#6e6a60]">Downloading Python runtime (first run, ~6MB)…</span>
+              <span className="text-[11px] text-[var(--ds-muted)]">Downloading Python runtime (first run, ~6MB)…</span>
             ) : (
-              <span className="text-[11px] text-[#6e6a60]">⌘/Ctrl + Enter</span>
+              <span className="text-[11px] text-[var(--ds-muted)]">⌘/Ctrl + Enter</span>
             )}
-            <button onClick={copy} title="Copy code" className="ml-auto flex items-center gap-1 rounded-lg border border-black/10 bg-white/70 px-2 py-1 text-[11px] font-semibold text-[#6e6a60] transition-colors duration-200 hover:bg-black/5 hover:text-[#1a1915]">
+            <button onClick={copy} title="Copy code" className="ml-auto flex items-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2 py-1 text-[11px] font-semibold text-[var(--ds-muted)] transition-colors duration-200 hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]">
               {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
             </button>
-            <button onClick={() => setCode(starter)} title="Reset to starter code" className="flex items-center gap-1 rounded-lg border border-black/10 bg-white/70 px-2 py-1 text-[11px] font-semibold text-[#6e6a60] transition-colors duration-200 hover:bg-black/5 hover:text-[#1a1915]">
+            <button onClick={() => setCode(starter)} title="Reset to starter code" className="flex items-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2 py-1 text-[11px] font-semibold text-[var(--ds-muted)] transition-colors duration-200 hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]">
               <RotateCcw className="w-3.5 h-3.5" />
             </button>
           </div>
         ) : (
-          <p className="text-[12px] text-[#6e6a60]">Live run currently supports JavaScript. This {data.language} snippet is shown as a reference.</p>
+          <p className="text-[12px] text-[var(--ds-muted)]">Live run currently supports JavaScript. This {data.language} snippet is shown as a reference.</p>
         )}
 
         {/* Console output: captured logs + any thrown error. */}
         {result && (
-          <div className="border border-black/10 rounded-xl overflow-hidden">
-            <div className="bg-black/[0.03] px-2.5 py-1.5 text-[11px] font-semibold text-[#6e6a60] border-b border-black/5 flex items-center gap-1.5">
+          <div className="border border-[var(--ds-hairline)] rounded-xl overflow-hidden">
+            <div className="bg-[var(--ds-well)] px-2.5 py-1.5 text-[11px] font-semibold text-[var(--ds-muted)] border-b border-[var(--ds-hairline-soft)] flex items-center gap-1.5">
               <Terminal className="w-3.5 h-3.5" /> Console
             </div>
             <div className="bg-slate-900 max-h-72 overflow-y-auto p-2.5 font-mono text-[12px] leading-relaxed">

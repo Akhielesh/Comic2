@@ -20,7 +20,7 @@ export const PlacesResults: React.FC<{ data: PlacesResultsArtifact }> = ({ data 
 
   const header = (
     <span className="flex min-w-0 items-center gap-1.5">
-      <MapPin className="h-4 w-4 shrink-0 text-[#6e6a60]" />
+      <MapPin className="h-4 w-4 shrink-0 text-[var(--ds-muted)]" />
       <SurfaceTitle className="capitalize">{data.query}</SurfaceTitle>
       <SurfaceSubtitle className="shrink truncate">near {data.near}</SurfaceSubtitle>
     </span>
@@ -30,20 +30,20 @@ export const PlacesResults: React.FC<{ data: PlacesResultsArtifact }> = ({ data 
   if (compact) {
     return (
       <Surface header={header} right={<SurfaceSubtitle>{data.results.length} places</SurfaceSubtitle>}>
-        <ul className="divide-y divide-black/5 border-t border-black/5">
+        <ul className="divide-y divide-[var(--ds-hairline-soft)] border-t border-[var(--ds-hairline-soft)]">
           {data.results.slice(0, 3).map((p, i) => {
             const dist = distanceLabel(p.distanceKm);
             return (
               <li key={`${p.name}-${i}`} className="flex items-center gap-2 px-3 py-1.5">
-                <span className="w-3.5 shrink-0 text-[10px] font-semibold text-[#6e6a60]">{i + 1}</span>
-                <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[#1a1915]">{p.name}</span>
+                <span className="w-3.5 shrink-0 text-[10px] font-semibold text-[var(--ds-muted)]">{i + 1}</span>
+                <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-[var(--ds-ink)]">{p.name}</span>
                 {typeof p.rating === 'number' && (
                   <span className="flex shrink-0 items-center gap-0.5 text-[11px] font-semibold text-amber-600">
                     <Star className="h-3 w-3 fill-amber-500 text-amber-500" />
                     {p.rating.toFixed(1)}
                   </span>
                 )}
-                {dist && <span className="shrink-0 text-[11px] text-[#6e6a60]">{dist}</span>}
+                {dist && <span className="shrink-0 text-[11px] text-[var(--ds-muted)]">{dist}</span>}
               </li>
             );
           })}
@@ -68,7 +68,7 @@ export const PlacesResults: React.FC<{ data: PlacesResultsArtifact }> = ({ data 
       <div className="px-3 pb-2">
         <InlineMap data={mapData} height={200} />
       </div>
-      <ul className="divide-y divide-black/5 border-t border-black/5">
+      <ul className="divide-y divide-[var(--ds-hairline-soft)] border-t border-[var(--ds-hairline-soft)]">
         {data.results.map((p, i) => (
           <PlaceRow key={`${p.name}-${i}`} place={p} index={i + 1} />
         ))}
@@ -81,20 +81,20 @@ const PlaceRow: React.FC<{ place: PlaceResult; index: number }> = ({ place, inde
   const dist = distanceLabel(place.distanceKm);
   const directions = `https://www.google.com/maps/dir/?api=1&destination=${place.lat},${place.lng}`;
   return (
-    <li className="flex gap-3 px-3 py-2.5 transition-colors duration-200 hover:bg-black/[0.03]">
-      <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-black/[0.03] ring-1 ring-black/5">
+    <li className="flex gap-3 px-3 py-2.5 transition-colors duration-200 hover:bg-[var(--ds-well)]">
+      <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[var(--ds-well)] ring-1 ring-[var(--ds-hairline-soft)]">
         {place.image ? (
           <img src={place.image} alt={place.name} loading="lazy" className="h-full w-full object-cover" />
         ) : (
-          <Utensils className="h-6 w-6 text-[#6e6a60]/50" />
+          <Utensils className="h-6 w-6 text-[var(--ds-muted)] opacity-60" />
         )}
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-1.5">
-          <span className="text-[11px] font-semibold text-[#6e6a60]">{index}</span>
-          <span className="truncate text-[13px] font-semibold leading-snug text-[#1a1915]">{place.name}</span>
+          <span className="text-[11px] font-semibold text-[var(--ds-muted)]">{index}</span>
+          <span className="truncate text-[13px] font-semibold leading-snug text-[var(--ds-ink)]">{place.name}</span>
         </div>
-        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[#6e6a60]">
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[var(--ds-muted)]">
           {typeof place.rating === 'number' && (
             <span className="flex items-center gap-0.5 font-semibold text-amber-600">
               <Star className="h-3 w-3 fill-amber-500 text-amber-500" />{place.rating.toFixed(1)}
@@ -103,22 +103,22 @@ const PlaceRow: React.FC<{ place: PlaceResult; index: number }> = ({ place, inde
           {typeof place.price === 'number' && place.price > 0 && (
             <span className="font-semibold text-emerald-700">{'$'.repeat(Math.min(4, place.price))}</span>
           )}
-          {dist && <span className="flex items-center gap-0.5 font-medium text-[#1a1915]/70"><Navigation className="h-3 w-3" />{dist}</span>}
+          {dist && <span className="flex items-center gap-0.5 font-medium text-[var(--ds-ink)] opacity-80"><Navigation className="h-3 w-3" />{dist}</span>}
           {place.cuisine && <span className="capitalize">{place.cuisine}</span>}
           {place.category && !place.cuisine && <span className="capitalize">{place.category.replace(/_/g, ' ')}</span>}
         </div>
         {place.openingHours && (
-          <div className="mt-0.5 flex items-center gap-1 text-[11px] text-[#6e6a60]">
+          <div className="mt-0.5 flex items-center gap-1 text-[11px] text-[var(--ds-muted)]">
             <Clock className="h-3 w-3 shrink-0" /> <span className="truncate">{place.openingHours}</span>
           </div>
         )}
-        {place.address && <div className="mt-0.5 truncate text-[11px] text-[#6e6a60]/80">{place.address}</div>}
+        {place.address && <div className="mt-0.5 truncate text-[11px] text-[var(--ds-muted)]">{place.address}</div>}
         <div className="mt-1 flex items-center gap-3">
           <a href={directions} target="_blank" rel="noopener noreferrer" className="flex items-center gap-0.5 text-[11px] font-semibold text-sky-700 transition-colors duration-200 hover:text-sky-900">
             <Navigation className="h-3 w-3" /> Directions
           </a>
           {place.website && (
-            <a href={place.website} target="_blank" rel="noopener noreferrer" className="flex items-center gap-0.5 text-[11px] font-semibold text-[#6e6a60] transition-colors duration-200 hover:text-[#1a1915]">
+            <a href={place.website} target="_blank" rel="noopener noreferrer" className="flex items-center gap-0.5 text-[11px] font-semibold text-[var(--ds-muted)] transition-colors duration-200 hover:text-[var(--ds-ink)]">
               <Globe className="h-3 w-3" /> Website
             </a>
           )}

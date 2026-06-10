@@ -35,12 +35,20 @@ gauges, RangeTabs, TrendPill, theme/palette, formatters, density). Charts are in
 SVG — no charting libraries.
 
 **House style for widgets is the macOS "calm studio" glass language** (same family
-as `components/chat/studioDesign.ts`): `Surface` shell (rounded-2xl, hairline
-`border-black/10`, frosted `bg-white/85 backdrop-blur`, soft ambient shadow), ink
-`#1a1915` / muted `#6e6a60` text, hairline dividers `divide-black/5`, recessed wells
-`bg-black/[0.03]`, `tabular-nums` for columnar numbers. **Never** use the legacy
-comic styles inside chat widgets: no `border-2 border-black`, no `shadow-comic`,
-no `font-display`/`font-comic`.
+as `components/chat/studioDesign.ts`): `Surface` shell (rounded-2xl, hairline,
+frosted glass, soft ambient shadow), `tabular-nums` for columnar numbers. **Never**
+use the legacy comic styles inside chat widgets: no `border-2 border-black`, no
+`shadow-comic`, no `font-display`/`font-comic`.
+
+**Colors MUST come from the theme tokens** (light + Claude-style dark themes, set
+as `--ds-*` CSS vars in `index.css`, toggled by a `dark` class via
+`services/theme.ts`): `text-[var(--ds-ink)]`, `text-[var(--ds-muted)]`,
+`bg-[var(--ds-canvas|sidebar|surface|surface-soft|surface-strong|raised|well)]`,
+`border-[var(--ds-hairline)]`/`[var(--ds-hairline-soft)]`,
+`hover:bg-[var(--ds-hover)]`, accent `bg-[var(--ds-accent)]`
+`hover:bg-[var(--ds-accent-hover)]`. Never hardcode the paper/ink hexes; never put
+a Tailwind slash-opacity on a `var()` color (invalid CSS) — accent tints use the
+literal `bg-[#D97757]/10` form since the accent is theme-invariant.
 
 ### Two versions per widget (density)
 

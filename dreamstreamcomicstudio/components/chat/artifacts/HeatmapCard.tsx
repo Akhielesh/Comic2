@@ -29,7 +29,7 @@ const Tile: React.FC<{ cell: HeatmapCell; unit: string; grow: number }> = ({ cel
   const { bg, fg } = tone(cell.value);
   const body = (
     <div
-      className="flex min-h-[3.5rem] flex-col justify-between rounded-lg border border-black/5 p-2 transition-opacity duration-200 hover:opacity-90"
+      className="flex min-h-[3.5rem] flex-col justify-between rounded-lg border border-[var(--ds-hairline-soft)] p-2 transition-opacity duration-200 hover:opacity-90"
       style={{ backgroundColor: bg, color: fg, flexGrow: grow, flexBasis: `${70 + grow * 18}px` }}
     >
       <div className="truncate text-[11px] font-semibold leading-none">{cell.label}</div>
@@ -46,7 +46,7 @@ const Tile: React.FC<{ cell: HeatmapCell; unit: string; grow: number }> = ({ cel
 
 const Group: React.FC<{ group: HeatmapGroup; unit: string; growOf: (w?: number) => number }> = ({ group, unit, growOf }) => (
   <div>
-    {group.name && <div className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">{group.name}</div>}
+    {group.name && <div className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">{group.name}</div>}
     <div className="flex flex-wrap gap-1.5">
       {group.cells.map((cell, i) => <Tile key={i} cell={cell} unit={unit} grow={growOf(cell.weight)} />)}
     </div>
@@ -59,7 +59,7 @@ const MoverRow: React.FC<{ cell: HeatmapCell; unit: string }> = ({ cell, unit })
   const color = typeof v === 'number' ? (v > 0 ? '#059669' : v < 0 ? '#dc2626' : '#6e6a60') : '#6e6a60';
   return (
     <div className="flex items-center justify-between gap-2 text-xs">
-      <span className="min-w-0 truncate font-medium text-[#1a1915]">{cell.label}</span>
+      <span className="min-w-0 truncate font-medium text-[var(--ds-ink)]">{cell.label}</span>
       <span className="shrink-0 font-semibold tabular-nums" style={{ color }}>
         {typeof v === 'number' && Number.isFinite(v) ? `${v >= 0 ? '+' : ''}${v.toFixed(2)}${unit}` : '—'}
       </span>
@@ -95,14 +95,14 @@ export const HeatmapCard: React.FC<{ data: HeatmapArtifact }> = ({ data }) => {
     return (
       <Surface accent="#0ea5e9" header={header}>
         {valued.length ? (
-          <div className={`grid ${losers.length ? 'grid-cols-2' : 'grid-cols-1'} divide-x divide-black/5 pb-2.5 ${header ? '' : 'pt-2.5'}`}>
+          <div className={`grid ${losers.length ? 'grid-cols-2' : 'grid-cols-1'} divide-x divide-[var(--ds-hairline-soft)] pb-2.5 ${header ? '' : 'pt-2.5'}`}>
             <div className="min-w-0 space-y-1 px-3">
-              <div className="text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">Top</div>
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Top</div>
               {gainers.map((c, i) => <MoverRow key={i} cell={c} unit={unit} />)}
             </div>
             {losers.length > 0 && (
               <div className="min-w-0 space-y-1 px-3">
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-[#6e6a60]">Bottom</div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Bottom</div>
                 {losers.map((c, i) => <MoverRow key={i} cell={c} unit={unit} />)}
               </div>
             )}
@@ -110,7 +110,7 @@ export const HeatmapCard: React.FC<{ data: HeatmapArtifact }> = ({ data }) => {
         ) : (
           <div className="flex flex-wrap gap-1.5 px-3 pb-2.5">
             {flatten(data).slice(0, 6).map((c, i) => (
-              <span key={i} className="rounded-full bg-black/[0.04] px-2 py-0.5 text-[11px] font-medium text-[#3c3a33]">{c.label}</span>
+              <span key={i} className="rounded-full bg-[var(--ds-well-strong)] px-2 py-0.5 text-[11px] font-medium text-[#3c3a33]">{c.label}</span>
             ))}
           </div>
         )}
@@ -139,7 +139,7 @@ export const HeatmapCard: React.FC<{ data: HeatmapArtifact }> = ({ data }) => {
     <Surface
       accent="#0ea5e9"
       header={header}
-      footer={data.caption ? <div className="text-[10px] text-[#6e6a60]">{data.caption}</div> : undefined}
+      footer={data.caption ? <div className="text-[10px] text-[var(--ds-muted)]">{data.caption}</div> : undefined}
     >
       <div className="space-y-3 p-3 pt-1">
         {groups.map((g, i) => <Group key={i} group={g} unit={unit} growOf={growOf} />)}
