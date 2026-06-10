@@ -42,13 +42,17 @@ import {
   type ModelSlot,
   type ModelSelection
 } from '../services/modelSelection';
-import { getCapabilities, featureSupport, FEATURE_LABELS, capabilityBadges, QUERY_FACETS, type CapabilityTone } from '../services/modelCapabilities';
+import { getCapabilities, featureSupport, FEATURE_LABELS, capabilityBadges, type CapabilityTone } from '../services/modelCapabilities';
+import { searchModels } from '../services/modelSearch';
 import { buildSmartTeam, TASK_PROFILES, pickBestForDomain, type SmartMode, type SmartTask, type SmartTeam } from '../services/smartModelSelection';
 import { recordModelFeedback, latestVote, feedbackSummary, MODEL_FEEDBACK_CHANGED, type FeedbackVote } from '../services/modelFeedback';
 import { topDomains, domainStrength, DOMAIN_META, FILTERABLE_DOMAINS, type DomainId } from '../services/modelDomains';
 import { getModelBenchmarks, BENCHMARK_METRICS, formatScore, type BenchmarkMetricId } from '../services/modelBenchmarks';
 import { DomainTags, ModelInsightsPanel } from './models/ModelInsights';
-import { CodingLeaderboard } from './models/CodingLeaderboard';
+import { ModelProviderIcon, ProviderIcon, SourceIcon } from './models/ProviderIcon';
+import { ProviderSections } from './models/ProviderSections';
+import { SectionHeader } from './models/SectionHeader';
+import { DomainLeaderboard } from './models/DomainLeaderboard';
 import { ImageModelRanking } from './models/ImageModelRanking';
 import { ProviderAggregatorTable } from './models/ProviderAggregatorTable';
 import { ModelDataSources } from './models/ModelDataSources';
@@ -153,7 +157,7 @@ const FILTER_PREDICATES: Record<Exclude<FilterKey, 'all'>, (m: CatalogModel, c: 
   nvidia: (m) => m.source === 'nvidia'
 };
 
-const matchesFilter = (model: CatalogModel, filters: Set<FilterKey>, domains: Set<DomainId>, vendors: Set<string>, query: string): boolean => {
+const matchesFilter = (model: CatalogModel, filters: Set<FilterKey>, domains: Set<DomainId>, vendors: Set<string>): boolean => {
   const caps = getCapabilities(model);
   for (const f of filters) {
     if (f === 'all') continue;
@@ -169,28 +173,6 @@ const matchesFilter = (model: CatalogModel, filters: Set<FilterKey>, domains: Se
   // domain. ANDs with everything else, so "Coding" + "Free" finds free models that can actually code.
   for (const d of domains) {
     if (domainStrength(model, d) < 55) return false;
-  }
-
-  // Smart search: each token is either a semantic facet ("free", "image", "vision",
-  // "reasoning", "editing", "nvidia"…) or a plain substring. ALL tokens must match — so
-  // typing "free image" auto-narrows to free image models without touching the chips.
-  const tokens = query.trim().toLowerCase().split(/[\s,]+/).filter(Boolean);
-  if (tokens.length) {
-    const capLabels = capabilityBadges(model).map((b) => b.label).join(' ');
-    const vendor = getModelVendor(model);
-    const haystack = [
-      model.id, model.name, model.description, model.source, vendor.label, vendor.id, getModelSize(model.id)?.params,
-      model.roles?.join(' '), model.possibilities?.join(' '), model.drawbacks?.join(' '),
-      model.editorialNote, capLabels
-    ].filter(Boolean).join(' ').toLowerCase();
-    for (const tok of tokens) {
-      const facet = QUERY_FACETS.find((f) => f.keys.includes(tok));
-      if (facet) {
-        if (!facet.test(caps, model)) return false;
-      } else if (!haystack.includes(tok)) {
-        return false;
-      }
-    }
   }
   return true;
 };
@@ -230,6 +212,19 @@ const UseModelControl: React.FC<{ model: CatalogModel; selection: ModelSelection
   const [confirming, setConfirming] = useState(false);
   const slot = slotOf(model);
   const isSelected = (slot === 'image' ? selection.imageModel : selection.textModel) === model.id;
+
+  // Download-only NVIDIA NIMs are listed in the catalog but 404 on the hosted API —
+  // never let them be selected, or every generation with them fails.
+  if (model.apiCallable === false) {
+    return (
+      <span
+        className="text-[11px] font-bold text-amber-700 flex items-center gap-1"
+        title="Listed in the catalog, but NVIDIA only offers this model as a downloadable NIM — the hosted API returns 404 for it, so it can't be used here."
+      >
+        <AlertTriangle className="w-3.5 h-3.5" /> Not callable via API
+      </span>
+    );
+  }
 
   if (isSelected) {
     return <span className="text-[11px] font-bold text-green-700 flex items-center gap-1"><Check className="w-3.5 h-3.5" /> In use ({slot})</span>;
@@ -291,17 +286,22 @@ const ModelCard: React.FC<{
     className="cursor-pointer text-left bg-white border-2 border-black rounded-lg p-4 shadow-comic hover:shadow-comic-hover hover:translate-x-[2px] hover:translate-y-[2px] transition-all flex flex-col gap-3"
   >
     <div className="flex items-start justify-between gap-2">
-      <div className="min-w-0">
-        <div className="flex items-center gap-1.5 mb-0.5">
-          <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-black ${getModelVendor(model).color}`}>{getModelVendor(model).label}</span>
-          <span className="text-[10px] font-bold uppercase text-slate-500">{sourceLabel(providerOrigin(model))}</span>
-          {getModelVendor(model).url && (
-            <a href={getModelVendor(model).url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-slate-400 hover:text-brand-blue" title={`${getModelVendor(model).label} — more info`}>
-              <ExternalLink className="w-3 h-3" />
-            </a>
-          )}
+      <div className="min-w-0 flex items-start gap-2">
+        <ModelProviderIcon model={model} className="w-5 h-5 shrink-0 mt-0.5" />
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5 mb-0.5">
+            <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-black ${getModelVendor(model).color}`}>{getModelVendor(model).label}</span>
+            <span className="text-[10px] font-bold uppercase text-slate-500 inline-flex items-center gap-1" title={`Served via ${sourceLabel(providerOrigin(model))}`}>
+              <SourceIcon source={providerOrigin(model)} className="w-3 h-3" />{sourceLabel(providerOrigin(model))}
+            </span>
+            {getModelVendor(model).url && (
+              <a href={getModelVendor(model).url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-slate-400 hover:text-brand-blue" title={`${getModelVendor(model).label} — more info`}>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            )}
+          </div>
+          <div className="font-bold leading-tight truncate">{model.name}</div>
         </div>
-        <div className="font-bold leading-tight truncate">{model.name}</div>
       </div>
       <Badge className={COST_CLASS_COLOR[model.costClass]}>{COST_CLASS_LABEL[model.costClass] ?? classBadge(model.costClass)}</Badge>
     </div>
@@ -355,10 +355,15 @@ const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; on
   <div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
     <div className="bg-white border-4 border-black rounded-xl shadow-comic max-w-2xl w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
       <div className="sticky top-0 z-10 bg-white rounded-t-lg border-b-2 border-black px-5 py-4 flex items-start justify-between gap-3 shadow-[0_2px_0_0_rgba(0,0,0,0.06)]">
-        <div className="min-w-0">
-          <div className="text-[10px] font-bold uppercase text-slate-500">{sourceLabel(providerOrigin(model))}</div>
-          <h2 className="text-xl font-display leading-tight truncate">{model.name}</h2>
-          <code className="text-[11px] text-slate-500 break-all">{model.id}</code>
+        <div className="min-w-0 flex items-start gap-2.5">
+          <ModelProviderIcon model={model} className="w-7 h-7 shrink-0 mt-1" />
+          <div className="min-w-0">
+            <div className="text-[10px] font-bold uppercase text-slate-500 inline-flex items-center gap-1">
+              {getModelVendor(model).label} · <SourceIcon source={providerOrigin(model)} className="w-3 h-3" /> {sourceLabel(providerOrigin(model))}
+            </div>
+            <h2 className="text-xl font-display leading-tight truncate">{model.name}</h2>
+            <code className="text-[11px] text-slate-500 break-all">{model.id}</code>
+          </div>
         </div>
         <button onClick={onClose} className="border-2 border-black rounded p-1 hover:bg-brand-yellow shrink-0" aria-label="Close"><X className="w-4 h-4" /></button>
       </div>
@@ -693,7 +698,9 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
   const [showCompare, setShowCompare] = useState(false);
   const [smartTeam, setSmartTeam] = useState<SmartTeam | null>(null);
   const [view, setView] = useState<'library' | 'leaderboard' | 'table'>('library');
+  const [groupByProvider, setGroupByProvider] = useState(false);
   const [domainPick, setDomainPick] = useState<{ domain: DomainId; best: ReturnType<typeof pickBestForDomain>; mode: SmartMode } | null>(null);
+  const { user } = useAuth();
 
   useEffect(() => {
     const onChange = () => setSelection(getModelSelection());
@@ -728,7 +735,9 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
   }, [reloadKey]);
 
   const visible = useMemo(() => {
-    let list = models.filter((model) => matchesFilter(model, filters, domainFilters, vendorFilters, query));
+    // Ranked search first (typo-tolerant, alias-aware), then chip filters, then sort.
+    // With "Best match" the search ranking IS the order; other sorts override it.
+    let list = searchModels(models, query).filter((model) => matchesFilter(model, filters, domainFilters, vendorFilters));
     if (minContextK > 0) list = list.filter((m) => (m.contextLength || 0) >= minContextK * 1000);
     return sortModels(list, sortBy);
   }, [models, filters, domainFilters, vendorFilters, query, minContextK, sortBy]);
@@ -789,15 +798,27 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
 
         <VerifiedStrip />
 
+        {/* Signed-out: the catalog is fully browsable; say exactly what sign-in adds instead of
+            silently hiding the live-verification strip and letting auth-gated bits look broken. */}
+        {!user && (
+          <div className="mt-4 border-2 border-black rounded-xl bg-brand-blue/5 p-3 text-xs flex flex-wrap items-center gap-2">
+            <ShieldCheck className="w-4 h-4 shrink-0 text-brand-blue" />
+            <span className="flex-1 min-w-[220px]">
+              You're browsing the full catalog signed out — search, compare and auto-pick all work.
+              <span className="font-bold"> Sign in</span> to chat with models, sync your picks across devices, and see live credits &amp; usage verified against each source.
+            </span>
+          </div>
+        )}
+
         {/* View: curated Library vs the technical coding leaderboard (OpenRouter-style ranking). */}
         <div className="mt-4 inline-flex rounded-xl border-2 border-black overflow-hidden">
           <button onClick={() => setView('library')} className={`px-4 py-2 text-sm font-bold ${view === 'library' ? 'bg-black text-white' : 'bg-white hover:bg-slate-100'}`}>Library</button>
           <button onClick={() => setView('table')} className={`px-4 py-2 text-sm font-bold border-l-2 border-black inline-flex items-center gap-1.5 ${view === 'table' ? 'bg-brand-blue text-white' : 'bg-white hover:bg-slate-100'}`}><SlidersHorizontal className="w-4 h-4" /> Providers table</button>
-          <button onClick={() => setView('leaderboard')} className={`px-4 py-2 text-sm font-bold border-l-2 border-black inline-flex items-center gap-1.5 ${view === 'leaderboard' ? 'bg-emerald-600 text-white' : 'bg-white hover:bg-slate-100'}`}><Code2 className="w-4 h-4" /> Coding leaderboard</button>
+          <button onClick={() => setView('leaderboard')} className={`px-4 py-2 text-sm font-bold border-l-2 border-black inline-flex items-center gap-1.5 ${view === 'leaderboard' ? 'bg-emerald-600 text-white' : 'bg-white hover:bg-slate-100'}`}><Code2 className="w-4 h-4" /> Leaderboards</button>
         </div>
 
         {view === 'leaderboard' ? (
-          <CodingLeaderboard models={models} onStartChat={onStartChat} />
+          <DomainLeaderboard models={models} onStartChat={onStartChat} />
         ) : view === 'table' ? (
           <>
             <ProviderAggregatorTable models={models} />
@@ -807,14 +828,17 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
         <>
         {/* Smart auto-pick — the app's own reasoning picks the best model per stage. */}
         <div className="mt-4 bg-gradient-to-r from-brand-blue/10 to-brand-yellow/10 border-2 border-black rounded-xl p-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="font-display text-lg flex items-center gap-2"><Wand2 className="w-5 h-5 text-brand-blue" /> Let the app pick</div>
-            <p className="text-xs text-slate-600 flex-1 min-w-[220px]">
-              Scores every model across all your sources for each stage — capabilities, drawbacks, and your 👍/👎 — and assigns the best team. It keeps improving as you give feedback.
-            </p>
-            <button onClick={() => applySmartTeam('best')} disabled={loading || models.length === 0} className="px-3 py-2 rounded-lg border-2 border-black bg-brand-blue text-white font-bold text-sm hover:translate-x-[1px] hover:translate-y-[1px] transition-transform disabled:opacity-50 flex items-center gap-1"><Wand2 className="w-4 h-4" /> Auto-pick best</button>
-            <button onClick={() => applySmartTeam('free')} disabled={loading || models.length === 0} className="px-3 py-2 rounded-lg border-2 border-black bg-green-600 text-white font-bold text-sm hover:translate-x-[1px] hover:translate-y-[1px] transition-transform disabled:opacity-50 flex items-center gap-1"><Zap className="w-4 h-4" /> Best free (any source)</button>
-          </div>
+          <SectionHeader
+            icon={<Wand2 className="w-5 h-5 text-brand-blue" />}
+            title="Let the app pick"
+            subtitle="Scores every model across all your sources for each stage — capabilities, drawbacks, and your 👍/👎 — and assigns the best team. It keeps improving as you give feedback."
+            right={
+              <>
+                <button onClick={() => applySmartTeam('best')} disabled={loading || models.length === 0} className="px-3 py-2 rounded-lg border-2 border-black bg-brand-blue text-white font-bold text-sm hover:translate-x-[1px] hover:translate-y-[1px] transition-transform disabled:opacity-50 flex items-center gap-1"><Wand2 className="w-4 h-4" /> Auto-pick best</button>
+                <button onClick={() => applySmartTeam('free')} disabled={loading || models.length === 0} className="px-3 py-2 rounded-lg border-2 border-black bg-green-600 text-white font-bold text-sm hover:translate-x-[1px] hover:translate-y-[1px] transition-transform disabled:opacity-50 flex items-center gap-1"><Zap className="w-4 h-4" /> Best free (any source)</button>
+              </>
+            }
+          />
           {smartTeam && (
             <div className="mt-3 pt-3 border-t border-black/10 text-xs space-y-2">
               <div className="font-bold uppercase text-slate-500">{smartTeam.mode === 'free' ? 'Best free team applied' : 'Best team applied'}</div>
@@ -850,10 +874,11 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
 
         {/* Domain-aware single pick — "best model for a specific job", across all your sources. */}
         <div className="mt-4 border-2 border-black rounded-xl p-4 bg-white">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="font-display text-lg flex items-center gap-2"><Sparkles className="w-5 h-5 text-brand-blue" /> Best model for…</div>
-            <p className="text-xs text-slate-600 flex-1 min-w-[200px]">Ranked by real benchmarks in that domain — not a guess. Pick a job and we'll name the strongest model (and the strongest free one).</p>
-          </div>
+          <SectionHeader
+            icon={<Sparkles className="w-5 h-5 text-brand-blue" />}
+            title="Best model for…"
+            subtitle="Ranked by real benchmarks in that domain — not a guess. Pick a job and we'll name the strongest model (and the strongest free one)."
+          />
           <div className="mt-3 flex flex-wrap gap-2">
             {(['coding', 'science', 'math', 'reasoning', 'writing'] as DomainId[]).map((d) => (
               <button key={d} onClick={() => runDomainPick(d, 'best')} disabled={loading || models.length === 0}
@@ -895,6 +920,13 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
                 {SORT_OPTIONS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
               </select>
             </label>
+            <button
+              onClick={() => setGroupByProvider((v) => !v)}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border-2 border-black text-sm font-bold transition-colors ${groupByProvider ? 'bg-black text-white' : 'bg-white hover:bg-brand-yellow/60'}`}
+              title="Group the catalog by provider — Anthropic, then everything in it; Google, then everything in it; …"
+            >
+              <Layers className="w-4 h-4" /> By provider
+            </button>
             <button
               onClick={() => setShowFilters((v) => !v)}
               className={`xl:hidden flex items-center gap-1.5 px-3 py-2 rounded-lg border-2 border-black text-sm font-bold transition-colors ${showFilters || activeFilterCount > 0 ? 'bg-brand-blue text-white' : 'bg-white hover:bg-brand-yellow/60'}`}
@@ -943,6 +975,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
                         onClick={toggle}
                         className={`text-[11px] font-bold px-2.5 py-1 rounded border-2 border-black transition-colors flex items-center gap-1.5 ${active ? vendor.color : 'bg-white hover:bg-slate-100'}`}
                       >
+                        <ProviderIcon vendorId={vendor.id} className="w-3.5 h-3.5" />
                         {vendor.label}
                         <span className={`text-[9px] font-mono rounded-full px-1 ${active ? 'bg-white/25' : 'bg-slate-200 text-slate-600'}`}>{count}</span>
                       </button>
@@ -1049,9 +1082,25 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
               <div className="mt-4"><ImageModelRanking /></div>
             )}
             <div className="mt-4 text-xs font-bold uppercase text-slate-500 flex items-center gap-2">
-              {visible.length} models
+              {visible.length} models{groupByProvider ? ' · grouped by provider' : ''}
               {refreshing && <span className="flex items-center gap-1 text-slate-400 normal-case font-normal"><Loader2 className="w-3 h-3 animate-spin" /> refreshing…</span>}
             </div>
+            {groupByProvider ? (
+              <ProviderSections
+                models={visible}
+                renderCard={(model) => (
+                  <ModelCard
+                    model={model}
+                    selection={selection}
+                    compared={compareIds.includes(model.id)}
+                    onOpen={() => setSelected(model)}
+                    onUse={(slot) => useModel(model, slot)}
+                    onToggleCompare={() => toggleCompare(model.id)}
+                    onStartChat={onStartChat}
+                  />
+                )}
+              />
+            ) : (
             <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {visible.map((model) => (
                 <ModelCard
@@ -1066,6 +1115,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
                 />
               ))}
             </div>
+            )}
           </>
         )}
           </div>

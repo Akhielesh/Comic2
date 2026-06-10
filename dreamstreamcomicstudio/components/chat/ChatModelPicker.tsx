@@ -9,6 +9,7 @@ import {
   type CatalogModel
 } from '../../services/modelCatalog';
 import { getCapabilities } from '../../services/modelCapabilities';
+import { searchModels } from '../../services/modelSearch';
 import { isProviderEnabled } from '../../services/sourceGovernance';
 import { fetchModelSpeed, speedTier, speedLabel, isTimeoutProneFreeModel, type ModelSpeed } from '../../services/modelSpeed';
 
@@ -120,19 +121,15 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
   }, []);
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return models.filter((model) => {
+    // Ranked, typo-tolerant search (aliases like "claude" → Anthropic work too),
+    // then the facet chips narrow the ranked list.
+    return searchModels(models, query).filter((model) => {
       const caps = getCapabilities(model);
       if (facet === 'free' && !caps.isFree) return false;
       if (facet === 'reasoning' && !caps.reasoning) return false;
       if (facet === 'vision' && !caps.imageInput) return false;
       if (facet === 'web' && model.source !== 'openrouter') return false;
-      if (!q) return true;
-      return (
-        model.name.toLowerCase().includes(q) ||
-        model.id.toLowerCase().includes(q) ||
-        (model.description || '').toLowerCase().includes(q)
-      );
+      return true;
     });
   }, [models, query, facet]);
 

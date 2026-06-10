@@ -16,6 +16,7 @@ import {
   fetchModelCatalog, loadCachedCatalog, sourceLabel, type CatalogModel
 } from '../../services/modelCatalog';
 import { domainStrength } from '../../services/modelDomains';
+import { searchModels } from '../../services/modelSearch';
 import { curateCoders } from '../../services/studioCoderAllowlist';
 import {
   getStudioModelSelection, setStudioModel, setStudioAuto, setStudioSource,
@@ -123,8 +124,7 @@ export const StudioSettingsPanel: React.FC<{ open: boolean; onClose: () => void 
     // recommend (the picker no longer lets you pin a model that will just fail). Power users can
     // still pin anything from the full ModelLibrary page.
     const list = curateCoders(models.filter(isCoderText));
-    const q = query.trim().toLowerCase();
-    const filtered = q ? list.filter((m) => `${m.name} ${m.id}`.toLowerCase().includes(q)) : list;
+    const filtered = searchModels(list, query);
     return [...filtered].sort((a, b) => {
       const ca = domainStrength(a, 'coding');
       const cb = domainStrength(b, 'coding');

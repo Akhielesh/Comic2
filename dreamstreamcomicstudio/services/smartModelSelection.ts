@@ -130,6 +130,8 @@ export interface ScoredModel {
 
 /** Score one model for one task in one mode. Returns null if it fails the hard gate / free filter. */
 export const scoreModelForTask = (model: CatalogModel, task: SmartTask, mode: SmartMode): ScoredModel | null => {
+  // Download-only catalog entries (NVIDIA NIMs) 404 on the hosted API — never auto-pick them.
+  if (model.apiCallable === false) return null;
   const profile = TASK_PROFILES[task];
   const caps = getCapabilities(model);
   if (!profile.gate(caps)) return null;
@@ -219,6 +221,7 @@ export interface DomainPick extends ScoredModel { strength: number; }
 export const rankModelsForDomain = (models: CatalogModel[], domain: DomainId, mode: SmartMode = 'best'): DomainPick[] =>
   models
     .map((model): DomainPick | null => {
+      if (model.apiCallable === false) return null; // download-only — would 404 on use
       const caps = getCapabilities(model);
       const isFree = caps.isFree;
       if (mode === 'free' && !isFree) return null;

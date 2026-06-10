@@ -68,13 +68,17 @@ export const diffTotals = (items: StudioActivityItem[]): { added: number; remove
 
 export const useStudioActivity = create<ActivityState>((set) => ({
   status: 'idle',
-  collapsed: false,
+  // Compact by default: the header line already shows live progress ("Building · N files"
+  // + spinner), so the detail pane never auto-expands and pushes the composer around.
+  collapsed: true,
   items: [],
   summary: null,
   startedAt: null,
   endedAt: null,
 
-  begin: () => set({ status: 'running', collapsed: false, items: [], summary: null, startedAt: Date.now(), endedAt: null }),
+  // Respect the user's expand/collapse choice across runs — starting a build must NOT
+  // auto-expand the detail pane (explicit user feedback). They can open it any time.
+  begin: () => set({ status: 'running', items: [], summary: null, startedAt: Date.now(), endedAt: null }),
 
   pushPhase: (label) =>
     set((s) => {
@@ -112,12 +116,13 @@ export const useStudioActivity = create<ActivityState>((set) => ({
       return { items };
     }),
 
-  // Stay expanded when a run finishes — auto-collapsing the build the moment it succeeded was a
-  // top annoyance (the record people most want to read vanished). The user can collapse it.
+  // Finishing never yanks the pane around either: success keeps whatever state the user
+  // chose (the summary line tells the story), and only a FAILURE auto-expands — that's
+  // the one moment the detail genuinely needs attention.
   finish: (status, summary) =>
-    set({ status, summary, collapsed: false, endedAt: Date.now() }),
+    set((s) => ({ status, summary, collapsed: status === 'error' ? false : s.collapsed, endedAt: Date.now() })),
 
   setCollapsed: (collapsed) => set({ collapsed }),
 
-  reset: () => set({ status: 'idle', collapsed: false, items: [], summary: null, startedAt: null, endedAt: null }),
+  reset: () => set((s) => ({ status: 'idle', collapsed: s.collapsed, items: [], summary: null, startedAt: null, endedAt: null })),
 }));

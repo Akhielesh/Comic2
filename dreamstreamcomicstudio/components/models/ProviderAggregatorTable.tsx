@@ -2,6 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { ExternalLink, ArrowUpDown, Search } from 'lucide-react';
 import type { CatalogModel } from '../../services/modelCatalog';
 import { getModelVendor, availableVendors } from '../../services/modelVendors';
+import { searchModels } from '../../services/modelSearch';
+import { ProviderIcon } from './ProviderIcon';
 import { getModelSize } from '../../services/modelParams';
 import { getModelBenchmarks } from '../../services/modelBenchmarks';
 
@@ -17,9 +19,9 @@ const releasedOf = (m: CatalogModel): string => getModelBenchmarks(m.id)?.asOf
 const infoUrl = (m: CatalogModel): string | undefined =>
   m.source === 'openrouter' ? `https://openrouter.ai/${m.id}` : getModelVendor(m).url;
 
-const Th: React.FC<{ id: SortKey; label: string; sort: SortKey; dir: 1 | -1; onSort: (k: SortKey) => void }> =
-  ({ id, label, sort, dir, onSort }) => (
-    <th className="py-2 px-2 text-left whitespace-nowrap">
+const Th: React.FC<{ id: SortKey; label: string; sort: SortKey; dir: 1 | -1; onSort: (k: SortKey) => void; align?: 'left' | 'right' }> =
+  ({ id, label, sort, dir, onSort, align = 'left' }) => (
+    <th className={`py-2 px-2 whitespace-nowrap ${align === 'right' ? 'text-right' : 'text-left'}`}>
       <button onClick={() => onSort(id)} className={`inline-flex items-center gap-1 hover:text-black ${sort === id ? 'text-black' : 'text-slate-500'}`}>
         {label}<ArrowUpDown className="w-3 h-3" />{sort === id && <span className="text-[9px]">{dir === 1 ? '▲' : '▼'}</span>}
       </button>
@@ -48,13 +50,12 @@ export const ProviderAggregatorTable: React.FC<{ models: CatalogModel[] }> = ({ 
   };
 
   const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    return models.filter((m) => {
+    // Ranked, typo-tolerant search first; the structural filters narrow the ranked list.
+    return searchModels(models, q).filter((m) => {
       if (vendorSel.size && !vendorSel.has(getModelVendor(m).id)) return false;
       if (modality === 'text' && !m.outputModalities.includes('text')) return false;
       if (modality === 'image' && !m.supportsImageOutput) return false;
       if (freeOnly && !m.isFree) return false;
-      if (needle && !`${m.id} ${m.name} ${getModelVendor(m).label}`.toLowerCase().includes(needle)) return false;
       return true;
     });
   }, [models, vendorSel, modality, freeOnly, q]);
@@ -111,6 +112,7 @@ export const ProviderAggregatorTable: React.FC<{ models: CatalogModel[] }> = ({ 
             {vendorOptions.map(({ vendor, count }) => (
               <label key={vendor.id} className="flex items-center gap-2 text-[12px] cursor-pointer hover:bg-slate-50 rounded px-1 py-0.5">
                 <input type="checkbox" checked={vendorSel.has(vendor.id)} onChange={() => toggleVendor(vendor.id)} className="accent-brand-blue w-3.5 h-3.5" />
+                <ProviderIcon vendorId={vendor.id} className="w-3.5 h-3.5 shrink-0" />
                 <span className={`text-[8px] font-bold uppercase px-1 py-0.5 rounded border border-black ${vendor.color}`}>{vendor.label}</span>
                 <span className="ml-auto font-mono text-[10px] text-slate-400">{count}</span>
               </label>
@@ -135,12 +137,12 @@ export const ProviderAggregatorTable: React.FC<{ models: CatalogModel[] }> = ({ 
               <tr className="text-[10px] font-bold uppercase border-b-2 border-black bg-slate-50">
                 <Th id="vendor" label="Provider" sort={sort} dir={dir} onSort={onSort} />
                 <Th id="name" label="Model" sort={sort} dir={dir} onSort={onSort} />
-                <Th id="context" label="Context" sort={sort} dir={dir} onSort={onSort} />
+                <Th id="context" label="Context" sort={sort} dir={dir} onSort={onSort} align="right" />
                 <th className="py-2 px-2 text-left whitespace-nowrap text-slate-500">Size / params</th>
-                <Th id="inPrice" label="In $/M" sort={sort} dir={dir} onSort={onSort} />
-                <Th id="outPrice" label="Out $/M" sort={sort} dir={dir} onSort={onSort} />
-                <Th id="image" label="$/img" sort={sort} dir={dir} onSort={onSort} />
-                <Th id="elo" label="Arena" sort={sort} dir={dir} onSort={onSort} />
+                <Th id="inPrice" label="In $/M" sort={sort} dir={dir} onSort={onSort} align="right" />
+                <Th id="outPrice" label="Out $/M" sort={sort} dir={dir} onSort={onSort} align="right" />
+                <Th id="image" label="$/img" sort={sort} dir={dir} onSort={onSort} align="right" />
+                <Th id="elo" label="Arena" sort={sort} dir={dir} onSort={onSort} align="right" />
                 <th className="py-2 px-2 text-left whitespace-nowrap text-slate-500 hidden md:table-cell">Released</th>
                 <th className="py-2 px-2"></th>
               </tr>
@@ -153,14 +155,23 @@ export const ProviderAggregatorTable: React.FC<{ models: CatalogModel[] }> = ({ 
                 const url = infoUrl(m);
                 return (
                   <tr key={m.id} className="border-b border-dashed border-slate-200 hover:bg-brand-yellow/5">
-                    <td className="py-1.5 px-2"><span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-black ${vendor.color}`}>{vendor.label}</span></td>
-                    <td className="py-1.5 px-2"><span className="font-bold">{m.name}</span></td>
-                    <td className="py-1.5 px-2 font-mono whitespace-nowrap">{ctxLabel(m.contextLength)}</td>
+                    <td className="py-1.5 px-2">
+                      <span className="inline-flex items-center gap-1.5">
+                        <ProviderIcon vendorId={vendor.id} className="w-4 h-4 shrink-0" />
+                        <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-black ${vendor.color}`}>{vendor.label}</span>
+                      </span>
+                    </td>
+                    <td className="py-1.5 px-2">
+                      <span className="font-bold">{m.name}</span>
+                      {m.isFree && <span className="ml-1.5 text-[8px] font-bold uppercase px-1 py-0.5 rounded bg-green-500 text-white align-middle">Free</span>}
+                      {m.apiCallable === false && <span className="ml-1.5 text-[8px] font-bold uppercase px-1 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-400 align-middle" title="Download-only — not callable on the hosted API">DL-only</span>}
+                    </td>
+                    <td className="py-1.5 px-2 font-mono whitespace-nowrap text-right">{ctxLabel(m.contextLength)}</td>
                     <td className="py-1.5 px-2 whitespace-nowrap text-slate-600">{size?.params ?? '—'}</td>
-                    <td className="py-1.5 px-2 font-mono whitespace-nowrap">{perMillion(m.pricing.promptPerToken)}</td>
-                    <td className="py-1.5 px-2 font-mono whitespace-nowrap">{perMillion(m.pricing.completionPerToken)}</td>
-                    <td className="py-1.5 px-2 font-mono whitespace-nowrap">{m.pricing.imagePerImage > 0 ? `$${m.pricing.imagePerImage.toFixed(3)}` : '—'}</td>
-                    <td className="py-1.5 px-2 font-mono whitespace-nowrap">{elo || '—'}</td>
+                    <td className="py-1.5 px-2 font-mono whitespace-nowrap text-right">{perMillion(m.pricing.promptPerToken)}</td>
+                    <td className="py-1.5 px-2 font-mono whitespace-nowrap text-right">{perMillion(m.pricing.completionPerToken)}</td>
+                    <td className="py-1.5 px-2 font-mono whitespace-nowrap text-right">{m.pricing.imagePerImage > 0 ? `$${m.pricing.imagePerImage.toFixed(3)}` : '—'}</td>
+                    <td className="py-1.5 px-2 font-mono whitespace-nowrap text-right">{elo || '—'}</td>
                     <td className="py-1.5 px-2 text-slate-500 hidden md:table-cell whitespace-nowrap">{releasedOf(m)}</td>
                     <td className="py-1.5 px-2">
                       {url && <a href={url} target="_blank" rel="noopener noreferrer" className="text-slate-400 hover:text-brand-blue inline-flex" title="More info"><ExternalLink className="w-3.5 h-3.5" /></a>}

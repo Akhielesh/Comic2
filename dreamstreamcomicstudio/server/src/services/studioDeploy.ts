@@ -82,6 +82,16 @@ export const deployViaWorker = async (input: {
     DEPLOY_TIMEOUT_MS,
   );
   if (!r.ok) {
+    // A 400 "unknown action" means the DEPLOYED worker predates the deploy action — the
+    // exact drift behind "deploys keep failing even though the infra exists". Say so,
+    // with the one command that fixes it, instead of a bare 400.
+    if (r.status === 400 && /unknown action/i.test(String(r.json?.error || r.json?.message || ''))) {
+      return {
+        status: 'unavailable',
+        message:
+          'The deployed Studio Worker is an older build without one-click deploy. Redeploy it (cd studio-worker && npx wrangler deploy) — until then, the deploy bundle + commands shown here work today.'
+      };
+    }
     return { status: 'error', message: r.json?.message || r.json?.error || `Deploy worker returned ${r.status}.` };
   }
   return normalizeDeployResult(r.json);

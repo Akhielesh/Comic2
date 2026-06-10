@@ -6,15 +6,23 @@ const reset = () => useStudioActivity.getState().reset();
 describe('activityStore', () => {
   beforeEach(reset);
 
-  it('begin() clears prior state and marks running + expanded', () => {
+  it('begin() clears prior state, marks running, and never auto-expands', () => {
     const s = useStudioActivity.getState();
     s.pushPhase('stale');
+    s.setCollapsed(true);
     s.begin();
-    const next = useStudioActivity.getState();
+    let next = useStudioActivity.getState();
     expect(next.status).toBe('running');
-    expect(next.collapsed).toBe(false);
+    // Explicit user feedback: starting a build must NOT pop the detail pane open.
+    expect(next.collapsed).toBe(true);
     expect(next.items).toHaveLength(0);
     expect(next.summary).toBeNull();
+
+    // …and if the user had it open, begin() leaves it open (their choice is sticky).
+    s.setCollapsed(false);
+    s.begin();
+    next = useStudioActivity.getState();
+    expect(next.collapsed).toBe(false);
   });
 
   it('upsertFile adds a writing row, then resolves the same path to written with bytes', () => {
@@ -64,20 +72,22 @@ describe('activityStore', () => {
     expect(useStudioActivity.getState().endedAt).not.toBeNull();
   });
 
-  it('finish stays expanded for both done + error (no annoying auto-collapse)', () => {
+  it('finish keeps the user\'s pane state on success and only auto-expands on error', () => {
     const s = useStudioActivity.getState();
+    s.setCollapsed(true);
     s.begin();
     s.finish('done', '✓ Built "X" — 3 files');
     let st = useStudioActivity.getState();
     expect(st.status).toBe('done');
-    // The build record people most want to read no longer vanishes the moment it succeeds.
-    expect(st.collapsed).toBe(false);
+    // Success doesn't yank the pane open or closed — the summary line tells the story.
+    expect(st.collapsed).toBe(true);
     expect(st.summary).toContain('Built');
 
     s.begin();
     s.finish('error', 'nope');
     st = useStudioActivity.getState();
     expect(st.status).toBe('error');
+    // A failure is the one moment the detail genuinely needs attention.
     expect(st.collapsed).toBe(false);
   });
 });

@@ -447,10 +447,22 @@ export const runChat = async (
         params.onDelta!(d);
       }
     : undefined;
+  // Huge :free models (550B-class reasoners) routinely sit QUEUED for the whole 90s
+  // budget on the free tier. Give them a shorter first-attempt deadline so the
+  // timeout-fallback below fires while the user is still waiting, not after.
+  const paramCountB = (() => {
+    const m = /(\d+(?:\.\d+)?)\s*b\b/i.exec(params.model);
+    return m ? Number(m[1]) : 0;
+  })();
+  const timeoutProne = params.provider === 'openrouter' && /:free$/i.test(params.model) && paramCountB >= 200;
+  const firstAttemptTimeoutMs =
+    timeoutProne && params.timeoutMs ? Math.min(45_000, params.timeoutMs) : params.timeoutMs;
+
   const callModel = (msgs: ChatMessage[], withTools: boolean, modelOverride?: string) => {
     const r = {
       ...baseReq,
       messages: msgs,
+      timeoutMs: modelOverride ? params.timeoutMs : firstAttemptTimeoutMs,
       ...(withTools && toolSpecs ? { tools: toolSpecs } : {}),
       // On a timeout-triggered retry, pin a single fast model and drop reasoning so the
       // reply actually fits the budget (no `models` chain, no reasoning effort).
@@ -539,6 +551,17 @@ export const runChat = async (
         convo.push({ role: 'user', content: formatToolResult(call.name, `Error: ${message}`) });
       }
     }
+    // Same empty-answer recovery as the native loop: a 200-with-no-content turn should
+    // retry once (tool-less) instead of handing the user a blank bubble.
+    if (!final.trim() && images.length === 0 && artifacts.length === 0) {
+      const retry = await provider.generateText({ ...baseReq, messages: [...convo, { role: 'user', content: 'Answer the request above now, in plain text.' }] }, ctx);
+      lastModel = retry.model || lastModel;
+      final = stripToolCallJson(retry.text || '') || (retry.text || '');
+      if (final.trim()) {
+        addNotice({ tool: 'agent', level: 'warn', message: 'The model initially returned an empty answer — retried once and recovered.' });
+      }
+    }
+
     const merged = dedupeCitations(citations);
     return {
       text: final,
@@ -628,6 +651,31 @@ export const runChat = async (
       level: 'warn',
       message: `Reached the ${MAX_TOOL_ITERATIONS}-step tool limit for this turn — the answer may be incomplete. Ask a follow-up to continue.`
     });
+  }
+
+  // Empty-answer recovery. Some free/preview models return HTTP 200 with EMPTY content
+  // (the production "says no response" failure) — the turn "succeeds" but the user gets a
+  // blank bubble. If nothing renderable came back (no text, no images, no artifacts),
+  // retry once: on OpenRouter switch to the fast fallback and mark the silent model down
+  // so Auto skips it; otherwise retry the same model tool-less (some models only go
+  // silent when tools are attached).
+  if (!String(result.text || '').trim() && images.length === 0 && artifacts.length === 0 && !streamedAny) {
+    if (params.provider === 'openrouter' && params.model !== TEXT_FALLBACK) {
+      markModelDown(params.model);
+      addNotice({
+        tool: 'agent',
+        level: 'warn',
+        message: `Your selected model (${params.model}) returned an empty answer, so this reply used a faster model (${TEXT_FALLBACK}). Pick a different model in the switcher to avoid this.`
+      });
+      params.onReset?.();
+      result = await callModel(messages, false, TEXT_FALLBACK);
+    } else {
+      params.onReset?.();
+      result = await callModel(messages, false);
+      if (String(result.text || '').trim()) {
+        addNotice({ tool: 'agent', level: 'warn', message: 'The model initially returned an empty answer — retried once and recovered.' });
+      }
+    }
   }
 
   if (result.citations) citations.push(...result.citations);

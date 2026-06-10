@@ -8,6 +8,7 @@ import { getSupabaseAdmin } from '../services/supabase.js';
 import { getProjectWithFiles, saveProject } from '../services/studioRepository.js';
 import { sanitizeFiles, deriveProjectName } from '../services/studioFiles.js';
 import { listRepos, pushFiles, pullFiles, parseRepoFullName, type RepoFile } from '../services/studioGithub.js';
+import { normalizeStudioId } from '../services/studioIds.js';
 
 export const studioGithubRouter = Router();
 
@@ -40,9 +41,10 @@ studioGithubRouter.post('/push', async (req, res, next) => {
     const branch = (typeof body.branch === 'string' && body.branch.trim()) || 'main';
 
     // Prefer the saved project's files; fall back to files supplied in the body.
+    const projectId = normalizeStudioId(body.projectId);
     let files: RepoFile[] = [];
-    if (typeof body.projectId === 'string' && body.projectId) {
-      const data = await getProjectWithFiles(req.user!.id, body.projectId);
+    if (projectId) {
+      const data = await getProjectWithFiles(req.user!.id, projectId);
       if (data) files = data.files.map((f) => ({ path: f.path, content: f.content }));
     }
     if (!files.length) files = sanitizeFiles(body.files).map((f) => ({ path: f.path, content: f.content }));
@@ -58,12 +60,12 @@ studioGithubRouter.post('/push', async (req, res, next) => {
     });
 
     // Record the repo on the project so the UI shows the connection.
-    if (typeof body.projectId === 'string' && body.projectId) {
+    if (projectId) {
       try {
         await getSupabaseAdmin()
           .from('studio_projects')
           .update({ github_repo: `${parsed.owner}/${parsed.repo}` })
-          .eq('id', body.projectId)
+          .eq('id', projectId)
           .eq('user_id', req.user!.id);
       } catch {
         /* best-effort */
@@ -86,7 +88,8 @@ studioGithubRouter.post('/pull', async (req, res, next) => {
 
     const parsed = typeof body.repo === 'string' ? parseRepoFullName(body.repo) : null;
     if (!parsed) return res.status(400).json({ error: { message: 'A repo as "owner/name" is required.', code: 'REPO_REQUIRED' } });
-    if (typeof body.projectId !== 'string' || !body.projectId) {
+    const projectId = normalizeStudioId(body.projectId);
+    if (!projectId) {
       return res.status(400).json({ error: { message: 'projectId is required to pull into a project.', code: 'PROJECT_REQUIRED' } });
     }
     const branch = (typeof body.branch === 'string' && body.branch.trim()) || 'main';
@@ -97,7 +100,7 @@ studioGithubRouter.post('/pull', async (req, res, next) => {
 
     await saveProject({
       userId: req.user!.id,
-      projectId: body.projectId,
+      projectId,
       name: deriveProjectName(undefined, files),
       template: 'react-ts',
       files,
@@ -105,7 +108,7 @@ studioGithubRouter.post('/pull', async (req, res, next) => {
       createdBy: 'user'
     });
 
-    res.json({ projectId: body.projectId, fileCount: files.length, repo: `${parsed.owner}/${parsed.repo}`, branch });
+    res.json({ projectId, fileCount: files.length, repo: `${parsed.owner}/${parsed.repo}`, branch });
   } catch (err) {
     res.status(502).json({ error: { message: (err as Error)?.message || 'Pull failed.', code: 'GITHUB_PULL_FAILED' } });
     void next;
