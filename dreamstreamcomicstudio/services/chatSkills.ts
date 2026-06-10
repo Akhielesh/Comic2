@@ -80,7 +80,7 @@ export const CHAT_SKILLS: ChatSkill[] = [
   },
   {
     command: 'research',
-    aliases: ['deepresearch', 'deep', 'dr', 'investigate'],
+    aliases: ['deepresearch', 'deep-research', 'deep', 'dr', 'investigate'],
     label: 'Deep research',
     description: 'Multi-agent investigation that reads real sources → a cited, decision-ready brief. Say "deep …" for the exhaustive dossier',
     emoji: '🔬',
@@ -168,6 +168,56 @@ export const CHAT_SKILLS: ChatSkill[] = [
     argName: 'spec',
     argRequired: true,
     buildValues: (arg) => ({ spec: arg })
+  },
+  {
+    command: 'goal',
+    aliases: ['goals', 'habit', 'okr', 'resolution'],
+    label: 'Goal coach',
+    description: 'Turn any goal into a tracked plan — target date, measurable metric, milestones you check off, next actions for this week',
+    emoji: '🎯',
+    category: 'life',
+    recipeId: 'goal-coach',
+    argName: 'goal (e.g. "run a 10k by October")',
+    argRequired: true,
+    buildValues: (arg) => ({ goal: arg })
+  },
+  {
+    command: 'code-review',
+    aliases: ['codereview', 'cr', 'pr'],
+    label: 'Code review',
+    description: 'A grounded review with a verdict card — paste code or drop a GitHub PR link and it reviews the REAL diff: findings, file:line, fixes',
+    emoji: '🧐',
+    category: 'build',
+    recipeId: 'code-review',
+    argName: 'code, or a GitHub PR URL',
+    argRequired: true,
+    buildValues: (arg) => ({ target: arg })
+  },
+  {
+    command: 'loop',
+    aliases: ['monitor', 'watch', 'repeat'],
+    label: 'Live monitor',
+    description: 'Loop a live widget on an interval — "/loop 5m NVDA" keeps the quote refreshing itself; works for stocks, weather, news, crypto & more',
+    emoji: '🔄',
+    category: 'research',
+    recipeId: 'live-monitor',
+    argName: 'interval + what to watch (e.g. "5m NVDA stock")',
+    argRequired: true,
+    buildValues: (arg) => {
+      // A leading "30s" / "5m" / "1h" token sets the cadence; the rest is the request.
+      const m = arg.match(/^(\d+)\s*(s|sec|secs|seconds?|m|min|mins|minutes?|h|hr|hrs|hours?)\b[:,]?\s*/i);
+      let intervalSec = 300;
+      let request = arg.trim();
+      if (m) {
+        const n = Number(m[1]);
+        const unit = m[2].toLowerCase();
+        intervalSec = unit.startsWith('h') ? n * 3600 : unit.startsWith('m') ? n * 60 : n;
+        request = arg.slice(m[0].length).trim();
+      }
+      // The tool clamps to 30s–1h; mirror it here so the recipe shows honest values.
+      intervalSec = Math.max(30, Math.min(3600, intervalSec));
+      return { request: request || arg.trim(), interval_sec: intervalSec };
+    }
   }
 ];
 
@@ -180,8 +230,9 @@ for (const s of CHAT_SKILLS) {
 export const findSkill = (command: string): ChatSkill | undefined =>
   byName.get(command.trim().toLowerCase());
 
-/** True while the user is typing a command (a leading `/` with no space yet). */
-export const isSlashQuery = (text: string): boolean => /^\/[a-zA-Z]*$/.test(text);
+/** True while the user is typing a command (a leading `/` with no space yet).
+ * Hyphens are part of command names (`/code-review`, `/deep-research`). */
+export const isSlashQuery = (text: string): boolean => /^\/[a-zA-Z][a-zA-Z-]*$/.test(text) || text === '/';
 
 /** The partial command being typed (chars after `/`, before any space). */
 export const slashQuery = (text: string): string => (isSlashQuery(text) ? text.slice(1).toLowerCase() : '');
@@ -200,7 +251,7 @@ export const filterSkills = (query: string): ChatSkill[] => {
 
 /** Parse a full composer string `/command rest...` into a skill + its argument. */
 export const parseSkillInput = (text: string): { skill: ChatSkill; arg: string } | null => {
-  const m = text.match(/^\/([a-zA-Z]+)(?:\s+([\s\S]*))?$/);
+  const m = text.match(/^\/([a-zA-Z][a-zA-Z-]*)(?:\s+([\s\S]*))?$/);
   if (!m) return null;
   const skill = findSkill(m[1]);
   if (!skill) return null;

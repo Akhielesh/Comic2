@@ -156,6 +156,19 @@ From `ARTIFACT_RENDERERS` (`ChatArtifacts.tsx:42-69`). Density-aware =
 | `dashboard` | `DashboardCard.tsx` | Customizable glass widget board with live widgets over an aurora gradient. | no | yes |
 | `learning_path` | `LearningPathCard.tsx` | Progress-tracked guided course (see `guided-learning.md`). | yes | yes |
 | `itinerary` | `ItineraryCard.tsx` | Day-tabbed trip plan with map + budget (see `travel-planner.md`). | yes | yes |
+| `ticker_tape` | `TickerTape.tsx` | Live scrolling market strip (marquee + readable rows); pauses on hover, static under reduced motion. | yes | yes |
+| `market_sentiment` | `MarketSentiment.tsx` | Fear & Greed gauges (stocks: CNN + components, crypto: alternative.me) with history. | yes | no |
+| `yield_curve` | `YieldCurveCard.tsx` | US Treasury par yield curve morphing today ↔ 1M ↔ 1Y ago; 2s10s spread + inversion badge. | yes | no |
+| `portfolio` | `PortfolioCard.tsx` | Live-priced holdings: totals + day/total P&L, allocation donut, holdings table. | yes | yes |
+| `whats_changed` | `WhatsChangedCard.tsx` | Agent changelog "since you last looked": weighted rows, kind icons, delta pills. | yes | no |
+| `boarding_pass` | `BoardingPass.tsx` | Wallet-style flight pass: 3D flip to details, status edge glow, QR. | yes | no |
+| `currency_converter` | `CurrencyConverter.tsx` | Live ECB converter: editable amount, ⇄ swap, 30-day trend + verdict. | yes | no |
+| `world_clocks` | `WorldClocks.tsx` | Ticking analog+digital clocks per zone, sleep shading, "good time to call" window. | yes | no |
+| `packing_list` | `PackingListCard.tsx` | Interactive packing checklist; check-offs persist locally (`ds.packing.v1`). | yes | no |
+| `trip_countdown` | `TripCountdown.tsx` | Live D/H/M/S countdown hero with destination weather strip + prep list. | yes | no |
+| `goal_tracker` | `GoalTracker.tsx` | /goal tracker: milestone timeline with persisted check-offs (`ds.goal.v1`), metric, next actions. | yes | yes |
+| `code_review` | `CodeReviewCard.tsx` | /code-review verdict card: severity-grouped findings, file:line chips, suggested fixes. | yes | yes |
+| `live_monitor` | `LiveMonitorCard.tsx` | /loop wrapper: re-runs one refreshable tool on an interval; embedded card inherits density. | yes | yes |
 
 ## How to add a new widget — checklist
 

@@ -830,10 +830,15 @@ export const REFRESHABLE_TOOLS = [
   'get_news',
   'get_stock',
   'find_places',
-  'get_crypto_price',
-  'get_forex_pair',
+  'crypto_price',
+  'exchange_rate',
   'show_map',
-  'video_search'
+  'video_search',
+  'get_ticker_tape',
+  'get_market_sentiment',
+  'get_yield_curve',
+  'build_portfolio',
+  'convert_currency'
 ] as const;
 
 // --- Guided learning path artifact (structured multi-module course in chat) ---
@@ -909,6 +914,327 @@ export interface ItineraryArtifact {
   /** Live destination weather snapshot, attached server-side at plan time. */
   weather?: { description?: string; tempC?: number; tempF?: number; daily?: { date: string; minC?: number; maxC?: number; description?: string; precipProb?: number }[] };
   palette?: string;
+  density?: 'compact' | 'detailed';
+}
+
+// --- Live ticker tape (multi-asset market strip) ---
+// Emitted by the `get_ticker_tape` tool. The server batch-quotes the symbols
+// (Yahoo/Stooq, keyless) so every figure is live; refresh re-runs the same call.
+export interface TickerTapeItem {
+  symbol: string;
+  name?: string;
+  price: number;
+  change: number;
+  changePercent: number;
+  currency?: string;
+  /** ~30 recent closes for the mini sparkline. */
+  spark?: number[];
+}
+export interface TickerTapeArtifact {
+  title?: string;
+  items: TickerTapeItem[];
+  /** ISO timestamp of the quote snapshot. */
+  asOf?: string;
+  density?: 'compact' | 'detailed';
+}
+
+// --- Market sentiment (fear & greed gauges) ---
+// Emitted by `get_market_sentiment`. Stocks score comes from CNN's Fear & Greed
+// index, crypto from alternative.me — both live, keyless, best-effort per market.
+export interface SentimentComponent {
+  label: string;
+  score?: number;
+  rating?: string;
+}
+export interface SentimentGauge {
+  market: 'stocks' | 'crypto';
+  /** 0–100, fear → greed. */
+  score: number;
+  /** Human band, e.g. "Greed", "Extreme Fear". */
+  rating: string;
+  /** Prior readings for context (e.g. "1 week ago" → 61). */
+  previous?: { label: string; score: number }[];
+  /** Recent daily scores, oldest → newest, for the history sparkline. */
+  history?: number[];
+  /** Sub-indicators (stocks: momentum, breadth, put/call, …). */
+  components?: SentimentComponent[];
+}
+export interface MarketSentimentArtifact {
+  title?: string;
+  asOf?: string;
+  gauges: SentimentGauge[];
+  sources?: { name: string; url: string }[];
+  density?: 'compact' | 'detailed';
+}
+
+// --- US Treasury yield curve ---
+// Emitted by `get_yield_curve` from the daily par-yield XML feed (keyless). Carries
+// comparison snapshots so the card can morph between today / 1M ago / 1Y ago.
+export interface YieldCurvePoint {
+  /** Maturity label, e.g. "3M", "2Y", "10Y". */
+  label: string;
+  /** Maturity in years (0.25 = 3 months) for the x-axis. */
+  years: number;
+  yieldPct: number;
+}
+export interface YieldCurveSnapshot {
+  date: string;
+  points: YieldCurvePoint[];
+}
+export interface YieldCurveArtifact {
+  title?: string;
+  latest: YieldCurveSnapshot;
+  monthAgo?: YieldCurveSnapshot;
+  yearAgo?: YieldCurveSnapshot;
+  /** 10Y − 2Y spread in percentage points; negative = inverted. */
+  spread10y2y?: number;
+  inverted?: boolean;
+  density?: 'compact' | 'detailed';
+}
+
+// --- Portfolio (live-priced holdings) ---
+// Emitted by `build_portfolio`: the model (or user) supplies holdings, the server
+// prices every position live and computes P&L/weights — no model arithmetic.
+export interface PortfolioPosition {
+  symbol: string;
+  name?: string;
+  shares?: number;
+  /** Per-share cost basis, when provided. */
+  costBasis?: number;
+  price: number;
+  change: number;
+  changePercent: number;
+  currency?: string;
+  /** shares × price. */
+  value?: number;
+  dayPnl?: number;
+  totalPnl?: number;
+  totalPnlPercent?: number;
+  /** Share of total portfolio value (%). */
+  weightPct?: number;
+  spark?: number[];
+}
+export interface PortfolioArtifact {
+  title?: string;
+  currency?: string;
+  positions: PortfolioPosition[];
+  totals?: {
+    value?: number;
+    dayPnl?: number;
+    dayPnlPercent?: number;
+    totalPnl?: number;
+    totalPnlPercent?: number;
+  };
+  asOf?: string;
+  density?: 'compact' | 'detailed';
+}
+
+// --- "What changed" diff card ---
+// Emitted by `render_whats_changed` — the agent diffs the world since the user
+// last looked (prices, news, calendar) and renders a prioritized changelog.
+export interface ChangeItem {
+  kind?: 'price' | 'news' | 'event' | 'metric' | 'other';
+  title: string;
+  detail?: string;
+  delta?: number;
+  deltaPercent?: number;
+  /** Importance 1–3 (3 = headline change). */
+  weight?: number;
+  url?: string;
+}
+export interface WhatsChangedArtifact {
+  title?: string;
+  /** The window covered, e.g. "since yesterday", "this week". */
+  since?: string;
+  summary?: string;
+  changes: ChangeItem[];
+  density?: 'compact' | 'detailed';
+}
+
+// --- Boarding pass (wallet-style flight card) ---
+// Emitted by `render_boarding_pass`. Front = the pass; tap flips (3D) to fare/
+// baggage/tips. The QR encodes the confirmation code.
+export type BoardingPassStatus = 'on-time' | 'delayed' | 'boarding' | 'departed' | 'cancelled';
+export interface BoardingPassEndpoint {
+  /** IATA code, e.g. "IAD". */
+  code: string;
+  city?: string;
+  /** Local time, e.g. "10:45". */
+  time?: string;
+  date?: string;
+  terminal?: string;
+}
+export interface BoardingPassArtifact {
+  airline: string;
+  flightNumber: string;
+  from: BoardingPassEndpoint;
+  to: BoardingPassEndpoint;
+  gate?: string;
+  seat?: string;
+  boardingGroup?: string;
+  boardingTime?: string;
+  passenger?: string;
+  status?: BoardingPassStatus;
+  statusNote?: string;
+  /** Confirmation / record locator (encoded into the QR). */
+  confirmation?: string;
+  fareClass?: string;
+  baggage?: string;
+  durationMin?: number;
+  aircraft?: string;
+  /** Agent tips, e.g. "Gate B32 is a 12-min walk". */
+  notes?: string[];
+  /** Airline brand color hex for the card accent. */
+  accent?: string;
+  density?: 'compact' | 'detailed';
+}
+
+// --- Currency converter (live ECB rates + 30-day context) ---
+// Emitted by `convert_currency` (Frankfurter, keyless). The card recomputes
+// amounts client-side; refresh re-fetches the live rate.
+export interface CurrencyConverterArtifact {
+  from: string;
+  to: string;
+  rate: number;
+  amount?: number;
+  converted?: number;
+  /** Rate date as reported by the ECB. */
+  date?: string;
+  /** ~30 daily rates, oldest → newest. */
+  series?: { date: string; rate: number }[];
+  avg30d?: number;
+  /** Current rate vs the 30-day average, in percent (positive = above average). */
+  vsAvgPct?: number;
+  density?: 'compact' | 'detailed';
+}
+
+// --- World clocks (live time-zone twins) ---
+// Emitted by `render_world_clocks`. Pure client-side live: the card ticks in
+// real time via Intl, shades sleep hours, and flags a good window to call.
+export interface WorldClockZone {
+  label: string;
+  /** IANA zone, e.g. "Asia/Kolkata". */
+  tz: string;
+  /** Waking window for the "good time to call" hint (defaults 8–22). */
+  wakeStart?: number;
+  wakeEnd?: number;
+}
+export interface WorldClocksArtifact {
+  title?: string;
+  zones: WorldClockZone[];
+  density?: 'compact' | 'detailed';
+}
+
+// --- Packing list (interactive checklist, progress persisted locally) ---
+// Emitted by `render_packing_list`. Check-off state is tracked client-side
+// (localStorage, keyed by `id`) — no server round-trip.
+export interface PackingGroup {
+  name?: string;
+  items: string[];
+}
+export interface PackingListArtifact {
+  /** Stable id for the locally-persisted check-off state. */
+  id: string;
+  title: string;
+  destination?: string;
+  /** Context line, e.g. "5 days · highs 31°C · rain likely". */
+  context?: string;
+  groups: PackingGroup[];
+  tips?: string[];
+  density?: 'compact' | 'detailed';
+}
+
+// --- Trip countdown hero ---
+// Emitted by `render_trip_countdown`. The server attaches a live destination
+// weather snapshot; the countdown itself ticks client-side.
+export interface TripCountdownArtifact {
+  destination: string;
+  /** ISO date(-time) the trip starts. */
+  startDate: string;
+  endDate?: string;
+  title?: string;
+  /** Live destination weather snapshot, attached server-side. */
+  weather?: {
+    description?: string;
+    tempC?: number;
+    daily?: { date: string; minC?: number; maxC?: number; description?: string; precipProb?: number }[];
+  };
+  /** Prep checklist (display only). */
+  checklist?: { text: string; done?: boolean }[];
+  accent?: string;
+  density?: 'compact' | 'detailed';
+}
+
+// --- Goal tracker (interactive, persisted locally) ---
+// Emitted by `create_goal_tracker` (the /goal skill). Milestone completion is
+// tracked client-side (localStorage, keyed by `id`).
+export interface GoalMilestone {
+  id: string;
+  title: string;
+  /** Target date (ISO) when relevant. */
+  due?: string;
+  notes?: string;
+}
+export interface GoalTrackerArtifact {
+  /** Stable id for the locally-persisted completion state. */
+  id: string;
+  title: string;
+  why?: string;
+  /** Target date for the whole goal. */
+  targetDate?: string;
+  /** Cadence line, e.g. "3 sessions / week". */
+  cadence?: string;
+  metric?: { label: string; start?: number; target?: number; unit?: string };
+  milestones: GoalMilestone[];
+  nextActions?: string[];
+  density?: 'compact' | 'detailed';
+}
+
+// --- Code review card ---
+// Emitted by `render_code_review` (the /code-review skill). For GitHub PRs the
+// recipe first pulls the real diff via `fetch_github_pr`, so findings cite real
+// files/lines.
+export type ReviewSeverity = 'critical' | 'major' | 'minor' | 'nit';
+export type ReviewCategory = 'correctness' | 'security' | 'performance' | 'readability' | 'style' | 'testing' | 'other';
+export interface ReviewFinding {
+  severity: ReviewSeverity;
+  title: string;
+  detail?: string;
+  file?: string;
+  line?: number;
+  /** Suggested fix, shown as a code block. */
+  suggestion?: string;
+  category?: ReviewCategory;
+}
+export interface CodeReviewArtifact {
+  title?: string;
+  /** What was reviewed, e.g. a PR URL or "pasted diff". */
+  target?: string;
+  verdict: 'approve' | 'approve-with-nits' | 'request-changes';
+  summary?: string;
+  /** 0–10 dimension scores (correctness, readability, …). */
+  scores?: { label: string; score: number }[];
+  findings: ReviewFinding[];
+  stats?: { files?: number; additions?: number; deletions?: number };
+  /** Things done well — reviews should not only criticize. */
+  positives?: string[];
+  density?: 'compact' | 'detailed';
+}
+
+// --- Live monitor (auto-refreshing widget loop) ---
+// Emitted by `create_monitor` (the /loop skill). Wraps one refresh-whitelisted
+// tool call; the client re-runs it on the interval while the widget is visible,
+// so the embedded artifact stays live without any model round-trip.
+export interface LiveMonitorArtifact {
+  label?: string;
+  /** The REFRESHABLE_TOOLS member this monitor re-runs. */
+  tool: string;
+  args: Record<string, unknown>;
+  /** Refresh cadence in seconds (clamped 30–3600 by the tool). */
+  intervalSec: number;
+  /** The initial snapshot (replaced on every tick). */
+  artifact?: ChatArtifact;
+  asOf?: string;
   density?: 'compact' | 'detailed';
 }
 
