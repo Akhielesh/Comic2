@@ -140,11 +140,50 @@
 .vm-input-row .input { padding: 9px 13px; border-radius: 99px; }
 .vm-send { width: 38px; height: 38px; flex: none; border: none; border-radius: 50%; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; cursor: pointer; }
 
-/* mobile immersive / fullscreen — hide chrome, video fills the screen */
+/* mobile immersive / fullscreen — true viewport takeover (works even where
+   the Fullscreen API is unavailable, e.g. iPhone Safari) */
+.viewer-mobile.immersive { position: fixed; inset: 0; z-index: 60; background: #000; height: 100dvh; }
 .viewer-mobile.immersive .vm-head, .viewer-mobile.immersive .vm-chat, .viewer-mobile.immersive .vm-composer { display: none; }
 .viewer-mobile.immersive .vm-video { flex: 1; aspect-ratio: auto; }
-.vm-immersive-reacts { position: absolute; right: 10px; bottom: 64px; display: flex; flex-direction: column; gap: 8px; z-index: 5; }
-.vm-immersive-reacts .vm-react { width: 40px; height: 40px; border-radius: 50%; background: rgba(255,255,255,.15); backdrop-filter: blur(6px); display: grid; place-items: center; }
+.vm-immersive-reacts { position: absolute; right: 10px; bottom: 64px; z-index: 5; }
+.vm-immersive-reacts .vc-react { width: 40px; height: 40px; }
+
+/* element-fullscreen (real Fullscreen API on the stage) */
+.preview:fullscreen { border-radius: 0; }
+.preview:fullscreen video { object-fit: contain; }
+
+/* ---- reactions: quick bar + full-library picker ---- */
+.react-bar { display: flex; gap: 4px; align-items: center; position: relative; flex-wrap: nowrap; }
+.react-bar.vertical { flex-direction: column; }
+.react-bar .vc-react { font-size: 16px; width: 34px; height: 34px; flex: none; }
+.vc-react.more { color: #fff; display: grid; place-items: center; }
+.vc-react.more.active { background: var(--accent); }
+.reactions-row .vc-react { background: none; backdrop-filter: none; }
+.reactions-row .vc-react:hover { background: var(--hover); }
+.reactions-row .vc-react.more { color: var(--muted); }
+.vm-reactions .react-bar { width: 100%; justify-content: space-between; }
+.emoji-pop {
+  position: absolute; bottom: calc(100% + 8px); right: 0; z-index: 30;
+  display: grid; grid-template-columns: repeat(8, 32px); gap: 2px; padding: 8px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg); max-height: 200px; overflow-y: auto; animation: fadeUp .15s ease;
+}
+.react-bar.vertical .emoji-pop { bottom: 0; right: calc(100% + 8px); }
+.emoji-pop-btn { border: none; background: none; font-size: 17px; width: 32px; height: 32px; border-radius: 7px; cursor: pointer; display: grid; place-items: center; transition: background .1s, transform .1s; }
+.emoji-pop-btn:hover { background: var(--hover); transform: scale(1.15); }
+
+/* ---- chat stays usable in fullscreen ---- */
+.fs-chatpeek { position: absolute; left: 14px; bottom: 76px; right: 30%; display: flex; flex-direction: column; gap: 5px; z-index: 5; pointer-events: none; }
+.fs-peek-msg { font-size: 13px; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.7); line-height: 1.35; overflow-wrap: anywhere; }
+.fs-peek-name { font-weight: 700; margin-right: 5px; }
+.fs-chatbtn { position: absolute; left: 14px; bottom: 18px; z-index: 7; width: 42px; height: 42px; border-radius: 50%; border: none; background: rgba(255,255,255,.16); color: #fff; cursor: pointer; display: grid; place-items: center; backdrop-filter: blur(8px); }
+.fs-chatbtn:hover { background: rgba(255,255,255,.28); }
+.preview .ms-chatsheet { color: var(--text); }
+
+/* ---- loading skeletons — calm shimmer instead of spinners ---- */
+.skeleton { position: relative; overflow: hidden; background: var(--panel-2); border-radius: var(--r-sm); }
+.skeleton::after { content: ''; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--panel) 70%, transparent), transparent); animation: shimmer 1.4s infinite; }
+@keyframes shimmer { 100% { transform: translateX(100%); } }
 
 /* ===== viewer join gate ===== */
 .viewer-join { flex: 1; display: grid; place-items: center; padding: 30px 16px; }

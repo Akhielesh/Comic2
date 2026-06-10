@@ -202,7 +202,46 @@ embeds/API → billing.
 
 ---
 
-## 9. v2 implementation (shipped — full DreamStream Live redesign)
+## 9.1 v3 additions (shipped — performance, retention, moderation, accounts)
+
+Product name is now **Stream Studio** everywhere user-facing (the worker keeps
+its deployed `dreamstream-live` name/route — infra, not branding).
+
+- **Performance:** 6 s segments (half the encoder rotations → smoother audio,
+  fewer seams; deliberate ~10 s glass-to-glass buffer), frame-skip compositor
+  (draws only when a source frame advances; opaque desynchronized 2D context).
+- **Mobile camera fixed:** the program canvas follows the camera's real
+  orientation/aspect (portrait phones stream portrait — no more "zoomed in"
+  center-crop), aspect-mismatched sources letterbox instead of cropping
+  (>25% crop guard), camera flip uses `facingMode: { exact }` with fallback,
+  and a lens cycler steps through every physical camera (0.5×/1×/tele).
+- **Fullscreen that works:** real Fullscreen API on the stage (landscape lock
+  for landscape streams) with a CSS viewport-takeover fallback for iPhone
+  Safari; chat stays usable in fullscreen (message peek + slide-up chat sheet).
+- **Recordings:** still always saved to the device, now ALSO uploaded (16 MB
+  R2 multipart parts, retried) to a host-only server store — list/download in
+  the recap — **kept 7 days then auto-purged** by the room's alarm janitor.
+- **24 h replay window:** viewers can rewatch from the same link for 24 hours
+  after the end; segments purge automatically afterwards. Abandoned rooms
+  auto-end after 2 h without segments.
+- **Hard viewer cap:** host sets 25–200 per event (platform ceiling 200,
+  enforced at the socket — over-cap joins get a clear "stream is full").
+- **Moderation:** profanity wordlist (with leet normalization) + repeat-spam
+  detection auto-hide messages, strike → 5-minute timeout, everything logged
+  to the durable activity log; slow mode unchanged.
+- **Emoji library:** 48-reaction library behind a "+" picker everywhere
+  (quick bar stays 6); the room allowlist mirrors it (tested in sync).
+- **Telemetry:** the studio reports uplink/encoded-bitrate/failures every 30 s
+  → durable `healthCurve` → "Network health" chart in the recap.
+- **Accounts & cross-device sync:** `server/sql/stream_studio.sql` adds
+  `stream_studio_events` (RLS owner-locked: id + hostKey travel with the
+  account, so past sessions appear on every device) and `stream_studio_access`
+  (admin/service-role managed: revoke streaming with `active=false`, or
+  onboard streaming-only users with `scope='studio_only'` — the main app can
+  read this to confine such accounts to /live.html). Signed-out users keep
+  the localStorage-only flow.
+
+## 9. v2 implementation (shipped — full redesign)
 
 The whole surface was rebuilt around the warm, paper-clean "calm studio" design
 system (cream canvas, clay accent, hairline borders; light + warm-espresso dark,

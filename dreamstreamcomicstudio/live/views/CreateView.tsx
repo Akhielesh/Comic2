@@ -4,6 +4,7 @@ import React, { useMemo, useState } from 'react';
 import { createEvent } from '../api';
 import { LIMITS, QUALITY_PRESETS, SEGMENT_MS, presetById } from '../config';
 import { addMyEvent } from '../events';
+import { pushEventToCloud } from '../sync';
 import type { Nav } from '../nav';
 import { studioUrl, viewerUrl } from '../nav';
 import { loadPrefs, savePrefs } from '../prefs';
@@ -23,6 +24,7 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
   const [cover, setCover] = useState(0);
   const [quality, setQuality] = useState(prefs.qualityId);
   const [access, setAccess] = useState<'open' | 'approval'>('open');
+  const [cap, setCap] = useState(100);
   const [rec, setRec] = useState(prefs.autoRecord);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -47,18 +49,21 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
         quality,
         segMs: SEGMENT_MS,
         scheduledAt: scheduledMs && scheduledMs > Date.now() ? scheduledMs : null,
+        maxViewers: cap,
       });
-      addMyEvent({
+      const mine = {
         id: res.id,
         hostKey: res.hostKey,
         title: cleanTitle,
         createdAt: Date.now(),
         scheduledAt: scheduledMs,
-        status: 'idle',
+        status: 'idle' as const,
         quality,
         access,
         cover,
-      });
+      };
+      addMyEvent(mine);
+      void pushEventToCloud(mine); // cross-device history when signed in
       // Remember host name + defaults for next time.
       savePrefs({ ...prefs, hostName: cleanHost, qualityId: quality, autoRecord: rec });
       setCreated(res);
@@ -95,7 +100,7 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
             <Btn variant="solid" icon="broadcast" onClick={() => nav.studio(created.id, created.hostKey)}>Open Studio</Btn>
             {scheduled && <Btn variant="ghost" icon="calendar" onClick={() => nav.event(created.id)}>Preview invite page</Btn>}
             {scheduledMs && scheduledMs > Date.now() && (
-              <Btn variant="ghost" icon="download" onClick={() => downloadIcs({ title: title.trim() || 'DreamStream Live', startMs: scheduledMs, url: share })}>
+              <Btn variant="ghost" icon="download" onClick={() => downloadIcs({ title: title.trim() || 'Stream Studio', startMs: scheduledMs, url: share })}>
                 Add to calendar
               </Btn>
             )}
@@ -185,6 +190,19 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
             />
             <div className="muted" style={{ fontSize: 12, marginTop: 7 }}>
               Viewers never sign up — they just enter a name to join{access === 'approval' ? ', then you let them in.' : '.'}
+            </div>
+          </Field>
+
+          <Field label="Viewer cap" hint="a hard limit — the room never exceeds it">
+            <Segmented
+              full
+              label="Viewer cap"
+              options={['25', '50', '100', '150', '200'].map((v) => ({ value: v, label: v }))}
+              value={String(cap)}
+              onChange={(v) => setCap(Number(v))}
+            />
+            <div className="muted" style={{ fontSize: 12, marginTop: 7 }}>
+              Joins beyond the cap are refused with a clear "stream is full" message. Platform ceiling: 200.
             </div>
           </Field>
 

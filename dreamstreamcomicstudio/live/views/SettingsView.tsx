@@ -197,6 +197,9 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
               <Row title="Record at higher bitrate" desc="Master copy at ~2.5× the stream — always sharper than viewers saw.">
                 <Toggle on={prefs.recordHighBitrate} onChange={(v) => set('recordHighBitrate', v)} label="Record at higher bitrate" />
               </Row>
+              <Row title="Keep a cloud copy for 7 days" desc="Recordings always download to your device; this also uploads them to the server so you can grab them later from any device. Auto-deleted after 7 days.">
+                <Toggle on={prefs.cloudRecordings} onChange={(v) => set('cloudRecordings', v)} label="Cloud recordings" />
+              </Row>
               <Row title="Auto-record on go-live" desc="Start the local master recording the moment you go live.">
                 <Toggle on={prefs.autoRecord} onChange={(v) => set('autoRecord', v)} label="Auto-record" />
               </Row>

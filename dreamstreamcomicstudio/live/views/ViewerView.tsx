@@ -9,17 +9,17 @@ import { Ema, fmtBps, fmtDuration } from '../metrics';
 import type { Nav } from '../nav';
 import { createLivePlayer, playbackSupport, type LivePlayer } from '../player';
 import type { ChatMsg, EventMeta, StreamStatus } from '../protocol';
-import { EMOJI_SET } from '../protocol';
+import { REPLAY_WINDOW_MS } from '../protocol';
 import { formatCountdown } from '../schedule';
 import { coverGradient } from '../theme';
 import { BrbSlate } from '../components/scenes';
-import { ChatRail } from '../components/rails';
+import { ChatRail, ReactBar } from '../components/rails';
 import { Icon } from '../ui/icons';
 import {
   Avatar, Btn, FloatLayer, Pill, cx, useFloatingEmoji, useMediaQuery, type PushToast,
 } from '../ui/primitives';
 
-type Phase = 'join' | 'waiting' | 'watching' | 'denied' | 'kicked' | 'error';
+type Phase = 'join' | 'waiting' | 'watching' | 'denied' | 'kicked' | 'full' | 'error';
 
 export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; push: PushToast }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -45,6 +45,8 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
   const [reactionsOn, setReactionsOn] = useState(true);
   const [muted, setMuted] = useState(true);
   const [immersive, setImmersive] = useState(false);
+  const [chatSheet, setChatSheet] = useState(false);
+  const stageRef = useRef<HTMLDivElement | null>(null);
   const [metricsOn, setMetricsOn] = useState(false);
   const [downBps, setDownBps] = useState<number | null>(null);
   const [replayOffered, setReplayOffered] = useState(false);
@@ -175,6 +177,12 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
             setSlowSec(msg.slow);
             setReactionsOn(msg.reactions);
             break;
+          case 'notice':
+            push(msg.text, { icon: 'info' });
+            break;
+          case 'full':
+            setPhase('full');
+            break;
           case 'emoji':
             spawnFloat(msg.e);
             break;
@@ -210,6 +218,7 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
       (reason) => {
         if (reason === 'denied') setPhase('denied');
         else if (reason === 'kicked') setPhase('kicked');
+        else if (reason === 'full') setPhase('full');
         else {
           setErr('Lost connection to the stream.');
           setPhase('error');
@@ -238,6 +247,37 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, immersive]);
+
+  /** Fullscreen/declutter: real Fullscreen API where the browser allows it
+   *  (with landscape lock for landscape streams), CSS takeover everywhere
+   *  else (iPhone Safari can't fullscreen a div). */
+  const setImmersiveMode = (on: boolean) => {
+    setImmersive(on);
+    if (!on) setChatSheet(false);
+    if (on) {
+      const el = stageRef.current;
+      el?.requestFullscreen?.()
+        .then(() => {
+          const v = videoRef.current;
+          const o = screen.orientation as ScreenOrientation & { lock?: (m: string) => Promise<void> };
+          if (v && v.videoWidth > v.videoHeight) o.lock?.('landscape').catch(() => undefined);
+        })
+        .catch(() => undefined);
+    } else if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => undefined);
+    }
+  };
+
+  useEffect(() => {
+    const onFs = () => {
+      if (!document.fullscreenElement) {
+        setImmersive(false);
+        setChatSheet(false);
+      }
+    };
+    document.addEventListener('fullscreenchange', onFs);
+    return () => document.removeEventListener('fullscreenchange', onFs);
+  }, []);
 
   // keep latest status visible to the fetcher interval without re-creating it
   const statusRef = useRef<StreamStatus>('idle');
@@ -373,17 +413,25 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
     );
   }
 
-  if (phase === 'denied' || phase === 'kicked' || phase === 'error') {
+  if (phase === 'denied' || phase === 'kicked' || phase === 'full' || phase === 'error') {
     return (
       <div className="viewer-root">
         <div className="center-screen">
           <div className="center-card fade-in">
-            <h2>{phase === 'error' ? 'Something went wrong' : phase === 'denied' ? 'Not admitted' : 'Removed'}</h2>
+            <h2>
+              {phase === 'error' ? 'Something went wrong' : phase === 'denied' ? 'Not admitted' : phase === 'full' ? 'Stream is full' : 'Removed'}
+            </h2>
             <p>
               {phase === 'denied' && 'The host did not admit you to this stream.'}
               {phase === 'kicked' && 'You were removed from this stream.'}
+              {phase === 'full' && `This stream is at its viewer cap${meta ? ` (${meta.maxViewers})` : ''}. Try again in a bit — a spot opens when someone leaves.`}
               {phase === 'error' && (err || 'Something went wrong.')}
             </p>
+            {phase === 'full' && (
+              <div style={{ marginTop: 16 }}>
+                <Btn variant="solid" icon="refresh" onClick={() => location.reload()}>Try again</Btn>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -392,8 +440,11 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
 
   /* ------------------------------------------------------------ watching */
 
+  const replayUntil = meta?.endedAt ? meta.endedAt + REPLAY_WINDOW_MS : null;
+  const replayOpen = replayUntil != null && Date.now() < replayUntil;
+
   const stage = (
-    <div className="preview">
+    <div className="preview" ref={stageRef}>
       <video ref={videoRef} autoPlay muted={muted} playsInline />
       {status === 'paused' && <BrbSlate sub="Starting again in a moment — stay tuned" />}
       {status === 'idle' && (
@@ -414,7 +465,7 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
       {status === 'ended' && (
         <div className="viewer-slate">
           <div className="vs-title serif">This stream has ended</div>
-          {replayOffered && meta && (
+          {replayOffered && replayOpen && meta && (
             <Btn
               variant="solid"
               icon="play"
@@ -426,7 +477,13 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
               Watch replay
             </Btn>
           )}
-          {!replayOffered && <div className="vs-sub">Thanks for watching.</div>}
+          {replayOpen ? (
+            <div className="vs-sub">
+              Replay available for another {formatCountdown(replayUntil! - Date.now()).replace(/^in /, '')}
+            </div>
+          ) : (
+            <div className="vs-sub">The 24-hour replay window has closed. Thanks for watching.</div>
+          )}
         </div>
       )}
       <div className="overlay-tl">
@@ -453,18 +510,62 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
           <Icon name={muted ? 'volumeOff' : 'volume'} size={18} />
         </button>
         {muted && !immersive && <span className="vc-hint">Tap to unmute</span>}
-        {immersive && reactionsOn && (
-          <div className="vc-reacts">
-            {EMOJI_SET.map((e) => (
-              <button key={e} className="vc-react" onClick={() => sendEmoji(e)} aria-label={`React ${e}`}>{e}</button>
-            ))}
-          </div>
-        )}
+        {immersive && reactionsOn && !isMobile && <ReactBar onReact={sendEmoji} />}
         <span className="spacer" />
-        <button className="pv-ctl" onClick={() => setImmersive((v) => !v)} aria-label={immersive ? 'Exit fullscreen' : 'Fullscreen'}>
+        <button className="pv-ctl" onClick={() => setImmersiveMode(!immersive)} aria-label={immersive ? 'Exit fullscreen' : 'Fullscreen'}>
           <Icon name={immersive ? 'x' : 'maximize'} size={17} />
         </button>
       </div>
+      {/* chat stays usable in fullscreen — last messages float over the video */}
+      {immersive && (
+        <div className="fs-chatpeek" aria-hidden>
+          {chat.slice(-3).map((m) => (
+            <div className="fs-peek-msg" key={m.id}>
+              <span className="fs-peek-name" style={{ color: m.role === 'host' ? 'var(--accent-2)' : '#d9d4cb' }}>{m.name}</span>
+              <span>{m.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {immersive && (
+        <button className="fs-chatbtn" onClick={() => setChatSheet(true)} aria-label="Open chat">
+          <Icon name="chat" size={18} />
+        </button>
+      )}
+      {immersive && chatSheet && (
+        <div className="ms-chatsheet">
+          <button className="ms-sheet-grip" onClick={() => setChatSheet(false)} aria-label="Close chat"><span /></button>
+          <div className="ms-sheet-head">
+            <b>Live chat</b>
+            <span className="faint" style={{ fontSize: 11 }}>{viewers} here</span>
+            <span className="spacer" />
+            <button className="ms-x" onClick={() => setChatSheet(false)} aria-label="Close chat"><Icon name="x" size={15} /></button>
+          </div>
+          <div className="ms-sheet-list">
+            {chat.map((m) => (
+              <div className="vm-msg" key={m.id}>
+                <span className="vm-msg-name" style={{ color: m.role === 'host' ? 'var(--accent)' : 'var(--muted)' }}>{m.name}</span>
+                <span>{m.text}</span>
+              </div>
+            ))}
+          </div>
+          <div className="vm-input-row" style={{ padding: '10px 12px 14px' }}>
+            <input
+              className="input"
+              placeholder="Say something…"
+              aria-label="Chat message"
+              onKeyDown={(e) => {
+                const t = e.target as HTMLInputElement;
+                if (e.key === 'Enter' && t.value.trim()) {
+                  sendChat(t.value.trim());
+                  t.value = '';
+                }
+              }}
+            />
+            <button className="vm-send" aria-label="Send"><Icon name="send" size={16} /></button>
+          </div>
+        </div>
+      )}
     </div>
   );
 
@@ -476,9 +577,7 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
             {stage}
             {immersive && reactionsOn && (
               <div className="vm-immersive-reacts">
-                {EMOJI_SET.map((e) => (
-                  <button key={e} className="vm-react" onClick={() => sendEmoji(e)} aria-label={`React ${e}`}>{e}</button>
-                ))}
+                <ReactBar onReact={sendEmoji} vertical />
               </div>
             )}
           </div>
@@ -506,9 +605,7 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
           <div className="vm-composer">
             {reactionsOn && (
               <div className="vm-reactions">
-                {EMOJI_SET.map((e) => (
-                  <button key={e} className="vm-react" onClick={() => sendEmoji(e)} aria-label={`React ${e}`}>{e}</button>
-                ))}
+                <ReactBar onReact={sendEmoji} />
               </div>
             )}
             <div className="vm-input-row">
@@ -536,7 +633,7 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
   return (
     <div className="viewer-root">
       <div className="viewer-topbar">
-        <span className="rail-logo" style={{ cursor: 'default' }}><span className="orb" /> DreamStream <span className="sub">Live</span></span>
+        <span className="rail-logo" style={{ cursor: 'default' }}><span className="orb" /> Stream <span className="sub">Studio</span></span>
         <span className="spacer" />
         {status === 'live' && <Pill tone="live" dot pulse>LIVE</Pill>}
       </div>
@@ -550,7 +647,7 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
                 <h1 className="vd-title serif">{meta?.title}</h1>
                 <div className="vd-by">{meta?.host}</div>
               </div>
-              <Btn variant="ghost" icon="maximize" onClick={() => setImmersive(true)}>Theater</Btn>
+              <Btn variant="ghost" icon="maximize" onClick={() => setImmersiveMode(true)}>Theater</Btn>
             </div>
             <div className="vd-chips">
               <Pill tone="neutral" icon="eye">{viewers} watching</Pill>

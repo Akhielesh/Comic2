@@ -102,7 +102,7 @@ export function EventPage({ eventId, nav, push }: { eventId: string; nav: Nav; p
   return (
     <div className="event-page-root">
       <div className="event-topbar">
-        <span className="rail-logo" style={{ cursor: 'default' }}><span className="orb" /> DreamStream <span className="sub">Live</span></span>
+        <span className="rail-logo" style={{ cursor: 'default' }}><span className="orb" /> Stream <span className="sub">Studio</span></span>
         <span className="spacer" />
         {meta.status === 'ended' && <Pill tone="neutral">Ended</Pill>}
       </div>

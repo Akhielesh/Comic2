@@ -1,9 +1,10 @@
 // Post-stream recap — headline stats, watch curve, the full durable event
 // log and top chatters, all served by the worker's host-gated /stats.
 import React, { useEffect, useMemo, useState } from 'react';
-import { getStats } from '../api';
+import { getStats, recordingDownloadUrl } from '../api';
 import { listMyRecordings } from '../events';
-import { fmtBytes, fmtDuration } from '../metrics';
+import { fmtBps, fmtBytes, fmtDuration } from '../metrics';
+import { RECORDING_RETENTION_MS } from '../protocol';
 import type { Nav } from '../nav';
 import { viewerUrl } from '../nav';
 import type { StatsResponse } from '../protocol';
@@ -57,8 +58,10 @@ export function SummaryView({ eventId, hostKey, nav, push }: { eventId: string; 
     );
   }
 
-  const { meta, stats, log, topChatters } = data;
+  const { meta, stats, log, topChatters, recordings: serverRecs } = data;
   const rows = filterLog(log, logFilter);
+  const healthUp = (stats.healthCurve ?? []).map((p) => p.up / 1e6);
+  const healthFails = (stats.healthCurve ?? []).reduce((mx, p) => Math.max(mx, p.fail), 0);
   const durSec = meta.startedAt && meta.endedAt ? (meta.endedAt - meta.startedAt) / 1000 : 0;
   const viewerData = stats.curve.map((p) => p.n);
   const chatData = stats.chatCurve.map((p) => p.n);
@@ -71,7 +74,7 @@ export function SummaryView({ eventId, hostKey, nav, push }: { eventId: string; 
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `dreamstream-${meta.id}-recap.json`;
+    a.download = `streamstudio-${meta.id}-recap.json`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -145,6 +148,33 @@ export function SummaryView({ eventId, hostKey, nav, push }: { eventId: string; 
             </div>
           </div>
 
+          {/* network health */}
+          <div className="card">
+            <div className="card-head">
+              <h3>Network health</h3>
+              <span className="spacer" />
+              <span className="legend"><span className="lg-dot" style={{ background: 'var(--green)' }} />Uplink (Mbps)</span>
+            </div>
+            <div className="card-pad">
+              {healthUp.length > 1 ? (
+                <>
+                  <AreaChart data={healthUp} h={120} color="var(--green)" id="health-up" />
+                  <div className="row" style={{ gap: 14, marginTop: 10, fontSize: 12.5, color: 'var(--muted)' }}>
+                    <span>avg {fmtBps((stats.healthCurve.reduce((s, p) => s + p.up, 0) / stats.healthCurve.length) || null)}</span>
+                    <span className="dotsep">·</span>
+                    <span style={{ color: healthFails > 0 ? 'var(--amber)' : 'var(--green)' }}>
+                      {healthFails > 0 ? `${healthFails} upload failure${healthFails > 1 ? 's' : ''}` : 'no upload failures'}
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <div className="muted" style={{ fontSize: 13 }}>
+                  Telemetry samples every 30 seconds while you're live — stream for a minute and this fills in.
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* full event log */}
           <div className="card">
             <div className="card-head"><h3>Event log</h3><span className="spacer" /><span className="faint" style={{ fontSize: 12 }}>{log.length} entries</span></div>
@@ -157,9 +187,46 @@ export function SummaryView({ eventId, hostKey, nav, push }: { eventId: string; 
         </div>
 
         <div className="col-side">
-          {/* recordings */}
+          {/* cloud recordings — kept 7 days, downloadable from any device */}
           <div className="card">
-            <div className="card-head"><h3>Recordings</h3></div>
+            <div className="card-head">
+              <h3>Cloud recordings</h3>
+              <span className="spacer" />
+              <span className="faint" style={{ fontSize: 11.5 }}>kept 7 days</span>
+            </div>
+            <div className="rec-list">
+              {serverRecs.length === 0 && (
+                <div className="card-pad muted" style={{ fontSize: 12.5 }}>
+                  No cloud copy for this event. Turn on “Keep a cloud copy” in Customize → Quality &amp; encoding.
+                </div>
+              )}
+              {serverRecs.map((r) => {
+                const expires = r.at + RECORDING_RETENTION_MS;
+                const daysLeft = Math.max(0, Math.ceil((expires - Date.now()) / 86_400_000));
+                return (
+                  <div className="rec-item" key={r.key}>
+                    <div className="rec-icon"><Icon name="download" size={15} /></div>
+                    <div className="rec-meta">
+                      <div className="rec-title">{r.file}</div>
+                      <div className="rec-sub mono">{fmtBytes(r.bytes)} · {daysLeft > 0 ? `${daysLeft}d left` : 'expiring'}</div>
+                    </div>
+                    <a
+                      className="iconbtn"
+                      href={recordingDownloadUrl(eventId, hostKey, r.key)}
+                      download={r.file}
+                      aria-label={`Download ${r.file}`}
+                    >
+                      <Icon name="download" size={16} />
+                    </a>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* device recordings */}
+          <div className="card">
+            <div className="card-head"><h3>On this device</h3></div>
             <div className="rec-list">
               {recordings.length === 0 && (
                 <div className="card-pad muted" style={{ fontSize: 12.5 }}>

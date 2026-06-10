@@ -1,4 +1,4 @@
-// DreamStream Live icon set. Stroke-based, 24×24, currentColor.
+// Stream Studio icon set. Stroke-based, 24×24, currentColor.
 import React, { createElement as h } from 'react';
 
 const P = (d: string, extra?: Record<string, unknown>) => h('path', { d, ...(extra || {}) });

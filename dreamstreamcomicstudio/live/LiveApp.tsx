@@ -1,4 +1,4 @@
-// DreamStream Live — app shell. Owns the URL (query = event identity, hash =
+// Stream Studio — app shell. Owns the URL (query = event identity, hash =
 // screen), the appearance (theme / accent), the collapsible side rail and
 // toasts. Screen contract:
 //   ?e=ID&k=KEY            → Host Studio        (#/summary → recap)
@@ -169,7 +169,7 @@ export function LiveApp() {
           <div className="rail-top">
             <button className="rail-logo" onClick={() => nav.dashboard()}>
               <span className="orb" />
-              <span className="logo-text">DreamStream <span className="sub">Live</span></span>
+              <span className="logo-text">Stream <span className="sub">Studio</span></span>
             </button>
             <button className="rail-collapse" onClick={() => setRailOpen((o) => !o)} aria-label={railOpen ? 'Collapse navigation' : 'Expand navigation'}>
               <Icon name={railOpen ? 'chevronLeft' : 'chevronRight'} size={16} />

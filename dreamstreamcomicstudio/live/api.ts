@@ -26,6 +26,7 @@ export async function createEvent(opts: {
   quality: string;
   segMs: number;
   scheduledAt?: number | null;
+  maxViewers?: number;
 }): Promise<CreatedEvent> {
   const res = await fetch(`${WORKER_BASE}/api/events`, {
     method: 'POST',
@@ -67,6 +68,78 @@ export async function rsvpEvent(id: string, name: string): Promise<{ ok: boolean
 export const segmentUrl = (id: string, seq: number): string =>
   `${WORKER_BASE}/api/events/${id}/segments/${seq}`;
 
+/* ------------------------- server-side recordings ------------------------- */
+/* Multi-GB masters go up as R2 multipart parts so they fit Worker limits.    */
+
+const REC_PART_BYTES = 16 * 1024 * 1024; // ≥5 MB (R2 minimum), small enough for flaky uplinks
+
+export interface ServerRecordings {
+  recordings: import('./protocol').RecordingEntry[];
+  expiresAt: number | null;
+}
+
+export async function listServerRecordings(id: string, hostKey: string): Promise<ServerRecordings> {
+  const res = await fetch(`${WORKER_BASE}/api/events/${id}/recordings?k=${encodeURIComponent(hostKey)}`);
+  assertWorkerResponse(res);
+  if (!res.ok) throw new Error(`recordings unavailable (${res.status})`);
+  return res.json();
+}
+
+export const recordingDownloadUrl = (id: string, hostKey: string, key: string): string =>
+  `${WORKER_BASE}/api/events/${id}/recordings?k=${encodeURIComponent(hostKey)}&download=${encodeURIComponent(key)}`;
+
+/**
+ * Uploads a finished recording to the event's 7-day server store.
+ * Chunked (16 MB parts) with simple per-part retry; reports progress 0..1.
+ */
+export async function uploadRecording(
+  id: string,
+  hostKey: string,
+  blob: Blob,
+  opts: { file: string; durMs: number; onProgress?: (frac: number) => void },
+): Promise<{ key: string }> {
+  const headers = { 'x-host-key': hostKey, 'content-type': 'application/json' };
+  const init = await fetch(`${WORKER_BASE}/api/events/${id}/recordings?op=init`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ file: opts.file, mime: blob.type || 'video/webm' }),
+  });
+  if (!init.ok) throw new Error(`recording upload init failed (${init.status})`);
+  const { key, uploadId } = (await init.json()) as { key: string; uploadId: string };
+
+  const parts: { partNumber: number; etag: string }[] = [];
+  const total = Math.max(1, Math.ceil(blob.size / REC_PART_BYTES));
+  for (let n = 1; n <= total; n++) {
+    const slice = blob.slice((n - 1) * REC_PART_BYTES, Math.min(n * REC_PART_BYTES, blob.size));
+    let lastErr: unknown;
+    let done = false;
+    for (let attempt = 0; attempt < 3 && !done; attempt++) {
+      try {
+        const res = await fetch(
+          `${WORKER_BASE}/api/events/${id}/recordings?op=part&key=${encodeURIComponent(key)}&uploadId=${encodeURIComponent(uploadId)}&n=${n}`,
+          { method: 'PUT', headers: { 'x-host-key': hostKey }, body: slice },
+        );
+        if (!res.ok) throw new Error(`part ${n} failed (${res.status})`);
+        parts.push((await res.json()) as { partNumber: number; etag: string });
+        done = true;
+      } catch (e) {
+        lastErr = e;
+        await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+      }
+    }
+    if (!done) throw lastErr instanceof Error ? lastErr : new Error(`part ${n} failed`);
+    opts.onProgress?.(n / total);
+  }
+
+  const complete = await fetch(`${WORKER_BASE}/api/events/${id}/recordings?op=complete`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ key, uploadId, parts, file: opts.file, bytes: blob.size, mime: blob.type || 'video/webm', durMs: opts.durMs }),
+  });
+  if (!complete.ok) throw new Error(`recording upload complete failed (${complete.status})`);
+  return { key };
+}
+
 export interface SegmentUploadResult {
   elapsedMs: number;
   bytes: number;
@@ -101,10 +174,11 @@ export async function fetchSegment(
 }
 
 /** Close codes the room uses for "you were removed on purpose — don't reconnect". */
-const NO_RECONNECT_CODES = new Set([4001, 4002]);
+const NO_RECONNECT_CODES = new Set([4001, 4002, 4003]);
 const MAX_RECONNECT_ATTEMPTS = 8;
 
 export type SocketStatus = 'connected' | 'reconnecting';
+export type GoneReason = 'denied' | 'kicked' | 'full' | 'failed';
 
 export interface RoomSocket {
   send(msg: Record<string, unknown>): void;
@@ -120,7 +194,7 @@ export function openRoomSocket(
   id: string,
   params: { name: string; k?: string; token?: string },
   onMsg: (m: ServerMsg) => void,
-  onGone: (reason: 'denied' | 'kicked' | 'failed') => void,
+  onGone: (reason: GoneReason) => void,
   onStatus?: (s: SocketStatus) => void,
 ): RoomSocket {
   let ws: WebSocket | null = null;
@@ -151,6 +225,7 @@ export function openRoomSocket(
       if (closedByUs) return;
       if (ev.code === 4001) return onGone('denied');
       if (ev.code === 4002) return onGone('kicked');
+      if (ev.code === 4003) return onGone('full');
       if (NO_RECONNECT_CODES.has(ev.code)) return;
       attempts += 1;
       if (attempts > MAX_RECONNECT_ATTEMPTS) return onGone('failed');

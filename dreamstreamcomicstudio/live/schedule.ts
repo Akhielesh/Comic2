@@ -17,13 +17,13 @@ const icsDate = (ms: number): string =>
 
 /** Minimal RFC 5545 calendar entry for the event. */
 export function buildIcs(opts: { title: string; startMs: number; durationMin?: number; url: string }): string {
-  const uid = `${opts.startMs}-${opts.url.replace(/\W/g, '').slice(-24)}@dreamstream`;
+  const uid = `${opts.startMs}-${opts.url.replace(/\W/g, '').slice(-24)}@streamstudio`;
   const end = opts.startMs + (opts.durationMin ?? 60) * 60_000;
   const esc = (s: string) => s.replace(/\\/g, '\\\\').replace(/[,;]/g, (c) => `\\${c}`);
   return [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
-    'PRODID:-//DreamStream//Live//EN',
+    'PRODID:-//Stream Studio//EN',
     'BEGIN:VEVENT',
     `UID:${uid}`,
     `DTSTAMP:${icsDate(Date.now())}`,
@@ -41,7 +41,7 @@ export function downloadIcs(opts: { title: string; startMs: number; url: string 
   const blob = new Blob([buildIcs(opts)], { type: 'text/calendar' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = 'dreamstream-live.ics';
+  a.download = 'stream-studio.ics';
   document.body.appendChild(a);
   a.click();
   a.remove();

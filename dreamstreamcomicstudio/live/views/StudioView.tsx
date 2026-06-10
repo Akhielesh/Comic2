@@ -4,7 +4,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { getEvent, openRoomSocket, uploadSegment, type RoomSocket, type SocketStatus } from '../api';
 import { IS_LOCAL_DEV, SEGMENT_MS, presetById, type QualityPreset } from '../config';
-import { addMyRecording, updateMyEvent } from '../events';
+import { addMyRecording, findMyEvent, updateMyEvent } from '../events';
+import { pushEventToCloud } from '../sync';
 import {
   LocalRecorder,
   SegmentedRecorder,
@@ -24,7 +25,8 @@ import type { Nav } from '../nav';
 import { viewerUrl } from '../nav';
 import { loadPrefs, playChime } from '../prefs';
 import type { ChatMsg, LobbyEntry, LogEntry, PersonEntry, StreamStatus } from '../protocol';
-import { ProgramCompositor, SCENES, type SceneId } from '../studio/compositor';
+import { ProgramCompositor, SCENES, fitCanvasToSource, type SceneId } from '../studio/compositor';
+import { uploadRecording } from '../api';
 import { ActivityRail, ChatRail, HealthRail, PeopleRail } from '../components/rails';
 import { SceneSketch } from '../components/scenes';
 import { Icon } from '../ui/icons';
@@ -100,6 +102,8 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   const [sockStatus, setSockStatus] = useState<SocketStatus>('connected');
   const [stats, setStats] = useState({ lastSeq: 0, failures: 0, upBps: null as number | null, encBps: null as number | null });
   const [viewerCurve, setViewerCurve] = useState<number[]>([]);
+  const [segMs, setSegMs] = useState(SEGMENT_MS);
+  const [maxViewers, setMaxViewers] = useState(100);
   const [floats, spawnFloat] = useFloatingEmoji();
   const [, setClock] = useState(0); // 1 Hz re-render for timers
 
@@ -107,6 +111,11 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   const shareUrl = viewerUrl(eventId);
   const isLive = status === 'live';
   viewersRef.current = viewers;
+  const statsRef = useRef(stats);
+  statsRef.current = stats;
+  const statusRef = useRef(status);
+  statusRef.current = status;
+  const recStartRef = useRef(0);
 
   // ------------------------------------------------------------- lifecycle
   useEffect(() => {
@@ -123,6 +132,8 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
         if (cancelled) return;
         setTitle(meta.title);
         setPinned(meta.pinned);
+        setSegMs(meta.segMs || SEGMENT_MS);
+        setMaxViewers(meta.maxViewers || 100);
         const p = presetById(meta.quality);
         setPreset(p);
         nextSeqRef.current = (meta.latestSeq || 0) + 1; // survive a studio reload mid-event
@@ -136,7 +147,11 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
         }
         camRef.current = cam;
         audioTrackRef.current = cam.getAudioTracks()[0] ?? null;
-        const comp = new ProgramCompositor(p.width, p.height, prefs.fps);
+        // The program follows the camera's real orientation/aspect — a phone
+        // held upright streams portrait instead of a hard center-crop.
+        const cs = cam.getVideoTracks()[0]?.getSettings() ?? {};
+        const dims = fitCanvasToSource(cs.width || p.width, cs.height || p.height, p.width, p.height);
+        const comp = new ProgramCompositor(dims.w, dims.h, prefs.fps);
         comp.setHostInitial(hostName);
         comp.setLook(prefs.look);
         comp.setCamera(cam);
@@ -197,6 +212,9 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
                 if (prefs.alertSound === 'soft') playChime();
               }
               break;
+            case 'config':
+              setMaxViewers(msg.maxViewers);
+              break;
             case 'state':
               setStatus(msg.status);
               setStartedAt(msg.startedAt);
@@ -215,11 +233,22 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     const curveTimer = window.setInterval(() => {
       setViewerCurve((cv) => [...cv.slice(-119), viewersRef.current]);
     }, 10_000);
+    // Network telemetry → the room's durable health curve (analyze & improve).
+    const healthTimer = window.setInterval(() => {
+      if (statusRef.current !== 'live') return;
+      socketRef.current?.send({
+        t: 'health',
+        up: Math.round(statsRef.current.upBps ?? 0),
+        enc: Math.round(statsRef.current.encBps ?? 0),
+        fail: statsRef.current.failures,
+      });
+    }, 30_000);
 
     return () => {
       cancelled = true;
       window.clearInterval(clock);
       window.clearInterval(curveTimer);
+      window.clearInterval(healthTimer);
       segRecRef.current?.stop();
       void localRecRef.current?.stop();
       socketRef.current?.close();
@@ -249,7 +278,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     const videoBps = prefs.videoBpsOverride > 0 ? prefs.videoBpsOverride : preset.videoBps;
     const rec = new SegmentedRecorder(
       mixed,
-      { mimeType: mime, videoBps, audioBps: preset.audioBps, segMs: SEGMENT_MS, startSeq: nextSeqRef.current },
+      { mimeType: mime, videoBps, audioBps: preset.audioBps, segMs, startSeq: nextSeqRef.current },
       (blob, seq, durMs) => {
         nextSeqRef.current = seq + 1;
         uploadSegment(eventId, hostKey, seq, durMs, blob)
@@ -299,7 +328,9 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     segRecRef.current?.stop();
     segRecRef.current = null;
     if (localRecRef.current) await stopRecording();
-    updateMyEvent(eventId, { status: 'ended', peakViewers: Math.max(...viewerCurve, viewers) });
+    updateMyEvent(eventId, { status: 'ended', peakViewers: Math.max(...viewerCurve, viewers), endedAt: Date.now() });
+    const mine = findMyEvent(eventId);
+    if (mine) void pushEventToCloud(mine);
     push('Stream ended', { icon: 'stop' });
     nav.summary(eventId, hostKey);
   };
@@ -309,6 +340,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     if (!mixed || !mime) return;
     const videoBps = prefs.videoBpsOverride > 0 ? prefs.videoBpsOverride : preset.videoBps;
     localRecRef.current = new LocalRecorder(mixed.clone(), mime, videoBps, prefs.recordHighBitrate ? 2.5 : 1);
+    recStartRef.current = Date.now();
     setRecOn(true);
     hostLog('rec', 'REC', `Local recording started · part ${recPartRef.current}`);
   };
@@ -319,11 +351,19 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     setRecOn(false);
     if (rec) {
       const blob = await rec.stop();
+      const durMs = Date.now() - recStartRef.current;
       if (blob.size > 0 && mime) {
         const file = recordingFilename(eventId, recPartRef.current, mime);
-        downloadBlob(blob, file);
+        downloadBlob(blob, file); // device copy first — never lose the master
         addMyRecording({ eventId, title: title || 'Untitled stream', file, bytes: blob.size, at: Date.now() });
-        hostLog('rec', 'REC', `Recording saved · ${fmtBytes(blob.size)}`);
+        hostLog('rec', 'REC', `Recording saved to device · ${fmtBytes(blob.size)}`);
+        if (prefs.cloudRecordings) {
+          // Background upload to the 7-day server store; survives leaving the studio.
+          push(`Uploading ${fmtBytes(blob.size)} to your 7-day cloud store…`, { icon: 'refresh' });
+          uploadRecording(eventId, hostKey, blob, { file, durMs })
+            .then(() => push('Recording stored in the cloud (kept 7 days)', { icon: 'check' }))
+            .catch(() => push('Cloud upload failed — the device copy is safe', { icon: 'alert' }));
+        }
       }
       recPartRef.current += 1;
       setRecBytes(0);
@@ -370,13 +410,41 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   const flipCamera = async () => {
     const next = facing === 'user' ? 'environment' : 'user';
     try {
-      const fresh = await openCameraVideo(preset, { facingMode: next });
+      // `exact` forces the browser to actually switch lenses (Android/iOS
+      // happily return the same camera for a soft facingMode hint).
+      let fresh: MediaStream;
+      try {
+        fresh = await navigator.mediaDevices.getUserMedia({
+          audio: false,
+          video: {
+            facingMode: { exact: next },
+            width: { ideal: preset.width },
+            height: { ideal: preset.height },
+            frameRate: { ideal: prefs.fps },
+          },
+        });
+      } catch {
+        fresh = await openCameraVideo(preset, { facingMode: next });
+      }
       swapCameraStream(fresh);
       setFacing(next);
-      setActiveDevice(null);
+      setActiveDevice(fresh.getVideoTracks()[0]?.getSettings().deviceId ?? null);
+      setDevices(await listVideoInputs()); // labels fill in after first grant
     } catch {
-      push('Could not flip camera', { icon: 'alert' });
+      push('This device has no camera facing the other way', { icon: 'alert' });
     }
+  };
+
+  /** Step through every physical lens the device exposes (0.5× / 1× / tele…). */
+  const cycleLens = async () => {
+    if (devices.length < 2) {
+      await flipCamera();
+      return;
+    }
+    const idx = Math.max(0, devices.findIndex((d) => d.deviceId === activeDevice));
+    const nextDev = devices[(idx + 1) % devices.length];
+    await switchCamera(nextDev.deviceId);
+    push(lensLabel(nextDev.label, (idx + 1) % devices.length), { icon: 'video', duration: 1200 });
   };
 
   /** The encoder records the canvas, so camera swaps never restart it. */
@@ -463,7 +531,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   // ----------------------------------------------------------------- render
   const liveFor = startedAt && (status === 'live' || status === 'paused') ? fmtDuration((Date.now() - startedAt) / 1000) : null;
   const sceneObj = SCENES.find((s) => s.id === scene) || SCENES[0];
-  const latencyEst = upElapsedEma.current.value != null ? SEGMENT_MS / 1000 + upElapsedEma.current.value / 1000 + 1 : null;
+  const latencyEst = upElapsedEma.current.value != null ? segMs / 1000 + upElapsedEma.current.value / 1000 + 1 : null;
   const healthy = stats.failures === 0 && sockStatus === 'connected';
 
   const metricRows: [string, string][] = useMemo(
@@ -472,13 +540,13 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
       ['Target bitrate', fmtBps((prefs.videoBpsOverride || preset.videoBps) + preset.audioBps)],
       ['Encoded (actual)', fmtBps(stats.encBps)],
       ['Upload speed', fmtBps(stats.upBps)],
-      ['Segment', stats.lastSeq ? `#${stats.lastSeq} · ${SEGMENT_MS / 1000}s` : '—'],
+      ['Segment', stats.lastSeq ? `#${stats.lastSeq} · ${segMs / 1000}s` : '—'],
       ['Upload failures', String(stats.failures)],
       ['Viewers', String(viewers)],
       ['Codec', mime ? mime.split(';')[0].replace('video/', '') : '—'],
       ['REC', recOn ? fmtBytes(recBytes) : 'off'],
     ],
-    [preset, prefs, stats, viewers, mime, recOn, recBytes],
+    [preset, prefs, stats, viewers, mime, recOn, recBytes, segMs],
   );
 
   const railTabs = [
@@ -505,7 +573,8 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   const mobileCtl: MobileCtl = {
     status, viewers, liveFor, chat, floats, mixed, micOn, camOn, scene,
     zoom: { min: zoomMin, max: zoomMax, step: zoomStep, value: zoomVal },
-    toggleMic, toggleCam, flip: () => void flipCamera(), applyZoom: (v) => void applyZoom(v),
+    lensCount: devices.length,
+    toggleMic, toggleCam, flip: () => void flipCamera(), lens: () => void cycleLens(), applyZoom: (v) => void applyZoom(v),
     cutScene: (s) => void cutScene(s), sendChat, sendEmoji,
     goLive, end: () => void endStream(),
     exit: () => (isPhone ? nav.dashboard() : setDevice('desktop')),
@@ -553,7 +622,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
         {sockStatus === 'reconnecting'
           ? <Pill tone="warn" icon="refresh">Reconnecting…</Pill>
           : <Pill tone={healthy ? 'ok' : 'warn'} icon="signal">{healthy ? 'Healthy' : 'Degraded'}</Pill>}
-        <Pill tone="neutral" icon="eye">{viewers}</Pill>
+        <Pill tone="neutral" icon="eye">{viewers}/{maxViewers}</Pill>
         <div className="t-sep" />
         <IconBtn
           name="link"
@@ -820,9 +889,11 @@ interface MobileCtl {
   camOn: boolean;
   scene: SceneId;
   zoom: { min: number; max: number; step: number; value: number };
+  lensCount: number;
   toggleMic(): void;
   toggleCam(): void;
   flip(): void;
+  lens(): void;
   applyZoom(v: number): void;
   cutScene(s: SceneId): void;
   sendChat(text: string): void;
@@ -871,6 +942,11 @@ function MobileStudio({ ctl }: { ctl: MobileCtl }) {
         <button className="ms-round" onClick={ctl.flip} aria-label="Flip camera">
           <Icon name="flip" size={20} /><span>Flip</span>
         </button>
+        {ctl.lensCount > 2 && (
+          <button className="ms-round" onClick={ctl.lens} aria-label="Switch lens">
+            <Icon name="video" size={20} /><span>Lens</span>
+          </button>
+        )}
         <div className="ms-zoom">
           <Icon name="search" size={14} />
           <input
