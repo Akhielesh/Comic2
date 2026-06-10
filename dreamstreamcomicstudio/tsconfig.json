@@ -29,6 +29,7 @@
   "exclude": [
     "server",
     "studio-worker",
+    "live-worker",
     "node_modules",
     "dist"
   ]

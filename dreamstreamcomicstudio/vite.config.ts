@@ -47,7 +47,8 @@ export default defineConfig(({ mode }) => {
       rollupOptions: {
         input: {
           main: path.resolve(__dirname, 'index.html'),
-          studio: path.resolve(__dirname, 'studio.html')
+          studio: path.resolve(__dirname, 'studio.html'),
+          live: path.resolve(__dirname, 'live.html')
         },
         output: {
           // Split heavy, independently-cacheable vendors out of the entry chunks so a change

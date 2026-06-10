@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "concurrently --kill-others-on-fail \"npm run dev:server\" \"vite\"",
+    "dev:live": "concurrently --kill-others-on-fail \"npm --prefix live-worker run dev\" \"vite\"",
     "dev:server": "tsx watch server/src/index.ts",
     "build": "vite build",
     "build:server": "tsc -p server/tsconfig.json",

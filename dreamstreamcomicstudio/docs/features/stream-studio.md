@@ -1,6 +1,6 @@
 # Stream Studio — Live Streaming for DreamStream
 
-Status: proposal / design doc (no code yet)
+Status: **v1 implemented on the R2 rail** — see §9 for what shipped and how to test.
 Scope: minimalist live streaming for up to ~100 concurrent viewers, hosted inside the
 DreamStream website, built entirely on the Cloudflare stack we already run
 (Workers, Durable Objects, R2) plus Supabase (auth, metadata) and Cloudflare Stream.
@@ -199,3 +199,51 @@ embeds/API → billing.
   clips, chat replay overlay.
 - **Phase 2:** native iOS capture app (lens-perfect, 4K local masters).
 - **Phase 3:** guests via Realtime SFU, ticketing, embeds/API.
+
+---
+
+## 9. v1 implementation (shipped)
+
+What exists in the repo now:
+
+- **`live-worker/`** — `dreamstream-live` Cloudflare Worker: REST API + `EventRoom`
+  Durable Object (WebSocket hibernation) for chat / emoji reactions / presence /
+  approval lobby (admit/deny) / moderation (kick, promote, pin, delete) / stream
+  state / segment fan-out. Segments live in R2 (`LIVE_BUCKET`), served immutable
+  through `caches.default` so 100 viewers ≈ 1 R2 read per segment.
+- **`live/` + `live.html`** — standalone Stream Studio page (kept out of the main
+  app bundle): create event → host studio (camera/lens chips, zoom, go live, pause
+  slate, full-clarity local REC of the program feed only, metrics toggle) and the
+  viewer page (MSE segment player with live-edge chasing + gap skip + buffer
+  eviction for marathon sessions, chat, floating reactions, replay after end,
+  metrics toggle). Light/dark themes. Quality presets and platform limits are
+  declared in `live/config.ts` and rendered verbatim in the UI.
+- Delivery encoding: the studio rotates MediaRecorder instances every 3 s so each
+  segment is independently playable; MP4/H.264 preferred (plays everywhere via
+  MSE), WebM fallback. ~4–10 s glass-to-glass latency.
+- Tests: `live/live.unit.test.ts` (presets/codec/metrics logic) runs in CI; the
+  worker has a WS smoke flow (create → knock → admit → chat → live → segment →
+  kick) exercised during development.
+
+**Test locally:** `cd live-worker && npm install` once, then `npm run dev:live`
+from the app root and open `http://localhost:7000/live.html`. Deploy: see
+`live-worker/README.md` (R2 bucket + `wrangler deploy` + `VITE_LIVE_WORKER_URL`).
+
+Not yet built (next): scheduling UI with countdown/ICS (worker accepts any time —
+the event link is permanent), recording upload to R2/Drive, sub-second mode.
+
+---
+
+## 10. Creative cost strategies (evaluated)
+
+The guiding fact: on this rail the marginal cost of a viewer is ~zero, so
+"cheaper" comes from storage and from who pays for it.
+
+| Idea | Verdict |
+|---|---|
+| **Route the live stream through the user's Google Drive** | Not viable for *live*: Drive's API rate limits and propagation latency can't serve 3-second segments to a fan-out audience, and using it as a CDN violates its ToS. |
+| **Google Drive as bring-your-own-storage for recordings** | The legit version of the same idea, and worth building: after the stream, the master recording (and optionally the segment VOD) uploads to the *creator's* connected Drive. Our storage cost: $0. The user owns their masters. Works for Dropbox too. |
+| **Audience-tiered rails** | <8 viewers: direct P2P WebRTC from the host (cost $0, sub-second). 8–100+: R2 rail (~$0.10/hr). Premium tier: Cloudflare Stream ABR ($6/hr). The event API is rail-agnostic so this is a routing decision, not a rewrite. |
+| **P2P segment mesh between viewers** | Legit (WebRTC data channels), but it only saves egress — and R2 egress is already $0. Skip. |
+| **Free-tier surfing** | Stream's WebRTC beta is currently unbilled and Realtime includes 1 TB/mo — both usable as overflow/low-latency modes while they last. |
+| **Restream to YouTube unlisted** | $0 escape hatch for very large one-off audiences; costs you branding, data and control. Offer as an output, not the default. |
