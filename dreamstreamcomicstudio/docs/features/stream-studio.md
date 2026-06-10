@@ -65,6 +65,31 @@ quality, the creator keeps a master copy better than anything the audience saw.
 - Ingest + encoding: **free**. Chat/presence on a Durable Object: pennies.
 - Realtime/TURN egress (if used): first 1 TB/mo free, then $0.05/GB (~$9/event-hour at 4 Mbps).
 
+### Cheaper rails — same or better quality
+
+Stream bills per **viewer-minute, not per pixel** — 1080p costs the same as 480p — so
+cost is cut by changing the delivery rail, never by lowering quality:
+
+| Rail | Cost per 100-viewer event-hour | Trade-off |
+|---|---|---|
+| Stream WebRTC beta (Path A, the v1 plan) | **$0 today** — docs: pricing applies "once generally available"; budget $6/hr at GA | Beta pricing will end eventually |
+| Realtime SFU (WHIP/WHEP via session API) | **$0 within 1 TB/mo free tier** (~5 event-hours at 4 Mbps), then ~$9 | More integration code; confirm current WHIP/WHEP surface in a spike |
+| **R2-served HLS (DIY packager)** | **~$0.10 at any viewer count** — R2 has zero egress, viewers hit CDN cache; segments ARE the recording (free VOD) | ~6–15 s latency, single rendition (no ABR), most engineering |
+| Stream Live HLS (Path B) | $6 + recording | The managed, zero-engineering ceiling |
+
+Additional standing savings:
+- **Store recordings in R2, not Stream storage:** a 1080p hour ≈ 2.7 GB ≈ **$0.04/month**
+  in R2 vs $0.30 + delivery fees in Stream. Only re-ingest into Stream the recordings
+  that need polished VOD playback.
+- On-device recording (already the plan) costs nothing and beats any cloud transcode.
+- Not viable: running a media server in Cloudflare Containers (no non-HTTP/UDP ingress).
+  Self-hosting MediaMTX on a ~€6/mo VPS is the absolute floor (~70 event-hours/mo, WHIP
+  in / WHEP + HLS out / disk recording) but adds ops burden and a single region —
+  only worth it if events become very frequent.
+
+**Net:** v1 as planned costs ≈ $0/month today. The long-term hedge is the R2-HLS rail
+(near-zero at any scale) with Stream as the premium ABR tier.
+
 ---
 
 ## 3. System components (maps onto existing infra)
