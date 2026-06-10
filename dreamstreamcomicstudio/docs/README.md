@@ -18,6 +18,17 @@ agent** can get oriented quickly and avoid re-deriving context.
 | `ai_flow_documentation.md` | Deep dive on the AI generation pipeline. | When the pipeline changes. |
 | `RAILWAY_DEPLOY.md` / `OPENROUTER_TESTING.md` | Backend deploy + OpenRouter testing guides. | When deploy/testing steps change. |
 
+### Feature docs (`features/`)
+
+| Doc | What it covers |
+|-----|----------------|
+| `features/component-library.md` | The chat widget system end to end: artifact pipeline, calm-studio design language, Primitive Kit API, dual density, resize, theming, full artifact-type table, add-a-widget checklist. |
+| `features/live-widgets.md` | Live data in widgets: origin stamping, `REFRESHABLE_TOOLS`, the `/api/chat/tool-refresh` contract, `useLiveData()`, and the NewsDigest topic-chip refresh pattern. |
+| `features/voice-dictation.md` | On-device voice dictation: recorder → 16 kHz PCM → transformers.js Whisper (WebGPU/WASM), engines + fallback, 4 s live partials, model self-hosting, UI states, failure modes. |
+| `features/guided-learning.md` | Guided learning: the `create_learning_path` tool, `LearningPathArtifact`, the progress-tracked course card, `/learn` skill + recipe, composition with quiz/flashcards/exercises, study-mode auto-detection. |
+| `features/travel-planner.md` | Travel planner: the `plan_trip` tool (coercion, Nominatim + Open-Meteo enrichment), `ItineraryArtifact`, the day-tabbed itinerary card, `/trip` skill + recipe, related tools and travel MCPs. |
+| `features/mcp-directory.md` | MCP support: per-user registry + SSRF guards, `/api/mcp` routes, tool proxying into the agentic loop, the 13-entry curated catalog, marketplace UI, and the outbound `/api/connect/mcp` endpoint. |
+
 ## Conventions
 
 - **ADRs** are immutable once `Accepted`. To change a decision, add a new ADR
