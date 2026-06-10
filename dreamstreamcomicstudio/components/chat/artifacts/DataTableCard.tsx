@@ -85,7 +85,7 @@ const CellBody: React.FC<{ col: DataTableColumn; raw: DataTableRowCell; accent: 
   );
 };
 
-export const DataTableCard: React.FC<{ data: DataTableArtifact }> = ({ data }) => {
+export const DataTableCard: React.FC<{ data: DataTableArtifact; embedded?: boolean }> = ({ data, embedded }) => {
   const theme = resolveTheme({ palette: (data.palette as PaletteName) || 'brand' });
   const columns = data.columns ?? [];
   const [sort, setSort] = useState<{ column: number; dir: 'asc' | 'desc' } | null>(data.sort ?? null);
@@ -111,6 +111,7 @@ export const DataTableCard: React.FC<{ data: DataTableArtifact }> = ({ data }) =
 
   return (
     <Surface
+      embedded={embedded}
       accent={theme.accent}
       header={data.title ? (
         <div>

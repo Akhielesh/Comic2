@@ -78,11 +78,11 @@ const Tile: React.FC<{ tile: MetricTile }> = ({ tile }) => {
   );
 };
 
-export const MetricBoard: React.FC<{ data: MetricBoardArtifact }> = ({ data }) => {
+export const MetricBoard: React.FC<{ data: MetricBoardArtifact; embedded?: boolean }> = ({ data, embedded }) => {
   if (!data.tiles?.length) return null;
   const cols = COLS[data.columns ?? Math.min(4, data.tiles.length)] ?? 'sm:grid-cols-3';
   return (
-    <Surface header={data.title ? <div className="text-sm font-extrabold">{data.title}</div> : undefined}>
+    <Surface embedded={embedded} header={data.title ? <div className="text-sm font-extrabold">{data.title}</div> : undefined}>
       <div className={`grid grid-cols-2 gap-2 p-3 ${cols}`}>
         {data.tiles.map((tile, i) => (
           <Tile key={i} tile={tile} />

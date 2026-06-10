@@ -14,13 +14,25 @@ interface SurfaceProps {
   accent?: string;
   /** Optional footer row, divided from the body. */
   footer?: React.ReactNode;
+  /**
+   * Render flush for use INSIDE another surface (e.g. the Finance Terminal): drops the
+   * heavy border, hard shadow, outer margin and accent strip so nested cards read as
+   * one cohesive panel instead of borders-within-borders.
+   */
+  embedded?: boolean;
   className?: string;
   children?: React.ReactNode;
 }
 
-export const Surface: React.FC<SurfaceProps> = ({ header, right, accent, footer, className = '', children }) => (
-  <div className={`my-2 rounded-xl border-2 border-black bg-white shadow-comic overflow-hidden animate-fade-in ${className}`}>
-    {accent && <div className="h-1" style={{ backgroundColor: accent }} />}
+export const Surface: React.FC<SurfaceProps> = ({ header, right, accent, footer, embedded = false, className = '', children }) => (
+  <div
+    className={
+      embedded
+        ? `rounded-lg border border-black/10 bg-white overflow-hidden ${className}`
+        : `my-2 rounded-xl border-2 border-black bg-white shadow-comic overflow-hidden animate-fade-in ${className}`
+    }
+  >
+    {!embedded && accent && <div className="h-1" style={{ backgroundColor: accent }} />}
     {(header || right) && (
       <div className="flex items-start justify-between gap-2 p-3 pb-2">
         <div className="min-w-0">{header}</div>

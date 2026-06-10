@@ -38,7 +38,7 @@ const arcPath = (cx: number, cy: number, r: number, a0: number, a1: number, inne
   return `M${x0},${y0} A${r},${r} 0 ${large} 1 ${x1},${y1} L${ix1},${iy1} A${inner},${inner} 0 ${large} 0 ${ix0},${iy0} Z`;
 };
 
-export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
+export const ChartCard: React.FC<{ data: ChartArtifact; embedded?: boolean }> = ({ data, embedded }) => {
   const theme = resolveTheme({ palette: (data.palette as PaletteName) || 'brand' });
   const colorOf = (s: DataChartSeries, i: number) => s.color || theme.series[i % theme.series.length];
   const [hidden, setHidden] = useState<Set<number>>(new Set());
@@ -108,6 +108,7 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
 
   return (
     <Surface
+      embedded={embedded}
       accent={theme.accent}
       header={
         data.title ? (

@@ -74,7 +74,7 @@ const Stat: React.FC<{ label: string; value?: string }> = ({ label, value }) =>
     </span>
   ) : null;
 
-export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => {
+export const MarketCard: React.FC<{ data: StockQuoteArtifact; embedded?: boolean }> = ({ data, embedded }) => {
   const theme = resolveTheme({ trend: data.change });
   const currency = data.currency ?? 'USD';
 
@@ -108,6 +108,7 @@ export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => 
 
   return (
     <Surface
+      embedded={embedded}
       accent={theme.accent}
       header={
         <div className="flex items-center gap-2">
