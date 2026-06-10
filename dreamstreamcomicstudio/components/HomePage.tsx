@@ -77,7 +77,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
                 onClick={() => onNavigate?.('chat')}
                 className="px-8 py-4 border-4 border-black rounded-xl font-bold hover:bg-brand-blue hover:text-white transition-colors flex items-center gap-2"
               >
-                <Bot size={18} /> Explore AI Chat
+                <Bot size={18} /> Explore Chat Studio
               </button>
               <button
                 onClick={() => onNavigate?.('how-it-works')}
@@ -176,7 +176,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
                 </div>
                 <span className="text-[10px] font-extrabold uppercase tracking-wider bg-green-100 text-green-700 border-2 border-green-600 rounded-full px-2.5 py-1">Live</span>
               </div>
-              <h3 className="text-2xl font-display mb-2">AI Chat</h3>
+              <h3 className="text-2xl font-display mb-2">Chat Studio</h3>
               <p className="text-sm font-comic text-slate-600 leading-relaxed flex-1">
                 Brainstorm and build with 100+ models — Claude, Gemini, GPT — with rich, interactive outputs and persistent threads.
               </p>
@@ -184,7 +184,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
                 onClick={() => onNavigate?.('chat')}
                 className="mt-6 inline-flex items-center gap-2 font-bold text-sm text-brand-blue hover:gap-3 transition-all"
               >
-                {user ? 'Open AI Chat' : 'Try AI Chat'} <ArrowRight size={16} />
+                {user ? 'Open Chat Studio' : 'Try Chat Studio'} <ArrowRight size={16} />
               </button>
             </div>
 
@@ -247,7 +247,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
             {/* Left: Description */}
             <div className="space-y-7">
               <div className="inline-flex items-center gap-2 bg-brand-blue text-white px-4 py-2 rounded-full font-mono text-xs font-bold uppercase tracking-widest">
-                <Bot size={14} /> AI Chat Platform
+                <Bot size={14} /> Chat Studio
               </div>
               <h2 className="text-4xl md:text-5xl font-display leading-tight">
                 Talk to AI. Build better comics.
@@ -271,7 +271,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
                   icon={<MessageSquare size={16} />}
                   className="shadow-comic hover:shadow-none transition-all"
                 >
-                  {user ? 'Open AI Chat' : 'Try AI Chat'}
+                  {user ? 'Open Chat Studio' : 'Try Chat Studio'}
                 </Button>
                 {!user && (
                   <button
@@ -284,7 +284,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               </div>
               {!user && (
                 <p className="text-xs font-mono text-slate-400">
-                  * AI Chat is open to members. New here? We’re in invite-only beta — request access above.
+                  * Chat Studio is open to members. New here? We’re in invite-only beta — request access above.
                 </p>
               )}
             </div>
@@ -300,7 +300,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
                 </div>
                 <div className="flex items-center gap-2 text-sm font-bold">
                   <Bot size={14} className="text-brand-yellow" />
-                  AI Chat Platform
+                  Chat Studio
                 </div>
                 <span className="ml-auto text-xs bg-brand-yellow/20 text-brand-yellow px-2 py-0.5 rounded font-mono border border-brand-yellow/30">
                   claude-3.5-sonnet
@@ -451,7 +451,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
             <h4 className="font-bold uppercase tracking-widest text-zinc-500 mb-6 text-xs">Products</h4>
             <ul className="space-y-4 text-sm font-bold">
               <li><button onClick={onEnterStudio} className="flex items-center gap-2 hover:text-brand-yellow text-left"><BookOpen size={16} /> Comic Studio</button></li>
-              <li><button onClick={() => onNavigate?.('chat')} className="flex items-center gap-2 hover:text-brand-yellow text-left"><Bot size={16} /> AI Chat</button></li>
+              <li><button onClick={() => onNavigate?.('chat')} className="flex items-center gap-2 hover:text-brand-yellow text-left"><Bot size={16} /> Chat Studio</button></li>
               <li><a href="/live.html" className="flex items-center gap-2 hover:text-brand-yellow text-left"><Radio size={16} /> Stream Studio <span className="text-[9px] uppercase tracking-wider bg-zinc-800 px-1.5 py-0.5 rounded">Beta</span></a></li>
               <li><button onClick={scrollToUpdates} className="flex items-center gap-2 text-zinc-500 hover:text-zinc-300 text-left"><Code2 size={16} /> Code <span className="text-[9px] uppercase tracking-wider bg-zinc-800 px-1.5 py-0.5 rounded">Soon</span></button></li>
             </ul>
