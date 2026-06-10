@@ -11,6 +11,7 @@ on:
     branches: [Dreamstrream-v1]
     paths:
       - 'dreamstreamcomicstudio/studio-worker/**'
+      - '.github/workflows/deploy-studio-worker.yml'
   workflow_dispatch:
 
 permissions:
@@ -23,10 +24,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # wrangler 4.98+ requires Node >= 22.
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Install worker dependencies
         working-directory: dreamstreamcomicstudio/studio-worker
