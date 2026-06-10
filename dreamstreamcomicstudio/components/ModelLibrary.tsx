@@ -285,26 +285,24 @@ const ModelCard: React.FC<{
     onClick={onOpen}
     className="cursor-pointer text-left bg-white border-2 border-black rounded-lg p-4 shadow-comic hover:shadow-comic-hover hover:translate-x-[2px] hover:translate-y-[2px] transition-all flex flex-col gap-3"
   >
+    {/* Header: chips WRAP (never overlap the cost badge), the badge never shrinks, and the
+        name clamps to two full-width lines instead of truncating to "NVIDIA: Ne…". */}
     <div className="flex items-start justify-between gap-2">
-      <div className="min-w-0 flex items-start gap-2">
-        <ModelProviderIcon model={model} className="w-5 h-5 shrink-0 mt-0.5" />
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5 mb-0.5">
-            <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-black ${getModelVendor(model).color}`}>{getModelVendor(model).label}</span>
-            <span className="text-[10px] font-bold uppercase text-slate-500 inline-flex items-center gap-1" title={`Served via ${sourceLabel(providerOrigin(model))}`}>
-              <SourceIcon source={providerOrigin(model)} className="w-3 h-3" />{sourceLabel(providerOrigin(model))}
-            </span>
-            {getModelVendor(model).url && (
-              <a href={getModelVendor(model).url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-slate-400 hover:text-brand-blue" title={`${getModelVendor(model).label} — more info`}>
-                <ExternalLink className="w-3 h-3" />
-              </a>
-            )}
-          </div>
-          <div className="font-bold leading-tight truncate">{model.name}</div>
-        </div>
+      <div className="min-w-0 flex-1 flex flex-wrap items-center gap-1.5">
+        <ModelProviderIcon model={model} className="w-[18px] h-[18px] shrink-0" />
+        <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-black ${getModelVendor(model).color}`}>{getModelVendor(model).label}</span>
+        <span className="text-[10px] font-bold uppercase text-slate-500 inline-flex items-center gap-1" title={`Served via ${sourceLabel(providerOrigin(model))}`}>
+          <SourceIcon source={providerOrigin(model)} className="w-3 h-3" />{sourceLabel(providerOrigin(model))}
+        </span>
+        {getModelVendor(model).url && (
+          <a href={getModelVendor(model).url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-slate-400 hover:text-brand-blue" title={`${getModelVendor(model).label} — more info`}>
+            <ExternalLink className="w-3 h-3" />
+          </a>
+        )}
       </div>
-      <Badge className={COST_CLASS_COLOR[model.costClass]}>{COST_CLASS_LABEL[model.costClass] ?? classBadge(model.costClass)}</Badge>
+      <Badge className={`shrink-0 ${COST_CLASS_COLOR[model.costClass]}`}>{COST_CLASS_LABEL[model.costClass] ?? classBadge(model.costClass)}</Badge>
     </div>
+    <div className="font-bold leading-tight line-clamp-2 -mt-1" title={model.name}>{model.name}</div>
 
     <div className="flex flex-wrap gap-1">
       {model.apiCallable === false && (
@@ -331,7 +329,7 @@ const ModelCard: React.FC<{
           <button
             onClick={(e) => { e.stopPropagation(); onStartChat({ id: model.id, name: model.name, source: providerOrigin(model) as 'openrouter' | 'nvidia' }); }}
             className="text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black bg-brand-blue text-white hover:bg-blue-600 flex items-center gap-1"
-            title="Try this model in the AI Chat Platform"
+            title="Try this model in Chat Studio"
           >
             <MessageSquare className="w-3 h-3" /> Chat
           </button>
@@ -542,7 +540,7 @@ const CompareModal: React.FC<{ models: CatalogModel[]; selection: ModelSelection
               <tr>
                 <th className="text-left p-2 sticky left-0 z-10 bg-white" />
                 {models.map((m) => (
-                  <th key={m.id} className={`p-2 align-top text-left min-w-[11rem] border-b-2 border-black ${inUse(m) ? 'bg-brand-yellow/30' : ''}`}>
+                  <th key={`${m.source}:${m.id}`} className={`p-2 align-top text-left min-w-[11rem] border-b-2 border-black ${inUse(m) ? 'bg-brand-yellow/30' : ''}`}>
                     <div className="text-[10px] font-bold uppercase text-slate-500">{sourceLabel(providerOrigin(m))}</div>
                     <div className="font-bold leading-tight">{m.name}</div>
                     <div className="text-[10px] text-slate-400 font-mono break-all">{m.id}</div>
@@ -563,7 +561,7 @@ const CompareModal: React.FC<{ models: CatalogModel[]; selection: ModelSelection
                       <td className="p-2 font-bold text-slate-600 text-[11px] sticky left-0 bg-white whitespace-nowrap">
                         <span className="inline-flex items-center gap-1">{row.label}{row.info && <InfoDot term={row.info} />}</span>
                       </td>
-                      {models.map((m) => <td key={m.id} className={`p-2 align-top ${inUse(m) ? 'bg-brand-yellow/10' : ''}`}>{row.render(m)}</td>)}
+                      {models.map((m) => <td key={`${m.source}:${m.id}`} className={`p-2 align-top ${inUse(m) ? 'bg-brand-yellow/10' : ''}`}>{row.render(m)}</td>)}
                     </tr>
                   ))}
                 </React.Fragment>
@@ -690,7 +688,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
   const [vendorFilters, setVendorFilters] = useState<Set<string>>(new Set());
   const [minContextK, setMinContextK] = useState(0); // context-length slider, in thousands of tokens
   const [sortBy, setSortBy] = useState<SortKey>('relevance');
-  const [showFilters, setShowFilters] = useState(false);
+  const [showFilters, setShowFilters] = useState(true); // rail visible by default, collapsible everywhere
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<CatalogModel | null>(null);
   const [selection, setSelection] = useState<ModelSelection>(() => getModelSelection());
@@ -929,7 +927,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
             </button>
             <button
               onClick={() => setShowFilters((v) => !v)}
-              className={`xl:hidden flex items-center gap-1.5 px-3 py-2 rounded-lg border-2 border-black text-sm font-bold transition-colors ${showFilters || activeFilterCount > 0 ? 'bg-brand-blue text-white' : 'bg-white hover:bg-brand-yellow/60'}`}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border-2 border-black text-sm font-bold transition-colors ${showFilters ? 'bg-brand-blue text-white' : 'bg-white hover:bg-brand-yellow/60'}`}
             >
               <SlidersHorizontal className="w-4 h-4" /> Filters
               {activeFilterCount > 0 && <span className="ml-0.5 rounded-full bg-white text-brand-blue text-[10px] font-bold w-4 h-4 flex items-center justify-center border border-black">{activeFilterCount}</span>}
@@ -939,7 +937,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
 
         <div className="mt-3 xl:flex xl:gap-6 xl:items-start">
           {/* Filter rail — left sidebar on xl, collapsible panel below the search bar on smaller screens */}
-          <aside className={`${showFilters ? 'block' : 'hidden'} xl:block xl:w-72 xl:shrink-0 xl:sticky xl:top-4 border-2 border-black rounded-xl bg-white p-4 shadow-comic space-y-4 mb-4 xl:mb-0`}>
+          <aside className={`${showFilters ? 'block' : 'hidden'} xl:w-72 xl:shrink-0 xl:sticky xl:top-4 border-2 border-black rounded-xl bg-white p-4 shadow-comic space-y-4 mb-4 xl:mb-0`}>
             <div>
               <div className="text-[10px] font-bold uppercase text-slate-500 mb-1.5">Type &amp; capabilities</div>
               <div className="flex flex-wrap gap-2">
@@ -1051,7 +1049,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   {picks.bestValue.map((m, i) => (
-                    <button key={m.id} onClick={() => setSelected(m)} className="text-left bg-white border-2 border-black rounded-lg p-3 hover:shadow-comic-hover hover:translate-x-[1px] hover:translate-y-[1px] transition-all">
+                    <button key={`${m.source}:${m.id}`} onClick={() => setSelected(m)} className="text-left bg-white border-2 border-black rounded-lg p-3 hover:shadow-comic-hover hover:translate-x-[1px] hover:translate-y-[1px] transition-all">
                       <div className="flex items-center gap-1.5 mb-1">
                         <span className="text-[9px] font-bold uppercase px-1 py-0.5 rounded bg-brand-blue text-white">#{i + 1} value</span>
                         <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded border border-black ${getModelVendor(m).color}`}>{getModelVendor(m).label}</span>
@@ -1104,7 +1102,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
             <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {visible.map((model) => (
                 <ModelCard
-                  key={model.id}
+                  key={`${model.source}:${model.id}`}
                   model={model}
                   selection={selection}
                   compared={compareIds.includes(model.id)}
@@ -1136,7 +1134,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
             </div>
             <div className="flex items-center gap-1.5 flex-1 overflow-x-auto py-0.5">
               {compareModels.map((m) => (
-                <span key={m.id} className="flex items-center gap-1 shrink-0 text-[11px] font-bold border-2 border-black rounded-full pl-2 pr-1 py-0.5 bg-brand-yellow/40 max-w-[14rem]">
+                <span key={`${m.source}:${m.id}`} className="flex items-center gap-1 shrink-0 text-[11px] font-bold border-2 border-black rounded-full pl-2 pr-1 py-0.5 bg-brand-yellow/40 max-w-[14rem]">
                   <span className="truncate">{m.name}</span>
                   <button onClick={() => toggleCompare(m.id)} className="rounded-full hover:bg-black/10 p-0.5 shrink-0" aria-label={`Remove ${m.name} from comparison`}><X className="w-3 h-3" /></button>
                 </span>

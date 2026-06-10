@@ -154,7 +154,7 @@ export const ProviderAggregatorTable: React.FC<{ models: CatalogModel[] }> = ({ 
                 const elo = eloOf(m);
                 const url = infoUrl(m);
                 return (
-                  <tr key={m.id} className="border-b border-dashed border-slate-200 hover:bg-brand-yellow/5">
+                  <tr key={`${m.source}:${m.id}`} className="border-b border-dashed border-slate-200 hover:bg-brand-yellow/5">
                     <td className="py-1.5 px-2">
                       <span className="inline-flex items-center gap-1.5">
                         <ProviderIcon vendorId={vendor.id} className="w-4 h-4 shrink-0" />

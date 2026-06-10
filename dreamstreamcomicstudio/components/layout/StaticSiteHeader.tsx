@@ -50,8 +50,8 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
       { label: 'Comic Studio', onClick: onEnterStudio },
       { label: 'Library', onClick: onViewComics },
     ] },
-    { heading: 'AI Chat', items: [
-      { label: 'Open AI Chat', onClick: () => onNavigate('chat') },
+    { heading: 'Chat Studio', items: [
+      { label: 'Open Chat Studio', onClick: () => onNavigate('chat') },
       { label: 'Model Catalog', onClick: () => onNavigate('models') },
     ] },
     { heading: 'Code', items: isAdmin
@@ -69,7 +69,7 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
         <div className="bg-brand-yellow border-b-2 border-black py-1.5 px-4 text-center text-xs font-bold text-black tracking-wide">
           <span className="inline-flex items-center gap-2">
             <Sparkles size={11} />
-            AI Chat is live — converse with Claude, Gemini &amp; 100+ models
+            Chat Studio is live — converse with Claude, Gemini &amp; 100+ models
             <button
               onClick={() => onNavigate('chat')}
               className="underline hover:no-underline ml-1"
@@ -98,11 +98,11 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
               ]}
             />
             <NavDropdown
-              label="AI Chat"
+              label="Chat Studio"
               icon={<Bot size={14} />}
               variant="blue"
               items={[
-                { label: 'Open AI Chat', description: 'Chat with Claude, Gemini & 100+ models', icon: <MessageSquare size={16} />, onClick: () => onNavigate('chat') },
+                { label: 'Open Chat Studio', description: 'Chat with Claude, Gemini & 100+ models', icon: <MessageSquare size={16} />, onClick: () => onNavigate('chat') },
                 { label: 'Model Catalog', description: 'Compare every available model', icon: <Cpu size={16} />, onClick: () => onNavigate('models') },
               ]}
             />
@@ -136,7 +136,7 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
               icon={<Cpu size={14} />}
               items={[
                 { label: 'Browse Models', description: 'Specs, pricing & benchmarks', icon: <Cpu size={16} />, onClick: () => onNavigate('models') },
-                { label: 'Use in AI Chat', description: 'Start a conversation with any model', icon: <MessageSquare size={16} />, onClick: () => onNavigate('chat') },
+                { label: 'Use in Chat Studio', description: 'Start a conversation with any model', icon: <MessageSquare size={16} />, onClick: () => onNavigate('chat') },
               ]}
             />
           </nav>

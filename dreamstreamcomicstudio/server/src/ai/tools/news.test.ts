@@ -70,3 +70,20 @@ describe('buildNewsUrl', () => {
     expect(buildNewsUrl({ query: 'x' })).toContain('gl=US');
   });
 });
+
+describe('parseNewsRss — double-escaped Google News descriptions', () => {
+  it('never lets escaped markup leak into snippets (production bug)', async () => {
+    const { parseNewsRss } = await import('./news.js');
+    const xml = `<rss><channel><item>
+      <title>Big Story - BBC</title>
+      <link>https://news.google.com/rss/articles/x</link>
+      <source url="https://bbc.com">BBC</source>
+      <description>&lt;ol&gt;&lt;li&gt;&lt;a href="https://news.google.com/rss/articles/abc" target="_blank"&gt;Big Story&lt;/a&gt;&amp;nbsp;&amp;nbsp;BBC&lt;/li&gt;&lt;/ol&gt;</description>
+    </item></channel></rss>`;
+    const items = parseNewsRss(xml);
+    expect(items).toHaveLength(1);
+    expect(items[0].title).toBe('Big Story');
+    // The all-markup description must be dropped entirely, not rendered as text.
+    expect(items[0].snippet).toBeUndefined();
+  });
+});

@@ -42,12 +42,26 @@ export const isModelDown = (id: string): boolean => {
 // Preference order among FREE text models (capable, generally reliable families), refreshed
 // for 2026: strong open generalists first. Needles are matched with id.includes(), so they must
 // appear in real catalog ids (e.g. 'deepseek/deepseek-chat-v3.1:free', 'z-ai/glm-4.5-air:free').
+// FAST generalists lead: Auto serves everyday chat, where a snappy capable model beats a
+// heavyweight reasoner that queues for minutes on the free tier (the #1 'Auto feels broken'
+// complaint). Reasoning-class frees (r1) sit late; users who want them can pin them.
 const FREE_TEXT_PRIORITY = [
-  'v3.1', 'deepseek-chat', 'deepseek-r1', 'deepseek',
-  'glm-4.6', 'glm-4.5', 'glm', 'qwen3', 'qwen-2.5', 'qwen',
-  'kimi-k2', 'gpt-oss', 'llama-3.3', 'llama-3.1',
-  'gemini-2.0-flash', 'gemini', 'mistral', 'gemma'
+  'v3.1', 'deepseek-chat', 'glm-4.6', 'glm-4.5-air', 'glm-4.5', 'glm',
+  'qwen3', 'qwen-2.5', 'qwen', 'kimi-k2', 'gpt-oss', 'llama-3.3', 'llama-3.1',
+  'gemini-2.0-flash', 'gemini', 'mistral', 'gemma', 'deepseek-r1', 'deepseek'
 ];
+
+// A free model advertising a huge param count in its id (550B-class) routinely sits queued
+// past the request timeout on the free tier — never AUTO-route to it (pinning still works).
+const paramCountB = (id: string): number => {
+  let max = 0;
+  for (const m of id.toLowerCase().matchAll(/(\d+(?:\.\d+)?)\s*b\b/g)) {
+    const n = Number(m[1]);
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  return max;
+};
+const isTimeoutProneFree = (m: AnnotatedModel): boolean => isFreeVerified(m) && paramCountB(m.id) >= 200;
 
 const isTextModel = (m: AnnotatedModel) =>
   !m.supportsImageOutput && (m.outputModalities?.includes('text') ?? true);
@@ -199,7 +213,7 @@ export const pickTextModelChain = async (
   }
   // Skip models we recently saw fail (404/429) so we don't lead the chain with a known-bad
   // free model and pay OpenRouter's ~15-20s wait before it routes onward.
-  const free = text.filter(isFreeVerified).filter((m) => !isModelDown(m.id));
+  const free = text.filter(isFreeVerified).filter((m) => !isModelDown(m.id) && !isTimeoutProneFree(m));
   const ranked: string[] = [];
   const push = (id: string) => { if (id && !ranked.includes(id)) ranked.push(id); };
   for (const needle of (opts?.rankOrder ?? FREE_TEXT_PRIORITY)) {

@@ -80,7 +80,15 @@ const decodeEntities = (text: string): string =>
     .replace(/&#x2F;|&#47;/g, '/')
     .replace(/&nbsp;/g, ' ');
 
-const stripTags = (html: string): string => decodeEntities(html.replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
+// Google News double-escapes descriptions (&lt;ol&gt;&lt;li&gt;&lt;a href=…), so tags must be
+// stripped AFTER entity decoding too — otherwise the UI shows literal markup (a real
+// production bug: news cards rendered "<ol><li><a href=…" as text). Decode → strip →
+// decode once more (for text like &amp;lt; that survives one pass) → collapse whitespace.
+const stripTags = (html: string): string =>
+  decodeEntities(decodeEntities(html.replace(/<[^>]+>/g, '')).replace(/<[^>]+>/g, ''))
+    .replace(/<[^>]+>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 
 // Pull the inner text of the first matching tag inside an <item> block.
 const tagText = (block: string, tag: string): string | undefined => {
@@ -127,6 +135,8 @@ export const parseNewsRss = (xml: string, limit = 10): NewsItem[] => {
     const descRaw = tagText(block, 'description');
     let snippet = descRaw ? stripTags(descRaw).slice(0, 240) : undefined;
     if (snippet && (snippet === title || snippet.startsWith(title))) snippet = undefined;
+    // A snippet that still looks like markup/links after stripping adds nothing — drop it.
+    if (snippet && /href=|<\w|news\.google\.com/i.test(snippet)) snippet = undefined;
 
     items.push({
       title,

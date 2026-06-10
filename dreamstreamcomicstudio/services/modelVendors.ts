@@ -38,6 +38,13 @@ export const VENDOR_META: VendorMeta[] = [
   { id: 'amazon', label: 'Amazon · Nova', color: 'bg-yellow-600 text-black', aliases: ['amazon'], url: 'https://aws.amazon.com/ai/generative-ai/nova' },
   { id: 'nvidia', label: 'NVIDIA', color: 'bg-green-600 text-white', aliases: ['nvidia'], url: 'https://build.nvidia.com' },
   { id: 'nous', label: 'Nous Research', color: 'bg-violet-600 text-white', aliases: ['nousresearch', 'nous'], url: 'https://nousresearch.com' },
+  { id: 'minimax', label: 'MiniMax', color: 'bg-red-500 text-white', aliases: ['minimax'], url: 'https://www.minimax.io' },
+  { id: 'stepfun', label: 'StepFun', color: 'bg-sky-700 text-white', aliases: ['stepfun'], url: 'https://www.stepfun.com' },
+  { id: 'ibm', label: 'IBM · Granite', color: 'bg-blue-800 text-white', aliases: ['ibm-granite', 'ibm'], url: 'https://www.ibm.com/granite' },
+  { id: 'nexagi', label: 'Nex AGI', color: 'bg-slate-800 text-white', aliases: ['nex-agi', 'nexagi'] },
+  { id: 'poolside', label: 'Poolside', color: 'bg-cyan-700 text-white', aliases: ['poolside'], url: 'https://poolside.ai' },
+  { id: 'openrouter-lab', label: 'OpenRouter Labs', color: 'bg-indigo-500 text-white', aliases: ['openrouter'], url: 'https://openrouter.ai' },
+  { id: 'inclusionai', label: 'InclusionAI', color: 'bg-emerald-700 text-white', aliases: ['inclusionai'] },
 ];
 
 const OTHER: VendorMeta = { id: 'other', label: 'Other', color: 'bg-slate-500 text-white', aliases: [] };
@@ -47,10 +54,13 @@ for (const vendor of VENDOR_META) {
   for (const alias of vendor.aliases) ALIAS_TO_VENDOR.set(alias.toLowerCase(), vendor);
 }
 
-/** The org slug = the part of the model id before the first "/" (or the whole id if none). */
+/** The org slug = the part of the model id before the first "/" (or the whole id if none).
+ *  OpenRouter "redirect alias" entries prefix the id with "~" (e.g. ~anthropic/claude-…-latest);
+ *  strip leading punctuation so those still resolve to their real maker instead of "Other". */
 export const vendorSlug = (model: { id: string }): string => {
-  const slash = model.id.indexOf('/');
-  return (slash > 0 ? model.id.slice(0, slash) : model.id).toLowerCase();
+  const id = model.id.replace(/^[^a-z0-9]+/i, '');
+  const slash = id.indexOf('/');
+  return (slash > 0 ? id.slice(0, slash) : id).toLowerCase();
 };
 
 /** Resolve a model to its canonical vendor (falls back to "Other"). */

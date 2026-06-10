@@ -262,7 +262,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
             <div className="w-16 h-16 rounded-2xl border-4 border-black bg-brand-yellow flex items-center justify-center shadow-comic mb-4">
               <Sparkles className="w-8 h-8" />
             </div>
-            <h2 className="font-display text-3xl mb-1">AI Chat</h2>
+            <h2 className="font-display text-3xl mb-1">Chat Studio</h2>
             <p className="text-slate-600 text-sm mb-5">
               Chat with <span className="font-bold">{modelLabel}</span>. Ask anything — answers render with
               tables, code, links and images. Switch models anytime.
