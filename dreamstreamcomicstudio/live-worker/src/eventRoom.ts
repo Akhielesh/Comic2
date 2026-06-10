@@ -23,6 +23,8 @@ export interface EventMeta {
   segMs: number;
   status: StreamStatus;
   createdAt: number;
+  /** Optional scheduled start (epoch ms) — viewers see a countdown until live. */
+  scheduledAt: number | null;
   startedAt: number | null;
   endedAt: number | null;
   firstSeq: number;
@@ -111,6 +113,10 @@ export class EventRoom {
       segMs: Math.min(6000, Math.max(2000, Number(body.segMs) || 3000)),
       status: 'idle',
       createdAt: Date.now(),
+      scheduledAt:
+        Number.isFinite(Number(body.scheduledAt)) && Number(body.scheduledAt) > Date.now()
+          ? Number(body.scheduledAt)
+          : null,
       startedAt: null,
       endedAt: null,
       firstSeq: 0,
