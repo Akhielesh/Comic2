@@ -1,27 +1,22 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowDown, ArrowUp, Clapperboard, CloudSun, LayoutDashboard, LineChart,
+  ArrowDown, ArrowUp, Clapperboard, CloudSun, LayoutDashboard, LineChart, Lock, LockOpen,
   Map as MapIcon, MapPin, Maximize2, Minimize2, MoreHorizontal, Newspaper,
-  Pencil, Plus, RefreshCw, Trash2, X
+  Pencil, Plus, RefreshCw, Sparkles, Trash2, X
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type {
-  ChatArtifact, MapArtifact, NewsResultsArtifact, PlacesResultsArtifact,
-  StockQuoteArtifact, VideoResultsArtifact, WeatherArtifact
-} from '../../apiTypes';
+import type { ChatArtifact } from '../../apiTypes';
 import { refreshArtifact } from '../../services/chatApi';
 import {
   DASHBOARD_TEMPLATES, addTile, createDashboard, listDashboards, moveTile,
-  onDashboardsChanged, removeDashboard, removeTile, updateDashboard, updateTile,
+  onDashboardsChanged, removeDashboard, removeTile, reorderTile, updateDashboard, updateTile,
   type CustomDashboard, type DashboardTemplate, type DashboardTile
 } from '../../services/customDashboards';
+import { deriveSmartPicks, tileKey, type SmartPick } from '../../services/smartPicks';
+import { getChatMemory, listChatSessions } from '../../services/chatStorage';
+import { useAuth } from '../../contexts/AuthContext';
 import { DensityProvider, relativeTime, type WidgetDensity } from './artifacts/kit';
-import { WeatherStation } from './artifacts/WeatherStation';
-import { NewsDigest } from './artifacts/NewsDigest';
-import { MarketCard } from './artifacts/MarketCard';
-import { PlacesResults } from './artifacts/PlacesResults';
-import { MapArtifactCard } from './artifacts/MapArtifactCard';
-import { VideoResults } from './artifacts/VideoResults';
+import { renderArtifactNode } from './artifacts/ChatArtifacts';
 
 // Custom Dashboards — personal, persistent boards of live widget tiles.
 //
@@ -29,6 +24,10 @@ import { VideoResults } from './artifacts/VideoResults';
 // re-execute it via /api/chat/tool-refresh (services/chatApi.refreshArtifact) and
 // render the result with the SAME artifact cards the chat uses, in the tile's
 // chosen density. No model round-trip — these are pure data tools.
+//
+// The board doubles as the user's PULSE: a greeting strip with smart picks mined
+// from their chat memory + recent conversations (services/smartPicks), drag-drop
+// rearranging, and a lock toggle that freezes the layout into a view-only board.
 
 // ---------------------------------------------------------------- catalog -----
 
@@ -64,24 +63,10 @@ const EXPECTED_ARTIFACT: Record<string, string> = {
 // Mirrors the get_news `topic` enum (server registry) — the sections offered here.
 const NEWS_TOPICS = ['top', 'world', 'business', 'technology', 'science', 'sports', 'health'] as const;
 
-const renderArtifactCard = (artifact: ChatArtifact): React.ReactNode => {
-  switch (artifact.type) {
-    case 'weather':
-      return <WeatherStation data={artifact.data as WeatherArtifact} />;
-    case 'news_results':
-      return <NewsDigest data={artifact.data as NewsResultsArtifact} />;
-    case 'stock_quote':
-      return <MarketCard data={artifact.data as StockQuoteArtifact} />;
-    case 'places_results':
-      return <PlacesResults data={artifact.data as PlacesResultsArtifact} />;
-    case 'map':
-      return <MapArtifactCard data={artifact.data as MapArtifact} />;
-    case 'video_results':
-      return <VideoResults data={artifact.data as VideoResultsArtifact} />;
-    default:
-      return null;
-  }
-};
+// Render via the chat's full artifact registry — ANY refreshable widget can live on a
+// board. (The old local 6-type switch silently rendered nothing for template tiles
+// like the ticker tape, sentiment gauges or macro tiles.)
+const renderArtifactCard = (artifact: ChatArtifact): React.ReactNode => renderArtifactNode(artifact);
 
 // ------------------------------------------------------------- tile chrome ----
 
@@ -115,35 +100,44 @@ const TileCard: React.FC<{
   state?: TileState;
   isFirst: boolean;
   isLast: boolean;
+  /** Locked board = view-only: no move/resize/remove chrome, refresh stays. */
+  locked: boolean;
   onMove: (dir: -1 | 1) => void;
   onToggleDensity: () => void;
   onRefresh: () => void;
   onRemove: () => void;
-}> = ({ tile, state, isFirst, isLast, onMove, onToggleDensity, onRefresh, onRemove }) => {
+}> = ({ tile, state, isFirst, isLast, locked, onMove, onToggleDensity, onRefresh, onRemove }) => {
   const label = tile.label || TOOL_LABELS[tile.tool] || tile.tool;
   const hasCard = !!state?.artifact;
   return (
     <div className="group/tile relative">
-      {/* Slim floating toolbar — appears on hover/focus, always reachable on touch. */}
+      {/* Slim floating toolbar — appears on hover/focus, always reachable on touch.
+          On a locked board only the refresh control remains. */}
       <div className="absolute right-2 top-2 z-20 flex items-center gap-0.5 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] p-0.5 opacity-0 shadow-[0_1px_3px_rgba(0,0,0,0.1)] backdrop-blur-sm transition-opacity duration-200 focus-within:opacity-100 group-hover/tile:opacity-100 [@media(pointer:coarse)]:opacity-70">
-        <ToolButton title="Move up" onClick={() => onMove(-1)} disabled={isFirst}>
-          <ArrowUp className="h-3 w-3" />
-        </ToolButton>
-        <ToolButton title="Move down" onClick={() => onMove(1)} disabled={isLast}>
-          <ArrowDown className="h-3 w-3" />
-        </ToolButton>
-        <ToolButton
-          title={tile.density === 'compact' ? 'Expand: full detail' : 'Collapse: glance view'}
-          onClick={onToggleDensity}
-        >
-          {tile.density === 'compact' ? <Maximize2 className="h-3 w-3" /> : <Minimize2 className="h-3 w-3" />}
-        </ToolButton>
+        {!locked && (
+          <>
+            <ToolButton title="Move up" onClick={() => onMove(-1)} disabled={isFirst}>
+              <ArrowUp className="h-3 w-3" />
+            </ToolButton>
+            <ToolButton title="Move down" onClick={() => onMove(1)} disabled={isLast}>
+              <ArrowDown className="h-3 w-3" />
+            </ToolButton>
+            <ToolButton
+              title={tile.density === 'compact' ? 'Expand: full detail' : 'Collapse: glance view'}
+              onClick={onToggleDensity}
+            >
+              {tile.density === 'compact' ? <Maximize2 className="h-3 w-3" /> : <Minimize2 className="h-3 w-3" />}
+            </ToolButton>
+          </>
+        )}
         <ToolButton title="Refresh" onClick={onRefresh} disabled={state?.loading}>
           <RefreshCw className={`h-3 w-3 ${state?.loading ? 'animate-spin' : ''}`} />
         </ToolButton>
-        <ToolButton title="Remove widget" onClick={onRemove}>
-          <Trash2 className="h-3 w-3" />
-        </ToolButton>
+        {!locked && (
+          <ToolButton title="Remove widget" onClick={onRemove}>
+            <Trash2 className="h-3 w-3" />
+          </ToolButton>
+        )}
       </div>
 
       {hasCard ? (
@@ -409,7 +403,14 @@ const TemplateCard: React.FC<{ template: DashboardTemplate; onUse: () => void }>
 
 const REFRESH_EVERY_MS = 5 * 60_000;
 
+/** "Good morning" / "Good afternoon" / "Good evening" by local hour. */
+const greeting = (): string => {
+  const h = new Date().getHours();
+  return h < 5 ? 'Up late' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+};
+
 export const DashboardsView: React.FC = () => {
+  const { user } = useAuth();
   const [dashboards, setDashboards] = useState<CustomDashboard[]>(() => listDashboards());
   const [activeId, setActiveId] = useState<string | null>(() => listDashboards()[0]?.id ?? null);
   const [tileStates, setTileStates] = useState<Record<string, TileState>>({});
@@ -419,12 +420,30 @@ export const DashboardsView: React.FC = () => {
   const [renaming, setRenaming] = useState(false);
   const [draftName, setDraftName] = useState('');
   const [, setClockTick] = useState(0); // re-render so "Updated Xm ago" stays honest
+  // Recent conversation titles — one signal for the smart picks row.
+  const [sessionTitles, setSessionTitles] = useState<string[]>([]);
+  // The tile currently being dragged (HTML5 DnD reorder), and the hovered drop slot.
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dropIndex, setDropIndex] = useState<number | null>(null);
 
   const inflight = useRef(new Set<string>());
   const tileStatesRef = useRef(tileStates);
   tileStatesRef.current = tileStates;
 
   useEffect(() => onDashboardsChanged(() => setDashboards(listDashboards())), []);
+
+  // Load recent chat titles once (IndexedDB, best-effort) for the smart picks row.
+  useEffect(() => {
+    let on = true;
+    listChatSessions()
+      .then((sessions) => {
+        if (on) setSessionTitles(sessions.slice(0, 20).map((s) => s.title).filter(Boolean));
+      })
+      .catch(() => {});
+    return () => {
+      on = false;
+    };
+  }, []);
 
   const active = useMemo(
     () => dashboards.find((d) => d.id === activeId) ?? dashboards[0],
@@ -515,6 +534,32 @@ export const DashboardsView: React.FC = () => {
     setActiveId(null);
   };
 
+  const locked = !!active?.locked;
+
+  // Smart picks: mined from the user's memory + recent chats, minus what's pinned.
+  const smartPicks = useMemo<SmartPick[]>(() => {
+    const existing = new Set((active?.tiles ?? []).map((t) => tileKey({ tool: t.tool, args: t.args, density: t.density })));
+    return deriveSmartPicks(getChatMemory(user?.id), sessionTitles, existing);
+  }, [active, sessionTitles, user?.id]);
+
+  const addPick = (pick: SmartPick) => {
+    if (active) {
+      const tile = addTile(active.id, pick.tile);
+      void fetchTile(tile);
+      return;
+    }
+    // No board yet — a pick bootstraps the user's pulse board.
+    const d = createDashboard('My pulse', '⚡', [pick.tile]);
+    setActiveId(d.id);
+  };
+
+  // Drag-drop reorder (desktop). Arrows in the tile toolbar remain for keyboard/touch.
+  const handleDrop = (toIndex: number) => {
+    if (active && dragId) reorderTile(active.id, dragId, toIndex);
+    setDragId(null);
+    setDropIndex(null);
+  };
+
   // Detailed tiles get the full row on md and 2 of 3 columns on xl.
   const spanFor = (density: WidgetDensity) => (density === 'detailed' ? 'md:col-span-2 xl:col-span-2' : 'min-w-0');
 
@@ -601,9 +646,24 @@ export const DashboardsView: React.FC = () => {
             </button>
           </div>
 
-          {/* Kebab: rename / delete the active dashboard. */}
+          {/* Right controls: lock toggle + kebab (rename / delete). */}
           {active && (
-            <div className="relative ml-auto">
+            <div className="ml-auto flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => updateDashboard(active.id, { locked: !locked })}
+                aria-pressed={locked}
+                title={locked ? 'Unlock: edit layout' : 'Lock: freeze layout (view-only pulse)'}
+                className={`flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors ${
+                  locked
+                    ? 'border-[var(--ds-accent)] bg-[#D97757]/10 text-[var(--ds-ink)]'
+                    : 'border-[var(--ds-hairline)] bg-[var(--ds-surface)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
+                }`}
+              >
+                {locked ? <Lock className="h-3.5 w-3.5 text-[var(--ds-accent)]" /> : <LockOpen className="h-3.5 w-3.5" />}
+                {locked ? 'Locked' : 'Lock'}
+              </button>
+              <div className="relative">
               <button
                 type="button"
                 aria-label="Dashboard options"
@@ -646,20 +706,76 @@ export const DashboardsView: React.FC = () => {
                   </div>
                 </>
               )}
+              </div>
             </div>
           )}
         </header>
+
+        {/* ------------------------------------------------------ pulse strip --- */}
+        {/* Greeting + smart picks mined from the user's memory and recent chats.
+            One tap pins a pick as a live tile. Hidden while the board is locked. */}
+        {active && !locked && smartPicks.length > 0 && (
+          <div className="mb-4 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-4 py-3 shadow-[0_1px_3px_rgba(0,0,0,0.05)]">
+            <div className="flex items-center gap-1.5 text-sm font-semibold text-[var(--ds-ink)]">
+              <Sparkles className="h-4 w-4 text-[var(--ds-accent)]" />
+              {greeting()} — your picks today
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {smartPicks.map((pick) => (
+                <button
+                  key={pick.label}
+                  type="button"
+                  title={`${pick.reason} — tap to pin`}
+                  onClick={() => addPick(pick)}
+                  className="inline-flex items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-2.5 py-1 text-[11px] font-medium text-[var(--ds-muted)] transition-colors hover:border-[var(--ds-accent)] hover:text-[var(--ds-ink)]"
+                >
+                  <Plus className="h-3 w-3 text-[var(--ds-accent)]" />
+                  {pick.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* ----------------------------------------------------- tile grid --- */}
         {active && (
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
             {active.tiles.map((tile, i) => (
-              <div key={tile.id} className={spanFor(tile.density)}>
+              <div
+                key={tile.id}
+                className={`${spanFor(tile.density)} ${dragId === tile.id ? 'opacity-50' : ''} ${
+                  dropIndex === i && dragId && dragId !== tile.id ? 'rounded-2xl ring-2 ring-[var(--ds-accent)] ring-offset-2 ring-offset-[var(--ds-canvas)]' : ''
+                }`}
+                draggable={!locked}
+                onDragStart={(e) => {
+                  if (locked) return;
+                  setDragId(tile.id);
+                  e.dataTransfer.effectAllowed = 'move';
+                }}
+                onDragOver={(e) => {
+                  if (locked || !dragId) return;
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'move';
+                  if (dropIndex !== i) setDropIndex(i);
+                }}
+                onDragLeave={() => {
+                  if (dropIndex === i) setDropIndex(null);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  handleDrop(i);
+                }}
+                onDragEnd={() => {
+                  setDragId(null);
+                  setDropIndex(null);
+                }}
+              >
                 <TileCard
                   tile={tile}
                   state={tileStates[tile.id]}
                   isFirst={i === 0}
                   isLast={i === active.tiles.length - 1}
+                  locked={locked}
                   onMove={(dir) => moveTile(active.id, tile.id, dir)}
                   onToggleDensity={() =>
                     updateTile(active.id, tile.id, { density: tile.density === 'compact' ? 'detailed' : 'compact' })
@@ -670,8 +786,8 @@ export const DashboardsView: React.FC = () => {
               </div>
             ))}
 
-            {/* Add widget — a card that expands into the inline picker panel. */}
-            {addOpen ? (
+            {/* Add widget — hidden on a locked board. */}
+            {locked ? null : addOpen ? (
               <div className="md:col-span-2 xl:col-span-3">
                 <AddWidgetPanel onAdd={handleAddTile} onClose={() => setAddOpen(false)} />
               </div>

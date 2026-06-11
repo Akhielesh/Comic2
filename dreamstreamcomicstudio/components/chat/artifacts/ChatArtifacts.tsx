@@ -218,6 +218,7 @@ const LiveArtifact: React.FC<{ artifact: ChatArtifact }> = ({ artifact }) => {
         type={current.type}
         densityHint={hint === 'compact' || hint === 'detailed' ? hint : undefined}
         densityAware={DENSITY_AWARE_TYPES.has(current.type)}
+        origin={canRefresh ? origin : undefined}
       >
         {node}
       </WidgetFrame>

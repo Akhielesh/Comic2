@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Maximize2, Minimize2, RefreshCw } from 'lucide-react';
+import { Check, LayoutDashboard, Maximize2, Minimize2, Plus, RefreshCw } from 'lucide-react';
 import { DensityProvider, useLiveData, type WidgetDensity } from './kit';
+import { addTile, createDashboard, listDashboards } from '../../../services/customDashboards';
 
 // Universal widget chrome: wraps every artifact card with the two capabilities the
 // component system promises —
@@ -50,15 +51,26 @@ interface WidgetFrameProps {
   densityAware: boolean;
   /** Controlled density (used by the gallery's global toggle); hides the toggle. */
   forcedDensity?: WidgetDensity;
+  /** The refresh-whitelisted tool call that produced this widget. When present the
+   *  frame offers "Pin to dashboard" — the same call becomes a live board tile. */
+  origin?: { tool: string; args: Record<string, unknown> };
   children: React.ReactNode;
 }
+
+/** Short human label for a pinned tile, derived from the producing call's args. */
+const tileLabelFor = (origin: { tool: string; args: Record<string, unknown> }): string | undefined => {
+  const a = origin.args;
+  const first = [a.symbol, a.location, a.query, a.topic, a.coin, a.destination]
+    .find((v) => typeof v === 'string' && (v as string).trim());
+  return typeof first === 'string' ? first : undefined;
+};
 
 /** Height (px) of the clamped preview for cards without a bespoke compact layout. */
 const CLAMP_HEIGHT = 210;
 const MIN_HEIGHT = 140;
 const MAX_HEIGHT = 1400;
 
-export const WidgetFrame: React.FC<WidgetFrameProps> = ({ type, densityHint, densityAware, forcedDensity, children }) => {
+export const WidgetFrame: React.FC<WidgetFrameProps> = ({ type, densityHint, densityAware, forcedDensity, origin, children }) => {
   const [ownDensity, setDensity] = useState<WidgetDensity>(() => {
     const saved = readStore(DENSITY_STORE)[type];
     if (saved === 'compact' || saved === 'detailed') return saved;
@@ -74,6 +86,19 @@ export const WidgetFrame: React.FC<WidgetFrameProps> = ({ type, densityHint, den
   const dragState = useRef<{ startY: number; startH: number } | null>(null);
   const density = forcedDensity ?? ownDensity;
   const live = useLiveData();
+  // "Pin to dashboard" popover state. `pinned` shows the ✓ confirmation beat.
+  const [pinOpen, setPinOpen] = useState(false);
+  const [pinned, setPinned] = useState(false);
+
+  const pinTo = (dashId: string | null) => {
+    if (!origin) return;
+    const tile = { tool: origin.tool, args: { ...origin.args }, label: tileLabelFor(origin), density };
+    if (dashId) addTile(dashId, tile);
+    else createDashboard('My pulse', '⚡', [tile]);
+    setPinOpen(false);
+    setPinned(true);
+    window.setTimeout(() => setPinned(false), 1600);
+  };
 
   const toggleDensity = () => {
     const next: WidgetDensity = density === 'compact' ? 'detailed' : 'compact';
@@ -133,6 +158,45 @@ export const WidgetFrame: React.FC<WidgetFrameProps> = ({ type, densityHint, den
 
   return (
     <div className="group/widget relative">
+      {/* Pin to dashboard (live-data widgets) — floats left of refresh. */}
+      {origin && !forcedDensity && (
+        <div className="absolute right-[4.5rem] top-3 z-30">
+          <button
+            onClick={() => setPinOpen((v) => !v)}
+            title={pinned ? 'Pinned!' : 'Pin to a dashboard (live tile)'}
+            aria-label="Pin widget to a dashboard"
+            className={`flex h-6 w-6 items-center justify-center rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] shadow-[0_1px_3px_rgba(0,0,0,0.1)] backdrop-blur-sm transition-all duration-200 hover:text-[var(--ds-ink)] focus-visible:opacity-100 group-hover/widget:opacity-100 group-focus-within/widget:opacity-100 [@media(pointer:coarse)]:opacity-70 ${
+              pinned ? 'text-emerald-600 opacity-100' : pinOpen ? 'text-[var(--ds-accent)] opacity-100' : 'text-[var(--ds-muted)] opacity-0'
+            }`}
+          >
+            {pinned ? <Check className="h-3 w-3" /> : <LayoutDashboard className="h-3 w-3" />}
+          </button>
+          {pinOpen && (
+            <>
+              <button aria-label="Close" onClick={() => setPinOpen(false)} className="fixed inset-0 z-30 cursor-default" />
+              <div className="absolute right-0 top-full z-40 mt-1 w-44 overflow-hidden rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] shadow-lg backdrop-blur-sm">
+                {listDashboards().map((d) => (
+                  <button
+                    key={d.id}
+                    onClick={() => pinTo(d.id)}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-[var(--ds-ink)] transition-colors hover:bg-[var(--ds-hover)]"
+                  >
+                    <span className="text-sm leading-none">{d.icon || '▦'}</span>
+                    <span className="truncate">{d.name}</span>
+                  </button>
+                ))}
+                <button
+                  onClick={() => pinTo(null)}
+                  className="flex w-full items-center gap-2 border-t border-[var(--ds-hairline-soft)] px-3 py-2 text-left text-xs font-medium text-[var(--ds-accent)] transition-colors hover:bg-[var(--ds-hover)]"
+                >
+                  <Plus className="h-3.5 w-3.5" /> New board
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Refresh (live-data widgets) — floats left of the density toggle. */}
       {live.canRefresh && (
         <button

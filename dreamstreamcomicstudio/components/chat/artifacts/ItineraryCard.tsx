@@ -14,10 +14,13 @@ import {
   MapPin,
   ArrowRight,
   ExternalLink,
+  Check,
   CheckCircle2,
   CloudSun,
-  Droplets
+  Droplets,
+  LayoutDashboard
 } from 'lucide-react';
+import { createDashboard } from '../../../services/customDashboards';
 import type { ItineraryArtifact, ItineraryDay, ItineraryStop, ItineraryStopKind, ItineraryTransport, MapArtifact } from '../../../apiTypes';
 import { Surface, SurfaceTitle, SurfaceSubtitle, Expandable, useCompact, resolveTheme, formatPrice } from './kit';
 import { InlineMap } from './InlineMap';
@@ -59,6 +62,26 @@ const MODE_ICONS: Record<NonNullable<ItineraryTransport['mode']>, React.Componen
 
 /** A stop is a transport leg when it carries structured transport data or a travel kind. */
 const isTransportStop = (s: ItineraryStop): boolean => !!s.transport || (!!s.kind && TRANSPORT_KINDS.has(s.kind));
+
+/**
+ * Turn a finalized trip into a live dashboard — destination weather, a map of the
+ * trip's located stops, local news and places to eat. One tap; no manual board
+ * building. (Tiles are whitelisted live-data calls, so the board refreshes itself.)
+ */
+const saveTripAsDashboard = (data: ItineraryArtifact): void => {
+  const destination = data.destination || data.title;
+  const located = data.days
+    .flatMap((d) => d.stops)
+    .filter((s) => typeof s.lat === 'number' && typeof s.lng === 'number')
+    .map((s) => (data.destination ? `${s.name}, ${data.destination}` : s.name))
+    .slice(0, 8);
+  createDashboard(`Trip: ${destination}`, '🧳', [
+    { tool: 'get_weather', args: { location: destination }, label: destination, density: 'detailed' },
+    ...(located.length ? [{ tool: 'show_map', args: { places: located }, label: 'Trip map', density: 'detailed' as const }] : []),
+    { tool: 'get_news', args: { query: destination }, label: `${destination} news`, density: 'compact' },
+    { tool: 'find_places', args: { query: 'restaurants', near: destination }, label: `Eat · ${destination}`, density: 'compact' }
+  ]);
+};
 
 const shortDay = (iso?: string): string => {
   if (!iso) return '';
@@ -344,6 +367,8 @@ export const ItineraryCard: React.FC<{ data: ItineraryArtifact }> = ({ data }) =
   const compact = useCompact();
   const theme = resolveTheme({ palette: (data.palette as never) ?? 'ocean' });
   const [activeDay, setActiveDay] = useState(0);
+  // "Save as dashboard" confirmation beat.
+  const [savedBoard, setSavedBoard] = useState(false);
   const currency = data.currency ?? 'USD';
   const days = data.days ?? [];
   const totalStops = days.reduce((n, d) => n + d.stops.length, 0);
@@ -407,7 +432,29 @@ export const ItineraryCard: React.FC<{ data: ItineraryArtifact }> = ({ data }) =
     <Surface
       accent={theme.accent}
       header={header}
-      right={data.weather ? <WeatherChip weather={data.weather} /> : undefined}
+      right={
+        <span className="flex shrink-0 items-center gap-1.5">
+          {data.weather && <WeatherChip weather={data.weather} />}
+          {/* Finalized the plan? One tap turns it into a live trip dashboard. */}
+          <button
+            type="button"
+            onClick={() => {
+              saveTripAsDashboard(data);
+              setSavedBoard(true);
+              window.setTimeout(() => setSavedBoard(false), 2000);
+            }}
+            title={savedBoard ? 'Saved — open Dashboards in the sidebar' : 'Save this trip as a live dashboard (weather, map, news, places)'}
+            className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold transition-colors duration-200 ${
+              savedBoard
+                ? 'border-emerald-600/40 text-emerald-600'
+                : 'border-[var(--ds-hairline)] text-[var(--ds-muted)] hover:border-[var(--ds-accent)] hover:text-[var(--ds-ink)]'
+            }`}
+          >
+            {savedBoard ? <Check className="h-3 w-3" /> : <LayoutDashboard className="h-3 w-3" />}
+            {savedBoard ? 'Saved' : 'Make board'}
+          </button>
+        </span>
+      }
       footer={<BudgetFooter data={data} currency={currency} />}
     >
       {data.weather?.daily && data.weather.daily.length > 0 && (

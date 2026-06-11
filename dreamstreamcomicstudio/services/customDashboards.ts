@@ -25,6 +25,8 @@ export interface CustomDashboard {
   icon?: string;
   tiles: DashboardTile[];
   createdAt: string;
+  /** Locked = view-only pulse mode: tile toolbars hidden, no move/remove/add. */
+  locked?: boolean;
 }
 
 /** A starter dashboard offered by the empty state's "Start from template". */
@@ -63,7 +65,8 @@ const sanitizeDashboard = (d: unknown): CustomDashboard | null => {
     name: dash.name,
     ...(typeof dash.icon === 'string' && dash.icon ? { icon: dash.icon } : {}),
     tiles: Array.isArray(dash.tiles) ? dash.tiles.map(sanitizeTile).filter((t): t is DashboardTile => t !== null) : [],
-    createdAt: typeof dash.createdAt === 'string' && dash.createdAt ? dash.createdAt : new Date().toISOString()
+    createdAt: typeof dash.createdAt === 'string' && dash.createdAt ? dash.createdAt : new Date().toISOString(),
+    ...(dash.locked === true ? { locked: true } : {})
   };
 };
 
@@ -120,13 +123,14 @@ export const createDashboard = (
   return dash;
 };
 
-export const updateDashboard = (id: string, patch: { name?: string; icon?: string }) => {
+export const updateDashboard = (id: string, patch: { name?: string; icon?: string; locked?: boolean }) => {
   write(
     read().map((d) => {
       if (d.id !== id) return d;
       const next: CustomDashboard = { ...d };
       if (typeof patch.name === 'string') next.name = patch.name.trim() || next.name;
       if (patch.icon !== undefined) next.icon = patch.icon.trim() || undefined;
+      if (typeof patch.locked === 'boolean') next.locked = patch.locked || undefined;
       return next;
     })
   );
@@ -174,6 +178,22 @@ export const updateTile = (
 
 export const removeTile = (dashId: string, tileId: string) => {
   write(read().map((d) => (d.id === dashId ? { ...d, tiles: d.tiles.filter((t) => t.id !== tileId) } : d)));
+};
+
+/** Move a tile to an exact position (drag-drop reorder). */
+export const reorderTile = (dashId: string, tileId: string, toIndex: number) => {
+  write(
+    read().map((d) => {
+      if (d.id !== dashId) return d;
+      const from = d.tiles.findIndex((t) => t.id === tileId);
+      const to = Math.max(0, Math.min(d.tiles.length - 1, toIndex));
+      if (from < 0 || from === to) return d;
+      const tiles = [...d.tiles];
+      const [moved] = tiles.splice(from, 1);
+      tiles.splice(to, 0, moved);
+      return { ...d, tiles };
+    })
+  );
 };
 
 /** Swap a tile with its neighbor (dir: -1 = up/earlier, 1 = down/later). */
