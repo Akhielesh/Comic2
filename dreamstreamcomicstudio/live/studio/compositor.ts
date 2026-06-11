@@ -403,6 +403,15 @@ export class ProgramCompositor {
     rest.slice(0, maxRows).forEach((t, i) => {
       this.drawTile(t, w - colW - gap, gap + i * (th + gap), colW, th);
     });
+    if (rest.length > maxRows) {
+      // The column is full — say so instead of silently hiding people.
+      const fs = Math.max(10, Math.round(Math.min(w, h) * 0.022));
+      ctx.font = `500 ${fs}px 'Hanken Grotesk', sans-serif`;
+      ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(`+${rest.length - maxRows} more in Grid`, w - gap - 4, h - gap - 4);
+    }
   }
 
   /** One labeled tile: cover-fit cams, letterbox screens, rounded corners. */

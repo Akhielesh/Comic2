@@ -54,3 +54,24 @@ Costs at 100 viewers: segments are written once (free ingress), read through
 `caches.default` (≈1 R2 read per segment per colo), and stored at R2's
 $0.015/GB-month. Chat/presence ride one Durable Object. There is no per-minute
 delivery billing on this rail.
+
+## On-air guests (v5)
+
+The room doubles as the **WebRTC signaling relay** for up to 4 on-air guests:
+
+- The host mints a `guestKey` over the socket (`{t:'guestkey'}`, `rotate:true`
+  invalidates every previously shared link). Guests connect to `/ws?g=<key>`
+  and take a `guest` role — they bypass the lobby (the key IS the seat pass),
+  don't count against the viewer cap, and cap at `MAX_GUESTS = 4`.
+- `{t:'rtc', to?, d}` frames relay SDP/ICE between host and guests only
+  (guest→host, host→named guest; 64 KB ceiling for SDP, all other frames stay
+  at 4 KB). The DO never inspects payloads. Media is peer-to-peer (STUN only);
+  the host mixes guests into the program canvas, so the R2 rail is unchanged.
+
+## Cost guardrails
+
+- `POST /api/events/:id/exit?k=hostKey` — pagehide beacon from the studio tab:
+  ends the stream immediately (restartable; going live again clears `endedAt`).
+- Host websocket drop while live → `paused` + 2-minute grace → auto-end.
+- 2 h without segment ingest while "live" → auto-end.
+- Segments purge 24 h after end; server recordings purge after 7 days.
