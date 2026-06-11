@@ -114,6 +114,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             if (event === 'SIGNED_OUT') {
                 userIdRef.current = null;
                 syncedUserRef.current = null;
+                // Purge on EVERY sign-out path (incl. Stream Studio's and the
+                // inactivity policy), not just our own buttons — a shared
+                // device must never keep the previous user's keys.
+                clearLocalAuthState();
             }
         });
 

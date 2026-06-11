@@ -149,15 +149,36 @@ export async function pullPrefsFromCloud(): Promise<boolean> {
   }
 }
 
-/** Sign the account out of this device (Stream Studio standalone account UI). */
+/** Sign the account out of THIS device only (supabase-js defaults to scope
+ *  'global', which would kill the user's sessions on every device — the bug
+ *  that made sign-out here look like random suite-wide logouts). Also purge
+ *  this browser's event registry: hostKeys must not survive for the next
+ *  person on a shared device. */
 export async function signOut(): Promise<void> {
   const supabase = await client();
   if (!supabase) return;
   try {
-    await supabase.auth.signOut();
+    await supabase.auth.signOut({ scope: 'local' });
   } catch {
     /* already signed out */
   }
+  try {
+    localStorage.removeItem('ds-live-my-events');
+    localStorage.removeItem('ds-live-my-recordings');
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+/** Debounced settings push — savePrefs schedules this so EVERY write path
+ *  (Customize, Create flow, PiP layout, Reset) mirrors to the account. */
+let prefsPushTimer: number | undefined;
+export function schedulePrefsPush(): void {
+  if (typeof window === 'undefined') return;
+  window.clearTimeout(prefsPushTimer);
+  prefsPushTimer = window.setTimeout(() => {
+    void pushPrefsToCloud();
+  }, 1200);
 }
 
 const toRow = (ev: MyEvent, uid: string): Omit<CloudEventRow, 'user_id'> & { user_id: string } => ({
