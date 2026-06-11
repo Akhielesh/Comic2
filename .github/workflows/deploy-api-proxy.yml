@@ -1,0 +1,50 @@
+name: Deploy API Proxy
+
+# Mounts the Railway backend at dreamstreamstudio.ai/api/* via a Workers route
+# (same pattern as deploy-live-worker.yml). This is what makes the deployed
+# Pages frontend's same-origin /api calls reach the real backend — before this
+# worker existed, the Pages SPA fallback answered every /api request with
+# index.html + HTTP 200, so all backend features silently failed in production.
+# Requires repo secrets: CLOUDFLARE_API_TOKEN (Workers Scripts:Edit + zone
+# Workers Routes:Edit), CLOUDFLARE_ACCOUNT_ID.
+#
+# The worker is dependency-free, so there is no npm install step — wrangler
+# bundles src/index.ts directly.
+
+on:
+  push:
+    branches: [Dreamstrream-v1]
+    paths:
+      - 'dreamstreamcomicstudio/api-proxy/**'
+      - '.github/workflows/deploy-api-proxy.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # wrangler 4.98+ requires Node >= 22.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Deploy with wrangler
+        working-directory: dreamstreamcomicstudio/api-proxy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@latest deploy
+
+      - name: Verify the mounted route answers with backend JSON
+        run: |
+          sleep 10
+          body=$(curl -s --max-time 20 https://dreamstreamstudio.ai/api/health)
+          echo "GET /api/health -> $body"
+          echo "$body" | grep -q '"status"' || { echo '::error::/api/health did not return backend JSON — route not active'; exit 1; }
