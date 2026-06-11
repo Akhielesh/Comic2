@@ -192,7 +192,7 @@ const weather: WeatherArtifact = {
 
 const news: NewsResultsArtifact = {
   query: 'AI', items: [
-    { title: 'A breakthrough model ships with agentic tools and parallel execution', url: 'https://techdaily.com/1', source: 'TechDaily', publishedAt: new Date(Date.now() - 3600_000).toISOString(), snippet: 'The release adds parallel tool use, a larger context window, and on-device inference, marking a notable step for agentic workflows across the industry.', sentiment: 'positive', readMinutes: 4 },
+    { title: 'What is artificial intelligence? A primer on agentic systems', url: 'https://en.wikipedia.org/wiki/Artificial_intelligence', source: 'Wikipedia', publishedAt: new Date(Date.now() - 3600_000).toISOString(), snippet: 'Agentic systems add parallel tool use, larger context windows, and on-device inference — read the full primer in-app to see the reader mode.', sentiment: 'positive', readMinutes: 4 },
     { title: 'Open models close the gap on closed ones', url: 'https://reuters.com/2', source: 'Reuters', publishedAt: new Date(Date.now() - 7200_000).toISOString(), snippet: 'Benchmarks show open-weight models trailing flagship systems by a narrowing margin.' },
     { title: 'Chipmakers race to meet inference demand', url: 'https://bloomberg.com/3', source: 'Bloomberg', publishedAt: new Date(Date.now() - 5 * 3600_000).toISOString(), snippet: 'Capacity constraints push prices higher as data-center buildout accelerates.', sentiment: 'neutral', readMinutes: 6 },
     { title: 'Regulators weigh new disclosure rules for AI systems', url: 'https://theverge.com/4', source: 'The Verge', publishedAt: new Date(Date.now() - 9 * 3600_000).toISOString(), sentiment: 'negative' }

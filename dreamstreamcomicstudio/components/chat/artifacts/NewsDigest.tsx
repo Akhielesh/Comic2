@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Newspaper } from 'lucide-react';
 import type { NewsResultsArtifact, NewsItem } from '../../../apiTypes';
 import { Surface, SurfaceTitle, SurfaceSubtitle, relativeTime, useCompact, useLiveData } from './kit';
+import { ArticleReader } from './ArticleReader';
 
 // News digest, rebuilt in the calm-studio language.
 //  • compact — the top 3 headlines with source + time. No images, no controls:
@@ -105,7 +106,11 @@ export const NewsDigest: React.FC<{ data: NewsResultsArtifact }> = ({ data }) =>
   const live = useLiveData();
   const items = data.items ?? [];
   const [showAll, setShowAll] = useState(false);
+  // Which article is open in the in-app reader (null = none).
+  const [reading, setReading] = useState<NewsItem | null>(null);
   if (!items.length) return null;
+
+  const reader = reading && <ArticleReader item={reading} onClose={() => setReading(null)} />;
 
   const updated = live.asOf ? relativeTime(live.asOf) : '';
   // Only a topical feed (no free-text query) lights up a chip.
@@ -132,7 +137,7 @@ export const NewsDigest: React.FC<{ data: NewsResultsArtifact }> = ({ data }) =>
         <ul className="divide-y divide-[var(--ds-hairline-soft)] border-t border-[var(--ds-hairline-soft)]">
           {items.slice(0, 3).map((n, i) => (
             <li key={`${n.url}-${i}`}>
-              <a href={n.url} target="_blank" rel="noopener noreferrer" className="flex items-start gap-2 px-3 py-1.5 transition-colors duration-200 hover:bg-[var(--ds-well)]">
+              <button type="button" onClick={() => setReading(n)} className="flex w-full items-start gap-2 px-3 py-1.5 text-left transition-colors duration-200 hover:bg-[var(--ds-well)]">
                 <span className="mt-0.5 shrink-0">
                   <SourceIcon item={n} size={14} />
                 </span>
@@ -140,10 +145,11 @@ export const NewsDigest: React.FC<{ data: NewsResultsArtifact }> = ({ data }) =>
                   <span className="block truncate text-[12px] font-medium leading-snug text-[var(--ds-ink)]">{n.title}</span>
                   <MetaLine item={n} showSentiment={false} />
                 </span>
-              </a>
+              </button>
             </li>
           ))}
         </ul>
+        {reader}
       </Surface>
     );
   }
@@ -189,8 +195,8 @@ export const NewsDigest: React.FC<{ data: NewsResultsArtifact }> = ({ data }) =>
 
       {/* Subtle shimmer while a topic refresh is in flight. */}
       <div className={`transition-opacity duration-200 ${live.refreshing ? 'pointer-events-none animate-pulse opacity-50' : ''}`}>
-      {/* Lead story */}
-      <a href={lead.url} target="_blank" rel="noopener noreferrer" className="block px-3 pb-2.5 pt-1 transition-colors duration-200 hover:bg-[var(--ds-well)]">
+      {/* Lead story — opens the in-app reader. */}
+      <button type="button" onClick={() => setReading(lead)} className="block w-full px-3 pb-2.5 pt-1 text-left transition-colors duration-200 hover:bg-[var(--ds-well)]">
         {lead.image && (
           <img src={lead.image} alt="" loading="lazy" className="mb-2 aspect-[2/1] w-full rounded-xl object-cover ring-1 ring-[var(--ds-hairline-soft)]" />
         )}
@@ -200,14 +206,14 @@ export const NewsDigest: React.FC<{ data: NewsResultsArtifact }> = ({ data }) =>
           <MetaLine item={lead} />
         </span>
         {lead.snippet && <span className="mt-1 block text-[11px] leading-snug text-[var(--ds-muted)] line-clamp-2">{lead.snippet}</span>}
-      </a>
+      </button>
 
-      {/* Remaining stories as clean divided rows */}
+      {/* Remaining stories as clean divided rows — each opens the in-app reader. */}
       {visibleRest.length > 0 && (
         <ul className="divide-y divide-[var(--ds-hairline-soft)] border-t border-[var(--ds-hairline-soft)]">
           {visibleRest.map((n, i) => (
             <li key={`${n.url}-${i}`}>
-              <a href={n.url} target="_blank" rel="noopener noreferrer" className="flex items-start gap-2 px-3 py-2 transition-colors duration-200 hover:bg-[var(--ds-well)]">
+              <button type="button" onClick={() => setReading(n)} className="flex w-full items-start gap-2 px-3 py-2 text-left transition-colors duration-200 hover:bg-[var(--ds-well)]">
                 <span className="mt-0.5 shrink-0">
                   <SourceIcon item={n} />
                 </span>
@@ -217,7 +223,7 @@ export const NewsDigest: React.FC<{ data: NewsResultsArtifact }> = ({ data }) =>
                     <MetaLine item={n} />
                   </span>
                 </span>
-              </a>
+              </button>
             </li>
           ))}
         </ul>
@@ -232,6 +238,7 @@ export const NewsDigest: React.FC<{ data: NewsResultsArtifact }> = ({ data }) =>
         </button>
       )}
       </div>
+      {reader}
     </Surface>
   );
 };

@@ -49,6 +49,30 @@ export const unfurlLink = (url: string): Promise<UnfurlResult> => {
   return p;
 };
 
+export interface ReadArticleResult {
+  url: string;
+  host: string;
+  title?: string;
+  byline?: string;
+  image?: string;
+  blocks: { type: 'h' | 'p'; text: string }[];
+  ok: boolean;
+  error?: string;
+}
+
+const readCache = new Map<string, Promise<ReadArticleResult>>();
+
+/** Fetch extracted reader-mode content for an article URL (cached per URL). */
+export const readArticle = (url: string): Promise<ReadArticleResult> => {
+  const cached = readCache.get(url);
+  if (cached) return cached;
+  const p = get<ReadArticleResult>(`/api/chat/read-url?url=${encodeURIComponent(url)}`).catch(
+    (): ReadArticleResult => ({ url, host: '', blocks: [], ok: false, error: 'fetch failed' })
+  );
+  readCache.set(url, p);
+  return p;
+};
+
 /**
  * Send a chat completion request to the AI Chat Platform backend (non-streaming).
  *

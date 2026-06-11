@@ -24,6 +24,7 @@ import { ALWAYS_ON_STUDIO_MCP_SERVERS, envDesignMcpServers, externalMcpEnabled }
 import { applyGuardrails } from '../ai/guardrails.js';
 import type { CapabilityNotice, McpServerConfig } from '../../../apiTypes.js';
 import { unfurlUrl } from '../ai/tools/unfurl.js';
+import { readArticle } from '../ai/tools/readArticle.js';
 import {
   attachBillingToPayload,
   formatLimitErrorResponse,
@@ -796,6 +797,19 @@ chatRouter.get('/unfurl', async (req, res) => {
     res.json(data);
   } catch (err) {
     res.status(200).json({ url, error: (err as Error)?.message || 'unfurl failed' });
+  }
+});
+
+// Reader mode: fetch a public article and return its extracted readable content so the
+// chat can show it inline (news sites block iframing). SSRF-guarded in readArticle.
+chatRouter.get('/read-url', async (req, res) => {
+  const url = String(req.query.url || '');
+  if (!url) return res.status(400).json({ error: { message: 'url is required' } });
+  try {
+    const data = await readArticle(url);
+    res.json(data);
+  } catch (err) {
+    res.status(200).json({ url, host: '', blocks: [], ok: false, error: (err as Error)?.message || 'read failed' });
   }
 });
 
