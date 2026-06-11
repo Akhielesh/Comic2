@@ -25,8 +25,12 @@ drop policy if exists user_settings_owner on public.user_settings;
 create policy user_settings_owner on public.user_settings
   for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
--- HARDENING (run once the frontend that talks to /api/account/settings is live):
--- the service role bypasses RLS and remains the only reader/writer, so direct
--- client access can be revoked entirely, like harden_user_api_keys.sql did for keys.
+-- HARDENING — APPLIED 2026-06-12 (migration
+-- harden_user_settings_and_user_api_keys_revoke_client_access): the service role
+-- bypasses RLS and remains the only reader/writer, so direct client access was
+-- revoked entirely, like harden_user_api_keys.sql did for key writes. The same
+-- migration also revoked SELECT on user_api_keys (rows are ciphertext; this just
+-- removes the table from the anon/authenticated GraphQL schema).
 --
 --   revoke select, insert, update, delete on public.user_settings from anon, authenticated;
+--   revoke select on public.user_api_keys from anon, authenticated;
