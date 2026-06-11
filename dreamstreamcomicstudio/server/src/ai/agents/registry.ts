@@ -39,6 +39,7 @@ export const AGENTS: Record<string, AgentDefinition> = {
 - render_table for any tabular data (holdings, fundamentals grids, screeners, comparisons) with typed cells (currency, deltaPercent, spark, badge).
 - render_heatmap for breadth/sector maps; render_chart for trends/allocation/correlation; show_metrics for KPI scorecards.
 - get_news / web_search for the "why" behind moves; wiki_lookup for company/term background.
+- Live widget platform: get_ticker_tape for a multi-asset strip; get_market_sentiment for Fear & Greed; get_yield_curve for rates shape/inversion; build_portfolio when the user lists holdings (the SERVER prices and computes P&L); convert_currency for an interactive FX card; show_macro_tiles / get_econ_calendar / get_earnings_calendar for macro and calendars; get_national_debt for the debt clock; render_central_banks for policy rates; get_predictions (Polymarket odds), get_funding_rates (perp positioning), get_stablecoins (peg watch), get_cot_positioning (CFTC speculative positioning) for market-intel context.
 Compose: lead with the visual the data deserves, then add a SHORT, insightful read — breadth, leaders vs laggards, where a price sits in its 52-week range, valuation, and what's notable from the news. Never restate numbers the cards already show.
 ACCURACY IS NON-NEGOTIABLE:
 - EVERY price, %, market cap, P/E or other market figure MUST come from a tool call in THIS turn. If you don't have it from a tool, you don't state it.
@@ -47,7 +48,13 @@ ACCURACY IS NON-NEGOTIABLE:
 - Only cover the tickers the user actually asked about; do NOT default to Apple/Tesla/Microsoft or pad with example stocks. If they want a dashboard but named none, ask which.
 - If a quote can't be fetched, say so plainly and omit it — never invent a placeholder.
 Never give personalized financial advice — present facts, context and scenarios, and note risks/uncertainty. ${SOURCED}`,
-    toolNames: ['build_finance_terminal', 'get_stock', 'crypto_price', 'exchange_rate', 'render_table', 'render_heatmap', 'render_chart', 'show_metrics', 'get_news', 'web_search', 'wiki_lookup']
+    toolNames: [
+      'build_finance_terminal', 'get_stock', 'crypto_price', 'exchange_rate',
+      'get_ticker_tape', 'get_market_sentiment', 'get_yield_curve', 'build_portfolio', 'convert_currency',
+      'show_macro_tiles', 'get_econ_calendar', 'get_earnings_calendar', 'get_national_debt', 'render_central_banks',
+      'get_predictions', 'get_funding_rates', 'get_stablecoins', 'get_cot_positioning',
+      'render_table', 'render_heatmap', 'render_chart', 'show_metrics', 'get_news', 'web_search', 'wiki_lookup'
+    ]
   },
   weather: {
     id: 'weather',
@@ -74,8 +81,12 @@ Never give personalized financial advice — present facts, context and scenario
     id: 'local',
     name: 'Local & Places',
     description: 'Locations, directions, points of interest, travel and "near me" questions.',
-    systemPrompt: `You are a local & places specialist. Use find_places to DISCOVER nearby places ("near me", restaurants, hotels, shops), show_map for a specific location/route, get_weather for local conditions, and web_search for hours/details. Honor the user's location context for "near me". ${SOURCED}`,
-    toolNames: ['find_places', 'show_map', 'get_weather', 'web_search']
+    systemPrompt: `You are a local & places specialist. Use find_places to DISCOVER nearby places ("near me", restaurants, hotels, shops), show_map for a specific location/route, get_weather for local conditions, and web_search for hours/details. Honor the user's location context for "near me". For TRIPS, reach for the travel widget platform: plan_trip for itineraries, get_flight_status to track a flight, convert_currency for money questions, render_world_clocks / render_trip_countdown / render_packing_list / render_cheatsheet / render_trip_budget for the on-the-ground cards. ${SOURCED}`,
+    toolNames: [
+      'find_places', 'show_map', 'get_weather', 'web_search',
+      'plan_trip', 'get_flight_status', 'convert_currency', 'render_world_clocks',
+      'render_trip_countdown', 'render_packing_list', 'render_cheatsheet', 'render_trip_budget'
+    ]
   },
   general: {
     id: 'general',

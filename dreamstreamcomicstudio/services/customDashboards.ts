@@ -237,5 +237,52 @@ export const DASHBOARD_TEMPLATES: DashboardTemplate[] = [
       { tool: 'get_weather', args: { location: timezoneCity() }, label: 'Weather', density: 'detailed' },
       { tool: 'get_news', args: { topic: 'top' }, label: 'Top headlines', density: 'compact' }
     ]
+  },
+  {
+    id: 'trader-desk',
+    name: 'Trader desk',
+    icon: '🖥️',
+    description: 'The live tape, Fear & Greed, the yield curve and speculative positioning — one screen.',
+    tiles: [
+      { tool: 'get_ticker_tape', args: {}, label: 'Market tape', density: 'detailed' },
+      { tool: 'get_market_sentiment', args: { market: 'both' }, label: 'Fear & Greed', density: 'compact' },
+      { tool: 'get_yield_curve', args: {}, label: 'Yield curve', density: 'compact' },
+      { tool: 'get_cot_positioning', args: {}, label: 'COT positioning', density: 'compact' }
+    ]
+  },
+  {
+    id: 'macro-watch',
+    name: 'Macro watch',
+    icon: '🏛️',
+    description: 'Key indicators (live with a FRED key), the econ calendar and the national debt clock.',
+    tiles: [
+      {
+        tool: 'show_macro_tiles',
+        args: {
+          tiles: [
+            { label: 'CPI (YoY)', seriesId: 'CPIAUCSL', unit: '%' },
+            { label: 'Unemployment', seriesId: 'UNRATE', unit: '%' },
+            { label: 'Fed funds', seriesId: 'FEDFUNDS', unit: '%' },
+            { label: '30Y mortgage', seriesId: 'MORTGAGE30US', unit: '%' }
+          ]
+        },
+        label: 'Indicators',
+        density: 'detailed'
+      },
+      { tool: 'get_econ_calendar', args: {}, label: 'Econ calendar', density: 'compact' },
+      { tool: 'get_national_debt', args: {}, label: 'Debt clock', density: 'compact' }
+    ]
+  },
+  {
+    id: 'crypto-pulse',
+    name: 'Crypto pulse',
+    icon: '🪙',
+    description: 'BTC, perp-funding positioning and the stablecoin peg watch.',
+    tiles: [
+      { tool: 'crypto_price', args: { coin: 'bitcoin' }, label: 'Bitcoin', density: 'compact' },
+      { tool: 'get_funding_rates', args: {}, label: 'Perp funding', density: 'compact' },
+      { tool: 'get_stablecoins', args: {}, label: 'Stablecoins', density: 'compact' },
+      { tool: 'get_market_sentiment', args: { market: 'crypto' }, label: 'Crypto sentiment', density: 'compact' }
+    ]
   }
 ];
