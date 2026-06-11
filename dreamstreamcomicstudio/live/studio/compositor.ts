@@ -98,6 +98,8 @@ export class ProgramCompositor {
   private dirty = true; // state changed (scene/look/zoom/cam-off) — force a draw
   private remoteTiles: ProgramTile[] = [];
   private focusId: string | null = null;
+  private speaking = new Set<string>();
+  private accent = '#c2603f';
   /** Fires when the user stops a screen share from the browser UI. */
   onScreenEnded: (() => void) | null = null;
 
@@ -231,6 +233,19 @@ export class ProgramCompositor {
       this.focusId = id;
       this.dirty = true;
     }
+  }
+
+  /** Tiles whose source is talking right now — they get the accent ring. */
+  setSpeaking(ids: Set<string>): void {
+    if (ids.size === this.speaking.size && [...ids].every((i) => this.speaking.has(i))) return;
+    this.speaking = new Set(ids);
+    try {
+      const v = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+      if (v) this.accent = v;
+    } catch {
+      /* keep default */
+    }
+    this.dirty = true;
   }
 
   /** Everything currently drawable, host first — also drives the focus picker. */
@@ -388,6 +403,15 @@ export class ProgramCompositor {
     rest.slice(0, maxRows).forEach((t, i) => {
       this.drawTile(t, w - colW - gap, gap + i * (th + gap), colW, th);
     });
+    if (rest.length > maxRows) {
+      // The column is full — say so instead of silently hiding people.
+      const fs = Math.max(10, Math.round(Math.min(w, h) * 0.022));
+      ctx.font = `500 ${fs}px 'Hanken Grotesk', sans-serif`;
+      ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(`+${rest.length - maxRows} more in Grid`, w - gap - 4, h - gap - 4);
+    }
   }
 
   /** One labeled tile: cover-fit cams, letterbox screens, rounded corners. */
@@ -422,8 +446,9 @@ export class ProgramCompositor {
     this.drawTileLabel(t.label, x, y, tw, th, stage);
     ctx.restore();
     ctx.filter = 'none';
-    ctx.strokeStyle = 'rgba(255,255,255,0.16)';
-    ctx.lineWidth = Math.max(1, this.width / 960);
+    const talking = t.kind === 'cam' && this.speaking.has(t.id);
+    ctx.strokeStyle = talking ? this.accent : 'rgba(255,255,255,0.16)';
+    ctx.lineWidth = talking ? Math.max(2, this.width / 480) : Math.max(1, this.width / 960);
     this.roundRectPath(x, y, tw, th, r);
     ctx.stroke();
   }

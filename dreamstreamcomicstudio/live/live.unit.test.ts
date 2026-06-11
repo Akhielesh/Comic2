@@ -165,3 +165,43 @@ describe('schedule helpers', async () => {
     expect(ics).toContain('END:VEVENT');
   });
 });
+
+describe('meeting scenes & guest links (v5)', async () => {
+  const { SCENES, MULTI_SCENES, fitCanvasToSource } = await import('./studio/compositor');
+  const { guestUrl, studioUrl, viewerUrl } = await import('./nav');
+  const { MAX_GUESTS } = await import('./protocol');
+
+  it('exposes six scenes with unique sequential hotkeys 1–6', () => {
+    expect(SCENES).toHaveLength(6);
+    expect(SCENES.map((s) => s.hotkey)).toEqual(['1', '2', '3', '4', '5', '6']);
+    expect(new Set(SCENES.map((s) => s.id)).size).toBe(6);
+  });
+
+  it('marks exactly the meeting layouts as multi scenes', () => {
+    expect([...MULTI_SCENES].sort()).toEqual(['grid', 'sidebar', 'spotlight']);
+    for (const id of MULTI_SCENES) expect(SCENES.some((s) => s.id === id)).toBe(true);
+  });
+
+  it('caps guest seats at a small mesh-friendly number', () => {
+    expect(MAX_GUESTS).toBeGreaterThanOrEqual(2);
+    expect(MAX_GUESTS).toBeLessThanOrEqual(6);
+  });
+
+  it('mints distinct viewer / studio / guest links from one event', () => {
+    const v = viewerUrl('abc123');
+    const s = studioUrl('abc123', 'host-key');
+    const g = guestUrl('abc123', 'guest-key');
+    expect(v).toContain('?e=abc123');
+    expect(v).not.toContain('k=');
+    expect(s).toContain('k=host-key');
+    expect(g).toContain('g=guest-key');
+    expect(g).not.toContain('k=');
+  });
+
+  it('keeps canvas dimensions even and orientation-faithful (regression)', () => {
+    const portrait = fitCanvasToSource(720, 1280, 1280, 720);
+    expect(portrait.h).toBeGreaterThan(portrait.w);
+    expect(portrait.w % 2).toBe(0);
+    expect(portrait.h % 2).toBe(0);
+  });
+});

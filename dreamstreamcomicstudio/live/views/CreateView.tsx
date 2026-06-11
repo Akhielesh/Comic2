@@ -95,6 +95,10 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
           <Field label="Your private studio link" hint="keep secret — it IS the key">
             <LinkBox url={studioUrl(created.id, created.hostKey)} onCopy={() => push('Studio link copied', { icon: 'check' })} />
           </Field>
+          <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>
+            <Icon name="users" size={13} /> Want co-hosts? Grab the <b>guest invite link</b> inside the studio
+            (People panel) — up to 4 guests join on air with cam, mic and screen share.
+          </p>
           <hr className="divider" />
           <div className="wrap-row">
             <Btn variant="solid" icon="broadcast" onClick={() => nav.studio(created.id, created.hostKey)}>Open Studio</Btn>

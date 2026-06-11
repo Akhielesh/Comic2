@@ -154,7 +154,7 @@ export interface GuestSeat {
   state: RTCPeerConnectionState;
 }
 
-export function PeopleRail({ hostName, people, lobby, guests = [], onCopyGuestInvite, onAdmit, onDeny, onKick, onPromote }: {
+export function PeopleRail({ hostName, people, lobby, guests = [], onCopyGuestInvite, onRotateGuestInvite, onAdmit, onDeny, onKick, onPromote }: {
   hostName: string;
   people: PersonEntry[];
   lobby: LobbyEntry[];
@@ -162,6 +162,8 @@ export function PeopleRail({ hostName, people, lobby, guests = [], onCopyGuestIn
   guests?: GuestSeat[];
   /** Present when the studio has a guest invite link to share. */
   onCopyGuestInvite?: () => void;
+  /** Rotates the guest key — every previously shared guest link goes dead. */
+  onRotateGuestInvite?: () => void;
   onAdmit: (sid: string) => void;
   onDeny: (sid: string) => void;
   onKick: (sid: string) => void;
@@ -201,10 +203,15 @@ export function PeopleRail({ hostName, people, lobby, guests = [], onCopyGuestIn
           </div>
         ))}
         {onCopyGuestInvite && (
-          <div style={{ padding: '2px 14px 10px' }}>
+          <div className="row" style={{ padding: '2px 14px 10px', gap: 6, flexWrap: 'wrap' }}>
             <Btn variant="subtle" size="sm" icon="users" onClick={onCopyGuestInvite}>
               {guests.length === 0 ? 'Invite guests on air' : 'Copy guest invite link'}
             </Btn>
+            {onRotateGuestInvite && (
+              <Btn variant="ghost" size="sm" icon="refresh" onClick={onRotateGuestInvite} title="Old guest links stop working">
+                New link
+              </Btn>
+            )}
           </div>
         )}
 

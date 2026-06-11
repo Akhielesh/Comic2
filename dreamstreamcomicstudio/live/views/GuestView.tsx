@@ -318,14 +318,23 @@ export function GuestView({ eventId, guestKey, nav, push }: { eventId: string; g
       <div className="gv-main">
         <div className="gv-video-wrap">
           <Sink stream={hostStream} className="program-video" />
-          {!hostStream && (
+          {(!hostStream || status === 'ended') && (
             <div className="gv-waiting">
               <div className="brb-orb"><span /></div>
               <div className="serif" style={{ fontSize: 18, marginTop: 10 }}>
-                {rtcState === 'failed'
-                  ? 'Could not reach the host directly (restrictive network). Try another network or watch the stream instead.'
-                  : 'Waiting for the host…'}
+                {status === 'ended'
+                  ? 'The stream has ended — thanks for being on it!'
+                  : rtcState === 'failed'
+                    ? 'Could not reach the host directly (restrictive network). Try another network or watch the stream instead.'
+                    : rtcState === 'disconnected' || rtcState === 'closed'
+                      ? 'The host stepped away — hang tight, you reconnect automatically.'
+                      : 'Waiting for the host…'}
               </div>
+              {status === 'ended' && (
+                <div style={{ marginTop: 14 }}>
+                  <Btn variant="solid" onClick={leave}>Leave the seat</Btn>
+                </div>
+              )}
             </div>
           )}
           <div className="gv-self">
