@@ -79,6 +79,7 @@ export const ALL_PROVIDERS: ApiKeyProvider[] = ['openrouter', 'nvidia', 'gemini'
 
 const STORAGE = 'dreamstream_api_keys_v2';
 const MIGRATED_FLAG = 'dreamstream_api_keys_migrated';
+const ACCOUNT_META = 'dreamstream_account_keys_meta';
 
 // Legacy single-key storage locations (kept for back-compat + one-time migration).
 const LEGACY_KEYS: Record<ApiKeyProvider, string> = {
@@ -111,8 +112,45 @@ const remove = (k: string) => {
 export const clearAllKeys = (): void => {
   remove(STORAGE);
   remove(MIGRATED_FLAG);
+  remove(ACCOUNT_META);
   for (const provider of ALL_PROVIDERS) remove(LEGACY_KEYS[provider]);
 };
+
+// ---- Account key metadata ------------------------------------------------------
+//
+// Which providers have a key stored ON THE ACCOUNT (server-encrypted user_api_keys),
+// fetched at login from GET /api/account/byok. Metadata only — suffix for display,
+// never the secret. Lets any studio show "key on file" / unlock BYOK features even
+// before (or without) the key existing in this browser: the server attaches the
+// account key to requests itself (server/src/middleware/accountKeys.ts).
+
+export interface AccountKeyMeta {
+  provider: string;
+  suffix: string;
+}
+
+export const setAccountKeyMeta = (keys: AccountKeyMeta[]): void => {
+  write(ACCOUNT_META, JSON.stringify(Array.isArray(keys) ? keys : []));
+};
+
+export const getAccountKeyMeta = (): AccountKeyMeta[] => {
+  const raw = read(ACCOUNT_META);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+/** True when the signed-in account has a stored key for the provider. */
+export const hasAccountKey = (provider: ApiKeyProvider): boolean =>
+  getAccountKeyMeta().some((k) => k && k.provider === provider && typeof k.suffix === 'string');
+
+/** A usable key for the provider exists locally OR on the account. */
+export const hasUsableKey = (provider: ApiKeyProvider): boolean =>
+  Boolean(getActiveKeyValue(provider)) || hasAccountKey(provider);
 
 const uuid = () =>
   (typeof crypto !== 'undefined' && 'randomUUID' in crypto)

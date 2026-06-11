@@ -135,6 +135,22 @@ const write = (next: StudioModelSelection) => {
 
 export const getStudioModelSelection = (): StudioModelSelection => read();
 
+/** Replace the whole studio selection at once (used when applying a cloud snapshot). */
+export const replaceStudioModelSelection = (next: StudioModelSelection) => {
+  write(sanitize(next));
+};
+
+/** Forget this account's studio settings (sign-out: prevents bleed into the next user). */
+export const clearStudioModelSelection = () => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(STORAGE);
+    window.dispatchEvent(new CustomEvent(STUDIO_MODEL_CHANGED));
+  } catch {
+    /* ignore */
+  }
+};
+
 /** Pin a specific coding model + source for the studio (mode → 'specific'). null model → back to auto. */
 export const setStudioModel = (model: string | null, source?: ModelSourceId | null) => {
   const next = read();

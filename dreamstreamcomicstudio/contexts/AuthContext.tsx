@@ -2,8 +2,11 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { getAuthRedirectUrl, isSessionExpiredByInactivity, supabase, touchLastActivity } from '../services/supabase';
-import { clearFluxKey, setSettingsChangeListener } from '../services/appSettings';
+import { clearFluxKey, clearUserScopedSettings, setSettingsChangeListener } from '../services/appSettings';
 import { clearAllKeys, setKeysChangeListener } from '../services/apiKeys';
+import { setChatDataChangeListener } from '../services/chatStorage';
+import { clearModelSelection, MODEL_SELECTION_CHANGED } from '../services/modelSelection';
+import { clearStudioModelSelection, STUDIO_MODEL_CHANGED } from '../services/studioModelSelection';
 import { registerDevice } from '../services/deviceSessions';
 import { syncOnLogin, schedulePush } from '../services/cloudSync';
 
@@ -72,11 +75,18 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
     useEffect(() => {
         // Mirror every local key/setting change up to the signed-in user's account.
+        // schedulePush is a no-op while a pulled snapshot is being applied, so these
+        // registrations never echo cloud data back as a fresh push.
         const pushIfSignedIn = () => {
             if (userIdRef.current) schedulePush(userIdRef.current);
         };
         setKeysChangeListener(pushIfSignedIn);
         setSettingsChangeListener(pushIfSignedIn);
+        // Chat memory + custom agents, and the model selections (chat/comics + Code
+        // Studio) used to change silently on one device only — sync them like keys.
+        setChatDataChangeListener(pushIfSignedIn);
+        window.addEventListener(MODEL_SELECTION_CHANGED, pushIfSignedIn);
+        window.addEventListener(STUDIO_MODEL_CHANGED, pushIfSignedIn);
 
         // Reconcile cloud <-> local exactly once per signed-in user.
         const onSignedIn = (userId: string) => {
@@ -125,6 +135,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             subscription.unsubscribe();
             setKeysChangeListener(null);
             setSettingsChangeListener(null);
+            setChatDataChangeListener(null);
+            window.removeEventListener(MODEL_SELECTION_CHANGED, pushIfSignedIn);
+            window.removeEventListener(STUDIO_MODEL_CHANGED, pushIfSignedIn);
         };
     }, []);
 
@@ -140,6 +153,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         // SECURITY: purge ALL BYOK keys + usage from the multi-key store so a shared device
         // never leaks the previous user's secrets, usage, or live provider balance after sign-out.
         clearAllKeys();
+        // Account-scoped preferences stored under global localStorage keys must go too —
+        // otherwise the next sign-in inherits them AND the login merge uploads them into
+        // that other account's cloud snapshot.
+        clearUserScopedSettings();
+        clearModelSelection();
+        clearStudioModelSelection();
     };
 
     const signOut = async () => {

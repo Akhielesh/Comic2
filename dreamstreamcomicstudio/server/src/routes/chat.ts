@@ -647,6 +647,69 @@ chatRouter.post('/memory', async (req, res, next) => {
   }
 });
 
+// Memory import: absorb the user's exported memories/custom-instructions from another
+// AI tool (ChatGPT, Claude, Gemini, …) into DreamStream's long-term memory. The pasted
+// or uploaded content is distilled into the same conservative bullet format the
+// auto-memory pipeline produces, then merged with the existing memory.
+const MEMORY_IMPORT_SYSTEM_PROMPT = `You merge a user's memory exported from another AI assistant into their memory here. You are given the EXISTING MEMORY and IMPORTED CONTENT (pasted memories, custom instructions, or an export file from ChatGPT, Claude, Gemini or similar — possibly raw JSON or markdown).
+
+Rules:
+- Extract only durable, reusable facts about the USER: name, location/timezone, language, occupation, ongoing projects, stable preferences (tools, formats, topics/interests), recurring goals, constraints, how they like answers delivered.
+- IGNORE assistant answers, one-off questions, conversation logs' transient chatter, file metadata, IDs, timestamps, and anything sensitive (health, finances, credentials, beliefs) unless the imported content explicitly says to remember it.
+- Merge with the existing memory: keep existing facts unless the import clearly updates or contradicts them (the import is newer); deduplicate.
+- Be brief: a flat list of short bullet lines starting with "- ", at most 20 bullets.
+- If the imported content contains no durable facts, return the existing memory unchanged.
+- Return ONLY the memory bullet lines. No preamble, no headings, no explanation.`;
+
+const MAX_IMPORT_CONTENT_CHARS = 24_000;
+const MAX_IMPORTED_MEMORY_CHARS = 2_500;
+const IMPORT_SOURCES = new Set(['chatgpt', 'claude', 'gemini', 'other']);
+
+chatRouter.post('/memory/import', async (req, res, next) => {
+  try {
+    const body = (req.body || {}) as { source?: string; content?: string; memory?: string };
+    const importSource = IMPORT_SOURCES.has(String(body.source || '').toLowerCase())
+      ? String(body.source).toLowerCase()
+      : 'other';
+    const content = typeof body.content === 'string' ? body.content.trim().slice(0, MAX_IMPORT_CONTENT_CHARS) : '';
+    const existing = typeof body.memory === 'string' ? body.memory.trim().slice(0, MAX_IMPORTED_MEMORY_CHARS) : '';
+    if (!content) return res.status(400).json({ error: { message: 'Nothing to import — paste or upload your exported memories first.' } });
+
+    const resolved = resolveChatProvider(req);
+    if (!resolved) {
+      return res.status(401).json({
+        error: { message: 'Importing memories needs an OpenRouter or NVIDIA key.', code: 'MISSING_CHAT_API_KEY' }
+      });
+    }
+
+    // Reliable model, like /memory — a flaky free model silently corrupting an import
+    // would destroy the user's trust in the whole feature.
+    const model = resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;
+    const result = await runChat({
+      provider: resolved.provider,
+      apiKey: resolved.apiKey,
+      model,
+      messages: [{
+        role: 'user',
+        content:
+          `EXISTING MEMORY:\n${existing || '(none)'}\n\n` +
+          `IMPORTED CONTENT (from ${importSource}):\n${content}`
+      }],
+      systemOverride: MEMORY_IMPORT_SYSTEM_PROMPT,
+      temperature: 0.2,
+      maxTokens: 900,
+      fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+      fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
+      timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+    });
+    const updated = (result.text || '').trim().slice(0, MAX_IMPORTED_MEMORY_CHARS);
+    if (!updated) return res.status(502).json({ error: { message: 'The import model returned nothing — try again.' } });
+    res.json({ memory: updated, model: result.model });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Proactive follow-ups: after an answer, suggest the few things THIS user is most
 // likely to actually want next — so the assistant feels helpful and forward-looking
 // instead of waiting passively. Deliberately context-disciplined: it must NOT invent a

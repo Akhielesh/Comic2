@@ -18,6 +18,7 @@ import {
   validateRuntimeConfig
 } from './config.js';
 import { attachKeys } from './middleware/keys.js';
+import { attachAccountKeys } from './middleware/accountKeys.js';
 import { attachFreeOnly } from './middleware/freeOnly.js';
 import { errorHandler } from './middleware/errors.js';
 import { optionalAuth, requireAuth } from './middleware/auth.js';
@@ -173,6 +174,10 @@ app.use('/api/connect', systemRateLimit, mcpOutboundRouter);
 
 // Protect all API routes
 app.use('/api', requireAuth);
+// Account-level BYOK: fill provider keys from the user's encrypted account store
+// wherever the request didn't carry one, so every studio and device shares the
+// same keys (header > account > platform env).
+app.use('/api', attachAccountKeys);
 
 app.use('/api/admin', adminRateLimit, adminRouter);
 app.use('/api/admin/verification', adminRateLimit, verificationRouter);

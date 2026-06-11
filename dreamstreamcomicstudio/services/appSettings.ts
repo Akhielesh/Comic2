@@ -49,6 +49,19 @@ const notifySettingsChanged = () => {
 
 export const getLockedImageProvider = () => IMAGE_PROVIDER_LOCK;
 
+/**
+ * SECURITY/HYGIENE: forget every account-scoped preference stored under global keys.
+ * Called on sign-out. Without this, the next user to sign in on a shared device
+ * inherited the previous user's preferences — and worse, the login-time cloud merge
+ * uploaded those leftovers INTO the new user's account.
+ */
+export const clearUserScopedSettings = () => {
+  removeFromStorage(SETTINGS_KEY);
+  removeFromStorage(MODEL_KEYS_STORAGE);
+  removeFromStorage(IMAGE_MODEL_KEY);
+  removeFromStorage(IMAGE_PROVIDER_KEY);
+};
+
 const IMAGE_MODEL_KEY = "dreamstream_image_model_id";
 
 export const getImageProvider = (): ImageProviderId => {

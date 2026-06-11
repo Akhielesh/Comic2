@@ -47,6 +47,7 @@ import { streamStudioAgents } from '../../services/studioAgentsApi';
 import { resolveStudioAgentIds, studioAgentName } from '../../services/studioAgents';
 import { createStudioSession } from '../../services/studioSessions';
 import { getOpenRouterKey } from '../../services/appSettings';
+import { hasUsableKey } from '../../services/apiKeys';
 import { getDeployUrl, setDeployUrl } from '../../services/studioDeployUrl';
 import { ensureSupabaseDependency, getBackend } from '../../services/studioBackend';
 import { isProviderEnabled } from '../../services/sourceGovernance';
@@ -934,7 +935,10 @@ export const CodeStudioView: React.FC<CodeStudioViewProps> = ({ artifact, isAdmi
 
   const projectName = wsTitle || 'Untitled project';
   // Build model tier: BYOK (your OpenRouter key → frontier models) vs. free-first auto.
-  const hasByok = isProviderEnabled('openrouter') && !!getOpenRouterKey();
+  // Checks the managed key store AND the account ("key on file" from any device/studio),
+  // not just the legacy single-key slot — a key added in Settings → API Configuration
+  // used to be invisible here.
+  const hasByok = isProviderEnabled('openrouter') && (hasUsableKey('openrouter') || !!getOpenRouterKey());
 
   // Live context-window usage for the next refine (project files + conversation vs the model's window).
   const pinnedModel = studioModel.mode === 'specific' ? studioModel.model : null;
