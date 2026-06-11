@@ -15,6 +15,20 @@ import {
 } from '../../services/toolAnalytics';
 import { listMcpServers, onMcpServersChanged, addMcpServer } from '../../services/mcpServers';
 import type { McpServerConfig } from '../../apiTypes';
+import { API_BASE_URL } from '../../services/clientConfig';
+
+// Server-side provider usage row (mirrors server/src/lib/providerUsage.ts snapshot).
+interface ProviderUsageRow {
+  provider: string;
+  todayCalls: number;
+  todayErrors: number;
+  blockedToday: number;
+  lastMinute: number;
+  perMin: number;
+  perDay: number;
+  dayUsedPct: number;
+  health: 'ok' | 'hot' | 'failing' | 'near-cap' | 'capped';
+}
 
 // Curated MCP marketplace — vetted, keyless https servers a user can connect in one
 // click (mirrors server/src/ai/tools/mcpCatalog.ts — keep the two lists in sync).
@@ -208,6 +222,20 @@ export const ToolsDashboard: React.FC = () => {
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(() => listMcpServers());
   const [query, setQuery] = useState('');
   const [activeCat, setActiveCat] = useState<ToolCategory | 'all'>('all');
+  const [usage, setUsage] = useState<ProviderUsageRow[] | null>(null);
+
+  // Server-side provider usage (counts + budgets) — refresh every 30s while open.
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      fetch(`${API_BASE_URL}/api/usage/providers`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => { if (alive && d?.providers) setUsage(d.providers); })
+        .catch(() => {});
+    load();
+    const t = setInterval(load, 30_000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
 
   useEffect(() => onToolAnalyticsChanged(() => setStats(getToolStats())), []);
   useEffect(() => onMcpServersChanged(() => setMcpServers(listMcpServers())), []);
@@ -319,6 +347,52 @@ export const ToolsDashboard: React.FC = () => {
           ))}
         </div>
       </div>
+
+      {/* Server-side provider usage & budgets — the guardrail view. Counts come from
+          the backend meter (every upstream call, all users), unlike the local
+          per-device tool analytics below. */}
+      {usage && usage.length > 0 && (
+        <div className="rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] p-3 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_var(--ds-hairline)]">
+          <div className="flex items-center gap-1.5 mb-2">
+            <Activity className="w-4 h-4 text-[var(--ds-accent)]" />
+            <span className="font-semibold text-sm text-[var(--ds-ink)]">Provider usage today (server)</span>
+            <span className="text-[10px] text-[var(--ds-muted)]">
+              Live counts vs. the free-tier budgets the backend enforces — spikes here mean the agent is over-calling a source
+            </span>
+          </div>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+            {usage.map((u) => {
+              const health: Record<ProviderUsageRow['health'], { label: string; cls: string }> = {
+                ok: { label: 'OK', cls: 'border-emerald-500/20 text-emerald-700 bg-emerald-50' },
+                hot: { label: 'HOT', cls: 'border-amber-500/20 text-amber-700 bg-amber-50' },
+                'near-cap': { label: 'NEAR CAP', cls: 'border-amber-500/20 text-amber-700 bg-amber-50' },
+                failing: { label: 'FAILING', cls: 'border-rose-500/20 text-rose-700 bg-rose-50' },
+                capped: { label: 'CAPPED', cls: 'border-rose-500/20 text-rose-700 bg-rose-50' }
+              };
+              const h = health[u.health];
+              return (
+                <div key={u.provider} className="rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-sm text-[var(--ds-ink)] truncate">{u.provider}</span>
+                    <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-md border ${h.cls}`}>{h.label}</span>
+                  </div>
+                  <div className="text-[10px] text-[var(--ds-muted)] mt-1 tabular-nums">
+                    {u.todayCalls.toLocaleString()} / {u.perDay.toLocaleString()} today · {u.lastMinute}/{u.perMin} last min
+                    {u.todayErrors > 0 && <span className="text-rose-700"> · {u.todayErrors} errors</span>}
+                    {u.blockedToday > 0 && <span className="text-amber-700"> · {u.blockedToday} blocked</span>}
+                  </div>
+                  <div className="h-1.5 rounded-full bg-[var(--ds-well)] mt-1.5 overflow-hidden">
+                    <div
+                      className={`h-full rounded-full ${u.dayUsedPct >= 80 ? 'bg-rose-500' : u.dayUsedPct >= 50 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                      style={{ width: `${Math.max(2, u.dayUsedPct)}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Controls */}
       <div className="flex flex-wrap items-center gap-2">

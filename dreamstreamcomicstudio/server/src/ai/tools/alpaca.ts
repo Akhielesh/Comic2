@@ -7,6 +7,7 @@
 // stocks/ETFs only — indices, futures, FX and non-US listings stay on the old chain.
 
 import type { StockQuoteArtifact, StockPoint, StockCandle, StockRange } from '../../../../apiTypes.js';
+import { assertProviderBudget, noteProviderCall } from '../../lib/providerUsage.js';
 
 const DATA_BASE = 'https://data.alpaca.markets/v2/stocks';
 const TIMEOUT_MS = 9_000;
@@ -18,6 +19,7 @@ export const alpacaEnabled = (): boolean =>
 export const isAlpacaSymbol = (symbol: string): boolean => /^[A-Za-z]{1,5}$/.test(symbol.trim());
 
 const fetchJson = async <T>(url: string, signal?: AbortSignal): Promise<T> => {
+  assertProviderBudget(url);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   const onAbort = () => controller.abort();
@@ -31,6 +33,7 @@ const fetchJson = async <T>(url: string, signal?: AbortSignal): Promise<T> => {
       },
       signal: controller.signal
     });
+    noteProviderCall(url, res.ok);
     if (!res.ok) throw new Error(`Alpaca ${res.status}`);
     return (await res.json()) as T;
   } finally {

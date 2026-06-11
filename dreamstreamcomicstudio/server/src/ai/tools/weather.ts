@@ -18,6 +18,8 @@ import type {
   WeatherPollen
 } from '../../../../apiTypes.js';
 import { getMetNoWeather } from './metno.js';
+import { TtlCache } from '../../lib/cache.js';
+import { assertProviderBudget, noteProviderCall } from '../../lib/providerUsage.js';
 
 const OM_BASE = (): string => (process.env.OPEN_METEO_BASE_URL || '').replace(/\/$/, '');
 const OM_KEY = (): string => process.env.OPEN_METEO_API_KEY || '';
@@ -75,14 +77,19 @@ export const pollenLevel = (max?: number): string | undefined => {
 };
 
 const fetchJson = async <T>(url: string, signal?: AbortSignal): Promise<T> => {
+  assertProviderBudget(url);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
   const onAbort = () => controller.abort();
   signal?.addEventListener('abort', onAbort, { once: true });
   try {
     const res = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': UA }, signal: controller.signal });
+    noteProviderCall(url, res.ok);
     if (!res.ok) throw new Error(`Weather request failed (${res.status})`);
     return (await res.json()) as T;
+  } catch (err) {
+    if ((err as Error)?.name === 'AbortError') noteProviderCall(url, false);
+    throw err;
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);
@@ -284,7 +291,17 @@ const SOURCES: Record<WeatherSource['provider'], WeatherSource> = {
   'open-meteo': { provider: 'open-meteo', attribution: 'Weather data by Open-Meteo.com (CC BY 4.0)', url: 'https://open-meteo.com' }
 };
 
+// Forecasts barely change minute-to-minute: a 10-minute cache per place collapses
+// repeated agent/widget calls into one upstream fetch (quota + latency win).
+const weatherCache = new TtlCache<{ weather: WeatherArtifact; source: WeatherSource }>(10 * 60_000, 200);
+
 export const getWeatherDetailed = async (
+  place: string,
+  signal?: AbortSignal
+): Promise<{ weather: WeatherArtifact; source: WeatherSource }> =>
+  weatherCache.getOrSet(place.trim().toLowerCase(), () => getWeatherUncached(place, signal));
+
+const getWeatherUncached = async (
   place: string,
   signal?: AbortSignal
 ): Promise<{ weather: WeatherArtifact; source: WeatherSource }> => {

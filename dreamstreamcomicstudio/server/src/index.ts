@@ -31,6 +31,7 @@ import { textRouter } from './routes/text.js';
 import { imageRouter } from './routes/image.js';
 import { visionRouter } from './routes/vision.js';
 import { systemRouter } from './routes/system.js';
+import { usageRouter } from './routes/usage.js';
 import webhookRouter from './routes/webhook.js';
 import { billingRouter } from './routes/billing.js';
 import { adminRouter } from './routes/admin.js';
@@ -170,6 +171,9 @@ app.use('/api/shares/token', optionalAuth, systemRateLimit, sharingRouter);
 // registry as an MCP endpoint. Authenticated by a bearer token (NOT the app session),
 // so it must mount BEFORE the global requireAuth. Rate-limited like other public routes.
 app.use('/api/connect', systemRateLimit, mcpOutboundRouter);
+
+// Provider usage snapshot (counts only — no keys/queries). Public read like /api/system.
+app.use('/api/usage', systemRateLimit, usageRouter);
 
 // Protect all API routes
 app.use('/api', requireAuth);

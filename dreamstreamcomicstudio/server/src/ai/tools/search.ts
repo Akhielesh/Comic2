@@ -19,6 +19,8 @@
 // advances to the next one. Set ANY one key to get reliable results in production.
 
 import { ddgWebSearch, type WebResult } from './duckduckgo.js';
+import { TtlCache } from '../../lib/cache.js';
+import { ProviderBudgetError, assertProviderBudget, noteProviderCall } from '../../lib/providerUsage.js';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 const PER_PROVIDER_TIMEOUT_MS = 7_000;
@@ -203,6 +205,19 @@ const searxngSearch = async (query: string, signal: AbortSignal, limit: number):
 
 type Provider = { name: string; run: (q: string, s: AbortSignal, n: number) => Promise<WebResult[] | null> };
 
+// Representative URL per provider so the usage meter/budget guard can attribute
+// calls (SearXNG resolves to the configured instance).
+const METER_URLS: Record<string, string> = {
+  tavily: 'https://api.tavily.com/search',
+  brave: 'https://api.search.brave.com/res/v1/web/search',
+  serper: 'https://google.serper.dev/search',
+  google: 'https://www.googleapis.com/customsearch/v1',
+  searxng: (process.env.SEARXNG_URL || 'https://searx.be') + '/search',
+  duckduckgo: 'https://duckduckgo.com/html',
+  bing: 'https://www.bing.com/search',
+  wikipedia: 'https://en.wikipedia.org/w/api.php'
+};
+
 // Ordered best→fallback. Keyed providers short-circuit to [] without a network call
 // when their key is absent, so the keyless chain (SearXNG → DuckDuckGo → Bing →
 // Wikipedia) is what runs by default — entirely free, no API keys required.
@@ -234,8 +249,16 @@ export interface WebSearchOutcome {
   status: 'ok' | 'empty' | 'error';
 }
 
+// Short result cache: identical queries within 5 minutes (per process) share one
+// upstream call — agents love re-searching the same thing, and this is the single
+// cheapest way to protect search quotas.
+const searchCache = new TtlCache<WebSearchOutcome>(5 * 60_000, 300);
+
 /** Run the provider chain; first non-empty wins. Never throws. */
 export const webSearch = async (query: string, signal?: AbortSignal, limit = 6): Promise<WebSearchOutcome> => {
+  const cacheKey = `${limit}:${query.trim().toLowerCase()}`;
+  const cached = searchCache.get(cacheKey);
+  if (cached) return cached;
   const deadline = Date.now() + GLOBAL_BUDGET_MS;
   const tried: string[] = [];
   let errorCount = 0;
@@ -243,17 +266,31 @@ export const webSearch = async (query: string, signal?: AbortSignal, limit = 6):
   for (const p of PROVIDERS) {
     if (Date.now() >= deadline) break;
     const t = timeoutSignal(signal, Math.min(PER_PROVIDER_TIMEOUT_MS, deadline - Date.now()));
+    const meterUrl = METER_URLS[p.name] || p.name;
     try {
+      assertProviderBudget(meterUrl);
       const results = await p.run(query, t.signal, limit);
       // null = the provider skipped (e.g. a keyed provider with no key). A skip is NOT an
-      // attempt — don't list it as tried, and don't let it mask a genuine outage.
+      // attempt — don't list it as tried or meter it, and don't let it mask an outage.
       if (results === null) continue;
+      noteProviderCall(meterUrl, true);
       tried.push(p.name);
-      if (results.length) return { results, provider: p.name, tried, status: 'ok' };
+      if (results.length) {
+        const out: WebSearchOutcome = { results, provider: p.name, tried, status: 'ok' };
+        searchCache.set(cacheKey, out);
+        return out;
+      }
       cleanCompletions += 1; // ran fine, just found nothing
-    } catch {
-      tried.push(p.name);
-      errorCount += 1;
+    } catch (err) {
+      // A budget block is an intentional skip to protect the quota — advance to the
+      // next provider without counting it as an upstream failure.
+      if (err instanceof ProviderBudgetError) {
+        tried.push(`${p.name}(budget)`);
+      } else {
+        noteProviderCall(meterUrl, false);
+        tried.push(p.name);
+        errorCount += 1;
+      }
     } finally {
       t.done();
     }

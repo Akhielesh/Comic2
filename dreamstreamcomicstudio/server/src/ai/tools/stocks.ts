@@ -20,6 +20,8 @@ import type {
 } from '../../../../apiTypes.js';
 import { fetchNews } from './news.js';
 import { alpacaEnabled, isAlpacaSymbol, getAlpacaQuote } from './alpaca.js';
+import { TtlCache } from '../../lib/cache.js';
+import { assertProviderBudget, noteProviderCall } from '../../lib/providerUsage.js';
 
 const QUOTE_URL = 'https://stooq.com/q/l/';
 const HISTORY_URL = 'https://stooq.com/q/d/l/';
@@ -154,12 +156,14 @@ const withTimeout = (signal?: AbortSignal, ms = DEFAULT_TIMEOUT_MS) => {
 };
 
 const fetchJson = async <T>(url: string, signal?: AbortSignal, cookie?: string): Promise<T> => {
+  assertProviderBudget(url);
   const t = withTimeout(signal);
   try {
     const res = await fetch(url, {
       headers: { Accept: 'application/json', 'User-Agent': UA, ...(cookie ? { Cookie: cookie } : {}) },
       signal: t.signal
     });
+    noteProviderCall(url, res.ok);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return (await res.json()) as T;
   } finally {
@@ -168,9 +172,11 @@ const fetchJson = async <T>(url: string, signal?: AbortSignal, cookie?: string):
 };
 
 const fetchText = async (url: string, signal?: AbortSignal): Promise<string> => {
+  assertProviderBudget(url);
   const t = withTimeout(signal);
   try {
     const res = await fetch(url, { headers: { Accept: 'text/csv,text/plain', 'User-Agent': UA }, signal: t.signal });
+    noteProviderCall(url, res.ok);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.text();
   } finally {
@@ -425,9 +431,18 @@ const getStooqQuote = async (rawSymbol: string, signal?: AbortSignal): Promise<S
   };
 };
 
+// Quotes within a minute are "live enough" for chat display; the cache collapses
+// repeated agent calls (comparisons, monitors, dashboards) into one upstream fetch.
+const quoteCache = new TtlCache<StockQuoteArtifact>(60_000, 300);
+
 export const getStockQuote = async (rawSymbol: string, signal?: AbortSignal): Promise<StockQuoteArtifact> => {
   const trimmed = rawSymbol?.trim();
   if (!trimmed) throw new Error('No ticker symbol was provided.');
+  const cacheKey = trimmed.toLowerCase();
+  return quoteCache.getOrSet(cacheKey, () => getStockQuoteUncached(trimmed, signal));
+};
+
+const getStockQuoteUncached = async (trimmed: string, signal?: AbortSignal): Promise<StockQuoteArtifact> => {
   // Map "gold"/"oil"/"the S&P"/"EURUSD" → a real Yahoo symbol before quoting.
   const symbol = resolveMarketSymbol(trimmed);
   // Licensed-feed-first: with Alpaca keys set, plain US equities are quoted from the
