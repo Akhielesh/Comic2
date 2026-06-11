@@ -224,5 +224,5 @@ export function downloadBlob(blob: Blob, filename: string): void {
 export const recordingFilename = (eventId: string, part: number, mime: string): string => {
   const ext = mime.includes('mp4') ? 'mp4' : 'webm';
   const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
-  return `dreamstream-${eventId}-${stamp}${part > 1 ? `-part${part}` : ''}.${ext}`;
+  return `streamstudio-${eventId}-${stamp}${part > 1 ? `-part${part}` : ''}.${ext}`;
 };

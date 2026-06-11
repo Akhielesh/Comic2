@@ -1,4 +1,4 @@
-// Shared UI primitives for DreamStream Live — the design-system vocabulary:
+// Shared UI primitives for Stream Studio — the design-system vocabulary:
 // buttons, pills, toggles, segmented controls, sliders, avatars, tabs, meters,
 // charts, sheets, fields and toasts. Plain CSS classes from styles/app.css.
 import React, { useEffect, useRef, useState } from 'react';

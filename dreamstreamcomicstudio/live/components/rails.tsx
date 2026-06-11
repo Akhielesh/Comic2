@@ -5,7 +5,7 @@ import { Icon } from '../ui/icons';
 import { AreaChart, Avatar, Btn, IconBtn, Meter, cx } from '../ui/primitives';
 import { fmtBps } from '../metrics';
 import type { ChatMsg, LobbyEntry, LogEntry, LogKind, PersonEntry, Role } from '../protocol';
-import { EMOJI_SET } from '../protocol';
+import { EMOJI_LIBRARY, QUICK_EMOJI } from '../emoji';
 
 /* --------------------------------------------------------------- helpers */
 
@@ -33,6 +33,33 @@ export const LOG_STYLE: Record<LogKind, [string, string]> = {
 
 const roleClass = (role: Role): string | null =>
   role === 'host' ? 'host' : role === 'mod' ? 'mod' : null;
+
+/* ----------------------------------------------------------- reactions ---- */
+
+/** One-tap quick reactions + a "+" picker over the full emoji library. */
+export function ReactBar({ onReact, vertical, compact }: { onReact: (e: string) => void; vertical?: boolean; compact?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const quick = compact ? QUICK_EMOJI.slice(0, 4) : QUICK_EMOJI;
+  return (
+    <div className={cx('react-bar', vertical && 'vertical')}>
+      {quick.map((e) => (
+        <button key={e} className="vc-react" onClick={() => onReact(e)} aria-label={`React ${e}`}>{e}</button>
+      ))}
+      <button className={cx('vc-react', 'more', open && 'active')} onClick={() => setOpen((o) => !o)} aria-label="More reactions" aria-expanded={open}>
+        <Icon name="plus" size={15} />
+      </button>
+      {open && (
+        <div className="emoji-pop" role="menu" aria-label="All reactions">
+          {EMOJI_LIBRARY.map((e) => (
+            <button key={e} className="emoji-pop-btn" role="menuitem" onClick={() => { onReact(e); setOpen(false); }} aria-label={`React ${e}`}>
+              {e}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /* ---------------------------------------------------------------- Chat ---- */
 
@@ -97,11 +124,7 @@ export function ChatRail({ chat, pinned, slowSec, reactionsOn, canModerate, onSe
       <div className="composer">
         {reactionsOn !== false && (
           <div className="reactions-row">
-            {EMOJI_SET.map((e) => (
-              <button key={e} className="react-btn" onClick={() => onReact(e)} aria-label={`React ${e}`}>
-                {e}
-              </button>
-            ))}
+            <ReactBar onReact={onReact} />
           </div>
         )}
         <div className="input-row">

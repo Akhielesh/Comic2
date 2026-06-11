@@ -1,18 +1,25 @@
 /**
- * EventRoom — one Durable Object per live event.
+ * EventRoom — one Durable Object per live event (Stream Studio).
  *
  * Owns everything that is "the room": stream state (idle/live/paused/ended),
  * chat (ring buffer, logged normally but NEVER part of any recording), emoji
- * reactions, presence/viewer count, the approval lobby (knock → admit/deny),
- * moderation (promote/kick/delete/pin), new-segment fan-out to viewers — and
- * the event's durable memory: an activity log, viewer-curve samples (via the
- * DO alarm while live), chat stats and RSVPs, so the dashboard, invite page
- * and post-stream summary are all served from the cloud.
+ * reactions, presence/viewer count + a hard host-set viewer cap (≤200), the
+ * approval lobby (knock → admit/deny), moderation (promote/kick/delete/pin
+ * plus automatic profanity/spam strikes with 5-minute timeouts) and
+ * new-segment fan-out to viewers.
+ *
+ * It is also the event's durable memory and janitor: activity log, viewer
+ * curve + host health telemetry (via the DO alarm while live), RSVPs, the
+ * server-side recording registry — and scheduled cleanup: segments (the 24 h
+ * replay window) purge a day after the stream ends, server recordings purge
+ * after 7 days so storage never leaks.
  *
  * Uses the WebSocket hibernation API so an idle room costs nothing between
  * messages. All durable facts live in storage; per-socket facts live in
  * attachments, so the room survives eviction mid-event.
  */
+
+import { EMOJI_LIBRARY, STRIKE_LIMIT, TIMEOUT_MS, checkSpam, hasProfanity, type SpamState } from './moderation';
 
 export type Role = 'host' | 'mod' | 'viewer' | 'pending';
 export type StreamStatus = 'idle' | 'live' | 'paused' | 'ended';
@@ -45,6 +52,8 @@ export interface EventMeta {
   slowSec: number;
   /** Whether emoji reactions are accepted from viewers. */
   reactionsOn: boolean;
+  /** Hard concurrent-viewer cap, host-set, never above HARD_VIEWER_CAP. */
+  maxViewers: number;
 }
 
 export interface ChatMsg {
@@ -63,6 +72,15 @@ export interface LogEntry {
   msg: string;
 }
 
+export interface RecordingEntry {
+  key: string;
+  file: string;
+  bytes: number;
+  mime: string;
+  durMs: number;
+  at: number;
+}
+
 interface Stats {
   peakViewers: number;
   peakAt: number | null;
@@ -73,6 +91,8 @@ interface Stats {
   curve: { at: number; n: number }[];
   /** Chat messages per minute buckets. */
   chatCurve: { at: number; n: number }[];
+  /** Host-reported network health: upload bps, encoded bps, upload failures. */
+  healthCurve: { at: number; up: number; enc: number; fail: number }[];
 }
 
 interface Attach {
@@ -93,8 +113,17 @@ const CHAT_MIN_INTERVAL_MS = 400;
 const LOG_CAP = 400;
 const CURVE_CAP = 1500; // ~12 h of 30 s samples
 const CURVE_SAMPLE_MS = 30_000;
+const HEALTH_MIN_INTERVAL_MS = 20_000;
 const RSVP_CAP = 500;
-const ALLOWED_EMOJI = new Set(['❤️', '🔥', '👏', '😂', '🤯', '🎉']);
+const REC_CAP = 20;
+/** Platform ceiling — hosts can set any cap up to this, never beyond. */
+export const HARD_VIEWER_CAP = 200;
+const DEFAULT_VIEWER_CAP = 100;
+/** Replay stays watchable this long after the stream ends, then segments purge. */
+export const REPLAY_WINDOW_MS = 24 * 60 * 60_000;
+/** Server-side recordings are kept this long for the host, then purge. */
+export const RECORDING_RETENTION_MS = 7 * 24 * 60 * 60_000;
+const ALLOWED_EMOJI = new Set<string>(EMOJI_LIBRARY);
 const MILESTONES = [10, 25, 50, 100, 250, 500, 1000];
 
 const emptyStats = (): Stats => ({
@@ -105,6 +134,7 @@ const emptyStats = (): Stats => ({
   uniqueViewers: 0,
   curve: [],
   chatCurve: [],
+  healthCurve: [],
 });
 
 const json = (data: unknown, status = 200) =>
@@ -115,8 +145,10 @@ const json = (data: unknown, status = 200) =>
 
 export class EventRoom {
   private lastChatAt = new Map<string, number>(); // best-effort rate limit; resets on hibernation, which is fine
+  private spam = new Map<string, SpamState>(); // best-effort repeat detector; same trade-off
+  private lastHealthAt = 0;
 
-  constructor(private state: DurableObjectState, _env: Env) {}
+  constructor(private state: DurableObjectState, private env: Env) {}
 
   // ---------------------------------------------------------------- storage
 
@@ -129,13 +161,16 @@ export class EventRoom {
   }
 
   private async getStats(): Promise<Stats> {
-    return (await this.state.storage.get<Stats>('stats')) ?? emptyStats();
+    const s = (await this.state.storage.get<Stats>('stats')) ?? emptyStats();
+    if (!s.healthCurve) s.healthCurve = []; // rooms created before health telemetry
+    return s;
   }
 
   private async publicMeta(m: EventMeta) {
     const rsvps = (await this.state.storage.get<string[]>('rsvps')) ?? [];
     return {
       ...m,
+      maxViewers: m.maxViewers || DEFAULT_VIEWER_CAP,
       viewers: this.viewerCount(),
       rsvpCount: rsvps.length,
       rsvpNames: rsvps.slice(0, 6),
@@ -167,6 +202,12 @@ export class EventRoom {
         return this.handleStats(url);
       case '/rsvp':
         return this.handleRsvp(req);
+      case '/auth':
+        return this.handleAuth(req);
+      case '/rec/register':
+        return this.handleRecRegister(req);
+      case '/rec/list':
+        return this.handleRecList(req, url);
       case '/ws':
         return this.handleUpgrade(req, url);
       default:
@@ -186,7 +227,7 @@ export class EventRoom {
       access: body.access === 'approval' ? 'approval' : 'open',
       quality: String(body.quality ?? '720p'),
       mime: String(body.mime ?? ''),
-      segMs: Math.min(6000, Math.max(2000, Number(body.segMs) || 3000)),
+      segMs: Math.min(12_000, Math.max(2000, Number(body.segMs) || 6000)),
       status: 'idle',
       createdAt: Date.now(),
       scheduledAt:
@@ -201,6 +242,7 @@ export class EventRoom {
       pinned: null,
       slowSec: 0,
       reactionsOn: true,
+      maxViewers: Math.min(HARD_VIEWER_CAP, Math.max(1, Math.floor(Number(body.maxViewers)) || DEFAULT_VIEWER_CAP)),
     };
     const hostKey = crypto.randomUUID();
     await this.state.storage.put({
@@ -213,6 +255,8 @@ export class EventRoom {
       rsvps: [] as string[],
       chatters: {} as Record<string, number>,
       seenNames: [] as string[],
+      strikes: {} as Record<string, { n: number; until: number }>,
+      recordings: [] as RecordingEntry[],
     });
     await this.addLog(
       'sys',
@@ -230,22 +274,73 @@ export class EventRoom {
     return json(await this.publicMeta(meta));
   }
 
+  /** Cheap host-key check for the worker's recording-upload routes. */
+  private async handleAuth(req: Request): Promise<Response> {
+    const hostKey = await this.state.storage.get<string>('hostKey');
+    if (!hostKey || req.headers.get('x-host-key') !== hostKey) return json({ error: 'forbidden' }, 403);
+    return new Response(null, { status: 204 });
+  }
+
+  /** The worker finished a multipart upload to R2 — remember the recording. */
+  private async handleRecRegister(req: Request): Promise<Response> {
+    const hostKey = await this.state.storage.get<string>('hostKey');
+    if (req.headers.get('x-host-key') !== hostKey) return json({ error: 'forbidden' }, 403);
+    const body = (await req.json()) as Partial<RecordingEntry>;
+    const rec: RecordingEntry = {
+      key: String(body.key ?? ''),
+      file: String(body.file ?? 'recording').slice(0, 120),
+      bytes: Math.max(0, Number(body.bytes) || 0),
+      mime: String(body.mime ?? 'video/webm').slice(0, 80),
+      durMs: Math.max(0, Number(body.durMs) || 0),
+      at: Date.now(),
+    };
+    if (!rec.key) return json({ error: 'bad key' }, 400);
+    const recordings = (await this.state.storage.get<RecordingEntry[]>('recordings')) ?? [];
+    recordings.push(rec);
+    await this.state.storage.put('recordings', recordings.slice(-REC_CAP));
+    await this.addLog('rec', 'REC', `Recording stored to the cloud · ${(rec.bytes / 1_048_576).toFixed(0)} MB (kept 7 days)`);
+    // Make sure the janitor is armed even if the host never hits "end stream".
+    const alarm = await this.state.storage.getAlarm();
+    if (alarm == null) await this.state.storage.setAlarm(Date.now() + RECORDING_RETENTION_MS);
+    return json({ ok: true, count: recordings.length });
+  }
+
+  private async handleRecList(req: Request, url: URL): Promise<Response> {
+    const hostKey = await this.state.storage.get<string>('hostKey');
+    if (url.searchParams.get('k') !== hostKey) return json({ error: 'forbidden' }, 403);
+    const recordings = (await this.state.storage.get<RecordingEntry[]>('recordings')) ?? [];
+    const meta = await this.getMeta();
+    const expiresAt = recordings.length
+      ? Math.min(...recordings.map((r) => r.at)) + RECORDING_RETENTION_MS
+      : meta?.endedAt
+        ? meta.endedAt + RECORDING_RETENTION_MS
+        : null;
+    return json({ recordings, expiresAt });
+  }
+
   /** Host-gated rollup for the post-stream summary screen. */
   private async handleStats(url: URL): Promise<Response> {
     const meta = await this.getMeta();
     if (!meta) return json({ error: 'not found' }, 404);
     const hostKey = await this.state.storage.get<string>('hostKey');
     if (url.searchParams.get('k') !== hostKey) return json({ error: 'forbidden' }, 403);
-    const [stats, log, chatters] = await Promise.all([
+    const [stats, log, chatters, recordings] = await Promise.all([
       this.getStats(),
       this.state.storage.get<LogEntry[]>('log'),
       this.state.storage.get<Record<string, number>>('chatters'),
+      this.state.storage.get<RecordingEntry[]>('recordings'),
     ]);
     const top = Object.entries(chatters ?? {})
       .sort((a, b) => b[1] - a[1])
       .slice(0, 10)
       .map(([name, count]) => ({ name, count }));
-    return json({ meta: await this.publicMeta(meta), stats, log: log ?? [], topChatters: top });
+    return json({
+      meta: await this.publicMeta(meta),
+      stats,
+      log: log ?? [],
+      topChatters: top,
+      recordings: recordings ?? [],
+    });
   }
 
   /** Name-only "save my spot" from the invite page — no account needed. */
@@ -289,17 +384,64 @@ export class EventRoom {
     return json({ ok: true });
   }
 
-  // ------------------------------------------------------- alarm (sampling)
+  // ----------------------------------------------------- alarm (the janitor)
 
-  /** While live, sample the viewer count every 30 s for the analytics curve. */
+  /**
+   * One alarm, three jobs: sample the viewer curve while live; purge segments
+   * when the 24 h replay window closes; purge server recordings after 7 days.
+   */
   async alarm(): Promise<void> {
     const meta = await this.getMeta();
-    if (!meta || meta.status !== 'live') return;
-    const stats = await this.getStats();
-    stats.curve.push({ at: Date.now(), n: this.viewerCount() });
-    if (stats.curve.length > CURVE_CAP) stats.curve.splice(0, stats.curve.length - CURVE_CAP);
-    await this.state.storage.put('stats', stats);
-    await this.state.storage.setAlarm(Date.now() + CURVE_SAMPLE_MS);
+    if (!meta) return;
+
+    if (meta.status === 'live') {
+      // Abandoned room (host vanished without ending): auto-end after 2 h of
+      // silence so viewers see "ended" and the retention janitor takes over.
+      if (meta.lastIngestAt && Date.now() - meta.lastIngestAt > 2 * 60 * 60_000) {
+        meta.status = 'ended';
+        meta.endedAt = meta.lastIngestAt;
+        await this.putMeta(meta);
+        this.broadcast({ t: 'state', status: 'ended', startedAt: meta.startedAt, endedAt: meta.endedAt });
+        await this.addLog('warn', 'WARN', 'Stream auto-ended after 2 h without segments');
+        await this.state.storage.setAlarm(meta.endedAt + REPLAY_WINDOW_MS);
+        return;
+      }
+      const stats = await this.getStats();
+      stats.curve.push({ at: Date.now(), n: this.viewerCount() });
+      if (stats.curve.length > CURVE_CAP) stats.curve.splice(0, stats.curve.length - CURVE_CAP);
+      await this.state.storage.put('stats', stats);
+      await this.state.storage.setAlarm(Date.now() + CURVE_SAMPLE_MS);
+      return;
+    }
+
+    if (meta.status !== 'ended' || !meta.endedAt) return;
+    const now = Date.now();
+    const segPurgeAt = meta.endedAt + REPLAY_WINDOW_MS;
+    const recPurgeAt = meta.endedAt + RECORDING_RETENTION_MS;
+
+    if (now >= recPurgeAt) {
+      await this.deletePrefix(`events/${meta.id}/rec/`);
+      await this.deletePrefix(`events/${meta.id}/seg/`);
+      await this.state.storage.put('recordings', [] as RecordingEntry[]);
+      await this.addLog('sys', 'SYS', 'Retention sweep — recordings purged after 7 days');
+      return; // done; no further alarms
+    }
+    if (now >= segPurgeAt) {
+      await this.deletePrefix(`events/${meta.id}/seg/`);
+      await this.addLog('sys', 'SYS', 'Replay window closed — segments purged after 24 h');
+      await this.state.storage.setAlarm(recPurgeAt);
+      return;
+    }
+    await this.state.storage.setAlarm(segPurgeAt);
+  }
+
+  private async deletePrefix(prefix: string): Promise<void> {
+    let cursor: string | undefined;
+    do {
+      const page = await this.env.LIVE_BUCKET.list({ prefix, cursor, limit: 500 });
+      if (page.objects.length > 0) await this.env.LIVE_BUCKET.delete(page.objects.map((o) => o.key));
+      cursor = page.truncated ? page.cursor : undefined;
+    } while (cursor);
   }
 
   // ------------------------------------------------------------- WebSocket
@@ -324,6 +466,18 @@ export class EventRoom {
 
     const pair = new WebSocketPair();
     const server = pair[1];
+
+    // Hard capacity gate — the room never exceeds the host's cap.
+    const cap = meta.maxViewers || DEFAULT_VIEWER_CAP;
+    if (role !== 'host' && this.viewerCount() >= cap) {
+      server.accept();
+      try {
+        server.send(JSON.stringify({ t: 'full', max: cap }));
+        server.close(4003, 'full');
+      } catch { /* socket on its way out */ }
+      return new Response(null, { status: 101, webSocket: pair[0] });
+    }
+
     this.state.acceptWebSocket(server);
     const attach: Attach = { sid: crypto.randomUUID().slice(0, 8), name, role };
     server.serializeAttachment(attach);
@@ -360,6 +514,8 @@ export class EventRoom {
         return this.onState(me, String(msg.status ?? ''));
       case 'config':
         return this.onConfig(me, msg);
+      case 'health':
+        return this.onHealth(me, msg);
       case 'log':
         return this.onHostLog(me, msg);
       case 'admit':
@@ -398,6 +554,36 @@ export class EventRoom {
     const meta = await this.getMeta();
     if (!meta) return;
     const now = Date.now();
+
+    // Automatic moderation (viewers only — the crew moderates itself).
+    if (me.role === 'viewer') {
+      const strikes = (await this.state.storage.get<Record<string, { n: number; until: number }>>('strikes')) ?? {};
+      const mine = strikes[me.name] ?? { n: 0, until: 0 };
+      if (mine.until > now) {
+        this.send(ws, { t: 'notice', text: `You're timed out for ${Math.ceil((mine.until - now) / 1000)}s.` });
+        return;
+      }
+      const profane = hasProfanity(clean);
+      const { spam, next } = checkSpam(this.spam.get(me.sid), clean, now);
+      this.spam.set(me.sid, next);
+      if (profane || spam) {
+        mine.n += 1;
+        const reason = profane ? 'profanity' : 'spam';
+        if (mine.n >= STRIKE_LIMIT) {
+          mine.until = now + TIMEOUT_MS;
+          mine.n = 0;
+          this.send(ws, { t: 'notice', text: `You've been timed out for ${TIMEOUT_MS / 60_000} minutes (${reason}).` });
+          await this.addLog('mod', 'MOD', `Auto-timeout for “${me.name}” · ${reason} · ${TIMEOUT_MS / 60_000} min`);
+        } else {
+          this.send(ws, { t: 'notice', text: profane ? 'Message hidden — keep it friendly.' : 'Message hidden — no need to repeat yourself.' });
+          await this.addLog('mod', 'MOD', `Hid a message from “${me.name}” · ${reason} (strike ${mine.n}/${STRIKE_LIMIT})`);
+        }
+        strikes[me.name] = mine;
+        await this.state.storage.put('strikes', strikes);
+        return; // never broadcast
+      }
+    }
+
     const minGap = me.role === 'viewer' && meta.slowSec > 0 ? meta.slowSec * 1000 : CHAT_MIN_INTERVAL_MS;
     if (now - (this.lastChatAt.get(me.sid) ?? 0) < minGap) return;
     this.lastChatAt.set(me.sid, now);
@@ -461,20 +647,40 @@ export class EventRoom {
     } else if (status === 'paused') {
       await this.addLog('scene', 'SCENE', 'Cut to “Be right back” slate');
     } else if (status === 'ended') {
-      await this.addLog('live', 'END', 'Stream ended by host');
-      await this.state.storage.deleteAlarm();
+      await this.addLog('live', 'END', 'Stream ended by host — replay stays up for 24 h, recordings for 7 days');
+      await this.state.storage.setAlarm(meta.endedAt! + REPLAY_WINDOW_MS);
     }
   }
 
-  /** Host adjusts room behavior mid-stream: slow mode, reactions on/off. */
+  /** Host adjusts room behavior mid-stream: slow mode, reactions, viewer cap. */
   private async onConfig(me: Attach, msg: Record<string, unknown>): Promise<void> {
     if (me.role !== 'host') return;
     const meta = await this.getMeta();
     if (!meta) return;
     if (msg.slow != null) meta.slowSec = Math.min(120, Math.max(0, Math.floor(Number(msg.slow)) || 0));
     if (msg.reactions != null) meta.reactionsOn = Boolean(msg.reactions);
+    if (msg.maxViewers != null) {
+      meta.maxViewers = Math.min(HARD_VIEWER_CAP, Math.max(1, Math.floor(Number(msg.maxViewers)) || DEFAULT_VIEWER_CAP));
+    }
     await this.putMeta(meta);
-    this.broadcast({ t: 'config', slow: meta.slowSec, reactions: meta.reactionsOn });
+    this.broadcast({ t: 'config', slow: meta.slowSec, reactions: meta.reactionsOn, maxViewers: meta.maxViewers });
+  }
+
+  /** The studio reports encoder/network telemetry ~every 30 s while live. */
+  private async onHealth(me: Attach, msg: Record<string, unknown>): Promise<void> {
+    if (me.role !== 'host') return;
+    const now = Date.now();
+    if (now - this.lastHealthAt < HEALTH_MIN_INTERVAL_MS) return;
+    this.lastHealthAt = now;
+    const stats = await this.getStats();
+    stats.healthCurve.push({
+      at: now,
+      up: Math.max(0, Math.round(Number(msg.up) || 0)),
+      enc: Math.max(0, Math.round(Number(msg.enc) || 0)),
+      fail: Math.max(0, Math.floor(Number(msg.fail) || 0)),
+    });
+    if (stats.healthCurve.length > CURVE_CAP) stats.healthCurve.splice(0, stats.healthCurve.length - CURVE_CAP);
+    await this.state.storage.put('stats', stats);
   }
 
   /** The studio reports client-side production events (scene cuts, recording)
@@ -497,6 +703,12 @@ export class EventRoom {
       if (a.role === 'host') return; // nobody moderates the host
 
       if (action === 'admit' && a.role === 'pending') {
+        const meta = await this.getMeta();
+        const cap = meta?.maxViewers || DEFAULT_VIEWER_CAP;
+        if (this.viewerCount() >= cap) {
+          await this.addLog('warn', 'WARN', `Could not admit “${a.name}” — room is at its ${cap}-viewer cap`);
+          return;
+        }
         const token = crypto.randomUUID();
         const admitted = (await this.state.storage.get<string[]>('admitted')) ?? [];
         admitted.push(token);

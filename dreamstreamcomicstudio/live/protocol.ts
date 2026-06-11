@@ -28,10 +28,29 @@ export interface EventMeta {
   pinned: string | null;
   slowSec: number;
   reactionsOn: boolean;
+  /** Hard concurrent-viewer cap, host-set (≤200 platform ceiling). */
+  maxViewers: number;
   viewers: number;
   rsvpCount: number;
   rsvpNames: string[];
 }
+
+/** Server-side recording copy, kept 7 days for the host. */
+export interface RecordingEntry {
+  key: string;
+  file: string;
+  bytes: number;
+  mime: string;
+  durMs: number;
+  at: number;
+}
+
+/** Replay stays watchable this long after a stream ends (mirrors the worker). */
+export const REPLAY_WINDOW_MS = 24 * 60 * 60_000;
+/** Server recordings are kept this long, then auto-purge (mirrors the worker). */
+export const RECORDING_RETENTION_MS = 7 * 24 * 60 * 60_000;
+/** Platform ceiling on the host-set viewer cap (mirrors the worker). */
+export const HARD_VIEWER_CAP = 200;
 
 export interface ChatMsg {
   id: string;
@@ -70,6 +89,8 @@ export interface EventStats {
   uniqueViewers: number;
   curve: { at: number; n: number }[];
   chatCurve: { at: number; n: number }[];
+  /** Host-reported network telemetry (upload bps, encoded bps, failures). */
+  healthCurve: { at: number; up: number; enc: number; fail: number }[];
 }
 
 export interface StatsResponse {
@@ -77,6 +98,7 @@ export interface StatsResponse {
   stats: EventStats;
   log: LogEntry[];
   topChatters: { name: string; count: number }[];
+  recordings: RecordingEntry[];
 }
 
 export type ServerMsg =
@@ -95,8 +117,10 @@ export type ServerMsg =
   | { t: 'lobby'; pending: LobbyEntry[] }
   | { t: 'people'; list: PersonEntry[] }
   | { t: 'log'; entry: LogEntry }
-  | { t: 'config'; slow: number; reactions: boolean }
+  | { t: 'config'; slow: number; reactions: boolean; maxViewers: number }
   | { t: 'milestone'; n: number }
+  | { t: 'full'; max: number }
+  | { t: 'notice'; text: string }
   | { t: 'pin'; text: string | null };
 
 export const EMOJI_SET = ['❤️', '🔥', '👏', '😂', '🤯', '🎉'] as const;

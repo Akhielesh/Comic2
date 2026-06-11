@@ -1,5 +1,5 @@
 /**
- * Clear-cut quality options and platform limits for DreamStream Live.
+ * Clear-cut quality options and platform limits for Stream Studio.
  * Everything user-facing about "what can I stream and what does it cost"
  * derives from these tables — keep docs/features/stream-studio.md in sync.
  */
@@ -28,7 +28,10 @@ export const DEFAULT_PRESET_ID = '720p';
 export const presetById = (id: string): QualityPreset =>
   QUALITY_PRESETS.find((p) => p.id === id) ?? QUALITY_PRESETS[1];
 
-export const SEGMENT_MS = 3000;
+/** 6-second segments: fewer encoder rotations (smoother audio, fewer seams),
+ *  fewer uploads, and a deliberate ~10 s glass-to-glass buffer that absorbs
+ *  network wobble. Rooms created on older builds keep their stored segMs. */
+export const SEGMENT_MS = 6000;
 
 /** Local recording runs at a higher bitrate than the stream — the master copy
  *  is always better than what viewers saw ("record in full clarity"). */
@@ -36,13 +39,13 @@ export const LOCAL_REC_BITRATE_FACTOR = 2.5;
 
 /** Shown verbatim in the UI so the limits are never a surprise. */
 export const LIMITS: { label: string; value: string }[] = [
-  { label: 'Max concurrent viewers', value: '100 (soft cap — delivery is CDN-cached, so more is possible)' },
-  { label: 'Latency', value: '≈ 4–10 s (segmented delivery; sub-second mode planned)' },
+  { label: 'Concurrent viewers', value: 'You set the cap per event — hard ceiling 200, never exceeded' },
+  { label: 'Latency', value: '≈ 8–15 s by design — the buffer keeps playback smooth through network wobble' },
   { label: 'Session length', value: 'Unlimited — short clips or marathon sessions' },
   { label: 'Resolution ceiling', value: '1080p60 streaming · local recording at the same resolution, ~2.5× bitrate' },
-  { label: 'Recording', value: 'Program feed only — never your screen, chat is never burned in' },
-  { label: 'Chat log', value: 'Last 200 messages kept server-side (normal logging, separate from video)' },
-  { label: 'Cost', value: '≈ $0.10 per 100-viewer hour on this rail (R2 has zero egress fees)' },
+  { label: 'Replay', value: 'Viewers can re-watch from the same link for 24 h after the stream ends' },
+  { label: 'Recordings', value: 'Saved to your device AND kept on the server for 7 days (then auto-deleted) — chat is never burned in' },
+  { label: 'Moderation', value: 'Profanity & spam are auto-hidden with strikes → 5-minute timeouts, all logged' },
 ];
 
 const explicitBase = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_LIVE_WORKER_URL;

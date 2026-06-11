@@ -29,6 +29,8 @@ export interface StudioPrefs {
   alertSound: AlertSound;
   /** Auto-start the local recording when going live. */
   autoRecord: boolean;
+  /** Also upload finished recordings to the event's 7-day server store. */
+  cloudRecordings: boolean;
   /** Host display name, reused across events. */
   hostName: string;
 }
@@ -47,6 +49,7 @@ export const DEFAULT_PREFS: StudioPrefs = {
   alertMilestones: true,
   alertSound: 'soft',
   autoRecord: true,
+  cloudRecordings: true,
   hostName: '',
 };
 

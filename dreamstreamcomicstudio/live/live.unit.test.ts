@@ -77,6 +77,35 @@ describe('cover themes', async () => {
   });
 });
 
+describe('room moderation (worker)', async () => {
+  const { hasProfanity, checkSpam, EMOJI_LIBRARY } = await import('../live-worker/src/moderation');
+
+  it('flags profanity including simple leet-speak, leaves normal chat alone', () => {
+    expect(hasProfanity('what the fuck')).toBe(true);
+    expect(hasProfanity('sh1t happens')).toBe(true);
+    expect(hasProfanity('this stream is great')).toBe(false);
+    expect(hasProfanity('the class assignment is done')).toBe(false); // no scunthorpe on "class"
+  });
+
+  it('detects the same message repeated 3+ times inside 30 s', () => {
+    let s = checkSpam(undefined, 'buy my coins', 0);
+    expect(s.spam).toBe(false);
+    s = checkSpam(s.next, 'buy my coins', 5_000);
+    expect(s.spam).toBe(false);
+    s = checkSpam(s.next, 'buy my coins', 10_000);
+    expect(s.spam).toBe(true);
+    // a different message resets the run
+    s = checkSpam(s.next, 'ok sorry', 12_000);
+    expect(s.spam).toBe(false);
+  });
+
+  it('keeps the client emoji library in sync with the room allowlist', async () => {
+    const { EMOJI_LIBRARY: clientLib, QUICK_EMOJI } = await import('./emoji');
+    expect([...clientLib]).toEqual([...EMOJI_LIBRARY]);
+    for (const q of QUICK_EMOJI) expect(clientLib).toContain(q);
+  });
+});
+
 describe('lensLabel', () => {
   it('maps iOS lens names to compact chips', () => {
     expect(lensLabel('Back Ultra Wide Camera', 0)).toBe('0.5×');
@@ -89,7 +118,7 @@ describe('lensLabel', () => {
 
 describe('recordingFilename', () => {
   it('uses the container extension and marks later parts', () => {
-    expect(recordingFilename('abc', 1, 'video/mp4;codecs=avc1')).toMatch(/^dreamstream-abc-.*\.mp4$/);
+    expect(recordingFilename('abc', 1, 'video/mp4;codecs=avc1')).toMatch(/^streamstudio-abc-.*\.mp4$/);
     expect(recordingFilename('abc', 2, 'video/webm')).toMatch(/-part2\.webm$/);
   });
 });

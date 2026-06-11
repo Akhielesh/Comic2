@@ -2,6 +2,7 @@
 // worker — cloud truth) and your recording downloads.
 import React, { useEffect, useMemo, useState } from 'react';
 import { hydrateMyEvents, listMyRecordings, removeMyEvent, type MyEvent } from '../events';
+import { fetchStudioAccess, syncMyEvents, type StudioAccess } from '../sync';
 import { fmtBytes, fmtDuration } from '../metrics';
 import type { Nav } from '../nav';
 import { viewerUrl } from '../nav';
@@ -84,21 +85,45 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
   const [tab, setTab] = useState('all');
   const [events, setEvents] = useState<MyEvent[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [access, setAccess] = useState<StudioAccess | null>(null);
   const prefs = useMemo(loadPrefs, []);
   const recordings = useMemo(listMyRecordings, []);
 
   useEffect(() => {
     let cancelled = false;
-    hydrateMyEvents().then((evs) => {
+    (async () => {
+      // Account sync first: cloud events land in the registry before hydrate,
+      // so past sessions from other devices show up here.
+      const acc = await fetchStudioAccess();
+      if (cancelled) return;
+      setAccess(acc);
+      if (!acc.allowed) {
+        setLoaded(true);
+        return;
+      }
+      await syncMyEvents();
+      const evs = await hydrateMyEvents();
       if (!cancelled) {
         setEvents(evs);
         setLoaded(true);
       }
-    });
+    })();
     return () => {
       cancelled = true;
     };
   }, []);
+
+  if (access && !access.allowed) {
+    return (
+      <div className="page fade-in">
+        <div className="page-head"><h1 className="page-title">Stream Studio</h1></div>
+        <div className="banner warn">
+          <Icon name="lock" size={15} />
+          Streaming access for this account is currently disabled. If you think that's a mistake, contact an administrator.
+        </div>
+      </div>
+    );
+  }
 
   const live = events.filter((e) => e.status === 'live' || e.status === 'paused');
   const scheduled = events.filter((e) => e.status === 'idle' && e.scheduledAt != null && e.scheduledAt > Date.now());
@@ -135,6 +160,12 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
               : scheduled.length > 0
                 ? `${scheduled.length} stream${scheduled.length > 1 ? 's' : ''} scheduled — share the invite links.`
                 : 'Create an event and go live in under a minute.'}
+            {' '}
+            <span className="faint" style={{ fontSize: 13 }}>
+              {access?.signedIn
+                ? `Synced to your account${access.email ? ` (${access.email})` : ''}.`
+                : 'Events live in this browser — sign in to the app to sync across devices.'}
+            </span>
           </p>
         </div>
         <span className="spacer" />
@@ -201,7 +232,11 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
               {filtered.length === 0 && (
                 <div className="dash-empty">
                   {!loaded ? (
-                    'Loading…'
+                    <div style={{ display: 'grid', gap: 10 }} aria-label="Loading streams">
+                      <div className="skeleton" style={{ height: 56 }} />
+                      <div className="skeleton" style={{ height: 56 }} />
+                      <div className="skeleton" style={{ height: 56 }} />
+                    </div>
                   ) : events.length === 0 ? (
                     <>
                       <div className="serif">No streams yet</div>
