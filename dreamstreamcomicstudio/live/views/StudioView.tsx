@@ -802,6 +802,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     hasZoom: hasNativeZoom,
     mirror: mirrorSelf,
     lensCount: devices.length,
+    guestCount: guests.length,
     toggleMic, toggleCam, flip: () => void flipCamera(), lens: () => void cycleLens(), applyZoom: (v) => void applyZoom(v),
     cutScene: (s) => void cutScene(s), sendChat, sendEmoji,
     goLive, end: () => void endStream(),
@@ -1116,6 +1117,14 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
                   lobby={lobby}
                   guests={guests}
                   onCopyGuestInvite={guestKey ? copyGuestInvite : undefined}
+                  onRotateGuestInvite={
+                    guestKey
+                      ? () => {
+                          socketRef.current?.send({ t: 'guestkey', rotate: true });
+                          push('Guest link rotated — previously shared links no longer work', { icon: 'refresh' });
+                        }
+                      : undefined
+                  }
                   onAdmit={(sid) => socketRef.current?.send({ t: 'admit', sid })}
                   onDeny={(sid) => socketRef.current?.send({ t: 'deny', sid })}
                   onKick={(sid) => socketRef.current?.send({ t: 'kick', sid })}
@@ -1168,6 +1177,7 @@ interface MobileCtl {
   hasZoom: boolean;
   mirror: boolean;
   lensCount: number;
+  guestCount: number;
   toggleMic(): void;
   toggleCam(): void;
   flip(): void;
@@ -1205,6 +1215,7 @@ function MobileStudio({ ctl }: { ctl: MobileCtl }) {
         {ctl.status === 'idle' && <span className="ov-pill">Ready</span>}
         {ctl.status === 'ended' && <span className="ov-pill">Ended</span>}
         <span className="ov-pill"><Icon name="eye" size={12} />{ctl.viewers}</span>
+        {ctl.guestCount > 0 && <span className="ov-pill"><Icon name="users" size={12} />{ctl.guestCount} on air</span>}
         <span className="spacer" />
         <button className="ms-x" onClick={ctl.exit} aria-label="Exit phone studio"><Icon name="x" size={16} /></button>
       </div>
