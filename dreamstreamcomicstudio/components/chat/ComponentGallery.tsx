@@ -377,15 +377,20 @@ const terminal: FinanceTerminalArtifact = {
 };
 
 const mapArtifact: MapArtifact = {
-  title: 'A short walk in Paris',
+  title: 'A day in Paris',
   markers: [
-    { lat: 48.8584, lng: 2.2945, label: 'Eiffel Tower', description: 'Start' },
-    { lat: 48.8606, lng: 2.3376, label: 'Louvre', description: 'Finish' }
+    { lat: 48.8584, lng: 2.2945, label: '1. Eiffel Tower', category: 'sight', description: 'Start' },
+    { lat: 48.8616, lng: 2.3216, label: '2. Café lunch', category: 'cafe', description: 'Rue Saint-Honoré' },
+    { lat: 48.8606, lng: 2.3376, label: '3. Louvre', category: 'sight', description: 'Afternoon' },
+    { lat: 48.8567, lng: 2.3508, label: '4. Hôtel · Le Marais', category: 'hotel', description: 'Check-in 15:00' }
   ],
   route: [
     { lat: 48.8584, lng: 2.2945 },
-    { lat: 48.8606, lng: 2.3376 }
-  ]
+    { lat: 48.8616, lng: 2.3216 },
+    { lat: 48.8606, lng: 2.3376 },
+    { lat: 48.8567, lng: 2.3508 }
+  ],
+  routeInfo: { mode: 'walk' }
 };
 
 // The single source of truth for the gallery. Each entry that renders a typed

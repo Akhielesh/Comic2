@@ -7,7 +7,7 @@
 import type { ToolSpec } from '../providers/types.js';
 import { ddgImageSearch, ddgVideoSearch, type ImageResult } from './duckduckgo.js';
 import { webSearch } from './search.js';
-import { getWeather } from './weather.js';
+import { getWeatherDetailed } from './weather.js';
 import { geocodePlaces } from './maps.js';
 import { fetchNews } from './news.js';
 import { getStockQuote } from './stocks.js';
@@ -153,9 +153,10 @@ const weatherTool: ChatTool = {
     const location = String(args?.location || '').trim();
     if (!location) return { content: 'No location was provided.' };
     try {
-      const weather = await getWeather(location, signal);
+      const { weather, source } = await getWeatherDetailed(location, signal);
       const content = `Weather for ${weather.location}: ${weather.current.tempC}°C (${weather.current.tempF}°F), ${weather.current.description}, wind ${weather.current.windKph} km/h. A weather card with the 5-day forecast is shown to the user.`;
-      return { content, artifacts: [{ type: 'weather', data: weather }] };
+      // CC BY 4.0 sources — surface the credit as a visible citation.
+      return { content, artifacts: [{ type: 'weather', data: weather }], citations: [{ url: source.url, title: source.attribution }] };
     } catch (err) {
       return { content: `Weather lookup failed: ${(err as Error)?.message || 'unknown error'}.` };
     }

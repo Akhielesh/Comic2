@@ -33,6 +33,25 @@ export type ToolCategory =
 
 export type ToolAuth = 'none' | 'optional' | 'required';
 
+/**
+ * Commercial-use licensing posture of a tool's PRIMARY data source (verified against
+ * provider terms, June 2026 audit):
+ *   'commercial-ok' — free for commercial use, no strings (e.g. government/public data).
+ *   'attribution'   — free for commercial use with required visible credit (CC BY etc.).
+ *   'conditional'   — free tier is personal/non-commercial; a key or paid plan unlocks
+ *                     commercial rights (the tool degrades honestly until configured).
+ *   'unofficial'    — unofficial/scrape endpoint with no license to rely on; never the
+ *                     sole source for anything compliance-critical.
+ */
+export type ToolLicense = 'commercial-ok' | 'attribution' | 'conditional' | 'unofficial';
+
+export const LICENSE_META: Record<ToolLicense, { label: string; blurb: string }> = {
+  'commercial-ok': { label: 'COMMERCIAL OK', blurb: 'Free for commercial use, verified.' },
+  attribution: { label: 'ATTRIBUTION', blurb: 'Free for commercial use with visible credit.' },
+  conditional: { label: 'KEY FOR COMMERCIAL', blurb: 'Free tier is personal-use; a key/plan unlocks commercial rights.' },
+  unofficial: { label: 'UNOFFICIAL', blurb: 'Unofficial endpoint — best-effort, no license guarantee.' }
+};
+
 export interface ToolMeta {
   /** Tool name the model and client reference (matches the server registry). */
   name: string;
@@ -56,6 +75,10 @@ export interface ToolMeta {
   docsUrl: string;
   /** Routing keywords used by the smart selector to decide relevance. */
   keywords: string[];
+  /** Commercial-use posture of the primary source (set on audited connectors). */
+  license?: ToolLicense;
+  /** One-line licensing/fallback note shown in the dashboard. */
+  licenseNote?: string;
 }
 
 export interface CategoryMeta {
@@ -91,9 +114,10 @@ export const CATEGORY_META: CategoryMeta[] = [
 export const TOOL_CATALOG: ToolMeta[] = [
   // ---------------------------------------------------------------- search ------
   {
-    name: 'web_search', label: 'Web search', category: 'search', kind: 'builtin', provider: 'SearXNG → DuckDuckGo → Bing → Wikipedia (free, keyless) · Tavily/Brave/Google if keyed',
+    name: 'web_search', label: 'Web search', category: 'search', kind: 'builtin', provider: 'SearXNG → DuckDuckGo → Bing → Wikipedia (free, keyless) · Tavily/Brave/Serper/Google if keyed',
     description: 'Search the live web for current, factual or post-training information with ranked results and citations.',
-    auth: 'optional', authEnv: 'SEARXNG_URL', rateLimit: 'Free keyless sources by default (open-source SearXNG + scrapers); self-host SearXNG via SEARXNG_URL, or add a free TAVILY_API_KEY/BRAVE_API_KEY, for higher reliability',
+    auth: 'optional', authEnv: 'SEARXNG_URL', rateLimit: 'Free keyless sources by default (open-source SearXNG + scrapers); self-host SearXNG via SEARXNG_URL, or add a TAVILY_API_KEY (1k free/mo) / BRAVE_API_KEY ($5 credit ≈ 1k/mo) / SERPER_API_KEY, for higher reliability',
+    license: 'conditional', licenseNote: 'Keyless scrapers are best-effort and block-prone from datacenter IPs; production should run a self-hosted SearXNG plus one keyed, non-scraping provider (Tavily/Brave).',
     dataShape: 'Ranked results: title, URL, snippet + citations.', docsUrl: 'https://duckduckgo.com',
     // Deliberately distinctive keywords only — web_search is also a guaranteed
     // backstop in routing/fallback, so it shouldn't win ties on generic words.
@@ -118,29 +142,33 @@ export const TOOL_CATALOG: ToolMeta[] = [
     name: 'get_news', label: 'News', category: 'news', kind: 'builtin', provider: 'Google News RSS',
     description: 'Latest news headlines from real outlets by topic or region.',
     auth: 'none', rateLimit: 'Fair use (public RSS)',
+    license: 'unofficial', licenseNote: 'Unofficial public RSS — fine as a headline pointer (links go to the outlets), but never the sole source for a paid feature.',
     dataShape: 'News card: dated, sourced headlines + citations.', docsUrl: 'https://news.google.com',
     keywords: ['news', 'headline', 'breaking', 'happening', 'latest on', 'updates', 'press']
   },
   // ---------------------------------------------------------------- weather -----
   {
-    name: 'get_weather', label: 'Weather', category: 'weather', kind: 'builtin', provider: 'Open-Meteo',
+    name: 'get_weather', label: 'Weather', category: 'weather', kind: 'builtin', provider: 'MET Norway (primary) → Open-Meteo (fallback / when keyed)',
     description: 'Current weather, forecast, UV and air quality for a place.',
-    auth: 'none', rateLimit: '~10,000 calls/day (no key)',
-    dataShape: 'Weather card: temp, conditions, 5-day forecast.', docsUrl: 'https://open-meteo.com',
+    auth: 'optional', authEnv: 'OPEN_METEO_API_KEY', rateLimit: 'MET Norway ~20 req/s fair use (keyless); Open-Meteo free tier is non-commercial — set OPEN_METEO_API_KEY or OPEN_METEO_BASE_URL (self-host) to make it primary',
+    license: 'attribution', licenseNote: 'MET Norway is free for commercial use (CC BY 4.0, credit shown as a citation). Open-Meteo runs only as uptime fallback unless a paid key / self-hosted instance is configured.',
+    dataShape: 'Weather card: temp, conditions, 5-day forecast.', docsUrl: 'https://api.met.no',
     keywords: ['weather', 'temperature', 'forecast', 'rain', 'snow', 'humidity', 'wind', 'uv', 'air quality', 'hot', 'cold']
   },
   // ---------------------------------------------------------------- finance -----
   {
-    name: 'get_stock', label: 'Markets (stocks, commodities, FX)', category: 'finance', kind: 'builtin', provider: 'Yahoo Finance (Stooq fallback)',
+    name: 'get_stock', label: 'Markets (stocks, commodities, FX)', category: 'finance', kind: 'builtin', provider: 'Alpaca IEX (US equities, if keyed) → Yahoo Finance → Stooq',
     description: 'Live quote for stocks, ETFs, indices, commodities (gold, oil, metals), FX pairs and crypto — with an intraday→multi-year range timeline, 52-week range, stats, peers and headlines.',
-    auth: 'none', rateLimit: 'Fair use (keyless)',
+    auth: 'optional', authEnv: 'ALPACA_API_KEY_ID', rateLimit: 'Alpaca free Basic: ~200 req/min (IEX feed); keyless Yahoo/Stooq: fair use',
+    license: 'conditional', licenseNote: 'Set free Alpaca keys to serve US equity prices from a licensed IEX feed; keyless Yahoo/Stooq are unofficial endpoints (indices/commodities/FX stay on them).',
     dataShape: 'Rich market card: price, range timeline, 52-wk, peers, news.', docsUrl: 'https://finance.yahoo.com',
     keywords: ['stock', 'share', 'ticker', 'nasdaq', 's&p', 'dow', 'index', 'equity', 'market', 'gold', 'silver', 'platinum', 'copper', 'oil', 'crude', 'brent', 'commodity', 'commodities', 'metals', 'natural gas', 'futures']
   },
   {
     name: 'crypto_price', label: 'Crypto prices', category: 'finance', kind: 'api', provider: 'CoinGecko',
     description: 'Current price, market cap and 24h change of a cryptocurrency.',
-    auth: 'none', rateLimit: '~10-30 calls/min (public demo tier)',
+    auth: 'optional', authEnv: 'COINGECKO_API_KEY', rateLimit: '~10-30 calls/min keyless · 10k calls/mo with a free Demo key · 100k credits/mo on Basic ($35/mo)',
+    license: 'conditional', licenseNote: 'Keyless/Demo tiers are non-commercial; commercial display rights start at CoinGecko Basic ($35/mo) and require the "Data provided by CoinGecko" credit (always attached). Exchange-direct "free" feeds (Binance/Coinbase) prohibit commercial display — not a legal fallback.',
     dataShape: 'Interactive price card (chart) + 24h %, market cap, rank.', docsUrl: 'https://www.coingecko.com/en/api',
     keywords: ['crypto', 'bitcoin', 'btc', 'ethereum', 'eth', 'coin', 'token', 'solana', 'dogecoin', 'altcoin']
   },
@@ -148,6 +176,7 @@ export const TOOL_CATALOG: ToolMeta[] = [
     name: 'exchange_rate', label: 'Currency exchange', category: 'finance', kind: 'api', provider: 'Frankfurter (ECB)',
     description: 'Convert between fiat currencies using official ECB reference rates.',
     auth: 'none', rateLimit: 'Unlimited fair use (no key)',
+    license: 'commercial-ok', licenseNote: 'Open-source service over official ECB reference rates (public data).',
     dataShape: 'Text: converted amount(s) + rate date.', docsUrl: 'https://www.frankfurter.app',
     keywords: ['currency', 'exchange', 'convert', 'usd', 'eur', 'gbp', 'forex', 'rate', 'money']
   },
@@ -388,10 +417,11 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['country', 'capital', 'population', 'currency of', 'flag', 'nation', 'demographics']
   },
   {
-    name: 'ip_lookup', label: 'IP geolocation', category: 'geo', kind: 'api', provider: 'ip-api.com',
-    description: 'Geolocate an IP address or domain — country, city, ISP and coordinates.',
-    auth: 'none', rateLimit: '45 req/min per IP (HTTP, no key)',
-    dataShape: 'Text: location, ISP, ASN, coordinates.', docsUrl: 'https://ip-api.com/docs',
+    name: 'ip_lookup', label: 'IP geolocation', category: 'geo', kind: 'api', provider: 'IPinfo Lite (if keyed) → ip-api.com',
+    description: 'Geolocate an IP address or domain — country, network/ISP and (fallback) city and coordinates.',
+    auth: 'optional', authEnv: 'IPINFO_TOKEN', rateLimit: 'IPinfo Lite: unlimited (free token) · ip-api fallback: 45 req/min (HTTP, no key)',
+    license: 'conditional', licenseNote: 'ip-api.com free tier is non-commercial only — set a free IPINFO_TOKEN (commercial-OK with attribution, country/ASN level) for the compliant primary.',
+    dataShape: 'Text: location, ISP, ASN, coordinates.', docsUrl: 'https://ipinfo.io/lite',
     keywords: ['ip', 'ip address', 'geolocate', 'whois', 'server location', 'hostname', 'isp']
   },
   {
@@ -814,6 +844,83 @@ export const TOOL_CATALOG: ToolMeta[] = [
     auth: 'required', authEnv: 'OPENROUTER_API_KEY', rateLimit: 'Bounded by your model usage limits',
     dataShape: 'Synthesized answer + live agent trace.', docsUrl: 'https://dreamstream.app',
     keywords: ['research everything', 'comprehensive', 'multi-step', 'plan and execute', 'deep dive', 'compare across']
+  }
+];
+
+// ------------------------------------------------------ connector key registry -----
+
+export interface ConnectorKeyMeta {
+  /** Server env var that activates the upgrade. */
+  env: string;
+  provider: string;
+  /** What setting this key unlocks, in plain words. */
+  unlocks: string;
+  /** Honest cost line — free-tier size and where paid starts. */
+  cost: string;
+  signupUrl: string;
+  /** Which tool names benefit. */
+  tools: string[];
+}
+
+/**
+ * The "set these free keys" onboarding list (June 2026 audit) — every entry has a
+ * genuinely free tier and upgrades reliability and/or commercial-use compliance.
+ * Informational on the client (env vars live on the server/Railway).
+ */
+export const CONNECTOR_KEYS: ConnectorKeyMeta[] = [
+  {
+    env: 'ALPACA_API_KEY_ID', provider: 'Alpaca Market Data',
+    unlocks: 'Licensed real-time IEX feed for US equity quotes (plus ALPACA_API_SECRET_KEY) instead of unofficial Yahoo endpoints.',
+    cost: 'Free (Basic plan, ~200 req/min). Paid SIP feed from $99/mo — not needed for display.',
+    signupUrl: 'https://alpaca.markets', tools: ['get_stock']
+  },
+  {
+    env: 'TAVILY_API_KEY', provider: 'Tavily',
+    unlocks: 'Reliable non-scraping web search built for AI agents — the production search backbone.',
+    cost: 'Free 1,000 credits/mo; then ~$8 per 1k searches (pay-as-you-go).',
+    signupUrl: 'https://www.tavily.com', tools: ['web_search']
+  },
+  {
+    env: 'BRAVE_API_KEY', provider: 'Brave Search API',
+    unlocks: 'Independent search index as a second non-scraping search provider.',
+    cost: '$5 free credit/mo (≈1,000 searches, attribution required); then $5 per 1k.',
+    signupUrl: 'https://brave.com/search/api/', tools: ['web_search']
+  },
+  {
+    env: 'SERPER_API_KEY', provider: 'Serper.dev',
+    unlocks: 'Cheapest paid Google-results escape hatch for search overflow.',
+    cost: '2,500 free one-time credits; then ~$0.30–1.00 per 1k queries.',
+    signupUrl: 'https://serper.dev', tools: ['web_search']
+  },
+  {
+    env: 'SEARXNG_URL', provider: 'SearXNG (self-hosted)',
+    unlocks: 'Your own metasearch instance — unlimited, private, free (deploy the Railway template).',
+    cost: 'Free software; ~$5/mo of Railway resources.',
+    signupUrl: 'https://docs.searxng.org', tools: ['web_search']
+  },
+  {
+    env: 'COINGECKO_API_KEY', provider: 'CoinGecko',
+    unlocks: 'Stable authenticated crypto data; the Basic plan adds the commercial-display license.',
+    cost: 'Demo key free (10k calls/mo, non-commercial); commercial rights from $35/mo (Basic).',
+    signupUrl: 'https://www.coingecko.com/en/api/pricing', tools: ['crypto_price']
+  },
+  {
+    env: 'IPINFO_TOKEN', provider: 'IPinfo Lite',
+    unlocks: 'Commercial-legal IP geolocation (country/ASN, unlimited) replacing non-commercial ip-api.com.',
+    cost: 'Free (attribution required); city-level from $49/mo.',
+    signupUrl: 'https://ipinfo.io/lite', tools: ['ip_lookup']
+  },
+  {
+    env: 'OPEN_METEO_API_KEY', provider: 'Open-Meteo (commercial)',
+    unlocks: 'Makes Open-Meteo the primary weather source again (adds feels-like, visibility, AQI/pollen). Alternative: self-host via OPEN_METEO_BASE_URL (AGPL, free).',
+    cost: 'Free path: MET Norway primary (default). Open-Meteo API Professional from €99/mo, or self-host for free.',
+    signupUrl: 'https://open-meteo.com/en/pricing', tools: ['get_weather']
+  },
+  {
+    env: 'FOURSQUARE_API_KEY', provider: 'Foursquare Places',
+    unlocks: 'Ratings, photos and price tiers on local place search (OpenStreetMap stays the keyless fallback).',
+    cost: 'Free tier; usage-based beyond it.',
+    signupUrl: 'https://location.foursquare.com', tools: ['find_places']
   }
 ];
 

@@ -76,11 +76,15 @@ export const countryInfoTool: ChatTool = {
   }
 };
 
-// --- IP / domain geolocation (ip-api.com) ---------------------------------------
+// --- IP / domain geolocation (IPinfo Lite → ip-api.com) ---------------------------
+// IPinfo Lite (free token, unlimited, commercial use allowed with attribution) is the
+// primary when IPINFO_TOKEN is set — country/network-level only. The keyless
+// ip-api.com endpoint is licensed for NON-commercial use only, so it serves purely as
+// the dev/unconfigured fallback and says so honestly in the notice.
 export const ipLookupTool: ChatTool = {
   name: 'ip_lookup',
   description:
-    'Geolocate an IP address or domain — country, region, city, ISP/organization and coordinates (via ip-api.com). Use for "where is this IP/server", network diagnostics, or locating a hostname.',
+    'Geolocate an IP address or domain — country, network/ISP and (when available) region, city and coordinates. Use for "where is this IP/server", network diagnostics, or locating a hostname.',
   parameters: {
     type: 'object',
     properties: { ip: { type: 'string', description: 'An IPv4/IPv6 address or a domain name, e.g. "8.8.8.8" or "github.com".' } },
@@ -89,6 +93,25 @@ export const ipLookupTool: ChatTool = {
   execute: async (args, signal) => {
     const ip = String(args?.ip || '').trim();
     if (!ip) return { content: 'No IP address or domain was provided.' };
+    const token = process.env.IPINFO_TOKEN;
+    if (token) {
+      try {
+        const d = await fetchJson<Record<string, unknown>>(
+          `https://api.ipinfo.io/lite/${encodeURIComponent(ip)}?token=${encodeURIComponent(token)}`,
+          { signal }
+        );
+        const content =
+          `${d.ip || ip}\n` +
+          `• Country: ${[d.country, d.country_code ? `(${d.country_code})` : ''].filter(Boolean).join(' ') || '—'}\n` +
+          `• Continent: ${d.continent || '—'}\n` +
+          `• Network: ${[d.asn, d.as_name].filter(Boolean).join(' — ') || '—'}\n` +
+          `• Operator domain: ${d.as_domain || '—'}\n` +
+          `(Country/network-level via IPinfo Lite.)`;
+        return { content, citations: [{ url: 'https://ipinfo.io', title: 'IP data by IPinfo' }] };
+      } catch {
+        /* fall through to the keyless fallback */
+      }
+    }
     try {
       const d = await fetchJson<Record<string, unknown>>(
         `http://ip-api.com/json/${encodeURIComponent(ip)}?fields=status,message,country,regionName,city,zip,lat,lon,timezone,isp,org,as,query`,
@@ -102,7 +125,16 @@ export const ipLookupTool: ChatTool = {
         `• Timezone: ${d.timezone || '—'}\n` +
         `• ISP / Org: ${[d.isp, d.org].filter(Boolean).join(' / ') || '—'}\n` +
         `• Network: ${d.as || '—'}`;
-      return { content };
+      return {
+        content,
+        notice: token
+          ? undefined
+          : {
+              level: 'info',
+              message: 'Served by ip-api.com (free tier is licensed for non-commercial use only).',
+              fix: 'Set IPINFO_TOKEN (free IPinfo Lite, commercial-OK with attribution) for a compliant primary source'
+            }
+      };
     } catch (err) {
       return { content: `IP lookup failed: ${(err as Error)?.message || 'unknown error'}.` };
     }

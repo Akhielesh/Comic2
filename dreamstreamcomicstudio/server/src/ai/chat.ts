@@ -145,6 +145,25 @@ const EXAM_STUDY_INTENT =
 
 export const isStudyIntent = (text: string): boolean => Boolean(text) && EXAM_STUDY_INTENT.test(text);
 
+// Trip-planning intent. When a turn looks like travel planning, layer on guidance that
+// keeps the answer a SEAMLESS plan instead of a scroll wall: clarify first, consolidate
+// everything onto ONE categorized map + the itinerary widget, honor the user's chosen
+// transport mode, and never spam a failing tool.
+const TRIP_INTENT =
+  /\b(plan (?:a|my|the|our) (?:trip|vacation|holiday|getaway|weekend)|trip to|itinerary|travel(?:ing|ling)? to|visit(?:ing)? [A-Z]|day trip|road trip|weekend in|flights? to|fly(?:ing)? to)\b/i;
+
+export const isTripIntent = (text: string): boolean => Boolean(text) && TRIP_INTENT.test(text);
+
+export const tripGuidanceBlock = (lastUserText: string): string => {
+  if (!lastUserText || !TRIP_INTENT.test(lastUserText)) return '';
+  return `\n\nTRIP PLANNING MODE — make the plan feel SEAMLESS, not a scroll wall:
+- If key details are missing (dates, transport preference, lodging style, interests, budget), use ask_user ONCE with 2–4 focused questions before building the plan. Honor every answer — especially the chosen transport mode — in everything that follows.
+- Consolidate: ONE plan_trip itinerary (with transport legs + lat/lng so stops are mapped) and AT MOST ONE places list (the single most useful category). Do NOT emit a separate map per category — the itinerary's map carries hotels/food/sights together via stop kinds.
+- Keep prose SHORT: a 2–3 sentence overview and a tight budget line. The widgets carry the detail; never restate their contents as text, and never paste long numbered lists of places into prose.
+- Mark each stop with its kind (flight/train/car/ferry/hotel/food/sight/…) so maps draw category icons, and include the transport legs with from/to and times.
+- If a tool fails (e.g. place search unavailable), do NOT retry it more than once or call it for more categories — fold what you have into the plan and note the gap in ONE short line.`;
+};
+
 export const studyGuidanceBlock = (lastUserText: string): string => {
   if (!lastUserText || !EXAM_STUDY_INTENT.test(lastUserText)) return '';
   return `\n\nEXAM / STUDY MODE — the user is learning or preparing for a test. Give genuinely exam-ready DEPTH, not a shallow summary:
@@ -398,6 +417,7 @@ export const runChat = async (
           ? lastUser!.content.map((p) => ('text' in p ? p.text : '')).join(' ')
           : '';
     systemContent += studyGuidanceBlock(lastUserText);
+    systemContent += tripGuidanceBlock(lastUserText);
   }
 
   const messages: ChatMessage[] = [{ role: 'system', content: systemContent }, ...params.messages];
