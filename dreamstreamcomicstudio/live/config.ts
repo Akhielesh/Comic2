@@ -40,12 +40,14 @@ export const LOCAL_REC_BITRATE_FACTOR = 2.5;
 /** Shown verbatim in the UI so the limits are never a surprise. */
 export const LIMITS: { label: string; value: string }[] = [
   { label: 'Concurrent viewers', value: 'You set the cap per event — hard ceiling 200, never exceeded' },
-  { label: 'Latency', value: '≈ 8–15 s by design — the buffer keeps playback smooth through network wobble' },
+  { label: 'On-air guests', value: 'Up to 4 guests join with cam, mic and screen share — mixed into the program live (Grid / Spotlight / Sidebar scenes)' },
+  { label: 'Latency', value: '≈ 8–15 s by design — the buffer keeps playback smooth through network wobble (guests talk to you in real time)' },
   { label: 'Session length', value: 'Unlimited — short clips or marathon sessions' },
   { label: 'Resolution ceiling', value: '1080p60 streaming · local recording at the same resolution, ~2.5× bitrate' },
   { label: 'Replay', value: 'Viewers can re-watch from the same link for 24 h after the stream ends' },
   { label: 'Recordings', value: 'Saved to your device AND kept on the server for 7 days (then auto-deleted) — chat is never burned in' },
   { label: 'Moderation', value: 'Profanity & spam are auto-hidden with strikes → 5-minute timeouts, all logged' },
+  { label: 'Cost guardrails', value: 'Closing the studio tab ends the stream instantly (restartable); silent drops auto-end after a 2-minute grace' },
 ];
 
 const explicitBase = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_LIVE_WORKER_URL;

@@ -49,6 +49,18 @@ for (const name of EMAIL_TEMPLATE_NAMES) {
   console.log(`✓ ${file}  (${TEMPLATE_KIND[name]})  — ${subject}`);
 }
 
+// studio-invite is keyed by studio id (the bare render above shows the Stream Studio
+// default) — also emit the Comic/Chat variants so all three feature sets are reviewable.
+for (const studio of ['comic_studio', 'chat_studio'] as const) {
+  const { subject, html } = renderEmail('studio-invite', { ...SAMPLE, studio, inviteUrl: undefined });
+  const file = `studio-invite-${studio}.html`;
+  writeFileSync(resolve(OUT_DIR, file), html, 'utf8');
+  rows.push(
+    `<tr><td><a href="./${file}">studio-invite (${studio})</a></td><td>${TEMPLATE_KIND['studio-invite']}</td><td>${subject.replace(/</g, '&lt;')}</td></tr>`
+  );
+  console.log(`✓ ${file}  (${TEMPLATE_KIND['studio-invite']})  — ${subject}`);
+}
+
 const index = `<!doctype html><meta charset="utf-8"><title>DreamStream email previews</title>
 <style>body{font-family:system-ui,sans-serif;max-width:760px;margin:40px auto;padding:0 16px}
 table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:8px;text-align:left;font-size:14px}

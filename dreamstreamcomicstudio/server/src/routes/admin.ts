@@ -618,6 +618,9 @@ adminRouter.post('/product-access', requireAdmin, async (req, res, next) => {
         email,
         {
           inviteUrl: `${APP_PUBLIC_URL}${target.path}`,
+          // The studio id selects the per-studio feature cards + deep link in the
+          // shared template (stream → /live.html, comic/chat → the suite root).
+          studio: product,
           studioName: target.name,
           inviterName,
           personalNote,

@@ -4,8 +4,23 @@
  * workers-types; keep the two in sync when the protocol changes.)
  */
 
-export type Role = 'host' | 'mod' | 'viewer' | 'pending';
+export type Role = 'host' | 'mod' | 'guest' | 'viewer' | 'pending';
 export type StreamStatus = 'idle' | 'live' | 'paused' | 'ended';
+
+/** On-air guest seats per event (mirrors the worker's mesh cap). */
+export const MAX_GUESTS = 4;
+
+/** WebRTC signaling envelope relayed through the room (host ⇄ guest). */
+export interface RtcSignal {
+  sdp?: { type: 'offer' | 'answer'; sdp?: string };
+  ice?: RTCIceCandidateInit | null;
+  /** MediaStream.id → what that stream is, so tiles label correctly. */
+  meta?: Record<string, 'cam' | 'screen'>;
+  /** Guest is ready for (re)negotiation — host (re)creates its peer. */
+  ready?: boolean;
+  /** Sender is leaving — tear the peer down. */
+  bye?: boolean;
+}
 
 export interface EventMeta {
   id: string;
@@ -121,6 +136,9 @@ export type ServerMsg =
   | { t: 'milestone'; n: number }
   | { t: 'full'; max: number }
   | { t: 'notice'; text: string }
-  | { t: 'pin'; text: string | null };
+  | { t: 'pin'; text: string | null }
+  | { t: 'guest'; sid: string; name: string; on: boolean }
+  | { t: 'guestkey'; key: string }
+  | { t: 'rtc'; from: string; d: RtcSignal };
 
 export const EMOJI_SET = ['❤️', '🔥', '👏', '😂', '🤯', '🎉'] as const;

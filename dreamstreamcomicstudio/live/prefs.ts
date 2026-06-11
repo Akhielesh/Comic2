@@ -36,6 +36,9 @@ export interface StudioPrefs {
   cloudRecordings: boolean;
   /** Host display name, reused across events. */
   hostName: string;
+  /** Self-view mirroring: auto = front camera in Solo only (the program out
+   *  is never mirrored — this is purely how YOU see yourself). */
+  mirrorPreview: 'auto' | 'on' | 'off';
 }
 
 export const DEFAULT_PREFS: StudioPrefs = {
@@ -56,6 +59,7 @@ export const DEFAULT_PREFS: StudioPrefs = {
   autoRecord: true,
   cloudRecordings: true,
   hostName: '',
+  mirrorPreview: 'auto',
 };
 
 const KEY = 'ds-live-prefs';

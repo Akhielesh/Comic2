@@ -102,6 +102,11 @@ describe('room moderation (worker)', async () => {
   it('keeps the client emoji library in sync with the room allowlist', async () => {
     const { EMOJI_LIBRARY: clientLib, QUICK_EMOJI } = await import('./emoji');
     expect([...clientLib]).toEqual([...EMOJI_LIBRARY]);
+    // 108 reactions in a 6-per-row grid; the quick bar is the first row.
+    expect(clientLib.length).toBe(108);
+    expect(new Set(clientLib).size).toBe(clientLib.length); // no duplicates
+    expect(QUICK_EMOJI.length).toBe(6);
+    expect([...clientLib.slice(0, QUICK_EMOJI.length)]).toEqual([...QUICK_EMOJI]);
     for (const q of QUICK_EMOJI) expect(clientLib).toContain(q);
   });
 });

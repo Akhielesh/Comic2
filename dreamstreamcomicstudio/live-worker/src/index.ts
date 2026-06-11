@@ -81,7 +81,7 @@ export default {
     const url = new URL(req.url);
     // Behind the site route the worker is mounted at /live-api/* — strip the prefix.
     const pathname = url.pathname.replace(/^\/live-api(?=\/)/, '');
-    const m = pathname.match(/^\/api\/events(?:\/([a-z0-9]+))?(?:\/(ws|segments|stats|rsvp|recordings))?(?:\/(\d+))?$/);
+    const m = pathname.match(/^\/api\/events(?:\/([a-z0-9]+))?(?:\/(ws|segments|stats|rsvp|recordings|exit))?(?:\/(\d+))?$/);
     if (!m) return withCors(json({ error: 'not found' }, 404), cors);
     const [, id, sub, seqStr] = m;
 
@@ -115,6 +115,17 @@ export default {
       // GET /api/events/:id/stats?k=hostKey — analytics + activity log (host only)
       if (sub === 'stats' && req.method === 'GET') {
         return withCors(await roomCall(env, id, `/stats${url.search}`), cors);
+      }
+
+      // POST /api/events/:id/exit?k=hostKey — pagehide beacon from the host's
+      // studio tab: end the stream immediately (sendBeacon can't set headers,
+      // so the key rides the query string; it's the same secret as the WS `k`).
+      if (sub === 'exit' && req.method === 'POST') {
+        const k = url.searchParams.get('k') ?? req.headers.get('x-host-key') ?? '';
+        return withCors(
+          await roomCall(env, id, '/host-exit', { method: 'POST', headers: { 'x-host-key': k } }),
+          cors,
+        );
       }
 
       // POST /api/events/:id/rsvp — save a spot on the invite page (name only)
