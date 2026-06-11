@@ -48,6 +48,16 @@ issue log for the account-sync area.
 | 11 | **Low** | `user_settings` table was **not defined in any migration** — fresh environments had silently-failing sync. | `server/sql/user_settings.sql` documents/creates it (idempotent), with RLS and a post-deploy hardening note to revoke direct client access. |
 | 12 | **Low** | `syncOnLogin` only seeded the cloud when local keys existed, so a first login with only *preferences* never created the account snapshot. | Seeding now always pushes the full local snapshot. |
 
+### Found by the pre-merge code review of this change itself
+
+| # | Severity | Issue | Fix |
+|---|----------|-------|-----|
+| 13 | **High** | A fresh device's *implicit defaults* for model selections would have ridden the snapshot as real objects and clobbered another device's pinned models in the `cloud ?? local` merge. | `buildLocalSnapshot` uses stored-or-null getters (`getStoredModelSelection` / `getStoredStudioModelSelection`) — an untouched device contributes `null`, never defaults. |
+| 14 | Medium | Saving a key under the legacy `flux` name skipped the stale-alias-row cleanup (`rawProvider !== 'flux'` condition), leaving a dead `flux` row behind. | Alias row is retired on every canonical `pixazo` write. |
+| 15 | Medium | The account-key middleware's hand-rolled cache evicted by insertion order, ignoring TTL (live entries could be evicted while expired ones survived), and duplicated `lib/cache.ts`. | Replaced with the existing `TtlCache` (TTL-aware, bounded, request-coalescing). The `flux→pixazo` canonicalization was also de-duplicated into one shared `canonicalAccountProvider`. |
+| 16 | Medium | `services/crypto.ts` (the hardcoded-secret encryption) was dead after the server-side move but still shipped in the bundle, inviting reuse of the broken pattern. | Deleted, along with its one (unused) import. The legacy *decryption* lives server-side only, for row migration. |
+| 17 | Low | Code Studio's BYOK gate needed a legacy-slot special case because `hasUsableKey` didn't cover the legacy single-key slots (`OpenRouterKeyInput` still writes one post-migration). | `hasUsableKey` checks managed store + legacy slots + account metadata; the call-site special case is gone. |
+
 ## Known issues deferred (logged, not yet fixed)
 
 | # | Severity | Issue | Recommendation |
@@ -63,6 +73,10 @@ issue log for the account-sync area.
 | D9 | Low | **Email preferences (`profile_private`) have no in-app UI** — set at signup, not editable after. | Add toggles to Settings → Profile. |
 | D10 | Info | **BYOK keys remain plaintext in localStorage on the device that entered them** (XSS exfiltration risk; account store is encrypted). Any client-side encryption would be obfuscation only. | Long-term: stop holding secrets client-side at all — the account fallback (fix #2) already makes that possible; the UI could keep only suffixes. |
 | D11 | Info | `dreamstream_settings.defaultImageModel` and `dreamstream_image_model_id` are **two slots for one concept** and can diverge. | Fold `imageModelId` into the settings object. |
+| D12 | Low | **Sign-out cleanup is a hand-maintained list** in `AuthContext` — other account-scoped stores (custom dashboards `ds.dashboards.v1`, MCP servers, model feedback) are *not* cleared. They're also not cloud-synced, so clearing them today would permanently destroy data; the settings cleared here are recoverable from the account. | Sync those stores into the snapshot first, then add them to sign-out clearing — ideally via a small "account-scoped store" registry each module registers with. |
+| D13 | Low | **Three overlapping echo-suppression mechanisms** during snapshot apply (`suspendKeysSync`, `suspendSettingsSync`, the `isApplyingSnapshot` guard in `schedulePush`). The global guard makes the module-level suspends mostly redundant. | Consolidate on `isApplyingSnapshot` once confident no other listener consumers exist. |
+| D14 | Info | `GET /api/account/byok` decrypts each key to compute a display suffix (login-time only, a few ms). | Store the suffix as a column at write time if it ever shows up in profiles. |
+| D15 | Info | `/api/chat/memory` and `/api/chat/memory/import` share ~10 lines of model-resolution plumbing. | Extract a `runMemoryDistillation` helper if a third memory endpoint appears. |
 
 False positive from a prior sweep, for the record: the client model-catalog cache *does*
 check its TTL (`services/modelCatalog.ts:74`).

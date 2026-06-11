@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   X, Brain, Network, Wrench, Plus, Trash2, Check, Pencil, Bot, Activity,
   LayoutGrid, BookOpen, Settings2, Sun, Moon, Monitor, Upload, Loader2, Sparkles
@@ -287,9 +287,11 @@ const MemoryTab: React.FC<{ userId?: string; onMemoryChange: (m: string) => void
     setImportText('');
   };
 
-  const previewNewCount = preview
-    ? preview.filter((p) => !items.some((it) => it.trim().toLowerCase() === p.trim().toLowerCase())).length
-    : 0;
+  const previewNewCount = useMemo(() => {
+    if (!preview) return 0;
+    const existing = new Set(items.map((it) => it.trim().toLowerCase()));
+    return preview.filter((p) => !existing.has(p.trim().toLowerCase())).length;
+  }, [preview, items]);
 
   return (
     <div className="space-y-4">

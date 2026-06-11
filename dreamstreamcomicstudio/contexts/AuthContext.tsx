@@ -2,7 +2,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { getAuthRedirectUrl, isSessionExpiredByInactivity, supabase, touchLastActivity } from '../services/supabase';
-import { clearFluxKey, clearUserScopedSettings, setSettingsChangeListener } from '../services/appSettings';
+import { clearUserScopedSettings, setSettingsChangeListener } from '../services/appSettings';
 import { clearAllKeys, setKeysChangeListener } from '../services/apiKeys';
 import { setChatDataChangeListener } from '../services/chatStorage';
 import { clearModelSelection, MODEL_SELECTION_CHANGED } from '../services/modelSelection';
@@ -144,14 +144,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const clearLocalAuthState = () => {
         setUser(null);
         setSession(null);
-        try {
-            localStorage.removeItem('dreamstream_api_key');
-        } catch {
-            // ignore storage access issues
-        }
-        clearFluxKey();
         // SECURITY: purge ALL BYOK keys + usage from the multi-key store so a shared device
-        // never leaks the previous user's secrets, usage, or live provider balance after sign-out.
+        // never leaks the previous user's secrets, usage, or live provider balance after
+        // sign-out (clearAllKeys also wipes every legacy single-key slot, incl. flux).
         clearAllKeys();
         // Account-scoped preferences stored under global localStorage keys must go too —
         // otherwise the next sign-in inherits them AND the login merge uploads them into

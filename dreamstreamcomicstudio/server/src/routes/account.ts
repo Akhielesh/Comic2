@@ -1,20 +1,11 @@
 import { Router } from 'express';
 import { getSupabaseAdmin, getSupabaseCapabilityStatus } from '../services/supabase.js';
 import { decryptLegacyClientBlob, decryptSecret, encryptSecret, isSecureStoreAvailable } from '../lib/secureStore.js';
-import { invalidateAccountKeys } from '../middleware/accountKeys.js';
+import { canonicalAccountProvider, invalidateAccountKeys } from '../middleware/accountKeys.js';
 import { logger } from '../lib/logger.js';
 
 // Authenticated account endpoints. Mounted under /api/account after requireAuth.
 export const accountRouter = Router();
-
-const PROVIDERS = new Set(['openrouter', 'nvidia', 'gemini', 'flux', 'pixazo', 'ideogram']);
-
-// Historic rows were written under 'flux'; canonicalize to 'pixazo' so the account
-// store has one row per real provider regardless of which UI saved the key.
-const canonicalProvider = (provider: string): string => {
-  const p = provider.trim().toLowerCase();
-  return p === 'flux' ? 'pixazo' : p;
-};
 
 const storageReady = (): boolean =>
   getSupabaseCapabilityStatus().storagePersistenceEnabled && isSecureStoreAvailable();
@@ -24,11 +15,10 @@ const storageReady = (): boolean =>
 accountRouter.post('/byok', async (req, res, next) => {
   try {
     if (!req.user?.id) return res.status(401).json({ error: { message: 'User not authenticated' } });
-    const rawProvider = String(req.body?.provider || '').trim().toLowerCase();
+    const provider = canonicalAccountProvider(String(req.body?.provider || ''));
     const key = typeof req.body?.key === 'string' ? req.body.key.trim() : '';
-    if (!PROVIDERS.has(rawProvider)) return res.status(400).json({ error: { message: 'Unknown provider' } });
+    if (!provider) return res.status(400).json({ error: { message: 'Unknown provider' } });
     if (!key || key.length > 500) return res.status(400).json({ error: { message: 'A valid key is required' } });
-    const provider = canonicalProvider(rawProvider);
 
     if (!storageReady()) {
       return res.json({ ok: false, persisted: false, reason: 'storage_disabled' });
@@ -45,8 +35,10 @@ accountRouter.post('/byok', async (req, res, next) => {
       logger.warn('byok_store_failed', { provider, message: error.message });
       return res.json({ ok: false, persisted: false });
     }
-    // Retire any legacy alias row so the fallback never resolves a stale secret.
-    if (provider === 'pixazo' && rawProvider !== 'flux') {
+    // Retire any legacy alias row so the fallback never resolves a stale secret —
+    // the write above always lands on the canonical 'pixazo' row, so a leftover
+    // 'flux' row can only ever be stale.
+    if (provider === 'pixazo') {
       await getSupabaseAdmin().from('user_api_keys').delete().eq('user_id', req.user.id).eq('provider', 'flux');
     }
     invalidateAccountKeys(req.user.id);
@@ -59,7 +51,8 @@ accountRouter.post('/byok', async (req, res, next) => {
 accountRouter.delete('/byok/:provider', async (req, res, next) => {
   try {
     if (!req.user?.id) return res.status(401).json({ error: { message: 'User not authenticated' } });
-    const provider = canonicalProvider(String(req.params.provider || ''));
+    const provider = canonicalAccountProvider(String(req.params.provider || ''));
+    if (!provider) return res.json({ ok: true });
     if (getSupabaseCapabilityStatus().storagePersistenceEnabled) {
       const providers = provider === 'pixazo' ? ['pixazo', 'flux'] : [provider];
       await getSupabaseAdmin().from('user_api_keys').delete().eq('user_id', req.user.id).in('provider', providers);
@@ -91,8 +84,8 @@ accountRouter.get('/byok', async (req, res, next) => {
 
     const byProvider = new Map<string, { provider: string; suffix: string }>();
     for (const row of data || []) {
-      const provider = canonicalProvider(String(row.provider || ''));
-      if (!PROVIDERS.has(provider)) continue;
+      const provider = canonicalAccountProvider(String(row.provider || ''));
+      if (!provider) continue;
       if (byProvider.has(provider) && String(row.provider).toLowerCase() !== provider) continue;
       const secret = decryptSecret(String(row.encrypted_key || ''), String(row.iv || ''));
       if (!secret) continue;

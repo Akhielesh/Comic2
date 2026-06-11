@@ -74,6 +74,20 @@ const write = (next: ModelSelection) => {
 
 export const getModelSelection = (): ModelSelection => read();
 
+/**
+ * The selection ONLY if this device actually stored one — null when untouched.
+ * Cloud sync uses this so a fresh device contributes nothing instead of a
+ * defaults object that would overwrite another device's real choices.
+ */
+export const getStoredModelSelection = (): ModelSelection | null => {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(STORAGE) ? read() : null;
+  } catch {
+    return null;
+  }
+};
+
 /** Replace the whole selection at once (used when applying a cloud snapshot). */
 export const replaceModelSelection = (next: ModelSelection) => {
   write({ ...DEFAULTS, ...next });

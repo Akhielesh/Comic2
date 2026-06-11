@@ -148,9 +148,16 @@ export const getAccountKeyMeta = (): AccountKeyMeta[] => {
 export const hasAccountKey = (provider: ApiKeyProvider): boolean =>
   getAccountKeyMeta().some((k) => k && k.provider === provider && typeof k.suffix === 'string');
 
-/** A usable key for the provider exists locally OR on the account. */
+/**
+ * A usable key for the provider exists locally OR on the account. Checks the
+ * managed store, the legacy single-key slot (some inputs still write it after the
+ * one-time migration already ran), and the account's "key on file" metadata — so
+ * feature gates don't need to know where a key happens to live.
+ */
 export const hasUsableKey = (provider: ApiKeyProvider): boolean =>
-  Boolean(getActiveKeyValue(provider)) || hasAccountKey(provider);
+  Boolean(getActiveKeyValue(provider)) ||
+  Boolean(read(LEGACY_KEYS[provider])?.trim()) ||
+  hasAccountKey(provider);
 
 const uuid = () =>
   (typeof crypto !== 'undefined' && 'randomUUID' in crypto)

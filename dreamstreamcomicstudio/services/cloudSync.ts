@@ -40,12 +40,12 @@ import {
   suspendSettingsSync,
 } from './appSettings';
 import {
-  getModelSelection,
+  getStoredModelSelection,
   replaceModelSelection,
   type ModelSelection,
 } from './modelSelection';
 import {
-  getStudioModelSelection,
+  getStoredStudioModelSelection,
   replaceStudioModelSelection,
   type StudioModelSelection,
 } from './studioModelSelection';
@@ -80,13 +80,16 @@ const buildLocalSnapshot = (userId: string): CloudSnapshot => ({
   settings: getSettingsState(),
   modelKeys: getAllModelKeys(),
   imageModelId: getImageModelId(),
-  modelSelection: getModelSelection(),
+  // Stored-or-null getters: an untouched device contributes null here, so its
+  // implicit defaults can never overwrite another device's real choices in the
+  // `cloud ?? local` merge below.
+  modelSelection: getStoredModelSelection(),
   chat: {
     memory: getChatMemory(userId),
     agents: listCustomAgents(userId),
   },
   studios: {
-    code: getStudioModelSelection(),
+    code: getStoredStudioModelSelection(),
   },
 });
 

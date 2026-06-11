@@ -19,35 +19,36 @@
 import { NextFunction, Request, Response } from 'express';
 import { allowedProviderFilter } from './keys.js';
 import { decryptSecret, isSecureStoreAvailable } from '../lib/secureStore.js';
+import { TtlCache } from '../lib/cache.js';
 import { getSupabaseAdmin, getSupabaseCapabilityStatus } from '../services/supabase.js';
 import { logger } from '../lib/logger.js';
 
 export type AccountKeyProvider = 'openrouter' | 'nvidia' | 'gemini' | 'pixazo' | 'ideogram';
 
-const CACHE_TTL_MS = 60_000;
-const CACHE_MAX_USERS = 1000;
+type AccountKeys = Partial<Record<AccountKeyProvider, string>>;
 
-type CacheEntry = { at: number; keys: Partial<Record<AccountKeyProvider, string>> };
-const cache = new Map<string, CacheEntry>();
+// 60s TTL, bounded; getOrSet coalesces concurrent loads for the same user.
+const cache = new TtlCache<AccountKeys>(60_000, 1000);
 
 /** Drop a user's cached keys (call after their stored keys change). */
 export const invalidateAccountKeys = (userId: string): void => {
   cache.delete(userId);
 };
 
-/** Historic rows were written under 'flux'; they are the pixazo provider. */
-const normalizeProvider = (provider: string): AccountKeyProvider | null => {
+/**
+ * Canonical provider name for an account-key row or request. Historic rows were
+ * written under 'flux'; they are the pixazo provider. Single source of truth —
+ * the account routes import this too, so alias rules can never drift apart.
+ */
+export const canonicalAccountProvider = (provider: string): AccountKeyProvider | null => {
   const p = provider.trim().toLowerCase();
   if (p === 'flux') return 'pixazo';
   if (p === 'openrouter' || p === 'nvidia' || p === 'gemini' || p === 'pixazo' || p === 'ideogram') return p;
   return null;
 };
 
-const loadAccountKeys = async (userId: string): Promise<Partial<Record<AccountKeyProvider, string>>> => {
-  const hit = cache.get(userId);
-  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.keys;
-
-  const keys: Partial<Record<AccountKeyProvider, string>> = {};
+const queryAccountKeys = async (userId: string): Promise<AccountKeys> => {
+  const keys: AccountKeys = {};
   try {
     const { data, error } = await getSupabaseAdmin()
       .from('user_api_keys')
@@ -55,7 +56,7 @@ const loadAccountKeys = async (userId: string): Promise<Partial<Record<AccountKe
       .eq('user_id', userId);
     if (!error) {
       for (const row of data || []) {
-        const provider = normalizeProvider(String(row.provider || ''));
+        const provider = canonicalAccountProvider(String(row.provider || ''));
         if (!provider) continue;
         // An exact-name row wins over an alias row ('pixazo' over 'flux').
         if (keys[provider] && String(row.provider).toLowerCase() !== provider) continue;
@@ -66,14 +67,21 @@ const loadAccountKeys = async (userId: string): Promise<Partial<Record<AccountKe
   } catch (err) {
     logger.warn('account_keys_load_failed', { message: (err as Error)?.message });
   }
-
-  if (cache.size >= CACHE_MAX_USERS) {
-    const oldest = cache.keys().next().value;
-    if (oldest !== undefined) cache.delete(oldest);
-  }
-  cache.set(userId, { at: Date.now(), keys });
   return keys;
 };
+
+// How each provider maps onto the req.apiKeys fields attachKeys populates.
+const PROVIDER_FIELDS: {
+  provider: AccountKeyProvider;
+  keyField: 'openRouterKey' | 'nvidiaKey' | 'geminiKey' | 'pixazoKey' | 'ideogramKey';
+  byokField: 'openRouterByok' | 'nvidiaByok' | 'geminiByok' | 'pixazoByok' | 'ideogramByok';
+}[] = [
+  { provider: 'openrouter', keyField: 'openRouterKey', byokField: 'openRouterByok' },
+  { provider: 'nvidia', keyField: 'nvidiaKey', byokField: 'nvidiaByok' },
+  { provider: 'gemini', keyField: 'geminiKey', byokField: 'geminiByok' },
+  { provider: 'pixazo', keyField: 'pixazoKey', byokField: 'pixazoByok' },
+  { provider: 'ideogram', keyField: 'ideogramKey', byokField: 'ideogramByok' }
+];
 
 /**
  * Fill in provider keys from the user's account store wherever the request didn't
@@ -82,36 +90,19 @@ const loadAccountKeys = async (userId: string): Promise<Partial<Record<AccountKe
 export const attachAccountKeys = async (req: Request, _res: Response, next: NextFunction) => {
   try {
     const userId = req.user?.id;
-    if (!userId || !req.apiKeys || !isSecureStoreAvailable()) return next();
-    if (!getSupabaseCapabilityStatus().storagePersistenceEnabled) return next();
-
     const k = req.apiKeys;
-    const needsAny = !k.openRouterByok || !k.nvidiaByok || !k.geminiByok || !k.pixazoByok || !k.ideogramByok;
-    if (!needsAny) return next();
+    if (!userId || !k || !isSecureStoreAvailable()) return next();
+    if (!getSupabaseCapabilityStatus().storagePersistenceEnabled) return next();
+    if (PROVIDER_FIELDS.every(({ byokField }) => k[byokField])) return next();
 
-    const account = await loadAccountKeys(userId);
+    const account = await cache.getOrSet(userId, () => queryAccountKeys(userId));
     if (Object.keys(account).length === 0) return next();
 
     const allow = allowedProviderFilter(req);
-    if (!k.openRouterByok && account.openrouter && allow('openrouter')) {
-      k.openRouterKey = account.openrouter;
-      k.openRouterByok = true;
-    }
-    if (!k.nvidiaByok && account.nvidia && allow('nvidia')) {
-      k.nvidiaKey = account.nvidia;
-      k.nvidiaByok = true;
-    }
-    if (!k.geminiByok && account.gemini && allow('gemini')) {
-      k.geminiKey = account.gemini;
-      k.geminiByok = true;
-    }
-    if (!k.pixazoByok && account.pixazo && allow('pixazo')) {
-      k.pixazoKey = account.pixazo;
-      k.pixazoByok = true;
-    }
-    if (!k.ideogramByok && account.ideogram && allow('ideogram')) {
-      k.ideogramKey = account.ideogram;
-      k.ideogramByok = true;
+    for (const { provider, keyField, byokField } of PROVIDER_FIELDS) {
+      if (k[byokField] || !account[provider] || !allow(provider)) continue;
+      k[keyField] = account[provider];
+      k[byokField] = true;
     }
     next();
   } catch (err) {
