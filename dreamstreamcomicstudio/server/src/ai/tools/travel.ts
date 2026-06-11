@@ -5,11 +5,28 @@
 // Both enrichments are best-effort — a network failure never sinks the plan.
 
 import type { ChatTool } from './types.js';
-import type { ItineraryArtifact, ItineraryDay, ItineraryStop, ItineraryStopKind } from '../../../../apiTypes.js';
+import type { ItineraryArtifact, ItineraryDay, ItineraryStop, ItineraryStopKind, ItineraryTransport } from '../../../../apiTypes.js';
 import { geocodePlaces } from './maps.js';
 import { getWeather } from './weather.js';
 
-const STOP_KINDS: ItineraryStopKind[] = ['flight', 'transit', 'hotel', 'food', 'sight', 'activity', 'shopping', 'other'];
+const STOP_KINDS: ItineraryStopKind[] = ['flight', 'transit', 'train', 'bus', 'car', 'ferry', 'walk', 'hotel', 'food', 'sight', 'activity', 'shopping', 'other'];
+const TRANSPORT_MODES: NonNullable<ItineraryTransport['mode']>[] = ['flight', 'train', 'bus', 'car', 'ferry', 'walk', 'transit'];
+
+const coerceTransport = (raw: unknown): ItineraryTransport | undefined => {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const t: ItineraryTransport = {
+    mode: TRANSPORT_MODES.includes(r.mode as ItineraryTransport['mode']) ? (r.mode as ItineraryTransport['mode']) : undefined,
+    from: str(r.from, 80),
+    to: str(r.to, 80),
+    carrier: str(r.carrier, 80),
+    code: str(r.code, 40),
+    depart: str(r.depart, 20),
+    arrive: str(r.arrive, 20)
+  };
+  // Only keep it if at least one meaningful field is present.
+  return Object.values(t).some((v) => v !== undefined) ? t : undefined;
+};
 
 const str = (v: unknown, max: number): string | undefined =>
   typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined;
@@ -31,7 +48,8 @@ const coerceStop = (raw: unknown): ItineraryStop | null => {
     address: str(r.address, 240),
     notes: str(r.notes, 600),
     cost: num(r.cost),
-    url: typeof r.url === 'string' && /^https:\/\//.test(r.url) ? r.url.slice(0, 500) : undefined
+    url: typeof r.url === 'string' && /^https:\/\//.test(r.url) ? r.url.slice(0, 500) : undefined,
+    transport: coerceTransport(r.transport)
   };
 };
 
@@ -141,7 +159,9 @@ export const planTripTool: ChatTool = {
     'a map of every stop, budget lines, packing list and live destination weather. Use for ANY trip planning request — ' +
     '"plan 3 days in Tokyo", "weekend in Rome with kids", "road trip SF→LA". Compose realistic days (3–6 stops each, ' +
     'logical geography and timing); include known lat/lng when you are confident, otherwise omit them — stops are ' +
-    'geocoded automatically. Use find_places/get_weather first if you need ground truth.',
+    'geocoded automatically. ALWAYS include the inter-city/arrival TRANSPORT legs (flight, train, ferry, car, bus): ' +
+    'set the stop kind to the transport mode AND fill the `transport` object (from, to, carrier, code, depart, arrive) ' +
+    'so the leg renders with route + times. Use find_places/get_weather first if you need ground truth.',
   parameters: {
     type: 'object',
     properties: {
@@ -180,7 +200,20 @@ export const planTripTool: ChatTool = {
                   address: { type: 'string' },
                   notes: { type: 'string' },
                   cost: { type: 'number' },
-                  url: { type: 'string' }
+                  url: { type: 'string' },
+                  transport: {
+                    type: 'object',
+                    description: 'For transport legs only (kind flight/train/bus/car/ferry/walk): the route + times.',
+                    properties: {
+                      mode: { type: 'string', enum: TRANSPORT_MODES },
+                      from: { type: 'string', description: 'Origin (city / station / airport code).' },
+                      to: { type: 'string', description: 'Destination.' },
+                      carrier: { type: 'string', description: 'Airline / rail operator / ferry line.' },
+                      code: { type: 'string', description: 'Flight number / train number / route code.' },
+                      depart: { type: 'string', description: 'Departure time, e.g. "08:15".' },
+                      arrive: { type: 'string', description: 'Arrival time, e.g. "11:40".' }
+                    }
+                  }
                 },
                 required: ['name']
               }

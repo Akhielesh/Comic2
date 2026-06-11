@@ -216,10 +216,23 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
 
   return (
     <Surface>
-      <div className="flex items-center justify-between px-3 pt-3">
-        <span className="flex items-center gap-1 text-xs font-semibold text-[var(--ds-muted)]">
-          <MapPin className="h-3.5 w-3.5" /> {data.location}
+      <div className="flex items-center justify-between gap-2 px-3 pt-3">
+        <span className="flex min-w-0 items-center gap-1 text-xs font-semibold text-[var(--ds-muted)]">
+          <MapPin className="h-3.5 w-3.5 shrink-0" /> <span className="truncate">{data.location}</span>
         </span>
+        {/* Unit toggle — calm pill (no longer buried inside a colored block). */}
+        <div className="flex shrink-0 overflow-hidden rounded-full border border-[var(--ds-hairline)] text-[11px] font-semibold">
+          {(['C', 'F'] as const).map((u) => (
+            <button
+              key={u}
+              onClick={() => setUnit(u)}
+              aria-pressed={unit === u}
+              className={`px-2 py-0.5 transition-colors duration-200 ${unit === u ? 'bg-[var(--ds-ink)] text-[var(--ds-canvas)]' : 'text-[var(--ds-muted)] hover:bg-[var(--ds-well)]'}`}
+            >
+              °{u}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Tabs */}
@@ -246,32 +259,29 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
         </div>
       ) : (
         <>
-          {/* Animated hero */}
-          <div className={`relative overflow-hidden bg-gradient-to-br ${bg} px-4 py-4 text-white`}>
-            <SkyScene sky={sky} isDay={c.isDay} />
-            <div className="relative z-10">
-              <div className="flex justify-end">
-                <div className="flex overflow-hidden rounded-full border border-white/40 text-[11px] font-semibold backdrop-blur-sm">
-                  {(['C', 'F'] as const).map((u) => (
-                    <button key={u} onClick={() => setUnit(u)} aria-pressed={unit === u} className={`px-2 py-0.5 transition-colors duration-200 ${unit === u ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)]' : 'text-white/90 hover:bg-white/20'}`}>
-                      °{u}
-                    </button>
-                  ))}
-                </div>
+          {/* Calm current-conditions header — same glass language as the compact glance
+              card. The animation lives in a small contained weather mark, not a
+              full-bleed saturated gradient (which clashed with the studio language). */}
+          <div className="flex items-start justify-between gap-3 px-3 pb-3 pt-1">
+            <div className="min-w-0">
+              <div className="flex items-end gap-1 leading-none">
+                <span className="text-6xl font-semibold tracking-tight text-[var(--ds-ink)]">{t(c.tempC)}°</span>
+                <span className="mb-1 text-2xl font-medium text-[var(--ds-muted)]">{unit}</span>
               </div>
-              <div className="-mt-3 flex items-end justify-between">
-                <div>
-                  <div className="text-5xl font-semibold leading-none tracking-tight">
-                    {t(c.tempC)}°<span className="align-top text-2xl font-medium">{unit}</span>
-                  </div>
-                  <div className="mt-1 text-sm font-semibold">{c.description}</div>
-                  <div className="mt-0.5 text-xs opacity-90">
-                    {typeof c.feelsLikeC === 'number' && <>Feels {t(c.feelsLikeC)}°</>}
-                    {today && <span className="ml-2">↑{t(today.maxC)}° ↓{t(today.minC)}°</span>}
-                  </div>
-                </div>
-                <div className="text-6xl drop-shadow">{glyph(c.code, c.isDay)}</div>
+              <div className="mt-2 text-sm font-semibold text-[var(--ds-ink)]">{c.description}</div>
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-[var(--ds-muted)]">
+                {typeof c.feelsLikeC === 'number' && <span>Feels {t(c.feelsLikeC)}°</span>}
+                {today && (
+                  <span className="font-medium text-[var(--ds-ink)]">
+                    H {t(today.maxC)}° · L {t(today.minC)}°
+                  </span>
+                )}
               </div>
+            </div>
+            {/* Animated weather mark — a living glyph in a calm, bordered tile. */}
+            <div className={`relative h-20 w-24 shrink-0 overflow-hidden rounded-2xl border border-[var(--ds-hairline-soft)] bg-gradient-to-br ${bg} opacity-95`}>
+              <SkyScene sky={sky} isDay={c.isDay} />
+              <span className="absolute inset-0 flex items-center justify-center text-4xl drop-shadow-sm">{glyph(c.code, c.isDay)}</span>
             </div>
           </div>
 

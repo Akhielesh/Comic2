@@ -890,7 +890,38 @@ export interface LearningPathArtifact {
 // --- Travel itinerary artifact (trip plan with map, budget and live context) ---
 // Emitted by the `plan_trip` tool. The server enriches the model-composed plan with
 // geocoded stop coordinates and a live weather snapshot for the destination.
-export type ItineraryStopKind = 'flight' | 'transit' | 'hotel' | 'food' | 'sight' | 'activity' | 'shopping' | 'other';
+export type ItineraryStopKind =
+  | 'flight'
+  | 'transit'
+  | 'train'
+  | 'bus'
+  | 'car'
+  | 'ferry'
+  | 'walk'
+  | 'hotel'
+  | 'food'
+  | 'sight'
+  | 'activity'
+  | 'shopping'
+  | 'other';
+/** Structured transport detail for a travel leg (flight/train/car/ferry/…). When present
+ *  the stop renders as a rich "leg" with from → to, carrier/number and depart/arrive
+ *  times instead of a plain timeline row. All fields optional — render what we have. */
+export interface ItineraryTransport {
+  mode?: 'flight' | 'train' | 'bus' | 'car' | 'ferry' | 'walk' | 'transit';
+  /** Origin label (city, station, airport code). */
+  from?: string;
+  /** Destination label. */
+  to?: string;
+  /** Operator / airline / rail line. */
+  carrier?: string;
+  /** Flight number, train number, route code. */
+  code?: string;
+  /** Departure clock time, e.g. "08:15". */
+  depart?: string;
+  /** Arrival clock time, e.g. "11:40". */
+  arrive?: string;
+}
 export interface ItineraryStop {
   name: string;
   kind?: ItineraryStopKind;
@@ -902,6 +933,8 @@ export interface ItineraryStop {
   notes?: string;
   cost?: number;
   url?: string;
+  /** Present on transport stops — renders the rich leg layout. */
+  transport?: ItineraryTransport;
 }
 export interface ItineraryDay {
   label?: string;

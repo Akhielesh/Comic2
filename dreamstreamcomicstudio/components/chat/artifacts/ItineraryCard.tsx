@@ -2,18 +2,23 @@ import React, { useMemo, useState } from 'react';
 import {
   Plane,
   TrainFront,
+  Bus,
+  Car,
+  Ship,
+  Footprints,
   BedDouble,
   UtensilsCrossed,
   Landmark,
   Ticket,
   ShoppingBag,
   MapPin,
+  ArrowRight,
   ExternalLink,
   CheckCircle2,
   CloudSun,
   Droplets
 } from 'lucide-react';
-import type { ItineraryArtifact, ItineraryDay, ItineraryStop, ItineraryStopKind, MapArtifact } from '../../../apiTypes';
+import type { ItineraryArtifact, ItineraryDay, ItineraryStop, ItineraryStopKind, ItineraryTransport, MapArtifact } from '../../../apiTypes';
 import { Surface, SurfaceTitle, SurfaceSubtitle, Expandable, useCompact, resolveTheme, formatPrice } from './kit';
 import { InlineMap } from './InlineMap';
 
@@ -28,6 +33,11 @@ import { InlineMap } from './InlineMap';
 const KIND_ICONS: Record<ItineraryStopKind, React.ComponentType<{ className?: string; style?: React.CSSProperties }>> = {
   flight: Plane,
   transit: TrainFront,
+  train: TrainFront,
+  bus: Bus,
+  car: Car,
+  ferry: Ship,
+  walk: Footprints,
   hotel: BedDouble,
   food: UtensilsCrossed,
   sight: Landmark,
@@ -35,6 +45,20 @@ const KIND_ICONS: Record<ItineraryStopKind, React.ComponentType<{ className?: st
   shopping: ShoppingBag,
   other: MapPin
 };
+
+const TRANSPORT_KINDS = new Set<ItineraryStopKind>(['flight', 'transit', 'train', 'bus', 'car', 'ferry', 'walk']);
+const MODE_ICONS: Record<NonNullable<ItineraryTransport['mode']>, React.ComponentType<{ className?: string; style?: React.CSSProperties }>> = {
+  flight: Plane,
+  train: TrainFront,
+  bus: Bus,
+  car: Car,
+  ferry: Ship,
+  walk: Footprints,
+  transit: TrainFront
+};
+
+/** A stop is a transport leg when it carries structured transport data or a travel kind. */
+const isTransportStop = (s: ItineraryStop): boolean => !!s.transport || (!!s.kind && TRANSPORT_KINDS.has(s.kind));
 
 const shortDay = (iso?: string): string => {
   if (!iso) return '';
@@ -144,6 +168,71 @@ const DayTabs: React.FC<{
     })}
   </div>
 );
+
+// ── Per-day weather pill, matched from the trip's daily forecast by date ──────
+const dayWeather = (
+  weather: ItineraryArtifact['weather'],
+  date?: string
+): NonNullable<NonNullable<ItineraryArtifact['weather']>['daily']>[number] | undefined =>
+  date ? weather?.daily?.find((d) => d.date === date) : undefined;
+
+// ── Transport leg — a rich row: mode icon, from → to, carrier · code, times ────
+const TransportLeg: React.FC<{ stop: ItineraryStop; currency: string; accent: string }> = ({ stop, currency, accent }) => {
+  const tp = stop.transport ?? {};
+  const mode = tp.mode ?? (stop.kind && stop.kind !== 'other' ? (stop.kind as NonNullable<ItineraryTransport['mode']>) : 'transit');
+  const Icon = MODE_ICONS[mode] ?? TrainFront;
+  const dur = durationLabel(stop.durationMin);
+  const from = tp.from;
+  const to = tp.to;
+  const carrierLine = [tp.carrier, tp.code].filter(Boolean).join(' · ');
+  return (
+    <li className="px-3 py-2">
+      <div className="flex items-stretch gap-2.5 rounded-xl border border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] p-2.5 transition-colors duration-200 hover:bg-[var(--ds-well-strong)]">
+        <span className="w-11 shrink-0 pt-px text-[11px] tabular-nums text-[var(--ds-muted)]">{stop.time ?? tp.depart ?? ''}</span>
+        <span
+          className="mt-px flex h-6 w-6 shrink-0 items-center justify-center rounded-lg"
+          style={{ backgroundColor: `${accent}1a`, color: accent }}
+          title={mode}
+        >
+          <Icon className="h-3.5 w-3.5" />
+        </span>
+        <div className="min-w-0 flex-1">
+          {/* Route line: from → to (falls back to the stop name). */}
+          {from || to ? (
+            <p className="flex items-center gap-1.5 text-[12px] font-semibold leading-snug text-[var(--ds-ink)]">
+              <span className="truncate">{from}</span>
+              <ArrowRight className="h-3 w-3 shrink-0 text-[var(--ds-muted)]" />
+              <span className="truncate">{to}</span>
+            </p>
+          ) : (
+            <p className="truncate text-[12px] font-semibold leading-snug text-[var(--ds-ink)]">{stop.name}</p>
+          )}
+          {/* Carrier · code, then a depart→arrive time strip. */}
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[var(--ds-muted)]">
+            {carrierLine && <span className="truncate">{carrierLine}</span>}
+            {(tp.depart || tp.arrive) && (
+              <span className="inline-flex items-center gap-1 tabular-nums">
+                {tp.depart && <span className="font-medium text-[var(--ds-ink)]">{tp.depart}</span>}
+                {tp.depart && tp.arrive && <span className="text-[var(--ds-muted)]">→</span>}
+                {tp.arrive && <span className="font-medium text-[var(--ds-ink)]">{tp.arrive}</span>}
+              </span>
+            )}
+            {dur && <span>· {dur}</span>}
+            {(from || to) && stop.name && stop.name !== `${from} → ${to}` && (
+              <span className="truncate opacity-80">· {stop.name}</span>
+            )}
+          </div>
+          {stop.notes && <p className="mt-0.5 truncate text-[11px] text-[var(--ds-muted)]">{stop.notes}</p>}
+        </div>
+        {typeof stop.cost === 'number' && (
+          <span className="shrink-0 pt-px text-right text-[11px] font-semibold tabular-nums text-[var(--ds-ink)]">
+            {formatPrice(stop.cost, currency)}
+          </span>
+        )}
+      </div>
+    </li>
+  );
+};
 
 // ── One stop on the timeline ──────────────────────────────────────────────────
 const StopRow: React.FC<{ stop: ItineraryStop; currency: string; accent: string }> = ({ stop, currency, accent }) => {
@@ -329,19 +418,49 @@ export const ItineraryCard: React.FC<{ data: ItineraryArtifact }> = ({ data }) =
 
       <div className="border-t border-[var(--ds-hairline-soft)] px-3 pt-2">
         <DayTabs days={days} active={activeDay} accent={theme.accent} currency={currency} onChange={setActiveDay} />
-        <div className="mt-1.5">
-          <p className="text-[13px] font-semibold tracking-tight text-[var(--ds-ink)]">
-            {day.label ?? `Day ${activeDay + 1}`}
-            {day.date && <span className="ml-1.5 text-[11px] font-normal text-[var(--ds-muted)]">{shortDay(day.date)}</span>}
-          </p>
-          {day.summary && <p className="text-[11px] text-[var(--ds-muted)]">{day.summary}</p>}
+        <div className="mt-1.5 flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-[13px] font-semibold tracking-tight text-[var(--ds-ink)]">
+              {day.label ?? `Day ${activeDay + 1}`}
+              {day.date && <span className="ml-1.5 text-[11px] font-normal text-[var(--ds-muted)]">{shortDay(day.date)}</span>}
+            </p>
+            {day.summary && <p className="text-[11px] text-[var(--ds-muted)]">{day.summary}</p>}
+          </div>
+          {/* Small per-day weather — the live forecast for this exact date. */}
+          {(() => {
+            const w = dayWeather(data.weather, day.date);
+            if (!w || (typeof w.maxC !== 'number' && typeof w.minC !== 'number')) return null;
+            return (
+              <span
+                className="inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-2 py-0.5 text-[11px] text-[var(--ds-muted)]"
+                title={w.description}
+              >
+                <CloudSun className="h-3 w-3 shrink-0 text-sky-600" />
+                <span className="font-semibold tabular-nums text-[var(--ds-ink)]">
+                  {typeof w.maxC === 'number' ? `${Math.round(w.maxC)}°` : '–'}
+                  <span className="text-[var(--ds-muted)]">/{typeof w.minC === 'number' ? `${Math.round(w.minC)}°` : '–'}</span>
+                </span>
+                {typeof w.precipProb === 'number' && w.precipProb > 0 && (
+                  <span className="inline-flex items-center gap-0.5 tabular-nums text-sky-700/80">
+                    <Droplets className="h-2.5 w-2.5" />
+                    {Math.round(w.precipProb)}%
+                  </span>
+                )}
+              </span>
+            );
+          })()}
         </div>
       </div>
 
-      <ul className="mt-1 divide-y divide-[var(--ds-hairline-soft)] border-t border-[var(--ds-hairline-soft)]">
-        {day.stops.map((stop, i) => (
-          <StopRow key={`${activeDay}-${i}`} stop={stop} currency={currency} accent={theme.accent} />
-        ))}
+      {/* Day timeline. Keyed by activeDay so switching days gently fades the new plan in. */}
+      <ul key={activeDay} className="mt-1 animate-fade-in divide-y divide-[var(--ds-hairline-soft)] border-t border-[var(--ds-hairline-soft)]">
+        {day.stops.map((stop, i) =>
+          isTransportStop(stop) ? (
+            <TransportLeg key={`${activeDay}-${i}`} stop={stop} currency={currency} accent={theme.accent} />
+          ) : (
+            <StopRow key={`${activeDay}-${i}`} stop={stop} currency={currency} accent={theme.accent} />
+          )
+        )}
       </ul>
 
       {dayMap && (

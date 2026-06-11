@@ -583,17 +583,19 @@ const itineraryDemo: ItineraryArtifact = {
   budget: { total: 1400, lines: [{ label: 'Hotel (2 nights)', amount: 520 }, { label: 'Food', amount: 360 }, { label: 'Transit & passes', amount: 120 }, { label: 'Tickets & museums', amount: 180 }] },
   days: [
     {
-      label: 'Day 1 — Classic east side', date: '2026-07-10', summary: 'Asakusa to the river, then electric town.',
+      label: 'Day 1 — Classic east side', date: '2026-07-10', summary: 'Land, drop bags, then Asakusa to the river and electric town.',
       stops: [
-        { time: '09:00', name: 'Sensō-ji Temple', kind: 'sight', lat: 35.7148, lng: 139.7967, notes: 'Arrive early to beat crowds; Nakamise street for snacks.', durationMin: 90 },
-        { time: '12:00', name: 'Ichiran Asakusa', kind: 'food', lat: 35.7115, lng: 139.7966, cost: 14, notes: 'Solo-booth tonkotsu ramen.' },
-        { time: '14:00', name: 'Akihabara Electric Town', kind: 'activity', lat: 35.7022, lng: 139.7741, durationMin: 150 },
+        { time: '06:55', name: 'SFO → HND', kind: 'flight', cost: 940, durationMin: 660, transport: { mode: 'flight', from: 'San Francisco (SFO)', to: 'Tokyo Haneda (HND)', carrier: 'ANA', code: 'NH 7', depart: '06:55', arrive: '11:25' } },
+        { time: '12:10', name: 'Haneda → Asakusa', kind: 'train', cost: 6, durationMin: 45, transport: { mode: 'train', from: 'Haneda Airport', to: 'Asakusa Stn', carrier: 'Keikyū + Toei Asakusa Line', depart: '12:10', arrive: '12:55' } },
+        { time: '14:00', name: 'Sensō-ji Temple', kind: 'sight', lat: 35.7148, lng: 139.7967, notes: 'Arrive mid-afternoon; Nakamise street for snacks.', durationMin: 90 },
+        { time: '16:00', name: 'Ichiran Asakusa', kind: 'food', lat: 35.7115, lng: 139.7966, cost: 14, notes: 'Solo-booth tonkotsu ramen.' },
         { time: '18:30', name: 'Tokyo Skytree at sunset', kind: 'sight', lat: 35.7101, lng: 139.8107, cost: 21 }
       ]
     },
     {
-      label: 'Day 2 — Shibuya & Harajuku', date: '2026-07-11', summary: 'Pop culture west side loop.',
+      label: 'Day 2 — Shibuya & Harajuku', date: '2026-07-11', summary: 'Pop culture west side loop, evening bay cruise.',
       stops: [
+        { time: '09:00', name: 'Asakusa → Hinode Pier', kind: 'ferry', cost: 8, durationMin: 40, transport: { mode: 'ferry', from: 'Asakusa', to: 'Hinode Pier', carrier: 'Tokyo Cruise Sumida line', depart: '09:00', arrive: '09:40' } },
         { time: '09:30', name: 'Meiji Jingu Shrine', kind: 'sight', lat: 35.6764, lng: 139.6993, durationMin: 90 },
         { time: '11:30', name: 'Takeshita Street', kind: 'shopping', lat: 35.6716, lng: 139.7031, notes: 'Crepes + vintage shops.' },
         { time: '15:00', name: 'Shibuya Crossing & Sky', kind: 'sight', lat: 35.6595, lng: 139.7005, cost: 18 },
