@@ -14,7 +14,8 @@
 export class ProgramAudioMixer {
   private ctx: AudioContext;
   private dest: MediaStreamAudioDestinationNode;
-  private sources = new Map<string, { node: MediaStreamAudioSourceNode; gain: GainNode; stream: MediaStream }>();
+  private sources = new Map<string, { node: MediaStreamAudioSourceNode; gain: GainNode; analyser: AnalyserNode; stream: MediaStream }>();
+  private levelBuf = new Uint8Array(128);
 
   constructor() {
     const Ctx = window.AudioContext || (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -41,8 +42,14 @@ export class ProgramAudioMixer {
       const node = this.ctx.createMediaStreamSource(stream);
       const gain = this.ctx.createGain();
       gain.gain.value = volume;
+      // Analyser taps the post-gain signal — it powers speaking indicators
+      // and active-speaker focus without touching the mix.
+      const analyser = this.ctx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.6;
       node.connect(gain).connect(this.dest);
-      this.sources.set(id, { node, gain, stream });
+      gain.connect(analyser);
+      this.sources.set(id, { node, gain, analyser, stream });
     } catch {
       /* stream ended between checks */
     }
@@ -54,11 +61,32 @@ export class ProgramAudioMixer {
       try {
         s.node.disconnect();
         s.gain.disconnect();
+        s.analyser.disconnect();
       } catch {
         /* already detached */
       }
       this.sources.delete(id);
     }
+  }
+
+  /** Instantaneous RMS level (0..~1) per source — who is talking right now.
+   *  Muted tracks read ~0, so mic toggles are respected automatically. */
+  levels(): Map<string, number> {
+    const out = new Map<string, number>();
+    for (const [id, s] of this.sources) {
+      try {
+        s.analyser.getByteTimeDomainData(this.levelBuf);
+        let sum = 0;
+        for (let i = 0; i < this.levelBuf.length; i++) {
+          const v = (this.levelBuf[i] - 128) / 128;
+          sum += v * v;
+        }
+        out.set(id, Math.sqrt(sum / this.levelBuf.length));
+      } catch {
+        out.set(id, 0);
+      }
+    }
+    return out;
   }
 
   has(id: string): boolean {

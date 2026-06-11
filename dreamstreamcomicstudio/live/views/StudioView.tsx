@@ -153,6 +153,11 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   statsRef.current = stats;
   const statusRef = useRef(status);
   statusRef.current = status;
+  const sceneRef = useRef(scene);
+  sceneRef.current = scene;
+  const focusIdRef = useRef(focusId);
+  focusIdRef.current = focusId;
+  const lastAutoFocusRef = useRef<{ id: string | null; at: number }>({ id: null, at: 0 });
   const recStartRef = useRef(0);
 
   // ------------------------------------------------------------- lifecycle
@@ -355,6 +360,41 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
       setClock((c) => c + 1);
       if (localRecRef.current) setRecBytes(localRecRef.current.bytes);
     }, 1000);
+    // Who's talking: light the speaking ring on cam tiles and, in Spotlight/
+    // Sidebar with focus on Auto and no screen on stage, follow the active
+    // speaker (2.5 s hysteresis so the stage never ping-pongs mid-sentence).
+    const EMPTY = new Set<string>();
+    const speakTimer = window.setInterval(() => {
+      const mixer = mixerRef.current;
+      const comp = compRef.current;
+      if (!mixer || !comp) return;
+      if (!MULTI_SCENES.has(sceneRef.current)) {
+        comp.setSpeaking(EMPTY);
+        return;
+      }
+      const speaking = new Set<string>();
+      let loudest: { id: string; lvl: number } | null = null;
+      for (const [src, lvl] of mixer.levels()) {
+        const tileId = src === 'host' ? 'host-cam' : `${src}-cam`;
+        if (lvl > 0.045) speaking.add(tileId);
+        if (lvl > 0.06 && (!loudest || lvl > loudest.lvl)) loudest = { id: tileId, lvl };
+      }
+      comp.setSpeaking(speaking);
+      if (
+        (sceneRef.current === 'spotlight' || sceneRef.current === 'sidebar') &&
+        focusIdRef.current == null &&
+        loudest
+      ) {
+        const tiles = comp.allTiles();
+        if (!tiles.some((t) => t.kind === 'screen') && tiles.some((t) => t.id === loudest!.id)) {
+          const last = lastAutoFocusRef.current;
+          if (last.id !== loudest.id && Date.now() - last.at > 2500) {
+            lastAutoFocusRef.current = { id: loudest.id, at: Date.now() };
+            comp.setFocus(loudest.id);
+          }
+        }
+      }
+    }, 250);
     const curveTimer = window.setInterval(() => {
       setViewerCurve((cv) => [...cv.slice(-119), viewersRef.current]);
     }, 10_000);
@@ -372,6 +412,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     return () => {
       cancelled = true;
       window.clearInterval(clock);
+      window.clearInterval(speakTimer);
       window.clearInterval(curveTimer);
       window.clearInterval(healthTimer);
       segRecRef.current?.stop();
@@ -952,10 +993,11 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
                       onChange={(e) => {
                         const id = e.target.value || null;
                         setFocusId(id);
+                        lastAutoFocusRef.current = { id: null, at: 0 };
                         compRef.current?.setFocus(id);
                       }}
                     >
-                      <option value="">Auto (screen first)</option>
+                      <option value="">Auto (screen → speaker)</option>
                       {focusOptions.map((t) => (
                         <option key={t.id} value={t.id}>{t.label}{t.kind === 'screen' ? ' · screen' : ''}</option>
                       ))}
