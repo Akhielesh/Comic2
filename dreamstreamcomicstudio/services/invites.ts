@@ -55,10 +55,27 @@ export interface ReferralInfo {
 /** The user's personal, shareable referral link (get-or-create). */
 export const getReferral = (): Promise<ReferralInfo> => get('/api/invites/referral');
 
-/** Email the user's referral link to friends (≤10). */
+export interface ReferralSendResult {
+  to: string;
+  ok: boolean;
+  /** 'already-member' = the email already has an account, so no invite was sent. */
+  status: 'sent' | 'already-member' | 'skipped' | 'failed';
+  skipped?: string;
+  error?: string;
+}
+
+export interface ReferralSendResponse {
+  url: string;
+  code: string;
+  sent: number;
+  alreadyMembers: number;
+  results: ReferralSendResult[];
+}
+
+/** Email the user's referral link to friends (≤10). Existing members are skipped server-side. */
 export const sendReferral = (
   emails: string,
   note?: string,
   inviterName?: string
-): Promise<{ url: string; code: string; sent: number; results: Array<{ to: string; ok: boolean; skipped?: string; error?: string }> }> =>
+): Promise<ReferralSendResponse> =>
   post('/api/invites/referral/send', { emails, note, inviterName });

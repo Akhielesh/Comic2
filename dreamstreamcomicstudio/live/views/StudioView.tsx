@@ -4,7 +4,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { getEvent, openRoomSocket, sendHostExitBeacon, uploadSegment, type RoomSocket, type SocketStatus } from '../api';
 import { IS_LOCAL_DEV, SEGMENT_MS, presetById, type QualityPreset } from '../config';
-import { addMyRecording, findMyEvent, updateMyEvent } from '../events';
+import { addMyEvent, addMyRecording, findMyEvent, updateMyEvent } from '../events';
 import { pushEventToCloud } from '../sync';
 import { ProgramAudioMixer } from '../studio/audioMixer';
 import { HostPeers, type GuestLink } from '../studio/rtc';
@@ -173,6 +173,25 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
       try {
         const meta = await getEvent(eventId);
         if (cancelled) return;
+        // Adopt-on-open: holding a valid studio link (id + hostKey) IS owning
+        // the event. Registering it here makes sessions hosted from a second
+        // device land in the local registry AND the account — before this,
+        // they never reached the Dashboard or the cloud at all.
+        if (!findMyEvent(eventId)) {
+          const adopted = {
+            id: eventId,
+            hostKey,
+            title: meta.title,
+            createdAt: meta.createdAt || Date.now(),
+            scheduledAt: meta.scheduledAt ?? null,
+            status: meta.status,
+            quality: meta.quality,
+            access: meta.access,
+            cover: meta.cover,
+          };
+          addMyEvent(adopted);
+          void pushEventToCloud(adopted);
+        }
         setTitle(meta.title);
         setPinned(meta.pinned);
         setSegMs(meta.segMs || SEGMENT_MS);
@@ -463,7 +482,10 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
       }
     };
     const onPageHide = (e: PageTransitionEvent) => {
-      if (!e.persisted && (statusRef.current === 'live' || statusRef.current === 'paused')) {
+      // LIVE only: ending a PAUSED (BRB) room here would turn an accidental
+      // refresh into "stream over" — paused rooms keep the worker's 2-minute
+      // host-gone grace instead, which exists for exactly that.
+      if (!e.persisted && statusRef.current === 'live') {
         sendHostExitBeacon(eventId, hostKey);
       }
     };
@@ -505,9 +527,12 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     mixerRef.current?.unlock(); // browsers may gesture-gate AudioContexts
     socketRef.current?.send({ t: 'state', status: 'live' });
     if (prefs.slowSec > 0) socketRef.current?.send({ t: 'config', slow: prefs.slowSec });
+    // Restarting an ended event is a NEW session — fresh clock, no stale end.
+    const freshStart = statusRef.current === 'ended' ? Date.now() : startedAt ?? Date.now();
+    setStartedAt(freshStart);
     setStatus('live');
     startSegments();
-    updateMyEvent(eventId, { status: 'live', startedAt: startedAt ?? Date.now() });
+    updateMyEvent(eventId, { status: 'live', startedAt: freshStart, endedAt: null });
     const mine = findMyEvent(eventId);
     if (mine) void pushEventToCloud(mine);
     if (prefs.autoRecord && !localRecRef.current) startRecording();

@@ -15,6 +15,8 @@ interface WaitlistFormProps {
   buttonLabel?: string;
   className?: string;
   onJoined?: (email: string) => void;
+  /** Shown when the email already has an account ('account-exists') — takes the user to sign-in. */
+  onSignIn?: () => void;
 }
 
 export const WaitlistForm: React.FC<WaitlistFormProps> = ({
@@ -24,10 +26,11 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
   placeholder = 'you@example.com',
   buttonLabel = 'Notify me',
   className = '',
-  onJoined
+  onJoined,
+  onSignIn
 }) => {
   const [email, setEmail] = useState('');
-  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error' | 'account-exists'>('idle');
   const [message, setMessage] = useState<string | null>(null);
   const [captchaToken, setCaptchaToken] = useState('');
 
@@ -49,6 +52,12 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
       setStatus('success');
       setMessage(result.message);
       onJoined?.(email.trim().toLowerCase());
+    } else if (result.status === 'account-exists') {
+      // Already a member: don't add them to the waitlist — point them at sign-in.
+      setStatus('account-exists');
+      setMessage(result.message);
+      setCaptchaToken('');
+      resetTurnstile();
     } else {
       setStatus('error');
       setMessage(result.message);
@@ -90,7 +99,7 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
             value={email}
             onChange={(e) => {
               setEmail(e.target.value);
-              if (status === 'error') setStatus('idle');
+              if (status === 'error' || status === 'account-exists') setStatus('idle');
             }}
             placeholder={placeholder}
             aria-label="Email address"
@@ -122,6 +131,24 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
       )}
       {status === 'error' && message && (
         <p className={`mt-2 text-xs font-bold ${isDark ? 'text-red-400' : 'text-red-600'}`}>{message}</p>
+      )}
+      {status === 'account-exists' && (
+        <div
+          className={`mt-2 flex flex-wrap items-center gap-2 rounded-lg border-2 px-3 py-2 text-xs font-bold ${
+            isDark ? 'border-brand-yellow bg-brand-yellow/10 text-brand-yellow' : 'border-brand-blue bg-brand-blue/5 text-brand-blue'
+          }`}
+        >
+          <span>{message || 'You already have an account — sign in instead.'}</span>
+          {onSignIn ? (
+            <button type="button" onClick={onSignIn} className="underline hover:no-underline">
+              Sign in
+            </button>
+          ) : (
+            <a href="/" className="underline hover:no-underline">
+              Sign in
+            </a>
+          )}
+        </div>
       )}
     </form>
   );

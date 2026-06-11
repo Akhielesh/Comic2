@@ -3,8 +3,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     Activity,
     AlertTriangle,
-    BadgeCheck,
+    Ban,
     CheckCircle2,
+    ChevronDown,
     ChevronRight,
     FlaskConical,
     Gauge,
@@ -26,25 +27,25 @@ import { EmailConsole } from './EmailConsole';
 import { ProductAccessPanel } from './ProductAccessPanel';
 import type {
     AdminAccessResponse,
-    AdminCouponAssignment,
-    AdminCouponDefinition,
-    AdminCouponRedemptionEvent,
     AdminUserRecord,
-    BillingPlanTier,
-    ProjectModerationQueueItem
+    ProjectModerationQueueItem,
+    UserRole
 } from '../../shared/types/billing';
 import {
     approveProjectRepublish,
-    createAdminCouponDefinition,
     forceProjectPrivate,
-    listAdminCoupons,
-    listAdminCouponsByCursor,
     listAdminUsers,
     listModerationQueue,
     moderateUser,
-    updateAdminUserPlan,
     updateAdminUserRole
 } from '../../services/billing';
+import {
+    adminSetProductAccess,
+    invalidateProductAccess,
+    PRODUCT_IDS,
+    PRODUCT_LABELS,
+    type ProductId
+} from '../../services/productAccess';
 import { getEmailUsage, listEmailTemplates, type EmailUsage } from '../../services/adminEmail';
 import { getAnalyticsOverview } from '../../services/adminAnalytics';
 import { patchUrlParams, persistUiState, resolveInitialUiState } from '../../services/viewState';
@@ -57,7 +58,6 @@ type AdminSection =
     | 'studios'
     | 'email'
     | 'analytics'
-    | 'coupons'
     | 'verification';
 
 const SECTIONS: Array<{ id: AdminSection; label: string; icon: React.ReactNode; adminOnly?: boolean }> = [
@@ -71,7 +71,6 @@ const SECTIONS: Array<{ id: AdminSection; label: string; icon: React.ReactNode; 
     // adminOnly: the server mounts /api/admin/analytics/* behind requireAdmin, so the
     // section would render nothing but 403s for moderators.
     { id: 'analytics', label: 'Analytics', icon: <Activity size={15} />, adminOnly: true },
-    { id: 'coupons', label: 'Coupons', icon: <BadgeCheck size={15} />, adminOnly: true },
     { id: 'verification', label: 'Verification', icon: <CheckCircle2 size={15} />, adminOnly: true }
 ];
 
@@ -82,14 +81,23 @@ type MessageState = { type: 'success' | 'error'; text: string } | null;
 
 const normalizeText = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
 
+/** Short chip labels for the per-studio access column. */
+const PRODUCT_CHIP_LABEL: Record<ProductId, string> = {
+    stream_studio: 'Stream',
+    comic_studio: 'Comic',
+    chat_studio: 'Chat'
+};
+
+/** Single visible role for the table's select: admin wins over moderator. */
+type RoleValue = 'admin' | 'moderator' | 'none';
+const roleValueOf = (roles: UserRole[]): RoleValue =>
+    roles.includes('admin') ? 'admin' : roles.includes('moderator') ? 'moderator' : 'none';
+
 interface AdminConsoleProps {
     isAdmin: boolean;
     isModerator: boolean;
     adminAccess: AdminAccessResponse | null;
     onNavigate?: (view: string) => void;
-    /** Called after actions that change billing-relevant state (e.g. the operator's own
-     *  plan), so the host can refresh its billing summary/entitlements immediately. */
-    onBillingShouldRefresh?: () => void;
 }
 
 /** Small framed stat used across the console. */
@@ -128,7 +136,7 @@ const sectionMotion = {
     transition: { duration: 0.18, ease: 'easeOut' as const }
 };
 
-export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator, adminAccess, onNavigate, onBillingShouldRefresh }) => {
+export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator, adminAccess, onNavigate }) => {
     const visibleSections = useMemo(
         () => SECTIONS.filter((section) => isAdmin || !section.adminOnly),
         [isAdmin]
@@ -163,18 +171,17 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
     const userQueryRef = useRef(adminUserQuery);
     userQueryRef.current = adminUserQuery;
     const [moderationReasonByProject, setModerationReasonByProject] = useState<Record<string, string>>({});
-    const [moderationReasonByUser, setModerationReasonByUser] = useState<Record<string, string>>({});
     const [message, setMessage] = useState<MessageState>(null);
     const [busy, setBusy] = useState(false);
     const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
 
-    // ----- coupons -----
-    const [couponDefinitions, setCouponDefinitions] = useState<AdminCouponDefinition[]>([]);
-    const [couponAssignments, setCouponAssignments] = useState<AdminCouponAssignment[]>([]);
-    const [couponEvents, setCouponEvents] = useState<AdminCouponRedemptionEvent[]>([]);
-    const [newCouponTokenAmount, setNewCouponTokenAmount] = useState('10000');
-    const [newCouponValidForHours, setNewCouponValidForHours] = useState('168');
-    const [createdCoupon, setCreatedCoupon] = useState<AdminCouponDefinition | null>(null);
+    // ----- users table: inline "Studios…" expander -----
+    const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
+    const [busyStudioKey, setBusyStudioKey] = useState<string | null>(null); // `${userId}:${product}`
+    // Invite-email options applied when granting from the expander (reset per user).
+    const [sendInvite, setSendInvite] = useState(false);
+    const [inviterName, setInviterName] = useState('');
+    const [personalNote, setPersonalNote] = useState('');
 
     // ----- platform health (overview) -----
     const [emailConfigured, setEmailConfigured] = useState<boolean | null>(null);
@@ -196,23 +203,6 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
         setModerationQueue(queueResult.items || []);
         setLastRefreshedAt(new Date().toISOString());
     }, [debouncedUserQuery]);
-
-    const loadCoupons = useCallback(async () => {
-        const firstPage = await listAdminCoupons(200);
-        const definitionRows = [...firstPage.definitions];
-        let cursor = firstPage.nextCursor;
-        let pageCount = 0;
-        while (cursor && pageCount < 25) {
-            const nextPage = await listAdminCouponsByCursor({ limit: 200, cursor });
-            definitionRows.push(...nextPage.definitions);
-            cursor = nextPage.nextCursor;
-            pageCount += 1;
-        }
-        setCouponDefinitions(definitionRows);
-        setCouponAssignments(firstPage.assignments);
-        setCouponEvents(firstPage.events);
-        setLastRefreshedAt(new Date().toISOString());
-    }, []);
 
     const loadHealth = useCallback(async () => {
         if (!isAdmin) return;
@@ -247,7 +237,6 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
         let alive = true;
         let inFlight = false;
 
-        const needsCoupons = isAdmin && section === 'coupons';
         const needsHealth = isAdmin && section === 'overview';
 
         const tick = async () => {
@@ -255,7 +244,6 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
             inFlight = true;
             try {
                 await loadGovernance();
-                if (needsCoupons) await loadCoupons();
                 if (needsHealth) await loadHealth();
             } catch (err: any) {
                 if (alive) setMessage({ type: 'error', text: err?.message || 'Failed to load admin data.' });
@@ -275,16 +263,13 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
             window.clearInterval(timer);
             document.removeEventListener('visibilitychange', onVisible);
         };
-    }, [section, isAdmin, isModerator, loadGovernance, loadCoupons, loadHealth]);
+    }, [section, isAdmin, isModerator, loadGovernance, loadHealth]);
 
     const refreshNow = async () => {
         setBusy(true);
         try {
             await loadGovernance();
-            if (isAdmin) {
-                await loadCoupons();
-                await loadHealth();
-            }
+            if (isAdmin) await loadHealth();
             setMessage(null);
         } catch (err: any) {
             setMessage({ type: 'error', text: err?.message || 'Failed to refresh admin data.' });
@@ -306,38 +291,99 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
         }
     };
 
-    const handlePlanChange = (userId: string, planTier: BillingPlanTier) =>
+    // Single-role model: setting a role grants it and revokes the other one, so the
+    // select always reflects reality on the next refresh. Grants run before revokes so
+    // the server's "last active admin" guard can still abort safely mid-change.
+    const handleRoleSelect = (adminUser: AdminUserRecord, next: RoleValue) =>
         runAction(async () => {
-            await updateAdminUserPlan({ userId, planTier });
+            const has = (role: UserRole) => adminUser.roles.includes(role);
+            const ops: Array<{ role: UserRole; action: 'grant' | 'revoke' }> = [];
+            if (next === 'admin') {
+                if (!has('admin')) ops.push({ role: 'admin', action: 'grant' });
+                if (has('moderator')) ops.push({ role: 'moderator', action: 'revoke' });
+            } else if (next === 'moderator') {
+                if (!has('moderator')) ops.push({ role: 'moderator', action: 'grant' });
+                if (has('admin')) ops.push({ role: 'admin', action: 'revoke' });
+            } else {
+                if (has('moderator')) ops.push({ role: 'moderator', action: 'revoke' });
+                if (has('admin')) ops.push({ role: 'admin', action: 'revoke' });
+            }
+            for (const op of ops) {
+                await updateAdminUserRole({ userId: adminUser.userId, role: op.role, action: op.action });
+            }
             await loadGovernance();
-            // The operator may have changed their OWN plan — refresh the host's billing
-            // summary so entitlements (default models, limits) re-validate immediately.
-            onBillingShouldRefresh?.();
-        }, 'Plan updated.');
+        }, 'Role updated.');
 
-    const handleRemovePlanStatus = (userId: string) =>
-        runAction(async () => {
-            await updateAdminUserPlan({ userId, removePlanStatus: true });
+    const handleSuspendToggle = (adminUser: AdminUserRecord) => {
+        const suspend = adminUser.moderationStatus !== 'suspended';
+        return runAction(async () => {
+            await moderateUser({ userId: adminUser.userId, status: suspend ? 'suspended' : 'active' });
             await loadGovernance();
-            onBillingShouldRefresh?.();
-        }, 'Plan status removed.');
+        }, suspend ? 'User suspended.' : 'User reactivated.');
+    };
 
-    const handleRoleChange = (userId: string, role: 'admin' | 'moderator', action: 'grant' | 'revoke') =>
-        runAction(async () => {
-            await updateAdminUserRole({ userId, role, action });
+    // Same grant/revoke call as the Studios panel (POST /api/admin/product-access),
+    // including the optional invite email. Honest outcomes: the server reports
+    // alreadyGranted instead of silently re-upserting, and 404 means "no account yet".
+    const toggleStudioAccess = async (adminUser: AdminUserRecord, product: ProductId, active: boolean) => {
+        const email = normalizeText(adminUser.email);
+        if (!email) {
+            setMessage({ type: 'error', text: 'Full email is required to change studio access (admin only).' });
+            return;
+        }
+        setBusyStudioKey(`${adminUser.userId}:${product}`);
+        setMessage(null);
+        try {
+            const result = await adminSetProductAccess({
+                email,
+                product,
+                active,
+                ...(active && sendInvite
+                    ? {
+                        sendInvite: true,
+                        inviterName: inviterName.trim() || undefined,
+                        personalNote: personalNote.trim() || undefined
+                    }
+                    : {})
+            });
+            if (result.alreadyGranted) {
+                setMessage({ type: 'success', text: `${PRODUCT_LABELS[product]}: already has access — nothing to do.` });
+            } else {
+                setMessage({
+                    type: 'success',
+                    text: active
+                        ? `${PRODUCT_LABELS[product]} granted${result.emailed ? ' — invite email sent.' : sendInvite ? ' (invite email was not sent).' : '.'}`
+                        : `${PRODUCT_LABELS[product]} revoked.`
+                });
+            }
+            // If the operator changed their OWN account, the suite's gates re-check immediately.
+            invalidateProductAccess();
             await loadGovernance();
-        }, `Role ${action === 'grant' ? 'granted' : 'revoked'}.`);
+        } catch (err: any) {
+            // 404 → "No account with this email yet — they need to sign up first." (server copy)
+            setMessage({ type: 'error', text: err?.message || 'Studio access update failed.' });
+        } finally {
+            setBusyStudioKey(null);
+        }
+    };
+
+    const toggleExpanded = (userId: string) => {
+        setExpandedUserId((prev) => {
+            const next = prev === userId ? null : userId;
+            if (next !== prev) {
+                // Reset the per-user invite options so a note typed for one user can't
+                // silently ride along on the next user's grant.
+                setSendInvite(false);
+                setInviterName('');
+                setPersonalNote('');
+            }
+            return next;
+        });
+    };
 
     // Each action consumes its reason input: a stale reason left in the box would
-    // otherwise be silently attached to the NEXT action on the same user/project,
+    // otherwise be silently attached to the NEXT action on the same project,
     // corrupting the moderation audit trail.
-    const handleModerateUser = (userId: string, status: 'active' | 'restricted' | 'suspended') =>
-        runAction(async () => {
-            await moderateUser({ userId, status, reason: normalizeText(moderationReasonByUser[userId]) || undefined });
-            setModerationReasonByUser((prev) => ({ ...prev, [userId]: '' }));
-            await loadGovernance();
-        }, `User set to ${status}.`);
-
     const handleForcePrivate = (projectId: string) =>
         runAction(async () => {
             await forceProjectPrivate({ projectId, reason: normalizeText(moderationReasonByProject[projectId]) });
@@ -352,19 +398,8 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
             await loadGovernance();
         }, approve ? 'Republish approved.' : 'Republish rejected.');
 
-    const handleCreateCoupon = () =>
-        runAction(async () => {
-            const tokenAmountCt = Math.floor(Number(newCouponTokenAmount));
-            const validForHours = Math.floor(Number(newCouponValidForHours));
-            if (!Number.isFinite(tokenAmountCt) || tokenAmountCt <= 0) throw new Error('Token amount must be a positive number.');
-            if (!Number.isFinite(validForHours) || validForHours <= 0) throw new Error('Validity must be a positive number of hours.');
-            const coupon = await createAdminCouponDefinition({ tokenAmountCt, validForHours });
-            setCreatedCoupon(coupon);
-            await loadCoupons();
-        }, 'Coupon created.');
-
     const pendingModeration = moderationQueue.filter((item) => item.republishRequestStatus === 'pending').length;
-    const planOptions: BillingPlanTier[] = ['free', 'creator', 'studio', 'custom', 'admin'];
+    const suspendedUsers = adminUsers.filter((u) => u.moderationStatus === 'suspended').length;
 
     const renderOverview = () => (
         <div className="space-y-5">
@@ -374,7 +409,7 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
                 <Stat label="Pending republish" value={pendingModeration} tone={pendingModeration ? 'bg-amber-50' : 'bg-white'} />
                 {isAdmin
                     ? <Stat label="Failures (24h)" value={failures24h ?? '—'} tone={failures24h ? 'bg-red-50' : 'bg-white'} />
-                    : <Stat label="Coupons" value="Admin only" />}
+                    : <Stat label="Suspended users" value={suspendedUsers} tone={suspendedUsers ? 'bg-red-50' : 'bg-white'} />}
             </div>
 
             {isAdmin && (
@@ -436,10 +471,130 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
         </div>
     );
 
+    // ── Users: one clean, compact table ─────────────────────────────────────────
+    // Roles model: admin / moderator / per-studio access. No plans, no billing.
+    const statusChip = (status: AdminUserRecord['moderationStatus']) => {
+        const tone = status === 'suspended'
+            ? 'bg-red-100 text-red-700'
+            : status === 'restricted'
+                ? 'bg-amber-100 text-amber-700'
+                : 'bg-green-100 text-green-700';
+        return <span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${tone}`}>{status}</span>;
+    };
+
+    const studioChips = (adminUser: AdminUserRecord) => {
+        const grants = adminUser.productAccess || [];
+        if (grants.length === 0) {
+            return (
+                <span
+                    className="inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-slate-100 text-slate-600"
+                    title="No grants — default access to every studio"
+                >
+                    all
+                </span>
+            );
+        }
+        return (
+            <span className="inline-flex gap-1">
+                {PRODUCT_IDS.map((product) => {
+                    const grant = grants.find((g) => g.product === product);
+                    const on = grant?.active === true;
+                    return (
+                        <span
+                            key={product}
+                            className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold ${on ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-400 line-through'}`}
+                            title={`${PRODUCT_LABELS[product]}: ${on ? 'granted' : grant ? 'revoked' : 'no grant (confined account — not allowed)'}`}
+                        >
+                            {PRODUCT_CHIP_LABEL[product]}
+                        </span>
+                    );
+                })}
+            </span>
+        );
+    };
+
+    const renderStudioExpander = (adminUser: AdminUserRecord) => {
+        const grants = adminUser.productAccess || [];
+        return (
+            <tr className="bg-slate-50/70 border-b border-slate-100">
+                <td colSpan={7} className="px-3 py-3">
+                    <div className="space-y-2.5">
+                        <p className="text-[11px] text-slate-500">
+                            No grants = default access to everything; any grant confines the account to exactly its
+                            active studios. Granting can send the branded studio-invite email.
+                        </p>
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+                            <label className="flex items-center gap-1.5 font-bold cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={sendInvite}
+                                    onChange={(e) => setSendInvite(e.target.checked)}
+                                    className="w-3.5 h-3.5 accent-black"
+                                />
+                                <Mail size={13} /> Send invite email when granting
+                            </label>
+                            {sendInvite && (
+                                <>
+                                    <input
+                                        value={inviterName}
+                                        onChange={(e) => setInviterName(e.target.value)}
+                                        placeholder="Inviter name (optional)"
+                                        maxLength={80}
+                                        className="border-2 border-black rounded px-2 py-1 bg-white"
+                                    />
+                                    <input
+                                        value={personalNote}
+                                        onChange={(e) => setPersonalNote(e.target.value)}
+                                        placeholder="Personal note (optional)"
+                                        maxLength={500}
+                                        className="border-2 border-black rounded px-2 py-1 bg-white w-64 max-w-full"
+                                    />
+                                </>
+                            )}
+                        </div>
+                        <div className="grid sm:grid-cols-3 gap-2">
+                            {PRODUCT_IDS.map((product) => {
+                                const grant = grants.find((g) => g.product === product);
+                                const state: 'default' | 'granted' | 'revoked' = !grant ? 'default' : grant.active ? 'granted' : 'revoked';
+                                const studioBusy = busyStudioKey === `${adminUser.userId}:${product}`;
+                                return (
+                                    <div key={product} className="border border-slate-300 rounded-lg bg-white px-2.5 py-2 flex items-center justify-between gap-2">
+                                        <div className="min-w-0">
+                                            <div className="text-xs font-bold truncate">{PRODUCT_LABELS[product]}</div>
+                                            <div className={`text-[10px] font-bold uppercase ${state === 'granted' ? 'text-green-700' : state === 'revoked' ? 'text-red-600' : 'text-slate-400'}`}>
+                                                {state === 'default' ? 'no grant' : state}
+                                            </div>
+                                        </div>
+                                        <div className="flex gap-1 shrink-0">
+                                            <button
+                                                disabled={studioBusy || state === 'granted'}
+                                                onClick={() => void toggleStudioAccess(adminUser, product, true)}
+                                                className="text-[11px] font-bold border-2 border-black rounded px-2 py-0.5 bg-brand-yellow hover:bg-black hover:text-brand-yellow transition-colors disabled:opacity-40 disabled:pointer-events-none"
+                                            >
+                                                {studioBusy ? <Loader2 size={11} className="animate-spin" /> : 'Grant'}
+                                            </button>
+                                            <button
+                                                disabled={studioBusy || state === 'revoked'}
+                                                onClick={() => void toggleStudioAccess(adminUser, product, false)}
+                                                className="text-[11px] font-bold border-2 border-black rounded px-2 py-0.5 bg-white hover:bg-slate-100 transition-colors disabled:opacity-40 disabled:pointer-events-none"
+                                            >
+                                                Revoke
+                                            </button>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </td>
+            </tr>
+        );
+    };
+
     const renderUsers = () => (
-        <div className="space-y-4">
+        <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
-                <p className="text-xs text-slate-500">Search users, manage plans and roles, apply account moderation.</p>
+                <p className="text-xs text-slate-500">Roles (admin / moderator) and per-studio access — nothing else to manage.</p>
                 <input
                     value={adminUserQuery}
                     onChange={(e) => setAdminUserQuery(e.target.value)}
@@ -448,112 +603,86 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
                 />
             </div>
 
-            <div className="space-y-3">
-                {adminUsers.length === 0 && (
-                    <div className="text-sm text-slate-500 border-2 border-dashed border-slate-300 rounded-xl px-4 py-6 text-center">No users found.</div>
-                )}
-                {adminUsers.map((adminUser) => {
-                    const isTargetAdmin = adminUser.roles.includes('admin');
-                    const canModerateTarget = isAdmin || !isTargetAdmin;
-                    return (
-                        <div key={adminUser.userId} className="border-2 border-black rounded-xl bg-white p-4 space-y-3">
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                                <div className="flex items-center gap-2.5 min-w-0">
-                                    <div className="w-9 h-9 shrink-0 rounded-full border-2 border-black bg-slate-100 flex items-center justify-center font-display">
-                                        {(adminUser.username || '?').slice(0, 1).toUpperCase()}
-                                    </div>
-                                    <div className="min-w-0">
-                                        <div className="font-bold truncate">{adminUser.username || '(no username)'}</div>
-                                        <div className="text-xs text-slate-500 truncate">{adminUser.email || adminUser.maskedEmail || adminUser.userId}</div>
-                                    </div>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    {adminUser.roles.map((role) => (
-                                        <span key={role} className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border border-black ${role === 'admin' ? 'bg-green-200' : 'bg-blue-200'}`}>
-                                            {role}
-                                        </span>
-                                    ))}
-                                    <span className="text-[11px] text-slate-500">
-                                        Joined {adminUser.createdAt ? new Date(adminUser.createdAt).toLocaleDateString() : 'n/a'}
-                                    </span>
-                                </div>
-                            </div>
-
-                            <div className="grid md:grid-cols-3 gap-3">
-                                <div className="border border-slate-300 rounded-lg p-3 space-y-2 bg-slate-50/60">
-                                    <div className="text-[10px] font-bold uppercase text-slate-500">Plan · {adminUser.planTier}</div>
-                                    {isAdmin ? (
-                                        <>
-                                            <select
-                                                value={adminUser.planTier}
-                                                onChange={(e) => void handlePlanChange(adminUser.userId, e.target.value as BillingPlanTier)}
-                                                className="w-full border-2 border-black rounded px-2 py-1 text-sm bg-white"
-                                                disabled={busy}
-                                            >
-                                                {adminUser.planTier === 'pro' && <option value="pro">pro (legacy)</option>}
-                                                {planOptions.map((planTier) => (
-                                                    <option key={planTier} value={planTier}>{planTier}</option>
-                                                ))}
-                                            </select>
-                                            <Button
-                                                variant="outline"
-                                                disabled={busy || adminUser.planTier === 'free'}
-                                                onClick={() => void handleRemovePlanStatus(adminUser.userId)}
-                                            >
-                                                Remove Plan Status
-                                            </Button>
-                                        </>
-                                    ) : (
-                                        <div className="text-xs text-slate-500">Only admins can change plans.</div>
-                                    )}
-                                </div>
-
-                                <div className="border border-slate-300 rounded-lg p-3 space-y-2 bg-slate-50/60">
-                                    <div className="text-[10px] font-bold uppercase text-slate-500">Roles</div>
-                                    {isAdmin ? (
-                                        <div className="flex gap-2 flex-wrap">
-                                            <Button
-                                                variant="outline"
-                                                disabled={busy}
-                                                onClick={() => void handleRoleChange(adminUser.userId, 'moderator', adminUser.roles.includes('moderator') ? 'revoke' : 'grant')}
-                                            >
-                                                {adminUser.roles.includes('moderator') ? 'Revoke Moderator' : 'Grant Moderator'}
-                                            </Button>
-                                            <Button
-                                                variant="outline"
-                                                disabled={busy}
-                                                onClick={() => void handleRoleChange(adminUser.userId, 'admin', adminUser.roles.includes('admin') ? 'revoke' : 'grant')}
-                                            >
-                                                {adminUser.roles.includes('admin') ? 'Revoke Admin' : 'Grant Admin'}
-                                            </Button>
-                                        </div>
-                                    ) : (
-                                        <div className="text-xs text-slate-500">Moderators cannot assign roles.</div>
-                                    )}
-                                </div>
-
-                                <div className="border border-slate-300 rounded-lg p-3 space-y-2 bg-slate-50/60">
-                                    <div className="text-[10px] font-bold uppercase text-slate-500">Account status · {adminUser.moderationStatus}</div>
-                                    <input
-                                        value={moderationReasonByUser[adminUser.userId] || ''}
-                                        onChange={(e) => setModerationReasonByUser((prev) => ({ ...prev, [adminUser.userId]: e.target.value }))}
-                                        placeholder="Reason (optional)"
-                                        className="w-full border-2 border-black rounded px-2 py-1 text-xs bg-white"
-                                    />
-                                    {canModerateTarget ? (
-                                        <div className="flex gap-2 flex-wrap">
-                                            <Button variant="outline" disabled={busy} onClick={() => void handleModerateUser(adminUser.userId, 'active')}>Activate</Button>
-                                            <Button variant="outline" disabled={busy} onClick={() => void handleModerateUser(adminUser.userId, 'restricted')}>Restrict</Button>
-                                            <Button variant="outline" disabled={busy} onClick={() => void handleModerateUser(adminUser.userId, 'suspended')}>Suspend</Button>
-                                        </div>
-                                    ) : (
-                                        <div className="text-xs text-slate-500">Only admins can moderate admin accounts.</div>
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-                    );
-                })}
+            <div className="bg-white border-2 border-black rounded-xl overflow-x-auto">
+                <table className="w-full text-sm text-left min-w-[860px]">
+                    <thead>
+                        <tr className="bg-slate-50 border-b-2 border-black text-[10px] uppercase tracking-wide text-slate-500">
+                            <th className="px-3 py-2 font-bold">Email</th>
+                            <th className="px-3 py-2 font-bold">Name</th>
+                            <th className="px-3 py-2 font-bold">Joined</th>
+                            <th className="px-3 py-2 font-bold">Role</th>
+                            <th className="px-3 py-2 font-bold">Studio access</th>
+                            <th className="px-3 py-2 font-bold">Status</th>
+                            <th className="px-3 py-2 font-bold text-right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {adminUsers.length === 0 && (
+                            <tr><td colSpan={7} className="px-3 py-6 text-center text-sm text-slate-500">No users found.</td></tr>
+                        )}
+                        {adminUsers.map((adminUser) => {
+                            const isTargetAdmin = adminUser.roles.includes('admin');
+                            const canModerateTarget = isAdmin || !isTargetAdmin;
+                            const expanded = expandedUserId === adminUser.userId;
+                            const suspended = adminUser.moderationStatus === 'suspended';
+                            return (
+                                <React.Fragment key={adminUser.userId}>
+                                    <tr className="border-b border-slate-100 last:border-0 hover:bg-slate-50/60">
+                                        <td className="px-3 py-2 font-mono text-xs max-w-[220px] truncate" title={adminUser.email || adminUser.maskedEmail || adminUser.userId}>
+                                            {adminUser.email || adminUser.maskedEmail || adminUser.userId}
+                                        </td>
+                                        <td className="px-3 py-2 font-bold max-w-[140px] truncate">{adminUser.username || '—'}</td>
+                                        <td className="px-3 py-2 text-xs text-slate-500 whitespace-nowrap">
+                                            {adminUser.createdAt ? new Date(adminUser.createdAt).toLocaleDateString() : '—'}
+                                        </td>
+                                        <td className="px-3 py-2">
+                                            {isAdmin ? (
+                                                <select
+                                                    value={roleValueOf(adminUser.roles)}
+                                                    onChange={(e) => void handleRoleSelect(adminUser, e.target.value as RoleValue)}
+                                                    disabled={busy}
+                                                    className="border-2 border-black rounded px-1.5 py-0.5 text-xs font-bold bg-white"
+                                                >
+                                                    <option value="none">—</option>
+                                                    <option value="moderator">moderator</option>
+                                                    <option value="admin">admin</option>
+                                                </select>
+                                            ) : (
+                                                <span className="text-xs font-bold">{roleValueOf(adminUser.roles) === 'none' ? '—' : roleValueOf(adminUser.roles)}</span>
+                                            )}
+                                        </td>
+                                        <td className="px-3 py-2">{studioChips(adminUser)}</td>
+                                        <td className="px-3 py-2">{statusChip(adminUser.moderationStatus)}</td>
+                                        <td className="px-3 py-2">
+                                            <div className="flex items-center justify-end gap-1.5">
+                                                {isAdmin && (
+                                                    <button
+                                                        onClick={() => toggleExpanded(adminUser.userId)}
+                                                        className={`inline-flex items-center gap-1 text-[11px] font-bold border-2 border-black rounded px-2 py-0.5 transition-colors ${expanded ? 'bg-black text-white' : 'bg-white hover:bg-slate-100'}`}
+                                                    >
+                                                        <MonitorPlay size={11} /> Studios…
+                                                        <ChevronDown size={11} className={`transition-transform ${expanded ? 'rotate-180' : ''}`} />
+                                                    </button>
+                                                )}
+                                                {canModerateTarget && (
+                                                    <button
+                                                        onClick={() => void handleSuspendToggle(adminUser)}
+                                                        disabled={busy}
+                                                        className={`inline-flex items-center gap-1 text-[11px] font-bold border-2 border-black rounded px-2 py-0.5 transition-colors disabled:opacity-40 ${suspended ? 'bg-green-100 hover:bg-green-200' : 'bg-white hover:bg-red-50 text-red-600'}`}
+                                                        title={suspended ? 'Reactivate this account' : 'Suspend this account'}
+                                                    >
+                                                        <Ban size={11} /> {suspended ? 'Unsuspend' : 'Suspend'}
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    {isAdmin && expanded && renderStudioExpander(adminUser)}
+                                </React.Fragment>
+                            );
+                        })}
+                    </tbody>
+                </table>
             </div>
         </div>
     );
@@ -619,172 +748,6 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
                     </div>
                 ))}
             </div>
-        </div>
-    );
-
-    const renderCoupons = () => (
-        <div className="space-y-4">
-            <div className="border-2 border-black rounded-xl bg-slate-50 p-4 space-y-3">
-                <div>
-                    <h3 className="font-display text-xl">Create coupon</h3>
-                    <p className="text-xs text-slate-600">Securely generated, single-use global code.</p>
-                </div>
-                <div className="grid md:grid-cols-3 gap-3 items-end">
-                    <div className="space-y-1">
-                        <label className="text-[10px] font-bold uppercase text-slate-500">Token Amount (CT)</label>
-                        <input
-                            value={newCouponTokenAmount}
-                            onChange={(e) => setNewCouponTokenAmount(e.target.value)}
-                            placeholder="10000"
-                            className="w-full border-2 border-black rounded-lg px-3 py-2 font-mono text-sm bg-white"
-                        />
-                    </div>
-                    <div className="space-y-1">
-                        <label className="text-[10px] font-bold uppercase text-slate-500">Valid For (Hours)</label>
-                        <input
-                            value={newCouponValidForHours}
-                            onChange={(e) => setNewCouponValidForHours(e.target.value)}
-                            placeholder="168"
-                            className="w-full border-2 border-black rounded-lg px-3 py-2 font-mono text-sm bg-white"
-                        />
-                    </div>
-                    <Button onClick={() => void handleCreateCoupon()} disabled={busy}>
-                        {busy ? 'Saving…' : 'Create Coupon'}
-                    </Button>
-                </div>
-
-                {createdCoupon && (
-                    <div className="border-2 border-green-500 bg-green-50 rounded-lg p-3 flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                            <div className="text-sm font-bold text-green-800">
-                                Coupon created: <span className="font-mono">{createdCoupon.code}</span>
-                            </div>
-                            <div className="text-xs text-slate-700">
-                                {createdCoupon.tokenAmountCt.toLocaleString()} CT · Expires {new Date(createdCoupon.endsAt).toLocaleString()}
-                            </div>
-                        </div>
-                        <Button
-                            variant="outline"
-                            onClick={async () => {
-                                try {
-                                    await navigator.clipboard.writeText(createdCoupon.code);
-                                    setMessage({ type: 'success', text: `Copied ${createdCoupon.code} to clipboard.` });
-                                } catch {
-                                    setMessage({ type: 'error', text: 'Unable to copy automatically. Copy the code manually.' });
-                                }
-                            }}
-                        >
-                            Copy Code
-                        </Button>
-                    </div>
-                )}
-            </div>
-
-            <div className="bg-white border-2 border-black rounded-xl overflow-auto">
-                <div className="px-4 py-2.5 text-xs font-bold uppercase tracking-wide border-b-2 border-black bg-slate-50">Coupon definitions</div>
-                <table className="w-full text-sm text-left min-w-[900px]">
-                    <thead className="bg-slate-50 border-b border-slate-200">
-                        <tr>
-                            <th className="p-3 font-bold">Code</th>
-                            <th className="p-3 font-bold">Mode</th>
-                            <th className="p-3 font-bold">Token CT</th>
-                            <th className="p-3 font-bold">Validity</th>
-                            <th className="p-3 font-bold">Usage</th>
-                            <th className="p-3 font-bold">Status</th>
-                            <th className="p-3 font-bold">First/Last Redeemed By</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {couponDefinitions.length === 0 && (
-                            <tr><td className="p-3 text-slate-500 text-sm" colSpan={7}>No coupon history found.</td></tr>
-                        )}
-                        {couponDefinitions.map((definition) => (
-                            <tr key={definition.id} className="border-b border-slate-100 last:border-0">
-                                <td className="p-3 font-mono font-bold">{definition.code}</td>
-                                <td className="p-3 text-xs uppercase">{definition.couponMode}</td>
-                                <td className="p-3 text-xs">{definition.tokenAmountCt.toLocaleString()}</td>
-                                <td className="p-3 text-xs text-slate-500">{new Date(definition.startsAt).toLocaleString()} → {new Date(definition.endsAt).toLocaleString()}</td>
-                                <td className="p-3 text-xs">{definition.redemptionCount}/{definition.maxRedemptions}</td>
-                                <td className="p-3 text-xs">
-                                    <span className={`inline-flex px-2 py-1 rounded-full font-semibold uppercase ${definition.status === 'active' ? 'bg-green-100 text-green-700' : definition.status === 'expired' || definition.status === 'exhausted' ? 'bg-slate-200 text-slate-700' : 'bg-amber-100 text-amber-700'}`}>
-                                        {definition.status}
-                                    </span>
-                                    {definition.warningExpiresSoon && <span className="ml-2 text-amber-700 font-semibold">Expires &lt; 72h</span>}
-                                </td>
-                                <td className="p-3 text-xs text-slate-600">
-                                    <div>{definition.firstRedeemedBy || '-'}</div>
-                                    <div>{definition.lastRedeemedBy || '-'}</div>
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-
-            <div className="bg-white border-2 border-black rounded-xl overflow-auto">
-                <div className="px-4 py-2.5 text-xs font-bold uppercase tracking-wide border-b-2 border-black bg-slate-50">Redemption events</div>
-                <table className="w-full text-sm text-left min-w-[760px]">
-                    <thead className="bg-slate-50 border-b border-slate-200">
-                        <tr>
-                            <th className="p-3 font-bold">When</th>
-                            <th className="p-3 font-bold">Code</th>
-                            <th className="p-3 font-bold">Outcome</th>
-                            <th className="p-3 font-bold">User</th>
-                            <th className="p-3 font-bold">Token CT</th>
-                            <th className="p-3 font-bold">Reason</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {couponEvents.length === 0 && (
-                            <tr><td className="p-3 text-slate-500 text-sm" colSpan={6}>No redemption events yet.</td></tr>
-                        )}
-                        {couponEvents.slice(0, 300).map((event) => (
-                            <tr key={event.id} className="border-b border-slate-100 last:border-0">
-                                <td className="p-3 text-xs">{new Date(event.createdAt).toLocaleString()}</td>
-                                <td className="p-3 font-mono">{event.couponCode}</td>
-                                <td className="p-3 text-xs">{event.outcome}</td>
-                                <td className="p-3 text-xs text-slate-600">{event.userId || event.email || '-'}</td>
-                                <td className="p-3 text-xs">{event.tokenAmountCt?.toLocaleString?.() || '-'}</td>
-                                <td className="p-3 text-xs text-slate-500">{event.reason || '-'}</td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-
-            {couponAssignments.length > 0 && (
-                <div className="bg-white border-2 border-black rounded-xl overflow-auto">
-                    <div className="px-4 py-2.5 text-xs font-bold uppercase tracking-wide border-b-2 border-black bg-slate-50">Legacy assignments (read-only)</div>
-                    <table className="w-full text-sm text-left min-w-[760px]">
-                        <thead className="bg-slate-50 border-b border-slate-200">
-                            <tr>
-                                <th className="p-3 font-bold">Coupon</th>
-                                <th className="p-3 font-bold">Target</th>
-                                <th className="p-3 font-bold">Window</th>
-                                <th className="p-3 font-bold">Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {couponAssignments.map((assignment) => (
-                                <tr key={assignment.id} className="border-b border-slate-100 last:border-0">
-                                    <td className="p-3 font-mono">{assignment.couponCode}</td>
-                                    <td className="p-3 text-xs text-slate-600">{assignment.userId || assignment.email || '-'}</td>
-                                    <td className="p-3 text-xs text-slate-600">
-                                        {new Date(assignment.startsAt).toLocaleString()} → {new Date(assignment.endsAt).toLocaleString()}
-                                    </td>
-                                    <td className="p-3 text-xs">
-                                        {assignment.revokedAt
-                                            ? 'Revoked'
-                                            : assignment.isRedeemed
-                                                ? `Redeemed ${assignment.redeemedAt ? new Date(assignment.redeemedAt).toLocaleString() : ''}`
-                                                : assignment.isActive ? 'Assigned' : 'Inactive'}
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            )}
         </div>
     );
 
@@ -869,7 +832,6 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
                     {section === 'analytics' && (
                         <div className="border-2 border-black rounded-xl bg-white"><AdminAnalytics /></div>
                     )}
-                    {section === 'coupons' && isAdmin && renderCoupons()}
                     {section === 'verification' && isAdmin && (
                         <div className="border-2 border-black rounded-xl bg-white"><VerificationCenter /></div>
                     )}

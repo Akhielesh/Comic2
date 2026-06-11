@@ -14,40 +14,17 @@ import { getSettingsState, setSettingsState as persistSettingsState } from '../s
 import { Button } from './Button';
 import { ApiConfiguration } from './ApiConfiguration';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AlertTriangle, Bell, CheckCircle2, ChevronLeft, CreditCard, FileText, KeyRound, LifeBuoy, LogOut, Mail, Monitor, Save, Settings, Shield, ShieldCheck, Trash2, Upload, User as UserIcon, X } from 'lucide-react';
+import { AlertTriangle, Bell, CheckCircle2, ChevronLeft, FileText, KeyRound, LifeBuoy, LogOut, Mail, Monitor, Save, Shield, ShieldCheck, Trash2, Upload, User as UserIcon, X } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { patchUrlParams, persistUiState, resolveInitialUiState } from '../services/viewState';
 import { listDevices, removeDevice, currentDeviceId, type UserDevice } from '../services/deviceSessions';
-import { useSearchParams } from 'react-router-dom';
 import { isImageModelAllowedForPlan } from '../services/imageModels';
 import { TEXT_MODEL } from '../services/modelPolicy';
 import type {
     AdminAccessResponse,
-    BillingInterval,
-    BillingPlanDefinition,
-    BillingPlanTier,
-    BillingPlanPricing,
-    BillingSummaryResponse,
-    CouponPreviewResult,
-    CreditPackId,
-    PurchasablePlanTier
+    BillingSummaryResponse
 } from '../shared/types/billing';
-import {
-    addCredits,
-    cancelSubscription,
-    confirmCheckoutSession,
-    createBillingPortal,
-    createCheckoutSession,
-    getAdminAccess,
-    getBillingSummary,
-    getPricingCatalog,
-    previewCoupon,
-    redeemCoupon,
-    reactivateSubscription,
-    setupPaymentMethod,
-    setSpendCap,
-    updateAutoReload
-} from '../services/billing';
+import { getAdminAccess, getBillingSummary } from '../services/billing';
 import { buildModelEntitlements } from '../services/modelEntitlements';
 import { isFreeOnly, setFreeOnly, onFreeOnlyChanged } from '../services/freeOnlyMode';
 import { AdminConsole } from './admin/AdminConsole';
@@ -70,7 +47,6 @@ interface AccountSettingsProps {
 }
 
 type MessageState = { type: 'success' | 'error'; text: string } | null;
-type BillingIntervalOption = BillingInterval;
 
 const USERNAME_REGEX = /^[A-Za-z0-9_]{3,20}$/;
 const normalizeText = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
@@ -185,17 +161,12 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     const [activeTab, setActiveTab] = useState<SettingsTab>(() =>
         resolveInitialUiState<SettingsTab>('settings.tab', 'tab', (v): v is SettingsTab => isSettingsTab(v), initialTab)
     );
-    const [searchParams] = useSearchParams();
     const [previewAvatar, setPreviewAvatar] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
     const [profile, setProfile] = useState<UserProfile | null>(null);
     const [privateProfile, setPrivateProfile] = useState<UserPrivateProfile | null>(null);
     const [privateProfileWarning, setPrivateProfileWarning] = useState<string | null>(null);
 
-    const [couponCode, setCouponCode] = useState('');
-    const [couponPreview, setCouponPreview] = useState<CouponPreviewResult | null>(null);
-    const [couponPreviewBusy, setCouponPreviewBusy] = useState(false);
-    const [redeemMsg, setRedeemMsg] = useState<MessageState>(null);
     const [isAdmin, setIsAdmin] = useState(false);
     const [isModerator, setIsModerator] = useState(false);
     const [adminAccess, setAdminAccess] = useState<AdminAccessResponse | null>(null);
@@ -204,14 +175,9 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     // not-yet-true isAdmin and silently downgrades a deep-linked admin-only section.
     const [accessChecked, setAccessChecked] = useState(false);
     const [settingsState, setSettingsState] = useState(() => getSettingsState());
+    // Billing summary is only fetched to derive model entitlements (default text/image
+    // models) for the API & Models tab — there is no plan/billing UI anymore.
     const [billingSummary, setBillingSummary] = useState<BillingSummaryResponse | null>(null);
-    const [planPricing, setPlanPricing] = useState<BillingPlanPricing[]>([]);
-    const [catalogPlans, setCatalogPlans] = useState<BillingPlanDefinition[]>([]);
-    const [billingLoading, setBillingLoading] = useState(false);
-    const [billingActionMessage, setBillingActionMessage] = useState<MessageState>(null);
-    const [billingBusy, setBillingBusy] = useState(false);
-    const [spendCapInput, setSpendCapInput] = useState<string>('');
-    const [selectedBillingInterval, setSelectedBillingInterval] = useState<BillingIntervalOption>('month');
 
     const [username, setUsername] = useState('');
     const [avatarUrl, setAvatarUrl] = useState('');
@@ -237,33 +203,6 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     const [sessionBusy, setSessionBusy] = useState(false);
     const [newPassword, setNewPassword] = useState('');
     const [confirmNewPassword, setConfirmNewPassword] = useState('');
-
-    useEffect(() => {
-        const billing = searchParams.get('billing');
-        const billingType = searchParams.get('type');
-        const sessionId = searchParams.get('session_id');
-        if (billing === 'success') {
-            const detail = billingType === 'credits' ? 'Credits purchase completed.' : 'Subscription updated successfully.';
-            const sync = async () => {
-                try {
-                    if (sessionId) {
-                        await confirmCheckoutSession(sessionId);
-                    }
-                    await refreshBillingSummary();
-                    setBillingActionMessage({ type: 'success', text: detail });
-                } catch (err: any) {
-                    setBillingActionMessage({ type: 'error', text: err?.message || 'Checkout completed, but sync is still pending.' });
-                }
-            };
-            void sync();
-        }
-        if (billing === 'cancelled') {
-            const detail = billingType === 'credits'
-                ? 'Credits checkout was cancelled.'
-                : 'Subscription checkout was cancelled.';
-            setBillingActionMessage({ type: 'error', text: detail });
-        }
-    }, [searchParams]);
 
     // Respond to in-app navigation (e.g. header → "Billing") after mount. Driven by the
     // request id, not the tab value, so re-requesting the same tab still applies; the
@@ -331,29 +270,19 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
     }, [user?.id]);
 
     useEffect(() => {
-        if ((activeTab !== 'billing' && activeTab !== 'settings' && activeTab !== 'admin') || !user) return;
+        if (activeTab !== 'settings' || !user) return;
         let alive = true;
 
-        const loadBilling = async () => {
-            setBillingLoading(true);
+        const loadEntitlements = async () => {
             try {
-                const [summary, catalog] = await Promise.all([
-                    getBillingSummary(),
-                    getPricingCatalog()
-                ]);
-                if (!alive) return;
-                setBillingSummary(summary);
-                setPlanPricing(catalog.planPricing || []);
-                setCatalogPlans(catalog.plans || []);
-            } catch (err: any) {
-                if (!alive) return;
-                setBillingActionMessage({ type: 'error', text: err?.message || 'Failed to load billing summary.' });
-            } finally {
-                if (alive) setBillingLoading(false);
+                const summary = await getBillingSummary();
+                if (alive) setBillingSummary(summary);
+            } catch {
+                // Entitlement clamping simply stays on defaults when the summary is unavailable.
             }
         };
 
-        void loadBilling();
+        void loadEntitlements();
         return () => {
             alive = false;
         };
@@ -445,204 +374,6 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
             active = false;
         };
     }, [user?.id]);
-
-    const handlePreviewCoupon = async () => {
-        const normalizedCode = couponCode.trim();
-        if (!normalizedCode) return;
-        setCouponPreviewBusy(true);
-        setRedeemMsg(null);
-        try {
-            const preview = await previewCoupon(normalizedCode);
-            setCouponPreview(preview);
-        } catch (err: any) {
-            setCouponPreview(null);
-            setRedeemMsg({ type: 'error', text: err?.message || 'Unable to preview coupon.' });
-        } finally {
-            setCouponPreviewBusy(false);
-        }
-    };
-
-    const handleRedeem = async () => {
-        const normalizedCode = couponCode.trim();
-        if (!normalizedCode) return;
-        setBillingBusy(true);
-        setRedeemMsg(null);
-        try {
-            const res = await redeemCoupon(normalizedCode);
-            setRedeemMsg({ type: res.success ? 'success' : 'error', text: res.message });
-            setCouponPreview(null);
-            if (res.summary) {
-                setBillingSummary(res.summary);
-            } else {
-                await refreshBillingSummary();
-            }
-        } catch (err: any) {
-            setRedeemMsg({ type: 'error', text: err?.message || 'Unable to redeem coupon.' });
-        } finally {
-            setBillingBusy(false);
-        }
-    };
-
-    const refreshBillingSummary = async () => {
-        try {
-            const [summary, catalog] = await Promise.all([
-                getBillingSummary(),
-                getPricingCatalog()
-            ]);
-            setBillingSummary(summary);
-            setPlanPricing(catalog.planPricing || []);
-            setCatalogPlans(catalog.plans || []);
-        } catch {
-            // handled by action-specific flows
-        }
-    };
-
-    const handleUpgradeCheckout = async (planTier: PurchasablePlanTier) => {
-        const intervalLabel = selectedBillingInterval === 'year' ? 'annual' : 'monthly';
-        const confirmed = window.confirm(`Confirm ${intervalLabel} subscription change to ${planTier.toUpperCase()}? You will be redirected to Stripe Checkout.`);
-        if (!confirmed) return;
-        setBillingActionMessage(null);
-        setBillingBusy(true);
-        try {
-            const session = await createCheckoutSession(planTier, selectedBillingInterval);
-            if (session.url) {
-                window.location.href = session.url;
-                return;
-            }
-            setBillingActionMessage({ type: 'error', text: 'Checkout URL was not returned.' });
-        } catch (err: any) {
-            setBillingActionMessage({ type: 'error', text: err?.message || 'Unable to start checkout.' });
-        } finally {
-            setBillingBusy(false);
-        }
-    };
-
-    const handleAddCredits = async (packId: CreditPackId, label: string) => {
-        const confirmed = window.confirm(`Confirm purchase for ${label}? You will be redirected to Stripe Checkout.`);
-        if (!confirmed) return;
-        setBillingActionMessage(null);
-        setBillingBusy(true);
-        try {
-            const session = await addCredits(packId);
-            if (session.url) {
-                window.location.href = session.url;
-                return;
-            }
-            setBillingActionMessage({ type: 'error', text: 'Checkout URL was not returned.' });
-        } catch (err: any) {
-            setBillingActionMessage({ type: 'error', text: err?.message || 'Unable to purchase credits.' });
-        } finally {
-            setBillingBusy(false);
-        }
-    };
-
-    const handleSetupPaymentMethod = async () => {
-        setBillingActionMessage(null);
-        setBillingBusy(true);
-        try {
-            const response = await setupPaymentMethod();
-            setBillingActionMessage({
-                type: 'success',
-                text: response.setupIntentClientSecret
-                    ? 'Setup intent created. Finish card collection in Stripe-enabled UI.'
-                    : 'Payment setup initiated.'
-            });
-            await refreshBillingSummary();
-        } catch (err: any) {
-            setBillingActionMessage({ type: 'error', text: err?.message || 'Unable to start payment setup.' });
-        } finally {
-            setBillingBusy(false);
-        }
-    };
-
-    const handleToggleAutoReload = async (enabled: boolean) => {
-        setBillingActionMessage(null);
-        setBillingBusy(true);
-        try {
-            await updateAutoReload({ enabled: false, thresholdCt: 5000, packUsd: 25 });
-            setBillingActionMessage({
-                type: enabled ? 'error' : 'success',
-                text: enabled ? 'Auto-reload is disabled by billing policy.' : 'Auto-reload remains disabled.'
-            });
-            await refreshBillingSummary();
-        } catch (err: any) {
-            setBillingActionMessage({ type: 'error', text: err?.message || 'Unable to update auto-reload.' });
-        } finally {
-            setBillingBusy(false);
-        }
-    };
-
-    const handleUpdateSpendCap = async () => {
-        const capUsd = Number(spendCapInput);
-        if (!Number.isFinite(capUsd) || capUsd < 0) {
-            setBillingActionMessage({ type: 'error', text: 'Enter a valid spend cap in USD (0 or more).' });
-            return;
-        }
-        setBillingActionMessage(null);
-        setBillingBusy(true);
-        try {
-            await setSpendCap(capUsd);
-            setBillingActionMessage({ type: 'success', text: `Monthly spend cap set to $${capUsd.toFixed(2)}.` });
-            setSpendCapInput('');
-            await refreshBillingSummary();
-        } catch (err: any) {
-            setBillingActionMessage({ type: 'error', text: err?.message || 'Unable to update spend cap.' });
-        } finally {
-            setBillingBusy(false);
-        }
-    };
-
-    const handleOpenBillingPortal = async () => {
-        setBillingActionMessage(null);
-        setBillingBusy(true);
-        try {
-            const result = await createBillingPortal();
-            if (result.url) {
-                window.location.href = result.url;
-                return;
-            }
-            setBillingActionMessage({ type: 'error', text: 'Billing portal URL was not returned.' });
-        } catch (err: any) {
-            setBillingActionMessage({ type: 'error', text: err?.message || 'Unable to open billing portal.' });
-        } finally {
-            setBillingBusy(false);
-        }
-    };
-
-    const handleCancelAtPeriodEnd = async () => {
-        const confirmed = window.confirm('Cancel subscription at period end? You will keep access until your current period ends.');
-        if (!confirmed) return;
-        setBillingActionMessage(null);
-        setBillingBusy(true);
-        try {
-            const status = await cancelSubscription();
-            setBillingActionMessage({
-                type: 'success',
-                text: status.currentPeriodEnd
-                    ? `Cancellation scheduled. Plan remains active until ${new Date(status.currentPeriodEnd).toLocaleString()}.`
-                    : 'Cancellation scheduled at period end.'
-            });
-            await refreshBillingSummary();
-        } catch (err: any) {
-            setBillingActionMessage({ type: 'error', text: err?.message || 'Unable to schedule cancellation.' });
-        } finally {
-            setBillingBusy(false);
-        }
-    };
-
-    const handleReactivateSubscription = async () => {
-        setBillingActionMessage(null);
-        setBillingBusy(true);
-        try {
-            await reactivateSubscription();
-            setBillingActionMessage({ type: 'success', text: 'Subscription reactivated successfully.' });
-            await refreshBillingSummary();
-        } catch (err: any) {
-            setBillingActionMessage({ type: 'error', text: err?.message || 'Unable to reactivate subscription.' });
-        } finally {
-            setBillingBusy(false);
-        }
-    };
 
     const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files || e.target.files.length === 0) return;
@@ -1231,227 +962,6 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         );
     };
 
-    const renderBilling = () => {
-        const formatCt = (value?: number) => typeof value === 'number' ? value.toLocaleString() : 'n/a';
-        const summary = billingSummary;
-        const planName = summary?.effectivePlan?.name || summary?.plan?.name || 'Free';
-        const planTier = summary?.effectivePlan?.id || summary?.plan?.id || 'free';
-        const availableCt = summary?.wallet?.availableCt || 0;
-        const dailyRemainingCt = summary?.usage?.dailyRemainingCt || 0;
-        const dailyLimitEnabled = summary?.effectivePlan?.dailyLimitEnabled ?? summary?.plan?.dailyLimitEnabled ?? false;
-        const monthlyResetAt = summary?.usage?.monthlyResetAt ? new Date(summary.usage.monthlyResetAt).toLocaleString() : 'n/a';
-        const dailyResetAt = summary?.usage?.dailyResetAt ? new Date(summary.usage.dailyResetAt).toLocaleString() : 'n/a';
-        const subscription = summary?.subscription;
-        const subscriptionEnd = subscription?.currentPeriodEnd ? new Date(subscription.currentPeriodEnd).toLocaleString() : null;
-        const isCancelPending = subscription?.cancelAtPeriodEnd === true;
-        const tierOrder: PurchasablePlanTier[] = ['creator', 'studio'];
-        const pricingForInterval = tierOrder
-            .map((tier) => planPricing.find((entry) => entry.planTier === tier && entry.interval === selectedBillingInterval))
-            .filter((entry): entry is BillingPlanPricing => !!entry);
-        const planById = new Map<string, BillingPlanDefinition>(catalogPlans.map((plan) => [plan.id, plan]));
-        const normalizedCode = couponCode.trim().toUpperCase();
-        const previewMatchesInput = Boolean(couponPreview?.couponCode && couponPreview.couponCode === normalizedCode);
-        const canRedeemPreviewedCoupon = previewMatchesInput && couponPreview?.canRedeemNow === true;
-
-        return (
-            <div className="space-y-6 animate-fade-in">
-                {billingLoading && <div className="text-sm font-bold text-slate-500">Loading billing summary...</div>}
-                {renderMessage(billingActionMessage)}
-
-                <div className="grid md:grid-cols-2 gap-6">
-                    <div className="border-4 border-black bg-white p-6 rounded-2xl">
-                        <h3 className="font-display text-2xl">Current Plan: {planName}</h3>
-                        <p className="font-mono text-xs mt-1 uppercase text-slate-500">{planTier}</p>
-                        <div className="mt-4 space-y-2 text-sm">
-                            <div className="flex justify-between"><span>Available CT</span><strong>{formatCt(availableCt)}</strong></div>
-                            {dailyLimitEnabled && (
-                                <div className="flex justify-between"><span>Daily Remaining CT</span><strong>{formatCt(dailyRemainingCt)}</strong></div>
-                            )}
-                            <div className="flex justify-between"><span>Monthly Included CT</span><strong>{formatCt(summary?.wallet?.includedMonthlyCt)}</strong></div>
-                            <div className="flex justify-between"><span>Used This Month CT</span><strong>{formatCt(summary?.wallet?.usedMonthlyCt)}</strong></div>
-                            <div className="flex justify-between"><span>Purchased CT</span><strong>{formatCt(summary?.wallet?.purchasedCt)}</strong></div>
-                            <div className="flex justify-between"><span>Reserved CT</span><strong>{formatCt(summary?.wallet?.reservedCt)}</strong></div>
-                        </div>
-                        <div className="mt-4 text-xs text-slate-500 space-y-1">
-                            {dailyLimitEnabled ? (
-                                <div>Daily reset: {dailyResetAt}</div>
-                            ) : (
-                                <div>Daily cap: Disabled for this plan</div>
-                            )}
-                            <div>Monthly reset: {monthlyResetAt}</div>
-                            {subscription?.status && <div>Subscription status: {subscription.status}</div>}
-                            {subscription?.interval && <div>Billing interval: {subscription.interval === 'year' ? 'Annual' : 'Monthly'}</div>}
-                            {subscriptionEnd && <div>Current period ends: {subscriptionEnd}</div>}
-                            {isCancelPending && <div className="text-red-600 font-bold">Cancellation scheduled at period end.</div>}
-                        </div>
-                    </div>
-
-                    <div className="border-4 border-black bg-brand-yellow/10 p-6 rounded-2xl">
-                        <h3 className="font-display text-2xl">Upgrade Plans</h3>
-                        <p className="text-xs text-slate-600 mb-4">Stripe checkout for monthly/annual subscriptions.</p>
-                        <div className="flex gap-2 mb-4">
-                            <Button
-                                variant={selectedBillingInterval === 'month' ? 'secondary' : 'outline'}
-                                disabled={billingBusy}
-                                onClick={() => setSelectedBillingInterval('month')}
-                            >
-                                Monthly
-                            </Button>
-                            <Button
-                                variant={selectedBillingInterval === 'year' ? 'secondary' : 'outline'}
-                                disabled={billingBusy}
-                                onClick={() => setSelectedBillingInterval('year')}
-                            >
-                                Annual
-                            </Button>
-                        </div>
-                        <div className="grid gap-2">
-                            {pricingForInterval.map((entry) => {
-                                const plan = planById.get(entry.planTier);
-                                const label = `${plan?.name || entry.planTier.toUpperCase()} · $${entry.priceUsd} · ${formatCt(entry.includedMonthlyCt)} CT`;
-                                return (
-                                    <Button
-                                        key={`${entry.planTier}-${entry.interval}`}
-                                        className="w-full"
-                                        disabled={billingBusy || !entry.stripePriceConfigured}
-                                        onClick={() => handleUpgradeCheckout(entry.planTier)}
-                                    >
-                                        {label} {entry.stripePriceConfigured ? '' : '(Unavailable)'}
-                                    </Button>
-                                );
-                            })}
-                        </div>
-                        <div className="mt-4 text-xs text-slate-600">
-                            Overage beyond credits requires a payment method on file.
-                        </div>
-                        <div className="mt-4 flex gap-2">
-                            <Button variant="outline" disabled={billingBusy} onClick={handleOpenBillingPortal}>Open Billing Portal</Button>
-                            {!isCancelPending && planTier !== 'free' && (
-                                <Button variant="outline" disabled={billingBusy} onClick={handleCancelAtPeriodEnd}>Cancel at Period End</Button>
-                            )}
-                            {isCancelPending && (
-                                <Button variant="secondary" disabled={billingBusy} onClick={handleReactivateSubscription}>Reactivate</Button>
-                            )}
-                        </div>
-                    </div>
-                </div>
-
-                <div className="grid lg:grid-cols-3 gap-6">
-                    <div className="border-2 border-black rounded-xl p-4 space-y-3">
-                        <h4 className="font-display text-xl">Credit Packs</h4>
-                        <div className="space-y-2 text-sm">
-                            <button className="w-full border-2 border-black rounded px-3 py-2 font-bold text-left" disabled={billingBusy} onClick={() => handleAddCredits('pack_10', '$10 · 100,000 CT')}>
-                                $10 · 100,000 CT
-                            </button>
-                            <button className="w-full border-2 border-black rounded px-3 py-2 font-bold text-left" disabled={billingBusy} onClick={() => handleAddCredits('pack_25', '$25 · 260,000 CT')}>
-                                $25 · 260,000 CT
-                            </button>
-                            <button className="w-full border-2 border-black rounded px-3 py-2 font-bold text-left" disabled={billingBusy} onClick={() => handleAddCredits('pack_100', '$100 · 1,100,000 CT')}>
-                                $100 · 1,100,000 CT
-                            </button>
-                        </div>
-                    </div>
-
-                    <div className="border-2 border-black rounded-xl p-4 space-y-3">
-                        <h4 className="font-display text-xl">Payment Method</h4>
-                        <div className="text-sm text-slate-700">
-                            {summary?.hasPaymentMethodOnFile
-                                ? 'Payment method on file for overage and direct credit purchases.'
-                                : 'No payment method on file. Required for overage usage and paid credit purchases.'}
-                        </div>
-                        <Button icon={<CreditCard size={16} />} onClick={handleSetupPaymentMethod} disabled={billingBusy}>
-                            {summary?.hasPaymentMethodOnFile ? 'Update Card' : 'Add Card'}
-                        </Button>
-                        <div className="text-xs text-slate-500">Cards are stored with Stripe; DreamStream stores tokenized references only.</div>
-                    </div>
-
-                    <div className="border-2 border-black rounded-xl p-4 space-y-3">
-                        <h4 className="font-display text-xl">Auto Reload Policy</h4>
-                        <div className="text-sm text-slate-700">
-                            Auto-reload is disabled. Every credit purchase requires explicit Stripe Checkout confirmation.
-                        </div>
-                        <div className="flex gap-2">
-                            <Button variant="outline" disabled={billingBusy} onClick={() => handleToggleAutoReload(false)}>Acknowledge</Button>
-                        </div>
-                        <div className="text-xs text-slate-500">Default overage hard cap: $100/month unless increased by support.</div>
-                    </div>
-
-                    <div className="border-2 border-black rounded-xl p-4 space-y-3">
-                        <h4 className="font-display text-xl">Monthly Spend Cap</h4>
-                        <div className="text-sm text-slate-700">
-                            Hard ceiling on overage spend per month — generation is blocked once it's reached. Current cap:{' '}
-                            <span className="font-bold">${(summary?.overageHardCapUsd ?? 0).toFixed(2)}</span>.
-                        </div>
-                        <div className="flex gap-2">
-                            <input
-                                type="number"
-                                min={0}
-                                step={1}
-                                value={spendCapInput}
-                                onChange={(e) => setSpendCapInput(e.target.value)}
-                                placeholder={`${(summary?.overageHardCapUsd ?? 0).toFixed(0)}`}
-                                className="w-32 border-2 border-black rounded px-3 py-2 text-sm"
-                            />
-                            <Button variant="outline" disabled={billingBusy || !spendCapInput.trim()} onClick={handleUpdateSpendCap}>Update cap</Button>
-                        </div>
-                        <div className="text-xs text-slate-500">Set to 0 to block all overage spend. You'll get an in-app alert at 80% and 100% of your daily limit or spend cap.</div>
-                    </div>
-                </div>
-
-                <div className="border-2 border-black rounded-xl p-4 max-w-2xl space-y-3">
-                    <label className="font-bold text-xs uppercase">Redeem Coupon</label>
-                    <p className="text-xs text-slate-600">
-                        Coupons add CT to your wallet and are single-use globally. Preview first to verify amount, expiry, and remaining availability.
-                    </p>
-                    <div className="flex gap-2 mt-2">
-                        <input
-                            type="text"
-                            value={couponCode}
-                            onChange={(e) => {
-                                setCouponCode(e.target.value);
-                                setCouponPreview(null);
-                                setRedeemMsg(null);
-                            }}
-                            placeholder="Enter coupon code"
-                            className="flex-1 border-2 border-black rounded-lg px-3 py-2 font-mono text-sm"
-                        />
-                        <Button onClick={handlePreviewCoupon} disabled={billingBusy || couponPreviewBusy || !couponCode.trim()}>
-                            {couponPreviewBusy ? 'Checking...' : 'Preview'}
-                        </Button>
-                        <Button onClick={handleRedeem} disabled={billingBusy || !canRedeemPreviewedCoupon}>
-                            Redeem
-                        </Button>
-                    </div>
-
-                    {couponPreview && (
-                        <div className={`border-2 rounded-lg p-3 text-sm ${couponPreview.success ? 'border-green-400 bg-green-50' : 'border-amber-400 bg-amber-50'}`}>
-                            <div className="font-semibold">{couponPreview.message}</div>
-                            <div className="mt-2 text-xs space-y-1">
-                                <div>Code: <span className="font-mono font-bold">{couponPreview.couponCode}</span></div>
-                                <div>Token amount: <span className="font-semibold">{formatCt(couponPreview.tokenAmountCt)} CT</span></div>
-                                {couponPreview.startsAt && couponPreview.endsAt && (
-                                    <div>Validity: {new Date(couponPreview.startsAt).toLocaleString()} to {new Date(couponPreview.endsAt).toLocaleString()}</div>
-                                )}
-                                <div>Remaining redemptions: {couponPreview.remainingRedemptions ?? 0} / {couponPreview.maxRedemptions ?? 1}</div>
-                                {couponPreview.warnings?.expiresSoon && (
-                                    <div className="text-amber-700 font-semibold">
-                                        Expiry warning: this coupon expires in about {couponPreview.warnings.expiresInHours ?? 0} hours.
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    )}
-
-                    {redeemMsg && (
-                        <p className={`text-sm mt-2 font-semibold ${redeemMsg.type === 'success' ? 'text-green-700' : 'text-red-700'}`}>
-                            {redeemMsg.text}
-                        </p>
-                    )}
-                </div>
-            </div>
-        );
-    };
-
     const renderAdmin = () => {
         // Gate hard: the console (and its admin API polling) must never mount for users
         // without access — a deep-linked ?tab=admin or stale session memory used to give
@@ -1475,7 +985,6 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                 isModerator={isModerator}
                 adminAccess={adminAccess}
                 onNavigate={onNavigate}
-                onBillingShouldRefresh={() => void refreshBillingSummary()}
             />
         );
     };
@@ -1532,8 +1041,7 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         {
             label: 'Workspace',
             items: [
-                { id: 'settings', label: 'API & Models', icon: <KeyRound size={17} /> },
-                { id: 'billing', label: 'Billing & Credits', icon: <CreditCard size={17} /> }
+                { id: 'settings', label: 'API & Models', icon: <KeyRound size={17} /> }
             ]
         },
         {
@@ -1556,7 +1064,6 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
         security: { title: 'Security', description: 'Verification, password, and signed-in devices.' },
         preferences: { title: 'Preferences', description: 'Generation cost policy and email preferences.' },
         settings: { title: 'API & Models', description: 'Bring-your-own keys, allowed sources, MCP servers, and default models.' },
-        billing: { title: 'Billing & Credits', description: 'Plan, credits, payment methods, and coupons.' },
         contact: { title: 'Contact', description: 'Reach the DreamStream team.' },
         legal: { title: 'Legal', description: 'Privacy policy and terms of service.' },
         admin: { title: 'Admin Console', description: 'Platform operations: users, moderation, email, analytics.' }
@@ -1661,7 +1168,6 @@ export const AccountSettings: React.FC<AccountSettingsProps> = ({
                                 <h2 className="font-display text-3xl mb-6">{tabMeta[activeTab].title}</h2>
                                 {activeTab === 'profile' && renderProfile()}
                                 {activeTab === 'settings' && renderSettings()}
-                                {activeTab === 'billing' && renderBilling()}
                                 {activeTab === 'preferences' && renderPreferences()}
                                 {activeTab === 'security' && renderSecurity()}
                                 {activeTab === 'legal' && renderLegal()}

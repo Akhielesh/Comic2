@@ -6,7 +6,6 @@
 export type SettingsTab =
     | 'profile'
     | 'settings'
-    | 'billing'
     | 'legal'
     | 'contact'
     | 'admin'
@@ -16,7 +15,6 @@ export type SettingsTab =
 export const SETTINGS_TAB_IDS: readonly SettingsTab[] = [
     'profile',
     'settings',
-    'billing',
     'preferences',
     'security',
     'legal',
