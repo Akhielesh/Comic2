@@ -35,7 +35,8 @@
 .event-card { display: flex; align-items: center; gap: 14px; padding: 13px 18px; border-bottom: 1px solid var(--line-soft); flex-wrap: wrap; }
 .event-card:last-child { border-bottom: none; }
 .event-card.is-live { background: color-mix(in srgb, var(--live-wash) 40%, transparent); }
-.ec-thumb { width: 64px; height: 40px; border-radius: var(--r-sm); flex: none; position: relative; display: grid; place-items: center; color: rgba(255,255,255,.92); overflow: hidden; }
+.ec-thumb { width: 64px; height: 40px; border-radius: var(--r-sm); flex: none; position: relative; display: grid; place-items: center; color: rgba(255,255,255,.92); overflow: hidden; border: none; cursor: pointer; padding: 0; }
+.ec-thumb:hover { filter: brightness(1.1); }
 .ec-livebadge { position: absolute; top: 4px; left: 4px; display: inline-flex; align-items: center; gap: 3px; font-size: 8px; font-weight: 700; color: #fff; background: rgba(0,0,0,.4); padding: 1px 4px; border-radius: 4px; }
 .ec-livebadge .pill-dot { width: 5px; height: 5px; background: #fff; }
 .ec-body { flex: 1; min-width: 180px; }
@@ -272,6 +273,8 @@
 .look-base.mono { filter: grayscale(1); }
 
 .emoji-chip { width: 30px; height: 30px; border-radius: 8px; background: var(--panel-2); display: inline-grid; place-items: center; font-size: 16px; border: 1px solid var(--line); }
+.emoji-lib-grid { display: grid; grid-template-columns: repeat(auto-fill, 30px); gap: 5px; justify-content: end; }
+@media (max-width: 820px) { .emoji-lib-grid { justify-content: start; } }
 
 .alert-preview { background: var(--panel-2); border: 1px dashed var(--line); border-radius: var(--r-md); padding: 24px; display: grid; place-items: center; margin-bottom: 18px; }
 .alert-toast { display: flex; align-items: center; gap: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px 16px; box-shadow: var(--shadow); animation: toastIn .3s ease; }

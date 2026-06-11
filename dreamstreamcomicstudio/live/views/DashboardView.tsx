@@ -42,10 +42,15 @@ function EventCard({ ev, nav, push }: { ev: MyEvent; nav: Nav; push: PushToast }
   const scheduled = !live && !ended && ev.scheduledAt != null && ev.scheduledAt > Date.now();
   return (
     <div className={cx('event-card', live && 'is-live')}>
-      <div className="ec-thumb" style={{ background: coverGradient(ev.cover ?? 0) }}>
+      <button
+        className="ec-thumb"
+        style={{ background: coverGradient(ev.cover ?? 0) }}
+        aria-label={ended ? 'Open recap' : 'Open studio'}
+        onClick={() => (ended ? nav.summary(ev.id, ev.hostKey) : nav.studio(ev.id, ev.hostKey))}
+      >
         {live && <span className="ec-livebadge"><span className="pill-dot pulse" />LIVE</span>}
         <Icon name={ended ? 'play' : live ? 'broadcast' : 'calendar'} size={22} />
-      </div>
+      </button>
       <div className="ec-body">
         <div className="ec-title">{ev.title}</div>
         <div className="ec-meta">

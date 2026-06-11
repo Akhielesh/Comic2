@@ -218,13 +218,13 @@ export function LiveApp() {
               </div>
             )}
             <hr className="divider" />
-            <div className="rail-user">
+            <button className="rail-user" onClick={() => nav.settings()} aria-label="Account & sync settings">
               <Avatar name={prefs.hostName || 'You'} size={32} />
               <div className="ru-txt">
                 <div className="ru-name">{prefs.hostName || 'You'}</div>
-                <div className="ru-meta">Streamer</div>
+                <div className="ru-meta">Account &amp; sync</div>
               </div>
-            </div>
+            </button>
           </div>
         </nav>
       )}
