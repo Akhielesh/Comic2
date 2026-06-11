@@ -362,4 +362,99 @@ export const codeReviewTool: ChatTool = {
   }
 };
 
-export const PRODUCTIVITY_TOOLS: ChatTool[] = [goalTrackerTool, whatsChangedTool, fetchGithubPrTool, codeReviewTool];
+// ----------------------------------------------------------------- ask user ---
+
+const CLARIFY_TYPES = ['single', 'multi', 'text'] as const;
+
+export const askUserTool: ChatTool = {
+  name: 'ask_user',
+  description:
+    'Ask the user a few INTERACTIVE clarifying questions instead of guessing or dumping a wall of questions as plain text. ' +
+    'Use this the moment a request is ambiguous or multi-faceted — trip planning (dates, budget, interests, pace), a build/feature spec, ' +
+    'a recommendation (use case, constraints) — BEFORE producing the main answer. The user picks chips / types answers inline and they ' +
+    'come back as their next message, so you can then build the tailored result (often with widgets). Prefer 2–4 focused questions; use ' +
+    '`single` for one-of choices, `multi` for "choose any", `text` for open input. Always offer realistic options — the user can still add their own.',
+  parameters: {
+    type: 'object',
+    properties: {
+      title: { type: 'string', description: 'Short heading, e.g. "A few quick questions".' },
+      intro: { type: 'string', description: 'One line of framing, e.g. "so I can tailor your Tokyo trip".' },
+      submitLabel: { type: 'string', description: 'Submit button label; defaults to "Send answers".' },
+      questions: {
+        type: 'array',
+        description: '2–4 focused questions.',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', description: 'Short stable id, e.g. "budget".' },
+            prompt: { type: 'string', description: 'The question text.' },
+            type: { type: 'string', enum: [...CLARIFY_TYPES] },
+            required: { type: 'boolean' },
+            placeholder: { type: 'string', description: 'For text questions.' },
+            options: {
+              type: 'array',
+              description: 'Choices for single/multi questions.',
+              items: {
+                type: 'object',
+                properties: {
+                  label: { type: 'string' },
+                  hint: { type: 'string', description: 'Optional short hint under the label.' }
+                },
+                required: ['label']
+              }
+            }
+          },
+          required: ['id', 'prompt', 'type']
+        }
+      }
+    },
+    required: ['questions']
+  },
+  execute: async (args) => {
+    const rawQuestions = Array.isArray(args?.questions) ? args!.questions : [];
+    const questions = rawQuestions
+      .map((q, i): unknown => {
+        const r = (q && typeof q === 'object' ? q : {}) as Record<string, unknown>;
+        const type = CLARIFY_TYPES.includes(r.type as (typeof CLARIFY_TYPES)[number]) ? (r.type as string) : 'single';
+        const prompt = str(r.prompt, 240);
+        if (!prompt) return null;
+        const options = Array.isArray(r.options)
+          ? r.options
+              .map((o) => {
+                const or = (o && typeof o === 'object' ? o : {}) as Record<string, unknown>;
+                const label = str(or.label, 80);
+                return label ? { label, hint: str(or.hint, 80) } : null;
+              })
+              .filter(Boolean)
+              .slice(0, 8)
+          : undefined;
+        return {
+          id: str(r.id, 40) || `q${i + 1}`,
+          prompt,
+          type,
+          required: r.required === true,
+          placeholder: str(r.placeholder, 120),
+          options: type === 'text' ? undefined : options
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 5);
+    if (questions.length === 0) {
+      return { content: 'Ask the questions directly in text — no valid structured questions were provided.' };
+    }
+    const data = {
+      title: str(args?.title, 80),
+      intro: str(args?.intro, 160),
+      submitLabel: str(args?.submitLabel, 40),
+      questions
+    };
+    return {
+      // The card carries the questions — do NOT also restate them in prose; add at most one
+      // short line inviting the user to answer.
+      content: `Asked the user ${questions.length} clarifying question(s) via an interactive card. Wait for their answers (they arrive as the next message), then build the tailored result. Add at most one short inviting line — do not repeat the questions in text.`,
+      artifacts: [{ type: 'clarify', data }]
+    };
+  }
+};
+
+export const PRODUCTIVITY_TOOLS: ChatTool[] = [goalTrackerTool, whatsChangedTool, fetchGithubPrTool, codeReviewTool, askUserTool];

@@ -148,6 +148,19 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
     return () => window.removeEventListener('dreamstream:compose', onCompose);
   }, []);
 
+  // Auto-send path: a widget (e.g. the clarifying-questions card) can dispatch
+  // `dreamstream:send` with { detail: { text } } to post a message immediately, without
+  // routing through the textarea — used when the user has already "answered" by clicking.
+  useEffect(() => {
+    const onSendEvent = (e: Event) => {
+      const text = (e as CustomEvent<{ text?: string }>).detail?.text;
+      if (!text || !text.trim() || busy) return;
+      onSend(text.trim(), []);
+    };
+    window.addEventListener('dreamstream:send', onSendEvent);
+    return () => window.removeEventListener('dreamstream:send', onSendEvent);
+  }, [busy, onSend]);
+
   const skillMatches = isSlashQuery(text) && !menuDismissed ? filterSkills(slashQuery(text)) : [];
   const menuOpen = skillMatches.length > 0;
   const activeSkill = menuOpen ? skillMatches[Math.min(skillIndex, skillMatches.length - 1)] : null;

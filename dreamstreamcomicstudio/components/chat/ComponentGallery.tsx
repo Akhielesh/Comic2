@@ -52,6 +52,8 @@ import { TripBudget } from './artifacts/TripBudget';
 import { LocalCheatsheet } from './artifacts/LocalCheatsheet';
 import { LoyaltyWallet } from './artifacts/LoyaltyWallet';
 import { WidgetStack } from './artifacts/WidgetStack';
+import { ClarifyCard } from './artifacts/ClarifyCard';
+import type { ClarifyArtifact } from '../../apiTypes';
 import { renderArtifactNode } from './artifacts/ChatArtifacts';
 import type {
   DashboardArtifact, LearningPathArtifact, ItineraryArtifact,
@@ -822,6 +824,33 @@ const tripCountdownDemo: TripCountdownArtifact = {
   accent: '#0ea5e9'
 };
 
+const clarifyDemo: ClarifyArtifact = {
+  title: 'A few quick questions',
+  intro: 'so I can tailor your Tokyo trip',
+  questions: [
+    {
+      id: 'dates',
+      prompt: 'When are you going?',
+      type: 'single',
+      required: true,
+      options: [{ label: 'Specific dates', hint: 'I’ll enter them' }, { label: 'Flexible in summer' }, { label: 'Next free weekend' }]
+    },
+    {
+      id: 'interests',
+      prompt: 'What are you most into?',
+      type: 'multi',
+      options: [{ label: 'Food' }, { label: 'History & temples' }, { label: 'Nightlife' }, { label: 'Nature & day trips' }, { label: 'Shopping' }, { label: 'Anime & games' }]
+    },
+    {
+      id: 'budget',
+      prompt: 'Rough nightly hotel budget?',
+      type: 'single',
+      options: [{ label: 'Under $120' }, { label: '$120–250' }, { label: '$250+' }]
+    },
+    { id: 'notes', prompt: 'Anything else I should know?', type: 'text', placeholder: 'Travelling with kids, dietary needs, must-sees…' }
+  ]
+};
+
 const goalDemo: GoalTrackerArtifact = {
   id: 'demo-goal-10k',
   title: 'Run a 10k under 60 minutes',
@@ -1097,6 +1126,7 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'World clocks (ticking · sleep shading · call window)', type: 'world_clocks', category: 'Travel & life', node: <WorldClocks data={worldClocksDemo} /> },
   { title: 'Packing list (check-off · saved progress · tips)', type: 'packing_list', category: 'Travel & life', node: <PackingListCard data={packingDemo} /> },
   { title: 'Trip countdown (live D/H/M/S · weather strip · prep list)', type: 'trip_countdown', category: 'Travel & life', node: <TripCountdown data={tripCountdownDemo} /> },
+  { title: 'Clarifying questions (single · multi · text → auto-sent)', type: 'clarify', category: 'Travel & life', node: <ClarifyCard data={clarifyDemo} /> },
   { title: 'Goal tracker (/goal · milestones · saved progress)', type: 'goal_tracker', category: 'Travel & life', node: <GoalTracker data={goalDemo} /> },
   { title: 'Code review (/code-review · verdict · findings · fixes)', type: 'code_review', category: 'Agents & code', node: <CodeReviewCard data={codeReviewDemo} /> },
   { title: 'Live monitor (/loop · auto-refreshing wrapped widget)', type: 'live_monitor', category: 'Agents & code', node: <LiveMonitorCard data={liveMonitorDemo} renderEmbedded={renderArtifactNode} /> },

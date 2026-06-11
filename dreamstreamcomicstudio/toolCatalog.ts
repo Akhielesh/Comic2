@@ -737,6 +737,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
   },
   // ----------------------------------------------------------- productivity -----
   {
+    name: 'ask_user', label: 'Ask the user', category: 'productivity', kind: 'builtin', provider: 'DreamStream (in-app)',
+    description: 'Asks the user interactive clarifying questions (single-select, multi-select, free text) instead of guessing or dumping a wall of text. Answers come back as the next message so the assistant can tailor the result.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Question card: chips for single/multi choice, text inputs, a Send-answers button.', docsUrl: 'https://dreamstream.app',
+    keywords: ['clarify', 'ask', 'question', 'which', 'preferences', 'options', 'choose', 'plan', 'trip', 'recommend', 'ambiguous', 'narrow down']
+  },
+  {
     name: 'create_goal_tracker', label: 'Goal tracker', category: 'productivity', kind: 'builtin', provider: 'DreamStream (in-app, progress saved locally)',
     description: 'An interactive goal tracker — target date, measurable metric, sequenced milestones the user checks off (progress persists), and next actions. The /goal skill.',
     auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',

@@ -56,6 +56,8 @@ import { TripBudget } from './TripBudget';
 import { LocalCheatsheet } from './LocalCheatsheet';
 import { LoyaltyWallet } from './LoyaltyWallet';
 import { WidgetStack } from './WidgetStack';
+import { ClarifyCard } from './ClarifyCard';
+import type { ClarifyArtifact } from '../../../apiTypes';
 
 // Renderer registry for typed rich-output artifacts. Adding a new rich component is
 // a single entry here — the chat loop and storage never change.
@@ -114,7 +116,8 @@ const ARTIFACT_RENDERERS: Record<string, (data: unknown, key: number) => React.R
   trip_budget: (d, k) => <TripBudget key={k} data={d as TripBudgetArtifact} />,
   local_cheatsheet: (d, k) => <LocalCheatsheet key={k} data={d as LocalCheatsheetArtifact} />,
   loyalty_wallet: (d, k) => <LoyaltyWallet key={k} data={d as LoyaltyWalletArtifact} />,
-  widget_stack: (d, k) => <WidgetStack key={k} data={d as WidgetStackArtifact} renderEmbedded={renderArtifactNode} />
+  widget_stack: (d, k) => <WidgetStack key={k} data={d as WidgetStackArtifact} renderEmbedded={renderArtifactNode} />,
+  clarify: (d, k) => <ClarifyCard key={k} data={d as ClarifyArtifact} />
 };
 
 /** Render an artifact's bare card via the registry (no frame/boundary). Used by the

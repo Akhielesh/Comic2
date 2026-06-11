@@ -959,6 +959,41 @@ export interface ItineraryArtifact {
   density?: 'compact' | 'detailed';
 }
 
+// --- Interactive clarifying questions (the "ask, don't guess" card) ---
+// Emitted by the `ask_user` tool when a request is ambiguous or multi-faceted (trip
+// planning, a build spec, a recommendation). Instead of dumping a wall of questions as
+// text, the model emits this card; the user picks/answers inline and the answers are
+// sent back as their next message, so the conversation stays interactive.
+export type ClarifyQuestionType = 'single' | 'multi' | 'text';
+export interface ClarifyOption {
+  /** The chip label shown to the user. */
+  label: string;
+  /** Optional short hint under the label. */
+  hint?: string;
+}
+export interface ClarifyQuestion {
+  /** Stable id used to label the answer in the reply. */
+  id: string;
+  /** The question text. */
+  prompt: string;
+  type: ClarifyQuestionType;
+  /** For single/multi: the choices. The user can always add their own ("Other"). */
+  options?: ClarifyOption[];
+  /** Placeholder for free-text questions. */
+  placeholder?: string;
+  /** Whether an answer is required before submit. Defaults to false. */
+  required?: boolean;
+}
+export interface ClarifyArtifact {
+  /** Optional heading, e.g. "A few quick questions". */
+  title?: string;
+  /** Optional one-line framing, e.g. "so I can tailor your Tokyo trip". */
+  intro?: string;
+  questions: ClarifyQuestion[];
+  /** Submit button label. Defaults to "Send answers". */
+  submitLabel?: string;
+}
+
 // --- Live ticker tape (multi-asset market strip) ---
 // Emitted by the `get_ticker_tape` tool. The server batch-quotes the symbols
 // (Yahoo/Stooq, keyless) so every figure is live; refresh re-runs the same call.
