@@ -70,6 +70,20 @@ mode by emitting `density: 'compact' | 'detailed'` in the artifact data.
   environmental, not a regression; set dummy `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`.)
 - Frontend build: `npm run build`
 
+## Database migrations (Supabase)
+
+Schema lives in `server/sql/*.sql` (idempotent files, applied manually — there is no
+auto-migration runner). When a change adds or edits one of these files, **apply it to
+the production Supabase project as part of shipping**: project **"Comic"**
+(ref `bdjfmxfmhqhzvgrhbbzm`), via the Supabase MCP `apply_migration` tool when
+available (use a descriptive snake_case migration name so it's recorded), otherwise
+tell the user exactly what to run. Inspect the live table first (`list_tables`,
+information_schema) — several tables predate their SQL files, so reconcile rather
+than assume a blank slate. Ordering matters for hardening steps: anything that
+revokes the CLIENT's direct table access (e.g. the commented revoke in
+`server/sql/user_settings.sql`) must only run AFTER the frontend that stops using
+direct access is deployed and old tabs have had time to reload.
+
 ## Deploy
 
 Production is the **`Dreamstrream-v1`** branch (Cloudflare Pages builds frontend from it;
