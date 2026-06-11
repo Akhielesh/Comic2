@@ -78,7 +78,7 @@ const MetaLine: React.FC<{ item: NewsItem; showSentiment?: boolean }> = ({ item,
       {item.readMinutes ? <span className="shrink-0">· {item.readMinutes} min</span> : null}
       {showSentiment && item.sentiment && (
         <>
-          <span className="shrink-0 text-black/20">·</span>
+          <span className="shrink-0 text-[var(--ds-faint)]">·</span>
           <SentimentMark sentiment={item.sentiment} />
         </>
       )}
@@ -175,7 +175,7 @@ export const NewsDigest: React.FC<{ data: NewsResultsArtifact }> = ({ data }) =>
                 onClick={() => void live.refresh({ topic: t.id, query: undefined })}
                 className={`rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors duration-200 disabled:cursor-default disabled:opacity-60 ${
                   active
-                    ? 'border-transparent bg-[#1a1915] text-white'
+                    ? 'border-transparent bg-[var(--ds-ink)] text-[var(--ds-canvas)]'
                     : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
                 }`}
                 aria-pressed={active}

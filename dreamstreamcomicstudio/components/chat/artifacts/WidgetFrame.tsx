@@ -191,7 +191,7 @@ export const WidgetFrame: React.FC<WidgetFrameProps> = ({ type, densityHint, den
           onDoubleClick={resetHeight}
           className={`mx-auto -mt-1 mb-0.5 flex h-3.5 w-16 cursor-ns-resize touch-none items-center justify-center opacity-0 transition-opacity duration-200 group-hover/widget:opacity-100 [@media(pointer:coarse)]:opacity-60 ${dragging ? 'opacity-100' : ''}`}
         >
-          <div className={`h-1 w-9 rounded-full transition-colors ${dragging ? 'bg-black/30' : 'bg-black/15'}`} />
+          <div className={`h-1 w-9 rounded-full transition-colors ${dragging ? "bg-[var(--ds-muted)]" : "bg-[var(--ds-faint)]"}`} />
         </div>
       )}
     </div>

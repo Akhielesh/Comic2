@@ -12,13 +12,13 @@ const statusIcon = (status: SwarmAgentStatus) => {
     case 'error':
       return <AlertTriangle className="w-3.5 h-3.5 text-red-500" />;
     default:
-      return <Circle className="w-3.5 h-3.5 text-black/20" />;
+      return <Circle className="w-3.5 h-3.5 text-[var(--ds-faint)]" />;
   }
 };
 
 // Status → dot color for the compact glance row.
 const STATUS_DOT: Record<SwarmAgentStatus, string> = {
-  pending: 'bg-black/15',
+  pending: 'bg-[var(--ds-faint)]',
   running: 'bg-fuchsia-500 animate-pulse',
   done: 'bg-emerald-500',
   error: 'bg-red-500'
@@ -86,7 +86,7 @@ export const SwarmTraceCard: React.FC<{ data: SwarmTraceArtifact }> = ({ data })
             <span
               key={a.id + i}
               title={`${a.name} · ${a.status}`}
-              className={`h-2 w-2 rounded-full ${STATUS_DOT[a.status] ?? 'bg-black/15'}`}
+              className={`h-2 w-2 rounded-full ${STATUS_DOT[a.status] ?? 'bg-[var(--ds-faint)]'}`}
             />
           ))}
           {running && <span className="ml-1 text-[11px] text-[var(--ds-muted)]">working…</span>}

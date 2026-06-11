@@ -71,7 +71,7 @@ export const SqlPlayground: React.FC<{ data: SqlExerciseArtifact }> = ({ data })
           onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); void run(); } }}
           rows={Math.min(10, Math.max(3, query.split('\n').length))}
           spellCheck={false}
-          className="w-full font-mono text-[13px] border border-[var(--ds-hairline)] rounded-xl p-2.5 bg-slate-900 text-slate-100 focus:outline-none focus:border-black/25 resize-y"
+          className="w-full font-mono text-[13px] border border-[var(--ds-hairline)] rounded-xl p-2.5 bg-slate-900 text-slate-100 focus:outline-none focus:border-[var(--ds-accent)] resize-y"
           placeholder="Write SQL here…"
         />
 
@@ -113,7 +113,7 @@ export const SqlPlayground: React.FC<{ data: SqlExerciseArtifact }> = ({ data })
                     )}
                     <tbody>
                       {result.rows.map((row, ri) => (
-                        <tr key={ri} className="odd:bg-[var(--ds-raised)] even:bg-black/[0.02]">
+                        <tr key={ri} className="odd:bg-[var(--ds-raised)] even:bg-[var(--ds-well)]">
                           {row.map((cell, ci) => <td key={ci} className="px-2.5 py-1 border-b border-[var(--ds-hairline-soft)] font-mono whitespace-pre-wrap break-words text-[var(--ds-ink)]">{cell === null ? <span className="text-[var(--ds-muted)] italic">NULL</span> : String(cell)}</td>)}
                         </tr>
                       ))}

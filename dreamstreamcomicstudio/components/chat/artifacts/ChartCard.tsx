@@ -255,7 +255,7 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
                 let stackTop = yTo(0);
                 return (
                   <g key={ci}>
-                    <rect x={groupX} y={padT} width={slot} height={plotH} fill={hover?.cat === ci ? '#1a1915' : 'transparent'} fillOpacity={hover?.cat === ci ? 0.04 : 0} onMouseEnter={() => setHover({ i: 0, cat: ci })} />
+                    <rect x={groupX} y={padT} width={slot} height={plotH} fill={hover?.cat === ci ? 'var(--ds-ink)' : 'transparent'} fillOpacity={hover?.cat === ci ? 0.04 : 0} onMouseEnter={() => setHover({ i: 0, cat: ci })} />
                     {visible.map(({ s, i }, vi) => {
                       const val = s.points[ci]?.y ?? 0;
                       if (isStacked) {
@@ -311,7 +311,7 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
                 return <rect key={ci} x={x - stepX / 2} y={padT} width={stepX} height={plotH} fill="transparent" onMouseEnter={() => setHover({ i: 0, cat: ci })} />;
               })}
             {hover && !isScatter && !isBar && (
-              <line x1={padL + (plotW / Math.max(1, cats.length - 1)) * hover.cat} x2={padL + (plotW / Math.max(1, cats.length - 1)) * hover.cat} y1={padT} y2={padT + plotH} stroke="#1a1915" strokeOpacity="0.2" strokeWidth="1" />
+              <line x1={padL + (plotW / Math.max(1, cats.length - 1)) * hover.cat} x2={padL + (plotW / Math.max(1, cats.length - 1)) * hover.cat} y1={padT} y2={padT + plotH} stroke="var(--ds-ink)" strokeOpacity="0.2" strokeWidth="1" />
             )}
 
             {/* x labels */}

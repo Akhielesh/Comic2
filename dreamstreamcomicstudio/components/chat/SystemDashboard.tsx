@@ -32,7 +32,7 @@ export const SystemDashboard: React.FC = () => {
   useEffect(load, []);
 
   if (loading) return <div className="flex items-center justify-center py-12"><Loader2 className="w-6 h-6 animate-spin text-[var(--ds-accent)]" /></div>;
-  if (error) return <div className="text-sm text-[var(--ds-muted)] text-center py-10 border border-dashed border-[var(--ds-hairline)] rounded-xl bg-black/[0.02]">{error}</div>;
+  if (error) return <div className="text-sm text-[var(--ds-muted)] text-center py-10 border border-dashed border-[var(--ds-hairline)] rounded-xl bg-[var(--ds-well)]">{error}</div>;
   if (!data) return null;
 
   return (

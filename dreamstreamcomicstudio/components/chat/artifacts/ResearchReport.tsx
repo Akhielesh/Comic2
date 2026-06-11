@@ -55,7 +55,7 @@ export const ResearchReport: React.FC<{ data: ResearchReportArtifact }> = ({ dat
         <div className="space-y-2 px-3 pb-3 pt-0.5">
           <div className="text-[11px] text-[var(--ds-muted)]">
             <span className="font-semibold text-[var(--ds-ink)]">{data.sourceCount}</span> sources
-            <span className="mx-1 text-black/20">·</span>
+            <span className="mx-1 text-[var(--ds-faint)]">·</span>
             <span className="font-semibold text-[var(--ds-ink)]">{data.readCount}</span> read in full
           </div>
           {data.questions?.length > 0 && (

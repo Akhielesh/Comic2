@@ -73,7 +73,7 @@ export const CodePlayground: React.FC<{ data: CodeExerciseArtifact }> = ({ data 
           rows={Math.min(16, Math.max(4, code.split('\n').length))}
           spellCheck={false}
           readOnly={!canRun}
-          className="w-full font-mono text-[13px] border border-[var(--ds-hairline)] rounded-xl p-2.5 bg-slate-900 text-slate-100 focus:outline-none focus:border-black/25 resize-y"
+          className="w-full font-mono text-[13px] border border-[var(--ds-hairline)] rounded-xl p-2.5 bg-slate-900 text-slate-100 focus:outline-none focus:border-[var(--ds-accent)] resize-y"
           placeholder="Write code here…"
         />
 

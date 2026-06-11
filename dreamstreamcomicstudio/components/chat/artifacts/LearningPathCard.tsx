@@ -380,7 +380,7 @@ export const LearningPathCard: React.FC<{ data: LearningPathArtifact }> = ({ dat
                   <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-[var(--ds-muted)] transition-transform duration-200 ${open ? 'rotate-180' : ''}`} />
                 </button>
                 {open && (
-                  <ul className="animate-fade-in divide-y divide-[var(--ds-hairline-soft)] border-t border-[var(--ds-hairline-soft)] bg-black/[0.015]">
+                  <ul className="animate-fade-in divide-y divide-[var(--ds-hairline-soft)] border-t border-[var(--ds-hairline-soft)] bg-[var(--ds-well)]">
                     {m.steps.map((s) => (
                       <StepRow key={s.id} step={s} done={done.has(s.id)} accent={accent} onToggle={() => toggleStep(s.id)} />
                     ))}

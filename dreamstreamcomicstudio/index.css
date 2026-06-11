@@ -400,6 +400,7 @@
   --ds-well: rgba(0,0,0,0.03);     /* recessed wells */
   --ds-well-strong: rgba(0,0,0,0.04);
   --ds-hover: rgba(0,0,0,0.05);    /* hover tint */
+  --ds-faint: rgba(0,0,0,0.28);    /* lowest-emphasis ink: placeholders, dots, idle glyphs */
   --ds-accent: #D97757;            /* terracotta — same in both themes */
   --ds-accent-hover: #c2643f;
 }
@@ -417,6 +418,7 @@
   --ds-well: rgba(255,255,255,0.04);
   --ds-well-strong: rgba(255,255,255,0.06);
   --ds-hover: rgba(255,255,255,0.06);
+  --ds-faint: rgba(255,255,255,0.34);
   --ds-accent: #D97757;
   --ds-accent-hover: #e08a6d;
 }

@@ -42,7 +42,7 @@ export const SourceCard: React.FC<SourceCardProps> = ({ index, url, title }) => 
       {favicon && <img src={favicon} alt="" className="h-3.5 w-3.5 shrink-0 rounded ring-1 ring-[var(--ds-hairline-soft)]" loading="lazy" />}
       <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-[var(--ds-ink)]">{title || domain}</span>
       <span className="hidden shrink-0 text-[10px] text-[var(--ds-muted)] sm:inline">{domain}</span>
-      <ExternalLink className="h-3 w-3 shrink-0 text-black/20 transition-colors duration-200 group-hover:text-[var(--ds-muted)]" />
+      <ExternalLink className="h-3 w-3 shrink-0 text-[var(--ds-faint)] transition-colors duration-200 group-hover:text-[var(--ds-muted)]" />
     </a>
   );
 };

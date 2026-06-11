@@ -102,6 +102,34 @@ describe('sendChatMessageStream', () => {
     expect(deltas).toContain('real answer');
   });
 
+  it('recovers when pre-tool narration streams, a reset wipes it, and the answer ends empty (silent-blank fix)', async () => {
+    // The hard case: the model streams some pre-tool narration (so content arrived), the
+    // server emits `reset` to clear it before the real answer, but the real answer never
+    // comes — `final` has empty text. Before the fix, the early delta left receivedContent
+    // permanently true, so recovery was skipped and the turn returned a BLANK answer.
+    postStreamMock.mockResolvedValue({
+      ok: true,
+      body: sseStream([
+        'event: delta\ndata: {"content":"Let me look that up…"}\n\n',
+        'event: reset\ndata: {}\n\n',
+        'event: final\ndata: {"text":"","model":"m"}\n\n'
+      ])
+    });
+    postMock.mockResolvedValue({ text: 'the real answer', model: 'm' });
+
+    const deltas: string[] = [];
+    const resets: number[] = [];
+    const res = await sendChatMessageStream(
+      { messages: [{ role: 'user', content: 'hi' }] } as never,
+      { onDelta: (c) => deltas.push(c), onReset: () => resets.push(1) }
+    );
+
+    expect(resets).toHaveLength(1); // the reset reached the UI (content was cleared)
+    expect(postMock).toHaveBeenCalledTimes(1); // and recovery re-answered instead of returning blank
+    expect(res.text).toBe('the real answer');
+    expect(deltas).toContain('the real answer');
+  });
+
   it('recovers a high-reasoning turn that TIMES OUT by retrying with light reasoning', async () => {
     // Production case: reasoning:high on the auto model exceeds the request timeout (90s).
     // Recovery must drop heavy reasoning so the buffered retry answers fast instead of

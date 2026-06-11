@@ -35,7 +35,7 @@ const blankRecipe = (): RecipeCardArtifact => ({
 
 // Calm-studio form controls shared across the run panel + editor.
 const INPUT_CLS =
-  'w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-3 py-2 text-sm text-[var(--ds-ink)] outline-none transition-colors duration-200 focus:border-black/20';
+  'w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-3 py-2 text-sm text-[var(--ds-ink)] outline-none transition-colors duration-200 focus:border-[var(--ds-accent)]';
 const BTN_PRIMARY =
   'flex items-center gap-1 rounded-lg bg-[var(--ds-accent)] px-4 py-2 text-sm font-semibold text-white transition-colors duration-200 hover:bg-[var(--ds-accent-hover)] disabled:opacity-40';
 const BTN_SECONDARY =
@@ -133,7 +133,7 @@ const Section: React.FC<{ title: string; empty?: string; children: React.ReactNo
   <div>
     <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">{title}</div>
     {empty ? (
-      <div className="rounded-xl border border-dashed border-[var(--ds-hairline)] bg-black/[0.02] py-6 text-center text-sm text-[var(--ds-muted)]">{empty}</div>
+      <div className="rounded-xl border border-dashed border-[var(--ds-hairline)] bg-[var(--ds-well)] py-6 text-center text-sm text-[var(--ds-muted)]">{empty}</div>
     ) : (
       <div className="space-y-2">{children}</div>
     )}
@@ -365,11 +365,11 @@ const RecipeEditor: React.FC<{ recipe: RecipeCardArtifact; onSave: (r: RecipeCar
 
   // Small editor inputs (param rows) share a tighter control style.
   const smallInput =
-    'rounded-md border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-2 py-1 text-[12px] text-[var(--ds-ink)] outline-none transition-colors duration-200 focus:border-black/20';
+    'rounded-md border border-[var(--ds-hairline)] bg-[var(--ds-raised)] px-2 py-1 text-[12px] text-[var(--ds-ink)] outline-none transition-colors duration-200 focus:border-[var(--ds-accent)]';
   const toggleChip = (active: boolean) =>
     `rounded-full border px-2 py-1 text-[11px] font-semibold transition-colors duration-200 ${
       active
-        ? 'border-transparent bg-[#1a1915] text-white'
+        ? 'border-transparent bg-[var(--ds-ink)] text-[var(--ds-canvas)]'
         : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
     }`;
 

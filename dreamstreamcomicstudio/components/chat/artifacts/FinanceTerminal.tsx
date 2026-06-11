@@ -144,7 +144,7 @@ export const FinanceTerminal: React.FC<{ data: FinanceTerminalArtifact }> = ({ d
               {news.slice(0, 6).map((n, i) => {
                 const inner = (
                   <>
-                    <Newspaper className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#9b968c]" />
+                    <Newspaper className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--ds-muted)]" />
                     <div className="min-w-0">
                       <div className="truncate text-xs font-semibold text-[var(--ds-ink)] transition-colors duration-200 group-hover:text-blue-600">{n.title}</div>
                       {(n.source || n.publishedAt) && (

@@ -145,7 +145,7 @@ export const Flashcards: React.FC<{ data: FlashcardsArtifact }> = ({ data }) => 
         }
       >
         {/* Mastery bar: green = known, amber = flagged for review, quiet track = remaining. */}
-        <div className="mx-3 flex h-1 overflow-hidden rounded-full bg-black/5" aria-hidden="true">
+        <div className="mx-3 flex h-1 overflow-hidden rounded-full bg-[var(--ds-well-strong)]" aria-hidden="true">
           <div className="bg-emerald-500 transition-all" style={{ width: `${(known.size / cards.length) * 100}%` }} />
           <div className="bg-amber-400 transition-all" style={{ width: `${(review.size / cards.length) * 100}%` }} />
         </div>

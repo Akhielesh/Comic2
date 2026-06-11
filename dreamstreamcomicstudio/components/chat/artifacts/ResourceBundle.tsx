@@ -68,7 +68,7 @@ export const ResourceBundle: React.FC<{ data: ResourceBundleArtifact }> = ({ dat
           <button
             onClick={downloadZip}
             disabled={files.length === 0}
-            className="flex items-center gap-1.5 rounded-lg bg-[#1a1915] px-3 py-1.5 text-[12px] font-semibold text-white transition-colors duration-200 hover:bg-black disabled:opacity-40"
+            className="flex items-center gap-1.5 rounded-lg bg-[var(--ds-ink)] px-3 py-1.5 text-[12px] font-semibold text-[var(--ds-canvas)] transition-opacity duration-200 hover:opacity-90 disabled:opacity-40"
           >
             <Download className="h-4 w-4" /> {base}.zip
           </button>

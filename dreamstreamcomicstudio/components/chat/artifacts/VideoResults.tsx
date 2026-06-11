@@ -44,7 +44,7 @@ export const VideoResults: React.FC<{ data: VideoResultsArtifact }> = ({ data })
               className="group min-w-0 text-left"
               title={v.title}
             >
-              <div className="relative aspect-video overflow-hidden rounded-lg bg-black/[0.06] ring-1 ring-[var(--ds-hairline-soft)]">
+              <div className="relative aspect-video overflow-hidden rounded-lg bg-[var(--ds-well-strong)] ring-1 ring-[var(--ds-hairline-soft)]">
                 {v.thumbnail ? (
                   <img src={v.thumbnail} alt={v.title} loading="lazy" className="h-full w-full object-cover" />
                 ) : (
@@ -83,9 +83,9 @@ export const VideoResults: React.FC<{ data: VideoResultsArtifact }> = ({ data })
                   play(v);
                 }
               }}
-              className="group min-w-0 cursor-pointer overflow-hidden rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] transition-colors duration-200 hover:bg-black/[0.02]"
+              className="group min-w-0 cursor-pointer overflow-hidden rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] transition-colors duration-200 hover:bg-[var(--ds-hover)]"
             >
-              <div className="relative aspect-video bg-black/[0.06]">
+              <div className="relative aspect-video bg-[var(--ds-well-strong)]">
                 {v.thumbnail ? (
                   <img src={v.thumbnail} alt={v.title} loading="lazy" className="h-full w-full object-cover" />
                 ) : (

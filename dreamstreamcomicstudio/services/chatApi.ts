@@ -240,6 +240,11 @@ export const sendChatMessageStream = async (
         receivedAny = true;
         handlers.onReasoning?.(parsed.reasoning);
       } else if (event === 'reset') {
+        // A reset wipes the content streamed so far from the screen (pre-tool narration
+        // dropped before the real answer). So any content counted before this point did
+        // NOT reach the user — clear the flag so a turn that resets and then produces an
+        // empty answer still falls into the recovery path below instead of returning blank.
+        receivedContent = false;
         handlers.onReset?.();
       } else if (event === 'final') {
         receivedAny = true;
@@ -336,7 +341,11 @@ export const runSwarmStream = async (
     else if (event === 'error') streamError = String(parsed.message || 'The swarm failed.');
   });
   if (streamError) throw new Error(streamError);
-  if (!final) {
+  // A `final` whose text is empty/whitespace is NOT a usable answer (reasoning consumed
+  // the budget, or agents produced nothing) — treat it exactly like a missing final so
+  // the recovery below actually re-answers instead of returning a blank turn.
+  const finalText = (final as ChatResponse | null)?.text;
+  if (!final || !(typeof finalText === 'string' && finalText.trim())) {
     // The swarm synthesized no answer (e.g. reasoning-only / agents produced nothing).
     // There's no buffered-swarm endpoint, so recover with a regular completion (reasoning
     // downgraded if it was heavy) rather than failing the turn outright.

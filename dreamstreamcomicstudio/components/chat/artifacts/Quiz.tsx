@@ -152,7 +152,7 @@ export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
               }`}
             >
               <div className="flex items-start gap-2">
-                <span className="shrink-0 w-6 h-6 rounded-full bg-black/[0.05] flex items-center justify-center text-xs font-semibold text-[var(--ds-ink)]">{i + 1}</span>
+                <span className="shrink-0 w-6 h-6 rounded-full bg-[var(--ds-well-strong)] flex items-center justify-center text-xs font-semibold text-[var(--ds-ink)]">{i + 1}</span>
                 <p className="text-sm font-semibold tracking-tight text-[var(--ds-ink)] flex-1">{q.prompt}</p>
                 {showResult && (ok ? <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" /> : <XCircle className="w-5 h-5 text-red-500 shrink-0" />)}
               </div>
@@ -165,7 +165,7 @@ export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
                     onChange={(e) => setText((p) => ({ ...p, [q.id]: e.target.value }))}
                     disabled={checked}
                     placeholder="Type your answer…"
-                    className="w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-2.5 py-1.5 text-sm text-[var(--ds-ink)] transition-colors duration-200 focus:bg-[var(--ds-raised)] focus:border-black/20 focus:outline-none disabled:opacity-70"
+                    className="w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-2.5 py-1.5 text-sm text-[var(--ds-ink)] transition-colors duration-200 focus:bg-[var(--ds-raised)] focus:border-[var(--ds-accent)] focus:outline-none disabled:opacity-70"
                   />
                 ) : (
                   (q.choices || []).map((c) => {
@@ -182,7 +182,7 @@ export const Quiz: React.FC<{ data: QuizArtifact }> = ({ data }) => {
                         onClick={() => (q.type === 'multi' ? toggleMulti(q.id, c.id) : setSingle(q.id, c.id))}
                         className={`w-full text-left flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-sm text-[var(--ds-ink)] transition-colors duration-200 ${tone} disabled:cursor-default`}
                       >
-                        <span className={`shrink-0 w-4 h-4 border ${q.type === 'multi' ? 'rounded' : 'rounded-full'} ${selected ? 'bg-[var(--ds-accent)] border-[#D97757]' : 'bg-[var(--ds-raised)] border-black/20'}`} />
+                        <span className={`shrink-0 w-4 h-4 border ${q.type === 'multi' ? 'rounded' : 'rounded-full'} ${selected ? 'bg-[var(--ds-accent)] border-[#D97757]' : 'bg-[var(--ds-raised)] border-[var(--ds-faint)]'}`} />
                         <span className="flex-1">{c.text}</span>
                         {showResult && isAnswer && <CheckCircle2 className="w-4 h-4 text-emerald-600" />}
                       </button>

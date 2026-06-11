@@ -87,12 +87,12 @@ const CellBody: React.FC<{ col: DataTableColumn; raw: DataTableRowCell; accent: 
   if (kind === 'spark') {
     body = cell.spark && cell.spark.length > 1
       ? <span className="inline-block w-20 align-middle"><Sparkline values={cell.spark} color={cell.color || accent} height={22} width={80} /></span>
-      : <span className="text-black/20">—</span>;
+      : <span className="text-[var(--ds-faint)]">—</span>;
   } else if (kind === 'badge') {
     const col2 = cell.color || '#64748b';
     body = cell.value != null && cell.value !== ''
       ? <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide" style={{ color: col2, backgroundColor: `${col2}1a` }}>{String(cell.value)}</span>
-      : <span className="text-black/20">—</span>;
+      : <span className="text-[var(--ds-faint)]">—</span>;
   } else if ((kind === 'delta' || kind === 'deltaPercent') && hasNum) {
     const pos = num > 0;
     const neg = num < 0;
@@ -106,7 +106,7 @@ const CellBody: React.FC<{ col: DataTableColumn; raw: DataTableRowCell; accent: 
     body = <span className="font-medium tabular-nums text-[var(--ds-ink)]">{Math.abs(num) >= 100000 ? compactNumber(num) : num.toLocaleString()}</span>;
   } else {
     const text = cell.value == null || cell.value === '' ? '—' : String(cell.value);
-    body = <span className={cell.value == null || cell.value === '' ? 'text-black/20' : 'font-medium text-[var(--ds-ink)]'} style={cell.color ? { color: cell.color } : undefined}>{text}</span>;
+    body = <span className={cell.value == null || cell.value === '' ? 'text-[var(--ds-faint)]' : 'font-medium text-[var(--ds-ink)]'} style={cell.color ? { color: cell.color } : undefined}>{text}</span>;
   }
 
   const wrapped = cell.href ? (
@@ -258,12 +258,12 @@ export const DataTableCard: React.FC<{ data: DataTableArtifact }> = ({ data }) =
       {/* Toolbar: client-side filter + CSV export */}
       <div className={`flex items-center gap-2 px-3 pb-2 ${header ? '' : 'pt-2.5'}`}>
         <div className="relative min-w-0 flex-1 max-w-[220px]">
-          <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[#9b968c]" />
+          <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--ds-muted)]" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder={`Filter ${allRows.length} rows…`}
-            className="w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface)] py-1 pl-7 pr-2 text-xs text-[var(--ds-ink)] placeholder:text-[#9b968c] transition-colors duration-200 focus:border-black/20 focus:outline-none focus:ring-2 focus:ring-[var(--ds-hairline-soft)]"
+            className="w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface)] py-1 pl-7 pr-2 text-xs text-[var(--ds-ink)] placeholder:text-[var(--ds-muted)] transition-colors duration-200 focus:border-[var(--ds-accent)] focus:outline-none focus:ring-2 focus:ring-[var(--ds-hairline-soft)]"
           />
         </div>
         <button

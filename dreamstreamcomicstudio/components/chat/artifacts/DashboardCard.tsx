@@ -108,7 +108,7 @@ const ListWidget: React.FC<{ w: DashboardWidget }> = ({ w }) => {
           <button
             onClick={() => toggle(i)}
             aria-label={done.has(i) ? 'Mark not done' : 'Mark done'}
-            className={`mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full border transition-colors ${done.has(i) ? 'bg-emerald-500 border-emerald-500' : 'border-black/25 hover:border-emerald-500'}`}
+            className={`mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full border transition-colors ${done.has(i) ? 'bg-emerald-500 border-emerald-500' : 'border-[var(--ds-faint)] hover:border-emerald-500'}`}
           />
           <span className={done.has(i) ? 'line-through text-[var(--ds-muted)]' : ''}>{it.text}</span>
           {it.meta && <span className="ml-auto text-[11px] text-[var(--ds-muted)] shrink-0 tabular-nums">{it.meta}</span>}
@@ -313,7 +313,7 @@ export const DashboardCard: React.FC<{ data: DashboardArtifact }> = ({ data }) =
                 <header className="flex items-center gap-1.5 mb-2 text-[var(--ds-muted)]">
                   {Icon && <Icon className="w-3.5 h-3.5" />}
                   <span className="text-[10px] font-semibold uppercase tracking-wider truncate">{w.title ?? w.kind}</span>
-                  <GripVertical className="w-3.5 h-3.5 ml-auto text-black/20 group-hover:text-black/40 cursor-grab" aria-label="Drag to rearrange" />
+                  <GripVertical className="w-3.5 h-3.5 ml-auto text-[var(--ds-faint)] group-hover:text-[var(--ds-faint)] cursor-grab" aria-label="Drag to rearrange" />
                 </header>
                 <WidgetBody w={w} />
               </section>

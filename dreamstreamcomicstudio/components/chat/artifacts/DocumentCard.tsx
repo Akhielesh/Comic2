@@ -74,7 +74,7 @@ export const DocumentCard: React.FC<{ data: DocumentArtifact }> = ({ data }) => 
 
   const header = (
     <div className="flex min-w-0 items-center gap-2">
-      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-black/[0.05] text-[var(--ds-ink)]">
+      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[var(--ds-well-strong)] text-[var(--ds-ink)]">
         <FileText className="h-4 w-4" />
       </span>
       <div className="min-w-0">

@@ -231,7 +231,7 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
               onClick={() => setTab(id)}
               aria-pressed={tab === id}
               className={`flex items-center gap-1 rounded-lg border px-2 py-0.5 text-[11px] font-semibold transition-colors duration-200 ${
-                tab === id ? 'border-transparent bg-[#1a1915] text-white' : 'border-[var(--ds-hairline)] text-[var(--ds-muted)] hover:bg-[var(--ds-well)]'
+                tab === id ? 'border-transparent bg-[var(--ds-ink)] text-[var(--ds-canvas)]' : 'border-[var(--ds-hairline)] text-[var(--ds-muted)] hover:bg-[var(--ds-well)]'
               }`}
             >
               <Icon className="h-3 w-3" /> {label}
@@ -369,7 +369,7 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
                         <span className="w-8" />
                       )}
                       <span className="w-7 text-right font-medium text-[var(--ds-muted)]">{lo}°</span>
-                      <div className="relative h-1.5 flex-1 rounded-full bg-black/[0.06]">
+                      <div className="relative h-1.5 flex-1 rounded-full bg-[var(--ds-well-strong)]">
                         <div className="absolute h-full rounded-full bg-gradient-to-r from-sky-400 to-orange-400" style={{ left: `${left}%`, width: `${Math.max(width, 4)}%` }} />
                       </div>
                       <span className="w-7 font-semibold text-[var(--ds-ink)]">{hi}°</span>
@@ -382,7 +382,7 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
 
           {/* Air quality, pollen, sun */}
           {(aq || pollen || today?.sunrise) && (
-            <div className="grid gap-3 border-t border-[var(--ds-hairline-soft)] bg-black/[0.02] p-3 sm:grid-cols-2">
+            <div className="grid gap-3 border-t border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] p-3 sm:grid-cols-2">
               {aq && (aq.usAqi !== undefined || aq.euAqi !== undefined) && (
                 <div>
                   <div className="mb-1 flex items-center justify-between">

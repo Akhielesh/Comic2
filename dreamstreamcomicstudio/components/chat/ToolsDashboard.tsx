@@ -259,7 +259,7 @@ export const ToolsDashboard: React.FC = () => {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search tools, providers, capabilities…"
-            className="w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] pl-8 pr-3 py-1.5 text-sm text-[var(--ds-ink)] outline-none transition-colors duration-200 focus:border-black/20 focus:bg-[var(--ds-raised)]"
+            className="w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] pl-8 pr-3 py-1.5 text-sm text-[var(--ds-ink)] outline-none transition-colors duration-200 focus:border-[var(--ds-accent)] focus:bg-[var(--ds-raised)]"
           />
         </div>
         {summary.totalCalls > 0 && (
@@ -278,7 +278,7 @@ export const ToolsDashboard: React.FC = () => {
           onClick={() => setActiveCat('all')}
           className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-colors duration-200 ${
             activeCat === 'all'
-              ? 'border-transparent bg-[#1a1915] text-white'
+              ? 'border-transparent bg-[var(--ds-ink)] text-[var(--ds-canvas)]'
               : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
           }`}
         >
@@ -293,7 +293,7 @@ export const ToolsDashboard: React.FC = () => {
               onClick={() => setActiveCat(c.id)}
               className={`flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full border transition-colors duration-200 ${
                 activeCat === c.id
-                  ? 'border-transparent bg-[#1a1915] text-white'
+                  ? 'border-transparent bg-[var(--ds-ink)] text-[var(--ds-canvas)]'
                   : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
               }`}
             >
@@ -317,7 +317,7 @@ export const ToolsDashboard: React.FC = () => {
           );
         })}
         {grouped.length === 0 && (
-          <div className="text-sm text-[var(--ds-muted)] text-center py-8 border border-dashed border-[var(--ds-hairline)] rounded-xl bg-black/[0.02]">
+          <div className="text-sm text-[var(--ds-muted)] text-center py-8 border border-dashed border-[var(--ds-hairline)] rounded-xl bg-[var(--ds-well)]">
             No tools match “{query}”.
           </div>
         )}
@@ -373,7 +373,7 @@ export const ToolsDashboard: React.FC = () => {
       <div>
         <SectionLabel icon={Plug} blurb="Model Context Protocol endpoints you’ve connected">Custom MCP servers</SectionLabel>
         {mcpServers.length === 0 ? (
-          <div className="text-[11px] text-[var(--ds-muted)] border border-dashed border-[var(--ds-hairline)] rounded-xl bg-black/[0.02] px-3 py-3">
+          <div className="text-[11px] text-[var(--ds-muted)] border border-dashed border-[var(--ds-hairline)] rounded-xl bg-[var(--ds-well)] px-3 py-3">
             None connected. Add an MCP server from the chat toolbar to expose its tools to the agent — they’ll be tagged
             <span className="inline-flex items-center mx-1"><KindBadge kind="mcp" /></span> and routed like any other tool.
           </div>

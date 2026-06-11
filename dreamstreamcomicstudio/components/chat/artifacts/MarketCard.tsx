@@ -247,7 +247,7 @@ export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => 
                   <span>52-wk low {formatPrice(week52.low, currency)}</span>
                   <span>52-wk high {formatPrice(week52.high, currency)}</span>
                 </div>
-                <div className="relative h-1.5 rounded-full bg-black/10">
+                <div className="relative h-1.5 rounded-full bg-[var(--ds-well-strong)]">
                   <div
                     className="absolute -top-1 h-3.5 w-1.5 -translate-x-1/2 rounded-full border border-white"
                     style={{ left: `${Math.min(100, Math.max(0, week52Pct))}%`, backgroundColor: theme.accent }}

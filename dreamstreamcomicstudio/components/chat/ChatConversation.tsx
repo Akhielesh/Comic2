@@ -310,7 +310,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
             {/* Skills: type `/` in the box, or tap one to get started. */}
             <div className="w-full mt-4">
               <div className={`mb-1.5 ${LABEL}`}>
-                Skills — type <code className="rounded bg-black/5 px-1">/</code> in the box
+                Skills — type <code className="rounded bg-[var(--ds-well-strong)] px-1">/</code> in the box
               </div>
               <div className="flex flex-wrap justify-center gap-1.5">
                 {CHAT_SKILLS.slice(0, 7).map((s) => (
