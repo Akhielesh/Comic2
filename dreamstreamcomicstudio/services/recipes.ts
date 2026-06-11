@@ -18,16 +18,16 @@ export interface RecipeLibrary {
   custom: StoredRecipe[];
 }
 
-export const listRecipes = (): Promise<RecipeLibrary> => get<RecipeLibrary>('/recipes');
+export const listRecipes = (): Promise<RecipeLibrary> => get<RecipeLibrary>('/api/recipes');
 
 export const getRecipe = (slug: string): Promise<{ recipe: StoredRecipe }> =>
-  get<{ recipe: StoredRecipe }>(`/recipes/${encodeURIComponent(slug)}`);
+  get<{ recipe: StoredRecipe }>(`/api/recipes/${encodeURIComponent(slug)}`);
 
 export const saveRecipe = (recipe: RecipeCardArtifact, isPublic = false): Promise<{ recipe: StoredRecipe }> =>
-  post<{ recipe: RecipeCardArtifact; isPublic: boolean }, { recipe: StoredRecipe }>('/recipes', { recipe, isPublic });
+  post<{ recipe: RecipeCardArtifact; isPublic: boolean }, { recipe: StoredRecipe }>('/api/recipes', { recipe, isPublic });
 
 export const deleteRecipe = (slug: string): Promise<{ deleted: boolean }> =>
-  del<{ deleted: boolean }>(`/recipes/${encodeURIComponent(slug)}`);
+  del<{ deleted: boolean }>(`/api/recipes/${encodeURIComponent(slug)}`);
 
 export interface ValidateResult {
   valid: boolean;
@@ -37,7 +37,7 @@ export interface ValidateResult {
 }
 
 export const validateRecipe = (recipe: RecipeCardArtifact, values?: Record<string, unknown>): Promise<ValidateResult> =>
-  post<{ recipe: RecipeCardArtifact; values?: Record<string, unknown> }, ValidateResult>('/recipes/validate', { recipe, values });
+  post<{ recipe: RecipeCardArtifact; values?: Record<string, unknown> }, ValidateResult>('/api/recipes/validate', { recipe, values });
 
 export interface RunRecipeRequest {
   recipeId?: string;
@@ -59,7 +59,7 @@ export const runRecipeStream = (req: RunRecipeRequest, signal?: AbortSignal): Pr
     ...req,
     messages: req.messages && req.messages.length ? req.messages : [{ role: 'user', content: `Run recipe ${req.recipeId || req.recipe?.title || ''}`.trim() }]
   };
-  return postStream<RunRecipeRequest>('/recipes/run', body, { signal });
+  return postStream<RunRecipeRequest>('/api/recipes/run', body, { signal });
 };
 
 export interface DistillResult {
@@ -146,6 +146,6 @@ export const runRecipe = async (
 /** Reflect on a completed run → score + learnings + a proposed reusable recipe. */
 export const distillRun = (goal: string, transcript: string, model?: string): Promise<DistillResult> =>
   post<{ goal: string; transcript: string; messages: { role: 'user'; content: string }[]; model?: string }, DistillResult>(
-    '/recipes/distill',
+    '/api/recipes/distill',
     { goal, transcript, messages: [{ role: 'user', content: goal }], model }
   );
