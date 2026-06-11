@@ -27,6 +27,7 @@ import { checkSystemDiagnostics, checkSystemStatus } from './services/geminiServ
 import { getFluxKeyInfo } from './services/appSettings';
 import { useAuth } from './contexts/AuthContext';
 import { useIsAdmin } from './hooks/useIsAdmin';
+import { useProductAccess, PRODUCT_LABELS, type ProductId } from './services/productAccess';
 import { AuthPage } from './components/AuthPage';
 import { AuthCallbackPage } from './components/AuthCallbackPage';
 import { supabase } from './services/supabase';
@@ -78,6 +79,11 @@ const RESTORABLE_VIEWS = new Set<AppView>([
   'dashboard', 'chat', 'codestudio', 'ventures', 'gallery', 'learn', 'test', 'how-it-works', 'privacy', 'terms', 'settings',
 ]);
 
+/** Where to send the user after they sign in (see the ?next= hand-back below). */
+const POST_LOGIN_NEXT_KEY = 'ds.postLoginNext';
+/** Same-origin absolute path only — never protocol-relative or external. */
+const isSafeNextPath = (p: string): boolean => /^\/(?!\/)/.test(p);
+
 
 type AuthCallbackStatus = 'idle' | 'verifying' | 'success' | 'error';
 type AuthCallbackFlow = 'magiclink' | 'recovery' | 'signup' | 'unknown';
@@ -86,6 +92,50 @@ type PendingReaderTarget = {
   id: string;
   returnView: AppView;
 };
+
+// Which product each gated view belongs to. Views not listed here (home, gallery,
+// reader, models, settings, legal, …) stay open to every signed-in account — only the
+// product work surfaces are confined. 'codestudio' maps to null: it isn't one of the
+// three standalone products, so a confined account never includes it.
+const VIEW_PRODUCT: Partial<Record<AppView, ProductId | null>> = {
+  chat: 'chat_studio',
+  dashboard: 'comic_studio',
+  editor: 'comic_studio',
+  comicforge: 'comic_studio',
+  pagestudio: 'comic_studio',
+  codestudio: null,
+};
+
+// Friendly gate for accounts confined to specific studios (product_access rows exist).
+const ProductGateScreen: React.FC<{ productLabel: string; canStream: boolean; onGoHome: () => void }> = ({ productLabel, canStream, onGoHome }) => (
+  <div className="min-h-[70vh] flex items-center justify-center p-4">
+    <div className="max-w-md w-full bg-white border-2 border-black rounded-2xl shadow-comic p-8 text-center">
+      <div className="w-14 h-14 mx-auto rounded-2xl bg-brand-yellow border-4 border-black shadow-comic flex items-center justify-center font-display text-2xl">
+        DS
+      </div>
+      <h2 className="font-display text-2xl mt-4">This account doesn&apos;t include {productLabel}</h2>
+      <p className="text-sm text-slate-600 mt-2">
+        Your account is set up for specific studios. Ask your admin to enable {productLabel} for you.
+      </p>
+      <div className="flex flex-wrap gap-2 justify-center mt-6">
+        {canStream && (
+          <button
+            onClick={() => { window.location.href = '/live.html'; }}
+            className="px-4 py-2 bg-brand-yellow border-2 border-black rounded-lg font-bold shadow-comic hover:translate-y-0.5 hover:shadow-none transition-all"
+          >
+            Open Stream Studio
+          </button>
+        )}
+        <button
+          onClick={onGoHome}
+          className="px-4 py-2 bg-white border-2 border-black rounded-lg font-bold shadow-comic hover:translate-y-0.5 hover:shadow-none transition-all"
+        >
+          Back to home
+        </button>
+      </div>
+    </div>
+  </div>
+);
 
 // Calm full-screen loader. The old solid-blue flash made every lazy-route switch and
 // auth check look like a hard reload; this matches the app surface so transitions read
@@ -105,6 +155,9 @@ const AppLoader: React.FC<{ label?: string }> = ({ label }) => (
 const App: React.FC = () => {
   const { user, loading: authLoading } = useAuth();
   const isAdmin = useIsAdmin();
+  // Per-account studio confinement (product_access). null = unrestricted/unknown → allow.
+  const allowedProducts = useProductAccess();
+  const streamOnlyRedirectedRef = useRef(false);
   // Chat → Code Studio hand-off: opening an app from chat bumps requestId; route here.
   const studioHandoffArtifact = useStudioHandoff((s) => s.artifact);
   const studioHandoffRequestId = useStudioHandoff((s) => s.requestId);
@@ -135,6 +188,55 @@ const App: React.FC = () => {
   useEffect(() => {
     if (studioHandoffRequestId > 0) setCurrentView('codestudio');
   }, [studioHandoffRequestId]);
+
+  // Standalone Stream Studio accounts (confined, and stream_studio is the ONLY active
+  // product) live at /live.html — send them there once instead of showing a suite they
+  // can't use. The ref guards against repeat assignments while the SPA stays mounted;
+  // /live.html is a separate entry point, so no redirect loop is possible. Admins are
+  // never gated (their probe may still be resolving, so the check stays in the deps).
+  useEffect(() => {
+    if (streamOnlyRedirectedRef.current) return;
+    if (authLoading || !user || isAdmin) return;
+    if (!allowedProducts) return; // unrestricted or still unknown
+    if (allowedProducts.size === 1 && allowedProducts.has('stream_studio')) {
+      streamOnlyRedirectedRef.current = true;
+      window.location.replace('/live.html');
+    }
+  }, [authLoading, user, isAdmin, allowedProducts]);
+
+  // Post-login hand-back: sub-apps (Stream Studio at /live.html) link here with
+  // ?next=<same-origin path> to attach the suite account, then come straight
+  // back. The target is remembered across the whole auth round trip
+  // (localStorage survives the magic-link tab) and expires after 15 minutes so
+  // a stale value can't ambush a later, unrelated sign-in.
+  useEffect(() => {
+    if (authLoading) return;
+    const params = new URLSearchParams(window.location.search);
+    const next = params.get('next');
+    if (!next || !isSafeNextPath(next)) return;
+    try {
+      localStorage.setItem(POST_LOGIN_NEXT_KEY, JSON.stringify({ path: next, at: Date.now() }));
+    } catch { /* storage unavailable */ }
+    if (!user) goToAuth('signin');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authLoading]);
+  useEffect(() => {
+    if (!user) return;
+    let saved: { path?: string; at?: number } | null = null;
+    try {
+      const raw = localStorage.getItem(POST_LOGIN_NEXT_KEY);
+      saved = raw ? (JSON.parse(raw) as { path?: string; at?: number }) : null;
+    } catch {
+      saved = null;
+    }
+    if (!saved?.path) return;
+    try {
+      localStorage.removeItem(POST_LOGIN_NEXT_KEY);
+    } catch { /* storage unavailable */ }
+    if (isSafeNextPath(saved.path) && Date.now() - (saved.at ?? 0) < 15 * 60_000) {
+      window.location.replace(saved.path);
+    }
+  }, [user]);
   // Which tab the auth page opens on: existing users sign in; everyone else can
   // request early access while new signups are invite-only.
   const [authInitialMode, setAuthInitialMode] = useState<'signin' | 'request-access'>('signin');
@@ -726,6 +828,17 @@ const App: React.FC = () => {
   const isProtectedViewStrict = ['dashboard', 'editor', 'test', 'learn', 'settings', 'comicforge', 'pagestudio', 'chat', 'codestudio'].includes(currentView);
   const effectiveView: AppView = !user && isProtectedViewStrict ? 'auth' : currentView;
 
+  // Product gate (product_access): confined accounts only reach their active studios.
+  // Catches every entry path (nav clicks, URL ?view= restore, internal setCurrentView).
+  // null access = unrestricted or still loading → always allow; admins are never gated.
+  const gatedProductLabel = (() => {
+    if (!user || isAdmin || !allowedProducts) return null;
+    if (!(effectiveView in VIEW_PRODUCT)) return null;
+    const product = VIEW_PRODUCT[effectiveView];
+    if (product && allowedProducts.has(product)) return null;
+    return product ? PRODUCT_LABELS[product] : 'Code Studio';
+  })();
+
   const activeProject = activeProjectId ? getProject(activeProjectId) : undefined;
   // Editor and ComicForge are focused, full-screen workspaces with their own
   // back/title bars, so we hide the global site header there (was a 3rd stacked header).
@@ -779,6 +892,13 @@ const App: React.FC = () => {
           return header;
         })()}
 
+        {gatedProductLabel ? (
+          <ProductGateScreen
+            productLabel={gatedProductLabel}
+            canStream={!!allowedProducts?.has('stream_studio')}
+            onGoHome={handleBackToHome}
+          />
+        ) : (
         <Suspense fallback={<AppLoader />}>
           {/* Views */}
           {effectiveView === 'home' && (
@@ -974,6 +1094,7 @@ const App: React.FC = () => {
             />
           )}
         </Suspense>
+        )}
 
         {showSharedLegalLinks && (
           <LegalMicroLinks

@@ -10,6 +10,7 @@ import {
     Gauge,
     Loader2,
     Mail,
+    MonitorPlay,
     RefreshCw,
     Shield,
     ShieldAlert,
@@ -22,6 +23,7 @@ import { VerificationCenter } from '../VerificationCenter';
 import { AdminAnalytics } from './AdminAnalytics';
 import { InviteManager } from './InviteManager';
 import { EmailConsole } from './EmailConsole';
+import { ProductAccessPanel } from './ProductAccessPanel';
 import type {
     AdminAccessResponse,
     AdminCouponAssignment,
@@ -52,6 +54,7 @@ type AdminSection =
     | 'users'
     | 'moderation'
     | 'invites'
+    | 'studios'
     | 'email'
     | 'analytics'
     | 'coupons'
@@ -62,6 +65,8 @@ const SECTIONS: Array<{ id: AdminSection; label: string; icon: React.ReactNode; 
     { id: 'users', label: 'Users', icon: <Users size={15} /> },
     { id: 'moderation', label: 'Moderation', icon: <ShieldAlert size={15} /> },
     { id: 'invites', label: 'Invites', icon: <Ticket size={15} />, adminOnly: true },
+    // adminOnly: /api/admin/product-access is mounted behind requireAdmin.
+    { id: 'studios', label: 'Studios', icon: <MonitorPlay size={15} />, adminOnly: true },
     { id: 'email', label: 'Email', icon: <Mail size={15} />, adminOnly: true },
     // adminOnly: the server mounts /api/admin/analytics/* behind requireAdmin, so the
     // section would render nothing but 403s for moderators.
@@ -854,6 +859,9 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
                     {section === 'moderation' && renderModeration()}
                     {section === 'invites' && isAdmin && (
                         <div className="border-2 border-black rounded-xl bg-white"><InviteManager /></div>
+                    )}
+                    {section === 'studios' && isAdmin && (
+                        <div className="border-2 border-black rounded-xl bg-white"><ProductAccessPanel /></div>
                     )}
                     {section === 'email' && isAdmin && (
                         <div className="border-2 border-black rounded-xl bg-white"><EmailConsole /></div>

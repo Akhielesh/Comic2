@@ -15,3 +15,7 @@ export const viewerUrl = (id: string): string => `${location.origin}${location.p
 
 /** Private host URL — keep secret, the k IS the credential. */
 export const studioUrl = (id: string, key: string): string => `${location.origin}${location.pathname}?e=${id}&k=${key}`;
+
+/** On-air guest URL — semi-private: anyone holding it takes a guest seat. */
+export const guestUrl = (id: string, guestKey: string): string =>
+  `${location.origin}${location.pathname}?e=${id}&g=${encodeURIComponent(guestKey)}`;

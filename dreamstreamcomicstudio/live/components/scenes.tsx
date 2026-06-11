@@ -21,6 +21,43 @@ export function SceneSketch({ kind, initial }: { kind: SceneId; initial: string 
       </div>
     );
   }
+  if (kind === 'grid') {
+    return (
+      <div className="sk">
+        <div className="sk-grid">
+          <span className="sk-cell"><span className="sk-initial">{initial}</span></span>
+          <span className="sk-cell" />
+          <span className="sk-cell" />
+          <span className="sk-cell" />
+        </div>
+      </div>
+    );
+  }
+  if (kind === 'spotlight') {
+    return (
+      <div className="sk sk-stack">
+        <div className="sk-box dim">
+          <span className="sk-initial">{initial}</span>
+        </div>
+        <div className="sk-strip">
+          <span className="sk-cell" />
+          <span className="sk-cell" />
+          <span className="sk-cell" />
+        </div>
+      </div>
+    );
+  }
+  if (kind === 'sidebar') {
+    return (
+      <div className="sk sk-row">
+        <div className="sk-box dim" style={{ width: '68%' }} />
+        <div className="sk-col">
+          <span className="sk-cell"><span className="sk-initial" style={{ fontSize: 9 }}>{initial}</span></span>
+          <span className="sk-cell" />
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="sk">
       <div className="sk-box">

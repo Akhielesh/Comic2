@@ -27,7 +27,7 @@ const HOTKEYS: { keys: string[]; action: string }[] = [
   { keys: ['Space'], action: 'Mute / unmute mic' },
   { keys: ['V'], action: 'Camera on / off' },
   { keys: ['R'], action: 'Start / stop recording' },
-  { keys: ['1', '–', '3'], action: 'Cut to scene 1–3' },
+  { keys: ['1', '–', '6'], action: 'Cut to scene 1–6' },
   { keys: ['B'], action: 'Cut to Be-right-back' },
   { keys: ['M'], action: 'Toggle metrics overlay' },
   { keys: ['/'], action: 'Focus chat composer' },
@@ -152,9 +152,16 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
                   )}
                 </>
               ) : (
-                <Row title="Not signed in" desc="Settings and events stay on this device. Sign in via the main app to enable sync.">
-                  <Btn variant="solid" size="sm" icon="arrowRight" onClick={() => window.open('/', '_blank')}>
-                    Open DreamStream Studio
+                <Row title="Not signed in" desc="Settings, events and recaps stay on this device only. Attach your DreamStream Studio account and they follow you everywhere — you'll come straight back here.">
+                  <Btn
+                    variant="solid"
+                    size="sm"
+                    icon="arrowRight"
+                    onClick={() => {
+                      window.location.href = `/?next=${encodeURIComponent('/live.html#/settings')}`;
+                    }}
+                  >
+                    Sign in
                   </Btn>
                 </Row>
               )}
@@ -167,7 +174,7 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
             <>
               <div className="set-head"><h2 className="serif">Scenes</h2></div>
               <p className="set-intro">
-                The layouts you cut between while live — the number is the hotkey. Cuts are seamless: the encoder records the program mixer, so switching never interrupts the stream. Guest scenes (interview, grid) arrive with multi-guest support.
+                The layouts you cut between while live — the number is the hotkey. Cuts are seamless: the encoder records the program mixer, so switching never interrupts the stream. Grid, Spotlight and Sidebar mix your on-air guests (invite up to 4 from the studio's People panel — their cams, mics and screen shares join the program live).
               </p>
               <div className="scene-edit-list">
                 {SCENES.map((s, i) => (
@@ -211,6 +218,9 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
               </Field>
               <Row title="Program frame rate" desc="The canvas the encoder records. 30 is right for drawing; 60 for fast motion.">
                 <Segmented label="Frame rate" options={[{ value: '24', label: '24' }, { value: '30', label: '30' }, { value: '60', label: '60' }]} value={String(prefs.fps)} onChange={(v) => set('fps', Number(v))} />
+              </Row>
+              <Row title="Mirror my self-view" desc="Auto mirrors the front camera in Solo, like a mirror — viewers and recordings always see the unmirrored program.">
+                <Segmented label="Mirror self-view" options={[{ value: 'auto', label: 'Auto' }, { value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]} value={prefs.mirrorPreview} onChange={(v) => set('mirrorPreview', v as StudioPrefs['mirrorPreview'])} />
               </Row>
             </>
           )}

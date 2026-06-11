@@ -6,6 +6,35 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Stream Studio v5 — on-air guests, meeting scenes, hard cost guardrails (2026-06-11):**
+  - **Guests on the program:** invite up to 4 guests with one link (People panel → "Invite
+    guests on air"). Guests join from any device with cam + mic (+ optional screen share on
+    desktop), talk to the host in real time over a host-centric WebRTC mesh signaled through
+    the event room, and are mixed live into the program canvas + a new WebAudio program
+    mixer — so viewers and recordings get everyone, on the existing near-zero-cost R2 rail.
+    Multiple participants can share screens AT THE SAME TIME (every share is its own tile).
+  - **Three new meeting scenes** with live layout control: **Grid** (equal tiles, centered last
+    row), **Spotlight** (featured tile + right-aligned strip), **Sidebar** (content stage +
+    people column), each with name-tag chips, a "featured tile" picker, hotkeys 1–6.
+  - **Tab-close guardrail:** closing the studio tab while on air now ENDS the stream
+    immediately via a `pagehide` beacon (`POST /api/events/:id/exit`) — viewers see a clean
+    end, storage/egress stop, and the event is restartable with the new "Go live again"
+    button. Network drops keep the gentler pause → 2-minute auto-end.
+  - **Account attach from inside Stream Studio:** a real "Sign in" button (Settings →
+    Account) round-trips through the main app (`/?next=/live.html#/settings`) and lands
+    back in the studio with sync on — no more "open the main app and find your way back".
+  - **Self-view mirror control** (Auto / On / Off) — the program out is never mirrored.
+  - **108 reactions** (was 72): 36 new curated emoji, mirrored into the room's allowlist.
+  - **Admin → Studios panel:** grant/revoke per-studio standalone access
+    (Stream / Comic / Chat) by email, with optional branded invite email (inviter name +
+    personal note). The main app now ENFORCES those grants: confined accounts see only
+    their products, and stream-only accounts land directly on /live.html.
+  - **Per-studio invite emails:** the `studio-invite` template now carries feature cards
+    per studio (Stream / Comic / Chat), the right deep link, and the "more studios coming
+    soon" tease — and the email worker finally auto-deploys
+    (`.github/workflows/deploy-email-worker.yml`) so template changes actually ship.
+  - **Mobile fix:** `live.html` now sets `interactive-widget=resizes-content`, keeping the
+    chat composer above the phone keyboard (matches the main app).
 - **Enterprise Foundations audit + plan + Cloudflare architecture (2026-06-07, docs only):**
   ran a code-level audit of all 10 cross-cutting concerns (session/identity, multi-device
   sync, concurrency, model/source reliability, testing, design system, integrations,

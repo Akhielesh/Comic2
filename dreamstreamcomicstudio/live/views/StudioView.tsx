@@ -2,10 +2,12 @@
 // segmented uploads, with scenes, transport, hotkeys, a four-tab right rail
 // (chat / people / activity / health) and a phone broadcaster mode.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { getEvent, openRoomSocket, uploadSegment, type RoomSocket, type SocketStatus } from '../api';
+import { getEvent, openRoomSocket, sendHostExitBeacon, uploadSegment, type RoomSocket, type SocketStatus } from '../api';
 import { IS_LOCAL_DEV, SEGMENT_MS, presetById, type QualityPreset } from '../config';
 import { addMyRecording, findMyEvent, updateMyEvent } from '../events';
 import { pushEventToCloud } from '../sync';
+import { ProgramAudioMixer } from '../studio/audioMixer';
+import { HostPeers, type GuestLink } from '../studio/rtc';
 import {
   LocalRecorder,
   SegmentedRecorder,
@@ -22,10 +24,10 @@ import {
 } from '../media';
 import { Ema, fmtBps, fmtBytes, fmtDuration } from '../metrics';
 import type { Nav } from '../nav';
-import { viewerUrl } from '../nav';
+import { guestUrl, viewerUrl } from '../nav';
 import { loadPrefs, playChime, savePrefs } from '../prefs';
 import type { ChatMsg, LobbyEntry, LogEntry, PersonEntry, StreamStatus } from '../protocol';
-import { ProgramCompositor, SCENES, fitCanvasToSource, type SceneId } from '../studio/compositor';
+import { MULTI_SCENES, ProgramCompositor, SCENES, fitCanvasToSource, type ProgramTile, type SceneId } from '../studio/compositor';
 import { uploadRecording } from '../api';
 import { ActivityRail, ChatRail, HealthRail, PeopleRail } from '../components/rails';
 import { SceneSketch } from '../components/scenes';
@@ -64,6 +66,20 @@ function VideoSink({ stream, className, mirror }: { stream: MediaStream | null; 
   );
 }
 
+/** Hidden monitor so the HOST hears a guest (the program mix is previewed muted). */
+function AudioSink({ stream }: { stream: MediaStream }) {
+  const ref = useRef<HTMLAudioElement | null>(null);
+  useEffect(() => {
+    const a = ref.current;
+    if (!a) return;
+    if (a.srcObject !== stream) {
+      a.srcObject = stream;
+      a.play().catch(() => undefined);
+    }
+  }, [stream]);
+  return <audio ref={ref} autoPlay style={{ display: 'none' }} />;
+}
+
 export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; hostKey: string; nav: Nav; push: PushToast }) {
   const prefs = useMemo(loadPrefs, []);
   const hostName = prefs.hostName.trim() || 'Host';
@@ -72,6 +88,10 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   const camRef = useRef<MediaStream | null>(null);          // current camera (video; first one also carries audio)
   const audioTrackRef = useRef<MediaStreamTrack | null>(null);
   const compRef = useRef<ProgramCompositor | null>(null);
+  const mixerRef = useRef<ProgramAudioMixer | null>(null);
+  const hostPeersRef = useRef<HostPeers | null>(null);
+  const guestNamesRef = useRef(new Map<string, string>());
+  const tileVideosRef = useRef(new Map<string, HTMLVideoElement>());
   const socketRef = useRef<RoomSocket | null>(null);
   const segRecRef = useRef<SegmentedRecorder | null>(null);
   const localRecRef = useRef<LocalRecorder | null>(null);
@@ -119,6 +139,9 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   const [maxViewers, setMaxViewers] = useState(100);
   const [pipPos, setPipPos] = useState(prefs.pipPos);
   const [pipSize, setPipSize] = useState(prefs.pipSize);
+  const [guests, setGuests] = useState<GuestLink[]>([]);
+  const [guestKey, setGuestKey] = useState<string | null>(null);
+  const [focusId, setFocusId] = useState<string | null>(null);
   const [floats, spawnFloat] = useFloatingEmoji();
   const [, setClock] = useState(0); // 1 Hz re-render for timers
 
@@ -178,9 +201,73 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
         };
         comp.start();
         compRef.current = comp;
-        setMixed(comp.buildOutput(audioTrackRef.current));
+
+        // Program audio = ONE stable mixed track (host mic + guests), so the
+        // encoder never restarts when someone joins. Falls back to the raw
+        // mic track if WebAudio is unavailable.
+        let programAudio: MediaStreamTrack | null = audioTrackRef.current;
+        try {
+          const mixer = new ProgramAudioMixer();
+          mixer.addSource('host', cam);
+          mixerRef.current = mixer;
+          programAudio = mixer.track;
+        } catch {
+          mixerRef.current = null;
+        }
+        setMixed(comp.buildOutput(programAudio));
         setZoomCap(zoomCapability(cam.getVideoTracks()[0]));
         setDevices(await listVideoInputs());
+
+        // On-air guests: host-centric WebRTC mesh, signaled through the room.
+        const peers = new HostPeers((sid, d) => socketRef.current?.send({ t: 'rtc', to: sid, d }));
+        peers.setReturnFeed(cam.getVideoTracks()[0] ?? null, audioTrackRef.current);
+        const syncGuests = () => {
+          const list = peers.guests();
+          setGuests(list);
+          const mixer = mixerRef.current;
+          const seen = new Set<string>();
+          const tiles: ProgramTile[] = [];
+          const videoFor = (stream: MediaStream): HTMLVideoElement => {
+            let v = tileVideosRef.current.get(stream.id);
+            if (!v) {
+              v = document.createElement('video');
+              v.muted = true; // tile video only — guest AUDIO flows through the mixer
+              v.playsInline = true;
+              v.srcObject = stream;
+              v.play().catch(() => undefined);
+              tileVideosRef.current.set(stream.id, v);
+            }
+            return v;
+          };
+          for (const g of list) {
+            if (g.cam) {
+              seen.add(g.cam.id);
+              tiles.push({ id: `${g.sid}-cam`, label: g.name, kind: 'cam', video: videoFor(g.cam) });
+              if (mixer) mixer.addSource(g.sid, g.cam);
+            } else if (mixer) {
+              mixer.removeSource(g.sid);
+            }
+            if (g.screen) {
+              seen.add(g.screen.id);
+              tiles.push({ id: `${g.sid}-screen`, label: `${g.name}'s screen`, kind: 'screen', video: videoFor(g.screen) });
+            }
+          }
+          for (const [id, v] of tileVideosRef.current) {
+            if (!seen.has(id)) {
+              v.srcObject = null;
+              tileVideosRef.current.delete(id);
+            }
+          }
+          if (mixer) {
+            const liveSids = new Set(list.map((g) => g.sid));
+            for (const g of guestNamesRef.current.keys()) {
+              if (!liveSids.has(g) && mixer.has(g)) mixer.removeSource(g);
+            }
+          }
+          comp.setRemoteTiles(tiles);
+        };
+        peers.onChange = syncGuests;
+        hostPeersRef.current = peers;
       } catch (e) {
         setErr(e instanceof Error ? e.message : 'Camera unavailable or live worker unreachable.');
         return;
@@ -197,6 +284,28 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
               setPinned(msg.meta.pinned);
               setStartedAt(msg.meta.startedAt);
               if (msg.log) setLog(msg.log);
+              // Mint (or fetch) the guest invite key for this event.
+              if (msg.you.role === 'host') socketRef.current?.send({ t: 'guestkey' });
+              break;
+            case 'guestkey':
+              setGuestKey(msg.key);
+              break;
+            case 'guest':
+              guestNamesRef.current.set(msg.sid, msg.name);
+              if (!msg.on) {
+                hostPeersRef.current?.close(msg.sid);
+                push(`${msg.name} left the guest seats`, { icon: 'users' });
+              } else {
+                push(`${msg.name} joined as a guest — try Grid (3) or Spotlight (4)`, { icon: 'users' });
+                if (prefs.alertSound === 'soft') playChime();
+              }
+              break;
+            case 'rtc':
+              void hostPeersRef.current?.onSignal(
+                msg.from,
+                guestNamesRef.current.get(msg.from) ?? 'Guest',
+                msg.d,
+              );
               break;
             case 'chat':
               setChat((c) => [...c.slice(-199), msg.m]);
@@ -267,6 +376,10 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
       window.clearInterval(healthTimer);
       segRecRef.current?.stop();
       void localRecRef.current?.stop();
+      hostPeersRef.current?.closeAll();
+      mixerRef.current?.close();
+      for (const v of tileVideosRef.current.values()) v.srcObject = null;
+      tileVideosRef.current.clear();
       socketRef.current?.close();
       compRef.current?.stop();
       camRef.current?.getTracks().forEach((t) => t.stop());
@@ -296,8 +409,11 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     savePrefs({ ...loadPrefs(), pipPos: pos, pipSize: size });
   };
 
-  // Closing the tab while live would strand viewers — warn first. The room
-  // also self-protects: it pauses when the host vanishes and auto-ends later.
+  // Guardrail: closing the tab while on air ENDS the stream (cost + viewer
+  // safety). beforeunload warns first; if the host proceeds, the pagehide
+  // beacon tells the room to end now — restartable from the same studio link.
+  // Silent drops (crash, network) skip pagehide; the room's 2-minute paused
+  // grace still backstops those.
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
       if (statusRef.current === 'live') {
@@ -305,9 +421,18 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
         e.returnValue = '';
       }
     };
+    const onPageHide = (e: PageTransitionEvent) => {
+      if (!e.persisted && (statusRef.current === 'live' || statusRef.current === 'paused')) {
+        sendHostExitBeacon(eventId, hostKey);
+      }
+    };
     window.addEventListener('beforeunload', onBeforeUnload);
-    return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, []);
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload);
+      window.removeEventListener('pagehide', onPageHide);
+    };
+  }, [eventId, hostKey]);
 
   // ------------------------------------------------------------- streaming
   const startSegments = () => {
@@ -336,6 +461,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   };
 
   const goLive = () => {
+    mixerRef.current?.unlock(); // browsers may gesture-gate AudioContexts
     socketRef.current?.send({ t: 'state', status: 'live' });
     if (prefs.slowSec > 0) socketRef.current?.send({ t: 'config', slow: prefs.slowSec });
     setStatus('live');
@@ -423,7 +549,9 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
         return;
       }
     }
-    if (id !== 'screen' && comp.screenActive) comp.stopScreenShare();
+    // The host's own share survives cuts BETWEEN layouts that can show it;
+    // cutting to a cam-only scene stops it (same behavior as before).
+    if (id !== 'screen' && !MULTI_SCENES.has(id) && comp.screenActive) comp.stopScreenShare();
     comp.setScene(id === 'brb' ? 'solo' : id);
     setScene(id);
     if (id === 'brb') {
@@ -492,6 +620,8 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     camRef.current = fresh;
     compRef.current?.setCamera(fresh);
     fresh.getVideoTracks().forEach((t) => (t.enabled = camOn));
+    // Guests' return feed follows the camera swap in place (no renegotiation).
+    void hostPeersRef.current?.replaceCamTrack(fresh.getVideoTracks()[0] ?? null);
     const cap = zoomCapability(fresh.getVideoTracks()[0]);
     setZoomCap(cap);
     setZoomVal(cap?.value ?? 1);
@@ -560,7 +690,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
         setChatOpen(true);
         setRailTab('chat');
         setTimeout(() => composerRef.current?.focus(), 50);
-      } else if (k >= '1' && k <= '3') {
+      } else if (k >= '1' && k <= '6') {
         const sc = SCENES[Number(k) - 1];
         if (sc) void cutScene(sc.id);
       }
@@ -574,6 +704,20 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   const sceneObj = SCENES.find((s) => s.id === scene) || SCENES[0];
   const latencyEst = upElapsedEma.current.value != null ? segMs / 1000 + upElapsedEma.current.value / 1000 + 1 : null;
   const healthy = stats.failures === 0 && sockStatus === 'connected';
+  // Self-view mirroring: explicit preference wins; auto = front cam in Solo
+  // (matching camera apps). The outgoing program is NEVER mirrored.
+  const mirrorSelf =
+    prefs.mirrorPreview === 'on' ? true
+    : prefs.mirrorPreview === 'off' ? false
+    : facing === 'user' && scene === 'solo';
+  // Hidden monitors so the host hears guests (the program preview is muted).
+  const guestMonitors = guests.filter((g) => g.cam).map((g) => <AudioSink key={g.sid} stream={g.cam!} />);
+  const focusOptions = MULTI_SCENES.has(scene) ? (compRef.current?.allTiles() ?? []) : [];
+  const copyGuestInvite = () => {
+    if (!guestKey) return;
+    navigator.clipboard?.writeText(guestUrl(eventId, guestKey)).catch(() => undefined);
+    push('Guest invite link copied — up to 4 guests can join on air', { icon: 'users' });
+  };
 
   const metricRows: [string, string][] = useMemo(
     () => [
@@ -615,7 +759,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     status, viewers, liveFor, chat, floats, mixed, micOn, camOn, scene,
     zoom: { min: zoomMin, max: zoomMax, step: zoomStep, value: zoomVal },
     hasZoom: hasNativeZoom,
-    mirror: facing === 'user' && scene === 'solo',
+    mirror: mirrorSelf,
     lensCount: devices.length,
     toggleMic, toggleCam, flip: () => void flipCamera(), lens: () => void cycleLens(), applyZoom: (v) => void applyZoom(v),
     cutScene: (s) => void cutScene(s), sendChat, sendEmoji,
@@ -628,6 +772,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     return (
       <div className="mstudio-fill">
         <MobileStudio ctl={mobileCtl} />
+        {guestMonitors}
       </div>
     );
   }
@@ -675,10 +820,12 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
             push('Viewer link copied', { icon: 'check' });
           }}
         />
+        <IconBtn name="users" label="Copy guest invite link" onClick={copyGuestInvite} />
         <IconBtn name="sliders" label="Customize" onClick={() => nav.settings()} />
         {status === 'idle' && <Btn variant="solid" icon="broadcast" onClick={goLive} disabled={!mime}>Go live</Btn>}
         {(isLive || status === 'paused') && <Btn variant="danger" icon="stop" onClick={() => void endStream()}>End stream</Btn>}
-        {status === 'ended' && <Btn variant="solid" icon="chart" onClick={() => nav.summary(eventId, hostKey)}>View recap</Btn>}
+        {status === 'ended' && <Btn variant="solid" icon="broadcast" onClick={goLive} disabled={!mime}>Go live again</Btn>}
+        {status === 'ended' && <Btn variant="subtle" icon="chart" onClick={() => nav.summary(eventId, hostKey)}>View recap</Btn>}
       </div>
 
       {device === 'mobile' ? (
@@ -701,7 +848,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
             {/* program preview */}
             <div className="preview-wrap">
               <div className="preview">
-                <VideoSink stream={mixed} className="program-video" mirror={facing === 'user' && scene === 'solo'} />
+                <VideoSink stream={mixed} className="program-video" mirror={mirrorSelf} />
                 {status === 'paused' && (
                   <div className="preview-slate">
                     <div className="brb-orb"><span /></div>
@@ -795,6 +942,26 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
                   </div>
                 )}
                 <button className="cam-flip" onClick={() => void flipCamera()} title="Flip camera"><Icon name="flip" size={15} />Flip</button>
+                {MULTI_SCENES.has(scene) && scene !== 'grid' && focusOptions.length > 1 && (
+                  <label className="cam-ctl-row">
+                    <Icon name="star" size={14} className="faint" />
+                    <select
+                      className="cam-select"
+                      value={focusId ?? ''}
+                      aria-label="Featured tile"
+                      onChange={(e) => {
+                        const id = e.target.value || null;
+                        setFocusId(id);
+                        compRef.current?.setFocus(id);
+                      }}
+                    >
+                      <option value="">Auto (screen first)</option>
+                      {focusOptions.map((t) => (
+                        <option key={t.id} value={t.id}>{t.label}{t.kind === 'screen' ? ' · screen' : ''}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
                 {scene === 'screen' && (
                   <>
                     <Segmented
@@ -905,6 +1072,8 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
                   hostName={hostName}
                   people={people}
                   lobby={lobby}
+                  guests={guests}
+                  onCopyGuestInvite={guestKey ? copyGuestInvite : undefined}
                   onAdmit={(sid) => socketRef.current?.send({ t: 'admit', sid })}
                   onDeny={(sid) => socketRef.current?.send({ t: 'deny', sid })}
                   onKick={(sid) => socketRef.current?.send({ t: 'kick', sid })}
@@ -936,6 +1105,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
           )}
         </div>
       )}
+      {guestMonitors}
     </div>
   );
 }

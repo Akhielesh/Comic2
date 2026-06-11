@@ -21,7 +21,7 @@
 
 import { EMOJI_LIBRARY, STRIKE_LIMIT, TIMEOUT_MS, checkSpam, hasProfanity, type SpamState } from './moderation';
 
-export type Role = 'host' | 'mod' | 'viewer' | 'pending';
+export type Role = 'host' | 'mod' | 'guest' | 'viewer' | 'pending';
 export type StreamStatus = 'idle' | 'live' | 'paused' | 'ended';
 
 export interface EventMeta {
@@ -125,6 +125,11 @@ export const REPLAY_WINDOW_MS = 24 * 60 * 60_000;
 export const RECORDING_RETENTION_MS = 7 * 24 * 60 * 60_000;
 /** Host vanished (tab closed / crashed) → the stream auto-ends after this. */
 export const HOST_GONE_GRACE_MS = 2 * 60_000;
+/** On-air guest seats (WebRTC mesh to the host — small by design). */
+export const MAX_GUESTS = 4;
+/** WebRTC offers/answers run a few KB — only `rtc` frames may be this large. */
+const RTC_FRAME_MAX = 64 * 1024;
+const FRAME_MAX = 4096;
 const ALLOWED_EMOJI = new Set<string>(EMOJI_LIBRARY);
 const MILESTONES = [10, 25, 50, 100, 250, 500, 1000];
 
@@ -206,6 +211,8 @@ export class EventRoom {
         return this.handleRsvp(req);
       case '/auth':
         return this.handleAuth(req);
+      case '/host-exit':
+        return this.handleHostExit(req);
       case '/rec/register':
         return this.handleRecRegister(req);
       case '/rec/list':
@@ -280,6 +287,29 @@ export class EventRoom {
   private async handleAuth(req: Request): Promise<Response> {
     const hostKey = await this.state.storage.get<string>('hostKey');
     if (!hostKey || req.headers.get('x-host-key') !== hostKey) return json({ error: 'forbidden' }, 403);
+    return new Response(null, { status: 204 });
+  }
+
+  /**
+   * Cost guardrail: the host deliberately closed the studio tab (pagehide
+   * beacon). End the program NOW instead of waiting out the paused-grace —
+   * uploads have stopped, viewers get a clean "ended", storage stops accruing.
+   * The event stays restartable: going live again simply clears `endedAt`.
+   */
+  private async handleHostExit(req: Request): Promise<Response> {
+    const hostKey = await this.state.storage.get<string>('hostKey');
+    if (!hostKey || req.headers.get('x-host-key') !== hostKey) return json({ error: 'forbidden' }, 403);
+    const meta = await this.getMeta();
+    if (!meta) return json({ error: 'not found' }, 404);
+    if (meta.status === 'live' || meta.status === 'paused') {
+      meta.status = 'ended';
+      meta.endedAt = Date.now();
+      await this.putMeta(meta);
+      await this.state.storage.delete('hostGoneAt');
+      this.broadcast({ t: 'state', status: 'ended', startedAt: meta.startedAt, endedAt: meta.endedAt });
+      await this.addLog('live', 'END', 'Host closed the studio — stream ended. Reopen your studio link to go live again.');
+      await this.state.storage.setAlarm(meta.endedAt + REPLAY_WINDOW_MS);
+    }
     return new Response(null, { status: 204 });
   }
 
@@ -472,21 +502,33 @@ export class EventRoom {
 
     const name = (url.searchParams.get('name') || 'guest').slice(0, 24);
     const key = url.searchParams.get('k');
+    const guestKeyParam = url.searchParams.get('g');
     const token = url.searchParams.get('token');
     const hostKey = await this.state.storage.get<string>('hostKey');
+    const guestKey = await this.state.storage.get<string>('guestKey');
     const admitted = (await this.state.storage.get<string[]>('admitted')) ?? [];
 
     let role: Role;
     if (key && key === hostKey) role = 'host';
+    else if (guestKeyParam && guestKey && guestKeyParam === guestKey) role = 'guest';
     else if (meta.access === 'open' || (token && admitted.includes(token))) role = 'viewer';
     else role = 'pending';
 
     const pair = new WebSocketPair();
     const server = pair[1];
 
-    // Hard capacity gate — the room never exceeds the host's cap.
+    // Hard capacity gates — viewers never exceed the host's cap, and the
+    // guest mesh stays small enough for a browser to mix.
     const cap = meta.maxViewers || DEFAULT_VIEWER_CAP;
-    if (role !== 'host' && this.viewerCount() >= cap) {
+    if (role === 'guest' && this.guestCount() >= MAX_GUESTS) {
+      server.accept();
+      try {
+        server.send(JSON.stringify({ t: 'full', max: MAX_GUESTS }));
+        server.close(4003, 'full');
+      } catch { /* socket on its way out */ }
+      return new Response(null, { status: 101, webSocket: pair[0] });
+    }
+    if (role !== 'host' && role !== 'guest' && this.viewerCount() >= cap) {
       server.accept();
       try {
         server.send(JSON.stringify({ t: 'full', max: cap }));
@@ -515,18 +557,24 @@ export class EventRoom {
       await this.trackViewerJoin(attach);
       await this.broadcastViewers();
       this.peopleSync();
+      if (role === 'guest') {
+        this.broadcast({ t: 'guest', sid: attach.sid, name: attach.name, on: true }, (a) => a.role === 'host' || a.role === 'mod');
+        await this.addLog('join', 'GUEST', `“${attach.name}” joined as an on-air guest`);
+      }
     }
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
   async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
-    if (typeof raw !== 'string' || raw.length > 4096) return;
+    if (typeof raw !== 'string' || raw.length > RTC_FRAME_MAX) return;
     let msg: Record<string, unknown>;
     try {
       msg = JSON.parse(raw);
     } catch {
       return;
     }
+    // Only WebRTC signaling (SDP bodies) may use the large frame budget.
+    if (msg.t !== 'rtc' && raw.length > FRAME_MAX) return;
     const me = ws.deserializeAttachment() as Attach | null;
     if (!me) return;
 
@@ -535,6 +583,10 @@ export class EventRoom {
         return this.onChat(ws, me, String(msg.text ?? ''));
       case 'emoji':
         return this.onEmoji(me, String(msg.e ?? ''));
+      case 'rtc':
+        return this.onRtc(me, msg);
+      case 'guestkey':
+        return this.onGuestKey(ws, me, Boolean(msg.rotate));
       case 'state':
         return this.onState(me, String(msg.status ?? ''));
       case 'config':
@@ -560,6 +612,11 @@ export class EventRoom {
     await this.broadcastViewers();
     if (me?.role === 'pending') this.lobbySync();
     else this.peopleSync();
+
+    if (me?.role === 'guest') {
+      this.broadcast({ t: 'guest', sid: me.sid, name: me.name, on: false }, (a) => a.role === 'host' || a.role === 'mod');
+      await this.addLog('join', 'GUEST', `“${me.name}” left the on-air guests`);
+    }
 
     // Guardrail: the host's tab closed / crashed while on the air. Pause the
     // program immediately (viewers see the BRB slate, uploads have stopped
@@ -794,6 +851,42 @@ export class EventRoom {
     }
   }
 
+  /**
+   * WebRTC signaling relay for on-air guests. The mesh is host-centric:
+   * guests only ever talk to the host, the host addresses one guest at a
+   * time — the room never inspects SDP, it just routes envelopes.
+   */
+  private onRtc(me: Attach, msg: Record<string, unknown>): void {
+    const d = msg.d;
+    if (d == null || typeof d !== 'object') return;
+    if (me.role === 'guest') {
+      this.broadcast({ t: 'rtc', from: me.sid, d }, (a) => a.role === 'host');
+      return;
+    }
+    if (me.role !== 'host') return;
+    const to = String(msg.to ?? '');
+    if (!to) return;
+    for (const ws of this.state.getWebSockets()) {
+      const a = ws.deserializeAttachment() as Attach | null;
+      if (a?.sid === to && a.role === 'guest') {
+        this.send(ws, { t: 'rtc', from: me.sid, d });
+        return;
+      }
+    }
+  }
+
+  /** Host fetches (or rotates) the guest invite key — the `g` IS the seat pass. */
+  private async onGuestKey(ws: WebSocket, me: Attach, rotate: boolean): Promise<void> {
+    if (me.role !== 'host') return;
+    let key = await this.state.storage.get<string>('guestKey');
+    if (!key || rotate) {
+      key = crypto.randomUUID();
+      await this.state.storage.put('guestKey', key);
+      if (rotate) await this.addLog('mod', 'MOD', 'Guest invite link rotated — old links no longer work');
+    }
+    this.send(ws, { t: 'guestkey', key });
+  }
+
   private async onPin(me: Attach, text: string | null): Promise<void> {
     if (me.role !== 'host' && me.role !== 'mod') return;
     const meta = await this.getMeta();
@@ -836,7 +929,7 @@ export class EventRoom {
 
   /** Track unique viewers + peak, and announce milestone crossings. */
   private async trackViewerJoin(a: Attach): Promise<void> {
-    if (a.role === 'host') return;
+    if (a.role === 'host' || a.role === 'guest') return; // crew aren't audience
     const [stats, seen] = await Promise.all([
       this.getStats(),
       this.state.storage.get<string[]>('seenNames').then((s) => s ?? []),
@@ -873,7 +966,16 @@ export class EventRoom {
     let n = 0;
     for (const ws of this.state.getWebSockets()) {
       const a = ws.deserializeAttachment() as Attach | null;
-      if (a && a.role !== 'pending' && a.role !== 'host') n++;
+      if (a && a.role !== 'pending' && a.role !== 'host' && a.role !== 'guest') n++;
+    }
+    return n;
+  }
+
+  private guestCount(): number {
+    let n = 0;
+    for (const ws of this.state.getWebSockets()) {
+      const a = ws.deserializeAttachment() as Attach | null;
+      if (a?.role === 'guest') n++;
     }
     return n;
   }

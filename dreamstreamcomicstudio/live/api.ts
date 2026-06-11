@@ -68,6 +68,22 @@ export async function rsvpEvent(id: string, name: string): Promise<{ ok: boolean
 export const segmentUrl = (id: string, seq: number): string =>
   `${WORKER_BASE}/api/events/${id}/segments/${seq}`;
 
+/**
+ * Cost guardrail: fired from `pagehide` when the host's tab closes mid-stream.
+ * `sendBeacon` survives tab teardown where fetch may not; the room ends the
+ * stream immediately (still restartable from the studio link).
+ */
+export function sendHostExitBeacon(id: string, hostKey: string): void {
+  const url = `${WORKER_BASE}/api/events/${id}/exit?k=${encodeURIComponent(hostKey)}`;
+  try {
+    if (!navigator.sendBeacon?.(url)) {
+      void fetch(url, { method: 'POST', keepalive: true }).catch(() => undefined);
+    }
+  } catch {
+    /* the room's paused-grace auto-end still backstops this */
+  }
+}
+
 /* ------------------------- server-side recordings ------------------------- */
 /* Multi-GB masters go up as R2 multipart parts so they fit Worker limits.    */
 
@@ -192,7 +208,7 @@ export interface RoomSocket {
  */
 export function openRoomSocket(
   id: string,
-  params: { name: string; k?: string; token?: string },
+  params: { name: string; k?: string; token?: string; g?: string },
   onMsg: (m: ServerMsg) => void,
   onGone: (reason: GoneReason) => void,
   onStatus?: (s: SocketStatus) => void,
@@ -205,6 +221,7 @@ export function openRoomSocket(
     const qs = new URLSearchParams({ name: params.name });
     if (params.k) qs.set('k', params.k);
     if (params.token) qs.set('token', params.token);
+    if (params.g) qs.set('g', params.g);
     const wsBase = WORKER_BASE.replace(/^http/, 'ws');
     ws = new WebSocket(`${wsBase}/api/events/${id}/ws?${qs}`);
 
