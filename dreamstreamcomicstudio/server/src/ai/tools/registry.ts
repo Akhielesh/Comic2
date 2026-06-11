@@ -30,6 +30,7 @@ import { VIDEO_TOOLS } from './videoRender.js';
 import { LIVE_TEMPLATE_TOOLS } from './liveTemplateTool.js';
 import { MARKET_WIDGET_TOOLS } from './marketWidgets.js';
 import { MACRO_WIDGET_TOOLS } from './macroData.js';
+import { MARKET_INTEL_TOOLS } from './marketIntel.js';
 import { TRAVEL_WIDGET_TOOLS } from './travelWidgets.js';
 import { PRODUCTIVITY_TOOLS } from './productivity.js';
 import { REFRESHABLE_TOOLS, type ChatArtifact } from '../../../../apiTypes.js';
@@ -996,6 +997,8 @@ const FREE_API_TOOLS: ChatTool[] = [
   ...MARKET_WIDGET_TOOLS,
   // Macro & calendar widgets (tiles, econ/earnings calendars, debt clock, CB watch).
   ...MACRO_WIDGET_TOOLS,
+  // Keyless market intelligence (predictions, funding, stablecoins, COT).
+  ...MARKET_INTEL_TOOLS,
   // Travel widgets (boarding pass, world clocks, packing list, trip countdown).
   ...TRAVEL_WIDGET_TOOLS,
   // Productivity widgets (/goal, /code-review, what-changed) + GitHub PR fetcher.

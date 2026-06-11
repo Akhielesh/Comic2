@@ -136,9 +136,8 @@ is covered by Finnhub in §3).
 - **Honest take:** lowest priority — the model keeps this card useful from news.
 
 ### E. Positioning & sentiment extras
-- **COT positioning:** CFTC publishes free weekly CSVs
-  (cftc.gov/MarketReports/CommitmentsofTraders) — purely an engineering task,
-  no signup. Tell me when you want it built.
+- **COT positioning: ✅ BUILT** — `get_cot_positioning` reads the CFTC Socrata
+  API (keyless, weekly). Nothing for you to do.
 - **Put/call ratio:** CBOE publishes free delayed stats pages/CSVs.
 - **AAII sentiment:** weekly, members-only — usually scraped; TOS-check it.
 - **WSB/social velocity:** Reddit API (free OAuth app, 100 q/min) or
@@ -146,16 +145,18 @@ is covered by Finnhub in §3).
   an OAuth app + TOS exposure?
 
 ### F. Crypto depth
-- **DefiLlama — free, keyless, excellent:** TVL, stablecoin supplies/pegs,
-  chain flows. *No signup; just tell me when to build the widgets.*
-- **Funding rates:** Binance/Bybit public endpoints, free keyless.
+- **Stablecoins (DefiLlama): ✅ BUILT** — `get_stablecoins` (supplies + peg
+  deviations, depeg flags). Keyless.
+- **Funding rates: ✅ BUILT** — `get_funding_rates` (Binance USD-M public).
+  Keyless.
 - **BTC ETF flows:** Farside Investors (scrape-only) or SoSoValue. TOS-check.
 - **Coinglass** ($) if you want aggregated funding/liquidations in one call.
 
 ### G. Prediction markets
-- **Polymarket:** free public Gamma API (`gamma-api.polymarket.com`) — keyless.
-- **Kalshi:** free API with an account (US-regulated).
-- *No blocker — engineering task when you want the widget.*
+- **Polymarket: ✅ BUILT** — `get_predictions` (Gamma API, keyless): top
+  markets or a topic search, implied probabilities + volume.
+- **Kalshi:** free API with an account (US-regulated) — still open if you want
+  US-regulated markets too.
 
 ### H. Flights & travel (beyond the basic status now wired)
 - **Live aircraft positions** (the moving-plane map): OpenSky Network (free,
@@ -215,6 +216,8 @@ is covered by Finnhub in §3).
 3. Test §4-B econ-calendar candidates with curl; pick whichever free tier
    actually returns actual/forecast/previous.
 4. Answer the flights question (§4-H): lookups/month → pick provider tier.
-5. Tell me which "no-signup, just build it" items to schedule: CFTC COT,
-   DefiLlama crypto, Polymarket, funding rates, Gmail reservation parsing.
+5. ~~Tell me which "no-signup, just build it" items to schedule~~ — **done:**
+   CFTC COT, DefiLlama stablecoins, Polymarket and funding rates are all built
+   and live (keyless). Still open from this bucket: Gmail reservation parsing
+   (your privacy call) and Windy webcams.
 6. Decide Redis + notifications (§6) when you want server-side monitors.

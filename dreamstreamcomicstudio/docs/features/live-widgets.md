@@ -44,7 +44,9 @@ export const REFRESHABLE_TOOLS = [
   // key-optional live tools (read-only; live when the env key is set,
   // model-supplied otherwise — see docs/features/data-connectors.md)
   'get_national_debt', 'show_macro_tiles', 'get_econ_calendar',
-  'get_earnings_calendar', 'get_flight_status'
+  'get_earnings_calendar', 'get_flight_status',
+  // keyless market intelligence (render through data_table)
+  'get_predictions', 'get_funding_rates', 'get_stablecoins', 'get_cot_positioning'
 ] as const;
 ```
 

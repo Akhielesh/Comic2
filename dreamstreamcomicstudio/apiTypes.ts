@@ -843,7 +843,11 @@ export const REFRESHABLE_TOOLS = [
   'show_macro_tiles',
   'get_econ_calendar',
   'get_earnings_calendar',
-  'get_flight_status'
+  'get_flight_status',
+  'get_predictions',
+  'get_funding_rates',
+  'get_stablecoins',
+  'get_cot_positioning'
 ] as const;
 
 // --- Guided learning path artifact (structured multi-module course in chat) ---

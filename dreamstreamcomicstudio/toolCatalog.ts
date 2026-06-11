@@ -228,6 +228,34 @@ export const TOOL_CATALOG: ToolMeta[] = [
     dataShape: 'Bank rows: rate, meeting countdown, implied-path mini chart.', docsUrl: 'https://dreamstream.app',
     keywords: ['fed', 'central bank', 'ecb', 'boj', 'rate decision', 'fomc meeting', 'interest rate', 'rate cut', 'rate hike', 'monetary policy', 'when does the fed meet']
   },
+  {
+    name: 'get_predictions', label: 'Prediction markets', category: 'finance', kind: 'api', provider: 'Polymarket (Gamma API)',
+    description: 'Live prediction-market odds — top open markets (or a searched topic) with implied probability, 24h volume and close date.',
+    auth: 'none', rateLimit: 'Fair use (public API)',
+    dataShape: 'Sortable table: market, yes %, volume, close date.', docsUrl: 'https://docs.polymarket.com',
+    keywords: ['odds', 'prediction market', 'polymarket', 'probability of', 'will x happen', 'election odds', 'betting markets', 'implied probability']
+  },
+  {
+    name: 'get_funding_rates', label: 'Perp funding rates', category: 'finance', kind: 'api', provider: 'Binance USD-M (public)',
+    description: 'Live crypto perpetual funding rates — 8h rate, annualized equivalent and mark price; positive = crowded long.',
+    auth: 'none', rateLimit: 'Binance public limits (generous)',
+    dataShape: 'Table: contract, 8h rate, annualized, mark, next funding.', docsUrl: 'https://binance-docs.github.io/apidocs/futures/en/',
+    keywords: ['funding rate', 'funding', 'perp', 'perpetual', 'crowded long', 'crypto positioning', 'overheated', 'basis']
+  },
+  {
+    name: 'get_stablecoins', label: 'Stablecoin board', category: 'finance', kind: 'api', provider: 'DefiLlama',
+    description: 'Live stablecoin supplies, prices and peg deviation in bps for the largest USD stablecoins; depegs over 30 bps flagged.',
+    auth: 'none', rateLimit: 'Fair use (public API)',
+    dataShape: 'Table: coin, supply, price, peg Δ bps, mechanism.', docsUrl: 'https://defillama.com/docs/api',
+    keywords: ['stablecoin', 'usdt', 'usdc', 'dai', 'depeg', 'peg', 'tether', 'stablecoin supply']
+  },
+  {
+    name: 'get_cot_positioning', label: 'COT positioning', category: 'finance', kind: 'api', provider: 'CFTC (Socrata public API)',
+    description: 'Weekly Commitments of Traders speculative positioning — non-commercial net longs and weekly change for major futures (gold, oil, S&P, FX, rates, BTC).',
+    auth: 'none', rateLimit: 'Fair use (public API; weekly data)',
+    dataShape: 'Table: market, net spec, Δ week, long/short, open interest.', docsUrl: 'https://www.cftc.gov/MarketReports/CommitmentsofTraders/index.htm',
+    keywords: ['cot', 'commitments of traders', 'positioning', 'net longs', 'speculators', 'cftc', 'crowded trade', 'futures positioning']
+  },
   // ----------------------------------------------------------------- places -----
   {
     name: 'find_places', label: 'Places / local', category: 'places', kind: 'builtin', provider: 'OpenStreetMap / Foursquare',
