@@ -98,6 +98,40 @@ describe('email templates', () => {
     expect(Object.keys(TEMPLATE_KIND).sort()).toEqual([...EMAIL_TEMPLATE_NAMES].sort());
   });
 
+  it('studio-invite defaults to Stream Studio with the suite subject format', () => {
+    const out = renderEmail('studio-invite', {
+      inviterName: 'Sam',
+      inviteUrl: 'https://dreamstreamstudio.ai/live.html'
+    });
+    expect(out.subject).toBe('Sam invited you to Stream Studio — DreamStream Studio');
+    expect(out.html).toContain('Go live from any device');
+    expect(out.html).toContain('Stay tuned');
+    expect(out.text).toContain('Stay tuned');
+  });
+
+  it('studio-invite renders per-studio feature sets and deep links', () => {
+    const comic = renderEmail('studio-invite', { studio: 'comic_studio', inviterName: 'Sam' });
+    expect(comic.subject).toBe('Sam invited you to Comic Studio — DreamStream Studio');
+    expect(comic.html).toContain('Script to panels');
+    expect(comic.html).not.toContain('Go live from any device');
+    expect(comic.html).toContain('https://dreamstreamstudio.ai'); // suite root deep link
+    expect(comic.html).toContain('Stream Studio and Chat Studio');
+
+    const chat = renderEmail('studio-invite', { studio: 'chat_studio' });
+    expect(chat.subject).toBe("You're invited to Chat Studio");
+    expect(chat.html).toContain('Dashboards that stay live');
+    expect(chat.html).toContain('Stream Studio and Comic Studio');
+
+    // No inviteUrl for stream ⇒ the /live.html deep link is derived from the brand URL.
+    const stream = renderEmail('studio-invite', { studio: 'stream_studio' });
+    expect(stream.subject).toBe("You're invited to Stream Studio");
+    expect(stream.html).toContain('https://dreamstreamstudio.ai/live.html');
+
+    // Unknown ids fall back to the Stream Studio content (existing calls unchanged).
+    const fallback = renderEmail('studio-invite', { studio: 'nope' });
+    expect(fallback.html).toContain('Go live from any device');
+  });
+
   it('renders a beta-invite with inviter, note and link', () => {
     const out = renderEmail('beta-invite', {
       inviterName: 'Sam',

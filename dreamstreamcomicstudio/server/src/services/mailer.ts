@@ -22,7 +22,7 @@ import {
   EMAIL_REQUEST_TIMEOUT_MS,
   EMAIL_WORKER_URL
 } from '../config.js';
-import { TEMPLATE_KIND, type EmailParams, type EmailTemplateName } from '../../../shared/email/index.js';
+import { TEMPLATE_KIND, type EmailParams, type EmailTemplateName, type StudioInviteId } from '../../../shared/email/index.js';
 import { getUsage, isSuppressed, logSend, normalizeEmail, patchLog } from './emailStore.js';
 
 export { APP_PUBLIC_URL };
@@ -213,6 +213,8 @@ export const sendBetaInvite = (
 
 export const sendStudioInvite = (
   email: string,
-  invite: { inviteUrl: string; studioName?: string; inviterName?: string; personalNote?: string; firstName?: string },
+  // `studio` picks the per-studio feature cards + deep link in the shared template;
+  // omitted ⇒ the template's Stream Studio default (existing calls are unchanged).
+  invite: { inviteUrl: string; studio?: StudioInviteId; studioName?: string; inviterName?: string; personalNote?: string; firstName?: string },
   req?: Parameters<typeof meta>[0]
 ) => sendEmail({ to: email, template: 'studio-invite', params: { ...invite }, ...meta(req) });

@@ -265,57 +265,149 @@ const betaInvite: Renderer = (params, brand) => {
 // ── Studio invite: onboarding to a standalone studio ───────────────────────────
 // "User X invited you to DreamStream Studio's Stream Studio" — feature tour,
 // one CTA, and a stay-tuned note for the other studios coming to the account.
+// The caller passes `studio` (a product id) to pick the studio's feature set and
+// deep link; omitted/unknown ids fall back to Stream Studio (the original behavior).
+
+export type StudioInviteId = 'stream_studio' | 'comic_studio' | 'chat_studio';
+
+interface StudioInviteContent {
+  /** Display name (overridable via params.studioName). */
+  name: string;
+  /** "— DreamStream Studio's {descriptor}." in the intro line. */
+  descriptor: string;
+  /** Inbox preheader + the one-line pitch paragraph above the feature cards. */
+  preheader: string;
+  pitch: string;
+  /** Path appended to brand.appUrl when no inviteUrl is supplied. */
+  path: string;
+  /** Heading emoji. */
+  emoji: string;
+  /** Exactly four feature cards: [emoji, title, description]. */
+  features: Array<[string, string, string]>;
+  /** Plain-text bullets mirroring the cards. */
+  textFeatures: string[];
+  /** The other studios named in the stay-tuned footer. */
+  othersComing: string;
+}
+
+const STUDIO_INVITES: Record<StudioInviteId, StudioInviteContent> = {
+  stream_studio: {
+    name: 'Stream Studio',
+    descriptor: 'live streaming studio',
+    preheader: 'Go live from your browser in under a minute — viewers join with just a name.',
+    pitch: 'Go live from your browser in under a minute. Your viewers join with just a name — no account, no installs.',
+    path: '/live.html',
+    emoji: '🎬',
+    features: [
+      ['🎥', 'Go live from any device', 'Camera or screen + cam with seamless scene cuts, native lens switching, and portrait-perfect mobile hosting.'],
+      ['💬', 'A room that runs itself', 'Live chat with a big reaction library, approval lobby, automatic profanity/spam timeouts, and hard viewer caps you control.'],
+      ['📼', 'Never lose a stream', 'Recordings save to your device AND a 7-day cloud store; viewers can replay any stream for 24 hours from the same link.'],
+      ['📊', 'Honest analytics', 'Peak and unique viewers, watch-time curves, network health and a full activity log after every stream.']
+    ],
+    textFeatures: [
+      '- Go live from any device: camera or screen + cam, seamless scene cuts, mobile hosting',
+      '- A room that runs itself: chat, reactions, approval lobby, auto-moderation, viewer caps',
+      '- Never lose a stream: device + 7-day cloud recordings, 24-hour viewer replay',
+      '- Honest analytics: watch curves, network health, full activity log'
+    ],
+    othersComing: 'Comic Studio and Chat Studio'
+  },
+  comic_studio: {
+    name: 'Comic Studio',
+    descriptor: 'AI comic creation studio',
+    preheader: 'Turn a script into a finished, styled comic — right from your browser.',
+    pitch: 'Turn a script into a finished comic in minutes. Write, generate, polish and publish — all from one studio.',
+    path: '/',
+    emoji: '🎨',
+    features: [
+      ['📝', 'Script to panels', 'Paste a script — even a paragraph — and watch it become cinematic, fully-styled panels with characters that stay consistent.'],
+      ['🧠', 'A model library to explore', 'Generate with a deep bench of AI image models and styles; compare looks and pick the one that fits your story.'],
+      ['🎨', 'A real page editor', 'Tune layouts, speech bubbles and covers, then regenerate any panel until the page lands exactly right.'],
+      ['📚', 'Share it anywhere', 'Publish to the public library or share a private link — readers open it on any device, no installs.']
+    ],
+    textFeatures: [
+      '- Script to panels: a paragraph becomes styled, consistent comic panels',
+      '- A model library to explore: a deep bench of AI image models and styles',
+      '- A real page editor: layouts, bubbles, covers — regenerate until it lands',
+      '- Share it anywhere: public library or private link, readable on any device'
+    ],
+    othersComing: 'Stream Studio and Chat Studio'
+  },
+  chat_studio: {
+    name: 'Chat Studio',
+    descriptor: 'AI chat workspace',
+    preheader: 'Chat with 100+ models — rich widgets, dashboards and cloud sync built in.',
+    pitch: 'One workspace for serious AI chat. Ask anything and get rich, interactive answers — not just walls of text.',
+    path: '/',
+    emoji: '💬',
+    features: [
+      ['🧩', 'Rich answers, not walls of text', 'Charts, maps, finance, news and interactive widgets render right inside the conversation.'],
+      ['🧠', 'Any model, your way', 'Chat with Claude, Gemini and 100+ more — use the built-in tier or bring your own key for any provider.'],
+      ['📊', 'Dashboards that stay live', 'Pin your favorite widgets into custom dashboards and watch them update in place.'],
+      ['☁️', 'Synced to your account', 'Conversations, keys and settings follow you across devices with secure cloud sync.']
+    ],
+    textFeatures: [
+      '- Rich answers: charts, maps, finance, news and widgets inside the chat',
+      '- Any model, your way: Claude, Gemini & 100+ more, built-in tier or BYOK',
+      '- Dashboards that stay live: pin widgets and watch them update in place',
+      '- Synced to your account: conversations, keys and settings on every device'
+    ],
+    othersComing: 'Stream Studio and Comic Studio'
+  }
+};
+
+const isStudioInviteId = (value: unknown): value is StudioInviteId =>
+  typeof value === 'string' && Object.prototype.hasOwnProperty.call(STUDIO_INVITES, value);
+
 const studioInvite: Renderer = (params, brand) => {
-  const studio = (params.studioName || 'Stream Studio').trim();
-  const url = params.inviteUrl || brand.appUrl;
+  const content = STUDIO_INVITES[isStudioInviteId(params.studio) ? params.studio : 'stream_studio'];
+  const studio = (params.studioName || content.name).trim();
+  // Deep link per studio: stream lives at /live.html; the suite studios open the app root.
+  const url =
+    params.inviteUrl ||
+    (content.path === '/' ? brand.appUrl : `${brand.appUrl.replace(/\/+$/, '')}${content.path}`);
   const inviter = (params.inviterName || '').trim();
   const intro = inviter
     ? `${escapeHtml(inviter)} has invited you to <strong>${escapeHtml(studio)}</strong> — ${escapeHtml(
         brand.productName
-      )}'s live streaming studio.`
-    : `You've been invited to <strong>${escapeHtml(studio)}</strong> — ${escapeHtml(brand.productName)}'s live streaming studio.`;
+      )}'s ${escapeHtml(content.descriptor)}.`
+    : `You've been invited to <strong>${escapeHtml(studio)}</strong> — ${escapeHtml(brand.productName)}'s ${escapeHtml(content.descriptor)}.`;
   const note = params.personalNote
     ? infoBox(`<em>&ldquo;${escapeHtml(params.personalNote)}&rdquo;</em>${inviter ? ` — ${escapeHtml(inviter)}` : ''}`)
     : '';
   return {
-    subject: inviter ? `${inviter} invited you to ${studio}` : `You're invited to ${studio}`,
-    preheader: 'Go live from your browser in under a minute — viewers join with just a name.',
+    subject: inviter ? `${inviter} invited you to ${studio} — ${brand.productName}` : `You're invited to ${studio}`,
+    preheader: content.preheader,
     content:
-      heading(`You're invited to ${escapeHtml(studio)} 🎬`) +
+      heading(`You're invited to ${escapeHtml(studio)} ${content.emoji}`) +
       paragraph(`${greetName(params)} ${intro}`) +
       note +
-      paragraph('Go live from your browser in under a minute. Your viewers join with just a name — no account, no installs.') +
-      featureCard('🎥', 'Go live from any device', 'Camera or screen + cam with seamless scene cuts, native lens switching, and portrait-perfect mobile hosting.') +
-      featureCard('💬', 'A room that runs itself', 'Live chat with a big reaction library, approval lobby, automatic profanity/spam timeouts, and hard viewer caps you control.') +
-      featureCard('📼', 'Never lose a stream', 'Recordings save to your device AND a 7-day cloud store; viewers can replay any stream for 24 hours from the same link.') +
-      featureCard('📊', 'Honest analytics', 'Peak and unique viewers, watch-time curves, network health and a full activity log after every stream.') +
+      paragraph(escapeHtml(content.pitch)) +
+      content.features.map(([emoji, title, desc]) => featureCard(emoji, title, desc)).join('') +
       button(`Open ${studio}`, url, 'yellow') +
       linkFallback(url) +
       divider() +
       muted(
         `${escapeHtml(studio)} is the first standalone studio on your ${escapeHtml(
           brand.productName
-        )} account — Comic Studio and Chat Studio access are on the way. Stay tuned, you'll be among the first in.`
+        )} account — ${escapeHtml(content.othersComing)} access are on the way. Stay tuned, you'll be among the first in.`
       ),
     text: [
       greetNameText(params),
       '',
       inviter
-        ? `${inviter} has invited you to ${studio} — ${brand.productName}'s live streaming studio.`
-        : `You've been invited to ${studio} — ${brand.productName}'s live streaming studio.`,
+        ? `${inviter} has invited you to ${studio} — ${brand.productName}'s ${content.descriptor}.`
+        : `You've been invited to ${studio} — ${brand.productName}'s ${content.descriptor}.`,
       params.personalNote ? `
 "${params.personalNote}"${inviter ? ` — ${inviter}` : ''}` : '',
       '',
-      'Go live from your browser in under a minute. Viewers join with just a name.',
+      content.pitch,
       '',
-      '- Go live from any device: camera or screen + cam, seamless scene cuts, mobile hosting',
-      '- A room that runs itself: chat, reactions, approval lobby, auto-moderation, viewer caps',
-      '- Never lose a stream: device + 7-day cloud recordings, 24-hour viewer replay',
-      '- Honest analytics: watch curves, network health, full activity log',
+      ...content.textFeatures,
       '',
       `Open ${studio}: ${url}`,
       '',
-      `${studio} is the first standalone studio on your account — Comic Studio and Chat Studio are on the way. Stay tuned.`
+      `${studio} is the first standalone studio on your account — ${content.othersComing} are on the way. Stay tuned.`
     ]
       .filter(Boolean)
       .join('\n')

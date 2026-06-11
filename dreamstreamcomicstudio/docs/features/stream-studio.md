@@ -365,3 +365,25 @@ The guiding fact: on this rail the marginal cost of a viewer is ~zero, so
 | **P2P segment mesh between viewers** | Legit (WebRTC data channels), but it only saves egress — and R2 egress is already $0. Skip. |
 | **Free-tier surfing** | Stream's WebRTC beta is currently unbilled and Realtime includes 1 TB/mo — both usable as overflow/low-latency modes while they last. |
 | **Restream to YouTube unlisted** | $0 escape hatch for very large one-off audiences; costs you branding, data and control. Offer as an output, not the default. |
+
+---
+
+## 10. v5 — on-air guests & cost guardrails (2026-06-11)
+
+- **Guest seats (≤4):** host mints a guest link in the studio (People → Invite guests on
+  air; the `g` key is the seat pass, host can rotate it via the `guestkey` room message).
+  Guests connect over a host-centric WebRTC mesh — signaling rides the room socket as
+  `{t:'rtc'}` envelopes (host=impolite, guest=polite perfect negotiation; STUN only, so
+  symmetric-NAT⇄symmetric-NAT pairs surface a clear "link failed" state). The host mixes
+  guest cams/mics/screens into the program canvas + a WebAudio mixer, so the R2 delivery
+  rail and recordings are unchanged. Guests hear the host's return feed in real time;
+  viewers hear everyone via the program. Multiple simultaneous screen shares are
+  supported — each share is its own tile.
+- **Scenes:** Grid / Spotlight / Sidebar joined Solo / Screen+cam / BRB (hotkeys 1–6),
+  with a featured-tile picker and name-tag chips burned into the program.
+- **Tab-close = end:** `pagehide` beacon → `POST /api/events/:id/exit?k=hostKey` ends the
+  stream instantly (restartable — "Go live again"). Silent drops keep pause → 2-min
+  auto-end; 2 h ingest silence still hard-ends. Guests/viewer caps: guests don't count
+  against the 200-viewer ceiling; guest seats cap at 4.
+- **Account attach:** Settings → Account → Sign in round-trips the main app via
+  `/?next=/live.html#/settings` (App.tsx honors same-origin `next` for 15 minutes).

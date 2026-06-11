@@ -13,4 +13,4 @@ export {
   senderRoleFor,
   isNoReply
 } from './templates.js';
-export type { EmailTemplateName, EmailKind, EmailParams, RenderedEmail, SenderRole } from './templates.js';
+export type { EmailTemplateName, EmailKind, EmailParams, RenderedEmail, SenderRole, StudioInviteId } from './templates.js';

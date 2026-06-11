@@ -21,7 +21,7 @@
 import type { CameraLook } from '../prefs';
 import { LOOK_FILTERS } from '../prefs';
 
-export type SceneId = 'solo' | 'screen' | 'brb';
+export type SceneId = 'solo' | 'screen' | 'brb' | 'grid' | 'spotlight' | 'sidebar';
 
 export interface SceneDef {
   id: SceneId;
@@ -33,8 +33,22 @@ export interface SceneDef {
 export const SCENES: SceneDef[] = [
   { id: 'solo', name: 'Solo', desc: 'You, full frame', hotkey: '1' },
   { id: 'screen', name: 'Screen + cam', desc: 'Share with PiP camera', hotkey: '2' },
-  { id: 'brb', name: 'Be right back', desc: 'Branded slate — uploads pause', hotkey: '3' },
+  { id: 'grid', name: 'Grid', desc: 'You + guests, equal tiles', hotkey: '3' },
+  { id: 'spotlight', name: 'Spotlight', desc: 'One tile big, the rest in a strip', hotkey: '4' },
+  { id: 'sidebar', name: 'Sidebar', desc: 'Content stage + people column', hotkey: '5' },
+  { id: 'brb', name: 'Be right back', desc: 'Branded slate — uploads pause', hotkey: '6' },
 ];
+
+/** Scenes that mix guest tiles (the meeting layouts). */
+export const MULTI_SCENES: ReadonlySet<SceneId> = new Set(['grid', 'spotlight', 'sidebar']);
+
+/** A live source drawn as a tile in the meeting layouts. */
+export interface ProgramTile {
+  id: string;
+  label: string;
+  kind: 'cam' | 'screen';
+  video: HTMLVideoElement;
+}
 
 /** Beyond this aspect mismatch we letterbox instead of cropping. */
 const CROP_TOLERANCE = 1.25;
@@ -76,11 +90,17 @@ export class ProgramCompositor {
   private pipSize: PipSize = 'md';
   private camEnabled = true;
   private hostInitial = '·';
+  private hostLabel = 'You';
   private timer: number | null = null;
   private filterSupported = true;
   private lastCamTime = -1;
   private lastScreenTime = -1;
   private dirty = true; // state changed (scene/look/zoom/cam-off) — force a draw
+  private remoteTiles: ProgramTile[] = [];
+  private focusId: string | null = null;
+  private speaking = new Set<string>();
+  private accent = '#c2603f';
+  private lastMultiSig = -1;
   /** Fires when the user stops a screen share from the browser UI. */
   onScreenEnded: (() => void) | null = null;
 
@@ -198,7 +218,43 @@ export class ProgramCompositor {
 
   setHostInitial(name: string): void {
     this.hostInitial = (name.trim()[0] || '·').toUpperCase();
+    this.hostLabel = name.trim() || 'You';
     this.dirty = true;
+  }
+
+  /** Guest cams/screens for the meeting layouts (grid / spotlight / sidebar). */
+  setRemoteTiles(tiles: ProgramTile[]): void {
+    this.remoteTiles = tiles;
+    this.dirty = true;
+  }
+
+  /** Which tile the Spotlight/Sidebar scenes feature (null = auto). */
+  setFocus(id: string | null): void {
+    if (this.focusId !== id) {
+      this.focusId = id;
+      this.dirty = true;
+    }
+  }
+
+  /** Tiles whose source is talking right now — they get the accent ring. */
+  setSpeaking(ids: Set<string>): void {
+    if (ids.size === this.speaking.size && [...ids].every((i) => this.speaking.has(i))) return;
+    this.speaking = new Set(ids);
+    try {
+      const v = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+      if (v) this.accent = v;
+    } catch {
+      /* keep default */
+    }
+    this.dirty = true;
+  }
+
+  /** Everything currently drawable, host first — also drives the focus picker. */
+  allTiles(): ProgramTile[] {
+    const tiles: ProgramTile[] = [];
+    if (this.camEnabled) tiles.push({ id: 'host-cam', label: this.hostLabel, kind: 'cam', video: this.camVideo });
+    if (this.screenVideo) tiles.push({ id: 'host-screen', label: 'Your screen', kind: 'screen', video: this.screenVideo });
+    return [...tiles, ...this.remoteTiles];
   }
 
   start(): void {
@@ -218,8 +274,24 @@ export class ProgramCompositor {
   // ------------------------------------------------------------------ draw
 
   private draw(): void {
+    const multi = MULTI_SCENES.has(this.scene);
     // Skip identical frames: drawing only when a source advanced keeps CPU
     // (and the encoder, which follows canvas changes) idle between frames.
+    // Meeting layouts sum every tile's clock — guests' 15–30 fps cams must
+    // not make a 60 fps canvas re-encode static pixels.
+    if (multi) {
+      let sig = 0;
+      for (const t of this.allTiles()) sig += t.video.currentTime;
+      if (!this.dirty && sig === this.lastMultiSig) return;
+      this.lastMultiSig = sig;
+      this.dirty = false;
+      const { ctx, width: w, height: h } = this;
+      ctx.filter = 'none';
+      ctx.fillStyle = '#17161b';
+      ctx.fillRect(0, 0, w, h);
+      this.drawMulti();
+      return;
+    }
     const camT = this.camVideo.currentTime;
     const scrT = this.screenVideo?.currentTime ?? -1;
     if (!this.dirty && camT === this.lastCamTime && scrT === this.lastScreenTime) return;
@@ -272,6 +344,143 @@ export class ProgramCompositor {
     } else {
       this.drawCamOff();
     }
+  }
+
+  // ------------------------------------------------- meeting layouts (multi)
+
+  /** The tile Spotlight/Sidebar feature: explicit pick → any screen → host. */
+  private focusTile(tiles: ProgramTile[]): ProgramTile | null {
+    if (tiles.length === 0) return null;
+    const picked = this.focusId ? tiles.find((t) => t.id === this.focusId) : null;
+    return picked ?? tiles.find((t) => t.kind === 'screen') ?? tiles[0];
+  }
+
+  private drawMulti(): void {
+    const { ctx, width: w, height: h } = this;
+    const tiles = this.allTiles();
+    if (tiles.length === 0) {
+      this.drawCamOff();
+      return;
+    }
+    const gap = Math.round(Math.min(w, h) * 0.015);
+
+    if (this.scene === 'grid' || tiles.length === 1) {
+      const n = tiles.length;
+      const cols = Math.ceil(Math.sqrt(n));
+      const rows = Math.ceil(n / cols);
+      const cw = (w - gap * (cols + 1)) / cols;
+      const ch = (h - gap * (rows + 1)) / rows;
+      tiles.forEach((t, i) => {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        // Center the last (possibly short) row, like every meeting app.
+        const inRow = row === rows - 1 ? n - (rows - 1) * cols : cols;
+        const xOffset = row === rows - 1 ? (w - (inRow * (cw + gap) + gap)) / 2 : 0;
+        this.drawTile(t, xOffset + gap + col * (cw + gap), gap + row * (ch + gap), cw, ch);
+      });
+      return;
+    }
+
+    const focus = this.focusTile(tiles)!;
+    const rest = tiles.filter((t) => t.id !== focus.id);
+
+    if (this.scene === 'spotlight') {
+      if (rest.length === 0) {
+        this.drawTile(focus, 0, 0, w, h, true);
+        return;
+      }
+      const stripH = Math.round(h * 0.2);
+      this.drawTile(focus, 0, 0, w, h - stripH - gap, true);
+      const tw = Math.min(Math.round((stripH - gap) * (16 / 10)), Math.floor((w - gap * (rest.length + 1)) / rest.length));
+      const totalW = rest.length * (tw + gap) - gap;
+      let x = w - totalW - gap; // right-aligned strip, the broadcast look
+      for (const t of rest) {
+        this.drawTile(t, x, h - stripH, tw, stripH - gap);
+        x += tw + gap;
+      }
+      return;
+    }
+
+    // sidebar: focus owns the stage, everyone else stacks in a right column.
+    const colW = Math.round(w * 0.24);
+    if (rest.length === 0) {
+      this.drawTile(focus, 0, 0, w, h, true);
+      return;
+    }
+    this.drawTile(focus, gap, gap, w - colW - gap * 3, h - gap * 2, true);
+    const maxRows = Math.min(rest.length, 4);
+    const th = (h - gap * (maxRows + 1)) / maxRows;
+    rest.slice(0, maxRows).forEach((t, i) => {
+      this.drawTile(t, w - colW - gap, gap + i * (th + gap), colW, th);
+    });
+    if (rest.length > maxRows) {
+      // The column is full — say so instead of silently hiding people.
+      const fs = Math.max(10, Math.round(Math.min(w, h) * 0.022));
+      ctx.font = `500 ${fs}px 'Hanken Grotesk', sans-serif`;
+      ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(`+${rest.length - maxRows} more in Grid`, w - gap - 4, h - gap - 4);
+    }
+  }
+
+  /** One labeled tile: cover-fit cams, letterbox screens, rounded corners. */
+  private drawTile(t: ProgramTile, x: number, y: number, tw: number, th: number, stage = false): void {
+    const { ctx } = this;
+    if (tw <= 4 || th <= 4) return;
+    const r = Math.round(Math.min(this.width, this.height) * 0.012);
+    ctx.save();
+    this.roundRectPath(x, y, tw, th, r);
+    ctx.clip();
+    ctx.fillStyle = '#211f26';
+    ctx.fillRect(x, y, tw, th);
+    const hasFrame = t.video.videoWidth > 0;
+    if (hasFrame) {
+      if (t.id === 'host-cam') this.applyLook();
+      if (t.kind === 'screen') this.drawContain(t.video, x, y, tw, th);
+      else this.drawSmart(t.video, x, y, tw, th, true);
+      ctx.filter = 'none';
+    } else {
+      // No frames yet (connecting / cam off) — initial avatar placeholder.
+      const rr = Math.round(Math.min(tw, th) * 0.18);
+      ctx.beginPath();
+      ctx.arc(x + tw / 2, y + th / 2, rr, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.12)';
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.font = `600 ${rr}px Georgia, serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText((t.label[0] || '·').toUpperCase(), x + tw / 2, y + th / 2);
+    }
+    this.drawTileLabel(t.label, x, y, tw, th, stage);
+    ctx.restore();
+    ctx.filter = 'none';
+    const talking = t.kind === 'cam' && this.speaking.has(t.id);
+    ctx.strokeStyle = talking ? this.accent : 'rgba(255,255,255,0.16)';
+    ctx.lineWidth = talking ? Math.max(2, this.width / 480) : Math.max(1, this.width / 960);
+    this.roundRectPath(x, y, tw, th, r);
+    ctx.stroke();
+  }
+
+  private drawTileLabel(label: string, x: number, y: number, tw: number, th: number, stage: boolean): void {
+    const { ctx } = this;
+    const fs = Math.max(10, Math.round(Math.min(this.width, this.height) * (stage ? 0.024 : 0.02)));
+    if (th < fs * 3.4 || tw < fs * 4) return; // tiny strip tiles skip the chip
+    ctx.font = `500 ${fs}px 'Hanken Grotesk', sans-serif`;
+    const text = label.slice(0, 24);
+    const padX = Math.round(fs * 0.6);
+    const tw2 = Math.min(ctx.measureText(text).width + padX * 2, tw - padX * 2);
+    const lh = Math.round(fs * 1.7);
+    const lx = x + padX;
+    const ly = y + th - lh - padX;
+    ctx.fillStyle = 'rgba(10,9,12,0.55)';
+    this.roundRectPath(lx, ly, tw2, lh, Math.round(lh / 2));
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.92)';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, lx + padX, ly + lh / 2 + 0.5, tw2 - padX * 2);
   }
 
   private hasCamFrame(): boolean {

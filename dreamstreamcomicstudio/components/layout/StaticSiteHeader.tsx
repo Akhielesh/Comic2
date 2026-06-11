@@ -6,6 +6,7 @@ import { NavDropdown } from './NavDropdown';
 import { NotificationBell } from '../NotificationBell';
 import { UserAvatar } from '../UserAvatar';
 import { TokenAvailabilityPill } from '../TokenAvailabilityPill';
+import { useProductAccess } from '../../services/productAccess';
 
 interface StaticSiteHeaderProps {
   isAuthenticated: boolean;
@@ -43,23 +44,34 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
   // Run an action then close the mobile menu.
   const go = (fn: () => void) => () => { fn(); setMobileOpen(false); };
 
+  // Per-account studio confinement (product_access): null = unrestricted → show all.
+  // Confined accounts only see the product groups in their active set (admins are never
+  // gated; marketing pages and the Models catalog stay visible to everyone).
+  const allowedProducts = useProductAccess();
+  const confined = !isAdmin && allowedProducts !== null;
+  const showComic = !confined || allowedProducts!.has('comic_studio');
+  const showChat = !confined || allowedProducts!.has('chat_studio');
+  const showLive = !confined || allowedProducts!.has('stream_studio');
+  // Code Studio isn't one of the standalone products — confined accounts never get it.
+  const showCode = !confined;
+
   // Same products as the desktop nav, flattened for the mobile menu (<1024px).
   const mobileGroups: { heading: string; items: { label: string; onClick: () => void }[] }[] = [
-    { heading: 'Comic', items: [
+    ...(showComic ? [{ heading: 'Comic', items: [
       { label: 'How It Works', onClick: () => onNavigate('how-it-works') },
       { label: 'Comic Studio', onClick: onEnterStudio },
       { label: 'Library', onClick: onViewComics },
-    ] },
-    { heading: 'Chat Studio', items: [
+    ] }] : []),
+    ...(showChat ? [{ heading: 'Chat Studio', items: [
       { label: 'Open Chat Studio', onClick: () => onNavigate('chat') },
       { label: 'Model Catalog', onClick: () => onNavigate('models') },
-    ] },
-    { heading: 'Code', items: isAdmin
+    ] }] : []),
+    ...(showCode ? [{ heading: 'Code', items: isAdmin
       ? [{ label: 'Open Code Studio', onClick: () => onNavigate('codestudio') }]
-      : [{ label: 'Get notified', onClick: notify }] },
-    { heading: 'Live', items: [
+      : [{ label: 'Get notified', onClick: notify }] }] : []),
+    ...(showLive ? [{ heading: 'Live', items: [
       { label: 'Open Stream Studio', onClick: () => { window.location.href = '/live.html'; } },
-    ] },
+    ] }] : []),
     { heading: 'Models', items: [
       { label: 'Browse Models', onClick: () => onNavigate('models') },
     ] },
@@ -91,27 +103,31 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
 
           {/* Centre nav — desktop only (≥1024px). The four products, each with its own hover menu. */}
           <nav className="hidden lg:flex items-center gap-1 bg-slate-100 border-2 border-black rounded-full px-2 py-1">
-            <NavDropdown
-              label="Comic"
-              icon={<BookOpen size={14} />}
-              items={[
-                { label: 'How It Works', description: 'The 8-step studio workflow', icon: <Compass size={16} />, onClick: () => onNavigate('how-it-works') },
-                { label: 'Studio', description: 'Turn your script into a comic', icon: <Palette size={16} />, onClick: onEnterStudio },
-                { label: 'Library', description: 'Browse the public comic gallery', icon: <LayoutGrid size={16} />, onClick: onViewComics },
-              ]}
-            />
-            <NavDropdown
-              label="Chat Studio"
-              icon={<Bot size={14} />}
-              variant="blue"
-              items={[
-                { label: 'Open Chat Studio', description: 'Chat with Claude, Gemini & 100+ models', icon: <MessageSquare size={16} />, onClick: () => onNavigate('chat') },
-                { label: 'Model Catalog', description: 'Compare every available model', icon: <Cpu size={16} />, onClick: () => onNavigate('models') },
-              ]}
-            />
+            {showComic && (
+              <NavDropdown
+                label="Comic"
+                icon={<BookOpen size={14} />}
+                items={[
+                  { label: 'How It Works', description: 'The 8-step studio workflow', icon: <Compass size={16} />, onClick: () => onNavigate('how-it-works') },
+                  { label: 'Studio', description: 'Turn your script into a comic', icon: <Palette size={16} />, onClick: onEnterStudio },
+                  { label: 'Library', description: 'Browse the public comic gallery', icon: <LayoutGrid size={16} />, onClick: onViewComics },
+                ]}
+              />
+            )}
+            {showChat && (
+              <NavDropdown
+                label="Chat Studio"
+                icon={<Bot size={14} />}
+                variant="blue"
+                items={[
+                  { label: 'Open Chat Studio', description: 'Chat with Claude, Gemini & 100+ models', icon: <MessageSquare size={16} />, onClick: () => onNavigate('chat') },
+                  { label: 'Model Catalog', description: 'Compare every available model', icon: <Cpu size={16} />, onClick: () => onNavigate('models') },
+                ]}
+              />
+            )}
             {/* Admins are never gated: they get the real Code Studio entry; everyone else
                 sees the "Soon" coming-soon capture until Code launches publicly. */}
-            {isAdmin ? (
+            {showCode && (isAdmin ? (
               <NavDropdown
                 label="Code"
                 icon={<Code2 size={14} />}
@@ -133,16 +149,18 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
                   { label: 'Get notified', description: 'Be first to know when Code launches', icon: <Mail size={16} />, onClick: notify },
                 ]}
               />
+            ))}
+            {showLive && (
+              <NavDropdown
+                label="Live"
+                icon={<Radio size={14} />}
+                variant="blue"
+                badge="Beta"
+                items={[
+                  { label: 'Open Stream Studio', description: 'Go live from your camera — chat, lobby & recording', icon: <Radio size={16} />, onClick: () => { window.location.href = '/live.html'; } },
+                ]}
+              />
             )}
-            <NavDropdown
-              label="Live"
-              icon={<Radio size={14} />}
-              variant="blue"
-              badge="Beta"
-              items={[
-                { label: 'Open Stream Studio', description: 'Go live from your camera — chat, lobby & recording', icon: <Radio size={16} />, onClick: () => { window.location.href = '/live.html'; } },
-              ]}
-            />
             <NavDropdown
               label="Models"
               icon={<Cpu size={14} />}

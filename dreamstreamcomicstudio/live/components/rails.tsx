@@ -148,10 +148,22 @@ export function ChatRail({ chat, pinned, slowSec, reactionsOn, canModerate, onSe
 
 /* -------------------------------------------------------------- People ---- */
 
-export function PeopleRail({ hostName, people, lobby, onAdmit, onDeny, onKick, onPromote }: {
+export interface GuestSeat {
+  sid: string;
+  name: string;
+  state: RTCPeerConnectionState;
+}
+
+export function PeopleRail({ hostName, people, lobby, guests = [], onCopyGuestInvite, onRotateGuestInvite, onAdmit, onDeny, onKick, onPromote }: {
   hostName: string;
   people: PersonEntry[];
   lobby: LobbyEntry[];
+  /** Connected on-air guest seats (WebRTC links to the studio). */
+  guests?: GuestSeat[];
+  /** Present when the studio has a guest invite link to share. */
+  onCopyGuestInvite?: () => void;
+  /** Rotates the guest key — every previously shared guest link goes dead. */
+  onRotateGuestInvite?: () => void;
   onAdmit: (sid: string) => void;
   onDeny: (sid: string) => void;
   onKick: (sid: string) => void;
@@ -162,7 +174,7 @@ export function PeopleRail({ hostName, people, lobby, onAdmit, onDeny, onKick, o
   return (
     <div className="rail-panel">
       <div className="people-scroll">
-        <div className="people-sect">On air · 1</div>
+        <div className="people-sect">On air · {1 + guests.length}</div>
         <div className="person">
           <Avatar name={hostName} size={34} ring />
           <div className="pz-meta">
@@ -172,6 +184,36 @@ export function PeopleRail({ hostName, people, lobby, onAdmit, onDeny, onKick, o
             <div className="pz-note">Running the studio</div>
           </div>
         </div>
+        {guests.map((g) => (
+          <div className="person" key={g.sid}>
+            <Avatar name={g.name} size={34} ring={g.state === 'connected'} />
+            <div className="pz-meta">
+              <div className="pz-name">
+                {g.name} <span className="cm-role mod">guest</span>
+              </div>
+              <div className="pz-note">
+                {g.state === 'connected' ? 'On the program — cam & mic mixed in'
+                  : g.state === 'failed' ? 'Link failed (restrictive network)'
+                  : 'Linking…'}
+              </div>
+            </div>
+            <div className="pz-ctl">
+              <IconBtn name="x" size={15} label={`Remove guest ${g.name}`} className="person-mini" onClick={() => onKick(g.sid)} />
+            </div>
+          </div>
+        ))}
+        {onCopyGuestInvite && (
+          <div className="row" style={{ padding: '2px 14px 10px', gap: 6, flexWrap: 'wrap' }}>
+            <Btn variant="subtle" size="sm" icon="users" onClick={onCopyGuestInvite}>
+              {guests.length === 0 ? 'Invite guests on air' : 'Copy guest invite link'}
+            </Btn>
+            {onRotateGuestInvite && (
+              <Btn variant="ghost" size="sm" icon="refresh" onClick={onRotateGuestInvite} title="Old guest links stop working">
+                New link
+              </Btn>
+            )}
+          </div>
+        )}
 
         {lobby.length > 0 && <div className="people-sect">Lobby · {lobby.length}</div>}
         {lobby.map((p) => (

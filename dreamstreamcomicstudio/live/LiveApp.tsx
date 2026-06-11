@@ -14,6 +14,7 @@ import { ACCENTS, applyAppearance, loadAppearance, saveAppearance, type Appearan
 import { CreateView } from './views/CreateView';
 import { DashboardView } from './views/DashboardView';
 import { EventPage } from './views/EventPage';
+import { GuestView } from './views/GuestView';
 import { SettingsView } from './views/SettingsView';
 import { StudioView } from './views/StudioView';
 import { SummaryView } from './views/SummaryView';
@@ -25,6 +26,7 @@ import { Avatar, cx, useToasts, type PushToast } from './ui/primitives';
 type Route =
   | { view: 'dashboard' | 'create' | 'settings' }
   | { view: 'studio' | 'summary'; id: string; k: string }
+  | { view: 'guest'; id: string; g: string }
   | { view: 'summary-lookup'; id: string }
   | { view: 'viewer' | 'event' | 'event-auto'; id: string };
 
@@ -32,11 +34,13 @@ function parseRoute(): Route {
   const params = new URLSearchParams(location.search);
   const e = params.get('e');
   const k = params.get('k');
+  const g = params.get('g');
   const hash = location.hash.replace(/^#\/?/, '');
   if (e && k) {
     if (hash === 'summary') return { view: 'summary', id: e, k };
     return { view: 'studio', id: e, k };
   }
+  if (e && g) return { view: 'guest', id: e, g };
   if (e) {
     if (hash === 'event') return { view: 'event', id: e };
     if (hash === 'watch') return { view: 'viewer', id: e };
@@ -149,6 +153,8 @@ export function LiveApp() {
         return <SummaryView eventId={route.id} hostKey={route.k} nav={nav} push={push} />;
       case 'summary-lookup':
         return <SummaryLookup id={route.id} nav={nav} push={push} />;
+      case 'guest':
+        return <GuestView eventId={route.id} guestKey={route.g} nav={nav} push={push} />;
       case 'viewer':
         return <ViewerView eventId={route.id} nav={nav} push={push} />;
       case 'event':
@@ -166,7 +172,7 @@ export function LiveApp() {
   };
 
   // Full-bleed surfaces own the whole viewport — no side rail.
-  const fullBleed = ['studio', 'viewer', 'event', 'event-auto'].includes(route.view);
+  const fullBleed = ['studio', 'viewer', 'event', 'event-auto', 'guest'].includes(route.view);
   const activeNav = route.view === 'create' ? 'create' : route.view === 'settings' ? 'settings' : 'dashboard';
 
   return (
