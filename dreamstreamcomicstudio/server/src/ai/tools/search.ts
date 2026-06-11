@@ -84,6 +84,25 @@ const braveSearch = async (query: string, signal: AbortSignal, limit: number): P
     .map((r) => ({ title: r.title ? stripTags(r.title) : (r.url as string), url: r.url as string, snippet: r.description ? stripTags(r.description) : '' }));
 };
 
+// Serper.dev — cheapest paid Google-results API (~$0.30–1.00 per 1k queries, 2,500
+// free one-time credits). Scraping-based upstream, so it sits after Tavily/Brave.
+const serperSearch = async (query: string, signal: AbortSignal, limit: number): Promise<WebResult[] | null> => {
+  const key = process.env.SERPER_API_KEY;
+  if (!key) return null; // skipped: no key — not a failed attempt
+  const res = await fetch('https://google.serper.dev/search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-API-KEY': key, 'User-Agent': UA },
+    body: JSON.stringify({ q: query, num: Math.min(limit, 10) }),
+    signal
+  });
+  if (!res.ok) throw new Error(`Serper ${res.status}`);
+  const data = (await res.json()) as { organic?: { title?: string; link?: string; snippet?: string }[] };
+  return (data.organic || [])
+    .filter((r) => r.link)
+    .slice(0, limit)
+    .map((r) => ({ title: r.title || (r.link as string), url: r.link as string, snippet: r.snippet || '' }));
+};
+
 const googleCseSearch = async (query: string, signal: AbortSignal, limit: number): Promise<WebResult[] | null> => {
   const key = process.env.GOOGLE_CSE_KEY;
   const cx = process.env.GOOGLE_CSE_CX;
@@ -190,6 +209,7 @@ type Provider = { name: string; run: (q: string, s: AbortSignal, n: number) => P
 const PROVIDERS: Provider[] = [
   { name: 'tavily', run: tavilySearch },
   { name: 'brave', run: braveSearch },
+  { name: 'serper', run: serperSearch },
   { name: 'google', run: googleCseSearch },
   { name: 'searxng', run: searxngSearch },
   { name: 'duckduckgo', run: ddgWebSearch },

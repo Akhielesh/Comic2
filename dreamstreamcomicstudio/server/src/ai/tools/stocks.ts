@@ -19,6 +19,7 @@ import type {
   NewsItem
 } from '../../../../apiTypes.js';
 import { fetchNews } from './news.js';
+import { alpacaEnabled, isAlpacaSymbol, getAlpacaQuote } from './alpaca.js';
 
 const QUOTE_URL = 'https://stooq.com/q/l/';
 const HISTORY_URL = 'https://stooq.com/q/d/l/';
@@ -429,6 +430,19 @@ export const getStockQuote = async (rawSymbol: string, signal?: AbortSignal): Pr
   if (!trimmed) throw new Error('No ticker symbol was provided.');
   // Map "gold"/"oil"/"the S&P"/"EURUSD" → a real Yahoo symbol before quoting.
   const symbol = resolveMarketSymbol(trimmed);
+  // Licensed-feed-first: with Alpaca keys set, plain US equities are quoted from the
+  // IEX feed (free, commercial-display oriented) and only the soft enrichments
+  // (name, headlines) ride on other sources. Indices/futures/FX/non-US symbols and
+  // any Alpaca failure fall through to the unofficial Yahoo → Stooq chain.
+  if (alpacaEnabled() && isAlpacaSymbol(symbol)) {
+    try {
+      const quote = await getAlpacaQuote(symbol, signal);
+      const headlines = await yfHeadlines(quote.name || quote.symbol, signal);
+      return headlines ? { ...quote, headlines } : quote;
+    } catch {
+      /* fall through to Yahoo/Stooq */
+    }
+  }
   try {
     return await getYahooQuote(symbol, signal);
   } catch {

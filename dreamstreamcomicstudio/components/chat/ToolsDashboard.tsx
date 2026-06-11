@@ -2,11 +2,12 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Search, Newspaper, CloudSun, LineChart, MapPin, BookOpen, Type, Globe, Rocket,
   UtensilsCrossed, Gamepad2, Code2, Network, Wrench, Server, ExternalLink, Activity,
-  KeyRound, Unlock, Zap, RotateCcw, Boxes, CheckCircle2, Plug, Plane, Target
+  KeyRound, Unlock, Zap, RotateCcw, Boxes, CheckCircle2, Plug, Plane, Target, ShieldCheck
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import {
-  TOOL_CATALOG, CATEGORY_META, type ToolMeta, type ToolCategory, type ToolKind, type ToolAuth
+  TOOL_CATALOG, CATEGORY_META, LICENSE_META, CONNECTOR_KEYS,
+  type ToolMeta, type ToolCategory, type ToolKind, type ToolAuth, type ToolLicense
 } from '../../toolCatalog';
 import {
   getToolStats, summarizeToolStats, resetToolStats, onToolAnalyticsChanged,
@@ -92,6 +93,24 @@ const AuthBadge: React.FC<{ auth: ToolAuth; env?: string }> = ({ auth, env }) =>
   );
 };
 
+// Commercial-use posture of the tool's primary data source (from the June 2026
+// connector audit) — surfaced so "free tier" is never confused with "free for
+// commercial use".
+const LicenseBadge: React.FC<{ license: ToolLicense }> = ({ license }) => {
+  const cls: Record<ToolLicense, string> = {
+    'commercial-ok': 'border-emerald-500/20 text-emerald-700 bg-emerald-50',
+    attribution: 'border-sky-500/20 text-sky-700 bg-sky-50',
+    conditional: 'border-amber-500/20 text-amber-700 bg-amber-50',
+    unofficial: 'border-rose-500/20 text-rose-700 bg-rose-50'
+  };
+  const m = LICENSE_META[license];
+  return (
+    <span title={m.blurb} className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-md border ${cls[license]}`}>
+      {m.label}
+    </span>
+  );
+};
+
 const relativeTime = (ts: number): string => {
   if (!ts) return 'never';
   const diff = Date.now() - ts;
@@ -135,9 +154,16 @@ const ToolRow: React.FC<{ tool: ToolMeta; stat?: ToolStat }> = ({ tool, stat }) 
             <span className="font-semibold text-sm text-[var(--ds-ink)]">{tool.label}</span>
             <KindBadge kind={tool.kind} />
             <AuthBadge auth={tool.auth} env={tool.authEnv} />
+            {tool.license && <LicenseBadge license={tool.license} />}
             <code className="text-[9px] text-[var(--ds-muted)]">{tool.name}</code>
           </div>
           <div className="text-[11px] text-[var(--ds-muted)] mt-0.5">{tool.description}</div>
+          {tool.licenseNote && (
+            <div className="flex items-start gap-1 text-[10px] text-[var(--ds-muted)] mt-1">
+              <ShieldCheck className="w-3 h-3 shrink-0 mt-px" />
+              <span>{tool.licenseNote}</span>
+            </div>
+          )}
         </div>
         <a
           href={tool.docsUrl}
@@ -250,6 +276,49 @@ export const ToolsDashboard: React.FC = () => {
         ones for each message (it <span className="font-semibold text-[var(--ds-ink)]">smart-routes</span> by relevance instead of calling everything).
         You don’t need to enable anything; this view is just for transparency. Usage analytics below are recorded locally on this device.
       </p>
+
+      {/* Connector upgrades — the audited "set these keys" checklist. Informational:
+          the env vars live on the server (Railway), not in the browser. */}
+      <div className="rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] p-3 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_var(--ds-hairline)]">
+        <div className="flex items-center gap-1.5 mb-1">
+          <ShieldCheck className="w-4 h-4 text-emerald-600" />
+          <span className="font-semibold text-sm text-[var(--ds-ink)]">Connector upgrades</span>
+          <span className="text-[10px] text-[var(--ds-muted)]">
+            Free keys that raise reliability and keep commercial use compliant — set them in the server environment
+          </span>
+        </div>
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {(Object.keys(LICENSE_META) as ToolLicense[]).map((l) => (
+            <span key={l} className="inline-flex items-center gap-1 text-[10px] text-[var(--ds-muted)]">
+              <LicenseBadge license={l} /> {LICENSE_META[l].blurb}
+            </span>
+          ))}
+        </div>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
+          {CONNECTOR_KEYS.map((k) => (
+            <div key={k.env} className="rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] p-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <KeyRound className="w-3.5 h-3.5 text-[var(--ds-muted)] shrink-0" />
+                  <span className="font-semibold text-sm text-[var(--ds-ink)] truncate">{k.provider}</span>
+                </div>
+                <a
+                  href={k.signupUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="shrink-0 text-[var(--ds-muted)] opacity-80 hover:text-[var(--ds-ink)] transition-colors duration-200"
+                  title={`${k.provider} — get a key`}
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              </div>
+              <code className="text-[9px] text-[var(--ds-muted)]">{k.env}</code>
+              <div className="text-[11px] text-[var(--ds-ink)] mt-1">{k.unlocks}</div>
+              <div className="text-[10px] text-[var(--ds-muted)] mt-1">{k.cost}</div>
+            </div>
+          ))}
+        </div>
+      </div>
 
       {/* Controls */}
       <div className="flex flex-wrap items-center gap-2">

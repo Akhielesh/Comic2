@@ -1,8 +1,27 @@
 // Crypto prices (CoinGecko) and fiat exchange rates (Frankfurter / ECB).
-// Both free and keyless; CoinGecko's public tier is rate-limited (~10-30 calls/min).
+//
+// CoinGecko licensing: the keyless public tier and the free Demo key are for
+// non-commercial use; commercial display rights start at the Basic plan ($35/mo),
+// which also requires visible "Data provided by CoinGecko" attribution (we always
+// attribute via citations). Set COINGECKO_API_KEY (+ COINGECKO_API_PLAN=pro for
+// paid plans) to authenticate; keyless remains the dev fallback.
 
 import type { ChatTool } from './types.js';
 import { fetchJson } from './http.js';
+
+const cgBase = (): string =>
+  process.env.COINGECKO_API_PLAN === 'pro' && process.env.COINGECKO_API_KEY
+    ? 'https://pro-api.coingecko.com/api/v3'
+    : 'https://api.coingecko.com/api/v3';
+
+const cgHeaders = (): Record<string, string> | undefined => {
+  const key = process.env.COINGECKO_API_KEY;
+  if (!key) return undefined;
+  return process.env.COINGECKO_API_PLAN === 'pro' ? { 'x-cg-pro-api-key': key } : { 'x-cg-demo-api-key': key };
+};
+
+const cgFetch = <T>(path: string, signal?: AbortSignal): Promise<T> =>
+  fetchJson<T>(`${cgBase()}${path}`, { signal, headers: cgHeaders() });
 
 interface CGSearch {
   coins?: { id: string; name: string; symbol: string; market_cap_rank?: number; thumb?: string }[];
@@ -25,12 +44,12 @@ export const cryptoPriceTool: ChatTool = {
     const vs = (String(args?.vs || 'usd').trim().toLowerCase() || 'usd');
     if (!coin) return { content: 'No coin was provided.' };
     try {
-      const search = await fetchJson<CGSearch>(`https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(coin)}`, { signal });
+      const search = await cgFetch<CGSearch>(`/search?query=${encodeURIComponent(coin)}`, signal);
       const top = search.coins?.[0];
       if (!top) return { content: `No cryptocurrency found matching "${coin}".` };
-      const price = await fetchJson<Record<string, Record<string, number>>>(
-        `https://api.coingecko.com/api/v3/simple/price?ids=${encodeURIComponent(top.id)}&vs_currencies=${encodeURIComponent(vs)}&include_market_cap=true&include_24hr_change=true`,
-        { signal }
+      const price = await cgFetch<Record<string, Record<string, number>>>(
+        `/simple/price?ids=${encodeURIComponent(top.id)}&vs_currencies=${encodeURIComponent(vs)}&include_market_cap=true&include_24hr_change=true`,
+        signal
       );
       const row = price[top.id];
       const value = row?.[vs];
@@ -47,9 +66,9 @@ export const cryptoPriceTool: ChatTool = {
       // same week, mislabeled as "1M"/"6M".)
       let series: { date: string; close: number }[] | undefined;
       try {
-        const chart = await fetchJson<{ prices?: [number, number][] }>(
-          `https://api.coingecko.com/api/v3/coins/${encodeURIComponent(top.id)}/market_chart?vs_currency=${encodeURIComponent(vs)}&days=365`,
-          { signal }
+        const chart = await cgFetch<{ prices?: [number, number][] }>(
+          `/coins/${encodeURIComponent(top.id)}/market_chart?vs_currency=${encodeURIComponent(vs)}&days=365`,
+          signal
         );
         const pts = chart.prices || [];
         if (pts.length) {
@@ -86,7 +105,8 @@ export const cryptoPriceTool: ChatTool = {
             }
           }
         ],
-        citations: [{ url: `https://www.coingecko.com/en/coins/${top.id}`, title: `${top.name} on CoinGecko` }]
+        // Required attribution wording per CoinGecko's API license.
+        citations: [{ url: `https://www.coingecko.com/en/coins/${top.id}`, title: 'Data provided by CoinGecko' }]
       };
     } catch (err) {
       const message = (err as Error)?.message || 'unknown error';
