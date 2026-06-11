@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { ChatRequest, ChatResponse, ChatClientContext } from '../../../apiTypes.js';
 import { REFRESHABLE_TOOLS } from '../../../apiTypes.js';
-import { runChat, isStudyIntent, isTrivialChat, type ChatReasoningLevel, type ChatAttachmentInput } from '../ai/chat.js';
+import { runChat, isStudyIntent, isTripIntent, isTrivialChat, type ChatReasoningLevel, type ChatAttachmentInput } from '../ai/chat.js';
 import { runSwarm } from '../ai/agents/orchestrator.js';
 import { makeSwarmTool, SWARM_TOOL_NAME } from '../ai/agents/swarmTool.js';
 import { makeDelegateTool } from '../ai/agents/delegateTool.js';
@@ -352,6 +352,14 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
     // study pack (bundle), and a relevant image for visual concepts.
     routedToolNames = Array.from(
       new Set(['generate_quiz', 'generate_flashcards', 'generate_document', 'generate_bundle', 'image_search', ...routedToolNames])
+    ).slice(0, MAX_MODEL_TOOLS);
+  }
+  // On trip-planning intent, guarantee the travel toolkit (clarify-first + the
+  // consolidated itinerary/map/places/weather widgets) is on the table, so the TRIP
+  // PLANNING guidance can actually deliver a seamless plan instead of prose lists.
+  if (toolsEnabledForProvider && isTripIntent(lastUserText)) {
+    routedToolNames = Array.from(
+      new Set(['ask_user', 'plan_trip', 'find_places', 'get_weather', 'show_map', 'convert_currency', ...routedToolNames])
     ).slice(0, MAX_MODEL_TOOLS);
   }
   // When the user attached files, force run_python onto the table so the model can

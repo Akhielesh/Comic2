@@ -191,16 +191,24 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
 
       <div className="relative px-2 pb-2 pt-1">
         {isRadial ? (
-          // --- Pie / Donut ---
+          // --- Pie / Donut — calm-studio styling: theme-aware slice gaps (canvas-color
+          //     strokes, not hardcoded white), a slim ring, soft hover dimming, and an
+          //     always-on center readout (total by default, the slice on hover). ---
           (() => {
             const pts = series[0]?.points ?? [];
             const total = pts.reduce((a, p) => a + Math.max(0, p.y), 0) || 1;
             const cx = W / 2;
             const cy = H / 2;
             const r = Math.min(H, 260) / 2 - 16;
+            const inner = data.variant === 'donut' ? r * 0.68 : 0;
+            const focused = hover && pts[hover.cat] ? pts[hover.cat] : null;
+            const centerValue = focused ? fmt(Math.max(0, focused.y), data.unit) : fmt(total, data.unit);
+            const centerLabel = focused
+              ? `${focused.x} · ${Math.round((Math.max(0, focused.y) / total) * 100)}%`
+              : 'Total';
             let a = -Math.PI / 2;
             return (
-              <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: H }}>
+              <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: H }} onMouseLeave={() => setHover(null)}>
                 {pts.map((p, i) => {
                   const frac = Math.max(0, p.y) / total;
                   const a0 = a;
@@ -208,24 +216,36 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
                   a = a1;
                   const mid = (a0 + a1) / 2;
                   const isH = hover?.cat === i;
-                  const ox = isH ? Math.cos(mid) * 6 : 0;
-                  const oy = isH ? Math.sin(mid) * 6 : 0;
+                  const ox = isH ? Math.cos(mid) * 4 : 0;
+                  const oy = isH ? Math.sin(mid) * 4 : 0;
                   return (
                     <path
                       key={i}
-                      d={arcPath(cx + ox, cy + oy, r, a0, a1, data.variant === 'donut' ? r * 0.58 : 0)}
+                      d={arcPath(cx + ox, cy + oy, r, a0, a1, inner)}
                       fill={theme.series[i % theme.series.length]}
-                      stroke="#fff"
-                      strokeWidth="2"
+                      stroke="var(--ds-canvas)"
+                      strokeWidth="2.5"
+                      opacity={hover && !isH ? 0.4 : 1}
+                      style={{ transition: 'opacity 150ms ease, transform 150ms ease' }}
                       onMouseEnter={() => setHover({ i: 0, cat: i })}
-                      onMouseLeave={() => setHover(null)}
                     />
                   );
                 })}
-                {hover && pts[hover.cat] && (
-                  <text x={cx} y={cy} textAnchor="middle" fontSize="18" fontWeight="600" fill="var(--ds-ink)">
-                    {Math.round((Math.max(0, pts[hover.cat].y) / total) * 100)}%
-                  </text>
+                {data.variant === 'donut' ? (
+                  <>
+                    <text x={cx} y={cy - 2} textAnchor="middle" fontSize="20" fontWeight="600" fill="var(--ds-ink)" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                      {centerValue}
+                    </text>
+                    <text x={cx} y={cy + 14} textAnchor="middle" fontSize="10" fill="var(--ds-muted)">
+                      {centerLabel}
+                    </text>
+                  </>
+                ) : (
+                  focused && (
+                    <text x={cx} y={cy} textAnchor="middle" fontSize="18" fontWeight="600" fill="#fff" style={{ paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.35)', strokeWidth: 3 }}>
+                      {Math.round((Math.max(0, focused.y) / total) * 100)}%
+                    </text>
+                  )
                 )}
               </svg>
             );

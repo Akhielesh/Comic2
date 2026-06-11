@@ -166,15 +166,44 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
     if (el) el.scrollTo({ top: el.scrollHeight, behavior });
   };
 
-  // Track scroll position to toggle the "jump to latest" button.
+  // Track scroll position to toggle the "jump to latest" button, AND remember the
+  // reading position per session (sessionStorage). Tab switches / window changes can
+  // remount this component — without the restore below, returning to the tab dumped
+  // the user at the top of the thread instead of where they left off.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const onScroll = () => setAtBottom(isNearBottom(el));
+    const onScroll = () => {
+      const nearBottom = isNearBottom(el);
+      setAtBottom(nearBottom);
+      try {
+        const store = JSON.parse(window.sessionStorage.getItem('ds.chat.scroll.v1') ?? '{}') as Record<string, number | 'bottom'>;
+        store[session.id] = nearBottom ? 'bottom' : el.scrollTop;
+        window.sessionStorage.setItem('ds.chat.scroll.v1', JSON.stringify(store));
+      } catch {
+        /* private mode — position just isn't remembered */
+      }
+    };
     el.addEventListener('scroll', onScroll, { passive: true });
     onScroll();
     return () => el.removeEventListener('scroll', onScroll);
-  }, []);
+  }, [session.id]);
+
+  // On mount / session switch: restore the saved reading position ("where I left off").
+  // Unsaved (first open) defaults to the latest message.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    let saved: number | 'bottom' | undefined;
+    try {
+      saved = (JSON.parse(window.sessionStorage.getItem('ds.chat.scroll.v1') ?? '{}') as Record<string, number | 'bottom'>)[session.id];
+    } catch {
+      saved = undefined;
+    }
+    if (typeof saved === 'number') el.scrollTo({ top: saved, behavior: 'auto' });
+    else scrollToBottom('auto');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.id]);
 
   // Auto-scroll on new content only when the user is already near the bottom.
   const lastTurnContent = session.turns[session.turns.length - 1]?.content;
@@ -353,14 +382,16 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
 
       </div>
 
-      {/* Jump-to-latest button — appears when scrolled away from the bottom. */}
+      {/* Jump-to-latest — a quiet arrow-only button; hidden whenever the user is
+          already reading the latest part of the thread. */}
       {!atBottom && session.turns.length > 0 && (
         <button
           onClick={() => scrollToBottom()}
-          className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1 ${PILL} ${SHADOW_SOFT} px-3 py-2 sm:py-1.5 text-xs font-semibold hover:bg-[var(--ds-raised)] animate-fade-in`}
+          className={`absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex h-9 w-9 items-center justify-center rounded-full ${PILL} ${SHADOW_SOFT} hover:bg-[var(--ds-raised)] animate-fade-in`}
           title="Jump to latest"
+          aria-label="Jump to latest"
         >
-          <ChevronDown className="w-4 h-4" /> Latest
+          <ChevronDown className="w-4 h-4" />
         </button>
       )}
       </div>

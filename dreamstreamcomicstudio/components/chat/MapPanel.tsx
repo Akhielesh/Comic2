@@ -12,6 +12,7 @@ import React, { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import type { MapArtifact } from '../../apiTypes';
+import { placeKind, PLACE_KIND_GLYPHS } from './artifacts/placeKinds';
 
 const escapeHtml = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -31,9 +32,11 @@ const accentColor = (): string => {
   return v || '#D97757';
 };
 
-// Accent teardrop pin (optionally numbered) as an inline-SVG divIcon — avoids
-// bundler/asset issues with Leaflet's default PNG markers and matches the design accent.
-const makePin = (color: string, n?: number): L.DivIcon =>
+// Accent teardrop pin as an inline-SVG divIcon — avoids bundler/asset issues with
+// Leaflet's default PNG markers and matches the design accent. Pins are numbered for
+// ordered trip stops; otherwise they show the place-category glyph (🍽️ 🏨 🌳 …) so a
+// mixed map (eat / stay / see) reads at a glance.
+const makePin = (color: string, n?: number, glyph?: string): L.DivIcon =>
   L.divIcon({
     html:
       `<svg width="28" height="38" viewBox="0 0 28 38" xmlns="http://www.w3.org/2000/svg" style="filter:drop-shadow(0 2px 3px rgba(0,0,0,0.3))">` +
@@ -41,13 +44,43 @@ const makePin = (color: string, n?: number): L.DivIcon =>
       `<circle cx="14" cy="14" r="8.5" fill="#fff"/>` +
       (typeof n === 'number'
         ? `<text x="14" y="18.5" text-anchor="middle" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11" font-weight="700" fill="${color}">${n}</text>`
-        : `<circle cx="14" cy="14" r="3.5" fill="${color}"/>`) +
+        : glyph
+          ? `<text x="14" y="18" text-anchor="middle" font-size="10">${glyph}</text>`
+          : `<circle cx="14" cy="14" r="3.5" fill="${color}"/>`) +
       `</svg>`,
     className: 'ds-map-pin',
     iconSize: [28, 38],
     iconAnchor: [14, 38],
     popupAnchor: [0, -34]
   });
+
+// Haversine length of a route in km — the honest "≈ distance" when the artifact
+// didn't carry one (we have no routing API; straight-line legs, clearly marked ≈).
+const routeKm = (pts: { lat: number; lng: number }[]): number => {
+  let km = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+    const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+    const s =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+    km += 6371 * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
+  }
+  return km;
+};
+
+// Rough door-to-door speed (km/h) per mode for the ≈duration estimate.
+const MODE_SPEEDS: Record<string, number> = { walk: 4.5, transit: 22, train: 80, bus: 45, drive: 75, car: 75, ferry: 28, flight: 700 };
+const MODE_GLYPHS: Record<string, string> = { walk: '🚶', transit: '🚇', train: '🚆', bus: '🚌', drive: '🚗', car: '🚗', ferry: '⛴️', flight: '✈️' };
+
+const fmtDuration = (min: number): string => {
+  if (min < 60) return `${Math.round(min)}m`;
+  const h = Math.floor(min / 60);
+  const m = Math.round(min % 60);
+  return m ? `${h}h ${m}m` : `${h}h`;
+};
 
 // A leading "3." / "12 — " in a marker label is the visit order — pull it out for the pin.
 const leadingNumber = (label: string): number | undefined => {
@@ -79,19 +112,76 @@ const MapPanel: React.FC<{ data: MapArtifact }> = ({ data }) => {
 
     const accent = accentColor();
     const latlngs: [number, number][] = data.markers.map((m) => [m.lat, m.lng]);
-    data.markers.forEach((m) => {
-      L.marker([m.lat, m.lng], { icon: makePin(accent, leadingNumber(m.label)) })
+    const markers = data.markers.map((m) => {
+      const marker = L.marker([m.lat, m.lng], {
+        icon: makePin(accent, leadingNumber(m.label), m.category ? PLACE_KIND_GLYPHS[placeKind(m.category)] : undefined)
+      })
         .addTo(map)
         .bindPopup(
           `<div class="ds-map-pop"><b>${escapeHtml(m.label)}</b>${m.description ? `<span>${escapeHtml(m.description)}</span>` : ''}</div>`
         );
+      return { marker, label: m.label };
     });
+
+    // Zoom-aware detail: once the user zooms in past street level, every pin grows a
+    // small permanent name label, so close-up exploration doesn't need popup clicks.
+    let labelsOn = false;
+    const syncLabels = () => {
+      const want = map.getZoom() >= 14;
+      if (want === labelsOn) return;
+      labelsOn = want;
+      for (const { marker, label } of markers) {
+        marker.unbindTooltip();
+        if (want) {
+          marker.bindTooltip(escapeHtml(label.replace(/^\s*\d{1,2}\s*[.)\-—:]\s*/, '')), {
+            permanent: true,
+            direction: 'right',
+            offset: [10, -22],
+            className: 'ds-map-label'
+          });
+        }
+      }
+    };
+    map.on('zoomend', syncLabels);
+    syncLabels();
 
     if (data.route && data.route.length > 1) {
       const pts = data.route.map((p) => [p.lat, p.lng] as [number, number]);
       // Soft halo under a solid accent line — reads cleanly on both light and dark tiles.
       L.polyline(pts, { color: '#ffffff', weight: 7, opacity: 0.55, lineCap: 'round', lineJoin: 'round' }).addTo(map);
       L.polyline(pts, { color: accent, weight: 3.5, opacity: 0.95, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+    }
+
+    // Route summary chip — the user's mode (drive/walk/transit) with ≈time, distance
+    // and tolls. Uses the artifact's routeInfo when present; otherwise estimates from
+    // the drawn route's length and the mode's rough speed (clearly marked ≈).
+    if ((data.route && data.route.length > 1) || data.routeInfo) {
+      const info = data.routeInfo ?? {};
+      const km = typeof info.distanceKm === 'number' ? info.distanceKm : data.route ? routeKm(data.route) : undefined;
+      const mode = (info.mode || '').toLowerCase();
+      const mins =
+        typeof info.durationMin === 'number'
+          ? info.durationMin
+          : km !== undefined && MODE_SPEEDS[mode]
+            ? (km / MODE_SPEEDS[mode]) * 60
+            : undefined;
+      const bits = [
+        mode ? `${MODE_GLYPHS[mode] ?? ''} ${mode[0].toUpperCase()}${mode.slice(1)}`.trim() : null,
+        mins !== undefined ? `≈ ${fmtDuration(mins)}` : null,
+        km !== undefined ? `${km >= 100 ? Math.round(km) : km.toFixed(1)} km` : null,
+        info.tollCost || null
+      ].filter(Boolean);
+      if (bits.length) {
+        const RouteChip = L.Control.extend({
+          options: { position: 'bottomleft' as const },
+          onAdd: () => {
+            const el = L.DomUtil.create('div', 'ds-map-route-chip');
+            el.innerHTML = bits.map((b) => `<span>${escapeHtml(String(b))}</span>`).join('<i></i>');
+            return el;
+          }
+        });
+        map.addControl(new RouteChip());
+      }
     }
 
     if (latlngs.length === 1) {
