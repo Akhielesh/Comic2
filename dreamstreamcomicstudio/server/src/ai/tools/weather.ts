@@ -82,13 +82,15 @@ const fetchJson = async <T>(url: string, signal?: AbortSignal): Promise<T> => {
   const timer = setTimeout(() => controller.abort(), 10_000);
   const onAbort = () => controller.abort();
   signal?.addEventListener('abort', onAbort, { once: true });
+  let noted = false; // meter exactly once per attempt, whether it resolves or rejects
   try {
     const res = await fetch(url, { headers: { Accept: 'application/json', 'User-Agent': UA }, signal: controller.signal });
+    noted = true;
     noteProviderCall(url, res.ok);
     if (!res.ok) throw new Error(`Weather request failed (${res.status})`);
     return (await res.json()) as T;
   } catch (err) {
-    if ((err as Error)?.name === 'AbortError') noteProviderCall(url, false);
+    if (!noted) noteProviderCall(url, false);
     throw err;
   } finally {
     clearTimeout(timer);
@@ -298,8 +300,12 @@ const weatherCache = new TtlCache<{ weather: WeatherArtifact; source: WeatherSou
 export const getWeatherDetailed = async (
   place: string,
   signal?: AbortSignal
-): Promise<{ weather: WeatherArtifact; source: WeatherSource }> =>
-  weatherCache.getOrSet(place.trim().toLowerCase(), () => getWeatherUncached(place, signal));
+): Promise<{ weather: WeatherArtifact; source: WeatherSource }> => {
+  // Shared (coalesced) compute — detached from the first caller's abort signal so
+  // one user's cancel can't reject everyone awaiting the same place.
+  void signal;
+  return weatherCache.getOrSet(place.trim().toLowerCase(), () => getWeatherUncached(place, undefined));
+};
 
 const getWeatherUncached = async (
   place: string,

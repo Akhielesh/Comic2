@@ -158,14 +158,19 @@ const withTimeout = (signal?: AbortSignal, ms = DEFAULT_TIMEOUT_MS) => {
 const fetchJson = async <T>(url: string, signal?: AbortSignal, cookie?: string): Promise<T> => {
   assertProviderBudget(url);
   const t = withTimeout(signal);
+  let noted = false; // meter once per attempt — rejections (timeouts) count too
   try {
     const res = await fetch(url, {
       headers: { Accept: 'application/json', 'User-Agent': UA, ...(cookie ? { Cookie: cookie } : {}) },
       signal: t.signal
     });
+    noted = true;
     noteProviderCall(url, res.ok);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return (await res.json()) as T;
+  } catch (err) {
+    if (!noted) noteProviderCall(url, false);
+    throw err;
   } finally {
     t.done();
   }
@@ -174,11 +179,16 @@ const fetchJson = async <T>(url: string, signal?: AbortSignal, cookie?: string):
 const fetchText = async (url: string, signal?: AbortSignal): Promise<string> => {
   assertProviderBudget(url);
   const t = withTimeout(signal);
+  let noted = false;
   try {
     const res = await fetch(url, { headers: { Accept: 'text/csv,text/plain', 'User-Agent': UA }, signal: t.signal });
+    noted = true;
     noteProviderCall(url, res.ok);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.text();
+  } catch (err) {
+    if (!noted) noteProviderCall(url, false);
+    throw err;
   } finally {
     t.done();
   }
@@ -438,8 +448,12 @@ const quoteCache = new TtlCache<StockQuoteArtifact>(60_000, 300);
 export const getStockQuote = async (rawSymbol: string, signal?: AbortSignal): Promise<StockQuoteArtifact> => {
   const trimmed = rawSymbol?.trim();
   if (!trimmed) throw new Error('No ticker symbol was provided.');
+  // The compute is shared across coalesced callers, so it must NOT be tied to the
+  // first caller's abort signal (their cancel would reject everyone else's await);
+  // the internal per-request timeouts bound it instead.
   const cacheKey = trimmed.toLowerCase();
-  return quoteCache.getOrSet(cacheKey, () => getStockQuoteUncached(trimmed, signal));
+  void signal;
+  return quoteCache.getOrSet(cacheKey, () => getStockQuoteUncached(trimmed, undefined));
 };
 
 const getStockQuoteUncached = async (trimmed: string, signal?: AbortSignal): Promise<StockQuoteArtifact> => {

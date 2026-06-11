@@ -24,6 +24,7 @@ const fetchJson = async <T>(url: string, signal?: AbortSignal): Promise<T> => {
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   const onAbort = () => controller.abort();
   signal?.addEventListener('abort', onAbort, { once: true });
+  let noted = false; // meter once per attempt — rejections (timeouts) count too
   try {
     const res = await fetch(url, {
       headers: {
@@ -33,9 +34,13 @@ const fetchJson = async <T>(url: string, signal?: AbortSignal): Promise<T> => {
       },
       signal: controller.signal
     });
+    noted = true;
     noteProviderCall(url, res.ok);
     if (!res.ok) throw new Error(`Alpaca ${res.status}`);
     return (await res.json()) as T;
+  } catch (err) {
+    if (!noted) noteProviderCall(url, false);
+    throw err;
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);

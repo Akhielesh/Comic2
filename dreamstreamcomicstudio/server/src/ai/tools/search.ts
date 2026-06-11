@@ -262,11 +262,14 @@ export const webSearch = async (query: string, signal?: AbortSignal, limit = 6):
   const deadline = Date.now() + GLOBAL_BUDGET_MS;
   const tried: string[] = [];
   let errorCount = 0;
+  let budgetBlocked = 0;
   let cleanCompletions = 0; // providers that actually RAN and returned (no throw, no skip)
   for (const p of PROVIDERS) {
     if (Date.now() >= deadline) break;
     const t = timeoutSignal(signal, Math.min(PER_PROVIDER_TIMEOUT_MS, deadline - Date.now()));
-    const meterUrl = METER_URLS[p.name] || p.name;
+    // Resolved per call (not at module load) so a late-set SEARXNG_URL attributes right.
+    const meterUrl =
+      p.name === 'searxng' ? `${process.env.SEARXNG_URL || 'https://searx.be'}/search` : METER_URLS[p.name] || p.name;
     try {
       assertProviderBudget(meterUrl);
       const results = await p.run(query, t.signal, limit);
@@ -285,6 +288,7 @@ export const webSearch = async (query: string, signal?: AbortSignal, limit = 6):
       // A budget block is an intentional skip to protect the quota — advance to the
       // next provider without counting it as an upstream failure.
       if (err instanceof ProviderBudgetError) {
+        budgetBlocked += 1;
         tried.push(`${p.name}(budget)`);
       } else {
         noteProviderCall(meterUrl, false);
@@ -298,7 +302,9 @@ export const webSearch = async (query: string, signal?: AbortSignal, limit = 6):
   // Only call it an outage ('error') when providers actually FAILED and NONE completed
   // cleanly. A partial success — some provider ran and simply found nothing — is 'empty',
   // not a live-search outage, so the model gets the right guidance.
+  // Budget exhaustion is an OUTAGE on our side, never evidence of absence — without
+  // this, an all-capped chain would read as "no results" and invite fabrication.
   const status: WebSearchOutcome['status'] =
-    errorCount > 0 && cleanCompletions === 0 ? 'error' : 'empty';
+    (errorCount > 0 || budgetBlocked > 0) && cleanCompletions === 0 ? 'error' : 'empty';
   return { results: [], provider: 'none', tried, status };
 };
