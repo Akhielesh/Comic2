@@ -74,6 +74,36 @@ const write = (next: ModelSelection) => {
 
 export const getModelSelection = (): ModelSelection => read();
 
+/**
+ * The selection ONLY if this device actually stored one — null when untouched.
+ * Cloud sync uses this so a fresh device contributes nothing instead of a
+ * defaults object that would overwrite another device's real choices.
+ */
+export const getStoredModelSelection = (): ModelSelection | null => {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(STORAGE) ? read() : null;
+  } catch {
+    return null;
+  }
+};
+
+/** Replace the whole selection at once (used when applying a cloud snapshot). */
+export const replaceModelSelection = (next: ModelSelection) => {
+  write({ ...DEFAULTS, ...next });
+};
+
+/** Forget this account's model choices (sign-out: prevents bleed into the next user). */
+export const clearModelSelection = () => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(STORAGE);
+    window.dispatchEvent(new CustomEvent(MODEL_SELECTION_CHANGED));
+  } catch {
+    /* ignore */
+  }
+};
+
 export const getSelectedImageModel = (): string | null => read().imageModel;
 export const getSelectedTextModel = (): string | null => read().textModel;
 // A hard lock wins over everything; then an explicit model's source; then the preferred default.

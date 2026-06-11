@@ -4,7 +4,11 @@ declare module 'express-serve-static-core' {
   interface Request {
     apiKeys?: {
       geminiKey?: string | null;
+      /** True when the Gemini key came from the end-user (header or account store), not the platform. */
+      geminiByok?: boolean;
       pixazoKey?: string | null;
+      /** True when the Pixazo key came from the end-user (header or account store), not the platform. */
+      pixazoByok?: boolean;
       /** Resolved OpenRouter key (BYOK header or platform env). */
       openRouterKey?: string | null;
       /** True when the OpenRouter key came from the end-user (BYOK), not the platform. */
@@ -30,14 +34,20 @@ const parseAllowedSources = (header?: string): Set<string> | null => {
   return new Set(header.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean));
 };
 
-export const attachKeys = (req: Request, _res: Response, next: NextFunction) => {
+/** Providers a request may use under its `X-Allowed-Sources` governance header. */
+export const allowedProviderFilter = (req: Request): ((provider: string) => boolean) => {
   const allowed = parseAllowedSources(req.header('X-Allowed-Sources'));
-  const allow = (provider: string) => !allowed || allowed.has(provider);
+  return (provider: string) => !allowed || allowed.has(provider);
+};
 
-  const geminiKey = allow('gemini') ? (req.header('X-Gemini-Key') || process.env.GEMINI_API_KEY || null) : null;
+export const attachKeys = (req: Request, _res: Response, next: NextFunction) => {
+  const allow = allowedProviderFilter(req);
+
+  const geminiHeaderKey = allow('gemini') ? (req.header('X-Gemini-Key') || null) : null;
+  const geminiKey = allow('gemini') ? (geminiHeaderKey || process.env.GEMINI_API_KEY || null) : null;
+  const pixazoHeaderKey = allow('pixazo') ? (req.header('X-Pixazo-Key') || req.header('X-Flux-Key') || null) : null;
   const pixazoKey = allow('pixazo')
-    ? (req.header('X-Pixazo-Key')
-      || req.header('X-Flux-Key')
+    ? (pixazoHeaderKey
       || process.env.PIXAZO_API_KEY
       || process.env.PIXAZO_SUBSCRIPTION_KEY
       || process.env.FLUX_API_KEY
@@ -51,7 +61,9 @@ export const attachKeys = (req: Request, _res: Response, next: NextFunction) => 
   const ideogramKey = allow('ideogram') ? (ideogramHeaderKey || process.env.IDEOGRAM_API_KEY || null) : null;
   req.apiKeys = {
     geminiKey,
+    geminiByok: Boolean(geminiHeaderKey),
     pixazoKey,
+    pixazoByok: Boolean(pixazoHeaderKey),
     openRouterKey,
     openRouterByok: Boolean(openRouterHeaderKey),
     nvidiaKey,

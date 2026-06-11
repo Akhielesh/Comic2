@@ -49,3 +49,33 @@ export const decryptSecret = (ciphertextB64: string, ivB64: string): string | nu
     return null;
   }
 };
+
+// ---- Legacy client-scheme decryption (migration only) --------------------------
+//
+// Before the settings snapshot moved server-side, services/crypto.ts encrypted it in
+// the BROWSER with this hardcoded app secret (PBKDF2 → AES-256-GCM). The secret
+// shipped in the public bundle, so this provided no real protection — but existing
+// `user_settings` rows are still in that format. This decryptor lets the server read
+// (and then re-encrypt) those rows once; it must never be used for new writes.
+
+const LEGACY_APP_SECRET = 'dreamstream-comic-studio-secret-key-v1';
+const LEGACY_SALT = 'dreamstream-salt';
+
+const getLegacyKey = (): Buffer =>
+  crypto.pbkdf2Sync(LEGACY_APP_SECRET, LEGACY_SALT, 100000, 32, 'sha256');
+
+export const decryptLegacyClientBlob = (ciphertextB64: string, ivB64: string): string | null => {
+  try {
+    const raw = Buffer.from(ciphertextB64, 'base64');
+    const iv = Buffer.from(ivB64, 'base64');
+    if (raw.length < 17) return null;
+    // WebCrypto AES-GCM emits ciphertext||authTag — the same layout encryptSecret uses.
+    const tag = raw.subarray(raw.length - 16);
+    const enc = raw.subarray(0, raw.length - 16);
+    const decipher = crypto.createDecipheriv('aes-256-gcm', getLegacyKey(), iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(enc), decipher.final()]).toString('utf8');
+  } catch {
+    return null;
+  }
+};

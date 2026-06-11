@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from "react";
 import { supabase } from "../services/supabase";
-import { encryptKey } from "../services/crypto";
 import { X, Eye, EyeOff, Copy, ChevronDown, ChevronUp, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { Button } from "./Button";
 import { ApiConfiguration } from "./ApiConfiguration";

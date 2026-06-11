@@ -453,6 +453,19 @@ export const setLastActiveChatSessionId = (id: string | null): void => {
 
 const MEMORY_KEY = 'dreamstream_chat_memory';
 
+/** Hard cap for the stored memory text (matches the historical 4000-char limit). */
+export const MAX_CHAT_MEMORY_CHARS = 4000;
+
+// Cloud-sync hook: AuthContext registers a listener so memory/agent changes follow
+// the account like keys and settings do (they used to silently stay on one device).
+let chatDataChangeListener: (() => void) | null = null;
+export const setChatDataChangeListener = (fn: (() => void) | null) => { chatDataChangeListener = fn; };
+export const notifyChatDataChanged = () => {
+  if (chatDataChangeListener) {
+    try { chatDataChangeListener(); } catch { /* never break local writes */ }
+  }
+};
+
 export const getChatMemory = (userId?: string): string => {
   try {
     return localStorage.getItem(`${MEMORY_KEY}:${userId || 'anon'}`) || '';
@@ -463,8 +476,9 @@ export const getChatMemory = (userId?: string): string => {
 
 export const setChatMemory = (text: string, userId?: string): void => {
   try {
-    localStorage.setItem(`${MEMORY_KEY}:${userId || 'anon'}`, text.slice(0, 4000));
+    localStorage.setItem(`${MEMORY_KEY}:${userId || 'anon'}`, text.slice(0, MAX_CHAT_MEMORY_CHARS));
   } catch {
     /* ignore */
   }
+  notifyChatDataChanged();
 };
