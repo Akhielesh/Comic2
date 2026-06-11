@@ -36,6 +36,19 @@
   animation: fadeIn 0.6s ease-out both;
 }
 
+/* Lightbox / popover entrance — a quick, calm pop-in (scale + fade), no vertical
+   slide. Used by the in-app video player and similar focused overlays. */
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+.animate-scale-in {
+  animation: scaleIn 0.18s ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-scale-in { animation: none; }
+}
+
 /* Row actions (edit / copy / overflow menu) that hide until hover on real pointer
    devices, but stay VISIBLE on touch — where `:hover` never fires, so an
    `opacity-0 group-hover:opacity-100` button is permanently unreachable. Pair with a
@@ -423,3 +436,51 @@
   --ds-accent-hover: #e08a6d;
 }
 .dark { color-scheme: dark; }
+
+/* ==========================================================================
+   Leaflet map — restyled to the calm studio language (CARTO basemaps set in
+   MapPanel.tsx). Popups, zoom controls and attribution all use the --ds-*
+   tokens so the map matches the surrounding widgets in both themes.
+   ========================================================================== */
+.ds-map { background: var(--ds-well); }
+.ds-map .leaflet-pane,
+.ds-map .leaflet-control { z-index: 1; }
+
+/* Popup — a small frosted card instead of Leaflet's default white balloon. */
+.ds-map .leaflet-popup-content-wrapper {
+  background: var(--ds-surface-strong);
+  color: var(--ds-ink);
+  border: 1px solid var(--ds-hairline);
+  border-radius: 0.75rem;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 8px 24px var(--ds-hairline);
+  backdrop-filter: blur(8px);
+}
+.ds-map .leaflet-popup-content { margin: 0.5rem 0.7rem; font-size: 12px; line-height: 1.35; }
+.ds-map .ds-map-pop b { display: block; color: var(--ds-ink); font-weight: 600; }
+.ds-map .ds-map-pop span { display: block; margin-top: 2px; color: var(--ds-muted); }
+.ds-map .leaflet-popup-tip { background: var(--ds-surface-strong); border: 1px solid var(--ds-hairline); }
+.ds-map .leaflet-popup-close-button { color: var(--ds-muted); }
+.ds-map .leaflet-popup-close-button:hover { color: var(--ds-ink); }
+
+/* Zoom control — calm rounded glass buttons. */
+.ds-map .leaflet-control-zoom { border: none; box-shadow: 0 1px 3px rgba(0,0,0,0.12); border-radius: 0.6rem; overflow: hidden; }
+.ds-map .leaflet-control-zoom a {
+  background: var(--ds-surface-strong);
+  color: var(--ds-ink);
+  border-bottom: 1px solid var(--ds-hairline-soft);
+  width: 28px; height: 28px; line-height: 28px;
+  backdrop-filter: blur(8px);
+}
+.ds-map .leaflet-control-zoom a:hover { background: var(--ds-hover); color: var(--ds-ink); }
+.ds-map .leaflet-bar a:last-child { border-bottom: none; }
+
+/* Attribution — quiet, legible, theme-aware (CARTO/OSM attribution is required). */
+.ds-map .leaflet-control-attribution {
+  background: var(--ds-surface-soft);
+  color: var(--ds-muted);
+  border-top-left-radius: 0.4rem;
+  font-size: 9px;
+  backdrop-filter: blur(6px);
+}
+.ds-map .leaflet-control-attribution a { color: var(--ds-muted); }
+.ds-map-pin { background: transparent; border: none; }

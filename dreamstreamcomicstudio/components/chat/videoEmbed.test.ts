@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toVideoEmbed, isEmbeddableVideo } from './videoEmbed';
+import { toVideoEmbed, isEmbeddableVideo, toVideoPreview } from './videoEmbed';
 
 describe('toVideoEmbed', () => {
   it('handles youtube watch URLs', () => {
@@ -35,5 +35,27 @@ describe('toVideoEmbed', () => {
     expect(toVideoEmbed('not a url')).toBeNull();
     expect(isEmbeddableVideo('https://example.com')).toBe(false);
     expect(isEmbeddableVideo('https://youtu.be/CtK8QQjRZOs')).toBe(true);
+  });
+});
+
+describe('toVideoPreview', () => {
+  it('builds a muted, looping, chrome-less youtube preview embed', () => {
+    const p = toVideoPreview('https://www.youtube.com/watch?v=CtK8QQjRZOs');
+    expect(p?.provider).toBe('youtube');
+    expect(p?.embedUrl).toContain('mute=1');
+    expect(p?.embedUrl).toContain('controls=0');
+    expect(p?.embedUrl).toContain('loop=1');
+    // A single-video loop requires playlist=<id>.
+    expect(p?.embedUrl).toContain('playlist=CtK8QQjRZOs');
+  });
+
+  it('builds a muted, looping vimeo preview', () => {
+    const p = toVideoPreview('https://vimeo.com/123456789');
+    expect(p?.embedUrl).toContain('muted=1');
+    expect(p?.embedUrl).toContain('loop=1');
+  });
+
+  it('returns null for unembeddable URLs', () => {
+    expect(toVideoPreview('https://example.com/foo')).toBeNull();
   });
 });

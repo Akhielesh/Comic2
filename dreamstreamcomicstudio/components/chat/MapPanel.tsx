@@ -1,6 +1,12 @@
-// Lazy-loaded Leaflet map (free OpenStreetMap tiles, no API key). Plain Leaflet —
-// no react-leaflet — to avoid React-version peer issues. Imported via React.lazy
-// so Leaflet ships as its own chunk only when a map is opened.
+// Lazy-loaded Leaflet map. Plain Leaflet (no react-leaflet) to avoid React-version
+// peer issues; imported via React.lazy so Leaflet ships as its own chunk only when a
+// map is opened.
+//
+// Styling: the raw OpenStreetMap raster (busy, saturated) is replaced with CARTO's
+// minimal basemaps — Positron in light, Dark Matter in dark — so the map reads as part
+// of the calm studio language and flips with the theme. Markers are accent teardrop
+// pins (numbered for ordered trips), the route uses the terracotta accent, and the
+// popups/zoom controls are restyled via the .ds-map-* rules in index.css.
 
 import React, { useEffect, useRef } from 'react';
 import L from 'leaflet';
@@ -10,14 +16,46 @@ import type { MapArtifact } from '../../apiTypes';
 const escapeHtml = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-// Emoji pin via divIcon — avoids bundler/asset issues with Leaflet's default PNG icons.
-const pinIcon = L.divIcon({
-  html: '<div style="font-size:24px;line-height:24px">📍</div>',
-  className: 'ds-map-pin',
-  iconSize: [24, 24],
-  iconAnchor: [12, 24],
-  popupAnchor: [0, -24]
-});
+const isDark = (): boolean =>
+  typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
+
+const TILES = {
+  light: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+  dark: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+};
+const TILE_ATTRIBUTION = '© OpenStreetMap · © CARTO';
+
+const accentColor = (): string => {
+  if (typeof document === 'undefined') return '#D97757';
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--ds-accent').trim();
+  return v || '#D97757';
+};
+
+// Accent teardrop pin (optionally numbered) as an inline-SVG divIcon — avoids
+// bundler/asset issues with Leaflet's default PNG markers and matches the design accent.
+const makePin = (color: string, n?: number): L.DivIcon =>
+  L.divIcon({
+    html:
+      `<svg width="28" height="38" viewBox="0 0 28 38" xmlns="http://www.w3.org/2000/svg" style="filter:drop-shadow(0 2px 3px rgba(0,0,0,0.3))">` +
+      `<path d="M14 0C6.3 0 0 6.2 0 13.9 0 24.3 14 38 14 38s14-13.7 14-24.1C28 6.2 21.7 0 14 0z" fill="${color}"/>` +
+      `<circle cx="14" cy="14" r="8.5" fill="#fff"/>` +
+      (typeof n === 'number'
+        ? `<text x="14" y="18.5" text-anchor="middle" font-family="ui-sans-serif,system-ui,sans-serif" font-size="11" font-weight="700" fill="${color}">${n}</text>`
+        : `<circle cx="14" cy="14" r="3.5" fill="${color}"/>`) +
+      `</svg>`,
+    className: 'ds-map-pin',
+    iconSize: [28, 38],
+    iconAnchor: [14, 38],
+    popupAnchor: [0, -34]
+  });
+
+// A leading "3." / "12 — " in a marker label is the visit order — pull it out for the pin.
+const leadingNumber = (label: string): number | undefined => {
+  const m = label.match(/^\s*(\d{1,2})\s*[.)\-—:]/);
+  if (!m) return undefined;
+  const n = Number(m[1]);
+  return n > 0 && n < 100 ? n : undefined;
+};
 
 const MapPanel: React.FC<{ data: MapArtifact }> = ({ data }) => {
   const elRef = useRef<HTMLDivElement>(null);
@@ -25,22 +63,35 @@ const MapPanel: React.FC<{ data: MapArtifact }> = ({ data }) => {
 
   useEffect(() => {
     if (!elRef.current) return;
-    const map = L.map(elRef.current, { scrollWheelZoom: true });
+    const map = L.map(elRef.current, { scrollWheelZoom: true, zoomControl: true, attributionControl: true });
     mapRef.current = map;
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap contributors',
-      maxZoom: 19
+
+    const tiles = L.tileLayer(isDark() ? TILES.dark : TILES.light, {
+      attribution: TILE_ATTRIBUTION,
+      maxZoom: 20,
+      // CARTO serves @2x retina tiles via the {r} placeholder for crisp rendering.
+      detectRetina: true
     }).addTo(map);
 
+    // Swap basemap live when the app theme flips (so an open map isn't stuck light-on-dark).
+    const themeObserver = new MutationObserver(() => tiles.setUrl(isDark() ? TILES.dark : TILES.light));
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+
+    const accent = accentColor();
     const latlngs: [number, number][] = data.markers.map((m) => [m.lat, m.lng]);
     data.markers.forEach((m) => {
-      L.marker([m.lat, m.lng], { icon: pinIcon })
+      L.marker([m.lat, m.lng], { icon: makePin(accent, leadingNumber(m.label)) })
         .addTo(map)
-        .bindPopup(`<b>${escapeHtml(m.label)}</b>${m.description ? `<br/>${escapeHtml(m.description)}` : ''}`);
+        .bindPopup(
+          `<div class="ds-map-pop"><b>${escapeHtml(m.label)}</b>${m.description ? `<span>${escapeHtml(m.description)}</span>` : ''}</div>`
+        );
     });
 
     if (data.route && data.route.length > 1) {
-      L.polyline(data.route.map((p) => [p.lat, p.lng] as [number, number]), { color: '#3b82f6', weight: 4 }).addTo(map);
+      const pts = data.route.map((p) => [p.lat, p.lng] as [number, number]);
+      // Soft halo under a solid accent line — reads cleanly on both light and dark tiles.
+      L.polyline(pts, { color: '#ffffff', weight: 7, opacity: 0.55, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+      L.polyline(pts, { color: accent, weight: 3.5, opacity: 0.95, lineCap: 'round', lineJoin: 'round' }).addTo(map);
     }
 
     if (latlngs.length === 1) {
@@ -54,10 +105,10 @@ const MapPanel: React.FC<{ data: MapArtifact }> = ({ data }) => {
     // Keep the map sized to its (resizable) container.
     const ro = new ResizeObserver(() => map.invalidateSize());
     ro.observe(elRef.current);
-    // Initial size settle after mount/animation.
     const t = window.setTimeout(() => map.invalidateSize(), 200);
 
     return () => {
+      themeObserver.disconnect();
       ro.disconnect();
       window.clearTimeout(t);
       map.remove();
@@ -65,7 +116,7 @@ const MapPanel: React.FC<{ data: MapArtifact }> = ({ data }) => {
     };
   }, [data]);
 
-  return <div ref={elRef} className="w-full h-full" />;
+  return <div ref={elRef} className="ds-map w-full h-full" />;
 };
 
 export default MapPanel;

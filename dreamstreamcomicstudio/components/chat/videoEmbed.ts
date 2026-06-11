@@ -57,3 +57,30 @@ export const toVideoEmbed = (url: string): VideoEmbed | null => {
 
 /** Whether a URL can be played inline (vs. only opened in a new tab). */
 export const isEmbeddableVideo = (url: string): boolean => toVideoEmbed(url) !== null;
+
+/**
+ * A MUTED, looping, chrome-less embed for the hover preview — the silent "peek" a
+ * thumbnail expands into when the cursor rests on it. Muted autoplay is the only kind
+ * browsers allow without a gesture, so the preview is always silent; the lightbox
+ * (toVideoEmbed) plays with sound on an explicit click. Returns null for unembeddable
+ * URLs so the caller just keeps showing the still thumbnail.
+ */
+export const toVideoPreview = (url: string): VideoEmbed | null => {
+  const embed = toVideoEmbed(url);
+  if (!embed) return null;
+  if (embed.provider === 'youtube') {
+    const qs = new URLSearchParams({
+      autoplay: '1',
+      mute: '1',
+      controls: '0',
+      rel: '0',
+      modestbranding: '1',
+      playsinline: '1',
+      loop: '1',
+      playlist: embed.id // required for a single-video loop
+    });
+    return { ...embed, embedUrl: `https://www.youtube-nocookie.com/embed/${embed.id}?${qs.toString()}` };
+  }
+  // Vimeo: muted, looping background-style preview.
+  return { ...embed, embedUrl: `https://player.vimeo.com/video/${embed.id}?autoplay=1&muted=1&loop=1&background=1` };
+};
