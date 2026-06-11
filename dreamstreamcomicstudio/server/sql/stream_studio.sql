@@ -60,3 +60,9 @@ create policy stream_studio_access_read_own on public.stream_studio_access
   using (auth.uid() = user_id);
 
 revoke insert, update, delete on public.stream_studio_access from anon, authenticated;
+
+-- Hardening (applied 2026-06-11): RLS already blocks rows, but table-level
+-- privileges for `anon` made these tables discoverable in the GraphQL schema.
+-- Only signed-in users ever touch them, so drop anon entirely.
+revoke all on public.stream_studio_events from anon;
+revoke all on public.stream_studio_access from anon;
