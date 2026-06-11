@@ -838,7 +838,12 @@ export const REFRESHABLE_TOOLS = [
   'get_market_sentiment',
   'get_yield_curve',
   'build_portfolio',
-  'convert_currency'
+  'convert_currency',
+  'get_national_debt',
+  'show_macro_tiles',
+  'get_econ_calendar',
+  'get_earnings_calendar',
+  'get_flight_status'
 ] as const;
 
 // --- Guided learning path artifact (structured multi-module course in chat) ---
@@ -1235,6 +1240,271 @@ export interface LiveMonitorArtifact {
   /** The initial snapshot (replaced on every tick). */
   artifact?: ChatArtifact;
   asOf?: string;
+  density?: 'compact' | 'detailed';
+}
+
+// --- Macro indicator tiles (Apple-Weather-style wall) ---
+// Emitted by `show_macro_tiles`. The model composes the tile set; when
+// FRED_API_KEY is configured the server fills any tile carrying a `seriesId`
+// with the live FRED value, change and sparkline.
+export interface MacroTile {
+  /** Display label, e.g. "CPI (YoY)". */
+  label: string;
+  /** FRED series id for live fill, e.g. "CPIAUCSL", "UNRATE", "FEDFUNDS". */
+  seriesId?: string;
+  value?: string | number;
+  unit?: string;
+  /** Change vs the previous reading. */
+  delta?: number;
+  deltaPercent?: number;
+  /** Recent readings, oldest → newest. */
+  spark?: number[];
+  /** Next scheduled release (ISO date) for the countdown. */
+  nextRelease?: string;
+  source?: string;
+  asOf?: string;
+}
+export interface MacroTilesArtifact {
+  title?: string;
+  tiles: MacroTile[];
+  /** True when values were filled from live FRED data. */
+  live?: boolean;
+  asOf?: string;
+  density?: 'compact' | 'detailed';
+}
+
+// --- Economic calendar timeline ---
+// Emitted by `get_econ_calendar`. Live when FINNHUB_API_KEY is configured
+// (and the account tier includes the economic calendar); model-supplied
+// otherwise. Past events render actual-vs-forecast beat/miss coloring.
+export interface EconEvent {
+  /** ISO datetime of the release. */
+  time: string;
+  title: string;
+  /** ISO 3166 country/region code, e.g. "US", "EU". */
+  country?: string;
+  /** 1 = low, 2 = medium, 3 = high importance. */
+  importance?: 1 | 2 | 3;
+  actual?: string | number;
+  forecast?: string | number;
+  previous?: string | number;
+  unit?: string;
+}
+export interface EconCalendarArtifact {
+  title?: string;
+  events: EconEvent[];
+  /** True when events came from a live provider. */
+  live?: boolean;
+  asOf?: string;
+  density?: 'compact' | 'detailed';
+}
+
+// --- Earnings countdown carousel ---
+// Emitted by `get_earnings_calendar`. Live when FINNHUB_API_KEY is configured;
+// model-supplied otherwise. `impliedMovePct` and `preview` are agent-authored.
+export type EarningsSession = 'pre' | 'after' | 'during' | 'unknown';
+export interface EarningsItem {
+  symbol: string;
+  name?: string;
+  /** Report date (ISO). */
+  date: string;
+  session?: EarningsSession;
+  epsEstimate?: number;
+  epsActual?: number;
+  revenueEstimate?: number;
+  /** Options-implied move in percent (agent/estimated unless options data wired). */
+  impliedMovePct?: number;
+  /** Agent's one-line preview ("Watch DC revenue guide"). */
+  preview?: string;
+}
+export interface EarningsCalendarArtifact {
+  title?: string;
+  items: EarningsItem[];
+  live?: boolean;
+  asOf?: string;
+  density?: 'compact' | 'detailed';
+}
+
+// --- Central bank watch ---
+// Emitted by `render_central_banks` (model-authored; rates change rarely and
+// the implied path has no free live source yet — see docs/features/data-connectors.md).
+export interface CentralBank {
+  /** "Federal Reserve", "ECB", "Bank of Japan"… */
+  name: string;
+  /** Short code for the avatar chip, e.g. "Fed". */
+  code?: string;
+  rateName?: string;
+  ratePct: number;
+  /** Next policy meeting (ISO date) for the countdown ring. */
+  nextMeeting?: string;
+  /** Market-implied path points for the mini chart. */
+  impliedPath?: { label: string; ratePct: number }[];
+  /** e.g. "+25 bps · Mar 2026". */
+  lastChange?: string;
+  /** One-liner on the latest central-bank speak. */
+  summary?: string;
+}
+export interface CentralBankWatchArtifact {
+  title?: string;
+  banks: CentralBank[];
+  asOf?: string;
+  density?: 'compact' | 'detailed';
+}
+
+// --- P&L calendar heatmap (GitHub-contribution style) ---
+// Emitted by `render_pnl_calendar` from user/model-supplied daily values.
+export interface PnlDay {
+  /** ISO date. */
+  date: string;
+  value: number;
+  note?: string;
+}
+export interface PnlCalendarArtifact {
+  title?: string;
+  currency?: string;
+  /** Unit when not a currency (e.g. "%"). */
+  unit?: string;
+  days: PnlDay[];
+  density?: 'compact' | 'detailed';
+}
+
+// --- National debt clock (live odometer) ---
+// Emitted by `get_national_debt` from the Treasury FiscalData API (keyless).
+// The client animates a per-second tick derived from the recent drift.
+export interface DebtClockArtifact {
+  label?: string;
+  /** Latest reported level (USD). */
+  amount: number;
+  /** Record date of `amount`. */
+  asOf: string;
+  /** Estimated drift per second (from the last two records). */
+  perSecond?: number;
+  previous?: { date: string; amount: number };
+  source?: string;
+  density?: 'compact' | 'detailed';
+}
+
+// --- Flight status tracker ---
+// Emitted by `get_flight_status`. Live when AVIATIONSTACK_API_KEY is set
+// (real-time status/delays/gates); renders schedule-only (model-supplied)
+// otherwise, with `live: false`.
+export type FlightPhase = 'scheduled' | 'active' | 'landed' | 'cancelled' | 'diverted' | 'unknown';
+export interface FlightEndpointStatus {
+  /** IATA code. */
+  code: string;
+  city?: string;
+  scheduled?: string;
+  estimated?: string;
+  actual?: string;
+  terminal?: string;
+  gate?: string;
+  /** Coordinates for the great-circle arc, when known. */
+  lat?: number;
+  lng?: number;
+}
+export interface FlightStatusArtifact {
+  airline?: string;
+  flightNumber: string;
+  status: FlightPhase;
+  statusNote?: string;
+  departure: FlightEndpointStatus;
+  arrival: FlightEndpointStatus;
+  /** 0–100 along the route (drives the plane position on the arc). */
+  progressPct?: number;
+  altitudeM?: number;
+  speedKmh?: number;
+  delayMin?: number;
+  /** True when data came from a live provider (vs schedule-only). */
+  live?: boolean;
+  asOf?: string;
+  density?: 'compact' | 'detailed';
+}
+
+// --- Trip budget burn ---
+// Emitted by `render_trip_budget`. The card computes burn pace client-side
+// ("at this rate you exceed budget by day N") from the dates + spend.
+export interface BudgetCategory {
+  label: string;
+  spent: number;
+  budget?: number;
+}
+export interface TripBudgetArtifact {
+  title?: string;
+  currency?: string;
+  /** Total trip budget. */
+  total: number;
+  /** Spent so far. */
+  spent: number;
+  startDate?: string;
+  endDate?: string;
+  categories?: BudgetCategory[];
+  density?: 'compact' | 'detailed';
+}
+
+// --- Local cheat-sheet (destination survival card) ---
+// Emitted by `render_cheatsheet` (model-authored per city).
+export interface CheatsheetPhrase {
+  local: string;
+  meaning: string;
+  /** Phonetic pronunciation hint. */
+  say?: string;
+}
+export interface LocalCheatsheetArtifact {
+  destination: string;
+  language?: string;
+  currency?: string;
+  /** General emergency number, e.g. "112". */
+  emergency?: string;
+  police?: string;
+  ambulance?: string;
+  tipping?: string;
+  /** Plug letters, e.g. "Type A / B". */
+  plug?: string;
+  voltage?: string;
+  /** Cash vs card norms. */
+  cashNorm?: string;
+  tapWater?: string;
+  phrases?: CheatsheetPhrase[];
+  /** Scam warnings. */
+  warnings?: string[];
+  etiquette?: string[];
+  density?: 'compact' | 'detailed';
+}
+
+// --- Loyalty wallet (stacked membership cards) ---
+// Emitted by `render_loyalty_wallet` from user-supplied program data.
+export interface LoyaltyCard {
+  program: string;
+  member?: string;
+  number?: string;
+  points?: number;
+  /** "miles", "points", "nights". */
+  pointsLabel?: string;
+  tier?: string;
+  tierProgress?: { value: number; max: number; nextTier?: string };
+  expiry?: string;
+  /** Brand color hex. */
+  accent?: string;
+  /** Agent suggestion ("use 24k points for this leg?"). */
+  note?: string;
+}
+export interface LoyaltyWalletArtifact {
+  title?: string;
+  cards: LoyaltyCard[];
+  density?: 'compact' | 'detailed';
+}
+
+// --- Smart widget stack (auto-rotating stack of live widgets) ---
+// Emitted by `create_widget_stack`: the server executes up to four refreshable
+// tool calls and embeds their snapshots; the client rotates between them
+// (pause on hover, dots to jump, manual-only under reduced motion) and each
+// card refreshes through its own origin.
+export interface WidgetStackArtifact {
+  label?: string;
+  /** Rotation cadence in seconds (default 8, clamped 4–60). */
+  intervalSec?: number;
+  /** Embedded artifact snapshots (each stamped with its origin). */
+  items: ChatArtifact[];
   density?: 'compact' | 'detailed';
 }
 

@@ -41,12 +41,26 @@ import { TripCountdown } from './artifacts/TripCountdown';
 import { GoalTracker } from './artifacts/GoalTracker';
 import { CodeReviewCard } from './artifacts/CodeReviewCard';
 import { LiveMonitorCard } from './artifacts/LiveMonitorCard';
+import { MacroTiles } from './artifacts/MacroTiles';
+import { EconCalendar } from './artifacts/EconCalendar';
+import { EarningsCountdown } from './artifacts/EarningsCountdown';
+import { CentralBankWatch } from './artifacts/CentralBankWatch';
+import { PnlCalendar } from './artifacts/PnlCalendar';
+import { DebtClock } from './artifacts/DebtClock';
+import { FlightStatus } from './artifacts/FlightStatus';
+import { TripBudget } from './artifacts/TripBudget';
+import { LocalCheatsheet } from './artifacts/LocalCheatsheet';
+import { LoyaltyWallet } from './artifacts/LoyaltyWallet';
+import { WidgetStack } from './artifacts/WidgetStack';
 import { renderArtifactNode } from './artifacts/ChatArtifacts';
 import type {
   DashboardArtifact, LearningPathArtifact, ItineraryArtifact,
   TickerTapeArtifact, MarketSentimentArtifact, YieldCurveArtifact, PortfolioArtifact, WhatsChangedArtifact,
   BoardingPassArtifact, CurrencyConverterArtifact, WorldClocksArtifact, PackingListArtifact, TripCountdownArtifact,
-  GoalTrackerArtifact, CodeReviewArtifact, LiveMonitorArtifact
+  GoalTrackerArtifact, CodeReviewArtifact, LiveMonitorArtifact,
+  MacroTilesArtifact, EconCalendarArtifact, EarningsCalendarArtifact, CentralBankWatchArtifact,
+  PnlCalendarArtifact, DebtClockArtifact, FlightStatusArtifact, TripBudgetArtifact,
+  LocalCheatsheetArtifact, LoyaltyWalletArtifact, WidgetStackArtifact
 } from '../../apiTypes';
 import type {
   WeatherArtifact, NewsResultsArtifact, StockQuoteArtifact,
@@ -876,6 +890,171 @@ const liveMonitorDemo: LiveMonitorArtifact = {
   artifact: { type: 'stock_quote', data: stock, origin: { tool: 'get_stock', args: { symbol: 'AAPL' } } }
 };
 
+// ── Wave-2 widget demos: macro/calendar, travel ops and the smart stack. ────────
+
+const macroTilesDemo: MacroTilesArtifact = {
+  title: 'US macro at a glance',
+  live: true,
+  asOf: '2026-06-10T14:30:00Z',
+  tiles: [
+    { label: 'CPI (YoY)', seriesId: 'CPIAUCSL', value: 2.9, unit: '%', delta: -0.1, spark: [3.4, 3.3, 3.3, 3.2, 3.1, 3.1, 3.0, 2.9], nextRelease: '2026-06-11', source: 'FRED', asOf: '2026-05-31' },
+    { label: 'Unemployment', seriesId: 'UNRATE', value: 4.1, unit: '%', delta: 0.1, spark: [3.8, 3.9, 3.9, 4.0, 4.0, 4.0, 4.1, 4.1], nextRelease: '2026-07-02', source: 'FRED', asOf: '2026-05-31' },
+    { label: 'Fed funds (effective)', seriesId: 'FEDFUNDS', value: 3.83, unit: '%', delta: -0.25, spark: [4.58, 4.58, 4.33, 4.33, 4.08, 4.08, 3.83, 3.83], source: 'FRED', asOf: '2026-05-31' },
+    { label: 'GDP (QoQ ann.)', seriesId: 'GDP', value: 2.4, unit: '%', delta: 0.3, spark: [1.6, 2.8, 3.0, 2.1, 1.9, 2.4], nextRelease: '2026-06-26', source: 'FRED', asOf: '2026-03-31' },
+    { label: 'Payrolls (monthly Δ)', seriesId: 'PAYEMS', value: '+178K', delta: -22, spark: [256, 212, 190, 240, 200, 178], nextRelease: '2026-07-02', source: 'FRED' },
+    { label: '30Y mortgage', seriesId: 'MORTGAGE30US', value: 6.12, unit: '%', delta: -0.08, spark: [6.7, 6.6, 6.5, 6.4, 6.3, 6.3, 6.2, 6.12], source: 'FRED', asOf: '2026-06-04' }
+  ]
+};
+
+const econCalendarDemo: EconCalendarArtifact = {
+  live: true,
+  asOf: '2026-06-10T14:30:00Z',
+  events: [
+    { time: '2026-06-09T10:00:00', title: 'Wholesale inventories (MoM)', country: 'US', importance: 1, actual: 0.2, forecast: 0.1, previous: 0.1, unit: '%' },
+    { time: '2026-06-10T08:30:00', title: 'CPI (YoY)', country: 'US', importance: 3, actual: 2.9, forecast: 3.0, previous: 3.1, unit: '%' },
+    { time: '2026-06-11T14:00:00', title: 'FOMC rate decision', country: 'US', importance: 3, forecast: 4.0, previous: 4.0, unit: '%' },
+    { time: '2026-06-12T08:30:00', title: 'PPI (MoM)', country: 'US', importance: 2, forecast: 0.2, previous: 0.3, unit: '%' },
+    { time: '2026-06-13T10:00:00', title: 'UMich consumer sentiment', country: 'US', importance: 2, forecast: 72.5, previous: 71.8 },
+    { time: '2026-06-16T05:00:00', title: 'ZEW economic sentiment', country: 'EU', importance: 2, forecast: 38.0, previous: 35.1 },
+    { time: '2026-06-17T08:30:00', title: 'Retail sales (MoM)', country: 'US', importance: 3, forecast: 0.3, previous: -0.1, unit: '%' }
+  ]
+};
+
+const earningsDemo: EarningsCalendarArtifact = {
+  live: true,
+  asOf: '2026-06-10T14:30:00Z',
+  items: [
+    { symbol: 'AVGO', name: 'Broadcom', date: '2026-06-09', session: 'after', epsEstimate: 1.85, epsActual: 1.92, impliedMovePct: 6.1, preview: 'Beat on AI networking strength.' },
+    { symbol: 'ORCL', name: 'Oracle', date: '2026-06-11', session: 'after', epsEstimate: 1.62, impliedMovePct: 7.4, preview: 'Watch OCI growth rate and capex guide.' },
+    { symbol: 'ADBE', name: 'Adobe', date: '2026-06-12', session: 'after', epsEstimate: 4.97, impliedMovePct: 5.2, preview: 'Firefly monetization vs seat growth.' },
+    { symbol: 'LEN', name: 'Lennar', date: '2026-06-16', session: 'after', epsEstimate: 2.1, impliedMovePct: 4.0, preview: 'Margins under rate-buydown pressure.' },
+    { symbol: 'KR', name: 'Kroger', date: '2026-06-18', session: 'pre', epsEstimate: 1.43, impliedMovePct: 3.5, preview: 'Grocery inflation pass-through read.' }
+  ]
+};
+
+const centralBanksDemo: CentralBankWatchArtifact = {
+  asOf: '2026-06-10T14:30:00Z',
+  banks: [
+    {
+      name: 'Federal Reserve', code: 'Fed', rateName: 'Fed funds target (upper)', ratePct: 4.0,
+      nextMeeting: '2026-06-11', lastChange: '−25 bps · Mar 2026',
+      impliedPath: [{ label: 'Jun', ratePct: 4.0 }, { label: 'Sep', ratePct: 3.75 }, { label: 'Dec', ratePct: 3.5 }],
+      summary: 'Powell: "policy is well positioned" — cuts contingent on shelter disinflation holding.'
+    },
+    {
+      name: 'European Central Bank', code: 'ECB', rateName: 'Deposit facility', ratePct: 2.15,
+      nextMeeting: '2026-07-23', lastChange: '−25 bps · Apr 2026',
+      impliedPath: [{ label: 'Jul', ratePct: 2.15 }, { label: 'Oct', ratePct: 2.0 }, { label: 'Jan', ratePct: 2.0 }],
+      summary: 'Lagarde signals a pause; wage growth cooling faster than staff projections.'
+    },
+    {
+      name: 'Bank of Japan', code: 'BoJ', rateName: 'Policy rate', ratePct: 0.75,
+      nextMeeting: '2026-06-16', lastChange: '+25 bps · Jan 2026',
+      impliedPath: [{ label: 'Jun', ratePct: 0.75 }, { label: 'Sep', ratePct: 1.0 }],
+      summary: 'Ueda keeps the hiking door open as shunto wage gains broaden.'
+    }
+  ]
+};
+
+// Deterministic ~14 weeks of trading-day P&L (weekends skipped).
+const pnlDemo: PnlCalendarArtifact = {
+  title: 'Daily P&L',
+  currency: 'USD',
+  days: Array.from({ length: 98 }, (_, i) => {
+    const d = new Date(Date.UTC(2026, 2, 2 + i)); // from Mar 2, 2026
+    const day = d.getUTCDay();
+    if (day === 0 || day === 6) return null;
+    const value = Math.round(Math.sin(i * 1.7) * 420 + Math.cos(i * 0.9) * 180);
+    return { date: d.toISOString().slice(0, 10), value };
+  }).filter((d): d is { date: string; value: number } => d !== null)
+};
+
+const debtDemo: DebtClockArtifact = {
+  label: 'US national debt',
+  amount: 37_214_582_113_402,
+  asOf: '2026-06-09',
+  perSecond: 48_950,
+  previous: { date: '2026-06-08', amount: 37_210_352_833_120 },
+  source: 'US Treasury · Debt to the Penny'
+};
+
+const flightDemo: FlightStatusArtifact = {
+  airline: 'United',
+  flightNumber: 'UA2402',
+  status: 'active',
+  departure: { code: 'SFO', city: 'San Francisco', scheduled: '2026-06-10T09:15:00', actual: '2026-06-10T09:32:00', terminal: 'I', gate: 'G92' },
+  arrival: { code: 'HND', city: 'Tokyo Haneda', scheduled: '2026-06-11T13:05:00', estimated: '2026-06-11T13:18:00', terminal: '3' },
+  progressPct: 62,
+  altitudeM: 10_600,
+  speedKmh: 905,
+  delayMin: 17,
+  live: true,
+  asOf: '2026-06-10T14:30:00Z'
+};
+
+const tripBudgetDemo: TripBudgetArtifact = {
+  title: 'Japan trip budget',
+  currency: 'USD',
+  total: 3000,
+  spent: 1240,
+  startDate: '2026-06-06',
+  endDate: '2026-06-16',
+  categories: [
+    { label: 'Food', spent: 420, budget: 600 },
+    { label: 'Stay', spent: 520, budget: 1200 },
+    { label: 'Transport', spent: 180, budget: 400 },
+    { label: 'Fun & shopping', spent: 120, budget: 500 }
+  ]
+};
+
+const cheatsheetDemo: LocalCheatsheetArtifact = {
+  destination: 'Tokyo',
+  language: 'Japanese',
+  currency: 'JPY (¥)',
+  police: '110',
+  ambulance: '119',
+  tipping: 'Not customary — refusing change can cause confusion; never tip at restaurants',
+  plug: 'Type A / B',
+  voltage: '100V · 50/60Hz',
+  cashNorm: 'Cash-heavy: many izakaya and shrines are card-free; load a Suica for transit',
+  tapWater: 'Safe to drink',
+  phrases: [
+    { local: 'すみません', meaning: 'Excuse me / sorry', say: 'soo-mee-mah-sen' },
+    { local: 'ありがとうございます', meaning: 'Thank you (polite)', say: 'ah-ree-gah-toh go-zai-mas' },
+    { local: '英語を話せますか？', meaning: 'Do you speak English?', say: 'ay-go o ha-nah-seh-mas-ka' },
+    { local: 'お会計お願いします', meaning: 'The bill, please', say: 'o-kai-kay o-neh-gai-shi-mas' }
+  ],
+  warnings: ['Ignore street touts in Kabukichō offering "free" bar guides', 'Taxis are honest but expensive — trains beat them until midnight'],
+  etiquette: ['Stand left on Tokyo escalators (right in Osaka)', 'No phone calls on trains; set your phone to manner mode', 'Carry your trash — public bins are rare']
+};
+
+const loyaltyDemo: LoyaltyWalletArtifact = {
+  title: 'Your programs',
+  cards: [
+    {
+      program: 'United MileagePlus', member: 'A. Traveler', number: '1234', points: 84_200, pointsLabel: 'miles',
+      tier: 'Gold', tierProgress: { value: 8200, max: 12_000, nextTier: 'Platinum' }, accent: '#1414D2',
+      note: 'Enough for a one-way SFO→HND saver — 24k miles on the July dates.'
+    },
+    {
+      program: 'Marriott Bonvoy', member: 'A. Traveler', number: '5678', points: 61_500, pointsLabel: 'points',
+      tier: 'Platinum', tierProgress: { value: 38, max: 75, nextTier: 'Titanium' }, accent: '#b45309',
+      note: 'Kyoto Mon–Thu runs 38k/night — book with points, pay cash on the weekend.'
+    },
+    { program: 'JR East', points: 3_180, pointsLabel: 'points', tier: 'Basic', accent: '#0f766e', expiry: '2027-03-31' }
+  ]
+};
+
+const widgetStackDemo: WidgetStackArtifact = {
+  label: 'Morning glance',
+  intervalSec: 8,
+  items: [
+    { type: 'stock_quote', data: stock, origin: { tool: 'get_stock', args: { symbol: 'AAPL' } } },
+    { type: 'currency_converter', data: currencyDemo, origin: { tool: 'convert_currency', args: { from: 'USD', to: 'JPY' } } },
+    { type: 'debt_clock', data: debtDemo, origin: { tool: 'get_national_debt', args: {} } }
+  ]
+};
+
 export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Guided learning path (modules · tracked progress · practice prompts)', type: 'learning_path', category: 'Learning', node: <LearningPathCard data={learningPathDemo} /> },
   { title: 'Travel itinerary (day tabs · map · budget · live weather)', type: 'itinerary', category: 'World & media', node: <ItineraryCard data={itineraryDemo} /> },
@@ -918,7 +1097,18 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Trip countdown (live D/H/M/S · weather strip · prep list)', type: 'trip_countdown', category: 'Travel & life', node: <TripCountdown data={tripCountdownDemo} /> },
   { title: 'Goal tracker (/goal · milestones · saved progress)', type: 'goal_tracker', category: 'Travel & life', node: <GoalTracker data={goalDemo} /> },
   { title: 'Code review (/code-review · verdict · findings · fixes)', type: 'code_review', category: 'Agents & code', node: <CodeReviewCard data={codeReviewDemo} /> },
-  { title: 'Live monitor (/loop · auto-refreshing wrapped widget)', type: 'live_monitor', category: 'Agents & code', node: <LiveMonitorCard data={liveMonitorDemo} renderEmbedded={renderArtifactNode} /> }
+  { title: 'Live monitor (/loop · auto-refreshing wrapped widget)', type: 'live_monitor', category: 'Agents & code', node: <LiveMonitorCard data={liveMonitorDemo} renderEmbedded={renderArtifactNode} /> },
+  { title: 'Macro tiles (FRED-live indicators · release countdowns)', type: 'macro_tiles', category: 'Finance', node: <MacroTiles data={macroTilesDemo} /> },
+  { title: 'Economic calendar (timeline · importance · beat/miss)', type: 'econ_calendar', category: 'Finance', node: <EconCalendar data={econCalendarDemo} /> },
+  { title: 'Earnings countdown (carousel · implied move · previews)', type: 'earnings_calendar', category: 'Finance', node: <EarningsCountdown data={earningsDemo} /> },
+  { title: 'Central bank watch (rates · meeting countdowns · implied path)', type: 'central_bank_watch', category: 'Finance', node: <CentralBankWatch data={centralBanksDemo} /> },
+  { title: 'National debt clock (live odometer · $/second drift)', type: 'debt_clock', category: 'Finance', node: <DebtClock data={debtDemo} /> },
+  { title: 'Calendar heatmap (daily P&L · win rate · best/worst)', type: 'pnl_calendar', category: 'Data & charts', node: <PnlCalendar data={pnlDemo} /> },
+  { title: 'Flight tracker (route arc · live progress · delays)', type: 'flight_status', category: 'Travel & life', node: <FlightStatus data={flightDemo} /> },
+  { title: 'Trip budget burn (fuel gauge · pace verdict · categories)', type: 'trip_budget', category: 'Travel & life', node: <TripBudget data={tripBudgetDemo} /> },
+  { title: 'Destination cheat-sheet (emergency · plugs · phrases · scams)', type: 'local_cheatsheet', category: 'Travel & life', node: <LocalCheatsheet data={cheatsheetDemo} /> },
+  { title: 'Loyalty wallet (stacked cards · tier progress · redemption tips)', type: 'loyalty_wallet', category: 'Travel & life', node: <LoyaltyWallet data={loyaltyDemo} /> },
+  { title: 'Smart stack (auto-rotating live cards · per-card refresh)', type: 'widget_stack', category: 'Agents & code', node: <WidgetStack data={widgetStackDemo} renderEmbedded={renderArtifactNode} /> }
 ];
 
 /** Artifact types that have a live demo in the gallery (used by the coverage test). */
