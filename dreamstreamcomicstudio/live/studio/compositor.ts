@@ -100,6 +100,7 @@ export class ProgramCompositor {
   private focusId: string | null = null;
   private speaking = new Set<string>();
   private accent = '#c2603f';
+  private lastMultiSig = -1;
   /** Fires when the user stops a screen share from the browser UI. */
   onScreenEnded: (() => void) | null = null;
 
@@ -276,10 +277,24 @@ export class ProgramCompositor {
     const multi = MULTI_SCENES.has(this.scene);
     // Skip identical frames: drawing only when a source advanced keeps CPU
     // (and the encoder, which follows canvas changes) idle between frames.
-    // Meeting layouts have many independent sources — they draw every tick.
+    // Meeting layouts sum every tile's clock — guests' 15–30 fps cams must
+    // not make a 60 fps canvas re-encode static pixels.
+    if (multi) {
+      let sig = 0;
+      for (const t of this.allTiles()) sig += t.video.currentTime;
+      if (!this.dirty && sig === this.lastMultiSig) return;
+      this.lastMultiSig = sig;
+      this.dirty = false;
+      const { ctx, width: w, height: h } = this;
+      ctx.filter = 'none';
+      ctx.fillStyle = '#17161b';
+      ctx.fillRect(0, 0, w, h);
+      this.drawMulti();
+      return;
+    }
     const camT = this.camVideo.currentTime;
     const scrT = this.screenVideo?.currentTime ?? -1;
-    if (!multi && !this.dirty && camT === this.lastCamTime && scrT === this.lastScreenTime) return;
+    if (!this.dirty && camT === this.lastCamTime && scrT === this.lastScreenTime) return;
     this.lastCamTime = camT;
     this.lastScreenTime = scrT;
     this.dirty = false;
@@ -288,11 +303,6 @@ export class ProgramCompositor {
     ctx.filter = 'none';
     ctx.fillStyle = '#17161b';
     ctx.fillRect(0, 0, w, h);
-
-    if (multi) {
-      this.drawMulti();
-      return;
-    }
 
     if (this.scene === 'screen' && this.screenVideo) {
       if (this.pipPos === 'side' && this.camEnabled && this.hasCamFrame()) {
