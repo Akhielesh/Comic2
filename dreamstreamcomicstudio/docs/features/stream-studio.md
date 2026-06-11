@@ -202,6 +202,37 @@ embeds/API → billing.
 
 ---
 
+## 9.2 v4 additions (shipped — brand, accounts, onboarding, guardrails)
+
+- **Brand:** new `StreamStudioMark`/`StreamStudioLogo` component (on-air tile:
+  rounded square, broadcast arcs, live dot) used across the rail/topbars, with
+  `public/stream-studio.svg` as the favicon/asset.
+- **Camera honesty:** the burned-in digital zoom is gone — zoom appears only
+  when the device exposes NATIVE camera zoom on the track (Chrome Android /
+  Safari 17+). Front/rear flip uses `facingMode: { exact }`; the host's
+  self-view is mirrored on the front camera (the program/viewers stay
+  unmirrored, like every camera app).
+- **Screen + cam layouts:** PiP corner (↖↗↙↘) + size (S/M/L) + a side-by-side
+  mode, switchable live from the camera bar and remembered. (True multi-guest
+  scenes still need WebRTC guest ingest — next big rock.)
+- **Host-exit guardrail:** if the host's tab closes mid-stream the room pauses
+  instantly (viewers see BRB) and **auto-ends after 2 minutes** unless the host
+  returns; restarting after an auto-end works. Saves storage + strands nobody.
+- **Account & settings sync:** Stream Studio now has an Account & sync panel —
+  signed-in users (shared DreamStream Studio session) get events AND settings
+  synced via `stream_studio_settings` (newer-wins). Signed-out stays local.
+  "Import event" on the dashboard adds an event from its private studio link
+  (phone→laptop without an account).
+- **Per-product access (`server/sql/product_access.sql`):** generic
+  `product_access` table — admins onboard users to exactly one studio
+  (stream/comic/chat) standalone or revoke one. New admin API:
+  `POST/GET /api/admin/product-access` (requireAdmin), optional branded invite.
+- **Invite email:** new `studio-invite` template ("X invited you to Stream
+  Studio") with a feature tour and a "more studios coming soon" note;
+  `sendStudioInvite()` in the mailer.
+- **Misc:** emoji library grown to 72; the dashboard's history-delete button
+  was removed (history is durable); cloud prefs adopt on app start.
+
 ## 9.1 v3 additions (shipped — performance, retention, moderation, accounts)
 
 Product name is now **Stream Studio** everywhere user-facing (the worker keeps

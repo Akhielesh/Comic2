@@ -1,8 +1,8 @@
 // Dashboard — live-now hero, lifetime stats, your streams (hydrated from the
 // worker — cloud truth) and your recording downloads.
 import React, { useEffect, useMemo, useState } from 'react';
-import { hydrateMyEvents, listMyRecordings, removeMyEvent, type MyEvent } from '../events';
-import { fetchStudioAccess, syncMyEvents, type StudioAccess } from '../sync';
+import { addMyEvent, hydrateMyEvents, listMyRecordings, type MyEvent } from '../events';
+import { fetchStudioAccess, pushEventToCloud, syncMyEvents, type StudioAccess } from '../sync';
 import { fmtBytes, fmtDuration } from '../metrics';
 import type { Nav } from '../nav';
 import { viewerUrl } from '../nav';
@@ -75,7 +75,6 @@ function EventCard({ ev, nav, push }: { ev: MyEvent; nav: Nav; push: PushToast }
         {live && <Btn variant="solid" size="sm" icon="broadcast" onClick={() => nav.studio(ev.id, ev.hostKey)}>Open Studio</Btn>}
         {ended && <Btn variant="ghost" size="sm" icon="chart" onClick={() => nav.summary(ev.id, ev.hostKey)}>Recap</Btn>}
         {!live && !ended && <Btn variant="ghost" size="sm" onClick={() => nav.studio(ev.id, ev.hostKey)}>Open Studio</Btn>}
-        {ended && <IconBtn name="trash" size={15} label="Remove from list" onClick={() => { removeMyEvent(ev.id); push('Removed from your list'); }} />}
       </div>
     </div>
   );
@@ -142,6 +141,27 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
     return `Good ${day}${who ? `, ${who}` : ''}`;
   })();
 
+  /** Hosted from another device without signing in? Paste the private studio
+   *  link and the event (with its logs, recap and recordings) appears here. */
+  const importByLink = async () => {
+    const raw = window.prompt('Paste your private studio link (the one with ?e=…&k=…):');
+    if (!raw) return;
+    try {
+      const url = new URL(raw.trim());
+      const id = url.searchParams.get('e');
+      const key = url.searchParams.get('k');
+      if (!id || !key) throw new Error('missing params');
+      const mine: MyEvent = { id, hostKey: key, title: 'Imported stream', createdAt: Date.now(), scheduledAt: null };
+      addMyEvent(mine);
+      void pushEventToCloud(mine);
+      const evs = await hydrateMyEvents();
+      setEvents(evs);
+      push('Event imported — recap and logs are available now', { icon: 'check' });
+    } catch {
+      push('That does not look like a studio link', { icon: 'alert' });
+    }
+  };
+
   const tabs = [
     { id: 'all', label: 'All' },
     { id: 'live', label: 'Live', badge: live.length },
@@ -169,6 +189,7 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
           </p>
         </div>
         <span className="spacer" />
+        <Btn variant="ghost" icon="link" onClick={() => void importByLink()}>Import event</Btn>
         <Btn variant="solid" icon="plus" onClick={() => nav.create()}>New event</Btn>
       </div>
 

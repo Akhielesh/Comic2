@@ -9,6 +9,7 @@ import { getEvent } from './api';
 import { findMyEvent } from './events';
 import type { Nav } from './nav';
 import { loadPrefs } from './prefs';
+import { pullPrefsFromCloud } from './sync';
 import { ACCENTS, applyAppearance, loadAppearance, saveAppearance, type Appearance } from './theme';
 import { CreateView } from './views/CreateView';
 import { DashboardView } from './views/DashboardView';
@@ -18,6 +19,7 @@ import { StudioView } from './views/StudioView';
 import { SummaryView } from './views/SummaryView';
 import { ViewerView } from './views/ViewerView';
 import { Icon } from './ui/icons';
+import { StreamStudioLogo } from './ui/logo';
 import { Avatar, cx, useToasts, type PushToast } from './ui/primitives';
 
 type Route =
@@ -107,6 +109,11 @@ export function LiveApp() {
     saveAppearance(appearance);
   }, [appearance]);
 
+  // Account settings follow the user: adopt cloud prefs when they're newer.
+  useEffect(() => {
+    void pullPrefsFromCloud();
+  }, []);
+
   useEffect(() => {
     const onPop = () => setRoute(parseRoute());
     window.addEventListener('popstate', onPop);
@@ -168,8 +175,7 @@ export function LiveApp() {
         <nav className={cx('rail', !railOpen && 'slim')} aria-label="Main">
           <div className="rail-top">
             <button className="rail-logo" onClick={() => nav.dashboard()}>
-              <span className="orb" />
-              <span className="logo-text">Stream <span className="sub">Studio</span></span>
+              <StreamStudioLogo />
             </button>
             <button className="rail-collapse" onClick={() => setRailOpen((o) => !o)} aria-label={railOpen ? 'Collapse navigation' : 'Expand navigation'}>
               <Icon name={railOpen ? 'chevronLeft' : 'chevronRight'} size={16} />

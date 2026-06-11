@@ -1,7 +1,7 @@
 // Customize — scenes, camera looks, chat & reactions, quality & encoding,
 // alerts and hotkeys. Every control writes StudioPrefs; the Studio reads them
 // when it opens (and pushes slow-mode to the room at go-live).
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { QUALITY_PRESETS, presetById } from '../config';
 import type { Nav } from '../nav';
 import { DEFAULT_PREFS, LOOK_LABELS, loadPrefs, playChime, savePrefs, type StudioPrefs } from '../prefs';
@@ -10,8 +10,10 @@ import { SCENES } from '../studio/compositor';
 import { SceneSketch } from '../components/scenes';
 import { Icon } from '../ui/icons';
 import { Btn, Field, Segmented, Slider, Toggle, cx, type PushToast } from '../ui/primitives';
+import { fetchStudioAccess, pullPrefsFromCloud, pushPrefsToCloud, signOut, type StudioAccess } from '../sync';
 
 const SET_CATS = [
+  { id: 'account', label: 'Account & sync', icon: 'user' },
   { id: 'scenes', label: 'Scenes', icon: 'layers' },
   { id: 'camera', label: 'Camera & looks', icon: 'video' },
   { id: 'chat', label: 'Chat & reactions', icon: 'chat' },
@@ -44,13 +46,29 @@ function Row({ title, desc, children }: { title: string; desc?: string; children
 }
 
 export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
-  const [cat, setCat] = useState('scenes');
+  const [cat, setCat] = useState('account');
   const [prefs, setPrefsState] = useState<StudioPrefs>(loadPrefs);
+  const [account, setAccount] = useState<StudioAccess | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      // Cloud settings first (newer wins), then who we are.
+      const adopted = await pullPrefsFromCloud();
+      if (!cancelled && adopted) setPrefsState(loadPrefs());
+      const acc = await fetchStudioAccess();
+      if (!cancelled) setAccount(acc);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const set = <K extends keyof StudioPrefs>(key: K, value: StudioPrefs[K]) => {
     const next = { ...prefs, [key]: value };
     setPrefsState(next);
     savePrefs(next);
+    void pushPrefsToCloud(); // mirrored to the account when signed in
   };
 
   const preset = presetById(prefs.qualityId);
@@ -61,7 +79,7 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
       <div className="page-head">
         <div>
           <h1 className="page-title">Customize</h1>
-          <p className="page-sub">Make the studio yours — scenes, look, encoding, alerts and shortcuts. Saved on this device, applied next time you open the studio.</p>
+          <p className="page-sub">Make the studio yours — scenes, look, encoding, alerts and shortcuts. Saved on this device and synced to your account when you're signed in.</p>
         </div>
         <span className="spacer" />
         <Btn
@@ -89,6 +107,62 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
         </nav>
 
         <div className="card card-pad settings-content">
+          {cat === 'account' && (
+            <>
+              <div className="set-head"><h2 className="serif">Account &amp; sync</h2></div>
+              <p className="set-intro">
+                Stream Studio works without an account — events and settings live in this browser. Sign in to your
+                DreamStream Studio account and everything syncs: past sessions, recaps and these settings follow you
+                across devices.
+              </p>
+              {account == null ? (
+                <div className="skeleton" style={{ height: 56 }} aria-label="Loading account" />
+              ) : account.signedIn ? (
+                <>
+                  <Row title="Signed in" desc={account.email || 'Your DreamStream Studio account'}>
+                    <Btn
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        void signOut().then(() => {
+                          setAccount({ signedIn: false, allowed: true, scope: 'full' });
+                          push('Signed out on this device', { icon: 'check' });
+                        });
+                      }}
+                    >
+                      Sign out
+                    </Btn>
+                  </Row>
+                  <Row title="Cloud sync" desc="Events, recaps and settings sync to your account automatically.">
+                    <Btn
+                      variant="soft"
+                      size="sm"
+                      icon="refresh"
+                      onClick={() => {
+                        void pushPrefsToCloud().then(() => push('Settings synced', { icon: 'check' }));
+                      }}
+                    >
+                      Sync now
+                    </Btn>
+                  </Row>
+                  {account.scope === 'studio_only' && (
+                    <Row title="Access" desc="This account is onboarded for Stream Studio standalone.">
+                      <span className="pill pill-info">Stream Studio</span>
+                    </Row>
+                  )}
+                </>
+              ) : (
+                <Row title="Not signed in" desc="Settings and events stay on this device. Sign in via the main app to enable sync.">
+                  <Btn variant="solid" size="sm" icon="arrowRight" onClick={() => window.open('/', '_blank')}>
+                    Open DreamStream Studio
+                  </Btn>
+                </Row>
+              )}
+              <Row title="Security" desc="Your private studio links carry the host key — treat them like passwords. Viewer links are safe to share anywhere.">
+                <span />
+              </Row>
+            </>
+          )}
           {cat === 'scenes' && (
             <>
               <div className="set-head"><h2 className="serif">Scenes</h2></div>

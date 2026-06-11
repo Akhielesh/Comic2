@@ -15,6 +15,7 @@ import { coverGradient } from '../theme';
 import { BrbSlate } from '../components/scenes';
 import { ChatRail, ReactBar } from '../components/rails';
 import { Icon } from '../ui/icons';
+import { StreamStudioLogo } from '../ui/logo';
 import {
   Avatar, Btn, FloatLayer, Pill, cx, useFloatingEmoji, useMediaQuery, type PushToast,
 } from '../ui/primitives';
@@ -633,7 +634,7 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
   return (
     <div className="viewer-root">
       <div className="viewer-topbar">
-        <span className="rail-logo" style={{ cursor: 'default' }}><span className="orb" /> Stream <span className="sub">Studio</span></span>
+        <span className="rail-logo" style={{ cursor: 'default' }}><StreamStudioLogo /></span>
         <span className="spacer" />
         {status === 'live' && <Pill tone="live" dot pulse>LIVE</Pill>}
       </div>

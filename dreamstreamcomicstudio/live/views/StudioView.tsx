@@ -23,13 +23,14 @@ import {
 import { Ema, fmtBps, fmtBytes, fmtDuration } from '../metrics';
 import type { Nav } from '../nav';
 import { viewerUrl } from '../nav';
-import { loadPrefs, playChime } from '../prefs';
+import { loadPrefs, playChime, savePrefs } from '../prefs';
 import type { ChatMsg, LobbyEntry, LogEntry, PersonEntry, StreamStatus } from '../protocol';
 import { ProgramCompositor, SCENES, fitCanvasToSource, type SceneId } from '../studio/compositor';
 import { uploadRecording } from '../api';
 import { ActivityRail, ChatRail, HealthRail, PeopleRail } from '../components/rails';
 import { SceneSketch } from '../components/scenes';
 import { Icon } from '../ui/icons';
+import { StreamStudioMark } from '../ui/logo';
 import {
   Btn, FloatLayer, IconBtn, Pill, Segmented, Tabs, cx,
   useFloatingEmoji, useMediaQuery, type PushToast,
@@ -37,8 +38,10 @@ import {
 
 type RailTab = 'chat' | 'people' | 'activity' | 'health';
 
-/** <video> bound to a MediaStream (the program preview). */
-function VideoSink({ stream, className }: { stream: MediaStream | null; className?: string }) {
+/** <video> bound to a MediaStream (the program preview). `mirror` flips the
+ *  host's SELF-VIEW only — what viewers and the recording get is unmirrored,
+ *  matching how every camera app behaves. */
+function VideoSink({ stream, className, mirror }: { stream: MediaStream | null; className?: string; mirror?: boolean }) {
   const ref = useRef<HTMLVideoElement | null>(null);
   useEffect(() => {
     const v = ref.current;
@@ -48,7 +51,17 @@ function VideoSink({ stream, className }: { stream: MediaStream | null; classNam
       if (stream) v.play().catch(() => undefined);
     }
   }, [stream]);
-  return <video ref={ref} autoPlay muted playsInline className={className} aria-label="Program preview" />;
+  return (
+    <video
+      ref={ref}
+      autoPlay
+      muted
+      playsInline
+      className={className}
+      style={mirror ? { transform: 'scaleX(-1)' } : undefined}
+      aria-label="Program preview"
+    />
+  );
 }
 
 export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; hostKey: string; nav: Nav; push: PushToast }) {
@@ -104,6 +117,8 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   const [viewerCurve, setViewerCurve] = useState<number[]>([]);
   const [segMs, setSegMs] = useState(SEGMENT_MS);
   const [maxViewers, setMaxViewers] = useState(100);
+  const [pipPos, setPipPos] = useState(prefs.pipPos);
+  const [pipSize, setPipSize] = useState(prefs.pipSize);
   const [floats, spawnFloat] = useFloatingEmoji();
   const [, setClock] = useState(0); // 1 Hz re-render for timers
 
@@ -154,6 +169,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
         const comp = new ProgramCompositor(dims.w, dims.h, prefs.fps);
         comp.setHostInitial(hostName);
         comp.setLook(prefs.look);
+        comp.setPipLayout(prefs.pipPos, prefs.pipSize);
         comp.setCamera(cam);
         comp.onScreenEnded = () => {
           comp.setScene('solo');
@@ -272,6 +288,27 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   const hostLog = (kind: LogEntry['kind'], tag: string, msg: string) =>
     socketRef.current?.send({ t: 'log', kind, tag, msg });
 
+  /** Screen + cam layout — applied live and remembered for next time. */
+  const applyPip = (pos: typeof pipPos, size: typeof pipSize) => {
+    setPipPos(pos);
+    setPipSize(size);
+    compRef.current?.setPipLayout(pos, size);
+    savePrefs({ ...loadPrefs(), pipPos: pos, pipSize: size });
+  };
+
+  // Closing the tab while live would strand viewers — warn first. The room
+  // also self-protects: it pauses when the host vanishes and auto-ends later.
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (statusRef.current === 'live') {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, []);
+
   // ------------------------------------------------------------- streaming
   const startSegments = () => {
     if (!mixed || !mime) return;
@@ -303,7 +340,9 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     if (prefs.slowSec > 0) socketRef.current?.send({ t: 'config', slow: prefs.slowSec });
     setStatus('live');
     startSegments();
-    updateMyEvent(eventId, { status: 'live' });
+    updateMyEvent(eventId, { status: 'live', startedAt: startedAt ?? Date.now() });
+    const mine = findMyEvent(eventId);
+    if (mine) void pushEventToCloud(mine);
     if (prefs.autoRecord && !localRecRef.current) startRecording();
     push('You are live', { icon: 'broadcast' });
   };
@@ -453,9 +492,9 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     camRef.current = fresh;
     compRef.current?.setCamera(fresh);
     fresh.getVideoTracks().forEach((t) => (t.enabled = camOn));
-    setZoomCap(zoomCapability(fresh.getVideoTracks()[0]));
-    setZoomVal(1);
-    compRef.current?.setDigitalZoom(1);
+    const cap = zoomCapability(fresh.getVideoTracks()[0]);
+    setZoomCap(cap);
+    setZoomVal(cap?.value ?? 1);
     old?.getVideoTracks().forEach((t) => t.stop());
   };
 
@@ -472,23 +511,25 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     setCamOn(next);
   };
 
+  // Zoom is the camera's NATIVE zoom only (Chrome Android / Safari 17+ expose
+  // it on the track). Devices without it simply don't show a zoom control —
+  // no synthesized crop-zoom.
   const applyZoom = async (v: number) => {
     setZoomVal(v);
     const track = camRef.current?.getVideoTracks()[0];
     if (track && zoomCap) {
       try {
         await setZoom(track, v);
-        return;
       } catch {
-        /* hardware refused — fall through to digital */
+        /* device refused the zoom level */
       }
     }
-    compRef.current?.setDigitalZoom(v); // burned into the program: viewers see it
   };
 
   const zoomMin = zoomCap ? zoomCap.min : 1;
-  const zoomMax = zoomCap ? Math.max(zoomCap.max, zoomCap.min + 0.1) : 4;
+  const zoomMax = zoomCap ? Math.max(zoomCap.max, zoomCap.min + 0.1) : 1;
   const zoomStep = zoomCap ? zoomCap.step : 0.1;
+  const hasNativeZoom = !!zoomCap && zoomMax > zoomMin;
 
   // ------------------------------------------------------------------ chat
   const sendChat = (text: string) => socketRef.current?.send({ t: 'chat', text });
@@ -560,7 +601,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     return (
       <div className="studio">
         <div className="studio-top">
-          <button className="rail-logo" onClick={() => nav.dashboard()} aria-label="Back to dashboard"><span className="orb" /></button>
+          <button className="rail-logo" onClick={() => nav.dashboard()} aria-label="Back to dashboard"><StreamStudioMark size={26} /></button>
           <div className="st-title">Studio</div>
         </div>
         <div style={{ padding: 24 }}>
@@ -573,6 +614,8 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   const mobileCtl: MobileCtl = {
     status, viewers, liveFor, chat, floats, mixed, micOn, camOn, scene,
     zoom: { min: zoomMin, max: zoomMax, step: zoomStep, value: zoomVal },
+    hasZoom: hasNativeZoom,
+    mirror: facing === 'user' && scene === 'solo',
     lensCount: devices.length,
     toggleMic, toggleCam, flip: () => void flipCamera(), lens: () => void cycleLens(), applyZoom: (v) => void applyZoom(v),
     cutScene: (s) => void cutScene(s), sendChat, sendEmoji,
@@ -601,7 +644,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
             nav.dashboard();
           }}
         >
-          <span className="orb" />
+          <StreamStudioMark size={26} />
         </button>
         <div className="st-title">{title || 'Untitled stream'}</div>
         <div className="st-meta">
@@ -658,7 +701,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
             {/* program preview */}
             <div className="preview-wrap">
               <div className="preview">
-                <VideoSink stream={mixed} className="program-video" />
+                <VideoSink stream={mixed} className="program-video" mirror={facing === 'user' && scene === 'solo'} />
                 {status === 'paused' && (
                   <div className="preview-slate">
                     <div className="brb-orb"><span /></div>
@@ -734,24 +777,45 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
                     </select>
                   </label>
                 )}
-                <div className="cam-ctl-row">
-                  <Icon name="search" size={14} className="faint" />
-                  <input
-                    type="range"
-                    className="slider cam-zoom"
-                    min={zoomMin}
-                    max={zoomMax}
-                    step={zoomStep}
-                    value={zoomVal}
-                    aria-label="Zoom"
-                    onChange={(e) => void applyZoom(Number(e.target.value))}
-                    style={{ '--pct': `${((zoomVal - zoomMin) / (zoomMax - zoomMin)) * 100}%` } as React.CSSProperties}
-                  />
-                  <span className="mono cam-zoom-val">{zoomVal.toFixed(1)}×</span>
-                </div>
+                {hasNativeZoom && (
+                  <div className="cam-ctl-row">
+                    <Icon name="search" size={14} className="faint" />
+                    <input
+                      type="range"
+                      className="slider cam-zoom"
+                      min={zoomMin}
+                      max={zoomMax}
+                      step={zoomStep}
+                      value={zoomVal}
+                      aria-label="Camera zoom"
+                      onChange={(e) => void applyZoom(Number(e.target.value))}
+                      style={{ '--pct': `${((zoomVal - zoomMin) / (zoomMax - zoomMin)) * 100}%` } as React.CSSProperties}
+                    />
+                    <span className="mono cam-zoom-val">{zoomVal.toFixed(1)}×</span>
+                  </div>
+                )}
                 <button className="cam-flip" onClick={() => void flipCamera()} title="Flip camera"><Icon name="flip" size={15} />Flip</button>
+                {scene === 'screen' && (
+                  <>
+                    <Segmented
+                      label="Camera position"
+                      options={[
+                        { value: 'br', label: '↘' }, { value: 'bl', label: '↙' },
+                        { value: 'tr', label: '↗' }, { value: 'tl', label: '↖' },
+                        { value: 'side', label: 'Side' },
+                      ]}
+                      value={pipPos}
+                      onChange={(v) => applyPip(v as typeof pipPos, pipSize)}
+                    />
+                    <Segmented
+                      label="Camera size"
+                      options={[{ value: 'sm', label: 'S' }, { value: 'md', label: 'M' }, { value: 'lg', label: 'L' }]}
+                      value={pipSize}
+                      onChange={(v) => applyPip(pipPos, v as typeof pipSize)}
+                    />
+                  </>
+                )}
                 <span className="spacer" />
-                {!zoomCap && zoomVal > 1 && <span className="faint" style={{ fontSize: 11.5 }}>digital zoom — viewers see it too</span>}
               </div>
             </div>
             {IS_LOCAL_DEV && (
@@ -889,6 +953,8 @@ interface MobileCtl {
   camOn: boolean;
   scene: SceneId;
   zoom: { min: number; max: number; step: number; value: number };
+  hasZoom: boolean;
+  mirror: boolean;
   lensCount: number;
   toggleMic(): void;
   toggleCam(): void;
@@ -910,7 +976,7 @@ function MobileStudio({ ctl }: { ctl: MobileCtl }) {
 
   return (
     <div className="ms-video">
-      <VideoSink stream={ctl.mixed} className="program-video" />
+      <VideoSink stream={ctl.mixed} className="program-video" mirror={ctl.mirror} />
       {ctl.status === 'paused' && (
         <div className="preview-slate">
           <div className="brb-orb"><span /></div>
@@ -947,21 +1013,23 @@ function MobileStudio({ ctl }: { ctl: MobileCtl }) {
             <Icon name="video" size={20} /><span>Lens</span>
           </button>
         )}
-        <div className="ms-zoom">
-          <Icon name="search" size={14} />
-          <input
-            type="range"
-            className="slider"
-            min={ctl.zoom.min}
-            max={ctl.zoom.max}
-            step={ctl.zoom.step}
-            value={ctl.zoom.value}
-            aria-label="Zoom"
-            onChange={(e) => ctl.applyZoom(Number(e.target.value))}
-            style={{ '--pct': `${((ctl.zoom.value - ctl.zoom.min) / (ctl.zoom.max - ctl.zoom.min)) * 100}%` } as React.CSSProperties}
-          />
-          <span className="mono">{ctl.zoom.value.toFixed(1)}×</span>
-        </div>
+        {ctl.hasZoom && (
+          <div className="ms-zoom">
+            <Icon name="search" size={14} />
+            <input
+              type="range"
+              className="slider"
+              min={ctl.zoom.min}
+              max={ctl.zoom.max}
+              step={ctl.zoom.step}
+              value={ctl.zoom.value}
+              aria-label="Camera zoom"
+              onChange={(e) => ctl.applyZoom(Number(e.target.value))}
+              style={{ '--pct': `${((ctl.zoom.value - ctl.zoom.min) / (ctl.zoom.max - ctl.zoom.min)) * 100}%` } as React.CSSProperties}
+            />
+            <span className="mono">{ctl.zoom.value.toFixed(1)}×</span>
+          </div>
+        )}
         <button className={cx('ms-round', showScenes && 'active')} onClick={() => setShowScenes((s) => !s)} aria-label="Scenes">
           <Icon name="layers" size={20} /><span>Scene</span>
         </button>

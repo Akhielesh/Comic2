@@ -10,6 +10,7 @@ import type { EventMeta } from '../protocol';
 import { downloadIcs, formatCountdown } from '../schedule';
 import { coverGradient } from '../theme';
 import { Icon } from '../ui/icons';
+import { StreamStudioLogo } from '../ui/logo';
 import { Avatar, Btn, Pill, cx, type PushToast } from '../ui/primitives';
 
 function fmtEventDate(ms: number | null): { day: string; time: string; mon: string; date: string } {
@@ -102,7 +103,7 @@ export function EventPage({ eventId, nav, push }: { eventId: string; nav: Nav; p
   return (
     <div className="event-page-root">
       <div className="event-topbar">
-        <span className="rail-logo" style={{ cursor: 'default' }}><span className="orb" /> Stream <span className="sub">Studio</span></span>
+        <span className="rail-logo" style={{ cursor: 'default' }}><StreamStudioLogo /></span>
         <span className="spacer" />
         {meta.status === 'ended' && <Pill tone="neutral">Ended</Pill>}
       </div>

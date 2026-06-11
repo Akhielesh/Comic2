@@ -10,6 +10,7 @@ import {
   listTelemetryEvents
 } from '../services/telemetryAnalytics.js';
 import { generateInvites, listInvites, revokeInvite } from '../services/invites.js';
+import { APP_PUBLIC_URL, sendStudioInvite } from '../services/mailer.js';
 
 const readablePlanTiers: BillingPlanTier[] = ['free', 'creator', 'pro', 'studio', 'custom', 'admin'];
 const assignablePlanTiers: BillingPlanTier[] = ['free', 'creator', 'studio', 'custom', 'admin'];
@@ -554,6 +555,104 @@ adminRouter.post('/invites/:id/revoke', requireAdmin, async (req, res, next) => 
     await revokeInvite(id);
     console.info('[ADMIN_ACTION] invite_revoked', { actorId, id });
     res.json({ success: true, id });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── Per-product access (standalone studio onboarding) ─────────────────────────
+// Grant or revoke access to a single studio (stream_studio | comic_studio |
+// chat_studio). Optionally sends the branded studio-invite email. Semantics of
+// product_access: no rows = default access; rows = the user's allowed set.
+const PRODUCTS = ['stream_studio', 'comic_studio', 'chat_studio'] as const;
+const PRODUCT_INVITE: Record<(typeof PRODUCTS)[number], { name: string; path: string }> = {
+  stream_studio: { name: 'Stream Studio', path: '/live.html' },
+  comic_studio: { name: 'Comic Studio', path: '/' },
+  chat_studio: { name: 'Chat Studio', path: '/' }
+};
+
+adminRouter.post('/product-access', requireAdmin, async (req, res, next) => {
+  try {
+    const actorId = req.user?.id;
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const product = String(req.body?.product || '') as (typeof PRODUCTS)[number];
+    const active = req.body?.active !== false;
+    const note = typeof req.body?.note === 'string' ? req.body.note.slice(0, 300) : null;
+    const sendInvite = req.body?.sendInvite === true;
+    const inviterName = typeof req.body?.inviterName === 'string' ? req.body.inviterName.slice(0, 80) : undefined;
+    const personalNote = typeof req.body?.personalNote === 'string' ? req.body.personalNote.slice(0, 500) : undefined;
+
+    if (!email) return res.status(400).json({ error: { message: 'email is required' } });
+    if (!PRODUCTS.includes(product)) {
+      return res.status(400).json({ error: { message: `product must be one of: ${PRODUCTS.join(', ')}` } });
+    }
+
+    const admin = getSupabaseAdmin();
+    const { data: profile, error: profileError } = await admin
+      .from('profiles')
+      .select('id, email, username')
+      .ilike('email', email.replace(/[%_]/g, ''))
+      .maybeSingle();
+    if (profileError) throw profileError;
+    if (!profile?.id) {
+      return res.status(404).json({ error: { message: 'No account with that email — ask them to sign up first.' } });
+    }
+
+    const { error: upsertError } = await admin.from('product_access').upsert(
+      {
+        user_id: profile.id,
+        product,
+        active,
+        note,
+        granted_by: actorId ?? null,
+        updated_at: new Date().toISOString()
+      },
+      { onConflict: 'user_id,product' }
+    );
+    if (upsertError) throw upsertError;
+
+    let emailed = false;
+    if (sendInvite && active) {
+      const target = PRODUCT_INVITE[product];
+      const r = await sendStudioInvite(
+        email,
+        {
+          inviteUrl: `${APP_PUBLIC_URL}${target.path}`,
+          studioName: target.name,
+          inviterName,
+          personalNote,
+          firstName: typeof profile.username === 'string' ? profile.username : undefined
+        },
+        req
+      );
+      emailed = !!r.ok;
+    }
+
+    console.info('[ADMIN_ACTION] product_access_set', { actorId, userId: profile.id, product, active, emailed });
+    res.json({ success: true, userId: profile.id, product, active, emailed });
+  } catch (error) {
+    next(error);
+  }
+});
+
+adminRouter.get('/product-access', requireAdmin, async (req, res, next) => {
+  try {
+    const email = String(req.query.email || '').trim().toLowerCase();
+    if (!email) return res.status(400).json({ error: { message: 'email query param is required' } });
+    const admin = getSupabaseAdmin();
+    const { data: profile, error: profileError } = await admin
+      .from('profiles')
+      .select('id, email')
+      .ilike('email', email.replace(/[%_]/g, ''))
+      .maybeSingle();
+    if (profileError) throw profileError;
+    if (!profile?.id) return res.status(404).json({ error: { message: 'No account with that email.' } });
+    const { data, error } = await admin
+      .from('product_access')
+      .select('product, active, note, created_at, updated_at')
+      .eq('user_id', profile.id);
+    if (error) throw error;
+    res.json({ userId: profile.id, email: profile.email, grants: data ?? [] });
   } catch (error) {
     next(error);
   }

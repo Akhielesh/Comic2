@@ -4,7 +4,7 @@
  * Draws the active scene (solo camera, or screen-share with a camera PiP)
  * onto a canvas at the stream's resolution, and exposes the canvas as a
  * MediaStream (canvas.captureStream + the mic track). Because the encoder
- * records the CANVAS, scene cuts, camera switches, digital zoom and looks
+ * records the CANVAS, scene cuts, camera switches, layouts and looks
  * are all seamless — the MediaRecorder never has to restart, exactly like a
  * hardware vision mixer feeding one encoder.
  *
@@ -39,6 +39,12 @@ export const SCENES: SceneDef[] = [
 /** Beyond this aspect mismatch we letterbox instead of cropping. */
 const CROP_TOLERANCE = 1.25;
 
+/** Where the camera sits in the Screen + cam scene. */
+export type PipPos = 'br' | 'bl' | 'tr' | 'tl' | 'side';
+export type PipSize = 'sm' | 'md' | 'lg';
+const PIP_WIDTH_FRAC: Record<PipSize, number> = { sm: 0.18, md: 0.24, lg: 0.32 };
+const SIDE_WIDTH_FRAC: Record<PipSize, number> = { sm: 0.24, md: 0.3, lg: 0.36 };
+
 /**
  * Canvas dimensions for a given camera: follow the source's orientation and
  * aspect, capped by the preset's pixel budget (longest edge). Even numbers —
@@ -66,7 +72,8 @@ export class ProgramCompositor {
   private screenStream: MediaStream | null = null;
   private scene: SceneId = 'solo';
   private look: CameraLook = 'none';
-  private digitalZoom = 1;
+  private pipPos: PipPos = 'br';
+  private pipSize: PipSize = 'md';
   private camEnabled = true;
   private hostInitial = '·';
   private timer: number | null = null;
@@ -173,11 +180,11 @@ export class ProgramCompositor {
     }
   }
 
-  /** Burned-in digital zoom — used when the camera has no hardware zoom. */
-  setDigitalZoom(z: number): void {
-    const next = Math.max(1, z);
-    if (this.digitalZoom !== next) {
-      this.digitalZoom = next;
+  /** Layout of the camera within the Screen + cam scene. */
+  setPipLayout(pos: PipPos, size: PipSize): void {
+    if (this.pipPos !== pos || this.pipSize !== size) {
+      this.pipPos = pos;
+      this.pipSize = size;
       this.dirty = true;
     }
   }
@@ -226,17 +233,27 @@ export class ProgramCompositor {
     ctx.fillRect(0, 0, w, h);
 
     if (this.scene === 'screen' && this.screenVideo) {
+      if (this.pipPos === 'side' && this.camEnabled && this.hasCamFrame()) {
+        // Side-by-side: screen keeps the stage, camera takes a full-height column.
+        const camW = Math.round(w * SIDE_WIDTH_FRAC[this.pipSize]);
+        this.drawContain(this.screenVideo, 0, 0, w - camW, h);
+        this.applyLook();
+        this.drawSmart(this.camVideo, w - camW, 0, camW, h, true);
+        ctx.filter = 'none';
+        return;
+      }
       this.drawContain(this.screenVideo, 0, 0, w, h);
       if (this.camEnabled && this.hasCamFrame()) {
-        const pw = Math.round(w * 0.24);
+        const pw = Math.round(w * PIP_WIDTH_FRAC[this.pipSize]);
         const ph = Math.round((pw * 10) / 16);
-        const px = w - pw - Math.round(w * 0.015);
-        const py = h - ph - Math.round(w * 0.015);
+        const m = Math.round(w * 0.015);
+        const px = this.pipPos === 'bl' || this.pipPos === 'tl' ? m : w - pw - m;
+        const py = this.pipPos === 'tl' || this.pipPos === 'tr' ? m : h - ph - m;
         ctx.save();
         this.roundRectPath(px, py, pw, ph, Math.round(w * 0.008));
         ctx.clip();
         this.applyLook();
-        this.drawSmart(this.camVideo, px, py, pw, ph, this.digitalZoom, true);
+        this.drawSmart(this.camVideo, px, py, pw, ph, true);
         ctx.restore();
         ctx.filter = 'none';
         ctx.strokeStyle = 'rgba(255,255,255,0.25)';
@@ -250,7 +267,7 @@ export class ProgramCompositor {
     // solo (and brb — uploads are paused, but keep the preview honest)
     if (this.camEnabled && this.hasCamFrame()) {
       this.applyLook();
-      this.drawSmart(this.camVideo, 0, 0, w, h, this.digitalZoom, false);
+      this.drawSmart(this.camVideo, 0, 0, w, h, false);
       ctx.filter = 'none';
     } else {
       this.drawCamOff();
@@ -273,27 +290,21 @@ export class ProgramCompositor {
   /**
    * Crop-guarded draw: cover-fit when the aspects roughly agree (≤25% crop),
    * letterbox when they don't — a portrait phone camera in a landscape frame
-   * must never become a 2× face crop. Digital zoom shrinks the source rect
-   * in either mode, so it stays a real zoom.
+   * must never become a 2× face crop. (Zoom is the camera's own native zoom,
+   * applied on the track — never synthesized here.)
    */
-  private drawSmart(video: HTMLVideoElement, dx: number, dy: number, dw: number, dh: number, zoom: number, alwaysCover: boolean): void {
+  private drawSmart(video: HTMLVideoElement, dx: number, dy: number, dw: number, dh: number, alwaysCover: boolean): void {
     const vw = video.videoWidth;
     const vh = video.videoHeight;
     if (!vw || !vh) return;
     const mismatch = Math.max((vw / vh) / (dw / dh), (dw / dh) / (vw / vh));
     if (alwaysCover || mismatch <= CROP_TOLERANCE) {
-      const scale = Math.max(dw / vw, dh / vh) * zoom;
+      const scale = Math.max(dw / vw, dh / vh);
       const sw = dw / scale;
       const sh = dh / scale;
       this.ctx.drawImage(video, (vw - sw) / 2, (vh - sh) / 2, sw, sh, dx, dy, dw, dh);
     } else {
-      // Letterbox/pillarbox, zoom still crops into the source.
-      const sw = vw / zoom;
-      const sh = vh / zoom;
-      const scale = Math.min(dw / sw, dh / sh);
-      const w = sw * scale;
-      const h = sh * scale;
-      this.ctx.drawImage(video, (vw - sw) / 2, (vh - sh) / 2, sw, sh, dx + (dw - w) / 2, dy + (dh - h) / 2, w, h);
+      this.drawContain(video, dx, dy, dw, dh);
     }
   }
 

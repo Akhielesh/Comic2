@@ -123,6 +123,8 @@ const DEFAULT_VIEWER_CAP = 100;
 export const REPLAY_WINDOW_MS = 24 * 60 * 60_000;
 /** Server-side recordings are kept this long for the host, then purge. */
 export const RECORDING_RETENTION_MS = 7 * 24 * 60 * 60_000;
+/** Host vanished (tab closed / crashed) → the stream auto-ends after this. */
+export const HOST_GONE_GRACE_MS = 2 * 60_000;
 const ALLOWED_EMOJI = new Set<string>(EMOJI_LIBRARY);
 const MILESTONES = [10, 25, 50, 100, 250, 500, 1000];
 
@@ -394,6 +396,21 @@ export class EventRoom {
     const meta = await this.getMeta();
     if (!meta) return;
 
+    // Host-gone grace expired while paused → end the stream for real.
+    if (meta.status === 'paused') {
+      const goneAt = await this.state.storage.get<number>('hostGoneAt');
+      if (goneAt != null && !this.hostConnected() && Date.now() >= goneAt + HOST_GONE_GRACE_MS) {
+        await this.state.storage.delete('hostGoneAt');
+        meta.status = 'ended';
+        meta.endedAt = Date.now();
+        await this.putMeta(meta);
+        this.broadcast({ t: 'state', status: 'ended', startedAt: meta.startedAt, endedAt: meta.endedAt });
+        await this.addLog('live', 'END', 'Auto-ended — the host did not return. Replay stays up for 24 h.');
+        await this.state.storage.setAlarm(meta.endedAt + REPLAY_WINDOW_MS);
+      }
+      return;
+    }
+
     if (meta.status === 'live') {
       // Abandoned room (host vanished without ending): auto-end after 2 h of
       // silence so viewers see "ended" and the retention janitor takes over.
@@ -482,6 +499,14 @@ export class EventRoom {
     const attach: Attach = { sid: crypto.randomUUID().slice(0, 8), name, role };
     server.serializeAttachment(attach);
 
+    if (role === 'host') {
+      const goneAt = await this.state.storage.get<number>('hostGoneAt');
+      if (goneAt != null) {
+        await this.state.storage.delete('hostGoneAt');
+        await this.addLog('sys', 'SYS', 'Host reconnected');
+      }
+    }
+
     if (role === 'pending') {
       this.send(server, { t: 'pending' });
       this.lobbySync();
@@ -535,6 +560,22 @@ export class EventRoom {
     await this.broadcastViewers();
     if (me?.role === 'pending') this.lobbySync();
     else this.peopleSync();
+
+    // Guardrail: the host's tab closed / crashed while on the air. Pause the
+    // program immediately (viewers see the BRB slate, uploads have stopped
+    // anyway) and auto-end after a short grace window unless they return —
+    // no zombie "live" rooms burning storage or stranding viewers.
+    if (me?.role === 'host' && !this.hostConnected()) {
+      const meta = await this.getMeta();
+      if (meta && meta.status === 'live') {
+        meta.status = 'paused';
+        await this.putMeta(meta);
+        this.broadcast({ t: 'state', status: 'paused', startedAt: meta.startedAt, endedAt: meta.endedAt });
+        await this.state.storage.put('hostGoneAt', Date.now());
+        await this.addLog('warn', 'WARN', `Host disconnected — paused; auto-end in ${HOST_GONE_GRACE_MS / 60_000} min unless they return`);
+        await this.state.storage.setAlarm(Date.now() + HOST_GONE_GRACE_MS);
+      }
+    }
   }
 
   async webSocketError(ws: WebSocket): Promise<void> {
@@ -637,6 +678,10 @@ export class EventRoom {
     const prev = meta.status;
     meta.status = status;
     if (status === 'live' && !meta.startedAt) meta.startedAt = Date.now();
+    if (status === 'live') {
+      meta.endedAt = null; // restarting after an (auto-)end — not over anymore
+      await this.state.storage.delete('hostGoneAt');
+    }
     if (status === 'ended') meta.endedAt = Date.now();
     await this.putMeta(meta);
     this.broadcast({ t: 'state', status, startedAt: meta.startedAt, endedAt: meta.endedAt });
@@ -814,6 +859,14 @@ export class EventRoom {
       this.broadcast({ t: 'milestone', n: crossed });
       await this.addLog('join', 'JOIN', `${crossed} viewers — new peak this session`);
     }
+  }
+
+  private hostConnected(): boolean {
+    for (const ws of this.state.getWebSockets()) {
+      const a = ws.deserializeAttachment() as Attach | null;
+      if (a?.role === 'host') return true;
+    }
+    return false;
   }
 
   private viewerCount(): number {

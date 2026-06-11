@@ -14,6 +14,7 @@
  */
 
 import { addMyEvent, listMyEvents, type MyEvent } from './events';
+import type { StudioPrefs } from './prefs';
 
 export interface StudioAccess {
   signedIn: boolean;
@@ -61,12 +62,31 @@ async function userId(): Promise<{ id: string; email?: string } | null> {
   }
 }
 
-/** Admin-defined access for the current account. Defaults to allowed. */
+/**
+ * Admin-defined access for the current account, from `product_access`:
+ * no rows → default access; rows present → the user is confined to the
+ * products with active = true (standalone onboarding). Falls back to the
+ * legacy stream_studio_access table, then to allowed.
+ */
 export async function fetchStudioAccess(): Promise<StudioAccess> {
   const u = await userId();
   if (!u) return { signedIn: false, allowed: true, scope: 'full' };
   const supabase = await client();
   if (!supabase) return { signedIn: true, allowed: true, scope: 'full', email: u.email };
+  try {
+    const { data, error } = await supabase
+      .from('product_access')
+      .select('product, active')
+      .eq('user_id', u.id);
+    if (!error && data && data.length > 0) {
+      const mine = data.find((r) => r.product === 'stream_studio');
+      const allowed = mine ? mine.active !== false : false; // confined to other products
+      const standalone = data.filter((r) => r.active !== false).length === 1 && mine?.active !== false;
+      return { signedIn: true, allowed, scope: standalone ? 'studio_only' : 'full', email: u.email };
+    }
+  } catch {
+    /* table missing in older envs — fall through */
+  }
   try {
     const { data, error } = await supabase
       .from('stream_studio_access')
@@ -82,6 +102,61 @@ export async function fetchStudioAccess(): Promise<StudioAccess> {
     };
   } catch {
     return { signedIn: true, allowed: true, scope: 'full', email: u.email };
+  }
+}
+
+/* ----------------------------- settings sync ----------------------------- */
+
+/** Push this device's settings to the account (newer-wins on other devices). */
+export async function pushPrefsToCloud(): Promise<void> {
+  const u = await userId();
+  if (!u) return;
+  const supabase = await client();
+  if (!supabase) return;
+  try {
+    const { loadPrefs } = await import('./prefs');
+    await supabase
+      .from('stream_studio_settings')
+      .upsert({ user_id: u.id, prefs: loadPrefs(), updated_at: new Date().toISOString() }, { onConflict: 'user_id' });
+  } catch {
+    /* offline / table missing */
+  }
+}
+
+/** Pull account settings; adopt them locally when they're newer than this
+ *  device's last edit. Returns true when cloud settings were adopted. */
+export async function pullPrefsFromCloud(): Promise<boolean> {
+  const u = await userId();
+  if (!u) return false;
+  const supabase = await client();
+  if (!supabase) return false;
+  try {
+    const { data, error } = await supabase
+      .from('stream_studio_settings')
+      .select('prefs, updated_at')
+      .eq('user_id', u.id)
+      .maybeSingle();
+    if (error || !data?.prefs) return false;
+    const cloudAt = new Date(data.updated_at as string).getTime() || 0;
+    const { prefsSavedAt, adoptCloudPrefs } = await import('./prefs');
+    if (cloudAt > prefsSavedAt()) {
+      adoptCloudPrefs(data.prefs as Partial<StudioPrefs>, cloudAt);
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/** Sign the account out of this device (Stream Studio standalone account UI). */
+export async function signOut(): Promise<void> {
+  const supabase = await client();
+  if (!supabase) return;
+  try {
+    await supabase.auth.signOut();
+  } catch {
+    /* already signed out */
   }
 }
 

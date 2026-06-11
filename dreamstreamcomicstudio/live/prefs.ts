@@ -16,6 +16,9 @@ export interface StudioPrefs {
   recordHighBitrate: boolean;
   /** Camera look burned into the program feed. */
   look: CameraLook;
+  /** Screen + cam scene: where the camera sits and how big. */
+  pipPos: 'br' | 'bl' | 'tr' | 'tl' | 'side';
+  pipSize: 'sm' | 'md' | 'lg';
   /** Show the chat rail when the studio opens. */
   chatOpen: boolean;
   /** Floating emoji over the program preview. */
@@ -42,6 +45,8 @@ export const DEFAULT_PREFS: StudioPrefs = {
   preferMp4: true,
   recordHighBitrate: true,
   look: 'none',
+  pipPos: 'br',
+  pipSize: 'md',
   chatOpen: true,
   floatingReactions: true,
   slowSec: 0,
@@ -54,6 +59,7 @@ export const DEFAULT_PREFS: StudioPrefs = {
 };
 
 const KEY = 'ds-live-prefs';
+const SAVED_AT_KEY = 'ds-live-prefs-saved-at';
 
 export function loadPrefs(): StudioPrefs {
   try {
@@ -67,9 +73,31 @@ export function loadPrefs(): StudioPrefs {
 export function savePrefs(p: StudioPrefs): void {
   try {
     localStorage.setItem(KEY, JSON.stringify(p));
+    localStorage.setItem(SAVED_AT_KEY, String(Date.now()));
   } catch {
     /* storage unavailable */
   }
+}
+
+/** When this device last changed settings — used by cloud sync (newer wins). */
+export function prefsSavedAt(): number {
+  try {
+    return Number(localStorage.getItem(SAVED_AT_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Cloud settings landed — write them locally with their cloud timestamp. */
+export function adoptCloudPrefs(p: Partial<StudioPrefs>, cloudUpdatedAtMs: number): StudioPrefs {
+  const merged = { ...DEFAULT_PREFS, ...p };
+  try {
+    localStorage.setItem(KEY, JSON.stringify(merged));
+    localStorage.setItem(SAVED_AT_KEY, String(cloudUpdatedAtMs));
+  } catch {
+    /* storage unavailable */
+  }
+  return merged;
 }
 
 /** CanvasRenderingContext2D filter string for each camera look. */

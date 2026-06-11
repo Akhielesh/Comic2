@@ -40,6 +40,7 @@ export type EmailTemplateName =
   | 'product-update'
   | 'announcement'
   | 'beta-invite'
+  | 'studio-invite'
   | 'access-requested'
   | 'welcome'
   | 'signin-alert'
@@ -66,6 +67,8 @@ export const TEMPLATE_KIND: Record<EmailTemplateName, EmailKind> = {
   announcement: 'essential',
   // A one-to-one beta invite/referral someone deliberately sends — transactional, not a list.
   'beta-invite': 'essential',
+  // One-to-one onboarding to a standalone studio (Stream Studio today).
+  'studio-invite': 'essential',
   'access-requested': 'essential',
   welcome: 'essential',
   'signin-alert': 'essential',
@@ -99,6 +102,7 @@ export const SENDER_ROLE: Record<EmailTemplateName, SenderRole> = {
   'product-update': 'notifications',
   announcement: 'notifications',
   'beta-invite': 'hello',
+  'studio-invite': 'hello',
   'access-requested': 'notifications',
   welcome: 'hello',
   'signin-alert': 'notifications',
@@ -252,6 +256,66 @@ const betaInvite: Renderer = (params, brand) => {
       params.personalNote ? `\n"${params.personalNote}"${inviter ? ` — ${inviter}` : ''}` : '',
       `\nAccept your invite: ${url}`,
       params.code ? `Invite code: ${params.code}` : ''
+    ]
+      .filter(Boolean)
+      .join('\n')
+  };
+};
+
+// ── Studio invite: onboarding to a standalone studio ───────────────────────────
+// "User X invited you to DreamStream Studio's Stream Studio" — feature tour,
+// one CTA, and a stay-tuned note for the other studios coming to the account.
+const studioInvite: Renderer = (params, brand) => {
+  const studio = (params.studioName || 'Stream Studio').trim();
+  const url = params.inviteUrl || brand.appUrl;
+  const inviter = (params.inviterName || '').trim();
+  const intro = inviter
+    ? `${escapeHtml(inviter)} has invited you to <strong>${escapeHtml(studio)}</strong> — ${escapeHtml(
+        brand.productName
+      )}'s live streaming studio.`
+    : `You've been invited to <strong>${escapeHtml(studio)}</strong> — ${escapeHtml(brand.productName)}'s live streaming studio.`;
+  const note = params.personalNote
+    ? infoBox(`<em>&ldquo;${escapeHtml(params.personalNote)}&rdquo;</em>${inviter ? ` — ${escapeHtml(inviter)}` : ''}`)
+    : '';
+  return {
+    subject: inviter ? `${inviter} invited you to ${studio}` : `You're invited to ${studio}`,
+    preheader: 'Go live from your browser in under a minute — viewers join with just a name.',
+    content:
+      heading(`You're invited to ${escapeHtml(studio)} 🎬`) +
+      paragraph(`${greetName(params)} ${intro}`) +
+      note +
+      paragraph('Go live from your browser in under a minute. Your viewers join with just a name — no account, no installs.') +
+      featureCard('🎥', 'Go live from any device', 'Camera or screen + cam with seamless scene cuts, native lens switching, and portrait-perfect mobile hosting.') +
+      featureCard('💬', 'A room that runs itself', 'Live chat with a big reaction library, approval lobby, automatic profanity/spam timeouts, and hard viewer caps you control.') +
+      featureCard('📼', 'Never lose a stream', 'Recordings save to your device AND a 7-day cloud store; viewers can replay any stream for 24 hours from the same link.') +
+      featureCard('📊', 'Honest analytics', 'Peak and unique viewers, watch-time curves, network health and a full activity log after every stream.') +
+      button(`Open ${studio}`, url, 'yellow') +
+      linkFallback(url) +
+      divider() +
+      muted(
+        `${escapeHtml(studio)} is the first standalone studio on your ${escapeHtml(
+          brand.productName
+        )} account — Comic Studio and Chat Studio access are on the way. Stay tuned, you'll be among the first in.`
+      ),
+    text: [
+      greetNameText(params),
+      '',
+      inviter
+        ? `${inviter} has invited you to ${studio} — ${brand.productName}'s live streaming studio.`
+        : `You've been invited to ${studio} — ${brand.productName}'s live streaming studio.`,
+      params.personalNote ? `
+"${params.personalNote}"${inviter ? ` — ${inviter}` : ''}` : '',
+      '',
+      'Go live from your browser in under a minute. Viewers join with just a name.',
+      '',
+      '- Go live from any device: camera or screen + cam, seamless scene cuts, mobile hosting',
+      '- A room that runs itself: chat, reactions, approval lobby, auto-moderation, viewer caps',
+      '- Never lose a stream: device + 7-day cloud recordings, 24-hour viewer replay',
+      '- Honest analytics: watch curves, network health, full activity log',
+      '',
+      `Open ${studio}: ${url}`,
+      '',
+      `${studio} is the first standalone studio on your account — Comic Studio and Chat Studio are on the way. Stay tuned.`
     ]
       .filter(Boolean)
       .join('\n')
@@ -484,6 +548,7 @@ const RENDERERS: Record<EmailTemplateName, Renderer> = {
   'product-update': productUpdate,
   announcement,
   'beta-invite': betaInvite,
+  'studio-invite': studioInvite,
   'access-requested': accessRequested,
   welcome,
   'signin-alert': signinAlert,

@@ -210,3 +210,9 @@ export const sendBetaInvite = (
   invite: { inviteUrl: string; inviterName?: string; personalNote?: string; code?: string },
   req?: Parameters<typeof meta>[0]
 ) => sendEmail({ to: email, template: 'beta-invite', params: { ...invite }, ...meta(req) });
+
+export const sendStudioInvite = (
+  email: string,
+  invite: { inviteUrl: string; studioName?: string; inviterName?: string; personalNote?: string; firstName?: string },
+  req?: Parameters<typeof meta>[0]
+) => sendEmail({ to: email, template: 'studio-invite', params: { ...invite }, ...meta(req) });
