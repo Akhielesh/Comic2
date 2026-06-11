@@ -77,9 +77,11 @@ export const ProductAccessPanel: React.FC = () => {
       });
       setMessage({
         type: 'success',
-        text: active
-          ? `${PRODUCT_LABELS[product]} granted${result.emailed ? ' — invite email sent.' : sendInvite ? ' (invite email was not sent).' : '.'}`
-          : `${PRODUCT_LABELS[product]} revoked.`
+        text: result.alreadyGranted
+          ? `${PRODUCT_LABELS[product]}: already has access — nothing to do.`
+          : active
+            ? `${PRODUCT_LABELS[product]} granted${result.emailed ? ' — invite email sent.' : sendInvite ? ' (invite email was not sent).' : '.'}`
+            : `${PRODUCT_LABELS[product]} revoked.`
       });
       // If the operator changed their OWN account, the suite's gates re-check immediately.
       invalidateProductAccess();

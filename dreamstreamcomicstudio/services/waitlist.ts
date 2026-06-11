@@ -8,10 +8,15 @@ import { API_BASE_URL, buildApiUrl } from './clientConfig';
  */
 export type WaitlistKind = 'updates' | 'access';
 
+/** Machine-readable outcome, set by the backend for 'access' signups. */
+export type WaitlistStatus = 'joined' | 'already-registered' | 'account-exists';
+
 export interface WaitlistResult {
   ok: boolean;
   /** True when the email was already on the list — treated as a soft success. */
   alreadyJoined?: boolean;
+  /** 'account-exists' = the email already has an ACCOUNT; show a sign-in prompt instead. */
+  status?: WaitlistStatus;
   message: string;
 }
 
@@ -23,9 +28,33 @@ const DEFAULT_SUCCESS: Record<WaitlistKind, string> = {
 };
 
 /**
+ * Decide whether a backend /subscribe response is authoritative, and translate it into a
+ * WaitlistResult. Returns null when the caller should fall back to the direct Supabase
+ * insert (unexpected status / unparseable body). Pure + exported for unit tests.
+ *
+ *   - 2xx bodies are always authoritative — including ok:false outcomes like
+ *     'account-exists' ("you already have an account — sign in"), which must NOT fall
+ *     back to inserting a waitlist row for an existing member.
+ *   - 400 validation errors are authoritative failures.
+ */
+export const interpretSubscribeResponse = (
+  httpOk: boolean,
+  httpStatus: number,
+  data: Partial<WaitlistResult> | null
+): WaitlistResult | null => {
+  if (httpOk && data && typeof data.ok === 'boolean' && typeof data.message === 'string') {
+    return { ok: data.ok, alreadyJoined: data.alreadyJoined, status: data.status, message: data.message };
+  }
+  // Validation errors (400) are authoritative — surface them rather than falling back.
+  if (httpStatus === 400 && data?.message) return { ok: false, message: data.message };
+  return null;
+};
+
+/**
  * When the backend is configured, route signups through it so we can send a confirmation
- * email (double opt-in for 'updates') and log the capture. Returns null on any failure so the
- * caller falls back to the direct Supabase insert below — capturing the lead must never fail.
+ * email (double opt-in for 'updates', thank-you for 'access') and dedupe against existing
+ * accounts. Returns null on any failure so the caller falls back to the direct Supabase
+ * insert below — capturing the lead must never fail.
  */
 const subscribeViaApi = async (
   email: string,
@@ -46,11 +75,8 @@ const subscribeViaApi = async (
         ...(typeof metadata.source === 'string' ? { source: metadata.source } : {})
       })
     });
-    const data = (await res.json().catch(() => null)) as WaitlistResult | null;
-    if (res.ok && data?.ok) return { ok: true, alreadyJoined: data.alreadyJoined, message: data.message };
-    // Validation errors (400) are authoritative — surface them rather than falling back.
-    if (res.status === 400 && data?.message) return { ok: false, message: data.message };
-    return null;
+    const data = (await res.json().catch(() => null)) as Partial<WaitlistResult> | null;
+    return interpretSubscribeResponse(res.ok, res.status, data);
   } catch {
     return null;
   }

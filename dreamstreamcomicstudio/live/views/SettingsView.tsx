@@ -10,7 +10,7 @@ import { SCENES } from '../studio/compositor';
 import { SceneSketch } from '../components/scenes';
 import { Icon } from '../ui/icons';
 import { Btn, Field, Segmented, Slider, Toggle, cx, type PushToast } from '../ui/primitives';
-import { fetchStudioAccess, pullPrefsFromCloud, pushPrefsToCloud, signOut, type StudioAccess } from '../sync';
+import { fetchStudioAccess, pullPrefsFromCloud, pushPrefsToCloud, signOut, syncMyEvents, type StudioAccess } from '../sync';
 
 const SET_CATS = [
   { id: 'account', label: 'Account & sync', icon: 'user' },
@@ -58,6 +58,13 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
       if (!cancelled && adopted) setPrefsState(loadPrefs());
       const acc = await fetchStudioAccess();
       if (!cancelled) setAccount(acc);
+      // Landing here signed in (e.g. straight back from the ?next= sign-in
+      // hand-off): sync BOTH ways now, not on some later Dashboard visit —
+      // this device's events/settings should follow the account immediately.
+      if (acc.signedIn) {
+        void syncMyEvents();
+        void pushPrefsToCloud();
+      }
     })();
     return () => {
       cancelled = true;

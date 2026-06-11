@@ -1,12 +1,13 @@
 import React from 'react';
 import { UserAvatar } from './UserAvatar';
+import type { SettingsTab } from './settingsTabs';
 import { Zap } from 'lucide-react';
 import { TokenAvailabilityPill } from './TokenAvailabilityPill';
 
 interface HeaderProps {
     currentView: string;
     setCurrentView: (view: string) => void;
-    setSettingsTab: (tab: 'profile' | 'settings' | 'billing' | 'legal' | 'contact' | 'admin' | 'preferences' | 'security') => void;
+    setSettingsTab: (tab: SettingsTab) => void;
     setLastView?: (view: string) => void;
 }
 

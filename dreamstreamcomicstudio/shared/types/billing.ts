@@ -354,16 +354,22 @@ export type AdminAccessResponse = {
   roles: UserRole[];
 };
 
+/** Per-studio (product_access) grant as exposed on the admin users list. */
+export type AdminUserProductAccess = {
+  product: 'stream_studio' | 'comic_studio' | 'chat_studio';
+  active: boolean;
+};
+
 export type AdminUserRecord = {
   userId: string;
   username?: string;
   email?: string;
   maskedEmail?: string;
-  planTier: BillingPlanTier;
-  subscriptionStatus?: string;
   roles: UserRole[];
   moderationStatus: 'active' | 'restricted' | 'suspended';
   moderationReason?: string;
+  /** Studio grants. Empty = no rows = unrestricted (default access to every studio). */
+  productAccess: AdminUserProductAccess[];
   createdAt?: string;
   updatedAt?: string;
 };

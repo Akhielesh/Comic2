@@ -162,8 +162,16 @@ export interface SetProductAccessInput {
   personalNote?: string;
 }
 
+export interface SetProductAccessResult {
+  success: boolean;
+  /** True when the user already had an active grant — the server made no change and sent no email. */
+  alreadyGranted?: boolean;
+  userId: string;
+  product: ProductId;
+  active: boolean;
+  emailed: boolean;
+}
+
 /** Admin: grant/revoke one studio for a user (optionally emailing the studio invite). */
-export const adminSetProductAccess = (
-  input: SetProductAccessInput
-): Promise<{ success: boolean; userId: string; product: ProductId; active: boolean; emailed: boolean }> =>
+export const adminSetProductAccess = (input: SetProductAccessInput): Promise<SetProductAccessResult> =>
   post('/api/admin/product-access', input);
