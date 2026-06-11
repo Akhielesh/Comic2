@@ -28,7 +28,10 @@ export default defineConfig(({ mode }) => {
       strictPort: false,
       host: '0.0.0.0',
       proxy: {
-        '/api': {
+        // Regex, not the bare '/api' prefix: a prefix key also captures app MODULE
+        // requests like /apiTypes.ts and forwards them to the backend, whose Express
+        // 404 then kills the whole dev module graph (blank app, chat never opens).
+        '^/api(/|$)': {
           target: 'http://localhost:7071',
           changeOrigin: true
         }
