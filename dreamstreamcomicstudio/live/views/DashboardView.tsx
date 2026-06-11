@@ -297,7 +297,7 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
           <div className="card card-pad" style={{ fontSize: 13, lineHeight: 1.6 }}>
             <h3 style={{ margin: '0 0 6px', fontSize: 14.5 }}>How it works</h3>
             <span className="muted">
-              Your camera becomes 3-second segments uploaded to the edge; viewers pull them through the CDN, so 100 viewers cost about the same as one. Chat, reactions and the lobby ride a websocket beside the video.
+              Your camera becomes 6-second segments uploaded to the edge; viewers pull them through the CDN, so 100 viewers cost about the same as one. Chat, reactions and the lobby ride a websocket beside the video — and if your tab ever closes mid-stream, the room pauses for viewers and ends itself safely.
             </span>
           </div>
         </div>
