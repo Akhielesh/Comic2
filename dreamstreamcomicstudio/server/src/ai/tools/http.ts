@@ -5,6 +5,8 @@
 // which each tool catches and degrades into a plain message (never an unhandled
 // rejection that would break the agentic loop).
 
+import { assertProviderBudget, noteProviderCall } from '../../lib/providerUsage.js';
+
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 // A descriptive UA — several free APIs (Wikipedia, Nominatim, USGS) ask callers to
@@ -54,9 +56,13 @@ const withTimeout = async (
   }
 };
 
-/** GET JSON, throwing on a non-2xx status or invalid body. */
+/** GET JSON, throwing on a non-2xx status or invalid body. Budget-metered. */
 export const fetchJson = async <T = unknown>(url: string, opts: FetchOptions = {}): Promise<T> => {
-  const res = await withTimeout(url, opts.accept || 'application/json', opts);
+  assertProviderBudget(url);
+  const res = await withTimeout(url, opts.accept || 'application/json', opts).then(
+    (r) => (noteProviderCall(url, r.ok), r),
+    (err) => (noteProviderCall(url, false), Promise.reject(err))
+  );
   if (!res.ok) throw new Error(`${hostOf(url)} returned ${res.status}`);
   // A non-JSON body (HTML error page served with 200, empty body, gateway error) would
   // otherwise surface as an opaque SyntaxError — map it to a clear, honest message.
@@ -67,9 +73,13 @@ export const fetchJson = async <T = unknown>(url: string, opts: FetchOptions = {
   }
 };
 
-/** GET text/XML/CSV, throwing on a non-2xx status. */
+/** GET text/XML/CSV, throwing on a non-2xx status. Budget-metered. */
 export const fetchText = async (url: string, opts: FetchOptions = {}): Promise<string> => {
-  const res = await withTimeout(url, opts.accept || 'text/plain, */*', opts);
+  assertProviderBudget(url);
+  const res = await withTimeout(url, opts.accept || 'text/plain, */*', opts).then(
+    (r) => (noteProviderCall(url, r.ok), r),
+    (err) => (noteProviderCall(url, false), Promise.reject(err))
+  );
   if (!res.ok) throw new Error(`${hostOf(url)} returned ${res.status}`);
   return res.text();
 };

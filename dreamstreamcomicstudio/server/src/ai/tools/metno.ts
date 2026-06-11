@@ -10,6 +10,7 @@
 //   - attribution: callers surface "Weather data by MET Norway" (weather.ts).
 
 import type { WeatherArtifact, WeatherDaily, WeatherHourly } from '../../../../apiTypes.js';
+import { assertProviderBudget, noteProviderCall } from '../../lib/providerUsage.js';
 
 const MET_URL = 'https://api.met.no/weatherapi/locationforecast/2.0/complete';
 
@@ -124,10 +125,12 @@ export const getMetNoWeather = async (
   signal?.addEventListener('abort', onAbort, { once: true });
   let series: MetEntry[];
   try {
+    assertProviderBudget(MET_URL);
     const res = await fetch(`${MET_URL}?lat=${la}&lon=${lo}`, {
       headers: { Accept: 'application/json', 'User-Agent': metUserAgent() },
       signal: controller.signal
     });
+    noteProviderCall(MET_URL, res.ok);
     if (!res.ok) throw new Error(`MET Norway request failed (${res.status})`);
     const data = (await res.json()) as { properties?: { timeseries?: MetEntry[] } };
     series = data.properties?.timeseries || [];
