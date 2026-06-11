@@ -325,7 +325,12 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                                     we’ll reach out the moment new access opens up.
                                 </p>
                             </div>
-                            <WaitlistForm kind="access" source="auth-request-access" buttonLabel="Request access" />
+                            <WaitlistForm
+                                kind="access"
+                                source="auth-request-access"
+                                buttonLabel="Request access"
+                                onSignIn={() => { setMode('signin'); setError(null); setMessage(null); setPendingVerificationEmail(null); }}
+                            />
                             <p className="text-xs font-bold text-slate-500">
                                 Already have an account?{' '}
                                 <button

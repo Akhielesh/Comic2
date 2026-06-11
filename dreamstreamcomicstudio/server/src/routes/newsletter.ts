@@ -13,6 +13,7 @@ import {
   normalizeEmail,
   upsertSubscriber
 } from '../services/emailStore.js';
+import { getSupabaseAdmin } from '../services/supabase.js';
 import { verifyTurnstile } from '../services/turnstile.js';
 
 // Public, logged-out newsletter + waitlist capture with double opt-in. Mounted with
@@ -31,6 +32,26 @@ const baseUrl = (req: Request): string =>
   EMAIL_PUBLIC_BASE_URL || `${req.protocol}://${req.get('host')}`;
 
 const redirectToApp = (status: string): string => `${APP_PUBLIC_URL}/?newsletter=${encodeURIComponent(status)}`;
+
+/**
+ * Does this email already belong to an account (profiles, service role)? Best-effort:
+ * any failure (no service role, transient DB error) returns false so the lookup can
+ * never block a waitlist capture.
+ */
+const accountExistsForEmail = async (email: string): Promise<boolean> => {
+  try {
+    const admin = getSupabaseAdmin();
+    const { data, error } = await admin
+      .from('profiles')
+      .select('id')
+      .ilike('email', email.replace(/[%_]/g, ''))
+      .limit(1)
+      .maybeSingle();
+    return !error && Boolean(data?.id);
+  } catch {
+    return false;
+  }
+};
 
 // POST /api/newsletter/subscribe — { email, kind?: 'updates'|'access', source?, firstName? }
 newsletterRouter.post('/subscribe', async (req, res, next) => {
@@ -52,13 +73,38 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
     }
 
     if (kind === 'access') {
+      // Dedupe 1: an existing ACCOUNT doesn't belong on the waitlist — tell them to
+      // sign in instead (200 + ok:false + status, so the client treats it as
+      // authoritative and doesn't fall back to a direct insert).
+      if (await accountExistsForEmail(email)) {
+        return res.json({
+          ok: false,
+          status: 'account-exists',
+          message: 'You already have an account — sign in instead.'
+        });
+      }
+
       const token = newConfirmToken();
       const { outcome } = await upsertSubscriber(email, 'access', token, source ? { source } : {});
-      // Acknowledge (essential) — best-effort, never blocks the response.
+
+      // Dedupe 2: already on the waitlist — soft success, no duplicate row, no re-email.
+      if (outcome === 'already_registered' || outcome === 'already_confirmed') {
+        return res.json({
+          ok: true,
+          status: 'already-registered',
+          alreadyJoined: true,
+          message: "You're already on the list."
+        });
+      }
+
+      // NEW signup: acknowledge with the access-requested template (essential) —
+      // best-effort and non-blocking; a mailer failure is logged by the mailer and
+      // must never fail the signup itself.
       void sendAccessRequested(email, firstName, reqMeta(req));
       return res.json({
         ok: true,
-        alreadyJoined: outcome === 'already_confirmed',
+        status: 'joined',
+        alreadyJoined: false,
         message: "Thanks! We'll email you the moment access opens up."
       });
     }

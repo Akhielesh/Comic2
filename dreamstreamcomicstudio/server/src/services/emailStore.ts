@@ -178,11 +178,13 @@ export const recentLog = async (limit = 50): Promise<Array<Record<string, unknow
 // ── Newsletter double opt-in ────────────────────────────────────────────────────
 export const newConfirmToken = (): string => crypto.randomBytes(24).toString('hex');
 
-export type SubscribeOutcome = 'new' | 'pending' | 'already_confirmed';
+export type SubscribeOutcome = 'new' | 'pending' | 'already_confirmed' | 'already_registered';
 
 /**
  * Upsert a waitlist subscriber and return what happened. For 'updates' we (re)issue a
- * confirm token unless the address is already confirmed. Idempotent on (lower(email), kind).
+ * confirm token unless the address is already confirmed. For 'access' an existing row
+ * (there is no confirm flow) reports 'already_registered' and is left untouched.
+ * Idempotent on (lower(email), kind).
  */
 export const upsertSubscriber = async (
   email: string,
@@ -204,6 +206,8 @@ export const upsertSubscriber = async (
 
   const now = new Date().toISOString();
   if (existing) {
+    // 'access' rows have no confirm step — the email is simply already on the list.
+    if (kind === 'access') return { outcome: 'already_registered' };
     if ((existing as { confirmed?: boolean }).confirmed) return { outcome: 'already_confirmed' };
     // Re-issue a fresh token + restart the expiry clock.
     await db

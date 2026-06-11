@@ -16,6 +16,7 @@ export const InviteFriends: React.FC = () => {
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [details, setDetails] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -49,11 +50,20 @@ export const InviteFriends: React.FC = () => {
     if (!emails.trim()) return;
     setBusy(true);
     setMsg(null);
+    setDetails([]);
     setError(null);
     try {
       const res = await sendReferral(emails, note || undefined);
-      const failed = res.results.filter((r) => !r.ok);
-      setMsg(`Sent ${res.sent} invite${res.sent === 1 ? '' : 's'}${failed.length ? ` · ${failed.length} skipped` : ''} 🎉`);
+      const alreadyMembers = res.results.filter((r) => r.status === 'already-member');
+      const failed = res.results.filter((r) => !r.ok && r.status !== 'already-member');
+      const parts = [`Sent ${res.sent} invite${res.sent === 1 ? '' : 's'}`];
+      if (alreadyMembers.length) parts.push(`${alreadyMembers.length} already a member`);
+      if (failed.length) parts.push(`${failed.length} skipped`);
+      setMsg(`${parts.join(' · ')}${res.sent > 0 ? ' 🎉' : ''}`);
+      setDetails([
+        ...alreadyMembers.map((r) => `${r.to} — already a member, no invite needed`),
+        ...failed.map((r) => `${r.to} — not sent${r.error ? ` (${r.error})` : ''}`)
+      ]);
       setEmails('');
       setNote('');
       void load();
@@ -99,7 +109,16 @@ export const InviteFriends: React.FC = () => {
         <button className={`${btnCls} bg-brand-blue text-white`} onClick={handleSend} disabled={busy || !emails.trim()}>
           {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} Send invites
         </button>
-        {msg && <div className="rounded-lg border-2 border-black bg-green-50 px-3 py-2 text-sm">{msg}</div>}
+        {msg && (
+          <div className="rounded-lg border-2 border-black bg-green-50 px-3 py-2 text-sm">
+            <div>{msg}</div>
+            {details.length > 0 && (
+              <ul className="mt-1 space-y-0.5 text-xs text-slate-600 font-mono">
+                {details.map((line) => <li key={line}>{line}</li>)}
+              </ul>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
