@@ -12,7 +12,6 @@ import {
 import { generateInvites, listInvites, revokeInvite } from '../services/invites.js';
 import { APP_PUBLIC_URL, sendStudioInvite } from '../services/mailer.js';
 
-const readablePlanTiers: BillingPlanTier[] = ['free', 'creator', 'pro', 'studio', 'custom', 'admin'];
 const assignablePlanTiers: BillingPlanTier[] = ['free', 'creator', 'studio', 'custom', 'admin'];
 const allowedRoles = ['admin', 'moderator'] as const;
 type AllowedRole = typeof allowedRoles[number];
@@ -164,16 +163,10 @@ adminRouter.get('/users', requireModerator, async (req, res, next) => {
       .filter(Boolean);
 
     const [
-      { data: plans },
       { data: roles },
-      { data: moderation }
+      { data: moderation },
+      { data: accessRows }
     ] = await Promise.all([
-      userIds.length
-        ? admin
-            .from('user_plan_subscriptions')
-            .select('user_id, plan_tier, status')
-            .in('user_id', userIds)
-        : Promise.resolve({ data: [] as Array<Record<string, unknown>> }),
       userIds.length
         ? admin
             .from('user_roles')
@@ -186,20 +179,14 @@ adminRouter.get('/users', requireModerator, async (req, res, next) => {
             .from('user_moderation_status')
             .select('user_id, status, reason, updated_at')
             .in('user_id', userIds)
+        : Promise.resolve({ data: [] as Array<Record<string, unknown>> }),
+      userIds.length
+        ? admin
+            .from('product_access')
+            .select('user_id, product, active')
+            .in('user_id', userIds)
         : Promise.resolve({ data: [] as Array<Record<string, unknown>> })
     ]);
-
-    const planByUser = new Map<string, { planTier: BillingPlanTier; status?: string }>();
-    for (const row of (plans || []) as Array<Record<string, unknown>>) {
-      const userId = typeof row.user_id === 'string' ? row.user_id : '';
-      if (!userId) continue;
-      const tier = String(row.plan_tier || 'free').toLowerCase();
-      const normalizedTier = readablePlanTiers.includes(tier as BillingPlanTier) ? tier as BillingPlanTier : 'free';
-      planByUser.set(userId, {
-        planTier: normalizedTier,
-        status: typeof row.status === 'string' ? row.status : undefined
-      });
-    }
 
     const rolesByUser = new Map<string, AllowedRole[]>();
     for (const row of (roles || []) as Array<Record<string, unknown>>) {
@@ -227,19 +214,29 @@ adminRouter.get('/users', requireModerator, async (req, res, next) => {
       });
     }
 
+    // Per-studio grants (product_access). No rows for a user ⇒ unrestricted default
+    // access, which the client renders as an "all" chip.
+    const accessByUser = new Map<string, Array<{ product: string; active: boolean }>>();
+    for (const row of (accessRows || []) as Array<Record<string, unknown>>) {
+      const userId = typeof row.user_id === 'string' ? row.user_id : '';
+      const product = typeof row.product === 'string' ? row.product : '';
+      if (!userId || !product) continue;
+      const current = accessByUser.get(userId) || [];
+      current.push({ product, active: row.active === true });
+      accessByUser.set(userId, current);
+    }
+
     const items = profileRows.map((row) => {
       const userId = typeof row.id === 'string' ? row.id : '';
       const email = typeof row.email === 'string' ? row.email : undefined;
-      const plan = planByUser.get(userId);
       const moderationStatus = moderationByUser.get(userId);
       return {
         userId,
         username: typeof row.username === 'string' ? row.username : undefined,
         email: canSeeEmail ? email : undefined,
         maskedEmail: canSeeEmail ? undefined : maskEmail(email),
-        planTier: plan?.planTier || 'free',
-        subscriptionStatus: plan?.status,
         roles: rolesByUser.get(userId) || [],
+        productAccess: accessByUser.get(userId) || [],
         moderationStatus: moderationStatus?.status || 'active',
         moderationReason: moderationStatus?.reason,
         createdAt: typeof row.created_at === 'string' ? row.created_at : undefined,
@@ -595,7 +592,23 @@ adminRouter.post('/product-access', requireAdmin, async (req, res, next) => {
       .maybeSingle();
     if (profileError) throw profileError;
     if (!profile?.id) {
-      return res.status(404).json({ error: { message: 'No account with that email — ask them to sign up first.' } });
+      return res.status(404).json({ error: { message: 'No account with this email yet — they need to sign up first.' } });
+    }
+
+    // Dedupe: granting a studio the user already actively has is a no-op — report it
+    // honestly (alreadyGranted) instead of silently re-upserting / re-emailing.
+    if (active) {
+      const { data: existingGrant, error: existingError } = await admin
+        .from('product_access')
+        .select('active')
+        .eq('user_id', profile.id)
+        .eq('product', product)
+        .maybeSingle();
+      if (existingError) throw existingError;
+      if (existingGrant?.active === true) {
+        console.info('[ADMIN_ACTION] product_access_noop_already_granted', { actorId, userId: profile.id, product });
+        return res.json({ success: true, alreadyGranted: true, userId: profile.id, product, active: true, emailed: false });
+      }
     }
 
     const { error: upsertError } = await admin.from('product_access').upsert(
@@ -632,7 +645,7 @@ adminRouter.post('/product-access', requireAdmin, async (req, res, next) => {
     }
 
     console.info('[ADMIN_ACTION] product_access_set', { actorId, userId: profile.id, product, active, emailed });
-    res.json({ success: true, userId: profile.id, product, active, emailed });
+    res.json({ success: true, alreadyGranted: false, userId: profile.id, product, active, emailed });
   } catch (error) {
     next(error);
   }
@@ -649,7 +662,7 @@ adminRouter.get('/product-access', requireAdmin, async (req, res, next) => {
       .ilike('email', email.replace(/[%_]/g, ''))
       .maybeSingle();
     if (profileError) throw profileError;
-    if (!profile?.id) return res.status(404).json({ error: { message: 'No account with that email.' } });
+    if (!profile?.id) return res.status(404).json({ error: { message: 'No account with this email yet — they need to sign up first.' } });
     const { data, error } = await admin
       .from('product_access')
       .select('product, active, note, created_at, updated_at')

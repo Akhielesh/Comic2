@@ -1,0 +1,22 @@
+{
+  // DreamStream API proxy — mounts the Railway backend at the SITE's own
+  // /api/* path. Why this exists: the Pages frontend calls same-origin
+  // `/api/...` (VITE_API_BASE_URL unset), but Pages' SPA fallback answered
+  // those with index.html + HTTP 200 — every backend feature (admin grants,
+  // invites, billing, moderation) silently swallowed HTML instead of JSON.
+  // A Workers route takes precedence over Pages on matching paths (exactly
+  // how /live-api is mounted), so this makes the deployed frontend work
+  // without a rebuild, with no CORS (same origin).
+  "name": "dreamstream-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+
+  "vars": {
+    // The Railway backend's public origin (no trailing slash).
+    "BACKEND_ORIGIN": "https://comic2-production.up.railway.app"
+  },
+
+  "routes": [
+    { "pattern": "dreamstreamstudio.ai/api/*", "zone_name": "dreamstreamstudio.ai" }
+  ]
+}

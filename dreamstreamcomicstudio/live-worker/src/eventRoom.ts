@@ -734,7 +734,9 @@ export class EventRoom {
     if (!meta) return;
     const prev = meta.status;
     meta.status = status;
-    if (status === 'live' && !meta.startedAt) meta.startedAt = Date.now();
+    // A restart after an end is a NEW session: reset the clock, or every
+    // viewer/recap shows the dead gap as elapsed airtime.
+    if (status === 'live' && (!meta.startedAt || prev === 'ended')) meta.startedAt = Date.now();
     if (status === 'live') {
       meta.endedAt = null; // restarting after an (auto-)end — not over anymore
       await this.state.storage.delete('hostGoneAt');

@@ -81,6 +81,9 @@ export function savePrefs(p: StudioPrefs): void {
   } catch {
     /* storage unavailable */
   }
+  // Every save path mirrors to the account (signed-out = no-op). Dynamic
+  // import keeps prefs ↔ sync from becoming a static cycle.
+  void import('./sync').then((m) => m.schedulePrefsPush()).catch(() => undefined);
 }
 
 /** When this device last changed settings — used by cloud sync (newer wins). */
