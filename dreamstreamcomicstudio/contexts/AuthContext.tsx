@@ -1,7 +1,7 @@
 
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { User, Session } from '@supabase/supabase-js';
-import { getAuthRedirectUrl, supabase } from '../services/supabase';
+import { getAuthRedirectUrl, isSessionExpiredByInactivity, supabase, touchLastActivity } from '../services/supabase';
 import { clearFluxKey, setSettingsChangeListener } from '../services/appSettings';
 import { clearAllKeys, setKeysChangeListener } from '../services/apiKeys';
 import { registerDevice } from '../services/deviceSessions';
@@ -88,8 +88,16 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             }
         };
 
-        // Check active session
+        // Check active session. Sessions idle for 30+ days sign out here
+        // (the only automatic sign-out — reloads and new tabs stay seamless).
         supabase.auth.getSession().then(({ data: { session } }) => {
+            if (session && isSessionExpiredByInactivity()) {
+                applyAuthState(null);
+                setLoading(false);
+                void supabase.auth.signOut({ scope: 'local' });
+                return;
+            }
+            touchLastActivity();
             applyAuthState(session);
             setLoading(false);
             if (session?.user) onSignedIn(session.user.id);
@@ -100,6 +108,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             applyAuthState(session);
             setLoading(false);
             if (session?.user && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED')) {
+                touchLastActivity(); // any authenticated activity resets the 30-day idle clock
                 onSignedIn(session.user.id);
             }
             if (event === 'SIGNED_OUT') {
