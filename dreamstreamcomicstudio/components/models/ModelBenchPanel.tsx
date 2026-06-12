@@ -14,6 +14,7 @@ import {
   type BenchRunSummary,
   type BenchSource
 } from '../../services/modelBench';
+import { BULL } from '../chat/artifacts/kit';
 
 // The in-app model bench (admin only): ONE button tests every model on the connected
 // sources and renders the raw numbers as a plain table — no charts, no decoration.
@@ -134,6 +135,21 @@ export const ModelBenchPanel: React.FC = () => {
 
   const grouped = useMemo(() => (run ? groupByModel(run.results) : []), [run]);
   const running = run?.state === 'running';
+
+  // Per-phase pass rate for the loaded run — a glanceable visual once the run is
+  // done: passed / tested per phase, skipped rows excluded (they weren't attempted).
+  const phasePassRates = useMemo(() => {
+    if (!run || run.state !== 'done') return [];
+    const acc = new Map<BenchPhase, { passed: number; tested: number }>();
+    for (const r of run.results) {
+      if (r.errorClass === 'skipped') continue;
+      const e = acc.get(r.phase) ?? { passed: 0, tested: 0 };
+      e.tested += 1;
+      if (r.pass === true) e.passed += 1;
+      acc.set(r.phase, e);
+    }
+    return ALL_PHASES.filter((p) => acc.has(p)).map((p) => ({ phase: p, ...acc.get(p)! }));
+  }, [run]);
   const togglePhase = (p: BenchPhase) =>
     setPhases((prev) => (prev.includes(p) ? (prev.length > 1 ? prev.filter((x) => x !== p) : prev) : [...prev, p]));
 
@@ -269,6 +285,33 @@ export const ModelBenchPanel: React.FC = () => {
               <div className="h-full bg-brand-blue transition-all" style={{ width: `${Math.round((run.tested / run.planned) * 100)}%` }} />
             </div>
           )}
+        </div>
+      )}
+
+      {/* Pass rate by phase — a compact visual readout of the finished run. */}
+      {phasePassRates.length > 0 && (
+        <div className="rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-4">
+          <div className="text-sm font-semibold text-[var(--ds-ink)]">Pass rate by phase</div>
+          <p className="text-[11px] text-[var(--ds-muted)]">Models that passed each phase, out of those actually tested (skips excluded).</p>
+          <div className="mt-3 space-y-2.5">
+            {phasePassRates.map(({ phase, passed, tested }) => {
+              const pct = tested > 0 ? (passed / tested) * 100 : 0;
+              return (
+                <div key={phase} className="flex items-center gap-3 text-xs">
+                  <span className="w-20 shrink-0 font-semibold uppercase text-[var(--ds-muted)]">{phase}</span>
+                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-[var(--ds-well)]">
+                    <div
+                      className="h-full rounded-full transition-all duration-300"
+                      style={{ width: `${passed > 0 ? Math.max(pct, 2) : 0}%`, background: BULL }}
+                    />
+                  </div>
+                  <span className="w-28 shrink-0 text-right tabular-nums text-[var(--ds-ink)]">
+                    {passed}/{tested} · {Math.round(pct)}%
+                  </span>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 

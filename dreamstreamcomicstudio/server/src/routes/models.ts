@@ -5,6 +5,7 @@ import { persistHarvestedModels, loadPersistedModels, loadCallabilityMap } from 
 import { getModelLatency } from '../services/telemetryAnalytics.js';
 import { getModelPopularity, parsePopularityWindow } from '../services/usageAnalytics.js';
 import { requireAuth } from '../middleware/auth.js';
+import { listModelScores, listMonthlyUsage, loadScoreMap } from '../services/modelStats.js';
 import type { AnnotatedModel } from '../ai/catalogAnnotations.js';
 
 export const modelsRouter = Router();
@@ -57,7 +58,13 @@ modelsRouter.get('/catalog', async (req: Request, res: Response) => {
 
   const result = await getCatalog(parseBool(req.query.refresh));
   const allModels = await withNvidiaModels(req, result.models);
-  const models = filterCatalog(allModels, filters);
+  let models = filterCatalog(allModels, filters);
+  // Attach the latest DRS Benchmark Score (when a bench run has been published)
+  // so the Library can rank and badge models by measured behavior, not vibes.
+  const scoreMap = await loadScoreMap().catch(() => new Map<string, number>());
+  if (scoreMap.size) {
+    models = models.map((m) => (scoreMap.has(m.id) ? { ...m, drsScore: scoreMap.get(m.id) } : m));
+  }
 
   res.json({
     models,
@@ -71,6 +78,31 @@ modelsRouter.get('/catalog', async (req: Request, res: Response) => {
     degraded: result.degraded,
     message: result.message
   });
+});
+
+// GET /api/models/bench-scores — the published DRS Benchmark Scores (latest bench
+// run, one row per model). Benches can only be RUN by admins/researchers; the
+// RESULTS are public reference data: scores, per-phase pass/fail and timings —
+// never raw provider error bodies.
+modelsRouter.get('/bench-scores', async (_req: Request, res: Response, next) => {
+  try {
+    const { runId, runAt, scores } = await listModelScores();
+    res.json({ runId, runAt, scores });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/models/usage-monthly?months=6 — aggregate monthly model-choice counts
+// per studio. Privacy-first by construction: counters only (month × product ×
+// model), no user ids, nothing finer than the month bucket.
+modelsRouter.get('/usage-monthly', async (req: Request, res: Response, next) => {
+  try {
+    const months = Number(req.query.months) || 6;
+    res.json({ rows: await listMonthlyUsage(months) });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // GET /api/models/speed — per-model typical latency (from chat_turn telemetry) so the

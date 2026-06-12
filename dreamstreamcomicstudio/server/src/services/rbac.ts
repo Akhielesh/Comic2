@@ -1,10 +1,12 @@
 import { getSupabaseAdmin } from './supabase.js';
 
-export type UserRole = 'admin' | 'moderator';
+export type UserRole = 'admin' | 'moderator' | 'researcher';
 
 export type AccessProfile = {
   isAdmin: boolean;
   isModerator: boolean;
+  /** Researchers/analysts: may run model benchmarks and build reports — NOT full admin. */
+  isResearcher: boolean;
   bootstrapAdmin: boolean;
   roles: UserRole[];
 };
@@ -48,7 +50,7 @@ export const getUserRoles = async (userId: string): Promise<UserRole[]> => {
     const roles = new Set<UserRole>();
     for (const row of data as Array<Record<string, unknown>>) {
       const role = String(row.role || '').toLowerCase();
-      if (role === 'admin' || role === 'moderator') {
+      if (role === 'admin' || role === 'moderator' || role === 'researcher') {
         roles.add(role);
       }
     }
@@ -66,10 +68,12 @@ export const resolveAccessProfile = async (input: {
   const bootstrapAdmin = isBootstrapAdminEmail(input.email);
   const isAdmin = bootstrapAdmin || roles.includes('admin');
   const isModerator = isAdmin || roles.includes('moderator');
+  const isResearcher = isAdmin || roles.includes('researcher');
 
   return {
     isAdmin,
     isModerator,
+    isResearcher,
     bootstrapAdmin,
     roles
   };

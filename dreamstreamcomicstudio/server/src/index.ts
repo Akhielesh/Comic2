@@ -55,7 +55,7 @@ import { newsletterRouter } from './routes/newsletter.js';
 import { emailRouter } from './routes/email.js';
 import { adminEmailRouter } from './routes/adminEmail.js';
 import { modelBenchRouter } from './routes/modelBench.js';
-import { requireAdmin } from './middleware/requireAdmin.js';
+import { requireAdmin, requireResearcher } from './middleware/requireAdmin.js';
 import { invitesRouter } from './routes/invites.js';
 import { accountRouter } from './routes/account.js';
 import { learnRouter } from './routes/learn.js';
@@ -217,7 +217,9 @@ app.use('/api/admin/verification', adminRateLimit, verificationRouter);
 // Admin Email Console (templates/preview/test/send/invite). Admin-only.
 app.use('/api/admin/email', adminRateLimit, requireAdmin, adminEmailRouter);
 // Admin model bench — in-app trigger + results for the all-models live test.
-app.use('/api/admin/model-bench', adminRateLimit, requireAdmin, modelBenchRouter);
+// Benches may be RUN by researchers/analysts as well as admins (requireResearcher
+// includes admins); published DRS scores are readable by everyone via /api/models.
+app.use('/api/admin/model-bench', adminRateLimit, requireResearcher, modelBenchRouter);
 app.use('/api/moderation', moderationRateLimit, moderationRouter);
 app.use('/api/text', textRateLimit, textRouter);
 app.use('/api/chat', textRateLimit, chatRouter);

@@ -6,8 +6,9 @@ declare module 'express-serve-static-core' {
     accessProfile?: {
       isAdmin: boolean;
       isModerator: boolean;
+      isResearcher: boolean;
       bootstrapAdmin: boolean;
-      roles: Array<'admin' | 'moderator'>;
+      roles: Array<'admin' | 'moderator' | 'researcher'>;
     };
   }
 }
@@ -22,6 +23,7 @@ export const hydrateAccessProfile = async (req: Request) => {
     req.accessProfile = {
       isAdmin: false,
       isModerator: false,
+      isResearcher: false,
       bootstrapAdmin: false,
       roles: []
     };
@@ -60,6 +62,23 @@ export const requireModerator = async (req: Request, res: Response, next: NextFu
   const profile = await hydrateAccessProfile(req);
   if (!profile.isModerator) {
     res.status(403).json({ error: { message: 'Moderator access required' } });
+    return;
+  }
+
+  next();
+};
+
+// Researchers/analysts may run model benchmarks and produce reports without
+// holding full admin (admins qualify implicitly via isResearcher).
+export const requireResearcher = async (req: Request, res: Response, next: NextFunction) => {
+  if (!req.user?.id) {
+    res.status(403).json({ error: { message: 'Researcher access required' } });
+    return;
+  }
+
+  const profile = await hydrateAccessProfile(req);
+  if (!profile.isResearcher) {
+    res.status(403).json({ error: { message: 'Researcher access required' } });
     return;
   }
 

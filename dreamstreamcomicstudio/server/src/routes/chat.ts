@@ -25,6 +25,7 @@ import {
   isMemoryEnabled,
   setMemoryEnabled
 } from '../services/userMemory.js';
+import { recordModelUsage } from '../services/modelStats.js';
 import { sanitizeAssistantContext } from '../ai/assistantPolicy.js';
 import { resolveTools, type ChatTool } from '../ai/tools/registry.js';
 import { selectRelevantTools, ROUTABLE_TOOL_NAMES } from '../../../toolCatalog.js';
@@ -1109,6 +1110,7 @@ chatRouter.post('/', async (req, res, next) => {
 
       const payload = withAllowanceNotices(req, buildPayload(p, result));
       maybeAutoRemember(p, result.text || '');
+      recordModelUsage('chat_studio', p.resolved.provider, result.model || p.model);
       res.json(
         reserve && reserve.allowed
           ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled)
@@ -1212,6 +1214,7 @@ chatRouter.post('/stream', async (req, res) => {
 
     const payload = withAllowanceNotices(req, buildPayload(p, result));
     maybeAutoRemember(p, result.text || '');
+    recordModelUsage('chat_studio', p.resolved.provider, result.model || p.model);
     const finalPayload =
       reserve && reserve.allowed
         ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled)
@@ -1331,6 +1334,7 @@ chatRouter.post('/swarm', async (req, res) => {
       usage: result.usage
     });
     maybeAutoRemember(p, result.text || '');
+    recordModelUsage('chat_studio', p.resolved.provider, result.model || p.model);
     const finalPayload =
       reserve && reserve.allowed
         ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled)

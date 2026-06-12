@@ -31,6 +31,7 @@ import { runClarify } from '../ai/studio/studioClarify.js';
 import { runSuggest } from '../ai/studio/studioSuggest.js';
 import { runPlan } from '../ai/studio/studioPlan.js';
 import { runStudioAgentsParallel, sanitizeAgentIds, studioAgentCatalog, STUDIO_AGENTS } from '../ai/studio/studioAgents.js';
+import { recordModelUsage } from '../services/modelStats.js';
 import { resolveTools } from '../ai/tools/registry.js';
 import { buildMcpTools } from '../ai/tools/mcpClient.js';
 import { makeImageTool, imageGenAvailable, type ImageKeys } from '../ai/tools/imageGen.js';
@@ -345,6 +346,7 @@ studioRouter.post('/generate', async (req, res, next) => {
       return result.text || '';
     };
 
+    recordModelUsage('stream_studio', resolved.provider, model);
     const artifact = await runGenerate(complete, {
       prompt,
       template: body.template,

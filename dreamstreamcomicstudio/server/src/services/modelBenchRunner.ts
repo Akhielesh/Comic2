@@ -21,9 +21,11 @@ import {
 } from '../config.js';
 import { logger } from '../lib/logger.js';
 import { getSupabaseAdmin } from './supabase.js';
+import { persistModelScores, type ModelBenchScore, type ModelPhaseScore } from './modelStats.js';
 
 export type BenchSource = 'openrouter' | 'nvidia';
-export type BenchPhase = 'echo' | 'context' | 'reasoning';
+export type BenchPhase = 'echo' | 'context' | 'reasoning' | 'json' | 'coding' | 'vision' | 'tools';
+const ALL_PHASES: BenchPhase[] = ['echo', 'context', 'reasoning', 'json', 'coding', 'vision', 'tools'];
 
 export interface BenchOptions {
   source: BenchSource | 'all';
@@ -37,6 +39,9 @@ export interface BenchOptions {
   timeoutMs: number;
   maxTokens: number;
   contextTokens: number;
+  /** Only bench models published within the last N months (0 = no age filter).
+   *  Old retired/legacy models waste budget and tell us nothing about today's catalog. */
+  maxAgeMonths: number;
 }
 
 export interface BenchRecord {
@@ -85,13 +90,14 @@ const DEFAULTS: BenchOptions = {
   freeOnly: false,
   match: '',
   limit: 0,
-  phases: ['echo', 'context', 'reasoning'],
+  phases: ALL_PHASES,
   budgetUsd: 5,
   maxPerModelUsd: 0.25,
   concurrency: 6,
   timeoutMs: 60_000,
   maxTokens: 256,
-  contextTokens: 6_000
+  contextTokens: 6_000,
+  maxAgeMonths: 6
 };
 
 // Hidden-reasoning models burn completion tokens on thinking before they emit a
@@ -107,7 +113,7 @@ const clamp = (v: number, min: number, max: number, fallback: number): number =>
 /** Sanitize client-supplied options — the server, not the client, owns the safety rails. */
 export const normalizeBenchOptions = (raw: Partial<BenchOptions> | undefined): BenchOptions => {
   const phases = Array.isArray(raw?.phases)
-    ? (raw!.phases.filter((p): p is BenchPhase => p === 'echo' || p === 'context' || p === 'reasoning'))
+    ? (raw!.phases.filter((p): p is BenchPhase => (ALL_PHASES as string[]).includes(p as string)))
     : DEFAULTS.phases;
   return {
     source: raw?.source === 'openrouter' || raw?.source === 'nvidia' ? raw.source : 'all',
@@ -120,7 +126,8 @@ export const normalizeBenchOptions = (raw: Partial<BenchOptions> | undefined): B
     concurrency: clamp(Number(raw?.concurrency), 1, 10, DEFAULTS.concurrency),
     timeoutMs: clamp(Number(raw?.timeoutMs), 5_000, 120_000, DEFAULTS.timeoutMs),
     maxTokens: clamp(Number(raw?.maxTokens), 16, 4_096, DEFAULTS.maxTokens),
-    contextTokens: clamp(Number(raw?.contextTokens), 500, 30_000, DEFAULTS.contextTokens)
+    contextTokens: clamp(Number(raw?.contextTokens), 500, 30_000, DEFAULTS.contextTokens),
+    maxAgeMonths: clamp(Number(raw?.maxAgeMonths), 0, 60, DEFAULTS.maxAgeMonths)
   };
 };
 
@@ -149,6 +156,10 @@ interface BenchModel {
   hasPricing: boolean;
   supportsTemperature: boolean;
   supportsReasoning: boolean;
+  supportsVision: boolean;
+  supportsTools: boolean;
+  /** Unix seconds the model was published upstream (OpenRouter `created`). */
+  createdAt: number | null;
   /** Non-null = not a general chat model; probed phases would only produce noise. */
   excludeReason: string | null;
 }
@@ -201,6 +212,9 @@ const discover = async (source: BenchSource): Promise<BenchModel[]> => {
         params.includes('reasoning') ||
         params.includes('include_reasoning') ||
         /\b(think|thinking|reasoner|-r1\b|o[134](-|$)|gpt-5)/i.test(id),
+      supportsVision: inMods.includes('image'),
+      supportsTools: params.includes('tools') || params.includes('tool_choice'),
+      createdAt: Number(m.created) || null,
       excludeReason: !textToText
         ? `non-text modality (${inMods.join('+')} → ${outMods.join('+')})`
         : special?.reason ?? null
@@ -282,8 +296,12 @@ const reasoningPass = (text: string): boolean => {
 interface PhaseSpec {
   prompt: string;
   promptTokens: number;
-  pass: (text: string) => boolean;
+  pass: (text: string, meta: { toolCalls: string[] }) => boolean;
   skip?: (model: BenchModel) => string | null;
+  /** Function tools to offer (tools phase). */
+  tools?: Array<Record<string, unknown>>;
+  /** Image attached to the prompt as a data URL (vision phase). */
+  imageUrl?: string;
 }
 
 const buildPhases = (opts: BenchOptions): Record<BenchPhase, PhaseSpec> => {
@@ -310,9 +328,56 @@ const buildPhases = (opts: BenchOptions): Record<BenchPhase, PhaseSpec> => {
         'End your reply with the final value on its own line in the form "ANSWER: <number>".',
       promptTokens: 50,
       pass: reasoningPass
+    },
+    // Model-type-specific probes: each auto-skips models that don't claim the
+    // capability, so a text-only model is never penalized for lacking vision.
+    json: {
+      prompt: 'Return ONLY a JSON object of the form {"status":"ok","sum":N} where N is the result of 17+25. No prose, no code fences.',
+      promptTokens: 40,
+      pass: (text) => {
+        const m = text.match(/\{[^{}]*\}/);
+        if (!m) return false;
+        try {
+          const obj = JSON.parse(m[0]) as { status?: unknown; sum?: unknown };
+          return obj.status === 'ok' && Number(obj.sum) === 42;
+        } catch { return false; }
+      }
+    },
+    coding: {
+      prompt:
+        'What is the exact console output of this JavaScript?\n' +
+        'console.log([3,1,2].sort().map(n => n * 2).join("-"));\n' +
+        'End your reply with the output on its own line in the form "OUTPUT: <text>".',
+      promptTokens: 60,
+      pass: (text) => /(^|\b|:)\s*2-4-6\b/.test(text)
+    },
+    vision: {
+      prompt: 'Look at the attached image. What single color fills it? Reply with one word.',
+      promptTokens: 280, // image tokens dominate
+      imageUrl: BENCH_VISION_IMAGE,
+      pass: (text) => /red/i.test(text),
+      skip: (model) => (model.supportsVision ? null : 'not a vision model')
+    },
+    tools: {
+      prompt: 'What is the current temperature in Paris? Use the available tool.',
+      promptTokens: 90,
+      tools: [{
+        type: 'function',
+        function: {
+          name: 'get_current_temperature',
+          description: 'Get the current temperature for a city, in °C.',
+          parameters: { type: 'object', properties: { city: { type: 'string' } }, required: ['city'] }
+        }
+      }],
+      pass: (_text, meta) => meta.toolCalls.includes('get_current_temperature'),
+      skip: (model) => (model.supportsTools ? null : 'does not support tool calling')
     }
   };
 };
+
+// 16x16 solid-red PNG (~130 bytes) — a deterministic vision probe with one
+// unambiguous answer, so the check is a plain case-insensitive match.
+const BENCH_VISION_IMAGE = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAF0lEQVR4nGP4z8BAEiJN9aiGUQ1DSgMAkPn/Afnh+ngAAAAASUVORK5CYII=';
 
 /** Completion-token budget for one phase: user setting + thinking headroom, hard-capped by the per-model spend. */
 const phaseTokenBudget = (model: BenchModel, phase: BenchPhase, spec: PhaseSpec, opts: BenchOptions): number => {
@@ -371,7 +436,13 @@ const runRequest = async (
       signal: controller.signal,
       body: JSON.stringify({
         model: model.id,
-        messages: [{ role: 'user', content: spec.prompt }],
+        messages: [{
+          role: 'user',
+          content: spec.imageUrl
+            ? [{ type: 'text', text: spec.prompt }, { type: 'image_url', image_url: { url: spec.imageUrl } }]
+            : spec.prompt
+        }],
+        ...(spec.tools ? { tools: spec.tools, tool_choice: 'auto' } : {}),
         max_tokens: maxTok,
         // o-series / image / search models hard-reject sampler params (HTTP 400).
         ...(model.supportsTemperature ? { temperature: 0 } : {}),
@@ -405,6 +476,7 @@ const runRequest = async (
 
     let text = '';
     let reasoningChars = 0;
+    const toolCalls: string[] = [];
     let ttft: number | null = null;
     let usage: Record<string, unknown> | null = null;
 
@@ -414,6 +486,9 @@ const runRequest = async (
       const data = (await res.json()) as Record<string, any>;
       text = data?.choices?.[0]?.message?.content || '';
       reasoningChars = String(data?.choices?.[0]?.message?.reasoning || '').length;
+      for (const tc of data?.choices?.[0]?.message?.tool_calls || []) {
+        if (tc?.function?.name) toolCalls.push(String(tc.function.name));
+      }
       usage = data?.usage || null;
       rec.finishReason = data?.choices?.[0]?.finish_reason || null;
       rec.servedModel = data?.model || null;
@@ -448,6 +523,13 @@ const runRequest = async (
             if (ttft === null) ttft = Date.now() - t0;
             text += delta;
           }
+          for (const tc of choice?.delta?.tool_calls || []) {
+            const name = tc?.function?.name;
+            if (name) {
+              if (ttft === null) ttft = Date.now() - t0;
+              toolCalls.push(String(name));
+            }
+          }
           if (choice?.finish_reason) rec.finishReason = choice.finish_reason;
         }
       }
@@ -465,7 +547,7 @@ const runRequest = async (
         rec.tokensPerSec = Number((rec.completionTokens / ((totalMs - ttft) / 1000)).toFixed(1));
       }
     }
-    if (!text.trim()) {
+    if (!text.trim() && !toolCalls.length) {
       if (reasoningChars > 0 && rec.finishReason === 'length') {
         // Not a broken model — it spent the entire completion budget thinking.
         rec.errorClass = 'reasoning_overflow';
@@ -477,7 +559,7 @@ const runRequest = async (
       return rec;
     }
     rec.ok = true;
-    rec.pass = spec.pass(text);
+    rec.pass = spec.pass(text, { toolCalls });
     if (!rec.pass) {
       rec.errorClass = rec.finishReason === 'length' ? 'truncated' : 'wrong_answer';
       if (rec.errorClass === 'truncated') {
@@ -702,6 +784,17 @@ const executeRun = async (run: BenchRun): Promise<void> => {
     );
   }
 
+  // Recency filter: legacy/retired models waste budget and say nothing about
+  // today's catalog. Models without a published date (NVIDIA) are kept.
+  if (opts.maxAgeMonths > 0) {
+    const cutoff = Date.now() / 1000 - opts.maxAgeMonths * 30.44 * 86_400;
+    const before = models.length;
+    models = models.filter((m) => m.createdAt === null || m.createdAt >= cutoff);
+    if (before !== models.length) {
+      run.anomalies.push(`info: age filter (≤${opts.maxAgeMonths} months) kept ${models.length} of ${before} models`);
+    }
+  }
+
   const fullCost = (m: BenchModel) =>
     opts.phases.reduce((s, p) => s + estimatePhaseCost(m, phases[p], opts, phaseTokenBudget(m, p, phases[p], opts)), 0);
   models.sort((a, b) => fullCost(a) - fullCost(b)); // cheapest first — budget cuts the expensive tail
@@ -710,6 +803,45 @@ const executeRun = async (run: BenchRun): Promise<void> => {
 
   // Reserve-then-settle budget ledger (same scheme as the script).
   let committedUsd = 0;
+
+  // DRS Benchmark Score: transparent 0-100 composite per model. Weighted pass
+  // rate over the phases that APPLY to the model (skipped phases don't count
+  // against it), small speed bonus for sub-second TTFT, small penalty for any
+  // 30s+ phase. Published to model_bench_scores when the run finishes.
+  const PHASE_WEIGHTS: Record<BenchPhase, number> = {
+    echo: 10, context: 20, reasoning: 20, json: 15, coding: 20, vision: 7.5, tools: 7.5
+  };
+  const runScores: ModelBenchScore[] = [];
+  const computeScore = (model: BenchModel, rows: BenchRecord[]): ModelBenchScore | null => {
+    let applicable = 0;
+    let earned = 0;
+    const phases: Record<string, ModelPhaseScore> = {};
+    const ttfts: number[] = [];
+    let slow = false;
+    for (const r of rows) {
+      phases[r.phase] = { pass: r.pass, ttftMs: r.ttftMs, tokensPerSec: r.tokensPerSec };
+      if (r.errorClass === 'skipped') continue;
+      const w = PHASE_WEIGHTS[r.phase] ?? 10;
+      applicable += w;
+      if (r.ok && r.pass === true) earned += w;
+      if (r.ttftMs !== null) ttfts.push(r.ttftMs);
+      if ((r.totalMs ?? 0) > 30_000) slow = true;
+    }
+    if (!applicable) return null;
+    ttfts.sort((a, b) => a - b);
+    const medianTtft = ttfts.length ? ttfts[Math.floor(ttfts.length / 2)] : null;
+    let score = (earned / applicable) * 100;
+    if (medianTtft !== null && medianTtft < 1_000 && score > 0) score = Math.min(100, score + 5);
+    if (slow) score = Math.max(0, score - 5);
+    return {
+      source: model.source,
+      model: model.id,
+      score: Math.round(score * 10) / 10,
+      phases,
+      runId: run.id,
+      computedAt: new Date().toISOString()
+    };
+  };
 
   // Healthy = proved at least one phase AND failed none. (All-skipped used to
   // count as healthy, which inflated the headline number.)
@@ -777,6 +909,8 @@ const executeRun = async (run: BenchRun): Promise<void> => {
     run.tested += 1;
     if (perModelHealthy(rows)) run.healthy += 1;
     run.anomalyCount = run.anomalies.length;
+    const score = computeScore(model, rows);
+    if (score) runScores.push(score);
   };
 
   let cursor = 0;
@@ -791,6 +925,7 @@ const executeRun = async (run: BenchRun): Promise<void> => {
   run.state = 'done';
   run.finishedAt = new Date().toISOString();
   await persistRun(run);
+  await persistModelScores(run.id, runScores);
   logger.info('model_bench_run_done', {
     runId: run.id,
     planned: run.planned,

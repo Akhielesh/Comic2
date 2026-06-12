@@ -31,6 +31,8 @@ export type AnnotatedModel = CatalogModel & {
   possibilities: string[];
   /** Optional hand-written editorial note for notable models. */
   editorialNote?: string;
+  /** Latest published DRS Benchmark Score (0-100), when a bench run exists. */
+  drsScore?: number;
   /** Hosted-API callability: false = listed but download-only (not callable via the
    *  hosted API, e.g. NVIDIA NIMs you must self-host). undefined = not yet probed. */
   apiCallable?: boolean;

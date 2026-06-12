@@ -111,3 +111,32 @@ AES-256-GCM solid), SSRF, XSS, rate limiting, workers, CORS/headers.
    Stripe/coupon tables (L2).
 8. **Ops**: set `ADMIN_EMAILS` and (if topology differs from one proxy hop)
    `TRUST_PROXY` explicitly in Railway env.
+
+## 5. Bench v2 — DRS Benchmark Scores (added 2026-06-12, later the same day)
+
+- **Model-type-specific probes**: echo, context, reasoning + new `json`,
+  `coding`, `vision` (16px solid-red PNG, one-word answer), and `tools`
+  (function-call round-trip) phases. Each phase auto-skips models that don't
+  claim the capability, so nothing is penalized for what it never promised.
+- **Recency filter**: `maxAgeMonths` (default 6, 0 = off) — legacy/retired
+  models no longer eat budget.
+- **DRS Benchmark Score**: transparent 0–100 weighted pass rate over the
+  applicable phases (+5 for sub-second median TTFT, −5 for any 30s+ phase),
+  published per model to `model_bench_scores` after every finished run, and
+  attached to the catalog as `drsScore`.
+- **Access model**: runs are restricted to admins and the new `researcher`
+  role (`user_roles.role = 'researcher'`, for onboarding analysts who develop
+  benches/reports/model selection); RESULTS are public — `GET
+  /api/models/bench-scores`, plus the "Benchmarks" tab in the Model Library.
+- **Monthly usage analytics (privacy-first)**: `model_usage_monthly` stores
+  aggregate counters per month × studio × model only — no user ids, nothing
+  finer than the month bucket. Server-only `bump_model_usage()`; read via
+  `GET /api/models/usage-monthly`.
+- Migration: `server/sql/model_bench_scores_and_usage.sql` (apply with
+  `user_memory_rag.sql`).
+
+**Future vision (noted, not built): enhanced DRS scoring system** — multi-run
+score smoothing (rolling median over the last N runs), domain-weighted scores
+per studio (a "DRS-Code" vs "DRS-Chat" axis), confidence intervals from probe
+repetition, regression alerts when a model's score drops between runs, and a
+public dreamstreamstudio.ai benchmark leaderboard page fed by the same tables.
