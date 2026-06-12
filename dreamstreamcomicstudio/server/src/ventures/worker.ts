@@ -1,8 +1,8 @@
 // Ventures worker (Epic A2) — a SEPARATE process: `npm run ventures:worker`. Requires
 // REDIS_URL. It (1) processes 'tick' jobs by running one governed tick per venture, and
 // (2) runs the scheduler heartbeat that fans out ticks for active ventures. Deploy it as its
-// own Railway service so the autonomous loop never competes with the API. Mirrors
-// comicforge/worker.ts. Nothing runs unless VENTURES_ENABLED is true + the kill switch is off
+// own Railway service so the autonomous loop never competes with the API.
+// Nothing runs unless VENTURES_ENABLED is true + the kill switch is off
 // (enforced inside the tick + scheduler).
 
 import { fileURLToPath } from 'node:url';

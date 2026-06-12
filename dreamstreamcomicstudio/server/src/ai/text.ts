@@ -8,8 +8,7 @@ import {
   ExtractWorldResponse,
   PanelBreakdownResponse,
   ContinuitySummaryResponse,
-  ContinuityAuditResponse,
-  TestLabReportResponse
+  ContinuityAuditResponse
 } from '../../../apiTypes.js';
 import { createClient } from './client.js';
 import { extractJson, ensureArray, isString } from './json.js';
@@ -1318,49 +1317,6 @@ ${panels.map((p, i) => `Panel ${i + 1}: ${p.description} | ${p.dialogue || ''}`)
   const responseText = response.text || '';
   return {
     summary: responseText || currentSummary || '',
-    prompt,
-    responseText,
-    usage: buildUsage(prompt, responseText, response.usageMetadata),
-    model
-  };
-};
-
-export const analyzeTestLabReport = async (
-  apiKey: string,
-  report: Record<string, unknown>,
-  modelOverride?: string
-): Promise<TestLabReportResponse> => {
-  const ai = createClient(apiKey);
-  const model = resolveTextModel(modelOverride);
-  const prompt = `
-You are a senior QA engineer analyzing a comic studio Test Lab run.
-Provide a structured analysis with:
-- Findings (what stands out)
-- Likely Causes (performance, prompt quality, provider limits)
-- Recommendations (specific improvements)
-- Next Tests (what to try next)
-
-Test Run JSON:
-${JSON.stringify(report, null, 2)}
-  `;
-
-  const response = await withRetry(
-    () => withModelTimeout(
-      ai.models.generateContent({
-        model,
-        contents: prompt
-      }),
-      TEXT_REQUEST_TIMEOUT_MS,
-      'Test Lab report'
-    ),
-    2,
-    1500,
-    'Test Lab Report'
-  );
-
-  const responseText = response.text || '';
-  return {
-    text: responseText,
     prompt,
     responseText,
     usage: buildUsage(prompt, responseText, response.usageMetadata),

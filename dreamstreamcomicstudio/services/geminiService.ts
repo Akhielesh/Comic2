@@ -20,8 +20,6 @@ import {
   ContinuitySummaryResponse,
   ContinuityAuditRequest,
   ContinuityAuditResponse,
-  TestLabReportRequest,
-  TestLabReportResponse,
   SystemStatusResponse,
   SystemDiagnosticsResponse,
   SystemVersionResponse,
@@ -868,17 +866,4 @@ export const updateContinuitySummary = async (
     handleGeminiError('continuity_summary', e);
     return currentSummary || '';
   }
-};
-
-export const analyzeTestLabReport = async (report: Record<string, unknown>): Promise<string> => {
-  const response = await safeGeminiCall(
-    'testlab_report',
-    undefined,
-    'text',
-    'testlab',
-    async () => withTextKeyFallback((apiKey, modelId) =>
-      post<TestLabReportRequest, TestLabReportResponse>('/api/text/testlab-report', { report }, { apiKey, modelId })
-    )
-  );
-  return response.text || '';
 };

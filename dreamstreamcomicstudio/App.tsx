@@ -5,7 +5,6 @@ import { lazyImportWithRetry } from './services/lazyImportWithRetry';
 const ProjectDashboard = lazyImportWithRetry(() => import('./components/ProjectDashboard').then(module => ({ default: module.ProjectDashboard })));
 const ComicEditor = lazyImportWithRetry(() => import('./components/ComicEditor').then(module => ({ default: module.ComicEditor })));
 const ComicReader = lazyImportWithRetry(() => import('./components/ComicReader').then(module => ({ default: module.ComicReader })));
-const TestLab = lazyImportWithRetry(() => import('./components/TestLab').then(module => ({ default: module.TestLab })));
 const LearnHub = lazyImportWithRetry(() => import('./components/LearnHub').then(module => ({ default: module.LearnHub })));
 const PublicGallery = lazyImportWithRetry(() => import('./components/PublicGallery').then(module => ({ default: module.PublicGallery })));
 const PublicProfile = lazyImportWithRetry(() => import('./components/PublicProfile').then(module => ({ default: module.PublicProfile })));
@@ -13,7 +12,6 @@ const AccountSettings = lazyImportWithRetry(() => import('./components/AccountSe
 const PrivacyPolicy = lazyImportWithRetry(() => import('./components/PrivacyPolicy').then(module => ({ default: module.PrivacyPolicy })));
 const TermsOfService = lazyImportWithRetry(() => import('./components/TermsOfService').then(module => ({ default: module.TermsOfService })));
 const SharedViewer = lazyImportWithRetry(() => import('./components/SharedViewer').then(module => ({ default: module.SharedViewer })));
-const ComicForgeStudio = lazyImportWithRetry(() => import('./components/comicforge/ComicForgeStudio').then(module => ({ default: module.ComicForgeStudio })));
 const PageStudio = lazyImportWithRetry(() => import('./components/pagestudio/PageStudio').then(module => ({ default: module.PageStudio })));
 const ModelLibrary = lazyImportWithRetry(() => import('./components/ModelLibrary').then(module => ({ default: module.ModelLibrary })));
 const HowItWorks = lazyImportWithRetry(() => import('./components/HowItWorks').then(module => ({ default: module.HowItWorks })));
@@ -54,7 +52,6 @@ type AppView =
   | 'dashboard'
   | 'editor'
   | 'reader'
-  | 'test'
   | 'learn'
   | 'how-it-works'
   | 'gallery'
@@ -64,7 +61,6 @@ type AppView =
   | 'privacy'
   | 'terms'
   | 'profile'
-  | 'comicforge'
   | 'pagestudio'
   | 'codestudio'
   | 'ventures'
@@ -73,10 +69,10 @@ type AppView =
 // Top-level views whose identity is persisted in the URL (?view=) so a refresh restores the page.
 // Path/param-managed views (reader, shared, auth-callback, models) are intentionally excluded —
 // they have their own URL handling and must not be clobbered.
-// (editor/comicforge/pagestudio/profile are excluded: they need a loaded project/profile that
+// (editor/pagestudio/profile are excluded: they need a loaded project/profile that
 //  isn't encoded here, so restoring them blind would render a broken page — they fall back to home.)
 const RESTORABLE_VIEWS = new Set<AppView>([
-  'dashboard', 'chat', 'codestudio', 'ventures', 'gallery', 'learn', 'test', 'how-it-works', 'privacy', 'terms', 'settings',
+  'dashboard', 'chat', 'codestudio', 'ventures', 'gallery', 'learn', 'how-it-works', 'privacy', 'terms', 'settings',
 ]);
 
 /** Where to send the user after they sign in (see the ?next= hand-back below). */
@@ -101,7 +97,6 @@ const VIEW_PRODUCT: Partial<Record<AppView, ProductId | null>> = {
   chat: 'chat_studio',
   dashboard: 'comic_studio',
   editor: 'comic_studio',
-  comicforge: 'comic_studio',
   pagestudio: 'comic_studio',
   codestudio: null,
 };
@@ -624,7 +619,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!user || authLoading || isCheckingKey) return;
     if (!needsDobCompletion || hasPromptedDobThisSession) return;
-    const immersive = ['auth', 'auth-callback', 'settings', 'chat', 'codestudio', 'editor', 'comicforge', 'pagestudio', 'reader', 'ventures'];
+    const immersive = ['auth', 'auth-callback', 'settings', 'chat', 'codestudio', 'editor', 'pagestudio', 'reader', 'ventures'];
     if (immersive.includes(currentView)) return;
 
     setHasPromptedDobThisSession(true);
@@ -692,13 +687,11 @@ const App: React.FC = () => {
     if (
       view === 'dashboard' ||
       view === 'auth' ||
-      view === 'test' ||
       view === 'learn' ||
       view === 'how-it-works' ||
       view === 'gallery' ||
       view === 'models' ||
       view === 'chat' ||
-      view === 'comicforge' ||
       view === 'codestudio' ||
       view === 'privacy' ||
       view === 'terms'
@@ -737,10 +730,12 @@ const App: React.FC = () => {
     setCurrentView(pipelineMode === 'pagestudio' ? 'pagestudio' : 'editor');
   };
 
-  const handleOpenProject = (id: string, expectedPipelineMode?: 'classic' | 'comicforge' | 'pagestudio') => {
+  const handleOpenProject = (id: string, expectedPipelineMode?: 'classic' | 'pagestudio') => {
     setIsHydratingProject(true);
-    const routeTo = (mode?: 'classic' | 'comicforge' | 'pagestudio') =>
-      setCurrentView(mode === 'comicforge' ? 'comicforge' : mode === 'pagestudio' ? 'pagestudio' : 'editor');
+    // Stored projects may carry legacy pipeline modes (e.g. the retired 'comicforge'
+    // engine) — coerce anything unknown to the classic editor so old projects still open.
+    const routeTo = (mode?: string) =>
+      setCurrentView(mode === 'pagestudio' ? 'pagestudio' : 'editor');
     hydrateProjectAssets(id)
       .then((hydrated) => {
         if (activeProjectId && !projects.find((project) => project.id === activeProjectId)) {
@@ -825,7 +820,7 @@ const App: React.FC = () => {
   }
 
   // Protection: studio/creation views require an authenticated user. Reading stays open to all.
-  const isProtectedViewStrict = ['dashboard', 'editor', 'test', 'learn', 'settings', 'comicforge', 'pagestudio', 'chat', 'codestudio'].includes(currentView);
+  const isProtectedViewStrict = ['dashboard', 'editor', 'learn', 'settings', 'pagestudio', 'chat', 'codestudio'].includes(currentView);
   const effectiveView: AppView = !user && isProtectedViewStrict ? 'auth' : currentView;
 
   // Product gate (product_access): confined accounts only reach their active studios.
@@ -840,9 +835,9 @@ const App: React.FC = () => {
   })();
 
   const activeProject = activeProjectId ? getProject(activeProjectId) : undefined;
-  // Editor and ComicForge are focused, full-screen workspaces with their own
+  // The editor is a focused, full-screen workspace with its own
   // back/title bars, so we hide the global site header there (was a 3rd stacked header).
-  const showSharedHeader = !['reader', 'shared', 'editor', 'comicforge', 'pagestudio', 'codestudio'].includes(effectiveView);
+  const showSharedHeader = !['reader', 'shared', 'editor', 'pagestudio', 'codestudio'].includes(effectiveView);
   const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'chat' && effectiveView !== 'codestudio';
   // Hide the floating Universal Assistant on the full-screen chat product to avoid two stacked chat surfaces.
   const showUniversalAssistant = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'codestudio';
@@ -869,7 +864,6 @@ const App: React.FC = () => {
               onGoHome={handleBackToHome}
               onViewComics={() => handleNavigate('gallery')}
               onEnterStudio={() => handleNavigate('dashboard')}
-              onEnterComicForge={() => handleNavigate('comicforge')}
               onSignIn={() => goToAuth('signin')}
               onRequestAccess={() => goToAuth('request-access')}
               onNotify={goToStayUpdated}
@@ -1000,19 +994,8 @@ const App: React.FC = () => {
             />
           )}
 
-          {effectiveView === 'test' && (
-            <TestLab
-              onCreateProject={(name) => createProject(name)}
-              onUpdateProject={updateProject}
-              onOpenProject={(id) => {
-                setActiveProjectId(id);
-                setCurrentView('editor');
-              }}
-            />
-          )}
-
           {effectiveView === 'learn' && (
-            <LearnHub onLaunchTestLab={() => setCurrentView('test')} />
+            <LearnHub />
           )}
 
           {effectiveView === 'editor' && activeProject && (
@@ -1029,17 +1012,6 @@ const App: React.FC = () => {
             <PageStudio
               project={activeProject}
               onUpdate={(updater) => updateProject(activeProject.id, updater)}
-              onBack={() => setCurrentView('dashboard')}
-            />
-          )}
-
-          {effectiveView === 'comicforge' && (
-            <ComicForgeStudio
-              projects={projects}
-              activeProject={activeProject}
-              onCreateProject={createProject}
-              onOpenProject={(id) => handleOpenProject(id, 'comicforge')}
-              onUpdateProject={updateProject}
               onBack={() => setCurrentView('dashboard')}
             />
           )}

@@ -8,8 +8,7 @@ import {
   extractWorldDetails,
   generatePanelBreakdown,
   updateContinuitySummary,
-  continuityAudit,
-  analyzeTestLabReport
+  continuityAudit
 } from '../ai/text.js';
 import { TEXT_MODEL, NVIDIA_TEXT_MODEL } from '../config.js';
 import { pickTextModel, type CostPref } from '../ai/autoRouter.js';
@@ -603,65 +602,6 @@ textRouter.post('/continuity-summary', async (req, res, next) => {
       await releaseReservedOperation({
         req,
         operation: 'text.continuity_summary',
-        provider,
-        model: effectiveModel,
-        projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
-        reason: (error as Error)?.message || 'text_request_failed',
-        metadata: { route: req.path, method: req.method }
-      });
-      throw error;
-    }
-  } catch (err) {
-    next(err);
-  }
-});
-
-textRouter.post('/testlab-report', async (req, res, next) => {
-  try {
-    const resolved = await resolveTextProvider(req, res);
-    if (!resolved) return;
-    const { apiKey, model: effectiveModel, provider } = resolved;
-    const { report } = req.body || {};
-    if (!report) {
-      return res.status(400).json({ error: { message: 'report is required' } });
-    }
-
-    const reserve = await reserveForOperation({
-      req,
-      operation: 'text.testlab_report',
-      fallbackModel: effectiveModel,
-      provider,
-      projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
-      comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
-      stage: 'testlab',
-      metadata: { route: req.path, method: req.method }
-    });
-    if ('details' in reserve) return res.status(402).json({ error: formatLimitErrorResponse(reserve.details) });
-
-    try {
-      const result = await analyzeTestLabReport(apiKey, report, effectiveModel);
-      const settled = await settleReservedOperation({
-        req,
-        operation: 'text.testlab_report',
-        provider,
-        model: effectiveModel,
-        seed: {
-          provider,
-          model: effectiveModel,
-          operation: 'text.testlab_report',
-          projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
-          comicId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,
-          stage: 'testlab',
-          byok: reserve.reservation.byokBypass
-        },
-        usage: result.usage,
-        metadata: { route: req.path, method: req.method }
-      });
-      res.json(attachBillingToPayload(result as unknown as Record<string, unknown>, reserve.reservation, settled));
-    } catch (error) {
-      await releaseReservedOperation({
-        req,
-        operation: 'text.testlab_report',
         provider,
         model: effectiveModel,
         projectId: typeof req.body?.projectId === 'string' ? req.body.projectId : undefined,

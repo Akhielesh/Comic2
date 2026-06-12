@@ -1,4 +1,4 @@
-import { Project, GenerationArtifact, ComicPanel, Character, Item, Location, StyleVariant, ProjectReport, TestLabRun, LearnProgress, ReaderState, UserProfile, UserPrivateProfile, AccountProfile, Comment, Follow, AppNotification, Review } from "../types";
+import { Project, GenerationArtifact, ComicPanel, Character, Item, Location, StyleVariant, ProjectReport, LearnProgress, ReaderState, UserProfile, UserPrivateProfile, AccountProfile, Comment, Follow, AppNotification, Review } from "../types";
 import { buildProjectReport } from "./reporting";
 import { supabase } from "./supabase";
 import { ImageTransformPreset, sanitizeProjectForStorage } from "./projectStorage";
@@ -920,8 +920,6 @@ export const getImageDataUrl = async (imageId: string): Promise<string | undefin
   }
 };
 
-export const getTestImageDataUrl = getImageDataUrl;
-
 // 3. Artifacts
 
 export const saveArtifact = async (artifact: GenerationArtifact): Promise<void> => {
@@ -948,37 +946,8 @@ export const loadArtifactsForProject = async (projectId: string): Promise<Genera
 
 
 // --- Legacy / Ephemeral Implementation (IndexedDB) ---
-
-export const saveTestRun = async (run: TestLabRun): Promise<void> => {
-  await runTransaction(TEST_RUNS_STORE, "readwrite", (store) => store.put(run));
-};
-
-export const loadTestRuns = async (limit = 200): Promise<TestLabRun[]> => {
-  const db = await openDb();
-  return new Promise((resolve) => {
-    const tx = db.transaction(TEST_RUNS_STORE, "readonly");
-    const store = tx.objectStore(TEST_RUNS_STORE);
-    const index = store.index("createdAt");
-    const results: TestLabRun[] = [];
-    index.openCursor(null, "prev").onsuccess = (event) => {
-      const cursor = (event.target as IDBRequest<IDBCursorWithValue | null>).result;
-      if (cursor && results.length < limit) {
-        results.push(cursor.value as TestLabRun);
-        cursor.continue();
-      } else {
-        resolve(results);
-      }
-    };
-    tx.onerror = () => resolve([]);
-  });
-};
-
-export const clearTestRuns = async (): Promise<void> => {
-  await runTransaction(TEST_RUNS_STORE, "readwrite", (store) => store.clear());
-  await runTransaction(TEST_IMAGES_STORE, "readwrite", (store) => store.clear());
-};
-
-// ... Keeping Test Images local for now to save bandwidth ...
+// Inline "test" images back the storage === 'test' generation mode (samples that are
+// kept local instead of being persisted to cloud storage) — they are NOT a test suite.
 export const saveTestImage = async (dataUrl: string): Promise<string> => {
   const id = crypto.randomUUID();
   const { mimeType } = parseDataUrl(dataUrl);

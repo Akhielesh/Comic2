@@ -4,7 +4,6 @@ import cors from 'cors';
 import compression from 'compression';
 
 import {
-  COMICFORGE_ENABLED,
   EMAIL_HMAC_SECRET,
   EMAIL_WORKER_URL,
   isAllowedOrigin,
@@ -15,7 +14,6 @@ import {
   RATE_LIMIT_TEXT_MAX_REQUESTS,
   RATE_LIMIT_VISION_MAX_REQUESTS,
   RATE_LIMIT_WINDOW_MS,
-  REDIS_URL,
   TRUST_PROXY,
   validateRuntimeConfig
 } from './config.js';
@@ -44,7 +42,6 @@ import { adminRouter } from './routes/admin.js';
 import { verificationRouter } from './routes/verification.js';
 import { moderationRouter } from './routes/moderation.js';
 import { sharingRouter } from './routes/sharing.js';
-import { comicForgeRouter } from './routes/comicforge.js';
 import { studioRouter } from './routes/studio.js';
 import { agentsRouter } from './routes/agents.js';
 import { recipesRouter } from './routes/recipes.js';
@@ -134,11 +131,6 @@ const visionRateLimit = createRateLimit({
   windowMs: RATE_LIMIT_WINDOW_MS,
   maxRequests: RATE_LIMIT_VISION_MAX_REQUESTS
 });
-const comicForgeRateLimit = createRateLimit({
-  scope: 'comicforge',
-  windowMs: RATE_LIMIT_WINDOW_MS,
-  maxRequests: Math.max(30, Math.floor(RATE_LIMIT_TEXT_MAX_REQUESTS / 2))
-});
 const adminRateLimit = createRateLimit({
   scope: 'admin',
   windowMs: RATE_LIMIT_WINDOW_MS,
@@ -226,7 +218,6 @@ app.use('/api/chat', textRateLimit, chatRouter);
 app.use('/api/image', imageRateLimit, imageRouter);
 app.use('/api/vision', visionRateLimit, visionRouter);
 app.use('/api/shares', systemRateLimit, sharingRouter);
-app.use('/api/v1/comicforge', comicForgeRateLimit, comicForgeRouter);
 // Studio v2 control plane — auth'd (global requireAuth above), text-tier rate limited.
 app.use('/api/studio', textRateLimit, studioRouter);
 app.use('/api/agents', systemRateLimit, agentsRouter);
@@ -263,16 +254,3 @@ app.listen(PORT, () => {
   // Autopilot pilot loop (in-process). No-op unless VENTURES_ENABLED && VENTURES_PILOT_INLINE.
   startInlineVenturesRunner();
 });
-
-// Run the ComicForge worker in-process when the feature is enabled and a queue is
-// configured. Without this, enqueued generation jobs would sit `queued` forever unless
-// the standalone `comicforge:worker` process is deployed separately. Failures here must
-// never take down the API, so they are caught and logged.
-if (COMICFORGE_ENABLED && REDIS_URL.trim()) {
-  import('./comicforge/worker.js')
-    .then(({ startComicForgeWorker }) => startComicForgeWorker())
-    .then(() => console.log('[ComicForge] In-process worker started'))
-    .catch((error) => {
-      console.error('[ComicForge] Failed to start in-process worker', (error as Error)?.message || error);
-    });
-}

@@ -5,6 +5,21 @@ All notable user-facing changes. Format loosely follows
 
 ## [Unreleased]
 
+### Changed
+- **Comic Studio: one engine, three stages, comics that finish (2026-06-12):**
+  - The creation flow is now presented as **Story → Cast → Pages** (the same
+    nine steps underneath, grouped — existing projects resume unchanged).
+  - **Builds self-heal instead of dying:** if no style image is locked, the run
+    generates a style anchor automatically; characters (and flagged
+    locations/items) without reference art get auto-generated turnaround/concept
+    sheets before any panel renders, so character consistency works without
+    ever visiting the World step. The old hard stops ("Failed: style lock",
+    "Failed: missing reference images") are gone — remaining issues flag
+    individual panels for retry instead of blocking the whole comic.
+  - **Removed:** the experimental ComicForge pipeline (stubbed, disabled, never
+    shipped a working generation path) and the admin Test Lab. Old ComicForge
+    projects open in the standard editor. (ADR 0004)
+
 ### Added
 - **Finance data works IN PRODUCTION — edge egress relay (2026-06-12):**
   - Direct production probing (newly possible via the public widget-refresh route)

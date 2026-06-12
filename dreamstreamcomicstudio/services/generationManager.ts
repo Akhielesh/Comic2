@@ -8,12 +8,14 @@ import { stableHash, hashScenes, hashWorld, hasStaleDownstreamFingerprint } from
 import { resolveAspectRatio } from "./imageUtils";
 import { getGridTemplate } from "./panelLayout";
 import { normalizePanelDialogue } from "./dialogueUtils";
-import { MAX_CONTINUITY_PANELS } from "./modelPolicy";
+import { CHARACTER_SHEET_MODEL, FEATURE_FLAGS, MAX_CONTINUITY_PANELS } from "./modelPolicy";
+import { applyGeneratedReference, collectAutoReferenceTasks } from "./autoReferences";
 import { createSystemNotification } from "./db";
 import { prependCappedHistory, appendCappedHistory } from "./projectStorage";
 import { ApiError } from "./apiClient";
 import { computeDefaultBubblePositions } from "./bubbleLayout";
 import {
+  buildContinuityFromWorld,
   buildPanelReferencePack,
   buildPanelScopedContext,
   getEntityById,
@@ -145,6 +147,145 @@ export const startBackgroundGeneration = async (
   try {
     addLog("Starting generation process...");
     addLog(`Story mood: ${storyMood.label} (${storyMood.brightness} palette). ${storyMood.summary}`);
+
+    // --- Phase 0a: auto style anchor -------------------------------------------------
+    // Strict mode used to hard-fail the whole run when no style image existed. Instead,
+    // generate one style anchor from the chosen style prompt so the run can proceed with
+    // a real visual lock — the #1 "generation blocked" cause for new users.
+    let styleResolved = initialStyleResolution.resolution.resolved;
+    if (!styleResolved && !state.styleImageId && (state.stylePrompt || "").trim()) {
+      updateStatus({ currentStepDescription: "Creating style anchor…" });
+      addLog("No style image found — generating a style anchor from your chosen style.");
+      try {
+        const anchorPrompt = buildImagePrompt({
+          stage: "style",
+          stylePrompt: state.stylePrompt,
+          moodGuidance: storyMood.promptGuidance,
+          creativeDirection: state.creativeDirection || undefined,
+          sceneContext: state.scenes[0]?.synopsis || undefined
+        });
+        const anchor = await generateImage(
+          anchorPrompt,
+          state.styleAspectRatio || "1:1",
+          state.imageResolution || "1K",
+          [],
+          project.id,
+          {
+            abortSignal: controller.signal,
+            stage: "style",
+            meta: { source: { type: "style", id: state.selectedStyleId || "auto_style", label: "Auto style anchor" }, auto_reference: 1, runId: panelRunId }
+          }
+        );
+        if (anchor?.imageId && anchor.imageUrl) {
+          const anchorVariant = {
+            id: state.selectedStyleId || `auto_style_${Date.now()}`,
+            prompt: state.stylePrompt,
+            imageId: anchor.imageId,
+            imageUrl: anchor.imageUrl,
+            category: state.styleCategory || "Auto",
+            aspectRatio: state.styleAspectRatio || "1:1",
+            resolution: state.imageResolution || "1K",
+            generatedAt: Date.now()
+          };
+          const existingVariant = (state.styleVariants || []).find((variant) => variant.id === anchorVariant.id);
+          const styleVariants = existingVariant
+            ? (state.styleVariants || []).map((variant) => (variant.id === anchorVariant.id ? { ...variant, ...anchorVariant } : variant))
+            : [...(state.styleVariants || []), anchorVariant];
+          state = {
+            ...state,
+            styleVariants,
+            selectedStyleId: anchorVariant.id,
+            styleImageId: anchor.imageId,
+            styleImageUrl: anchor.imageUrl,
+            styleLockStatus: "resolved",
+            styleLockResolvedAt: Date.now()
+          };
+          styleResolved = true;
+          addLog("Style anchor created and locked for this run.");
+          onUpdate(project.id, (prev) => ({
+            state: {
+              ...prev.state,
+              styleVariants: state.styleVariants,
+              selectedStyleId: state.selectedStyleId,
+              styleImageId: state.styleImageId,
+              styleImageUrl: state.styleImageUrl,
+              styleLockStatus: state.styleLockStatus,
+              styleLockResolvedAt: state.styleLockResolvedAt
+            }
+          }));
+        }
+      } catch (error: any) {
+        addLog(`Style anchor generation failed (${error?.message || "unknown error"}) — continuing with the style prompt only.`);
+      }
+    }
+
+    // --- Phase 0b: auto character/world reference sheets ------------------------------
+    // Generate a turnaround/concept sheet for every entity that has no visual reference,
+    // so the continuity system has something to inject into panel prompts. Missing
+    // references used to block strict runs outright; now they're created on demand.
+    if (FEATURE_FLAGS.ENABLE_CHAR_SHEETS) {
+      const referenceTasks = collectAutoReferenceTasks(state);
+      if (referenceTasks.length > 0) {
+        updateStatus({ currentStepDescription: `Creating ${referenceTasks.length} reference sheet${referenceTasks.length === 1 ? "" : "s"}…` });
+        addLog(`Creating reference sheets for: ${referenceTasks.map((task) => task.name).join(", ")}.`);
+        const queue = [...referenceTasks];
+        const workers = new Array(Math.min(3, queue.length)).fill(null).map(async () => {
+          while (queue.length > 0) {
+            if (isCanceled(project.id)) return;
+            const task = queue.shift();
+            if (!task) return;
+            try {
+              const sheetPrompt = buildImagePrompt({
+                stage: task.kind === "character" ? "character_sheet" : "world",
+                stylePrompt: state.stylePrompt,
+                subjectName: task.name,
+                subjectDescription: task.description,
+                extraNotes: task.kind !== "character" ? `Concept art for ${task.kind === "item" ? "Item" : "Location"}` : undefined
+              });
+              const refIds = [state.styleImageId, ...task.uploadedReferenceIds].filter((id): id is string => Boolean(id));
+              const generated = await generateImage(sheetPrompt, "1:1", "1K", refIds, project.id, {
+                abortSignal: controller.signal,
+                stage: "world",
+                lockedModelId: CHARACTER_SHEET_MODEL,
+                meta: {
+                  source: { type: task.kind, id: task.id, label: task.name },
+                  auto_reference: 1,
+                  runId: panelRunId
+                }
+              });
+              if (generated?.imageId && generated.imageUrl) {
+                state = { ...state, ...applyGeneratedReference(state, task, generated.imageId, generated.imageUrl) };
+                addLog(`Reference ready: ${task.name}`);
+              } else {
+                addLog(`⚠ Reference generation returned no image for ${task.name} — its panels may drift.`);
+              }
+            } catch (error: any) {
+              addLog(`⚠ Reference generation failed for ${task.name} (${error?.message || "unknown error"}) — its panels may drift.`);
+            }
+          }
+        });
+        await Promise.all(workers);
+        if (isCanceled(project.id)) {
+          addLog("Generation stopped by user.");
+          stopWithStatus("Stopped");
+          return;
+        }
+        const rebuiltContinuity = buildContinuityFromWorld(state.scenes, state.characters, state.items, state.locations, state.continuity);
+        state = { ...state, continuity: rebuiltContinuity };
+        state = { ...state, worldHash: hashWorld(state) };
+        onUpdate(project.id, (prev) => ({
+          state: {
+            ...prev.state,
+            characters: state.characters,
+            items: state.items,
+            locations: state.locations,
+            continuity: rebuiltContinuity,
+            worldHash: state.worldHash
+          }
+        }));
+      }
+    }
+
     // Snapshot only the small STYLE inputs used for this run, so single-panel re-rolls stay
     // faithful even if the style/mood is edited later. References are NOT duplicated here —
     // each panel already stores its own continuity.referenceImageIds (see regen below), which
@@ -191,14 +332,11 @@ export const startBackgroundGeneration = async (
         }
       }));
     }
-    if (strictMode && !initialStyleResolution.resolution.resolved) {
-      addLog("Generation blocked: strict mode requires a resolved style lock.");
-      void createSystemNotification(
-        "Generation blocked: style lock is unresolved. Select a style variant with a generated style image.",
-        { projectId: project.id, stage: "generation" }
-      );
-      stopWithStatus(`Failed: ${STRICT_STYLE_LOCK_ERROR}`);
-      return;
+    if (strictMode && !styleResolved) {
+      // Previously a hard stop (STRICT_STYLE_LOCK_UNRESOLVED). The auto style anchor above
+      // already tried to fix this; if it couldn't, generating with the style prompt alone
+      // beats failing the whole run.
+      addLog("Warning: no resolved style image — continuing with the style prompt only. Pick a style with a generated image for tighter consistency.");
     }
 
     const validation = validateContinuityState(state);
@@ -211,22 +349,12 @@ export const startBackgroundGeneration = async (
       }
     }));
     if (strictMode && !validation.isValid) {
-      addLog(`Continuity validation failed (${validation.issues.length} issue${validation.issues.length === 1 ? '' : 's'}).`);
-      // Name the specific blockers so the user knows exactly what to fix instead of a
-      // bare "Failed: Continuity". Missing reference images are the #1 cause.
-      const needsRefs = validation.issues
-        .filter((issue) => issue.code === 'ENTITY_REFERENCE_MISSING' || issue.code === 'ENTITY_NOT_FOUND')
-        .map((issue) => issue.message);
+      // Previously a hard stop ("Failed: Continuity" / missing references) — the worst
+      // "my comic never generates" failure mode. Phase 0 above already auto-generated
+      // what it could; remaining issues are logged honestly and the affected panels get
+      // individually flagged for retry by the per-panel strict checks below.
+      addLog(`Continuity has ${validation.issues.length} unresolved issue${validation.issues.length === 1 ? '' : 's'} — continuing; affected panels will be flagged for retry.`);
       validation.issues.slice(0, 6).forEach((issue) => addLog(`• ${issue.message}`));
-      const refHint = needsRefs.length
-        ? ` Generate reference images for: ${[...new Set(needsRefs)].slice(0, 6).join('; ')}.`
-        : '';
-      void createSystemNotification(
-        `Generation blocked: continuity needs attention (${validation.issues.length} issue${validation.issues.length === 1 ? '' : 's'}).${refHint} Fix in the World stage, then start again.`,
-        { projectId: project.id, stage: 'generation' }
-      );
-      stopWithStatus(needsRefs.length ? "Failed: missing reference images (see World stage)" : "Failed: Continuity");
-      return;
     }
 
     const existingPanels = state.panels.map(panelToPlan);
@@ -461,7 +589,7 @@ export const startBackgroundGeneration = async (
                   panel_ref_count: referencePack.imageIds.length,
                   zero_ref_panel: referencePack.imageIds.length === 0 ? 1 : 0,
                   multi_frame_description_detected: sanitizedDescription.flagged ? 1 : 0,
-                  style_lock_resolved: initialStyleResolution.resolution.resolved,
+                  style_lock_resolved: styleResolved,
                   style_lock_used: Boolean(referencePack.styleImageId),
                   requiredReferences,
                   referenceCount: referencePack.imageIds.length,
@@ -631,7 +759,7 @@ export const startBackgroundGeneration = async (
       ? Number((panelReferenceCounts.reduce((sum, value) => sum + value, 0) / panelReferenceCounts.length).toFixed(2))
       : 0;
     addLog(
-      `[METRICS] panel_ref_count=${averageRefCount} zero_ref_panel=${zeroRefPanelCount} mixed_model_in_run=${mixedModelInRun} multi_frame_description_detected=${multiFrameDetectedCount} style_lock_resolved=${initialStyleResolution.resolution.resolved ? 1 : 0} stale_downstream_fingerprint=${staleDownstreamFingerprint ? 1 : 0} dropped_entity_count=${droppedEntityCount} ungrounded_entity_count=${ungroundedEntityCount}`
+      `[METRICS] panel_ref_count=${averageRefCount} zero_ref_panel=${zeroRefPanelCount} mixed_model_in_run=${mixedModelInRun} multi_frame_description_detected=${multiFrameDetectedCount} style_lock_resolved=${styleResolved ? 1 : 0} stale_downstream_fingerprint=${staleDownstreamFingerprint ? 1 : 0} dropped_entity_count=${droppedEntityCount} ungrounded_entity_count=${ungroundedEntityCount}`
     );
 
     // Persist a compact record of this run's understanding + outcome (mood -> style ->

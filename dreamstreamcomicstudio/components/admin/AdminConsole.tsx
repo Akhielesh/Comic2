@@ -7,7 +7,6 @@ import {
     CheckCircle2,
     ChevronDown,
     ChevronRight,
-    FlaskConical,
     Gauge,
     Loader2,
     Mail,
@@ -466,16 +465,6 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
                             ? `${pendingModeration} republish request${pendingModeration === 1 ? '' : 's'} awaiting review.`
                             : 'No pending republish requests.'}
                     </p>
-                </button>
-                <button
-                    onClick={() => onNavigate?.('test')}
-                    className="group text-left border-2 border-black rounded-xl bg-white p-4 hover:bg-purple-50 transition-colors"
-                >
-                    <div className="flex items-center justify-between">
-                        <h4 className="font-display text-lg flex items-center gap-2"><FlaskConical size={17} /> Launch Test Lab</h4>
-                        <ChevronRight size={16} className="transition-transform group-hover:translate-x-1" />
-                    </div>
-                    <p className="text-xs text-slate-500 mt-1">Restricted model-consistency environment — strict limits, no token burn, full audit.</p>
                 </button>
             </div>
         </div>

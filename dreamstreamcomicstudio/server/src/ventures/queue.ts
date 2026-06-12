@@ -1,4 +1,4 @@
-// BullMQ queue for Autopilot ticks (Epic A2). Mirrors comicforge/queue.ts: a guarded,
+// BullMQ queue for Autopilot ticks (Epic A2). A guarded,
 // lazily-created queue that requires REDIS_URL. Without Redis the queue is simply unavailable
 // and the API keeps working — only the autonomous worker needs it. A per-venture jobId
 // de-dupes so a venture never piles up overlapping ticks.

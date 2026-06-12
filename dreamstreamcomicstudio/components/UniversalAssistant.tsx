@@ -7,8 +7,7 @@ import { queryUniversalAssistant } from '../services/geminiService';
 import { ApiError } from '../services/apiClient';
 import { Project } from '../types';
 import { buildProjectSnapshot, summarizeAllProjects, summarizeProject } from '../services/assistantContext';
-import { getUsageLimits, getUserProfile, loadArtifactsForProject, loadTestRuns } from '../services/db';
-import { buildTestLabSummary, getRecentTestRuns } from '../services/testLabAnalytics';
+import { getUsageLimits, getUserProfile, loadArtifactsForProject } from '../services/db';
 import { useAuth } from '../contexts/AuthContext';
 import { captureError, captureEvent } from '../services/telemetry';
 import { detectSentiment, submitFeedback } from '../services/feedback';
@@ -142,13 +141,12 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
 
     if (!isAuthenticated) return base;
 
-    const [profile, usage, activeSummary, allSummaries, artifacts, testRuns] = await Promise.all([
+    const [profile, usage, activeSummary, allSummaries, artifacts] = await Promise.all([
       user ? getUserProfile(user.id) : Promise.resolve(null),
       getUsageLimits(),
       activeProject ? summarizeProject(activeProject) : Promise.resolve(undefined),
       summarizeAllProjects(projects.slice(0, 12)),
-      activeProject ? loadArtifactsForProject(activeProject.id) : Promise.resolve([]),
-      loadTestRuns(50)
+      activeProject ? loadArtifactsForProject(activeProject.id) : Promise.resolve([])
     ]);
 
     const generatedPanels = activeProject
@@ -196,9 +194,7 @@ export const UniversalAssistant: React.FC<UniversalAssistantProps> = ({
         lastUpdatedProject: projects[0]
           ? { id: projects[0].id, name: projects[0].name, updatedAt: projects[0].updatedAt }
           : undefined
-      },
-      testLabSummary: buildTestLabSummary(testRuns) as unknown as Record<string, unknown>,
-      testLabRecentRuns: getRecentTestRuns(testRuns, 5) as unknown as Record<string, unknown>[]
+      }
     };
   };
 

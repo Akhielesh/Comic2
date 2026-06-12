@@ -8,6 +8,7 @@ agent** can get oriented quickly and avoid re-deriving context.
 
 | Path | What lives here | When to add/update |
 |------|-----------------|--------------------|
+| `VISION.md` | Product vision, the Connector Standard (3 lanes), Google-services phased plan + costs, prioritized roadmap. | When product direction or priorities change. |
 | `ARCHITECTURE.md` | System overview: frontend, backend, data, AI gateway, billing, deploy. | When a major module or data flow changes. |
 | `decisions/` | **ADRs** (Architecture Decision Records) — one file per significant decision, numbered. | Whenever you make a non-obvious, hard-to-reverse, or cross-cutting choice. |
 | `SOLUTION_LOG.md` | Chronological **problem → root cause → fix** log, with files + commit. | Every time you fix a real bug or land a feature worth explaining later. |
@@ -28,6 +29,7 @@ agent** can get oriented quickly and avoid re-deriving context.
 | `features/guided-learning.md` | Guided learning: the `create_learning_path` tool, `LearningPathArtifact`, the progress-tracked course card, `/learn` skill + recipe, composition with quiz/flashcards/exercises, study-mode auto-detection. |
 | `features/travel-planner.md` | Travel planner: the `plan_trip` tool (coercion, Nominatim + Open-Meteo enrichment), `ItineraryArtifact`, the day-tabbed itinerary card, `/trip` skill + recipe, related tools and travel MCPs. |
 | `features/mcp-directory.md` | MCP support: per-user registry + SSRF guards, `/api/mcp` routes, tool proxying into the agentic loop, the 13-entry curated catalog, marketplace UI, and the outbound `/api/connect/mcp` endpoint. |
+| `features/comic-studio.md` | The finalized comic creation flow: Story/Cast/Pages stages, Phase 0 auto style anchor + reference sheets, soft gates, models, sharing. (ADR 0004 removed ComicForge + Test Lab.) |
 
 ## Conventions
 

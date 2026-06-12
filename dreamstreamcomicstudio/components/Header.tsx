@@ -30,7 +30,6 @@ export const Header: React.FC<HeaderProps> = ({ currentView, setCurrentView, set
             <div className="hidden md:flex items-center gap-6">
                 <nav className="flex items-center gap-4 mr-4">
                     <NavButton label="HOW IT WORKS" active={currentView === 'how-it-works'} onClick={() => setCurrentView('how-it-works')} />
-                    <NavButton label="TEST LAB" active={currentView === 'test'} onClick={() => setCurrentView('test')} />
                     <NavButton label="LEARN" active={currentView === 'learn'} onClick={() => setCurrentView('learn')} />
                     <NavButton label="DASHBOARD" active={currentView === 'dashboard'} onClick={() => setCurrentView('dashboard')} />
                 </nav>
