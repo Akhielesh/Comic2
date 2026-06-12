@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Key, Plus, Trash2, Check, AlertTriangle, ExternalLink, Pencil, X, ChevronDown, ChevronRight, Shield, Power, Loader2, ShieldCheck, ShieldX, ShieldQuestion, RefreshCw } from 'lucide-react';
+import { Key, Plus, Trash2, Check, AlertTriangle, ExternalLink, Pencil, X, ChevronDown, ChevronRight, Shield, Power, Loader2, ShieldCheck, ShieldX, ShieldQuestion, RefreshCw, Gauge } from 'lucide-react';
 import {
   ALL_PROVIDERS,
   PROVIDER_META,
@@ -23,6 +23,14 @@ import { Button } from './Button';
 import { ModelSelectionPanel } from './ModelSelectionPanel';
 import { useAuth } from '../contexts/AuthContext';
 import { reconcileProviderMirror, syncByokKeyToServer } from '../services/byokSync';
+import {
+  fetchAllowanceStatus,
+  patchBillingPrefs,
+  resetsLabel,
+  type AllowanceStatus,
+  type BillingPrefsPatch,
+  type ByokFallbackMode
+} from '../services/usageAllowance';
 
 // Manage custom remote MCP servers (their tools appear as connectors in the chat).
 const McpServersPanel: React.FC = () => {
@@ -281,6 +289,169 @@ const HeaderUsage: React.FC<{ k: ManagedApiKey }> = ({ k }) => {
   return <span className={`text-[11px] font-bold ${color}`}>{pct}%</span>;
 };
 
+// ---------------------------------------------------------------------------
+// DreamStream monthly allowance — platform-key usage, expressed ONLY in percent.
+// Backed by GET /api/usage/allowance + PATCH /api/account/billing-prefs (built in
+// a parallel workstream); the panel hides itself entirely while those endpoints
+// don't exist or error. NEVER show a dollar figure here — the per-key usedUsd /
+// limitUsd meters below are a separate, BYOK-only concern.
+// ---------------------------------------------------------------------------
+
+const ALLOWANCE_POLL_MS = 60_000; // refresh while the settings view stays open
+
+const FALLBACK_OPTIONS: { mode: ByokFallbackMode; label: string }[] = [
+  { mode: 'ask', label: 'Ask me first' },
+  { mode: 'auto', label: 'Switch to my key automatically' },
+  { mode: 'never', label: 'Stop until reset' }
+];
+
+// emerald < 30, amber < 90, rose >= 90
+const allowanceMeterColor = (pct: number) =>
+  pct >= 90 ? 'bg-rose-500' : pct >= 30 ? 'bg-amber-500' : 'bg-emerald-500';
+
+const DreamStreamAllowancePanel: React.FC = () => {
+  const [status, setStatus] = useState<AllowanceStatus | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let on = true;
+    const load = async () => {
+      const next = await fetchAllowanceStatus();
+      // Keep the last good status on a transient poll failure instead of flash-hiding.
+      if (on && next) setStatus(next);
+    };
+    void load();
+    const id = setInterval(() => void load(), ALLOWANCE_POLL_MS);
+    return () => { on = false; clearInterval(id); };
+  }, []);
+
+  if (!status || !status.enabled) return null;
+
+  const applyPrefs = async (prefs: BillingPrefsPatch) => {
+    if (saving) return;
+    setSaving(true);
+    const before = status;
+    setStatus({ ...status, ...prefs }); // optimistic
+    const next = await patchBillingPrefs(prefs);
+    if (next) setStatus(next);
+    else {
+      // PATCH failed — reconcile with the server (or revert) rather than lying.
+      const re = await fetchAllowanceStatus();
+      setStatus(re ?? before);
+    }
+    setSaving(false);
+  };
+
+  const pct = Math.min(100, Math.max(0, Math.round(status.pctUsed)));
+  const reset = resetsLabel(status.resetsAt);
+  const crossed90 = status.exhausted || status.crossed.includes(90) || status.pctUsed >= 90;
+  const showConsent = status.exhausted && status.byokAvailable && status.byokFallbackMode === 'ask';
+
+  return (
+    <div className="bg-white border-2 border-black rounded-xl shadow-comic p-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2 min-w-0">
+          <Gauge className="w-4 h-4 shrink-0" />
+          <h4 className="font-bold">Use DreamStream monthly allowance</h4>
+        </div>
+        <button
+          role="switch"
+          aria-checked={status.usePlatformAllowance}
+          disabled={saving}
+          onClick={() => void applyPrefs({ usePlatformAllowance: !status.usePlatformAllowance })}
+          className={`flex items-center gap-2 border-2 border-black rounded-full px-3 py-1 text-[11px] font-bold shrink-0 transition-colors disabled:opacity-50 ${status.usePlatformAllowance ? 'bg-emerald-100 hover:bg-emerald-200' : 'bg-slate-100 hover:bg-slate-200 text-slate-500'}`}
+        >
+          <Power className={`w-3.5 h-3.5 ${status.usePlatformAllowance ? 'text-emerald-600' : 'text-slate-400'}`} />
+          {status.usePlatformAllowance ? 'On' : 'Off'}
+        </button>
+      </div>
+      <p className="text-[11px] text-slate-500 mt-1">
+        On: generation runs on the platform's universal key until your monthly allowance is used.
+        Off: only your own keys below are used.
+      </p>
+
+      {/* Allowance meter — percentages only, with tick marks at the 30/70/90 alert thresholds. */}
+      <div className="mt-3">
+        <div className="relative h-2.5 w-full bg-slate-200 rounded-full overflow-hidden border border-black/20">
+          <div className={`h-full ${allowanceMeterColor(status.pctUsed)}`} style={{ width: `${Math.max(2, pct)}%` }} />
+          {[30, 70, 90].map((t) => (
+            <span key={t} className="absolute top-0 bottom-0 w-px bg-black/30" style={{ left: `${t}%` }} title={`${t}%`} />
+          ))}
+        </div>
+        <div className="mt-1 text-[11px] text-slate-600">
+          <span className={`font-bold ${pct >= 90 ? 'text-rose-600' : ''}`}>{pct}%</span> of your monthly allowance used
+          {reset && <> · resets {reset}</>}
+        </div>
+      </div>
+
+      {/* What happens once the allowance is exhausted. */}
+      <div className="mt-3">
+        <div className="text-[11px] font-bold uppercase text-slate-500">When my allowance runs out</div>
+        <div className="mt-1 inline-flex flex-wrap rounded-lg border-2 border-black overflow-hidden" role="radiogroup" aria-label="When my allowance runs out">
+          {FALLBACK_OPTIONS.map((opt, i) => {
+            const active = status.byokFallbackMode === opt.mode;
+            return (
+              <button
+                key={opt.mode}
+                role="radio"
+                aria-checked={active}
+                disabled={saving}
+                onClick={() => void applyPrefs({ byokFallbackMode: opt.mode })}
+                className={`px-3 py-1.5 text-xs font-bold transition-colors disabled:opacity-50 ${i > 0 ? 'border-l-2 border-black' : ''} ${active ? 'bg-black text-white' : 'bg-white hover:bg-slate-100'}`}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+        {!status.byokAvailable && (
+          <p className="text-[11px] text-slate-500 mt-1">No personal key on file — add a key below to enable fallback.</p>
+        )}
+      </div>
+
+      {/* Threshold banner: warn at 90%, rose at exhaustion; doubles as the consent
+          prompt when the user asked to be asked before falling back to their key. */}
+      {(crossed90 || status.exhausted) && (
+        showConsent ? (
+          <div className="mt-3 border-2 border-black rounded-lg bg-rose-50 p-3">
+            <div className="flex items-start gap-2 flex-wrap sm:flex-nowrap">
+              <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
+              <div className="flex-1 min-w-[12rem]">
+                <div className="text-sm font-bold text-rose-700">
+                  You've used 100% of this month's allowance. Continue with your own key?
+                </div>
+                <p className="text-[11px] text-slate-600 mt-0.5">Your key's own limits still apply.</p>
+              </div>
+              <button
+                onClick={() => void applyPrefs({ byokFallbackMode: 'auto' })}
+                disabled={saving}
+                className="shrink-0 px-3 py-1.5 text-xs font-bold border-2 border-black rounded-lg bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-50"
+              >
+                Continue with my key
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className={`mt-3 border-2 border-black rounded-lg p-3 flex items-start gap-2 ${status.exhausted ? 'bg-rose-50' : 'bg-amber-50'}`}>
+            <AlertTriangle className={`w-4 h-4 shrink-0 mt-0.5 ${status.exhausted ? 'text-rose-600' : 'text-amber-600'}`} />
+            <div className="text-xs text-slate-700">
+              {status.exhausted ? (
+                status.byokFallbackMode === 'auto' && status.byokAvailable ? (
+                  <>You've used <span className="font-bold">100%</span> of this month's allowance — generation now runs on your own key{reset && <> until it resets {reset}</>}.</>
+                ) : (
+                  <>You've used <span className="font-bold">100%</span> of this month's allowance. Platform generation is paused{reset && <> until it resets {reset}</>}{!status.byokAvailable && <> — add a key below to keep going</>}.</>
+                )
+              ) : (
+                <>You've used over <span className="font-bold">90%</span> of this month's allowance{reset && <> — it resets {reset}</>}.</>
+              )}
+            </div>
+          </div>
+        )
+      )}
+    </div>
+  );
+};
+
 // Central "allowed sources" governance — turn a source off and its keys (yours AND
 // the platform's) are ignored everywhere, so nothing uses it by accident.
 const SourceGovernancePanel: React.FC<{ onChange: () => void }> = ({ onChange }) => {
@@ -365,6 +536,10 @@ export const ApiConfiguration: React.FC = () => {
           </span>
         </div>
       </div>
+
+      {/* Platform allowance — sits ABOVE the BYOK sections; hides itself until the
+          allowance backend is live. Speaks only in percentages, never dollars. */}
+      <DreamStreamAllowancePanel />
 
       <SourceGovernancePanel onChange={() => setGovVersion((v) => v + 1)} />
 

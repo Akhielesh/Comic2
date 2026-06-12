@@ -9,6 +9,7 @@ import { ChatProjectModal } from './ChatProjectModal';
 import { ChatSettingsModal } from './ChatSettingsModal';
 import { listCustomAgents } from '../../services/chatAgents';
 import { ChatPanelContext } from './panelContext';
+import { AllowanceBanner } from './AllowanceBanner';
 import { MediaPanel, type MediaPanelData } from './MediaPanel';
 import type { PlaygroundData } from './MultiFilePlayground';
 import type { ChatArtifact, CodeStudioArtifact, MapArtifact } from '../../apiTypes';
@@ -1245,7 +1246,11 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
 
   return (
     <ChatPanelContext.Provider value={setPanel}>
-    <div className={`h-[100dvh] flex overflow-hidden ${CANVAS_BG} ${INK}`}>
+    <div className={`h-[100dvh] flex flex-col overflow-hidden ${CANVAS_BG} ${INK}`}>
+      {/* Platform-allowance alerts (30/70/90/100%) — slim strip above the whole shell;
+          renders nothing until a threshold is crossed (or while the backend is absent). */}
+      <AllowanceBanner />
+      <div className="flex-1 min-h-0 flex overflow-hidden">
       {sidebarOpen && (() => {
         // On phones the sidebar floats over the conversation as a drawer (with a tap-to-close
         // backdrop) instead of stealing a 288px column; selecting a chat closes it. On desktop
@@ -1460,6 +1465,7 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
           onClose={() => setSettingsTab(null)}
         />
       )}
+      </div>
     </div>
     </ChatPanelContext.Provider>
   );

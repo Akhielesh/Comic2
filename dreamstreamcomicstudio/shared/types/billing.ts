@@ -129,7 +129,10 @@ export type LimitExceededReason =
   | 'MONTHLY_INCLUDED_EXHAUSTED'
   | 'INSUFFICIENT_CREDITS'
   | 'PAYMENT_METHOD_REQUIRED'
-  | 'OVERAGE_CAP_REACHED';
+  | 'OVERAGE_CAP_REACHED'
+  // Monthly platform model-spend allowance used up (percent-only messaging — never
+  // USD; see server/src/services/platformAllowance.ts).
+  | 'platform_allowance_exhausted';
 
 export type LimitExceededDetails = {
   reason: LimitExceededReason;
@@ -138,6 +141,12 @@ export type LimitExceededDetails = {
   resetAt: string;
   usage: UsageLimitState;
   options: LimitExceededResolutionOptions;
+  /** User-facing message (set for 'platform_allowance_exhausted'; PERCENT terms only). */
+  message?: string;
+  /** Whether the user has a stored BYOK key they could fall back to. */
+  canFallbackToByok?: boolean;
+  /** The user's configured BYOK fallback behavior once the allowance is exhausted. */
+  byokFallbackMode?: 'ask' | 'auto' | 'never';
 };
 
 export type ReservationState = {

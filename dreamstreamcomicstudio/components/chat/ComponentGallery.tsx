@@ -54,6 +54,8 @@ import { LocalCheatsheet } from './artifacts/LocalCheatsheet';
 import { LoyaltyWallet } from './artifacts/LoyaltyWallet';
 import { WidgetStack } from './artifacts/WidgetStack';
 import { ClarifyCard } from './artifacts/ClarifyCard';
+import { ModelPopularityCard } from '../models/ModelPopularityPanel';
+import type { ModelPopularity } from '../../services/modelPopularity';
 import type { ClarifyArtifact } from '../../apiTypes';
 import { renderArtifactNode } from './artifacts/ChatArtifacts';
 import type {
@@ -1151,7 +1153,23 @@ const widgetStackDemo: WidgetStackArtifact = {
   ]
 };
 
+// "What DreamStream users run" — not a chat artifact (it lives in the Model Library's
+// Leaderboards view), demoed here untyped so the visual stays covered by the gallery.
+const modelPopularityDemo: ModelPopularity = {
+  window: 'week',
+  generatedAt: new Date(Date.now() - 23 * 60_000).toISOString(),
+  models: [
+    { model: 'claude-sonnet-4.5', provider: 'anthropic', requests: 412_300, users: 1840, sharePct: 31.2 },
+    { model: 'gemini-2.5-flash', provider: 'google', requests: 286_900, users: 1510, sharePct: 21.7 },
+    { model: 'gpt-5-mini', provider: 'openai', requests: 174_400, users: 980, sharePct: 13.2 },
+    { model: 'llama-4-maverick', provider: 'meta', requests: 121_800, users: 640, sharePct: 9.2 },
+    { model: 'deepseek-v3.2', provider: 'deepseek', requests: 98_500, users: 720, sharePct: 7.5 },
+    { model: 'qwen3-coder', provider: 'qwen', requests: 64_100, users: 410, sharePct: 4.9 }
+  ]
+};
+
 export const GALLERY_DEMOS: GalleryDemo[] = [
+  { title: 'Model popularity ranking (What DreamStream users run · share bars · req/user counts)', category: 'Data & charts', node: <ModelPopularityCard data={modelPopularityDemo} /> },
   { title: 'Guided learning path (modules · tracked progress · practice prompts)', type: 'learning_path', category: 'Learning', node: <LearningPathCard data={learningPathDemo} /> },
   { title: 'Travel itinerary (day tabs · map · budget · live weather)', type: 'itinerary', category: 'World & media', node: <ItineraryCard data={itineraryDemo} /> },
   { title: 'Weather station (animated · gauges · map)', type: 'weather', category: 'World & media', node: <WeatherStation data={weather} /> },

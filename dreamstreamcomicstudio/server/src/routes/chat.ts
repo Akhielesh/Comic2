@@ -27,6 +27,7 @@ import { unfurlUrl } from '../ai/tools/unfurl.js';
 import { readArticle } from '../ai/tools/readArticle.js';
 import {
   attachBillingToPayload,
+  consumeAllowanceNotices,
   formatLimitErrorResponse,
   releaseReservedOperation,
   reserveForOperation,
@@ -511,6 +512,13 @@ const withGuardrailNotices = (result: {
   return merged.length ? merged : undefined;
 };
 
+// Platform-allowance threshold notices (attached during settlement) ride the same
+// notices channel the UI already renders — percent-only messages, never USD.
+const withAllowanceNotices = (req: any, payload: ChatResponse): ChatResponse => {
+  const extra = consumeAllowanceNotices(req);
+  return extra.length ? { ...payload, notices: [...(payload.notices || []), ...extra] } : payload;
+};
+
 const buildPayload = (p: PreparedChat, result: Awaited<ReturnType<typeof runChat>>): ChatResponse => ({
   text: result.text,
   model: result.model,
@@ -922,7 +930,7 @@ chatRouter.post('/', async (req, res, next) => {
             })
           : null;
 
-      const payload = buildPayload(p, result);
+      const payload = withAllowanceNotices(req, buildPayload(p, result));
       res.json(
         reserve && reserve.allowed
           ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled)
@@ -1024,7 +1032,7 @@ chatRouter.post('/stream', async (req, res) => {
           })
         : null;
 
-    const payload = buildPayload(p, result);
+    const payload = withAllowanceNotices(req, buildPayload(p, result));
     const finalPayload =
       reserve && reserve.allowed
         ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled)
@@ -1128,7 +1136,7 @@ chatRouter.post('/swarm', async (req, res) => {
           })
         : null;
 
-    const payload: ChatResponse = {
+    const payload: ChatResponse = withAllowanceNotices(req, {
       text: result.text,
       model: result.model,
       source: p.resolved.provider,
@@ -1142,7 +1150,7 @@ chatRouter.post('/swarm', async (req, res) => {
       artifacts: result.artifacts,
       notices: withGuardrailNotices(result),
       usage: result.usage
-    };
+    });
     const finalPayload =
       reserve && reserve.allowed
         ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled)

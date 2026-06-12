@@ -53,6 +53,7 @@ import { ModelProviderIcon, ProviderIcon, SourceIcon } from './models/ProviderIc
 import { ProviderSections } from './models/ProviderSections';
 import { SectionHeader } from './models/SectionHeader';
 import { DomainLeaderboard } from './models/DomainLeaderboard';
+import { ModelPopularityPanel } from './models/ModelPopularityPanel';
 import { ImageModelRanking } from './models/ImageModelRanking';
 import { ProviderAggregatorTable } from './models/ProviderAggregatorTable';
 import { ModelDataSources } from './models/ModelDataSources';
@@ -816,7 +817,12 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
         </div>
 
         {view === 'leaderboard' ? (
-          <DomainLeaderboard models={models} onStartChat={onStartChat} />
+          <>
+            {/* Live popularity ranking — what the platform's users actually run. Hides itself
+                while the /api/models/popularity backend isn't deployed yet. */}
+            <div className="mt-4"><ModelPopularityPanel /></div>
+            <DomainLeaderboard models={models} onStartChat={onStartChat} />
+          </>
         ) : view === 'table' ? (
           <>
             <ProviderAggregatorTable models={models} />

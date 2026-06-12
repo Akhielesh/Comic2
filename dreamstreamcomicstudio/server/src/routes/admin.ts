@@ -10,6 +10,8 @@ import {
   listTelemetryEvents
 } from '../services/telemetryAnalytics.js';
 import { generateInvites, listInvites, revokeInvite } from '../services/invites.js';
+import { getAdminUserUsage } from '../services/usageAnalytics.js';
+import { startOfCurrentUtcMonthIso } from '../services/platformAllowance.js';
 import { APP_PUBLIC_URL, sendStudioInvite } from '../services/mailer.js';
 
 const assignablePlanTiers: BillingPlanTier[] = ['free', 'creator', 'studio', 'custom', 'admin'];
@@ -506,6 +508,18 @@ adminRouter.get('/analytics/feedback', requireAdmin, async (req, res, next) => {
 adminRouter.get('/analytics/sessions/:sessionId', requireAdmin, async (req, res, next) => {
   try {
     res.json(await getSessionTimeline(String(req.params.sessionId || '').trim()));
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── Per-user model spend (admin-only) ─────────────────────────────────────────
+// Current-month platform spend + request mix per user, heaviest spenders first.
+// This is the ONE place allowance dollars are exposed; users only ever see percent.
+adminRouter.get('/usage/users', requireAdmin, async (req, res, next) => {
+  try {
+    const limit = parseLimit(req.query.limit, 50);
+    res.json({ month: startOfCurrentUtcMonthIso(), users: await getAdminUserUsage(limit) });
   } catch (error) {
     next(error);
   }
