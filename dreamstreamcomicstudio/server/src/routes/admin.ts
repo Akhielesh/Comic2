@@ -674,4 +674,33 @@ adminRouter.get('/product-access', requireAdmin, async (req, res, next) => {
   }
 });
 
+// Reset an account to default full access by deleting every product_access row —
+// the inverse of confinement ("all studios" in the console). Per-studio revoke
+// stays POST { active: false }; this clears the confinement entirely.
+adminRouter.delete('/product-access', requireAdmin, async (req, res, next) => {
+  try {
+    const actorId = req.user?.id;
+    const email = String(req.query.email || req.body?.email || '').trim().toLowerCase();
+    if (!email) return res.status(400).json({ error: { message: 'email is required' } });
+    const admin = getSupabaseAdmin();
+    const { data: profile, error: profileError } = await admin
+      .from('profiles')
+      .select('id, email')
+      .ilike('email', email.replace(/[%_]/g, ''))
+      .maybeSingle();
+    if (profileError) throw profileError;
+    if (!profile?.id) return res.status(404).json({ error: { message: 'No account with this email yet — they need to sign up first.' } });
+    const { data: removed, error: deleteError } = await admin
+      .from('product_access')
+      .delete()
+      .eq('user_id', profile.id)
+      .select('product');
+    if (deleteError) throw deleteError;
+    console.info('[ADMIN_ACTION] product_access_reset', { actorId, userId: profile.id, cleared: removed?.length ?? 0 });
+    res.json({ success: true, userId: profile.id, cleared: removed?.length ?? 0 });
+  } catch (error) {
+    next(error);
+  }
+});
+
 export { adminRouter };

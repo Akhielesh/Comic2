@@ -211,7 +211,9 @@ export const sendAnnouncement = (
 
 export const sendBetaInvite = (
   email: string,
-  invite: { inviteUrl: string; inviterName?: string; personalNote?: string; code?: string },
+  // `studios` (comma-separated product ids) makes the email name the included studios,
+  // walk their features, and mark the rest "coming soon". Omitted ⇒ generic beta copy.
+  invite: { inviteUrl: string; inviterName?: string; personalNote?: string; code?: string; studios?: string },
   req?: Parameters<typeof meta>[0]
 ) => sendEmail({ to: email, template: 'beta-invite', params: { ...invite }, ...meta(req) });
 

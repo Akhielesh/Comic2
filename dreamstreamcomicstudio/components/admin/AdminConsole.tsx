@@ -40,6 +40,7 @@ import {
     updateAdminUserRole
 } from '../../services/billing';
 import {
+    adminResetProductAccess,
     adminSetProductAccess,
     invalidateProductAccess,
     PRODUCT_IDS,
@@ -331,6 +332,15 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
             setMessage({ type: 'error', text: 'Full email is required to change studio access (admin only).' });
             return;
         }
+        // Granting the FIRST row flips the account from "everything open" to "only the
+        // granted studios" — make sure the operator means to confine, not add.
+        if ((adminUser.productAccess || []).length === 0) {
+            const ok = window.confirm(
+                `${adminUser.email || 'This user'} currently has full access to every studio (default).\n\n` +
+                `Granting ${PRODUCT_LABELS[product]} will CONFINE the account to only the studios you explicitly grant.\n\nContinue?`
+            );
+            if (!ok) return;
+        }
         setBusyStudioKey(`${adminUser.userId}:${product}`);
         setMessage(null);
         try {
@@ -513,16 +523,52 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
         );
     };
 
+    // Clearing every grant row returns the account to default full access — the
+    // counterpart of the confinement that the first grant creates.
+    const resetStudioAccess = async (adminUser: AdminUserRecord) => {
+        const email = normalizeText(adminUser.email);
+        if (!email) {
+            setMessage({ type: 'error', text: 'Full email is required to change studio access (admin only).' });
+            return;
+        }
+        setBusyStudioKey(`${adminUser.userId}:reset`);
+        setMessage(null);
+        try {
+            const result = await adminResetProductAccess(email);
+            setMessage({ type: 'success', text: `Reset to full access — ${result.cleared} grant${result.cleared === 1 ? '' : 's'} cleared (all studios open).` });
+            invalidateProductAccess();
+            await loadGovernance();
+        } catch (err: any) {
+            setMessage({ type: 'error', text: err?.message || 'Reset failed.' });
+        } finally {
+            setBusyStudioKey(null);
+        }
+    };
+
     const renderStudioExpander = (adminUser: AdminUserRecord) => {
         const grants = adminUser.productAccess || [];
+        const isDefault = grants.length === 0;
         return (
             <tr className="bg-slate-50/70 border-b border-slate-100">
                 <td colSpan={7} className="px-3 py-3">
                     <div className="space-y-2.5">
-                        <p className="text-[11px] text-slate-500">
-                            No grants = default access to everything; any grant confines the account to exactly its
-                            active studios. Granting can send the branded studio-invite email.
-                        </p>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-[11px] text-slate-500">
+                                {isDefault
+                                    ? 'This account has FULL access (default — no grants). Granting a studio below switches it to confined mode: only explicitly granted studios stay open.'
+                                    : 'This account is CONFINED to its granted studios. Use "Reset to full access" to reopen everything (back to default).'}
+                                {' '}Granting can send the branded studio-invite email.
+                            </p>
+                            {!isDefault && (
+                                <button
+                                    disabled={busyStudioKey === `${adminUser.userId}:reset`}
+                                    onClick={() => void resetStudioAccess(adminUser)}
+                                    className="text-[11px] font-bold border-2 border-black rounded px-2 py-0.5 bg-white hover:bg-green-50 transition-colors disabled:opacity-40"
+                                >
+                                    {busyStudioKey === `${adminUser.userId}:reset` ? <Loader2 size={11} className="animate-spin" /> : 'Reset to full access (all studios)'}
+                                </button>
+                            )}
+                        </div>
                         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
                             <label className="flex items-center gap-1.5 font-bold cursor-pointer">
                                 <input
@@ -556,13 +602,21 @@ export const AdminConsole: React.FC<AdminConsoleProps> = ({ isAdmin, isModerator
                             {PRODUCT_IDS.map((product) => {
                                 const grant = grants.find((g) => g.product === product);
                                 const state: 'default' | 'granted' | 'revoked' = !grant ? 'default' : grant.active ? 'granted' : 'revoked';
+                                // Effective access, not just row state: default mode means every
+                                // studio is open; confined mode means a missing row = locked out.
+                                const label = state !== 'default' ? state : isDefault ? 'open (default)' : 'not allowed';
+                                const labelTone = state === 'granted'
+                                    ? 'text-green-700'
+                                    : state === 'revoked'
+                                        ? 'text-red-600'
+                                        : isDefault ? 'text-green-600' : 'text-red-500';
                                 const studioBusy = busyStudioKey === `${adminUser.userId}:${product}`;
                                 return (
                                     <div key={product} className="border border-slate-300 rounded-lg bg-white px-2.5 py-2 flex items-center justify-between gap-2">
                                         <div className="min-w-0">
                                             <div className="text-xs font-bold truncate">{PRODUCT_LABELS[product]}</div>
-                                            <div className={`text-[10px] font-bold uppercase ${state === 'granted' ? 'text-green-700' : state === 'revoked' ? 'text-red-600' : 'text-slate-400'}`}>
-                                                {state === 'default' ? 'no grant' : state}
+                                            <div className={`text-[10px] font-bold uppercase ${labelTone}`}>
+                                                {label}
                                             </div>
                                         </div>
                                         <div className="flex gap-1 shrink-0">

@@ -2,9 +2,12 @@ import { Router } from 'express';
 import {
   renderEmail,
   isEmailTemplateName,
+  isStudioInviteId,
+  STUDIO_INVITE_IDS,
   TEMPLATE_KIND,
   EMAIL_TEMPLATE_NAMES,
-  type EmailParams
+  type EmailParams,
+  type StudioInviteId
 } from '../../../shared/email/index.js';
 import { APP_PUBLIC_URL, getEmailUsageStatus, mailerConfigured, sendBetaInvite, sendEmail } from '../services/mailer.js';
 import { normalizeEmail, recentLog } from '../services/emailStore.js';
@@ -122,17 +125,34 @@ adminEmailRouter.post('/send', async (req, res, next) => {
 });
 
 // Admin "invite by email": mint a fresh invite code and email the branded link to one person.
+// `products` (studio ids) selects what the invite unlocks: a proper subset is stored on the
+// invite (redemption confines the account to those studios) and the email names the included
+// studios with their features, marking the rest "coming soon". All studios (or none) selected
+// ⇒ a full-access invite with every studio featured in the email.
 adminEmailRouter.post('/invite', async (req, res, next) => {
   try {
     const email = normalizeEmail(req.body?.email || '');
     if (!EMAIL_REGEX.test(email)) return res.status(400).json({ error: { message: 'Enter a valid email.' } });
+
+    const rawProducts = Array.isArray(req.body?.products) ? req.body.products : [];
+    const products = [...new Set(rawProducts.filter(isStudioInviteId))] as StudioInviteId[];
+    if (rawProducts.length > 0 && products.length === 0) {
+      return res.status(400).json({ error: { message: `products must be studio ids: ${STUDIO_INVITE_IDS.join(', ')}` } });
+    }
+    // Only a PROPER subset confines the redeemed account; selecting every studio (or none)
+    // keeps the default full access, so future studios open up automatically too.
+    const confineTo = products.length > 0 && products.length < STUDIO_INVITE_IDS.length ? products : [];
+    // The email always spells out what's included: chosen studios, or all of them.
+    const featured = products.length > 0 ? products : [...STUDIO_INVITE_IDS];
+
     const [invite] = await generateInvites({
       createdBy: req.user?.id || '',
       count: 1,
       label: req.body?.label || 'admin-invite',
       note: typeof req.body?.note === 'string' ? req.body.note : undefined,
       maxUses: req.body?.maxUses,
-      expiresInDays: req.body?.expiresInDays
+      expiresInDays: req.body?.expiresInDays,
+      products: confineTo
     });
     const inviteUrl = `${APP_PUBLIC_URL}/?invite=${encodeURIComponent(String(invite.code))}`;
     const result = await sendBetaInvite(
@@ -140,13 +160,14 @@ adminEmailRouter.post('/invite', async (req, res, next) => {
       {
         inviteUrl,
         code: String(invite.code),
+        studios: featured.join(','),
         personalNote: typeof req.body?.personalNote === 'string' ? req.body.personalNote.slice(0, 500) : undefined,
         inviterName: typeof req.body?.inviterName === 'string' ? req.body.inviterName.slice(0, 80) : undefined
       },
       { userId: req.user?.id ?? null, requestId: req.requestId }
     );
-    console.info('[ADMIN_ACTION] invite_emailed', { actorId: req.user?.id, code: invite.code, to: email });
-    res.json({ code: invite.code, inviteUrl, email, ...result });
+    console.info('[ADMIN_ACTION] invite_emailed', { actorId: req.user?.id, code: invite.code, to: email, products: confineTo });
+    res.json({ code: invite.code, inviteUrl, email, products: featured, confined: confineTo.length > 0, ...result });
   } catch (err) {
     next(err);
   }

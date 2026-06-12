@@ -4,6 +4,7 @@
 
 import { getSupabaseAdmin } from './supabase.js';
 import { logger } from '../lib/logger.js';
+import { isStudioInviteId, type StudioInviteId } from '../../../shared/email/index.js';
 
 // Human-friendly, unambiguous alphabet (no 0/O/1/I) for codes like DS-7K9F-Q3MX.
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -23,6 +24,11 @@ export interface GenerateInput {
   maxUses?: number;
   expiresInDays?: number;
   createdBy: string;
+  /**
+   * Studio confinement carried by the invite (stored in metadata.products): on redemption
+   * the account is granted exactly these studios. Empty/omitted ⇒ default full access.
+   */
+  products?: StudioInviteId[];
 }
 
 export const generateInvites = async (input: GenerateInput) => {
@@ -33,6 +39,7 @@ export const generateInvites = async (input: GenerateInput) => {
     : null;
   const label = input.label ? String(input.label).slice(0, 120) : null;
   const note = input.note ? String(input.note).slice(0, 500) : null;
+  const products = (input.products ?? []).filter(isStudioInviteId);
 
   const rows = Array.from({ length: count }, () => ({
     code: generateCode(),
@@ -42,7 +49,8 @@ export const generateInvites = async (input: GenerateInput) => {
     max_uses: maxUses,
     use_count: 0,
     created_by: input.createdBy,
-    expires_at: expiresAt
+    expires_at: expiresAt,
+    metadata: products.length ? { products } : {}
   }));
 
   const { data, error } = await getSupabaseAdmin().from('access_invites').insert(rows).select('*');
@@ -130,7 +138,7 @@ export const redeemInvite = async (input: { code: unknown; userId: string; email
     // Codes are generated uppercase; match case-insensitively to be forgiving.
     const { data: invite, error } = await admin
       .from('access_invites')
-      .select('id, code, status, max_uses, use_count, expires_at')
+      .select('id, code, status, max_uses, use_count, expires_at, metadata, created_by')
       .ilike('code', code)
       .maybeSingle();
     if (error) throw error;
@@ -174,6 +182,34 @@ export const redeemInvite = async (input: { code: unknown; userId: string; email
         status: nextCount >= Number(invite.max_uses) ? 'redeemed' : 'active'
       })
       .eq('id', invite.id);
+
+    // Studio confinement carried by the invite: grant exactly the chosen studios.
+    // Best-effort — a grant failure must not undo a successful redemption.
+    const rawProducts = (invite as { metadata?: { products?: unknown } }).metadata?.products;
+    const products = (Array.isArray(rawProducts) ? rawProducts : []).filter(isStudioInviteId);
+    if (products.length > 0) {
+      try {
+        const { error: grantError } = await admin.from('product_access').upsert(
+          products.map((product) => ({
+            user_id: input.userId,
+            product,
+            active: true,
+            note: `invite ${invite.code}`,
+            granted_by: (invite as { created_by?: string | null }).created_by ?? null,
+            updated_at: new Date().toISOString()
+          })),
+          { onConflict: 'user_id,product' }
+        );
+        if (grantError) throw grantError;
+        logger.info('invite_products_granted', { inviteId: invite.id, userId: input.userId, products });
+      } catch (grantErr) {
+        logger.warn('invite_product_grant_failed', {
+          inviteId: invite.id,
+          userId: input.userId,
+          message: (grantErr as Error)?.message || String(grantErr)
+        });
+      }
+    }
 
     logger.info('invite_redeemed', { inviteId: invite.id, userId: input.userId });
     return { ok: true, message: "Access granted — you're set up as a tester. Add your API keys in Settings." };

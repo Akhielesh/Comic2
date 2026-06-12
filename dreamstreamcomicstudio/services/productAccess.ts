@@ -11,7 +11,7 @@
 
 import { useEffect, useState } from 'react';
 import { supabase } from './supabase';
-import { get, post } from './apiClient';
+import { del, get, post } from './apiClient';
 
 export const PRODUCT_IDS = ['stream_studio', 'comic_studio', 'chat_studio'] as const;
 export type ProductId = (typeof PRODUCT_IDS)[number];
@@ -175,3 +175,7 @@ export interface SetProductAccessResult {
 /** Admin: grant/revoke one studio for a user (optionally emailing the studio invite). */
 export const adminSetProductAccess = (input: SetProductAccessInput): Promise<SetProductAccessResult> =>
   post('/api/admin/product-access', input);
+
+/** Admin: delete every grant row, returning the account to default full access ("all studios"). */
+export const adminResetProductAccess = (email: string): Promise<{ success: boolean; userId: string; cleared: number }> =>
+  del(`/api/admin/product-access?email=${encodeURIComponent(email)}`);

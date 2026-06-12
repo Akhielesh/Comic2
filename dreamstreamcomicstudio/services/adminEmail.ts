@@ -67,9 +67,26 @@ export const sendEmailBroadcast = (
 
 export const adminInviteByEmail = (
   email: string,
-  opts: { personalNote?: string; inviterName?: string; maxUses?: number; expiresInDays?: number } = {}
-): Promise<{ code: string; inviteUrl: string; email: string; ok: boolean; error?: string; skipped?: string }> =>
-  post('/api/admin/email/invite', { email, ...opts });
+  opts: {
+    personalNote?: string;
+    inviterName?: string;
+    maxUses?: number;
+    expiresInDays?: number;
+    /** Studio ids the invite unlocks. A proper subset confines the redeemed account; all (or none) = full access. */
+    products?: string[];
+  } = {}
+): Promise<{
+  code: string;
+  inviteUrl: string;
+  email: string;
+  ok: boolean;
+  /** Studios featured in the email (the chosen ones, or all when full access). */
+  products?: string[];
+  /** True when redeeming this invite confines the account to the chosen studios. */
+  confined?: boolean;
+  error?: string;
+  skipped?: string;
+}> => post('/api/admin/email/invite', { email, ...opts });
 
 export const getEmailUsage = (): Promise<EmailUsage> => get('/api/admin/email/usage');
 

@@ -231,31 +231,112 @@ const announcement: Renderer = (params, brand) => {
 };
 
 // ── Beta invite / referral (one-to-one, sent by an admin or a user) ─────────────
+// When `params.studios` carries product ids (comma-separated), the email names exactly
+// those studios, walks their feature cards, and lists the rest as "coming soon" — so the
+// inbox matches what the invite actually unlocks. Without `studios` (referrals, legacy
+// callers) the original generic copy renders unchanged.
+const joinNames = (names: string[]): string =>
+  names.length <= 1 ? names[0] || '' : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+
 const betaInvite: Renderer = (params, brand) => {
   const url = params.inviteUrl || brand.appUrl;
   const inviter = (params.inviterName || '').trim();
-  const intro = inviter
-    ? `${escapeHtml(inviter)} thinks you'd love ${escapeHtml(brand.productName)} and invited you to the beta.`
-    : `You've been invited to the ${escapeHtml(brand.productName)} beta.`;
+  const chosen = parseStudioIds(params.studios);
+  const comingSoon = chosen.length ? STUDIO_INVITE_IDS.filter((id) => !chosen.includes(id)) : [];
+  const chosenNames = joinNames(chosen.map((id) => STUDIO_INVITES[id].name));
+
   const note = params.personalNote
     ? infoBox(`<em>&ldquo;${escapeHtml(params.personalNote)}&rdquo;</em>${inviter ? ` — ${escapeHtml(inviter)}` : ''}`)
     : '';
+  const codeLine = params.code
+    ? muted(`Or enter this invite code at sign-up: <strong>${escapeHtml(params.code)}</strong>`)
+    : '';
+  const codeText = params.code ? `Invite code: ${params.code}` : '';
+
+  if (chosen.length === 0) {
+    const intro = inviter
+      ? `${escapeHtml(inviter)} thinks you'd love ${escapeHtml(brand.productName)} and invited you to the beta.`
+      : `You've been invited to the ${escapeHtml(brand.productName)} beta.`;
+    return {
+      subject: inviter ? `${inviter} invited you to ${brand.productName}` : `You're invited to the ${brand.productName} beta`,
+      preheader: 'Your beta invite is inside — claim your spot.',
+      content:
+        heading("You're invited! 🎟️") +
+        paragraph(intro) +
+        note +
+        paragraph('Turn scripts into cinematic comics, build with 100+ AI models in Chat, and more. Tap below to claim your spot.') +
+        button('Accept your invite', url, 'yellow') +
+        linkFallback(url) +
+        codeLine,
+      text: [
+        intro,
+        params.personalNote ? `\n"${params.personalNote}"${inviter ? ` — ${inviter}` : ''}` : '',
+        `\nAccept your invite: ${url}`,
+        codeText
+      ]
+        .filter(Boolean)
+        .join('\n')
+    };
+  }
+
+  const intro = inviter
+    ? `${escapeHtml(inviter)} invited you to <strong>${escapeHtml(chosenNames)}</strong> on ${escapeHtml(brand.productName)}.`
+    : `You've been invited to <strong>${escapeHtml(chosenNames)}</strong> on ${escapeHtml(brand.productName)}.`;
+  const studioSections = chosen
+    .map((id) => {
+      const s = STUDIO_INVITES[id];
+      return (
+        divider() +
+        paragraph(`<strong style="font-size:18px;">${s.emoji} ${escapeHtml(s.name)}</strong>`) +
+        paragraph(escapeHtml(s.pitch)) +
+        s.features.map(([emoji, title, desc]) => featureCard(emoji, title, desc)).join('')
+      );
+    })
+    .join('');
+  const comingSoonBox = comingSoon.length
+    ? divider() +
+      infoBox(
+        `<strong>Coming soon to your account</strong><br/>` +
+          comingSoon
+            .map((id) => {
+              const s = STUDIO_INVITES[id];
+              return `${s.emoji} <strong>${escapeHtml(s.name)}</strong> — ${escapeHtml(s.descriptor)} · <em>coming soon</em>`;
+            })
+            .join('<br/>')
+      ) +
+      muted(`Your invite covers ${escapeHtml(chosenNames)} today — we'll email you the moment the rest opens up for you.`)
+    : '';
+  const introText = inviter
+    ? `${inviter} invited you to ${chosenNames} on ${brand.productName}.`
+    : `You've been invited to ${chosenNames} on ${brand.productName}.`;
+
   return {
-    subject: inviter ? `${inviter} invited you to ${brand.productName}` : `You're invited to the ${brand.productName} beta`,
-    preheader: 'Your beta invite is inside — claim your spot.',
+    subject: inviter
+      ? `${inviter} invited you to ${chosenNames} — ${brand.productName}`
+      : `You're invited to ${chosenNames} — ${brand.productName}`,
+    preheader: `Your invite unlocks ${chosenNames} — claim your spot.`,
     content:
       heading("You're invited! 🎟️") +
       paragraph(intro) +
       note +
-      paragraph('Turn scripts into cinematic comics, build with 100+ AI models in Chat, and more. Tap below to claim your spot.') +
+      paragraph(`Here's what your invite unlocks — tap below to claim your spot.`) +
       button('Accept your invite', url, 'yellow') +
       linkFallback(url) +
-      (params.code ? muted(`Or enter this invite code at sign-up: <strong>${escapeHtml(params.code)}</strong>`) : ''),
+      codeLine +
+      studioSections +
+      comingSoonBox,
     text: [
-      intro,
+      introText,
       params.personalNote ? `\n"${params.personalNote}"${inviter ? ` — ${inviter}` : ''}` : '',
       `\nAccept your invite: ${url}`,
-      params.code ? `Invite code: ${params.code}` : ''
+      codeText,
+      ...chosen.flatMap((id) => {
+        const s = STUDIO_INVITES[id];
+        return ['', `${s.name} — ${s.pitch}`, ...s.textFeatures];
+      }),
+      ...(comingSoon.length
+        ? ['', 'Coming soon to your account:', ...comingSoon.map((id) => `- ${STUDIO_INVITES[id].name} — ${STUDIO_INVITES[id].descriptor} (coming soon)`)]
+        : [])
     ]
       .filter(Boolean)
       .join('\n')
@@ -356,8 +437,20 @@ const STUDIO_INVITES: Record<StudioInviteId, StudioInviteContent> = {
   }
 };
 
-const isStudioInviteId = (value: unknown): value is StudioInviteId =>
+export const isStudioInviteId = (value: unknown): value is StudioInviteId =>
   typeof value === 'string' && Object.prototype.hasOwnProperty.call(STUDIO_INVITES, value);
+
+/** Every studio id, in display order — the universe the invite email partitions into "included" vs "coming soon". */
+export const STUDIO_INVITE_IDS = ['stream_studio', 'comic_studio', 'chat_studio'] as const satisfies readonly StudioInviteId[];
+
+/** Parse a comma/space-separated studios param into known ids (deduped, order preserved). */
+export const parseStudioIds = (value: string | undefined): StudioInviteId[] => {
+  const seen: StudioInviteId[] = [];
+  for (const part of String(value || '').split(/[\s,;]+/)) {
+    if (isStudioInviteId(part) && !seen.includes(part)) seen.push(part);
+  }
+  return seen;
+};
 
 const studioInvite: Renderer = (params, brand) => {
   const content = STUDIO_INVITES[isStudioInviteId(params.studio) ? params.studio : 'stream_studio'];

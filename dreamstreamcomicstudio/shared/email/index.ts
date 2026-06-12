@@ -11,6 +11,9 @@ export {
   TEMPLATE_KIND,
   SENDER_ROLE,
   senderRoleFor,
-  isNoReply
+  isNoReply,
+  isStudioInviteId,
+  STUDIO_INVITE_IDS,
+  parseStudioIds
 } from './templates.js';
 export type { EmailTemplateName, EmailKind, EmailParams, RenderedEmail, SenderRole, StudioInviteId } from './templates.js';

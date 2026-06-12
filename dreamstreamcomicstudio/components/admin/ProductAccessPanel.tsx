@@ -11,6 +11,7 @@ import { Check, Loader2, Mail, MonitorPlay, Search, ShieldOff } from 'lucide-rea
 import { Button } from '../Button';
 import {
   adminGetProductAccess,
+  adminResetProductAccess,
   adminSetProductAccess,
   PRODUCT_IDS,
   PRODUCT_LABELS,
@@ -60,6 +61,15 @@ export const ProductAccessPanel: React.FC = () => {
 
   const handleSet = async (product: ProductId, active: boolean) => {
     if (lookup.status !== 'loaded') return;
+    // First grant on a default account flips it from "everything open" to "confined to
+    // the granted studios" — confirm the operator wants confinement, not addition.
+    if (active && lookup.grants.length === 0) {
+      const ok = window.confirm(
+        `${lookup.email} currently has full access to every studio (default).\n\n` +
+        `Granting ${PRODUCT_LABELS[product]} will CONFINE the account to only the studios you explicitly grant.\n\nContinue?`
+      );
+      if (!ok) return;
+    }
     setBusyProduct(product);
     setMessage(null);
     try {
@@ -95,6 +105,24 @@ export const ProductAccessPanel: React.FC = () => {
 
   const grants = lookup.status === 'loaded' ? lookup.grants : [];
   const grantFor = (product: ProductId) => grants.find((g) => g.product === product);
+  const isDefault = grants.length === 0;
+
+  // Delete every grant row → back to default full access (the inverse of confinement).
+  const handleReset = async () => {
+    if (lookup.status !== 'loaded') return;
+    setBusyProduct('stream_studio'); // any sentinel to disable the grid while resetting
+    setMessage(null);
+    try {
+      const result = await adminResetProductAccess(lookup.email);
+      setMessage({ type: 'success', text: `Reset to full access — ${result.cleared} grant${result.cleared === 1 ? '' : 's'} cleared (all studios open).` });
+      invalidateProductAccess();
+      await loadGrants(lookup.email);
+    } catch (err) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Reset failed.' });
+    } finally {
+      setBusyProduct(null);
+    }
+  };
 
   return (
     <div className="space-y-4 p-4">
@@ -141,9 +169,18 @@ export const ProductAccessPanel: React.FC = () => {
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <span className="font-bold">{lookup.email}</span>
             <span className="text-slate-400 font-mono truncate">{lookup.userId}</span>
-            <span className={`px-1.5 py-0.5 rounded font-bold ${grants.length === 0 ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
-              {grants.length === 0 ? 'Default access (no grants — everything open)' : `Confined to ${grants.filter((g) => g.active).length} active studio(s)`}
+            <span className={`px-1.5 py-0.5 rounded font-bold ${isDefault ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+              {isDefault ? 'Full access (default — everything open)' : `Confined to ${grants.filter((g) => g.active).length} active studio(s)`}
             </span>
+            {!isDefault && (
+              <button
+                onClick={() => void handleReset()}
+                disabled={busyProduct !== null}
+                className="font-bold border-2 border-black rounded px-2 py-0.5 bg-white hover:bg-green-50 transition-colors disabled:opacity-40"
+              >
+                Reset to full access (all studios)
+              </button>
+            )}
           </div>
 
           {/* Invite email options (used when granting) */}
@@ -186,6 +223,14 @@ export const ProductAccessPanel: React.FC = () => {
             {PRODUCT_IDS.map((product) => {
               const grant = grantFor(product);
               const state: 'default' | 'granted' | 'revoked' = !grant ? 'default' : grant.active ? 'granted' : 'revoked';
+              // Effective access, not raw row state: in default mode every studio is open;
+              // in confined mode a missing row means locked out.
+              const stateLabel = state !== 'default' ? state : isDefault ? 'Open (default)' : 'Not allowed';
+              const stateTone = state === 'granted'
+                ? 'bg-green-100 text-green-700'
+                : state === 'revoked'
+                  ? 'bg-red-100 text-red-700'
+                  : isDefault ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-500';
               const busy = busyProduct === product;
               return (
                 <div key={product} className="border-2 border-black rounded-xl bg-white p-3 space-y-2 flex flex-col">
@@ -193,8 +238,8 @@ export const ProductAccessPanel: React.FC = () => {
                     <div className="font-display text-lg flex items-center gap-1.5">
                       <MonitorPlay size={16} /> {PRODUCT_LABELS[product]}
                     </div>
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${state === 'granted' ? 'bg-green-100 text-green-700' : state === 'revoked' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-500'}`}>
-                      {state === 'default' ? 'No grant' : state}
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${stateTone}`}>
+                      {stateLabel}
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-500 leading-snug grow">{STUDIO_BLURB[product]}</p>

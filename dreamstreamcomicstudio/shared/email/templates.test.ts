@@ -143,6 +143,42 @@ describe('email templates', () => {
     expect(out.html).toContain('DS-AAAA-BBBB');
     expect(out.html).toContain('Join me!');
     expect(out.html).toContain('invite=DS-AAAA-BBBB');
+    // No studios param ⇒ the generic copy, with no coming-soon section.
+    expect(out.html).not.toContain('Coming soon to your account');
+  });
+
+  it('beta-invite with studios names them, walks their features, and marks the rest coming soon', () => {
+    const out = renderEmail('beta-invite', {
+      inviterName: 'Sam',
+      inviteUrl: 'https://dreamstreamstudio.ai/?invite=DS-AAAA-BBBB',
+      code: 'DS-AAAA-BBBB',
+      studios: 'stream_studio,chat_studio'
+    });
+    // Subject + intro name exactly the included studios.
+    expect(out.subject).toBe('Sam invited you to Stream Studio and Chat Studio — DreamStream Studio');
+    expect(out.html).toContain('Stream Studio and Chat Studio');
+    // Included studios bring their feature tours…
+    expect(out.html).toContain('Go live from any device');
+    expect(out.html).toContain('Dashboards that stay live');
+    // …and the studio NOT included is only present as coming soon (no feature cards).
+    expect(out.html).toContain('Coming soon to your account');
+    expect(out.html).toContain('Comic Studio');
+    expect(out.html).not.toContain('Script to panels');
+    // Plain-text mirrors both halves.
+    expect(out.text).toContain('Stream Studio');
+    expect(out.text).toContain('Coming soon to your account:');
+    expect(out.text).toContain('Comic Studio');
+  });
+
+  it('beta-invite with every studio features all three and skips coming soon', () => {
+    const out = renderEmail('beta-invite', { studios: 'stream_studio,comic_studio,chat_studio' });
+    expect(out.subject).toBe("You're invited to Stream Studio, Comic Studio and Chat Studio — DreamStream Studio");
+    expect(out.html).toContain('Go live from any device');
+    expect(out.html).toContain('Script to panels');
+    expect(out.html).toContain('Dashboards that stay live');
+    expect(out.html).not.toContain('Coming soon to your account');
+    // Unknown ids are ignored — garbage degrades to the generic invite, never a crash.
+    expect(renderEmail('beta-invite', { studios: 'bogus,unknown' }).html).not.toContain('Coming soon to your account');
   });
 
   it('automated mail is no-reply with a do-not-reply notice; warm mail is not', () => {

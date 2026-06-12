@@ -14,6 +14,7 @@ import {
   type EmailLogRow,
   type SendOutcome
 } from '../../services/adminEmail';
+import { PRODUCT_IDS, PRODUCT_LABELS, type ProductId } from '../../services/productAccess';
 
 const inputCls =
   'w-full rounded-lg border-2 border-black bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-blue';
@@ -50,8 +51,14 @@ export const EmailConsole: React.FC = () => {
 
   // Invite state
   const [inv, setInv] = useState({ email: '', inviterName: '', personalNote: '', maxUses: 1, expiresInDays: 30 });
-  const [invResult, setInvResult] = useState<{ code: string; inviteUrl: string } | null>(null);
+  // Studios the invite unlocks. All selected (default) = full account; a subset confines
+  // the redeemed account to those studios and the email marks the rest "coming soon".
+  const [invProducts, setInvProducts] = useState<ProductId[]>([...PRODUCT_IDS]);
+  const [invResult, setInvResult] = useState<{ code: string; inviteUrl: string; products?: string[]; confined?: boolean } | null>(null);
   const [copied, setCopied] = useState(false);
+
+  const toggleInvProduct = (product: ProductId) =>
+    setInvProducts((prev) => (prev.includes(product) ? prev.filter((p) => p !== product) : [...prev, product]));
 
   // Log state
   const [log, setLog] = useState<EmailLogRow[]>([]);
@@ -154,6 +161,10 @@ export const EmailConsole: React.FC = () => {
 
   const doInvite = async () => {
     if (!inv.email.trim()) return;
+    if (invProducts.length === 0) {
+      setError('Pick at least one studio for the invite.');
+      return;
+    }
     setBusy('invite');
     setInvResult(null);
     setError(null);
@@ -162,9 +173,10 @@ export const EmailConsole: React.FC = () => {
         inviterName: inv.inviterName || undefined,
         personalNote: inv.personalNote || undefined,
         maxUses: inv.maxUses,
-        expiresInDays: inv.expiresInDays
+        expiresInDays: inv.expiresInDays,
+        products: invProducts
       });
-      if (r.ok || r.code) setInvResult({ code: r.code, inviteUrl: r.inviteUrl });
+      if (r.ok || r.code) setInvResult({ code: r.code, inviteUrl: r.inviteUrl, products: r.products, confined: r.confined });
       else setError(r.error || r.skipped || 'Invite failed');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Invite failed');
@@ -312,12 +324,43 @@ export const EmailConsole: React.FC = () => {
             <label className={labelCls}>Personal note (optional)</label>
             <textarea className={`${inputCls} min-h-[60px]`} value={inv.personalNote} onChange={(e) => setInv({ ...inv, personalNote: e.target.value })} />
           </div>
-          <button className={`${btnCls} bg-brand-yellow`} onClick={doInvite} disabled={busy === 'invite' || !inv.email.trim()}>
+          <div>
+            <label className={labelCls}>Studios this invite unlocks</label>
+            <div className="flex flex-wrap gap-2">
+              {PRODUCT_IDS.map((product) => {
+                const on = invProducts.includes(product);
+                return (
+                  <label
+                    key={product}
+                    className={`flex cursor-pointer items-center gap-1.5 rounded-lg border-2 border-black px-2.5 py-1.5 text-xs font-bold transition-colors ${on ? 'bg-brand-yellow' : 'bg-white text-slate-400'}`}
+                  >
+                    <input type="checkbox" checked={on} onChange={() => toggleInvProduct(product)} className="h-3.5 w-3.5 accent-black" />
+                    {PRODUCT_LABELS[product]}
+                  </label>
+                );
+              })}
+            </div>
+            <p className="mt-1 text-[11px] text-slate-500">
+              {invProducts.length === PRODUCT_IDS.length
+                ? 'All studios — full account access; the email features everything.'
+                : invProducts.length === 0
+                  ? 'Pick at least one studio.'
+                  : `On redeem the account gets exactly ${invProducts.map((p) => PRODUCT_LABELS[p]).join(' + ')}; the email features ${invProducts.length === 1 ? 'it' : 'them'} and marks the rest "coming soon".`}
+            </p>
+          </div>
+          <button className={`${btnCls} bg-brand-yellow`} onClick={doInvite} disabled={busy === 'invite' || !inv.email.trim() || invProducts.length === 0}>
             {busy === 'invite' ? <Loader2 size={14} className="animate-spin" /> : <Ticket size={14} />} Create &amp; send invite
           </button>
           {invResult && (
             <div className="space-y-2 rounded-lg border-2 border-black bg-green-50 p-3 text-sm">
               <div>Invite <strong>{invResult.code}</strong> created &amp; emailed.</div>
+              {invResult.products && (
+                <div className="text-xs text-slate-600">
+                  {invResult.confined
+                    ? `Unlocks only: ${invResult.products.map((p) => PRODUCT_LABELS[p as ProductId] ?? p).join(', ')} (account is confined to these on redeem).`
+                    : 'Unlocks the full account (all studios).'}
+                </div>
+              )}
               <div className="flex items-center gap-2">
                 <input readOnly className={`${inputCls} font-mono text-xs`} value={invResult.inviteUrl} />
                 <button className={`${btnCls} bg-white`} onClick={() => copy(invResult.inviteUrl)}>
