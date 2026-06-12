@@ -13,6 +13,31 @@ Entry format:
 
 ---
 
+## 2026-06-12 — Comic Studio v3 direction: the Agent Stream (spec)
+
+- **Problem:** owner approved a new direction — a Flow/Ideogram-style minimal canvas
+  where an agent designs the comic and streams editable cards — and asked for
+  concrete solutions to the five generation rigidities (script-edit wipes all,
+  mid-run model mixing, reference caps, style-change strips world art, 1–8 panel
+  clamp) plus an ultra-comprehensive UI/UX + backend design document.
+- **Solution:** `docs/features/comic-studio-v3-agent-stream.md` — implementation-grade
+  spec grounded in the existing codebase: calm-studio tokens + artifact-card pipeline
+  for the stream UI (8 new card types incl. confirm gates), Flow-parity Agent
+  settings (confirm Always/Threshold/Never, budget cap, consistency policy), backend
+  on the existing chat SSE protocol + agent orchestrator/registry + reserve/settle
+  billing gates, phase extraction of generationManager as the one real refactor, and
+  a 3-phase shippable build plan. Rigidity solutions: scoped diff-aware invalidation
+  (scene/entity hashes), user-owned consistency policy (strict = same-model retry
+  queue), cast tiers + persistent sheet queue + descriptor-locked extras, re-skin
+  instead of delete on style change, beat-based planning (scene split/merge).
+  Corrected two internal-audit errors: comic projects ARE Supabase-persisted
+  (`projects` table, db.ts:464) and `/api/billing/estimate` already exists.
+- **Files:** `docs/features/comic-studio-v3-agent-stream.md` (new),
+  `docs/features/comic-studio-v2-direction.md` (superseded banner).
+- **Commit/Decision:** owner direction 2026-06-12; supersedes the v2 Layer-1 sketch.
+
+---
+
 ## 2026-06-12 — Multi-page flow cut to 3 clicks; build-never-starts bug; real covers; 504 fixes
 
 - **Problem:** owner (after producing on prod): multi-page flow "terrible" — remove

@@ -1,5 +1,11 @@
 # Comic Studio v2 — direction assessment & layered plan (June 2026)
 
+> **Superseded (2026-06-12, same day):** the owner approved the agent-first
+> direction — see **`comic-studio-v3-agent-stream.md`** for the authoritative,
+> implementation-grade spec (agent stream UX, card system, orchestrator backend,
+> and the solutions to the five generation rigidities). This file stays as the
+> assessment that led there.
+
 The owner proposed a redesigned flow (script → AI analysis → image styling →
 character/world/item/location references with zero hallucination → comic layout
 (4:3/16:9, panel positions, custom grid templates) → cover styling → bubbles/captions →
