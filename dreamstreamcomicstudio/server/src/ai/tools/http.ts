@@ -6,6 +6,7 @@
 // rejection that would break the agentic loop).
 
 import { assertProviderBudget, noteProviderCall } from '../../lib/providerUsage.js';
+import { egressHeaders, egressUrlFor } from '../../lib/egressProxy.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -56,14 +57,34 @@ const withTimeout = async (
   }
 };
 
+// Direct attempt first; for relay-allowlisted hosts (lib/egressProxy.ts) a
+// failure retries once through the edge egress worker — several market-data
+// upstreams block this backend's datacenter IPs.
+const fetchDirectThenEgress = async (url: string, accept: string, opts: FetchOptions): Promise<Response> => {
+  try {
+    const res = await withTimeout(url, accept, opts);
+    if (res.ok) return res;
+    throw new Error(`${hostOf(url)} returned ${res.status}`);
+  } catch (err) {
+    const relay = egressUrlFor(url);
+    if (!relay) throw err;
+    const res = await withTimeout(relay, accept, {
+      ...opts,
+      timeoutMs: Math.max(opts.timeoutMs ?? 0, 14_000),
+      headers: { ...(opts.headers || {}), ...egressHeaders() }
+    });
+    if (!res.ok) throw new Error(`${hostOf(url)} returned ${res.status} (via egress)`);
+    return res;
+  }
+};
+
 /** GET JSON, throwing on a non-2xx status or invalid body. Budget-metered. */
 export const fetchJson = async <T = unknown>(url: string, opts: FetchOptions = {}): Promise<T> => {
   assertProviderBudget(url);
-  const res = await withTimeout(url, opts.accept || 'application/json', opts).then(
-    (r) => (noteProviderCall(url, r.ok), r),
+  const res = await fetchDirectThenEgress(url, opts.accept || 'application/json', opts).then(
+    (r) => (noteProviderCall(url, true), r),
     (err) => (noteProviderCall(url, false), Promise.reject(err))
   );
-  if (!res.ok) throw new Error(`${hostOf(url)} returned ${res.status}`);
   // A non-JSON body (HTML error page served with 200, empty body, gateway error) would
   // otherwise surface as an opaque SyntaxError — map it to a clear, honest message.
   try {
@@ -76,11 +97,10 @@ export const fetchJson = async <T = unknown>(url: string, opts: FetchOptions = {
 /** GET text/XML/CSV, throwing on a non-2xx status. Budget-metered. */
 export const fetchText = async (url: string, opts: FetchOptions = {}): Promise<string> => {
   assertProviderBudget(url);
-  const res = await withTimeout(url, opts.accept || 'text/plain, */*', opts).then(
-    (r) => (noteProviderCall(url, r.ok), r),
+  const res = await fetchDirectThenEgress(url, opts.accept || 'text/plain, */*', opts).then(
+    (r) => (noteProviderCall(url, true), r),
     (err) => (noteProviderCall(url, false), Promise.reject(err))
   );
-  if (!res.ok) throw new Error(`${hostOf(url)} returned ${res.status}`);
   return res.text();
 };
 

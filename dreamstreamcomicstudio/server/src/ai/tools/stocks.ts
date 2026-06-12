@@ -23,6 +23,7 @@ import { fetchNews } from './news.js';
 import { alpacaEnabled, isAlpacaSymbol, getAlpacaQuote } from './alpaca.js';
 import { TtlCache } from '../../lib/cache.js';
 import { assertProviderBudget, noteProviderCall } from '../../lib/providerUsage.js';
+import { egressHeaders, egressUrlFor } from '../../lib/egressProxy.js';
 
 const QUOTE_URL = 'https://stooq.com/q/l/';
 const HISTORY_URL = 'https://stooq.com/q/d/l/';
@@ -156,42 +157,58 @@ const withTimeout = (signal?: AbortSignal, ms = DEFAULT_TIMEOUT_MS) => {
   return { signal: controller.signal, done: () => clearTimeout(timer) };
 };
 
+// Direct fetch first; on ANY failure retry once through the edge egress relay
+// (Yahoo/Stooq block this backend's datacenter IPs — see lib/egressProxy.ts).
+// Both attempts are metered against the ORIGINAL provider.
+const fetchWithEgressRetry = async (
+  url: string,
+  accept: string,
+  signal?: AbortSignal,
+  cookie?: string
+): Promise<Response> => {
+  const headers = { Accept: accept, 'User-Agent': UA, ...(cookie ? { Cookie: cookie } : {}) };
+  const direct = withTimeout(signal);
+  try {
+    const res = await fetch(url, { headers, signal: direct.signal });
+    if (res.ok) return res;
+    throw new Error(`HTTP ${res.status}`);
+  } catch (err) {
+    const relay = egressUrlFor(url);
+    if (!relay) throw err;
+    const t = withTimeout(signal, 14_000);
+    try {
+      const res = await fetch(relay, { headers: { ...headers, ...egressHeaders() }, signal: t.signal });
+      if (!res.ok) throw new Error(`HTTP ${res.status} (via egress)`);
+      return res;
+    } finally {
+      t.done();
+    }
+  } finally {
+    direct.done();
+  }
+};
+
 const fetchJson = async <T>(url: string, signal?: AbortSignal, cookie?: string): Promise<T> => {
   assertProviderBudget(url);
-  const t = withTimeout(signal);
-  let noted = false; // meter once per attempt — rejections (timeouts) count too
   try {
-    const res = await fetch(url, {
-      headers: { Accept: 'application/json', 'User-Agent': UA, ...(cookie ? { Cookie: cookie } : {}) },
-      signal: t.signal
-    });
-    noted = true;
-    noteProviderCall(url, res.ok);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const res = await fetchWithEgressRetry(url, 'application/json', signal, cookie);
+    noteProviderCall(url, true);
     return (await res.json()) as T;
   } catch (err) {
-    if (!noted) noteProviderCall(url, false);
+    noteProviderCall(url, false);
     throw err;
-  } finally {
-    t.done();
   }
 };
 
 const fetchText = async (url: string, signal?: AbortSignal): Promise<string> => {
   assertProviderBudget(url);
-  const t = withTimeout(signal);
-  let noted = false;
   try {
-    const res = await fetch(url, { headers: { Accept: 'text/csv,text/plain', 'User-Agent': UA }, signal: t.signal });
-    noted = true;
-    noteProviderCall(url, res.ok);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const res = await fetchWithEgressRetry(url, 'text/csv,text/plain', signal);
+    noteProviderCall(url, true);
     return res.text();
   } catch (err) {
-    if (!noted) noteProviderCall(url, false);
+    noteProviderCall(url, false);
     throw err;
-  } finally {
-    t.done();
   }
 };
 
