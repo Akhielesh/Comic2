@@ -92,12 +92,29 @@ pokemon_info, tv_show, trivia_questions, random_joke/advice/fact; github_repo,
 fetch_github_pr, npm_package, pypi_package, qr_code, predict_name, render_video,
 generate_image, nango_* (3).
 
-- **Rendering gap (known, still open):** most of this tail returns **plain
-  text** even where the API gives structured data. This is the single biggest
-  remaining widget-gallery integration gap and is tracked in
-  `DATA_CONNECTORS.md` as the next milestone.
+- **Rendering gap CLOSED for 23 of these (June 2026):** the packs now emit
+  EXISTING rich artifact types server-side (no new renderers) — `document`
+  (wiki_lookup, search_papers, search_books, define_word, find_recipe,
+  find_cocktail, tv_show, anime_info), `news_results` (hacker_news → split
+  reader), `metric_board` (country_info, sun_times, pokemon_info, npm_package,
+  pypi_package), `data_table` (public_holidays, zip_lookup, find_university,
+  people_in_space, space_launches, github_repo), `world_clocks` (world_time),
+  and richer `map` markers (iss_location, earthquakes). All are pinnable as
+  snapshots. Still text **by design** (commented in code): number_fact,
+  useless_fact, random_joke, random_advice, word_assoc, trivia_questions,
+  predict_name; qr_code/nasa_apod render via images; ip_lookup, fetch_github_pr,
+  nango_* remain text.
 - Verified: unit for the tested parsers (duckduckgo, metno, news, places,
-  convertData, …); the long-tail upstreams are **not** runtime-verified.
+  convertData, plus the new knowledge/geo/space/culture/dev mapping helpers).
+  Exercised live (tool → upstream → artifact) during the June 2026 artifact
+  upgrade: hacker_news, wiki_lookup, earthquakes, iss_location (Open Notify
+  fallback path — wheretheiss.at was 503), people_in_space, public_holidays,
+  sun_times, world_time, find_recipe, github_repo, npm_package, pypi_package.
+  **country_info's upstream is broken**: the REST Countries legacy API
+  (v3.1) now returns a deprecation error and the new v5 requires an auth key —
+  the metric-board mapper is unit-tested, but the tool needs a provider
+  migration (follow-up; tracked in `DATA_CONNECTORS.md`). The rest of the
+  tail's upstreams are **not** runtime-verified.
 
 ### MCP (13 curated + user-added)
 Context7, GitHub, Filesystem, Memory, Puppeteer/Fetch-class servers etc. (see
@@ -155,11 +172,18 @@ without auth, bad-key fallback matrix (Alpaca, CoinGecko).
 **Unit-verified only:** the in-app/deterministic pack (pure), search chain
 beyond DDG, travel cards, portfolio/terminal builders.
 
-**Not verified at runtime:** the ~39-tool long tail's upstreams, MCP servers
-individually, Nango, aviationstack, NASA APOD key path, render_video worker.
+**Not verified at runtime:** the long-tail upstreams not listed in the
+long-tail section's live list above (e.g. search_books, search_papers,
+define_word, find_cocktail, tv_show, anime_info, space_launches, zip_lookup,
+find_university, pokemon_info), MCP servers individually, Nango, aviationstack,
+NASA APOD key path, render_video worker. country_info's upstream is known
+broken (REST Countries legacy deprecation — see above).
 
 **Known integration gaps (the truthful to-do list):**
-1. Long-tail tools render text, not cards (biggest gallery gap).
+1. ~~Long-tail tools render text, not cards~~ — closed June 2026 for 23 tools
+   (existing artifact types, server-side emission only; see the long-tail
+   section above). Remaining text-only by design: one-liner/quiz/statistical
+   tools, ip_lookup, fetch_github_pr, nango_*.
 2. MCP results are text-only; no artifact bridge.
 3. Dashboards are localStorage-only (no cross-device sync of boards).
 4. Article extraction is publisher-limited without `JINA_API_KEY`.

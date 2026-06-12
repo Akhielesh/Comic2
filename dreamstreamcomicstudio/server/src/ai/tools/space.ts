@@ -3,9 +3,33 @@
 // unless a NASA_API_KEY is configured (which lifts the hourly/daily limit).
 
 import type { ChatTool } from './types.js';
+import type { DataTableArtifact, MapMarker } from '../../../../apiTypes.js';
 import { fetchJson, envKey } from './http.js';
 
 // --- ISS current position (Where the ISS at?) -----------------------------------
+
+export interface IssTelemetry {
+  latitude: number;
+  longitude: number;
+  altitude?: number;
+  velocity?: number;
+  visibility?: string;
+}
+
+/** Build the ISS map marker, with telemetry in the pin description. Pure. */
+export const issToMarker = (t: IssTelemetry): MapMarker => {
+  const bits: string[] = [];
+  if (typeof t.altitude === 'number') bits.push(`altitude ~${Math.round(t.altitude)} km`);
+  if (typeof t.velocity === 'number') bits.push(`speed ~${Math.round(t.velocity).toLocaleString()} km/h`);
+  if (t.visibility) bits.push(`${t.visibility} side of Earth`);
+  return {
+    lat: t.latitude,
+    lng: t.longitude,
+    label: 'ISS 🛰️',
+    ...(bits.length ? { description: bits.join(' · ') } : {})
+  };
+};
+
 export const issLocationTool: ChatTool = {
   name: 'iss_location',
   description:
@@ -14,23 +38,21 @@ export const issLocationTool: ChatTool = {
   execute: async (_args, signal) => {
     // Primary: Where the ISS at? (rich: altitude/speed). Fallback: Open Notify
     // iss-now (position only) — keeps the tool working if one host is down.
-    let lat: number | undefined;
-    let lng: number | undefined;
+    let telemetry: IssTelemetry | undefined;
     let extra = '';
     try {
       const d = await fetchJson<{ latitude?: number; longitude?: number; altitude?: number; velocity?: number; visibility?: string }>(
         'https://api.wheretheiss.at/v1/satellites/25544',
         { signal }
       );
-      if (typeof d.latitude === 'number') {
-        lat = d.latitude;
-        lng = d.longitude;
+      if (typeof d.latitude === 'number' && typeof d.longitude === 'number') {
+        telemetry = { latitude: d.latitude, longitude: d.longitude, altitude: d.altitude, velocity: d.velocity, visibility: d.visibility };
         extra = ` (altitude ${Math.round(d.altitude || 0)} km, speed ${Math.round(d.velocity || 0).toLocaleString()} km/h, ${d.visibility || 'unknown'} side)`;
       }
     } catch {
       /* fall through to Open Notify */
     }
-    if (typeof lat !== 'number') {
+    if (!telemetry) {
       try {
         const d = await fetchJson<{ iss_position?: { latitude?: string; longitude?: string } }>(
           'http://api.open-notify.org/iss-now.json',
@@ -38,24 +60,35 @@ export const issLocationTool: ChatTool = {
         );
         const p = d.iss_position;
         if (p?.latitude) {
-          lat = Number(p.latitude);
-          lng = Number(p.longitude);
+          const lat = Number(p.latitude);
+          const lng = Number(p.longitude);
+          if (Number.isFinite(lat) && Number.isFinite(lng)) telemetry = { latitude: lat, longitude: lng };
         }
       } catch {
         /* both failed */
       }
     }
-    if (typeof lat !== 'number' || typeof lng !== 'number' || Number.isNaN(lat)) {
+    if (!telemetry) {
       return { content: 'Could not get the ISS position right now (the tracking services are unreachable).' };
     }
     return {
-      content: `The ISS is currently at ${lat.toFixed(2)}°, ${lng.toFixed(2)}°${extra}.`,
-      artifacts: [{ type: 'map', data: { title: 'ISS — live position', markers: [{ lat, lng, label: 'ISS 🛰️' }] } }]
+      content: `The ISS is currently at ${telemetry.latitude.toFixed(2)}°, ${telemetry.longitude.toFixed(2)}°${extra}. (A live map with the ISS ground point is shown to the user.)`,
+      artifacts: [{ type: 'map', data: { title: 'ISS — live position', markers: [issToMarker(telemetry)] } }]
     };
   }
 };
 
 // --- People currently in space (Open Notify) ------------------------------------
+
+/** Map the Open Notify astronaut roster to a data table (name, craft). Pure. */
+export const astrosToTable = (people: { name: string; craft: string }[]): DataTableArtifact => ({
+  title: 'People in space right now',
+  subtitle: `${people.length} aboard ${new Set(people.map((p) => p.craft)).size} spacecraft`,
+  columns: [{ label: 'Astronaut' }, { label: 'Spacecraft', kind: 'badge' }],
+  rows: people.map((p) => [p.name, p.craft]),
+  caption: 'Source: Open Notify'
+});
+
 export const peopleInSpaceTool: ChatTool = {
   name: 'people_in_space',
   description:
@@ -75,7 +108,10 @@ export const peopleInSpaceTool: ChatTool = {
         byCraft.set(p.craft, arr);
       }
       const groups = Array.from(byCraft.entries()).map(([craft, names]) => `• ${craft}: ${names.join(', ')}`);
-      return { content: `There are currently ${d.number ?? d.people.length} people in space:\n${groups.join('\n')}` };
+      return {
+        content: `There are currently ${d.number ?? d.people.length} people in space:\n${groups.join('\n')}\n(A roster table is shown to the user — don't repeat the names.)`,
+        artifacts: [{ type: 'data_table', data: astrosToTable(d.people) }]
+      };
     } catch (err) {
       return { content: `People-in-space lookup failed: ${(err as Error)?.message || 'unknown error'}.` };
     }
@@ -83,10 +119,30 @@ export const peopleInSpaceTool: ChatTool = {
 };
 
 // --- Earthquakes (USGS) ---------------------------------------------------------
-interface QuakeFeature {
+export interface QuakeFeature {
   properties?: { mag?: number; place?: string; time?: number; url?: string };
   geometry?: { coordinates?: number[] };
 }
+
+/** Map USGS GeoJSON quakes to map markers (label = magnitude + place, description = depth/time), capped at 10. Pure. */
+export const quakesToMarkers = (quakes: QuakeFeature[]): MapMarker[] =>
+  quakes
+    .filter((q) => Array.isArray(q.geometry?.coordinates) && q.geometry!.coordinates!.length >= 2 && q.properties?.mag != null)
+    .slice(0, 10)
+    .map((q) => {
+      const [lng, lat, depth] = q.geometry!.coordinates!;
+      const p = q.properties!;
+      const bits: string[] = [];
+      if (typeof depth === 'number' && Number.isFinite(depth)) bits.push(`depth ${Math.round(depth)} km`);
+      if (typeof p.time === 'number') bits.push(new Date(p.time).toUTCString());
+      return {
+        lat,
+        lng,
+        label: `M${p.mag!.toFixed(1)} — ${p.place || 'unknown location'}`,
+        ...(bits.length ? { description: bits.join(' · ') } : {})
+      };
+    });
+
 export const earthquakesTool: ChatTool = {
   name: 'earthquakes',
   description:
@@ -115,12 +171,9 @@ export const earthquakesTool: ChatTool = {
           return `• M${p.mag?.toFixed(1)} — ${p.place || 'unknown'}${p.time ? ` (${new Date(p.time).toUTCString()})` : ''}`;
         })
         .join('\n')}`;
-      const markers = quakes
-        .filter((q) => q.geometry?.coordinates && q.geometry.coordinates.length >= 2)
-        .slice(0, 8)
-        .map((q) => ({ lat: q.geometry!.coordinates![1], lng: q.geometry!.coordinates![0], label: `M${q.properties!.mag?.toFixed(1)} ${q.properties!.place || ''}` }));
+      const markers = quakesToMarkers(quakes);
       return {
-        content,
+        content: markers.length ? `${content}\n(A quake map is shown to the user — don't repeat the list.)` : content,
         ...(markers.length ? { artifacts: [{ type: 'map', data: { title: 'Recent earthquakes', markers } }] } : {}),
         citations: quakes.filter((q) => q.properties?.url).map((q) => ({ url: q.properties!.url!, title: q.properties!.place }))
       };
@@ -131,13 +184,33 @@ export const earthquakesTool: ChatTool = {
 };
 
 // --- Rocket launches (SpaceX) ---------------------------------------------------
-interface Launch {
+export interface Launch {
   name?: string;
   date_utc?: string;
   details?: string;
   success?: boolean | null;
   links?: { webcast?: string; patch?: { small?: string } };
 }
+
+// Note: the v5 list endpoint only carries a rocket *id*, so the table is
+// mission / date / status / details (a rocket name would need an extra call).
+/** Map SpaceX launches to a data table; mission links to the webcast when available. Pure. */
+export const launchesToTable = (launches: Launch[], when: 'upcoming' | 'recent'): DataTableArtifact => ({
+  title: `${when === 'recent' ? 'Recent' : 'Upcoming'} SpaceX launches`,
+  columns: [{ label: 'Mission' }, { label: 'Date (UTC)' }, { label: 'Status', kind: 'badge' }, { label: 'Details' }],
+  rows: launches.map((l) => {
+    const date = l.date_utc ? `${l.date_utc.slice(0, 10)} ${l.date_utc.slice(11, 16)}` : 'TBD';
+    const status = when === 'recent' ? (l.success === true ? 'Success' : l.success === false ? 'Failure' : 'Unknown') : 'Upcoming';
+    return [
+      { value: l.name || 'Mission', href: l.links?.webcast },
+      date,
+      status,
+      l.details ? `${l.details.slice(0, 120)}${l.details.length > 120 ? '…' : ''}` : '—'
+    ];
+  }),
+  caption: 'Source: SpaceX API (r/SpaceX)'
+});
+
 export const spaceLaunchesTool: ChatTool = {
   name: 'space_launches',
   description:
@@ -164,7 +237,12 @@ export const spaceLaunchesTool: ChatTool = {
         .join('\n')}`;
       const citations = sorted.filter((l) => l.links?.webcast).map((l) => ({ url: l.links!.webcast!, title: `${l.name} webcast` }));
       const images = sorted.filter((l) => l.links?.patch?.small).slice(0, 3).map((l) => ({ url: l.links!.patch!.small!, title: l.name, source: 'SpaceX' }));
-      return { content, ...(citations.length ? { citations } : {}), ...(images.length ? { images } : {}) };
+      return {
+        content: `${content}\n(A launch table is shown to the user — don't repeat the schedule.)`,
+        ...(citations.length ? { citations } : {}),
+        ...(images.length ? { images } : {}),
+        artifacts: [{ type: 'data_table', data: launchesToTable(sorted, when) }]
+      };
     } catch (err) {
       return { content: `Launch lookup failed: ${(err as Error)?.message || 'unknown error'}.` };
     }

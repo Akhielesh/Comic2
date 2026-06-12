@@ -1,10 +1,12 @@
 // Knowledge & reference tools — all free, keyless public APIs.
 //
 // Wikipedia, Free Dictionary, Datamuse, Numbers API, Open Library, arXiv and
-// Hacker News. Each returns clean structured text (plus citations/images where
-// available) the model synthesizes; every network failure degrades to a message.
+// Hacker News. Each returns clean structured text the model synthesizes PLUS a
+// rich artifact card where the data is genuinely structured (document /
+// news_results); every network failure degrades to a message.
 
 import type { ChatTool } from './types.js';
+import type { DocumentArtifact, NewsItem, NewsResultsArtifact } from '../../../../apiTypes.js';
 import { fetchJson, fetchText } from './http.js';
 
 // --- Wikipedia: search → summary (extract + thumbnail + canonical URL) ----------
@@ -18,6 +20,21 @@ interface WikiSummary {
   content_urls?: { desktop?: { page?: string } };
   thumbnail?: { source?: string };
 }
+
+/** Map a Wikipedia summary to a document card — image, extract, source link. Pure. */
+export const wikiToDocument = (w: {
+  title: string;
+  description?: string;
+  extract: string;
+  url: string;
+  thumbnail?: string;
+}): DocumentArtifact => ({
+  title: w.title,
+  subtitle: w.description,
+  content:
+    `${w.thumbnail ? `![${w.title}](${w.thumbnail})\n\n` : ''}${w.extract}\n\n` +
+    `[Read the full article on Wikipedia](${w.url})`
+});
 
 export const wikiLookupTool: ChatTool = {
   name: 'wiki_lookup',
@@ -44,12 +61,20 @@ export const wikiLookupTool: ChatTool = {
       );
       const url = summary.content_urls?.desktop?.page || `https://en.wikipedia.org/wiki/${encodeURIComponent(top.key)}`;
       const extract = summary.extract || top.excerpt?.replace(/<[^>]+>/g, '') || top.description || '';
-      const content = `Wikipedia — ${summary.title || top.title}${summary.description ? ` (${summary.description})` : ''}:\n${extract}\nSource: ${url}`;
+      const content = `Wikipedia — ${summary.title || top.title}${summary.description ? ` (${summary.description})` : ''}:\n${extract}\nSource: ${url}\n(A document card with this summary is shown to the user — don't repeat the extract.)`;
       const thumb = summary.thumbnail?.source;
+      const doc = wikiToDocument({
+        title: summary.title || top.title,
+        description: summary.description,
+        extract,
+        url,
+        thumbnail: thumb
+      });
       return {
         content,
         citations: [{ url, title: summary.title || top.title }],
-        ...(thumb ? { images: [{ url: thumb, title: summary.title || top.title, source: 'Wikipedia' }] } : {})
+        ...(thumb ? { images: [{ url: thumb, title: summary.title || top.title, source: 'Wikipedia' }] } : {}),
+        artifacts: [{ type: 'document', data: doc }]
       };
     } catch (err) {
       return { content: `Wikipedia lookup failed: ${(err as Error)?.message || 'unknown error'}.` };
@@ -63,6 +88,25 @@ interface DictEntry {
   phonetic?: string;
   meanings?: { partOfSpeech?: string; definitions?: { definition?: string; example?: string }[]; synonyms?: string[] }[];
 }
+
+/** Map a Free Dictionary entry to a document card — senses, examples, synonyms. Pure. */
+export const dictToDocument = (entry: DictEntry, fallbackWord: string): DocumentArtifact => {
+  const word = entry.word || fallbackWord;
+  const sections = (entry.meanings || []).slice(0, 4).map((m) => {
+    const defs = (m.definitions || [])
+      .slice(0, 4)
+      .map((d, i) => `${i + 1}. ${d.definition}${d.example ? `\n   - *“${d.example}”*` : ''}`)
+      .join('\n');
+    const syn = m.synonyms?.length ? `\n\n**Synonyms:** ${m.synonyms.slice(0, 8).join(', ')}` : '';
+    return `## ${m.partOfSpeech || 'word'}\n\n${defs}${syn}`;
+  });
+  return {
+    title: word,
+    subtitle: entry.phonetic ? `Pronounced ${entry.phonetic}` : undefined,
+    content: sections.join('\n\n'),
+    filename: `definition-${word.toLowerCase()}`
+  };
+};
 
 export const defineWordTool: ChatTool = {
   name: 'define_word',
@@ -94,7 +138,10 @@ export const defineWordTool: ChatTool = {
           return `(${m.partOfSpeech || 'word'})\n${defs}${syn}`;
         })
         .join('\n');
-      return { content: `Definition of "${entry.word || word}"${entry.phonetic ? ` ${entry.phonetic}` : ''}:\n${lines}` };
+      return {
+        content: `Definition of "${entry.word || word}"${entry.phonetic ? ` ${entry.phonetic}` : ''}:\n${lines}\n(A dictionary document card is shown to the user — don't repeat the definitions.)`,
+        artifacts: [{ type: 'document', data: dictToDocument(entry, word) }]
+      };
     } catch (err) {
       const msg = (err as Error)?.message || 'unknown error';
       return { content: msg.includes('404') ? `No dictionary entry found for "${word}".` : `Dictionary lookup failed: ${msg}.` };
@@ -103,6 +150,7 @@ export const defineWordTool: ChatTool = {
 };
 
 // --- Datamuse: synonyms / rhymes / related / "means like" -----------------------
+// Deliberately text-only: a flat word list is for the model to weave into prose.
 type WordRel = 'synonyms' | 'rhymes' | 'related' | 'antonyms' | 'sounds_like' | 'spelled_like';
 const DATAMUSE_PARAM: Record<WordRel, string> = {
   synonyms: 'rel_syn',
@@ -147,6 +195,7 @@ export const wordAssocTool: ChatTool = {
 };
 
 // --- Numbers API: a fact about a number, math property, date or year ------------
+// Deliberately text-only: the payload is one sentence — a card would outweigh the fact.
 export const numberFactTool: ChatTool = {
   name: 'number_fact',
   description:
@@ -184,6 +233,23 @@ interface OLDoc {
   edition_count?: number;
 }
 
+// Document (not resource_bundle) on purpose: search results are a linked reading
+// list, not files we ship — a bundle card would imply downloadable book content.
+/** Map Open Library docs to a linked reading-list document. Pure. */
+export const booksToDocument = (query: string, docs: OLDoc[]): DocumentArtifact => ({
+  title: `Books — ${query}`,
+  subtitle: `${docs.length} result${docs.length === 1 ? '' : 's'} from Open Library`,
+  content: docs
+    .map((d) => {
+      const author = d.author_name?.length ? ` — ${d.author_name.slice(0, 2).join(', ')}` : '';
+      const year = d.first_publish_year ? ` (${d.first_publish_year})` : '';
+      const editions = d.edition_count ? ` · ${d.edition_count} edition${d.edition_count === 1 ? '' : 's'}` : '';
+      return `- [${d.title}](https://openlibrary.org${d.key})${author}${year}${editions}`;
+    })
+    .join('\n'),
+  filename: `books-${query.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}`
+});
+
 export const searchBooksTool: ChatTool = {
   name: 'search_books',
   description:
@@ -216,7 +282,12 @@ export const searchBooksTool: ChatTool = {
         .slice(0, 4)
         .map((d) => ({ url: `https://covers.openlibrary.org/b/id/${d.cover_i}-M.jpg`, title: d.title, source: 'Open Library' }));
       const citations = docs.map((d) => ({ url: `https://openlibrary.org${d.key}`, title: d.title }));
-      return { content, citations, ...(images.length ? { images } : {}) };
+      return {
+        content: `${content}\n(A linked reading-list card is shown to the user — don't repeat the list.)`,
+        citations,
+        ...(images.length ? { images } : {}),
+        artifacts: [{ type: 'document', data: booksToDocument(query, docs) }]
+      };
     } catch (err) {
       return { content: `Book search failed: ${(err as Error)?.message || 'unknown error'}.` };
     }
@@ -228,6 +299,29 @@ const atomTag = (block: string, tag: string): string | undefined => {
   const m = block.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i'));
   return m ? m[1].replace(/\s+/g, ' ').trim() : undefined;
 };
+
+export interface ArxivPaper {
+  title: string;
+  id: string;
+  summary: string;
+  authors: string[];
+  published: string;
+}
+
+// Document (not resource_bundle) on purpose: papers are a linked reading list,
+// not files — a bundle card would imply we're shipping the PDFs themselves.
+/** Map parsed arXiv entries to a linked document card. Pure. */
+export const papersToDocument = (query: string, papers: ArxivPaper[]): DocumentArtifact => ({
+  title: `arXiv papers — ${query}`,
+  subtitle: `${papers.length} most relevant result${papers.length === 1 ? '' : 's'}`,
+  content: papers
+    .map((p) => {
+      const meta = [p.authors.join(', '), p.published].filter(Boolean).join(' · ');
+      return `### [${p.title}](${p.id})\n\n${meta ? `*${meta}*\n\n` : ''}${p.summary}${p.summary.length >= 320 ? '…' : ''}`;
+    })
+    .join('\n\n'),
+  filename: `arxiv-${query.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}`
+});
 
 export const searchPapersTool: ChatTool = {
   name: 'search_papers',
@@ -248,7 +342,7 @@ export const searchPapersTool: ChatTool = {
       );
       const entries = xml.match(/<entry\b[\s\S]*?<\/entry>/gi) || [];
       if (!entries.length) return { content: `No arXiv papers found for "${query}".` };
-      const papers = entries.slice(0, 5).map((block) => {
+      const papers: ArxivPaper[] = entries.slice(0, 5).map((block) => {
         const title = atomTag(block, 'title') || 'Untitled';
         const id = atomTag(block, 'id') || '';
         const summary = (atomTag(block, 'summary') || '').slice(0, 320);
@@ -263,8 +357,12 @@ export const searchPapersTool: ChatTool = {
           (p, i) =>
             `[${i + 1}] ${p.title}${p.authors.length ? ` — ${p.authors.join(', ')}` : ''}${p.published ? ` (${p.published})` : ''}\n${p.summary}…\n${p.id}`
         )
-        .join('\n\n')}`;
-      return { content, citations: papers.filter((p) => p.id).map((p) => ({ url: p.id, title: p.title })) };
+        .join('\n\n')}\n(A linked papers card is shown to the user — don't repeat the abstracts.)`;
+      return {
+        content,
+        citations: papers.filter((p) => p.id).map((p) => ({ url: p.id, title: p.title })),
+        artifacts: [{ type: 'document', data: papersToDocument(query, papers) }]
+      };
     } catch (err) {
       return { content: `arXiv search failed: ${(err as Error)?.message || 'unknown error'}.` };
     }
@@ -272,7 +370,7 @@ export const searchPapersTool: ChatTool = {
 };
 
 // --- Hacker News (Algolia): top tech/startup stories ----------------------------
-interface HNHit {
+export interface HNHit {
   title?: string;
   url?: string;
   points?: number;
@@ -281,6 +379,19 @@ interface HNHit {
   objectID?: string;
   created_at?: string;
 }
+
+/** Map Algolia HN hits to NewsItem[] for the news_results card (split reader for free). Pure. */
+export const hnToNewsItems = (hits: HNHit[]): NewsItem[] =>
+  hits
+    .filter((h) => h.title)
+    .map((h) => ({
+      title: h.title!,
+      url: h.url || `https://news.ycombinator.com/item?id=${h.objectID}`,
+      source: 'Hacker News',
+      publishedAt:
+        h.created_at && !Number.isNaN(Date.parse(h.created_at)) ? new Date(h.created_at).toISOString() : undefined,
+      snippet: `${h.points ?? 0} points · ${h.num_comments ?? 0} comments${h.author ? ` · by ${h.author}` : ''}`
+    }));
 
 export const hackerNewsTool: ChatTool = {
   name: 'hacker_news',
@@ -313,7 +424,12 @@ export const hackerNewsTool: ChatTool = {
         url: h.url || `https://news.ycombinator.com/item?id=${h.objectID}`,
         title: h.title
       }));
-      return { content, citations };
+      const newsData: NewsResultsArtifact = { query, items: hnToNewsItems(hits) };
+      return {
+        content: `${content}\n(A news card with these stories is shown to the user — don't repeat the list.)`,
+        citations,
+        artifacts: [{ type: 'news_results', data: newsData }]
+      };
     } catch (err) {
       return { content: `Hacker News lookup failed: ${(err as Error)?.message || 'unknown error'}.` };
     }

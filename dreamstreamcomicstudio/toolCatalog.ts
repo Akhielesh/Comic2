@@ -369,28 +369,28 @@ export const TOOL_CATALOG: ToolMeta[] = [
     name: 'wiki_lookup', label: 'Wikipedia', category: 'knowledge', kind: 'api', provider: 'Wikipedia REST',
     description: 'Encyclopedic summary of a topic, person, place, event or concept.',
     auth: 'none', rateLimit: '~200 req/s per IP (no key)',
-    dataShape: 'Text extract + source link + thumbnail.', docsUrl: 'https://www.mediawiki.org/wiki/API:REST_API',
+    dataShape: 'Document card: image, extract + source link (downloadable).', docsUrl: 'https://www.mediawiki.org/wiki/API:REST_API',
     keywords: ['wikipedia', 'who is', 'what is', 'history of', 'about', 'encyclopedia', 'biography', 'background']
   },
   {
     name: 'search_books', label: 'Books', category: 'knowledge', kind: 'api', provider: 'Open Library',
     description: 'Search books by title, author or subject with covers and links.',
     auth: 'none', rateLimit: 'Fair use (~100/min suggested)',
-    dataShape: 'List: title, author, year, cover image + links.', docsUrl: 'https://openlibrary.org/developers/api',
+    dataShape: 'Document card: linked reading list (title, author, year) + covers.', docsUrl: 'https://openlibrary.org/developers/api',
     keywords: ['book', 'books', 'author', 'novel', 'read', 'reading', 'isbn', 'publication']
   },
   {
     name: 'search_papers', label: 'Research papers', category: 'knowledge', kind: 'api', provider: 'arXiv',
     description: 'Search academic/research papers across sciences with abstracts.',
     auth: 'none', rateLimit: '1 request / 3s suggested',
-    dataShape: 'List: title, authors, abstract, link.', docsUrl: 'https://info.arxiv.org/help/api',
+    dataShape: 'Document card: linked papers with authors + abstracts.', docsUrl: 'https://info.arxiv.org/help/api',
     keywords: ['paper', 'papers', 'research', 'arxiv', 'study', 'academic', 'scientific', 'preprint', 'citation']
   },
   {
     name: 'hacker_news', label: 'Hacker News', category: 'knowledge', kind: 'api', provider: 'HN (Algolia)',
     description: 'Tech, startup and programming stories the dev community is discussing.',
     auth: 'none', rateLimit: '~10,000 req/hr (no key)',
-    dataShape: 'List: title, points, comments, link.', docsUrl: 'https://hn.algolia.com/api',
+    dataShape: 'News card (split reader): stories with points/comments.', docsUrl: 'https://hn.algolia.com/api',
     keywords: ['hacker news', 'hn', 'tech news', 'startup', 'show hn', 'developer community', 'trending tech']
   },
   {
@@ -405,7 +405,7 @@ export const TOOL_CATALOG: ToolMeta[] = [
     name: 'define_word', label: 'Dictionary', category: 'words', kind: 'api', provider: 'Free Dictionary',
     description: 'Definitions, part of speech, examples, phonetics and synonyms of a word.',
     auth: 'none', rateLimit: 'Fair use (no key)',
-    dataShape: 'Text: meanings, examples, synonyms.', docsUrl: 'https://dictionaryapi.dev',
+    dataShape: 'Document card: phonetics, senses, examples, synonyms.', docsUrl: 'https://dictionaryapi.dev',
     keywords: ['define', 'definition', 'meaning', 'what does', 'mean', 'dictionary', 'pronounce', 'spelling']
   },
   {
@@ -419,8 +419,9 @@ export const TOOL_CATALOG: ToolMeta[] = [
   {
     name: 'country_info', label: 'Country facts', category: 'geo', kind: 'api', provider: 'REST Countries',
     description: 'Capital, population, languages, currencies, area, timezones and flag of a country.',
-    auth: 'none', rateLimit: 'Unlimited fair use (no key)',
-    dataShape: 'Text profile + flag image.', docsUrl: 'https://restcountries.com',
+    auth: 'none', rateLimit: 'Unlimited fair use (no key) — but see license note',
+    license: 'conditional', licenseNote: 'REST Countries deprecated its legacy keyless API in June 2026 (v3.1 now returns an error); the replacement v5 API requires an auth key. Needs a provider migration.',
+    dataShape: 'Metric board: population, area, capital, currency… + flag.', docsUrl: 'https://restcountries.com',
     keywords: ['country', 'capital', 'population', 'currency of', 'flag', 'nation', 'demographics']
   },
   {
@@ -435,35 +436,35 @@ export const TOOL_CATALOG: ToolMeta[] = [
     name: 'public_holidays', label: 'Public holidays', category: 'geo', kind: 'api', provider: 'Nager.Date',
     description: 'National/public holidays for a country and year.',
     auth: 'none', rateLimit: 'Fair use (no key)',
-    dataShape: 'Text: list of dated holidays.', docsUrl: 'https://date.nager.at/swagger',
+    dataShape: 'Data table: date, holiday, weekday.', docsUrl: 'https://date.nager.at/swagger',
     keywords: ['holiday', 'holidays', 'public holiday', 'bank holiday', 'day off', 'national day']
   },
   {
     name: 'sun_times', label: 'Sunrise / sunset', category: 'geo', kind: 'api', provider: 'sunrise-sunset.org',
     description: 'Sunrise, sunset, solar noon and day length for a place.',
     auth: 'none', rateLimit: 'Fair use (no key)',
-    dataShape: 'Text: sun event times (UTC).', docsUrl: 'https://sunrise-sunset.org/api',
+    dataShape: 'Metric board: sunrise, sunset, solar noon, day length.', docsUrl: 'https://sunrise-sunset.org/api',
     keywords: ['sunrise', 'sunset', 'golden hour', 'daylight', 'day length', 'solar noon', 'dawn', 'dusk']
   },
   {
     name: 'world_time', label: 'World time', category: 'geo', kind: 'api', provider: 'Open-Meteo geocoding + Intl',
     description: 'Current local date/time and UTC offset for a place or timezone.',
     auth: 'none', rateLimit: 'Geocoding fair use; time computed locally',
-    dataShape: 'Text: local time, offset, weekday.', docsUrl: 'https://open-meteo.com',
+    dataShape: 'Live world-clock card + local time text.', docsUrl: 'https://open-meteo.com',
     keywords: ['time in', 'what time', 'timezone', 'current time', 'utc offset', 'time difference', 'clock']
   },
   {
     name: 'zip_lookup', label: 'Postal codes', category: 'geo', kind: 'api', provider: 'Zippopotam',
     description: 'Resolve a postal/ZIP code to place, region and coordinates.',
     auth: 'none', rateLimit: 'Fair use (no key)',
-    dataShape: 'Text: places, state, coordinates.', docsUrl: 'https://www.zippopotam.us',
+    dataShape: 'Data table: place, region, coordinates.', docsUrl: 'https://www.zippopotam.us',
     keywords: ['zip', 'zip code', 'postal code', 'postcode', 'area code', 'what city is']
   },
   {
     name: 'find_university', label: 'Universities', category: 'geo', kind: 'api', provider: 'Hipolabs',
     description: 'Search universities/colleges by name and country with official sites.',
     auth: 'none', rateLimit: 'Fair use (no key)',
-    dataShape: 'Text: names, countries, websites.', docsUrl: 'http://universities.hipolabs.com',
+    dataShape: 'Data table: linked universities + country.', docsUrl: 'http://universities.hipolabs.com',
     keywords: ['university', 'universities', 'college', 'school', 'campus', 'higher education']
   },
   // ----------------------------------------------------------------- space ------
@@ -471,28 +472,28 @@ export const TOOL_CATALOG: ToolMeta[] = [
     name: 'iss_location', label: 'ISS tracker', category: 'space', kind: 'api', provider: 'Where the ISS at? / Open Notify',
     description: "The International Space Station's live position, altitude and speed.",
     auth: 'none', rateLimit: '~1 req/s (no key, dual-source)',
-    dataShape: 'Text + map marker of the ISS.', docsUrl: 'https://wheretheiss.at/w/developer',
+    dataShape: 'Live map: ISS ground point with altitude/speed.', docsUrl: 'https://wheretheiss.at/w/developer',
     keywords: ['iss', 'space station', 'international space station', 'where is the iss', 'satellite position']
   },
   {
     name: 'people_in_space', label: 'People in space', category: 'space', kind: 'api', provider: 'Open Notify',
     description: 'Astronauts currently in space and their spacecraft.',
     auth: 'none', rateLimit: 'Fair use (no key)',
-    dataShape: 'Text: count + names grouped by craft.', docsUrl: 'http://open-notify.org',
+    dataShape: 'Data table: astronaut × spacecraft.', docsUrl: 'http://open-notify.org',
     keywords: ['who is in space', 'people in space', 'astronauts', 'cosmonauts', 'how many in space']
   },
   {
     name: 'earthquakes', label: 'Earthquakes', category: 'space', kind: 'api', provider: 'USGS',
     description: 'Recent significant earthquakes worldwide with magnitude and a map.',
     auth: 'none', rateLimit: 'Fair use (no key)',
-    dataShape: 'Text + map of recent quakes.', docsUrl: 'https://earthquake.usgs.gov/fdsnws/event/1',
+    dataShape: 'Map: quake pins (magnitude/place, depth/time).', docsUrl: 'https://earthquake.usgs.gov/fdsnws/event/1',
     keywords: ['earthquake', 'earthquakes', 'seismic', 'tremor', 'magnitude', 'quake', 'richter']
   },
   {
     name: 'space_launches', label: 'Rocket launches', category: 'space', kind: 'api', provider: 'SpaceX API',
     description: 'Upcoming or recent SpaceX launches with dates, details and webcasts.',
     auth: 'none', rateLimit: 'Fair use (no key)',
-    dataShape: 'Text: missions, dates, links, patches.', docsUrl: 'https://github.com/r-spacex/SpaceX-API',
+    dataShape: 'Data table: mission, date, status + webcast links.', docsUrl: 'https://github.com/r-spacex/SpaceX-API',
     keywords: ['rocket', 'launch', 'launches', 'spacex', 'falcon', 'mission', 'liftoff', 'space flight']
   },
   {
@@ -507,14 +508,14 @@ export const TOOL_CATALOG: ToolMeta[] = [
     name: 'find_recipe', label: 'Recipes', category: 'food', kind: 'api', provider: 'TheMealDB',
     description: 'Cooking recipe with ingredients and step-by-step instructions.',
     auth: 'none', rateLimit: 'Fair use (test key)',
-    dataShape: 'Text: ingredients + steps + dish photo.', docsUrl: 'https://www.themealdb.com/api.php',
+    dataShape: 'Document card: photo, ingredients, steps (downloadable).', docsUrl: 'https://www.themealdb.com/api.php',
     keywords: ['recipe', 'cook', 'cooking', 'how to make', 'dish', 'meal', 'ingredients', 'food recipe']
   },
   {
     name: 'find_cocktail', label: 'Cocktails', category: 'food', kind: 'api', provider: 'TheCocktailDB',
     description: 'Cocktail/drink recipe with ingredients, measures and instructions.',
     auth: 'none', rateLimit: 'Fair use (test key)',
-    dataShape: 'Text: ingredients + steps + drink photo.', docsUrl: 'https://www.thecocktaildb.com/api.php',
+    dataShape: 'Document card: photo, ingredients, instructions.', docsUrl: 'https://www.thecocktaildb.com/api.php',
     keywords: ['cocktail', 'drink', 'mocktail', 'bartender', 'mixology', 'how to make a', 'margarita', 'mojito']
   },
   // ------------------------------------------------------------ entertainment ---
@@ -522,7 +523,7 @@ export const TOOL_CATALOG: ToolMeta[] = [
     name: 'pokemon_info', label: 'Pokémon', category: 'entertainment', kind: 'api', provider: 'PokéAPI',
     description: 'Pokémon types, stats, height/weight and artwork.',
     auth: 'none', rateLimit: 'Fair use (caching encouraged)',
-    dataShape: 'Text: types, stats + artwork image.', docsUrl: 'https://pokeapi.co',
+    dataShape: 'Metric board: base-stat gauges, type, size + artwork.', docsUrl: 'https://pokeapi.co',
     keywords: ['pokemon', 'pokémon', 'pikachu', 'pokedex', 'pokémon stats', 'pokemon type']
   },
   {
@@ -536,14 +537,14 @@ export const TOOL_CATALOG: ToolMeta[] = [
     name: 'tv_show', label: 'TV shows', category: 'entertainment', kind: 'api', provider: 'TVMaze',
     description: 'TV show genres, premiere, network, rating and summary.',
     auth: 'none', rateLimit: '~20 calls / 10s (no key)',
-    dataShape: 'Text profile + poster image.', docsUrl: 'https://www.tvmaze.com/api',
+    dataShape: 'Document card: poster, facts, summary.', docsUrl: 'https://www.tvmaze.com/api',
     keywords: ['tv show', 'series', 'episode', 'season', 'sitcom', 'show about', 'aired', 'tv series']
   },
   {
     name: 'anime_info', label: 'Anime', category: 'entertainment', kind: 'api', provider: 'Jikan (MyAnimeList)',
     description: 'Anime score, episodes, year, genres and synopsis.',
     auth: 'none', rateLimit: '3 req/s, 60 req/min (no key)',
-    dataShape: 'Text profile + poster image.', docsUrl: 'https://jikan.moe',
+    dataShape: 'Document card: poster, facts, synopsis.', docsUrl: 'https://jikan.moe',
     keywords: ['anime', 'manga', 'myanimelist', 'mal', 'otaku', 'anime about', 'studio ghibli']
   },
   {
@@ -572,21 +573,21 @@ export const TOOL_CATALOG: ToolMeta[] = [
     name: 'github_repo', label: 'GitHub repos', category: 'dev', kind: 'api', provider: 'GitHub',
     description: 'Search GitHub repositories by popularity — stars, language, license.',
     auth: 'optional', authEnv: 'GITHUB_TOKEN', rateLimit: '10 req/min keyless · 30/min with token',
-    dataShape: 'Text: repos, stars, language + links.', docsUrl: 'https://docs.github.com/rest',
+    dataShape: 'Data table: repos × stars/forks/issues/language.', docsUrl: 'https://docs.github.com/rest',
     keywords: ['github', 'repo', 'repository', 'open source', 'library for', 'package on github', 'star']
   },
   {
     name: 'npm_package', label: 'npm packages', category: 'dev', kind: 'api', provider: 'npm registry',
     description: 'npm package version, license, homepage and weekly downloads.',
     auth: 'none', rateLimit: 'Fair use (no key)',
-    dataShape: 'Text: version, deps, downloads + link.', docsUrl: 'https://github.com/npm/registry',
+    dataShape: 'Metric board: version, weekly downloads, license, deps.', docsUrl: 'https://github.com/npm/registry',
     keywords: ['npm', 'node package', 'javascript library', 'npm package', 'yarn', 'pnpm']
   },
   {
     name: 'pypi_package', label: 'PyPI packages', category: 'dev', kind: 'api', provider: 'PyPI',
     description: 'PyPI (Python) package version, summary, author and license.',
     auth: 'none', rateLimit: 'Fair use (no key)',
-    dataShape: 'Text: version, summary, license + link.', docsUrl: 'https://warehouse.pypa.io/api-reference/json.html',
+    dataShape: 'Metric board: version, license, author.', docsUrl: 'https://warehouse.pypa.io/api-reference/json.html',
     keywords: ['pypi', 'pip', 'python package', 'python library', 'pip install']
   },
   {

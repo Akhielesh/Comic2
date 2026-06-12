@@ -1,11 +1,13 @@
 // Developer & utility tools — GitHub repos, npm & PyPI packages, QR codes and
 // name demographics. Free; GitHub honors an optional GITHUB_TOKEN for higher limits.
+// Structured results also emit rich artifact cards (data_table / metric_board).
 
 import type { ChatTool } from './types.js';
+import type { DataTableArtifact, MetricBoardArtifact, MetricTile } from '../../../../apiTypes.js';
 import { fetchJson, envKey } from './http.js';
 
 // --- GitHub repository search ---------------------------------------------------
-interface GHRepo {
+export interface GHRepo {
   full_name?: string;
   description?: string;
   stargazers_count?: number;
@@ -16,6 +18,34 @@ interface GHRepo {
   license?: { spdx_id?: string };
   updated_at?: string;
 }
+
+// Judgment call vs. the metric_board suggestion: this tool is a SEARCH that returns
+// several repos, so a sortable table (one row per repo, stars/forks/issues columns)
+// fits the data better than a single-repo KPI board would.
+/** Map GitHub search results to a sortable data table. Pure. */
+export const reposToTable = (query: string, repos: GHRepo[]): DataTableArtifact => ({
+  title: 'GitHub repositories',
+  subtitle: `Top matches for "${query}"`,
+  columns: [
+    { label: 'Repository' },
+    { label: 'Stars', kind: 'number', align: 'right' },
+    { label: 'Forks', kind: 'number', align: 'right' },
+    { label: 'Open issues', kind: 'number', align: 'right' },
+    { label: 'Language', kind: 'badge' },
+    { label: 'Updated' }
+  ],
+  rows: repos.map((r) => [
+    { value: r.full_name || '—', href: r.html_url, sub: r.description ? r.description.slice(0, 80) : undefined },
+    r.stargazers_count ?? 0,
+    r.forks_count ?? 0,
+    r.open_issues_count ?? 0,
+    r.language || '—',
+    r.updated_at ? r.updated_at.slice(0, 10) : '—'
+  ]),
+  sort: { column: 1, dir: 'desc' },
+  caption: 'Source: GitHub search, ranked by stars'
+});
+
 export const githubRepoTool: ChatTool = {
   name: 'github_repo',
   description:
@@ -43,8 +73,12 @@ export const githubRepoTool: ChatTool = {
               r.license?.spdx_id && r.license.spdx_id !== 'NOASSERTION' ? ` · ${r.license.spdx_id}` : ''
             }\n  ${(r.description || '').slice(0, 140)}\n  ${r.html_url}`
         )
-        .join('\n')}`;
-      return { content, citations: repos.map((r) => ({ url: r.html_url!, title: r.full_name })) };
+        .join('\n')}\n(A sortable repo table is shown to the user — don't repeat the stats.)`;
+      return {
+        content,
+        citations: repos.map((r) => ({ url: r.html_url!, title: r.full_name })),
+        artifacts: [{ type: 'data_table', data: reposToTable(query, repos) }]
+      };
     } catch (err) {
       return { content: `GitHub search failed: ${(err as Error)?.message || 'unknown error'}.` };
     }
@@ -52,6 +86,26 @@ export const githubRepoTool: ChatTool = {
 };
 
 // --- npm package ----------------------------------------------------------------
+
+export interface NpmMeta {
+  name?: string;
+  version?: string;
+  description?: string;
+  license?: unknown;
+  homepage?: string;
+  dependencies?: Record<string, string>;
+}
+
+/** Map npm registry metadata (+ optional weekly downloads) to a KPI board. Pure. */
+export const npmToMetrics = (meta: NpmMeta, weeklyDownloads?: number): MetricBoardArtifact => {
+  const license = typeof meta.license === 'string' ? meta.license : (meta.license as { type?: string })?.type || '—';
+  const tiles: MetricTile[] = [{ label: 'Latest version', value: meta.version || '—' }];
+  if (typeof weeklyDownloads === 'number') tiles.push({ label: 'Weekly downloads', value: weeklyDownloads });
+  tiles.push({ label: 'License', value: license });
+  tiles.push({ label: 'Dependencies', value: meta.dependencies ? Object.keys(meta.dependencies).length : 0 });
+  return { title: `npm — ${meta.name || 'package'}`, columns: 2, tiles };
+};
+
 export const npmPackageTool: ChatTool = {
   name: 'npm_package',
   description:
@@ -65,15 +119,15 @@ export const npmPackageTool: ChatTool = {
     const name = String(args?.name || '').trim();
     if (!name) return { content: 'No package name was provided.' };
     try {
-      const meta = await fetchJson<{ name?: string; version?: string; description?: string; license?: unknown; homepage?: string; dependencies?: Record<string, string> }>(
+      const meta = await fetchJson<NpmMeta>(
         `https://registry.npmjs.org/${encodeURIComponent(name).replace('%40', '@')}/latest`,
         { signal }
       );
       if (!meta.name) return { content: `No npm package found named "${name}".` };
-      let downloads = '';
+      let weeklyDownloads: number | undefined;
       try {
         const dl = await fetchJson<{ downloads?: number }>(`https://api.npmjs.org/downloads/point/last-week/${encodeURIComponent(name)}`, { signal });
-        if (typeof dl.downloads === 'number') downloads = `\n• Weekly downloads: ${dl.downloads.toLocaleString()}`;
+        if (typeof dl.downloads === 'number') weeklyDownloads = dl.downloads;
       } catch {
         /* downloads optional */
       }
@@ -82,9 +136,16 @@ export const npmPackageTool: ChatTool = {
       const content =
         `npm: ${meta.name}@${meta.version}\n` +
         `• ${meta.description || 'No description.'}\n` +
-        `• License: ${license} · Dependencies: ${depCount}${downloads}\n` +
-        `• https://www.npmjs.com/package/${meta.name}`;
-      return { content, citations: [{ url: `https://www.npmjs.com/package/${meta.name}`, title: meta.name }] };
+        `• License: ${license} · Dependencies: ${depCount}${
+          typeof weeklyDownloads === 'number' ? `\n• Weekly downloads: ${weeklyDownloads.toLocaleString()}` : ''
+        }\n` +
+        `• https://www.npmjs.com/package/${meta.name}\n` +
+        `(A package stat board is shown to the user — don't repeat the numbers.)`;
+      return {
+        content,
+        citations: [{ url: `https://www.npmjs.com/package/${meta.name}`, title: meta.name }],
+        artifacts: [{ type: 'metric_board', data: npmToMetrics(meta, weeklyDownloads) }]
+      };
     } catch (err) {
       const msg = (err as Error)?.message || 'unknown error';
       return { content: msg.includes('404') ? `No npm package found named "${name}".` : `npm lookup failed: ${msg}.` };
@@ -93,6 +154,28 @@ export const npmPackageTool: ChatTool = {
 };
 
 // --- PyPI package ---------------------------------------------------------------
+
+export interface PypiInfo {
+  name?: string;
+  version?: string;
+  summary?: string;
+  author?: string;
+  license?: string;
+  home_page?: string;
+  package_url?: string;
+}
+
+/** Map PyPI JSON metadata to a KPI board (license sliced — some packages embed full license text). Pure. */
+export const pypiToMetrics = (info: PypiInfo): MetricBoardArtifact => ({
+  title: `PyPI — ${info.name || 'package'}`,
+  columns: 3,
+  tiles: [
+    { label: 'Latest version', value: info.version || '—' },
+    { label: 'License', value: (info.license || '—').slice(0, 40) },
+    { label: 'Author', value: info.author || '—' }
+  ]
+});
+
 export const pypiPackageTool: ChatTool = {
   name: 'pypi_package',
   description:
@@ -106,7 +189,7 @@ export const pypiPackageTool: ChatTool = {
     const name = String(args?.name || '').trim();
     if (!name) return { content: 'No package name was provided.' };
     try {
-      const d = await fetchJson<{ info?: { name?: string; version?: string; summary?: string; author?: string; license?: string; home_page?: string; package_url?: string } }>(
+      const d = await fetchJson<{ info?: PypiInfo }>(
         `https://pypi.org/pypi/${encodeURIComponent(name)}/json`,
         { signal }
       );
@@ -116,8 +199,13 @@ export const pypiPackageTool: ChatTool = {
         `PyPI: ${info.name} ${info.version}\n` +
         `• ${info.summary || 'No summary.'}\n` +
         `• Author: ${info.author || '—'} · License: ${info.license || '—'}\n` +
-        `• ${info.package_url || `https://pypi.org/project/${info.name}/`}`;
-      return { content, citations: [{ url: info.package_url || `https://pypi.org/project/${info.name}/`, title: info.name }] };
+        `• ${info.package_url || `https://pypi.org/project/${info.name}/`}\n` +
+        `(A package stat board is shown to the user — don't repeat the metadata.)`;
+      return {
+        content,
+        citations: [{ url: info.package_url || `https://pypi.org/project/${info.name}/`, title: info.name }],
+        artifacts: [{ type: 'metric_board', data: pypiToMetrics(info) }]
+      };
     } catch (err) {
       const msg = (err as Error)?.message || 'unknown error';
       return { content: msg.includes('404') ? `No PyPI package found named "${name}".` : `PyPI lookup failed: ${msg}.` };
@@ -126,6 +214,7 @@ export const pypiPackageTool: ChatTool = {
 };
 
 // --- QR code generation (goqr.me) -----------------------------------------------
+// Deliberately no extra artifact: the generated QR already renders via the images channel.
 export const qrCodeTool: ChatTool = {
   name: 'qr_code',
   description:
@@ -147,6 +236,7 @@ export const qrCodeTool: ChatTool = {
 };
 
 // --- Name demographics (agify / genderize / nationalize) ------------------------
+// Deliberately text-only: these are statistical guesses — a KPI board would lend them false authority.
 export const predictNameTool: ChatTool = {
   name: 'predict_name',
   description:
