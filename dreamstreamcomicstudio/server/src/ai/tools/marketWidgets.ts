@@ -24,6 +24,7 @@ import type {
 } from '../../../../apiTypes.js';
 import { getLightQuote } from './stocks.js';
 import { fetchJson, fetchText } from './http.js';
+import { TtlCache } from '../../lib/cache.js';
 
 const MAX_SYMBOLS = 12;
 
@@ -296,9 +297,18 @@ const toSnapshot = (row: CurveRow): YieldCurveSnapshot => ({
 
 const yyyymmOf = (d: Date): string => `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 
+// The Treasury feed is slow (~6s per month) and only updates once a business day —
+// cache parsed months so dashboard tiles refresh instantly instead of riding the
+// 20s tool-refresh timeout (the live fetch alone used to take ~19s).
+const curveMonthCache = new TtlCache<CurveRow[]>(30 * 60_000, 24);
+
 const fetchCurveMonth = async (yyyymm: string, signal?: AbortSignal): Promise<CurveRow[]> => {
+  const cached = curveMonthCache.get(yyyymm);
+  if (cached) return cached;
   try {
-    return parseTreasuryXml(await fetchText(TREASURY_XML(yyyymm), { signal, accept: 'application/xml, text/xml' }));
+    const rows = parseTreasuryXml(await fetchText(TREASURY_XML(yyyymm), { signal, accept: 'application/xml, text/xml' }));
+    if (rows.length) curveMonthCache.set(yyyymm, rows);
+    return rows;
   } catch {
     return [];
   }
@@ -329,8 +339,17 @@ export const yieldCurveTool: ChatTool = {
       const now = new Date();
       const prevMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 15));
       // Current month can be empty in the first days of a month — pull the prior
-      // month alongside it and treat the union as "recent".
-      const [cur, prev] = await Promise.all([fetchCurveMonth(yyyymmOf(now), signal), fetchCurveMonth(yyyymmOf(prevMonth), signal)]);
+      // month alongside it and treat the union as "recent". The year-ago month is
+      // computable from "now" (within days of the latest row — immaterial for a
+      // "~1 year ago" snapshot), so all three months fetch IN PARALLEL: the
+      // sequential year-ago fetch used to push the tool to ~19s, right against
+      // the 20s refresh timeout, which made the dashboard tile flaky.
+      const yearAgoGuess = new Date(now.getTime() - 365 * 86_400_000);
+      const [cur, prev, yearRows] = await Promise.all([
+        fetchCurveMonth(yyyymmOf(now), signal),
+        fetchCurveMonth(yyyymmOf(prevMonth), signal),
+        fetchCurveMonth(yyyymmOf(yearAgoGuess), signal)
+      ]);
       const recent = [...prev, ...cur];
       const latestRow = recent.at(-1);
       if (!latestRow) throw new Error('Treasury feed returned no rows');
@@ -339,7 +358,6 @@ export const yieldCurveTool: ChatTool = {
       const monthAgoTarget = new Date(new Date(latestRow.date).getTime() - 30 * 86_400_000);
       const yearAgoTarget = new Date(new Date(latestRow.date).getTime() - 365 * 86_400_000);
       const monthAgoRow = closestTo(recent, monthAgoTarget.toISOString());
-      const yearRows = await fetchCurveMonth(yyyymmOf(yearAgoTarget), signal);
       const yearAgoRow = closestTo(yearRows, yearAgoTarget.toISOString());
 
       const y10 = latest.points.find((p) => p.label === '10Y')?.yieldPct;

@@ -8,6 +8,7 @@
 // port. Best-effort — callers fall back to "open original" when extraction is thin.
 
 import { fetchText, hostOf } from './http.js';
+import { decodeGoogleNewsUrl, isGoogleNewsUrl } from './googleNews.js';
 
 export interface ReadArticleResult {
   url: string;
@@ -19,6 +20,9 @@ export interface ReadArticleResult {
   blocks: { type: 'h' | 'p'; text: string }[];
   /** Whether we got a usable amount of text. */
   ok: boolean;
+  /** The publisher URL when `url` was an aggregator redirect (Google News). */
+  resolvedUrl?: string;
+  resolvedHost?: string;
 }
 
 // --- SSRF guard: only fetch public http(s) URLs, never internal/loopback hosts. ---
@@ -92,9 +96,21 @@ export const readArticle = async (url: string, signal?: AbortSignal): Promise<Re
   const base: ReadArticleResult = { url, host, blocks: [], ok: false };
   if (!isFetchableUrl(url)) return base;
 
+  // Google News RSS links are JS-redirect interstitials with no article text —
+  // resolve them to the publisher's URL first or extraction always comes up empty.
+  let target = url;
+  if (isGoogleNewsUrl(url)) {
+    const real = await decodeGoogleNewsUrl(url, signal).catch(() => null);
+    if (real && isFetchableUrl(real)) {
+      target = real;
+      base.resolvedUrl = real;
+      base.resolvedHost = hostOf(real);
+    }
+  }
+
   let html: string;
   try {
-    html = await fetchText(url, { timeoutMs: 9000, accept: 'text/html,*/*', signal });
+    html = await fetchText(target, { timeoutMs: 9000, accept: 'text/html,*/*', signal });
   } catch {
     return base;
   }
@@ -145,13 +161,90 @@ export const readArticle = async (url: string, signal?: AbortSignal): Promise<Re
 
   // Total readable text length is the quality signal.
   const charCount = blocks.reduce((n, b) => n + (b.type === 'p' ? b.text.length : 0), 0);
-  return {
-    url,
-    host,
+  const direct: ReadArticleResult = {
+    ...base,
     title: title?.slice(0, 300),
     byline: byline?.slice(0, 160),
     image,
     blocks: blocks.slice(0, 80),
     ok: charCount >= 240 // a couple of real paragraphs
   };
+  if (direct.ok) return direct;
+
+  // Direct fetch came back thin (bot wall / JS-only site — most large publishers
+  // 403 datacenter IPs). Best-effort second pass through the Jina reader proxy,
+  // which fetches + extracts on its own infra. Budget-metered; failures keep the
+  // honest "open original" fallback.
+  const viaJina = await readViaJina(target, signal).catch((): null => null);
+  if (viaJina && viaJina.blocks.length) {
+    return {
+      ...direct,
+      title: direct.title || viaJina.title,
+      image: direct.image || viaJina.image,
+      blocks: viaJina.blocks,
+      ok: true
+    };
+  }
+  return direct;
+};
+
+// ------------------------------------------------------ Jina reader fallback ----
+
+/** Parse a Jina Reader text/plain response ("Title: …\n…\nMarkdown Content:\n…")
+ *  into reader blocks. Pure + exported for tests. */
+export const parseJinaReader = (text: string): { title?: string; image?: string; blocks: ReadArticleResult['blocks'] } | null => {
+  const title = text.match(/^Title:\s*(.+)$/m)?.[1]?.trim();
+  const idx = text.indexOf('Markdown Content:');
+  const md = idx >= 0 ? text.slice(idx + 'Markdown Content:'.length) : text;
+  const blocks: ReadArticleResult['blocks'] = [];
+  let image: string | undefined;
+  const seen = new Set<string>();
+  for (const rawLine of md.split(/\n+/)) {
+    if (blocks.length >= 80) break;
+    const line = rawLine.trim();
+    if (!line) continue;
+    const img = line.match(/^!\[[^\]]*\]\((https?:[^)\s]+)/);
+    if (img) {
+      image = image || img[1];
+      continue;
+    }
+    const head = line.match(/^#{1,4}\s+(.+)$/);
+    if (head) {
+      const t = stripMdInline(head[1]);
+      if (t && !seen.has(t)) {
+        seen.add(t);
+        blocks.push({ type: 'h', text: t.slice(0, 300) });
+      }
+      continue;
+    }
+    // Skip nav/list/link-noise lines; keep substantive paragraphs.
+    if (/^[-*>|]|^\d+\.\s|^\[/.test(line)) continue;
+    const t = stripMdInline(line);
+    if (t.length < 40 || seen.has(t)) continue;
+    seen.add(t);
+    blocks.push({ type: 'p', text: t.slice(0, 2000) });
+  }
+  const charCount = blocks.reduce((n, b) => n + (b.type === 'p' ? b.text.length : 0), 0);
+  if (charCount < 240) return null;
+  return { title, image, blocks };
+};
+
+/** Strip inline markdown (links, emphasis, images) down to plain text. */
+const stripMdInline = (s: string): string =>
+  s
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[*_`]{1,3}([^*_`]+)[*_`]{1,3}/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const readViaJina = async (url: string, signal?: AbortSignal) => {
+  const key = process.env.JINA_API_KEY;
+  const text = await fetchText(`https://r.jina.ai/${url}`, {
+    timeoutMs: 14_000,
+    accept: 'text/plain',
+    headers: key ? { Authorization: `Bearer ${key}` } : undefined,
+    signal
+  });
+  return parseJinaReader(text);
 };

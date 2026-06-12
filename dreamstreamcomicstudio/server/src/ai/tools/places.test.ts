@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { osmFilters, parseOverpass, type Anchor } from './places.js';
+import { isNameQuery, nameClauses, nameSearchTerm, osmFilters, parseOverpass, rankByNameMatch, type Anchor } from './places.js';
 
 describe('osmFilters', () => {
   it('routes common queries to the right OSM tags', () => {
@@ -13,6 +13,42 @@ describe('osmFilters', () => {
     const f = osmFilters('somewhere to go');
     expect(f.clauses[0]).toContain('restaurant');
     expect(f.label).toBe('restaurants');
+    expect(f.matched).toBe(false);
+  });
+});
+
+describe('name-aware search', () => {
+  it('treats unmatched queries as name searches, categories not', () => {
+    expect(isNameQuery('mezeh')).toBe(true);
+    expect(isNameQuery("trader joe's")).toBe(true);
+    expect(isNameQuery('coffee shops')).toBe(false);
+    expect(isNameQuery('best italian restaurant')).toBe(false);
+    expect(isNameQuery('')).toBe(false);
+  });
+
+  it('strips filler words from the name term', () => {
+    expect(nameSearchTerm('mezeh near me')).toBe('mezeh');
+    expect(nameSearchTerm('best mezeh restaurant nearby')).toBe('mezeh');
+    expect(nameSearchTerm('mezeh')).toBe('mezeh');
+  });
+
+  it('builds case-insensitive name/brand/cuisine clauses with escaped regex', () => {
+    const clauses = nameClauses("trader joe's");
+    expect(clauses[0]).toBe(`["amenity"]["name"~"trader joe's",i]`);
+    expect(clauses.some((c) => c.includes('brand'))).toBe(true);
+    expect(clauses.some((c) => c.includes('cuisine'))).toBe(true);
+    expect(nameClauses('a.b(c)')[0]).toContain('a\\.b\\(c\\)');
+  });
+
+  it('ranks exact → prefix → contains → rest, stably', () => {
+    const items = [
+      { name: 'Bellissimo' },
+      { name: 'Mezeh Mediterranean Grill' },
+      { name: 'Cafe Mezeh Annex' },
+      { name: 'mezeh' }
+    ];
+    const ranked = rankByNameMatch(items, 'mezeh').map((i) => i.name);
+    expect(ranked).toEqual(['mezeh', 'Mezeh Mediterranean Grill', 'Cafe Mezeh Annex', 'Bellissimo']);
   });
 });
 

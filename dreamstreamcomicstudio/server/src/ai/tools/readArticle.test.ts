@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isFetchableUrl } from './readArticle.js';
+import { isFetchableUrl, parseJinaReader } from './readArticle.js';
 
 // The reader endpoint fetches an arbitrary client-supplied URL server-side, so the
 // SSRF guard is security-critical: public http(s) only, never internal/loopback hosts.
@@ -39,5 +39,36 @@ describe('isFetchableUrl (reader SSRF guard)', () => {
   it('rejects malformed URLs', () => {
     expect(isFetchableUrl('not a url')).toBe(false);
     expect(isFetchableUrl('')).toBe(false);
+  });
+});
+
+describe('parseJinaReader', () => {
+  it('parses title, image and substantive blocks from a reader response', () => {
+    const text = [
+      'Title: SpaceX prices its IPO',
+      '',
+      'URL Source: https://example.com/spacex',
+      '',
+      'Markdown Content:',
+      '# SpaceX prices its IPO',
+      '![hero](https://example.com/hero.jpg)',
+      '[Skip to content](https://example.com/#main)',
+      '- Home',
+      'The rocket maker priced its initial public offering well above the expected range on Thursday, a milestone for the commercial space industry and its investors worldwide.',
+      '## What it means',
+      'Analysts said the pricing reflects extraordinary demand for the most closely watched listing in a decade, with retail platforms reporting record interest from individual buyers.',
+      'short line',
+      'The rocket maker priced its initial public offering well above the expected range on Thursday, a milestone for the commercial space industry and its investors worldwide.'
+    ].join('\n');
+    const parsed = parseJinaReader(text);
+    expect(parsed).not.toBeNull();
+    expect(parsed!.title).toBe('SpaceX prices its IPO');
+    expect(parsed!.image).toBe('https://example.com/hero.jpg');
+    const types = parsed!.blocks.map((b) => b.type);
+    expect(types).toEqual(['h', 'p', 'h', 'p']); // nav junk + dupes dropped
+  });
+
+  it('returns null when the content is too thin to read', () => {
+    expect(parseJinaReader('Title: x\nMarkdown Content:\n- nav\n- nav2')).toBeNull();
   });
 });

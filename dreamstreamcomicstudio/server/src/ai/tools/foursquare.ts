@@ -9,9 +9,11 @@
 
 import type { PlaceResult, PlacesResultsArtifact } from '../../../../apiTypes.js';
 import { FOURSQUARE_API_KEY, FOURSQUARE_API_VERSION } from '../../config.js';
+import { isNameQuery, nameSearchTerm, rankByNameMatch } from './places.js';
 
 const SEARCH_URL = 'https://places-api.foursquare.com/places/search';
 const DEFAULT_RADIUS_M = 2500;
+const NAME_RADIUS_M = 12_000;
 const LIMIT = 12;
 
 export const foursquareEnabled = (): boolean => Boolean(FOURSQUARE_API_KEY);
@@ -98,7 +100,8 @@ export const findPlacesFoursquare = async (
 ): Promise<PlacesResultsArtifact> => {
   const params = new URLSearchParams({
     query: args.query,
-    radius: String(DEFAULT_RADIUS_M),
+    // Name searches get a wider net — a specific place is worth a drive.
+    radius: String(isNameQuery(args.query) ? NAME_RADIUS_M : DEFAULT_RADIUS_M),
     limit: String(LIMIT),
     fields: 'fsq_place_id,name,latitude,longitude,geocodes,location,categories,distance,tel,website,hours,rating,price,photos'
   });
@@ -131,14 +134,26 @@ export const findPlacesFoursquare = async (
     });
     if (!res.ok) throw new Error(`Foursquare returned ${res.status}`);
     const json = await res.json();
-    const results = parseFoursquare(json);
+    let results = parseFoursquare(json);
+    // A proper-name query ("mezeh") shows ONLY name matches (ranked) and titles
+    // the card with the name itself — never padded with unrelated nearby spots.
+    // When nothing matches the name we keep Foursquare's own relevance order.
+    let nameMatched = false;
+    if (isNameQuery(args.query)) {
+      const t = nameSearchTerm(args.query).toLowerCase();
+      const named = results.filter((p) => p.name.toLowerCase().includes(t));
+      if (named.length) {
+        results = rankByNameMatch(named, t);
+        nameMatched = true;
+      }
+    }
     // Derive a friendlier anchor for the map from the first result if we used "near me".
     const anchor = args.userLocation
       ? { lat: args.userLocation.lat, lng: args.userLocation.lng }
       : results[0]
         ? { lat: results[0].lat, lng: results[0].lng }
         : undefined;
-    return { query: args.label, near, anchor, results };
+    return { query: nameMatched ? args.query : args.label, near, anchor, results };
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onAbort);
