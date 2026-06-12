@@ -57,10 +57,39 @@ const normalize = (raw: unknown): AllowanceStatus | null => {
   };
 };
 
+// ---------------------------------------------------------------------------
+// Shared status store — the settings panel (60s poll) and the chat banner
+// (5min poll) render from ONE module-level status, so a change made on either
+// surface (e.g. switching byokFallbackMode) shows up everywhere immediately.
+// The polls remain purely as refresh sources feeding this store.
+// ---------------------------------------------------------------------------
+
+type AllowanceListener = (status: AllowanceStatus) => void;
+
+let lastStatus: AllowanceStatus | null = null;
+const listeners = new Set<AllowanceListener>();
+
+/** Last known status (null until the first successful fetch). */
+export const getLastAllowanceStatus = (): AllowanceStatus | null => lastStatus;
+
+/** Push a status to every subscriber — also used for optimistic UI updates/reverts. */
+export const publishAllowanceStatus = (status: AllowanceStatus): void => {
+  lastStatus = status;
+  for (const fn of [...listeners]) fn(status);
+};
+
+/** Subscribe to status updates; returns the unsubscribe function. */
+export const subscribeAllowanceStatus = (fn: AllowanceListener): (() => void) => {
+  listeners.add(fn);
+  return () => { listeners.delete(fn); };
+};
+
 /** Current allowance status, or null when the endpoint is missing/erroring (hide the UI). */
 export const fetchAllowanceStatus = async (options?: { signal?: AbortSignal }): Promise<AllowanceStatus | null> => {
   try {
-    return normalize(await get<unknown>('/api/usage/allowance', options));
+    const status = normalize(await get<unknown>('/api/usage/allowance', options));
+    if (status) publishAllowanceStatus(status); // keep the last good status on transient failures
+    return status;
   } catch {
     return null;
   }
@@ -73,7 +102,9 @@ export const patchBillingPrefs = async (prefs: BillingPrefsPatch): Promise<Allow
     // Contract says the full allowance shape comes back; the deployed backend answers
     // { ok, prefs } instead. Accept both: use the full shape when present, otherwise
     // reconcile with a fresh GET so callers always hold server truth.
-    return normalize(raw) ?? (await fetchAllowanceStatus());
+    const status = normalize(raw) ?? (await fetchAllowanceStatus());
+    if (status) publishAllowanceStatus(status);
+    return status;
   } catch {
     return null;
   }

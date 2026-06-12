@@ -12,8 +12,9 @@ import {
   type ModelSlot,
   type ModelSourceId
 } from '../services/modelSelection';
-import { getActiveKey } from '../services/apiKeys';
+import { getActiveKey, hasUsableKey } from '../services/apiKeys';
 import { getCapabilities, featureSupport } from '../services/modelCapabilities';
+import { useModelSourceScope } from '../hooks/useModelSourceScope';
 
 // Planning stages that need structured (JSON) output. Surfaced under "Advanced" so a
 // user can pin a specific model per stage; models without JSON are flagged (the server
@@ -269,13 +270,22 @@ export const ModelSelectionPanel: React.FC = () => {
     return () => window.removeEventListener(MODEL_SELECTION_CHANGED, h);
   }, []);
 
-  // A hard lock restricts the entire library (and all routing) to one source.
+  // Settings-level source scope (Allowed-sources toggles + connected keys) decides which
+  // sources' models are offered at all; a hard lock then narrows further to one source.
+  const sourceScope = useModelSourceScope();
   const locked = (sel.lockedSource ?? null) as ModelSourceId | null;
-  const inScope = (m: CatalogModel) => !locked || m.source === locked;
-  const imageModels = useMemo(() => catalog.filter((m) => m.supportsImageOutput && inScope(m)), [catalog, locked]);
-  const textModels = useMemo(() => catalog.filter((m) => !m.supportsImageOutput && inScope(m)), [catalog, locked]);
-  const hasOpenRouter = !!getActiveKey('openrouter');
-  const hasNvidia = !!getActiveKey('nvidia');
+  const inScope = (m: CatalogModel) =>
+    sourceScope.active.includes(m.source) && (!locked || m.source === locked);
+  const imageModels = useMemo(() => catalog.filter((m) => m.supportsImageOutput && inScope(m)), [catalog, locked, sourceScope]);
+  const textModels = useMemo(() => catalog.filter((m) => !m.supportsImageOutput && inScope(m)), [catalog, locked, sourceScope]);
+  const hasOpenRouter = hasUsableKey('openrouter');
+  const hasNvidia = hasUsableKey('nvidia');
+  const sourceAvailable = (s: ModelSourceId) => sourceScope.active.includes(s);
+  // Why a source can't be picked right now — for disabled <option> labels.
+  const sourceUnavailableNote = (s: ModelSourceId): string => {
+    if (sourceScope.active.includes(s)) return '';
+    return sourceScope.hidden.includes(s) ? ' — no key connected' : ' — off in Settings';
+  };
 
   const textModelObj = useMemo(() => catalog.find((m) => m.id === sel.textModel) || null, [catalog, sel.textModel]);
   const imageModelObj = useMemo(() => catalog.find((m) => m.id === sel.imageModel) || null, [catalog, sel.imageModel]);
@@ -285,6 +295,20 @@ export const ModelSelectionPanel: React.FC = () => {
       <div>
         <h4 className="font-display text-lg flex items-center gap-2"><Sparkles className="w-4 h-4" /> Models</h4>
         <p className="text-[11px] text-slate-500">Search and pick the image and text models, or leave on Auto. Each model shows its source (OpenRouter / NVIDIA) — the source you pick is the one billed and used.</p>
+        {sourceScope.reason === 'connected' && (
+          <p className="text-[11px] text-slate-600 mt-1">
+            Scoped to your connected source{sourceScope.active.length > 1 ? 's' : ''}:{' '}
+            <span className="font-bold">{sourceScope.active.map((s) => SOURCE_LABEL[s as ModelSource]).join(' + ')}</span>
+            {sourceScope.hidden.length > 0 && <> — {sourceScope.hidden.map((s) => SOURCE_LABEL[s as ModelSource]).join(' + ')} is hidden until you add a key</>}
+            {sourceScope.active.length > 1 && <>. The same model on several sources asks you to pick one</>}.
+          </p>
+        )}
+        {sourceScope.reason === 'none' && (
+          <p className="text-[11px] text-brand-red font-bold mt-1 flex items-start gap-1">
+            <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
+            All model sources are off in Settings → API Configuration → Allowed sources, so there are no models to pick.
+          </p>
+        )}
       </div>
 
       {/* Hard source lock — restrict the whole library AND all routing to one source. */}
@@ -297,9 +321,9 @@ export const ModelSelectionPanel: React.FC = () => {
             onChange={(e) => setLockedSource((e.target.value || null) as ModelSourceId | null)}
             className="ml-auto border-2 border-black rounded px-2 py-1 bg-white font-normal"
           >
-            <option value="">Off — use any source</option>
-            <option value="nvidia">NVIDIA Build only{hasNvidia ? '' : ' — no key'}</option>
-            <option value="openrouter">OpenRouter only{hasOpenRouter ? '' : ' — no key'}</option>
+            <option value="">Off — use any active source</option>
+            <option value="nvidia" disabled={!sourceAvailable('nvidia')}>NVIDIA Build only{sourceUnavailableNote('nvidia')}</option>
+            <option value="openrouter" disabled={!sourceAvailable('openrouter')}>OpenRouter only{sourceUnavailableNote('openrouter')}</option>
           </select>
         </label>
         {locked && (
@@ -338,7 +362,13 @@ export const ModelSelectionPanel: React.FC = () => {
                   <>
                     <SourceBadge source={src} />
                     <span className="truncate max-w-[11rem]">{pinned ? model!.name : 'Auto (default source)'}</span>
-                    {key ? (
+                    {!sourceAvailable(src as ModelSourceId) ? (
+                      // The pick predates the source becoming unavailable (toggled off / key
+                      // removed) — say so here instead of letting generation fail mysteriously.
+                      <span className="text-amber-700 font-bold flex items-center gap-0.5">
+                        <AlertTriangle className="w-3 h-3" /> {SOURCE_LABEL[src]}{sourceUnavailableNote(src as ModelSourceId)} — pick another model or fix it in Settings
+                      </span>
+                    ) : key ? (
                       <span className="text-green-700 font-bold flex items-center gap-0.5"><Check className="w-3 h-3" /> {key.label}</span>
                     ) : (
                       <span className="text-amber-700 font-bold flex items-center gap-0.5">
@@ -371,8 +401,8 @@ export const ModelSelectionPanel: React.FC = () => {
                     className="border-2 border-black rounded px-2 py-1 bg-white disabled:bg-slate-100"
                   >
                     <option value="">Auto (server default)</option>
-                    <option value="openrouter">OpenRouter{hasOpenRouter ? '' : ' — no key'}</option>
-                    <option value="nvidia">NVIDIA{hasNvidia ? '' : ' — no key'}</option>
+                    <option value="openrouter" disabled={!sourceAvailable('openrouter')}>OpenRouter{sourceUnavailableNote('openrouter')}</option>
+                    <option value="nvidia" disabled={!sourceAvailable('nvidia')}>NVIDIA{sourceUnavailableNote('nvidia')}</option>
                   </select>
                 </label>
               ))}

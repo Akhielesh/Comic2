@@ -69,9 +69,9 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
     ...(showCode ? [{ heading: 'Code', items: isAdmin
       ? [{ label: 'Open Code Studio', onClick: () => onNavigate('codestudio') }]
       : [{ label: 'Get notified', onClick: notify }] }] : []),
-    ...(showLive ? [{ heading: 'Live', items: [
-      { label: 'Open Stream Studio', onClick: () => { window.location.href = '/live.html'; } },
-    ] }] : []),
+    { heading: 'Live', items: showLive
+      ? [{ label: 'Open Stream Studio', onClick: () => { window.location.href = '/live.html'; } }]
+      : [{ label: 'Get notified', onClick: notify }] },
     { heading: 'Models', items: [
       { label: 'Browse Models', onClick: () => onNavigate('models') },
     ] },
@@ -126,14 +126,12 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
               />
             )}
             {/* Admins are never gated: they get the real Code Studio entry; everyone else
-                sees the "Soon" coming-soon capture until Code launches publicly. */}
+                sees the "Coming soon" capture until Code launches publicly. */}
             {showCode && (isAdmin ? (
               <NavDropdown
                 label="Code"
                 icon={<Code2 size={14} />}
                 variant="blue"
-                badge="Admin"
-                caption="⚡ Admin preview"
                 items={[
                   { label: 'Open Code Studio', description: 'Build & run apps live (agentic builder)', icon: <Code2 size={16} />, onClick: () => onNavigate('codestudio') },
                 ]}
@@ -143,21 +141,31 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
                 label="Code"
                 icon={<Code2 size={14} />}
                 variant="muted"
-                badge="Soon"
+                badge="Coming soon"
                 caption="🚧 In the workshop"
                 items={[
                   { label: 'Get notified', description: 'Be first to know when Code launches', icon: <Mail size={16} />, onClick: notify },
                 ]}
               />
             ))}
-            {showLive && (
+            {showLive ? (
               <NavDropdown
                 label="Live"
                 icon={<Radio size={14} />}
                 variant="blue"
-                badge="Beta"
                 items={[
                   { label: 'Open Stream Studio', description: 'Go live from your camera — chat, lobby & recording', icon: <Radio size={16} />, onClick: () => { window.location.href = '/live.html'; } },
+                ]}
+              />
+            ) : (
+              <NavDropdown
+                label="Live"
+                icon={<Radio size={14} />}
+                variant="muted"
+                badge="Coming soon"
+                caption="🚧 In the workshop"
+                items={[
+                  { label: 'Get notified', description: 'Be first to know when Live launches', icon: <Mail size={16} />, onClick: notify },
                 ]}
               />
             )}

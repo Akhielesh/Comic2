@@ -3,10 +3,12 @@ import { AlertTriangle, Gauge, X } from 'lucide-react';
 import {
   dismissThreshold,
   fetchAllowanceStatus,
+  getLastAllowanceStatus,
   highestCrossedThreshold,
   isThresholdDismissed,
   patchBillingPrefs,
   resetsLabel,
+  subscribeAllowanceStatus,
   type AllowanceStatus
 } from '../../services/usageAllowance';
 
@@ -29,20 +31,20 @@ const openApiSettings = () => {
 };
 
 export const AllowanceBanner: React.FC = () => {
-  const [status, setStatus] = useState<AllowanceStatus | null>(null);
+  // Render from the shared store so settings-panel changes (mode/toggle) reflect here
+  // immediately — e.g. the consent CTA hides the moment the mode stops being 'ask'.
+  const [status, setStatus] = useState<AllowanceStatus | null>(() => getLastAllowanceStatus());
   const [saving, setSaving] = useState(false);
   const [, bump] = useState(0); // re-render after a localStorage dismissal
 
   useEffect(() => {
-    let on = true;
-    const load = async () => {
-      const next = await fetchAllowanceStatus();
-      if (on && next) setStatus(next); // keep last good status on a transient failure
-    };
-    void load();
-    const id = setInterval(() => void load(), POLL_MS);
+    const unsubscribe = subscribeAllowanceStatus(setStatus);
+    // The banner's own poll cadence remains a refresh source feeding the store
+    // (fetch publishes on success and keeps the last good status on failure).
+    void fetchAllowanceStatus();
+    const id = setInterval(() => void fetchAllowanceStatus(), POLL_MS);
     return () => {
-      on = false;
+      unsubscribe();
       clearInterval(id);
     };
   }, []);
@@ -64,11 +66,9 @@ export const AllowanceBanner: React.FC = () => {
   const consent = async () => {
     if (saving) return;
     setSaving(true);
+    // patchBillingPrefs publishes to the shared store, updating this banner AND the panel.
     const next = await patchBillingPrefs({ byokFallbackMode: 'auto' });
-    if (next) {
-      setStatus(next);
-      dismiss(); // the user acted on this threshold — don't keep nagging
-    }
+    if (next) dismiss(); // the user acted on this threshold — don't keep nagging
     setSaving(false);
   };
 

@@ -18,6 +18,7 @@
     "test": "vitest",
     "openrouter:smoketest": "node scripts/openrouter-smoketest.mjs",
     "validate:sources": "node scripts/source-model-validate.mjs",
+    "bench:models": "node scripts/model-bench.mjs",
     "catalog:refresh": "tsx server/src/jobs/refreshModelCatalog.ts",
     "nvidia:probe": "tsx server/src/jobs/probeNvidiaAvailability.ts",
     "pricing:sync": "tsx server/src/jobs/dailyPricingSync.ts",

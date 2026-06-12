@@ -180,21 +180,46 @@ export const newConfirmToken = (): string => crypto.randomBytes(24).toString('he
 
 export type SubscribeOutcome = 'new' | 'pending' | 'already_confirmed' | 'already_registered';
 
+/** Product ids a signup can register interest in (whitelist for the intent capture). */
+export const WAITLIST_PRODUCTS = ['comic_studio', 'chat_studio', 'code_studio', 'stream_studio', 'dashboards'] as const;
+
+export interface SubscriberIntent {
+  /** Whitelisted product ids the person wants first access to. */
+  productInterests?: string[];
+  /** Optional free-text "what would you like to see" (capped upstream). */
+  feedback?: string;
+}
+
+const sanitizeIntent = (intent?: SubscriberIntent): { product_interests?: string[]; feedback?: string } => {
+  const out: { product_interests?: string[]; feedback?: string } = {};
+  const products = Array.isArray(intent?.productInterests)
+    ? [...new Set(intent!.productInterests.filter((p) => (WAITLIST_PRODUCTS as readonly string[]).includes(p)))]
+    : [];
+  if (products.length) out.product_interests = products;
+  const feedback = typeof intent?.feedback === 'string' ? intent.feedback.trim().slice(0, 1000) : '';
+  if (feedback) out.feedback = feedback;
+  return out;
+};
+
 /**
  * Upsert a waitlist subscriber and return what happened. For 'updates' we (re)issue a
  * confirm token unless the address is already confirmed. For 'access' an existing row
- * (there is no confirm flow) reports 'already_registered' and is left untouched.
+ * (there is no confirm flow) reports 'already_registered' and is left untouched —
+ * except that newly provided intent (product interests / feedback) is merged in, so
+ * someone re-registering with picks still gets them recorded.
  * Idempotent on (lower(email), kind).
  */
 export const upsertSubscriber = async (
   email: string,
   kind: 'updates' | 'access',
   token: string,
-  metadata: Record<string, unknown> = {}
+  metadata: Record<string, unknown> = {},
+  intent?: SubscriberIntent
 ): Promise<{ outcome: SubscribeOutcome }> => {
   const db = adminOrNull();
   const normalized = normalizeEmail(email);
   if (!db) return { outcome: 'pending' };
+  const intentCols = sanitizeIntent(intent);
 
   const { data: existing } = await db
     .from('waitlist_signups')
@@ -206,6 +231,10 @@ export const upsertSubscriber = async (
 
   const now = new Date().toISOString();
   if (existing) {
+    // Merge any newly provided intent onto the existing row (never clears old picks).
+    if (Object.keys(intentCols).length) {
+      await db.from('waitlist_signups').update(intentCols).eq('id', (existing as { id: string }).id);
+    }
     // 'access' rows have no confirm step — the email is simply already on the list.
     if (kind === 'access') return { outcome: 'already_registered' };
     if ((existing as { confirmed?: boolean }).confirmed) return { outcome: 'already_confirmed' };
@@ -222,6 +251,7 @@ export const upsertSubscriber = async (
     kind,
     source: typeof metadata.source === 'string' ? metadata.source : null,
     metadata,
+    ...intentCols,
     confirmed: false,
     confirm_token: token,
     confirm_sent_at: now

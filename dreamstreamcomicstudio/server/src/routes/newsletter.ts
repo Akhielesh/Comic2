@@ -60,6 +60,13 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
     const kind = req.body?.kind === 'access' ? 'access' : 'updates';
     const firstName = typeof req.body?.firstName === 'string' ? req.body.firstName.slice(0, 80) : undefined;
     const source = typeof req.body?.source === 'string' ? req.body.source.slice(0, 200) : undefined;
+    // Optional intent capture — whitelisted/capped in upsertSubscriber.
+    const intent = {
+      productInterests: Array.isArray(req.body?.productInterests)
+        ? (req.body.productInterests as unknown[]).map(String).slice(0, 10)
+        : undefined,
+      feedback: typeof req.body?.feedback === 'string' ? req.body.feedback.slice(0, 1000) : undefined
+    };
 
     if (!email) return res.status(400).json({ ok: false, message: 'Please enter your email address.' });
     if (!EMAIL_REGEX.test(email) || email.length > 320) {
@@ -85,7 +92,7 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
       }
 
       const token = newConfirmToken();
-      const { outcome } = await upsertSubscriber(email, 'access', token, source ? { source } : {});
+      const { outcome } = await upsertSubscriber(email, 'access', token, source ? { source } : {}, intent);
 
       // Dedupe 2: already on the waitlist — soft success, no duplicate row, no re-email.
       if (outcome === 'already_registered' || outcome === 'already_confirmed') {
@@ -111,7 +118,7 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
 
     // Newsletter double opt-in.
     const token = newConfirmToken();
-    const { outcome } = await upsertSubscriber(email, 'updates', token, source ? { source } : {});
+    const { outcome } = await upsertSubscriber(email, 'updates', token, source ? { source } : {}, intent);
     if (outcome === 'already_confirmed') {
       return res.json({ ok: true, alreadyJoined: true, message: "You're already subscribed — sit tight!" });
     }

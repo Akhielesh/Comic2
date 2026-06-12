@@ -55,7 +55,9 @@ const TIMEOUT_MS = Number(flag('timeout')) || 30_000;
 const SOURCES = {
   openrouter: {
     baseUrl: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
-    key: process.env.OPENROUTER_API_KEY,
+    // Test tooling runs on the dedicated DREAMSTREAMSTUDIO_MODELTEST key when present,
+    // so validation spend never lands on the user-serving DREAMSTREAMSTUDIO_ALL key.
+    key: process.env.DREAMSTREAMSTUDIO_MODELTEST || process.env.dreamstreamstudio_modeltest || process.env.OPENROUTER_API_KEY,
     headers: { 'HTTP-Referer': 'https://dreamstream.local', 'X-Title': 'DreamStream source validator' },
     models: [
       'google/gemini-2.0-flash-exp:free',

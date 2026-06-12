@@ -162,7 +162,27 @@ export const IDEOGRAM_FETCH_IMAGE_TIMEOUT_MS = parseIntegerEnv(
 // --- OpenRouter (unified gateway: text + image, incl. Gemini-family models via OpenRouter) ---
 // AI_PROVIDER gates the unified path: 'gemini' = legacy Google SDK + Pixazo, 'openrouter' = gateway.
 export const AI_PROVIDER = (process.env.AI_PROVIDER || 'gemini').trim().toLowerCase();
-export const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || '';
+
+// --- Named platform keys (set in Railway; secrets — values must never be logged) ----
+// DREAMSTREAMSTUDIO_ALL — THE OpenRouter key that serves all user traffic. Per-user
+//   spend on it is hard-capped by the monthly platform allowance
+//   (PLATFORM_MONTHLY_ALLOWANCE_USD, default $5/user/month — enforced in
+//   services/usageEnforcer.ts via services/platformAllowance.ts; BYOK traffic never
+//   counts against it).
+// DREAMSTREAMSTUDIO_MODELTEST — a separate key dedicated to model testing (the bench
+//   harness, the source validators, the verification runner — see
+//   jobs/preferModelTestKey.ts). Deliberately kept OUT of the user-serving key pool so
+//   test spend never mixes with user spend, and either key can be rotated or capped at
+//   OpenRouter independently.
+export const DREAMSTREAMSTUDIO_ALL_KEY =
+  (process.env.DREAMSTREAMSTUDIO_ALL || process.env.dreamstreamstudio_all || '').trim();
+export const DREAMSTREAMSTUDIO_MODELTEST_KEY =
+  (process.env.DREAMSTREAMSTUDIO_MODELTEST || process.env.dreamstreamstudio_modeltest || '').trim();
+
+export const OPENROUTER_API_KEY = DREAMSTREAMSTUDIO_ALL_KEY || process.env.OPENROUTER_API_KEY || '';
+// Several call sites (middleware/keys, routes/models, jobs) read the env var directly,
+// so normalize it to the resolved value — every platform-key path then uses the ALL key.
+if (OPENROUTER_API_KEY) process.env.OPENROUTER_API_KEY = OPENROUTER_API_KEY;
 // F1: provider key-pool. The single key above is always included; OPENROUTER_API_KEYS adds more
 // (comma-separated) so one rate-limited key can't throttle the platform. De-duped by KeyPool.
 export const OPENROUTER_API_KEYS = [OPENROUTER_API_KEY, ...(process.env.OPENROUTER_API_KEYS || '').split(',')]

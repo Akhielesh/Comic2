@@ -12,7 +12,8 @@ import {
   setActiveKey,
   setKeyValidation,
   usageFraction,
-  isOverLimit
+  isOverLimit,
+  getAccountKeyMeta
 } from '../services/apiKeys';
 import { isProviderEnabled, setProviderEnabled } from '../services/sourceGovernance';
 import { validateApiKey } from '../services/keyValidation';
@@ -25,8 +26,11 @@ import { useAuth } from '../contexts/AuthContext';
 import { reconcileProviderMirror, syncByokKeyToServer } from '../services/byokSync';
 import {
   fetchAllowanceStatus,
+  getLastAllowanceStatus,
   patchBillingPrefs,
+  publishAllowanceStatus,
   resetsLabel,
+  subscribeAllowanceStatus,
   type AllowanceStatus,
   type BillingPrefsPatch,
   type ByokFallbackMode
@@ -310,19 +314,18 @@ const allowanceMeterColor = (pct: number) =>
   pct >= 90 ? 'bg-rose-500' : pct >= 30 ? 'bg-amber-500' : 'bg-emerald-500';
 
 const DreamStreamAllowancePanel: React.FC = () => {
-  const [status, setStatus] = useState<AllowanceStatus | null>(null);
+  // Render from the shared store so changes made elsewhere (e.g. the chat banner's
+  // consent CTA flipping byokFallbackMode) reflect here immediately.
+  const [status, setStatus] = useState<AllowanceStatus | null>(() => getLastAllowanceStatus());
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    let on = true;
-    const load = async () => {
-      const next = await fetchAllowanceStatus();
-      // Keep the last good status on a transient poll failure instead of flash-hiding.
-      if (on && next) setStatus(next);
-    };
-    void load();
-    const id = setInterval(() => void load(), ALLOWANCE_POLL_MS);
-    return () => { on = false; clearInterval(id); };
+    const unsubscribe = subscribeAllowanceStatus(setStatus);
+    // This panel's own poll cadence remains a refresh source feeding the store
+    // (fetch publishes on success and keeps the last good status on failure).
+    void fetchAllowanceStatus();
+    const id = setInterval(() => void fetchAllowanceStatus(), ALLOWANCE_POLL_MS);
+    return () => { unsubscribe(); clearInterval(id); };
   }, []);
 
   if (!status || !status.enabled) return null;
@@ -331,13 +334,12 @@ const DreamStreamAllowancePanel: React.FC = () => {
     if (saving) return;
     setSaving(true);
     const before = status;
-    setStatus({ ...status, ...prefs }); // optimistic
-    const next = await patchBillingPrefs(prefs);
-    if (next) setStatus(next);
-    else {
+    publishAllowanceStatus({ ...status, ...prefs }); // optimistic — the banner sees it too
+    const next = await patchBillingPrefs(prefs); // publishes server truth on success
+    if (!next) {
       // PATCH failed — reconcile with the server (or revert) rather than lying.
       const re = await fetchAllowanceStatus();
-      setStatus(re ?? before);
+      if (!re) publishAllowanceStatus(before);
     }
     setSaving(false);
   };
@@ -456,6 +458,11 @@ const DreamStreamAllowancePanel: React.FC = () => {
 // the platform's) are ignored everywhere, so nothing uses it by accident.
 const SourceGovernancePanel: React.FC<{ onChange: () => void }> = ({ onChange }) => {
   const enabledCount = ALL_PROVIDERS.filter(isProviderEnabled).length;
+  // Honesty check: a green "On" pill must mean a key actually exists (local BYOK or
+  // an account-stored key). Providers without one keep a working allow/block toggle
+  // (platform keys may exist server-side) but show a muted "No key added" chip.
+  const localKeys = listKeys();
+  const accountMeta = getAccountKeyMeta();
   return (
     <div className="bg-white border-2 border-black rounded-xl shadow-comic p-4">
       <div className="flex items-center gap-2">
@@ -470,19 +477,28 @@ const SourceGovernancePanel: React.FC<{ onChange: () => void }> = ({ onChange })
       <div className="grid sm:grid-cols-2 gap-2">
         {ALL_PROVIDERS.map((provider) => {
           const on = isProviderEnabled(provider);
+          const keyPresent =
+            localKeys.some((k) => k.provider === provider) ||
+            accountMeta.some((m) => m.provider === provider);
           return (
             <button
               key={provider}
               onClick={() => { setProviderEnabled(provider, !on); onChange(); }}
-              className={`flex items-center justify-between gap-2 border-2 border-black rounded-lg px-3 py-2 transition-colors ${on ? 'bg-green-50 hover:bg-green-100' : 'bg-slate-100 hover:bg-slate-200'}`}
+              className={`flex items-center justify-between gap-2 border-2 border-black rounded-lg px-3 py-2 transition-colors ${on ? (keyPresent ? 'bg-green-50 hover:bg-green-100' : 'bg-white hover:bg-slate-50') : 'bg-slate-100 hover:bg-slate-200'}`}
             >
               <span className="flex items-center gap-2 min-w-0">
-                <Power className={`w-3.5 h-3.5 shrink-0 ${on ? 'text-green-600' : 'text-slate-400'}`} />
+                <Power className={`w-3.5 h-3.5 shrink-0 ${on && keyPresent ? 'text-green-600' : 'text-slate-400'}`} />
                 <span className="font-bold text-sm truncate">{PROVIDER_META[provider].label}</span>
               </span>
-              <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border-2 border-black shrink-0 ${on ? 'bg-green-300' : 'bg-white text-slate-500'}`}>
-                {on ? 'On' : 'Off'}
-              </span>
+              {on && !keyPresent ? (
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full border-2 border-slate-300 bg-slate-100 text-slate-500 shrink-0">
+                  No key added
+                </span>
+              ) : (
+                <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border-2 border-black shrink-0 ${on ? 'bg-green-300' : 'bg-white text-slate-500'}`}>
+                  {on ? 'On' : 'Off'}
+                </span>
+              )}
             </button>
           );
         })}

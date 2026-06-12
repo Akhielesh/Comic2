@@ -75,7 +75,7 @@ import { CHAT_SKILLS, type ChatSkill } from '../../services/chatSkills';
 import { gatherClientContext } from '../../services/clientContext';
 import { toggleConnector, type ChatConnector } from '../../services/chatConnectors';
 import { recommendModels, detectTools } from '../../services/chatSuggest';
-import { isProviderEnabled } from '../../services/sourceGovernance';
+import { isSourceInScope } from '../../services/sourceGovernance';
 import type { ModelSourceId } from '../../services/modelSelection';
 import { listMcpServers, getMcpServersByIds, onMcpServersChanged } from '../../services/mcpServers';
 import { recordToolEvents } from '../../services/toolAnalytics';
@@ -639,7 +639,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     if (activeSession?.autoMode && !overrideModel) {
       const candidates = Array.from(catalog.values()).filter((m) => {
         if (activeSession.lockedSource && m.source !== activeSession.lockedSource) return false;
-        return isProviderEnabled(m.source);
+        return isSourceInScope(m.source);
       });
       const best = recommendModels(text || 'general question', candidates, 1)[0]?.model;
       if (best) {

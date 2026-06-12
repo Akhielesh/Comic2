@@ -49,6 +49,7 @@ import {
   replaceStudioModelSelection,
   type StudioModelSelection,
 } from './studioModelSelection';
+import { applyGovernanceMap, getGovernanceMap, type GovernanceMap } from './sourceGovernance';
 import { getChatMemory, setChatMemory, MAX_CHAT_MEMORY_CHARS } from './chatStorage';
 import { listCustomAgents, replaceCustomAgents, parseMemoryItems, formatMemoryItems } from './chatAgents';
 import type { CustomAgentDef } from '../apiTypes';
@@ -67,6 +68,8 @@ interface CloudSnapshot {
     memory?: string;
     agents?: CustomAgentDef[];
   };
+  /** Allowed-sources governance (explicit on/off per provider) — an OFF must follow the account. */
+  sourceGovernance?: GovernanceMap;
   // ---- Studio-scoped: each studio's own settings, namespaced (v2) ----
   studios?: {
     /** Code Studio: pinned coding model, cost pref, agents, runtime, … */
@@ -88,6 +91,7 @@ const buildLocalSnapshot = (userId: string): CloudSnapshot => ({
     memory: getChatMemory(userId),
     agents: listCustomAgents(userId),
   },
+  sourceGovernance: getGovernanceMap(),
   studios: {
     code: getStoredStudioModelSelection(),
   },
@@ -165,6 +169,7 @@ const applySnapshot = (snap: CloudSnapshot, userId: string) => {
     if (snap.studios?.code) replaceStudioModelSelection(snap.studios.code);
     if (typeof snap.chat?.memory === 'string') setChatMemory(snap.chat.memory, userId);
     if (Array.isArray(snap.chat?.agents)) replaceCustomAgents(snap.chat.agents, userId);
+    if (snap.sourceGovernance) applyGovernanceMap(snap.sourceGovernance);
   } finally {
     suspendKeysSync(false);
     suspendSettingsSync(false);
@@ -232,6 +237,8 @@ export const syncOnLogin = async (userId: string): Promise<void> => {
         memory: mergeMemory(local.chat?.memory || '', cloud.chat?.memory || ''),
         agents: mergeAgents(local.chat?.agents || [], cloud.chat?.agents || []),
       },
+      // Cloud wins per-provider; local explicit choices not yet synced fill the gaps.
+      sourceGovernance: { ...local.sourceGovernance, ...cloud.sourceGovernance },
       studios: {
         code: cloud.studios?.code ?? local.studios?.code,
       },

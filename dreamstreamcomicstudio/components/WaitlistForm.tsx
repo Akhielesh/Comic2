@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Loader2, ArrowRight, Check, Mail } from 'lucide-react';
-import { submitWaitlistEmail, WaitlistKind } from '../services/waitlist';
+import { submitWaitlistEmail, WaitlistKind, type ProductInterest } from '../services/waitlist';
 import { Turnstile, resetTurnstile } from './Turnstile';
 import { turnstileEnabled } from '../services/clientConfig';
 
@@ -19,6 +19,15 @@ interface WaitlistFormProps {
   onSignIn?: () => void;
 }
 
+/** Friendly labels for the optional "what do you want first access to?" chips. */
+const PRODUCT_OPTIONS: { id: ProductInterest; label: string }[] = [
+  { id: 'comic_studio', label: 'Comic Studio' },
+  { id: 'chat_studio', label: 'Chat Studio' },
+  { id: 'code_studio', label: 'Code Studio' },
+  { id: 'stream_studio', label: 'Stream Studio' },
+  { id: 'dashboards', label: 'Dashboards' },
+];
+
 export const WaitlistForm: React.FC<WaitlistFormProps> = ({
   kind = 'updates',
   source,
@@ -33,6 +42,9 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
   const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error' | 'account-exists'>('idle');
   const [message, setMessage] = useState<string | null>(null);
   const [captchaToken, setCaptchaToken] = useState('');
+  // Optional intent: product chips + free-form note — email alone still submits.
+  const [interests, setInterests] = useState<ProductInterest[]>([]);
+  const [feedback, setFeedback] = useState('');
 
   const isDark = variant === 'dark';
 
@@ -47,7 +59,10 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
     setStatus('loading');
     setMessage(null);
 
-    const result = await submitWaitlistEmail(email, kind, source ? { source } : {}, captchaToken || undefined);
+    const result = await submitWaitlistEmail(email, kind, source ? { source } : {}, captchaToken || undefined, {
+      productInterests: interests.length ? interests : undefined,
+      feedback: feedback.trim() || undefined
+    });
     if (result.ok) {
       setStatus('success');
       setMessage(result.message);
@@ -124,6 +139,54 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
           )}
         </button>
       </div>
+
+      {/* Optional intent — chips + note. Email alone still submits. */}
+      <div className="mt-3">
+        <p className={`text-xs font-bold ${isDark ? 'text-zinc-400' : 'text-slate-600'}`}>
+          What do you want first access to?{' '}
+          <span className={`font-medium ${isDark ? 'text-zinc-600' : 'text-slate-400'}`}>(optional)</span>
+        </p>
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {PRODUCT_OPTIONS.map(({ id, label }) => {
+            const selected = interests.includes(id);
+            return (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={selected}
+                onClick={() =>
+                  setInterests((prev) => (selected ? prev.filter((p) => p !== id) : [...prev, id]))
+                }
+                className={`rounded-full border-2 px-3 py-1 text-xs font-bold transition-colors ${
+                  selected
+                    ? isDark
+                      ? 'border-brand-yellow bg-brand-yellow/10 text-brand-yellow'
+                      : 'border-black bg-brand-yellow text-black'
+                    : isDark
+                      ? 'border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200'
+                      : 'border-slate-300 bg-white text-slate-500 hover:border-black hover:text-black'
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <textarea
+        value={feedback}
+        onChange={(e) => setFeedback(e.target.value)}
+        maxLength={1000}
+        rows={2}
+        placeholder="Anything you'd want to see? (optional)"
+        aria-label="Anything you'd want to see? (optional)"
+        className={`mt-2 w-full resize-y rounded-lg border-2 px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-brand-blue ${
+          isDark
+            ? 'border-zinc-700 bg-zinc-900 text-white placeholder:text-zinc-600'
+            : 'border-black bg-white text-black placeholder:text-slate-400'
+        }`}
+      />
+
       {turnstileEnabled() && (
         <div className="mt-3">
           <Turnstile onToken={setCaptchaToken} onExpire={() => setCaptchaToken('')} action="waitlist" />
