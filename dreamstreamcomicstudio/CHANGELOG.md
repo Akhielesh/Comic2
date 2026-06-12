@@ -6,6 +6,35 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Dashboards that actually work — full widget gallery, readable news, real directions (2026-06-12):**
+  - **It remembers where you were:** reloading the studio restores your last view and
+    your last open dashboard (shareable `?board=` deep links) instead of bouncing to
+    defaults.
+  - **Every widget is addable now:** the Add-widget panel is the complete catalog —
+    markets, crypto, macro, calendars, travel and more, grouped, searchable, with
+    one-tap presets (e.g. a Metals & energy tape) — enforced by a coverage test.
+  - **News you can read in place:** Google News article links are decoded to the real
+    publisher server-side (they were unreadable redirects before), and wide news
+    cards become a split-pane reader — headlines on the left, the extracted article
+    with a reading-progress bar on the right. Bot-walled sites fall back honestly to
+    "open original" at the real outlet; an optional `JINA_API_KEY` makes in-app
+    reading much more reliable.
+  - **Places search that respects names:** searching a specific spot ("mezeh") finds
+    that place — not every restaurant nearby — with honest card titles and no filler.
+  - **Real directions:** drive/walk/bike routes with live ETAs, alternatives and an
+    animated route draw, Google-Maps-style mode pills, and a transit deep link. Works
+    from chat, the widget gallery, and the dashboard AI bar ("directions from home to
+    Dulles Airport").
+  - **Fixed "broken" finance tiles:** the yield curve no longer races its own timeout
+    (parallel + cached Treasury fetch), and starter templates only ship widgets that
+    self-populate keyless — plus a new Metals & energy board (gold, silver, copper,
+    crude).
+  - **Resize everything:** dashboard tiles (including video and news) and the floating
+    mini-player are drag-resizable, persisted.
+  - **Honest picks:** "Your picks today" only suggests from your real chat/memory
+    signal — no more canned filler — and hides when there's nothing relevant.
+  - Slimmer top: the Dashboards title bar is gone; boards sit on one scrolling strip
+    with a name search when it gets crowded.
 - **One account, everywhere — account sync overhaul + memory import (2026-06-11):**
   - **Your API keys now follow your account, not your browser.** The server resolves
     provider keys per request as *this device's key → your account's stored key →
