@@ -18,7 +18,15 @@ export interface DashboardTile {
   density: 'compact' | 'detailed';
   /** User-dragged tile height in px (undefined = natural height). */
   heightPx?: number;
+  /** User-dragged tile width in grid columns (1–3; undefined = density default). */
+  colSpan?: 1 | 2 | 3;
+  /** Frozen artifact for non-refreshable cards pinned from chat (tool = 'pinned_artifact'):
+   *  the card renders this stored data forever instead of fetching live. */
+  snapshot?: { type: string; data: unknown };
 }
+
+/** Tile tool id for a frozen chat card (no live-data fetch — renders `snapshot`). */
+export const PINNED_TILE = 'pinned_artifact';
 
 export interface CustomDashboard {
   id: string;
@@ -44,6 +52,7 @@ const STORAGE = 'ds.dashboards.v1';
 export const DASHBOARDS_CHANGED = 'dreamstream:dashboards-changed';
 
 const isDensity = (v: unknown): v is DashboardTile['density'] => v === 'compact' || v === 'detailed';
+const isColSpan = (v: unknown): v is NonNullable<DashboardTile['colSpan']> => v === 1 || v === 2 || v === 3;
 
 const sanitizeTile = (t: unknown): DashboardTile | null => {
   if (!t || typeof t !== 'object') return null;
@@ -55,7 +64,11 @@ const sanitizeTile = (t: unknown): DashboardTile | null => {
     args: tile.args && typeof tile.args === 'object' && !Array.isArray(tile.args) ? (tile.args as Record<string, unknown>) : {},
     ...(typeof tile.label === 'string' && tile.label ? { label: tile.label } : {}),
     density: isDensity(tile.density) ? tile.density : 'detailed',
-    ...(typeof tile.heightPx === 'number' && tile.heightPx > 0 ? { heightPx: Math.round(tile.heightPx) } : {})
+    ...(typeof tile.heightPx === 'number' && tile.heightPx > 0 ? { heightPx: Math.round(tile.heightPx) } : {}),
+    ...(isColSpan(tile.colSpan) ? { colSpan: tile.colSpan } : {}),
+    ...(tile.snapshot && typeof tile.snapshot === 'object' && typeof (tile.snapshot as { type?: unknown }).type === 'string'
+      ? { snapshot: { type: (tile.snapshot as { type: string }).type, data: (tile.snapshot as { data?: unknown }).data } }
+      : {})
   };
 };
 
@@ -118,7 +131,8 @@ export const createDashboard = (
       tool: t.tool,
       args: { ...t.args },
       ...(t.label ? { label: t.label } : {}),
-      density: isDensity(t.density) ? t.density : 'detailed'
+      density: isDensity(t.density) ? t.density : 'detailed',
+      ...(t.snapshot ? { snapshot: t.snapshot } : {})
     })),
     createdAt: new Date().toISOString()
   };
@@ -149,7 +163,8 @@ export const addTile = (dashId: string, tile: Omit<DashboardTile, 'id'> & { id?:
     tool: tile.tool,
     args: { ...tile.args },
     ...(tile.label ? { label: tile.label } : {}),
-    density: isDensity(tile.density) ? tile.density : 'detailed'
+    density: isDensity(tile.density) ? tile.density : 'detailed',
+    ...(tile.snapshot ? { snapshot: tile.snapshot } : {})
   };
   write(read().map((d) => (d.id === dashId ? { ...d, tiles: [...d.tiles, entry] } : d)));
   return entry;
@@ -173,6 +188,7 @@ export const updateTile = (
           if (patch.label !== undefined) next.label = patch.label || undefined;
           if (isDensity(patch.density)) next.density = patch.density;
           if ('heightPx' in patch) next.heightPx = typeof patch.heightPx === 'number' && patch.heightPx > 0 ? Math.round(patch.heightPx) : undefined;
+          if ('colSpan' in patch) next.colSpan = isColSpan(patch.colSpan) ? patch.colSpan : undefined;
           return next;
         })
       };

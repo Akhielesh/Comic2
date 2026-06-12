@@ -6,6 +6,25 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Finance accuracy + boards you can truly shape (2026-06-12):**
+  - **Found and fixed the "everything broke when I added API keys" bug:** the Alpaca
+    key silently switched US stock cards to the thin IEX feed (wrong-looking volume,
+    bare cards with no name/fundamentals/long-range charts). Yahoo's consolidated
+    tape is primary again; Alpaca is now strictly a licensed fallback. A misconfigured
+    CoinGecko key likewise can no longer take crypto down — it auto-falls back to the
+    keyless API, majors skip the search round-trip, and results cache for a minute.
+  - **Dashboards can't be killed by a stale login anymore:** widget refresh, the
+    article reader and link previews are now public, rate-limited data endpoints —
+    an expired session token used to 401 every tile at once ("nothing works").
+  - **Window-style tile resize:** grab ANY edge or corner of any tile — width snaps
+    live to grid columns, height is free, double-click resets. Works on every widget
+    including video and news.
+  - **Pin anything from chat:** cards without live data (quizzes, itineraries,
+    documents, model-built charts…) now pin to boards as frozen snapshots — the
+    whole component gallery is board-eligible, not just the 22 live widgets.
+  - Charts, the market card and the weather station were rebuilt to be fully
+    fluid — they fill the card at any size (no more tiny chart in an expanded
+    widget) with draw-in and morph animations matching the studio design.
 - **Dashboards that actually work — full widget gallery, readable news, real directions (2026-06-12):**
   - **It remembers where you were:** reloading the studio restores your last view and
     your last open dashboard (shareable `?board=` deep links) instead of bouncing to

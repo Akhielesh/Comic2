@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, Expand, LayoutDashboard, Maximize2, Minimize2, Plus, RefreshCw } from 'lucide-react';
 import { DensityProvider, useLiveData, type WidgetDensity } from './kit';
 import { ExpandLightbox } from './kit/ExpandLightbox';
-import { addTile, createDashboard, listDashboards } from '../../../services/customDashboards';
+import { PINNED_TILE, addTile, createDashboard, listDashboards } from '../../../services/customDashboards';
 
 // Universal widget chrome: wraps every artifact card with the two capabilities the
 // component system promises —
@@ -55,6 +55,9 @@ interface WidgetFrameProps {
   /** The refresh-whitelisted tool call that produced this widget. When present the
    *  frame offers "Pin to dashboard" — the same call becomes a live board tile. */
   origin?: { tool: string; args: Record<string, unknown> };
+  /** The artifact itself — cards WITHOUT a refreshable origin pin as a frozen
+   *  snapshot instead, so every gallery component can live on a board. */
+  snapshot?: { type: string; data: unknown };
   children: React.ReactNode;
 }
 
@@ -66,12 +69,22 @@ const tileLabelFor = (origin: { tool: string; args: Record<string, unknown> }): 
   return typeof first === 'string' ? first : undefined;
 };
 
+/** Label for a frozen snapshot tile: the card's own title when it has one, else
+ *  a humanized artifact type ("learning_path" → "Learning path"). */
+const snapshotLabel = (snapshot: { type: string; data: unknown }): string => {
+  const d = snapshot.data as { title?: unknown; name?: unknown } | null | undefined;
+  const title = typeof d?.title === 'string' && d.title ? d.title : typeof d?.name === 'string' && d.name ? d.name : '';
+  if (title) return title.slice(0, 60);
+  const t = snapshot.type.replace(/_/g, ' ');
+  return t.charAt(0).toUpperCase() + t.slice(1);
+};
+
 /** Height (px) of the clamped preview for cards without a bespoke compact layout. */
 const CLAMP_HEIGHT = 210;
 const MIN_HEIGHT = 140;
 const MAX_HEIGHT = 1400;
 
-export const WidgetFrame: React.FC<WidgetFrameProps> = ({ type, densityHint, densityAware, forcedDensity, origin, children }) => {
+export const WidgetFrame: React.FC<WidgetFrameProps> = ({ type, densityHint, densityAware, forcedDensity, origin, snapshot, children }) => {
   const [ownDensity, setDensity] = useState<WidgetDensity>(() => {
     const saved = readStore(DENSITY_STORE)[type];
     if (saved === 'compact' || saved === 'detailed') return saved;
@@ -94,8 +107,14 @@ export const WidgetFrame: React.FC<WidgetFrameProps> = ({ type, densityHint, den
   const [expanded, setExpanded] = useState(false);
 
   const pinTo = (dashId: string | null) => {
-    if (!origin) return;
-    const tile = { tool: origin.tool, args: { ...origin.args }, label: tileLabelFor(origin), density };
+    // Live-data cards pin their producing call (a refreshing tile); everything
+    // else pins as a frozen snapshot of the artifact data.
+    const tile = origin
+      ? { tool: origin.tool, args: { ...origin.args }, label: tileLabelFor(origin), density }
+      : snapshot
+        ? { tool: PINNED_TILE, args: {}, label: snapshotLabel(snapshot), density, snapshot }
+        : null;
+    if (!tile) return;
     if (dashId) addTile(dashId, tile);
     else createDashboard('My pulse', '⚡', [tile]);
     setPinOpen(false);
@@ -179,12 +198,13 @@ export const WidgetFrame: React.FC<WidgetFrameProps> = ({ type, densityHint, den
         </ExpandLightbox>
       )}
 
-      {/* Pin to dashboard (live-data widgets) — floats left of refresh. */}
-      {origin && !forcedDensity && (
+      {/* Pin to dashboard — live tiles for refreshable cards, frozen snapshots
+          for everything else. Floats left of refresh. */}
+      {(origin || snapshot) && !forcedDensity && (
         <div className="absolute right-[4.5rem] top-3 z-30">
           <button
             onClick={() => setPinOpen((v) => !v)}
-            title={pinned ? 'Pinned!' : 'Pin to a dashboard (live tile)'}
+            title={pinned ? 'Pinned!' : origin ? 'Pin to a dashboard (live tile)' : 'Pin to a dashboard (frozen copy)'}
             aria-label="Pin widget to a dashboard"
             className={`flex h-6 w-6 items-center justify-center rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] shadow-[0_1px_3px_rgba(0,0,0,0.1)] backdrop-blur-sm transition-all duration-200 hover:text-[var(--ds-ink)] focus-visible:opacity-100 group-hover/widget:opacity-100 group-focus-within/widget:opacity-100 [@media(pointer:coarse)]:opacity-70 ${
               pinned ? 'text-emerald-600 opacity-100' : pinOpen ? 'text-[var(--ds-accent)] opacity-100' : 'text-[var(--ds-muted)] opacity-0'

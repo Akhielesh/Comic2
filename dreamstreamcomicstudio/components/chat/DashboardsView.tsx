@@ -7,7 +7,7 @@ import type { ChatArtifact } from '../../apiTypes';
 import { refreshArtifact, sendChatMessage } from '../../services/chatApi';
 import { ChatMarkdown } from './ChatMarkdown';
 import {
-  DASHBOARD_TEMPLATES, addTile, createDashboard, listDashboards,
+  DASHBOARD_TEMPLATES, PINNED_TILE, addTile, createDashboard, listDashboards,
   onDashboardsChanged, removeDashboard, removeTile, reorderTile, updateDashboard, updateTile,
   type CustomDashboard, type DashboardTemplate, type DashboardTile
 } from '../../services/customDashboards';
@@ -266,55 +266,147 @@ const tileMenuItemCls =
 const TILE_MIN_H = 160;
 const TILE_MAX_H = 1200;
 
-/** Bottom drag handle that resizes a tile's height (drag; double-click resets).
- *  Works alongside the board's drag-to-reorder: pointer capture + cancelled
- *  dragstart keep a resize from ever turning into a tile move. */
-const TileResizeHandle: React.FC<{
-  height: number | null;
-  measure: () => number;
-  onLive: (px: number) => void;
-  onCommit: (px: number | null) => void;
-}> = ({ height, measure, onLive, onCommit }) => {
-  const drag = useRef<{ startY: number; startH: number; live: number } | null>(null);
+// ------------------------------------------------- window-style tile resize ----
+//
+// Every tile resizes like a desktop window: grab ANY edge or corner. Horizontal
+// drags snap the tile's width to grid columns (1–3 spans, live-previewed);
+// vertical drags set a free pixel height. Pointer capture + cancelled dragstart
+// keep a resize from ever turning into a drag-to-reorder. Double-click any grip
+// to reset that axis (corners reset both).
+
+interface TileSizePreview {
+  span?: 1 | 2 | 3;
+  heightPx?: number;
+}
+
+interface ResizeGrip {
+  x: -1 | 0 | 1;
+  y: -1 | 0 | 1;
+  cls: string;
+  cursor: string;
+}
+
+const GRIPS: ResizeGrip[] = [
+  { x: 1, y: 0, cls: 'right-0 top-8 bottom-8 w-1.5', cursor: 'cursor-ew-resize' },
+  { x: -1, y: 0, cls: 'left-0 top-8 bottom-8 w-1.5', cursor: 'cursor-ew-resize' },
+  { x: 0, y: 1, cls: 'bottom-0 left-8 right-8 h-1.5', cursor: 'cursor-ns-resize' },
+  { x: 1, y: 1, cls: 'bottom-0 right-0 h-3.5 w-3.5', cursor: 'cursor-nwse-resize' },
+  { x: -1, y: 1, cls: 'bottom-0 left-0 h-3.5 w-3.5', cursor: 'cursor-nesw-resize' },
+  { x: 1, y: -1, cls: 'top-0 right-9 h-3.5 w-3.5', cursor: 'cursor-nesw-resize' },
+  { x: -1, y: -1, cls: 'top-0 left-9 h-3.5 w-3.5', cursor: 'cursor-nwse-resize' }
+];
+
+/** Overlay of resize grips around a tile. `itemRef` is the GRID ITEM element —
+ *  column metrics are read from its parent grid at drag start. */
+const TileResizeFrame: React.FC<{
+  itemRef: React.RefObject<HTMLDivElement | null>;
+  currentSpan: number;
+  currentHeight: number | null;
+  onLive: (preview: TileSizePreview | null) => void;
+  onCommit: (patch: { colSpan?: 1 | 2 | 3 | null; heightPx?: number | null }) => void;
+}> = ({ itemRef, currentSpan, currentHeight, onLive, onCommit }) => {
+  const drag = useRef<{
+    grip: ResizeGrip;
+    startX: number;
+    startY: number;
+    startH: number;
+    startSpan: number;
+    colW: number;
+    gap: number;
+    maxCols: number;
+    live: TileSizePreview;
+  } | null>(null);
   const [active, setActive] = useState(false);
+
+  const begin = (grip: ResizeGrip) => (e: React.PointerEvent) => {
+    const item = itemRef.current;
+    const grid = item?.parentElement;
+    if (!item || !grid) return;
+    e.preventDefault();
+    e.stopPropagation();
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    const style = window.getComputedStyle(grid);
+    const cols = style.gridTemplateColumns.split(' ').filter(Boolean);
+    const colW = parseFloat(cols[0]) || item.getBoundingClientRect().width;
+    drag.current = {
+      grip,
+      startX: e.clientX,
+      startY: e.clientY,
+      startH: currentHeight ?? Math.round(item.getBoundingClientRect().height),
+      startSpan: Math.min(currentSpan, cols.length || 1),
+      colW,
+      gap: parseFloat(style.columnGap) || 12,
+      maxCols: cols.length || 1,
+      live: {}
+    };
+    setActive(true);
+  };
+
+  const move = (e: React.PointerEvent) => {
+    const d = drag.current;
+    if (!d) return;
+    const preview: TileSizePreview = {};
+    if (d.grip.x !== 0 && d.maxCols > 1) {
+      const startW = d.startSpan * d.colW + (d.startSpan - 1) * d.gap;
+      const targetW = startW + (e.clientX - d.startX) * d.grip.x;
+      const span = Math.max(1, Math.min(d.maxCols, Math.round((targetW + d.gap / 2) / (d.colW + d.gap)))) as 1 | 2 | 3;
+      preview.span = span;
+    }
+    if (d.grip.y !== 0) {
+      // Dragging the top edge upward grows the tile (desktop-window semantics).
+      const next = d.startH + (e.clientY - d.startY) * d.grip.y;
+      preview.heightPx = Math.min(TILE_MAX_H, Math.max(TILE_MIN_H, Math.round(next)));
+    }
+    d.live = preview;
+    onLive(preview);
+  };
+
+  const end = () => {
+    const d = drag.current;
+    if (!d) return;
+    drag.current = null;
+    setActive(false);
+    onLive(null);
+    const patch: { colSpan?: 1 | 2 | 3; heightPx?: number } = {};
+    if (d.live.span !== undefined && d.live.span !== d.startSpan) patch.colSpan = d.live.span;
+    if (d.live.heightPx !== undefined) patch.heightPx = d.live.heightPx;
+    if (Object.keys(patch).length) onCommit(patch);
+  };
+
+  const cancel = () => {
+    drag.current = null;
+    setActive(false);
+    onLive(null);
+  };
+
   return (
-    <div
-      role="separator"
-      aria-orientation="horizontal"
-      aria-label="Resize widget (drag; double-click to reset)"
-      draggable
-      onDragStart={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-      }}
-      onPointerDown={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        (e.target as HTMLElement).setPointerCapture(e.pointerId);
-        drag.current = { startY: e.clientY, startH: height ?? measure(), live: height ?? measure() };
-        setActive(true);
-      }}
-      onPointerMove={(e) => {
-        if (!drag.current) return;
-        const next = Math.min(TILE_MAX_H, Math.max(TILE_MIN_H, drag.current.startH + (e.clientY - drag.current.startY)));
-        drag.current.live = next;
-        onLive(next);
-      }}
-      onPointerUp={() => {
-        if (!drag.current) return;
-        onCommit(drag.current.live);
-        drag.current = null;
-        setActive(false);
-      }}
-      onPointerCancel={() => {
-        drag.current = null;
-        setActive(false);
-      }}
-      onDoubleClick={() => onCommit(null)}
-      className={`mx-auto -mt-0.5 flex h-3.5 w-16 cursor-ns-resize touch-none items-center justify-center opacity-0 transition-opacity duration-200 group-hover/tile:opacity-100 [@media(pointer:coarse)]:opacity-60 ${active ? 'opacity-100' : ''}`}
-    >
-      <div className={`h-1 w-9 rounded-full transition-colors ${active ? 'bg-[var(--ds-muted)]' : 'bg-[var(--ds-faint)]'}`} />
-    </div>
+    <>
+      {GRIPS.map((grip) => (
+        <div
+          key={`${grip.x},${grip.y}`}
+          role="separator"
+          aria-label="Resize widget (drag any edge or corner; double-click resets)"
+          draggable
+          onDragStart={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onPointerDown={begin(grip)}
+          onPointerMove={move}
+          onPointerUp={end}
+          onPointerCancel={cancel}
+          onDoubleClick={() =>
+            onCommit({
+              ...(grip.x !== 0 ? { colSpan: null } : {}),
+              ...(grip.y !== 0 ? { heightPx: null } : {})
+            })
+          }
+          className={`absolute z-30 touch-none rounded-full transition-colors duration-200 ${grip.cls} ${grip.cursor} ${
+            active ? 'bg-[#D97757]/30' : 'bg-transparent hover:bg-[#D97757]/25'
+          }`}
+        />
+      ))}
+    </>
   );
 };
 
@@ -328,15 +420,17 @@ const TileCard: React.FC<{
   onRemove: () => void;
   /** Persist edited args (+ optional new label), then refetch the tile. */
   onSaveEdit: (args: Record<string, unknown>, label?: string) => void;
-  /** Persist a user-dragged tile height (null = back to natural). */
-  onResize: (px: number | null) => void;
-}> = ({ tile, state, locked, onToggleDensity, onRefresh, onRemove, onSaveEdit, onResize }) => {
-  // Live height while the resize handle is dragged (commit persists via onResize).
-  const [liveHeight, setLiveHeight] = useState<number | null>(null);
-  const bodyRef = useRef<HTMLDivElement>(null);
-  const effectiveHeight = liveHeight ?? tile.heightPx ?? null;
+  /** Effective height (live resize preview or the persisted tile height). */
+  heightPx?: number | null;
+}> = ({ tile, state, locked, onToggleDensity, onRefresh, onRemove, onSaveEdit, heightPx }) => {
+  const effectiveHeight = heightPx ?? null;
   const label = tile.label || TOOL_LABELS[tile.tool] || tile.tool;
-  const hasCard = !!state?.artifact;
+  // Frozen chat card: renders its stored snapshot forever — no fetch, no edit.
+  const pinned = tile.tool === PINNED_TILE && !!tile.snapshot;
+  const artifact: ChatArtifact | undefined = pinned
+    ? { type: tile.snapshot!.type, data: tile.snapshot!.data }
+    : state?.artifact;
+  const hasCard = !!artifact;
   // ⋯ popover: 'menu' lists actions; 'edit' swaps in the mini args form.
   const [menu, setMenu] = useState<'closed' | 'menu' | 'edit'>('closed');
   const menuRef = useRef<HTMLDivElement>(null);
@@ -387,11 +481,12 @@ const TileCard: React.FC<{
 
         {menu === 'menu' && (
           <div className="absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] py-1 shadow-lg">
-            {!locked && (
+            {!locked && !pinned && (
               <button type="button" onClick={() => setMenu('edit')} className={`${tileMenuItemCls} text-[var(--ds-ink)]`}>
                 <Pencil className="h-3.5 w-3.5 text-[var(--ds-muted)]" /> Edit
               </button>
             )}
+            {!pinned && (
             <button
               type="button"
               disabled={state?.loading}
@@ -403,6 +498,7 @@ const TileCard: React.FC<{
             >
               <RefreshCw className={`h-3.5 w-3.5 text-[var(--ds-muted)] ${state?.loading ? 'animate-spin' : ''}`} /> Refresh
             </button>
+            )}
             {!locked && (
               <>
                 <button
@@ -452,26 +548,20 @@ const TileCard: React.FC<{
       {hasCard ? (
         <>
           <div
-            ref={bodyRef}
             className={effectiveHeight != null ? 'overflow-y-auto overscroll-contain [scrollbar-width:thin]' : undefined}
             style={effectiveHeight != null ? { height: effectiveHeight } : undefined}
           >
-            <DensityProvider value={tile.density}>{renderArtifactCard(state!.artifact!)}</DensityProvider>
+            <DensityProvider value={tile.density}>{renderArtifactCard(artifact!)}</DensityProvider>
           </div>
-          {!locked && (
-            <TileResizeHandle
-              height={effectiveHeight}
-              measure={() => bodyRef.current?.getBoundingClientRect().height ?? TILE_MIN_H}
-              onLive={setLiveHeight}
-              onCommit={(px) => {
-                setLiveHeight(null);
-                onResize(px);
-              }}
-            />
-          )}
-          <div className="flex items-center gap-1 px-1 text-[10px] text-[var(--ds-muted)]">
-            {state?.error && <span>Couldn’t refresh — showing last data ·</span>}
-            <span>Updated {relativeTime(state?.asOf) || 'just now'}</span>
+          <div className="mt-1 flex items-center gap-1 px-1 text-[10px] text-[var(--ds-muted)]">
+            {pinned ? (
+              <span>Pinned from chat</span>
+            ) : (
+              <>
+                {state?.error && <span>Couldn’t refresh — showing last data ·</span>}
+                <span>Updated {relativeTime(state?.asOf) || 'just now'}</span>
+              </>
+            )}
           </div>
         </>
       ) : state?.error ? (
@@ -919,7 +1009,7 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode }> = ({
   }, [active?.id]);
 
   const fetchTile = useCallback(async (tile: DashboardTile) => {
-    if (tile.tool === AI_CHAT_TILE) return; // the mini chat tile has no live-data fetch
+    if (tile.tool === AI_CHAT_TILE || tile.tool === PINNED_TILE) return; // no live-data fetch
     if (inflight.current.has(tile.id)) return;
     inflight.current.add(tile.id);
     setTileStates((prev) => ({ ...prev, [tile.id]: { ...prev[tile.id], loading: true } }));
@@ -1049,8 +1139,23 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode }> = ({
     setDropIndex(null);
   };
 
-  // Detailed tiles get the full row on md and 2 of 3 columns on xl.
-  const spanFor = (density: WidgetDensity) => (density === 'detailed' ? 'md:col-span-2 xl:col-span-2' : 'min-w-0');
+  // Tile width in grid columns: explicit user choice → density default
+  // (detailed = 2 columns, compact = 1). Live resize previews override both.
+  const [sizePreviews, setSizePreviews] = useState<Record<string, TileSizePreview>>({});
+  const tileItemRefs = useRef(new Map<string, HTMLDivElement | null>());
+  const spanOf = (tile: DashboardTile): number =>
+    sizePreviews[tile.id]?.span ?? tile.colSpan ?? (tile.density === 'detailed' ? 2 : 1);
+  const spanCls = (span: number): string =>
+    span >= 3 ? 'md:col-span-2 xl:col-span-3' : span === 2 ? 'md:col-span-2' : 'min-w-0';
+  const tileHeight = (tile: DashboardTile): number | null =>
+    sizePreviews[tile.id]?.heightPx ?? tile.heightPx ?? null;
+  const setPreview = (tileId: string) => (preview: TileSizePreview | null) =>
+    setSizePreviews((prev) => {
+      const next = { ...prev };
+      if (preview) next[tileId] = preview;
+      else delete next[tileId];
+      return next;
+    });
 
   // ------------------------------------------------------------ empty hero ----
   if (dashboards.length === 0) {
@@ -1286,7 +1391,10 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode }> = ({
             {active.tiles.map((tile, i) => (
               <div
                 key={tile.id}
-                className={`transition-all duration-200 ease-out ${spanFor(tile.density)} ${
+                ref={(el) => {
+                  tileItemRefs.current.set(tile.id, el);
+                }}
+                className={`relative transition-all duration-200 ease-out ${spanCls(spanOf(tile))} ${
                   dragId === tile.id ? 'scale-[0.98] opacity-50' : ''
                 } ${
                   dropIndex === i && dragId && dragId !== tile.id
@@ -1318,7 +1426,10 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode }> = ({
                 }}
               >
                 {tile.tool === AI_CHAT_TILE ? (
-                  <div className="group/tile relative">
+                  <div
+                    className="group/tile relative"
+                    style={tileHeight(tile) != null ? { height: tileHeight(tile)! } : undefined}
+                  >
                     {!locked && (
                       <div className="absolute right-2 top-2 z-20 flex items-center gap-0.5 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] p-0.5 opacity-0 shadow-[0_1px_3px_rgba(0,0,0,0.1)] backdrop-blur-sm transition-opacity duration-200 focus-within:opacity-100 group-hover/tile:opacity-100 [@media(pointer:coarse)]:opacity-70">
                         <button
@@ -1337,6 +1448,7 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode }> = ({
                   tile={tile}
                   state={tileStates[tile.id]}
                   locked={locked}
+                  heightPx={tileHeight(tile)}
                   onToggleDensity={() =>
                     updateTile(active.id, tile.id, { density: tile.density === 'compact' ? 'detailed' : 'compact' })
                   }
@@ -1347,8 +1459,22 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode }> = ({
                     // Refetch with the fresh args (state will catch up via the change event).
                     void fetchTile({ ...tile, args });
                   }}
-                  onResize={(px) => updateTile(active.id, tile.id, { heightPx: px ?? undefined })}
                 />
+                )}
+                {/* Window-style resize: every edge and corner, on every tile. */}
+                {!locked && (
+                  <TileResizeFrame
+                    itemRef={{ current: tileItemRefs.current.get(tile.id) ?? null }}
+                    currentSpan={spanOf(tile)}
+                    currentHeight={tileHeight(tile)}
+                    onLive={setPreview(tile.id)}
+                    onCommit={(patch) =>
+                      updateTile(active.id, tile.id, {
+                        ...('colSpan' in patch ? { colSpan: patch.colSpan ?? undefined } : {}),
+                        ...('heightPx' in patch ? { heightPx: patch.heightPx ?? undefined } : {})
+                      })
+                    }
+                  />
                 )}
               </div>
             ))}

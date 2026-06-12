@@ -824,11 +824,21 @@ chatRouter.post('/followups', async (req, res, next) => {
   }
 });
 
+// ------------------------------------------------------------ public data routes ---
+//
+// Pure, keyless, budget-guarded data endpoints (widget refresh, reader-mode
+// extraction, link unfurl). Mounted with optionalAuth BEFORE the global
+// requireAuth: they spend no model budget and read no user data, and gating
+// them on a session meant one stale/expired token silently killed EVERY
+// dashboard tile and article reader ("nothing works") while the tools
+// themselves were fine. Signed-in calls still attribute usage to the account.
+export const chatPublicRouter = Router();
+
 // Live widget refresh: re-execute the single whitelisted tool call that produced an
 // artifact (its `origin`), so the client updates the widget in place with fresh data.
 // No model round-trip, no billing reservation — these are keyless data tools.
 const REFRESHABLE = new Set<string>(REFRESHABLE_TOOLS);
-chatRouter.post('/tool-refresh', async (req, res) => {
+chatPublicRouter.post('/tool-refresh', async (req, res) => {
   const body = (req.body ?? {}) as { tool?: unknown; args?: unknown; clientContext?: unknown };
   const tool = typeof body.tool === 'string' ? body.tool : '';
   if (!REFRESHABLE.has(tool)) {
@@ -868,7 +878,7 @@ chatRouter.post('/tool-refresh', async (req, res) => {
 });
 
 // Link unfurl for source hover-cards (OG/meta preview). SSRF-guarded + cached.
-chatRouter.get('/unfurl', async (req, res) => {
+chatPublicRouter.get('/unfurl', async (req, res) => {
   const url = String(req.query.url || '');
   if (!url) return res.status(400).json({ error: { message: 'url is required' } });
   try {
@@ -881,7 +891,7 @@ chatRouter.get('/unfurl', async (req, res) => {
 
 // Reader mode: fetch a public article and return its extracted readable content so the
 // chat can show it inline (news sites block iframing). SSRF-guarded in readArticle.
-chatRouter.get('/read-url', async (req, res) => {
+chatPublicRouter.get('/read-url', async (req, res) => {
   const url = String(req.query.url || '');
   if (!url) return res.status(400).json({ error: { message: 'url is required' } });
   try {
