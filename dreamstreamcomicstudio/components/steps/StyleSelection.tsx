@@ -876,6 +876,9 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
   }
 
   const selectedCount = Object.values(styleSelections).filter((s) => s.selected).length;
+  // Custom styles generate too (handleGenerateSelected gathers the list AND the typed
+  // draft) — counting only preset checkboxes left custom-only users with a dead button.
+  const generatableCount = selectedCount + customStyles.length + (customStyleInput.trim() ? 1 : 0);
   const normalizedSearch = styleSearch.trim().toLowerCase();
   const visibleStyles = normalizedSearch.length === 0
     ? STYLE_PRESETS
@@ -953,7 +956,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
           <div className="bg-white p-6 rounded-xl border-4 border-black shadow-comic space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-2xl font-display">Choose Styles</h3>
-              <div className="text-xs font-bold">Selected: {selectedCount}</div>
+              <div className="text-xs font-bold">Selected: {generatableCount}</div>
             </div>
 
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
@@ -1209,7 +1212,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
             <Button
               onClick={handleGenerateSelected}
               isLoading={isBatchGenerating}
-              disabled={selectedCount === 0}
+              disabled={generatableCount === 0}
               className="w-full"
               icon={<Wand2 className="w-4 h-4" />}
             >

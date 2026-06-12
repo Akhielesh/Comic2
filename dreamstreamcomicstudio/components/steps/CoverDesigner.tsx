@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Wand2, UploadCloud, RefreshCw, Image as ImageIcon } from 'lucide-react';
-import { ComicState, StyleVariant } from '../../types';
+import React, { useEffect, useState } from 'react';
+import { Wand2, UploadCloud, RefreshCw, Image as ImageIcon, Sparkles } from 'lucide-react';
+import { ComicState } from '../../types';
 import { generateImage } from '../../services/imageService';
 import { saveImage, getImageUrl } from '../../services/db';
 import { Button } from '../Button';
@@ -8,6 +8,7 @@ import { ImagePreviewModal } from '../modals/ImagePreviewModal';
 import { buildImagePrompt } from '../../services/imagePrompt';
 import { classifyStoryMood } from '../../services/storyMood';
 import { resolveAspectRatio } from '../../services/imageUtils';
+import { suggestCoverConcepts, type CoverConcept } from '../../services/geminiService';
 import { COVER_TEMPLATE_DEFINITIONS } from '../../services/coverTemplates';
 
 interface CoverDesignerProps {
@@ -24,6 +25,8 @@ type CoverCandidate = {
   imageId?: string;
   imageUrl: string;
   prompt: string;
+  conceptName: string;
+  conceptBrief: string;
 };
 
 const fileToBase64 = (file: File): Promise<string> => {
@@ -35,35 +38,39 @@ const fileToBase64 = (file: File): Promise<string> => {
   });
 };
 
+// When the concept call fails (offline text model etc.), covers still generate from
+// three contrasting archetypes — the template library doubles as the safety net.
+const FALLBACK_TEMPLATE_IDS = ['hero-splash', 'cinematic-montage', 'retro-pulp'];
+const fallbackConcepts = (): CoverConcept[] =>
+  COVER_TEMPLATE_DEFINITIONS
+    .filter((t) => FALLBACK_TEMPLATE_IDS.includes(t.id))
+    .map((t) => ({
+      name: t.label,
+      brief: `${t.compositionRules} ${t.focalStrategy} ${t.safeZoneNotes} Tone: ${t.toneTags.join(', ')}.`,
+      typography: t.typography
+    }));
+
+/**
+ * Cover stage, "master prompt" flow: the author gives a rough idea (or nothing); the AI
+ * designs distinct cover CONCEPTS grounded in the story + locked style, each concept
+ * renders as one candidate, and the author picks. No template grid, no identical
+ * "Variation A/B/C" rerolls.
+ */
 export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, projectName, onUpdate, onConfirm }) => {
-  const initialTemplateId = COVER_TEMPLATE_DEFINITIONS.find((t) => t.id === state.coverTemplateId)
-    ? (state.coverTemplateId as string)
-    : COVER_TEMPLATE_DEFINITIONS[0].id;
-  const [selectedTemplateId, setSelectedTemplateId] = useState(initialTemplateId);
-  const [coverNotes, setCoverNotes] = useState(state.coverPrompt || '');
+  const [roughIdea, setRoughIdea] = useState(state.coverPrompt || '');
   // The masthead defaults to the comic's actual name (it used to default to the STYLE
   // CATEGORY, which is why covers never carried a real title).
-  const [coverTitleIdea, setCoverTitleIdea] = useState(projectName || '');
+  const [coverTitle, setCoverTitle] = useState(projectName || '');
   const [coverTagline, setCoverTagline] = useState('');
-  const [coverMood, setCoverMood] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [progressLine, setProgressLine] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<CoverCandidate[]>([]);
 
   useEffect(() => {
-    if (state.coverTemplateId && COVER_TEMPLATE_DEFINITIONS.some((t) => t.id === state.coverTemplateId)) {
-      setSelectedTemplateId(state.coverTemplateId);
-    }
-  }, [state.coverTemplateId]);
-
-  useEffect(() => {
-    setCoverNotes(state.coverPrompt || '');
+    setRoughIdea(state.coverPrompt || '');
   }, [state.coverPrompt]);
-
-  const selectedTemplate = useMemo(
-    () => COVER_TEMPLATE_DEFINITIONS.find((t) => t.id === selectedTemplateId) || COVER_TEMPLATE_DEFINITIONS[0],
-    [selectedTemplateId]
-  );
 
   const handleUpload = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -77,86 +84,106 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
     onUpdate({
       coverImageId: candidate.imageId,
       coverImageUrl: candidate.imageUrl,
-      coverPrompt: coverNotes,
-      coverTemplateId: selectedTemplate.id
+      coverPrompt: roughIdea,
+      coverTemplateId: `ai:${candidate.conceptName}`
     });
   };
 
-  const handleGenerateCover = async () => {
+  const handleDesignCovers = async () => {
     setIsGenerating(true);
+    setError(null);
+    setCandidates([]);
     try {
       const scene = state.scenes[0];
       const cast = state.characters.map((c) => c.name).join(', ');
-      const keyItems = state.items.slice(0, 3).map((item) => item.name).join(', ');
-      const styleVariant = state.styleVariants.find((v: StyleVariant) => v.id === state.selectedStyleId);
+      const styleVariant = state.styleVariants.find((v) => v.id === state.selectedStyleId);
       const referenceIds: string[] = [];
       if (state.coverTemplateImageId) referenceIds.push(state.coverTemplateImageId);
       if (styleVariant?.imageId) referenceIds.push(styleVariant.imageId);
       else if (state.styleImageId) referenceIds.push(state.styleImageId);
 
+      const moodGuidance = (state.storyMood?.promptGuidance)
+        || classifyStoryMood(state.script, state.creativeDirection).promptGuidance;
+
+      // 1) Design pass — the AI turns the rough idea + story context into distinct concepts.
+      setProgressLine('Designing cover concepts from your story…');
+      let concepts: CoverConcept[];
+      try {
+        concepts = await suggestCoverConcepts({
+          script: state.script,
+          title: coverTitle || projectName || 'Untitled',
+          tagline: coverTagline || undefined,
+          roughIdea: roughIdea || undefined,
+          stylePrompt: state.stylePrompt || undefined,
+          cast: cast || undefined,
+          setting: scene?.setting || undefined,
+          moodHint: moodGuidance
+        });
+      } catch (conceptError) {
+        console.warn('Cover concept design failed — using archetype fallbacks.', conceptError);
+        concepts = fallbackConcepts();
+      }
+
+      // 2) Render pass — one cover per concept.
       const ratioConfig = resolveAspectRatio(state, state.styleAspectRatio);
-      const sharedTemplateBrief = [
-        selectedTemplate.compositionRules,
-        selectedTemplate.focalStrategy,
-        selectedTemplate.safeZoneNotes,
-        `Title treatment: ${selectedTemplate.typography}`,
-        `Tone tags: ${selectedTemplate.toneTags.join(', ')}`
-      ].join(' ');
-      const sharedBrief = [
-        coverNotes,
-        coverMood ? `Mood direction: ${coverMood}` : ''
-      ].filter(Boolean).join(' ');
-
-      const variationLabels = ['Variation A', 'Variation B', 'Variation C'];
       const nextCandidates: CoverCandidate[] = [];
-
-      for (const variation of variationLabels) {
+      for (const [index, concept] of concepts.entries()) {
+        setProgressLine(`Rendering "${concept.name}" (${index + 1}/${concepts.length})…`);
         const prompt = buildImagePrompt({
           stage: 'cover',
           stylePrompt: state.stylePrompt || 'bold comic style',
-          sceneAction: sharedTemplateBrief,
+          sceneAction: `${concept.brief} Title treatment: ${concept.typography}`,
           setting: scene?.setting || '',
           characters: cast || 'Lead cast',
-          items: keyItems || undefined,
-          moodGuidance: (state.storyMood?.promptGuidance) || classifyStoryMood(state.script, state.creativeDirection).promptGuidance,
-          extraNotes: `${sharedBrief} ${variation}`.trim(),
-          projectTitle: coverTitleIdea || projectName || undefined,
+          moodGuidance,
+          extraNotes: roughIdea.trim(),
+          projectTitle: coverTitle || projectName || undefined,
           instructions: coverTagline || undefined
         });
 
-        const generated = await generateImage(
-          prompt,
-          ratioConfig.modelRatio,
-          state.imageResolution,
-          referenceIds,
-          projectId,
-          {
-            stage: 'cover',
-            cropToRatio: ratioConfig.cropRatio,
-            meta: {
-              source: { type: 'cover', id: projectId, label: 'Cover' },
-              templateId: selectedTemplate.id
+        try {
+          const generated = await generateImage(
+            prompt,
+            ratioConfig.modelRatio,
+            state.imageResolution,
+            referenceIds,
+            projectId,
+            {
+              stage: 'cover',
+              cropToRatio: ratioConfig.cropRatio,
+              meta: {
+                source: { type: 'cover', id: projectId, label: 'Cover' },
+                concept: concept.name
+              }
             }
+          );
+          if (generated?.imageUrl) {
+            nextCandidates.push({
+              id: `${concept.name}-${Date.now()}-${index}`,
+              imageId: generated.imageId,
+              imageUrl: generated.imageUrl,
+              prompt,
+              conceptName: concept.name,
+              conceptBrief: concept.brief
+            });
+            // Show progress in the gallery as each concept lands.
+            setCandidates([...nextCandidates]);
           }
-        );
-
-        if (generated?.imageUrl) {
-          nextCandidates.push({
-            id: `${selectedTemplate.id}-${variation}-${Date.now()}`,
-            imageId: generated.imageId,
-            imageUrl: generated.imageUrl,
-            prompt
-          });
+        } catch (renderError) {
+          console.warn(`Cover concept "${concept.name}" failed to render`, renderError);
         }
       }
 
-      setCandidates(nextCandidates);
-      if (nextCandidates[0]) {
-        selectCoverCandidate(nextCandidates[0]);
+      if (nextCandidates.length === 0) {
+        setError('No covers could be rendered — check your image model/key in Settings and try again.');
+        return;
       }
+      if (nextCandidates[0]) selectCoverCandidate(nextCandidates[0]);
     } catch (e) {
       console.error(e);
+      setError(e instanceof Error ? e.message : 'Cover generation failed. Try again.');
     } finally {
+      setProgressLine(null);
       setIsGenerating(false);
     }
   };
@@ -172,7 +199,10 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
         <div className="flex flex-col md:flex-row justify-between items-start gap-4">
           <div>
             <h2 className="text-4xl font-display text-black">Cover Designer</h2>
-            <p className="text-slate-600 font-comic">Choose a cover template, add a brief, and generate multiple cover candidates.</p>
+            <p className="text-slate-600 font-comic">
+              Give a rough idea (or nothing) — the AI designs distinct cover options from your story and style,
+              with the title rendered as real cover art.
+            </p>
           </div>
           <div className="flex gap-2">
             <Button variant="secondary" onClick={handleSkip}>Skip</Button>
@@ -181,37 +211,13 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[1.2fr_0.8fr] gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-[0.9fr_1.1fr] gap-6">
         <div className="space-y-6">
-          <div className="bg-white rounded-xl border-4 border-black shadow-comic p-6 space-y-4">
-            <h3 className="text-2xl font-display">Choose a Template</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {COVER_TEMPLATE_DEFINITIONS.map((template) => {
-                const selected = template.id === selectedTemplateId;
-                return (
-                  <button
-                    key={template.id}
-                    onClick={() => {
-                      setSelectedTemplateId(template.id);
-                      onUpdate({ coverTemplateId: template.id });
-                    }}
-                    className={`border-4 rounded-xl p-4 text-left transition-all ${selected ? 'border-brand-blue bg-brand-blue/5 shadow-comic' : 'border-black bg-white'}`}
-                  >
-                    <div className="font-display text-lg">{template.label}</div>
-                    <div className="text-xs font-comic text-slate-600 mt-1">{template.description}</div>
-                    <div className="text-[11px] font-comic text-slate-500 mt-1.5 italic">Title style: {template.typography}</div>
-                    <div className="text-[10px] font-bold uppercase text-slate-500 mt-2">Tone: {template.toneTags.join(', ')}</div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
           <div className="bg-white rounded-xl border-4 border-black shadow-comic p-6 space-y-3">
-            <label className="text-lg font-display text-black">Cover Brief</label>
+            <label className="text-lg font-display text-black">Your Cover</label>
             <input
-              value={coverTitleIdea}
-              onChange={(e) => setCoverTitleIdea(e.target.value)}
+              value={coverTitle}
+              onChange={(e) => setCoverTitle(e.target.value)}
               placeholder="Title — rendered as the cover masthead"
               className="w-full border-2 border-black rounded p-2 text-sm"
             />
@@ -221,26 +227,20 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
               placeholder="Tagline — rendered small on the cover (optional)"
               className="w-full border-2 border-black rounded p-2 text-sm"
             />
-            <input
-              value={coverMood}
-              onChange={(e) => setCoverMood(e.target.value)}
-              placeholder="Mood keywords (e.g., gritty, hopeful, neon)"
-              className="w-full border-2 border-black rounded p-2 text-sm"
-            />
             <textarea
-              value={coverNotes}
+              value={roughIdea}
               onChange={(e) => {
-                setCoverNotes(e.target.value);
+                setRoughIdea(e.target.value);
                 onUpdate({ coverPrompt: e.target.value });
               }}
-              placeholder="Composition and art direction notes..."
+              placeholder="Rough idea (optional) — e.g. 'Maya on her bike above the flooded city, defiant'…"
               className="w-full h-24 bg-slate-50 border-2 border-black rounded-lg p-3 text-sm"
             />
             <div className="space-y-2">
-              <div className="text-xs font-bold uppercase">Template Reference (Optional)</div>
+              <div className="text-xs font-bold uppercase">Layout Reference (Optional)</div>
               <label className="flex items-center gap-2 border-2 border-dashed border-black rounded-lg p-3 cursor-pointer hover:bg-slate-50">
                 <UploadCloud size={16} />
-                <span className="text-xs font-bold">Upload rough cover layout</span>
+                <span className="text-xs font-bold">Upload a cover you like as reference</span>
                 <input type="file" hidden accept="image/*" onChange={(e) => handleUpload(e.target.files)} />
               </label>
               {state.coverTemplateImageUrl && (
@@ -248,50 +248,54 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
                   onClick={() => setPreviewImage(state.coverTemplateImageUrl || null)}
                   className="text-xs font-bold text-brand-blue flex items-center gap-1"
                 >
-                  <ImageIcon size={12} /> View uploaded template
+                  <ImageIcon size={12} /> View uploaded reference
                 </button>
               )}
             </div>
-            <div className="flex flex-wrap gap-2">
-              <Button onClick={handleGenerateCover} isLoading={isGenerating} icon={<Wand2 className="w-4 h-4" />}>
-                Generate 3 Covers
-              </Button>
-              {state.coverImageUrl && (
-                <Button variant="secondary" onClick={handleGenerateCover} icon={<RefreshCw className="w-4 h-4" />}>
-                  Regenerate
-                </Button>
-              )}
-            </div>
+            <Button onClick={handleDesignCovers} isLoading={isGenerating} icon={<Wand2 className="w-4 h-4" />} className="w-full">
+              {candidates.length > 0 ? 'Design New Options' : 'Design Cover Options'}
+            </Button>
+            {progressLine && (
+              <div className="flex items-center gap-2 text-xs font-bold text-slate-600">
+                <Sparkles size={14} className="text-brand-blue animate-pulse" /> {progressLine}
+              </div>
+            )}
+            {error && <div className="text-xs font-bold text-brand-red">{error}</div>}
           </div>
         </div>
 
         <div className="space-y-6">
           <div className="bg-white rounded-xl border-4 border-black shadow-comic p-6">
-            <h3 className="text-2xl font-display mb-4">Cover Preview</h3>
-            {state.coverImageUrl ? (
-              <div className="border-4 border-black rounded-xl overflow-hidden shadow-comic cursor-pointer" onClick={() => setPreviewImage(state.coverImageUrl || null)}>
-                <img src={state.coverImageUrl} alt="Cover preview" className="w-full h-auto object-cover" />
-              </div>
-            ) : (
-              <div className="border-4 border-dashed border-black rounded-xl h-64 flex items-center justify-center text-slate-400 font-comic">
-                No cover generated yet.
+            <h3 className="text-2xl font-display mb-4">Cover Options</h3>
+            {state.coverImageUrl && (
+              <div className="border-4 border-black rounded-xl overflow-hidden shadow-comic cursor-pointer mb-4" onClick={() => setPreviewImage(state.coverImageUrl || null)}>
+                <img src={state.coverImageUrl} alt="Selected cover" className="w-full h-auto object-cover" />
               </div>
             )}
-
-            {candidates.length > 0 && (
-              <div className="mt-4 space-y-2">
-                <div className="text-xs font-bold uppercase text-slate-500">Candidates</div>
-                <div className="grid grid-cols-3 gap-2">
-                  {candidates.map((candidate) => (
+            {candidates.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {candidates.map((candidate) => {
+                  const selected = state.coverImageUrl === candidate.imageUrl;
+                  return (
                     <button
                       key={candidate.id}
                       onClick={() => selectCoverCandidate(candidate)}
-                      className={`border-2 rounded overflow-hidden ${state.coverImageUrl === candidate.imageUrl ? 'border-brand-blue' : 'border-black'}`}
+                      className={`text-left border-4 rounded-xl overflow-hidden transition-all ${selected ? 'border-brand-blue ring-4 ring-brand-blue/30' : 'border-black hover:-translate-y-1'}`}
+                      title={candidate.conceptBrief}
                     >
-                      <img src={candidate.imageUrl} alt="Cover candidate" className="w-full h-24 object-cover" />
+                      <img src={candidate.imageUrl} alt={candidate.conceptName} className="w-full h-36 object-cover" />
+                      <div className="p-2 bg-white border-t-2 border-black">
+                        <div className="text-xs font-display truncate">{candidate.conceptName}</div>
+                        <div className="text-[10px] font-comic text-slate-500 line-clamp-2">{candidate.conceptBrief}</div>
+                      </div>
                     </button>
-                  ))}
-                </div>
+                  );
+                })}
+              </div>
+            ) : !state.coverImageUrl && (
+              <div className="border-4 border-dashed border-black rounded-xl h-64 flex flex-col items-center justify-center gap-2 text-slate-400 font-comic">
+                <RefreshCw size={20} className={isGenerating ? 'animate-spin' : ''} />
+                {isGenerating ? 'Designing…' : 'No cover options yet — hit "Design Cover Options".'}
               </div>
             )}
           </div>

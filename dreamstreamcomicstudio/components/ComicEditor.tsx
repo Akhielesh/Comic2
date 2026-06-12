@@ -22,6 +22,62 @@ import { checkDeploymentParity, DeploymentParityStatus } from '../services/gemin
 import { getFormFactorDefaultAspectRatio } from '../services/storyPlanning';
 import { TokenAvailabilityPill } from './TokenAvailabilityPill';
 import { getSelectedImageModel, MODEL_SELECTION_CHANGED } from '../services/modelSelection';
+import { getComicCost, BILLING_SUMMARY_REFRESH_EVENT } from '../services/billing';
+import { DollarSign } from 'lucide-react';
+
+// Always-visible "what has THIS comic cost so far" chip — real settled spend from the
+// billing ledger, refreshed after every generation. Hover shows the per-stage split.
+const ComicCostChip: React.FC<{ projectId: string }> = ({ projectId }) => {
+  const [totalUsd, setTotalUsd] = useState<number | null>(null);
+  const [byStage, setByStage] = useState<Array<{ stage: string; usd: number }>>([]);
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      try {
+        const report = await getComicCost(projectId);
+        if (!active) return;
+        setTotalUsd(report.totalBillableUsd ?? 0);
+        setByStage(
+          Object.entries(report.byStage || {})
+            .map(([stage, v]) => ({ stage, usd: v.usd }))
+            .filter((s) => s.usd > 0)
+            .sort((a, b) => b.usd - a.usd)
+        );
+      } catch {
+        // Billing backend unavailable → hide rather than show a broken chip.
+        if (active) setTotalUsd(null);
+      }
+    };
+    void load();
+    window.addEventListener(BILLING_SUMMARY_REFRESH_EVENT, load);
+    return () => {
+      active = false;
+      window.removeEventListener(BILLING_SUMMARY_REFRESH_EVENT, load);
+    };
+  }, [projectId]);
+  if (totalUsd === null) return null;
+  return (
+    <div className="relative group hidden md:block">
+      <div className="flex items-center gap-1 rounded-full border-2 border-black bg-white px-2.5 py-1 text-[11px] font-bold text-slate-700 cursor-default" title="What this comic has cost so far">
+        <DollarSign size={12} className="text-green-600" />
+        <span className="tabular-nums">This comic: ${totalUsd.toFixed(2)}</span>
+      </div>
+      {byStage.length > 0 && (
+        <div className="absolute right-0 mt-2 w-56 z-50 hidden group-hover:block">
+          <div className="bg-white border-2 border-black rounded-xl shadow-comic p-3 text-left space-y-1">
+            <div className="text-[10px] font-bold uppercase text-slate-500">Cost by stage</div>
+            {byStage.map((s) => (
+              <div key={s.stage} className="flex justify-between text-[11px] text-slate-600 tabular-nums">
+                <span className="capitalize truncate">{s.stage.replace(/_/g, ' ')}</span>
+                <span>${s.usd.toFixed(3)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 // Always-visible chip showing the active image model, refreshed when the selection changes.
 const ActiveImageModelChip: React.FC = () => {
@@ -371,6 +427,12 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           customAspectRatio={state.customAspectRatio}
           onCustomAspectRatioChange={(enabled, ratio) => updateState({ customAspectRatioEnabled: enabled, customAspectRatio: ratio })}
           onStyleConfirmed={(style) => {
+            // Re-confirming the SAME locked style must not nuke downstream work (world
+            // reference art, cover, panels) — that reset is for actual style changes.
+            if (style.id === state.selectedStyleId && state.styleLockStatus === 'resolved') {
+              nextStep();
+              return;
+            }
             applyReset('confirming style', (prev) => resetFromStyleConfirm(prev, style));
           }} />;
       case AppStep.REFERENCE_BUILDER:
@@ -497,6 +559,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
 
         {/* Active model + usage/limit, surfaced on the studio page */}
         <div className="ml-auto flex items-center gap-2 shrink-0">
+          <ComicCostChip projectId={project.id} />
           <ActiveImageModelChip />
           <TokenAvailabilityPill />
           <button

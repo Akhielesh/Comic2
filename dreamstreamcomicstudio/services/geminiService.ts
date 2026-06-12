@@ -788,8 +788,70 @@ export const suggestStyle = async (
   const directionLine = opts?.creativeDirection?.trim()
     ? ` Honour the author's creative direction: ${opts.creativeDirection.trim()}.`
     : '';
-  const instruction = `Analyze this script and suggest a unique, creative visual style for a comic adaptation.${moodLine}${directionLine} Provide a concise, evocative style prompt (art style, colors, lighting, mood) suitable for an image generator. Output ONLY the prompt, no intro.`;
+  const instruction = `You are a veteran comic-book art director. Read this script and design ONE distinctive, production-ready visual style for adapting it as a comic.${moodLine}${directionLine}
+Be CONCRETE — name real visual decisions an image model can execute:
+- medium & technique (e.g. "bold inked linework with flat screentones", "loose watercolor over pencil", "clean ligne claire", "painterly gouache with visible brushwork")
+- line quality and shading language
+- a specific 4-6 color palette direction tied to THIS story's setting and era
+- lighting treatment (e.g. "hard noir shadows", "golden-hour rim light", "soft overcast diffusion")
+- one or two genre/era influences that fit the subject matter (never name living artists)
+FORBIDDEN: generic filler ("high quality", "detailed", "masterpiece", "stunning", "8k"), contradictions, character names, plot beats.
+Output ONLY the style prompt as 2-3 dense sentences, directly usable by an image generator.`;
   return await runStoryTool(script, instruction, []);
+};
+
+export interface CoverConcept {
+  name: string;
+  brief: string;
+  typography: string;
+}
+
+/**
+ * AI-designed cover options ("master prompt" flow): the user gives a rough idea and the
+ * model returns N DISTINCT, image-model-ready cover concepts grounded in the story, the
+ * locked art style, and real cover trade-dress craft. Each concept renders as one cover
+ * candidate, so the options differ by DESIGN — not three rerolls of one prompt.
+ */
+export const suggestCoverConcepts = async (input: {
+  script: string;
+  title: string;
+  tagline?: string;
+  roughIdea?: string;
+  stylePrompt?: string;
+  cast?: string;
+  setting?: string;
+  moodHint?: string;
+  count?: number;
+}): Promise<CoverConcept[]> => {
+  const count = Math.min(4, Math.max(2, input.count ?? 3));
+  const instruction = `You are a celebrated comic-book cover artist and art director designing the FRONT COVER for "${input.title}".
+${input.roughIdea?.trim() ? `The author's rough idea (honour it in every concept): ${input.roughIdea.trim()}` : 'No author brief — derive the strongest hooks from the story itself.'}
+${input.stylePrompt?.trim() ? `The book's locked art style (every concept must live inside it): ${input.stylePrompt.trim()}` : ''}
+${input.cast?.trim() ? `Cast available: ${input.cast.trim()}` : ''}
+${input.setting?.trim() ? `Key setting: ${input.setting.trim()}` : ''}
+${input.moodHint?.trim() ? `Story mood: ${input.moodHint.trim()}` : ''}
+${input.tagline?.trim() ? `Tagline to feature: "${input.tagline.trim()}"` : ''}
+Design ${count} CLEARLY DIFFERENT cover concepts — different composition strategies (e.g. iconic hero close-up vs layered cast montage vs symbolic minimal vs environment-dominant), not variations of one idea. For each, write what an image model needs:
+- "brief": 2-4 dense sentences of concrete visual direction — subject staging and scale, camera/angle, depth layers, palette accent, lighting, one memorable hook detail from THIS story. Single cover image, readable at thumbnail size, no panel grids.
+- "typography": one sentence describing the title masthead treatment (letterform character, placement, how it integrates with the art).
+- "name": a 2-4 word label.
+FORBIDDEN: generic filler ("high quality", "stunning", "8k"), spoilers in text, naming living artists.
+Output STRICT JSON only — an array of ${count} objects with keys "name", "brief", "typography". No markdown fences, no commentary.`;
+  const raw = await runStoryTool(input.script, instruction, []);
+  const jsonText = raw.replace(/```json|```/gi, '').trim();
+  const start = jsonText.indexOf('[');
+  const end = jsonText.lastIndexOf(']');
+  if (start < 0 || end <= start) throw new Error('Cover concepts: model returned no JSON array.');
+  const parsed = JSON.parse(jsonText.slice(start, end + 1)) as Array<Record<string, unknown>>;
+  const concepts = parsed
+    .map((c) => ({
+      name: String(c.name || '').trim(),
+      brief: String(c.brief || '').trim(),
+      typography: String(c.typography || '').trim()
+    }))
+    .filter((c) => c.brief.length > 20);
+  if (concepts.length === 0) throw new Error('Cover concepts: empty result.');
+  return concepts.slice(0, count);
 };
 
 export const suggestFormFactor = async (script: string): Promise<string> => {
