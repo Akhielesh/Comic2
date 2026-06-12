@@ -1,4 +1,4 @@
-import { Project, GenerationArtifact, ComicPanel, Character, Item, Location, StyleVariant, ProjectReport, TestLabRun, LearnProgress, ReaderState } from "../types";
+import { Project, GenerationArtifact, ComicPanel, Character, Item, Location, StyleVariant, ProjectReport, LearnProgress, ReaderState } from "../types";
 import { buildProjectReport } from "./reporting";
 
 const DB_NAME = "dreamstream_comic_studio";
@@ -145,61 +145,6 @@ export const reloadProjects = async (): Promise<Project[]> => {
 
 const loadStoreAll = async <T>(storeName: string): Promise<T[]> => {
   return runTransaction<T[]>(storeName, "readonly", (store) => store.getAll());
-};
-
-const pruneTestRuns = async (limit: number) => {
-  const db = await openDb();
-  return new Promise<void>((resolve) => {
-    const tx = db.transaction(TEST_RUNS_STORE, "readwrite");
-    const store = tx.objectStore(TEST_RUNS_STORE);
-    const index = store.index("createdAt");
-    const runs: TestLabRun[] = [];
-    index.openCursor().onsuccess = (event) => {
-      const cursor = (event.target as IDBRequest<IDBCursorWithValue | null>).result;
-      if (cursor) {
-        runs.push(cursor.value as TestLabRun);
-        cursor.continue();
-      } else {
-        const sorted = runs.sort((a, b) => b.createdAt - a.createdAt);
-        const toDelete = sorted.slice(limit);
-        toDelete.forEach((run) => store.delete(run.id));
-        resolve();
-      }
-    };
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => resolve();
-  });
-};
-
-export const saveTestRun = async (run: TestLabRun): Promise<void> => {
-  await runTransaction(TEST_RUNS_STORE, "readwrite", (store) => store.put(run));
-  await pruneTestRuns(200);
-};
-
-export const loadTestRuns = async (limit = 200): Promise<TestLabRun[]> => {
-  const db = await openDb();
-  return new Promise((resolve) => {
-    const tx = db.transaction(TEST_RUNS_STORE, "readonly");
-    const store = tx.objectStore(TEST_RUNS_STORE);
-    const index = store.index("createdAt");
-    const results: TestLabRun[] = [];
-    index.openCursor(null, "prev").onsuccess = (event) => {
-      const cursor = (event.target as IDBRequest<IDBCursorWithValue | null>).result;
-      if (cursor && results.length < limit) {
-        results.push(cursor.value as TestLabRun);
-        cursor.continue();
-      } else {
-        resolve(results);
-      }
-    };
-    tx.onerror = () => resolve([]);
-  });
-};
-
-export const clearTestRuns = async (): Promise<void> => {
-  await runTransaction(TEST_RUNS_STORE, "readwrite", (store) => store.clear());
-  await runTransaction(TEST_IMAGES_STORE, "readwrite", (store) => store.clear());
-  testImageUrlCache.clear();
 };
 
 export const saveLearnProgress = async (progress: LearnProgress): Promise<void> => {

@@ -307,17 +307,6 @@ export const sanitizeAssistantContext = (
   const appSnapshot = sanitizeLooseValue(source.appSnapshot) as AssistantMap | undefined;
   if (appSnapshot) next.appSnapshot = appSnapshot;
 
-  const testLabSummary = sanitizeLooseValue(source.testLabSummary) as AssistantMap | undefined;
-  if (testLabSummary) next.testLabSummary = testLabSummary;
-
-  if (Array.isArray(source.testLabRecentRuns)) {
-    const runs = source.testLabRecentRuns
-      .map((item) => sanitizeLooseValue(item) as AssistantMap | undefined)
-      .filter((item): item is AssistantMap => !!item)
-      .slice(0, 10);
-    if (runs.length) next.testLabRecentRuns = runs;
-  }
-
   return next;
 };
 

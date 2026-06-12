@@ -16,7 +16,6 @@ interface StaticSiteHeaderProps {
   onGoHome: () => void;
   onViewComics: () => void;
   onEnterStudio: () => void;
-  onEnterComicForge?: () => void;
   onSignIn: () => void;
   onRequestAccess?: () => void;
   /** Jump to the "stay updated" capture (used by the Code "coming soon" product). */

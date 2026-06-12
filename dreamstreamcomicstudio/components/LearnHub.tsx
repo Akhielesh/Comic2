@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { BookOpen, CheckCircle2, PlayCircle, RefreshCw } from "lucide-react";
+import { BookOpen, CheckCircle2, RefreshCw } from "lucide-react";
 import { Button } from "./Button";
 import { LearnProgress } from "../types";
 import { loadLearnProgress, saveLearnProgress } from "../services/db";
@@ -8,7 +8,6 @@ type Lesson = {
   id: string;
   title: string;
   summary: string;
-  testLabPrefill?: Record<string, string>;
 };
 
 type Module = {
@@ -27,18 +26,12 @@ const LEARN_MODULES: Module[] = [
       {
         id: "script-basics",
         title: "Scene Headers",
-        summary: "Include scene headings and character dialogue to avoid analysis errors.",
-        testLabPrefill: {
-          script: "Scene 1: A rainy alley at night.\nDETECTIVE: \"We are not alone.\"\nScene 2: Rooftop chase across neon signs."
-        }
+        summary: "Include scene headings and character dialogue to avoid analysis errors."
       },
       {
         id: "script-structure",
         title: "Character Clarity",
-        summary: "Introduce characters with short descriptors for better world extraction.",
-        testLabPrefill: {
-          script: "Scene 1: CITY SUBWAY - NIGHT.\nMARA (tired engineer): \"This is the last train.\"\nALTO (mystic guide): \"Then we ride it.\""
-        }
+        summary: "Introduce characters with short descriptors for better world extraction."
       }
     ]
   },
@@ -50,22 +43,12 @@ const LEARN_MODULES: Module[] = [
       {
         id: "style-tone",
         title: "Tone Matching",
-        summary: "Use short, visual adjectives that describe texture, lighting, and mood.",
-        testLabPrefill: {
-          stylePrompt: "Moody neo-noir, cinematic lighting, heavy rain, glossy reflections, grainy film texture.",
-          synopsis: "A lone detective walks under flickering neon lights.",
-          setting: "Neon city alley"
-        }
+        summary: "Use short, visual adjectives that describe texture, lighting, and mood."
       },
       {
         id: "style-ratio",
         title: "Aspect Ratio Impact",
-        summary: "Tall ratios feel dramatic; wide ratios feel cinematic.",
-        testLabPrefill: {
-          stylePrompt: "Clean cel shading, high-contrast linework, bold colors.",
-          synopsis: "A hero overlooks a vast skyline.",
-          setting: "Rooftop skyline at sunset"
-        }
+        summary: "Tall ratios feel dramatic; wide ratios feel cinematic."
       }
     ]
   },
@@ -77,14 +60,7 @@ const LEARN_MODULES: Module[] = [
       {
         id: "world-characters",
         title: "Characters & Props",
-        summary: "List characters, props, and locations for more coherent images.",
-        testLabPrefill: {
-          stylePrompt: "Vibrant anime style, soft gradients, crisp line art.",
-          characters: "Ava (pilot with red scarf), Jax (robot companion)",
-          items: "Jetpack, glowing compass",
-          location: "Floating city hangar",
-          synopsis: "Ava calibrates her jetpack."
-        }
+        summary: "List characters, props, and locations for more coherent images."
       }
     ]
   },
@@ -96,39 +72,25 @@ const LEARN_MODULES: Module[] = [
       {
         id: "panel-breakdown",
         title: "Panel Breakdown",
-        summary: "Generate panel descriptions and check that dialogue exists.",
-        testLabPrefill: {
-          synopsis: "A storm hits the harbor as the crew prepares to sail.",
-          stylePrompt: "Painterly, dramatic lighting, stormy sea.",
-          setting: "Harbor at dusk"
-        }
+        summary: "Generate panel descriptions and check that dialogue exists."
       }
     ]
   },
   {
     id: "generation",
     title: "Generation & Review",
-    description: "Use Test Lab to validate image generation and regeneration quality.",
+    description: "Validate image generation and regeneration quality.",
     lessons: [
       {
         id: "cover",
         title: "Cover Composition",
-        summary: "Try a hero-centric cover prompt with strong silhouette.",
-        testLabPrefill: {
-          coverPrompt: "Hero standing against a lightning-split sky, cape flowing, city beneath.",
-          stylePrompt: "Graphic novel ink, high contrast, bold shadows.",
-          setting: "City skyline"
-        }
+        summary: "Try a hero-centric cover prompt with strong silhouette."
       }
     ]
   }
 ];
 
-interface LearnHubProps {
-  onLaunchTestLab: () => void;
-}
-
-export const LearnHub: React.FC<LearnHubProps> = ({ onLaunchTestLab }) => {
+export const LearnHub: React.FC = () => {
   const [progress, setProgress] = useState<Record<string, LearnProgress>>({});
 
   useEffect(() => {
@@ -162,13 +124,6 @@ export const LearnHub: React.FC<LearnHubProps> = ({ onLaunchTestLab }) => {
     };
     await saveLearnProgress(updated);
     setProgress((prev) => ({ ...prev, [moduleId]: updated }));
-  };
-
-  const handleTryLesson = (lesson: Lesson) => {
-    if (lesson.testLabPrefill) {
-      localStorage.setItem("dreamstream_testlab_prefill", JSON.stringify(lesson.testLabPrefill));
-      onLaunchTestLab();
-    }
   };
 
   return (
@@ -212,11 +167,6 @@ export const LearnHub: React.FC<LearnHubProps> = ({ onLaunchTestLab }) => {
                         <Button size="sm" variant="secondary" onClick={() => markLesson(module.id, lesson.id)}>
                           Mark Complete
                         </Button>
-                        {lesson.testLabPrefill && (
-                          <Button size="sm" onClick={() => handleTryLesson(lesson)} icon={<PlayCircle className="w-4 h-4" />}>
-                            Try in Test Lab
-                          </Button>
-                        )}
                       </div>
                     </div>
                   );

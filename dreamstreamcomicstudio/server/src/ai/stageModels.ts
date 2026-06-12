@@ -14,7 +14,7 @@ export type PipelineStage =
   | 'analyze_script' | 'extract_world' | 'panel_breakdown'
   | 'continuity_audit' | 'continuity_summary'
   | 'story_outline' | 'story_draft' | 'story_tool'
-  | 'image_generation' | 'cover' | 'assistant' | 'testlab_report' | 'generate';
+  | 'image_generation' | 'cover' | 'assistant' | 'generate';
 
 export type Capability = 'structuredJson' | 'imageOutput' | 'imageInput' | 'longContext';
 
@@ -38,7 +38,6 @@ export const STAGE_REQUIREMENTS: Record<PipelineStage, StageRequirement> = {
   story_draft:        { kind: 'text',  requires: [] },
   story_tool:         { kind: 'text',  requires: [] },
   generate:           { kind: 'text',  requires: [] },
-  testlab_report:     { kind: 'text',  requires: [] },
   assistant:          { kind: 'text',  requires: [] },
   image_generation:   { kind: 'image', requires: ['imageOutput'], prefers: ['imageInput'] },
   cover:              { kind: 'image', requires: ['imageOutput'], prefers: ['imageInput'] }
