@@ -640,6 +640,8 @@ export interface ComicState {
   layoutType: LayoutType;
   /** ID of the selected grid template from gridTemplates.ts */
   gridTemplateId?: string;
+  /** How many pages the user asked for — drives the automatic panel plan (pages × template panels, spread across scenes). */
+  pageCount?: number;
   /** Snapshot of panel slot positions used at generation time (for versioning) */
   panelSlotsSnapshot?: Array<{
     id: string;

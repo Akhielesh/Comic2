@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ComicState, ComicPanel } from '../types';
-import { Zap, Check, AlertTriangle, Loader2, Clock } from 'lucide-react';
+import { Zap, Check, AlertTriangle, Loader2, Clock, RefreshCw } from 'lucide-react';
 
 interface ComicGeneratorProps {
   state: ComicState;
@@ -61,8 +61,13 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({ state, onStart, 
   const [tipIndex, setTipIndex] = useState(0);
 
   useEffect(() => {
-    // If not active and not finished, start it
-    if (!status?.isActive && state.panels.length === 0 && !hasTriggeredStart.current) {
+    // Auto-start when nothing has rendered yet. "No panels" alone is wrong: panel plans
+    // (no images) used to satisfy it, so a project arriving with a pre-planned panel list
+    // never started and then auto-advanced to an empty Review — the "images are never
+    // generated" bug. A failed/stopped run never auto-restarts; that's the Retry button.
+    const hasRenderedImages = state.panels.some((p) => p.imageUrl);
+    const failedOrStopped = /^(failed|stopped)/i.test(status?.currentStepDescription || '');
+    if (!status?.isActive && !hasRenderedImages && !failedOrStopped && !hasTriggeredStart.current) {
         hasTriggeredStart.current = true;
         onStart();
     }
@@ -98,10 +103,12 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({ state, onStart, 
 
   useEffect(() => {
     if (!status || status.isActive) return;
-    if (state.panels.length === 0) return;
+    // Advance only when something actually rendered — planned-but-imageless panels mean
+    // the run failed or never started, and Review would be an empty page.
+    if (!state.panels.some((p) => p.imageUrl)) return;
     if (hasAutoAdvanced.current) return;
     const timer = setTimeout(() => {
-      if (!status.isActive && state.panels.length > 0 && !hasAutoAdvanced.current) {
+      if (!status.isActive && state.panels.some((p) => p.imageUrl) && !hasAutoAdvanced.current) {
         hasAutoAdvanced.current = true;
         onGenerationComplete(state.panels);
       }
@@ -229,6 +236,16 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({ state, onStart, 
             <p className="text-white/90 font-comic text-sm italic min-h-[1.25rem] transition-opacity">{TIPS[tipIndex]}</p>
           )}
         </div>
+
+        {/* A failed/stopped run never auto-restarts — this is the explicit way back in. */}
+        {isFailed && (
+          <button
+            onClick={() => { hasAutoAdvanced.current = false; hasTriggeredStart.current = true; onStart(); }}
+            className="inline-flex items-center gap-2 bg-brand-yellow text-black border-4 border-black px-6 py-3 rounded-xl font-display text-lg shadow-comic hover:translate-y-0.5 hover:shadow-none transition-all"
+          >
+            <RefreshCw className="w-5 h-5" /> Retry build
+          </button>
+        )}
 
         {/* Fallback / failure / billing notice, pulled from the live log stream */}
         {(failedCount > 0 || fallbackCount > 0 || billingHit) && (

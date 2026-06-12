@@ -5,25 +5,33 @@ single source of truth for its design flow and structure. The experimental
 ComicForge pipeline and the admin Test Lab were removed the same week (see ADR
 0004); the classic engine is THE engine._
 
-## The flow: three stages, nine steps under the hood
+## The flow: three stages, seven live steps
 
-Users see **three stages** (StepIndicator groups them; the `AppStep` machine in
-`types.ts` is unchanged, so existing projects resume exactly where they were):
+The Story-Planning review and the manual panel-Preview stages were **removed**
+(June 2026, owner feedback: "remove the story scenes section entirely… auto
+generate the panels, don't ask the user"). Scene analysis runs silently inside
+Script; panel planning runs automatically inside the Build. Their `AppStep`
+enum values stay reserved and both the load-time migration
+(`hooks/useProjectManager.ts`) and a runtime remap in `ComicEditor` route any
+project saved on a removed step onto its live neighbour.
 
 | Stage | Steps inside | What the user does | Required? |
 |---|---|---|---|
-| **1 · Story** | Script → Plan → Style | Paste/write the script, click Analyze; accept the recommended plan; pick a style card | Script + style choice |
-| **2 · Cast** | World → Cover | Review auto-extracted characters/items/locations; optionally upload/generate reference art; optional cover | All optional |
-| **3 · Pages** | Layout → Preview → Build → Done | Pick a layout (default grid works); confirm the panel plan; generation runs; review/retry/publish | Confirm + generate |
+| **1 · Story** | Script → Style | Paste/write the script, click Analyze; pick a style card | Script + style choice |
+| **2 · World** | Cast → Cover | Review auto-extracted characters/items/locations; optional cover (full trade dress: title masthead rendered in-image) | All optional |
+| **3 · Pages** | Layout → Build → Done | Pick a layout + answer "how many pages?"; click **Generate my comic**; review/retry/publish | Layout + generate |
 
-Minimum path to a finished comic: **analyze script → pick style → confirm
-layout → confirm preview → build** (5 clicks). Everything else has a default.
+Minimum path to a finished comic: **analyze script → pick style → generate**
+(3 clicks). Everything else has a default. Page count drives the automatic
+panel plan: `pages × layout panels-per-page`, spread evenly across scenes
+(clamped 1–8 per scene, `services/generationManager.ts`).
 
-Navigation rules (`components/ComicEditor.tsx`): forward motion is gated by
-`advanceBlockReason` (scenes exist, style chosen, panels planned); backward
-motion is free up to `maxStepReached`, and editing an upstream step snapshots
-the current state into Version History before resetting downstream work
-(`services/pipelineReset.ts`).
+Navigation rules (`components/ComicEditor.tsx`): forward motion follows
+`STEP_SEQUENCE` and is gated by `advanceBlockReason` (scenes exist, style
+chosen); backward motion is free up to `maxStepReached`, and editing an
+upstream step snapshots the current state into Version History before
+resetting downstream work (`services/pipelineReset.ts`). Confirming Layout is
+the single spend gesture — it launches the build directly.
 
 ## Generation: what actually happens on Build
 
@@ -46,8 +54,10 @@ rebuilt, and every panel prompt from then on carries real reference images.
 most users because building references was a manual, skippable step.**
 
 **Phase 1 — per-scene panel breakdown.** Scenes lacking a plan get one from
-`/api/text/panel-breakdown` (3 panels default), grounded in the continuity
-bible + the running summary.
+`/api/text/panel-breakdown` — `pageCount × layout panels-per-page` spread
+across scenes (3 per scene when no page count was set), grounded in the
+continuity bible + the running summary. This is the ONLY panel-planning path
+now (the manual Preview stage is gone).
 
 **Phase 2 — batched panel rendering.** 4 panels in flight; each panel builds a
 reference pack (entity sheets first, then location, prior panel, style — max
@@ -71,8 +81,14 @@ comic; the worst case is some flagged panels, never a blocked build.
 
 - Panels/covers/sheets: `gemini-2.5-flash-image` (Nano Banana) by default —
   reference-capable. `gemini-3-pro-image-preview` (Nano Banana Pro) is the
-  pro-tier upgrade. Flux Schnell remains the free no-reference fallback for
-  style boards. (`services/imageModels.ts`)
+  pro-tier upgrade. The user's own selection (Settings → API & Models, or the
+  Models page) always wins. The legacy "Flux Schnell (Pixazo Free)" entry was
+  removed from every picker/pricing surface; `fluxService` keeps the id only
+  as an internal transport constant. (`services/imageModels.ts`)
+- Covers are the one stage allowed to render in-image text (title masthead,
+  tagline, issue badge) — the global no-text blocker exempts `stage: 'cover'`,
+  and each cover template carries a typography direction
+  (`services/coverTemplates.ts`).
 - Text stages (analysis, planning, breakdown, continuity): stage-resolved via
   `server/src/ai/stageModels.ts`.
 

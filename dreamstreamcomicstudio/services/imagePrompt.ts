@@ -90,14 +90,20 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
     ].filter(Boolean).join(" ");
   }
 
-  // 3. Cover: Template Design + Style
+  // 3. Cover: full trade dress — a real comic cover IS art + title masthead + tagline,
+  // so (unlike every other stage) text is rendered in-image here.
   if (options.stage === "cover") {
+    const title = clean(options.projectTitle);
     return [
-      "Professional comic-book cover design.",
-      "No text rendering required in-image; leave clean text-safe zones for title/subtitle overlays.",
-      "Strong silhouette hierarchy, readable at thumbnail size, and high-impact focal composition.",
-      "Avoid poster-like clutter and avoid multi-frame comic page layouts.",
-      options.sceneAction ? `Template Composition Rules: ${clean(options.sceneAction)}` : "Template Composition Rules: balanced dramatic cover composition.",
+      "Professional published comic-book FRONT COVER with full trade dress.",
+      title
+        ? `Render the comic's title "${title.toUpperCase()}" as a large, bold masthead logotype integrated into the design — custom display lettering that matches the art style, perfectly spelled, highly readable at thumbnail size.`
+        : "Reserve a clean masthead band for the title logotype.",
+      clean(options.instructions) ? `Tagline (render small, near the masthead or lower third, exactly this text): ${clean(options.instructions)}` : "",
+      "Typography is part of the illustration: masthead, optional small issue badge (#1) — nothing else; no fake publisher barcodes, no lorem ipsum, no gibberish text anywhere.",
+      "Strong silhouette hierarchy, one high-impact focal composition, readable at thumbnail size.",
+      "Single cover image — no multi-frame comic page layout, no panel gutters.",
+      options.sceneAction ? `Cover design direction: ${clean(options.sceneAction)}` : "Cover design direction: balanced dramatic cover composition.",
       options.setting ? `World/Environment Cues: ${clean(options.setting)}` : "",
       options.characters ? `Core Cast Presence: ${clean(options.characters)}` : "",
       options.items ? `Key Props/Symbols: ${clean(options.items)}` : "",
@@ -105,7 +111,7 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
       clean(options.moodGuidance) ? `Mood & palette: ${clean(options.moodGuidance)}` : "",
       clean(options.creativeDirection) ? `Author's creative direction: ${clean(options.creativeDirection)}` : "",
       clean(options.extraNotes) ? `Creative Brief: ${clean(options.extraNotes)}` : "",
-      "High quality full-color illustration with intentional negative space for masthead."
+      "High quality full-color illustration; the title treatment and art read as one designed cover."
     ].filter(Boolean).join(" ");
   }
 

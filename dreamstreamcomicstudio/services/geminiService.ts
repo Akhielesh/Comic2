@@ -572,7 +572,10 @@ export const generateImage = async (
 ) => {
   // Special handling for generateImage since it has unique artifact fields (images) and logic
   updateDebugState('gemini', { lastRequestAt: Date.now(), lastRequestType: 'generate_image', lastError: undefined });
-  const finalPrompt = NO_TEXT_IN_IMAGE ? `${prompt}\n\n${IMAGE_TEXT_BLOCKER}` : prompt;
+  // Covers are the one stage where in-image text IS the design (title masthead,
+  // tagline, issue badge — real comic trade dress). Everything else stays text-free.
+  const allowTextInImage = options?.stage === 'cover';
+  const finalPrompt = NO_TEXT_IN_IMAGE && !allowTextInImage ? `${prompt}\n\n${IMAGE_TEXT_BLOCKER}` : prompt;
   const startPerf = performance.now();
   const targetModel = options?.modelId || IMAGE_MODEL;
   const artifactMeta = options?.meta || {};
@@ -755,12 +758,18 @@ const runStoryTool = async (
 ): Promise<string> => {
   updateDebugState('gemini', { lastRequestAt: Date.now(), lastRequestType: 'story_tool', lastError: undefined });
   try {
-    const response = await withTextKeyFallback((apiKey, modelId) =>
-      post<StoryToolRequest, StoryToolResponse>(
-        '/api/text/story-tool',
-        { script, instruction, history },
-        { apiKey, modelId }
-      )
+    // Same retry posture as analyze-script: one timeout on a slow free model must not
+    // surface as a dead "suggest theme" button — the retry re-resolves the model (the
+    // server marks failed models down, so attempt 2 routes around the slow one).
+    const response = await withTextRetry(
+      () => withTextKeyFallback((apiKey, modelId) =>
+        post<StoryToolRequest, StoryToolResponse>(
+          '/api/text/story-tool',
+          { script, instruction, history },
+          { apiKey, modelId }
+        )
+      ),
+      { attempts: 2, delayMs: 350 }
     );
     return response.text || '';
   } catch (e) {

@@ -457,7 +457,8 @@ export const saveProject = async (project: Project): Promise<void> => {
   const prevBytes = lastStateBytesLogged.get(id);
   if (prevBytes === undefined || Math.abs(stateBytes - prevBytes) >= 4096) {
     lastStateBytesLogged.set(id, stateBytes);
-    console.info("[METRICS] project_state_bytes", { projectId: id, bytes: stateBytes });
+    // Dev-only: this fired on every save in production and drowned the console.
+    if (import.meta.env.DEV) console.info("[METRICS] project_state_bytes", { projectId: id, bytes: stateBytes });
   }
 
   const { error } = await supabase.from('projects').upsert({
@@ -907,7 +908,8 @@ export const getImageDataUrl = async (imageId: string): Promise<string | undefin
     const sorted = [...imageFetchSamplesMs].sort((a, b) => a - b);
     const p95Index = Math.max(0, Math.ceil(sorted.length * 0.95) - 1);
     const p95 = sorted[p95Index] || fetchMs;
-    console.info("[METRICS] image_fetch_ms_p95", { p95, samples: sorted.length });
+    // Dev-only: per-image logging was pure console noise in production.
+    if (import.meta.env.DEV) console.info("[METRICS] image_fetch_ms_p95", { p95, samples: sorted.length });
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onloadend = () => resolve(reader.result as string);

@@ -8,18 +8,13 @@ export const IDEOGRAM_V2_MODEL_ID = 'ideogram/ideogram-v2';
 export const IDEOGRAM_V2_TURBO_MODEL_ID = 'ideogram/ideogram-v2-turbo';
 
 export const IMAGE_PROVIDER_LOCK: ImageProviderId | null = null;
-export const DEFAULT_IMAGE_PROVIDER: ImageProviderId = 'flux';
+// Nano Banana is the documented default for panels/covers. The user's own selection
+// (Settings → API & Models, or the Models page) always wins over this; nothing in the
+// UI offers the legacy Pixazo Flux fallback anymore (FLUX_SCHNELL_MODEL_ID survives
+// only as fluxService's internal id).
+export const DEFAULT_IMAGE_PROVIDER: ImageProviderId = 'gemini';
 
 export const IMAGE_MODELS: ImageModelDefinition[] = [
-  {
-    id: FLUX_SCHNELL_MODEL_ID,
-    label: 'Flux Schnell (Pixazo Free)',
-    provider: 'flux',
-    supportsReferences: false,
-    supportsAspectRatio: true,
-    defaultSteps: 4,
-    isFree: true
-  },
   {
     id: GEMINI_IMAGE_MODEL_ID,
     label: 'Gemini 2.5 Flash Image (Nano Banana)',
@@ -70,9 +65,7 @@ export const getAllowedImageModelsForPlan = (planTier?: string | null) =>
 export const getDefaultImageModelForPlan = (planTier?: string | null) => {
   const allowed = getAllowedImageModelsForPlan(planTier);
   if (!allowed.length) return IMAGE_MODELS[0];
-  if (!isProPlanTier(planTier)) {
-    return allowed.find((model) => model.provider === 'flux') || allowed[0];
-  }
+  // Nano Banana for every tier — the user's explicit model selection always wins upstream.
   return allowed.find((model) => model.id === GEMINI_IMAGE_MODEL_ID) || allowed[0];
 };
 

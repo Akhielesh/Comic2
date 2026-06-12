@@ -55,7 +55,9 @@ export const generateImage = async (
   const fallbackGeminiModel = getImageModelById(GEMINI_IMAGE_MODEL_ID)
     || IMAGE_MODELS.find((model) => model.provider === "gemini" && model.supportsReferences)
     || getDefaultImageModelByProvider("gemini");
-  const fallbackFluxModel = getDefaultImageModelByProvider("flux");
+  // Unknown/legacy stored model id → the catalog default (Nano Banana since the Pixazo
+  // Flux entry was retired from the picker list).
+  const fallbackDefaultModel = getDefaultImageModelByProvider("gemini");
 
   const notifyFallback = async (message: string) => {
     console.warn(`[Image Fallback] ${message}`);
@@ -98,9 +100,9 @@ export const generateImage = async (
       return fallbackGeminiModel;
     }
     void notifyFallback(
-      `Configured model "${requestedModelId}" is unavailable. Auto-switched to "${fallbackFluxModel.label}".`
+      `Configured model "${requestedModelId}" is unavailable. Auto-switched to "${fallbackDefaultModel.label}".`
     );
-    return fallbackFluxModel;
+    return fallbackDefaultModel;
   };
 
   const runModel = async (
@@ -120,12 +122,14 @@ export const generateImage = async (
       fallbackToModel: runtimeMeta?.fallbackToModel,
       referenceDropped: Boolean(runtimeMeta?.referenceDropped)
     };
+    // Covers intentionally render their own title/trade-dress text — don't negative-prompt it away.
+    const negativePrompt = options?.stage === 'cover' ? undefined : IMAGE_TEXT_BLOCKER;
     if (provider === "flux") {
       return generateFluxImage({
         prompt,
         aspectRatio,
         resolution,
-        negativePrompt: IMAGE_TEXT_BLOCKER,
+        negativePrompt,
         projectId,
         stage: options?.stage,
         cropToRatio: options?.cropToRatio,
@@ -142,7 +146,7 @@ export const generateImage = async (
         prompt,
         aspectRatio,
         resolution,
-        negativePrompt: IMAGE_TEXT_BLOCKER,
+        negativePrompt,
         modelId,
         projectId,
         stage: options?.stage,

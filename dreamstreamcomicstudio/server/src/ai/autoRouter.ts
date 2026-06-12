@@ -173,7 +173,10 @@ export const pickTextModel = async (opts?: PickOpts): Promise<string> => {
       return [...text].sort(byContextDesc)[0]?.id || TEXT_FALLBACK;
     }
     if (costPref === 'free') {
-      const free = text.filter(isFreeVerified);
+      // Same hygiene as pickTextModelChain: skip recently-failed models and the huge
+      // (200B+) free models that routinely queue past the request timeout — picking one
+      // here was how single-model routes (analyze-script, story-tool) hit bare 504s.
+      const free = text.filter(isFreeVerified).filter((m) => !isModelDown(m.id) && !isTimeoutProneFree(m));
       if (free.length) {
         for (const needle of (opts?.rankOrder ?? FREE_TEXT_PRIORITY)) {
           const hit = free.find((m) => m.id.toLowerCase().includes(needle));

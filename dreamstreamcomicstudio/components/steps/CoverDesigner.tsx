@@ -13,6 +13,8 @@ import { COVER_TEMPLATE_DEFINITIONS } from '../../services/coverTemplates';
 interface CoverDesignerProps {
   state: ComicState;
   projectId: string;
+  /** The comic's name — default masthead title rendered on the cover. */
+  projectName?: string;
   onUpdate: (updates: Partial<ComicState>) => void;
   onConfirm: () => void;
 }
@@ -33,13 +35,15 @@ const fileToBase64 = (file: File): Promise<string> => {
   });
 };
 
-export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, onUpdate, onConfirm }) => {
+export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, projectName, onUpdate, onConfirm }) => {
   const initialTemplateId = COVER_TEMPLATE_DEFINITIONS.find((t) => t.id === state.coverTemplateId)
     ? (state.coverTemplateId as string)
     : COVER_TEMPLATE_DEFINITIONS[0].id;
   const [selectedTemplateId, setSelectedTemplateId] = useState(initialTemplateId);
   const [coverNotes, setCoverNotes] = useState(state.coverPrompt || '');
-  const [coverTitleIdea, setCoverTitleIdea] = useState(state.styleCategory || '');
+  // The masthead defaults to the comic's actual name (it used to default to the STYLE
+  // CATEGORY, which is why covers never carried a real title).
+  const [coverTitleIdea, setCoverTitleIdea] = useState(projectName || '');
   const [coverTagline, setCoverTagline] = useState('');
   const [coverMood, setCoverMood] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
@@ -95,13 +99,12 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
         selectedTemplate.compositionRules,
         selectedTemplate.focalStrategy,
         selectedTemplate.safeZoneNotes,
+        `Title treatment: ${selectedTemplate.typography}`,
         `Tone tags: ${selectedTemplate.toneTags.join(', ')}`
       ].join(' ');
       const sharedBrief = [
         coverNotes,
-        coverMood ? `Mood direction: ${coverMood}` : '',
-        coverTitleIdea ? `Title intent: ${coverTitleIdea}` : '',
-        coverTagline ? `Tagline intent: ${coverTagline}` : ''
+        coverMood ? `Mood direction: ${coverMood}` : ''
       ].filter(Boolean).join(' ');
 
       const variationLabels = ['Variation A', 'Variation B', 'Variation C'];
@@ -117,7 +120,8 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
           items: keyItems || undefined,
           moodGuidance: (state.storyMood?.promptGuidance) || classifyStoryMood(state.script, state.creativeDirection).promptGuidance,
           extraNotes: `${sharedBrief} ${variation}`.trim(),
-          projectTitle: coverTitleIdea || state.styleCategory || undefined
+          projectTitle: coverTitleIdea || projectName || undefined,
+          instructions: coverTagline || undefined
         });
 
         const generated = await generateImage(
@@ -195,6 +199,7 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
                   >
                     <div className="font-display text-lg">{template.label}</div>
                     <div className="text-xs font-comic text-slate-600 mt-1">{template.description}</div>
+                    <div className="text-[11px] font-comic text-slate-500 mt-1.5 italic">Title style: {template.typography}</div>
                     <div className="text-[10px] font-bold uppercase text-slate-500 mt-2">Tone: {template.toneTags.join(', ')}</div>
                   </button>
                 );
@@ -207,13 +212,13 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
             <input
               value={coverTitleIdea}
               onChange={(e) => setCoverTitleIdea(e.target.value)}
-              placeholder="Title idea"
+              placeholder="Title — rendered as the cover masthead"
               className="w-full border-2 border-black rounded p-2 text-sm"
             />
             <input
               value={coverTagline}
               onChange={(e) => setCoverTagline(e.target.value)}
-              placeholder="Tagline or hook"
+              placeholder="Tagline — rendered small on the cover (optional)"
               className="w-full border-2 border-black rounded p-2 text-sm"
             />
             <input

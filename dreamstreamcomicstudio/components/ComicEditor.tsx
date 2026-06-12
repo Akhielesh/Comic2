@@ -1,20 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { StepIndicator } from './StepIndicator';
 import { ScriptInput } from './steps/ScriptInput';
-import { StoryPlanning } from './steps/StoryPlanning';
 import { StyleSelection } from './steps/StyleSelection';
 import { CoverDesigner } from './steps/CoverDesigner';
 import { ReferenceBuilder } from './steps/ReferenceBuilder';
 import { LayoutSelector } from './steps/LayoutSelector';
 import { ComicGenerator } from './ComicGenerator';
 import { ReviewExport } from './steps/ReviewExport';
-import { CombinedPreview } from './steps/CombinedPreview';
 import { AppStep, Project } from '../types';
 import { assignImageTags, collectStateImageEntries } from '../services/imageTags';
 import {
   resetFromLayoutConfirm,
   resetFromScriptAnalysis,
-  resetFromStoryPlanningConfirm,
   resetFromStyleConfirm,
   resetFromWorldConfirm
 } from '../services/pipelineReset';
@@ -57,6 +54,27 @@ interface ComicEditorProps {
   onBack: () => void;
 }
 
+// The live step order. STORY_PLANNING and COMBINED_PREVIEW were removed from the flow
+// (scene review is automatic; panel planning happens inside generation Phase 1) — their
+// enum values stay reserved so saved projects keep parsing, and the remap effect below
+// routes any legacy saved step onto this sequence.
+const STEP_SEQUENCE: AppStep[] = [
+  AppStep.SCRIPT_INPUT,
+  AppStep.STYLE_SELECTION,
+  AppStep.REFERENCE_BUILDER,
+  AppStep.COVER,
+  AppStep.LAYOUT_SELECTION,
+  AppStep.FULL_GENERATION,
+  AppStep.REVIEW_EXPORT
+];
+
+// Legacy saved steps → their nearest live equivalent. COMBINED_PREVIEW maps to LAYOUT
+// (not straight into generation) so an old project never starts spending on load.
+const LEGACY_STEP_REMAP: Partial<Record<AppStep, AppStep>> = {
+  [AppStep.STORY_PLANNING]: AppStep.STYLE_SELECTION,
+  [AppStep.COMBINED_PREVIEW]: AppStep.LAYOUT_SELECTION
+};
+
 export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onStartGeneration, onStopGeneration, onBack }) => {
   const state = project.state;
   const [titleDraft, setTitleDraft] = useState(project.name);
@@ -66,7 +84,6 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   const previousStepRef = useRef<AppStep>(state.step);
   const previousGenerationActiveRef = useRef<boolean>(!!state.generationStatus?.isActive);
   const lastAutoVersionKeyRef = useRef<string>('');
-  const lastPlanVersionKeyRef = useRef<string>('');
 
   const updateState = (updates: Partial<Project['state']> | ((prev: Project['state']) => Partial<Project['state']>)) => {
     onUpdate((prevProject) => {
@@ -78,7 +95,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   };
 
   // Hard prerequisites for leaving a step — keeps the pipeline from advancing into a
-  // state generation can't use (e.g. entering generation with no planned panels).
+  // state generation can't use (e.g. entering generation with no scenes).
   const advanceBlockReason = (s: Project['state']): string | null => {
     switch (s.step) {
       case AppStep.SCRIPT_INPUT:
@@ -87,8 +104,6 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
         return s.selectedStyleId || s.stylePrompt ? null : 'Choose a style first.';
       case AppStep.LAYOUT_SELECTION:
         return (s.scenes?.length || 0) > 0 ? null : 'Add scenes before planning panels.';
-      case AppStep.COMBINED_PREVIEW:
-        return (s.panels?.length || 0) > 0 ? null : 'Plan at least one panel before generating.';
       default:
         return null;
     }
@@ -101,7 +116,9 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
       return;
     }
     setNavError(null);
-    const next = state.step + 1;
+    const idx = STEP_SEQUENCE.indexOf(state.step);
+    const next = idx >= 0 && idx < STEP_SEQUENCE.length - 1 ? STEP_SEQUENCE[idx + 1] : state.step;
+    if (next === state.step) return;
     updateState({
       step: next,
       maxStepReached: Math.max(state.maxStepReached, next)
@@ -167,16 +184,29 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
     }));
   };
 
+  // Route projects saved on a removed step (Story-Planning / Preview) onto the live flow.
+  useEffect(() => {
+    const remapped = LEGACY_STEP_REMAP[state.step as AppStep];
+    if (remapped !== undefined) {
+      updateState({ step: remapped, maxStepReached: Math.max(state.maxStepReached, remapped) });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.step]);
+
   useEffect(() => {
     const status = state.generationStatus;
-    const shouldAdvance = status && !status.isActive && state.panels.length > 0 && state.step === AppStep.FULL_GENERATION;
+    // Only advance once something actually rendered: planned-but-imageless panels (a
+    // failed/stalled run) must keep the user on the Build screen with its retry, not
+    // dump them on an empty Review page.
+    const hasRenderedPanels = state.panels.some((panel) => panel.imageUrl);
+    const shouldAdvance = status && !status.isActive && hasRenderedPanels && state.step === AppStep.FULL_GENERATION;
     if (shouldAdvance) {
       updateState({
         step: AppStep.REVIEW_EXPORT,
         maxStepReached: Math.max(state.maxStepReached, AppStep.REVIEW_EXPORT)
       });
     }
-  }, [state.generationStatus?.isActive, state.panels.length, state.step, state.maxStepReached]);
+  }, [state.generationStatus?.isActive, state.panels, state.step, state.maxStepReached]);
 
   useEffect(() => {
     const previousStep = previousStepRef.current;
@@ -184,11 +214,6 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
 
     let nextVersionName: string | null = null;
     let autoKey = '';
-
-    if (state.step === AppStep.COMBINED_PREVIEW && state.panels.length > 0) {
-      autoKey = `preview:${state.panelPlanVersion || 0}:${state.panels.length}`;
-      nextVersionName = `Auto - Preview Plan (${new Date().toLocaleTimeString()})`;
-    }
 
     if (state.step === AppStep.REVIEW_EXPORT && state.panels.length > 0) {
       const imageSignature = state.panels.map((panel) => panel.imageId || '').join('|');
@@ -233,27 +258,6 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   }, [state.generationStatus?.isActive, state.panels.length]);
 
   useEffect(() => {
-    if (state.step !== AppStep.COMBINED_PREVIEW) return;
-    if (state.panels.length === 0) return;
-    const planIds = state.panels
-      .filter((panel) => panel.isPlanned !== false)
-      .map((panel) => panel.id)
-      .sort()
-      .join('|');
-    if (!planIds) return;
-    const key = `plan:${planIds}`;
-    if (key === lastPlanVersionKeyRef.current) return;
-    lastPlanVersionKeyRef.current = key;
-    updateState({
-      versions: appendVersion(
-        `Auto - Plan Updated (${new Date().toLocaleTimeString()})`,
-        state,
-        'panel'
-      )
-    });
-  }, [state.step, state.panels]);
-
-  useEffect(() => {
     setTitleDraft(project.name);
   }, [project.id, project.name]);
 
@@ -279,7 +283,6 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
     previousStepRef.current = state.step;
     previousGenerationActiveRef.current = !!state.generationStatus?.isActive;
     lastAutoVersionKeyRef.current = '';
-    lastPlanVersionKeyRef.current = '';
   }, [project.id]);
 
   useEffect(() => {
@@ -351,16 +354,6 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
             applyReset('re-analyzing script', (prev) => resetFromScriptAnalysis(prev, script, scenes));
           }}
         />;
-      case AppStep.STORY_PLANNING:
-        return (
-          <StoryPlanning
-            script={state.script}
-            scenes={state.scenes}
-            planning={state.storyPlanning}
-            onPlanningChange={(storyPlanning) => updateState({ storyPlanning })}
-            onConfirm={() => applyReset('confirming story planning', (prev) => resetFromStoryPlanningConfirm(prev))}
-          />
-        );
       case AppStep.STYLE_SELECTION:
         return <StyleSelection
           firstScene={state.scenes[0]}
@@ -399,6 +392,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           <CoverDesigner
             state={state}
             projectId={project.id}
+            projectName={project.name}
             onUpdate={(updates) => updateState(updates)}
             onConfirm={() => nextStep()}
           />
@@ -416,18 +410,10 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           onDialogueModeChange={(dialogueMode) => updateState({ dialogueMode })}
           currentDialogueStyle={state.universalDialogueStyle || 'speech'}
           onDialogueStyleChange={(universalDialogueStyle) => updateState({ universalDialogueStyle })}
-          onLayoutConfirmed={(layoutType, customLayoutPrompt, gridTemplateId) => {
-            applyReset('confirming layout', (prev) => resetFromLayoutConfirm(prev, layoutType, customLayoutPrompt, gridTemplateId));
+          currentPageCount={state.pageCount}
+          onLayoutConfirmed={(layoutType, customLayoutPrompt, gridTemplateId, pageCount) => {
+            applyReset('confirming layout', (prev) => resetFromLayoutConfirm(prev, layoutType, customLayoutPrompt, gridTemplateId, pageCount));
           }} />;
-      case AppStep.COMBINED_PREVIEW:
-        return (
-          <CombinedPreview
-            state={state}
-            projectId={project.id}
-            onConfirm={nextStep}
-            onStateUpdate={(updates) => updateState(updates)}
-          />
-        );
       case AppStep.FULL_GENERATION:
         return <ComicGenerator
           state={state}
@@ -444,7 +430,8 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           panels={state.panels}
           state={state}
           onReturnToPreview={() => {
-            updateState({ step: AppStep.COMBINED_PREVIEW });
+            // The manual preview stage is gone — re-planning starts from Layout.
+            updateState({ step: AppStep.LAYOUT_SELECTION });
           }}
           onUpdatePanel={(id, imageId, imageUrl) => {
             const newPanels = state.panels.map(p => p.id === id ? {

@@ -136,8 +136,8 @@ describe("pipeline reset matrix", () => {
     ];
     const reset = resetFromScriptAnalysis(state, "New script", nextScenes);
 
-    expect(reset.step).toBe(AppStep.STORY_PLANNING);
-    expect(reset.maxStepReached).toBe(AppStep.STORY_PLANNING);
+    expect(reset.step).toBe(AppStep.STYLE_SELECTION);
+    expect(reset.maxStepReached).toBe(AppStep.STYLE_SELECTION);
     expect(reset.storyPlanning).toBeDefined();
     expect(reset.styleVariants).toEqual([]);
     expect(reset.characters).toEqual([]);
@@ -206,10 +206,11 @@ describe("pipeline reset matrix", () => {
 
   it("layout confirm clears panel plan and generated panels only", () => {
     const state = makeState();
-    const reset = resetFromLayoutConfirm(state, "manga", undefined, "manga-template");
+    const reset = resetFromLayoutConfirm(state, "manga", undefined, "manga-template", 6);
 
-    expect(reset.step).toBe(AppStep.COMBINED_PREVIEW);
-    expect(reset.maxStepReached).toBe(AppStep.COMBINED_PREVIEW);
+    expect(reset.step).toBe(AppStep.FULL_GENERATION);
+    expect(reset.maxStepReached).toBe(AppStep.FULL_GENERATION);
+    expect(reset.pageCount).toBe(6);
     expect(reset.layoutType).toBe("manga");
     expect(reset.gridTemplateId).toBe("manga-template");
     expect(reset.panels).toEqual([]);

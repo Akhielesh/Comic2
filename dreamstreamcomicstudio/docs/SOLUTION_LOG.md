@@ -13,6 +13,52 @@ Entry format:
 
 ---
 
+## 2026-06-12 — Multi-page flow cut to 3 clicks; build-never-starts bug; real covers; 504 fixes
+
+- **Problem:** owner (after producing on prod): multi-page flow "terrible" — remove
+  the Story-Scenes/planning stage entirely; planning should only ask page count;
+  panel plan must be automatic ("don't ask the user"); covers had "literally no
+  styling"; the hardcoded "Flux Schnell (Pixazo Free)" still appeared though the
+  image model is chosen in Settings/Models; the "Premium Model Comparison" pricing
+  table was noise; after the preview stage images were never generated; console
+  spammed [METRICS]; /api/text/analyze-script + /story-tool returned bare 504s and
+  "suggest theme" timed out at 60s.
+- **Root cause / context:** (1) `ComicGenerator` auto-started only when
+  `panels.length === 0` — pre-planned (imageless) panels skipped the start AND a
+  3s effect auto-advanced to Review, so a planned project silently never rendered.
+  (2) Covers could never carry a title: the global NO_TEXT_IN_IMAGE blocker applied
+  to stage 'cover' too, and the default masthead text was the STYLE CATEGORY, not
+  the comic's name. (3) `DEFAULT_IMAGE_PROVIDER='flux'` + a Flux entry in
+  IMAGE_MODELS leaked the legacy fallback into pickers/pricing. (4) Railway's edge
+  kills non-streaming requests at ~60s while the server waited 90s — clients saw
+  naked 504s; `pickTextModel` (single-model routes) didn't skip 200B+ free models
+  the way `pickTextModelChain` does. (5) [METRICS] logs were unconditional.
+- **Solution:** STORY_PLANNING + COMBINED_PREVIEW removed from the flow (files
+  deleted; enum values reserved; load-time migration + runtime remap route legacy
+  saves; the old v4 "planning gate" retired). Layout stage now asks page count and
+  its button is the single spend gesture ("Generate my comic") → straight into the
+  build; generation Phase 1 plans `pages × panels-per-page` across scenes
+  (clamped 1–8/scene). ComicGenerator starts when nothing has rendered (not when
+  panels are merely planned), never auto-restarts failed runs (explicit Retry
+  button), and both auto-advance paths require ≥1 rendered image. Covers: stage
+  'cover' exempt from the text blocker (prompt + negativePrompt), cover prompt
+  renders the real title masthead/tagline, templates gained typography directions
+  + new Cinematic Montage / Painted Epic / Retro Pulp archetypes, default title =
+  project name. Flux entry removed from IMAGE_MODELS (default = Nano Banana,
+  user selection always wins). TEXT_REQUEST_TIMEOUT_MS 50s (clamped ≤55s) so
+  structured timeout errors beat the edge 504; pickTextModel skips down/
+  timeout-prone free models; story-tool client got the analyze-script retry
+  posture. [METRICS] logs are dev-only.
+- **Files:** `components/{ComicEditor,ComicGenerator,StepIndicator}.tsx`,
+  `components/steps/{LayoutSelector,CoverDesigner}.tsx` (+ deleted
+  `StoryPlanning.tsx`, `CombinedPreview.tsx`), `services/{pipelineReset,generationManager,imageModels,imageService,imagePrompt,coverTemplates,geminiService,db}.ts`,
+  `hooks/useProjectManager.ts`, `types.ts`,
+  `server/src/{config.ts,ai/autoRouter.ts}`.
+- **Commit/Decision:** owner feedback session 2026-06-12;
+  `docs/features/comic-studio.md` updated.
+
+---
+
 ## 2026-06-12 — Invite flow completed end-to-end; header pill + source-gating sync
 
 - **Problem:** owner: invite emails' links did nothing (no account-setup flow);

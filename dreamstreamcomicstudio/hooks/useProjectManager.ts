@@ -82,25 +82,21 @@ const applyStateMigrations = (state: ComicState): ComicState => {
   let nextMax = injectStoryPlanningStep(migratedMaxOrder, sourceFlowVersion);
 
   const planningFromState = state.storyPlanning;
-  let computedPlanning = planningFromState || (
+  const computedPlanning = planningFromState || (
     (state.script || '').trim() && (state.scenes || []).length > 0
       ? recommendStoryPlanning({ script: state.script || '', scenes: state.scenes || [] })
       : getDefaultStoryPlanningState()
   );
-  const needsPlanningGate = (
-    ((state.script || '').trim().length > 0 || (state.scenes || []).length > 0)
-    && !computedPlanning.approved
-    && nextStep >= AppStep.STYLE_SELECTION
-  );
-  if (needsPlanningGate) {
-    const resumeStep = nextStep;
-    nextStep = AppStep.STORY_PLANNING;
-    nextMax = AppStep.STORY_PLANNING;
-    computedPlanning = {
-      ...computedPlanning,
-      resumeStep
-    };
-  }
+  // The Story-Planning approval gate (flow v4) is retired along with the stage itself,
+  // and the manual panel-Preview stage is gone too — normalize anything saved on a
+  // removed step onto its live neighbour (planning data is kept; only the step moves).
+  const remapRemovedStep = (step: number) => {
+    if (step === AppStep.STORY_PLANNING) return AppStep.STYLE_SELECTION;
+    if (step === AppStep.COMBINED_PREVIEW) return AppStep.LAYOUT_SELECTION;
+    return step;
+  };
+  nextStep = remapRemovedStep(nextStep);
+  nextMax = Math.max(remapRemovedStep(nextMax), nextStep);
 
   const nextContinuity = state.continuity || buildDefaultContinuityState(state);
   const nextValidation = validateContinuityState({

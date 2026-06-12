@@ -359,14 +359,24 @@ export const startBackgroundGeneration = async (
 
     const existingPanels = state.panels.map(panelToPlan);
     const planByScene = groupPanelsByScene(existingPanels);
+    // Panels per scene come from the user's page count × the layout's panels-per-page,
+    // spread evenly across scenes (clamped 1–8 so a tiny script with many pages doesn't
+    // explode a single scene). No page count saved → the long-standing default of 3.
+    const panelsPerPage = getGridTemplate(state.gridTemplateId)?.panelCount || 3;
+    const requestedPages = Math.max(0, Math.floor(state.pageCount || 0));
+    const panelsPerScene = requestedPages > 0 && state.scenes.length > 0
+      ? Math.min(8, Math.max(1, Math.round((requestedPages * panelsPerPage) / state.scenes.length)))
+      : 3;
+    if (requestedPages > 0) {
+      addLog(`Plan target: ${requestedPages} page${requestedPages === 1 ? '' : 's'} × ${panelsPerPage} panels ≈ ${panelsPerScene} panel${panelsPerScene === 1 ? '' : 's'} per scene.`);
+    }
     // Seed the estimate per-scene: a scene with an existing plan contributes its real
-    // panel count; a scene still needing planning is assumed to be 3. This generalizes
-    // both the fresh run (scenes*3) and the resume case, so the later
-    // `-3 + breakdown.length` adjustment (which assumes a seeded 3) stays correct instead
-    // of skewing the total — previously a resume seeded `existingPanels.length` yet still
-    // subtracted 3 per replanned scene, corrupting the progress %/ETA.
+    // panel count; a scene still needing planning is assumed to be panelsPerScene. This
+    // generalizes both the fresh run and the resume case, so the later
+    // `-panelsPerScene + breakdown.length` adjustment (which assumes the seed) stays
+    // correct instead of skewing the progress %/ETA.
     let totalPanelsEstimate = state.scenes.reduce(
-      (sum, scene) => sum + (planByScene.get(scene.id)?.length || 3),
+      (sum, scene) => sum + (planByScene.get(scene.id)?.length || panelsPerScene),
       0
     );
     let stepsCompleted = 0;
@@ -404,7 +414,7 @@ export const startBackgroundGeneration = async (
             state.stylePrompt,
             state.layoutType,
             project.id,
-            3,
+            panelsPerScene,
             {
               abortSignal: controller.signal,
               stage: "preview",
@@ -450,7 +460,7 @@ export const startBackgroundGeneration = async (
             };
           }).map(normalizePanelDialogue);
 
-          totalPanelsEstimate = totalPanelsEstimate - 3 + breakdown.length;
+          totalPanelsEstimate = totalPanelsEstimate - panelsPerScene + breakdown.length;
         } catch (e: any) {
           addLog(`Error planning scene ${scene.id}: ${e.message}`);
           throw e; // Stop generation if planning fails

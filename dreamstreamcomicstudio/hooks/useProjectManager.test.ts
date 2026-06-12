@@ -38,14 +38,16 @@ const makeState = (overrides?: Partial<ComicState>): ComicState => ({
 });
 
 describe('flow migration v4', () => {
-  it('forces one-time story planning gate for migrated projects', () => {
+  it('migrates legacy projects without gating them on the removed planning stage', () => {
     const migrated = migrateComicStateForFlow(makeState());
 
     expect(migrated.flowVersion).toBe(4);
-    expect(migrated.step).toBe(AppStep.STORY_PLANNING);
-    expect(migrated.maxStepReached).toBe(AppStep.STORY_PLANNING);
-    expect(migrated.storyPlanning?.approved).toBe(false);
-    expect(migrated.storyPlanning?.resumeStep).toBeGreaterThanOrEqual(AppStep.STYLE_SELECTION);
+    // flow v3 step 1 (old STYLE position) shifts +1 to the current STYLE_SELECTION —
+    // and is never parked on the retired STORY_PLANNING stage.
+    expect(migrated.step).toBe(AppStep.STYLE_SELECTION);
+    expect(migrated.maxStepReached).toBeGreaterThanOrEqual(AppStep.STYLE_SELECTION);
+    expect(migrated.step).not.toBe(AppStep.STORY_PLANNING);
+    expect(migrated.storyPlanning).toBeDefined();
   });
 
   it('allows migrated projects with approved planning to continue', () => {

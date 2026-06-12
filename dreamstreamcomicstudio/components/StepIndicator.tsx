@@ -8,22 +8,22 @@ interface StepIndicatorProps {
   onStepClick: (step: AppStep) => void;
 }
 
-// The nine AppSteps grouped into the three stages users actually think in:
-// write the story, set up the cast, make the pages. The underlying step machine
-// is unchanged — this is purely how progress is presented and navigated.
+// The live steps grouped into the three stages users actually think in: write the
+// story, build the world, make the pages. Story-Planning and the manual panel
+// Preview were removed from the flow (scene review is automatic; panel planning
+// happens inside the build), so they no longer appear here.
 const STAGES: { label: string; steps: { id: AppStep; label: string }[] }[] = [
   {
     label: 'Story',
     steps: [
       { id: AppStep.SCRIPT_INPUT, label: 'Script' },
-      { id: AppStep.STORY_PLANNING, label: 'Plan' },
       { id: AppStep.STYLE_SELECTION, label: 'Style' }
     ]
   },
   {
-    label: 'Cast',
+    label: 'World',
     steps: [
-      { id: AppStep.REFERENCE_BUILDER, label: 'World' },
+      { id: AppStep.REFERENCE_BUILDER, label: 'Cast' },
       { id: AppStep.COVER, label: 'Cover' }
     ]
   },
@@ -31,7 +31,6 @@ const STAGES: { label: string; steps: { id: AppStep; label: string }[] }[] = [
     label: 'Pages',
     steps: [
       { id: AppStep.LAYOUT_SELECTION, label: 'Layout' },
-      { id: AppStep.COMBINED_PREVIEW, label: 'Preview' },
       { id: AppStep.FULL_GENERATION, label: 'Build' },
       { id: AppStep.REVIEW_EXPORT, label: 'Done' }
     ]

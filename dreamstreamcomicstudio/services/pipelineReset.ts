@@ -116,7 +116,9 @@ export const resetFromScriptAnalysis = (
   });
 
   return {
-    ...withStepGate(state, AppStep.STORY_PLANNING),
+    // Scenes confirmed → straight to styling. The old Story-Planning review stage is
+    // gone; its recommendation still runs below so layout gets a form-factor default.
+    ...withStepGate(state, AppStep.STYLE_SELECTION),
     ...applyResetSource("script_analysis"),
     ...clearCoverState(),
     ...clearPanelState(),
@@ -149,6 +151,8 @@ export const resetFromScriptAnalysis = (
 export const resetFromStoryPlanningConfirm = (
   state: ComicState
 ): Partial<ComicState> => {
+  // Legacy (the Story-Planning stage was removed): keep only the aspect-ratio carry-over
+  // for old saved projects that still route through it.
   const styleAspectRatio = state.storyPlanning
     ? getFormFactorDefaultAspectRatio(state.storyPlanning.formFactor)
     : state.styleAspectRatio;
@@ -222,14 +226,19 @@ export const resetFromLayoutConfirm = (
   state: ComicState,
   layoutType: LayoutType,
   customLayoutPrompt?: string,
-  gridTemplateId?: string
+  gridTemplateId?: string,
+  pageCount?: number
 ): Partial<ComicState> => {
   return {
-    ...withStepGate(state, AppStep.COMBINED_PREVIEW),
+    // Layout (+ page count) confirmed → straight into the build. Panel planning is
+    // automatic now (generation Phase 1 plans every scene from the chosen design),
+    // so there is no manual panel-plan stage in between.
+    ...withStepGate(state, AppStep.FULL_GENERATION),
     ...applyResetSource("layout_confirm"),
     ...clearPanelState(),
     layoutType,
     customLayoutPrompt,
-    gridTemplateId
+    gridTemplateId,
+    pageCount: pageCount && pageCount > 0 ? Math.min(60, Math.floor(pageCount)) : undefined
   };
 };

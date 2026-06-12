@@ -9,9 +9,10 @@ import { FEATURE_FLAGS } from '../../services/modelPolicy';
 import { recommendLayouts } from '../../services/layoutRecommendation';
 
 interface LayoutSelectorProps {
-    onLayoutConfirmed: (layout: LayoutType, customPrompt?: string, gridTemplateId?: string) => void;
+    onLayoutConfirmed: (layout: LayoutType, customPrompt?: string, gridTemplateId?: string, pageCount?: number) => void;
     currentLayoutType?: LayoutType;
     currentGridTemplateId?: string;
+    currentPageCount?: number;
     selectedFormFactor?: AspectRatio;
     scenes: Scene[];
     projectId: string;
@@ -73,6 +74,7 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
     onLayoutConfirmed,
     currentLayoutType,
     currentGridTemplateId,
+    currentPageCount,
     selectedFormFactor,
     scenes,
     projectId,
@@ -87,7 +89,11 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
     const [customLayoutPrompt, setCustomLayoutPrompt] = useState<string | null>(null);
     const [isAnalyzing, setIsAnalyzing] = useState(false);
     const [previewImage, setPreviewImage] = useState<string | null>(null);
-    const [pendingConfirmTemplate, setPendingConfirmTemplate] = useState<GridTemplate | null>(null);
+    // Confirming this stage now LAUNCHES the build (the manual panel-plan stage is gone),
+    // so a card click only selects — the explicit button below is the one spend gesture.
+    const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(currentGridTemplateId || null);
+    const [selectedCustom, setSelectedCustom] = useState(currentLayoutType === 'custom');
+    const [pageCount, setPageCount] = useState<number>(() => Math.min(60, Math.max(1, currentPageCount || Math.max(1, scenes.length))));
 
     // ---- Determine which templates to show ---------------------------------
 
@@ -136,26 +142,28 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
         }
     };
 
-    // One click = select AND advance. (Previously a "not recommended?" modal gated every
-    // non-top pick, which was friction and a place to get stuck. The recommendation is still
-    // shown as info text above.)
+    // One click = select only. Confirming launches the image build, so the explicit
+    // "Generate my comic" button below is the single spend gesture.
     const handleSelectTemplate = (template: GridTemplate) => {
-        onLayoutConfirmed(template.id as LayoutType, undefined, template.id);
+        setSelectedCustom(false);
+        setSelectedTemplateId(template.id);
     };
 
-    // Deterministic advance for the explicit "Continue" button.
-    const continueToPreview = () => {
-        const id = currentGridTemplateId || recommendedTemplateId || displayTemplates[0]?.id;
-        if (id) onLayoutConfirmed(id as LayoutType, undefined, id);
-        else onLayoutConfirmed('custom', customLayoutPrompt || undefined);
+    const effectiveTemplateId = selectedCustom ? null : (selectedTemplateId || currentGridTemplateId || recommendedTemplateId || displayTemplates[0]?.id);
+
+    // The one explicit launch: layout + page count → straight into the build.
+    const startBuild = () => {
+        if (selectedCustom && customLayoutPrompt) {
+            onLayoutConfirmed('custom', customLayoutPrompt, undefined, pageCount);
+            return;
+        }
+        if (effectiveTemplateId) onLayoutConfirmed(effectiveTemplateId as LayoutType, undefined, effectiveTemplateId, pageCount);
     };
 
     // ---- Render helpers ----------------------------------------------------
 
     const renderTemplateCard = (template: GridTemplate, isIncompatible = false) => {
-        const isSelected = currentGridTemplateId
-            ? currentGridTemplateId === template.id
-            : currentLayoutType === template.id;
+        const isSelected = !selectedCustom && effectiveTemplateId === template.id;
 
         return (
             <div
@@ -237,9 +245,9 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                 {displayTemplates.map(t => renderTemplateCard(t))}
 
                 {/* Custom Layout Card */}
-                <div className={`group relative bg-white rounded-xl border-4 shadow-comic transition-all duration-300 flex flex-col overflow-hidden md:col-span-2 lg:col-span-1 ${currentLayoutType === 'custom' ? 'border-brand-blue ring-4 ring-brand-blue/30 scale-105 z-10' : 'border-black hover:-translate-y-2 hover:shadow-[8px_8px_0px_0px_#000]'}`}>
+                <div className={`group relative bg-white rounded-xl border-4 shadow-comic transition-all duration-300 flex flex-col overflow-hidden md:col-span-2 lg:col-span-1 ${selectedCustom ? 'border-brand-blue ring-4 ring-brand-blue/30 scale-105 z-10' : 'border-black hover:-translate-y-2 hover:shadow-[8px_8px_0px_0px_#000]'}`}>
                     <div className="aspect-[3/4] bg-slate-50 p-4 border-b-4 border-black flex flex-col gap-2 relative">
-                        {currentLayoutType === 'custom' && <div className="absolute top-2 right-2 bg-brand-blue text-white p-1 rounded-full border-2 border-white shadow-md z-10"><Check size={20} strokeWidth={3} /></div>}
+                        {selectedCustom && <div className="absolute top-2 right-2 bg-brand-blue text-white p-1 rounded-full border-2 border-white shadow-md z-10"><Check size={20} strokeWidth={3} /></div>}
                         <label className="flex-1 border-2 border-dashed border-slate-400 rounded-lg flex flex-col items-center justify-center text-center p-2 text-slate-400 cursor-pointer hover:bg-slate-100 hover:border-brand-blue">
                             <UploadCloud size={32} />
                             <span className="text-xs font-bold mt-1">Upload up to 4 reference images</span>
@@ -260,8 +268,8 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                         )}
 
                         {customLayoutPrompt ? (
-                            <Button onClick={() => onLayoutConfirmed('custom', customLayoutPrompt)} variant={currentLayoutType === 'custom' ? "primary" : "secondary"} icon={<Check />}>
-                                {currentLayoutType === 'custom' ? "Selected" : "Use This Layout"}
+                            <Button onClick={() => setSelectedCustom(true)} variant={selectedCustom ? "primary" : "secondary"} icon={<Check />}>
+                                {selectedCustom ? "Selected" : "Use This Layout"}
                             </Button>
                         ) : (
                             <Button onClick={handleAnalyzeLayout} variant="secondary" isLoading={isAnalyzing} disabled={customImages.length === 0} icon={<Wand2 />}>Analyze Images</Button>
@@ -340,39 +348,50 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                 </div>
             </div>
 
-            {/* Explicit advance — always available so the stage can never feel stuck. */}
+            {/* Pages + launch — the one question left in planning, then the one spend gesture. */}
+            <div className="bg-white p-6 rounded-xl border-4 border-black shadow-comic max-w-2xl mx-auto">
+                <h3 className="text-2xl font-display text-black mb-1">How many pages?</h3>
+                <p className="text-xs text-slate-600 font-comic mb-4">
+                    Panels are planned automatically from your script — {pageCount} page{pageCount === 1 ? '' : 's'} of this layout ≈{' '}
+                    {pageCount * (getTemplateById(effectiveTemplateId || '')?.panelCount || 3)} panels across {scenes.length} scene{scenes.length === 1 ? '' : 's'}.
+                </p>
+                <div className="flex items-center justify-center gap-3">
+                    <button
+                        onClick={() => setPageCount((n) => Math.max(1, n - 1))}
+                        className="w-12 h-12 border-2 border-black rounded-lg bg-white font-display text-2xl hover:bg-slate-100"
+                        aria-label="Fewer pages"
+                    >
+                        −
+                    </button>
+                    <input
+                        type="number"
+                        min={1}
+                        max={60}
+                        value={pageCount}
+                        onChange={(e) => setPageCount(Math.min(60, Math.max(1, Math.floor(Number(e.target.value) || 1))))}
+                        className="w-24 h-12 border-2 border-black rounded-lg text-center font-display text-2xl"
+                        aria-label="Page count"
+                    />
+                    <button
+                        onClick={() => setPageCount((n) => Math.min(60, n + 1))}
+                        className="w-12 h-12 border-2 border-black rounded-lg bg-white font-display text-2xl hover:bg-slate-100"
+                        aria-label="More pages"
+                    >
+                        +
+                    </button>
+                </div>
+            </div>
+
             <div className="flex flex-col items-center gap-2 pt-2 pb-8">
-                <Button onClick={continueToPreview} icon={<ArrowRight className="w-5 h-5" />} className="text-lg px-10 py-4 shadow-comic">
-                    Continue to Preview
+                <Button onClick={startBuild} icon={<ArrowRight className="w-5 h-5" />} className="text-lg px-10 py-4 shadow-comic">
+                    Generate my comic
                 </Button>
-                <p className="text-xs text-slate-500 font-comic">Selecting a layout above advances automatically — or use this to continue with the current/recommended layout.</p>
+                <p className="text-xs text-slate-500 font-comic">
+                    Panels are planned and rendered automatically from your script, style and this layout.
+                </p>
             </div>
 
             {previewImage && <ImagePreviewModal imageUrl={previewImage} onClose={() => setPreviewImage(null)} />}
-            {pendingConfirmTemplate && (
-                <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
-                    <div className="bg-white border-4 border-black rounded-xl shadow-comic p-6 max-w-md space-y-4">
-                        <h3 className="text-2xl font-display">Confirm Non-Recommended Layout</h3>
-                        <p className="text-sm text-slate-600 font-comic">
-                            "{pendingConfirmTemplate.title}" is not the top recommended layout for your story pacing.
-                            Continue anyway?
-                        </p>
-                        <div className="flex justify-end gap-2">
-                            <Button variant="secondary" onClick={() => setPendingConfirmTemplate(null)}>
-                                Cancel
-                            </Button>
-                            <Button
-                                onClick={() => {
-                                    onLayoutConfirmed(pendingConfirmTemplate.id as LayoutType, undefined, pendingConfirmTemplate.id);
-                                    setPendingConfirmTemplate(null);
-                                }}
-                            >
-                                Confirm Selection
-                            </Button>
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
     );
 };
