@@ -1196,9 +1196,13 @@ export const DashboardsView: React.FC = () => {
                   <div className="group/tile relative">
                     {!locked && (
                       <div className="absolute right-2 top-2 z-20 flex items-center gap-0.5 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] p-0.5 opacity-0 shadow-[0_1px_3px_rgba(0,0,0,0.1)] backdrop-blur-sm transition-opacity duration-200 focus-within:opacity-100 group-hover/tile:opacity-100 [@media(pointer:coarse)]:opacity-70">
-                        <ToolButton title="Remove widget" onClick={() => removeTile(active.id, tile.id)}>
+                        <button
+                          title="Remove widget"
+                          onClick={() => removeTile(active.id, tile.id)}
+                          className="rounded-md p-1 text-[var(--ds-muted)] transition-colors duration-200 hover:bg-[var(--ds-hover)] hover:text-rose-600"
+                        >
                           <Trash2 className="h-3 w-3" />
-                        </ToolButton>
+                        </button>
                       </div>
                     )}
                     <AiChatTile />
