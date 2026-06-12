@@ -57,7 +57,23 @@ const leadingNumber = (label: string): number | undefined => {
   return n > 0 && n < 100 ? n : undefined;
 };
 
-const MapPanel: React.FC<{ data: MapArtifact }> = ({ data }) => {
+// RainViewer live precipitation radar (free, attribution required). The frames
+// index is fetched once per session; the newest "past" frame is the live layer.
+let radarPathPromise: Promise<string | null> | null = null;
+const latestRadarPath = (): Promise<string | null> => {
+  if (!radarPathPromise) {
+    radarPathPromise = fetch('https://api.rainviewer.com/public/weather-maps.json')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const past = d?.radar?.past;
+        return Array.isArray(past) && past.length ? String(past[past.length - 1].path) : null;
+      })
+      .catch(() => null);
+  }
+  return radarPathPromise;
+};
+
+const MapPanel: React.FC<{ data: MapArtifact; radar?: boolean }> = ({ data, radar }) => {
   const elRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
 
@@ -115,6 +131,25 @@ const MapPanel: React.FC<{ data: MapArtifact }> = ({ data }) => {
       mapRef.current = null;
     };
   }, [data]);
+
+  // Weather radar overlay. Declared AFTER the map effect so that on a `data` change
+  // (map rebuilt) this re-runs against the NEW map instance, not the removed one.
+  useEffect(() => {
+    if (!radar) return;
+    let layer: L.TileLayer | null = null;
+    let cancelled = false;
+    void latestRadarPath().then((path) => {
+      if (cancelled || !path || !mapRef.current) return;
+      layer = L.tileLayer(`https://tilecache.rainviewer.com${path}/256/{z}/{x}/{y}/2/1_1.png`, {
+        opacity: 0.7,
+        attribution: '© RainViewer'
+      }).addTo(mapRef.current);
+    });
+    return () => {
+      cancelled = true;
+      if (layer && mapRef.current) mapRef.current.removeLayer(layer);
+    };
+  }, [radar, data]);
 
   return <div ref={elRef} className="ds-map w-full h-full" />;
 };

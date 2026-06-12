@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { PlayCircle, Video, ExternalLink, X } from 'lucide-react';
+import { PlayCircle, Video, ExternalLink, X, Maximize2, PictureInPicture2 } from 'lucide-react';
 import type { VideoResultsArtifact, VideoResult } from '../../../apiTypes';
 import { Surface, SurfaceTitle, SurfaceSubtitle, useCompact } from './kit';
 import { toVideoEmbed, toVideoPreview } from '../videoEmbed';
+import { setFloatingVideo } from '../../../services/floatingVideo';
 
 // Video results in two densities:
 //  • compact — a 2-up row of small thumbnails.
@@ -185,13 +186,60 @@ const VideoThumb: React.FC<{
   );
 };
 
+// ── Inline player — plays IN the widget so the click never hijacks the layout;
+//    the card simply grows and neighbors reflow. Expand → lightbox; PiP → the
+//    floating mini-player that follows the user across views. ──────────────────
+const InlinePlayer: React.FC<{
+  video: VideoResult;
+  onExpand: () => void;
+  onClose: () => void;
+}> = ({ video, onExpand, onClose }) => {
+  const embed = toVideoEmbed(video.url);
+  if (!embed) return null;
+  return (
+    <div className="px-3 pt-1 animate-fade-in">
+      <div className="overflow-hidden rounded-xl border border-[var(--ds-hairline)] bg-black">
+        <div className="flex items-center gap-1 bg-[var(--ds-surface-strong)] px-2 py-1">
+          <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-[var(--ds-ink)]">{video.title}</span>
+          <button
+            onClick={() => { setFloatingVideo({ url: video.url, title: video.title }); onClose(); }}
+            className="rounded p-1 text-[var(--ds-muted)] transition-colors duration-200 hover:text-[var(--ds-ink)]"
+            title="Pop out — keeps playing while you move around"
+          >
+            <PictureInPicture2 className="h-3.5 w-3.5" />
+          </button>
+          <button onClick={onExpand} className="rounded p-1 text-[var(--ds-muted)] transition-colors duration-200 hover:text-[var(--ds-ink)]" title="Expand">
+            <Maximize2 className="h-3.5 w-3.5" />
+          </button>
+          <a href={video.url} target="_blank" rel="noopener noreferrer" className="rounded p-1 text-[var(--ds-muted)] transition-colors duration-200 hover:text-[var(--ds-ink)]" title="Open original">
+            <ExternalLink className="h-3.5 w-3.5" />
+          </a>
+          <button onClick={onClose} className="rounded p-1 text-[var(--ds-muted)] transition-colors duration-200 hover:text-[var(--ds-ink)]" title="Stop">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        <div className="aspect-video">
+          <iframe
+            src={embed.embedUrl}
+            title={video.title}
+            className="h-full w-full"
+            allow="accelerated-encoding; autoplay; encrypted-media; picture-in-picture; fullscreen"
+            allowFullScreen
+          />
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export const VideoResults: React.FC<{ data: VideoResultsArtifact }> = ({ data }) => {
   const compact = useCompact();
   const [lightbox, setLightbox] = useState<VideoResult | null>(null);
+  const [playing, setPlaying] = useState<VideoResult | null>(null);
 
   const open = (v: VideoResult) => {
-    // Embeddable → in-app lightbox; everything else opens the original.
-    if (toVideoEmbed(v.url)) setLightbox(v);
+    // Embeddable → play right here in the widget; everything else opens the original.
+    if (toVideoEmbed(v.url)) setPlaying(v);
     else window.open(v.url, '_blank', 'noopener,noreferrer');
   };
 
@@ -205,11 +253,19 @@ export const VideoResults: React.FC<{ data: VideoResultsArtifact }> = ({ data })
   );
 
   const lightboxEl = lightbox && <VideoLightbox video={lightbox} onClose={() => setLightbox(null)} />;
+  const playerEl = playing && (
+    <InlinePlayer
+      video={playing}
+      onExpand={() => { setLightbox(playing); setPlaying(null); }}
+      onClose={() => setPlaying(null)}
+    />
+  );
 
   // ── Compact: a 2-up row of small thumbnails. ────────────────────────────────
   if (compact) {
     return (
       <Surface header={header} right={<SurfaceSubtitle>{data.results.length} videos</SurfaceSubtitle>}>
+        {playerEl}
         <div className="grid grid-cols-2 gap-2 px-3 pb-3 pt-1">
           {data.results.slice(0, 2).map((v, i) => (
             <div key={`${v.url}-${i}`} className="min-w-0">
@@ -226,6 +282,7 @@ export const VideoResults: React.FC<{ data: VideoResultsArtifact }> = ({ data })
   // ── Detailed: the full grid. ────────────────────────────────────────────────
   return (
     <Surface header={header} right={<SurfaceSubtitle>{data.results.length} videos</SurfaceSubtitle>}>
+      {playerEl}
       <div className="grid grid-cols-1 gap-2 px-3 pb-3 pt-1 sm:grid-cols-2 lg:grid-cols-3">
         {data.results.map((v, i) => (
           <div key={`${v.url}-${i}`} className="min-w-0 overflow-hidden rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] transition-colors duration-200 hover:bg-[var(--ds-hover)]">

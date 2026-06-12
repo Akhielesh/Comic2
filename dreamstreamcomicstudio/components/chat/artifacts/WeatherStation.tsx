@@ -154,6 +154,7 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
   const compact = useCompact();
   const [unit, setUnit] = useState<'C' | 'F'>(defaultUnit);
   const [tab, setTab] = useState<'forecast' | 'map'>('forecast');
+  const [radar, setRadar] = useState(false); // live precipitation overlay (RainViewer)
   const c = data.current;
   const sky = skyOf(c.code);
   const bg = HERO_BG[sky][c.isDay ? 'day' : 'night'];
@@ -255,7 +256,19 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
 
       {tab === 'map' && mapData ? (
         <div className="p-3 pt-1">
-          <InlineMap data={mapData} height={260} />
+          <div className="mb-1.5 flex justify-end">
+            <button
+              onClick={() => setRadar((r) => !r)}
+              aria-pressed={radar}
+              className={`rounded-lg border px-2 py-0.5 text-[11px] font-semibold transition-colors duration-200 ${
+                radar ? 'border-transparent bg-[var(--ds-accent)] text-white' : 'border-[var(--ds-hairline)] text-[var(--ds-muted)] hover:bg-[var(--ds-well)]'
+              }`}
+              title="Live precipitation radar (RainViewer)"
+            >
+              Radar {radar ? 'on' : 'off'}
+            </button>
+          </div>
+          <InlineMap data={mapData} height={260} radar={radar} />
         </div>
       ) : (
         <>

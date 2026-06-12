@@ -10,13 +10,13 @@ const MapPanel = lazy(() => import('../MapPanel'));
  * An interactive OpenStreetMap rendered INLINE in the chat message (not behind a
  * button). The expand control still opens the full-height side panel.
  */
-export const InlineMap: React.FC<{ data: MapArtifact; height?: number }> = ({ data, height = 220 }) => {
+export const InlineMap: React.FC<{ data: MapArtifact; height?: number; radar?: boolean }> = ({ data, height = 220, radar }) => {
   const openPanel = useChatPanel();
   if (!data?.markers?.length) return null;
   return (
     <div className="relative overflow-hidden rounded-xl border border-[var(--ds-hairline)] ring-1 ring-[var(--ds-hairline-soft)]" style={{ height }}>
       <Suspense fallback={<div className="flex h-full w-full items-center justify-center bg-[var(--ds-well)]"><Loader2 className="h-5 w-5 animate-spin text-[var(--ds-muted)]" /></div>}>
-        <MapPanel data={data} />
+        <MapPanel data={data} radar={radar} />
       </Suspense>
       {openPanel && (
         <button
