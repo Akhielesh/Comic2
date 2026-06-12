@@ -8,6 +8,7 @@
 //   where the orchestrator adds them to the deployable pool.
 
 import type { CustomAgentDef } from '../apiTypes';
+import { notifyChatDataChanged } from './chatStorage';
 
 export interface BuiltinAgentMeta {
   id: string;
@@ -71,6 +72,12 @@ const persist = (agents: CustomAgentDef[], userId?: string): void => {
   } catch {
     /* ignore */
   }
+  notifyChatDataChanged();
+};
+
+/** Replace the whole agent list at once (used when applying a cloud snapshot). */
+export const replaceCustomAgents = (agents: CustomAgentDef[], userId?: string): void => {
+  persist(Array.isArray(agents) ? agents : [], userId);
 };
 
 /** Create or update a custom agent; returns the new list. */

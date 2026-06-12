@@ -484,3 +484,30 @@
 }
 .ds-map .leaflet-control-attribution a { color: var(--ds-muted); }
 .ds-map-pin { background: transparent; border: none; }
+
+/* Route summary chip (mode · ≈time · distance · tolls) — bottom-left glass pill. */
+.ds-map-route-chip {
+  display: flex; align-items: center; gap: 0.5rem;
+  background: var(--ds-surface-strong);
+  color: var(--ds-ink);
+  border: 1px solid var(--ds-hairline);
+  border-radius: 9999px;
+  padding: 0.3rem 0.7rem;
+  font-size: 11px; font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+  backdrop-filter: blur(8px);
+}
+.ds-map-route-chip i { width: 1px; height: 0.8em; background: var(--ds-hairline); }
+
+/* Zoomed-in pin labels — quiet glass tags that appear past street-level zoom. */
+.ds-map .ds-map-label {
+  background: var(--ds-surface-strong);
+  color: var(--ds-ink);
+  border: 1px solid var(--ds-hairline);
+  border-radius: 0.5rem;
+  padding: 1px 6px;
+  font-size: 10px; font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+  backdrop-filter: blur(6px);
+}
+.ds-map .ds-map-label::before { display: none; }

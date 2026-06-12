@@ -23,7 +23,7 @@
     "COMPANY_NAME": "DreamStream Studio",
     "COMPANY_ADDRESS": "",
     "LOGO_URL": "",
-    "SUPABASE_VERIFY_URL": "https://YOUR_PROJECT_REF.supabase.co"
+    "SUPABASE_VERIFY_URL": "https://bdjfmxfmhqhzvgrhbbzm.supabase.co"
   }
 
   // No public route needed — the backend reaches this Worker on its *.workers.dev URL,

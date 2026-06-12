@@ -6,6 +6,26 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **One account, everywhere — account sync overhaul + memory import (2026-06-11):**
+  - **Your API keys now follow your account, not your browser.** The server resolves
+    provider keys per request as *this device's key → your account's stored key →
+    platform default*, so a key added in any studio on any device works in all of them
+    (chat, code, comics). Deleting a key or switching the active one now updates the
+    account too.
+  - **Settings sync, properly namespaced:** chat/comics model choices, the Code
+    Studio's pinned model and knobs, your chat memory and custom agents all sync with
+    the account now (they used to silently stay on one device). Account-wide vs
+    per-studio settings are kept in separate sections so studios never overwrite each
+    other.
+  - **Import memories from other AI tools:** Settings → Memory → "Import from another
+    AI" absorbs your ChatGPT memory list, Claude preferences, or Gemini saved info
+    (paste or upload an export file). Assistant chatter and metadata are stripped,
+    facts are distilled into editable memories, and you review before saving.
+  - **Security:** the account settings snapshot is now encrypted on the server with a
+    server-only secret (the old scheme encrypted in the browser with a key shipped in
+    the public bundle). Signing out now also clears all preference state, so the next
+    person on a shared device no longer inherits — or uploads — your settings.
+  - Full issue register: `docs/audits/2026-06-account-sync-audit.md`.
 - **Stream Studio v5 — on-air guests, meeting scenes, hard cost guardrails (2026-06-11):**
   - **Guests on the program:** invite up to 4 guests with one link (People panel → "Invite
     guests on air"). Guests join from any device with cam + mic (+ optional screen share on

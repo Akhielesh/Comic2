@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   X, Brain, Network, Wrench, Plus, Trash2, Check, Pencil, Bot, Activity,
-  LayoutGrid, BookOpen, Settings2, Sun, Moon, Monitor
+  LayoutGrid, BookOpen, Settings2, Sun, Moon, Monitor, Upload, Loader2, Sparkles
 } from 'lucide-react';
 import { ModalPortal } from '../modals/ModalPortal';
 import { SystemDashboard } from './SystemDashboard';
@@ -10,6 +10,11 @@ import { RecipeStudio } from './RecipeStudio';
 import { ToolsDashboard } from './ToolsDashboard';
 import type { CustomAgentDef } from '../../apiTypes';
 import { getChatMemory, setChatMemory } from '../../services/chatStorage';
+import { importChatMemory } from '../../services/chatApi';
+import {
+  MEMORY_IMPORT_SOURCES, MAX_IMPORT_FILE_BYTES, prepareMemoryImportContent,
+  type MemoryImportSource
+} from '../../services/memoryImport';
 import { useTheme, type ThemePreference } from '../../services/theme';
 import {
   BUILTIN_AGENTS, AGENT_TOOLS, TOOL_LABEL,
@@ -234,6 +239,60 @@ const MemoryTab: React.FC<{ userId?: string; onMemoryChange: (m: string) => void
   const edit = (i: number, v: string) => commit(items.map((it, idx) => (idx === i ? v : it)));
   const remove = (i: number) => commit(items.filter((_, idx) => idx !== i));
 
+  // ---- Import from another AI tool (ChatGPT / Claude / Gemini / other) ----
+  const [importSource, setImportSource] = useState<MemoryImportSource>('chatgpt');
+  const [importText, setImportText] = useState('');
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [preview, setPreview] = useState<string[] | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const sourceMeta = MEMORY_IMPORT_SOURCES.find((s) => s.id === importSource)!;
+
+  const onPickFile = async (file: File | null) => {
+    if (!file) return;
+    if (file.size > MAX_IMPORT_FILE_BYTES) {
+      setImportError('That file is too large — export files over 8 MB usually mean full chat logs; paste just the memory/instructions text instead.');
+      return;
+    }
+    setImportError(null);
+    setImportText(await file.text());
+  };
+
+  const runImport = async () => {
+    const content = prepareMemoryImportContent(importText);
+    if (!content || importing) return;
+    setImporting(true);
+    setImportError(null);
+    try {
+      const existing = formatMemoryItems(items);
+      const res = await importChatMemory(importSource, content, existing);
+      const merged = parseMemoryItems(res.memory);
+      if (merged.length === 0) {
+        setImportError('Nothing durable found in that content — try pasting the memory list itself.');
+      } else {
+        setPreview(merged);
+      }
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : 'Import failed — try again.');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const applyImport = () => {
+    if (!preview) return;
+    commit(preview);
+    setPreview(null);
+    setImportText('');
+  };
+
+  const previewNewCount = useMemo(() => {
+    if (!preview) return 0;
+    const existing = new Set(items.map((it) => it.trim().toLowerCase()));
+    return preview.filter((p) => !existing.has(p.trim().toLowerCase())).length;
+  }, [preview, items]);
+
   return (
     <div className="space-y-4">
       <p className="text-sm text-[var(--ds-muted)]">
@@ -290,6 +349,102 @@ const MemoryTab: React.FC<{ userId?: string; onMemoryChange: (m: string) => void
           </ul>
         </div>
       )}
+
+      {/* Import memories the user already built up in another AI tool. */}
+      <section>
+        <SectionLabel className="mb-2 px-1">Import from another AI</SectionLabel>
+        <Group>
+          <div className="space-y-3 px-4 py-4">
+            <p className="text-xs text-[var(--ds-muted)]">
+              Bring what ChatGPT, Claude or Gemini already knows about you. Paste your memory
+              list or custom instructions (or upload an export file) — it's distilled into
+              memories here, and you review before anything is saved.
+            </p>
+            <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Import source">
+              {MEMORY_IMPORT_SOURCES.map((s) => (
+                <button
+                  key={s.id}
+                  role="radio"
+                  aria-checked={importSource === s.id}
+                  onClick={() => setImportSource(s.id)}
+                  className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                    importSource === s.id
+                      ? 'bg-[#D97757]/10 text-[var(--ds-accent)]'
+                      : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
+                  }`}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] text-[var(--ds-muted)]">Where to find it: {sourceMeta.hint}.</p>
+            <textarea
+              value={importText}
+              onChange={(e) => { setImportText(e.target.value); setPreview(null); }}
+              rows={4}
+              placeholder={`Paste your ${sourceMeta.label === 'Other' ? '' : `${sourceMeta.label} `}memories or instructions here…`}
+              className={`w-full resize-y ${FIELD}`}
+            />
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".json,.txt,.md,application/json,text/plain,text/markdown"
+              className="hidden"
+              onChange={(e) => { void onPickFile(e.target.files?.[0] ?? null); e.target.value = ''; }}
+            />
+            {importError && <p className="text-xs text-red-500">{importError}</p>}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => fileRef.current?.click()}
+                className="flex items-center gap-1.5 rounded-lg border border-[var(--ds-hairline)] px-3 py-2 text-sm text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]"
+              >
+                <Upload className="h-4 w-4" /> Upload export file
+              </button>
+              <button
+                onClick={() => void runImport()}
+                disabled={!importText.trim() || importing}
+                className="flex items-center gap-1.5 rounded-lg bg-[var(--ds-accent)] px-3 py-2 text-sm font-medium text-white hover:bg-[var(--ds-accent-hover)] disabled:opacity-40"
+              >
+                {importing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                {importing ? 'Distilling…' : 'Import'}
+              </button>
+            </div>
+
+            {preview && (
+              <div className="space-y-2 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] p-3">
+                <div className="flex items-center justify-between">
+                  <SectionLabel>
+                    Preview · {preview.length} {preview.length === 1 ? 'memory' : 'memories'}
+                    {previewNewCount > 0 ? ` (${previewNewCount} new)` : ' (no new facts)'}
+                  </SectionLabel>
+                </div>
+                <ul className="max-h-44 space-y-1 overflow-y-auto">
+                  {preview.map((p, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm text-[var(--ds-ink)]">
+                      <Brain className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--ds-muted)]" />
+                      <span className="min-w-0">{p}</span>
+                    </li>
+                  ))}
+                </ul>
+                <div className="flex gap-2 pt-1">
+                  <button
+                    onClick={applyImport}
+                    className="flex items-center gap-1.5 rounded-lg bg-[var(--ds-accent)] px-3 py-1.5 text-sm font-medium text-white hover:bg-[var(--ds-accent-hover)]"
+                  >
+                    <Check className="h-4 w-4" /> Save these memories
+                  </button>
+                  <button
+                    onClick={() => setPreview(null)}
+                    className="rounded-lg px-3 py-1.5 text-sm text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </Group>
+      </section>
     </div>
   );
 };

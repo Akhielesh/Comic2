@@ -1928,10 +1928,24 @@ export interface MapMarker {
   lng: number;
   label: string;
   description?: string;
+  /** Coarse category for the pin glyph: food, cafe, bar, hotel, park, sight,
+   *  shop, transit, flight, activity — anything else gets the default dot. */
+  category?: string;
+}
+/** Route summary shown as a chip on the map (mode + time + distance + tolls). */
+export interface MapRouteInfo {
+  /** Travel mode the user prefers, e.g. 'drive' | 'walk' | 'transit' | 'train' | 'flight'. */
+  mode?: string;
+  durationMin?: number;
+  distanceKm?: number;
+  /** Free-text toll estimate, e.g. "$25–40 tolls". */
+  tollCost?: string;
 }
 export interface MapArtifact {
   title?: string;
   markers: MapMarker[];
+  /** Summary of the drawn route, rendered as a glass chip over the map. */
+  routeInfo?: MapRouteInfo;
   /** Ordered points for a drawn route/path between places, if any. */
   route?: { lat: number; lng: number }[];
 }

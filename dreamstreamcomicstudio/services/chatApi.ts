@@ -126,6 +126,24 @@ export const updateChatMemory = (
   );
 
 /**
+ * Absorb memories/custom-instructions exported from another AI tool (ChatGPT, Claude,
+ * Gemini, …) into the user's long-term memory here. The server distills the content
+ * into the standard bullet format and merges it with the existing memory; the caller
+ * shows the result for review before saving.
+ */
+export const importChatMemory = (
+  source: 'chatgpt' | 'claude' | 'gemini' | 'other',
+  content: string,
+  memory: string,
+  options?: { signal?: AbortSignal }
+): Promise<{ memory: string; model?: string }> =>
+  post<{ source: string; content: string; memory: string }, { memory: string; model?: string }>(
+    '/api/chat/memory/import',
+    { source, content, memory },
+    options
+  );
+
+/**
  * After an answer, fetch a few proactive follow-up suggestions the user is likely to
  * want next (rendered as clickable chips). Best-effort — callers ignore failures, and
  * the server returns an empty list when there's nothing useful or no key is configured.

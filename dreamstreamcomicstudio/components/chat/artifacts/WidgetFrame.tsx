@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, LayoutDashboard, Maximize2, Minimize2, Plus, RefreshCw } from 'lucide-react';
+import { Check, Expand, LayoutDashboard, Maximize2, Minimize2, Plus, RefreshCw } from 'lucide-react';
 import { DensityProvider, useLiveData, type WidgetDensity } from './kit';
+import { ExpandLightbox } from './kit/ExpandLightbox';
 import { addTile, createDashboard, listDashboards } from '../../../services/customDashboards';
 
 // Universal widget chrome: wraps every artifact card with the two capabilities the
@@ -89,6 +90,8 @@ export const WidgetFrame: React.FC<WidgetFrameProps> = ({ type, densityHint, den
   // "Pin to dashboard" popover state. `pinned` shows the ✓ confirmation beat.
   const [pinOpen, setPinOpen] = useState(false);
   const [pinned, setPinned] = useState(false);
+  // Expand-in-place: the widget re-renders full-size in a lightbox over the chat.
+  const [expanded, setExpanded] = useState(false);
 
   const pinTo = (dashId: string | null) => {
     if (!origin) return;
@@ -158,6 +161,24 @@ export const WidgetFrame: React.FC<WidgetFrameProps> = ({ type, densityHint, den
 
   return (
     <div className="group/widget relative">
+      {/* Expand in place — the widget opens full-size in a lightbox over the chat
+          (like the video player), never the persistent side panel. */}
+      {!forcedDensity && (
+        <button
+          onClick={() => setExpanded(true)}
+          title="Expand widget"
+          aria-label="Expand widget"
+          className="absolute left-2 top-3 z-20 flex h-6 w-6 items-center justify-center rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] text-[var(--ds-muted)] opacity-0 shadow-[0_1px_3px_rgba(0,0,0,0.1)] backdrop-blur-sm transition-all duration-200 hover:text-[var(--ds-ink)] focus-visible:opacity-100 group-hover/widget:opacity-100 group-focus-within/widget:opacity-100 [@media(pointer:coarse)]:opacity-70"
+        >
+          <Expand className="h-3 w-3" />
+        </button>
+      )}
+      {expanded && (
+        <ExpandLightbox title="Widget" onClose={() => setExpanded(false)}>
+          <DensityProvider value="detailed">{children}</DensityProvider>
+        </ExpandLightbox>
+      )}
+
       {/* Pin to dashboard (live-data widgets) — floats left of refresh. */}
       {origin && !forcedDensity && (
         <div className="absolute right-[4.5rem] top-3 z-30">

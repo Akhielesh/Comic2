@@ -5,6 +5,8 @@ import compression from 'compression';
 
 import {
   COMICFORGE_ENABLED,
+  EMAIL_HMAC_SECRET,
+  EMAIL_WORKER_URL,
   isAllowedOrigin,
   MAX_BODY_SIZE,
   PORT,
@@ -18,6 +20,7 @@ import {
   validateRuntimeConfig
 } from './config.js';
 import { attachKeys } from './middleware/keys.js';
+import { attachAccountKeys } from './middleware/accountKeys.js';
 import { attachFreeOnly } from './middleware/freeOnly.js';
 import { errorHandler } from './middleware/errors.js';
 import { optionalAuth, requireAuth } from './middleware/auth.js';
@@ -147,7 +150,10 @@ const moderationRateLimit = createRateLimit({
 });
 
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok' });
+  // email: 'configured' | 'dormant' — mirrors mailerConfigured() so the live process's view of
+  // EMAIL_WORKER_URL/EMAIL_HMAC_SECRET is checkable from outside (no admin login, no log access).
+  const emailConfigured = Boolean(EMAIL_WORKER_URL && EMAIL_HMAC_SECRET && !EMAIL_WORKER_URL.includes('<'));
+  res.json({ status: 'ok', email: emailConfigured ? 'configured' : 'dormant' });
 });
 
 // Public routes
@@ -183,6 +189,10 @@ app.use('/api', requireAuth);
 // Per-request account context (AsyncLocalStorage) so deep tool code — e.g. the
 // provider usage meter — can attribute upstream API calls to the signed-in account.
 app.use('/api', attachAccountContext);
+// Account-level BYOK: fill provider keys from the user's encrypted account store
+// wherever the request didn't carry one, so every studio and device shares the
+// same keys (header > account > platform env).
+app.use('/api', attachAccountKeys);
 
 // Persist account-wise provider usage to Supabase (append-only deltas, ~60s flush).
 // Best-effort: without a service-role key this stays in-memory only.
@@ -194,7 +204,6 @@ try {
 } catch {
   console.warn('[provider-usage] cloud sink not configured (no Supabase admin) — usage stays in-memory');
 }
-
 
 app.use('/api/admin', adminRateLimit, adminRouter);
 app.use('/api/admin/verification', adminRateLimit, verificationRouter);
@@ -225,6 +234,17 @@ app.use(errorHandler);
 
 app.listen(PORT, () => {
   console.log(`DreamStream API listening on :${PORT}`);
+  // The mailer is dormant-by-design when unconfigured and skips sends WITHOUT logging to
+  // email_log, so say so loudly here — otherwise "no emails and no errors" is undebuggable.
+  if (EMAIL_WORKER_URL && EMAIL_HMAC_SECRET && !EMAIL_WORKER_URL.includes('<')) {
+    console.log(`[email] mailer configured → ${EMAIL_WORKER_URL}`);
+  } else {
+    const missing = [
+      !EMAIL_WORKER_URL || EMAIL_WORKER_URL.includes('<') ? 'EMAIL_WORKER_URL' : '',
+      !EMAIL_HMAC_SECRET ? 'EMAIL_HMAC_SECRET' : ''
+    ].filter(Boolean);
+    console.warn(`[email] mailer DORMANT — all sends are silently skipped. Missing env: ${missing.join(', ')} (see docs/email/SETUP.md)`);
+  }
   // Warm the model catalog from the durable index immediately so the first /api/models/catalog
   // request is instant (no slow live fetch on a cold start), then keep it warm in the background.
   void prewarmCatalog();

@@ -277,22 +277,37 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
           </div>
         )}
 
-        {/* Capability gaps: honest flags about what the AI couldn't fully deliver. */}
-        {!isUser && turn.notices && turn.notices.length > 0 && (
-          <div className="w-full mt-1 space-y-1">
-            {turn.notices.map((n, i) => (
-              <div
-                key={i}
-                className={`flex items-start gap-1.5 text-[11px] rounded px-2 py-1 border ${
-                  n.level === 'error' ? 'bg-red-500/10 border-red-500/30 text-red-600' : 'bg-amber-500/10 border-amber-500/30 text-amber-600'
-                }`}
-              >
-                {n.level === 'error' ? <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" /> : <Info className="w-3 h-3 shrink-0 mt-0.5" />}
-                <span>{n.message}{n.fix ? <span className="font-bold"> ({n.fix})</span> : ''}</span>
-              </div>
-            ))}
-          </div>
-        )}
+        {/* Capability gaps: honest flags about what the AI couldn't fully deliver.
+            DEDUPED — a tool that fails 7 times in one turn produced 7 identical rows
+            of red noise; now each distinct message renders once with a ×N count. */}
+        {!isUser && turn.notices && turn.notices.length > 0 && (() => {
+          const grouped = new Map<string, { n: (typeof turn.notices)[number]; count: number }>();
+          for (const n of turn.notices) {
+            const key = `${n.level}:${n.message}:${n.fix ?? ''}`;
+            const hit = grouped.get(key);
+            if (hit) hit.count += 1;
+            else grouped.set(key, { n, count: 1 });
+          }
+          return (
+            <div className="w-full mt-1 space-y-1">
+              {[...grouped.values()].map(({ n, count }, i) => (
+                <div
+                  key={i}
+                  className={`flex items-start gap-1.5 text-[11px] rounded px-2 py-1 border ${
+                    n.level === 'error' ? 'bg-red-500/10 border-red-500/30 text-red-600' : 'bg-amber-500/10 border-amber-500/30 text-amber-600'
+                  }`}
+                >
+                  {n.level === 'error' ? <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" /> : <Info className="w-3 h-3 shrink-0 mt-0.5" />}
+                  <span>
+                    {n.message}
+                    {n.fix ? <span className="font-bold"> ({n.fix})</span> : ''}
+                    {count > 1 && <span className="ml-1 opacity-70">×{count}</span>}
+                  </span>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
 
         {/* Model-switch transparency: shown when the answer came from a different model. */}
         {!isUser && !turn.error && turn.requestedModel && turn.model && turn.requestedModel !== turn.model && (

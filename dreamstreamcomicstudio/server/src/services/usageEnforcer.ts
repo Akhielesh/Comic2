@@ -37,12 +37,17 @@ const resolveModelFromRequest = (req: Request, fallbackModel: string) => {
   return fallbackModel;
 };
 
+// BYOK-ness comes from the resolved req.apiKeys flags (set by attachKeys and the
+// account-key fallback in middleware/accountKeys.ts), NOT from raw headers — a key
+// resolved from the user's account store is still the user's key, and billing it as
+// platform usage would double-charge them. Header checks remain as a fallback for
+// callers that run before the middleware.
 export const hasByokForProvider = (req: Request, provider: 'gemini' | 'pixazo' | 'openrouter' | 'nvidia' | 'ideogram' | 'internal') => {
-  if (provider === 'gemini') return Boolean(req.header('X-Gemini-Key'));
-  if (provider === 'pixazo') return Boolean(req.header('X-Pixazo-Key') || req.header('X-Flux-Key'));
-  if (provider === 'openrouter') return Boolean(req.header('X-OpenRouter-Key'));
-  if (provider === 'nvidia') return Boolean(req.header('X-Nvidia-Key'));
-  if (provider === 'ideogram') return Boolean(req.header('X-Ideogram-Key'));
+  if (provider === 'gemini') return Boolean(req.apiKeys?.geminiByok ?? req.header('X-Gemini-Key'));
+  if (provider === 'pixazo') return Boolean(req.apiKeys?.pixazoByok ?? (req.header('X-Pixazo-Key') || req.header('X-Flux-Key')));
+  if (provider === 'openrouter') return Boolean(req.apiKeys?.openRouterByok ?? req.header('X-OpenRouter-Key'));
+  if (provider === 'nvidia') return Boolean(req.apiKeys?.nvidiaByok ?? req.header('X-Nvidia-Key'));
+  if (provider === 'ideogram') return Boolean(req.apiKeys?.ideogramByok ?? req.header('X-Ideogram-Key'));
   return false;
 };
 

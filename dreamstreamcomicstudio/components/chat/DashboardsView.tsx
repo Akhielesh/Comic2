@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Clapperboard, CloudSun, LayoutDashboard, LineChart, Loader2, Lock, LockOpen,
-  Map as MapIcon, MapPin, Maximize2, Minimize2, MoreHorizontal, MoreVertical, Newspaper,
+  Map as MapIcon, MapPin, Maximize2, MessageCircle, Minimize2, MoreHorizontal, MoreVertical, Newspaper,
   Pencil, Plus, RefreshCw, Send, Sparkles, Trash2, X
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { ChatArtifact } from '../../apiTypes';
-import { refreshArtifact } from '../../services/chatApi';
+import { refreshArtifact, sendChatMessage } from '../../services/chatApi';
+import { ChatMarkdown } from './ChatMarkdown';
 import {
   DASHBOARD_TEMPLATES, addTile, createDashboard, listDashboards,
   onDashboardsChanged, removeDashboard, removeTile, reorderTile, updateDashboard, updateTile,
@@ -41,7 +42,11 @@ interface WidgetTypeDef {
   defaultDensity: WidgetDensity;
 }
 
+// 'ai_chat' is a special tile: a mini assistant box on the board (no live-data tool).
+export const AI_CHAT_TILE = 'ai_chat';
+
 const WIDGET_TYPES: WidgetTypeDef[] = [
+  { tool: AI_CHAT_TILE, label: 'Ask AI', icon: MessageCircle, blurb: 'A mini chat box right on the board', defaultDensity: 'detailed' },
   { tool: 'get_stock', label: 'Stock quote', icon: LineChart, blurb: 'Stocks, indices, gold, FX, crypto', defaultDensity: 'compact' },
   { tool: 'get_news', label: 'News', icon: Newspaper, blurb: 'Headlines by section or topic', defaultDensity: 'compact' },
   { tool: 'get_weather', label: 'Weather', icon: CloudSun, blurb: 'Conditions + 5-day forecast', defaultDensity: 'detailed' },
@@ -49,6 +54,83 @@ const WIDGET_TYPES: WidgetTypeDef[] = [
   { tool: 'show_map', label: 'Map', icon: MapIcon, blurb: 'Pinned locations on a live map', defaultDensity: 'detailed' },
   { tool: 'video_search', label: 'Videos', icon: Clapperboard, blurb: 'Tutorials, reviews and clips', defaultDensity: 'detailed' }
 ];
+
+// ----------------------------------------------------------- mini AI chat tile ---
+
+/** A small assistant box living on the board: ask → answer renders as markdown.
+ *  Keeps the last exchange only — it's a pulse-glance tool, not a full thread
+ *  (the sidebar's New chat is one click away for that). */
+const AiChatTile: React.FC = () => {
+  const [draft, setDraft] = useState('');
+  const [exchange, setExchange] = useState<{ q: string; a: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const ask = async () => {
+    const q = draft.trim();
+    if (!q || busy) return;
+    setBusy(true);
+    setDraft('');
+    setExchange({ q, a: '' });
+    try {
+      const res = await sendChatMessage({ messages: [{ role: 'user', content: q }] } as never);
+      setExchange({ q, a: res.text || '(no response)' });
+    } catch (err) {
+      setExchange({ q, a: `Couldn't answer: ${(err as Error)?.message || 'request failed'}` });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex h-full min-h-[160px] flex-col rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] shadow-[0_1px_3px_rgba(0,0,0,0.05)]">
+      <div className="flex items-center gap-1.5 border-b border-[var(--ds-hairline-soft)] px-3 py-2 text-xs font-semibold text-[var(--ds-ink)]">
+        <MessageCircle className="h-3.5 w-3.5 text-[var(--ds-accent)]" /> Ask AI
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
+        {exchange ? (
+          <div className="space-y-1.5">
+            <p className="text-[11px] font-semibold text-[var(--ds-muted)]">{exchange.q}</p>
+            {busy ? (
+              <div className="flex items-center gap-1.5 text-[11px] text-[var(--ds-muted)]">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-[var(--ds-accent)]" /> Thinking…
+              </div>
+            ) : (
+              <div className="text-[12px] leading-relaxed text-[var(--ds-ink)]">
+                <ChatMarkdown text={exchange.a} />
+              </div>
+            )}
+          </div>
+        ) : (
+          <p className="text-[11px] text-[var(--ds-muted)]">
+            Quick questions without leaving the board — “what’s moving the market?”, “rain this weekend in Tokyo?”
+          </p>
+        )}
+      </div>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void ask();
+        }}
+        className="flex items-center gap-1.5 border-t border-[var(--ds-hairline-soft)] p-2"
+      >
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="Ask anything…"
+          className="min-w-0 flex-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-2.5 py-1.5 text-[12px] text-[var(--ds-ink)] outline-none transition-colors placeholder:text-[var(--ds-muted)] focus:border-[var(--ds-accent)] focus:bg-[var(--ds-raised)]"
+        />
+        <button
+          type="submit"
+          disabled={busy || !draft.trim()}
+          aria-label="Send"
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--ds-accent)] text-white transition-colors hover:bg-[var(--ds-accent-hover)] disabled:opacity-40"
+        >
+          <Send className="h-3.5 w-3.5" />
+        </button>
+      </form>
+    </div>
+  );
+};
 
 const TOOL_LABELS: Record<string, string> = Object.fromEntries(WIDGET_TYPES.map((w) => [w.tool, w.label]));
 
@@ -416,6 +498,8 @@ const AddWidgetPanel: React.FC<{
   // Build the tile from the current fields; null while invalid (required empty).
   const draft = useMemo((): Omit<DashboardTile, 'id'> | null => {
     switch (tool) {
+      case AI_CHAT_TILE:
+        return { tool: AI_CHAT_TILE, args: {}, label: 'Ask AI', density: 'detailed' };
       case 'get_stock': {
         const symbol = val('symbol');
         return symbol ? { tool, args: { symbol }, label: symbol, density } : null;
@@ -759,6 +843,7 @@ export const DashboardsView: React.FC = () => {
   activeRef.current = active;
 
   const fetchTile = useCallback(async (tile: DashboardTile) => {
+    if (tile.tool === AI_CHAT_TILE) return; // the mini chat tile has no live-data fetch
     if (inflight.current.has(tile.id)) return;
     inflight.current.add(tile.id);
     setTileStates((prev) => ({ ...prev, [tile.id]: { ...prev[tile.id], loading: true } }));
@@ -1076,8 +1161,12 @@ export const DashboardsView: React.FC = () => {
             {active.tiles.map((tile, i) => (
               <div
                 key={tile.id}
-                className={`${spanFor(tile.density)} ${dragId === tile.id ? 'opacity-50' : ''} ${
-                  dropIndex === i && dragId && dragId !== tile.id ? 'rounded-2xl ring-2 ring-[var(--ds-accent)] ring-offset-2 ring-offset-[var(--ds-canvas)]' : ''
+                className={`transition-all duration-200 ease-out ${spanFor(tile.density)} ${
+                  dragId === tile.id ? 'scale-[0.98] opacity-50' : ''
+                } ${
+                  dropIndex === i && dragId && dragId !== tile.id
+                    ? 'translate-y-0.5 rounded-2xl ring-2 ring-[var(--ds-accent)] ring-offset-2 ring-offset-[var(--ds-canvas)]'
+                    : ''
                 }`}
                 draggable={!locked}
                 onDragStart={(e) => {
@@ -1103,6 +1192,18 @@ export const DashboardsView: React.FC = () => {
                   setDropIndex(null);
                 }}
               >
+                {tile.tool === AI_CHAT_TILE ? (
+                  <div className="group/tile relative">
+                    {!locked && (
+                      <div className="absolute right-2 top-2 z-20 flex items-center gap-0.5 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] p-0.5 opacity-0 shadow-[0_1px_3px_rgba(0,0,0,0.1)] backdrop-blur-sm transition-opacity duration-200 focus-within:opacity-100 group-hover/tile:opacity-100 [@media(pointer:coarse)]:opacity-70">
+                        <ToolButton title="Remove widget" onClick={() => removeTile(active.id, tile.id)}>
+                          <Trash2 className="h-3 w-3" />
+                        </ToolButton>
+                      </div>
+                    )}
+                    <AiChatTile />
+                  </div>
+                ) : (
                 <TileCard
                   tile={tile}
                   state={tileStates[tile.id]}
@@ -1118,6 +1219,7 @@ export const DashboardsView: React.FC = () => {
                     void fetchTile({ ...tile, args });
                   }}
                 />
+                )}
               </div>
             ))}
 

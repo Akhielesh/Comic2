@@ -64,20 +64,34 @@ const MODE_ICONS: Record<NonNullable<ItineraryTransport['mode']>, React.Componen
 const isTransportStop = (s: ItineraryStop): boolean => !!s.transport || (!!s.kind && TRANSPORT_KINDS.has(s.kind));
 
 /**
- * Turn a finalized trip into a live dashboard — destination weather, a map of the
- * trip's located stops, local news and places to eat. One tap; no manual board
- * building. (Tiles are whitelisted live-data calls, so the board refreshes itself.)
+ * Turn a finalized trip into a live dashboard — CONTEXT-AWARE, built from what the
+ * trip actually contains, not a fixed recipe:
+ *  • always: destination weather, the trip map, local news, places to eat
+ *  • flying (a flight leg with a code)        → live flight-status tile
+ *  • foreign-currency budget (non-USD)        → live currency-converter tile
+ *  • transit-heavy days                        → transit-stations map tile
+ * (Tiles are whitelisted live-data calls, so the board refreshes itself.)
  */
 const saveTripAsDashboard = (data: ItineraryArtifact): void => {
   const destination = data.destination || data.title;
-  const located = data.days
-    .flatMap((d) => d.stops)
+  const stops = data.days.flatMap((d) => d.stops);
+  const located = stops
     .filter((s) => typeof s.lat === 'number' && typeof s.lng === 'number')
     .map((s) => (data.destination ? `${s.name}, ${data.destination}` : s.name))
     .slice(0, 8);
+  // Context signals mined from the plan itself.
+  const flightCode = stops.find((s) => (s.transport?.mode === 'flight' || s.kind === 'flight') && s.transport?.code)?.transport?.code;
+  const foreignCurrency = data.currency && data.currency.toUpperCase() !== 'USD' ? data.currency.toUpperCase() : undefined;
+  const transitHeavy = stops.filter((s) => s.kind && TRANSPORT_KINDS.has(s.kind) && s.kind !== 'flight' && s.kind !== 'car').length >= 2;
+
   createDashboard(`Trip: ${destination}`, '🧳', [
     { tool: 'get_weather', args: { location: destination }, label: destination, density: 'detailed' },
     ...(located.length ? [{ tool: 'show_map', args: { places: located }, label: 'Trip map', density: 'detailed' as const }] : []),
+    ...(flightCode ? [{ tool: 'get_flight_status', args: { flightNumber: flightCode.replace(/\s+/g, '') }, label: `Flight ${flightCode}`, density: 'compact' as const }] : []),
+    ...(foreignCurrency ? [{ tool: 'convert_currency', args: { from: 'USD', to: foreignCurrency, amount: 100 }, label: `USD → ${foreignCurrency}`, density: 'compact' as const }] : []),
+    ...(transitHeavy
+      ? [{ tool: 'find_places', args: { query: 'train station', near: destination }, label: `Transit · ${destination}`, density: 'compact' as const }]
+      : []),
     { tool: 'get_news', args: { query: destination }, label: `${destination} news`, density: 'compact' },
     { tool: 'find_places', args: { query: 'restaurants', near: destination }, label: `Eat · ${destination}`, density: 'compact' }
   ]);
@@ -382,15 +396,21 @@ export const ItineraryCard: React.FC<{ data: ItineraryArtifact }> = ({ data }) =
     );
     if (located.length === 0) return null;
     const points = located.map((s) => ({ lat: s.lat, lng: s.lng }));
+    // The day's dominant transport mode drives the map's route chip (≈time/distance).
+    const modes = day.stops
+      .map((s) => s.transport?.mode ?? (s.kind && TRANSPORT_KINDS.has(s.kind) ? s.kind : undefined))
+      .filter((m): m is NonNullable<ItineraryTransport['mode']> => !!m && m !== 'transit');
     return {
       title: day.label ?? `Day ${activeDay + 1}`,
       markers: located.map((s, i) => ({
         lat: s.lat,
         lng: s.lng,
         label: `${i + 1}. ${s.name}`,
+        category: s.kind,
         description: [s.time, s.address, s.notes].filter(Boolean).join(' · ') || undefined
       })),
-      route: points.length > 1 ? points : undefined
+      route: points.length > 1 ? points : undefined,
+      routeInfo: points.length > 1 ? { mode: modes[0] ?? 'walk' } : undefined
     };
   }, [day, activeDay]);
 

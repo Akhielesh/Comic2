@@ -22,7 +22,7 @@ import type { McpServerConfig } from '../apiTypes';
 import { Button } from './Button';
 import { ModelSelectionPanel } from './ModelSelectionPanel';
 import { useAuth } from '../contexts/AuthContext';
-import { syncByokKeyToServer } from '../services/byokSync';
+import { reconcileProviderMirror, syncByokKeyToServer } from '../services/byokSync';
 
 // Manage custom remote MCP servers (their tools appear as connectors in the chat).
 const McpServersPanel: React.FC = () => {
@@ -172,7 +172,7 @@ const KeyRow: React.FC<{ k: ManagedApiKey; onChange: () => void }> = ({ k, onCha
     <div className={`border-2 rounded-lg p-3 ${k.active ? 'border-black bg-brand-yellow/10' : 'border-slate-300 bg-white'}`}>
       <div className="flex items-start gap-3">
         <button
-          onClick={() => { setActiveKey(k.id); onChange(); }}
+          onClick={() => { setActiveKey(k.id); void reconcileProviderMirror(k.provider); onChange(); }}
           title={k.active ? 'Active key' : 'Set as active'}
           className={`mt-0.5 w-5 h-5 shrink-0 rounded-full border-2 border-black flex items-center justify-center ${k.active ? 'bg-brand-blue text-white' : 'bg-white'}`}
         >
@@ -232,7 +232,7 @@ const KeyRow: React.FC<{ k: ManagedApiKey; onChange: () => void }> = ({ k, onCha
             <>
               <button onClick={verify} disabled={checking} title="Verify key is valid" className="p-1.5 border-2 border-black rounded hover:bg-brand-yellow disabled:opacity-40"><RefreshCw className={`w-3.5 h-3.5 ${checking ? 'animate-spin' : ''}`} /></button>
               <button onClick={() => setEditing(true)} title="Edit label / limit" className="p-1.5 border-2 border-black rounded hover:bg-brand-yellow"><Pencil className="w-3.5 h-3.5" /></button>
-              <button onClick={() => { if (confirm(`Delete "${k.label}"?`)) { deleteKey(k.id); onChange(); } }} title="Delete key" className="p-1.5 border-2 border-black rounded hover:bg-red-100 text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
+              <button onClick={() => { if (confirm(`Delete "${k.label}"?`)) { deleteKey(k.id); void reconcileProviderMirror(k.provider); onChange(); } }} title="Delete key" className="p-1.5 border-2 border-black rounded hover:bg-red-100 text-red-600"><Trash2 className="w-3.5 h-3.5" /></button>
             </>
           )}
         </div>
