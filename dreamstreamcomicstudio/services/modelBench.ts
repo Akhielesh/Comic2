@@ -70,21 +70,35 @@ export const listBenchRuns = (): Promise<{ runs: BenchRunSummary[] }> =>
 export const getBenchRunById = (id: string): Promise<{ run: BenchRun }> =>
   get<{ run: BenchRun }>(`/api/admin/model-bench/runs/${encodeURIComponent(id)}`);
 
-// ── Client-side export of a finished run (no server round-trip) ─────────────────
+/** Every finished run with full results — the "export all tests combined" payload. */
+export const getAllBenchRunsFull = (): Promise<{ runs: BenchRun[] }> =>
+  get<{ runs: BenchRun[] }>('/api/admin/model-bench/runs/export');
 
-export const benchRunToCsv = (run: BenchRun): string => {
-  const cols: (keyof BenchRecord)[] = [
-    'ts', 'source', 'model', 'phase', 'ok', 'pass', 'httpStatus', 'ttftMs', 'totalMs',
-    'promptTokens', 'completionTokens', 'tokensPerSec', 'costUsd', 'servedModel',
-    'finishReason', 'errorClass', 'errorDetail', 'promptPreview', 'textPreview'
-  ];
-  const escape = (v: unknown): string => {
-    const s = v === null || v === undefined ? '' : String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  return [cols.join(',')]
-    .concat(run.results.map((r) => cols.map((c) => escape(r[c])).join(',')))
+// ── Client-side export (no extra server work) ───────────────────────────────────
+
+const RECORD_COLS: (keyof BenchRecord)[] = [
+  'ts', 'source', 'model', 'phase', 'ok', 'pass', 'httpStatus', 'ttftMs', 'totalMs',
+  'promptTokens', 'completionTokens', 'tokensPerSec', 'costUsd', 'servedModel',
+  'finishReason', 'errorClass', 'errorDetail', 'promptPreview', 'textPreview'
+];
+
+const csvEscape = (v: unknown): string => {
+  const s = v === null || v === undefined ? '' : String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+
+export const benchRunToCsv = (run: BenchRun): string =>
+  [RECORD_COLS.join(',')]
+    .concat(run.results.map((r) => RECORD_COLS.map((c) => csvEscape(r[c])).join(',')))
     .join('\n');
+
+/** All runs in one CSV — rows are prefixed with the run they belong to. */
+export const benchRunsToCombinedCsv = (runs: BenchRun[]): string => {
+  const header = ['runId', 'runStartedAt', ...RECORD_COLS].join(',');
+  const rows = runs.flatMap((run) =>
+    run.results.map((r) => [csvEscape(run.id), csvEscape(run.startedAt), ...RECORD_COLS.map((c) => csvEscape(r[c]))].join(','))
+  );
+  return [header, ...rows].join('\n');
 };
 
 export const downloadBlob = (content: string, filename: string, type: string): void => {

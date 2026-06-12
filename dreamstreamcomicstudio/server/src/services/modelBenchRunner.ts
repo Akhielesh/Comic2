@@ -20,6 +20,7 @@ import {
   NVIDIA_BASE_URL
 } from '../config.js';
 import { logger } from '../lib/logger.js';
+import { getSupabaseAdmin } from './supabase.js';
 
 export type BenchSource = 'openrouter' | 'nvidia';
 export type BenchPhase = 'echo' | 'context' | 'reasoning';
@@ -354,13 +355,108 @@ const runRequest = async (
   return rec;
 };
 
-// ── Run registry + executor ─────────────────────────────────────────────────────
+// ── Run registry (memory for the live run + cache) + Supabase history ───────────
+//
+// Finished runs are persisted to model_bench_runs (best-effort — a DB hiccup never
+// fails a run), so test history survives restarts/redeploys. Listing and lookups
+// merge the in-memory runs (incl. the currently running one) with the stored rows.
 const MAX_RUNS_KEPT = 10;
 const runs: BenchRun[] = []; // newest first
 
-export const listBenchRuns = (): BenchRunSummary[] => runs.map(({ results: _r, anomalies: _a, ...summary }) => summary);
+const toSummary = (run: BenchRun): BenchRunSummary => {
+  const { results: _r, anomalies: _a, ...summary } = run;
+  return summary;
+};
 
-export const getBenchRun = (id: string): BenchRun | null => runs.find((r) => r.id === id) || null;
+const rowToRun = (row: Record<string, unknown>): BenchRun => ({
+  id: String(row.id),
+  state: row.state === 'error' ? 'error' : 'done',
+  startedAt: new Date(String(row.started_at)).toISOString(),
+  finishedAt: row.finished_at ? new Date(String(row.finished_at)).toISOString() : null,
+  options: normalizeBenchOptions((row.options || {}) as Partial<BenchOptions>),
+  planned: Number(row.planned) || 0,
+  tested: Number(row.tested) || 0,
+  healthy: Number(row.healthy) || 0,
+  spendUsd: Number(row.spend_usd) || 0,
+  anomalyCount: Number(row.anomaly_count) || 0,
+  error: row.error ? String(row.error) : undefined,
+  results: Array.isArray(row.results) ? (row.results as BenchRecord[]) : [],
+  anomalies: Array.isArray(row.anomalies) ? (row.anomalies as string[]) : []
+});
+
+const persistRun = async (run: BenchRun): Promise<void> => {
+  try {
+    const { error } = await getSupabaseAdmin().from('model_bench_runs').insert({
+      id: run.id,
+      started_at: run.startedAt,
+      finished_at: run.finishedAt,
+      state: run.state,
+      options: run.options,
+      planned: run.planned,
+      tested: run.tested,
+      healthy: run.healthy,
+      spend_usd: run.spendUsd,
+      anomaly_count: run.anomalyCount,
+      error: run.error ?? null,
+      results: run.results,
+      anomalies: run.anomalies
+    });
+    if (error) throw new Error(error.message);
+  } catch (err) {
+    logger.warn('model_bench_persist_failed', { runId: run.id, message: (err as Error)?.message });
+  }
+};
+
+const HISTORY_LIST_LIMIT = 50;
+
+const fetchStoredRuns = async (limit: number, withResults: boolean): Promise<BenchRun[]> => {
+  try {
+    const columns = withResults
+      ? '*'
+      : 'id, started_at, finished_at, state, options, planned, tested, healthy, spend_usd, anomaly_count, error';
+    const { data, error } = await getSupabaseAdmin()
+      .from('model_bench_runs')
+      .select(columns)
+      .order('started_at', { ascending: false })
+      .limit(limit);
+    if (error) throw new Error(error.message);
+    return ((data || []) as unknown as Array<Record<string, unknown>>).map(rowToRun);
+  } catch (err) {
+    logger.warn('model_bench_history_read_failed', { message: (err as Error)?.message });
+    return [];
+  }
+};
+
+/** In-memory runs (incl. running) merged with stored history, newest first, deduped by id. */
+export const listBenchRuns = async (): Promise<BenchRunSummary[]> => {
+  const stored = await fetchStoredRuns(HISTORY_LIST_LIMIT, false);
+  const seen = new Set(runs.map((r) => r.id));
+  const merged = [...runs.map(toSummary), ...stored.filter((r) => !seen.has(r.id)).map(toSummary)];
+  return merged.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+};
+
+export const getBenchRun = async (id: string): Promise<BenchRun | null> => {
+  const inMemory = runs.find((r) => r.id === id);
+  if (inMemory) return inMemory;
+  try {
+    const { data, error } = await getSupabaseAdmin().from('model_bench_runs').select('*').eq('id', id).maybeSingle();
+    if (error) throw new Error(error.message);
+    return data ? rowToRun(data as Record<string, unknown>) : null;
+  } catch (err) {
+    logger.warn('model_bench_run_read_failed', { runId: id, message: (err as Error)?.message });
+    return null;
+  }
+};
+
+const EXPORT_MAX_RUNS = 100;
+
+/** Every finished run WITH full results (for the combined export), newest first. */
+export const getAllBenchRuns = async (): Promise<BenchRun[]> => {
+  const stored = await fetchStoredRuns(EXPORT_MAX_RUNS, true);
+  const seen = new Set(stored.map((r) => r.id));
+  const memoryOnly = runs.filter((r) => r.state !== 'running' && !seen.has(r.id));
+  return [...memoryOnly, ...stored].sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, EXPORT_MAX_RUNS);
+};
 
 export const getRunningBenchRun = (): BenchRun | null => runs.find((r) => r.state === 'running') || null;
 
@@ -424,6 +520,7 @@ export const startBenchRun = (rawOptions: Partial<BenchOptions> | undefined): { 
     run.error = String((err as Error)?.message || err).slice(0, 300);
     run.finishedAt = new Date().toISOString();
     logger.warn('model_bench_run_failed', { runId: run.id, message: run.error });
+    void persistRun(run);
   });
 
   const { results: _r, anomalies: _a, ...summary } = run;
@@ -511,6 +608,7 @@ const executeRun = async (run: BenchRun): Promise<void> => {
 
   run.state = 'done';
   run.finishedAt = new Date().toISOString();
+  await persistRun(run);
   logger.info('model_bench_run_done', {
     runId: run.id,
     planned: run.planned,

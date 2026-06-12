@@ -4,7 +4,9 @@ import {
   startBench,
   listBenchRuns,
   getBenchRunById,
+  getAllBenchRunsFull,
   benchRunToCsv,
+  benchRunsToCombinedCsv,
   downloadBlob,
   type BenchPhase,
   type BenchRecord,
@@ -65,6 +67,7 @@ export const ModelBenchPanel: React.FC = () => {
   const [run, setRun] = useState<BenchRun | null>(null);
   const [pastRuns, setPastRuns] = useState<BenchRunSummary[]>([]);
   const [starting, setStarting] = useState(false);
+  const [exportingAll, setExportingAll] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -107,6 +110,26 @@ export const ModelBenchPanel: React.FC = () => {
   const loadRun = (id: string) => {
     if (pollTimer.current) clearTimeout(pollTimer.current);
     poll(id);
+  };
+
+  // "All tests combined" export: pull every stored run with full results, ship one file.
+  const exportAll = async (kind: 'json' | 'csv') => {
+    setExportingAll(true);
+    setError(null);
+    try {
+      const { runs } = await getAllBenchRunsFull();
+      if (!runs.length) {
+        setError('No finished runs to export yet.');
+        return;
+      }
+      const stamp = new Date().toISOString().slice(0, 10);
+      if (kind === 'json') downloadBlob(JSON.stringify(runs, null, 2), `model-bench-all-${stamp}.json`, 'application/json');
+      else downloadBlob(benchRunsToCombinedCsv(runs), `model-bench-all-${stamp}.csv`, 'text/csv');
+    } catch (err) {
+      setError((err as Error)?.message || 'Export failed.');
+    } finally {
+      setExportingAll(false);
+    }
   };
 
   const grouped = useMemo(() => (run ? groupByModel(run.results) : []), [run]);
@@ -168,23 +191,62 @@ export const ModelBenchPanel: React.FC = () => {
             {running ? 'Running…' : 'Run bench'}
           </button>
         </div>
-        {pastRuns.length > 0 && (
-          <div className="mt-3 pt-3 border-t border-dashed border-slate-200 flex items-center gap-2 text-xs">
-            <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
-            <span className="font-bold text-slate-500">Past runs (this server boot):</span>
-            {pastRuns.slice(0, 5).map((r) => (
-              <button key={r.id} onClick={() => loadRun(r.id)} className={`px-2 py-0.5 rounded border-2 border-black font-mono ${run?.id === r.id ? 'bg-brand-yellow' : 'bg-white hover:bg-slate-100'}`}>
-                {new Date(r.startedAt).toLocaleTimeString()} · {r.healthy}/{r.tested}{r.state === 'running' ? ' · running' : ''}
-              </button>
-            ))}
-          </div>
-        )}
         {error && (
           <div className="mt-3 text-xs bg-red-100 border-2 border-black rounded-lg p-2 flex items-start gap-1.5">
             <AlertTriangle className="w-4 h-4 shrink-0" /> {error}
           </div>
         )}
       </div>
+
+      {/* Test history — every saved run (persisted in Supabase, survives restarts).
+          Click one to open its full model table below; export one run or everything. */}
+      {pastRuns.length > 0 && (
+        <div className="border-2 border-black rounded-xl bg-white shadow-comic">
+          <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b-2 border-black">
+            <RotateCcw className="w-4 h-4 text-slate-500" />
+            <h3 className="font-display text-base">Test history</h3>
+            <span className="text-[11px] text-slate-500">{pastRuns.length} run{pastRuns.length === 1 ? '' : 's'} · saved permanently · click one to open it</span>
+            <span className="ml-auto flex items-center gap-2 text-xs">
+              <button onClick={() => exportAll('json')} disabled={exportingAll} className="flex items-center gap-1 px-2 py-1 rounded border-2 border-black bg-white hover:bg-brand-yellow disabled:opacity-50 font-bold">
+                {exportingAll ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />} All tests JSON
+              </button>
+              <button onClick={() => exportAll('csv')} disabled={exportingAll} className="flex items-center gap-1 px-2 py-1 rounded border-2 border-black bg-white hover:bg-brand-yellow disabled:opacity-50 font-bold">
+                {exportingAll ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />} All tests CSV
+              </button>
+            </span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[11px]">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50 text-left">
+                  {['Started', 'State', 'Healthy', 'Anomalies', 'Spend', 'Source', 'Phases'].map((h) => (
+                    <th key={h} className="px-3 py-1.5 font-bold uppercase text-[10px] text-slate-500 whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {pastRuns.map((r) => (
+                  <tr
+                    key={r.id}
+                    onClick={() => loadRun(r.id)}
+                    className={`border-t border-slate-100 cursor-pointer hover:bg-brand-yellow/10 ${run?.id === r.id ? 'bg-brand-yellow/20' : ''}`}
+                  >
+                    <td className="px-3 py-1.5 whitespace-nowrap">{new Date(r.startedAt).toLocaleString()}</td>
+                    <td className={`px-3 py-1.5 font-bold ${r.state === 'running' ? 'text-brand-blue' : r.state === 'error' ? 'text-brand-red' : 'text-green-700'}`}>
+                      {r.state === 'running' ? <span className="inline-flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> running</span> : r.state}
+                    </td>
+                    <td className="px-3 py-1.5 tabular-nums">{r.healthy}/{r.tested}{r.planned > r.tested ? ` of ${r.planned}` : ''}</td>
+                    <td className={`px-3 py-1.5 tabular-nums ${r.anomalyCount > 0 ? 'text-amber-700 font-bold' : 'text-slate-400'}`}>{r.anomalyCount}</td>
+                    <td className="px-3 py-1.5 tabular-nums">${r.spendUsd.toFixed(4)}</td>
+                    <td className="px-3 py-1.5 uppercase text-slate-500">{r.options.source}{r.options.freeOnly ? ' · free' : ''}{r.options.match ? ` · "${r.options.match}"` : ''}</td>
+                    <td className="px-3 py-1.5 text-slate-500">{r.options.phases.join('+')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Live progress + spend. */}
       {run && (

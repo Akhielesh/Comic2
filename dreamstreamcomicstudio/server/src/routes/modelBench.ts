@@ -1,12 +1,14 @@
 // Admin model-bench API — the in-app trigger for the all-models live test.
 // Mounted at /api/admin/model-bench behind requireAuth + requireAdmin (same gate
 // as the Admin Email Console). One run at a time; results are polled by id.
+// Finished runs persist to model_bench_runs, so history survives restarts.
 
 import { Router } from 'express';
 import {
   startBenchRun,
   listBenchRuns,
   getBenchRun,
+  getAllBenchRuns,
   getRunningBenchRun,
   type BenchOptions
 } from '../services/modelBenchRunner.js';
@@ -25,16 +27,34 @@ modelBenchRouter.post('/start', (req, res) => {
 });
 
 // Past + current runs, newest first (summaries only — no result rows).
-modelBenchRouter.get('/runs', (_req, res) => {
-  res.json({ runs: listBenchRuns() });
+modelBenchRouter.get('/runs', async (_req, res, next) => {
+  try {
+    res.json({ runs: await listBenchRuns() });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Every finished run WITH full results — the "export all tests combined" payload.
+// Registered before /runs/:id so "export" is never matched as a run id.
+modelBenchRouter.get('/runs/export', async (_req, res, next) => {
+  try {
+    res.json({ runs: await getAllBenchRuns() });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // Full run state — the UI polls this while state === 'running'.
-modelBenchRouter.get('/runs/:id', (req, res) => {
-  const run = getBenchRun(String(req.params.id));
-  if (!run) {
-    res.status(404).json({ error: { message: 'No such bench run (runs are kept in memory and pruned).' } });
-    return;
+modelBenchRouter.get('/runs/:id', async (req, res, next) => {
+  try {
+    const run = await getBenchRun(String(req.params.id));
+    if (!run) {
+      res.status(404).json({ error: { message: 'No such bench run.' } });
+      return;
+    }
+    res.json({ run });
+  } catch (err) {
+    next(err);
   }
-  res.json({ run });
 });
