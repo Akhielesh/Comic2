@@ -4,7 +4,7 @@
 import { get, post } from './apiClient';
 
 export type BenchSource = 'openrouter' | 'nvidia';
-export type BenchPhase = 'echo' | 'context' | 'reasoning';
+export type BenchPhase = 'echo' | 'context' | 'reasoning' | 'json' | 'coding' | 'vision' | 'tools';
 
 export interface BenchOptions {
   source: BenchSource | 'all';
@@ -18,6 +18,8 @@ export interface BenchOptions {
   timeoutMs: number;
   maxTokens: number;
   contextTokens: number;
+  /** Only bench models published within the last N months (0 = no age filter). */
+  maxAgeMonths: number;
 }
 
 export interface BenchRecord {

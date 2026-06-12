@@ -22,7 +22,29 @@ import { BULL } from '../chat/artifacts/kit';
 // DREAMSTREAMSTUDIO_MODELTEST key; this panel just starts a run and polls it.
 
 const POLL_MS = 2_500;
-const ALL_PHASES: BenchPhase[] = ['echo', 'context', 'reasoning'];
+const ALL_PHASES: BenchPhase[] = ['echo', 'context', 'reasoning', 'json', 'coding', 'vision', 'tools'];
+
+// Brief labels for the phase toggles; the originals keep their raw names.
+const PHASE_LABELS: Record<BenchPhase, string> = {
+  echo: 'echo',
+  context: 'context',
+  reasoning: 'reasoning',
+  json: 'Strict JSON',
+  coding: 'Code output',
+  vision: 'Vision (image probe)',
+  tools: 'Tool calling'
+};
+
+// Compact column headers for the results table.
+const PHASE_COLS: Record<BenchPhase, string> = {
+  echo: 'Echo',
+  context: 'Context',
+  reasoning: 'Math',
+  json: 'JSON',
+  coding: 'Coding',
+  vision: 'Vision',
+  tools: 'Tools'
+};
 
 const fmtMs = (ms: number | null | undefined): string =>
   ms === null || ms === undefined ? '—' : ms >= 10_000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
@@ -64,6 +86,7 @@ export const ModelBenchPanel: React.FC = () => {
   const [budgetUsd, setBudgetUsd] = useState(5);
   const [limit, setLimit] = useState(0);
   const [match, setMatch] = useState('');
+  const [maxAgeMonths, setMaxAgeMonths] = useState(6);
 
   const [run, setRun] = useState<BenchRun | null>(null);
   const [pastRuns, setPastRuns] = useState<BenchRunSummary[]>([]);
@@ -99,7 +122,7 @@ export const ModelBenchPanel: React.FC = () => {
     setStarting(true);
     setError(null);
     try {
-      const res = await startBench({ source, freeOnly, phases, budgetUsd, limit, match });
+      const res = await startBench({ source, freeOnly, phases, budgetUsd, limit, match, maxAgeMonths });
       poll(res.run.id);
     } catch (err) {
       setError((err as Error)?.message || 'Failed to start the bench run.');
@@ -136,6 +159,15 @@ export const ModelBenchPanel: React.FC = () => {
   const grouped = useMemo(() => (run ? groupByModel(run.results) : []), [run]);
   const running = run?.state === 'running';
 
+  // Phase columns for the loaded run — whatever phases actually exist in its
+  // results (old saved runs may predate the newer phases), options as fallback.
+  const runPhases = useMemo(() => {
+    if (!run) return [] as BenchPhase[];
+    const present = new Set<BenchPhase>(run.results.map((r) => r.phase));
+    for (const p of run.options.phases ?? []) present.add(p);
+    return ALL_PHASES.filter((p) => present.has(p));
+  }, [run]);
+
   // Per-phase pass rate for the loaded run — a glanceable visual once the run is
   // done: passed / tested per phase, skipped rows excluded (they weren't attempted).
   const phasePassRates = useMemo(() => {
@@ -163,8 +195,8 @@ export const ModelBenchPanel: React.FC = () => {
         </div>
         <p className="text-xs text-slate-600 mb-3">
           Live-tests each model on your sources: echo (instruction-following + latency), context (a code planted in ~6K tokens,
-          asked back) and arithmetic. Plain numbers only. Runs on the dedicated <code>MODELTEST</code> key with a hard budget —
-          pass/fail means &ldquo;working condition&rdquo;, not a capability ranking.
+          asked back), arithmetic, strict JSON, code output, vision and tool calling. Plain numbers only. Runs on the dedicated{' '}
+          <code>MODELTEST</code> key with a hard budget — pass/fail means &ldquo;working condition&rdquo;, not a capability ranking.
         </p>
         <div className="flex flex-wrap items-end gap-3 text-xs">
           <label className="flex flex-col gap-1 font-bold">
@@ -187,14 +219,24 @@ export const ModelBenchPanel: React.FC = () => {
             Filter id contains
             <input value={match} onChange={(e) => setMatch(e.target.value)} placeholder="e.g. claude" className="border-2 border-black rounded px-2 py-1.5 w-36 font-normal" />
           </label>
+          <label className="flex flex-col gap-1 font-bold" title="Skips models published earlier — keeps the run focused and cheap.">
+            Only models newer than
+            <select value={maxAgeMonths} onChange={(e) => setMaxAgeMonths(Number(e.target.value))} className="border-2 border-black rounded px-2 py-1.5 bg-white font-normal">
+              <option value={3}>3 months</option>
+              <option value={6}>6 months</option>
+              <option value={12}>12 months</option>
+              <option value={0}>All ages</option>
+            </select>
+            <span className="font-normal text-slate-400 text-[10px] max-w-[11rem]">Skips models published earlier — keeps the run focused and cheap.</span>
+          </label>
           <label className="flex items-center gap-1.5 font-bold pb-2">
             <input type="checkbox" checked={freeOnly} onChange={(e) => setFreeOnly(e.target.checked)} className="accent-brand-blue" /> Free only
           </label>
-          <div className="flex items-center gap-2 pb-2">
+          <div className="flex flex-wrap items-center gap-2 pb-2">
             <span className="font-bold">Phases:</span>
             {ALL_PHASES.map((p) => (
               <button key={p} onClick={() => togglePhase(p)} className={`px-2 py-1 rounded border-2 border-black font-bold ${phases.includes(p) ? 'bg-brand-blue text-white' : 'bg-white hover:bg-slate-100'}`}>
-                {p}
+                {PHASE_LABELS[p]}
               </button>
             ))}
           </div>
@@ -331,7 +373,7 @@ export const ModelBenchPanel: React.FC = () => {
           <table className="w-full text-[11px]">
             <thead>
               <tr className="border-b-2 border-black bg-slate-50 text-left">
-                {['Model', 'Source', 'Echo', 'TTFT', 'Total', 'tok/s', 'Context', 'Math', 'Cost', 'Error'].map((h) => (
+                {['Model', 'Source', 'TTFT', 'Total', 'tok/s', ...runPhases.map((p) => PHASE_COLS[p]), 'Cost', 'Error'].map((h) => (
                   <th key={h} className="px-2 py-1.5 font-bold uppercase text-[10px] text-slate-500 whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -341,25 +383,25 @@ export const ModelBenchPanel: React.FC = () => {
                 const echo = g.rows.find((r) => r.phase === 'echo') || g.rows[0];
                 const cost = g.rows.reduce((s, r) => s + (r.costUsd || 0), 0);
                 const err = g.rows.find((r) => r.errorDetail && r.errorClass !== 'skipped');
-                const cells: { label: string; cls: string }[] = [phaseCell(g.rows, 'echo'), phaseCell(g.rows, 'context'), phaseCell(g.rows, 'reasoning')];
                 const isOpen = expanded === g.key;
                 return (
                   <React.Fragment key={g.key}>
                     <tr onClick={() => setExpanded(isOpen ? null : g.key)} className={`border-t border-slate-100 cursor-pointer hover:bg-brand-yellow/10 ${isOpen ? 'bg-brand-yellow/10' : ''}`}>
                       <td className="px-2 py-1 font-mono max-w-[26rem] truncate" title={g.model}>{g.model}</td>
                       <td className="px-2 py-1 uppercase text-slate-500">{g.source}</td>
-                      <td className={`px-2 py-1 whitespace-nowrap ${cells[0].cls}`}>{cells[0].label}</td>
                       <td className="px-2 py-1 tabular-nums">{fmtMs(echo.ttftMs)}</td>
                       <td className={`px-2 py-1 tabular-nums ${(echo.totalMs ?? 0) > 30_000 ? 'text-amber-700 font-bold' : ''}`}>{fmtMs(echo.totalMs)}</td>
                       <td className="px-2 py-1 tabular-nums">{echo.tokensPerSec ?? '—'}</td>
-                      <td className={`px-2 py-1 whitespace-nowrap ${cells[1].cls}`}>{cells[1].label}</td>
-                      <td className={`px-2 py-1 whitespace-nowrap ${cells[2].cls}`}>{cells[2].label}</td>
+                      {runPhases.map((p) => {
+                        const cell = phaseCell(g.rows, p);
+                        return <td key={p} className={`px-2 py-1 whitespace-nowrap ${cell.cls}`}>{cell.label}</td>;
+                      })}
                       <td className="px-2 py-1 tabular-nums">{fmtUsd(cost || null)}</td>
                       <td className="px-2 py-1 max-w-[16rem] truncate text-slate-500" title={err?.errorDetail || ''}>{err?.errorDetail || ''}</td>
                     </tr>
                     {isOpen && (
                       <tr className="border-t border-slate-100 bg-slate-50/60">
-                        <td colSpan={10} className="px-3 py-2">
+                        <td colSpan={7 + runPhases.length} className="px-3 py-2">
                           <div className="grid gap-1.5">
                             {g.rows.map((r) => (
                               <div key={r.phase} className="font-mono text-[10px] leading-relaxed">
