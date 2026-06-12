@@ -371,7 +371,9 @@ const stockTool: ChatTool = {
       // price was "retrieved" or invent one / deflect the user to another website.
       return {
         content: `Could not fetch a live quote for "${symbol}" right now (${(err as Error)?.message || 'unknown error'}). No card was shown. Tell the user the market data is temporarily unavailable and do NOT invent a price or tell them to check another site.`,
-        notice: { level: 'error', message: `Market quote unavailable for "${symbol}".` }
+        // Carry the per-source reasons — a datacenter-IP block upstream is
+        // undiagnosable from a generic "unavailable".
+        notice: { level: 'error', message: `Market quote unavailable for "${symbol}" — ${(err as Error)?.message || 'unknown error'}` }
       };
     }
   }

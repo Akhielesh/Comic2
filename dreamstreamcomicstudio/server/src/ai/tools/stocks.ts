@@ -467,22 +467,29 @@ const getStockQuoteUncached = async (trimmed: string, signal?: AbortSignal): Pro
   // market (its volume and ranges understate the consolidated tape), so it must
   // never preempt Yahoo — running it first is what made cards inaccurate and bare
   // (no name/fundamentals/5Y) the moment Alpaca keys were configured. Stooq stays
-  // the last-resort basic quote.
+  // the last-resort basic quote. When EVERY source fails, the error names each
+  // source's reason — datacenter IP blocks are invisible without this.
+  const failures: string[] = [];
   try {
     return await getYahooQuote(symbol, signal);
-  } catch {
-    /* fall through */
+  } catch (err) {
+    failures.push(`Yahoo: ${(err as Error)?.message || 'failed'}`);
   }
   if (alpacaEnabled() && isAlpacaSymbol(symbol)) {
     try {
       const quote = await getAlpacaQuote(symbol, signal);
       const headlines = await yfHeadlines(quote.name || quote.symbol, signal);
       return headlines ? { ...quote, headlines } : quote;
-    } catch {
-      /* fall through to Stooq */
+    } catch (err) {
+      failures.push(`Alpaca: ${(err as Error)?.message || 'failed'}`);
     }
   }
-  return await getStooqQuote(symbol, signal);
+  try {
+    return await getStooqQuote(symbol, signal);
+  } catch (err) {
+    failures.push(`Stooq: ${(err as Error)?.message || 'failed'}`);
+    throw new Error(failures.join(' · '));
+  }
 };
 
 /** A trimmed quote for building watchlists/heatmaps where the full enrichment

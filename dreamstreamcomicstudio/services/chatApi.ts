@@ -90,13 +90,22 @@ export const sendChatMessage = (
  * fresh artifacts back. Server-whitelisted to pure data tools — no model involved.
  * `args` may patch the original call (e.g. a news widget switching topic).
  */
+export interface RefreshArtifactResult {
+  artifacts: ChatArtifact[];
+  asOf?: string;
+  /** Tool-supplied failure/degradation notice (present when something went wrong). */
+  notice?: { level?: string; message?: string };
+  /** Tool's own text when it produced no artifacts — the honest "why". */
+  summary?: string;
+}
+
 export const refreshArtifact = async (
   tool: string,
   args: Record<string, unknown>
-): Promise<{ artifacts: ChatArtifact[]; asOf?: string }> => {
+): Promise<RefreshArtifactResult> => {
   const { gatherClientContext } = await import('./clientContext');
   const clientContext = await gatherClientContext().catch(() => undefined);
-  return post<{ tool: string; args: Record<string, unknown>; clientContext?: unknown }, { artifacts: ChatArtifact[]; asOf?: string }>(
+  return post<{ tool: string; args: Record<string, unknown>; clientContext?: unknown }, RefreshArtifactResult>(
     '/api/chat/tool-refresh',
     { tool, args, ...(clientContext ? { clientContext } : {}) }
   );

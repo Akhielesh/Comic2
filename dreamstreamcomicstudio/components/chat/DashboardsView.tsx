@@ -1017,7 +1017,9 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode }> = ({
       const result = await refreshArtifact(tile.tool, tile.args);
       const want = EXPECTED_ARTIFACT[tile.tool];
       const artifact = result.artifacts.find((a) => a.type === want) ?? result.artifacts[0];
-      if (!artifact) throw new Error('No data returned — check the widget’s settings.');
+      // Surface the tool's own reason (upstream block, bad symbol, missing key…)
+      // instead of a generic shrug — "No data returned" hid real outages.
+      if (!artifact) throw new Error(result.notice?.message || result.summary || 'No data returned — check the widget’s settings.');
       setTileStates((prev) => ({
         ...prev,
         [tile.id]: { loading: false, artifact, asOf: result.asOf ?? new Date().toISOString() }
