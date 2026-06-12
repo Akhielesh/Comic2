@@ -82,3 +82,43 @@ describe('usage snapshot & health', () => {
     expect(row.health).toBe('near-cap');
   });
 });
+
+describe('account-wise cloud deltas', () => {
+  it('attributes deltas to the ALS account and accumulates per day', async () => {
+    const { runWithAccount } = await import('./accountContext.js');
+    const url = 'https://api.frankfurter.app/latest?from=USD&to=EUR';
+    runWithAccount('user-123', () => {
+      noteProviderCall(url, true, T0);
+      noteProviderCall(url, false, T0 + 1000);
+    });
+    noteProviderCall(url, true, T0 + 2000); // no account context → 'anon'
+    const { __pendingUsageDeltas } = await import('./providerUsage.js');
+    const deltas = __pendingUsageDeltas();
+    const user = deltas.find((d) => d.account_id === 'user-123')!;
+    const anon = deltas.find((d) => d.account_id === 'anon')!;
+    expect(user).toMatchObject({ provider: 'frankfurter', day: '2026-06-11', calls: 2, errors: 1, blocked: 0 });
+    expect(anon).toMatchObject({ calls: 1, errors: 0 });
+  });
+
+  it('counts budget blocks per account and survives a failed flush', async () => {
+    const { runWithAccount } = await import('./accountContext.js');
+    const { setUsageCloudSink, flushUsageDeltas, __pendingUsageDeltas } = await import('./providerUsage.js');
+    process.env.PROVIDER_BUDGETS = JSON.stringify({ frankfurter: { perMin: 1, perDay: 1000 } });
+    const url = 'https://api.frankfurter.app/latest?from=USD&to=EUR';
+    runWithAccount('user-9', () => {
+      noteProviderCall(url, true, T0);
+      expect(() => assertProviderBudget(url, T0 + 100)).toThrow(ProviderBudgetError);
+    });
+    expect(__pendingUsageDeltas().find((d) => d.account_id === 'user-9')?.blocked).toBe(1);
+    // Failing sink → deltas restored for retry.
+    setUsageCloudSink(async () => { throw new Error('db down'); });
+    await flushUsageDeltas();
+    expect(__pendingUsageDeltas().length).toBeGreaterThan(0);
+    // Healthy sink → drained.
+    const rows: unknown[] = [];
+    setUsageCloudSink(async (r) => { rows.push(...r); });
+    await flushUsageDeltas();
+    expect(rows.length).toBeGreaterThan(0);
+    expect(__pendingUsageDeltas()).toHaveLength(0);
+  });
+});

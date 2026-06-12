@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowDown, ArrowUp, Clapperboard, CloudSun, LayoutDashboard, LineChart, Loader2, Lock, LockOpen,
-  Map as MapIcon, MapPin, Maximize2, MessageCircle, Minimize2, MoreHorizontal, Newspaper,
+  Clapperboard, CloudSun, LayoutDashboard, LineChart, Loader2, Lock, LockOpen,
+  Map as MapIcon, MapPin, Maximize2, MessageCircle, Minimize2, MoreHorizontal, MoreVertical, Newspaper,
   Pencil, Plus, RefreshCw, Send, Sparkles, Trash2, X
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -9,10 +9,11 @@ import type { ChatArtifact } from '../../apiTypes';
 import { refreshArtifact, sendChatMessage } from '../../services/chatApi';
 import { ChatMarkdown } from './ChatMarkdown';
 import {
-  DASHBOARD_TEMPLATES, addTile, createDashboard, listDashboards, moveTile,
+  DASHBOARD_TEMPLATES, addTile, createDashboard, listDashboards,
   onDashboardsChanged, removeDashboard, removeTile, reorderTile, updateDashboard, updateTile,
   type CustomDashboard, type DashboardTemplate, type DashboardTile
 } from '../../services/customDashboards';
+import { runDashboardCommand, type DashboardCommandResult } from '../../services/dashboardAi';
 import { deriveSmartPicks, tileKey, type SmartPick } from '../../services/smartPicks';
 import { getChatMemory, listChatSessions } from '../../services/chatStorage';
 import { useAuth } from '../../contexts/AuthContext';
@@ -26,9 +27,10 @@ import { renderArtifactNode } from './artifacts/ChatArtifacts';
 // render the result with the SAME artifact cards the chat uses, in the tile's
 // chosen density. No model round-trip — these are pure data tools.
 //
-// The board doubles as the user's PULSE: a greeting strip with smart picks mined
-// from their chat memory + recent conversations (services/smartPicks), drag-drop
-// rearranging, and a lock toggle that freezes the layout into a view-only board.
+// The board doubles as the user's PULSE: a sticky AI command bar (greeting +
+// natural-language build/change commands via services/dashboardAi), smart picks
+// mined from their chat memory + recent conversations (services/smartPicks),
+// drag-drop rearranging, and a lock toggle that freezes the layout view-only.
 
 // ---------------------------------------------------------------- catalog -----
 
@@ -159,66 +161,275 @@ interface TileState {
   error?: string;
 }
 
-const ToolButton: React.FC<{
-  title: string;
-  onClick: () => void;
-  disabled?: boolean;
-  children: React.ReactNode;
-}> = ({ title, onClick, disabled, children }) => (
-  <button
-    type="button"
-    title={title}
-    aria-label={title}
-    disabled={disabled}
-    onClick={onClick}
-    className="flex h-6 w-6 items-center justify-center rounded-md text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] disabled:pointer-events-none disabled:opacity-35"
-  >
-    {children}
-  </button>
-);
+/** Per-tool mini-form fields for the in-menu tile editor. Tools without an
+ *  entry fall back to a raw-JSON args editor. */
+interface TileEditField {
+  key: string;
+  label: string;
+  placeholder?: string;
+  optional?: boolean;
+  /** Comma-separated input stored as string[] in args (e.g. show_map.places). */
+  list?: boolean;
+}
+
+const TILE_EDIT_FIELDS: Record<string, TileEditField[]> = {
+  get_stock: [{ key: 'symbol', label: 'Symbol or asset', placeholder: 'AAPL, ^GSPC, gold, BTC-USD…' }],
+  get_weather: [{ key: 'location', label: 'Location', placeholder: 'Tokyo or Austin, TX' }],
+  get_news: [{ key: 'query', label: 'Topic/query', placeholder: 'AI chips, business…' }],
+  crypto_price: [{ key: 'coin', label: 'Coin', placeholder: 'bitcoin, ethereum…' }],
+  find_places: [
+    { key: 'query', label: 'What', placeholder: 'coffee, ramen, hotels…' },
+    { key: 'near', label: 'Near', placeholder: 'Blank = my location', optional: true }
+  ],
+  video_search: [{ key: 'query', label: 'Query', placeholder: 'how to make croissants…' }],
+  show_map: [{ key: 'places', label: 'Places (comma-separated)', placeholder: 'Eiffel Tower, Louvre', list: true }]
+};
+
+/** A sensible new tile label after an edit (mirrors AddWidgetPanel's labels). */
+const labelForEditedArgs = (tool: string, values: Record<string, string>): string | undefined => {
+  if (tool === 'find_places') {
+    const query = (values.query ?? '').trim();
+    const near = (values.near ?? '').trim();
+    return near ? `${query} · ${near}` : query || undefined;
+  }
+  if (tool === 'show_map') {
+    const places = (values.places ?? '').split(',').map((p) => p.trim()).filter(Boolean);
+    return places.length ? places.join(', ') : undefined;
+  }
+  const first = TILE_EDIT_FIELDS[tool]?.[0];
+  const v = first ? (values[first.key] ?? '').trim() : '';
+  return v || undefined;
+};
+
+/** Mini-form shown inside the tile's ⋯ popover. Known tools get 1–2 smart
+ *  fields; anything else gets a validated raw-JSON args editor. */
+const TileEditForm: React.FC<{
+  tile: DashboardTile;
+  onSave: (args: Record<string, unknown>, label?: string) => void;
+  onCancel: () => void;
+}> = ({ tile, onSave, onCancel }) => {
+  const fields = TILE_EDIT_FIELDS[tile.tool];
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      (fields ?? []).map((f) => {
+        // get_news tiles created from a section store { topic } — prefill from it.
+        const v = tile.args[f.key] ?? (tile.tool === 'get_news' && f.key === 'query' ? tile.args.topic : undefined);
+        return [f.key, f.list && Array.isArray(v) ? v.join(', ') : typeof v === 'string' || typeof v === 'number' ? String(v) : ''];
+      })
+    )
+  );
+  const [jsonText, setJsonText] = useState(() => JSON.stringify(tile.args, null, 2));
+  const [jsonError, setJsonError] = useState<string | null>(null);
+
+  const valid = fields
+    ? fields.every((f) => {
+        if (f.optional) return true;
+        const raw = (values[f.key] ?? '').trim();
+        return f.list ? raw.split(',').some((p) => p.trim()) : !!raw;
+      })
+    : true;
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (fields) {
+      if (!valid) return;
+      const args: Record<string, unknown> = {};
+      for (const f of fields) {
+        const raw = (values[f.key] ?? '').trim();
+        if (!raw) continue; // optional + empty → omit
+        args[f.key] = f.list ? raw.split(',').map((p) => p.trim()).filter(Boolean) : raw;
+      }
+      onSave(args, labelForEditedArgs(tile.tool, values));
+      return;
+    }
+    try {
+      const parsed: unknown = JSON.parse(jsonText);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Args must be a JSON object.');
+      onSave(parsed as Record<string, unknown>); // keep the existing label
+    } catch (err) {
+      setJsonError((err as Error)?.message || 'Invalid JSON.');
+    }
+  };
+
+  return (
+    <form onSubmit={submit} className="space-y-2.5">
+      <div className="text-xs font-semibold text-[var(--ds-ink)]">Edit {TOOL_LABELS[tile.tool] || tile.tool}</div>
+      {fields ? (
+        fields.map((f, i) => (
+          <div key={f.key}>
+            <FieldLabel>{f.label}</FieldLabel>
+            <input
+              autoFocus={i === 0}
+              value={values[f.key] ?? ''}
+              onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
+              placeholder={f.placeholder}
+              className={inputCls}
+            />
+          </div>
+        ))
+      ) : (
+        <div>
+          <FieldLabel>Args (JSON)</FieldLabel>
+          <textarea
+            autoFocus
+            rows={5}
+            spellCheck={false}
+            value={jsonText}
+            onChange={(e) => {
+              setJsonText(e.target.value);
+              setJsonError(null);
+            }}
+            aria-label="Tool arguments as JSON"
+            className="w-full resize-y rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-3 py-2 font-mono text-xs text-[var(--ds-ink)] outline-none transition-colors placeholder:text-[var(--ds-muted)] focus:border-[var(--ds-accent)]"
+          />
+          {jsonError && <p className="mt-1 text-[11px] text-rose-600">{jsonError}</p>}
+        </div>
+      )}
+      <div className="flex items-center justify-end gap-1.5 pt-0.5">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={!valid}
+          className="rounded-lg bg-[var(--ds-accent)] px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-[var(--ds-accent-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          Save
+        </button>
+      </div>
+    </form>
+  );
+};
+
+const tileMenuItemCls =
+  'flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-[var(--ds-hover)] disabled:pointer-events-none disabled:opacity-40';
 
 const TileCard: React.FC<{
   tile: DashboardTile;
   state?: TileState;
-  isFirst: boolean;
-  isLast: boolean;
-  /** Locked board = view-only: no move/resize/remove chrome, refresh stays. */
+  /** Locked board = view-only: the ⋯ menu offers only Refresh. */
   locked: boolean;
-  onMove: (dir: -1 | 1) => void;
   onToggleDensity: () => void;
   onRefresh: () => void;
   onRemove: () => void;
-}> = ({ tile, state, isFirst, isLast, locked, onMove, onToggleDensity, onRefresh, onRemove }) => {
+  /** Persist edited args (+ optional new label), then refetch the tile. */
+  onSaveEdit: (args: Record<string, unknown>, label?: string) => void;
+}> = ({ tile, state, locked, onToggleDensity, onRefresh, onRemove, onSaveEdit }) => {
   const label = tile.label || TOOL_LABELS[tile.tool] || tile.tool;
   const hasCard = !!state?.artifact;
+  // ⋯ popover: 'menu' lists actions; 'edit' swaps in the mini args form.
+  const [menu, setMenu] = useState<'closed' | 'menu' | 'edit'>('closed');
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Close on outside click / Escape while open.
+  useEffect(() => {
+    if (menu === 'closed') return;
+    const onDown = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenu('closed');
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenu('closed');
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [menu]);
+
+  const close = () => setMenu('closed');
+
   return (
     <div className="group/tile relative">
-      {/* Slim floating toolbar — appears on hover/focus, always reachable on touch.
-          On a locked board only the refresh control remains. */}
-      <div className="absolute right-2 top-2 z-20 flex items-center gap-0.5 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] p-0.5 opacity-0 shadow-[0_1px_3px_rgba(0,0,0,0.1)] backdrop-blur-sm transition-opacity duration-200 focus-within:opacity-100 group-hover/tile:opacity-100 [@media(pointer:coarse)]:opacity-70">
-        {!locked && (
-          <>
-            <ToolButton title="Move up" onClick={() => onMove(-1)} disabled={isFirst}>
-              <ArrowUp className="h-3 w-3" />
-            </ToolButton>
-            <ToolButton title="Move down" onClick={() => onMove(1)} disabled={isLast}>
-              <ArrowDown className="h-3 w-3" />
-            </ToolButton>
-            <ToolButton
-              title={tile.density === 'compact' ? 'Expand: full detail' : 'Collapse: glance view'}
-              onClick={onToggleDensity}
+      {/* ⋯ menu — appears on hover/focus, always reachable on touch. Drags
+          starting inside it are cancelled so form text selection works. */}
+      <div
+        ref={menuRef}
+        onDragStart={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        className={`absolute right-2 top-2 z-20 transition-opacity duration-200 focus-within:opacity-100 group-hover/tile:opacity-100 [@media(pointer:coarse)]:opacity-70 ${
+          menu === 'closed' ? 'opacity-0' : 'opacity-100'
+        }`}
+      >
+        <button
+          type="button"
+          title="Widget options"
+          aria-label="Widget options"
+          aria-expanded={menu !== 'closed'}
+          onClick={() => setMenu((m) => (m === 'closed' ? 'menu' : 'closed'))}
+          className="flex h-7 w-7 items-center justify-center rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] text-[var(--ds-muted)] shadow-[0_1px_3px_rgba(0,0,0,0.1)] backdrop-blur-sm transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]"
+        >
+          <MoreVertical className="h-3.5 w-3.5" />
+        </button>
+
+        {menu === 'menu' && (
+          <div className="absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] py-1 shadow-lg">
+            {!locked && (
+              <button type="button" onClick={() => setMenu('edit')} className={`${tileMenuItemCls} text-[var(--ds-ink)]`}>
+                <Pencil className="h-3.5 w-3.5 text-[var(--ds-muted)]" /> Edit
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={state?.loading}
+              onClick={() => {
+                onRefresh();
+                close();
+              }}
+              className={`${tileMenuItemCls} text-[var(--ds-ink)]`}
             >
-              {tile.density === 'compact' ? <Maximize2 className="h-3 w-3" /> : <Minimize2 className="h-3 w-3" />}
-            </ToolButton>
-          </>
+              <RefreshCw className={`h-3.5 w-3.5 text-[var(--ds-muted)] ${state?.loading ? 'animate-spin' : ''}`} /> Refresh
+            </button>
+            {!locked && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onToggleDensity();
+                    close();
+                  }}
+                  className={`${tileMenuItemCls} text-[var(--ds-ink)]`}
+                >
+                  {tile.density === 'compact' ? (
+                    <Maximize2 className="h-3.5 w-3.5 text-[var(--ds-muted)]" />
+                  ) : (
+                    <Minimize2 className="h-3.5 w-3.5 text-[var(--ds-muted)]" />
+                  )}
+                  {tile.density === 'compact' ? 'Detailed view' : 'Compact view'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onRemove();
+                    close();
+                  }}
+                  className={`${tileMenuItemCls} text-rose-600`}
+                >
+                  <Trash2 className="h-3.5 w-3.5" /> Remove
+                </button>
+              </>
+            )}
+          </div>
         )}
-        <ToolButton title="Refresh" onClick={onRefresh} disabled={state?.loading}>
-          <RefreshCw className={`h-3 w-3 ${state?.loading ? 'animate-spin' : ''}`} />
-        </ToolButton>
-        {!locked && (
-          <ToolButton title="Remove widget" onClick={onRemove}>
-            <Trash2 className="h-3 w-3" />
-          </ToolButton>
+
+        {menu === 'edit' && !locked && (
+          <div className="absolute right-0 top-full z-20 mt-1 w-64 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-raised)] p-3 shadow-lg">
+            <TileEditForm
+              tile={tile}
+              onSave={(args, newLabel) => {
+                onSaveEdit(args, newLabel);
+                close();
+              }}
+              onCancel={() => setMenu('menu')}
+            />
+          </div>
         )}
       </div>
 
@@ -493,6 +704,101 @@ const greeting = (): string => {
   return h < 5 ? 'Up late' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
 };
 
+// --------------------------------------------------------- AI command bar -----
+
+/** First-paint suggestion chips → the fuller command each prefills. */
+const COMMAND_CHIPS: Array<{ label: string; command: string }> = [
+  { label: 'Study sprint', command: 'Build a study sprint dashboard for machine learning — tutorial videos, AI news and quiet cafes to work from' },
+  { label: 'Cook tonight', command: 'Build a cook tonight dashboard — dinner recipe videos, grocery stores near me and tonight’s weather' },
+  { label: 'Markets snapshot', command: 'Build a markets snapshot dashboard — S&P 500, NVDA, bitcoin and business headlines' },
+  { label: 'Trip planner', command: 'Build a trip planner dashboard for Tokyo — weather, a map of the big sights and ramen near Shibuya' }
+];
+
+/** Sticky glass bar: greeting + a natural-language command line that builds or
+ *  edits boards via services/dashboardAi. The bar shows the result message
+ *  inline; structural side effects (switch board, refetch tiles) go through
+ *  `onResult` so the view owns its state. */
+const AiCommandBar: React.FC<{
+  board: CustomDashboard | null;
+  onResult: (result: DashboardCommandResult) => void;
+}> = ({ board, onResult }) => {
+  const [input, setInput] = useState('');
+  const [pending, setPending] = useState(false);
+  const [result, setResult] = useState<DashboardCommandResult | null>(null);
+  // Chips are a first-paint affordance — gone after the first submit.
+  const [virgin, setVirgin] = useState(true);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const command = input.trim();
+    if (!command || pending) return;
+    setPending(true);
+    setResult(null);
+    setVirgin(false);
+    let res: DashboardCommandResult;
+    try {
+      res = await runDashboardCommand(command, board);
+    } catch (err) {
+      res = { kind: 'error', message: (err as Error)?.message || 'The AI couldn’t process that — try again.' };
+    }
+    setPending(false);
+    setResult(res);
+    if (res.kind !== 'error') {
+      setInput('');
+      onResult(res);
+    }
+  };
+
+  return (
+    <div className="sticky top-0 z-30 border-b border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] backdrop-blur">
+      <div className="mx-auto w-full max-w-6xl px-3 py-2.5 sm:px-6">
+        <form onSubmit={submit} className="flex items-center gap-2">
+          <span className="hidden shrink-0 items-center gap-1.5 text-xs font-medium text-[var(--ds-muted)] sm:flex">
+            <Sparkles className="h-3.5 w-3.5 text-[var(--ds-accent)]" />
+            {greeting()}
+          </span>
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            disabled={pending}
+            aria-label="Tell the AI what to build or change"
+            placeholder="Tell the AI what to build or change — “study dashboard for ML”, “change weather to Tokyo”, “stocks to NVDA”…"
+            className="min-w-0 flex-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-3 py-1.5 text-base text-[var(--ds-ink)] outline-none transition-colors placeholder:text-[var(--ds-muted)] focus:border-[var(--ds-accent)] disabled:opacity-60 sm:text-sm"
+          />
+          <button
+            type="submit"
+            disabled={pending || !input.trim()}
+            aria-label="Run AI command"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[var(--ds-accent)] text-white transition-colors hover:bg-[var(--ds-accent-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+          </button>
+        </form>
+        {virgin && !input && !pending && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {COMMAND_CHIPS.map((c) => (
+              <button
+                key={c.label}
+                type="button"
+                title={c.command}
+                onClick={() => setInput(c.command)}
+                className="rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-2.5 py-1 text-[11px] font-medium text-[var(--ds-muted)] transition-colors hover:border-[var(--ds-accent)] hover:text-[var(--ds-ink)]"
+              >
+                {c.label}
+              </button>
+            ))}
+          </div>
+        )}
+        {result && (
+          <p role="status" className={`mt-1.5 text-[11px] ${result.kind === 'error' ? 'text-rose-600' : 'text-[var(--ds-muted)]'}`}>
+            {result.message}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+};
+
 export const DashboardsView: React.FC = () => {
   const { user } = useAuth();
   const [dashboards, setDashboards] = useState<CustomDashboard[]>(() => listDashboards());
@@ -638,7 +944,29 @@ export const DashboardsView: React.FC = () => {
     setActiveId(d.id);
   };
 
-  // Drag-drop reorder (desktop). Arrows in the tile toolbar remain for keyboard/touch.
+  // Apply an AI command result: re-read boards from the store, switch to a
+  // freshly created board, and refetch any tiles the AI changed.
+  const handleAiResult = useCallback(
+    (result: DashboardCommandResult) => {
+      if (result.kind === 'error') return;
+      const boards = listDashboards();
+      setDashboards(boards);
+      if (result.kind === 'created' && result.dashboardId) {
+        setActiveId(result.dashboardId);
+        return; // new tiles load via the initial-fetch effect
+      }
+      if (result.kind === 'updated' && result.changedTileIds?.length) {
+        const pool = result.dashboardId ? boards.filter((b) => b.id === result.dashboardId) : boards;
+        for (const id of result.changedTileIds) {
+          const changed = pool.flatMap((b) => b.tiles).find((t) => t.id === id);
+          if (changed) void fetchTile(changed);
+        }
+      }
+    },
+    [fetchTile]
+  );
+
+  // Drag-drop reorder (desktop).
   const handleDrop = (toIndex: number) => {
     if (active && dragId) reorderTile(active.id, dragId, toIndex);
     setDragId(null);
@@ -652,6 +980,8 @@ export const DashboardsView: React.FC = () => {
   if (dashboards.length === 0) {
     return (
       <div className="h-full w-full overflow-y-auto bg-[var(--ds-canvas)]">
+        {/* The AI bar also bootstraps the first board ("study dashboard for ML"). */}
+        <AiCommandBar board={null} onResult={handleAiResult} />
         <div className="mx-auto w-full max-w-3xl px-4 py-12 text-center sm:py-16">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#D97757]/10">
             <LayoutDashboard className="h-7 w-7 text-[var(--ds-accent)]" />
@@ -683,6 +1013,8 @@ export const DashboardsView: React.FC = () => {
 
   return (
     <div className="h-full w-full overflow-y-auto bg-[var(--ds-canvas)]">
+      {/* -------------------------------------------- sticky AI command bar --- */}
+      <AiCommandBar board={active ?? null} onResult={handleAiResult} />
       <div className="mx-auto w-full max-w-6xl px-3 py-4 sm:px-6 sm:py-6">
         {/* ------------------------------------------------ switcher header --- */}
         <header className="mb-4 flex flex-wrap items-center gap-2">
@@ -797,13 +1129,14 @@ export const DashboardsView: React.FC = () => {
         </header>
 
         {/* ------------------------------------------------------ pulse strip --- */}
-        {/* Greeting + smart picks mined from the user's memory and recent chats.
-            One tap pins a pick as a live tile. Hidden while the board is locked. */}
+        {/* Smart picks mined from the user's memory and recent chats (the greeting
+            lives in the sticky AI bar). One tap pins a pick as a live tile.
+            Hidden while the board is locked. */}
         {active && !locked && smartPicks.length > 0 && (
           <div className="mb-4 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-4 py-3 shadow-[0_1px_3px_rgba(0,0,0,0.05)]">
             <div className="flex items-center gap-1.5 text-sm font-semibold text-[var(--ds-ink)]">
               <Sparkles className="h-4 w-4 text-[var(--ds-accent)]" />
-              {greeting()} — your picks today
+              Your picks today
             </div>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {smartPicks.map((pick) => (
@@ -863,9 +1196,13 @@ export const DashboardsView: React.FC = () => {
                   <div className="group/tile relative">
                     {!locked && (
                       <div className="absolute right-2 top-2 z-20 flex items-center gap-0.5 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] p-0.5 opacity-0 shadow-[0_1px_3px_rgba(0,0,0,0.1)] backdrop-blur-sm transition-opacity duration-200 focus-within:opacity-100 group-hover/tile:opacity-100 [@media(pointer:coarse)]:opacity-70">
-                        <ToolButton title="Remove widget" onClick={() => removeTile(active.id, tile.id)}>
+                        <button
+                          title="Remove widget"
+                          onClick={() => removeTile(active.id, tile.id)}
+                          className="rounded-md p-1 text-[var(--ds-muted)] transition-colors duration-200 hover:bg-[var(--ds-hover)] hover:text-rose-600"
+                        >
                           <Trash2 className="h-3 w-3" />
-                        </ToolButton>
+                        </button>
                       </div>
                     )}
                     <AiChatTile />
@@ -874,15 +1211,17 @@ export const DashboardsView: React.FC = () => {
                 <TileCard
                   tile={tile}
                   state={tileStates[tile.id]}
-                  isFirst={i === 0}
-                  isLast={i === active.tiles.length - 1}
                   locked={locked}
-                  onMove={(dir) => moveTile(active.id, tile.id, dir)}
                   onToggleDensity={() =>
                     updateTile(active.id, tile.id, { density: tile.density === 'compact' ? 'detailed' : 'compact' })
                   }
                   onRefresh={() => void fetchTile(tile)}
                   onRemove={() => removeTile(active.id, tile.id)}
+                  onSaveEdit={(args, newLabel) => {
+                    updateTile(active.id, tile.id, { args, ...(newLabel ? { label: newLabel } : {}) });
+                    // Refetch with the fresh args (state will catch up via the change event).
+                    void fetchTile({ ...tile, args });
+                  }}
                 />
                 )}
               </div>

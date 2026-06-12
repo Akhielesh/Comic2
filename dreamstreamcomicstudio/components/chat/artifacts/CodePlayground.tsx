@@ -62,7 +62,7 @@ export const CodePlayground: React.FC<{ data: CodeExerciseArtifact }> = ({ data 
         {data.instructions && <p className="text-sm text-[var(--ds-muted)]">{data.instructions}</p>}
         {data.task && (
           <div className="text-sm text-[var(--ds-ink)] rounded-xl bg-[var(--ds-well)] p-2.5">
-            <span className="font-semibold text-emerald-800">Task:</span> {data.task}
+            <span className="font-semibold text-emerald-800 dark:text-emerald-300">Task:</span> {data.task}
           </div>
         )}
 

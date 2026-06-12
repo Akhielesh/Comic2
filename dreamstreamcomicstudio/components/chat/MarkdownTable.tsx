@@ -209,8 +209,8 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
                   return (
                     <td
                       key={ci}
-                      className={`relative px-2.5 py-1.5 align-top ${
-                        stat.isNumeric ? 'text-right font-medium tabular-nums text-[var(--ds-ink)]' : 'text-[#3c3a33]'
+                      className={`relative px-2.5 py-1.5 align-top text-[var(--ds-ink)] ${
+                        stat.isNumeric ? 'text-right font-medium tabular-nums' : ''
                       }`}
                     >
                       {showBars && n !== null && (

@@ -30,7 +30,7 @@ const TEMPLATE_COLORS: Record<string, string> = {
 export const CodeStudioCard: React.FC<{ data: CodeStudioArtifact }> = ({ data }) => {
   const openInStudio = useStudioHandoff((s) => s.open);
   const templateLabel = TEMPLATE_LABELS[data.template] || data.template;
-  const templateColor = TEMPLATE_COLORS[data.template] || '#6e6a60';
+  const templateColor = TEMPLATE_COLORS[data.template] || 'var(--ds-muted)';
 
   return (
     <Surface

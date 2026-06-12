@@ -365,7 +365,7 @@ export const LearningPathCard: React.FC<{ data: LearningPathArtifact }> = ({ dat
                 >
                   <span
                     className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[11px] font-semibold tabular-nums"
-                    style={complete ? { color: '#fff', backgroundColor: accent } : { color: '#6e6a60', backgroundColor: 'rgba(0,0,0,0.04)' }}
+                    style={complete ? { color: '#fff', backgroundColor: accent } : { color: 'var(--ds-muted)', backgroundColor: 'var(--ds-well-strong)' }}
                   >
                     {complete ? <Check className="h-3.5 w-3.5" strokeWidth={3} /> : mi + 1}
                   </span>

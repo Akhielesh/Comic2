@@ -35,7 +35,7 @@ const initials = (s?: string): string =>
 
 const SENTIMENT: Record<NonNullable<NewsItem['sentiment']>, string> = {
   positive: '#059669',
-  neutral: '#6e6a60',
+  neutral: 'var(--ds-muted)',
   negative: '#dc2626'
 };
 

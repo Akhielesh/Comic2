@@ -3,7 +3,7 @@ import { BookOpen, Network, Bot, Wrench, Sparkles, Hash, ToggleLeft } from 'luci
 import type { RecipeCardArtifact, RecipeParameterView } from '../../../apiTypes';
 import { Surface, Expandable, Chip, Badge } from './kit';
 
-const TONE = { good: '#059669', bad: '#dc2626', neutral: '#6e6a60' } as const;
+const TONE = { good: '#059669', bad: '#dc2626', neutral: 'var(--ds-muted)' } as const;
 
 // A recipe summary card — a reusable, parameterized agent workflow (goose-style).
 // Renders the recipe's identity, how it runs (swarm vs single agent), its typed

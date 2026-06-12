@@ -54,6 +54,7 @@ const pickExport = <P,>(m: Record<string, unknown>, name: string): { default: Re
 
 const ChatHome = lazy(() => import('./ChatHome').then((m) => pickExport<ChatHomeProps>(m, 'ChatHome')));
 const SkillsView = lazy(() => import('./SkillsView').then((m) => pickExport<SkillsViewProps>(m, 'SkillsView')));
+import { FloatingVideoDock } from './FloatingVideoDock';
 const DashboardsView = lazy(() => import('./DashboardsView').then((m) => pickExport<Record<string, never>>(m, 'DashboardsView')));
 const CommandPalette = lazy(() => import('./CommandPalette').then((m) => pickExport<CommandPaletteProps>(m, 'CommandPalette')));
 import { deriveModelFeatures } from '../../services/chatFeatures';
@@ -1363,6 +1364,8 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
             )}
             {resolvedView === 'dashboards' && <DashboardsView />}
           </Suspense>
+          {/* Always-on-top mini video player — follows the user across views. */}
+          <FloatingVideoDock />
         </div>
       </div>
       )}
