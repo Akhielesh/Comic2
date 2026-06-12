@@ -147,7 +147,10 @@ const moderationRateLimit = createRateLimit({
 });
 
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok' });
+  // email: 'configured' | 'dormant' — mirrors mailerConfigured() so the live process's view of
+  // EMAIL_WORKER_URL/EMAIL_HMAC_SECRET is checkable from outside (no admin login, no log access).
+  const emailConfigured = Boolean(EMAIL_WORKER_URL && EMAIL_HMAC_SECRET && !EMAIL_WORKER_URL.includes('<'));
+  res.json({ status: 'ok', email: emailConfigured ? 'configured' : 'dormant' });
 });
 
 // Public routes

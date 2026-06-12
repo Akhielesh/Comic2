@@ -87,13 +87,17 @@ export const getEmailUsageStatus = async () => {
  * list; both essential and marketing respect the hard cost cap.
  */
 export const sendEmail = async (opts: SendOptions): Promise<SendResult> => {
-  if (!mailerConfigured()) return { ok: false, skipped: 'not_configured' };
-
   const to = normalizeEmail(opts.to);
   const template = opts.template;
   const kind = TEMPLATE_KIND[template];
   const params: EmailParams = { ...(opts.params ?? {}) };
   const baseLog = { toEmail: to, template, kind, userId: opts.userId ?? null, requestId: opts.requestId ?? null };
+
+  // (1) dormant — still leave an audit row, otherwise "no email and no trace" is undebuggable.
+  if (!mailerConfigured()) {
+    await logSend({ ...baseLog, status: 'skipped', error: 'not_configured' });
+    return { ok: false, skipped: 'not_configured' };
+  }
 
   // (2) marketing suppression
   if (kind === 'marketing' && (await isSuppressed(to))) {
