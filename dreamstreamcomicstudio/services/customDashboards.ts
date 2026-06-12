@@ -16,6 +16,8 @@ export interface DashboardTile {
   label?: string;
   /** Which version of the widget card to render. */
   density: 'compact' | 'detailed';
+  /** User-dragged tile height in px (undefined = natural height). */
+  heightPx?: number;
 }
 
 export interface CustomDashboard {
@@ -52,7 +54,8 @@ const sanitizeTile = (t: unknown): DashboardTile | null => {
     tool: tile.tool,
     args: tile.args && typeof tile.args === 'object' && !Array.isArray(tile.args) ? (tile.args as Record<string, unknown>) : {},
     ...(typeof tile.label === 'string' && tile.label ? { label: tile.label } : {}),
-    density: isDensity(tile.density) ? tile.density : 'detailed'
+    density: isDensity(tile.density) ? tile.density : 'detailed',
+    ...(typeof tile.heightPx === 'number' && tile.heightPx > 0 ? { heightPx: Math.round(tile.heightPx) } : {})
   };
 };
 
@@ -169,6 +172,7 @@ export const updateTile = (
           if (patch.args && typeof patch.args === 'object') next.args = { ...patch.args };
           if (patch.label !== undefined) next.label = patch.label || undefined;
           if (isDensity(patch.density)) next.density = patch.density;
+          if ('heightPx' in patch) next.heightPx = typeof patch.heightPx === 'number' && patch.heightPx > 0 ? Math.round(patch.heightPx) : undefined;
           return next;
         })
       };
@@ -271,26 +275,31 @@ export const DASHBOARD_TEMPLATES: DashboardTemplate[] = [
     ]
   },
   {
+    // Every tile here self-populates from keyless live data — the previous
+    // version shipped econ-calendar/macro-tile widgets that render EMPTY without
+    // optional FRED/Finnhub keys, which read as "the dashboard is broken".
     id: 'macro-watch',
     name: 'Macro watch',
     icon: '🏛️',
-    description: 'Key indicators (live with a FRED key), the econ calendar and the national debt clock.',
+    description: 'The yield curve, the national debt clock, market mood and economy headlines — all live.',
     tiles: [
-      {
-        tool: 'show_macro_tiles',
-        args: {
-          tiles: [
-            { label: 'CPI (YoY)', seriesId: 'CPIAUCSL', unit: '%' },
-            { label: 'Unemployment', seriesId: 'UNRATE', unit: '%' },
-            { label: 'Fed funds', seriesId: 'FEDFUNDS', unit: '%' },
-            { label: '30Y mortgage', seriesId: 'MORTGAGE30US', unit: '%' }
-          ]
-        },
-        label: 'Indicators',
-        density: 'detailed'
-      },
-      { tool: 'get_econ_calendar', args: {}, label: 'Econ calendar', density: 'compact' },
-      { tool: 'get_national_debt', args: {}, label: 'Debt clock', density: 'compact' }
+      { tool: 'get_yield_curve', args: {}, label: 'Yield curve', density: 'detailed' },
+      { tool: 'get_national_debt', args: {}, label: 'Debt clock', density: 'compact' },
+      { tool: 'get_market_sentiment', args: { market: 'both' }, label: 'Fear & Greed', density: 'compact' },
+      { tool: 'get_news', args: { query: 'economy inflation federal reserve' }, label: 'Economy news', density: 'compact' }
+    ]
+  },
+  {
+    id: 'metals-energy',
+    name: 'Metals & energy',
+    icon: '🥇',
+    description: 'Gold, silver, copper and crude — live commodity quotes on one screen.',
+    tiles: [
+      { tool: 'get_stock', args: { symbol: 'gold' }, label: 'Gold', density: 'compact' },
+      { tool: 'get_stock', args: { symbol: 'silver' }, label: 'Silver', density: 'compact' },
+      { tool: 'get_stock', args: { symbol: 'copper' }, label: 'Copper', density: 'compact' },
+      { tool: 'get_stock', args: { symbol: 'crude oil' }, label: 'Crude oil', density: 'compact' },
+      { tool: 'get_news', args: { query: 'gold price commodities metals' }, label: 'Commodities news', density: 'compact' }
     ]
   },
   {

@@ -1,10 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Clapperboard, CloudSun, LayoutDashboard, LineChart, Loader2, Lock, LockOpen,
-  Map as MapIcon, MapPin, Maximize2, MessageCircle, Minimize2, MoreHorizontal, MoreVertical, Newspaper,
-  Pencil, Plus, RefreshCw, Send, Sparkles, Trash2, X
+  LayoutDashboard, Loader2, Lock, LockOpen, Maximize2, MessageCircle, Minimize2,
+  MoreHorizontal, MoreVertical, Pencil, Plus, RefreshCw, Search, Send, Sparkles, Trash2, X
 } from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
 import type { ChatArtifact } from '../../apiTypes';
 import { refreshArtifact, sendChatMessage } from '../../services/chatApi';
 import { ChatMarkdown } from './ChatMarkdown';
@@ -17,8 +15,15 @@ import { runDashboardCommand, type DashboardCommandResult } from '../../services
 import { deriveSmartPicks, tileKey, type SmartPick } from '../../services/smartPicks';
 import { getChatMemory, listChatSessions } from '../../services/chatStorage';
 import { useAuth } from '../../contexts/AuthContext';
+import { persistUiState, resolveInitialUiState } from '../../services/viewState';
 import { DensityProvider, relativeTime, type WidgetDensity } from './artifacts/kit';
 import { renderArtifactNode } from './artifacts/ChatArtifacts';
+import {
+  AI_CHAT_TILE, TOOL_LABELS, WIDGET_BY_TOOL, WIDGET_CATEGORIES, buildTileFromFields, searchWidgets,
+  type WidgetDef
+} from './widgetCatalog';
+
+export { AI_CHAT_TILE };
 
 // Custom Dashboards — personal, persistent boards of live widget tiles.
 //
@@ -32,28 +37,9 @@ import { renderArtifactNode } from './artifacts/ChatArtifacts';
 // mined from their chat memory + recent conversations (services/smartPicks),
 // drag-drop rearranging, and a lock toggle that freezes the layout view-only.
 
-// ---------------------------------------------------------------- catalog -----
-
-interface WidgetTypeDef {
-  tool: string;
-  label: string;
-  icon: LucideIcon;
-  blurb: string;
-  defaultDensity: WidgetDensity;
-}
-
-// 'ai_chat' is a special tile: a mini assistant box on the board (no live-data tool).
-export const AI_CHAT_TILE = 'ai_chat';
-
-const WIDGET_TYPES: WidgetTypeDef[] = [
-  { tool: AI_CHAT_TILE, label: 'Ask AI', icon: MessageCircle, blurb: 'A mini chat box right on the board', defaultDensity: 'detailed' },
-  { tool: 'get_stock', label: 'Stock quote', icon: LineChart, blurb: 'Stocks, indices, gold, FX, crypto', defaultDensity: 'compact' },
-  { tool: 'get_news', label: 'News', icon: Newspaper, blurb: 'Headlines by section or topic', defaultDensity: 'compact' },
-  { tool: 'get_weather', label: 'Weather', icon: CloudSun, blurb: 'Conditions + 5-day forecast', defaultDensity: 'detailed' },
-  { tool: 'find_places', label: 'Places', icon: MapPin, blurb: 'Restaurants, cafes, shops nearby', defaultDensity: 'detailed' },
-  { tool: 'show_map', label: 'Map', icon: MapIcon, blurb: 'Pinned locations on a live map', defaultDensity: 'detailed' },
-  { tool: 'video_search', label: 'Videos', icon: Clapperboard, blurb: 'Tutorials, reviews and clips', defaultDensity: 'detailed' }
-];
+// The widget catalog (every refreshable tool, categorized, with field specs)
+// lives in ./widgetCatalog — shared by the add panel and the tile editor, and
+// coverage-tested against REFRESHABLE_TOOLS.
 
 // ----------------------------------------------------------- mini AI chat tile ---
 
@@ -132,20 +118,17 @@ const AiChatTile: React.FC = () => {
   );
 };
 
-const TOOL_LABELS: Record<string, string> = Object.fromEntries(WIDGET_TYPES.map((w) => [w.tool, w.label]));
-
-/** Which artifact type each tool's refresh is expected to produce. */
+/** Which artifact type each tool's refresh is expected to produce. Tools not
+ *  listed fall back to the first artifact the refresh returns. */
 const EXPECTED_ARTIFACT: Record<string, string> = {
   get_weather: 'weather',
   get_news: 'news_results',
   get_stock: 'stock_quote',
   find_places: 'places_results',
   show_map: 'map',
-  video_search: 'video_results'
+  video_search: 'video_results',
+  get_directions: 'directions'
 };
-
-// Mirrors the get_news `topic` enum (server registry) — the sections offered here.
-const NEWS_TOPICS = ['top', 'world', 'business', 'technology', 'science', 'sports', 'health'] as const;
 
 // Render via the chat's full artifact registry — ANY refreshable widget can live on a
 // board. (The old local 6-type switch silently rendered nothing for template tiles
@@ -161,60 +144,25 @@ interface TileState {
   error?: string;
 }
 
-/** Per-tool mini-form fields for the in-menu tile editor. Tools without an
- *  entry fall back to a raw-JSON args editor. */
-interface TileEditField {
-  key: string;
-  label: string;
-  placeholder?: string;
-  optional?: boolean;
-  /** Comma-separated input stored as string[] in args (e.g. show_map.places). */
-  list?: boolean;
-}
-
-const TILE_EDIT_FIELDS: Record<string, TileEditField[]> = {
-  get_stock: [{ key: 'symbol', label: 'Symbol or asset', placeholder: 'AAPL, ^GSPC, gold, BTC-USD…' }],
-  get_weather: [{ key: 'location', label: 'Location', placeholder: 'Tokyo or Austin, TX' }],
-  get_news: [{ key: 'query', label: 'Topic/query', placeholder: 'AI chips, business…' }],
-  crypto_price: [{ key: 'coin', label: 'Coin', placeholder: 'bitcoin, ethereum…' }],
-  find_places: [
-    { key: 'query', label: 'What', placeholder: 'coffee, ramen, hotels…' },
-    { key: 'near', label: 'Near', placeholder: 'Blank = my location', optional: true }
-  ],
-  video_search: [{ key: 'query', label: 'Query', placeholder: 'how to make croissants…' }],
-  show_map: [{ key: 'places', label: 'Places (comma-separated)', placeholder: 'Eiffel Tower, Louvre', list: true }]
-};
-
-/** A sensible new tile label after an edit (mirrors AddWidgetPanel's labels). */
-const labelForEditedArgs = (tool: string, values: Record<string, string>): string | undefined => {
-  if (tool === 'find_places') {
-    const query = (values.query ?? '').trim();
-    const near = (values.near ?? '').trim();
-    return near ? `${query} · ${near}` : query || undefined;
-  }
-  if (tool === 'show_map') {
-    const places = (values.places ?? '').split(',').map((p) => p.trim()).filter(Boolean);
-    return places.length ? places.join(', ') : undefined;
-  }
-  const first = TILE_EDIT_FIELDS[tool]?.[0];
-  const v = first ? (values[first.key] ?? '').trim() : '';
-  return v || undefined;
-};
-
-/** Mini-form shown inside the tile's ⋯ popover. Known tools get 1–2 smart
- *  fields; anything else gets a validated raw-JSON args editor. */
+/** Mini-form shown inside the tile's ⋯ popover. Catalog-known tools get their
+ *  declared fields; anything else gets a validated raw-JSON args editor. */
 const TileEditForm: React.FC<{
   tile: DashboardTile;
   onSave: (args: Record<string, unknown>, label?: string) => void;
   onCancel: () => void;
 }> = ({ tile, onSave, onCancel }) => {
-  const fields = TILE_EDIT_FIELDS[tile.tool];
+  const def = WIDGET_BY_TOOL[tile.tool];
+  const fields = def && def.fields.length ? def.fields : undefined;
   const [values, setValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(
       (fields ?? []).map((f) => {
-        // get_news tiles created from a section store { topic } — prefill from it.
-        const v = tile.args[f.key] ?? (tile.tool === 'get_news' && f.key === 'query' ? tile.args.topic : undefined);
-        return [f.key, f.list && Array.isArray(v) ? v.join(', ') : typeof v === 'string' || typeof v === 'number' ? String(v) : ''];
+        const v = tile.args[f.key];
+        const asText = f.list && Array.isArray(v)
+          ? v.map((item) => (item && typeof item === 'object' && 'symbol' in (item as object) ? String((item as { symbol: unknown }).symbol) : String(item))).join(', ')
+          : typeof v === 'string' || typeof v === 'number'
+            ? String(v)
+            : f.default ?? '';
+        return [f.key, asText];
       })
     )
   );
@@ -231,15 +179,10 @@ const TileEditForm: React.FC<{
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (fields) {
-      if (!valid) return;
-      const args: Record<string, unknown> = {};
-      for (const f of fields) {
-        const raw = (values[f.key] ?? '').trim();
-        if (!raw) continue; // optional + empty → omit
-        args[f.key] = f.list ? raw.split(',').map((p) => p.trim()).filter(Boolean) : raw;
-      }
-      onSave(args, labelForEditedArgs(tile.tool, values));
+    if (fields && def) {
+      const built = buildTileFromFields(def, values, tile.density);
+      if (!built) return;
+      onSave(built.args, built.label);
       return;
     }
     try {
@@ -258,13 +201,25 @@ const TileEditForm: React.FC<{
         fields.map((f, i) => (
           <div key={f.key}>
             <FieldLabel>{f.label}</FieldLabel>
-            <input
-              autoFocus={i === 0}
-              value={values[f.key] ?? ''}
-              onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
-              placeholder={f.placeholder}
-              className={inputCls}
-            />
+            {f.select ? (
+              <select
+                value={values[f.key] ?? f.default ?? ''}
+                onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
+                className={inputCls}
+              >
+                {f.select.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                autoFocus={i === 0}
+                value={values[f.key] ?? ''}
+                onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
+                placeholder={f.placeholder}
+                className={inputCls}
+              />
+            )}
           </div>
         ))
       ) : (
@@ -308,6 +263,61 @@ const TileEditForm: React.FC<{
 const tileMenuItemCls =
   'flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-[var(--ds-hover)] disabled:pointer-events-none disabled:opacity-40';
 
+const TILE_MIN_H = 160;
+const TILE_MAX_H = 1200;
+
+/** Bottom drag handle that resizes a tile's height (drag; double-click resets).
+ *  Works alongside the board's drag-to-reorder: pointer capture + cancelled
+ *  dragstart keep a resize from ever turning into a tile move. */
+const TileResizeHandle: React.FC<{
+  height: number | null;
+  measure: () => number;
+  onLive: (px: number) => void;
+  onCommit: (px: number | null) => void;
+}> = ({ height, measure, onLive, onCommit }) => {
+  const drag = useRef<{ startY: number; startH: number; live: number } | null>(null);
+  const [active, setActive] = useState(false);
+  return (
+    <div
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="Resize widget (drag; double-click to reset)"
+      draggable
+      onDragStart={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        (e.target as HTMLElement).setPointerCapture(e.pointerId);
+        drag.current = { startY: e.clientY, startH: height ?? measure(), live: height ?? measure() };
+        setActive(true);
+      }}
+      onPointerMove={(e) => {
+        if (!drag.current) return;
+        const next = Math.min(TILE_MAX_H, Math.max(TILE_MIN_H, drag.current.startH + (e.clientY - drag.current.startY)));
+        drag.current.live = next;
+        onLive(next);
+      }}
+      onPointerUp={() => {
+        if (!drag.current) return;
+        onCommit(drag.current.live);
+        drag.current = null;
+        setActive(false);
+      }}
+      onPointerCancel={() => {
+        drag.current = null;
+        setActive(false);
+      }}
+      onDoubleClick={() => onCommit(null)}
+      className={`mx-auto -mt-0.5 flex h-3.5 w-16 cursor-ns-resize touch-none items-center justify-center opacity-0 transition-opacity duration-200 group-hover/tile:opacity-100 [@media(pointer:coarse)]:opacity-60 ${active ? 'opacity-100' : ''}`}
+    >
+      <div className={`h-1 w-9 rounded-full transition-colors ${active ? 'bg-[var(--ds-muted)]' : 'bg-[var(--ds-faint)]'}`} />
+    </div>
+  );
+};
+
 const TileCard: React.FC<{
   tile: DashboardTile;
   state?: TileState;
@@ -318,7 +328,13 @@ const TileCard: React.FC<{
   onRemove: () => void;
   /** Persist edited args (+ optional new label), then refetch the tile. */
   onSaveEdit: (args: Record<string, unknown>, label?: string) => void;
-}> = ({ tile, state, locked, onToggleDensity, onRefresh, onRemove, onSaveEdit }) => {
+  /** Persist a user-dragged tile height (null = back to natural). */
+  onResize: (px: number | null) => void;
+}> = ({ tile, state, locked, onToggleDensity, onRefresh, onRemove, onSaveEdit, onResize }) => {
+  // Live height while the resize handle is dragged (commit persists via onResize).
+  const [liveHeight, setLiveHeight] = useState<number | null>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const effectiveHeight = liveHeight ?? tile.heightPx ?? null;
   const label = tile.label || TOOL_LABELS[tile.tool] || tile.tool;
   const hasCard = !!state?.artifact;
   // ⋯ popover: 'menu' lists actions; 'edit' swaps in the mini args form.
@@ -435,8 +451,25 @@ const TileCard: React.FC<{
 
       {hasCard ? (
         <>
-          <DensityProvider value={tile.density}>{renderArtifactCard(state!.artifact!)}</DensityProvider>
-          <div className="mt-1 flex items-center gap-1 px-1 text-[10px] text-[var(--ds-muted)]">
+          <div
+            ref={bodyRef}
+            className={effectiveHeight != null ? 'overflow-y-auto overscroll-contain [scrollbar-width:thin]' : undefined}
+            style={effectiveHeight != null ? { height: effectiveHeight } : undefined}
+          >
+            <DensityProvider value={tile.density}>{renderArtifactCard(state!.artifact!)}</DensityProvider>
+          </div>
+          {!locked && (
+            <TileResizeHandle
+              height={effectiveHeight}
+              measure={() => bodyRef.current?.getBoundingClientRect().height ?? TILE_MIN_H}
+              onLive={setLiveHeight}
+              onCommit={(px) => {
+                setLiveHeight(null);
+                onResize(px);
+              }}
+            />
+          )}
+          <div className="flex items-center gap-1 px-1 text-[10px] text-[var(--ds-muted)]">
             {state?.error && <span>Couldn’t refresh — showing last data ·</span>}
             <span>Updated {relativeTime(state?.asOf) || 'just now'}</span>
           </div>
@@ -479,62 +512,31 @@ const FieldLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <label className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-[var(--ds-muted)]">{children}</label>
 );
 
+/** The full widget gallery: every refreshable live-data widget the platform
+ *  has, searchable and grouped by category. Picking one opens a small config
+ *  step (presets + the widget's declared fields). */
 const AddWidgetPanel: React.FC<{
   onAdd: (tile: Omit<DashboardTile, 'id'>) => void;
   onClose: () => void;
 }> = ({ onAdd, onClose }) => {
-  const [tool, setTool] = useState<string | null>(null);
-  const [density, setDensity] = useState<WidgetDensity>('compact');
-  const [fields, setFields] = useState<Record<string, string>>({ newsTopic: 'top' });
-  const set = (key: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
-    setFields((f) => ({ ...f, [key]: e.target.value }));
-  const val = (key: string) => (fields[key] ?? '').trim();
+  const [selected, setSelected] = useState<WidgetDef | null>(null);
+  const [term, setTerm] = useState('');
+  const [density, setDensity] = useState<WidgetDensity>('detailed');
+  const [values, setValues] = useState<Record<string, string>>({});
 
-  const pick = (def: WidgetTypeDef) => {
-    setTool(def.tool);
+  const pick = (def: WidgetDef) => {
+    setSelected(def);
     setDensity(def.defaultDensity);
+    setValues(Object.fromEntries(def.fields.filter((f) => f.default).map((f) => [f.key, f.default!])));
   };
 
-  // Build the tile from the current fields; null while invalid (required empty).
-  const draft = useMemo((): Omit<DashboardTile, 'id'> | null => {
-    switch (tool) {
-      case AI_CHAT_TILE:
-        return { tool: AI_CHAT_TILE, args: {}, label: 'Ask AI', density: 'detailed' };
-      case 'get_stock': {
-        const symbol = val('symbol');
-        return symbol ? { tool, args: { symbol }, label: symbol, density } : null;
-      }
-      case 'get_news': {
-        const query = val('newsQuery');
-        const topic = val('newsTopic') || 'top';
-        return query
-          ? { tool, args: { query }, label: query, density }
-          : { tool, args: { topic }, label: `${topic === 'top' ? 'Top' : topic[0].toUpperCase() + topic.slice(1)} headlines`, density };
-      }
-      case 'get_weather': {
-        // get_weather REQUIRES location server-side (no context fallback), so the
-        // field is required here rather than offering a blank "My location".
-        const location = val('location');
-        return location ? { tool, args: { location }, label: location, density } : null;
-      }
-      case 'find_places': {
-        const query = val('placesQuery');
-        const near = val('placesNear');
-        if (!query) return null;
-        return { tool, args: { query, ...(near ? { near } : {}) }, label: near ? `${query} · ${near}` : query, density };
-      }
-      case 'show_map': {
-        const places = val('mapPlaces').split(',').map((p) => p.trim()).filter(Boolean);
-        return places.length ? { tool, args: { places }, label: places.join(', '), density } : null;
-      }
-      case 'video_search': {
-        const query = val('videoQuery');
-        return query ? { tool, args: { query }, label: query, density } : null;
-      }
-      default:
-        return null;
-    }
-  }, [tool, fields, density]);
+  const matches = useMemo(() => searchWidgets(term), [term]);
+  const grouped = useMemo(
+    () => WIDGET_CATEGORIES.map((c) => ({ category: c, defs: matches.filter((w) => w.category === c) })).filter((g) => g.defs.length),
+    [matches]
+  );
+
+  const draft = selected ? buildTileFromFields(selected, values, density) : null;
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -543,101 +545,129 @@ const AddWidgetPanel: React.FC<{
 
   return (
     <div className="rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-4 shadow-[0_1px_3px_rgba(0,0,0,0.06)]">
-      <div className="mb-3 flex items-center justify-between">
-        <div className="text-sm font-semibold text-[var(--ds-ink)]">Add a widget</div>
+      <div className="mb-3 flex items-center gap-2">
+        {selected ? (
+          <button
+            type="button"
+            onClick={() => setSelected(null)}
+            className="rounded-lg px-2 py-1 text-xs font-medium text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]"
+          >
+            ← All widgets
+          </button>
+        ) : (
+          <div className="text-sm font-semibold text-[var(--ds-ink)]">Add a widget</div>
+        )}
+        {!selected && (
+          <div className="relative ml-auto w-44 sm:w-56">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--ds-muted)]" />
+            <input
+              value={term}
+              onChange={(e) => setTerm(e.target.value)}
+              placeholder="Search widgets…"
+              aria-label="Search widgets"
+              className="w-full rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] py-1.5 pl-8 pr-2.5 text-xs text-[var(--ds-ink)] outline-none transition-colors placeholder:text-[var(--ds-muted)] focus:border-[var(--ds-accent)]"
+            />
+          </div>
+        )}
         <button
           type="button"
           onClick={onClose}
           aria-label="Close add widget panel"
-          className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]"
+          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] ${selected ? 'ml-auto' : ''}`}
         >
           <X className="h-4 w-4" />
         </button>
       </div>
 
-      {/* 1. Pick a widget type. */}
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-        {WIDGET_TYPES.map((def) => {
-          const Icon = def.icon;
-          const selected = tool === def.tool;
-          return (
-            <button
-              key={def.tool}
-              type="button"
-              onClick={() => pick(def)}
-              className={`flex items-start gap-2 rounded-xl border px-3 py-2.5 text-left transition-colors ${
-                selected
-                  ? 'border-[var(--ds-accent)] bg-[#D97757]/10'
-                  : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] hover:bg-[var(--ds-hover)]'
-              }`}
-            >
-              <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${selected ? 'text-[var(--ds-accent)]' : 'text-[var(--ds-muted)]'}`} />
-              <span className="min-w-0">
-                <span className="block text-xs font-semibold text-[var(--ds-ink)]">{def.label}</span>
-                <span className="block truncate text-[10px] text-[var(--ds-muted)]">{def.blurb}</span>
-              </span>
-            </button>
-          );
-        })}
-      </div>
+      {!selected ? (
+        // 1. The gallery: every widget, grouped, scrollable.
+        <div className="max-h-[420px] space-y-4 overflow-y-auto overscroll-contain pr-1 [scrollbar-width:thin]">
+          {grouped.length === 0 && (
+            <p className="py-6 text-center text-xs text-[var(--ds-muted)]">No widgets match “{term}”.</p>
+          )}
+          {grouped.map(({ category, defs }) => (
+            <section key={category}>
+              <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--ds-muted)]">{category}</h3>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">
+                {defs.map((def) => {
+                  const Icon = def.icon;
+                  return (
+                    <button
+                      key={def.tool}
+                      type="button"
+                      onClick={() => pick(def)}
+                      className="flex items-start gap-2 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 py-2.5 text-left transition-colors hover:border-[var(--ds-accent)] hover:bg-[var(--ds-hover)]"
+                    >
+                      <Icon className="mt-0.5 h-4 w-4 shrink-0 text-[var(--ds-muted)]" />
+                      <span className="min-w-0">
+                        <span className="block text-xs font-semibold text-[var(--ds-ink)]">{def.label}</span>
+                        <span className="block text-[10px] leading-snug text-[var(--ds-muted)] line-clamp-2">{def.blurb}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          ))}
+        </div>
+      ) : (
+        // 2. Configure the chosen widget: presets + its declared fields.
+        <form onSubmit={submit} className="space-y-3">
+          <div className="flex items-center gap-2">
+            <selected.icon className="h-4 w-4 shrink-0 text-[var(--ds-accent)]" />
+            <span className="text-sm font-semibold text-[var(--ds-ink)]">{selected.label}</span>
+            <span className="truncate text-[11px] text-[var(--ds-muted)]">{selected.blurb}</span>
+          </div>
+          {selected.note && (
+            <p className="rounded-lg border border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] px-2.5 py-1.5 text-[11px] text-[var(--ds-muted)]">{selected.note}</p>
+          )}
 
-      {/* 2. One or two smart fields for the chosen type. */}
-      {tool && (
-        <form onSubmit={submit} className="mt-4 space-y-3">
-          {tool === 'get_stock' && (
-            <div>
-              <FieldLabel>Symbol or asset</FieldLabel>
-              <input autoFocus required value={fields.symbol ?? ''} onChange={set('symbol')} placeholder="AAPL, ^GSPC, gold, BTC-USD…" className={inputCls} />
+          {selected.presets && selected.presets.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {selected.presets.map((p) => (
+                <button
+                  key={p.label}
+                  type="button"
+                  onClick={() => onAdd({ tool: selected.tool, args: p.args, label: p.tileLabel ?? p.label, density })}
+                  className="inline-flex items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-2.5 py-1 text-[11px] font-medium text-[var(--ds-muted)] transition-colors hover:border-[var(--ds-accent)] hover:text-[var(--ds-ink)]"
+                >
+                  <Plus className="h-3 w-3 text-[var(--ds-accent)]" />
+                  {p.label}
+                </button>
+              ))}
             </div>
           )}
-          {tool === 'get_news' && (
+
+          {selected.fields.length > 0 && (
             <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <FieldLabel>Section</FieldLabel>
-                <select value={fields.newsTopic ?? 'top'} onChange={set('newsTopic')} className={inputCls}>
-                  {NEWS_TOPICS.map((t) => (
-                    <option key={t} value={t}>
-                      {t === 'top' ? 'Top stories' : t[0].toUpperCase() + t.slice(1)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <FieldLabel>Or a topic search</FieldLabel>
-                <input value={fields.newsQuery ?? ''} onChange={set('newsQuery')} placeholder="Optional — e.g. “AI chips” (overrides section)" className={inputCls} />
-              </div>
+              {selected.fields.map((f, i) => (
+                <div key={f.key} className={selected.fields.length === 1 ? 'sm:col-span-2' : undefined}>
+                  <FieldLabel>{f.label}{f.optional ? '' : ' (required)'}</FieldLabel>
+                  {f.select ? (
+                    <select
+                      value={values[f.key] ?? f.default ?? ''}
+                      onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
+                      className={inputCls}
+                    >
+                      {f.select.map((o) => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      autoFocus={i === 0}
+                      value={values[f.key] ?? ''}
+                      onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
+                      placeholder={f.placeholder}
+                      className={inputCls}
+                    />
+                  )}
+                </div>
+              ))}
             </div>
           )}
-          {tool === 'get_weather' && (
-            <div>
-              <FieldLabel>Location (required)</FieldLabel>
-              <input autoFocus required value={fields.location ?? ''} onChange={set('location')} placeholder="City or place — e.g. Tokyo or Austin, TX" className={inputCls} />
-              <p className="mt-1 text-[10px] text-[var(--ds-muted)]">The weather tool needs a place — it can’t auto-detect your location here.</p>
-            </div>
-          )}
-          {tool === 'find_places' && (
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <FieldLabel>What to find</FieldLabel>
-                <input autoFocus required value={fields.placesQuery ?? ''} onChange={set('placesQuery')} placeholder="coffee, ramen, hotels…" className={inputCls} />
-              </div>
-              <div>
-                <FieldLabel>Near (optional)</FieldLabel>
-                <input value={fields.placesNear ?? ''} onChange={set('placesNear')} placeholder="Blank = my location" className={inputCls} />
-              </div>
-            </div>
-          )}
-          {tool === 'show_map' && (
-            <div>
-              <FieldLabel>Places (comma-separated)</FieldLabel>
-              <input autoFocus required value={fields.mapPlaces ?? ''} onChange={set('mapPlaces')} placeholder="Eiffel Tower, Louvre, Notre-Dame" className={inputCls} />
-            </div>
-          )}
-          {tool === 'video_search' && (
-            <div>
-              <FieldLabel>Search videos for</FieldLabel>
-              <input autoFocus required value={fields.videoQuery ?? ''} onChange={set('videoQuery')} placeholder="how to make croissants…" className={inputCls} />
-            </div>
+          {selected.fields.length === 0 && !selected.presets?.length && (
+            <p className="text-[11px] text-[var(--ds-muted)]">No configuration needed — it’s live data.</p>
           )}
 
           <div className="flex flex-wrap items-center gap-2 pt-1">
@@ -721,7 +751,10 @@ const COMMAND_CHIPS: Array<{ label: string; command: string }> = [
 const AiCommandBar: React.FC<{
   board: CustomDashboard | null;
   onResult: (result: DashboardCommandResult) => void;
-}> = ({ board, onResult }) => {
+  /** Sidebar toggle from the host shell — the dashboards view owns its full
+   *  height (no separate title header), so the toggle lives in this bar. */
+  leading?: React.ReactNode;
+}> = ({ board, onResult, leading }) => {
   const [input, setInput] = useState('');
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<DashboardCommandResult | null>(null);
@@ -751,8 +784,9 @@ const AiCommandBar: React.FC<{
 
   return (
     <div className="sticky top-0 z-30 border-b border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] backdrop-blur">
-      <div className="mx-auto w-full max-w-6xl px-3 py-2.5 sm:px-6">
+      <div className="mx-auto w-full max-w-6xl px-3 py-2 sm:px-6">
         <form onSubmit={submit} className="flex items-center gap-2">
+          {leading}
           <span className="hidden shrink-0 items-center gap-1.5 text-xs font-medium text-[var(--ds-muted)] sm:flex">
             <Sparkles className="h-3.5 w-3.5 text-[var(--ds-accent)]" />
             {greeting()}
@@ -799,10 +833,30 @@ const AiCommandBar: React.FC<{
   );
 };
 
-export const DashboardsView: React.FC = () => {
+// localStorage key remembering the last-open board across sessions (the URL
+// `?board=` param wins for shareable deep links; see resolveInitialBoard).
+const ACTIVE_BOARD_STORE = 'ds.dashboards.active.v1';
+
+const resolveInitialBoard = (): string | null => {
+  const ids = new Set(listDashboards().map((d) => d.id));
+  const isKnown = (v: string): v is string => ids.has(v);
+  const remembered = resolveInitialUiState('dashboards.board', 'board', isKnown, '');
+  if (remembered) return remembered;
+  try {
+    const stored = window.localStorage.getItem(ACTIVE_BOARD_STORE);
+    if (stored && ids.has(stored)) return stored;
+  } catch {
+    /* private mode — fall through */
+  }
+  return listDashboards()[0]?.id ?? null;
+};
+
+export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode }> = ({ sidebarControl }) => {
   const { user } = useAuth();
   const [dashboards, setDashboards] = useState<CustomDashboard[]>(() => listDashboards());
-  const [activeId, setActiveId] = useState<string | null>(() => listDashboards()[0]?.id ?? null);
+  // Continuity: reloading (or coming back later) reopens the LAST board the
+  // user was on, not the first in the list.
+  const [activeId, setActiveId] = useState<string | null>(() => resolveInitialBoard());
   const [tileStates, setTileStates] = useState<Record<string, TileState>>({});
   const [addOpen, setAddOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -815,6 +869,12 @@ export const DashboardsView: React.FC = () => {
   // The tile currently being dragged (HTML5 DnD reorder), and the hovered drop slot.
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
+  // Filter for the board switcher (appears once the tab strip gets crowded).
+  const [boardFilter, setBoardFilter] = useState('');
+  const [boardFilterOpen, setBoardFilterOpen] = useState(false);
+  // Scroll the active pill into view when the selection changes (not every render —
+  // tile-state re-renders would otherwise fight the user scrolling the strip).
+  const activePillRef = useRef<HTMLButtonElement>(null);
 
   const inflight = useRef(new Set<string>());
   const tileStatesRef = useRef(tileStates);
@@ -841,6 +901,22 @@ export const DashboardsView: React.FC = () => {
   );
   const activeRef = useRef(active);
   activeRef.current = active;
+
+  useEffect(() => {
+    activePillRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [activeId]);
+
+  // Persist the open board (URL param + session memory + localStorage).
+  useEffect(() => {
+    const id = active?.id ?? null;
+    persistUiState('dashboards.board', 'board', id);
+    try {
+      if (id) window.localStorage.setItem(ACTIVE_BOARD_STORE, id);
+      else window.localStorage.removeItem(ACTIVE_BOARD_STORE);
+    } catch {
+      /* private mode — session memory still covers reloads */
+    }
+  }, [active?.id]);
 
   const fetchTile = useCallback(async (tile: DashboardTile) => {
     if (tile.tool === AI_CHAT_TILE) return; // the mini chat tile has no live-data fetch
@@ -981,7 +1057,7 @@ export const DashboardsView: React.FC = () => {
     return (
       <div className="h-full w-full overflow-y-auto bg-[var(--ds-canvas)]">
         {/* The AI bar also bootstraps the first board ("study dashboard for ML"). */}
-        <AiCommandBar board={null} onResult={handleAiResult} />
+        <AiCommandBar board={null} onResult={handleAiResult} leading={sidebarControl} />
         <div className="mx-auto w-full max-w-3xl px-4 py-12 text-center sm:py-16">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#D97757]/10">
             <LayoutDashboard className="h-7 w-7 text-[var(--ds-accent)]" />
@@ -1011,15 +1087,60 @@ export const DashboardsView: React.FC = () => {
     );
   }
 
+  const filterTerm = boardFilter.trim().toLowerCase();
+  const visibleBoards = filterTerm ? dashboards.filter((d) => d.name.toLowerCase().includes(filterTerm)) : dashboards;
+  const manyBoards = dashboards.length > 5;
+
   return (
     <div className="h-full w-full overflow-y-auto bg-[var(--ds-canvas)]">
       {/* -------------------------------------------- sticky AI command bar --- */}
-      <AiCommandBar board={active ?? null} onResult={handleAiResult} />
-      <div className="mx-auto w-full max-w-6xl px-3 py-4 sm:px-6 sm:py-6">
-        {/* ------------------------------------------------ switcher header --- */}
-        <header className="mb-4 flex flex-wrap items-center gap-2">
-          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            {dashboards.map((d) => {
+      <AiCommandBar board={active ?? null} onResult={handleAiResult} leading={sidebarControl} />
+      <div className="mx-auto w-full max-w-6xl px-3 py-3 sm:px-6 sm:py-4">
+        {/* --------------------------------------------------- switcher row ---
+            One slim line that never wraps: the board pills scroll horizontally,
+            with a name filter once the strip gets crowded. */}
+        <header className="mb-3 flex items-center gap-1.5">
+          {manyBoards && (
+            <div className="relative shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setBoardFilterOpen((v) => !v);
+                  setBoardFilter('');
+                }}
+                aria-label="Search dashboards"
+                aria-expanded={boardFilterOpen}
+                className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors ${
+                  boardFilterOpen ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-sm' : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
+                }`}
+              >
+                <Search className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+          {boardFilterOpen && manyBoards && (
+            <input
+              autoFocus
+              value={boardFilter}
+              onChange={(e) => setBoardFilter(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  setBoardFilterOpen(false);
+                  setBoardFilter('');
+                }
+                if (e.key === 'Enter' && visibleBoards[0]) {
+                  setActiveId(visibleBoards[0].id);
+                  setBoardFilterOpen(false);
+                  setBoardFilter('');
+                }
+              }}
+              placeholder="Find a dashboard…"
+              aria-label="Filter dashboards by name"
+              className="h-8 w-36 shrink-0 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-3 text-xs text-[var(--ds-ink)] outline-none transition-colors placeholder:text-[var(--ds-muted)] focus:border-[var(--ds-accent)]"
+            />
+          )}
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto py-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {visibleBoards.map((d) => {
               const isActive = active?.id === d.id;
               if (isActive && renaming) {
                 return (
@@ -1034,7 +1155,7 @@ export const DashboardsView: React.FC = () => {
                       if (e.key === 'Escape') setRenaming(false);
                     }}
                     aria-label="Dashboard name"
-                    className="h-8 w-40 rounded-full border border-[var(--ds-accent)] bg-[var(--ds-surface)] px-3 text-base font-medium text-[var(--ds-ink)] outline-none sm:text-xs"
+                    className="h-8 w-40 shrink-0 rounded-full border border-[var(--ds-accent)] bg-[var(--ds-surface)] px-3 text-base font-medium text-[var(--ds-ink)] outline-none sm:text-xs"
                   />
                 );
               }
@@ -1043,7 +1164,8 @@ export const DashboardsView: React.FC = () => {
                   key={d.id}
                   type="button"
                   onClick={() => setActiveId(d.id)}
-                  className={`flex h-8 max-w-[180px] items-center gap-1.5 rounded-full px-3 text-xs font-medium transition-colors ${
+                  ref={isActive ? activePillRef : undefined}
+                  className={`flex h-8 max-w-[180px] shrink-0 items-center gap-1.5 rounded-full px-3 text-xs font-medium transition-colors ${
                     isActive
                       ? 'border border-[var(--ds-hairline)] bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-sm'
                       : 'text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
@@ -1054,18 +1176,21 @@ export const DashboardsView: React.FC = () => {
                 </button>
               );
             })}
+            {filterTerm && visibleBoards.length === 0 && (
+              <span className="shrink-0 px-2 text-[11px] text-[var(--ds-muted)]">No boards match “{boardFilter}”.</span>
+            )}
             <button
               type="button"
               onClick={handleNew}
-              className="flex h-8 items-center gap-1 rounded-full border border-dashed border-[var(--ds-hairline)] px-3 text-xs font-medium text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]"
+              className="flex h-8 shrink-0 items-center gap-1 rounded-full border border-dashed border-[var(--ds-hairline)] px-3 text-xs font-medium text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]"
             >
-              <Plus className="h-3.5 w-3.5" /> New dashboard
+              <Plus className="h-3.5 w-3.5" /> New
             </button>
           </div>
 
           {/* Right controls: lock toggle + kebab (rename / delete). */}
           {active && (
-            <div className="ml-auto flex items-center gap-1.5">
+            <div className="ml-auto flex shrink-0 items-center gap-1.5">
               <button
                 type="button"
                 onClick={() => updateDashboard(active.id, { locked: !locked })}
@@ -1222,6 +1347,7 @@ export const DashboardsView: React.FC = () => {
                     // Refetch with the fresh args (state will catch up via the change event).
                     void fetchTile({ ...tile, args });
                   }}
+                  onResize={(px) => updateTile(active.id, tile.id, { heightPx: px ?? undefined })}
                 />
                 )}
               </div>

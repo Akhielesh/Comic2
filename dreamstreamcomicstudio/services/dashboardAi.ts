@@ -65,10 +65,28 @@ export const extractTopic = (command: string): string => {
   return topic;
 };
 
+// "directions from X to Y" / "route to the airport from home" / "commute…" —
+// a travel need gets the real multi-modal directions widget.
+const DIRECTIONS_RE = /(?:directions|route|commute|how\s+(?:do\s+i|to)\s+get)\b.*?\bfrom\s+(.+?)\s+to\s+(.+)$/i;
+const DIRECTIONS_TO_FROM_RE = /(?:directions|route|commute|how\s+(?:do\s+i|to)\s+get)\b.*?\bto\s+(.+?)\s+from\s+(.+)$/i;
+
 /** Parse a command into a deterministic plan. Pure — no storage access. */
 export const parseDashboardCommand = (raw: string): DashboardPlan => {
   const command = raw.trim();
   if (!command) return { kind: 'error', message: 'Tell me what to build or change.' };
+
+  const dir = command.match(DIRECTIONS_RE) ?? command.match(DIRECTIONS_TO_FROM_RE);
+  if (dir) {
+    const swapped = !DIRECTIONS_RE.test(command);
+    const from = (swapped ? dir[2] : dir[1]).trim().replace(/[.!?]$/, '');
+    const to = (swapped ? dir[1] : dir[2]).trim().replace(/[.!?]$/, '');
+    if (from && to) {
+      return { kind: 'edit', tool: 'get_directions', args: { from, to }, label: `${from} → ${to}` };
+    }
+  }
+  if (/^(?:directions|route|commute)\b/i.test(command)) {
+    return { kind: 'error', message: 'Give me both ends — e.g. “directions from home to Dulles Airport”.' };
+  }
 
   const edit = command.match(EDIT_RE);
   if (edit) {
@@ -153,7 +171,12 @@ export const runDashboardCommand = async (
   if (plan.kind === 'error') return { kind: 'error', message: plan.message };
 
   if (plan.kind === 'edit') {
-    if (!board) return { kind: 'error', message: 'Open a dashboard first, then tell me what to change.' };
+    if (!board) {
+      // No board open — bootstrap one around the requested widget instead of
+      // bouncing the user ("change weather to Tokyo" on day one should just work).
+      const dash = createDashboard(plan.label, '⚡', [{ tool: plan.tool, args: plan.args, label: plan.label, density: 'detailed' }]);
+      return { kind: 'created', dashboardId: dash.id, message: `Started “${dash.name}” with that widget.` };
+    }
     const matches = board.tiles.filter((t) => t.tool === plan.tool);
     if (matches.length === 0) {
       const added = addTile(board.id, { tool: plan.tool, args: plan.args, label: plan.label, density: 'detailed' });

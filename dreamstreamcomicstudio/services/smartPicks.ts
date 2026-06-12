@@ -1,9 +1,8 @@
 // Smart picks — context-relevant dashboard suggestions mined from the user's own
 // data: their long-term chat memory and recent conversation titles. Each pick is a
 // one-click dashboard tile (a whitelisted live-data tool call). Relevance over
-// volume: only surface a pick when something in the user's data actually points at
-// it; generic fallbacks (local weather, top news, S&P 500) fill in only when the
-// mined picks run thin.
+// volume: a pick only surfaces when something in the user's data actually points
+// at it. NO generic fallbacks — without real signal the row stays hidden.
 
 import type { DashboardTile } from './customDashboards';
 
@@ -66,17 +65,6 @@ const mineTopics = (text: string): string[] => {
 
 const CRYPTO_IDS: Record<string, string> = { btc: 'bitcoin', bitcoin: 'bitcoin', eth: 'ethereum', ethereum: 'ethereum' };
 
-const timezoneCity = (): string | null => {
-  try {
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
-    const city = tz.split('/').pop()?.replace(/_/g, ' ').trim();
-    if (city && !/^(UTC|GMT|Etc)/i.test(city)) return city;
-  } catch {
-    /* fall through */
-  }
-  return null;
-};
-
 /**
  * Derive smart dashboard picks from the user's memory text and recent chat titles.
  * `existingKeys` (tool:args of tiles already pinned) suppresses duplicates.
@@ -129,28 +117,9 @@ export const deriveSmartPicks = (
     });
   }
 
-  // Fallbacks only when the mined picks run thin — keep the row useful on day one.
-  if (picks.length < 3) {
-    const city = timezoneCity();
-    if (city) {
-      push({
-        label: `Weather · ${city}`,
-        reason: 'your timezone',
-        tile: { tool: 'get_weather', args: { location: city }, label: city, density: 'compact' }
-      });
-    }
-    push({
-      label: 'Top headlines',
-      reason: 'daily pulse',
-      tile: { tool: 'get_news', args: { topic: 'top' }, label: 'Top headlines', density: 'compact' }
-    });
-    push({
-      label: 'S&P 500',
-      reason: 'market pulse',
-      tile: { tool: 'get_stock', args: { symbol: '^GSPC' }, label: 'S&P 500', density: 'compact' }
-    });
-  }
-
+  // NO generic fallbacks: picks must come from the user's own context (memory,
+  // chats). When there isn't enough signal the row simply doesn't render —
+  // a canned "Top headlines / S&P 500" suggestion is noise, not personalization.
   return picks.slice(0, 6);
 };
 

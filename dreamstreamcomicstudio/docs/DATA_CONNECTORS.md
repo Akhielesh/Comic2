@@ -19,9 +19,11 @@ the topic→source mapping, utilization status, and operating rules.
 | Indices/FX/commodities | Yahoo (unofficial) | Stooq | — | unofficial | **rich card** ✓ |
 | Crypto | CoinGecko (+ demo/pro key) | none legal (exchange-direct feeds PROHIBIT commercial display) | `COINGECKO_API_KEY`, `COINGECKO_API_PLAN` | $35/mo Basic for commercial + attribution | **rich card** ✓ |
 | Fiat FX rates | Frankfurter (ECB) | — | — | commercial-ok ✓ | text |
-| News | Google News RSS (unofficial) | — (GDELT is the planned fallback) | — | unofficial — never sole source | **rich card** ✓ |
-| Places/POI | Foursquare (keyed) | OpenStreetMap | `FOURSQUARE_API_KEY` | conditional | **rich card** ✓ |
+| News | Google News RSS (unofficial; article links decoded to publisher URLs server-side) | — (GDELT is the planned fallback) | — | unofficial — never sole source | **rich card** ✓ + split reader |
+| Article reader (extraction) | Direct fetch + heuristic reader | Jina Reader proxy (keyless best-effort; key lifts limits) | `JINA_API_KEY` (optional) | per-publisher; honest open-original fallback | **reader pane** ✓ |
+| Places/POI | Foursquare (keyed) | OpenStreetMap Overpass (overpass-api.de → kumi.systems mirror; name/brand/cuisine-aware search) | `FOURSQUARE_API_KEY` | conditional | **rich card** ✓ |
 | Geocoding/maps | OSM Nominatim | Open-Meteo geocoder | — | fair-use ✓ | **map** ✓ |
+| Directions/routing | FOSSGIS OSRM (drive/bike/foot, alternatives) | — (transit deep-links to Google Maps) | — | fair-use demo server ✓ (budgeted 20/min) | **rich card** ✓ animated routes |
 | IP geolocation | IPinfo Lite (keyed) | ip-api.com (NON-commercial — dev only) | `IPINFO_TOKEN` | attribution ✓ | text |
 | Knowledge/papers/books | Wikipedia, arXiv, OpenLibrary | — | — | open ✓ | text-only ⚠ |
 | Geo/civic (countries, holidays, time, postal) | REST Countries, Nager.Date, Zippopotam | — | — | open ✓ | text-only ⚠ |

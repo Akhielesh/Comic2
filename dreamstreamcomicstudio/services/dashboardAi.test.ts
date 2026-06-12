@@ -62,3 +62,20 @@ describe('extractTopic', () => {
     expect(extractTopic('create a board about coffee')).toBe('coffee');
   });
 });
+
+describe('directions commands', () => {
+  it('parses "directions from X to Y" into a get_directions edit', () => {
+    const plan = parseDashboardCommand('directions from home to Dulles Airport');
+    expect(plan).toEqual({ kind: 'edit', tool: 'get_directions', args: { from: 'home', to: 'Dulles Airport' }, label: 'home → Dulles Airport' });
+  });
+
+  it('parses the "to … from …" ordering too', () => {
+    const plan = parseDashboardCommand('how do I get to the office from Fairfax?');
+    expect(plan).toEqual({ kind: 'edit', tool: 'get_directions', args: { from: 'Fairfax', to: 'the office' }, label: 'Fairfax → the office' });
+  });
+
+  it('asks for both ends when one is missing', () => {
+    const plan = parseDashboardCommand('directions to the airport');
+    expect(plan.kind).toBe('error');
+  });
+});

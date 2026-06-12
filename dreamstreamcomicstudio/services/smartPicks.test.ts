@@ -40,11 +40,9 @@ describe('deriveSmartPicks', () => {
     expect(again.find((p) => p.label === 'NVDA stock')).toBeUndefined();
   });
 
-  it('falls back to generic pulse picks when nothing is mined', () => {
-    const picks = deriveSmartPicks('', []);
-    expect(picks.length).toBeGreaterThanOrEqual(2);
-    expect(picks.some((p) => p.tile.tool === 'get_news')).toBe(true);
-    expect(picks.some((p) => p.tile.tool === 'get_stock')).toBe(true);
+  it('suggests NOTHING when there is no real signal (no generic fallbacks)', () => {
+    expect(deriveSmartPicks('', [])).toEqual([]);
+    expect(deriveSmartPicks('hello there, nice day', [])).toEqual([]);
   });
 
   it('uses recent session titles as signal too', () => {

@@ -13,6 +13,7 @@ import { MediaPanel, type MediaPanelData } from './MediaPanel';
 import type { PlaygroundData } from './MultiFilePlayground';
 import type { ChatArtifact, CodeStudioArtifact, MapArtifact } from '../../apiTypes';
 import { CANVAS_BG, SIDEBAR_BG, GLASS, HEADING, INK, ACCENT_TEXT, CONTROL_BTN, TRANSITION } from './studioDesign';
+import { persistUiState, resolveInitialUiState } from '../../services/viewState';
 
 const MapPanel = lazy(() => import('./MapPanel'));
 const MultiFilePlayground = lazy(() => import('./MultiFilePlayground'));
@@ -38,6 +39,11 @@ interface SkillsViewProps {
   skills: ChatSkill[];
   onRunSkill: (skill: ChatSkill, arg: string) => void;
 }
+interface DashboardsViewProps {
+  /** Renders the sidebar toggle inside the dashboards top bar (its own header is
+   *  hidden for this view to reclaim the vertical space). */
+  sidebarControl?: React.ReactNode;
+}
 interface CommandPaletteProps {
   open: boolean;
   onClose: () => void;
@@ -55,7 +61,7 @@ const pickExport = <P,>(m: Record<string, unknown>, name: string): { default: Re
 const ChatHome = lazy(() => import('./ChatHome').then((m) => pickExport<ChatHomeProps>(m, 'ChatHome')));
 const SkillsView = lazy(() => import('./SkillsView').then((m) => pickExport<SkillsViewProps>(m, 'SkillsView')));
 import { FloatingVideoDock } from './FloatingVideoDock';
-const DashboardsView = lazy(() => import('./DashboardsView').then((m) => pickExport<Record<string, never>>(m, 'DashboardsView')));
+const DashboardsView = lazy(() => import('./DashboardsView').then((m) => pickExport<DashboardsViewProps>(m, 'DashboardsView')));
 const CommandPalette = lazy(() => import('./CommandPalette').then((m) => pickExport<CommandPaletteProps>(m, 'CommandPalette')));
 import { deriveModelFeatures } from '../../services/chatFeatures';
 import { getCapabilities } from '../../services/modelCapabilities';
@@ -188,7 +194,13 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   const [activeId, setActiveId] = useState<string | null>(null);
   // Which main view fills the area right of the sidebar. Selecting/creating a chat
   // always lands back on 'chat'; a null active session falls back to 'home'.
-  const [view, setView] = useState<StudioView>('chat');
+  // Continuity: a reload restores the last view (URL ?cview= → session memory),
+  // so refreshing on Dashboards no longer bounces the user back to the default.
+  const isStudioView = (v: string): v is StudioView => v === 'chat' || v === 'home' || v === 'skills' || v === 'dashboards';
+  const [view, setView] = useState<StudioView>(() => resolveInitialUiState('chat.view', 'cview', isStudioView, 'chat'));
+  useEffect(() => {
+    persistUiState('chat.view', 'cview', view === 'chat' ? null : view);
+  }, [view]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [catalog, setCatalog] = useState<Map<string, CatalogModel>>(new Map());
   // Per-session generation state, so several chats can stream at the same time and a
@@ -1327,7 +1339,10 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
       ) : (
       <div className={`flex-1 flex flex-col min-w-0 min-h-0 h-full ${CANVAS_BG}`}>
         {/* Slim header for the non-chat views — keeps the sidebar toggle reachable.
-            `relative z-20` lifts it above the scrolling content below. */}
+            `relative z-20` lifts it above the scrolling content below. Dashboards
+            skip it entirely (the toggle moves into their own sticky bar) so the
+            board content starts at the very top — no wasted title strip. */}
+        {resolvedView !== 'dashboards' && (
         <div className={`relative z-20 flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-3 border-b border-[var(--ds-hairline)] ${GLASS}`}>
           <button
             onClick={() => setSidebarOpen((v) => !v)}
@@ -1337,9 +1352,10 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
             {sidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
           </button>
           <span className={`text-sm ${HEADING}`}>
-            {resolvedView === 'skills' ? 'Skills' : resolvedView === 'dashboards' ? 'Dashboards' : 'Home'}
+            {resolvedView === 'skills' ? 'Skills' : 'Home'}
           </span>
         </div>
+        )}
         <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain [-webkit-overflow-scrolling:touch]">
           <Suspense
             fallback={
@@ -1362,7 +1378,19 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
             {resolvedView === 'skills' && (
               <SkillsView skills={CHAT_SKILLS} onRunSkill={handleRunSkillFrom} />
             )}
-            {resolvedView === 'dashboards' && <DashboardsView />}
+            {resolvedView === 'dashboards' && (
+              <DashboardsView
+                sidebarControl={
+                  <button
+                    onClick={() => setSidebarOpen((v) => !v)}
+                    className={`${CONTROL_BTN} p-2 sm:p-1.5 tap-target shrink-0`}
+                    title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+                  >
+                    {sidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
+                  </button>
+                }
+              />
+            )}
           </Suspense>
           {/* Always-on-top mini video player — follows the user across views. */}
           <FloatingVideoDock />
