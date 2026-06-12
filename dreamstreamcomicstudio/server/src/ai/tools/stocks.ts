@@ -249,23 +249,49 @@ const yfChart = async (symbol: string, range: string, interval: string, signal?:
 const sliceTail = (pts: StockPoint[], n: number): StockPoint[] => (pts.length > n ? pts.slice(-n) : pts);
 
 // Best-effort fundamentals via Yahoo quoteSummary (needs a crumb + cookie). Any
-// failure (consent walls, missing crumb) silently yields no stats.
+// failure (consent walls, missing crumb) silently yields no stats. Both the
+// cookie and crumb steps retry through the egress relay — without that, stats
+// silently vanish in production where Yahoo blocks the backend's IPs.
 const yfFundamentals = async (symbol: string, signal?: AbortSignal): Promise<StockStats | undefined> => {
   try {
-    // 1) get a session cookie, 2) exchange it for a crumb, 3) call quoteSummary.
-    const t = withTimeout(signal, 6_000);
+    const cookieFrom = (res: Response): string => {
+      const sc = (res.headers as { getSetCookie?: () => string[] }).getSetCookie?.();
+      return (sc && sc.length ? sc : [res.headers.get('set-cookie') || ''])
+        .map((c) => c.split(';')[0])
+        .filter(Boolean)
+        .join('; ');
+    };
+    // 1) get a session cookie (any status — fc.yahoo.com 404s by design),
+    //    falling back to the relay when the direct host is blocked.
     let cookie = '';
+    const cookieAttempt = async (url: string, extra: Record<string, string>): Promise<string> => {
+      const t = withTimeout(signal, 6_000);
+      try {
+        const res = await fetch(url, { headers: { 'User-Agent': UA, ...extra }, signal: t.signal });
+        return cookieFrom(res);
+      } finally {
+        t.done();
+      }
+    };
     try {
-      const res = await fetch('https://fc.yahoo.com/', { headers: { 'User-Agent': UA }, signal: t.signal });
-      const sc = (res.headers as any).getSetCookie?.() as string[] | undefined;
-      cookie = (sc && sc.length ? sc : [res.headers.get('set-cookie') || '']).map((c) => c.split(';')[0]).filter(Boolean).join('; ');
+      cookie = await cookieAttempt('https://fc.yahoo.com/', {});
     } catch {
-      /* ignore */
-    } finally {
-      t.done();
+      /* blocked/unreachable — try the relay below */
+    }
+    if (!cookie) {
+      const relay = egressUrlFor('https://fc.yahoo.com/');
+      if (relay) {
+        try {
+          cookie = await cookieAttempt(relay, egressHeaders());
+        } catch {
+          /* fundamentals stay best-effort */
+        }
+      }
     }
     if (!cookie) return undefined;
-    const crumb = (await (await fetch(YF_CRUMB, { headers: { 'User-Agent': UA, Cookie: cookie } })).text()).trim();
+    // 2) exchange it for a crumb, 3) call quoteSummary — both egress-retried.
+    const crumbRes = await fetchWithEgressRetry(YF_CRUMB, 'text/plain,*/*', signal, cookie);
+    const crumb = (await crumbRes.text()).trim();
     if (!crumb || crumb.includes('<')) return undefined;
     const url = `${YF_SUMMARY}/${encodeURIComponent(symbol)}?modules=summaryDetail,defaultKeyStatistics,price&crumb=${encodeURIComponent(crumb)}`;
     const data = await fetchJson<any>(url, signal, cookie);
