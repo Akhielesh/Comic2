@@ -54,6 +54,7 @@ import { telemetryRouter } from './routes/telemetry.js';
 import { newsletterRouter } from './routes/newsletter.js';
 import { emailRouter } from './routes/email.js';
 import { adminEmailRouter } from './routes/adminEmail.js';
+import { modelBenchRouter } from './routes/modelBench.js';
 import { requireAdmin } from './middleware/requireAdmin.js';
 import { invitesRouter } from './routes/invites.js';
 import { accountRouter } from './routes/account.js';
@@ -215,6 +216,8 @@ app.use('/api/admin', adminRateLimit, adminRouter);
 app.use('/api/admin/verification', adminRateLimit, verificationRouter);
 // Admin Email Console (templates/preview/test/send/invite). Admin-only.
 app.use('/api/admin/email', adminRateLimit, requireAdmin, adminEmailRouter);
+// Admin model bench — in-app trigger + results for the all-models live test.
+app.use('/api/admin/model-bench', adminRateLimit, requireAdmin, modelBenchRouter);
 app.use('/api/moderation', moderationRateLimit, moderationRouter);
 app.use('/api/text', textRateLimit, textRouter);
 app.use('/api/chat', textRateLimit, chatRouter);
