@@ -11,6 +11,7 @@ import {
 import { getCapabilities } from '../../services/modelCapabilities';
 import { searchModels } from '../../services/modelSearch';
 import { isProviderEnabled } from '../../services/sourceGovernance';
+import { useModelSourceScope } from '../../hooks/useModelSourceScope';
 import { fetchModelSpeed, speedTier, speedLabel, isTimeoutProneFreeModel, type ModelSpeed } from '../../services/modelSpeed';
 import {
   GLASS_STRONG, HAIRLINE, MUTED, INK, HEADING, TRANSITION, SHADOW_SOFT,
@@ -124,10 +125,15 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
     };
   }, []);
 
+  // Same Settings-level source scope as the Model Library and comic Model panel:
+  // a source that's off in Settings (or keyless while another source is connected)
+  // doesn't offer models here either.
+  const sourceScope = useModelSourceScope();
   const filtered = useMemo(() => {
     // Ranked, typo-tolerant search (aliases like "claude" → Anthropic work too),
     // then the facet chips narrow the ranked list.
     return searchModels(models, query).filter((model) => {
+      if (!sourceScope.active.includes(model.source)) return false;
       const caps = getCapabilities(model);
       if (facet === 'free' && !caps.isFree) return false;
       if (facet === 'reasoning' && !caps.reasoning) return false;
@@ -135,7 +141,7 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
       if (facet === 'web' && model.source !== 'openrouter') return false;
       return true;
     });
-  }, [models, query, facet]);
+  }, [models, query, facet, sourceScope]);
 
   return (
     <ModalPortal>

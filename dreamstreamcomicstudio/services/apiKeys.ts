@@ -81,6 +81,15 @@ const STORAGE = 'dreamstream_api_keys_v2';
 const MIGRATED_FLAG = 'dreamstream_api_keys_migrated';
 const ACCOUNT_META = 'dreamstream_account_keys_meta';
 
+/** Fired on every mutation of the key store, so UIs scoped by "connected sources"
+ *  (Model Library, pickers) can re-derive without polling. */
+export const API_KEYS_CHANGED = 'dreamstream:api-keys:changed';
+
+const emitKeysChanged = () => {
+  if (typeof window === 'undefined') return;
+  try { window.dispatchEvent(new CustomEvent(API_KEYS_CHANGED)); } catch { /* ignore */ }
+};
+
 // Legacy single-key storage locations (kept for back-compat + one-time migration).
 const LEGACY_KEYS: Record<ApiKeyProvider, string> = {
   openrouter: 'dreamstream_openrouter_key',
@@ -114,6 +123,7 @@ export const clearAllKeys = (): void => {
   remove(MIGRATED_FLAG);
   remove(ACCOUNT_META);
   for (const provider of ALL_PROVIDERS) remove(LEGACY_KEYS[provider]);
+  emitKeysChanged();
 };
 
 // ---- Account key metadata ------------------------------------------------------
@@ -131,6 +141,7 @@ export interface AccountKeyMeta {
 
 export const setAccountKeyMeta = (keys: AccountKeyMeta[]): void => {
   write(ACCOUNT_META, JSON.stringify(Array.isArray(keys) ? keys : []));
+  emitKeysChanged(); // account "key on file" affects which sources count as connected
 };
 
 export const getAccountKeyMeta = (): AccountKeyMeta[] => {
@@ -227,6 +238,7 @@ export const suspendKeysSync = (value: boolean) => { syncSuspended = value; };
 
 const writeAll = (keys: ManagedApiKey[]) => {
   write(STORAGE, JSON.stringify(keys));
+  emitKeysChanged();
   if (keysChangeListener && !syncSuspended) {
     try { keysChangeListener(); } catch { /* listener errors must not break local writes */ }
   }

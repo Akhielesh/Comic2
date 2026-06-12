@@ -65,6 +65,7 @@ import { modelLinks, SOURCE_HOSTING_NOTE } from '../services/modelLinks';
 import { getModelVendor, getModelVendorId, availableVendors } from '../services/modelVendors';
 import { recommendModels, accuracyElo } from '../services/modelRecommendations';
 import { getModelSize } from '../services/modelParams';
+import { useModelSourceScope } from '../hooks/useModelSourceScope';
 import type { ModelSource } from '../services/modelCatalog';
 
 interface ModelLibraryProps {
@@ -232,15 +233,15 @@ const UseModelControl: React.FC<{ model: CatalogModel; selection: ModelSelection
   }
   if (confirming) {
     return (
-      <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-        <span className="text-[11px] text-slate-600">Use for {slot}?</span>
+      <div className="flex flex-wrap items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+        <span className="text-[11px] text-slate-600 whitespace-nowrap">Use for {slot}?</span>
         <button onClick={() => { onUse(slot); setConfirming(false); }} className="text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black bg-brand-blue text-white">Confirm</button>
         <button onClick={() => setConfirming(false)} className="text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black bg-white">Cancel</button>
       </div>
     );
   }
   return (
-    <button onClick={(e) => { e.stopPropagation(); setConfirming(true); }} className="text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black bg-white hover:bg-brand-yellow">
+    <button onClick={(e) => { e.stopPropagation(); setConfirming(true); }} className="text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black bg-white hover:bg-brand-yellow whitespace-nowrap">
       Use this model
     </button>
   );
@@ -323,24 +324,27 @@ const ModelCard: React.FC<{
 
     {model.editorialNote && <p className="text-xs text-slate-600 line-clamp-2">{model.editorialNote}</p>}
 
-    <div className="mt-auto flex items-center justify-between gap-2 pt-2 border-t border-dashed border-slate-200">
-      <div className="flex items-center gap-1.5">
+    {/* Action row: WRAPS instead of overflowing — on narrow cards (4-col grid, small
+        devices) the two button groups stack as full rows rather than spilling past the
+        card border onto the neighbour. Buttons keep their label on one line. */}
+    <div className="mt-auto flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 pt-2 border-t border-dashed border-slate-200">
+      <div className="flex flex-wrap items-center gap-1.5 min-w-0">
         <UseModelControl model={model} selection={selection} onUse={onUse} />
         {onStartChat && canChatWith(model) && model.apiCallable !== false && (
           <button
             onClick={(e) => { e.stopPropagation(); onStartChat({ id: model.id, name: model.name, source: providerOrigin(model) as 'openrouter' | 'nvidia' }); }}
-            className="text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black bg-brand-blue text-white hover:bg-blue-600 flex items-center gap-1"
+            className="text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black bg-brand-blue text-white hover:bg-blue-600 flex items-center gap-1 whitespace-nowrap"
             title="Try this model in Chat Studio"
           >
             <MessageSquare className="w-3 h-3" /> Chat
           </button>
         )}
       </div>
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1.5 ml-auto">
         <FeedbackButtons modelId={model.id} />
         <button
           onClick={(e) => { e.stopPropagation(); onToggleCompare(); }}
-          className={`text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black flex items-center gap-1 ${compared ? 'bg-brand-blue text-white' : 'bg-white hover:bg-brand-yellow'}`}
+          className={`text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black flex items-center gap-1 whitespace-nowrap ${compared ? 'bg-brand-blue text-white' : 'bg-white hover:bg-brand-yellow'}`}
           title="Add to comparison"
         >
           <Scale className="w-3 h-3" /> {compared ? 'Comparing' : 'Compare'}
@@ -733,25 +737,52 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reloadKey]);
 
+  // Settings-level source scope: the catalog is cut to the sources the Settings
+  // toggles + connected keys allow, so this page always agrees with Settings and
+  // the pickers (no more "model shows here but can't be used there").
+  const sourceScope = useModelSourceScope();
+  const scopedModels = useMemo(
+    () => models.filter((m) => sourceScope.active.includes(m.source)),
+    [models, sourceScope]
+  );
+
+  // Drop a source filter chip whose source left the scope (key removed / source
+  // turned off in Settings) so a stale chip can't filter the page to zero results.
+  useEffect(() => {
+    setFilters((prev) => {
+      if (!prev.has('openrouter') && !prev.has('nvidia')) return prev;
+      const next = new Set(prev);
+      if (!sourceScope.active.includes('openrouter')) next.delete('openrouter');
+      if (!sourceScope.active.includes('nvidia')) next.delete('nvidia');
+      return next.size === prev.size ? prev : next;
+    });
+  }, [sourceScope]);
+
+  // Source chips are only offered when there's a real choice between active sources.
+  const filterChips = FILTERS.filter((f) =>
+    (f.key !== 'openrouter' && f.key !== 'nvidia') ||
+    (sourceScope.active.length > 1 && sourceScope.active.includes(f.key))
+  );
+
   const visible = useMemo(() => {
     // Ranked search first (typo-tolerant, alias-aware), then chip filters, then sort.
     // With "Best match" the search ranking IS the order; other sorts override it.
-    let list = searchModels(models, query).filter((model) => matchesFilter(model, filters, domainFilters, vendorFilters));
+    let list = searchModels(scopedModels, query).filter((model) => matchesFilter(model, filters, domainFilters, vendorFilters));
     if (minContextK > 0) list = list.filter((m) => (m.contextLength || 0) >= minContextK * 1000);
     return sortModels(list, sortBy);
-  }, [models, filters, domainFilters, vendorFilters, query, minContextK, sortBy]);
-  const compareModels = useMemo(() => compareIds.map((id) => models.find((m) => m.id === id)).filter((m): m is CatalogModel => !!m), [compareIds, models]);
-  const vendorOptions = useMemo(() => availableVendors(models), [models]);
-  const picks = useMemo(() => recommendModels(models, 2), [models]);
+  }, [scopedModels, filters, domainFilters, vendorFilters, query, minContextK, sortBy]);
+  const compareModels = useMemo(() => compareIds.map((id) => scopedModels.find((m) => m.id === id)).filter((m): m is CatalogModel => !!m), [compareIds, scopedModels]);
+  const vendorOptions = useMemo(() => availableVendors(scopedModels), [scopedModels]);
+  const picks = useMemo(() => recommendModels(scopedModels, 2), [scopedModels]);
 
   const activeFilterCount = filters.size + domainFilters.size + vendorFilters.size + (minContextK > 0 ? 1 : 0);
   const resetFilters = () => { setFilters(new Set()); setDomainFilters(new Set()); setVendorFilters(new Set()); setMinContextK(0); };
 
   const useModel = (model: CatalogModel, slot: ModelSlot) => setSelectedModel(slot, model.id, 'specific', model.source);
 
-  // Smart auto-pick: score every model (all sources) per stage and assign the best team.
+  // Smart auto-pick: score every model (within the active source scope) per stage and assign the best team.
   const applySmartTeam = (mode: SmartMode) => {
-    const team = buildSmartTeam(models, mode);
+    const team = buildSmartTeam(scopedModels, mode);
     if (team.text) setSelectedModel('text', team.text.model.id, 'specific', team.text.model.source);
     if (team.image) setSelectedModel('image', team.image.model.id, 'specific', team.image.model.source);
     (Object.keys(TASK_PROFILES) as SmartTask[]).forEach((task) => {
@@ -764,8 +795,8 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
     setSmartTeam(team);
   };
 
-  // Domain-aware single pick: "what's the best model for coding / science / …" across all sources.
-  const runDomainPick = (domain: DomainId, mode: SmartMode) => setDomainPick({ domain, best: pickBestForDomain(models, domain, mode), mode });
+  // Domain-aware single pick: "what's the best model for coding / science / …" across your active sources.
+  const runDomainPick = (domain: DomainId, mode: SmartMode) => setDomainPick({ domain, best: pickBestForDomain(scopedModels, domain, mode), mode });
 
   const toggleCompare = (id: string) =>
     setCompareIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : prev.length >= MAX_COMPARE ? prev : [...prev, id]));
@@ -797,6 +828,32 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
 
         <VerifiedStrip />
 
+        {/* Source scope — the Settings-level decision, restated where the models actually are,
+            so this page always matches the Allowed-sources toggles + connected keys. */}
+        {sourceScope.reason === 'none' ? (
+          <div className="mt-4 border-2 border-black rounded-xl bg-red-100 p-3 text-xs flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>
+              All model sources are turned off in <span className="font-bold">Settings → API Configuration → Allowed sources</span>.
+              Turn a source back on to see its models here.
+            </span>
+          </div>
+        ) : sourceScope.reason === 'connected' ? (
+          <div className="mt-4 border-2 border-black rounded-xl bg-white p-3 text-xs flex flex-wrap items-center gap-2">
+            <ShieldCheck className="w-4 h-4 shrink-0 text-brand-blue" />
+            <span className="flex-1 min-w-[220px]">
+              Showing models from your connected source{sourceScope.active.length > 1 ? 's' : ''}:{' '}
+              <span className="font-bold">{sourceScope.active.map((s) => sourceLabel(s)).join(' + ')}</span>.
+              {sourceScope.hidden.length > 0 && (
+                <> {sourceScope.hidden.map((s) => sourceLabel(s)).join(' + ')} models are hidden until you add a key in Settings → API Configuration.</>
+              )}
+              {sourceScope.active.length > 1 && (
+                <> Where the same model exists on more than one source, you choose the source when selecting it.</>
+              )}
+            </span>
+          </div>
+        ) : null}
+
         {/* Signed-out: the catalog is fully browsable; say exactly what sign-in adds instead of
             silently hiding the live-verification strip and letting auth-gated bits look broken. */}
         {!user && (
@@ -821,11 +878,11 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
             {/* Live popularity ranking — what the platform's users actually run. Hides itself
                 while the /api/models/popularity backend isn't deployed yet. */}
             <div className="mt-4"><ModelPopularityPanel /></div>
-            <DomainLeaderboard models={models} onStartChat={onStartChat} />
+            <DomainLeaderboard models={scopedModels} onStartChat={onStartChat} />
           </>
         ) : view === 'table' ? (
           <>
-            <ProviderAggregatorTable models={models} />
+            <ProviderAggregatorTable models={scopedModels} />
             <ModelDataSources />
           </>
         ) : (
@@ -838,8 +895,8 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
             subtitle="Scores every model across all your sources for each stage — capabilities, drawbacks, and your 👍/👎 — and assigns the best team. It keeps improving as you give feedback."
             right={
               <>
-                <button onClick={() => applySmartTeam('best')} disabled={loading || models.length === 0} className="px-3 py-2 rounded-lg border-2 border-black bg-brand-blue text-white font-bold text-sm hover:translate-x-[1px] hover:translate-y-[1px] transition-transform disabled:opacity-50 flex items-center gap-1"><Wand2 className="w-4 h-4" /> Auto-pick best</button>
-                <button onClick={() => applySmartTeam('free')} disabled={loading || models.length === 0} className="px-3 py-2 rounded-lg border-2 border-black bg-green-600 text-white font-bold text-sm hover:translate-x-[1px] hover:translate-y-[1px] transition-transform disabled:opacity-50 flex items-center gap-1"><Zap className="w-4 h-4" /> Best free (any source)</button>
+                <button onClick={() => applySmartTeam('best')} disabled={loading || scopedModels.length === 0} className="px-3 py-2 rounded-lg border-2 border-black bg-brand-blue text-white font-bold text-sm hover:translate-x-[1px] hover:translate-y-[1px] transition-transform disabled:opacity-50 flex items-center gap-1"><Wand2 className="w-4 h-4" /> Auto-pick best</button>
+                <button onClick={() => applySmartTeam('free')} disabled={loading || scopedModels.length === 0} className="px-3 py-2 rounded-lg border-2 border-black bg-green-600 text-white font-bold text-sm hover:translate-x-[1px] hover:translate-y-[1px] transition-transform disabled:opacity-50 flex items-center gap-1"><Zap className="w-4 h-4" /> Best free (any source)</button>
               </>
             }
           />
@@ -885,7 +942,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
           />
           <div className="mt-3 flex flex-wrap gap-2">
             {(['coding', 'science', 'math', 'reasoning', 'writing'] as DomainId[]).map((d) => (
-              <button key={d} onClick={() => runDomainPick(d, 'best')} disabled={loading || models.length === 0}
+              <button key={d} onClick={() => runDomainPick(d, 'best')} disabled={loading || scopedModels.length === 0}
                 className={`text-xs font-bold px-3 py-1.5 rounded border-2 border-black disabled:opacity-50 ${domainPick?.domain === d ? `${DOMAIN_META[d].tone}` : 'bg-white hover:bg-brand-yellow/60'}`}>
                 {DOMAIN_META[d].label}
               </button>
@@ -899,7 +956,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
                   <button onClick={() => setSelected(domainPick.best!.model)} className="font-bold underline">{domainPick.best.model.name}</button>
                   <span className="text-slate-500">{domainPick.best.reasons.join(' · ')}</span>
                   <button onClick={() => useModel(domainPick.best!.model, slotOf(domainPick.best!.model))} className="ml-auto text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black bg-brand-blue text-white">Use it</button>
-                  {(() => { const free = pickBestForDomain(models, domainPick.domain, 'free'); return free && free.model.id !== domainPick.best!.model.id
+                  {(() => { const free = pickBestForDomain(scopedModels, domainPick.domain, 'free'); return free && free.model.id !== domainPick.best!.model.id
                     ? <span className="basis-full text-slate-500">Best <span className="font-bold text-green-700">free</span>: <button onClick={() => setSelected(free.model)} className="font-bold underline">{free.model.name}</button> ({free.strength}/100)</span>
                     : null; })()}
                 </div>
@@ -947,7 +1004,7 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
             <div>
               <div className="text-[10px] font-bold uppercase text-slate-500 mb-1.5">Type &amp; capabilities</div>
               <div className="flex flex-wrap gap-2">
-                {FILTERS.map((f) => {
+                {filterChips.map((f) => {
                   const active = f.key === 'all' ? filters.size === 0 : filters.has(f.key);
                   const toggle = () => setFilters((prev) => {
                     if (f.key === 'all') return new Set<FilterKey>();
@@ -1105,7 +1162,10 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
                 )}
               />
             ) : (
-            <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            // With the filter rail docked left (xl) the row is ~920px wide — 4 columns make
+            // ~220px cards whose action buttons spill over the border. 3 columns fit; 4 only
+            // when the rail is hidden and the full width is available.
+            <div className={`mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 ${showFilters ? 'xl:grid-cols-3' : 'xl:grid-cols-4'} gap-4`}>
               {visible.map((model) => (
                 <ModelCard
                   key={`${model.source}:${model.id}`}
