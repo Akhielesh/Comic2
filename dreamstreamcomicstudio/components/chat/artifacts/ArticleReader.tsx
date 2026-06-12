@@ -1,28 +1,29 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Loader2, ExternalLink, X, Newspaper } from 'lucide-react';
-import { readArticle, type ReadArticleResult } from '../../../services/chatApi';
+import { ExternalLink, X, Newspaper } from 'lucide-react';
 import type { NewsItem } from '../../../apiTypes';
+import {
+  ArticleBlocks,
+  ArticleFooter,
+  ArticleSkeleton,
+  ArticleUnavailable,
+  articleHost,
+  articleHref,
+  useArticle
+} from './NewsReader';
 
 // In-app article reader — opens a focused, scrollable overlay with the extracted
 // readable content (server-side reader mode) so a news item is read in-window instead
 // of bouncing to a new tab. Portaled to <body> so it escapes any transformed/clipped
 // ancestor; Esc / backdrop closes it. Falls back to the snippet + "open original" when
 // extraction is thin (paywalls, JS-only sites).
+//
+// Shares its loading skeleton, typography, host resolution (real publisher host, never
+// news.google.com when a resolved host exists) and fallback messaging with the split-pane
+// reader via ./NewsReader.
 
 export const ArticleReader: React.FC<{ item: NewsItem; onClose: () => void }> = ({ item, onClose }) => {
-  const [state, setState] = useState<{ loading: boolean; data: ReadArticleResult | null }>({ loading: true, data: null });
-
-  useEffect(() => {
-    let active = true;
-    setState({ loading: true, data: null });
-    readArticle(item.url).then((data) => {
-      if (active) setState({ loading: false, data });
-    });
-    return () => {
-      active = false;
-    };
-  }, [item.url]);
+  const { loading, article } = useArticle(item.url);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -39,11 +40,13 @@ export const ArticleReader: React.FC<{ item: NewsItem; onClose: () => void }> = 
 
   if (typeof document === 'undefined') return null;
 
-  const data = state.data;
-  const hasBody = !!data && data.ok && data.blocks.length > 0;
-  const title = data?.title || item.title;
-  const image = data?.image || item.image;
-  const host = data?.host || (() => { try { return new URL(item.url).hostname.replace(/^www\./, ''); } catch { return ''; } })();
+  const hasBody = !!article && article.ok && article.blocks.length > 0;
+  const title = article?.title || item.title;
+  const image = article?.image || item.image;
+  // Real publisher host (server-resolved when the item URL was a news.google.com
+  // redirect) and the best outbound link to match it.
+  const host = articleHost(item, article);
+  const href = articleHref(item, article);
 
   return createPortal(
     <div
@@ -65,10 +68,10 @@ export const ArticleReader: React.FC<{ item: NewsItem; onClose: () => void }> = 
           </span>
           <div className="flex shrink-0 items-center gap-1">
             <a
-              href={item.url}
+              href={href}
               target="_blank"
               rel="noopener noreferrer"
-              title="Open original"
+              title={`Open at ${host}`}
               className="rounded-lg p-1.5 text-[var(--ds-muted)] transition-colors duration-200 hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]"
             >
               <ExternalLink className="h-4 w-4" />
@@ -86,7 +89,7 @@ export const ArticleReader: React.FC<{ item: NewsItem; onClose: () => void }> = 
         <div className="px-5 py-4 sm:px-7 sm:py-6">
           <h1 className="text-xl font-semibold leading-tight tracking-tight text-[var(--ds-ink)] sm:text-2xl">{title}</h1>
           <p className="mt-1.5 text-[12px] text-[var(--ds-muted)]">
-            {[data?.byline, host].filter(Boolean).join(' · ')}
+            {[article?.byline, host].filter(Boolean).join(' · ')}
           </p>
 
           {image && (
@@ -98,39 +101,19 @@ export const ArticleReader: React.FC<{ item: NewsItem; onClose: () => void }> = 
             />
           )}
 
-          {state.loading ? (
-            <div className="flex items-center justify-center gap-2 py-12 text-[var(--ds-muted)]">
-              <Loader2 className="h-5 w-5 animate-spin text-[var(--ds-accent)]" />
-              <span className="text-sm">Loading the article…</span>
-            </div>
-          ) : hasBody ? (
-            <div className="mt-4 space-y-3">
-              {data!.blocks.map((b, i) =>
-                b.type === 'h' ? (
-                  <h2 key={i} className="pt-1 text-[15px] font-semibold tracking-tight text-[var(--ds-ink)]">{b.text}</h2>
-                ) : (
-                  <p key={i} className="text-[15px] leading-relaxed text-[var(--ds-ink)] opacity-90">{b.text}</p>
-                )
-              )}
-              <p className="border-t border-[var(--ds-hairline-soft)] pt-3 text-[12px] text-[var(--ds-muted)]">
-                Extracted for in-app reading.{' '}
-                <a href={item.url} target="_blank" rel="noopener noreferrer" className="font-medium text-[var(--ds-accent)] hover:underline">
-                  Read the full article at {host} ↗
-                </a>
-              </p>
-            </div>
-          ) : (
-            // Extraction too thin (paywall / JS-only) → show what we have + a clear out.
-            <div className="mt-4">
-              {item.snippet && <p className="text-[15px] leading-relaxed text-[var(--ds-ink)] opacity-90">{item.snippet}</p>}
-              <div className="mt-4 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-4 py-3 text-[13px] text-[var(--ds-muted)]">
-                This article couldn’t be fully loaded for in-app reading (it may be paywalled or load its text with scripts).{' '}
-                <a href={item.url} target="_blank" rel="noopener noreferrer" className="font-medium text-[var(--ds-accent)] hover:underline">
-                  Open it at {host} ↗
-                </a>
-              </div>
-            </div>
-          )}
+          <div className="mt-4">
+            {loading ? (
+              <ArticleSkeleton withImage={!image} />
+            ) : hasBody ? (
+              <>
+                <ArticleBlocks blocks={article.blocks} />
+                <ArticleFooter host={host} href={href} className="mt-4" />
+              </>
+            ) : (
+              // Extraction too thin (paywall / JS-only) → show what we have + a clear out.
+              <ArticleUnavailable item={item} host={host} href={href} />
+            )}
+          </div>
         </div>
       </article>
     </div>,

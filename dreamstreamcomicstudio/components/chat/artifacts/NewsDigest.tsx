@@ -1,26 +1,24 @@
-import React, { useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Newspaper } from 'lucide-react';
 import type { NewsResultsArtifact, NewsItem } from '../../../apiTypes';
 import { Surface, SurfaceTitle, SurfaceSubtitle, relativeTime, useCompact, useLiveData } from './kit';
 import { ArticleReader } from './ArticleReader';
+import { NewsReaderPane, hostOf, prefetchArticle } from './NewsReader';
 
 // News digest, rebuilt in the calm-studio language.
 //  • compact — the top 3 headlines with source + time. No images, no controls:
 //    a pure glance card.
-//  • detailed — a lead story (with image when available) above clean divided rows:
-//    headline, source favicon, relative time, a tiny tinted sentiment dot + label,
-//    and read minutes. "Show all" expansion preserved.
+//  • detailed + WIDE (the card itself measures ≥ 560px) — a master-detail split:
+//    a scrollable headline list on the left, an in-card article reader on the
+//    right (extracted content, reading-progress bar, ↑/↓ selection, hover
+//    prefetch). Scroll the list, read on the right — like flipping through a feed.
+//  • detailed + narrow — the classic lead story above clean divided rows; tapping
+//    a story opens the ArticleReader modal overlay.
 //  • live — when the live-data context can re-run the producing get_news call,
 //    the detailed view grows a topic chip row: clicking a chip re-queries the tool
-//    with that topic (no model round-trip) and the card re-renders with fresh data.
+//    with that topic (no model round-trip); the split stays put and the first new
+//    story is selected.
 
-const hostOf = (url: string): string => {
-  try {
-    return new URL(url).hostname.replace(/^www\./, '');
-  } catch {
-    return '';
-  }
-};
 const faviconUrl = (url: string): string | null => {
   const host = hostOf(url);
   return host ? `https://www.google.com/s2/favicons?domain=${host}&sz=64` : null;
@@ -89,6 +87,11 @@ const MetaLine: React.FC<{ item: NewsItem; showSentiment?: boolean }> = ({ item,
 
 const PREVIEW = 5;
 
+// The card's OWN width (not the viewport) at which the detailed view becomes a
+// master-detail split. Measured with a ResizeObserver so the same card adapts in
+// the chat column, the two-up artifact grid, dashboard tiles and the lightbox.
+const SPLIT_MIN_WIDTH = 560;
+
 // Topic chips mirror the server's get_news `topic` enum (the subset that maps to a
 // stable Google News section). Label is display-only; id is the tool argument.
 const TOPICS: { id: string; label: string }[] = [
@@ -106,8 +109,58 @@ export const NewsDigest: React.FC<{ data: NewsResultsArtifact }> = ({ data }) =>
   const live = useLiveData();
   const items = data.items ?? [];
   const [showAll, setShowAll] = useState(false);
-  // Which article is open in the in-app reader (null = none).
+  // Which article is open in the modal reader (narrow/compact paths; null = none).
   const [reading, setReading] = useState<NewsItem | null>(null);
+
+  // ── Width-aware layout: measure the card itself. ────────────────────────────
+  const shellRef = useRef<HTMLDivElement>(null);
+  const [wide, setWide] = useState(false);
+  useLayoutEffect(() => {
+    if (compact) return;
+    const el = shellRef.current;
+    if (!el) return;
+    const update = (w: number) => setWide(w >= SPLIT_MIN_WIDTH);
+    update(el.getBoundingClientRect().width);
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect?.width;
+      if (typeof w === 'number') update(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [compact]);
+
+  // ── Split-pane selection. Auto-select the first story on mount and whenever the
+  //    item set changes (e.g. a topic chip refresh swaps the feed). ─────────────
+  const itemsKey = useMemo(() => items.map((n) => n.url).join('\n'), [items]);
+  const [selectedUrl, setSelectedUrl] = useState<string | null>(items[0]?.url ?? null);
+  useEffect(() => {
+    setSelectedUrl(items[0]?.url ?? null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemsKey]);
+  const selectedIndex = Math.max(0, items.findIndex((n) => n.url === selectedUrl));
+  const selectedItem = items[selectedIndex];
+  const rowRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+  const moveSelection = (delta: number) => {
+    if (!items.length) return;
+    const next = Math.min(items.length - 1, Math.max(0, selectedIndex + delta));
+    if (next === selectedIndex) return;
+    setSelectedUrl(items[next].url);
+    rowRefs.current[next]?.scrollIntoView?.({ block: 'nearest' });
+  };
+  // ↑/↓ move the selection while focus is anywhere inside the split (list rows or
+  // the reader pane) — the handler catches the bubbled keydown from either side.
+  const onSplitKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      moveSelection(1);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      moveSelection(-1);
+    }
+  };
+
   if (!items.length) return null;
 
   const reader = reading && <ArticleReader item={reading} onClose={() => setReading(null)} />;
@@ -154,47 +207,99 @@ export const NewsDigest: React.FC<{ data: NewsResultsArtifact }> = ({ data }) =>
     );
   }
 
-  // ── Detailed: lead story + divided rows. ────────────────────────────────────
+  // ── Detailed: topic chips (live), then either the master-detail split (wide)
+  //    or the classic lead-story list (narrow). ─────────────────────────────────
   const [lead, ...rest] = items;
   const visibleRest = showAll ? rest : rest.slice(0, PREVIEW - 1);
   const hiddenCount = rest.length - visibleRest.length;
 
-  return (
-    <Surface
-      header={
-        <span className="flex min-w-0 items-center gap-1.5">
-          <Newspaper className="h-4 w-4 shrink-0 text-[var(--ds-muted)]" />
-          <SurfaceTitle>{heading(data)}</SurfaceTitle>
-        </span>
-      }
-      right={headerRight}
-    >
-      {/* Topic chips — live re-query of the producing get_news call, no model round-trip. */}
-      {live.canRefresh && (
-        <div className="flex flex-wrap gap-1 px-3 pb-2">
-          {TOPICS.map((t) => {
-            const active = t.id === activeTopic;
-            return (
-              <button
-                key={t.id}
-                disabled={live.refreshing}
-                onClick={() => void live.refresh({ topic: t.id, query: undefined })}
-                className={`rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors duration-200 disabled:cursor-default disabled:opacity-60 ${
-                  active
-                    ? 'border-transparent bg-[var(--ds-ink)] text-[var(--ds-canvas)]'
-                    : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
-                }`}
-                aria-pressed={active}
-              >
-                {t.label}
-              </button>
-            );
-          })}
-        </div>
-      )}
+  const topicChips = live.canRefresh && (
+    <div className="flex shrink-0 flex-wrap gap-1 px-3 pb-2">
+      {TOPICS.map((t) => {
+        const active = t.id === activeTopic;
+        return (
+          <button
+            key={t.id}
+            disabled={live.refreshing}
+            onClick={() => void live.refresh({ topic: t.id, query: undefined })}
+            className={`rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors duration-200 disabled:cursor-default disabled:opacity-60 ${
+              active
+                ? 'border-transparent bg-[var(--ds-ink)] text-[var(--ds-canvas)]'
+                : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]'
+            }`}
+            aria-pressed={active}
+          >
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
 
-      {/* Subtle shimmer while a topic refresh is in flight. */}
-      <div className={`transition-opacity duration-200 ${live.refreshing ? 'pointer-events-none animate-pulse opacity-50' : ''}`}>
+  // Master-detail split: headline list (left, ~38%) ⇄ in-card reader (right).
+  // `flex-[1_1_420px]` is the height contract: a pleasant 420px by default (chat
+  // flow, auto-height), but grow/shrink to fill when an ancestor (dashboard tile,
+  // dragged WidgetFrame, lightbox) hands the card a constrained height.
+  const splitBody = (
+    <div
+      onKeyDown={onSplitKeyDown}
+      className={`flex min-h-0 flex-[1_1_420px] border-t border-[var(--ds-hairline-soft)] transition-opacity duration-200 ${
+        live.refreshing ? 'pointer-events-none animate-pulse opacity-50' : ''
+      }`}
+    >
+      {/* Left — scrollable headline list. */}
+      <ul
+        role="listbox"
+        aria-label="Stories"
+        className="min-h-0 w-[38%] min-w-[200px] shrink-0 divide-y divide-[var(--ds-hairline-soft)] overflow-y-auto overscroll-contain border-r border-[var(--ds-hairline-soft)] [scrollbar-width:thin]"
+      >
+        {items.map((n, i) => {
+          const selected = i === selectedIndex;
+          const time = relativeTime(n.publishedAt);
+          return (
+            <li key={`${n.url}-${i}`} role="presentation">
+              <button
+                type="button"
+                role="option"
+                aria-selected={selected}
+                ref={(el) => {
+                  rowRefs.current[i] = el;
+                }}
+                onClick={() => setSelectedUrl(n.url)}
+                onMouseEnter={() => prefetchArticle(n.url)}
+                onFocus={() => prefetchArticle(n.url)}
+                className={`relative flex w-full items-start gap-2 py-2 pl-3.5 pr-3 text-left transition-colors duration-150 ${
+                  selected ? 'bg-[var(--ds-well)]' : 'hover:bg-[var(--ds-hover)]'
+                }`}
+              >
+                {/* Accent rail on the selected story. */}
+                {selected && <span aria-hidden className="absolute bottom-1.5 left-0 top-1.5 w-[2px] rounded-r-full bg-[var(--ds-accent)]" />}
+                <span className="mt-0.5 shrink-0">
+                  <SourceIcon item={n} size={14} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className={`block text-[12px] leading-snug text-[var(--ds-ink)] line-clamp-2 ${selected ? 'font-semibold' : 'font-medium'}`}>
+                    {n.title}
+                  </span>
+                  <span className="mt-0.5 flex items-center gap-1 text-[10px] text-[var(--ds-muted)]">
+                    <span className="truncate font-medium">{n.source || hostOf(n.url)}</span>
+                    {time && <span className="shrink-0">· {time}</span>}
+                  </span>
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+
+      {/* Right — the reader for the selected story. */}
+      <NewsReaderPane item={selectedItem} />
+    </div>
+  );
+
+  // Classic narrow list: lead story + divided rows; stories open the modal reader.
+  const listBody = (
+    <div className={`transition-opacity duration-200 ${live.refreshing ? 'pointer-events-none animate-pulse opacity-50' : ''}`}>
       {/* Lead story — opens the in-app reader. */}
       <button type="button" onClick={() => setReading(lead)} className="block w-full px-3 pb-2.5 pt-1 text-left transition-colors duration-200 hover:bg-[var(--ds-well)]">
         {lead.image && (
@@ -237,8 +342,31 @@ export const NewsDigest: React.FC<{ data: NewsResultsArtifact }> = ({ data }) =>
           {showAll ? 'Show less' : `Show all ${items.length}`}
         </button>
       )}
-      </div>
-      {reader}
-    </Surface>
+    </div>
+  );
+
+  // The wrapper is the measured element AND the height conduit: as a flex column
+  // with h-full, a height-constrained ancestor (dashboard tile, lightbox) flows its
+  // height through Surface (flex-1, margins respected) into the split's panes,
+  // which then scroll internally instead of overflowing the card.
+  return (
+    <div ref={shellRef} className="flex h-full max-h-full min-h-0 flex-col">
+      <Surface
+        className={wide ? 'flex min-h-0 flex-1 flex-col' : ''}
+        header={
+          <span className="flex min-w-0 items-center gap-1.5">
+            <Newspaper className="h-4 w-4 shrink-0 text-[var(--ds-muted)]" />
+            <SurfaceTitle>{heading(data)}</SurfaceTitle>
+          </span>
+        }
+        right={headerRight}
+      >
+        {/* Topic chips — live re-query of the producing get_news call, no model round-trip.
+            Switching topics keeps the split; the first new story is auto-selected. */}
+        {topicChips}
+        {wide ? splitBody : listBody}
+        {reader}
+      </Surface>
+    </div>
   );
 };
