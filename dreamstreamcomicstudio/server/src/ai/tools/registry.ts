@@ -9,6 +9,7 @@ import { ddgImageSearch, ddgVideoSearch, type ImageResult } from './duckduckgo.j
 import { webSearch } from './search.js';
 import { getWeatherDetailed } from './weather.js';
 import { geocodePlaces } from './maps.js';
+import { getDirections } from './directions.js';
 import { fetchNews } from './news.js';
 import { getStockQuote } from './stocks.js';
 import { findPlaces, osmFilters } from './places.js';
@@ -229,6 +230,45 @@ const mapTool: ChatTool = {
       };
     } catch (err) {
       return { content: `Map lookup failed: ${(err as Error)?.message || 'unknown error'}.` };
+    }
+  }
+};
+
+const directionsTool: ChatTool = {
+  name: 'get_directions',
+  description:
+    'Get real DIRECTIONS between two places — driving, walking and cycling routes with live ETAs, distances and route alternatives (OSRM), rendered as an interactive map card with a transport-mode toggle (Google-Maps-style). Use whenever the user asks how to get somewhere, travel time between places, or "directions from X to Y". For transit the card deep-links to Google Maps.',
+  parameters: {
+    type: 'object',
+    properties: {
+      from: { type: 'string', description: 'Start place/address, e.g. "Lincoln Memorial" or "123 Main St, Fairfax VA".' },
+      to: { type: 'string', description: 'Destination place/address.' },
+      mode: { type: 'string', enum: ['drive', 'walk', 'bike'], description: 'Preferred mode to preselect (all are fetched).' }
+    },
+    required: ['from', 'to']
+  },
+  execute: async (args, signal) => {
+    const from = String(args?.from || '').trim();
+    const to = String(args?.to || '').trim();
+    if (!from || !to) return { content: 'Both a start ("from") and a destination ("to") are needed for directions.' };
+    try {
+      const mode = args?.mode === 'walk' || args?.mode === 'bike' || args?.mode === 'drive' ? args.mode : undefined;
+      const data = await getDirections({ from, to, mode }, signal);
+      const best = data.modes.find((m) => m.mode === (data.defaultMode ?? m.mode)) ?? data.modes[0];
+      const r = best?.routes[0];
+      const content = r
+        ? `Directions ${data.origin.label} → ${data.destination.label}: ${best.mode} ${r.durationMin} min · ${r.distanceKm} km${r.summary ? ` (${r.summary})` : ''}. An interactive route card with drive/walk/bike toggles is shown — describe the best option briefly, don't repeat every number.`
+        : `Directions ${data.origin.label} → ${data.destination.label} are shown on an interactive route card.`;
+      return {
+        content,
+        artifacts: [{ type: 'directions', data }],
+        citations: [{ url: 'https://routing.openstreetmap.de/about.html', title: 'FOSSGIS OSRM routing (OpenStreetMap)' }]
+      };
+    } catch (err) {
+      return {
+        content: `Directions lookup failed: ${(err as Error)?.message || 'unknown error'}.`,
+        notice: { level: 'error', message: 'Route lookup is unavailable right now.' }
+      };
     }
   }
 };
@@ -1024,6 +1064,7 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   video_search: videoSearchTool,
   get_weather: weatherTool,
   show_map: mapTool,
+  get_directions: directionsTool,
   get_stock: stockTool,
   render_chart: chartTool,
   show_metrics: metricsTool,

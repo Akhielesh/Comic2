@@ -3,12 +3,13 @@ import { REFRESHABLE_TOOLS } from '../../../apiTypes';
 import { LiveDataContext } from './kit';
 import type { ChatArtifact, WeatherArtifact, VideoResultsArtifact, MapArtifact, NewsResultsArtifact, StockQuoteArtifact, SwarmTraceArtifact, PlacesResultsArtifact, ChartArtifact, MetricBoardArtifact, DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact, RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact, CodeExerciseArtifact, GenerativeUIArtifact, LearningPathArtifact, ItineraryArtifact } from '../../../apiTypes';
 import type { DashboardArtifact, TickerTapeArtifact, MarketSentimentArtifact, YieldCurveArtifact, PortfolioArtifact, WhatsChangedArtifact, BoardingPassArtifact, CurrencyConverterArtifact, WorldClocksArtifact, PackingListArtifact, TripCountdownArtifact, GoalTrackerArtifact, CodeReviewArtifact, LiveMonitorArtifact } from '../../../apiTypes';
-import type { MacroTilesArtifact, EconCalendarArtifact, EarningsCalendarArtifact, CentralBankWatchArtifact, PnlCalendarArtifact, DebtClockArtifact, FlightStatusArtifact, TripBudgetArtifact, LocalCheatsheetArtifact, LoyaltyWalletArtifact, WidgetStackArtifact } from '../../../apiTypes';
+import type { MacroTilesArtifact, EconCalendarArtifact, EarningsCalendarArtifact, CentralBankWatchArtifact, PnlCalendarArtifact, DebtClockArtifact, FlightStatusArtifact, TripBudgetArtifact, LocalCheatsheetArtifact, LoyaltyWalletArtifact, WidgetStackArtifact, DirectionsArtifact } from '../../../apiTypes';
 import { ArtifactBoundary } from './ArtifactBoundary';
 import { WidgetFrame } from './WidgetFrame';
 import { WeatherStation } from './WeatherStation';
 import { VideoResults } from './VideoResults';
 import { MapArtifactCard } from './MapArtifactCard';
+import { DirectionsCard } from './DirectionsCard';
 import { NewsDigest } from './NewsDigest';
 import { MarketCard } from './MarketCard';
 import { SwarmTraceCard } from './SwarmTraceCard';
@@ -70,6 +71,7 @@ const ARTIFACT_RENDERERS: Record<string, (data: unknown, key: number) => React.R
   weather: (d, k) => <WeatherStation key={k} data={d as WeatherArtifact} />,
   video_results: (d, k) => <VideoResults key={k} data={d as VideoResultsArtifact} />,
   map: (d, k) => <MapArtifactCard key={k} data={d as MapArtifact} />,
+  directions: (d, k) => <DirectionsCard key={k} data={d as DirectionsArtifact} />,
   news_results: (d, k) => <NewsDigest key={k} data={d as NewsResultsArtifact} />,
   places_results: (d, k) => <PlacesResults key={k} data={d as PlacesResultsArtifact} />,
   stock_quote: (d, k) => <MarketCard key={k} data={d as StockQuoteArtifact} />,
@@ -148,6 +150,7 @@ export const DENSITY_AWARE_TYPES = new Set([
   'flashcards',
   'document',
   'map',
+  'directions',
   'learning_path',
   'itinerary',
   'ticker_tape',
@@ -241,7 +244,7 @@ const renderArtifact = (artifact: ChatArtifact, key: number): React.ReactNode =>
 // charts, KPI boards, news) pack two-up so the model can aggregate several data
 // sources side by side — e.g. "compare gold, oil and the S&P" → three quote cards
 // laid out in a grid instead of a tall stack.
-const FULL_WIDTH = new Set(['weather', 'map', 'places_results', 'video_results', 'swarm_trace', 'code_studio', 'recipe_card', 'recipe_run', 'research_report', 'quiz', 'document', 'flashcards', 'sql_exercise', 'resource_bundle', 'code_exercise', 'generative_ui', 'dashboard', 'learning_path', 'itinerary', 'ticker_tape', 'portfolio', 'goal_tracker', 'code_review', 'live_monitor', 'macro_tiles', 'econ_calendar', 'earnings_calendar', 'central_bank_watch', 'pnl_calendar', 'flight_status', 'local_cheatsheet', 'widget_stack']);
+const FULL_WIDTH = new Set(['weather', 'map', 'directions', 'places_results', 'video_results', 'swarm_trace', 'code_studio', 'recipe_card', 'recipe_run', 'research_report', 'quiz', 'document', 'flashcards', 'sql_exercise', 'resource_bundle', 'code_exercise', 'generative_ui', 'dashboard', 'learning_path', 'itinerary', 'ticker_tape', 'portfolio', 'goal_tracker', 'code_review', 'live_monitor', 'macro_tiles', 'econ_calendar', 'earnings_calendar', 'central_bank_watch', 'pnl_calendar', 'flight_status', 'local_cheatsheet', 'widget_stack']);
 
 export const ChatArtifacts: React.FC<{ artifacts?: ChatArtifact[] }> = ({ artifacts }) => {
   if (!artifacts || artifacts.length === 0) return null;

@@ -11,6 +11,7 @@ import { SwarmTraceCard } from './artifacts/SwarmTraceCard';
 import { ChartCard } from './artifacts/ChartCard';
 import { MetricBoard } from './artifacts/MetricBoard';
 import { MapArtifactCard } from './artifacts/MapArtifactCard';
+import { DirectionsCard } from './artifacts/DirectionsCard';
 import { DataTableCard } from './artifacts/DataTableCard';
 import { HeatmapCard } from './artifacts/HeatmapCard';
 import { FinanceTerminal } from './artifacts/FinanceTerminal';
@@ -67,7 +68,7 @@ import type {
 import type {
   WeatherArtifact, NewsResultsArtifact, StockQuoteArtifact,
   VideoResultsArtifact, PlacesResultsArtifact, SwarmTraceArtifact,
-  ChartArtifact, MetricBoardArtifact, MapArtifact,
+  ChartArtifact, MetricBoardArtifact, MapArtifact, DirectionsArtifact,
   DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact,
   RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact, CodeExerciseArtifact,
   GenerativeUIArtifact
@@ -391,6 +392,65 @@ const mapArtifact: MapArtifact = {
     { lat: 48.8567, lng: 2.3508 }
   ],
   routeInfo: { mode: 'walk' }
+};
+
+const directionsDemo: DirectionsArtifact = {
+  origin: { label: 'Lincoln Memorial', lat: 38.8893, lng: -77.0502 },
+  destination: { label: 'Georgetown Waterfront', lat: 38.9015, lng: -77.0633 },
+  defaultMode: 'drive',
+  googleMapsUrl: 'https://www.google.com/maps/dir/?api=1&origin=Lincoln%20Memorial&destination=Georgetown%20Waterfront',
+  transitUrl: 'https://www.google.com/maps/dir/?api=1&origin=Lincoln%20Memorial&destination=Georgetown%20Waterfront&travelmode=transit',
+  modes: [
+    {
+      mode: 'drive',
+      routes: [
+        {
+          summary: 'via Whitehurst Freeway',
+          distanceKm: 4.8,
+          durationMin: 10,
+          path: [
+            [38.8893, -77.0502], [38.8901, -77.0521], [38.8923, -77.0547], [38.8951, -77.0568],
+            [38.8972, -77.0591], [38.8994, -77.0612], [38.9015, -77.0633]
+          ]
+        },
+        {
+          summary: 'via Rock Creek Pkwy',
+          distanceKm: 5.6,
+          durationMin: 13,
+          path: [
+            [38.8893, -77.0502], [38.8918, -77.0489], [38.8956, -77.0511], [38.8987, -77.0556],
+            [38.9002, -77.0601], [38.9015, -77.0633]
+          ]
+        }
+      ]
+    },
+    {
+      mode: 'bike',
+      routes: [
+        {
+          summary: 'via Capital Crescent Trail',
+          distanceKm: 4.2,
+          durationMin: 16,
+          path: [
+            [38.8893, -77.0502], [38.8912, -77.0531], [38.8946, -77.0562], [38.8981, -77.0597], [38.9015, -77.0633]
+          ]
+        }
+      ]
+    },
+    {
+      mode: 'walk',
+      routes: [
+        {
+          summary: 'via the riverfront',
+          distanceKm: 3.9,
+          durationMin: 48,
+          path: [
+            [38.8893, -77.0502], [38.8909, -77.0526], [38.8941, -77.0558], [38.8976, -77.0593], [38.9015, -77.0633]
+          ]
+        }
+      ]
+    }
+  ]
 };
 
 // The single source of truth for the gallery. Each entry that renders a typed
@@ -1099,6 +1159,7 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'News digest (compact · source-branded · snippets)', type: 'news_results', category: 'News & knowledge', node: <NewsDigest data={news} /> },
   { title: 'Places (local) card', type: 'places_results', category: 'World & media', node: <PlacesResults data={places} /> },
   { title: 'Map (markers · route)', type: 'map', category: 'World & media', node: <MapArtifactCard data={mapArtifact} /> },
+  { title: 'Directions (drive/walk/bike toggle · animated route · alternatives)', type: 'directions', category: 'World & media', node: <DirectionsCard data={directionsDemo} /> },
   { title: 'Video results', type: 'video_results', category: 'World & media', node: <VideoResults data={videos} /> },
   { title: 'Agent swarm trace', type: 'swarm_trace', category: 'Agents & code', node: <SwarmTraceCard data={swarm} /> },
   { title: 'Chart — grouped bars (legend · hover)', type: 'chart', category: 'Data & charts', node: <ChartCard data={barChart} /> },

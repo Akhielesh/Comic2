@@ -300,6 +300,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
     dataShape: 'Interactive map artifact with markers/route.', docsUrl: 'https://leafletjs.com',
     keywords: ['map', 'where is', 'directions', 'route', 'navigate', 'located', 'location of']
   },
+  {
+    name: 'get_directions', label: 'Directions', category: 'places', kind: 'builtin', provider: 'FOSSGIS OSRM (OpenStreetMap)',
+    description: 'Real drive/walk/bike routes between two places with ETAs, distances and alternatives, on an animated map with a transport-mode toggle. Transit deep-links to Google Maps.',
+    auth: 'none', rateLimit: 'FOSSGIS demo server fair use (budgeted 20/min)',
+    dataShape: 'Directions card: mode pills, ETA/distance, animated route + alternatives.', docsUrl: 'https://routing.openstreetmap.de/about.html',
+    keywords: ['directions', 'route', 'how do i get to', 'travel time', 'drive time', 'commute', 'walk', 'bike', 'eta', 'navigation']
+  },
   // ----------------------------------------------------------------- travel -----
   {
     name: 'render_boarding_pass', label: 'Boarding pass', category: 'travel', kind: 'builtin', provider: 'DreamStream (in-app)',
@@ -903,6 +910,12 @@ export const CONNECTOR_KEYS: ConnectorKeyMeta[] = [
     unlocks: 'Stable authenticated crypto data; the Basic plan adds the commercial-display license.',
     cost: 'Demo key free (10k calls/mo, non-commercial); commercial rights from $35/mo (Basic).',
     signupUrl: 'https://www.coingecko.com/en/api/pricing', tools: ['crypto_price']
+  },
+  {
+    env: 'JINA_API_KEY', provider: 'Jina Reader',
+    unlocks: 'Reliable in-app article reading: extracts stories from publishers that 403 datacenter IPs (the keyless tier is heavily rate-limited and best-effort).',
+    cost: 'Free key with a generous monthly token grant; pay-as-you-go after.',
+    signupUrl: 'https://jina.ai/reader', tools: ['get_news']
   },
   {
     env: 'IPINFO_TOKEN', provider: 'IPinfo Lite',

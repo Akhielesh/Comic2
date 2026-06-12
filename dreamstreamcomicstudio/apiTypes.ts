@@ -833,6 +833,7 @@ export const REFRESHABLE_TOOLS = [
   'crypto_price',
   'exchange_rate',
   'show_map',
+  'get_directions',
   'video_search',
   'get_ticker_tape',
   'get_market_sentiment',
@@ -849,6 +850,31 @@ export const REFRESHABLE_TOOLS = [
   'get_stablecoins',
   'get_cot_positioning'
 ] as const;
+
+// --- Directions artifact (multi-modal routes on a live map) ----------------
+// Emitted by the `get_directions` tool: real drive/walk/bike routes (FOSSGIS
+// OSRM) with alternatives, rendered as a Google-Maps-style card with a mode
+// toggle and an animated route draw.
+export interface DirectionsRoute {
+  summary?: string;
+  distanceKm: number;
+  durationMin: number;
+  /** [lat, lng] pairs, downsampled for transport. */
+  path: Array<[number, number]>;
+}
+export interface DirectionsModeResult {
+  mode: 'drive' | 'walk' | 'bike';
+  routes: DirectionsRoute[];
+}
+export interface DirectionsArtifact {
+  origin: { label: string; lat: number; lng: number };
+  destination: { label: string; lat: number; lng: number };
+  modes: DirectionsModeResult[];
+  defaultMode?: 'drive' | 'walk' | 'bike';
+  googleMapsUrl?: string;
+  transitUrl?: string;
+  density?: 'compact' | 'detailed';
+}
 
 // --- Guided learning path artifact (structured multi-module course in chat) ---
 // Emitted by the `create_learning_path` tool. Progress is tracked client-side
