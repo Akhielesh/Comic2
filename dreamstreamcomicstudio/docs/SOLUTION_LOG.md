@@ -13,6 +13,22 @@ Entry format:
 
 ---
 
+## 2026-06-12 — Live production generation test (post-consolidation)
+
+- **Problem:** prove the consolidated comic engine + Phase 0 self-healing
+  actually produce a coherent comic in production, under a $3 budget.
+- **Result:** full 3-scene / 5-panel comic generated end-to-end on production
+  for **$0.45** (project `873f751d…`, public). Single-character consistency and
+  style are strong (reference-sheet injection works); the kitchen set stays
+  consistent across scenes. **Gaps:** (1) multi-character panels bleed identity
+  (Arjun rendered as a second Maya) — labeled/focal-weighted refs needed; (2)
+  OpenAI image models (`gpt-5-image`, `gpt-5.4-image-2`) exceed the 60s image
+  timeout and can't be used yet; `openai/gpt-image-1` in `imageModelRanking.ts`
+  is an invalid OpenRouter id. Nano Banana $0.039/img, Pro $0.138/img.
+- **Files / details:** `docs/COMIC_PRODUCTION_TEST_2026-06-12.md`.
+
+---
+
 ## 2026-06-12 — Comic Studio consolidation: comics reliably generate
 
 - **Problem:** owner "struggling with not being able to consistently produce
