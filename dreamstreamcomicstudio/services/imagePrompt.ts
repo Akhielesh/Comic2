@@ -154,6 +154,18 @@ export const buildImagePrompt = (options: ImagePromptOptions): string => {
   if (clean(options.shotType)) lines.push(`Shot type: ${clean(options.shotType)}.`);
   if (clean(options.cameraAngle)) lines.push(`Camera angle: ${clean(options.cameraAngle)}.`);
   if (clean(options.composition)) lines.push(`Composition: ${clean(options.composition)}.`);
+  // Multi-character panels: the reference images are separate per-character
+  // turnaround sheets. Without this, a 2+ character panel tends to render the
+  // dominant identity twice (e.g. a male vendor drawn as a clone of the lead).
+  // Spell out the 1-sheet-per-named-character mapping and forbid identity bleed.
+  const distinctEntityCount = clean(options.requiredEntityNames)
+    ? clean(options.requiredEntityNames).split(",").map((n) => n.trim()).filter(Boolean).length
+    : clean(options.entityVisualRef).split("\n").filter((l) => l.trim().startsWith("[")).length;
+  if ((options.stage === "panel" || options.stage === "panel_regen") && distinctEntityCount >= 2) {
+    lines.push(
+      `Multiple DISTINCT characters appear (${clean(options.requiredEntityNames) || "see visual references"}). The reference images are separate turnaround sheets, one per named character. Render EACH named character using ONLY their own sheet's face, age, gender, body type and wardrobe. Never merge two characters, and never duplicate one character's appearance onto another — they must look clearly different from each other.`
+    );
+  }
   if (clean(options.characters)) lines.push(`Characters: ${clean(options.characters)}.`);
   if (clean(options.items)) lines.push(`Items: ${clean(options.items)}.`);
   if (clean(options.locations)) lines.push(`Locations: ${clean(options.locations)}.`);
