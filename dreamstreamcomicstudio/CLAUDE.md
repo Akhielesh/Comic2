@@ -86,3 +86,11 @@ So after committing + verifying (typecheck, tests, build), automatically:
 Do this without waiting to be asked. Never force-push production; if the merge is
 genuinely ambiguous or risky, pause and ask. (The auto-mode classifier may still prompt
 for the production push — that's fine, proceed once allowed.)
+
+## Data connectors
+
+Before answering "do we have data/API coverage for topic X?", adding a data
+source, or changing provider chains: **read `docs/DATA_CONNECTORS.md`** — the
+authoritative topic→API map with license verdicts, budgets, account-wise usage
+logging, and the add-a-connector checklist. Keep it updated in the same PR as
+any connector change.

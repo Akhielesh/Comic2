@@ -32,6 +32,9 @@ import { imageRouter } from './routes/image.js';
 import { visionRouter } from './routes/vision.js';
 import { systemRouter } from './routes/system.js';
 import { usageRouter } from './routes/usage.js';
+import { attachAccountContext } from './lib/accountContext.js';
+import { setUsageCloudSink } from './lib/providerUsage.js';
+import { getSupabaseAdmin } from './services/supabase.js';
 import webhookRouter from './routes/webhook.js';
 import { billingRouter } from './routes/billing.js';
 import { adminRouter } from './routes/admin.js';
@@ -177,6 +180,21 @@ app.use('/api/usage', systemRateLimit, usageRouter);
 
 // Protect all API routes
 app.use('/api', requireAuth);
+// Per-request account context (AsyncLocalStorage) so deep tool code — e.g. the
+// provider usage meter — can attribute upstream API calls to the signed-in account.
+app.use('/api', attachAccountContext);
+
+// Persist account-wise provider usage to Supabase (append-only deltas, ~60s flush).
+// Best-effort: without a service-role key this stays in-memory only.
+try {
+  setUsageCloudSink(async (rows) => {
+    const { error } = await getSupabaseAdmin().from('provider_usage_log').insert(rows);
+    if (error) throw new Error(error.message);
+  });
+} catch {
+  console.warn('[provider-usage] cloud sink not configured (no Supabase admin) — usage stays in-memory');
+}
+
 
 app.use('/api/admin', adminRateLimit, adminRouter);
 app.use('/api/admin/verification', adminRateLimit, verificationRouter);

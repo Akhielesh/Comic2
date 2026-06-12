@@ -14,6 +14,8 @@
 // accounting. When a budget is hit the tool degrades to its next provider or an
 // honest "budget reached" notice instead of calling upstream.
 
+import { currentAccountId } from './accountContext.js';
+
 const HOST_TO_PROVIDER: [RegExp, string][] = [
   [/api\.tavily\.com/, 'tavily'],
   [/api\.search\.brave\.com/, 'brave'],
@@ -102,6 +104,70 @@ interface ProviderStat {
 const stats = new Map<string, ProviderStat>();
 const dayKey = (now: number): string => new Date(now).toISOString().slice(0, 10);
 
+// ---------------------------------------------------------------- cloud sink -----
+// Account-wise usage, persisted to Supabase. We accumulate DELTAS per
+// (account, provider, day) in memory and append them to provider_usage_log every
+// flush — append-only inserts are race-free across instances/restarts; daily
+// totals come from the provider_usage_daily view (SUM over deltas). Fully
+// best-effort: no admin client / table → counted in memory only, never throws.
+interface UsageDelta {
+  account_id: string;
+  provider: string;
+  day: string;
+  calls: number;
+  errors: number;
+  blocked: number;
+}
+const pendingDeltas = new Map<string, UsageDelta>();
+const FLUSH_MS = 60_000;
+let flusher: ReturnType<typeof setInterval> | null = null;
+let cloudSink: ((rows: UsageDelta[]) => Promise<void>) | null = null;
+
+/** Wire the cloud persistence sink (called once at server start; absent in tests). */
+export const setUsageCloudSink = (sink: (rows: UsageDelta[]) => Promise<void>): void => {
+  cloudSink = sink;
+  if (!flusher) {
+    flusher = setInterval(() => void flushUsageDeltas(), FLUSH_MS);
+    flusher.unref?.();
+  }
+};
+
+export const flushUsageDeltas = async (): Promise<void> => {
+  if (!cloudSink || pendingDeltas.size === 0) return;
+  const rows = [...pendingDeltas.values()];
+  pendingDeltas.clear();
+  try {
+    await cloudSink(rows);
+  } catch (err) {
+    // Cloud write failed — restore the deltas so the next flush retries (merge with
+    // anything accumulated meanwhile), and log once per flush, never throw.
+    for (const r of rows) {
+      const key = `${r.account_id}|${r.provider}|${r.day}`;
+      const cur = pendingDeltas.get(key);
+      if (cur) {
+        cur.calls += r.calls;
+        cur.errors += r.errors;
+        cur.blocked += r.blocked;
+      } else {
+        pendingDeltas.set(key, r);
+      }
+    }
+    console.warn(`[provider-usage] cloud flush failed (${(err as Error)?.message || 'unknown'}); will retry`);
+  }
+};
+
+const noteAccountDelta = (provider: string, now: number, field: 'calls' | 'errors' | 'blocked'): void => {
+  const account = currentAccountId() || 'anon';
+  const day = dayKey(now);
+  const key = `${account}|${provider}|${day}`;
+  let d = pendingDeltas.get(key);
+  if (!d) {
+    d = { account_id: account, provider, day, calls: 0, errors: 0, blocked: 0 };
+    pendingDeltas.set(key, d);
+  }
+  d[field] += 1;
+};
+
 const statFor = (provider: string, now: number): ProviderStat => {
   let s = stats.get(provider);
   const dk = dayKey(now);
@@ -135,11 +201,13 @@ export const assertProviderBudget = (url: string, now = Date.now()): void => {
   const b = budgetFor(provider);
   if (s.minuteStamps.length >= b.perMin) {
     s.blockedToday += 1;
+    noteAccountDelta(provider, now, 'blocked');
     console.warn(`[provider-usage] BLOCKED ${provider}: per-minute budget (${b.perMin}) reached`);
     throw new ProviderBudgetError(provider, 'minute');
   }
   if (s.dayCalls >= b.perDay) {
     s.blockedToday += 1;
+    noteAccountDelta(provider, now, 'blocked');
     console.warn(`[provider-usage] BLOCKED ${provider}: daily budget (${b.perDay}) reached`);
     throw new ProviderBudgetError(provider, 'day');
   }
@@ -153,9 +221,11 @@ export const noteProviderCall = (url: string, ok: boolean, now = Date.now()): vo
   s.dayCalls += 1;
   s.minuteStamps.push(now);
   s.lastCallAt = now;
+  noteAccountDelta(provider, now, 'calls');
   if (!ok) {
     s.dayErrors += 1;
     s.lastErrorAt = now;
+    noteAccountDelta(provider, now, 'errors');
   }
   // One log line when a provider crosses 80% of its daily budget — the early-warning
   // anomaly signal ("why is the agent calling CoinGecko 250×today?").
@@ -232,5 +302,9 @@ export const getProviderUsageSnapshot = (now = Date.now()): ProviderUsageRow[] =
 /** Test hook. */
 export const __resetProviderUsage = (): void => {
   stats.clear();
+  pendingDeltas.clear();
   envOverrides = null;
 };
+
+/** Test/inspection hook for the un-flushed account deltas. */
+export const __pendingUsageDeltas = (): UsageDelta[] => [...pendingDeltas.values()];
