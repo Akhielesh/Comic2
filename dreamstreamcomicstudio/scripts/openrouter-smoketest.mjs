@@ -39,7 +39,9 @@ loadEnvFile(resolve(projectRoot, '.env'));
 loadEnvFile(resolve(projectRoot, 'server/.env'));
 
 const BASE_URL = process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1';
-const API_KEY = process.env.OPENROUTER_API_KEY;
+// Test tooling prefers the dedicated DREAMSTREAMSTUDIO_MODELTEST key (smoke-test spend
+// stays off the user-serving DREAMSTREAMSTUDIO_ALL key); falls back to the legacy var.
+const API_KEY = process.env.DREAMSTREAMSTUDIO_MODELTEST || process.env.dreamstreamstudio_modeltest || process.env.OPENROUTER_API_KEY;
 const TEXT_MODEL = process.env.OPENROUTER_TEXT_MODEL || 'google/gemini-2.0-flash-exp:free';
 const IMAGE_MODEL = process.env.OPENROUTER_IMAGE_MODEL || 'google/gemini-2.5-flash-image';
 

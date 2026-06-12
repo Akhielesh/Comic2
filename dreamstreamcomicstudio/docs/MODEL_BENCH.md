@@ -58,7 +58,9 @@ npm run bench:models -- --phases echo --concurrency 10 # fast availability sweep
 npm run bench:models -- --models openrouter:anthropic/claude-fable-5
 ```
 
-Keys come from the environment or `.env`: `OPENROUTER_API_KEY`, `NVIDIA_API_KEY`.
+Keys come from the environment or `.env`. OpenRouter prefers the dedicated test key
+`DREAMSTREAMSTUDIO_MODELTEST` (falling back to `OPENROUTER_API_KEY`), so bench spend
+never lands on the user-serving `DREAMSTREAMSTUDIO_ALL` key. NVIDIA: `NVIDIA_API_KEY`.
 
 ## Is $10 enough? (the honest math)
 

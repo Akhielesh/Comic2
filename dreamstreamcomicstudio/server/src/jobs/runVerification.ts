@@ -9,6 +9,7 @@
 // shell. Mirrors the dailyPricingSync / dailyBillingReconciliation script shape so
 // the existing CI patterns just work.
 
+import './preferModelTestKey.js'; // MUST stay first: bills this run to the model-test key, not the user-serving one
 import { getSupabaseAdmin } from '../services/supabase.js';
 import { runCheck } from '../verification/runner.js';
 import { listBuiltins } from '../verification/registry.js';

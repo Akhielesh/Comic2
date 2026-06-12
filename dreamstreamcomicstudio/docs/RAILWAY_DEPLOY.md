@@ -27,9 +27,20 @@ Secrets you must provide (never committed):
 
 ```
 SUPABASE_SERVICE_ROLE_KEY=<Supabase dashboard → Project Settings → API → service_role>
-OPENROUTER_API_KEY=<your OpenRouter key>      # funds paid-tier generation
+DREAMSTREAMSTUDIO_ALL=<OpenRouter key #1>       # serves ALL user traffic; per-user spend is
+                                                # hard-capped by the monthly platform allowance
+                                                # (PLATFORM_MONTHLY_ALLOWANCE_USD, default $5/user)
+DREAMSTREAMSTUDIO_MODELTEST=<OpenRouter key #2> # model testing only (bench:models, validate:sources,
+                                                # smoketest, verify:run) — never serves users, so test
+                                                # spend stays separate and auditable per key
 CORS_ORIGIN=<your frontend origin, e.g. https://dreamstreamstudio.ai>
 ```
+
+Create both keys in the OpenRouter dashboard (name them `dreamstreamstudio_all` and
+`dreamstreamstudio_modeltest` there too, and consider a per-key spend cap on each).
+`OPENROUTER_API_KEY` still works as a legacy fallback when `DREAMSTREAMSTUDIO_ALL`
+is unset. Keys live only in Railway's variable store — they are never logged and
+never sent to the client.
 
 Optional / has-defaults:
 

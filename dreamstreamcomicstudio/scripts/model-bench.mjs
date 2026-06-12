@@ -30,8 +30,10 @@
 //   --context-tokens N              [6000]     --slow-ms N (flag)    [30000]
 //   --dry-run                                  --out dir             [bench-results]
 //
-// Keys come from the environment or .env (project root / server/):
-//   OPENROUTER_API_KEY, NVIDIA_API_KEY. Bases: OPENROUTER_BASE_URL, NVIDIA_BASE_URL.
+// Keys come from the environment or .env (project root / server/). OpenRouter prefers
+// the dedicated test key DREAMSTREAMSTUDIO_MODELTEST (falls back to OPENROUTER_API_KEY)
+// so bench spend never mixes with the user-serving DREAMSTREAMSTUDIO_ALL key.
+// NVIDIA: NVIDIA_API_KEY. Bases: OPENROUTER_BASE_URL, NVIDIA_BASE_URL.
 
 import { readFileSync, mkdirSync, writeFileSync, appendFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -89,7 +91,7 @@ const OPT = {
 const SOURCES = {
   openrouter: {
     baseUrl: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
-    key: process.env.OPENROUTER_API_KEY,
+    key: process.env.DREAMSTREAMSTUDIO_MODELTEST || process.env.dreamstreamstudio_modeltest || process.env.OPENROUTER_API_KEY,
     extraHeaders: {
       'HTTP-Referer': process.env.OPENROUTER_APP_URL || 'https://dreamstream.studio',
       'X-Title': 'DreamStream model bench'
