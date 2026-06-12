@@ -877,7 +877,7 @@ export interface ConnectorKeyMeta {
 export const CONNECTOR_KEYS: ConnectorKeyMeta[] = [
   {
     env: 'ALPACA_API_KEY_ID', provider: 'Alpaca Market Data',
-    unlocks: 'Licensed real-time IEX feed for US equity quotes (plus ALPACA_API_SECRET_KEY) instead of unofficial Yahoo endpoints.',
+    unlocks: 'Licensed IEX fallback feed for US equity quotes (plus ALPACA_API_SECRET_KEY) that keeps stock cards alive if Yahoo blocks the server. Yahoo stays primary — IEX volume/ranges understate the consolidated tape.',
     cost: 'Free (Basic plan, ~200 req/min). Paid SIP feed from $99/mo — not needed for display.',
     signupUrl: 'https://alpaca.markets', tools: ['get_stock']
   },

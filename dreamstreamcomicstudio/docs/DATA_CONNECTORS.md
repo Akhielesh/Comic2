@@ -9,15 +9,19 @@ Machine-readable source of truth: `toolCatalog.ts` (`TOOL_CATALOG` — per-tool
 provider/auth/license/rateLimit; `CONNECTOR_KEYS` — key onboarding). This doc adds
 the topic→source mapping, utilization status, and operating rules.
 
+Full per-tool inventory (all 102 tools × rendering × board-eligibility ×
+verification status, plus the complete logs/analytics/metrics collection list):
+**`docs/audits/2026-06-platform-data-audit.md`**.
+
 ## Topic → source map (verified June 2026)
 
 | Topic / field | Primary source | Fallback(s) | Access (env) | Commercial license | Rendering |
 |---|---|---|---|---|---|
 | Web search | Self-hosted SearXNG | Tavily → Brave → Serper → Google CSE → DDG/Bing scrape → Wikipedia | `SEARXNG_URL`, `TAVILY_API_KEY`, `BRAVE_API_KEY`, `SERPER_API_KEY` | conditional (keyless scrapers best-effort) | text + citations |
 | Weather/AQI | MET Norway (free, CC BY) | Open-Meteo (fallback; primary when `OPEN_METEO_API_KEY`/`OPEN_METEO_BASE_URL`) | `MET_USER_AGENT` | attribution ✓ | **rich card** ✓ |
-| US equities | Alpaca IEX (keyed) | Yahoo (unofficial) → Stooq | `ALPACA_API_KEY_ID/_SECRET_KEY` | conditional | **rich card** ✓ |
+| US equities | Yahoo (unofficial, consolidated tape — full volume/52w/fundamentals/5Y) | Alpaca IEX (keyed; licensed but THIN — IEX-only volume/ranges, no fundamentals; must never preempt Yahoo) → Stooq | `ALPACA_API_KEY_ID/_SECRET_KEY` (fallback only) | conditional | **rich card** ✓ |
 | Indices/FX/commodities | Yahoo (unofficial) | Stooq | — | unofficial | **rich card** ✓ |
-| Crypto | CoinGecko (+ demo/pro key) | none legal (exchange-direct feeds PROHIBIT commercial display) | `COINGECKO_API_KEY`, `COINGECKO_API_PLAN` | $35/mo Basic for commercial + attribution | **rich card** ✓ |
+| Crypto | CoinGecko (+ demo/pro key; misconfigured keys auto-fall back keyless; majors skip /search; 60s result cache) | none legal (exchange-direct feeds PROHIBIT commercial display) | `COINGECKO_API_KEY`, `COINGECKO_API_PLAN` | $35/mo Basic for commercial + attribution | **rich card** ✓ |
 | Fiat FX rates | Frankfurter (ECB) | — | — | commercial-ok ✓ | text |
 | News | Google News RSS (unofficial; article links decoded to publisher URLs server-side) | — (GDELT is the planned fallback) | — | unofficial — never sole source | **rich card** ✓ + split reader |
 | Article reader (extraction) | Direct fetch + heuristic reader | Jina Reader proxy (keyless best-effort; key lifts limits) | `JINA_API_KEY` (optional) | per-publisher; honest open-original fallback | **reader pane** ✓ |

@@ -2,8 +2,9 @@
 // quote endpoints, which give a real range timeline (intraday 1D through multi-year),
 // 52-week range, volume, exchange/currency, fundamentals (market cap, P/E, dividend —
 // best-effort via the crumb flow), related peers and recent headlines — everything the
-// MarketCard renders. Stooq (CSV) remains a dependency-free FALLBACK for the core quote
-// if Yahoo is unavailable.
+// MarketCard renders. With Alpaca keys set, the IEX feed is the FIRST fallback for
+// plain US equities (licensed, real-time, but thin — see getStockQuoteUncached);
+// Stooq (CSV) remains the dependency-free last resort.
 //
 // All upstreams are public and not runtime-verifiable in the build sandbox; every
 // enrichment is wrapped so failures degrade to a still-useful quote, never throw.
@@ -459,25 +460,29 @@ export const getStockQuote = async (rawSymbol: string, signal?: AbortSignal): Pr
 const getStockQuoteUncached = async (trimmed: string, signal?: AbortSignal): Promise<StockQuoteArtifact> => {
   // Map "gold"/"oil"/"the S&P"/"EURUSD" → a real Yahoo symbol before quoting.
   const symbol = resolveMarketSymbol(trimmed);
-  // Licensed-feed-first: with Alpaca keys set, plain US equities are quoted from the
-  // IEX feed (free, commercial-display oriented) and only the soft enrichments
-  // (name, headlines) ride on other sources. Indices/futures/FX/non-US symbols and
-  // any Alpaca failure fall through to the unofficial Yahoo → Stooq chain.
+  // ACCURACY-FIRST chain: Yahoo's consolidated tape is the primary for everything —
+  // real market-wide price/volume, true 52-week range, fundamentals, 5Y/MAX history,
+  // peers. Alpaca (IEX feed) is the FALLBACK for plain US equities when Yahoo is
+  // blocked: it keeps a live price + 1Y chart alive, but IEX is a thin slice of the
+  // market (its volume and ranges understate the consolidated tape), so it must
+  // never preempt Yahoo — running it first is what made cards inaccurate and bare
+  // (no name/fundamentals/5Y) the moment Alpaca keys were configured. Stooq stays
+  // the last-resort basic quote.
+  try {
+    return await getYahooQuote(symbol, signal);
+  } catch {
+    /* fall through */
+  }
   if (alpacaEnabled() && isAlpacaSymbol(symbol)) {
     try {
       const quote = await getAlpacaQuote(symbol, signal);
       const headlines = await yfHeadlines(quote.name || quote.symbol, signal);
       return headlines ? { ...quote, headlines } : quote;
     } catch {
-      /* fall through to Yahoo/Stooq */
+      /* fall through to Stooq */
     }
   }
-  try {
-    return await getYahooQuote(symbol, signal);
-  } catch {
-    // Yahoo blocked/unavailable — fall back to the keyless Stooq quote.
-    return await getStooqQuote(symbol, signal);
-  }
+  return await getStooqQuote(symbol, signal);
 };
 
 /** A trimmed quote for building watchlists/heatmaps where the full enrichment

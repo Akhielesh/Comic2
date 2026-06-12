@@ -29,7 +29,7 @@ import { createRateLimit } from './middleware/rateLimit.js';
 import { attachRequestContext, requestLogger } from './middleware/requestContext.js';
 import { applySecurityHeaders } from './middleware/security.js';
 import { assistantRouter } from './routes/assistant.js';
-import { chatRouter } from './routes/chat.js';
+import { chatPublicRouter, chatRouter } from './routes/chat.js';
 import { textRouter } from './routes/text.js';
 import { imageRouter } from './routes/image.js';
 import { visionRouter } from './routes/vision.js';
@@ -184,6 +184,12 @@ app.use('/api/connect', systemRateLimit, mcpOutboundRouter);
 
 // Provider usage snapshot (counts only — no keys/queries). Public read like /api/system.
 app.use('/api/usage', systemRateLimit, usageRouter);
+
+// Pure data endpoints for live widgets (tool-refresh), reader-mode article
+// extraction and link unfurl. optionalAuth BEFORE the global requireAuth: a
+// stale/expired session token must degrade a dashboard to anonymous data, not
+// kill every tile with a 401. Keyless tools, budget-guarded + rate-limited.
+app.use('/api/chat', systemRateLimit, optionalAuth, attachAccountContext, chatPublicRouter);
 
 // Protect all API routes
 app.use('/api', requireAuth);

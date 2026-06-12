@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Wind, Droplets, MapPin, Sun, Umbrella, Gauge, Eye, Cloud, Thermometer, Leaf, Map as MapIcon, BarChart3 } from 'lucide-react';
 import type { WeatherArtifact } from '../../../apiTypes';
 import { Surface, Chart, RadialGauge, LinearGauge, Compass, SunArc, Badge, useCompact } from './kit';
 import type { ChartPoint } from './kit';
+import { prefersReducedMotion, useMeasure } from './kit/Chart';
 import { InlineMap } from './InlineMap';
 
 // Flagship weather card, in two densities:
@@ -12,6 +13,12 @@ import { InlineMap } from './InlineMap';
 //    (UV, humidity, wind compass, pressure, visibility, cloud, dew, precip), an
 //    hourly temperature chart, a 7-day forecast, air quality + pollen, a
 //    sunrise/sunset arc, and a map view. All dependency-free SVG.
+//
+// The detailed layout is FLUID: the card is a flex column, so when it's given more
+// height (drag-resize, the expanded lightbox) the hourly chart and the 7-day strip
+// stretch to use it — no more tiny chart in a sea of empty space. The hourly chart
+// is container-responsive (kit Chart + aspect), C/F switches morph the curve, and
+// the day-range bars draw in with a soft stagger.
 
 // --- helpers (shared with the legacy card's logic) ---
 const glyph = (code: number, isDay = true): string => {
@@ -155,6 +162,22 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
   const [unit, setUnit] = useState<'C' | 'F'>(defaultUnit);
   const [tab, setTab] = useState<'forecast' | 'map'>('forecast');
   const [radar, setRadar] = useState(false); // live precipitation overlay (RainViewer)
+  // The map pane is measured so the (fixed-height) InlineMap can fill stretched cards.
+  const [mapRef, mapSize] = useMeasure<HTMLDivElement>();
+  // Day-range bars draw in (width 0 → full) with a soft stagger, re-running when the
+  // forecast tab comes back. Reduced motion renders them settled immediately.
+  const [barsIn, setBarsIn] = useState(false);
+  useEffect(() => {
+    if (tab !== 'forecast') return;
+    if (prefersReducedMotion()) {
+      setBarsIn(true);
+      return;
+    }
+    setBarsIn(false);
+    const raf = requestAnimationFrame(() => setBarsIn(true));
+    return () => cancelAnimationFrame(raf);
+  }, [tab]);
+
   const c = data.current;
   const sky = skyOf(c.code);
   const bg = HERO_BG[sky][c.isDay ? 'day' : 'night'];
@@ -215,8 +238,13 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
   const aq = data.airQuality;
   const pollen = data.pollen;
 
+  // Shared scale for the 7-day hi/lo range bars.
+  const weekMin = data.daily.length ? Math.min(...data.daily.map((x) => x.minC)) : 0;
+  const weekMax = data.daily.length ? Math.max(...data.daily.map((x) => x.maxC)) : 1;
+  const weekSpan = weekMax - weekMin || 1;
+
   return (
-    <Surface>
+    <Surface className="flex min-h-[calc(100%-1rem)] flex-col">
       <div className="flex items-center justify-between gap-2 px-3 pt-3">
         <span className="flex min-w-0 items-center gap-1 text-xs font-semibold text-[var(--ds-muted)]">
           <MapPin className="h-3.5 w-3.5 shrink-0" /> <span className="truncate">{data.location}</span>
@@ -255,7 +283,9 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
       )}
 
       {tab === 'map' && mapData ? (
-        <div className="p-3 pt-1">
+        /* The map pane grows with the card: the wrapper is measured and the map gets
+           the real pixel height, so an expanded/stretched card shows a BIG map. */
+        <div className="flex grow animate-fade-in flex-col p-3 pt-1">
           <div className="mb-1.5 flex justify-end">
             <button
               onClick={() => setRadar((r) => !r)}
@@ -268,24 +298,26 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
               Radar {radar ? 'on' : 'off'}
             </button>
           </div>
-          <InlineMap data={mapData} height={260} radar={radar} />
+          <div ref={mapRef} className="min-h-[260px] grow">
+            <InlineMap data={mapData} height={Math.max(260, Math.floor(mapSize.height))} radar={radar} />
+          </div>
         </div>
       ) : (
         <>
           {/* Calm current-conditions header — same glass language as the compact glance
               card. The animation lives in a small contained weather mark, not a
               full-bleed saturated gradient (which clashed with the studio language). */}
-          <div className="flex items-start justify-between gap-3 px-3 pb-3 pt-1">
+          <div className="flex animate-fade-in items-start justify-between gap-3 px-3 pb-3 pt-1">
             <div className="min-w-0">
               <div className="flex items-end gap-1 leading-none">
-                <span className="text-6xl font-semibold tracking-tight text-[var(--ds-ink)]">{t(c.tempC)}°</span>
+                <span className="text-6xl font-semibold tracking-tight tabular-nums text-[var(--ds-ink)]">{t(c.tempC)}°</span>
                 <span className="mb-1 text-2xl font-medium text-[var(--ds-muted)]">{unit}</span>
               </div>
               <div className="mt-2 text-sm font-semibold text-[var(--ds-ink)]">{c.description}</div>
               <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-[var(--ds-muted)]">
                 {typeof c.feelsLikeC === 'number' && <span>Feels {t(c.feelsLikeC)}°</span>}
                 {today && (
-                  <span className="font-medium text-[var(--ds-ink)]">
+                  <span className="font-medium tabular-nums text-[var(--ds-ink)]">
                     H {t(today.maxC)}° · L {t(today.minC)}°
                   </span>
                 )}
@@ -354,14 +386,26 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
             )}
           </div>
 
-          {/* Hourly temperature chart */}
+          {/* Hourly temperature chart — the primary flexible region. It grows when
+              the card is stretched (kit Chart fills its measured box) and the C/F
+              toggle morphs the curve instead of snapping. */}
           {hourlyPoints.length > 2 && (
-            <div className="px-1 pb-1">
+            <div className="flex grow-[2] flex-col px-1 pb-1">
               <div className="px-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Next 24 hours</div>
-              <Chart points={hourlyPoints} variant="area" color={c.isDay ? '#0ea5e9' : '#6366f1'} height={92} formatValue={(n) => `${Math.round(n)}°${unit}`} />
-              <div className="flex gap-3 overflow-x-auto px-2 pb-1">
+              <div className="relative grow">
+                <Chart
+                  points={hourlyPoints}
+                  variant="area"
+                  color={c.isDay ? '#0ea5e9' : '#6366f1'}
+                  height={104}
+                  aspect={0.2}
+                  maxHeight={320}
+                  formatValue={(n) => `${Math.round(n)}°${unit}`}
+                />
+              </div>
+              <div className="flex overflow-x-auto px-2 pb-1 pt-0.5">
                 {(data.hourly ?? []).map((h) => (
-                  <div key={h.time} className="flex w-9 shrink-0 flex-col items-center gap-0.5 text-center">
+                  <div key={h.time} className="flex min-w-[30px] flex-1 shrink-0 flex-col items-center gap-0.5 text-center">
                     <span className="text-base leading-none">{glyph(h.code, h.isDay ?? c.isDay)}</span>
                     {typeof h.precipProb === 'number' && h.precipProb > 0 && <span className="text-[9px] font-semibold text-sky-600">{h.precipProb}%</span>}
                   </div>
@@ -370,18 +414,16 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
             </div>
           )}
 
-          {/* 7-day forecast */}
+          {/* 7-day forecast — rows breathe apart when the card has extra height, and
+              each hi/lo range bar grows in from its cold end with a soft stagger. */}
           {data.daily.length > 0 && (
-            <div className="border-t border-[var(--ds-hairline-soft)] px-3 py-2">
-              <div className="space-y-1">
-                {data.daily.slice(0, 7).map((d) => {
+            <div className="flex grow flex-col border-t border-[var(--ds-hairline-soft)] px-3 py-2">
+              <div className="flex grow flex-col justify-evenly gap-1">
+                {data.daily.slice(0, 7).map((d, i) => {
                   const lo = t(d.minC);
                   const hi = t(d.maxC);
-                  const allMin = Math.min(...data.daily.map((x) => x.minC));
-                  const allMax = Math.max(...data.daily.map((x) => x.maxC));
-                  const span = allMax - allMin || 1;
-                  const left = ((d.minC - allMin) / span) * 100;
-                  const width = ((d.maxC - d.minC) / span) * 100;
+                  const left = ((d.minC - weekMin) / weekSpan) * 100;
+                  const width = ((d.maxC - d.minC) / weekSpan) * 100;
                   return (
                     <div key={d.date} className="flex items-center gap-2 text-xs">
                       <span className="w-9 font-semibold text-[var(--ds-ink)]">{dayName(d.date)}</span>
@@ -391,11 +433,19 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
                       ) : (
                         <span className="w-8" />
                       )}
-                      <span className="w-7 text-right font-medium text-[var(--ds-muted)]">{lo}°</span>
+                      <span className="w-7 text-right font-medium tabular-nums text-[var(--ds-muted)]">{lo}°</span>
                       <div className="relative h-1.5 flex-1 rounded-full bg-[var(--ds-well-strong)]">
-                        <div className="absolute h-full rounded-full bg-gradient-to-r from-sky-400 to-orange-400" style={{ left: `${left}%`, width: `${Math.max(width, 4)}%` }} />
+                        <div
+                          className="absolute h-full rounded-full bg-gradient-to-r from-sky-400 to-orange-400 transition-[width,opacity] duration-500 ease-out"
+                          style={{
+                            left: `${left}%`,
+                            width: barsIn ? `${Math.max(width, 4)}%` : '0%',
+                            opacity: barsIn ? 1 : 0,
+                            transitionDelay: `${i * 45}ms`
+                          }}
+                        />
                       </div>
-                      <span className="w-7 font-semibold text-[var(--ds-ink)]">{hi}°</span>
+                      <span className="w-7 font-semibold tabular-nums text-[var(--ds-ink)]">{hi}°</span>
                     </div>
                   );
                 })}

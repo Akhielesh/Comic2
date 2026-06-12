@@ -8,20 +8,68 @@
 
 import type { ChatTool } from './types.js';
 import { fetchJson } from './http.js';
+import { TtlCache } from '../../lib/cache.js';
 
-const cgBase = (): string =>
-  process.env.COINGECKO_API_PLAN === 'pro' && process.env.COINGECKO_API_KEY
-    ? 'https://pro-api.coingecko.com/api/v3'
-    : 'https://api.coingecko.com/api/v3';
+/** Normalize COINGECKO_API_PLAN: anything pro-ish selects the pro host; everything
+ *  else (unset, '', 'demo', 'free', stray whitespace/case) means the public host
+ *  with the demo-key header. Exported for tests. */
+export const cgPlanIsPro = (raw: string | undefined): boolean => /^(pro|paid|analyst|lite|enterprise)$/i.test((raw || '').trim());
 
-const cgHeaders = (): Record<string, string> | undefined => {
-  const key = process.env.COINGECKO_API_KEY;
-  if (!key) return undefined;
-  return process.env.COINGECKO_API_PLAN === 'pro' ? { 'x-cg-pro-api-key': key } : { 'x-cg-demo-api-key': key };
+const cgConfig = (): { base: string; headers?: Record<string, string> } => {
+  const key = (process.env.COINGECKO_API_KEY || '').trim();
+  if (key && cgPlanIsPro(process.env.COINGECKO_API_PLAN)) {
+    return { base: 'https://pro-api.coingecko.com/api/v3', headers: { 'x-cg-pro-api-key': key } };
+  }
+  return { base: 'https://api.coingecko.com/api/v3', headers: key ? { 'x-cg-demo-api-key': key } : undefined };
 };
 
-const cgFetch = <T>(path: string, signal?: AbortSignal): Promise<T> =>
-  fetchJson<T>(`${cgBase()}${path}`, { signal, headers: cgHeaders() });
+// A misconfigured key (demo key + plan=pro, expired key…) must NEVER take crypto
+// down entirely — on an auth-ish failure of the keyed config, retry once keyless
+// against the public host (the pre-key behavior, which always worked).
+const cgFetch = async <T>(path: string, signal?: AbortSignal): Promise<T> => {
+  const { base, headers } = cgConfig();
+  try {
+    return await fetchJson<T>(`${base}${path}`, { signal, headers });
+  } catch (err) {
+    const msg = (err as Error)?.message || '';
+    const authish = /\b(400|401|403|10002|10005)\b|unauthorized|api key/i.test(msg);
+    if (headers && authish) {
+      return fetchJson<T>(`https://api.coingecko.com/api/v3${path}`, { signal });
+    }
+    throw err;
+  }
+};
+
+// Majors resolve without a /search round-trip (3 upstream calls per tile refresh
+// against a 30/min demo budget is how a crypto board rate-limits itself).
+const KNOWN_COINS: Record<string, { id: string; name: string; symbol: string; rank?: number }> = {
+  bitcoin: { id: 'bitcoin', name: 'Bitcoin', symbol: 'btc', rank: 1 },
+  btc: { id: 'bitcoin', name: 'Bitcoin', symbol: 'btc', rank: 1 },
+  ethereum: { id: 'ethereum', name: 'Ethereum', symbol: 'eth', rank: 2 },
+  eth: { id: 'ethereum', name: 'Ethereum', symbol: 'eth', rank: 2 },
+  tether: { id: 'tether', name: 'Tether', symbol: 'usdt' },
+  usdt: { id: 'tether', name: 'Tether', symbol: 'usdt' },
+  solana: { id: 'solana', name: 'Solana', symbol: 'sol' },
+  sol: { id: 'solana', name: 'Solana', symbol: 'sol' },
+  xrp: { id: 'ripple', name: 'XRP', symbol: 'xrp' },
+  ripple: { id: 'ripple', name: 'XRP', symbol: 'xrp' },
+  bnb: { id: 'binancecoin', name: 'BNB', symbol: 'bnb' },
+  dogecoin: { id: 'dogecoin', name: 'Dogecoin', symbol: 'doge' },
+  doge: { id: 'dogecoin', name: 'Dogecoin', symbol: 'doge' },
+  cardano: { id: 'cardano', name: 'Cardano', symbol: 'ada' },
+  ada: { id: 'cardano', name: 'Cardano', symbol: 'ada' },
+  litecoin: { id: 'litecoin', name: 'Litecoin', symbol: 'ltc' },
+  ltc: { id: 'litecoin', name: 'Litecoin', symbol: 'ltc' }
+};
+
+/** Resolve a user/model coin string to a CoinGecko id without burning quota on
+ *  majors. Exported for tests. */
+export const resolveKnownCoin = (raw: string) => KNOWN_COINS[raw.trim().toLowerCase()] ?? null;
+
+// Searched ids barely change — keep them for a day. Full results stay fresh-ish
+// for a minute so dashboard refresh bursts collapse into one upstream pass.
+const coinIdCache = new TtlCache<{ id: string; name: string; symbol: string; rank?: number }>(24 * 60 * 60_000, 300);
+const cryptoResultCache = new TtlCache<{ content: string; artifacts: unknown[]; citations: unknown[] }>(60_000, 100);
 
 interface CGSearch {
   coins?: { id: string; name: string; symbol: string; market_cap_rank?: number; thumb?: string }[];
@@ -43,10 +91,18 @@ export const cryptoPriceTool: ChatTool = {
     const coin = String(args?.coin || '').trim();
     const vs = (String(args?.vs || 'usd').trim().toLowerCase() || 'usd');
     if (!coin) return { content: 'No coin was provided.' };
+    const cacheKey = `${coin.toLowerCase()}:${vs}`;
+    const cached = cryptoResultCache.get(cacheKey);
+    if (cached) return cached as never;
     try {
-      const search = await cgFetch<CGSearch>(`/search?query=${encodeURIComponent(coin)}`, signal);
-      const top = search.coins?.[0];
-      if (!top) return { content: `No cryptocurrency found matching "${coin}".` };
+      let top = resolveKnownCoin(coin) ?? coinIdCache.get(coin.toLowerCase()) ?? null;
+      if (!top) {
+        const search = await cgFetch<CGSearch>(`/search?query=${encodeURIComponent(coin)}`, signal);
+        const hit = search.coins?.[0];
+        if (!hit) return { content: `No cryptocurrency found matching "${coin}".` };
+        top = { id: hit.id, name: hit.name, symbol: hit.symbol, rank: hit.market_cap_rank };
+        coinIdCache.set(coin.toLowerCase(), top);
+      }
       const price = await cgFetch<Record<string, Record<string, number>>>(
         `/simple/price?ids=${encodeURIComponent(top.id)}&vs_currencies=${encodeURIComponent(vs)}&include_market_cap=true&include_24hr_change=true`,
         signal
@@ -85,8 +141,8 @@ export const cryptoPriceTool: ChatTool = {
         `${top.name} (${top.symbol.toUpperCase()}): ${value.toLocaleString(undefined, { maximumFractionDigits: value < 1 ? 6 : 2 })} ${vs.toUpperCase()} ` +
         `${dir}${typeof change === 'number' ? ` ${change >= 0 ? '+' : ''}${change.toFixed(2)}% (24h)` : ''}` +
         `${typeof mcap === 'number' ? ` · market cap ${Math.round(mcap).toLocaleString()} ${vs.toUpperCase()}` : ''}` +
-        `${top.market_cap_rank ? ` · rank #${top.market_cap_rank}` : ''}. A live price card is shown to the user.`;
-      return {
+        `${top.rank ? ` · rank #${top.rank}` : ''}. A live price card is shown to the user.`;
+      const result = {
         content,
         artifacts: [
           {
@@ -108,6 +164,8 @@ export const cryptoPriceTool: ChatTool = {
         // Required attribution wording per CoinGecko's API license.
         citations: [{ url: `https://www.coingecko.com/en/coins/${top.id}`, title: 'Data provided by CoinGecko' }]
       };
+      cryptoResultCache.set(cacheKey, result);
+      return result;
     } catch (err) {
       const message = (err as Error)?.message || 'unknown error';
       // CoinGecko's keyless tier rate-limits (429) often; tell the UI honestly rather than
