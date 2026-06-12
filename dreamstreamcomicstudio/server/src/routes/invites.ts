@@ -71,7 +71,7 @@ invitesRouter.get('/referral', async (req, res, next) => {
   try {
     if (!req.user?.id) return res.status(401).json({ error: { message: 'Sign in.' } });
     const ref = await getOrCreateReferral(req.user.id);
-    const stats = await getReferralStats(req.user.id);
+    const stats = await getReferralStats(req.user.id, ref);
     res.json({
       code: ref.code,
       url: referralUrl(ref.code),

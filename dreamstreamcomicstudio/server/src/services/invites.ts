@@ -4,6 +4,7 @@
 
 import { getSupabaseAdmin } from './supabase.js';
 import { logger } from '../lib/logger.js';
+import { normalizeEmail } from './emailStore.js';
 import { APP_PUBLIC_URL, sendBetaInvite } from './mailer.js';
 import { isStudioInviteId, type StudioInviteId } from '../../../shared/email/index.js';
 
@@ -103,7 +104,7 @@ export const recordInviteSend = async (input: {
   sentBy?: string | null;
   kind: InviteSendKind;
 }): Promise<void> => {
-  const email = String(input.email || '').trim().toLowerCase();
+  const email = normalizeEmail(String(input.email || ''));
   if (!email) return;
   try {
     const admin = getSupabaseAdmin();
@@ -146,7 +147,7 @@ export interface PendingInvite {
  * failure returns null so callers degrade to the normal (no-invite) path.
  */
 export const findPendingInviteForEmail = async (rawEmail: string): Promise<PendingInvite | null> => {
-  const email = String(rawEmail || '').trim().toLowerCase();
+  const email = normalizeEmail(String(rawEmail || ''));
   if (!email) return null;
   try {
     const admin = getSupabaseAdmin();
@@ -156,12 +157,17 @@ export const findPendingInviteForEmail = async (rawEmail: string): Promise<Pendi
       .eq('to_email', email)
       .order('last_sent_at', { ascending: false })
       .limit(5);
-    for (const send of (sends || []) as Array<Record<string, unknown>>) {
-      const { data: invite } = await admin
-        .from('access_invites')
-        .select('id, status, max_uses, use_count, expires_at')
-        .eq('id', String(send.invite_id))
-        .maybeSingle();
+    const sendRows = (sends || []) as Array<Record<string, unknown>>;
+    if (sendRows.length === 0) return null;
+    // One batched lookup for all candidate invites (not one query per send row).
+    const inviteIds = [...new Set(sendRows.map((s) => String(s.invite_id)))];
+    const { data: invites } = await admin
+      .from('access_invites')
+      .select('id, status, max_uses, use_count, expires_at')
+      .in('id', inviteIds);
+    const inviteById = new Map(((invites || []) as Array<Record<string, unknown>>).map((i) => [String(i.id), i]));
+    for (const send of sendRows) {
+      const invite = inviteById.get(String(send.invite_id));
       if (!invite) continue;
       if (invite.status === 'revoked') continue;
       if (invite.expires_at && Date.parse(String(invite.expires_at)) < Date.now()) continue;
@@ -200,7 +206,7 @@ export const resendPendingInvite = async (
   rawEmail: string,
   meta?: { requestId?: string | null }
 ): Promise<ResendOutcome> => {
-  const email = String(rawEmail || '').trim().toLowerCase();
+  const email = normalizeEmail(String(rawEmail || ''));
   const pending = await findPendingInviteForEmail(email);
   if (!pending) return { status: 'none', resent: false };
 
@@ -234,13 +240,16 @@ export interface ReferralInviteStat {
  * What happened to the invites a user sent: per emailed friend, whether they joined
  * (redeemed) and when — plus joins that came through the bare link (no email send).
  * Deliberately NOT usage analytics: an inviter sees accepted-or-not, nothing more.
+ * Callers that already hold the referral (the /referral route) pass it in to avoid
+ * a second get-or-create round trip.
  */
 export const getReferralStats = async (
-  userId: string
+  userId: string,
+  referral?: { id: string }
 ): Promise<{ invited: ReferralInviteStat[]; joinedViaLink: number }> => {
   try {
     const admin = getSupabaseAdmin();
-    const ref = await getOrCreateReferral(userId);
+    const ref = referral ?? (await getOrCreateReferral(userId));
     const [{ data: sends }, { data: reds }] = await Promise.all([
       admin
         .from('access_invite_sends')
@@ -257,7 +266,9 @@ export const getReferralStats = async (
       if (r.email) joinedByEmail.set(String(r.email).toLowerCase(), String(r.redeemed_at));
     }
     const invited: ReferralInviteStat[] = ((sends || []) as Array<Record<string, unknown>>).map((s) => {
-      const email = String(s.to_email);
+      // Sends are stored lowercase, but normalize the lookup key anyway so the
+      // joined-match can't silently break if a row ever arrives unnormalized.
+      const email = String(s.to_email).toLowerCase();
       const joinedAt = joinedByEmail.get(email) ?? null;
       return {
         email,
