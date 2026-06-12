@@ -870,7 +870,12 @@ chatPublicRouter.post('/tool-refresh', async (req, res) => {
     const out = await impl.execute(args, signal);
     res.json({
       artifacts: (out.artifacts ?? []).map((a) => ({ ...a, origin: { tool, args } })),
-      asOf: new Date().toISOString()
+      asOf: new Date().toISOString(),
+      // Honest failure surface: when a tool returns no artifacts, the notice (or
+      // the tool's own text) tells the tile — and us — exactly WHY, instead of a
+      // generic "no data returned".
+      ...(out.notice ? { notice: out.notice } : {}),
+      ...(!out.artifacts?.length && out.content ? { summary: String(out.content).slice(0, 400) } : {})
     });
   } catch (err) {
     res.status(502).json({ error: { message: (err as Error)?.message || 'Refresh failed.' } });

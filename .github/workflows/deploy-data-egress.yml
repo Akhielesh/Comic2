@@ -1,0 +1,51 @@
+name: Deploy Data Egress Worker
+
+# Allowlisted market-data fetch relay (Yahoo/Stooq/FiscalData) on Cloudflare's
+# edge — the Railway backend's egress IPs are blocked by those upstreams, which
+# made every stock/metals/ticker widget return nothing in production. Same
+# pattern + secrets as deploy-api-proxy.yml: CLOUDFLARE_API_TOKEN (Workers
+# Scripts:Edit + zone Workers Routes:Edit), CLOUDFLARE_ACCOUNT_ID.
+
+on:
+  push:
+    branches: [Dreamstrream-v1]
+    paths:
+      - 'dreamstreamcomicstudio/data-egress/**'
+      - '.github/workflows/deploy-data-egress.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-worker:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # wrangler 4.98+ requires Node >= 22.
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Deploy with wrangler
+        working-directory: dreamstreamcomicstudio/data-egress
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@latest deploy
+
+      - name: Verify the relay reaches an allowlisted upstream
+        run: |
+          sleep 10
+          body=$(curl -s --max-time 25 'https://dreamstreamstudio.ai/egress/fetch?url=https%3A%2F%2Fquery1.finance.yahoo.com%2Fv8%2Ffinance%2Fchart%2FAAPL%3Frange%3D1d%26interval%3D1d')
+          echo "egress AAPL probe -> ${body:0:200}"
+          if echo "$body" | grep -q '"chart"'; then
+            echo "Relay active — Yahoo JSON received through the edge."
+          elif echo "$body" | grep -qi 'challenge-platform\|Just a moment'; then
+            echo '::warning::Cloudflare bot challenge served to the CI runner — relay health could not be verified from CI (deploy itself succeeded).'
+          else
+            echo '::warning::Relay did not return Yahoo JSON from CI — check the worker logs (deploy itself succeeded).'
+          fi

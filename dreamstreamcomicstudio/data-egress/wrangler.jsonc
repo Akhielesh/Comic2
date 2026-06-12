@@ -1,0 +1,17 @@
+{
+  // DreamStream data-egress — allowlisted market-data fetch relay on the edge.
+  // The Railway backend's egress IPs are blocked by Yahoo/Stooq (every
+  // stock/metals widget returned nothing in production); this worker fetches
+  // those public endpoints from Cloudflare's IPs instead. Mounted on the zone
+  // so the backend has a deterministic URL (no per-account workers.dev guess):
+  //   https://dreamstreamstudio.ai/egress/fetch?url=…
+  // Optional hardening: `wrangler secret put EGRESS_SHARED_SECRET` here and
+  // set the same value as DATA_EGRESS_SECRET on the backend.
+  "name": "dreamstream-data-egress",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-01-01",
+
+  "routes": [
+    { "pattern": "dreamstreamstudio.ai/egress/*", "zone_name": "dreamstreamstudio.ai" }
+  ]
+}

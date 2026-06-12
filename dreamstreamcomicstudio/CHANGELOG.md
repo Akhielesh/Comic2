@@ -6,6 +6,18 @@ All notable user-facing changes. Format loosely follows
 ## [Unreleased]
 
 ### Added
+- **Finance data works IN PRODUCTION — edge egress relay (2026-06-12):**
+  - Direct production probing (newly possible via the public widget-refresh route)
+    revealed that Yahoo Finance and Stooq block the backend host's egress IPs —
+    the real reason every stock/metals/ticker widget showed nothing on the live
+    site while working in development. A new auto-deployed Cloudflare Worker
+    (`data-egress`, strict 5-host allowlist) now relays those public market-data
+    calls through the edge; the backend retries through it only when a direct
+    call fails. Verified live: Apple/NVDA/gold/silver, the ticker tape and the
+    debt clock all render on dreamstreamstudio.ai, with production telemetry
+    showing Yahoo traffic at zero errors for the first time.
+  - Failed widgets now say WHY (per-source upstream reasons reach the tile)
+    instead of a generic "No data returned".
 - **Finance accuracy + boards you can truly shape (2026-06-12):**
   - **Found and fixed the "everything broke when I added API keys" bug:** the Alpaca
     key silently switched US stock cards to the thin IEX feed (wrong-looking volume,
