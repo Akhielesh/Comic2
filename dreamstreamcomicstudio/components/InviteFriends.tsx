@@ -97,6 +97,34 @@ export const InviteFriends: React.FC = () => {
         )}
       </div>
 
+      {/* What happened to the invites you sent: invited or joined, nothing more. */}
+      {ref && ((ref.invited?.length ?? 0) > 0 || (ref.joinedViaLink ?? 0) > 0) && (
+        <div className="border-t-2 border-dashed border-slate-300 pt-3">
+          <div className="text-xs font-bold uppercase tracking-wide text-slate-600 mb-1.5">Your invites</div>
+          <div className="rounded-lg border-2 border-black bg-white divide-y divide-slate-100 max-h-44 overflow-y-auto">
+            {(ref.invited ?? []).map((inv) => (
+              <div key={inv.email} className="flex items-center gap-2 px-3 py-1.5 text-xs">
+                <span className="font-mono truncate flex-1">{inv.email}</span>
+                {inv.joined ? (
+                  <span className="rounded-full bg-green-100 px-2 py-0.5 font-bold text-green-700">
+                    Joined{inv.joinedAt ? ` ${new Date(inv.joinedAt).toLocaleDateString()}` : ''}
+                  </span>
+                ) : (
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 font-bold text-slate-500" title={`Invited ${new Date(inv.lastSentAt).toLocaleDateString()}${inv.sendCount > 1 ? ` · sent ${inv.sendCount}×` : ''}`}>
+                    Invited
+                  </span>
+                )}
+              </div>
+            ))}
+            {(ref.joinedViaLink ?? 0) > 0 && (
+              <div className="px-3 py-1.5 text-xs text-slate-500">
+                +{ref.joinedViaLink} joined via your link
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="border-t-2 border-dashed border-slate-300 pt-3 space-y-2">
         <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">Or email them directly (up to 10)</label>
         <textarea

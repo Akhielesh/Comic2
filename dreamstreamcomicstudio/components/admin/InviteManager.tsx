@@ -110,19 +110,52 @@ export const InviteManager: React.FC = () => {
       <div className="border-2 border-black rounded-xl bg-white divide-y-2 divide-slate-100 max-h-96 overflow-y-auto">
         {invites.length === 0 && !loading && <div className="p-3 text-xs text-slate-400">No invites yet — generate a batch above.</div>}
         {invites.map((i) => (
-          <div key={i.id} className="p-2.5 flex items-center gap-2 text-xs">
-            <code className="font-mono font-bold">{i.code}</code>
-            <button onClick={() => void copy(i.code)} title="Copy code" className="text-slate-400 hover:text-black">
-              {copied === i.code ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
-            </button>
-            <span className={`px-1.5 py-0.5 rounded font-bold ${statusTone(i.status)}`}>{i.status}</span>
-            <span className="text-slate-500 tabular-nums">{i.use_count}/{i.max_uses} used</span>
-            {i.label && <span className="text-slate-400 truncate">{i.label}</span>}
-            <span className="ml-auto text-slate-300 tabular-nums">{new Date(i.created_at).toLocaleDateString()}</span>
-            {i.status !== 'revoked' && (
-              <button onClick={() => void handleRevoke(i.id)} disabled={busy} title="Revoke" className="text-slate-400 hover:text-brand-red disabled:opacity-40">
-                <Ban className="w-3.5 h-3.5" />
+          <div key={i.id} className="p-2.5 text-xs">
+            <div className="flex items-center gap-2">
+              <code className="font-mono font-bold">{i.code}</code>
+              <button onClick={() => void copy(i.code)} title="Copy code" className="text-slate-400 hover:text-black">
+                {copied === i.code ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
               </button>
+              <span className={`px-1.5 py-0.5 rounded font-bold ${statusTone(i.status)}`}>{i.status}</span>
+              <span className="text-slate-500 tabular-nums">{i.use_count}/{i.max_uses} used</span>
+              {i.label && <span className="text-slate-400 truncate">{i.label}</span>}
+              <span className="ml-auto text-slate-300 tabular-nums">{new Date(i.created_at).toLocaleDateString()}</span>
+              {i.status !== 'revoked' && (
+                <button onClick={() => void handleRevoke(i.id)} disabled={busy} title="Revoke" className="text-slate-400 hover:text-brand-red disabled:opacity-40">
+                  <Ban className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+            {/* Delivery + redemption timeline: sent to whom/when → who joined when. */}
+            {((i.recipients?.length ?? 0) > 0 || (i.redeemedBy?.length ?? 0) > 0) && (
+              <div className="mt-1.5 ml-1 space-y-0.5 border-l-2 border-slate-100 pl-2">
+                {(i.recipients ?? []).map((r) => {
+                  const joined = (i.redeemedBy ?? []).find((d) => d.email && d.email.toLowerCase() === r.email.toLowerCase());
+                  return (
+                    <div key={r.email} className="flex flex-wrap items-center gap-x-2 text-[11px] text-slate-500">
+                      <span className="font-mono">{r.email}</span>
+                      <span>
+                        sent {new Date(r.last_sent_at).toLocaleDateString()}
+                        {r.send_count > 1 ? ` (${r.send_count}×)` : ''} via {r.kind}
+                      </span>
+                      {joined ? (
+                        <span className="font-bold text-green-700">joined {new Date(joined.redeemed_at).toLocaleDateString()}</span>
+                      ) : (
+                        <span className="text-slate-400">not joined yet</span>
+                      )}
+                    </div>
+                  );
+                })}
+                {(i.redeemedBy ?? [])
+                  .filter((d) => !d.email || !(i.recipients ?? []).some((r) => r.email.toLowerCase() === d.email!.toLowerCase()))
+                  .map((d, idx) => (
+                    <div key={`${d.user_id || d.email || idx}`} className="text-[11px] text-slate-500">
+                      <span className="font-mono">{d.email || d.user_id || 'unknown user'}</span>{' '}
+                      <span className="font-bold text-green-700">joined {new Date(d.redeemed_at).toLocaleDateString()}</span>{' '}
+                      <span className="text-slate-400">via code/link</span>
+                    </div>
+                  ))}
+              </div>
             )}
           </div>
         ))}

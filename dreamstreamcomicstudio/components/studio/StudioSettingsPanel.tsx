@@ -30,6 +30,7 @@ import { fetchKeyStatus, type KeyStatus } from '../../services/keyStatus';
 import { STUDIO_AGENT_CATALOG, STUDIO_AGENT_ORDER, DEFAULT_STUDIO_AGENT_IDS } from '../../services/studioAgents';
 import { DESIGN_PRESETS as DESIGN_PRESET_OPTIONS } from '../../services/designPresets';
 import { CODING_RECOMMENDATIONS, TIER_LABEL, type CodingPick } from '../../services/codingRecommendations';
+import { useModelSourceScope } from '../../hooks/useModelSourceScope';
 import type { ModelSourceId } from '../../services/modelSelection';
 
 const COST_OPTIONS: { id: StudioCostPref; label: string; hint: string }[] = [
@@ -119,11 +120,16 @@ export const StudioSettingsPanel: React.FC<{ open: boolean; onClose: () => void 
     return () => { active = false; };
   }, [open]);
 
+  // Same Settings-level source scope as the chat picker and Model Library: a source
+  // that's off in Settings (or keyless while another is connected) offers no coders here.
+  const sourceScope = useModelSourceScope();
+
   const coders = useMemo(() => {
     // Curated, API-callable coders only — hide download-only/dead models and ones we can't truly
     // recommend (the picker no longer lets you pin a model that will just fail). Power users can
     // still pin anything from the full ModelLibrary page.
-    const list = curateCoders(models.filter(isCoderText));
+    const inScope = models.filter((m) => sourceScope.active.includes(m.source));
+    const list = curateCoders(inScope.filter(isCoderText));
     const filtered = searchModels(list, query);
     return [...filtered].sort((a, b) => {
       const ca = domainStrength(a, 'coding');
@@ -132,7 +138,7 @@ export const StudioSettingsPanel: React.FC<{ open: boolean; onClose: () => void 
       if (a.isFree !== b.isFree) return a.isFree ? -1 : 1;
       return a.name.localeCompare(b.name);
     }).slice(0, 60);
-  }, [models, query]);
+  }, [models, query, sourceScope]);
 
   const activeSource: ModelSourceId | null = sel.source;
   const pickRecommended = (pick: CodingPick) => {
@@ -270,11 +276,11 @@ export const StudioSettingsPanel: React.FC<{ open: boolean; onClose: () => void 
             </div>
           </section>
 
-          {/* Source */}
+          {/* Source — only sources allowed by the Settings governance toggles are offered. */}
           <section className={card}>
             <div className="text-sm font-bold mb-2">Source</div>
             <div className="flex gap-2">
-              {SOURCE_OPTIONS.map((o) => {
+              {SOURCE_OPTIONS.filter((o) => o.id === 'auto' || sourceScope.active.includes(o.id as ModelSourceId)).map((o) => {
                 const active = o.id === 'auto' ? !sel.source : sel.source === o.id;
                 return (
                   <button
@@ -287,7 +293,10 @@ export const StudioSettingsPanel: React.FC<{ open: boolean; onClose: () => void 
                 );
               })}
             </div>
-            <p className={`mt-2 text-[11px] ${t.textFaint}`}>Where to route the coding model. Auto prefers your OpenRouter key, then NVIDIA.</p>
+            <p className={`mt-2 text-[11px] ${t.textFaint}`}>
+              Where to route the coding model. Auto prefers your OpenRouter key, then NVIDIA.
+              {sourceScope.active.length < SOURCE_OPTIONS.length - 1 && ' Sources turned off in Settings → API Configuration are hidden here.'}
+            </p>
           </section>
 
           {/* Spend preference */}

@@ -31,6 +31,7 @@ import { AuthCallbackPage } from './components/AuthCallbackPage';
 import { supabase } from './services/supabase';
 import { getPrivateProfile, getPublicProject, incrementViewCount } from './services/db';
 import { setPendingChatModel } from './services/chatStorage';
+import { captureInviteCodeFromUrl, clearPendingInviteCode, getPendingInviteCode, redeemInvite } from './services/invites';
 import { persistUiState } from './services/viewState';
 import { isSettingsTab, type SettingsTab } from './components/settingsTabs';
 import { useStudioHandoff } from './services/studioHandoff';
@@ -235,6 +236,39 @@ const App: React.FC = () => {
   // Which tab the auth page opens on: existing users sign in; everyone else can
   // request early access while new signups are invite-only.
   const [authInitialMode, setAuthInitialMode] = useState<'signin' | 'request-access'>('signin');
+
+  // ── Invite deep link (email → /?invite=CODE) ──────────────────────────────────
+  // Capture the code off the URL, keep it across the whole auth round trip
+  // (localStorage survives sign-up → email verify → sign-in), and auto-redeem on the
+  // first signed-in load — invited people never have to type the code by hand.
+  const [inviteNotice, setInviteNotice] = useState<{ tone: 'success' | 'error'; message: string } | null>(null);
+  const inviteRedeemInFlightRef = useRef(false);
+  useEffect(() => {
+    if (authLoading) return;
+    captureInviteCodeFromUrl();
+    const code = getPendingInviteCode();
+    if (!code) return;
+    if (!user) {
+      // Invited visitor without a session → straight to the auth page, where the
+      // invite banner explains that creating an account claims the invite.
+      if (currentView !== 'auth-callback' && currentView !== 'shared') setCurrentView('auth');
+      return;
+    }
+    if (inviteRedeemInFlightRef.current) return;
+    inviteRedeemInFlightRef.current = true;
+    void redeemInvite(code).then((result) => {
+      inviteRedeemInFlightRef.current = false;
+      // Invalid/expired codes are cleared too — a dead code must not retry forever.
+      clearPendingInviteCode();
+      setInviteNotice({ tone: result.ok ? 'success' : 'error', message: result.message });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authLoading, user]);
+  useEffect(() => {
+    if (!inviteNotice || inviteNotice.tone !== 'success') return;
+    const id = window.setTimeout(() => setInviteNotice(null), 8000);
+    return () => window.clearTimeout(id);
+  }, [inviteNotice]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [publicProject, setPublicProject] = useState<Project | null>(null);
   const [viewedProfile, setViewedProfile] = useState<string | null>(null); // username
@@ -855,6 +889,20 @@ const App: React.FC = () => {
   return (
     <ErrorBoundary>
       <div className="min-h-screen font-sans relative bg-slate-50">
+        {inviteNotice && (
+          <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[90] w-[calc(100%-2rem)] max-w-md">
+            <div
+              className={`flex items-start gap-2 rounded-xl border-2 px-4 py-3 text-sm font-bold shadow-lg ${
+                inviteNotice.tone === 'success'
+                  ? 'border-green-600 bg-green-50 text-green-700'
+                  : 'border-red-500 bg-red-50 text-red-600'
+              }`}
+            >
+              <span className="flex-1">{inviteNotice.message}</span>
+              <button onClick={() => setInviteNotice(null)} aria-label="Dismiss" className="opacity-60 hover:opacity-100">✕</button>
+            </div>
+          </div>
+        )}
         {showSharedHeader && (() => {
           const header = (
             <StaticSiteHeader
@@ -908,6 +956,7 @@ const App: React.FC = () => {
           {effectiveView === 'auth' && (
             <AuthPage
               initialMode={authInitialMode}
+              pendingInviteCode={getPendingInviteCode()}
               onLoginSuccess={() => {
                 if (pendingReaderTarget) {
                   const target = pendingReaderTarget;

@@ -39,7 +39,7 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
   onSignIn
 }) => {
   const [email, setEmail] = useState('');
-  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error' | 'account-exists'>('idle');
+  const [status, setStatus] = useState<'idle' | 'loading' | 'success' | 'error' | 'account-exists' | 'already-invited'>('idle');
   const [message, setMessage] = useState<string | null>(null);
   const [captchaToken, setCaptchaToken] = useState('');
   // Optional intent: product chips + free-form note — email alone still submits.
@@ -70,6 +70,13 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
     } else if (result.status === 'account-exists') {
       // Already a member: don't add them to the waitlist — point them at sign-in.
       setStatus('account-exists');
+      setMessage(result.message);
+      setCaptchaToken('');
+      resetTurnstile();
+    } else if (result.status === 'already-invited') {
+      // Already invited: access was granted before — the backend re-sent the invite
+      // email, so point them at its setup instructions instead of the waitlist.
+      setStatus('already-invited');
       setMessage(result.message);
       setCaptchaToken('');
       resetTurnstile();
@@ -114,7 +121,7 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
             value={email}
             onChange={(e) => {
               setEmail(e.target.value);
-              if (status === 'error' || status === 'account-exists') setStatus('idle');
+              if (status === 'error' || status === 'account-exists' || status === 'already-invited') setStatus('idle');
             }}
             placeholder={placeholder}
             aria-label="Email address"
@@ -194,6 +201,15 @@ export const WaitlistForm: React.FC<WaitlistFormProps> = ({
       )}
       {status === 'error' && message && (
         <p className={`mt-2 text-xs font-bold ${isDark ? 'text-red-400' : 'text-red-600'}`}>{message}</p>
+      )}
+      {status === 'already-invited' && (
+        <div
+          className={`mt-2 rounded-lg border-2 px-3 py-2 text-xs font-bold ${
+            isDark ? 'border-brand-yellow bg-brand-yellow/10 text-brand-yellow' : 'border-green-600 bg-green-50 text-green-700'
+          }`}
+        >
+          {message || 'You already have access — follow the instructions in your invite email to set up your account.'}
+        </div>
       )}
       {status === 'account-exists' && (
         <div

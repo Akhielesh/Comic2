@@ -66,7 +66,8 @@ const DashboardsView = lazy(() => import('./DashboardsView').then((m) => pickExp
 const CommandPalette = lazy(() => import('./CommandPalette').then((m) => pickExport<CommandPaletteProps>(m, 'CommandPalette')));
 import { deriveModelFeatures } from '../../services/chatFeatures';
 import { getCapabilities } from '../../services/modelCapabilities';
-import { fetchModelCatalog, type CatalogModel } from '../../services/modelCatalog';
+import { fetchModelCatalog, prettyModelLabel, sourceLabel, type CatalogModel } from '../../services/modelCatalog';
+import { setActiveModelInfo } from '../../services/activeModelBeacon';
 import type { ChatReasoningLevel, ChatRequestMessage, ChatMessagePart, UniversalAssistantContext } from '../../apiTypes';
 import type { Project } from '../../types';
 import { sendChatMessageStream, runSwarmStream, updateChatMemory, friendlyChatError } from '../../services/chatApi';
@@ -470,6 +471,19 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   }, [initialized, sessions, activeId]);
 
   const resolvedModel = activeSession?.modelId ? catalog.get(activeSession.modelId) || null : null;
+  // Publish the chat's REAL model to global chrome (header usage pill) — without this
+  // the pill could only show the comic-generation defaults ("Auto") while in chat.
+  useEffect(() => {
+    const auto = !activeSession || activeSession.autoMode || !activeSession.modelId;
+    setActiveModelInfo({
+      surface: 'chat',
+      label: auto ? 'Auto · best model per message' : resolvedModel?.name || prettyModelLabel(activeSession?.modelId),
+      detail: !auto && (resolvedModel?.source || activeSession?.source)
+        ? sourceLabel(resolvedModel?.source || activeSession?.source)
+        : undefined
+    });
+    return () => setActiveModelInfo(null);
+  }, [activeSession, resolvedModel]);
   const features = useMemo(() => deriveModelFeatures(resolvedModel), [resolvedModel]);
   const suggestModels = useMemo(() => Array.from(catalog.values()), [catalog]);
 

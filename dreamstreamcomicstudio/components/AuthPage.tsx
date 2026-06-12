@@ -15,14 +15,22 @@ interface AuthPageProps {
     onOpenPrivacy: () => void;
     onOpenTerms: () => void;
     initialMode?: 'signin' | 'request-access';
+    /**
+     * A captured `?invite=` code (from the invite email link). Holding one unlocks the
+     * real sign-up tab even while public signups are off — the invite is auto-redeemed
+     * after the first signed-in load (see App.tsx).
+     */
+    pendingInviteCode?: string | null;
 }
 
-export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivacy, onOpenTerms, initialMode = 'signin' }) => {
+export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivacy, onOpenTerms, initialMode = 'signin', pendingInviteCode = null }) => {
     const USERNAME_REGEX = /^[A-Za-z0-9_]{3,20}$/;
     const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const MIN_SIGNUP_AGE_YEARS = 8;
+    // An invite in hand unlocks real account creation even while public signups are off.
+    const signupsAllowed = SIGNUPS_ENABLED || Boolean(pendingInviteCode);
     const [mode, setMode] = useState<'signin' | 'signup' | 'forgot' | 'magic-link' | 'request-access'>(
-        initialMode === 'request-access' && !SIGNUPS_ENABLED ? 'request-access' : 'signin'
+        pendingInviteCode ? 'signup' : initialMode === 'request-access' && !SIGNUPS_ENABLED ? 'request-access' : 'signin'
     );
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -108,7 +116,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                 throw new Error('Please complete the verification challenge.');
             }
             if (mode === 'signup') {
-                if (!SIGNUPS_ENABLED) {
+                if (!signupsAllowed) {
                     throw new Error('New sign-ups are invite-only right now. Request access and we’ll be in touch.');
                 }
                 // Validation
@@ -305,14 +313,23 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onOpenPrivac
                         Sign In
                     </button>
                     <button
-                        onClick={() => { setMode(SIGNUPS_ENABLED ? 'signup' : 'request-access'); setError(null); setMessage(null); setPendingVerificationEmail(null); }}
+                        onClick={() => { setMode(signupsAllowed ? 'signup' : 'request-access'); setError(null); setMessage(null); setPendingVerificationEmail(null); }}
                         className={`flex-1 py-4 font-display text-xl transition-colors ${(mode === 'signup' || mode === 'request-access') ? 'bg-brand-blue text-white' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`}
                     >
-                        {SIGNUPS_ENABLED ? 'Sign Up' : 'Request Access'}
+                        {signupsAllowed ? 'Sign Up' : 'Request Access'}
                     </button>
                 </div>
 
                 <div className="p-8">
+                    {pendingInviteCode && (
+                        <div className="mb-6 flex items-start gap-2 rounded-lg border-2 border-brand-blue bg-brand-blue/5 px-3 py-2.5 text-sm font-bold text-brand-blue">
+                            <span className="mt-0.5">🎟️</span>
+                            <span>
+                                You&apos;ve been invited! Create your account (or sign in) and invite{' '}
+                                <span className="font-mono">{pendingInviteCode}</span> will be applied automatically.
+                            </span>
+                        </div>
+                    )}
                     {mode === 'request-access' && (
                         <div className="space-y-5">
                             <div className="inline-flex items-center gap-2 bg-brand-blue/10 border-2 border-brand-blue text-brand-blue px-3 py-1.5 rounded-full font-mono text-xs font-bold uppercase tracking-widest">

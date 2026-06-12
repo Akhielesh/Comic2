@@ -182,3 +182,13 @@ export const providerOrigin = (model: CatalogModel): string => {
   const slash = model.id.indexOf('/');
   return slash > 0 ? model.id.slice(0, slash) : 'openrouter';
 };
+
+/**
+ * Human-friendly label for a raw model id/slug — for chrome (header pill etc.) that
+ * shouldn't show "vendor/model-name:free" verbatim. Falls back to 'Auto' when unset.
+ */
+export const prettyModelLabel = (id?: string | null): string => {
+  if (!id) return 'Auto';
+  const tail = id.includes('/') ? id.slice(id.indexOf('/') + 1) : id;
+  return tail.replace(/:free$/i, '').trim() || id;
+};

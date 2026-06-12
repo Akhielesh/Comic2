@@ -11,7 +11,7 @@ import {
 } from '../../../shared/email/index.js';
 import { APP_PUBLIC_URL, getEmailUsageStatus, mailerConfigured, sendBetaInvite, sendEmail } from '../services/mailer.js';
 import { normalizeEmail, recentLog } from '../services/emailStore.js';
-import { generateInvites } from '../services/invites.js';
+import { generateInvites, recordInviteSend } from '../services/invites.js';
 
 // Admin Email Console API. Mounted under /api/admin/email behind requireAuth + requireAdmin,
 // so every handler here is admin-only. Sends always go through the mailer (cost caps,
@@ -166,6 +166,15 @@ adminEmailRouter.post('/invite', async (req, res, next) => {
       },
       { userId: req.user?.id ?? null, requestId: req.requestId }
     );
+    if (result.ok) {
+      await recordInviteSend({
+        inviteId: String(invite.id),
+        code: String(invite.code),
+        email,
+        sentBy: req.user?.id ?? null,
+        kind: 'admin'
+      });
+    }
     console.info('[ADMIN_ACTION] invite_emailed', { actorId: req.user?.id, code: invite.code, to: email, products: confineTo });
     res.json({ code: invite.code, inviteUrl, email, products: featured, confined: confineTo.length > 0, ...result });
   } catch (err) {

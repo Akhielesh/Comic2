@@ -9,7 +9,7 @@ import { API_BASE_URL, buildApiUrl } from './clientConfig';
 export type WaitlistKind = 'updates' | 'access';
 
 /** Machine-readable outcome, set by the backend for 'access' signups. */
-export type WaitlistStatus = 'joined' | 'already-registered' | 'account-exists';
+export type WaitlistStatus = 'joined' | 'already-registered' | 'account-exists' | 'already-invited';
 
 /** Products a signup can ask for first access to (server-accepted values). */
 export const PRODUCT_INTERESTS = ['comic_studio', 'chat_studio', 'code_studio', 'stream_studio', 'dashboards'] as const;
@@ -29,7 +29,11 @@ export interface WaitlistResult {
   ok: boolean;
   /** True when the email was already on the list — treated as a soft success. */
   alreadyJoined?: boolean;
-  /** 'account-exists' = the email already has an ACCOUNT; show a sign-in prompt instead. */
+  /**
+   * 'account-exists' = the email already has an ACCOUNT; show a sign-in prompt instead.
+   * 'already-invited' = the email holds a pending invite; the backend re-sent the invite
+   * email — tell them to follow its instructions instead of joining the waitlist.
+   */
   status?: WaitlistStatus;
   message: string;
 }

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getInviteStatusForUser, getOrCreateReferral, redeemInvite } from '../services/invites.js';
+import { getInviteStatusForUser, getOrCreateReferral, getReferralStats, recordInviteSend, redeemInvite } from '../services/invites.js';
 import { APP_PUBLIC_URL, sendBetaInvite } from '../services/mailer.js';
 import { getSupabaseAdmin } from '../services/supabase.js';
 
@@ -65,12 +65,21 @@ invitesRouter.get('/me', async (req, res, next) => {
   }
 });
 
-// The signed-in user's personal, shareable referral link (get-or-create).
+// The signed-in user's personal, shareable referral link (get-or-create), plus what
+// happened to the invites they sent (per friend: invited/joined — never more).
 invitesRouter.get('/referral', async (req, res, next) => {
   try {
     if (!req.user?.id) return res.status(401).json({ error: { message: 'Sign in.' } });
     const ref = await getOrCreateReferral(req.user.id);
-    res.json({ code: ref.code, url: referralUrl(ref.code), used: ref.use_count, max: ref.max_uses });
+    const stats = await getReferralStats(req.user.id);
+    res.json({
+      code: ref.code,
+      url: referralUrl(ref.code),
+      used: ref.use_count,
+      max: ref.max_uses,
+      invited: stats.invited,
+      joinedViaLink: stats.joinedViaLink
+    });
   } catch (err) {
     next(err);
   }
@@ -114,6 +123,9 @@ invitesRouter.post('/referral/send', async (req, res, next) => {
         { inviteUrl: url, code: ref.code, inviterName, personalNote: note },
         { userId: req.user.id, requestId: req.requestId }
       );
+      if (r.ok) {
+        await recordInviteSend({ inviteId: ref.id, code: ref.code, email: to, sentBy: req.user.id, kind: 'referral' });
+      }
       results.push({ to, ok: r.ok, status: r.ok ? 'sent' : r.skipped ? 'skipped' : 'failed', skipped: r.skipped, error: r.error });
     }
     res.json({

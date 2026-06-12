@@ -4,6 +4,7 @@
 
 import { getSupabaseAdmin } from './supabase.js';
 import { logger } from '../lib/logger.js';
+import { APP_PUBLIC_URL, sendBetaInvite } from './mailer.js';
 import { isStudioInviteId, type StudioInviteId } from '../../../shared/email/index.js';
 
 // Human-friendly, unambiguous alphabet (no 0/O/1/I) for codes like DS-7K9F-Q3MX.
@@ -62,11 +63,11 @@ export const generateInvites = async (input: GenerateInput) => {
  * One persistent personal referral code per user (get-or-create). Reuses access_invites with
  * label 'referral' and a generous max_uses so a user can invite multiple friends from one link.
  */
-export const getOrCreateReferral = async (userId: string): Promise<{ code: string; use_count: number; max_uses: number }> => {
+export const getOrCreateReferral = async (userId: string): Promise<{ id: string; code: string; use_count: number; max_uses: number }> => {
   const admin = getSupabaseAdmin();
   const { data: existing } = await admin
     .from('access_invites')
-    .select('code, use_count, max_uses')
+    .select('id, code, use_count, max_uses')
     .eq('created_by', userId)
     .eq('label', 'referral')
     .eq('status', 'active')
@@ -75,13 +76,206 @@ export const getOrCreateReferral = async (userId: string): Promise<{ code: strin
     .maybeSingle();
   if (existing) {
     return {
+      id: String(existing.id),
       code: String(existing.code),
       use_count: Number(existing.use_count) || 0,
       max_uses: Number(existing.max_uses) || 0
     };
   }
   const [created] = await generateInvites({ createdBy: userId, label: 'referral', maxUses: 25, count: 1 });
-  return { code: String(created.code), use_count: 0, max_uses: 25 };
+  return { id: String(created.id), code: String(created.code), use_count: 0, max_uses: 25 };
+};
+
+// ── Invite delivery tracking (access_invite_sends) ─────────────────────────────
+//
+// Every emailed invite is recorded per (invite, recipient): first/last sent, send
+// count, sender and path. This is what lets the platform answer "was this email
+// already invited?" at register time, show admins the sent → joined timeline, and
+// show users which of their referral invites were accepted.
+
+export type InviteSendKind = 'admin' | 'referral' | 'resend';
+
+/** Record (or bump) an invite email delivery. Best-effort: a log failure never blocks the send. */
+export const recordInviteSend = async (input: {
+  inviteId: string;
+  code: string;
+  email: string;
+  sentBy?: string | null;
+  kind: InviteSendKind;
+}): Promise<void> => {
+  const email = String(input.email || '').trim().toLowerCase();
+  if (!email) return;
+  try {
+    const admin = getSupabaseAdmin();
+    const { data: existing } = await admin
+      .from('access_invite_sends')
+      .select('id, send_count')
+      .eq('invite_id', input.inviteId)
+      .eq('to_email', email)
+      .maybeSingle();
+    if (existing?.id) {
+      await admin
+        .from('access_invite_sends')
+        .update({ send_count: (Number(existing.send_count) || 1) + 1, last_sent_at: new Date().toISOString() })
+        .eq('id', existing.id);
+      return;
+    }
+    await admin.from('access_invite_sends').insert({
+      invite_id: input.inviteId,
+      code: input.code,
+      to_email: email,
+      sent_by: input.sentBy ?? null,
+      kind: input.kind
+    });
+  } catch (err) {
+    logger.warn('invite_send_record_failed', { message: (err as Error)?.message || String(err) });
+  }
+};
+
+export interface PendingInvite {
+  inviteId: string;
+  code: string;
+  sentBy: string | null;
+  kind: InviteSendKind;
+  lastSentAt: string;
+}
+
+/**
+ * Does this email hold a still-usable invite that was emailed to them? Returns the most
+ * recently sent one whose code is active, unexpired and has uses left. Best-effort: any
+ * failure returns null so callers degrade to the normal (no-invite) path.
+ */
+export const findPendingInviteForEmail = async (rawEmail: string): Promise<PendingInvite | null> => {
+  const email = String(rawEmail || '').trim().toLowerCase();
+  if (!email) return null;
+  try {
+    const admin = getSupabaseAdmin();
+    const { data: sends } = await admin
+      .from('access_invite_sends')
+      .select('invite_id, code, sent_by, kind, last_sent_at')
+      .eq('to_email', email)
+      .order('last_sent_at', { ascending: false })
+      .limit(5);
+    for (const send of (sends || []) as Array<Record<string, unknown>>) {
+      const { data: invite } = await admin
+        .from('access_invites')
+        .select('id, status, max_uses, use_count, expires_at')
+        .eq('id', String(send.invite_id))
+        .maybeSingle();
+      if (!invite) continue;
+      if (invite.status === 'revoked') continue;
+      if (invite.expires_at && Date.parse(String(invite.expires_at)) < Date.now()) continue;
+      if (Number(invite.use_count) >= Number(invite.max_uses)) continue;
+      return {
+        inviteId: String(send.invite_id),
+        code: String(send.code),
+        sentBy: send.sent_by ? String(send.sent_by) : null,
+        kind: (send.kind as InviteSendKind) || 'admin',
+        lastSentAt: String(send.last_sent_at)
+      };
+    }
+    return null;
+  } catch (err) {
+    logger.warn('invite_pending_lookup_failed', { message: (err as Error)?.message || String(err) });
+    return null;
+  }
+};
+
+// Don't re-email more often than this when someone repeatedly retries registering —
+// the status message still tells them to check their inbox either way.
+const RESEND_COOLDOWN_MS = 10 * 60_000;
+
+export interface ResendOutcome {
+  status: 'invited' | 'none';
+  /** True when a fresh email actually went out (false inside the cooldown window). */
+  resent: boolean;
+}
+
+/**
+ * Register-intent path: when an already-invited email tries to sign up again, re-send
+ * their original invite email (cooldown-guarded) so "follow the instructions in your
+ * email" is always actionable.
+ */
+export const resendPendingInvite = async (
+  rawEmail: string,
+  meta?: { requestId?: string | null }
+): Promise<ResendOutcome> => {
+  const email = String(rawEmail || '').trim().toLowerCase();
+  const pending = await findPendingInviteForEmail(email);
+  if (!pending) return { status: 'none', resent: false };
+
+  const lastSent = Date.parse(pending.lastSentAt);
+  if (Number.isFinite(lastSent) && Date.now() - lastSent < RESEND_COOLDOWN_MS) {
+    return { status: 'invited', resent: false };
+  }
+
+  const inviteUrl = `${APP_PUBLIC_URL}/?invite=${encodeURIComponent(pending.code)}`;
+  const result = await sendBetaInvite(
+    email,
+    { inviteUrl, code: pending.code },
+    { userId: pending.sentBy, requestId: meta?.requestId ?? null }
+  );
+  if (result.ok) {
+    await recordInviteSend({ inviteId: pending.inviteId, code: pending.code, email, sentBy: null, kind: 'resend' });
+    logger.info('invite_resent', { inviteId: pending.inviteId });
+  }
+  return { status: 'invited', resent: result.ok };
+};
+
+export interface ReferralInviteStat {
+  email: string;
+  lastSentAt: string;
+  sendCount: number;
+  joined: boolean;
+  joinedAt: string | null;
+}
+
+/**
+ * What happened to the invites a user sent: per emailed friend, whether they joined
+ * (redeemed) and when — plus joins that came through the bare link (no email send).
+ * Deliberately NOT usage analytics: an inviter sees accepted-or-not, nothing more.
+ */
+export const getReferralStats = async (
+  userId: string
+): Promise<{ invited: ReferralInviteStat[]; joinedViaLink: number }> => {
+  try {
+    const admin = getSupabaseAdmin();
+    const ref = await getOrCreateReferral(userId);
+    const [{ data: sends }, { data: reds }] = await Promise.all([
+      admin
+        .from('access_invite_sends')
+        .select('to_email, send_count, last_sent_at')
+        .eq('invite_id', ref.id)
+        .order('last_sent_at', { ascending: false }),
+      admin
+        .from('access_invite_redemptions')
+        .select('email, redeemed_at')
+        .eq('invite_id', ref.id)
+    ]);
+    const joinedByEmail = new Map<string, string>();
+    for (const r of (reds || []) as Array<Record<string, unknown>>) {
+      if (r.email) joinedByEmail.set(String(r.email).toLowerCase(), String(r.redeemed_at));
+    }
+    const invited: ReferralInviteStat[] = ((sends || []) as Array<Record<string, unknown>>).map((s) => {
+      const email = String(s.to_email);
+      const joinedAt = joinedByEmail.get(email) ?? null;
+      return {
+        email,
+        lastSentAt: String(s.last_sent_at),
+        sendCount: Number(s.send_count) || 1,
+        joined: joinedAt !== null,
+        joinedAt
+      };
+    });
+    const sentEmails = new Set(invited.map((i) => i.email));
+    const joinedViaLink = ((reds || []) as Array<Record<string, unknown>>).filter(
+      (r) => !r.email || !sentEmails.has(String(r.email).toLowerCase())
+    ).length;
+    return { invited, joinedViaLink };
+  } catch (err) {
+    logger.warn('referral_stats_failed', { message: (err as Error)?.message || String(err) });
+    return { invited: [], joinedViaLink: 0 };
+  }
 };
 
 export const listInvites = async (opts: { limit?: number; offset?: number; status?: string } = {}) => {
@@ -98,20 +292,52 @@ export const listInvites = async (opts: { limit?: number; offset?: number; statu
   if (error) throw error;
   const invites = (data || []) as Array<Record<string, unknown>>;
 
-  // Attach redemption counts for the listed invites.
+  // Attach the full delivery + redemption timeline for the listed invites, so the
+  // admin view can answer "sent to whom, when — and did they join?" per code.
   const ids = invites.map((i) => i.id as string).filter(Boolean);
-  let redemptionsByInvite = new Map<string, number>();
+  const redemptionsByInvite = new Map<string, number>();
+  const redeemedByInvite = new Map<string, Array<{ email: string | null; user_id: string | null; redeemed_at: string }>>();
+  const sendsByInvite = new Map<string, Array<{ email: string; send_count: number; last_sent_at: string; kind: string }>>();
   if (ids.length) {
-    const { data: reds } = await admin
-      .from('access_invite_redemptions')
-      .select('invite_id')
-      .in('invite_id', ids);
+    const [{ data: reds }, { data: sends }] = await Promise.all([
+      admin
+        .from('access_invite_redemptions')
+        .select('invite_id, email, user_id, redeemed_at')
+        .in('invite_id', ids),
+      admin
+        .from('access_invite_sends')
+        .select('invite_id, to_email, send_count, last_sent_at, kind')
+        .in('invite_id', ids)
+    ]);
     for (const r of (reds || []) as Array<Record<string, unknown>>) {
       const id = String(r.invite_id);
       redemptionsByInvite.set(id, (redemptionsByInvite.get(id) || 0) + 1);
+      const list = redeemedByInvite.get(id) || [];
+      list.push({
+        email: r.email ? String(r.email) : null,
+        user_id: r.user_id ? String(r.user_id) : null,
+        redeemed_at: String(r.redeemed_at)
+      });
+      redeemedByInvite.set(id, list);
+    }
+    for (const s of (sends || []) as Array<Record<string, unknown>>) {
+      const id = String(s.invite_id);
+      const list = sendsByInvite.get(id) || [];
+      list.push({
+        email: String(s.to_email),
+        send_count: Number(s.send_count) || 1,
+        last_sent_at: String(s.last_sent_at),
+        kind: String(s.kind || 'admin')
+      });
+      sendsByInvite.set(id, list);
     }
   }
-  return invites.map((i) => ({ ...i, redemptions: redemptionsByInvite.get(String(i.id)) || 0 }));
+  return invites.map((i) => ({
+    ...i,
+    redemptions: redemptionsByInvite.get(String(i.id)) || 0,
+    recipients: sendsByInvite.get(String(i.id)) || [],
+    redeemedBy: redeemedByInvite.get(String(i.id)) || []
+  }));
 };
 
 export const revokeInvite = async (id: string) => {

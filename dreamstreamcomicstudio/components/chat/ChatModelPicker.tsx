@@ -10,7 +10,7 @@ import {
 } from '../../services/modelCatalog';
 import { getCapabilities } from '../../services/modelCapabilities';
 import { searchModels } from '../../services/modelSearch';
-import { isProviderEnabled } from '../../services/sourceGovernance';
+import { isProviderEnabled, MODEL_SOURCES } from '../../services/sourceGovernance';
 import { useModelSourceScope } from '../../hooks/useModelSourceScope';
 import { fetchModelSpeed, speedTier, speedLabel, isTimeoutProneFreeModel, type ModelSpeed } from '../../services/modelSpeed';
 import {
@@ -200,25 +200,34 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-1.5 mt-2">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Lock source:</span>
-              {([
+            {/* Lock-source choices come from governance, not a hardcoded list: a source
+                turned off in Settings can't be offered as an Auto lock target. With a
+                single enabled source there's nothing to lock, so the row hides. */}
+            {(() => {
+              const lockable = MODEL_SOURCES.filter(isProviderEnabled);
+              if (lockable.length < 2) return null;
+              const options: { key: LockSource; label: string }[] = [
                 { key: null, label: 'Any' },
-                { key: 'openrouter', label: 'OpenRouter' },
-                { key: 'nvidia', label: 'NVIDIA' }
-              ] as { key: LockSource; label: string }[]).map((opt) => {
-                const active = autoMode && (lockedSource ?? null) === opt.key;
-                return (
-                  <button
-                    key={String(opt.key)}
-                    onClick={() => onSelectAuto(opt.key)}
-                    className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${TRANSITION} ${active ? `${ACCENT_BG} ${ACCENT_BG_HOVER} text-white border border-transparent` : `${HAIRLINE} bg-[var(--ds-surface-soft)] ${MUTED} hover:bg-[var(--ds-hover)]`}`}
-                  >
-                    {opt.label}
-                  </button>
-                );
-              })}
-            </div>
+                ...lockable.map((s) => ({ key: s as LockSource, label: sourceLabel(s) }))
+              ];
+              return (
+                <div className="flex items-center gap-1.5 mt-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Lock source:</span>
+                  {options.map((opt) => {
+                    const active = autoMode && (lockedSource ?? null) === opt.key;
+                    return (
+                      <button
+                        key={String(opt.key)}
+                        onClick={() => onSelectAuto(opt.key)}
+                        className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${TRANSITION} ${active ? `${ACCENT_BG} ${ACCENT_BG_HOVER} text-white border border-transparent` : `${HAIRLINE} bg-[var(--ds-surface-soft)] ${MUTED} hover:bg-[var(--ds-hover)]`}`}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
 
           <div className="flex-1 overflow-y-auto p-4">

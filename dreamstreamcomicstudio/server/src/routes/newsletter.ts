@@ -13,6 +13,7 @@ import {
   normalizeEmail,
   upsertSubscriber
 } from '../services/emailStore.js';
+import { resendPendingInvite } from '../services/invites.js';
 import { getSupabaseAdmin } from '../services/supabase.js';
 import { verifyTurnstile } from '../services/turnstile.js';
 
@@ -88,6 +89,22 @@ newsletterRouter.post('/subscribe', async (req, res, next) => {
           ok: false,
           status: 'account-exists',
           message: 'You already have an account — sign in instead.'
+        });
+      }
+
+      // Dedupe 1.5: an ALREADY-INVITED email doesn't belong on the waitlist either —
+      // they already have access. Re-send their invite (cooldown-guarded inside) and
+      // point them at the email instructions. Behind the same Turnstile gate as the
+      // rest of this route, so this isn't a free enumeration oracle.
+      const invited = await resendPendingInvite(email, { requestId: req.requestId });
+      if (invited.status === 'invited') {
+        return res.json({
+          ok: false,
+          status: 'already-invited',
+          resent: invited.resent,
+          message: invited.resent
+            ? 'You already have access — we just re-sent your invite email. Follow its instructions to set up your account.'
+            : 'You already have access — check your inbox for the invite email (sent recently) and follow its instructions to set up your account.'
         });
       }
 

@@ -13,6 +13,46 @@ Entry format:
 
 ---
 
+## 2026-06-12 — Invite flow completed end-to-end; header pill + source-gating sync
+
+- **Problem:** owner: invite emails' links did nothing (no account-setup flow);
+  an already-invited person clicking register got a generic waitlist response
+  instead of "you already have access — follow the email instructions" (+ resend);
+  no admin view of sent→joined per invite; inviters couldn't see whether their
+  referrals were accepted. Separately: the header usage pill always showed a raw
+  mono "Auto" in Chat Studio (the chat's real model lives per-conversation) and
+  used the legacy comic styling; the Auto "Lock source" row in the chat picker
+  hardcoded OpenRouter/NVIDIA regardless of Settings toggles; the Code Studio
+  model picker ignored source governance entirely.
+- **Root cause / context:** `?invite=` was generated in emails but never processed
+  by App.tsx; signups were globally disabled with no invite-holder exception; no
+  table linked invite codes to recipient emails (email_log doesn't store codes),
+  so "is this email invited?" was unanswerable; the pill predates the per-studio
+  model split and source governance; `StudioSettingsPanel` predates
+  `useModelSourceScope`.
+- **Solution:** New `access_invite_sends` table (per invite × recipient: kind,
+  send_count, first/last sent; service-role only) recorded by the admin email
+  invite, referral sends, and resends. `captureInviteCodeFromUrl` + auto-redeem
+  on first signed-in load + auth-page invite banner; an invite in hand unlocks
+  the real Sign Up tab. `/api/newsletter/subscribe` (access) now answers
+  `already-invited` and re-sends the invite (10-min cooldown) behind the existing
+  Turnstile gate. `listInvites` returns `recipients`/`redeemedBy` (admin
+  timeline); `GET /api/invites/referral` returns `invited[]`/`joinedViaLink`
+  (inviter stats — accepted-or-not only). Pill: governance-filtered providers,
+  theme-token glass styling, friendly model labels, and a new
+  `activeModelBeacon` that Chat Studio publishes its real per-conversation
+  model to. Chat picker lock-source row + Code Studio coder list/source chips
+  now derive from governance/source scope.
+- **Files:** `server/sql/access_invite_sends.sql`, `server/src/services/invites.ts`,
+  `server/src/routes/{invites,adminEmail,newsletter}.ts`, `services/{invites,waitlist,modelCatalog,activeModelBeacon}.ts`,
+  `App.tsx`, `components/{AuthPage,WaitlistForm,InviteFriends,TokenAvailabilityPill}.tsx`,
+  `components/admin/InviteManager.tsx`, `components/chat/{AIChatPlatform,ChatModelPicker}.tsx`,
+  `components/studio/StudioSettingsPanel.tsx`.
+- **Commit/Decision:** `docs/features/invite-system.md`,
+  `docs/features/comic-studio-v2-direction.md` (v2 assessment + layered plan).
+
+---
+
 ## 2026-06-12 — Comic Studio consolidation: comics reliably generate
 
 - **Problem:** owner "struggling with not being able to consistently produce
