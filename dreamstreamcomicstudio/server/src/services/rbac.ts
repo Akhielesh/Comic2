@@ -16,15 +16,19 @@ const isMissingTableError = (error: unknown) => {
   return code === '42P01' || code === 'PGRST205';
 };
 
-// Fail CLOSED when ADMIN_EMAILS is unset: an empty allowlist means no bootstrap
-// admins. (A guessable default like admin@test.com would hand full admin to
-// whoever registers that address on a fresh deployment.) Durable admins come
-// from the user_roles table; ADMIN_EMAILS only bootstraps the first one.
-export const parseAdminEmails = () =>
-  process.env.ADMIN_EMAILS
+// Platform owners — ALWAYS bootstrap admins, locked in code so a misconfigured
+// ADMIN_EMAILS env can never lock the owners out. Owners (and any admin) can
+// grant further admin/moderator/researcher roles via the admin role endpoints;
+// no guessable defaults beyond these two real accounts.
+const OWNER_ADMIN_EMAILS = ['akhieleshsrirangam@gmail.com', 'akhielesh99@gmail.com'];
+
+export const parseAdminEmails = () => {
+  const configured = process.env.ADMIN_EMAILS
     ?.split(',')
     .map((email) => email.trim().toLowerCase())
     .filter(Boolean) ?? [];
+  return Array.from(new Set([...OWNER_ADMIN_EMAILS, ...configured]));
+};
 
 export const isBootstrapAdminEmail = (email?: string | null) => {
   const normalized = String(email || '').trim().toLowerCase();
