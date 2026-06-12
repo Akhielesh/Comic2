@@ -9,6 +9,10 @@ Machine-readable source of truth: `toolCatalog.ts` (`TOOL_CATALOG` — per-tool
 provider/auth/license/rateLimit; `CONNECTOR_KEYS` — key onboarding). This doc adds
 the topic→source mapping, utilization status, and operating rules.
 
+Full per-tool inventory (all 102 tools × rendering × board-eligibility ×
+verification status, plus the complete logs/analytics/metrics collection list):
+**`docs/audits/2026-06-platform-data-audit.md`**.
+
 ## Topic → source map (verified June 2026)
 
 | Topic / field | Primary source | Fallback(s) | Access (env) | Commercial license | Rendering |

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { CandlestickChart, LineChart, AreaChart } from 'lucide-react';
 import type { StockQuoteArtifact, StockRange, StockPoint, MarketState } from '../../../apiTypes';
 import {
@@ -12,19 +12,25 @@ import {
   TrendPill,
   Badge,
   resolveTheme,
+  withAlpha,
   formatPrice,
   formatPercent,
   compactNumber,
   shortDate,
   relativeTime,
-  useCompact
+  useCompact,
+  BULL,
+  BEAR
 } from './kit';
 import type { ChartVariant, ChartPoint } from './kit';
 
 // Flagship finance card in the calm-studio glass language. Two densities:
 // - compact: name/symbol + price + trend pill + one sparkline (a glance card)
-// - detailed: interactive chart (crosshair, range timeline, area/line/candlestick
-//   toggle), key-stats footer, and an expandable fundamentals + headlines drawer.
+// - detailed: a chart region that FLEXES to fill whatever height the card is given
+//   (drag-resize, expanded lightbox), with crosshair, range timeline and an
+//   area/line/candlestick toggle; key-stats footer; fundamentals + headlines drawer.
+//   The price tick-pulses green/red when a live refresh moves it, and range-tab
+//   switches morph the chart instead of snapping.
 
 const RANGE_ORDER: StockRange[] = ['1D', '5D', '1M', '6M', '1Y', '5Y', 'MAX'];
 // How many trailing sessions each range approximates when we have to derive it
@@ -78,6 +84,38 @@ const Stat: React.FC<{ label: string; value?: string }> = ({ label, value }) =>
     </span>
   ) : null;
 
+/**
+ * The headline price with a tick pulse: when a live refresh moves the value, the
+ * number flashes bull/bear (color + a faint tint behind it) and calmly fades back.
+ */
+const TickPrice: React.FC<{ value: number; formatted: string; className?: string }> = ({ value, formatted, className = '' }) => {
+  const prevRef = useRef(value);
+  const [pulse, setPulse] = useState<'up' | 'down' | null>(null);
+  useEffect(() => {
+    if (prevRef.current === value) return;
+    const dir: 'up' | 'down' = value > prevRef.current ? 'up' : 'down';
+    prevRef.current = value;
+    setPulse(dir);
+    const t = window.setTimeout(() => setPulse(null), 1100);
+    return () => window.clearTimeout(t);
+  }, [value]);
+  const pulseColor = pulse === 'up' ? BULL : BEAR;
+  return (
+    <span
+      className={`-mx-1 inline-block rounded-md px-1 font-semibold tracking-tight tabular-nums leading-none text-[var(--ds-ink)] ${className}`}
+      style={{
+        color: pulse ? pulseColor : undefined,
+        backgroundColor: pulse ? withAlpha(pulseColor, 0.12) : 'transparent',
+        transition: pulse
+          ? 'color 120ms ease-out, background-color 120ms ease-out'
+          : 'color 700ms ease, background-color 700ms ease'
+      }}
+    >
+      {formatted}
+    </span>
+  );
+};
+
 export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => {
   const compact = useCompact();
   const theme = resolveTheme({ trend: data.change });
@@ -117,8 +155,8 @@ export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => 
         }
         right={
           <>
-            <div className="text-xl font-semibold tracking-tight tabular-nums leading-none text-[var(--ds-ink)]">
-              {formatPrice(data.price, currency)}
+            <div className="text-xl leading-none">
+              <TickPrice value={data.price} formatted={formatPrice(data.price, currency)} />
             </div>
             <div className="mt-1 flex justify-end">
               <TrendPill change={data.change} changePercent={data.changePercent} size="sm" />
@@ -128,7 +166,7 @@ export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => 
       >
         {sparkValues.length > 1 && (
           <div className="px-3 pb-2.5">
-            <Sparkline values={sparkValues} color={theme.accent} height={44} />
+            <Sparkline values={sparkValues} color={theme.accent} height={44} direction={data.change >= 0 ? 'up' : 'down'} />
           </div>
         )}
       </Surface>
@@ -151,6 +189,7 @@ export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => 
   return (
     <Surface
       accent={theme.accent}
+      className="flex min-h-[calc(100%-1rem)] flex-col"
       header={
         <div className="flex items-center gap-2">
           <div className="min-w-0">
@@ -166,8 +205,8 @@ export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => 
       }
       right={
         <>
-          <div className="text-xl font-semibold tracking-tight tabular-nums leading-none text-[var(--ds-ink)]">
-            {formatPrice(data.price, currency)}
+          <div className="text-2xl leading-none">
+            <TickPrice value={data.price} formatted={formatPrice(data.price, currency)} />
           </div>
           <div className="mt-1 flex justify-end">
             <TrendPill change={data.change} changePercent={data.changePercent} size="sm" />
@@ -212,18 +251,25 @@ export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => 
         </div>
       </div>
 
+      {/* The chart region flexes: in normal chat flow it sizes by width (≈ a third of
+          the card width, capped), and when the card is stretched taller — drag-resize
+          or the expanded lightbox — it absorbs the extra height into a BIG chart. */}
       {chartPoints.length > 1 && (
-        <Chart
-          points={chartPoints}
-          candles={candles}
-          variant={effectiveVariant}
-          color={theme.accent}
-          up={theme.up}
-          down={theme.down}
-          baseline={effectiveVariant !== 'candlestick' ? data.previousClose : undefined}
-          formatValue={(n) => formatPrice(n, currency)}
-          height={140}
-        />
+        <div className="relative grow">
+          <Chart
+            points={chartPoints}
+            candles={candles}
+            variant={effectiveVariant}
+            color={theme.accent}
+            up={theme.up}
+            down={theme.down}
+            baseline={effectiveVariant !== 'candlestick' ? data.previousClose : undefined}
+            formatValue={(n) => formatPrice(n, currency)}
+            height={150}
+            aspect={0.34}
+            maxHeight={420}
+          />
+        </div>
       )}
 
       {/* Expanded fundamentals + headlines + peers */}
@@ -249,7 +295,7 @@ export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => 
                 </div>
                 <div className="relative h-1.5 rounded-full bg-[var(--ds-well-strong)]">
                   <div
-                    className="absolute -top-1 h-3.5 w-1.5 -translate-x-1/2 rounded-full border border-white"
+                    className="absolute -top-1 h-3.5 w-1.5 -translate-x-1/2 rounded-full border border-[var(--ds-canvas)]"
                     style={{ left: `${Math.min(100, Math.max(0, week52Pct))}%`, backgroundColor: theme.accent }}
                   />
                 </div>
@@ -265,7 +311,7 @@ export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => 
                     href={h.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="block text-xs font-medium text-[var(--ds-ink)] transition-colors duration-200 hover:text-blue-600"
+                    className="block text-xs font-medium text-[var(--ds-ink)] transition-colors duration-200 hover:text-[var(--ds-accent)]"
                   >
                     {h.title}
                     {(h.source || h.publishedAt) && (
