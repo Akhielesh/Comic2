@@ -11,7 +11,7 @@ import { Surface, SurfaceTitle, SurfaceSubtitle, useCompact } from './kit';
 
 // Map a value (default scale ±4%) onto a green↔red tile background + readable text.
 const tone = (value: number | undefined): { bg: string; fg: string } => {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return { bg: '#e9e7e2', fg: '#3c3a33' };
+  if (typeof value !== 'number' || !Number.isFinite(value)) return { bg: 'var(--ds-well-strong)', fg: 'var(--ds-muted)' };
   const clamped = Math.max(-1, Math.min(1, value / 4));
   const intensity = Math.min(1, Math.abs(clamped));
   // Light (low) → saturated (high) green or red.
@@ -56,7 +56,7 @@ const Group: React.FC<{ group: HeatmapGroup; unit: string; growOf: (w?: number) 
 // One row of the compact movers strip: label left, tinted signed value right.
 const MoverRow: React.FC<{ cell: HeatmapCell; unit: string }> = ({ cell, unit }) => {
   const v = cell.value;
-  const color = typeof v === 'number' ? (v > 0 ? '#059669' : v < 0 ? '#dc2626' : '#6e6a60') : '#6e6a60';
+  const color = typeof v === 'number' ? (v > 0 ? '#059669' : v < 0 ? '#dc2626' : 'var(--ds-muted)') : 'var(--ds-muted)';
   return (
     <div className="flex items-center justify-between gap-2 text-xs">
       <span className="min-w-0 truncate font-medium text-[var(--ds-ink)]">{cell.label}</span>
@@ -110,7 +110,7 @@ export const HeatmapCard: React.FC<{ data: HeatmapArtifact }> = ({ data }) => {
         ) : (
           <div className="flex flex-wrap gap-1.5 px-3 pb-2.5">
             {flatten(data).slice(0, 6).map((c, i) => (
-              <span key={i} className="rounded-full bg-[var(--ds-well-strong)] px-2 py-0.5 text-[11px] font-medium text-[#3c3a33]">{c.label}</span>
+              <span key={i} className="rounded-full bg-[var(--ds-well-strong)] px-2 py-0.5 text-[11px] font-medium text-[var(--ds-ink)]">{c.label}</span>
             ))}
           </div>
         )}

@@ -20,7 +20,7 @@ export const RadialGauge: React.FC<{
   color?: string;
   track?: string;
   size?: number;
-}> = ({ value, max, min = 0, label, unit, display, color = '#3B82F6', track = '#e2e8f0', size = 76 }) => {
+}> = ({ value, max, min = 0, label, unit, display, color = '#3B82F6', track = 'var(--ds-hairline)', size = 76 }) => {
   const r = size / 2 - 7;
   const cx = size / 2;
   const cy = size / 2;
@@ -77,7 +77,7 @@ export const LinearGauge: React.FC<{
   const id = useId().replace(/:/g, '');
   const frac = Math.max(0, Math.min(1, (value - min) / (max - min || 1)));
   return (
-    <div className="relative w-full overflow-hidden rounded-full bg-slate-200" style={{ height }}>
+    <div className="relative w-full overflow-hidden rounded-full bg-[var(--ds-hairline)]" style={{ height }}>
       {bands ? (
         <div className="absolute inset-0 flex">
           {bands.map((b, i) => {
@@ -90,7 +90,7 @@ export const LinearGauge: React.FC<{
       )}
       {(showMarker || bands) && (
         <div
-          className="absolute top-1/2 h-[140%] w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full border border-white bg-slate-900"
+          className="absolute top-1/2 h-[140%] w-[3px] -translate-x-1/2 -translate-y-1/2 rounded-full border border-[var(--ds-raised)] bg-[var(--ds-ink)]"
           style={{ left: `${frac * 100}%` }}
         />
       )}
@@ -114,16 +114,16 @@ export const Compass: React.FC<{
   return (
     <div className="flex flex-col items-center">
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-        <circle cx={cx} cy={cy} r={r} fill="#f8fafc" stroke="#cbd5e1" strokeWidth="1.5" />
+        <circle cx={cx} cy={cy} r={r} fill="var(--ds-well)" stroke="var(--ds-hairline)" strokeWidth="1.5" />
         {[0, 90, 180, 270].map((d) => {
           const [x1, y1] = POLAR(cx, cy, r, d);
           const [x2, y2] = POLAR(cx, cy, r - 5, d);
-          return <line key={d} x1={x1} y1={y1} x2={x2} y2={y2} stroke="#94a3b8" strokeWidth="1.5" />;
+          return <line key={d} x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--ds-faint)" strokeWidth="1.5" />;
         })}
         {(['N', 'E', 'S', 'W'] as const).map((c, i) => {
           const [lx, ly] = POLAR(cx, cy, r - 11, i * 90);
           return (
-            <text key={c} x={lx} y={ly + 3} textAnchor="middle" fontSize="8" fontWeight="800" fill={c === 'N' ? color : '#94a3b8'}>
+            <text key={c} x={lx} y={ly + 3} textAnchor="middle" fontSize="8" fontWeight="800" fill={c === 'N' ? color : 'var(--ds-muted)'}>
               {c}
             </text>
           );
@@ -137,7 +137,7 @@ export const Compass: React.FC<{
             />
           </g>
         )}
-        <circle cx={cx} cy={cy} r="13" fill="#fff" stroke="#cbd5e1" />
+        <circle cx={cx} cy={cy} r="13" fill="var(--ds-raised)" stroke="var(--ds-hairline)" />
         <text x={cx} y={cy - 1} textAnchor="middle" fontSize="11" fontWeight="800" fill="var(--ds-ink)">
           {Math.round(speed)}
         </text>
@@ -169,9 +169,9 @@ export const SunArc: React.FC<{ sunrise?: string; sunset?: string; now?: number;
   const fmt = (t: number) => (Number.isFinite(t) ? new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : '—');
   return (
     <svg viewBox={`0 0 ${w} ${h}`} className="w-full" style={{ maxHeight: h }}>
-      <path d={`M${pad},${h - 6} Q${w / 2},${-h + 22} ${w - pad},${h - 6}`} fill="none" stroke="#e2e8f0" strokeWidth="2" strokeDasharray="3 4" />
-      <line x1={pad} y1={h - 6} x2={w - pad} y2={h - 6} stroke="#cbd5e1" strokeWidth="1" />
-      <circle cx={ax} cy={ay} r={isUp ? 6 : 4} fill={isUp ? color : '#cbd5e1'} stroke="#fff" strokeWidth="1.5" />
+      <path d={`M${pad},${h - 6} Q${w / 2},${-h + 22} ${w - pad},${h - 6}`} fill="none" stroke="var(--ds-hairline)" strokeWidth="2" strokeDasharray="3 4" />
+      <line x1={pad} y1={h - 6} x2={w - pad} y2={h - 6} stroke="var(--ds-hairline)" strokeWidth="1" />
+      <circle cx={ax} cy={ay} r={isUp ? 6 : 4} fill={isUp ? color : 'var(--ds-faint)'} stroke="var(--ds-raised)" strokeWidth="1.5" />
       <text x={pad} y={h - 12} textAnchor="start" fontSize="9" fontWeight="700" fill="var(--ds-muted)">↑ {fmt(rise)}</text>
       <text x={w - pad} y={h - 12} textAnchor="end" fontSize="9" fontWeight="700" fill="var(--ds-muted)">↓ {fmt(set)}</text>
     </svg>

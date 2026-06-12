@@ -49,7 +49,7 @@ export const SqlPlayground: React.FC<{ data: SqlExerciseArtifact }> = ({ data })
         {data.instructions && <p className="text-sm text-[var(--ds-muted)]">{data.instructions}</p>}
         {data.task && (
           <div className="text-sm text-[var(--ds-ink)] rounded-xl bg-[var(--ds-well)] p-2.5">
-            <span className="font-semibold text-sky-800">Task:</span> {data.task}
+            <span className="font-semibold text-sky-800 dark:text-sky-300">Task:</span> {data.task}
           </div>
         )}
 

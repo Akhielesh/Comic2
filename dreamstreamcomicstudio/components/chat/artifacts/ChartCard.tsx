@@ -165,7 +165,7 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
           <button
             key={i}
             onClick={() => !isRadial && setHidden((prev) => { const n = new Set(prev); n.has(i) ? n.delete(i) : n.add(i); return n; })}
-            className={`flex items-center gap-1 text-[11px] font-medium text-[#3c3a33] transition-opacity duration-200 ${off ? 'opacity-40' : ''} ${isRadial ? 'cursor-default' : ''}`}
+            className={`flex items-center gap-1 text-[11px] font-medium text-[var(--ds-ink)] transition-opacity duration-200 ${off ? 'opacity-40' : ''} ${isRadial ? 'cursor-default' : ''}`}
           >
             <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: col }} />
             {name}
@@ -215,7 +215,7 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
                       key={i}
                       d={arcPath(cx + ox, cy + oy, r, a0, a1, data.variant === 'donut' ? r * 0.58 : 0)}
                       fill={theme.series[i % theme.series.length]}
-                      stroke="#fff"
+                      stroke="var(--ds-raised)"
                       strokeWidth="2"
                       onMouseEnter={() => setHover({ i: 0, cat: i })}
                       onMouseLeave={() => setHover(null)}
@@ -240,7 +240,7 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
               return (
                 <g key={i}>
                   <line x1={padL} x2={W - padR} y1={y} y2={y} stroke="var(--ds-hairline)" strokeWidth="1" />
-                  <text x={padL - 4} y={y + 3} textAnchor="end" fontSize="9" fill="#9a968c">{fmt(v, data.unit)}</text>
+                  <text x={padL - 4} y={y + 3} textAnchor="end" fontSize="9" fill="var(--ds-muted)">{fmt(v, data.unit)}</text>
                 </g>
               );
             })}
@@ -286,7 +286,7 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
                   <g key={i}>
                     {data.variant === 'area' && <path d={`${line} L${pts[pts.length - 1][0]},${yTo(0)} L${pts[0][0]},${yTo(0)} Z`} fill={withAlpha(col, 0.18)} />}
                     <path d={line} fill="none" stroke={col} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" className="kit-draw-line" />
-                    {pts.map(([x, y], pi) => <circle key={pi} cx={x} cy={y} r={pts.length === 1 ? 3.5 : hover?.cat === pi ? 3.5 : 0} fill={col} stroke="#fff" strokeWidth="1.5" />)}
+                    {pts.map(([x, y], pi) => <circle key={pi} cx={x} cy={y} r={pts.length === 1 ? 3.5 : hover?.cat === pi ? 3.5 : 0} fill={col} stroke="var(--ds-raised)" strokeWidth="1.5" />)}
                   </g>
                 );
               })}
@@ -318,7 +318,7 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
             {cats.map((cat, ci) => {
               if (cats.length > 12 && ci % Math.ceil(cats.length / 8) !== 0) return null;
               const x = isBar ? padL + (plotW / cats.length) * (ci + 0.5) : padL + (plotW / Math.max(1, cats.length - 1)) * ci;
-              return <text key={ci} x={x} y={H - 10} textAnchor="middle" fontSize="9" fill="#8a867c">{cat.length > 8 ? `${cat.slice(0, 7)}…` : cat}</text>;
+              return <text key={ci} x={x} y={H - 10} textAnchor="middle" fontSize="9" fill="var(--ds-muted)">{cat.length > 8 ? `${cat.slice(0, 7)}…` : cat}</text>;
             })}
           </svg>
         )}
@@ -333,7 +333,7 @@ export const ChartCard: React.FC<{ data: ChartArtifact }> = ({ data }) => {
               <div className="font-semibold tabular-nums text-[var(--ds-ink)]">{fmt(series[0].points[hover.cat]?.y ?? 0, data.unit)}</div>
             ) : (
               visible.map(({ s, i }) => (
-                <div key={i} className="flex items-center gap-1 text-[#3c3a33]">
+                <div key={i} className="flex items-center gap-1 text-[var(--ds-ink)]">
                   <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: colorOf(s, i) }} />
                   {s.name || `S${i + 1}`}: <span className="font-semibold tabular-nums text-[var(--ds-ink)]">{fmt(s.points[hover.cat]?.y ?? 0, data.unit)}</span>
                 </div>

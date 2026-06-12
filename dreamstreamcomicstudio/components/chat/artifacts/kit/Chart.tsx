@@ -103,7 +103,7 @@ export const Chart: React.FC<ChartProps> = ({
         </defs>
 
         {typeof baseline === 'number' && (
-          <line x1="0" x2={W} y1={geom.y(baseline)} y2={geom.y(baseline)} stroke="#94a3b8" strokeWidth="1" strokeDasharray="4 4" />
+          <line x1="0" x2={W} y1={geom.y(baseline)} y2={geom.y(baseline)} stroke="var(--ds-faint)" strokeWidth="1" strokeDasharray="4 4" />
         )}
 
         {/* Line / area */}

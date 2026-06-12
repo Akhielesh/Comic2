@@ -40,10 +40,12 @@ export const Badge: React.FC<{ children: React.ReactNode; color?: string; title?
   color = NEUTRAL,
   title
 }) => (
+  // `#rrggbb` colors get a 10%-alpha tint of themselves; CSS-var colors (e.g.
+  // var(--ds-muted), which can't be hex-concatenated) fall back to the well tint.
   <span
     title={title}
     className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide"
-    style={{ color, backgroundColor: `${color}1a` }}
+    style={{ color, backgroundColor: color.startsWith('#') ? `${color}1a` : 'var(--ds-well-strong)' }}
   >
     {children}
   </span>
