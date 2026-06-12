@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { getSupabaseAdmin, getSupabaseCapabilityStatus } from '../services/supabase.js';
 import { decryptLegacyClientBlob, decryptSecret, encryptSecret, isSecureStoreAvailable } from '../lib/secureStore.js';
 import { canonicalAccountProvider, invalidateAccountKeys } from '../middleware/accountKeys.js';
+import { isByokFallbackMode, setBillingPrefs, type BillingPrefs } from '../services/platformAllowance.js';
 import { logger } from '../lib/logger.js';
 
 // Authenticated account endpoints. Mounted under /api/account after requireAuth.
@@ -92,6 +93,45 @@ accountRouter.get('/byok', async (req, res, next) => {
       byProvider.set(provider, { provider, suffix: secret.slice(-4) });
     }
     res.json({ ok: true, keys: [...byProvider.values()] });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---- Platform-allowance billing preferences --------------------------------------
+//
+// PATCH /api/account/billing-prefs { usePlatformAllowance?, byokFallbackMode? }
+// The master toggle ("run on the DreamStream allowance vs my own keys") and the
+// exhausted-allowance fallback behavior. Read back via GET /api/usage/allowance.
+
+accountRouter.patch('/billing-prefs', async (req, res, next) => {
+  try {
+    if (!req.user?.id) return res.status(401).json({ error: { message: 'User not authenticated' } });
+
+    const body = (req.body || {}) as Record<string, unknown>;
+    const patch: Partial<BillingPrefs> = {};
+    if (body.usePlatformAllowance !== undefined) {
+      if (typeof body.usePlatformAllowance !== 'boolean') {
+        return res.status(400).json({ error: { message: 'usePlatformAllowance must be a boolean' } });
+      }
+      patch.usePlatformAllowance = body.usePlatformAllowance;
+    }
+    if (body.byokFallbackMode !== undefined) {
+      if (!isByokFallbackMode(body.byokFallbackMode)) {
+        return res.status(400).json({ error: { message: "byokFallbackMode must be 'ask', 'auto' or 'never'" } });
+      }
+      patch.byokFallbackMode = body.byokFallbackMode;
+    }
+    if (Object.keys(patch).length === 0) {
+      return res.status(400).json({ error: { message: 'Provide usePlatformAllowance and/or byokFallbackMode' } });
+    }
+
+    if (!getSupabaseCapabilityStatus().storagePersistenceEnabled) {
+      return res.json({ ok: false, persisted: false, reason: 'storage_disabled' });
+    }
+
+    const prefs = await setBillingPrefs(req.user.id, patch);
+    res.json({ ok: true, prefs });
   } catch (err) {
     next(err);
   }

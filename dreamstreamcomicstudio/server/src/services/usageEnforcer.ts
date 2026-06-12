@@ -1,5 +1,6 @@
 import type { Request } from 'express';
 import type { LimitExceededDetails, ReservationState, TokenEstimateRequest, TokenEstimateResponse } from '../../../shared/types/billing.js';
+import type { CapabilityNotice } from '../../../apiTypes.js';
 import {
   reserveUsageTokens,
   releaseReservation,
@@ -12,11 +13,22 @@ import {
   estimateCharge,
   type UsagePayload
 } from './costEstimator.js';
+import {
+  allowanceCrossingNotices,
+  buildAllowanceExhaustedDetails,
+  bumpAllowanceCache,
+  getAllowanceStatus,
+  getBillingPrefs,
+  isPlatformFundedProvider
+} from './platformAllowance.js';
+import { hasAccountKeyFor } from '../middleware/accountKeys.js';
 
 declare module 'express-serve-static-core' {
   interface Request {
     usageReservation?: ReservationState;
     usageLimitDetails?: LimitExceededDetails;
+    /** Allowance threshold notices produced at settlement (drained by consumeAllowanceNotices). */
+    allowanceNotices?: CapabilityNotice[];
   }
 }
 
@@ -120,6 +132,32 @@ export const reserveForOperation = async (input: {
   const byok = hasByokForProvider(input.req, provider);
   const model = resolveModelFromRequest(input.req, input.fallbackModel);
 
+  // Platform-allowance gate (services/platformAllowance.ts): a platform-funded request
+  // stops once the user's monthly allowance is exhausted. Runs BEFORE the wallet
+  // reservation so the existing wallet/credit semantics stay untouched, and fails
+  // OPEN — when metering is unavailable the status reports enabled:false. BYOK
+  // requests (header or auto-fallback account key) never hit this gate.
+  if (!byok && isPlatformFundedProvider(provider)) {
+    try {
+      const prefs = await getBillingPrefs(input.req.user.id);
+      if (prefs.usePlatformAllowance) {
+        const status = await getAllowanceStatus(input.req.user.id);
+        if (status.enabled && status.exhausted) {
+          const canFallbackToByok = await hasAccountKeyFor(input.req.user.id, provider);
+          const details = buildAllowanceExhaustedDetails({
+            status,
+            canFallbackToByok,
+            byokFallbackMode: prefs.byokFallbackMode
+          });
+          input.req.usageLimitDetails = details;
+          return { allowed: false as const, details };
+        }
+      }
+    } catch {
+      // Allowance checks are best-effort; never block generation on a metering failure.
+    }
+  }
+
   const seed = buildEstimateFromRequestBody(provider, model, input.operation, input.req.body, {
     inputTokens: input.inputTokens,
     outputTokens: input.outputTokens,
@@ -195,7 +233,7 @@ export const settleReservedOperation = async (input: {
     imageUnits: input.imageUnits
   });
 
-  return settleReservation({
+  const settled = await settleReservation({
     userId: input.req.user.id,
     reservationId: reservation.reservationId,
     estimatedCt: reservation.estimated.estimatedCt,
@@ -207,6 +245,38 @@ export const settleReservedOperation = async (input: {
     metadata: input.metadata,
     byokBypass: reservation.byokBypass
   });
+
+  // Platform-allowance metering: optimistically bump the cached month-to-date spend
+  // with the ACTUAL settled platform cost so rapid-fire requests can't overshoot the
+  // cap between 60s cache refreshes. Newly crossed 30/70/90 thresholds become
+  // percent-only response notices, drained by consumeAllowanceNotices. Best-effort —
+  // settlement above already persisted the authoritative spend.
+  if (settled && !reservation.byokBypass && isPlatformFundedProvider(input.seed.provider)) {
+    try {
+      const actualPlatformUsd = settled.billableUsd || settled.providerCostUsd || 0;
+      if (actualPlatformUsd > 0) {
+        const status = await getAllowanceStatus(input.req.user.id);
+        if (status.enabled) {
+          const bump = bumpAllowanceCache(input.req.user.id, actualPlatformUsd);
+          const notices = bump ? allowanceCrossingNotices(bump.crossedNow, status.resetsAt) : [];
+          if (notices.length) {
+            input.req.allowanceNotices = [...(input.req.allowanceNotices || []), ...notices];
+          }
+        }
+      }
+    } catch {
+      // Never fail a settled request over allowance cache accounting.
+    }
+  }
+
+  return settled;
+};
+
+/** Drain the allowance threshold notices settlement attached to this request. */
+export const consumeAllowanceNotices = (req: Request): CapabilityNotice[] => {
+  const notices = req.allowanceNotices || [];
+  req.allowanceNotices = undefined;
+  return notices;
 };
 
 export const releaseReservedOperation = async (input: {

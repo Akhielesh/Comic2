@@ -3,6 +3,8 @@ import { getCatalog, filterCatalog, getProviderModels, type CatalogFilters } fro
 import { fetchOpenRouterKeyStatus, fetchOpenRouterCredits } from '../ai/providers/openrouter.js';
 import { persistHarvestedModels, loadPersistedModels, loadCallabilityMap } from '../services/modelCatalogStore.js';
 import { getModelLatency } from '../services/telemetryAnalytics.js';
+import { getModelPopularity, parsePopularityWindow } from '../services/usageAnalytics.js';
+import { requireAuth } from '../middleware/auth.js';
 import type { AnnotatedModel } from '../ai/catalogAnnotations.js';
 
 export const modelsRouter = Router();
@@ -74,6 +76,19 @@ modelsRouter.get('/catalog', async (req: Request, res: Response) => {
 modelsRouter.get('/speed', async (req: Request, res: Response, next) => {
   try {
     res.json({ models: await getModelLatency(req.query.days) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/models/popularity?window=week|month|all
+// What models people ACTUALLY run, aggregated from generation events: request counts,
+// distinct users and share — top 15. Counts only, never cost. This router is public
+// (mounted before the global requireAuth), so auth is enforced per-route here.
+modelsRouter.get('/popularity', requireAuth, async (req: Request, res: Response, next) => {
+  try {
+    const window = parsePopularityWindow(req.query.window);
+    res.json({ window, models: await getModelPopularity(window) });
   } catch (err) {
     next(err);
   }
