@@ -8,11 +8,20 @@
 
 import type { CatalogModel } from './providers/types.js';
 import { classifyModel, type CostClass } from '../../../shared/pricing.js';
+import {
+  deriveModelCapabilities,
+  type ModelCapabilities,
+  type ModelKind
+} from '../../../shared/modelCapabilities.js';
 
 export type DreamStreamRole = 'text-brain' | 'dialogue' | 'panel-art' | 'cover' | 'qc';
 export type Band = 'free' | 'low' | 'medium' | 'high';
 
 export type AnnotatedModel = CatalogModel & {
+  /** Chat vs special-purpose (safety classifier / code-apply / router / media / deep-research). */
+  kind: ModelKind;
+  /** Derived capability flags (vision, tools, reasoning, json, longContext…). */
+  capabilities: ModelCapabilities;
   /** Where this model fits in the comic pipeline. */
   roles: DreamStreamRole[];
   costBand: Band;
@@ -159,11 +168,20 @@ export const annotateModel = (model: CatalogModel): AnnotatedModel => {
   const override = ANNOTATION_OVERRIDES.find((entry) =>
     model.id.toLowerCase().includes(entry.match.toLowerCase())
   );
+  const capabilities = deriveModelCapabilities(model);
+  const drawbacks = deriveDrawbacks(model);
+  if (capabilities.kind !== 'chat') {
+    drawbacks.unshift(
+      'Special-purpose model: not a conversational model — hidden from studio chat pickers and validated against at request time.'
+    );
+  }
   return {
     ...model,
+    kind: capabilities.kind,
+    capabilities,
     roles: override?.roles || deriveRoles(model),
     costBand: costBandFor(model),
-    drawbacks: deriveDrawbacks(model),
+    drawbacks,
     possibilities: derivePossibilities(model),
     editorialNote: override?.note
   };

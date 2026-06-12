@@ -90,9 +90,16 @@ const DEFAULTS: BenchOptions = {
   maxPerModelUsd: 0.25,
   concurrency: 6,
   timeoutMs: 60_000,
-  maxTokens: 120,
+  maxTokens: 256,
   contextTokens: 6_000
 };
+
+// Hidden-reasoning models burn completion tokens on thinking before they emit a
+// single visible character. A flat per-run maxTokens starves them into
+// finish_reason=length with empty text, which a past run misread as ~80 broken
+// models. These headrooms are ADDED to opts.maxTokens for reasoning-capable models.
+const REASONING_HEADROOM_TOKENS = 1_500;
+const REASONING_PHASE_HEADROOM_TOKENS = 3_000;
 
 const clamp = (v: number, min: number, max: number, fallback: number): number =>
   Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback;
@@ -112,7 +119,7 @@ export const normalizeBenchOptions = (raw: Partial<BenchOptions> | undefined): B
     maxPerModelUsd: clamp(Number(raw?.maxPerModelUsd), 0.001, 2, DEFAULTS.maxPerModelUsd),
     concurrency: clamp(Number(raw?.concurrency), 1, 10, DEFAULTS.concurrency),
     timeoutMs: clamp(Number(raw?.timeoutMs), 5_000, 120_000, DEFAULTS.timeoutMs),
-    maxTokens: clamp(Number(raw?.maxTokens), 16, 512, DEFAULTS.maxTokens),
+    maxTokens: clamp(Number(raw?.maxTokens), 16, 4_096, DEFAULTS.maxTokens),
     contextTokens: clamp(Number(raw?.contextTokens), 500, 30_000, DEFAULTS.contextTokens)
   };
 };
@@ -140,8 +147,22 @@ interface BenchModel {
   completionPerTok: number;
   isFree: boolean;
   hasPricing: boolean;
-  imageOnly: boolean;
+  supportsTemperature: boolean;
+  supportsReasoning: boolean;
+  /** Non-null = not a general chat model; probed phases would only produce noise. */
+  excludeReason: string | null;
 }
+
+// Catalog taxonomy: these respond on /chat/completions but are not conversational
+// models, so echo/context/reasoning probes can only "fail" them. A past run counted
+// them as broken instead of recognizing the category.
+const SPECIAL_PURPOSE: Array<{ re: RegExp; reason: string }> = [
+  { re: /guard|content-safety|shieldgemma|prompt-?injection/i, reason: 'safety classifier, not a chat model' },
+  { re: /^relace\/|^morph\/morph|fast-apply/i, reason: 'code-edit apply model (requires special tagged input)' },
+  { re: /bodybuilder/i, reason: 'request-builder meta-model (returns JSON request bodies)' },
+  { re: /deep-research/i, reason: 'agentic deep-research model (minutes-long runs, not probe-compatible)' },
+  { re: /lyria|musicgen|suno|-tts\b|whisper/i, reason: 'audio/music generation model' }
+];
 
 const discover = async (source: BenchSource): Promise<BenchModel[]> => {
   const cfg = sourceConfig(source);
@@ -153,37 +174,109 @@ const discover = async (source: BenchSource): Promise<BenchModel[]> => {
   const data = (await res.json()) as { data?: Array<Record<string, unknown>> };
   const rows = Array.isArray(data?.data) ? data.data : [];
   return rows.map((m) => {
+    const id = String(m.id);
     const pricing = (m.pricing || {}) as Record<string, unknown>;
     const promptPerTok = Number(pricing.prompt) || 0;
     const completionPerTok = Number(pricing.completion) || 0;
     const arch = (m.architecture || {}) as Record<string, unknown>;
-    const out = Array.isArray(arch.output_modalities) ? (arch.output_modalities as string[]) : [];
+    const inMods = Array.isArray(arch.input_modalities) ? (arch.input_modalities as string[]) : ['text'];
+    const outMods = Array.isArray(arch.output_modalities) ? (arch.output_modalities as string[]) : ['text'];
+    const params = Array.isArray(m.supported_parameters) ? (m.supported_parameters as string[]) : [];
+    const textToText = inMods.includes('text') && outMods.includes('text');
+    const special = SPECIAL_PURPOSE.find((s) => s.re.test(id));
     return {
       source,
-      id: String(m.id),
+      id,
       contextLength: Number(m.context_length) || null,
       promptPerTok,
       completionPerTok,
       isFree: source === 'openrouter'
-        ? String(m.id).endsWith(':free') || (promptPerTok === 0 && completionPerTok === 0)
+        ? id.endsWith(':free') || (promptPerTok === 0 && completionPerTok === 0)
         : true, // NVIDIA bills credits to the key, not per-call USD
       hasPricing: source === 'openrouter',
-      imageOnly: out.includes('image') && !out.includes('text')
+      // o-series / image / search models reject unsupported sampler params with
+      // HTTP 400 — only send temperature when the catalog says it's accepted.
+      supportsTemperature: params.length === 0 || params.includes('temperature'),
+      supportsReasoning:
+        params.includes('reasoning') ||
+        params.includes('include_reasoning') ||
+        /\b(think|thinking|reasoner|-r1\b|o[134](-|$)|gpt-5)/i.test(id),
+      excludeReason: !textToText
+        ? `non-text modality (${inMods.join('+')} → ${outMods.join('+')})`
+        : special?.reason ?? null
     };
   });
 };
 
+// ── Free-pool pacing + retries ──────────────────────────────────────────────────
+// OpenRouter's :free models share ONE account-wide "free-models-per-min" quota
+// (observed 16–20/min). Six workers hitting free models back-to-back trip it
+// instantly, failing models that are perfectly healthy. Space free requests out
+// globally; paid models are unaffected.
+const FREE_REQUEST_INTERVAL_MS = 4_200;
+let freeQueueTail: Promise<void> = Promise.resolve();
+let nextFreeSlotAt = 0;
+const acquireFreeSlot = (): Promise<void> => {
+  const prev = freeQueueTail;
+  let release!: () => void;
+  freeQueueTail = new Promise((resolve) => (release = resolve));
+  return prev.then(async () => {
+    const wait = nextFreeSlotAt - Date.now();
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    nextFreeSlotAt = Date.now() + FREE_REQUEST_INTERVAL_MS;
+    release();
+  });
+};
+
+const RETRYABLE_CLASSES = new Set(['rate_limited', 'server_error', 'network']);
+const MAX_ATTEMPTS = 3;
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
 // ── Phases ──────────────────────────────────────────────────────────────────────
-const buildContextPrompt = (tokens: number, vaultCode: string): string => {
-  const sentence = 'The archive room holds shelves of unlabeled boxes that nobody has opened in years. ';
-  const reps = Math.max(1, Math.ceil((tokens * 4) / sentence.length));
-  const half = Math.floor(reps / 2);
-  return (
-    sentence.repeat(half) +
-    `Important: the vault code is ${vaultCode}. Remember it. ` +
-    sentence.repeat(reps - half) +
-    'Question: what is the vault code mentioned above? Reply with the code only.'
+// Probe-design notes, learned from run 6d0b89f2 (2026-06-12):
+//  • A single sentence repeated thousands of times sends small models into
+//    repetition loops, so they fail for reasons unrelated to context recall.
+//  • Framing the needle as a secret ("vault code … remember it") makes
+//    safety-tuned frontier models (Claude, GPT-5.x) refuse the question as a
+//    prompt-injection/secret-extraction attempt. The needle must be mundane.
+const FILLER_SENTENCES = [
+  'The archive room holds shelves of unlabeled boxes that nobody has opened in years. ',
+  'A narrow window lets in pale light that settles over the dusty reading desks. ',
+  'Catalog cards sit in long wooden drawers, sorted by a system only the founder understood. ',
+  'Visitors sign a paper ledger at the front counter before walking the narrow aisles. ',
+  'Somewhere above, a ceiling fan turns slowly and stirs the smell of old paper. ',
+  'The basement stores rolled maps and blueprints wrapped in brown twine. ',
+  'A typewritten index of donors hangs in a thin frame beside the stairwell. ',
+  'Each spring the staff rotate the displays in the entry-hall cabinets. '
+];
+
+const buildContextPrompt = (tokens: number, refCode: string): string => {
+  const targetChars = tokens * 4;
+  const parts: string[] = [];
+  let len = 0;
+  for (let i = 0; len < targetChars; i++) {
+    const s = FILLER_SENTENCES[i % FILLER_SENTENCES.length];
+    parts.push(s);
+    len += s.length;
+  }
+  parts.splice(
+    Math.floor(parts.length / 2),
+    0,
+    `For the catalog record, the reference ID for shipment 7 is ${refCode}. `
   );
+  return parts.join('') + 'Question: what is the reference ID for shipment 7 mentioned above? Reply with the ID only.';
+};
+
+// Lenient final-answer extraction. The old exact regex failed models that replied
+// "394." or "= 394" or showed correct working — instruction-following is the echo
+// phase's job; this phase measures whether the model can get the arithmetic right.
+const REASONING_ANSWER = 394;
+const reasoningPass = (text: string): boolean => {
+  const sentinel = text.match(/ANSWER\s*[:=]\s*\$?(-?\d[\d,]*(?:\.\d+)?)/i);
+  const candidates = sentinel
+    ? [sentinel[1]]
+    : (text.replace(/[,$]/g, ' ').match(/-?\d+(?:\.\d+)?/g) || []).slice(-2);
+  return candidates.some((n) => Math.abs(parseFloat(n.replace(/,/g, '')) - REASONING_ANSWER) < 1e-9);
 };
 
 interface PhaseSpec {
@@ -195,7 +288,7 @@ interface PhaseSpec {
 
 const buildPhases = (opts: BenchOptions): Record<BenchPhase, PhaseSpec> => {
   const nonce = randomBytes(4).toString('hex');
-  const vaultCode = String(100000 + (parseInt(nonce.slice(0, 4), 16) % 900000));
+  const refCode = String(100000 + (parseInt(nonce.slice(0, 4), 16) % 900000));
   return {
     echo: {
       prompt: `Reply with exactly: BENCH-OK-${nonce}`,
@@ -203,20 +296,36 @@ const buildPhases = (opts: BenchOptions): Record<BenchPhase, PhaseSpec> => {
       pass: (text) => text.includes(nonce)
     },
     context: {
-      prompt: buildContextPrompt(opts.contextTokens, vaultCode),
+      prompt: buildContextPrompt(opts.contextTokens, refCode),
       promptTokens: opts.contextTokens + 30,
-      pass: (text) => text.includes(vaultCode),
+      pass: (text) => text.includes(refCode),
       skip: (model) =>
         model.contextLength && model.contextLength < opts.contextTokens + 200
           ? `context window ${model.contextLength} < probe ${opts.contextTokens}`
           : null
     },
     reasoning: {
-      prompt: 'Compute: (17 * 23) + (144 / 12) - 9. Reply with only the final number.',
-      promptTokens: 30,
-      pass: (text) => /(^|[^\d.])394([^\d.]|$)/.test(text)
+      prompt:
+        'Compute (17 * 23) + (144 / 12) - 9. You may show your working. ' +
+        'End your reply with the final value on its own line in the form "ANSWER: <number>".',
+      promptTokens: 50,
+      pass: reasoningPass
     }
   };
+};
+
+/** Completion-token budget for one phase: user setting + thinking headroom, hard-capped by the per-model spend. */
+const phaseTokenBudget = (model: BenchModel, phase: BenchPhase, spec: PhaseSpec, opts: BenchOptions): number => {
+  let budget = opts.maxTokens;
+  if (model.supportsReasoning) {
+    budget += phase === 'reasoning' ? REASONING_PHASE_HEADROOM_TOKENS : REASONING_HEADROOM_TOKENS;
+  }
+  if (model.hasPricing && model.completionPerTok > 0) {
+    const perPhaseUsd = opts.maxPerModelUsd / Math.max(opts.phases.length, 1);
+    const affordable = Math.floor((perPhaseUsd - spec.promptTokens * model.promptPerTok) / model.completionPerTok);
+    budget = Math.min(budget, Math.max(affordable, opts.maxTokens));
+  }
+  return budget;
 };
 
 // ── One streamed request, instrumented ──────────────────────────────────────────
@@ -224,9 +333,12 @@ const runRequest = async (
   model: BenchModel,
   phase: BenchPhase,
   spec: PhaseSpec,
-  opts: BenchOptions
+  opts: BenchOptions,
+  maxTok: number,
+  retryHint: { afterMs: number | null }
 ): Promise<BenchRecord> => {
   const cfg = sourceConfig(model.source)!;
+  retryHint.afterMs = null;
   const rec: BenchRecord = {
     ts: new Date().toISOString(),
     source: model.source,
@@ -260,8 +372,12 @@ const runRequest = async (
       body: JSON.stringify({
         model: model.id,
         messages: [{ role: 'user', content: spec.prompt }],
-        max_tokens: opts.maxTokens,
-        temperature: 0,
+        max_tokens: maxTok,
+        // o-series / image / search models hard-reject sampler params (HTTP 400).
+        ...(model.supportsTemperature ? { temperature: 0 } : {}),
+        // Keep hidden thinking short on trivial probes — the arithmetic phase needs
+        // none of it and the budget headroom stays available for the visible answer.
+        ...(model.source === 'openrouter' && model.supportsReasoning ? { reasoning: { effort: 'low' } } : {}),
         stream: true,
         stream_options: { include_usage: true },
         ...(model.source === 'openrouter' ? { usage: { include: true } } : {})
@@ -278,10 +394,17 @@ const runRequest = async (
         : 'bad_request';
       rec.errorDetail = `HTTP ${res.status}: ${body}`;
       rec.totalMs = Date.now() - t0;
+      const retryAfter = Number(res.headers.get('retry-after'));
+      if (Number.isFinite(retryAfter) && retryAfter > 0) retryHint.afterMs = retryAfter * 1000;
+      const resetAt = Number(res.headers.get('x-ratelimit-reset'));
+      if (!retryHint.afterMs && Number.isFinite(resetAt) && resetAt > Date.now()) {
+        retryHint.afterMs = resetAt - Date.now();
+      }
       return rec;
     }
 
     let text = '';
+    let reasoningChars = 0;
     let ttft: number | null = null;
     let usage: Record<string, unknown> | null = null;
 
@@ -290,6 +413,7 @@ const runRequest = async (
       // Provider ignored stream:true and answered with one JSON body.
       const data = (await res.json()) as Record<string, any>;
       text = data?.choices?.[0]?.message?.content || '';
+      reasoningChars = String(data?.choices?.[0]?.message?.reasoning || '').length;
       usage = data?.usage || null;
       rec.finishReason = data?.choices?.[0]?.finish_reason || null;
       rec.servedModel = data?.model || null;
@@ -315,6 +439,11 @@ const runRequest = async (
           if (chunk?.usage) usage = chunk.usage;
           const choice = chunk?.choices?.[0];
           const delta = choice?.delta?.content ?? choice?.text ?? '';
+          const reasoningDelta = choice?.delta?.reasoning ?? choice?.delta?.reasoning_content ?? '';
+          if (typeof reasoningDelta === 'string' && reasoningDelta) {
+            if (ttft === null) ttft = Date.now() - t0;
+            reasoningChars += reasoningDelta.length;
+          }
           if (delta) {
             if (ttft === null) ttft = Date.now() - t0;
             text += delta;
@@ -337,13 +466,24 @@ const runRequest = async (
       }
     }
     if (!text.trim()) {
-      rec.errorClass = 'empty_response';
-      rec.errorDetail = `finish_reason=${rec.finishReason ?? 'n/a'}`;
+      if (reasoningChars > 0 && rec.finishReason === 'length') {
+        // Not a broken model — it spent the entire completion budget thinking.
+        rec.errorClass = 'reasoning_overflow';
+        rec.errorDetail = `spent the full ${maxTok}-token budget on hidden reasoning (${reasoningChars} chars), no visible answer — raise maxTokens`;
+      } else {
+        rec.errorClass = 'empty_response';
+        rec.errorDetail = `finish_reason=${rec.finishReason ?? 'n/a'}`;
+      }
       return rec;
     }
     rec.ok = true;
     rec.pass = spec.pass(text);
-    if (!rec.pass) rec.errorClass = 'wrong_answer';
+    if (!rec.pass) {
+      rec.errorClass = rec.finishReason === 'length' ? 'truncated' : 'wrong_answer';
+      if (rec.errorClass === 'truncated') {
+        rec.errorDetail = `output cut at the ${maxTok}-token budget before the answer completed — raise maxTokens`;
+      }
+    }
   } catch (err) {
     const e = err as Error & { name?: string };
     rec.errorClass = e?.name === 'AbortError' ? 'timeout' : 'network';
@@ -460,8 +600,15 @@ export const getAllBenchRuns = async (): Promise<BenchRun[]> => {
 
 export const getRunningBenchRun = (): BenchRun | null => runs.find((r) => r.state === 'running') || null;
 
-const estimatePhaseCost = (model: BenchModel, spec: PhaseSpec, opts: BenchOptions): number =>
-  model.hasPricing ? spec.promptTokens * model.promptPerTok + opts.maxTokens * model.completionPerTok : 0;
+// Budget with the *expected* completion (trivial probes answer in well under
+// maxTokens+500 even with low-effort thinking), not the worst-case token cap —
+// otherwise the reasoning headroom would price every frontier model out of the
+// per-model cap. The ledger settles with actual reported cost after each call,
+// and phaseTokenBudget() hard-caps worst-case spend at the per-model limit.
+const estimatePhaseCost = (model: BenchModel, spec: PhaseSpec, opts: BenchOptions, maxTok: number): number =>
+  model.hasPricing
+    ? spec.promptTokens * model.promptPerTok + Math.min(maxTok, opts.maxTokens + 500) * model.completionPerTok
+    : 0;
 
 const skippedRecord = (model: BenchModel, phase: BenchPhase, detail: string): BenchRecord => ({
   ts: new Date().toISOString(),
@@ -541,10 +688,22 @@ const executeRun = async (run: BenchRun): Promise<void> => {
       run.anomalies.push(`${s} discovery failed: ${(err as Error).message}`);
     }
   }
-  models = models.filter((m) => !m.imageOnly);
   if (opts.match) models = models.filter((m) => m.id.toLowerCase().includes(opts.match));
   if (opts.freeOnly) models = models.filter((m) => m.isFree);
-  const fullCost = (m: BenchModel) => opts.phases.reduce((s, p) => s + estimatePhaseCost(m, phases[p], opts), 0);
+
+  // Special-purpose / non-text models can't pass chat probes by design — testing
+  // them only manufactures anomalies. Surface them once, then leave them out.
+  const excluded = models.filter((m) => m.excludeReason);
+  models = models.filter((m) => !m.excludeReason);
+  if (excluded.length) {
+    run.anomalies.push(
+      `info: excluded ${excluded.length} special-purpose/non-text models from chat probes: ` +
+      excluded.map((m) => `${m.id} (${m.excludeReason})`).join('; ')
+    );
+  }
+
+  const fullCost = (m: BenchModel) =>
+    opts.phases.reduce((s, p) => s + estimatePhaseCost(m, phases[p], opts, phaseTokenBudget(m, p, phases[p], opts)), 0);
   models.sort((a, b) => fullCost(a) - fullCost(b)); // cheapest first — budget cuts the expensive tail
   if (opts.limit > 0) models = models.slice(0, opts.limit);
   run.planned = models.length;
@@ -552,8 +711,29 @@ const executeRun = async (run: BenchRun): Promise<void> => {
   // Reserve-then-settle budget ledger (same scheme as the script).
   let committedUsd = 0;
 
+  // Healthy = proved at least one phase AND failed none. (All-skipped used to
+  // count as healthy, which inflated the headline number.)
   const perModelHealthy = (rows: BenchRecord[]): boolean =>
+    rows.some((r) => r.ok && r.pass === true) &&
     rows.every((r) => (r.ok && r.pass !== false) || r.errorClass === 'skipped');
+
+  // One phase with transient-failure retries. Free-pool pacing happens per attempt
+  // so retried calls also respect the shared account-wide quota.
+  const attemptPhase = async (model: BenchModel, phase: BenchPhase, spec: PhaseSpec, maxTok: number): Promise<{ rec: BenchRecord; attempts: number }> => {
+    const retryHint: { afterMs: number | null } = { afterMs: null };
+    let rec!: BenchRecord;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      if (model.source === 'openrouter' && model.isFree) await acquireFreeSlot();
+      rec = await runRequest(model, phase, spec, opts, maxTok, retryHint);
+      const transientStreamDrop = rec.errorClass === 'empty_response' && rec.finishReason === 'error';
+      const retryable = (rec.errorClass && RETRYABLE_CLASSES.has(rec.errorClass)) || transientStreamDrop;
+      if (!retryable || attempt === MAX_ATTEMPTS) return { rec, attempts: attempt };
+      const base = rec.errorClass === 'rate_limited' ? 6_000 : 1_500;
+      const wait = Math.min(retryHint.afterMs ?? base * 2 ** (attempt - 1), 30_000) + Math.random() * 500;
+      await sleep(wait);
+    }
+    return { rec, attempts: MAX_ATTEMPTS };
+  };
 
   const runModel = async (model: BenchModel): Promise<void> => {
     const rows: BenchRecord[] = [];
@@ -561,11 +741,12 @@ const executeRun = async (run: BenchRun): Promise<void> => {
       const spec = phases[phase];
       const skipReason = spec.skip?.(model);
       if (skipReason) { rows.push(skippedRecord(model, phase, skipReason)); continue; }
-      const est = estimatePhaseCost(model, spec, opts);
+      const maxTok = phaseTokenBudget(model, phase, spec, opts);
+      const est = estimatePhaseCost(model, spec, opts, maxTok);
       if (est > opts.maxPerModelUsd) { rows.push(skippedRecord(model, phase, `estimated $${est.toFixed(3)} > per-model cap`)); continue; }
       if (committedUsd + est > opts.budgetUsd) { rows.push(skippedRecord(model, phase, 'budget exhausted')); continue; }
       committedUsd += est;
-      const rec = await runRequest(model, phase, spec, opts);
+      const { rec, attempts } = await attemptPhase(model, phase, spec, maxTok);
       if (typeof rec.costUsd === 'number') {
         committedUsd += rec.costUsd - est;
         run.spendUsd = Number((run.spendUsd + rec.costUsd).toFixed(6));
@@ -575,12 +756,13 @@ const executeRun = async (run: BenchRun): Promise<void> => {
       rows.push(rec);
       // Anomalies, mirrored from the script's report.
       if (rec.errorClass && rec.errorClass !== 'skipped' && rec.errorClass !== 'wrong_answer') {
-        run.anomalies.push(`${model.source}:${model.id} [${phase}] ${rec.errorClass}: ${rec.errorDetail || ''}`);
+        const suffix = attempts > 1 ? ` (after ${attempts} attempts)` : '';
+        run.anomalies.push(`${model.source}:${model.id} [${phase}] ${rec.errorClass}${suffix}: ${rec.errorDetail || ''}`);
       }
       if (rec.ok && (rec.totalMs ?? 0) > 30_000) {
         run.anomalies.push(`${model.source}:${model.id} [${phase}] SLOW: ${rec.totalMs}ms total (ttft ${rec.ttftMs ?? '—'}ms)`);
       }
-      if (rec.ok && rec.pass === false) {
+      if (rec.ok && rec.pass === false && rec.errorClass === 'wrong_answer') {
         run.anomalies.push(`${model.source}:${model.id} [${phase}] responded but failed the check: "${rec.textPreview}"`);
       }
       // Dead-on-arrival models: don't burn the remaining phases.

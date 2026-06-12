@@ -9,25 +9,20 @@ export type AccessProfile = {
   roles: UserRole[];
 };
 
-const DEFAULT_ADMIN_EMAILS = ['admin@test.com'];
-
 const isMissingTableError = (error: unknown) => {
   const code = String((error as { code?: string })?.code || '').toUpperCase();
   return code === '42P01' || code === 'PGRST205';
 };
 
-export const parseAdminEmails = () => {
-  const configured = process.env.ADMIN_EMAILS
+// Fail CLOSED when ADMIN_EMAILS is unset: an empty allowlist means no bootstrap
+// admins. (A guessable default like admin@test.com would hand full admin to
+// whoever registers that address on a fresh deployment.) Durable admins come
+// from the user_roles table; ADMIN_EMAILS only bootstraps the first one.
+export const parseAdminEmails = () =>
+  process.env.ADMIN_EMAILS
     ?.split(',')
     .map((email) => email.trim().toLowerCase())
-    .filter(Boolean);
-
-  if (configured && configured.length > 0) {
-    return configured;
-  }
-
-  return DEFAULT_ADMIN_EMAILS;
-};
+    .filter(Boolean) ?? [];
 
 export const isBootstrapAdminEmail = (email?: string | null) => {
   const normalized = String(email || '').trim().toLowerCase();

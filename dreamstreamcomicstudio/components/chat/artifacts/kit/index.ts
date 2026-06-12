@@ -16,3 +16,4 @@ export { TrendPill, Badge, Chip } from './Pills';
 export { resolveTheme, withAlpha, PALETTES, BULL, BEAR, NEUTRAL } from './theme';
 export type { PaletteName, Palette, ThemeInput, ResolvedTheme } from './theme';
 export { compactNumber, formatPrice, formatPriceCompact, formatPercent, formatSigned, relativeTime, shortDate } from './format';
+export { safeHref } from './format';

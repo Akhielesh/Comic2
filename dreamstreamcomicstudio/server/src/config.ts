@@ -25,7 +25,7 @@ const parseCorsOrigins = (raw: string | undefined) => {
   return parsed.length > 0 ? parsed : ['http://localhost:7000'];
 };
 
-const parseTrustProxy = (raw: string | undefined, fallback: boolean): boolean | number | string => {
+const parseTrustProxy = (raw: string | undefined, fallback: boolean | number): boolean | number | string => {
   if (!raw || !raw.trim()) return fallback;
   const normalized = raw.trim().toLowerCase();
   if (normalized === 'true') return true;
@@ -72,7 +72,11 @@ export const isAllowedOrigin = (origin: string | undefined): boolean => {
   );
 };
 export const MAX_BODY_SIZE = process.env.MAX_BODY_SIZE || '10mb';
-export const TRUST_PROXY = parseTrustProxy(process.env.TRUST_PROXY, IS_PRODUCTION);
+// Default to trusting exactly ONE proxy hop in production (Railway's edge), not
+// `true`: trust=true takes the LEFTMOST X-Forwarded-For value — i.e. whatever the
+// CLIENT sends — so every IP-keyed rate limit and guest quota could be bypassed
+// by rotating a spoofed header. Set TRUST_PROXY explicitly if the topology differs.
+export const TRUST_PROXY = parseTrustProxy(process.env.TRUST_PROXY, IS_PRODUCTION ? 1 : false);
 
 export const RATE_LIMIT_WINDOW_MS = parseIntegerEnv(process.env.RATE_LIMIT_WINDOW_MS, 60_000, 'RATE_LIMIT_WINDOW_MS', 1_000);
 export const RATE_LIMIT_MAX_REQUESTS = parseIntegerEnv(process.env.RATE_LIMIT_MAX_REQUESTS, 120, 'RATE_LIMIT_MAX_REQUESTS', 1);

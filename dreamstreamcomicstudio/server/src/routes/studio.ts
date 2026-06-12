@@ -335,6 +335,10 @@ studioRouter.post('/generate', async (req, res, next) => {
         messages: [{ role: 'user', content: genPrompt }],
         temperature,
         maxTokens: 16000,
+        // Cross-product memory: the user's durable preferences (frameworks,
+        // styling, conventions learned in any studio) shape generated apps too.
+        userId: req.user?.id,
+        userMemory: true,
         fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
         timeoutMs: STUDIO_REQUEST_TIMEOUT_MS
       });

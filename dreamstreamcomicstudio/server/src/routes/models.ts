@@ -43,6 +43,7 @@ const withNvidiaModels = async (req: Request, base: AnnotatedModel[]): Promise<A
 // GET /api/models/catalog
 // Public reference data that powers the Model Library ("movie-site" browse).
 // Query: ?free=&modality=image|text&refs=&source=openrouter|nvidia&q=&refresh=
+//        &product=chat_studio|stream_studio|comic_studio (capability-gated list)
 modelsRouter.get('/catalog', async (req: Request, res: Response) => {
   const modalityParam = req.query.modality;
   const filters: CatalogFilters = {
@@ -50,7 +51,8 @@ modelsRouter.get('/catalog', async (req: Request, res: Response) => {
     supportsRefs: parseBool(req.query.refs),
     modality: modalityParam === 'image' ? 'image' : modalityParam === 'text' ? 'text' : undefined,
     source: parseSource(req.query.source),
-    query: typeof req.query.q === 'string' ? req.query.q : undefined
+    query: typeof req.query.q === 'string' ? req.query.q : undefined,
+    product: typeof req.query.product === 'string' ? req.query.product : undefined
   };
 
   const result = await getCatalog(parseBool(req.query.refresh));
@@ -98,7 +100,9 @@ modelsRouter.get('/popularity', requireAuth, async (req: Request, res: Response,
 // Verification system: reconciles what we SHOW against LIVE source data — no guessing.
 // - OpenRouter: GET /api/v1/key for the caller's real usage/limit/is_free_tier.
 // - Per-source model counts from a freshly-forced catalog refresh.
-modelsRouter.get('/verify', async (req: Request, res: Response) => {
+// requireAuth: with no BYOK header this falls back to PLATFORM keys and reports
+// their live usage/limits/credits — that's operator telemetry, not public data.
+modelsRouter.get('/verify', requireAuth, async (req: Request, res: Response) => {
   const openRouterKey = req.header('X-OpenRouter-Key') || process.env.OPENROUTER_API_KEY || null;
   const nvidiaKey = req.header('X-Nvidia-Key') || process.env.NVIDIA_API_KEY || null;
 

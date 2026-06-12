@@ -9,7 +9,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { GripVertical, Clock, Hourglass, ListChecks, Globe2, StickyNote, Link2, RotateCcw } from 'lucide-react';
 import type { DashboardArtifact, DashboardWidget, DashboardGlobePoint } from '../../../apiTypes';
-import { Chart, Sparkline, TrendPill, RadialGauge } from './kit';
+import { Chart, Sparkline, TrendPill, RadialGauge, safeHref } from './kit';
 
 const STORAGE_PREFIX = 'ds_dashboard_layout:';
 
@@ -194,7 +194,7 @@ const LinksWidget: React.FC<{ w: DashboardWidget }> = ({ w }) => (
   <ul className="space-y-1.5">
     {(w.links ?? []).slice(0, 8).map((l, i) => (
       <li key={i}>
-        <a href={l.url} target="_blank" rel="noopener noreferrer" className="text-[13px] text-blue-700 hover:underline inline-flex items-center gap-1.5">
+        <a href={safeHref(l.url) ?? '#'} target="_blank" rel="noopener noreferrer" className="text-[13px] text-blue-700 hover:underline inline-flex items-center gap-1.5">
           <Link2 className="w-3 h-3 shrink-0" />{l.label}
         </a>
       </li>

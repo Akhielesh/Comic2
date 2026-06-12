@@ -100,6 +100,32 @@ export const assertSafePublicUrl = async (url: string): Promise<void> => {
   await assertResolvedHostSafe(url, false);
 };
 
+/**
+ * Fetch a USER-supplied URL with the full SSRF gate applied to EVERY redirect hop
+ * (default `redirect: 'follow'` would let a public site 302 the server into
+ * 127.0.0.1 / cloud metadata). Validates, fetches with manual redirects, and
+ * re-validates each Location before following, up to maxRedirects.
+ */
+export const fetchPublicUrl = async (
+  url: string,
+  init: RequestInit = {},
+  maxRedirects = 3
+): Promise<Response> => {
+  let current = url;
+  for (let hop = 0; hop <= maxRedirects; hop++) {
+    await assertSafePublicUrl(current);
+    const res = await fetch(current, { ...init, redirect: 'manual' });
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get('location');
+      if (!location) return res;
+      current = new URL(location, current).toString();
+      continue;
+    }
+    return res;
+  }
+  throw new Error('too many redirects');
+};
+
 // Parse a JSON-RPC result from a JSON body or a (single-event) SSE body.
 const parseRpcBody = (text: string): any => {
   const trimmed = text.trim();

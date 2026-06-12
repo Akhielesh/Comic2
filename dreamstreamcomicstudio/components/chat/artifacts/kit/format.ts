@@ -71,3 +71,18 @@ export const shortDate = (value: string): string => {
   if (Number.isNaN(d.getTime())) return value;
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 };
+
+/**
+ * Scheme-validated href for links whose URL originates from LLM/tool output.
+ * Artifact data is model-writable, so a prompt-injected `javascript:` (or
+ * `data:`/`vbscript:`) URL must never reach an <a href>. Allows http(s),
+ * mailto, and same-origin relative/anchor paths; everything else → undefined
+ * (renderers then drop the link and show plain text).
+ */
+export const safeHref = (raw?: string | null): string | undefined => {
+  const url = (raw ?? '').trim();
+  if (!url) return undefined;
+  if (/^(https?:|mailto:)/i.test(url)) return url;
+  if (url.startsWith('/') || url.startsWith('#')) return url;
+  return undefined;
+};

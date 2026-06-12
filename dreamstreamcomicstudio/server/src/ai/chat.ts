@@ -17,6 +17,7 @@ import type { AIProviderId } from './providers/types.js';
 import { toToolSpec, type ChatTool } from './tools/registry.js';
 import { buildJsonToolSystemBlock, extractToolCall, stripToolCallJson, formatToolResult } from './tools/jsonToolProtocol.js';
 import { JSON_TOOL_PROTOCOL_ENABLED, CHAT_MAX_OUTPUT_TOKENS } from '../config.js';
+import { buildUserMemoryBlock } from '../services/userMemory.js';
 
 export type ChatReasoningLevel = 'none' | 'low' | 'medium' | 'high';
 
@@ -71,6 +72,16 @@ export interface RunChatParams {
    * block so the model can help with the user's own projects but can't act or leak.
    */
   dreamstreamContextJson?: string;
+  /**
+   * Authenticated user id + explicit opt-in for cross-product memory (RAG).
+   * When both are set, durable user memories are retrieved (vector → FTS →
+   * recency) and injected as a system block BEFORE the model call — for ANY
+   * provider/model, so context follows the user across Chat Studio, Code
+   * Studio and Comic Studio. Utility/sub-agent calls must NOT opt in (cost,
+   * and the memory distiller itself would recurse).
+   */
+  userId?: string;
+  userMemory?: boolean;
   /** Agentic tools the model may call (DuckDuckGo, etc.). OpenRouter only. */
   tools?: ChatTool[];
   /** Runtime situational context (date/timezone/locale/units/location). */
@@ -370,6 +381,23 @@ export const runChat = async (
   const extra = params.systemPrompt?.trim();
   let systemContent = extra ? `${base}\n\nAdditional instructions:\n${extra}` : base;
   systemContent += buildContextBlock(params.clientContext);
+  // Cross-product user memory: retrieved fresh per request and injected as plain
+  // text, so it works identically for every provider and model. Time-boxed so a
+  // slow lookup can never stall the chat; failures simply mean "no memory".
+  if (params.userId && params.userMemory) {
+    const lastUser = [...params.messages].reverse().find((m) => m.role === 'user');
+    const memoryQuery =
+      typeof lastUser?.content === 'string'
+        ? lastUser.content
+        : Array.isArray(lastUser?.content)
+          ? lastUser!.content.map((p) => ('text' in p ? p.text : '')).join(' ')
+          : '';
+    const memoryBlock = await Promise.race([
+      buildUserMemoryBlock(params.userId, memoryQuery).catch(() => null),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_500))
+    ]);
+    if (memoryBlock) systemContent += memoryBlock;
+  }
   if (params.dreamstreamContextJson) {
     systemContent += dreamstreamBlock(params.dreamstreamContextJson);
   }

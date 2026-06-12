@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { PlayCircle, Video, ExternalLink, X, Maximize2, PictureInPicture2 } from 'lucide-react';
 import type { VideoResultsArtifact, VideoResult } from '../../../apiTypes';
-import { Surface, SurfaceTitle, SurfaceSubtitle, useCompact } from './kit';
+import { Surface, SurfaceTitle, SurfaceSubtitle, useCompact, safeHref } from './kit';
 import { toVideoEmbed, toVideoPreview } from '../videoEmbed';
 import { setFloatingVideo } from '../../../services/floatingVideo';
 
@@ -53,7 +53,7 @@ const VideoLightbox: React.FC<{ video: VideoResult; onClose: () => void }> = ({ 
           <p className="min-w-0 truncate text-sm font-semibold text-white">{video.title}</p>
           <div className="flex shrink-0 items-center gap-1">
             <a
-              href={video.url}
+              href={safeHref(video.url) ?? '#'}
               target="_blank"
               rel="noopener noreferrer"
               title="Open original"
@@ -82,7 +82,7 @@ const VideoLightbox: React.FC<{ video: VideoResult; onClose: () => void }> = ({ 
           ) : (
             <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-white/80">
               <Video className="h-8 w-8" />
-              <a href={video.url} target="_blank" rel="noopener noreferrer" className="text-sm underline">
+              <a href={safeHref(video.url) ?? '#'} target="_blank" rel="noopener noreferrer" className="text-sm underline">
                 Open this video
               </a>
             </div>
@@ -172,7 +172,7 @@ const VideoThumb: React.FC<{
           </span>
         )}
         <a
-          href={video.url}
+          href={safeHref(video.url) ?? '#'}
           target="_blank"
           rel="noopener noreferrer"
           onClick={(e) => e.stopPropagation()}
@@ -211,7 +211,7 @@ const InlinePlayer: React.FC<{
           <button onClick={onExpand} className="rounded p-1 text-[var(--ds-muted)] transition-colors duration-200 hover:text-[var(--ds-ink)]" title="Expand">
             <Maximize2 className="h-3.5 w-3.5" />
           </button>
-          <a href={video.url} target="_blank" rel="noopener noreferrer" className="rounded p-1 text-[var(--ds-muted)] transition-colors duration-200 hover:text-[var(--ds-ink)]" title="Open original">
+          <a href={safeHref(video.url) ?? '#'} target="_blank" rel="noopener noreferrer" className="rounded p-1 text-[var(--ds-muted)] transition-colors duration-200 hover:text-[var(--ds-ink)]" title="Open original">
             <ExternalLink className="h-3.5 w-3.5" />
           </a>
           <button onClick={onClose} className="rounded p-1 text-[var(--ds-muted)] transition-colors duration-200 hover:text-[var(--ds-ink)]" title="Stop">

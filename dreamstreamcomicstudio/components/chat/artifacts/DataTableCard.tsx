@@ -17,7 +17,8 @@ import {
   formatPercent,
   formatSigned,
   compactNumber,
-  useCompact
+  useCompact,
+  safeHref
 } from './kit';
 import type { PaletteName } from './kit';
 
@@ -109,8 +110,9 @@ const CellBody: React.FC<{ col: DataTableColumn; raw: DataTableRowCell; accent: 
     body = <span className={cell.value == null || cell.value === '' ? 'text-[var(--ds-faint)]' : 'font-medium text-[var(--ds-ink)]'} style={cell.color ? { color: cell.color } : undefined}>{text}</span>;
   }
 
-  const wrapped = cell.href ? (
-    <a href={cell.href} target="_blank" rel="noopener noreferrer" className="hover:underline">{body}</a>
+  const cellHref = safeHref(cell.href);
+  const wrapped = cellHref ? (
+    <a href={cellHref} target="_blank" rel="noopener noreferrer" className="hover:underline">{body}</a>
   ) : body;
 
   return (

@@ -57,6 +57,10 @@ export interface CatalogQuery {
   refs?: boolean;
   source?: ModelSource;
   q?: string;
+  /** Capability-gated list for a studio: drops safety classifiers, code-apply
+   *  engines, routers and media models that can never work as that product's
+   *  chat model (server enforces the same rule at request time). */
+  product?: 'chat_studio' | 'stream_studio' | 'comic_studio';
 }
 
 // Last-good catalog kept in localStorage so the Library paints instantly on revisit/refresh and
@@ -98,6 +102,7 @@ export const fetchModelCatalog = async (query: CatalogQuery = {}, opts?: { timeo
   if (query.refs) params.set('refs', 'true');
   if (query.source) params.set('source', query.source);
   if (query.q) params.set('q', query.q);
+  if (query.product) params.set('product', query.product);
   const qs = params.toString();
   const path = `/api/models/catalog${qs ? `?${qs}` : ''}`;
   const timeoutMs = opts?.timeoutMs ?? 15_000;

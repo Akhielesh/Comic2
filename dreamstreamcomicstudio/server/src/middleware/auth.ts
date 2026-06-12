@@ -31,11 +31,13 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
         };
         next();
     } catch (e: any) {
+        // Upstream error detail stays in the server logs — echoing it to the
+        // client leaks internal provider/infra information.
+        console.error('[auth] provider unavailable:', e?.message || e);
         res.status(503).json({
             error: {
                 message: 'Auth provider unavailable',
-                code: 'AUTH_PROVIDER_UNAVAILABLE',
-                details: e?.message || String(e)
+                code: 'AUTH_PROVIDER_UNAVAILABLE'
             }
         });
         return;

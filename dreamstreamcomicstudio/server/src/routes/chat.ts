@@ -15,6 +15,16 @@ import { pickTextModel, pickTextModelChain, markModelDown, TEXT_FALLBACK } from 
 import { NVIDIA_TEXT_MODEL, OPENROUTER_TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS, JSON_TOOL_PROTOCOL_ENABLED } from '../config.js';
 import type { AIProviderId, ChatMessage, MessagePart } from '../ai/providers/types.js';
 import { assertModelAllowedForUser } from '../services/modelAccessPolicy.js';
+import { getCatalog } from '../services/modelCatalog.js';
+import { productFitForModel } from '../../../shared/modelCapabilities.js';
+import {
+  rememberUserMemories,
+  listUserMemories,
+  deleteUserMemory,
+  deleteAllUserMemories,
+  isMemoryEnabled,
+  setMemoryEnabled
+} from '../services/userMemory.js';
 import { sanitizeAssistantContext } from '../ai/assistantPolicy.js';
 import { resolveTools, type ChatTool } from '../ai/tools/registry.js';
 import { selectRelevantTools, ROUTABLE_TOOL_NAMES } from '../../../toolCatalog.js';
@@ -156,6 +166,8 @@ type PreparedChat = {
   customAgents: AgentDefinition[];
   /** Files attached to the current turn — surfaced to the model so it can read them. */
   attachments: ChatAttachmentInput[];
+  /** Authenticated user — enables cross-product memory retrieval/write-back. */
+  userId?: string;
 };
 
 type PrepResult = { error: { status: number; body: unknown } } | { prepared: PreparedChat };
@@ -217,6 +229,51 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
       ? await pickTextModel({ preferFree: true, prefer: (m) => (m.supportedParameters || []).includes('tools') })
       : OPENROUTER_TEXT_MODEL);
   if (resolved.provider === 'nvidia' && !model.includes('/')) model = NVIDIA_TEXT_MODEL;
+
+  // Capability guard: a pinned special-purpose model (safety classifier, code-apply
+  // engine, request router, media model) can never hold a conversation, and a model
+  // without image input can't see attached images. Fail fast with an actionable
+  // message instead of streaming provider errors or moderation labels back as "chat".
+  if (requestedModel && resolved.provider === 'openrouter') {
+    try {
+      const { models: catalogModels } = await getCatalog();
+      const entry = catalogModels.find((m) => m.id === requestedModel);
+      if (entry) {
+        const fit = productFitForModel(entry, 'chat_studio');
+        if (!fit.allowed) {
+          return {
+            error: {
+              status: 400,
+              body: {
+                error: {
+                  message: `${fit.blockedReason} Pick a chat model from the Model Library (or leave the model on Auto).`,
+                  code: 'MODEL_NOT_CHAT_CAPABLE'
+                }
+              }
+            }
+          };
+        }
+        const hasImageParts = messages.some(
+          (m) => Array.isArray(m.content) && m.content.some((p) => p.type === 'image_url')
+        );
+        if (hasImageParts && !entry.capabilities.vision) {
+          return {
+            error: {
+              status: 400,
+              body: {
+                error: {
+                  message: `${requestedModel} cannot read images. Switch to a vision-capable model (filter the Model Library by "image input") or remove the attachment.`,
+                  code: 'MODEL_NO_VISION'
+                }
+              }
+            }
+          };
+        }
+      }
+    } catch {
+      /* catalog unavailable — never block chat on a metadata lookup */
+    }
+  }
 
   if (resolved.provider === 'openrouter' && req.user?.id) {
     try {
@@ -490,7 +547,7 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   }
 
   return {
-    prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, systemPrompt, fallbackModels, dreamstreamContextJson, tools: [...builtinTools, ...metaTools, ...mcpTools], clientContext, customAgents, attachments }
+    prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, systemPrompt, fallbackModels, dreamstreamContextJson, tools: [...builtinTools, ...metaTools, ...mcpTools], clientContext, customAgents, attachments, userId: req.user?.id }
   };
 };
 
@@ -544,6 +601,8 @@ const runChatParams = (p: PreparedChat) => ({
   reasoningLevel: p.reasoningLevel,
   webSearch: p.webSearch,
   dreamstreamContextJson: p.dreamstreamContextJson,
+  userId: p.userId,
+  userMemory: Boolean(p.userId),
   tools: p.tools,
   clientContext: p.clientContext,
   attachments: p.attachments,
@@ -657,11 +716,114 @@ chatRouter.post('/memory', async (req, res, next) => {
       timeoutMs: TEXT_REQUEST_TIMEOUT_MS
     });
     const updated = (result.text || '').trim().slice(0, MAX_MEMORY_CHARS);
+    // Canonical store: distilled bullets also land in the server-side cross-product
+    // memory (pgvector), so they follow the user to every device, studio and model —
+    // the localStorage copy returned below remains a fast-paint cache.
+    if (req.user?.id && updated) {
+      const bullets = updated.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('-'));
+      void rememberUserMemories(req.user.id, 'chat_studio', null, bullets.map((content) => ({ content })));
+    }
     res.json({ memory: updated || existing });
   } catch (err) {
     next(err);
   }
 });
+
+// ── Cross-product memory management (the privacy surface) ───────────────────────
+// Authenticated-only: list what's remembered, delete one or all, toggle the
+// feature. Backed by user_memories / user_memory_prefs (owner-scoped, RLS'd).
+chatRouter.get('/memory/list', async (req, res, next) => {
+  try {
+    if (!req.user?.id) return res.status(401).json({ error: { message: 'Sign in to view your memory.' } });
+    const [memories, enabled] = await Promise.all([
+      listUserMemories(req.user.id),
+      isMemoryEnabled(req.user.id)
+    ]);
+    res.json({ enabled, memories });
+  } catch (err) {
+    next(err);
+  }
+});
+
+chatRouter.put('/memory/prefs', async (req, res, next) => {
+  try {
+    if (!req.user?.id) return res.status(401).json({ error: { message: 'Sign in to change memory settings.' } });
+    const enabled = (req.body as { enabled?: unknown })?.enabled === true;
+    await setMemoryEnabled(req.user.id, enabled);
+    res.json({ enabled });
+  } catch (err) {
+    next(err);
+  }
+});
+
+chatRouter.delete('/memory/all', async (req, res, next) => {
+  try {
+    if (!req.user?.id) return res.status(401).json({ error: { message: 'Sign in to manage your memory.' } });
+    const deleted = await deleteAllUserMemories(req.user.id);
+    res.json({ deleted });
+  } catch (err) {
+    next(err);
+  }
+});
+
+chatRouter.delete('/memory/:id', async (req, res, next) => {
+  try {
+    if (!req.user?.id) return res.status(401).json({ error: { message: 'Sign in to manage your memory.' } });
+    const deleted = await deleteUserMemory(req.user.id, String(req.params.id));
+    if (!deleted) return res.status(404).json({ error: { message: 'Memory not found.' } });
+    res.json({ deleted: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Automatic write-back: distill durable facts from the latest exchange after a
+// completed chat, throttled per user so it costs at most one cheap model call
+// every few minutes. Fire-and-forget — never delays or fails the chat response.
+const AUTO_MEMORY_THROTTLE_MS = 5 * 60_000;
+const lastAutoMemoryAt = new Map<string, number>();
+const maybeAutoRemember = (p: PreparedChat, answerText: string): void => {
+  const userId = p.userId;
+  if (!userId || !answerText) return;
+  const last = lastAutoMemoryAt.get(userId) || 0;
+  if (Date.now() - last < AUTO_MEMORY_THROTTLE_MS) return;
+  lastAutoMemoryAt.set(userId, Date.now());
+  void (async () => {
+    try {
+      const transcript = p.messages
+        .slice(-6)
+        .map((t) => {
+          const text = typeof t.content === 'string'
+            ? t.content
+            : Array.isArray(t.content)
+              ? t.content.map((part) => ('text' in part ? part.text : '')).join(' ')
+              : '';
+          return `${t.role === 'user' ? 'User' : 'Assistant'}: ${text}`;
+        })
+        .concat(`Assistant: ${answerText.slice(0, 1_500)}`)
+        .join('\n')
+        .slice(0, 6_000);
+      const model = p.resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;
+      const result = await runChat({
+        provider: p.resolved.provider,
+        apiKey: p.resolved.apiKey,
+        model,
+        messages: [{ role: 'user', content: `EXISTING MEMORY:\n(none)\n\nRECENT CONVERSATION:\n${transcript}` }],
+        systemOverride: MEMORY_SYSTEM_PROMPT,
+        temperature: 0.2,
+        maxTokens: 400,
+        fallbackModel: p.resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+        timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+      });
+      const bullets = (result.text || '').split('\n').map((l) => l.trim()).filter((l) => l.startsWith('-'));
+      if (bullets.length) {
+        await rememberUserMemories(userId, 'chat_studio', null, bullets.map((content) => ({ content })));
+      }
+    } catch {
+      /* memory write-back must never disturb the chat path */
+    }
+  })();
+};
 
 // Memory import: absorb the user's exported memories/custom-instructions from another
 // AI tool (ChatGPT, Claude, Gemini, …) into DreamStream's long-term memory. The pasted
@@ -946,6 +1108,7 @@ chatRouter.post('/', async (req, res, next) => {
           : null;
 
       const payload = withAllowanceNotices(req, buildPayload(p, result));
+      maybeAutoRemember(p, result.text || '');
       res.json(
         reserve && reserve.allowed
           ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled)
@@ -1048,6 +1211,7 @@ chatRouter.post('/stream', async (req, res) => {
         : null;
 
     const payload = withAllowanceNotices(req, buildPayload(p, result));
+    maybeAutoRemember(p, result.text || '');
     const finalPayload =
       reserve && reserve.allowed
         ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled)
@@ -1166,6 +1330,7 @@ chatRouter.post('/swarm', async (req, res) => {
       notices: withGuardrailNotices(result),
       usage: result.usage
     });
+    maybeAutoRemember(p, result.text || '');
     const finalPayload =
       reserve && reserve.allowed
         ? attachBillingToPayload(payload as unknown as Record<string, unknown>, reserve.reservation, settled)

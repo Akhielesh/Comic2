@@ -8,6 +8,7 @@
 // port. Best-effort — callers fall back to "open original" when extraction is thin.
 
 import { fetchText, hostOf } from './http.js';
+import { assertSafePublicUrl } from './mcpClient.js';
 import { decodeGoogleNewsUrl, isGoogleNewsUrl } from './googleNews.js';
 
 export interface ReadArticleResult {
@@ -108,8 +109,12 @@ export const readArticle = async (url: string, signal?: AbortSignal): Promise<Re
     }
   }
 
+  // SSRF gate: the hostname-pattern check in isFetchableUrl misses DNS rebinding
+  // (a public name resolving to 127.0.0.1 / cloud metadata) — verify the RESOLVED
+  // IPs too. This route is reachable pre-auth, so the check must be airtight.
   let html: string;
   try {
+    await assertSafePublicUrl(target);
     html = await fetchText(target, { timeoutMs: 9000, accept: 'text/html,*/*', signal });
   } catch {
     return base;

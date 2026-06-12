@@ -8,6 +8,7 @@
 import { getProvider, resolveProviderContext } from '../ai/gateway.js';
 import { annotateModels, type AnnotatedModel } from '../ai/catalogAnnotations.js';
 import { persistHarvestedModels, loadPersistedModels } from './modelCatalogStore.js';
+import { productFitForModel } from '../../../shared/modelCapabilities.js';
 import type { AIProviderId } from '../ai/providers/types.js';
 
 const CATALOG_TTL_MS = (() => {
@@ -134,6 +135,12 @@ export type CatalogFilters = {
   source?: AIProviderId;
   /** Substring search over id/name/description. */
   query?: string;
+  /**
+   * Restrict to models usable in a given product (chat_studio | stream_studio |
+   * comic_studio): drops special-purpose kinds (safety classifiers, code-apply
+   * engines, routers, media models) and models missing required capabilities.
+   */
+  product?: string;
 };
 
 /** Fetch + annotate models from a specific provider (used to merge BYOK sources like NVIDIA). */
@@ -152,6 +159,7 @@ export const getProviderModels = async (
 export const filterCatalog = (models: AnnotatedModel[], filters: CatalogFilters): AnnotatedModel[] => {
   const q = filters.query?.trim().toLowerCase();
   return models.filter((model) => {
+    if (filters.product && !productFitForModel(model, filters.product).allowed) return false;
     if (filters.free && !model.isFree) return false;
     if (filters.modality === 'image' && !model.supportsImageOutput) return false;
     if (filters.modality === 'text' && model.supportsImageOutput) return false;

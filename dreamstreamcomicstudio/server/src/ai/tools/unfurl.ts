@@ -2,7 +2,7 @@
 // description, image, site name) for source hover-cards. SSRF-guarded (https +
 // private-host blocklist, shared with the MCP client), size-capped, cached.
 
-import { isSafeMcpUrl } from './mcpClient.js';
+import { isSafeMcpUrl, fetchPublicUrl } from './mcpClient.js';
 
 export interface UnfurlResult {
   url: string;
@@ -43,7 +43,10 @@ export const unfurlUrl = async (url: string): Promise<UnfurlResult> => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
-    const res = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'text/html' }, signal: controller.signal });
+    // fetchPublicUrl re-runs the SSRF gate (DNS-resolution check included) on
+    // every redirect hop — this route is reachable pre-auth, so a public site
+    // 302'ing into 127.0.0.1/metadata must be caught, not followed.
+    const res = await fetchPublicUrl(url, { headers: { 'User-Agent': UA, Accept: 'text/html' }, signal: controller.signal });
     if (!res.ok) throw new Error(`Fetch failed (${res.status})`);
 
     let html = '';

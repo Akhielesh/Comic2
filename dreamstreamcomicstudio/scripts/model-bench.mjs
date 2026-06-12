@@ -79,7 +79,7 @@ const OPT = {
   maxPerModelUsd: Number(flag('max-per-model')) || 0.25,
   concurrency: Math.max(1, Number(flag('concurrency')) || 6),
   timeoutMs: Number(flag('timeout')) || 60_000,
-  maxTokens: Number(flag('max-tokens')) || 120,
+  maxTokens: Number(flag('max-tokens')) || 256,
   retries: flag('retries') !== undefined ? Math.max(0, Number(flag('retries')) || 0) : 1,
   contextTokens: Number(flag('context-tokens')) || 6_000,
   slowMs: Number(flag('slow-ms')) || 30_000,
@@ -124,24 +124,57 @@ const discover = async (source) => {
   const data = await res.json();
   const rows = Array.isArray(data?.data) ? data.data : [];
   return rows.map((m) => {
+    const id = String(m.id);
     const promptPerTok = Number(m?.pricing?.prompt) || 0;
     const completionPerTok = Number(m?.pricing?.completion) || 0;
-    const outputsImages = Array.isArray(m?.architecture?.output_modalities)
-      ? m.architecture.output_modalities.includes('image') && !m.architecture.output_modalities.includes('text')
-      : false;
+    const inMods = Array.isArray(m?.architecture?.input_modalities) ? m.architecture.input_modalities : ['text'];
+    const outMods = Array.isArray(m?.architecture?.output_modalities) ? m.architecture.output_modalities : ['text'];
+    const params = Array.isArray(m?.supported_parameters) ? m.supported_parameters : [];
+    const special = SPECIAL_PURPOSE.find((s) => s.re.test(id));
     return {
       source,
-      id: String(m.id),
+      id,
       contextLength: Number(m.context_length) || null,
       promptPerTok,
       completionPerTok,
       isFree: source === 'openrouter'
-        ? String(m.id).endsWith(':free') || (promptPerTok === 0 && completionPerTok === 0)
+        ? id.endsWith(':free') || (promptPerTok === 0 && completionPerTok === 0)
         : true, // NVIDIA hosted models bill against the key's credit pool, not per-call USD
       hasPricing: source === 'openrouter',
-      imageOnly: outputsImages
+      supportsTemperature: params.length === 0 || params.includes('temperature'),
+      supportsReasoning: params.includes('reasoning') || params.includes('include_reasoning') ||
+        /\b(think|thinking|reasoner|-r1\b|o[134](-|$)|gpt-5)/i.test(id),
+      excludeReason: !(inMods.includes('text') && outMods.includes('text'))
+        ? `non-text modality (${inMods.join('+')} → ${outMods.join('+')})`
+        : special?.reason ?? null
     };
   });
+};
+
+// Special-purpose models answer /chat/completions but are not chat models, so
+// echo/context/reasoning probes can only "fail" them. Exclude up front.
+const SPECIAL_PURPOSE = [
+  { re: /guard|content-safety|shieldgemma|prompt-?injection/i, reason: 'safety classifier' },
+  { re: /^relace\/|^morph\/morph|fast-apply/i, reason: 'code-edit apply model' },
+  { re: /bodybuilder/i, reason: 'request-builder meta-model' },
+  { re: /deep-research/i, reason: 'agentic deep-research model' },
+  { re: /lyria|musicgen|suno|-tts\b|whisper/i, reason: 'audio/music model' }
+];
+
+// Hidden-reasoning models burn completion tokens thinking before any visible
+// output; give them headroom or they end at finish_reason=length with no text.
+const REASONING_HEADROOM = 1_500;
+const REASONING_PHASE_HEADROOM = 3_000;
+const phaseTokenBudget = (model, phase) => {
+  let budget = OPT.maxTokens;
+  if (model.supportsReasoning) budget += phase === 'reasoning' ? REASONING_PHASE_HEADROOM : REASONING_HEADROOM;
+  if (model.hasPricing && model.completionPerTok > 0) {
+    const perPhaseUsd = OPT.maxPerModelUsd / Math.max(activePhases.length, 1);
+    const { promptTokens } = PHASES[phase].build();
+    const affordable = Math.floor((perPhaseUsd - promptTokens * model.promptPerTok) / model.completionPerTok);
+    budget = Math.min(budget, Math.max(affordable, OPT.maxTokens));
+  }
+  return budget;
 };
 
 // ── Test phases ────────────────────────────────────────────────────────────────
@@ -150,17 +183,40 @@ const VAULT_CODE = String(100000 + (parseInt(NONCE.slice(0, 4), 16) % 900000));
 
 // Deterministic filler so the context probe is reproducible and genuinely long.
 // ~4 chars/token → contextTokens * 4 chars, with the needle planted mid-way.
+// Varied sentences (a single repeated one sends small models into repetition
+// loops) and a mundane needle (a "secret vault code" makes safety-tuned models
+// refuse the question as a prompt-injection test).
+const FILLER_SENTENCES = [
+  'The archive room holds shelves of unlabeled boxes that nobody has opened in years. ',
+  'A narrow window lets in pale light that settles over the dusty reading desks. ',
+  'Catalog cards sit in long wooden drawers, sorted by a system only the founder understood. ',
+  'Visitors sign a paper ledger at the front counter before walking the narrow aisles. ',
+  'Somewhere above, a ceiling fan turns slowly and stirs the smell of old paper. ',
+  'The basement stores rolled maps and blueprints wrapped in brown twine. ',
+  'A typewritten index of donors hangs in a thin frame beside the stairwell. ',
+  'Each spring the staff rotate the displays in the entry-hall cabinets. '
+];
 const buildContextPrompt = (tokens) => {
-  const sentence = 'The archive room holds shelves of unlabeled boxes that nobody has opened in years. ';
   const targetChars = tokens * 4;
-  const reps = Math.max(1, Math.ceil(targetChars / sentence.length));
-  const half = Math.floor(reps / 2);
-  return (
-    sentence.repeat(half) +
-    `Important: the vault code is ${VAULT_CODE}. Remember it. ` +
-    sentence.repeat(reps - half) +
-    'Question: what is the vault code mentioned above? Reply with the code only.'
-  );
+  const parts = [];
+  let len = 0;
+  for (let i = 0; len < targetChars; i++) {
+    const s = FILLER_SENTENCES[i % FILLER_SENTENCES.length];
+    parts.push(s);
+    len += s.length;
+  }
+  parts.splice(Math.floor(parts.length / 2), 0, `For the catalog record, the reference ID for shipment 7 is ${VAULT_CODE}. `);
+  return parts.join('') + 'Question: what is the reference ID for shipment 7 mentioned above? Reply with the ID only.';
+};
+
+// Lenient final-answer extraction: "394." / "= 394" / correct working all count.
+// Strict instruction-following is the echo phase's job, not this one's.
+const reasoningPass = (text) => {
+  const sentinel = text.match(/ANSWER\s*[:=]\s*\$?(-?\d[\d,]*(?:\.\d+)?)/i);
+  const candidates = sentinel
+    ? [sentinel[1]]
+    : (text.replace(/[,$]/g, ' ').match(/-?\d+(?:\.\d+)?/g) || []).slice(-2);
+  return candidates.some((n) => Math.abs(parseFloat(n.replace(/,/g, '')) - 394) < 1e-9);
 };
 
 const PHASES = {
@@ -186,10 +242,15 @@ const PHASES = {
   reasoning: {
     label: 'reasoning',
     build: () => ({
-      messages: [{ role: 'user', content: 'Compute: (17 * 23) + (144 / 12) - 9. Reply with only the final number.' }],
-      promptTokens: 30
+      messages: [{
+        role: 'user',
+        content:
+          'Compute (17 * 23) + (144 / 12) - 9. You may show your working. ' +
+          'End your reply with the final value on its own line in the form "ANSWER: <number>".'
+      }],
+      promptTokens: 50
     }),
-    pass: (text) => /(^|[^\d.])394([^\d.]|$)/.test(text)
+    pass: reasoningPass
   }
 };
 
@@ -199,7 +260,10 @@ if (activePhases.length === 0) { console.error('No valid phases. Use --phases ec
 const estimatePhaseCost = (model, phase) => {
   if (!model.hasPricing) return 0; // NVIDIA: credit-based, no USD figure to estimate
   const { promptTokens } = PHASES[phase].build();
-  return promptTokens * model.promptPerTok + OPT.maxTokens * model.completionPerTok;
+  // Budget with the expected completion (trivial probes finish well under the
+  // reasoning headroom); phaseTokenBudget hard-caps the worst case per model.
+  const expectedCompletion = Math.min(phaseTokenBudget(model, phase), OPT.maxTokens + 500);
+  return promptTokens * model.promptPerTok + expectedCompletion * model.completionPerTok;
 };
 const estimateModelCost = (model) => activePhases.reduce((s, p) => s + estimatePhaseCost(model, p), 0);
 
@@ -241,8 +305,11 @@ const runRequest = async (model, phase) => {
         body: JSON.stringify({
           model: model.id,
           messages,
-          max_tokens: OPT.maxTokens,
-          temperature: 0,
+          max_tokens: phaseTokenBudget(model, phase),
+          // o-series / image / search models hard-reject sampler params (HTTP 400).
+          ...(model.supportsTemperature ? { temperature: 0 } : {}),
+          // Keep hidden thinking short on trivial probes.
+          ...(model.source === 'openrouter' && model.supportsReasoning ? { reasoning: { effort: 'low' } } : {}),
           stream: true,
           stream_options: { include_usage: true }, // OpenAI-style; OpenRouter + NVIDIA accept it
           ...(model.source === 'openrouter' ? { usage: { include: true } } : {})
@@ -257,6 +324,7 @@ const runRequest = async (model, phase) => {
       }
 
       let text = '';
+      let reasoningChars = 0;
       let ttft = null;
       let usage = null;
       let finishReason = null;
@@ -293,6 +361,11 @@ const runRequest = async (model, phase) => {
             if (chunk?.usage) usage = chunk.usage;
             const choice = chunk?.choices?.[0];
             const delta = choice?.delta?.content ?? choice?.text ?? '';
+            const reasoningDelta = choice?.delta?.reasoning ?? choice?.delta?.reasoning_content ?? '';
+            if (typeof reasoningDelta === 'string' && reasoningDelta) {
+              if (ttft === null) ttft = Date.now() - t0;
+              reasoningChars += reasoningDelta.length;
+            }
             if (delta) {
               if (ttft === null) ttft = Date.now() - t0;
               text += delta;
@@ -317,13 +390,18 @@ const runRequest = async (model, phase) => {
         }
       }
       if (!text.trim()) {
-        rec.errorClass = 'empty_response';
-        rec.errorDetail = `finish_reason=${finishReason ?? 'n/a'}`;
+        if (reasoningChars > 0 && finishReason === 'length') {
+          rec.errorClass = 'reasoning_overflow';
+          rec.errorDetail = `spent the whole completion budget on hidden reasoning (${reasoningChars} chars) — raise --max-tokens`;
+        } else {
+          rec.errorClass = 'empty_response';
+          rec.errorDetail = `finish_reason=${finishReason ?? 'n/a'}`;
+        }
         return;
       }
       rec.ok = true;
       rec.pass = PHASES[phase].pass(text);
-      if (!rec.pass) rec.errorClass = 'wrong_answer';
+      if (!rec.pass) rec.errorClass = finishReason === 'length' ? 'truncated' : 'wrong_answer';
     } catch (err) {
       const msg = String(err?.message || err);
       if (err?.name === 'AbortError') {
@@ -396,7 +474,7 @@ const main = async () => {
       const id = known ? rest.join(':') : spec;
       const source = known || usable[0];
       if (!SOURCES[source].key) { console.warn(`⚠ ${spec}: no key for ${source} — skipped.`); continue; }
-      models.push({ source, id, contextLength: null, promptPerTok: 0, completionPerTok: 0, isFree: false, hasPricing: false, imageOnly: false });
+      models.push({ source, id, contextLength: null, promptPerTok: 0, completionPerTok: 0, isFree: false, hasPricing: false, supportsTemperature: true, supportsReasoning: false, excludeReason: null });
     }
   } else {
     for (const s of usable) {
@@ -410,7 +488,12 @@ const main = async () => {
     }
   }
 
-  models = models.filter((m) => !m.imageOnly); // chat probes only make sense for text-output models
+  // Chat probes only make sense for general text→text chat models.
+  const excludedModels = models.filter((m) => m.excludeReason);
+  models = models.filter((m) => !m.excludeReason);
+  if (excludedModels.length) {
+    console.log(`ℹ excluded ${excludedModels.length} special-purpose/non-text models: ${excludedModels.map((m) => `${m.id} (${m.excludeReason})`).join('; ')}`);
+  }
   if (OPT.match) models = models.filter((m) => m.id.toLowerCase().includes(OPT.match));
   if (OPT.freeOnly) models = models.filter((m) => m.isFree);
   if (OPT.paidOnly) models = models.filter((m) => !m.isFree);
