@@ -15,7 +15,7 @@ import { ALL_PROVIDERS, type ApiKeyProvider } from './apiKeys';
 const STORAGE = 'dreamstream_source_governance';
 export const SOURCE_GOVERNANCE_CHANGED = 'dreamstream:source-governance:changed';
 
-type GovernanceMap = Partial<Record<ApiKeyProvider, boolean>>;
+export type GovernanceMap = Partial<Record<ApiKeyProvider, boolean>>;
 
 const read = (): GovernanceMap => {
   if (typeof window === 'undefined') return {};
@@ -44,6 +44,24 @@ export const setProviderEnabled = (provider: ApiKeyProvider, on: boolean): void 
   const map = read();
   map[provider] = on;
   write(map);
+};
+
+/** The full governance map (explicit user choices only) — synced in the account snapshot. */
+export const getGovernanceMap = (): GovernanceMap => read();
+
+/**
+ * Restore a synced governance map (cloud-snapshot apply). Writes localStorage and
+ * notifies UI listeners; it never schedules a cloud push itself — the change event
+ * fires while cloudSync's applyingSnapshot guard is up, so the restore can't echo
+ * back as a fresh save (no save loop).
+ */
+export const applyGovernanceMap = (map: GovernanceMap): void => {
+  if (!map || typeof map !== 'object') return;
+  const clean: GovernanceMap = {};
+  for (const provider of ALL_PROVIDERS) {
+    if (typeof map[provider] === 'boolean') clean[provider] = map[provider];
+  }
+  write(clean);
 };
 
 export const getEnabledProviders = (): ApiKeyProvider[] => ALL_PROVIDERS.filter(isProviderEnabled);

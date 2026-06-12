@@ -7,6 +7,7 @@ import { clearAllKeys, setKeysChangeListener } from '../services/apiKeys';
 import { setChatDataChangeListener } from '../services/chatStorage';
 import { clearModelSelection, MODEL_SELECTION_CHANGED } from '../services/modelSelection';
 import { clearStudioModelSelection, STUDIO_MODEL_CHANGED } from '../services/studioModelSelection';
+import { SOURCE_GOVERNANCE_CHANGED } from '../services/sourceGovernance';
 import { registerDevice } from '../services/deviceSessions';
 import { syncOnLogin, schedulePush } from '../services/cloudSync';
 
@@ -87,6 +88,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         setChatDataChangeListener(pushIfSignedIn);
         window.addEventListener(MODEL_SELECTION_CHANGED, pushIfSignedIn);
         window.addEventListener(STUDIO_MODEL_CHANGED, pushIfSignedIn);
+        // Allowed-sources governance: an explicit OFF must follow the account (the
+        // restore path fires this event under the applyingSnapshot guard, so no loop).
+        window.addEventListener(SOURCE_GOVERNANCE_CHANGED, pushIfSignedIn);
 
         // Reconcile cloud <-> local exactly once per signed-in user.
         const onSignedIn = (userId: string) => {
@@ -138,6 +142,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             setChatDataChangeListener(null);
             window.removeEventListener(MODEL_SELECTION_CHANGED, pushIfSignedIn);
             window.removeEventListener(STUDIO_MODEL_CHANGED, pushIfSignedIn);
+            window.removeEventListener(SOURCE_GOVERNANCE_CHANGED, pushIfSignedIn);
         };
     }, []);
 

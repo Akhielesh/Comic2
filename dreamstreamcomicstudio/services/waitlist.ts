@@ -11,6 +11,20 @@ export type WaitlistKind = 'updates' | 'access';
 /** Machine-readable outcome, set by the backend for 'access' signups. */
 export type WaitlistStatus = 'joined' | 'already-registered' | 'account-exists';
 
+/** Products a signup can ask for first access to (server-accepted values). */
+export const PRODUCT_INTERESTS = ['comic_studio', 'chat_studio', 'code_studio', 'stream_studio', 'dashboards'] as const;
+export type ProductInterest = (typeof PRODUCT_INTERESTS)[number];
+
+const MAX_FEEDBACK_CHARS = 1000;
+
+/** Optional intent captured with the signup — email alone always still submits. */
+export interface WaitlistIntent {
+  /** Which products the signup wants first access to. */
+  productInterests?: ProductInterest[];
+  /** Free-form "anything you'd want to see" note (≤1000 chars). */
+  feedback?: string;
+}
+
 export interface WaitlistResult {
   ok: boolean;
   /** True when the email was already on the list — treated as a soft success. */
@@ -60,7 +74,8 @@ const subscribeViaApi = async (
   email: string,
   kind: WaitlistKind,
   metadata: Record<string, unknown>,
-  captchaToken?: string
+  captchaToken?: string,
+  intent: WaitlistIntent = {}
 ): Promise<WaitlistResult | null> => {
   if (!API_BASE_URL) return null;
   try {
@@ -72,7 +87,9 @@ const subscribeViaApi = async (
         kind,
         captchaToken,
         source: typeof window !== 'undefined' ? window.location.pathname : undefined,
-        ...(typeof metadata.source === 'string' ? { source: metadata.source } : {})
+        ...(typeof metadata.source === 'string' ? { source: metadata.source } : {}),
+        ...(intent.productInterests?.length ? { productInterests: intent.productInterests } : {}),
+        ...(intent.feedback ? { feedback: intent.feedback } : {})
       })
     });
     const data = (await res.json().catch(() => null)) as Partial<WaitlistResult> | null;
@@ -91,7 +108,8 @@ export const submitWaitlistEmail = async (
   rawEmail: string,
   kind: WaitlistKind = 'updates',
   metadata: Record<string, unknown> = {},
-  captchaToken?: string
+  captchaToken?: string,
+  intent: WaitlistIntent = {}
 ): Promise<WaitlistResult> => {
   const email = rawEmail.trim().toLowerCase();
   if (!email) {
@@ -101,8 +119,17 @@ export const submitWaitlistEmail = async (
     return { ok: false, message: 'That email doesn’t look right — please check it.' };
   }
 
+  // Both intent fields are optional — sanitize to the server contract.
+  const productInterests = intent.productInterests
+    ?.filter((p): p is ProductInterest => (PRODUCT_INTERESTS as readonly string[]).includes(p));
+  const feedback = intent.feedback?.trim().slice(0, MAX_FEEDBACK_CHARS) || undefined;
+  const cleanIntent: WaitlistIntent = {
+    ...(productInterests?.length ? { productInterests } : {}),
+    ...(feedback ? { feedback } : {})
+  };
+
   // Preferred path: the backend (sends the confirmation email + logs the capture).
-  const apiResult = await subscribeViaApi(email, kind, metadata, captchaToken);
+  const apiResult = await subscribeViaApi(email, kind, metadata, captchaToken, cleanIntent);
   if (apiResult) return apiResult;
 
   // Fallback: write directly to Supabase (no email, but the lead is still captured).
@@ -113,7 +140,7 @@ export const submitWaitlistEmail = async (
       email,
       kind,
       source: typeof window !== 'undefined' ? window.location.pathname : null,
-      metadata
+      metadata: { ...metadata, ...cleanIntent }
     });
 
     if (error) {
