@@ -3,6 +3,11 @@
 > Audit of the comic-generation pipelines: why the staged flow ("stages") does
 > not work, plus secondary issues in the live pipeline. Dated 2026-06-02.
 
+> **HISTORICAL (2026-06-12):** ComicForge was removed entirely per ADR 0004 —
+> the classic engine is the only engine, with new Phase 0 auto-references and
+> soft gates. Current truth: `features/comic-studio.md`. This audit is kept as
+> the record of why.
+
 The repo has **two** generation systems:
 
 1. **ComicForge** — the staged studio (`components/comicforge/`,

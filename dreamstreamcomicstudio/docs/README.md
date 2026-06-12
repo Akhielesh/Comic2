@@ -29,6 +29,7 @@ agent** can get oriented quickly and avoid re-deriving context.
 | `features/guided-learning.md` | Guided learning: the `create_learning_path` tool, `LearningPathArtifact`, the progress-tracked course card, `/learn` skill + recipe, composition with quiz/flashcards/exercises, study-mode auto-detection. |
 | `features/travel-planner.md` | Travel planner: the `plan_trip` tool (coercion, Nominatim + Open-Meteo enrichment), `ItineraryArtifact`, the day-tabbed itinerary card, `/trip` skill + recipe, related tools and travel MCPs. |
 | `features/mcp-directory.md` | MCP support: per-user registry + SSRF guards, `/api/mcp` routes, tool proxying into the agentic loop, the 13-entry curated catalog, marketplace UI, and the outbound `/api/connect/mcp` endpoint. |
+| `features/comic-studio.md` | The finalized comic creation flow: Story/Cast/Pages stages, Phase 0 auto style anchor + reference sheets, soft gates, models, sharing. (ADR 0004 removed ComicForge + Test Lab.) |
 
 ## Conventions
 

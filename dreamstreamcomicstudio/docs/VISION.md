@@ -145,8 +145,9 @@ shipped thin and end-to-end (connect → tool → card → memory) before wideni
 **P2 — platform health over new features:** memory settings UI (promised
 privacy surface), onboarding/first-run for Chat Studio, usage/retention
 instrumentation — *getting and keeping users for what's already built beats
-adding surface #9*. Decide Comic Studio's fate explicitly (it's behind a
-legacy flag; either recommit or sunset).
+adding surface #9*. Comic Studio's fate is DECIDED (June 2026): recommitted as
+a shareable product — one engine, simplified flow, ComicForge removed (ADR
+0004, `features/comic-studio.md`).
 
 **Parked (in the vision, not the plan):** WhatsApp/messaging connectors,
 studio-autopilot build-out, proactive background agent infrastructure beyond

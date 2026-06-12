@@ -13,6 +13,34 @@ Entry format:
 
 ---
 
+## 2026-06-12 — Comic Studio consolidation: comics reliably generate
+
+- **Problem:** owner "struggling with not being able to consistently produce
+  comics — the stages/flows are super messy"; wants to share Comic Studio with
+  real users.
+- **Root cause / context:** (1) Two engines: the live classic engine plus the
+  half-wired, disabled-by-default ComicForge (stubbed workers, retired model
+  ids, no queue consumer) confusing every audit and change. (2) The classic
+  engine's strict pre-run gates hard-failed builds when the style lock was
+  unresolved or characters had no reference images — and building references
+  was a manual, skippable step most users never did, so reference packs were
+  empty (no character consistency) or runs were blocked outright. (3) Nine
+  flat wizard steps read as "super messy".
+- **Solution:** ADR 0004 — classic engine is THE engine; ComicForge + admin
+  Test Lab deleted. New Phase 0 in `startBackgroundGeneration`: auto style
+  anchor (stage `style`) + auto character/world reference sheets
+  (`collectAutoReferenceTasks`, `character_sheet`/`world` stages, capped 10,
+  concurrency 3, `CHARACTER_SHEET_MODEL`), continuity bible rebuilt after.
+  Pre-run hard stops replaced with honest soft-continue logs; per-panel strict
+  checks still flag individual panels for retry. StepIndicator regrouped into
+  Story / Cast / Pages over the unchanged step machine.
+- **Files:** `services/autoReferences.ts` (+ tests), `services/generationManager.ts`,
+  `components/StepIndicator.tsx`, removals across `components/comicforge/`,
+  `server/src/comicforge/`, `components/TestLab.tsx` et al.
+- **Commit/Decision:** ADR 0004; `docs/features/comic-studio.md`.
+
+---
+
 ## 2026-06-08 — Transactional + newsletter email via Cloudflare Email Sending
 
 - **Problem:** no mailing service. Needed newsletter request confirmation, signup/auth

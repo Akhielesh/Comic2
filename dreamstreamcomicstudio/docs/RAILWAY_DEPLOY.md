@@ -49,8 +49,7 @@ AI_PROVIDER=openrouter        # default 'gemini'; set to 'openrouter' to use the
 GEMINI_API_KEY=<...>          # only if AI_PROVIDER=gemini
 PIXAZO_API_KEY=<...>          # only if using the legacy Pixazo image path
 ASSISTANT_GEMINI_API_KEY=<...>
-REDIS_URL=<redis url>         # OR set COMICFORGE_ENABLED=false if you have no Redis
-COMICFORGE_ENABLED=false      # disable the ComicForge worker when REDIS_URL is unset
+REDIS_URL=<redis url>         # optional — used by non-comic queue consumers (ventures)
 FOURSQUARE_API_KEY=<key>      # enables rich local search (ratings/price/photos) in chat;
                               # without it, find_places falls back to keyless OpenStreetMap
 FOURSQUARE_API_VERSION=2025-06-17  # only if Foursquare changes the required version date
