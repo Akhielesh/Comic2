@@ -7,6 +7,7 @@ import { ReferenceBuilder } from './steps/ReferenceBuilder';
 import { LayoutSelector } from './steps/LayoutSelector';
 import { ComicGenerator } from './ComicGenerator';
 import { ComicStreamView } from './studio/comic/ComicStreamView';
+import { AgentSettingsPanel } from './studio/comic/AgentSettingsPanel';
 import { ReviewExport } from './steps/ReviewExport';
 import { AppStep, Project } from '../types';
 import { assignImageTags, collectStateImageEntries } from '../services/imageTags';
@@ -143,6 +144,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   const [viewMode, setViewMode] = useState<'stream' | 'detailed'>(
     import.meta.env.VITE_COMIC_AGENT_ENABLED === 'true' ? 'stream' : 'detailed',
   );
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [deploymentParity, setDeploymentParity] = useState<DeploymentParityStatus | null>(null);
   const [navError, setNavError] = useState<string | null>(null);
   const previousStepRef = useRef<AppStep>(state.step);
@@ -606,7 +608,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           state={state}
           projectTitle={project.name}
           onBack={onBack}
-          onOpenSettings={() => setViewMode('detailed')}
+          onOpenSettings={() => setSettingsOpen(true)}
           onSend={(text) => {
             // Phase A bridge: a brand-new script routes to analysis in Detailed mode;
             // a mid-build note is captured as creative direction for the next run.
@@ -629,6 +631,13 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
             onExport: () => { setViewMode('detailed'); goToStep(AppStep.REVIEW_EXPORT); },
             onPublish: () => { setViewMode('detailed'); goToStep(AppStep.REVIEW_EXPORT); },
           }}
+        />
+        <AgentSettingsPanel
+          open={settingsOpen}
+          settings={state.agentSettings}
+          onChange={(next) => updateState({ agentSettings: next })}
+          onClose={() => setSettingsOpen(false)}
+          onOpenDetailed={() => { setSettingsOpen(false); setViewMode('detailed'); }}
         />
       </div>
     );
