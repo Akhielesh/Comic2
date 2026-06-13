@@ -6,6 +6,7 @@ import { CoverDesigner } from './steps/CoverDesigner';
 import { ReferenceBuilder } from './steps/ReferenceBuilder';
 import { LayoutSelector } from './steps/LayoutSelector';
 import { ComicGenerator } from './ComicGenerator';
+import { ComicStreamView } from './studio/comic/ComicStreamView';
 import { ReviewExport } from './steps/ReviewExport';
 import { AppStep, Project } from '../types';
 import { assignImageTags, collectStateImageEntries } from '../services/imageTags';
@@ -136,6 +137,12 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   const state = project.state;
   const [titleDraft, setTitleDraft] = useState(project.name);
   const [showVersions, setShowVersions] = useState(false);
+  // v3 Agent Stream is the centralized surface; the classic step wizard stays as
+  // "Detailed mode". Default to the stream when the flag is on; either way it's a
+  // non-destructive toggle, so production behavior is unchanged until we flip the flag.
+  const [viewMode, setViewMode] = useState<'stream' | 'detailed'>(
+    import.meta.env.VITE_COMIC_AGENT_ENABLED === 'true' ? 'stream' : 'detailed',
+  );
   const [deploymentParity, setDeploymentParity] = useState<DeploymentParityStatus | null>(null);
   const [navError, setNavError] = useState<string | null>(null);
   const previousStepRef = useRef<AppStep>(state.step);
@@ -592,6 +599,41 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
     }
   };
 
+  if (viewMode === 'stream') {
+    return (
+      <div className="h-screen">
+        <ComicStreamView
+          state={state}
+          projectTitle={project.name}
+          onBack={onBack}
+          onOpenSettings={() => setViewMode('detailed')}
+          onSend={(text) => {
+            // Phase A bridge: a brand-new script routes to analysis in Detailed mode;
+            // a mid-build note is captured as creative direction for the next run.
+            if ((state.scenes?.length || 0) === 0) {
+              updateState({ script: text });
+              setViewMode('detailed');
+              goToStep(AppStep.SCRIPT_INPUT);
+            } else {
+              updateState({ creativeDirection: text });
+            }
+          }}
+          handlers={{
+            onApprovePlan: () => onStartGeneration(project.id),
+            onSelectStyle: (id) => updateState({ selectedStyleId: id }),
+            onMoreStyles: () => { setViewMode('detailed'); goToStep(AppStep.STYLE_SELECTION); },
+            onEditEntity: () => { setViewMode('detailed'); goToStep(AppStep.REFERENCE_BUILDER); },
+            onSelectCover: () => { setViewMode('detailed'); goToStep(AppStep.COVER); },
+            onAdjust: () => setViewMode('detailed'),
+            onRead: () => { setViewMode('detailed'); goToStep(AppStep.REVIEW_EXPORT); },
+            onExport: () => { setViewMode('detailed'); goToStep(AppStep.REVIEW_EXPORT); },
+            onPublish: () => { setViewMode('detailed'); goToStep(AppStep.REVIEW_EXPORT); },
+          }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex flex-col">
       <StepIndicator currentStep={state.step} maxStepReached={state.maxStepReached} onStepClick={goToStep} />
@@ -627,6 +669,13 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
 
         {/* Active model + usage/limit, surfaced on the studio page */}
         <div className="ml-auto flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => setViewMode('stream')}
+            className="px-2.5 py-1 text-[11px] font-bold rounded-full border-2 border-black bg-brand-yellow hover:-translate-y-px transition-transform shrink-0"
+            title="Switch to the new Agent Stream view"
+          >
+            ✨ Stream view
+          </button>
           <ComicCostChip projectId={project.id} />
           <ActiveImageModelChip />
           <TokenAvailabilityPill />
