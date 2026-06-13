@@ -129,8 +129,11 @@ const buildStatusFromState = (state: ComicState): ComicAgentCardStatus | undefin
   const description = state.generationStatus?.currentStepDescription || "";
   if (/^failed/i.test(description)) return "failed";
   if (/^stopped/i.test(description)) return "blocked";
-  if (state.panels?.some((panel) => panel.imageUrl)) return "done";
+  // An in-flight run stays "active" even after the first panel lands. Checking rendered
+  // panels first flipped the Build card to "done" mid-render — while its own summary
+  // still read "1 of N panels rendered" — so only call it done once it is no longer active.
   if (state.generationStatus?.isActive) return "active";
+  if (state.panels?.some((panel) => panel.imageUrl)) return "done";
   return undefined;
 };
 

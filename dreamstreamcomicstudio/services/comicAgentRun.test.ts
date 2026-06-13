@@ -99,6 +99,39 @@ describe("comicAgentRun", () => {
     expect(run.events.at(-1)?.message).toBe(`event-${AGENT_EVENT_LIMIT + 9}`);
   });
 
+  it("keeps the build card active while a run is still rendering", () => {
+    const state = makeState({
+      step: AppStep.FULL_GENERATION,
+      maxStepReached: AppStep.FULL_GENERATION,
+      panels: [{
+        id: "panel-1",
+        sceneId: 1,
+        description: "Maya opens the door.",
+        dialogue: "",
+        imageId: "image-1",
+        imageUrl: "https://example.com/panel.png",
+        imageIdHistory: ["image-1"]
+      }],
+      generationStatus: {
+        isActive: true,
+        progress: 25,
+        startTime: 1,
+        estimatedTimeRemaining: "1m 00s",
+        currentStepDescription: "Scene 1 — panels 1–4 of 12",
+        logs: [],
+        completedPanels: 1,
+        totalPanels: 12
+      }
+    });
+
+    const run = syncAgentRunWithState(state);
+
+    // First panel has rendered, but the run is still active — the build card must not
+    // claim "done" while it is mid-render.
+    expect(run.cards.find((card) => card.kind === "build")?.status).toBe("active");
+    expect(run.cards.find((card) => card.kind === "build")?.summary).toBe("1 of 12 panels rendered.");
+  });
+
   it("summarizes prepared review outputs on the export card", () => {
     const state = makeState({
       step: AppStep.REVIEW_EXPORT,
