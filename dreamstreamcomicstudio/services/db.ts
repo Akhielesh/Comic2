@@ -17,6 +17,8 @@ const IMAGE_FETCH_METRIC_WINDOW = 200;
 const imageFetchSamplesMs: number[] = [];
 const IMAGE_URL_CACHE_TTL_MS = 15 * 60 * 1000;
 const SIGNED_IMAGE_URL_TIMEOUT_MS = 8000;
+const SIGNED_IMAGE_URL_MAX_ATTEMPTS = 2; // initial try + one retry on a transient failure
+const SIGNED_IMAGE_URL_RETRY_DELAY_MS = 250;
 const imageUrlCache = new Map<string, { url: string; expiresAt: number }>();
 
 // (Keeping IndexedDB logic for these specific stores)
@@ -174,24 +176,54 @@ const fetchSignedImageUrlFromApi = async (
     parsed.forEach((value, key) => query.set(key, value));
   }
 
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), SIGNED_IMAGE_URL_TIMEOUT_MS);
-  try {
-    const { data: { session } } = await supabase.auth.getSession();
-    const response = await fetch(buildApiUrl(`/api/system/image-url?${query.toString()}`), {
-      headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
-      signal: controller.signal
-    });
-    if (!response.ok) return undefined;
+  // One signing attempt. Returns the URL on success, otherwise a `retryable` flag:
+  // network/timeout/5xx/429 are transient and worth one retry, while 4xx (auth,
+  // not-found) and malformed payloads will not improve on a second try.
+  const attempt = async (): Promise<{ url?: string; retryable: boolean; reason: string }> => {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), SIGNED_IMAGE_URL_TIMEOUT_MS);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const response = await fetch(buildApiUrl(`/api/system/image-url?${query.toString()}`), {
+        headers: session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : undefined,
+        signal: controller.signal
+      });
+      if (!response.ok) {
+        return { retryable: response.status >= 500 || response.status === 429, reason: `http ${response.status}` };
+      }
+      const payload = await response.json().catch(() => null) as { url?: unknown } | null;
+      if (!payload || typeof payload.url !== 'string' || !payload.url.trim()) {
+        return { retryable: false, reason: 'empty payload' };
+      }
+      return { url: payload.url.trim(), retryable: false, reason: 'ok' };
+    } catch (error) {
+      return { retryable: true, reason: error instanceof Error ? error.name : 'network error' };
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  };
 
-    const payload = await response.json().catch(() => null) as { url?: unknown } | null;
-    if (!payload || typeof payload.url !== 'string' || !payload.url.trim()) return undefined;
-    return payload.url.trim();
-  } catch {
-    return undefined;
-  } finally {
-    window.clearTimeout(timeout);
+  let lastReason = 'unknown';
+  let lastRetryable = false;
+  for (let i = 0; i < SIGNED_IMAGE_URL_MAX_ATTEMPTS; i++) {
+    const result = await attempt();
+    if (result.url) return result.url;
+    lastReason = result.reason;
+    lastRetryable = result.retryable;
+    if (!result.retryable) break;
+    if (i < SIGNED_IMAGE_URL_MAX_ATTEMPTS - 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, SIGNED_IMAGE_URL_RETRY_DELAY_MS));
+    }
   }
+
+  // This used to fail silently — images just vanished with no diagnostic. The caller
+  // still falls back to a public URL, but surface transient/outage failures so a flaky
+  // backend or expired session is visible. Stay quiet on deterministic 4xx, which is the
+  // expected "not signable here, use the public URL" path and would otherwise spam.
+  if (lastRetryable) {
+    console.warn(`[db] Signed image URL unavailable for ${imagePath} after ${SIGNED_IMAGE_URL_MAX_ATTEMPTS} attempts (${lastReason}).`);
+  }
+  return undefined;
 };
 
 
