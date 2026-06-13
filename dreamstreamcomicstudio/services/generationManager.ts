@@ -682,6 +682,23 @@ export const startBackgroundGeneration = async (
             }
           }
 
+          // generateImage resolves to `undefined` (rather than throwing) when the run is
+          // aborted or the model returns an empty/blocked result. Without this guard the
+          // panel resolves "fulfilled" yet blank — counted as neither rendered nor failed,
+          // so it vanishes from progress and offers no retry. Treat a real empty result as
+          // a retryable failure; leave a user-canceled panel planned so a resumed run
+          // regenerates it.
+          if (!generatedImageId || !generatedImageUrl) {
+            if (isCanceled(project.id) || controller.signal.aborted) {
+              return normalizePanelDialogue({
+                ...normalizedPanel,
+                continuity: { ...panelContinuity, referenceImageIds: referencePack.imageIds },
+                isPlanned: true
+              });
+            }
+            throw new Error('No image was returned for this panel — the model returned an empty or blocked result. Retry the panel.');
+          }
+
           return normalizePanelDialogue({
             ...normalizedPanel,
             continuity: {
