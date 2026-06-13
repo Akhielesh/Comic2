@@ -68,8 +68,7 @@ async function main() {
         output.generation_steps.push({
             step: "Story/Script",
             input_context: {
-                user_input_script: state.script,
-                story_builder: state.storyBuilder
+                user_input_script: state.script
             },
             output_context: {
                 scenes: state.scenes?.map((s: any) => ({

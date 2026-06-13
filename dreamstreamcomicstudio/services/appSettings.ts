@@ -241,7 +241,6 @@ const TASK_ALIASES: Record<string, string> = {
   preview: "panel",
   script: "script_analysis",
   script_analysis: "script_analysis",
-  story_builder: "story_builder",
   layout: "panel_breakdown",
   panel_breakdown: "panel_breakdown",
   image_generation: "panel"

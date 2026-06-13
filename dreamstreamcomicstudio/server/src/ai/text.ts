@@ -487,10 +487,12 @@ Hard rules:
 Fill EVERY field for each entity so an artist can draw it without guessing. Never leave a field blank:
 - name: the canonical name exactly as written in the script.
 - description: ONE rich visual sentence of at least 12 words (silhouette, key features, colors, mood).
-- Characters MUST include structured: role, ageBand, physicalTraits, outfit, colorPalette, personality, constraints.
+- Characters MUST include structured: role, genderPresentation, ageBand, physicalTraits, distinguishingFeatures, outfit, colorPalette, personality, constraints, mustKeep, evidence.
 - Items MUST include structured: itemType, material, condition, scale, visualMotif, constraints.
 - Locations MUST include structured: environmentType, eraMood, lighting, landmarks, palette, constraints.
-- When a detail is not stated, infer the most likely concrete visual implied by the scene rather than leaving it empty; only use "unspecified" if the scenes truly give nothing.
+- Preserve stated gender, age, body, face, hair, outfit, species, and relationship cues exactly. If a detail is ambiguous, write "unspecified" instead of changing the character identity.
+- evidence is a short source clue from the scene excerpt that justifies the identity fields.
+- mustKeep is a compact lock string for every later panel: gender/presentation, age band, body/silhouette, face/hair/skin, outfit, palette, and signature marks.
 
 - Characters max: ${MAX_WORLD_CHARACTER_COUNT}
 - Items max: ${MAX_WORLD_ITEM_COUNT}
@@ -901,12 +903,16 @@ export const extractWorldDetails = async (
                     type: Type.OBJECT,
                     properties: {
                       role: { type: Type.STRING },
+                      genderPresentation: { type: Type.STRING },
                       ageBand: { type: Type.STRING },
                       physicalTraits: { type: Type.STRING },
+                      distinguishingFeatures: { type: Type.STRING },
                       outfit: { type: Type.STRING },
                       colorPalette: { type: Type.STRING },
                       personality: { type: Type.STRING },
-                      constraints: { type: Type.STRING }
+                      constraints: { type: Type.STRING },
+                      mustKeep: { type: Type.STRING },
+                      evidence: { type: Type.STRING }
                     }
                   }
                 },
@@ -976,12 +982,16 @@ export const extractWorldDetails = async (
     const name = isString(c?.name) ? c.name.trim() : 'Unnamed';
     const structured = readStructuredObject(c?.structured, [
       'role',
+      'genderPresentation',
       'ageBand',
       'physicalTraits',
+      'distinguishingFeatures',
       'outfit',
       'colorPalette',
       'personality',
-      'constraints'
+      'constraints',
+      'mustKeep',
+      'evidence'
     ]);
     return {
       id: crypto.randomUUID(),

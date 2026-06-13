@@ -584,9 +584,14 @@ export const generateImage = async (
   const fallbackFromModel = typeof artifactMeta.fallbackFromModel === 'string' ? artifactMeta.fallbackFromModel : undefined;
   const fallbackToModel = typeof artifactMeta.fallbackToModel === 'string' ? artifactMeta.fallbackToModel : undefined;
   const styleLockUsed = Boolean(artifactMeta.styleLockUsed);
+  const artifactReferenceIds = referenceImageIds.map((ref, index) =>
+    ref.startsWith('data:image/') ? `inline-reference-${index + 1}` : ref
+  );
 
   try {
-    const referenceDataUrls = await Promise.all(referenceImageIds.map((id) => getImageDataUrl(id)));
+    const referenceDataUrls = await Promise.all(referenceImageIds.map((id) =>
+      id.startsWith('data:image/') ? id : getImageDataUrl(id)
+    ));
     const validReferenceImages = referenceDataUrls.filter((img): img is string => !!img);
     const modelSpecificKey = getModelSpecificKey(targetModel);
     const storageMode = options?.storage || 'project';
@@ -705,7 +710,7 @@ export const generateImage = async (
         model: response.model || 'gemini-image',
         stage: options?.stage || 'generation',
         prompt: response.prompt,
-        inputImageIds: referenceImageIds,
+        inputImageIds: artifactReferenceIds,
         outputImageId: imageId,
         aspectRatio,
         resolution,
@@ -732,7 +737,7 @@ export const generateImage = async (
         model: targetModel,
         stage: options?.stage || 'generation',
         prompt: finalPrompt,
-        inputImageIds: referenceImageIds,
+        inputImageIds: artifactReferenceIds,
         aspectRatio,
         resolution,
         success: false,

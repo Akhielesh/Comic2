@@ -8,38 +8,37 @@ interface StepIndicatorProps {
   onStepClick: (step: AppStep) => void;
 }
 
-// The live steps grouped into the three stages users actually think in: write the
-// story, build the world, make the pages. Story-Planning and the manual panel
-// Preview were removed from the flow (scene review is automatic; panel planning
-// happens inside the build), so they no longer appear here.
+// The live flow is grouped into three agent phases. Story-Planning and the manual
+// panel Preview are intentionally absent: scene review is automatic, and panel
+// planning happens inside the build.
 const STAGES: { label: string; steps: { id: AppStep; label: string }[] }[] = [
   {
-    label: 'Story',
+    label: 'Prompt',
     steps: [
       { id: AppStep.SCRIPT_INPUT, label: 'Script' },
       { id: AppStep.STYLE_SELECTION, label: 'Style' }
     ]
   },
   {
-    label: 'World',
+    label: 'Design',
     steps: [
       { id: AppStep.REFERENCE_BUILDER, label: 'Cast' },
       { id: AppStep.COVER, label: 'Cover' }
     ]
   },
   {
-    label: 'Pages',
+    label: 'Build',
     steps: [
-      { id: AppStep.LAYOUT_SELECTION, label: 'Layout' },
+      { id: AppStep.LAYOUT_SELECTION, label: 'Pages' },
       { id: AppStep.FULL_GENERATION, label: 'Build' },
-      { id: AppStep.REVIEW_EXPORT, label: 'Done' }
+      { id: AppStep.REVIEW_EXPORT, label: 'Export' }
     ]
   }
 ];
 
 export const StepIndicator: React.FC<StepIndicatorProps> = ({ currentStep, maxStepReached, onStepClick }) => {
   return (
-    <div className="w-full py-2 sticky top-0 z-40 bg-brand-blue/90 backdrop-blur-sm border-b-2 border-black">
+    <div className="w-full py-2 sticky top-0 z-40 bg-zinc-950/95 backdrop-blur-sm border-b border-zinc-800">
       <div className="max-w-5xl mx-auto px-4 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <div className="flex items-center gap-2 sm:gap-3">
           {STAGES.map((stage, stageIndex) => {
@@ -51,14 +50,14 @@ export const StepIndicator: React.FC<StepIndicatorProps> = ({ currentStep, maxSt
 
             return (
               <React.Fragment key={stage.label}>
-                {stageIndex > 0 && <div className="h-1 w-4 sm:w-8 shrink-0 rounded-full bg-black/30" />}
+                {stageIndex > 0 && <div className="h-px w-2 sm:w-8 shrink-0 bg-zinc-700" />}
                 <div
                   className={`
-                    flex items-center gap-1.5 rounded-full border-2 px-2 py-1 shrink-0 transition-all
-                    ${isCurrentStage ? 'bg-white border-black shadow-comic' :
-                      isCompletedStage ? 'bg-brand-yellow border-black cursor-pointer' :
-                      isReachableStage ? 'bg-slate-800/70 border-slate-600 cursor-pointer' :
-                      'bg-slate-800/70 border-slate-600 opacity-60 cursor-not-allowed'}
+                    flex items-center gap-1.5 rounded-full border px-1.5 py-1 sm:px-2 shrink-0 transition-all
+                    ${isCurrentStage ? 'bg-white border-white' :
+                      isCompletedStage ? 'bg-emerald-300 border-emerald-300 cursor-pointer' :
+                      isReachableStage ? 'bg-zinc-900 border-zinc-700 cursor-pointer' :
+                      'bg-zinc-900 border-zinc-800 opacity-60 cursor-not-allowed'}
                   `}
                   onClick={() => {
                     if (!isCurrentStage && isReachableStage) {
@@ -69,13 +68,13 @@ export const StepIndicator: React.FC<StepIndicatorProps> = ({ currentStep, maxSt
                 >
                   <div
                     className={`
-                      w-6 h-6 rounded-full flex items-center justify-center border-2 border-black shrink-0
-                      ${isCompletedStage ? 'bg-white text-black' : isCurrentStage ? 'bg-brand-yellow text-black' : 'bg-slate-700 text-white/60 border-slate-500'}
+                      w-5 h-5 rounded-full flex items-center justify-center border shrink-0
+                      ${isCompletedStage ? 'bg-zinc-950 text-emerald-300 border-zinc-950' : isCurrentStage ? 'bg-zinc-950 text-white border-zinc-950' : 'bg-zinc-800 text-white/60 border-zinc-700'}
                     `}
                   >
-                    {isCompletedStage ? <Check size={14} strokeWidth={4} /> : <span className="text-xs font-display">{stageIndex + 1}</span>}
+                    {isCompletedStage ? <Check size={12} strokeWidth={4} /> : <span className="text-[10px] font-semibold">{stageIndex + 1}</span>}
                   </div>
-                  <span className={`text-xs font-bold uppercase tracking-wide whitespace-nowrap ${isCurrentStage || isCompletedStage ? 'text-black' : 'text-white/70'}`}>
+                  <span className={`text-xs font-semibold whitespace-nowrap ${isCurrentStage ? '' : 'hidden sm:inline'} ${isCurrentStage || isCompletedStage ? 'text-zinc-950' : 'text-white/70'}`}>
                     {stage.label}
                   </span>
 
@@ -97,11 +96,11 @@ export const StepIndicator: React.FC<StepIndicatorProps> = ({ currentStep, maxSt
                             disabled={!isReachable}
                             title={step.label}
                             className={`
-                              rounded-full border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide whitespace-nowrap transition-all
-                              ${isCurrent ? 'bg-black text-white border-black' :
-                                isDone ? 'bg-brand-yellow text-black border-black' :
-                                isReachable ? 'bg-white text-slate-600 border-slate-300 hover:border-black' :
-                                'bg-white/60 text-slate-400 border-slate-200 cursor-not-allowed'}
+                              rounded-full border px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap transition-all
+                              ${isCurrent ? 'bg-zinc-950 text-white border-zinc-950' :
+                                isDone ? 'bg-emerald-300 text-zinc-950 border-emerald-300' :
+                                isReachable ? 'bg-white text-zinc-600 border-zinc-300 hover:border-zinc-950' :
+                                'bg-white/60 text-zinc-400 border-zinc-200 cursor-not-allowed'}
                             `}
                           >
                             {step.label}

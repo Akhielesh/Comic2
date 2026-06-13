@@ -231,6 +231,7 @@ export const PageStudio: React.FC<PageStudioProps> = ({ project, onUpdate, onBac
         imageUrl: url,
         imageId: res.imageId,
         baseImageUrl: url,
+        baseImageId: res.imageId,
         edits: [],
         createdAt: Date.now()
       };

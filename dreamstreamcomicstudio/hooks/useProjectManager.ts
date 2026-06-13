@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Project, ComicState, AppStep, ComicPanel, Character, Item, Location, StyleVariant } from '../types';
+import { Project, ComicState, AppStep, ComicPanel, Character, Item, Location, StyleVariant, PageStudioPage } from '../types';
 import { startBackgroundGeneration, cancelGeneration } from '../services/generationManager';
 import { DEFAULT_PRICING_CONFIG } from '../services/pricingConfig';
 import { buildDefaultContinuityState, validateContinuityState } from '../services/continuity';
@@ -8,6 +8,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { IMAGE_TRANSFORMS } from '../services/projectStorage';
 import { applyStyleLockResolution } from '../services/styleLock';
 import { getDefaultStoryPlanningState, recommendStoryPlanning } from '../services/storyPlanning';
+import { makeDefaultComicAgentSettings, normalizeComicAgentSettings } from '../services/comicAgentSettings';
+import { makeDefaultComicAgentRun, syncAgentRunWithState } from '../services/comicAgentRun';
 
 const SAVE_DEBOUNCE_MS = 500;
 const FLOW_VERSION = 4;
@@ -67,10 +69,10 @@ const remapLegacyStepOrder = (step: number, flowVersion: number) => {
   return step;
 };
 
-const injectStoryPlanningStep = (step: number, flowVersion: number) => {
+const mapLegacyStepToCurrentEnum = (step: number, flowVersion: number) => {
   if (flowVersion >= FLOW_VERSION) return step;
-  // STORY_PLANNING was inserted after SCRIPT_INPUT in flow v4.
-  // For legacy flows (<4), every step from prior index 1 onward shifts by +1.
+  // Older saved projects used step 1 for Style. The reserved STORY_PLANNING enum
+  // now lives at 1, so legacy steps from that point forward shift into today's enum.
   return step >= AppStep.STORY_PLANNING ? step + 1 : step;
 };
 
@@ -78,8 +80,8 @@ const applyStateMigrations = (state: ComicState): ComicState => {
   const sourceFlowVersion = typeof state.flowVersion === 'number' ? state.flowVersion : 0;
   const migratedStepOrder = remapLegacyStepOrder(state.step, sourceFlowVersion);
   const migratedMaxOrder = remapLegacyStepOrder(state.maxStepReached, sourceFlowVersion);
-  let nextStep = injectStoryPlanningStep(migratedStepOrder, sourceFlowVersion);
-  let nextMax = injectStoryPlanningStep(migratedMaxOrder, sourceFlowVersion);
+  let nextStep = mapLegacyStepToCurrentEnum(migratedStepOrder, sourceFlowVersion);
+  let nextMax = mapLegacyStepToCurrentEnum(migratedMaxOrder, sourceFlowVersion);
 
   const planningFromState = state.storyPlanning;
   const computedPlanning = planningFromState || (
@@ -112,7 +114,7 @@ const applyStateMigrations = (state: ComicState): ComicState => {
     overview: state.overview || '',
     comments: state.comments || [],
     storyPlanning: computedPlanning,
-    storyBuilder: state.storyBuilder,
+    agentSettings: normalizeComicAgentSettings(state.agentSettings),
     isFeatured: state.isFeatured ?? false,
     customAspectRatioEnabled: state.customAspectRatioEnabled ?? false,
     customAspectRatio: state.customAspectRatio,
@@ -129,7 +131,11 @@ const applyStateMigrations = (state: ComicState): ComicState => {
       validation: nextValidation
     }
   };
-  return applyStyleLockResolution(migrated).state;
+  const repaired = applyStyleLockResolution(migrated).state;
+  return {
+    ...repaired,
+    agentRun: syncAgentRunWithState(repaired)
+  };
 };
 
 export const migrateComicStateForFlow = (state: ComicState) => applyStateMigrations(state);
@@ -144,6 +150,11 @@ const didStyleLockRepairOccur = (before: ComicState, after: ComicState) => {
     before.styleLockResolvedAt !== after.styleLockResolvedAt
   );
 };
+
+const didStateMigrationRequireSave = (before: ComicState, after: ComicState) =>
+  didStyleLockRepairOccur(before, after) ||
+  !before.agentRun ||
+  before.flowVersion !== after.flowVersion;
 
 const hasLegacyStepShift = (state: ComicState): boolean => {
   if (typeof state.flowVersion !== 'number') return false;
@@ -202,6 +213,8 @@ const INITIAL_STATE: ComicState = {
   maxStepReached: AppStep.SCRIPT_INPUT,
   flowVersion: FLOW_VERSION,
   script: '',
+  agentSettings: makeDefaultComicAgentSettings(),
+  agentRun: makeDefaultComicAgentRun(),
   storyPlanning: getDefaultStoryPlanningState(),
   scriptChecklist: undefined,
   scenes: [],
@@ -225,7 +238,6 @@ const INITIAL_STATE: ComicState = {
   },
   overview: '',
   comments: [],
-  storyBuilder: undefined,
   isFeatured: false,
   coverImageId: undefined,
   coverImageUrl: undefined,
@@ -260,6 +272,7 @@ const INITIAL_STATE: ComicState = {
 export const useProjectManager = () => {
   const { user, loading: authLoading } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
   const saveTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const pendingSavesRef = useRef<Map<string, Project>>(new Map());
 
@@ -287,9 +300,9 @@ export const useProjectManager = () => {
     };
   }, []);
 
-  const hydrateProject = async (project: Project): Promise<Project> => {
-    const hydratePanel = async (panel: ComicPanel) => {
-      const imageUrl = panel.imageId ? await getImageUrl(panel.imageId) : panel.imageUrl;
+	  const hydrateProject = async (project: Project): Promise<Project> => {
+	    const hydratePanel = async (panel: ComicPanel) => {
+	      const imageUrl = panel.imageId ? await getImageUrl(panel.imageId) : panel.imageUrl;
       const imageUrlHistory = panel.imageIdHistory
         ? await Promise.all(panel.imageIdHistory.map((id) => getImageUrl(id)))
         : [];
@@ -301,16 +314,41 @@ export const useProjectManager = () => {
       return { ...entity, imageUrl };
     };
 
-    const hydrateVariant = async (variant: StyleVariant) => {
-      const imageUrl = variant.imageId ? await getImageUrl(variant.imageId) : variant.imageUrl;
-      return { ...variant, imageUrl };
-    };
+	    const hydrateVariant = async (variant: StyleVariant) => {
+	      const imageUrl = variant.imageId ? await getImageUrl(variant.imageId) : variant.imageUrl;
+	      return { ...variant, imageUrl };
+	    };
 
-    const panels = await Promise.all(project.state.panels.map(hydratePanel));
-    const characters = await Promise.all(project.state.characters.map(hydrateEntity));
-    const items = await Promise.all(project.state.items.map(hydrateEntity));
-    const locations = await Promise.all(project.state.locations.map(hydrateEntity));
-    const styleVariants = await Promise.all(project.state.styleVariants.map(hydrateVariant));
+	    const hydratePageStudioPage = async (page: PageStudioPage): Promise<PageStudioPage> => {
+	      const imageUrl = page.imageId ? await getImageUrl(page.imageId) : page.imageUrl;
+	      const baseImageUrl = page.baseImageId
+	        ? await getImageUrl(page.baseImageId)
+	        : page.baseImageUrl || imageUrl;
+	      const edits = page.edits
+	        ? await Promise.all(page.edits.map(async (edit) => ({
+	            ...edit,
+	            imageUrl: edit.imageId ? await getImageUrl(edit.imageId) : edit.imageUrl
+	          })))
+	        : [];
+	      return {
+	        ...page,
+	        imageUrl,
+	        baseImageUrl,
+	        edits
+	      };
+	    };
+
+	    const panels = await Promise.all(project.state.panels.map(hydratePanel));
+	    const characters = await Promise.all(project.state.characters.map(hydrateEntity));
+	    const items = await Promise.all(project.state.items.map(hydrateEntity));
+	    const locations = await Promise.all(project.state.locations.map(hydrateEntity));
+	    const styleVariants = await Promise.all(project.state.styleVariants.map(hydrateVariant));
+	    const pageStudio = project.state.pageStudio
+	      ? {
+	          ...project.state.pageStudio,
+	          pages: await Promise.all(project.state.pageStudio.pages.map(hydratePageStudioPage))
+	        }
+	      : project.state.pageStudio;
 
     // Hydrate the persisted style reference image
     const styleImageUrl = project.state.styleImageId
@@ -318,20 +356,21 @@ export const useProjectManager = () => {
       : project.state.styleImageUrl;
 
     const migratedState = await migrateHydratedCoverAndFlowState(project.state, {
-      panels,
-      characters,
-      items,
-      locations,
-      styleVariants,
-      styleImageUrl,
-    }, { useThumbTransform: false });
+	      panels,
+	      characters,
+	      items,
+	      locations,
+	      styleVariants,
+	      pageStudio,
+	      styleImageUrl,
+	    }, { useThumbTransform: false });
 
     const hydratedProject: Project = {
       ...project,
       state: migratedState
     };
 
-    if (didStyleLockRepairOccur(project.state, migratedState)) {
+    if (didStateMigrationRequireSave(project.state, migratedState)) {
       void saveProject(hydratedProject);
     }
 
@@ -358,7 +397,7 @@ export const useProjectManager = () => {
       }
     }
 
-    let styleOverrides: StyleVariant[] | undefined;
+	    let styleOverrides: StyleVariant[] | undefined;
     const firstStyleWithImageIdIndex = project.state.styleVariants.findIndex((variant) => !variant.imageUrl && !!variant.imageId);
     if (firstStyleWithImageIdIndex >= 0) {
       const target = project.state.styleVariants[firstStyleWithImageIdIndex];
@@ -370,22 +409,36 @@ export const useProjectManager = () => {
           imageUrl: hydratedStyleUrl
         };
       }
-    }
+	    }
 
-    const migratedState = await migrateHydratedCoverAndFlowState(
-      project.state,
-      {
-        ...(panelOverrides ? { panels: panelOverrides } : {}),
-        ...(styleOverrides ? { styleVariants: styleOverrides } : {})
-      },
-      { useThumbTransform: true }
-    );
+	    let pageStudioOverride = project.state.pageStudio;
+	    if (project.state.pageStudio?.pages?.length) {
+	      pageStudioOverride = {
+	        ...project.state.pageStudio,
+	        pages: await Promise.all(project.state.pageStudio.pages.map(async (page) => ({
+	          ...page,
+	          imageUrl: page.imageId
+	            ? await getImageUrl(page.imageId, { transform: IMAGE_TRANSFORMS.thumb })
+	            : page.imageUrl
+	        })))
+	      };
+	    }
+
+	    const migratedState = await migrateHydratedCoverAndFlowState(
+	      project.state,
+	      {
+	        ...(panelOverrides ? { panels: panelOverrides } : {}),
+	        ...(styleOverrides ? { styleVariants: styleOverrides } : {}),
+	        ...(pageStudioOverride ? { pageStudio: pageStudioOverride } : {})
+	      },
+	      { useThumbTransform: true }
+	    );
 
     const hydratedProject: Project = {
       ...project,
       state: migratedState
     };
-    if (didStyleLockRepairOccur(project.state, migratedState)) {
+    if (didStateMigrationRequireSave(project.state, migratedState)) {
       void saveProject(hydratedProject);
     }
     return hydratedProject;
@@ -490,8 +543,10 @@ export const useProjectManager = () => {
 
   const loadAllProjects = async () => {
     try {
+      setProjectsLoaded(false);
       if (!user) {
         setProjects([]);
+        setProjectsLoaded(true);
         return;
       }
 
@@ -500,6 +555,8 @@ export const useProjectManager = () => {
       setProjects(hydrated);
     } catch (e) {
       console.error("Failed to load projects", e);
+    } finally {
+      setProjectsLoaded(true);
     }
   };
 
@@ -618,6 +675,7 @@ export const useProjectManager = () => {
 
   return {
     projects,
+    projectsLoaded,
     createProject,
     updateProject,
     deleteProject,

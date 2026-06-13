@@ -1,5 +1,6 @@
 import { AppStep, Character, ComicState, Item, LayoutType, Location, Scene, StyleVariant } from "../types";
 import { buildContinuityFromWorld } from "./continuity";
+import { transitionAgentRun } from "./comicAgentRun";
 import { getFormFactorDefaultAspectRatio, recommendStoryPlanning } from "./storyPlanning";
 
 type ResetSourceStage =
@@ -88,6 +89,38 @@ const stripGeneratedWorldImages = <T extends Character | Item | Location>(entiti
     imageUrl: undefined
   }));
 
+const normalizeMatchText = (value: string) =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const containsName = (source: string, name: string) => {
+  const normalizedSource = normalizeMatchText(source);
+  const normalizedName = normalizeMatchText(name);
+  if (!normalizedSource || !normalizedName) return false;
+  return new RegExp(`(^|\\s)${normalizedName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|\\s)`).test(normalizedSource);
+};
+
+const preserveGroundedWorld = (state: ComicState, nextScript: string, nextScenes: Scene[]) => {
+  const groundingText = [
+    nextScript,
+    ...nextScenes.flatMap((scene) => [
+      scene.rawText || "",
+      scene.synopsis || "",
+      scene.setting || "",
+      ...(scene.characters || [])
+    ])
+  ].join("\n");
+
+  const characters = (state.characters || []).filter((character) => containsName(groundingText, character.name));
+  const items = (state.items || []).filter((item) => containsName(groundingText, item.name));
+  const locations = (state.locations || []).filter((location) => containsName(groundingText, location.name));
+
+  return { characters, items, locations };
+};
+
 const applyResetSource = (
   source: ResetSourceStage
 ): Pick<ComicState, "lastResetSourceStage"> => ({
@@ -99,14 +132,16 @@ export const resetFromScriptAnalysis = (
   nextScript: string,
   nextScenes: Scene[]
 ): Partial<ComicState> => {
-  const clearedCharacters: Character[] = [];
-  const clearedItems: Item[] = [];
-  const clearedLocations: Location[] = [];
+  const {
+    characters: preservedCharacters,
+    items: preservedItems,
+    locations: preservedLocations
+  } = preserveGroundedWorld(state, nextScript, nextScenes);
   const nextContinuity = buildContinuityFromWorld(
     nextScenes,
-    clearedCharacters,
-    clearedItems,
-    clearedLocations,
+    preservedCharacters,
+    preservedItems,
+    preservedLocations,
     state.continuity
   );
 
@@ -123,6 +158,28 @@ export const resetFromScriptAnalysis = (
     ...clearCoverState(),
     ...clearPanelState(),
     script: nextScript,
+    agentRun: transitionAgentRun(
+      state,
+      [
+        {
+          kind: "prompt",
+          status: "done",
+          summary: `${nextScenes.length} scene${nextScenes.length === 1 ? "" : "s"} analyzed from the story input.`,
+          progress: 100
+        },
+        { kind: "style", status: "active", summary: "Ready to pick the comic's visual language." },
+        { kind: "cast", status: "pending" },
+        { kind: "cover", status: "pending" },
+        { kind: "layout", status: "pending" },
+        { kind: "build", status: "pending", progress: 0 },
+        { kind: "export", status: "pending", progress: 0 }
+      ],
+      {
+        kind: "prompt",
+        status: "info",
+        message: `Analyzed the story into ${nextScenes.length} scene${nextScenes.length === 1 ? "" : "s"}.`
+      }
+    ),
     storyPlanning,
     scenes: nextScenes,
     styleVariants: [],
@@ -135,16 +192,18 @@ export const resetFromScriptAnalysis = (
     styleCategory: "",
     styleAspectRatio: "1:1",
     imageResolution: "1K",
-    characters: clearedCharacters,
-    items: clearedItems,
-    locations: clearedLocations,
+    characters: preservedCharacters,
+    items: preservedItems,
+    locations: preservedLocations,
     continuity: nextContinuity,
     layoutType: "grid",
     gridTemplateId: undefined,
     customLayoutPrompt: undefined,
     scriptHash: stableHash(nextScript || ""),
     sceneHash: hashScenes(nextScenes),
-    worldHash: undefined
+    worldHash: preservedCharacters.length || preservedItems.length || preservedLocations.length
+      ? hashWorld(preservedCharacters, preservedItems, preservedLocations)
+      : undefined
   };
 };
 
@@ -159,6 +218,18 @@ export const resetFromStoryPlanningConfirm = (
   return {
     ...withStepGate(state, AppStep.STYLE_SELECTION),
     ...applyResetSource("story_planning_confirm"),
+    agentRun: transitionAgentRun(
+      state,
+      [
+        { kind: "prompt", status: "done", progress: 100 },
+        { kind: "style", status: "active", summary: "Ready to pick the comic's visual language." }
+      ],
+      {
+        kind: "style",
+        status: "info",
+        message: "Skipped the retired planning gate and moved to style."
+      }
+    ),
     styleAspectRatio
   };
 };
@@ -184,6 +255,27 @@ export const resetFromStyleConfirm = (
     ...clearCoverState(),
     ...clearPanelState(),
     selectedStyleId: style.id,
+    agentRun: transitionAgentRun(
+      state,
+      [
+        {
+          kind: "style",
+          status: "done",
+          summary: `Style locked${style.category ? `: ${style.category}` : ""}.`,
+          progress: 100
+        },
+        { kind: "cast", status: "active", summary: "Ready to extract and lock the cast/world context." },
+        { kind: "cover", status: "pending" },
+        { kind: "layout", status: "pending" },
+        { kind: "build", status: "pending", progress: 0 },
+        { kind: "export", status: "pending", progress: 0 }
+      ],
+      {
+        kind: "style",
+        status: "info",
+        message: `Locked style direction${style.category ? ` (${style.category})` : ""}.`
+      }
+    ),
     stylePrompt: style.prompt,
     styleImageId: style.imageId,
     styleImageUrl: style.imageUrl,
@@ -217,6 +309,26 @@ export const resetFromWorldConfirm = (state: ComicState): Partial<ComicState> =>
     ...applyResetSource("world_confirm"),
     ...clearCoverState(),
     ...clearPanelState(),
+    agentRun: transitionAgentRun(
+      state,
+      [
+        {
+          kind: "cast",
+          status: "done",
+          summary: `${(state.characters || []).length} character${(state.characters || []).length === 1 ? "" : "s"}, ${(state.items || []).length} item${(state.items || []).length === 1 ? "" : "s"}, and ${(state.locations || []).length} location${(state.locations || []).length === 1 ? "" : "s"} locked.`,
+          progress: 100
+        },
+        { kind: "cover", status: "active", summary: "Ready to generate a story-grounded cover." },
+        { kind: "layout", status: "pending" },
+        { kind: "build", status: "pending", progress: 0 },
+        { kind: "export", status: "pending", progress: 0 }
+      ],
+      {
+        kind: "cast",
+        status: "info",
+        message: "Locked cast, world, and continuity context."
+      }
+    ),
     continuity: nextContinuity,
     worldHash: hashWorld(state.characters || [], state.items || [], state.locations || [])
   };
@@ -236,6 +348,24 @@ export const resetFromLayoutConfirm = (
     ...withStepGate(state, AppStep.FULL_GENERATION),
     ...applyResetSource("layout_confirm"),
     ...clearPanelState(),
+    agentRun: transitionAgentRun(
+      state,
+      [
+        {
+          kind: "layout",
+          status: "done",
+          summary: `${pageCount && pageCount > 0 ? Math.min(60, Math.floor(pageCount)) : "Auto"} page plan with ${layoutType.replace(/_/g, " ")} layout.`,
+          progress: 100
+        },
+        { kind: "build", status: "active", summary: "Ready to render and save panels.", progress: 0 },
+        { kind: "export", status: "pending", progress: 0 }
+      ],
+      {
+        kind: "layout",
+        status: "info",
+        message: "Confirmed layout and queued the build."
+      }
+    ),
     layoutType,
     customLayoutPrompt,
     gridTemplateId,

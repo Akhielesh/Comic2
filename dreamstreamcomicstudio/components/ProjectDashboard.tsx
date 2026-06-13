@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, Suspense } from 'react';
-import { Plus, BookOpen, Edit, Trash2, Copy, LayoutGrid, Sparkles, Zap, CheckCircle2, XCircle, AlertTriangle, Info, Star, Filter, Calendar, ArrowDownAZ, ArrowUpAZ, Clock, Loader2 } from 'lucide-react';
+import { Plus, BookOpen, Edit, Trash2, Copy, LayoutGrid, Sparkles, CheckCircle2, XCircle, AlertTriangle, Info, Star, Filter, Calendar, ArrowDownAZ, ArrowUpAZ, Clock, Loader2 } from 'lucide-react';
 import { AppStep, Project } from '../types';
 import { Button } from './Button';
 // Lazy load ProjectInfoModal
@@ -28,9 +28,6 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
 }) => {
   const [isCreating, setIsCreating] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
-  // Engine the new comic uses. Default to 'classic' (multi-panel with character
-  // continuity); 'pagestudio' is the quick single-page alternative.
-  const [createMode, setCreateMode] = useState<'classic' | 'pagestudio'>('classic');
   const [infoProjectId, setInfoProjectId] = useState<string | null>(null);
   const infoProject = infoProjectId ? projects.find((p) => p.id === infoProjectId) : undefined;
   const [searchTerm, setSearchTerm] = useState('');
@@ -42,7 +39,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
   const [statusFilter, setStatusFilter] = useState<'all' | 'generating' | 'completed' | 'draft'>('all');
   const [hasCoverFilter, setHasCoverFilter] = useState(false);
   const [hasCommentsFilter, setHasCommentsFilter] = useState(false);
-  const [stepFilter, setStepFilter] = useState<'all' | 'script' | 'plan' | 'style' | 'world' | 'cover' | 'layout' | 'preview' | 'build' | 'done'>('all');
+  const [stepFilter, setStepFilter] = useState<'all' | 'script' | 'style' | 'world' | 'cover' | 'layout' | 'build' | 'done'>('all');
 
   const filteredProjects = useMemo(() => {
     const now = Date.now();
@@ -55,23 +52,22 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
       const step = project.state.step;
       switch (stepFilter) {
         case 'script': return step === AppStep.SCRIPT_INPUT;
-        case 'plan': return step === AppStep.STORY_PLANNING;
         case 'style': return step === AppStep.STYLE_SELECTION;
         case 'world': return step === AppStep.REFERENCE_BUILDER;
         case 'cover': return step === AppStep.COVER;
         case 'layout': return step === AppStep.LAYOUT_SELECTION;
-        case 'preview': return step === AppStep.COMBINED_PREVIEW;
         case 'build': return step === AppStep.FULL_GENERATION;
         case 'done': return step === AppStep.REVIEW_EXPORT;
         default: return true;
       }
     };
 
-    const matchesStatus = (project: Project) => {
-      if (statusFilter === 'all') return true;
-      const isGenerating = !!project.state.generationStatus?.isActive;
-      const isCompleted = project.state.panels.length > 0 && !isGenerating;
-      const isDraft = project.state.panels.length === 0 && !isGenerating;
+	    const matchesStatus = (project: Project) => {
+	      if (statusFilter === 'all') return true;
+	      const isGenerating = !!project.state.generationStatus?.isActive;
+	      const hasRenderedPageStudioPage = !!project.state.pageStudio?.pages?.some((page) => !!page.imageUrl);
+	      const isCompleted = (project.state.panels.length > 0 || hasRenderedPageStudioPage) && !isGenerating;
+	      const isDraft = project.state.panels.length === 0 && !hasRenderedPageStudioPage && !isGenerating;
       if (statusFilter === 'generating') return isGenerating;
       if (statusFilter === 'completed') return isCompleted;
       if (statusFilter === 'draft') return isDraft;
@@ -124,7 +120,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
 
   const handleCreate = () => {
     if (newProjectName.trim()) {
-      onCreateProject(newProjectName, createMode);
+      onCreateProject(newProjectName, 'classic');
       setNewProjectName('');
       setIsCreating(false);
     }
@@ -180,26 +176,9 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
             onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
           />
 
-          <label className="block text-lg font-display mt-5 mb-2 text-black">How do you want to build it?</label>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <button
-              type="button"
-              onClick={() => setCreateMode('classic')}
-              aria-pressed={createMode === 'classic'}
-              className={`text-left p-4 border-2 border-black rounded-lg transition-all ${createMode === 'classic' ? 'bg-brand-yellow shadow-comic' : 'bg-white hover:bg-slate-50'}`}
-            >
-              <div className="flex items-center gap-2 font-display text-black"><BookOpen className="w-5 h-5" /> Full comic</div>
-              <p className="mt-1 text-xs font-comic text-slate-600">Multi-panel pages from a script. Keeps characters, outfits and locations consistent across panels. Best for real comics.</p>
-            </button>
-            <button
-              type="button"
-              onClick={() => setCreateMode('pagestudio')}
-              aria-pressed={createMode === 'pagestudio'}
-              className={`text-left p-4 border-2 border-black rounded-lg transition-all ${createMode === 'pagestudio' ? 'bg-brand-yellow shadow-comic' : 'bg-white hover:bg-slate-50'}`}
-            >
-              <div className="flex items-center gap-2 font-display text-black"><Zap className="w-5 h-5" /> Quick single page</div>
-              <p className="mt-1 text-xs font-comic text-slate-600">One full-page image you can refine with edits. Fastest, but does not maintain character consistency across panels.</p>
-            </button>
+          <div className="mt-5 rounded-lg border-2 border-black bg-slate-50 p-4">
+            <div className="flex items-center gap-2 font-display text-black"><BookOpen className="w-5 h-5" /> Comic agent</div>
+            <p className="mt-1 text-xs font-comic text-slate-600">Starts from any script or rough idea, then builds consistent cast, world, pages, reader and export.</p>
           </div>
 
           <div className="flex gap-4 mt-5">
@@ -279,12 +258,10 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                 >
                   <option value="all">All Steps</option>
                   <option value="script">Script</option>
-                  <option value="plan">Plan</option>
                   <option value="style">Style</option>
                   <option value="world">World</option>
                   <option value="cover">Cover</option>
                   <option value="layout">Layout</option>
-                  <option value="preview">Preview</option>
                   <option value="build">Build</option>
                   <option value="done">Done</option>
                 </select>
@@ -328,17 +305,20 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                 No projects match the current filters.
               </div>
             )}
-            {displayedProjects.map(project => {
-              const previewCandidates = [
-                project.state.coverImageUrl,
-                project.state.panels.find((panel) => panel.imageUrl)?.imageUrl,
-                project.state.styleVariants.find((variant) => variant.imageUrl)?.imageUrl
-              ].filter((value): value is string => Boolean(value));
-              const primaryPreview = previewCandidates[0];
-              const fallbackPreviews = previewCandidates.slice(1);
-              const hasPanelPreview = project.state.panels.some((panel) => panel.imageUrl);
-              const hasStylePreview = project.state.styleVariants.some((variant) => variant.imageUrl);
-              const hasCoverPreview = Boolean(project.state.coverImageUrl);
+	            {displayedProjects.map(project => {
+	              const firstPageStudioImage = project.state.pageStudio?.pages?.find((page) => page.imageUrl)?.imageUrl;
+	              const previewCandidates = [
+	                project.state.coverImageUrl,
+	                project.state.panels.find((panel) => panel.imageUrl)?.imageUrl,
+	                firstPageStudioImage,
+	                project.state.styleVariants.find((variant) => variant.imageUrl)?.imageUrl
+	              ].filter((value): value is string => Boolean(value));
+	              const primaryPreview = previewCandidates[0];
+	              const fallbackPreviews = previewCandidates.slice(1);
+	              const hasPanelPreview = project.state.panels.some((panel) => panel.imageUrl);
+	              const hasPageStudioPreview = Boolean(firstPageStudioImage);
+	              const hasStylePreview = project.state.styleVariants.some((variant) => variant.imageUrl);
+	              const hasCoverPreview = Boolean(project.state.coverImageUrl);
 
               return (
                 <div key={project.id} className="group bg-white rounded-xl border-4 border-black shadow-comic hover:-translate-y-2 hover:shadow-[8px_8px_0px_0px_#000] transition-all duration-300 flex flex-col overflow-hidden">
@@ -348,7 +328,7 @@ export const ProjectDashboard: React.FC<ProjectDashboardProps> = ({
                         src={primaryPreview}
                         fallbackSources={fallbackPreviews}
                         alt={`${project.name} cover`}
-                        className={`w-full h-full object-cover ${!hasCoverPreview && !hasPanelPreview && !hasStylePreview ? 'opacity-50 grayscale' : ''}`}
+	                        className={`w-full h-full object-cover ${!hasCoverPreview && !hasPanelPreview && !hasPageStudioPreview && !hasStylePreview ? 'opacity-50 grayscale' : ''}`}
                         loadingComponent={<div className="w-full h-full flex items-center justify-center bg-slate-50"><div className="w-8 h-8 border-4 border-brand-blue border-t-transparent rounded-full animate-spin"></div></div>}
                         fallbackIcon={<div className="font-display text-4xl text-brand-blue/30">?</div>}
                         containerClassName="w-full h-full"

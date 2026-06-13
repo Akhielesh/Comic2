@@ -35,6 +35,7 @@ import { captureInviteCodeFromUrl, clearPendingInviteCode, getPendingInviteCode,
 import { persistUiState } from './services/viewState';
 import { isSettingsTab, type SettingsTab } from './components/settingsTabs';
 import { useStudioHandoff } from './services/studioHandoff';
+import { findStudioProjectForDeepLink, normalizeStudioDeepLinkUrl, resolveStudioDeepLink } from './services/studioDeepLink';
 import { Project } from './types';
 import { Loader2 } from 'lucide-react';
 import { SystemDiagnosticsResponse } from './apiTypes';
@@ -88,6 +89,12 @@ type AuthCallbackFlow = 'magiclink' | 'recovery' | 'signup' | 'unknown';
 type PendingReaderTarget = {
   id: string;
   returnView: AppView;
+};
+
+type PendingStudioTarget = {
+  id: string;
+  view: 'editor' | 'pagestudio';
+  source: 'id' | 'board';
 };
 
 // Which product each gated view belongs to. Views not listed here (home, gallery,
@@ -157,7 +164,7 @@ const App: React.FC = () => {
   // Chat → Code Studio hand-off: opening an app from chat bumps requestId; route here.
   const studioHandoffArtifact = useStudioHandoff((s) => s.artifact);
   const studioHandoffRequestId = useStudioHandoff((s) => s.requestId);
-  const { projects, createProject, updateProject, deleteProject, duplicateProject, getProject, startGeneration, stopGeneration, hydrateProjectAssets } = useProjectManager();
+  const { projects, projectsLoaded, createProject, updateProject, deleteProject, duplicateProject, getProject, startGeneration, stopGeneration, hydrateProjectAssets } = useProjectManager();
 
   const [isCheckingKey, setIsCheckingKey] = useState(true);
   const [systemDiagnostics, setSystemDiagnostics] = useState<SystemDiagnosticsResponse | null>(null);
@@ -274,6 +281,7 @@ const App: React.FC = () => {
   const [viewedProfile, setViewedProfile] = useState<string | null>(null); // username
   const [systemError, setSystemError] = useState<string | null>(null);
   const [pendingReaderTarget, setPendingReaderTarget] = useState<PendingReaderTarget | null>(null);
+  const [pendingStudioTarget, setPendingStudioTarget] = useState<PendingStudioTarget | null>(null);
   const [shareToken, setShareToken] = useState<string | null>(null);
   const hasWarnedDobProfileCheckRef = useRef(false);
 
@@ -281,6 +289,7 @@ const App: React.FC = () => {
     const url = new URL(window.location.href);
     url.searchParams.set('view', 'read');
     url.searchParams.set('id', id);
+    url.searchParams.delete('board');
     window.history.pushState({}, '', url);
   };
 
@@ -406,6 +415,15 @@ const App: React.FC = () => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('view') === 'read') return; // reader deep-link handled separately
     const v = params.get('view');
+    const studioTarget = resolveStudioDeepLink(params);
+    if (studioTarget) {
+      if (studioTarget.source === 'board') {
+        const normalized = normalizeStudioDeepLinkUrl(new URL(window.location.href), studioTarget);
+        window.history.replaceState({}, '', normalized);
+      }
+      setPendingStudioTarget({ id: studioTarget.id, view: studioTarget.view, source: studioTarget.source });
+      return;
+    }
     if (v && RESTORABLE_VIEWS.has(v as AppView)) {
       setCurrentView(v as AppView);
       // Deep continuity: ?view=settings&tab=admin restores the exact settings tab too,
@@ -425,12 +443,29 @@ const App: React.FC = () => {
     if (currentView === 'reader' || currentView === 'shared' || currentView === 'auth-callback' || currentView === 'models') return;
     try {
       const url = new URL(window.location.href);
-      url.searchParams.delete('id'); // reader-only param; drop it when not reading
-      if (currentView === 'home') url.searchParams.delete('view');
-      else url.searchParams.set('view', currentView);
+      const urlView = url.searchParams.get('view');
+      const urlProjectId = url.searchParams.get('id');
+      const awaitingStudioDeepLink = !!(
+        pendingStudioTarget &&
+        urlProjectId === pendingStudioTarget.id &&
+        (urlView === 'editor' || urlView === 'pagestudio') &&
+        activeProjectId !== pendingStudioTarget.id
+      );
+      if (awaitingStudioDeepLink) return;
+
+      if ((currentView === 'editor' || currentView === 'pagestudio') && activeProjectId) {
+        url.pathname = '/';
+        url.searchParams.set('view', currentView);
+        url.searchParams.set('id', activeProjectId);
+        url.searchParams.delete('board');
+      } else {
+        url.searchParams.delete('id');
+        if (currentView === 'home') url.searchParams.delete('view');
+        else url.searchParams.set('view', currentView);
+      }
       window.history.replaceState({}, '', url);
     } catch { /* history unavailable; navigation still works via state */ }
-  }, [currentView]);
+  }, [currentView, activeProjectId, pendingStudioTarget]);
 
   useEffect(() => {
     if (!user?.email || user.email !== 'admin@test.com') {
@@ -754,9 +789,6 @@ const App: React.FC = () => {
 
   const handleCreateProject = (name: string, pipelineMode: 'classic' | 'pagestudio' = 'classic') => {
     const newProject = createProject(name);
-    // The user explicitly picks the engine at creation (Full comic = Classic, which
-    // keeps characters consistent across panels; Quick = single-sheet PageStudio).
-    // Default to Classic so multi-panel comics get continuity unless Quick is chosen.
     updateProject(newProject.id, (prev) => ({
       state: { ...prev.state, pipelineMode }
     }));
@@ -787,6 +819,54 @@ const App: React.FC = () => {
       })
       .finally(() => setIsHydratingProject(false));
   };
+
+  useEffect(() => {
+    let target = pendingStudioTarget;
+    if (!target) {
+      const params = new URLSearchParams(window.location.search);
+      const studioTarget = resolveStudioDeepLink(params);
+      if (studioTarget) {
+        target = { id: studioTarget.id, view: studioTarget.view, source: studioTarget.source };
+        if (studioTarget.source === 'board') {
+          const normalized = normalizeStudioDeepLinkUrl(new URL(window.location.href), studioTarget);
+          window.history.replaceState({}, '', normalized);
+        }
+        setPendingStudioTarget(target);
+      }
+    }
+    if (!target) return;
+    if (authLoading || isCheckingKey) return;
+
+    if (!user) {
+      if (currentView !== 'auth') setCurrentView('auth');
+      return;
+    }
+
+    if (currentView === target.view && activeProjectId === target.id) {
+      setPendingStudioTarget(null);
+      return;
+    }
+
+    if (!projectsLoaded) return;
+
+    const matchedProject = findStudioProjectForDeepLink(projects, target);
+    if (!matchedProject) {
+      setPendingStudioTarget(null);
+      setSystemError('Comic project not found for this editor link.');
+      return;
+    }
+
+    setPendingStudioTarget(null);
+    handleOpenProject(
+      matchedProject.id,
+      target.view === 'pagestudio'
+        ? 'pagestudio'
+        : matchedProject.state.pipelineMode === 'pagestudio'
+          ? 'pagestudio'
+          : 'classic'
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingStudioTarget, authLoading, isCheckingKey, user?.id, projectsLoaded, projects, currentView, activeProjectId]);
 
   const handleReadProject = (id: string) => {
     void navigateToReader(id, currentView);
@@ -820,6 +900,7 @@ const App: React.FC = () => {
     setAuthCallbackStatus('idle');
     setAuthCallbackMessage(null);
     setPendingReaderTarget(null);
+    setPendingStudioTarget(null);
     setCurrentView('home');
     clearReaderUrlParams();
   };

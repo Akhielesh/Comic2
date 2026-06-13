@@ -14,14 +14,10 @@ interface HomePageProps {
 }
 
 const PROCESS_STAGES = [
-  { id: 1, title: "Idea", desc: "Start with a raw concept or theme." },
-  { id: 2, title: "Script", desc: "Write or paste your screenplay." },
-  { id: 3, title: "Analysis", desc: "AI extracts scenes, characters, and props." },
-  { id: 4, title: "Characters", desc: "Design consistent character sheets." },
-  { id: 5, title: "World", desc: "Build locations and consistent props." },
-  { id: 6, title: "Storyboard", desc: "Plan panels and layout flow." },
-  { id: 7, title: "Generation", desc: "Render high-fidelity panel images." },
-  { id: 8, title: "Polish", desc: "Add lettering, speech bubbles, and export." }
+  { id: 1, title: "Prompt", desc: "Paste a script, outline, notes, or a rough idea." },
+  { id: 2, title: "Plan", desc: "The agent extracts scenes, cast, world, format, and budget." },
+  { id: 3, title: "Build", desc: "Generate a locked style, references, cover, and pages." },
+  { id: 4, title: "Polish", desc: "Edit panels, audit continuity, read, share, and export." }
 ];
 
 const CHAT_FEATURES = [
@@ -358,7 +354,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
         </div>
       </section>
 
-      {/* 8-Stage Process */}
+      {/* Comic Studio Process */}
       <section className="py-20 bg-slate-50 border-b-4 border-black">
         <div className="max-w-7xl mx-auto px-6">
           <div className="text-center mb-16">
@@ -366,7 +362,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               <BookOpen size={12} /> Inside Comic Studio
             </div>
             <h2 className="text-4xl md:text-5xl font-display mb-4">The Studio Workflow</h2>
-            <p className="font-comic text-slate-600">From raw idea to polished pages in 8 steps.</p>
+            <p className="font-comic text-slate-600">From raw idea to polished comic through one agent flow.</p>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
@@ -400,9 +396,9 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
                 {activeStage === 1 && <Sparkles size={64} className="mx-auto text-brand-yellow mb-4" />}
                 {activeStage === 2 && <BookOpen size={64} className="mx-auto text-brand-blue mb-4" />}
                 {activeStage === 3 && <Zap size={64} className="mx-auto text-purple-500 mb-4" />}
-                <h3 className="text-3xl font-display mb-2">{PROCESS_STAGES[activeStage - 1].title}</h3>
+                <h3 className="text-3xl font-display mb-2">{PROCESS_STAGES[activeStage - 1]?.title || PROCESS_STAGES[0].title}</h3>
                 <p className="font-comic text-slate-500 max-w-xs mx-auto">
-                  Simulated interface for {PROCESS_STAGES[activeStage - 1].title.toLowerCase()} goes here.
+                  Simulated interface for {(PROCESS_STAGES[activeStage - 1]?.title || PROCESS_STAGES[0].title).toLowerCase()} goes here.
                 </p>
               </div>
             </div>

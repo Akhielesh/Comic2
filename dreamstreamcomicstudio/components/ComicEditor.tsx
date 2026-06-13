@@ -15,6 +15,7 @@ import {
   resetFromStyleConfirm,
   resetFromWorldConfirm
 } from '../services/pipelineReset';
+import { transitionAgentRun } from '../services/comicAgentRun';
 import { ArrowLeft, Save, History, AlertTriangle, ImageIcon } from 'lucide-react';
 import { VersionHistoryModal } from './modals/VersionHistoryModal';
 import { ProjectVersion } from '../types';
@@ -155,11 +156,11 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   const advanceBlockReason = (s: Project['state']): string | null => {
     switch (s.step) {
       case AppStep.SCRIPT_INPUT:
-        return (s.scenes?.length || 0) > 0 ? null : 'Analyze the script into scenes first.';
+        return (s.scenes?.length || 0) > 0 ? null : 'Start the comic agent first.';
       case AppStep.STYLE_SELECTION:
-        return s.selectedStyleId || s.stylePrompt ? null : 'Choose a style first.';
+        return s.selectedStyleId || s.stylePrompt ? null : 'Choose a style direction first.';
       case AppStep.LAYOUT_SELECTION:
-        return (s.scenes?.length || 0) > 0 ? null : 'Add scenes before planning panels.';
+        return (s.scenes?.length || 0) > 0 ? null : 'Start the comic agent before building pages.';
       default:
         return null;
     }
@@ -257,10 +258,27 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
     const hasRenderedPanels = state.panels.some((panel) => panel.imageUrl);
     const shouldAdvance = status && !status.isActive && hasRenderedPanels && state.step === AppStep.FULL_GENERATION;
     if (shouldAdvance) {
-      updateState({
+      updateState((prev) => ({
         step: AppStep.REVIEW_EXPORT,
-        maxStepReached: Math.max(state.maxStepReached, AppStep.REVIEW_EXPORT)
-      });
+        maxStepReached: Math.max(prev.maxStepReached, AppStep.REVIEW_EXPORT),
+        agentRun: transitionAgentRun(
+          { ...prev, panels: state.panels, step: AppStep.REVIEW_EXPORT },
+          [
+            {
+              kind: 'build',
+              status: 'done',
+              summary: `${state.panels.filter((panel) => panel.imageUrl).length} rendered panel${state.panels.filter((panel) => panel.imageUrl).length === 1 ? '' : 's'} saved.`,
+              progress: 100
+            },
+            { kind: 'export', status: 'active', summary: 'Ready to review, download, publish, or export.' }
+          ],
+          {
+            kind: 'build',
+            status: 'info',
+            message: 'Build finished and moved to review.'
+          }
+        )
+      }));
     }
   }, [state.generationStatus?.isActive, state.panels, state.step, state.maxStepReached]);
 
@@ -402,8 +420,8 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           onScriptChange={(script) => updateState({ script })}
           initialCreativeDirection={state.creativeDirection}
           onCreativeDirectionChange={(creativeDirection) => updateState({ creativeDirection })}
-          initialStoryBuilder={state.storyBuilder}
-          onStoryBuilderUpdate={(storyBuilder) => updateState({ storyBuilder })}
+          initialAgentSettings={state.agentSettings}
+          onAgentSettingsChange={(agentSettings) => updateState({ agentSettings })}
           initialChecklist={state.scriptChecklist}
           onChecklistUpdate={(scriptChecklist) => updateState({ scriptChecklist })}
           onScenesGenerated={(script, scenes) => {
@@ -423,6 +441,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           selectedStyleId={state.selectedStyleId}
           onVariantsChange={(styleVariants) => updateState({ styleVariants })}
           onBackToScript={() => goToStep(AppStep.SCRIPT_INPUT)}
+          agentSettings={state.agentSettings}
           customAspectRatioEnabled={state.customAspectRatioEnabled}
           customAspectRatio={state.customAspectRatio}
           onCustomAspectRatioChange={(enabled, ratio) => updateState({ customAspectRatioEnabled: enabled, customAspectRatio: ratio })}
@@ -447,6 +466,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           initialItems={state.items || []}
           initialLocations={state.locations || []}
           initialContinuity={state.continuity}
+          agentSettings={state.agentSettings}
           onDataUpdate={(data) => updateState({ ...data })}
           onConfirm={() => applyReset('confirming characters', (prev) => resetFromWorldConfirm(prev))} />;
       case AppStep.COVER:
@@ -455,8 +475,31 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
             state={state}
             projectId={project.id}
             projectName={project.name}
+            agentSettings={state.agentSettings}
             onUpdate={(updates) => updateState(updates)}
-            onConfirm={() => nextStep()}
+            onConfirm={() => {
+              updateState((prev) => ({
+                step: AppStep.LAYOUT_SELECTION,
+                maxStepReached: Math.max(prev.maxStepReached, AppStep.LAYOUT_SELECTION),
+                agentRun: transitionAgentRun(
+                  prev,
+                  [
+                    {
+                      kind: 'cover',
+                      status: 'done',
+                      summary: prev.coverImageId || prev.coverImageUrl ? 'Cover image is ready.' : 'Cover step confirmed.',
+                      progress: 100
+                    },
+                    { kind: 'layout', status: 'active', summary: 'Ready to choose pages, panel density, and outputs.' }
+                  ],
+                  {
+                    kind: 'cover',
+                    status: 'info',
+                    message: 'Confirmed the cover direction.'
+                  }
+                )
+              }));
+            }}
           />
         );
       case AppStep.LAYOUT_SELECTION:
@@ -473,6 +516,8 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           currentDialogueStyle={state.universalDialogueStyle || 'speech'}
           onDialogueStyleChange={(universalDialogueStyle) => updateState({ universalDialogueStyle })}
           currentPageCount={state.pageCount}
+          agentSettings={state.agentSettings}
+          pricingConfig={state.pricingConfig}
           onLayoutConfirmed={(layoutType, customLayoutPrompt, gridTemplateId, pageCount) => {
             applyReset('confirming layout', (prev) => resetFromLayoutConfirm(prev, layoutType, customLayoutPrompt, gridTemplateId, pageCount));
           }} />;
@@ -481,7 +526,30 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           state={state}
           onStart={() => onStartGeneration(project.id)}
           onCancel={() => onStopGeneration(project.id)}
-          onGenerationComplete={(panels) => { updateState({ panels }); nextStep(); }}
+          onGenerationComplete={(panels) => {
+            updateState((prev) => ({
+              panels,
+              step: AppStep.REVIEW_EXPORT,
+              maxStepReached: Math.max(prev.maxStepReached, AppStep.REVIEW_EXPORT),
+              agentRun: transitionAgentRun(
+                { ...prev, panels, step: AppStep.REVIEW_EXPORT },
+                [
+                  {
+                    kind: 'build',
+                    status: 'done',
+                    summary: `${panels.filter((panel) => panel.imageUrl).length} rendered panel${panels.filter((panel) => panel.imageUrl).length === 1 ? '' : 's'} saved.`,
+                    progress: 100
+                  },
+                  { kind: 'export', status: 'active', summary: 'Ready to review, download, publish, or export.' }
+                ],
+                {
+                  kind: 'build',
+                  status: 'info',
+                  message: 'Build finished and moved to review.'
+                }
+              )
+            }));
+          }}
         />;
       case AppStep.REVIEW_EXPORT:
         return <ReviewExport

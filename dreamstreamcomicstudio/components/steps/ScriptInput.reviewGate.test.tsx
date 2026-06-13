@@ -30,12 +30,8 @@ vi.mock('../../services/geminiService', () => ({
   analyzeScriptDetailed: analyzeScriptDetailedMock
 }));
 
-vi.mock('../StoryBuilder', () => ({
-  StoryBuilder: () => null
-}));
-
-describe('ScriptInput review gate', () => {
-  it('does not progress until review approval', async () => {
+describe('ScriptInput agent start', () => {
+  it('analyzes and progresses without a second review approval gate', async () => {
     const onScenesGenerated = vi.fn();
 
     render(
@@ -47,19 +43,52 @@ describe('ScriptInput review gate', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /Analyze Script/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Analyze Now|Proceed Anyway/i }));
-
-    await waitFor(() => {
-      expect(screen.getByText(/Review Script Understanding/i)).toBeInTheDocument();
-    });
-
-    expect(onScenesGenerated).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole('button', { name: /Approve & Continue/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Start comic agent/i }));
 
     await waitFor(() => {
       expect(onScenesGenerated).toHaveBeenCalledTimes(1);
     });
+
+    expect(onScenesGenerated).toHaveBeenCalledWith(
+      expect.stringContaining('SALTY and PIP'),
+      expect.arrayContaining([
+        expect.objectContaining({
+          characters: ['SALTY', 'PIP'],
+          setting: 'Tunnel at dusk'
+        })
+      ])
+    );
+    expect(screen.queryByText(/Review Script Understanding/i)).not.toBeInTheDocument();
+  });
+
+  it('persists agent confirmation and output settings from the composer', () => {
+    const onAgentSettingsChange = vi.fn();
+
+    render(
+      <ScriptInput
+        initialScript={'Scene 1: SALTY and PIP enter the tunnel.\nSALTY: "Steady."'}
+        projectId={'project-1'}
+        onScenesGenerated={() => {}}
+        onScriptChange={() => {}}
+        onAgentSettingsChange={onAgentSettingsChange}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^Never$/i }));
+    expect(onAgentSettingsChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ confirmPolicy: 'never' })
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^HTML$/i }));
+    expect(onAgentSettingsChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        outputTargets: expect.not.arrayContaining(['html'])
+      })
+    );
+
+    fireEvent.change(screen.getByRole('spinbutton', { name: /Budget cap/i }), { target: { value: '1.25' } });
+    expect(onAgentSettingsChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ budgetCapUsd: 1.25 })
+    );
   });
 });

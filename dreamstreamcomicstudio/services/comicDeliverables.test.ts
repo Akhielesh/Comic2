@@ -1,0 +1,47 @@
+import { describe, expect, it } from 'vitest';
+import { buildComicExportManifest, buildComicHtmlDocument } from './comicDeliverables';
+import type { ComicPanel } from '../types';
+
+const panels: ComicPanel[] = [
+  {
+    id: 'panel-1',
+    sceneId: 1,
+    description: 'Maya opens the glowing door.',
+    dialogue: 'Maya: "Whoa."',
+    imageId: 'image-1',
+    imageUrl: 'data:image/png;base64,panel',
+    imageIdHistory: ['image-1']
+  }
+];
+
+describe('comicDeliverables', () => {
+  it('builds an offline HTML comic document with escaped title and panel images', () => {
+    const html = buildComicHtmlDocument({
+      projectName: 'Maya & <Door>',
+      panels,
+      coverDataUrl: 'data:image/png;base64,cover',
+      textLayout: 'caption'
+    });
+
+    expect(html).toContain('<!DOCTYPE html>');
+    expect(html).toContain('Maya &amp; &lt;Door&gt;');
+    expect(html).toContain('data:image/png;base64,cover');
+    expect(html).toContain('data:image/png;base64,panel');
+    expect(html).toContain('id="zoomTarget"');
+  });
+
+  it('builds a compact export manifest for agent-prepared outputs', () => {
+    const manifest = JSON.parse(buildComicExportManifest({
+      projectId: 'project-1',
+      projectName: 'Maya',
+      panels,
+      coverImageId: 'cover-1',
+      outputTargets: ['comic', 'book', 'html']
+    }));
+
+    expect(manifest.kind).toBe('dreamstream_comic_export_manifest');
+    expect(manifest.panelCount).toBe(1);
+    expect(manifest.renderedPanels).toBe(1);
+    expect(manifest.panels[0]).toMatchObject({ id: 'panel-1', imageId: 'image-1' });
+  });
+});

@@ -63,10 +63,75 @@ describe('ReferenceBuilder contamination block', () => {
       expect(screen.getByText(/Script Contamination Block/i)).toBeInTheDocument();
     });
 
-    const confirmButton = screen.getByRole('button', { name: /Confirm World/i });
+    const confirmButton = screen.getByRole('button', { name: /Use world/i });
     expect(confirmButton).toBeDisabled();
 
     fireEvent.click(screen.getByLabelText(/I reviewed dropped entities/i));
     expect(confirmButton).toBeEnabled();
+  });
+
+  it('auto-confirms grounded world data only in auto-spend mode', async () => {
+    const onConfirm = vi.fn();
+
+    render(
+      <ReferenceBuilder
+        scenes={[
+          {
+            id: 1,
+            rawText: 'SALTY and PIP enter the tunnel.',
+            synopsis: 'SALTY and PIP move through the tunnel.',
+            characters: ['SALTY', 'PIP'],
+            setting: 'Tunnel'
+          }
+        ]}
+        script={'SALTY and PIP enter the tunnel.'}
+        currentStyle={'comic style'}
+        projectId={'project-1'}
+        initialCharacters={[
+          { id: 'c1', name: 'SALTY', bio: 'Tabby cat captain', description: 'Ginger tabby with a milky eye.', referenceImageIds: [] }
+        ]}
+        initialItems={[]}
+        initialLocations={[]}
+        agentSettings={{ confirmPolicy: 'never', outputTargets: ['comic', 'book', 'html'], autoPageCount: true }}
+        onDataUpdate={() => {}}
+        onConfirm={onConfirm}
+      />
+    );
+
+    await waitFor(() => {
+      expect(onConfirm).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('does not auto-confirm grounded world data in guided mode', async () => {
+    const onConfirm = vi.fn();
+
+    render(
+      <ReferenceBuilder
+        scenes={[
+          {
+            id: 1,
+            rawText: 'SALTY and PIP enter the tunnel.',
+            synopsis: 'SALTY and PIP move through the tunnel.',
+            characters: ['SALTY', 'PIP'],
+            setting: 'Tunnel'
+          }
+        ]}
+        script={'SALTY and PIP enter the tunnel.'}
+        currentStyle={'comic style'}
+        projectId={'project-1'}
+        initialCharacters={[
+          { id: 'c1', name: 'SALTY', bio: 'Tabby cat captain', description: 'Ginger tabby with a milky eye.', referenceImageIds: [] }
+        ]}
+        initialItems={[]}
+        initialLocations={[]}
+        agentSettings={{ confirmPolicy: 'big_spends', outputTargets: ['comic', 'book', 'html'], autoPageCount: true }}
+        onDataUpdate={() => {}}
+        onConfirm={onConfirm}
+      />
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(onConfirm).not.toHaveBeenCalled();
   });
 });

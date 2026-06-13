@@ -1,8 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { Download, Edit2, RefreshCw, X, History, Share2, FileCode, Loader2, ArrowLeftRight } from 'lucide-react';
-import { ComicPanel, ComicState, DialogueBlock, TextLayout, ProjectReport, Project } from '../../types';
+import React, { useCallback, useState, useEffect, useMemo, useRef } from 'react';
+import { Activity, Check, Download, Edit2, RefreshCw, History, Share2, FileCode, ArrowLeftRight, Terminal } from 'lucide-react';
+import { AgentOutputTarget, ComicExportTarget, ComicPanel, ComicState, ProjectReport, Project } from '../../types';
 import { PanelDialogue } from '../PanelDialogue';
-import { generateImage } from '../../services/imageService';
 import { regenerateSinglePanel } from '../../services/generationManager';
 import { runContinuityAudit } from '../../services/geminiService';
 import { Button } from '../Button';
@@ -13,28 +12,30 @@ const HistoryModal = React.lazy(() => import('../modals/HistoryModal').then(modu
 const BubbleEditorModal = React.lazy(() => import('../modals/BubbleEditorModal').then(module => ({ default: module.BubbleEditorModal })));
 const ShareModal = React.lazy(() => import('../modals/ShareModal').then(module => ({ default: module.ShareModal })));
 
-import { exportProject, getImageUrl, getImageDataUrl } from '../../services/db';
-import { ensureDialogueBlocks } from '../../services/dialogueUtils';
-import { getLayoutClass as sharedGetLayoutClass, getPanelClass as sharedGetPanelClass, getGridTemplate, EXPORT_DIALOGUE_CSS, buildPanelDialogueHtml } from '../../services/panelLayout';
+import { exportProject, getImageUrl, getImageDataUrl, saveArtifact } from '../../services/db';
+import { getLayoutClass as sharedGetLayoutClass, getPanelClass as sharedGetPanelClass, getGridTemplate } from '../../services/panelLayout';
 import { getModelForTask } from '../../services/appSettings';
 import { getImageModelById } from '../../services/imageModels';
 import { buildImagePrompt } from '../../services/imagePrompt';
-import { parseRatio, resolveAspectRatio } from '../../services/imageUtils';
+import { parseRatio } from '../../services/imageUtils';
 import { buildProjectReport } from '../../services/reporting';
 import { loadArtifactsForProject } from '../../services/db';
 import { downloadBlob } from '../../services/download';
-import { collectPanelReferenceImageIds, resolvePanelContinuity, validateContinuityState } from '../../services/continuity';
 import { appendCappedHistory } from '../../services/projectStorage';
 import { ApiError } from '../../services/apiClient';
 import { LimitExceededModal } from '../modals/LimitExceededModal';
 import { getComicCost } from '../../services/billing';
+import { normalizeComicAgentSettings, outputTargetLabel } from '../../services/comicAgentSettings';
+import { transitionAgentRun } from '../../services/comicAgentRun';
+import { AgentStageShell } from '../AgentStageShell';
+import { buildComicExportManifest, buildComicHtmlDocument } from '../../services/comicDeliverables';
 
 declare const jspdf: any;
 declare const html2canvas: any;
 
 interface ReviewExportProps {
   project: Project;
-  onUpdateProject: (updates: Partial<Project>) => void;
+  onUpdateProject: (updates: Partial<Project> | ((prev: Project) => Partial<Project>)) => void;
   projectId: string;
   projectName: string;
   panels: ComicPanel[];
@@ -44,17 +45,7 @@ interface ReviewExportProps {
 }
 
 // renderPanelText removed — use <PanelDialogue /> component instead
-
-const escapeHtml = (value: string) =>
-  value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/\"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-
-const getDialogueBlocks = (panel: ComicPanel) =>
-  ensureDialogueBlocks(panel.dialogue, panel.dialogueBlocks, panel.description);
+const EMPTY_EXPORTED_OUTPUTS: Partial<Record<ComicExportTarget, number>> = Object.freeze({});
 
 export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdateProject, projectId, projectName, panels, state, onReturnToPreview, onUpdatePanel }) => {
   const [selectedPanel, setSelectedPanel] = useState<ComicPanel | null>(panels[0] || null);
@@ -62,7 +53,6 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [showRegenModal, setShowRegenModal] = useState(false);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
-  const [shareLink, setShareLink] = useState<string | null>(null);
   const [showShareModal, setShowShareModal] = useState(false);
   const [historyUrls, setHistoryUrls] = useState<string[]>([]);
   const [costReport, setCostReport] = useState<ProjectReport | null>(null);
@@ -73,15 +63,105 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
   const [auditScoresByPanel, setAuditScoresByPanel] = useState<Record<string, { driftScore: number; issues: string[]; suggestedFix?: string }>>({});
   const [regenError, setRegenError] = useState<string | null>(null);
   const [limitDetails, setLimitDetails] = useState<Record<string, unknown> | null>(null);
-  const estimatedCt = costReport ? Math.ceil(costReport.cost_summary.totalCost / 0.0001) : null;
   const [comicCost, setComicCost] = useState<{ totalActualCt: number; totalBillableUsd: number; totalProviderCostUsd: number; byStage: Record<string, { ct: number; usd: number }>; byModel: Record<string, { ct: number; usd: number }> } | null>(null);
   const [showBubbleEditor, setShowBubbleEditor] = useState(false);
+  const autoPrepareKeyRef = useRef('');
 
   const textLayout = state.textLayout || 'caption';
   const gridTemplate = getGridTemplate(state.gridTemplateId);
   const activeModel = getImageModelById(getModelForTask('panel'));
+  const agentSettings = useMemo(() => normalizeComicAgentSettings(state.agentSettings), [state.agentSettings]);
+  const wantsComic = agentSettings.outputTargets.includes('comic');
+  const wantsBook = agentSettings.outputTargets.includes('book');
+  const wantsHtml = agentSettings.outputTargets.includes('html');
   const [showVersionPicker, setShowVersionPicker] = useState(false);
   const versions = state.versions || [];
+  const exportedOutputs = state.exportedOutputs || EMPTY_EXPORTED_OUTPUTS;
+  const deliveredOutputCount = agentSettings.outputTargets.filter((target) => exportedOutputs[target]).length;
+  const requestedOutputCount = Math.max(agentSettings.outputTargets.length, 1);
+  const exportProgress = Math.round((deliveredOutputCount / requestedOutputCount) * 100);
+  const renderedPanels = panels.filter((panel) => panel.imageUrl).length;
+  const failedPanels = panels.filter((panel) => panel.failureReason && !panel.imageUrl).length;
+  const recentAgentEvents = [...(state.agentRun?.events || [])].slice(-6).reverse();
+
+  const outputDelivered = (target: AgentOutputTarget) => Boolean(exportedOutputs[target]);
+
+  const recordExportEvent = useCallback((
+    message: string,
+    summary = message,
+    eventStatus: 'info' | 'blocked' | 'failed' = 'info'
+  ) => {
+    onUpdateProject((prev) => {
+      const prevState = prev.state;
+      const prevSettings = normalizeComicAgentSettings(prevState.agentSettings);
+      const prevDeliveredCount = prevSettings.outputTargets.filter((target) => prevState.exportedOutputs?.[target]).length;
+      const prevRequestedCount = Math.max(prevSettings.outputTargets.length, 1);
+      return {
+        state: {
+          ...prevState,
+          agentRun: transitionAgentRun(
+            prevState,
+            [
+              {
+                kind: 'export',
+                status: eventStatus === 'failed' ? 'failed' : 'active',
+                summary,
+                progress: Math.round((prevDeliveredCount / prevRequestedCount) * 100)
+              }
+            ],
+            {
+              kind: 'export',
+              status: eventStatus,
+              message
+            }
+          )
+        }
+      };
+    });
+  }, [onUpdateProject]);
+
+  const markOutputDelivered = useCallback((target: ComicExportTarget, message: string) => {
+    onUpdateProject((prev) => {
+      const prevState = prev.state;
+      const prevSettings = normalizeComicAgentSettings(prevState.agentSettings);
+      const prevRequestedCount = Math.max(prevSettings.outputTargets.length, 1);
+      const nextExportedOutputs = {
+        ...(prevState.exportedOutputs || {}),
+        [target]: Date.now()
+      };
+      const nextDeliveredCount = prevSettings.outputTargets.filter((outputTarget) => nextExportedOutputs[outputTarget]).length;
+      const nextProgress = Math.round((nextDeliveredCount / prevRequestedCount) * 100);
+      const allRequestedDelivered = nextDeliveredCount >= prevRequestedCount;
+      const nextState: ComicState = {
+        ...prevState,
+        exportedOutputs: nextExportedOutputs
+      };
+
+      return {
+        state: {
+          ...nextState,
+          agentRun: transitionAgentRun(
+            nextState,
+            [
+              {
+                kind: 'export',
+                status: allRequestedDelivered ? 'done' : 'active',
+                summary: allRequestedDelivered
+                  ? 'Requested outputs prepared.'
+                  : `${nextDeliveredCount} of ${prevRequestedCount} requested outputs prepared.`,
+                progress: nextProgress
+              }
+            ],
+            {
+              kind: 'export',
+              status: 'info',
+              message
+            }
+          )
+        }
+      };
+    });
+  }, [onUpdateProject]);
 
   useEffect(() => {
     let isActive = true;
@@ -229,6 +309,7 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
     if (panels.length === 0) return;
     setAuditLoading(true);
     setRegenError(null);
+    recordExportEvent('Started continuity audit.', 'Checking finished panels for continuity drift.');
     try {
       const response = await runContinuityAudit({
         script: state.script,
@@ -254,9 +335,12 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
       });
       setAuditSummary(response.summary || '');
       setAuditScoresByPanel(map);
+      recordExportEvent('Continuity audit complete.', response.summary || 'Continuity audit complete.');
     } catch (error) {
       console.error(error);
-      setRegenError((error as Error)?.message || 'Continuity audit failed.');
+      const message = (error as Error)?.message || 'Continuity audit failed.';
+      setRegenError(message);
+      recordExportEvent(`Continuity audit failed: ${message}`, 'Continuity audit needs attention.', 'failed');
     } finally {
       setAuditLoading(false);
     }
@@ -313,69 +397,100 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
       const blob = pdf.output('blob');
       const safeName = projectName.replace(/[^a-zA-Z0-9-_]+/g, '_') || 'dreamstream-comic';
       downloadBlob(blob, `${safeName}.pdf`);
+      markOutputDelivered('book', 'Downloaded Book/PDF output.');
     } finally {
       comicEl.style.height = originalHeight;
       comicEl.style.overflow = originalOverflow;
     }
   };
 
-  const handleDownloadHTML = async () => {
+  const buildHtmlDeliverable = useCallback(async () => {
     const panelData = await Promise.all(panels.map(async (panel) => {
       const dataUrl = panel.imageId ? await getImageDataUrl(panel.imageId) : panel.imageUrl;
       return { ...panel, dataUrl };
     }));
     const coverDataUrl = state.coverImageId ? await getImageDataUrl(state.coverImageId) : state.coverImageUrl;
 
-    const htmlContent = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>${escapeHtml(projectName)}</title>
-        <style>
-          body{margin:0;padding:20px;background:#eee;font-family:Arial,sans-serif;}
-          .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:16px;}
-          .comic-container{max-width:900px;margin:0 auto;background:white;padding:20px;box-shadow:0 4px 6px rgba(0,0,0,0.1);}
-          .cover{margin-bottom:24px;border:4px solid #000;overflow:hidden;}
-          .cover img{width:100%;display:block;}
-          .panel{margin-bottom:20px;border:2px solid black;position:relative;overflow:hidden;}
-          .panel img{width:100%;display:block;}
-          .zoom-wrapper{transform-origin:top center;}
-          ${EXPORT_DIALOGUE_CSS}
-        </style>
-      </head>
-      <body>
-        <div class="toolbar">
-          <label>Zoom</label>
-          <input id="zoom" type="range" min="0.5" max="2" value="1" step="0.1" />
-          <button onclick="adjustZoom(-0.1)">-</button>
-          <button onclick="adjustZoom(0.1)">+</button>
-        </div>
-        <div class="comic-container zoom-wrapper" id="zoomTarget">
-          ${coverDataUrl ? `<div class="cover"><img src="${coverDataUrl}" /></div>` : ''}
-          ${panelData.map(p => {
-      return `<div class="panel">
-              <img src="${p.dataUrl || ''}" />
-              ${buildPanelDialogueHtml(p, textLayout)}
-            </div>`;
-    }).join('')}
-        </div>
-        <script>
-          const zoom = document.getElementById('zoom');
-          const target = document.getElementById('zoomTarget');
-          const applyZoom = () => { target.style.transform = 'scale(' + zoom.value + ')'; };
-          zoom.addEventListener('input', applyZoom);
-          const adjustZoom = (delta) => { zoom.value = Math.min(2, Math.max(0.5, Number(zoom.value) + delta)); applyZoom(); };
-          applyZoom();
-        </script>
-      </body>
-      </html>
-    `;
+    return buildComicHtmlDocument({
+      projectName,
+      panels: panelData,
+      coverDataUrl,
+      textLayout
+    });
+  }, [panels, projectName, state.coverImageId, state.coverImageUrl, textLayout]);
+
+  const handleDownloadHTML = async () => {
+    const htmlContent = await buildHtmlDeliverable();
     const blob = new Blob([htmlContent], { type: 'text/html' });
     downloadBlob(blob, 'comic.html');
+    markOutputDelivered('html', 'Downloaded HTML output.');
   };
+
+  const savePreparedOutputArtifact = useCallback(async (
+    target: AgentOutputTarget,
+    responseText: string,
+    prompt: string
+  ) => {
+    await saveArtifact({
+      id: `export-${target}-${projectId}-${Date.now()}`,
+      projectId,
+      timestamp: Date.now(),
+      type: 'system',
+      model: 'browser-export',
+      prompt,
+      responseText,
+      stage: 'export',
+      success: true,
+      meta: {
+        target,
+        projectName,
+        panelCount: panels.length,
+        renderedPanels,
+        preparedBy: 'comic-agent'
+      }
+    });
+  }, [panels.length, projectId, projectName, renderedPanels]);
+
+  const prepareRequestedOutput = useCallback(async (target: AgentOutputTarget) => {
+    if (target === 'html') {
+      const htmlContent = await buildHtmlDeliverable();
+      await savePreparedOutputArtifact('html', htmlContent, 'Prepared offline HTML comic export.');
+      markOutputDelivered('html', 'Prepared HTML output.');
+      return;
+    }
+
+    if (target === 'book') {
+      const htmlContent = await buildHtmlDeliverable();
+      await savePreparedOutputArtifact('book', htmlContent, 'Prepared print/book HTML source for PDF export.');
+      markOutputDelivered('book', 'Prepared Book/PDF output.');
+      return;
+    }
+
+    const manifest = buildComicExportManifest({
+      projectId,
+      projectName,
+      panels,
+      coverImageId: state.coverImageId,
+      coverImageUrl: state.coverImageUrl,
+      outputTargets: agentSettings.outputTargets
+    });
+    await savePreparedOutputArtifact('comic', manifest, 'Prepared comic export manifest.');
+    markOutputDelivered('comic', 'Prepared comic output.');
+  }, [
+    agentSettings.outputTargets,
+    buildHtmlDeliverable,
+    markOutputDelivered,
+    panels,
+    projectId,
+    projectName,
+    savePreparedOutputArtifact,
+    state.coverImageId,
+    state.coverImageUrl
+  ]);
 
   const handleShare = () => {
     setShowShareModal(true);
+    recordExportEvent('Opened share dialog.', 'Ready to share the finished comic.');
   };
 
   const getExtensionFromMime = (mime: string) => {
@@ -429,49 +544,15 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
 
       const coverImageRef = state.coverImageId ? `images/${imageFileMap[state.coverImageId] || ''}` : '';
 
-      const html = `<!DOCTYPE html>
-<html>
-<head>
-  <title>${escapeHtml(projectName)}</title>
-  <style>
-    body{margin:0;padding:20px;background:#eee;font-family:Arial,sans-serif;}
-    .toolbar{display:flex;gap:10px;align-items:center;margin-bottom:16px;}
-    .comic-container{max-width:900px;margin:0 auto;background:white;padding:20px;box-shadow:0 4px 6px rgba(0,0,0,0.1);}
-    .cover{margin-bottom:24px;border:4px solid #000;overflow:hidden;}
-    .cover img{width:100%;display:block;}
-    .panel{margin-bottom:20px;border:2px solid black;position:relative;overflow:hidden;}
-    .panel img{width:100%;display:block;}
-    .zoom-wrapper{transform-origin:top center;}
-    ${EXPORT_DIALOGUE_CSS}
-  </style>
-</head>
-<body>
-  <div class="toolbar">
-    <label>Zoom</label>
-    <input id="zoom" type="range" min="0.5" max="2" value="1" step="0.1" />
-    <button onclick="adjustZoom(-0.1)">-</button>
-    <button onclick="adjustZoom(0.1)">+</button>
-  </div>
-  <div class="comic-container zoom-wrapper" id="zoomTarget">
-    ${coverImageRef ? `<div class="cover"><img src="${coverImageRef}" /></div>` : ''}
-    ${panels.map(p => {
-        const imgRef = p.imageId ? `images/${imageFileMap[p.imageId] || ''}` : '';
-        return `<div class="panel">
-        <img src="${imgRef}" />
-        ${buildPanelDialogueHtml(p, textLayout)}
-      </div>`;
-      }).join('')}
-  </div>
-  <script>
-    const zoom = document.getElementById('zoom');
-    const target = document.getElementById('zoomTarget');
-    const applyZoom = () => { target.style.transform = 'scale(' + zoom.value + ')'; };
-    zoom.addEventListener('input', applyZoom);
-    const adjustZoom = (delta) => { zoom.value = Math.min(2, Math.max(0.5, Number(zoom.value) + delta)); applyZoom(); };
-    applyZoom();
-  </script>
-</body>
-</html>`;
+      const html = buildComicHtmlDocument({
+        projectName,
+        coverDataUrl: coverImageRef,
+        panels: panels.map((panel) => ({
+          ...panel,
+          dataUrl: panel.imageId ? `images/${imageFileMap[panel.imageId] || ''}` : panel.imageUrl
+        })),
+        textLayout
+      });
 
       zip.file('comic.html', html);
 
@@ -482,10 +563,61 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
 
       const blob = await zip.generateAsync({ type: 'blob' });
       downloadBlob(blob, `${safeName || 'comic'}_project.zip`);
+      markOutputDelivered('comic', 'Downloaded project ZIP output.');
     } catch (e) {
       console.error("Export failed", e);
+      recordExportEvent(`Project ZIP export failed: ${(e as Error)?.message || 'Unknown error'}`, 'Project ZIP export failed.', 'failed');
     }
   };
+
+  useEffect(() => {
+    const pendingTargets = agentSettings.outputTargets.filter((target) => !exportedOutputs[target]);
+    if (pendingTargets.length === 0) return;
+    if (panels.length === 0 || renderedPanels === 0) return;
+
+    const prepareKey = [
+      projectId,
+      pendingTargets.join(','),
+      state.coverImageId || state.coverImageUrl || 'no-cover',
+      textLayout,
+      panels.map((panel) => `${panel.id}:${panel.imageId || panel.imageUrl || 'missing'}`).join('|')
+    ].join('::');
+    if (autoPrepareKeyRef.current === prepareKey) return;
+    autoPrepareKeyRef.current = prepareKey;
+
+    let cancelled = false;
+    void (async () => {
+      recordExportEvent('Preparing requested comic outputs.', 'Preparing requested outputs.');
+      for (const target of pendingTargets) {
+        if (cancelled) break;
+        try {
+          await prepareRequestedOutput(target);
+        } catch (error) {
+          console.error(`Failed to prepare ${target} output`, error);
+          recordExportEvent(
+            `Failed to prepare ${outputTargetLabel(target)} output: ${(error as Error)?.message || 'Unknown error'}`,
+            `${outputTargetLabel(target)} output needs attention.`,
+            'failed'
+          );
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    agentSettings.outputTargets,
+    exportedOutputs,
+    panels,
+    prepareRequestedOutput,
+    projectId,
+    recordExportEvent,
+    renderedPanels,
+    state.coverImageId,
+    state.coverImageUrl,
+    textLayout
+  ]);
 
   const getLayoutClass = () => sharedGetLayoutClass(state.layoutType);
   const getPanelClass = (idx: number) => sharedGetPanelClass(state.layoutType, idx);
@@ -557,159 +689,242 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
     );
   };
 
-  return (
-    <div className="h-[calc(100vh-180px)] flex flex-col md:flex-row gap-6 animate-fade-in">
-      {/* Main Editor Area */}
-      <div className="flex-1 flex flex-col gap-6">
-        <div id="comic-render-area" className="flex-1 bg-white rounded-xl border-4 border-black shadow-comic p-8 overflow-y-auto custom-scrollbar">
-          {state.coverImageUrl && (
-            <div className="mb-6 border-4 border-black rounded-lg overflow-hidden shadow-comic">
-              <img src={state.coverImageUrl} alt={`${projectName} cover`} className="w-full h-auto object-cover" />
-            </div>
-          )}
-          {gridTemplate ? renderTemplatePages() : (
-            <div className={getLayoutClass()}>
-              {panels.map((panel, idx) => renderPanelCard(panel, idx))}
-            </div>
-          )}
-        </div>
-
-        <div className="bg-white border-4 border-black rounded-xl p-4 shadow-comic flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-          <div>
-            <div className="text-xs font-bold uppercase text-slate-500">Cost Summary</div>
-            <div className="text-lg font-display">
-              {isCostLoading
-                ? "Updating..."
-                : comicCost
-                  ? `$${(comicCost.totalBillableUsd > 0 ? comicCost.totalBillableUsd : comicCost.totalProviderCostUsd).toFixed(4)}`
-                  : costReport
-                    ? `$${costReport.cost_summary.totalCost.toFixed(4)}`
-                    : "n/a"}
-            </div>
-            <div className="text-[11px] font-mono text-slate-500">
-              {costUpdatedAt ? `Updated ${new Date(costUpdatedAt).toLocaleTimeString()}` : "Waiting for data..."}
-            </div>
-            <div className="text-[11px] font-mono text-slate-400 mt-1 select-all" title="Reference these when reporting an issue">
-              Project {projectId} · Session {state.sessionId || "—"}
-            </div>
-            {auditSummary && (
-              <div className="text-[11px] text-slate-600 mt-1 max-w-xl">{auditSummary}</div>
-            )}
-            {regenError && (
-              <div className="text-[11px] text-red-600 mt-1">{regenError}</div>
-            )}
-          </div>
-          {costReport && (
-            <div className="text-xs font-mono text-slate-600 space-y-1">
-              <div>Estimated USD (artifact-based): ${costReport.cost_summary.totalCost.toFixed(4)}</div>
-              <div>Estimated CT (artifact-based): {estimatedCt?.toLocaleString()}</div>
-              {comicCost && <div>Actual CT (billing events): {comicCost.totalActualCt.toLocaleString()}</div>}
-              {comicCost && <div>Actual USD (billing events): ${comicCost.totalBillableUsd.toFixed(4)}</div>}
-              {comicCost && comicCost.totalProviderCostUsd > 0 && <div>Actual API cost (provider): ${comicCost.totalProviderCostUsd.toFixed(4)}</div>}
-              <div>Tokens: {costReport.ai_usage.totalTokens}</div>
-              <div>Artifacts: {costReport.ai_usage.totalArtifacts}</div>
-            </div>
-          )}
-        </div>
-
-        {comicCost && (Object.keys(comicCost.byStage).length > 0 || Object.keys(comicCost.byModel).length > 0) && (
-          <div className="bg-white border-2 border-black rounded-xl p-4 space-y-2">
-            <div className="text-xs font-bold uppercase text-slate-500">Cost breakdown — optimize the priciest</div>
-            <div className="grid sm:grid-cols-2 gap-4 text-xs">
+  const sidebar = (
+    <div className="space-y-5">
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+        <div className="text-xs font-semibold uppercase text-zinc-500">Deliverables</div>
+        <div className="mt-3 space-y-2">
+          {agentSettings.outputTargets.map((target) => (
+            <div key={target} className="flex items-center justify-between gap-3 rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2">
               <div>
-                <div className="font-bold mb-1">By stage</div>
-                {Object.entries(comicCost.byStage).sort((a, b) => b[1].usd - a[1].usd).slice(0, 6).map(([stage, v]) => (
-                  <div key={stage} className="flex justify-between gap-2"><span className="text-slate-600 truncate">{stage}</span><span className="font-mono shrink-0">${v.usd.toFixed(4)}</span></div>
-                ))}
+                <div className="text-sm font-semibold text-zinc-100">{outputTargetLabel(target)}</div>
+                <div className="text-[11px] text-zinc-500">
+                  {outputDelivered(target)
+                    ? `Prepared ${new Date(exportedOutputs[target] || 0).toLocaleTimeString()}`
+                    : 'Waiting'}
+                </div>
               </div>
-              <div>
-                <div className="font-bold mb-1">By model</div>
-                {Object.entries(comicCost.byModel).sort((a, b) => b[1].usd - a[1].usd).slice(0, 6).map(([model, v]) => (
-                  <div key={model} className="flex justify-between gap-2"><span className="text-slate-600 truncate">{model}</span><span className="font-mono shrink-0">${v.usd.toFixed(4)}</span></div>
-                ))}
-              </div>
+              <span className={`flex h-6 w-6 items-center justify-center rounded-full border ${outputDelivered(target) ? 'border-emerald-400/60 bg-emerald-400/10 text-emerald-200' : 'border-zinc-700 text-zinc-500'}`}>
+                {outputDelivered(target) ? <Check className="h-3.5 w-3.5" /> : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
+              </span>
             </div>
-          </div>
-        )}
+          ))}
+        </div>
+        <div className="mt-4 h-2 overflow-hidden rounded-full bg-zinc-800">
+          <div className="h-full rounded-full bg-zinc-100 transition-all duration-500" style={{ width: `${exportProgress}%` }} />
+        </div>
+        <div className="mt-2 text-xs text-zinc-500">{deliveredOutputCount} of {requestedOutputCount} requested outputs prepared</div>
+      </div>
 
-        {/* Model & Layout Info Bar */}
-        <div className="bg-slate-50 border-2 border-slate-200 rounded-lg px-4 py-2 flex flex-wrap items-center gap-4 text-xs font-mono text-slate-600">
-          <div className="flex items-center gap-1.5">
-            <span className="inline-block w-2 h-2 rounded-full bg-brand-blue" />
-            <span className="font-bold text-slate-700">Model:</span> {activeModel?.label || 'Default'}
-          </div>
-          {gridTemplate ? (
-            <div className="flex items-center gap-1.5">
-              <span className="inline-block w-2 h-2 rounded-full bg-brand-yellow" />
-              <span className="font-bold text-slate-700">Layout:</span> {gridTemplate.title}
-            </div>
-          ) : state.layoutType ? (
-            <div className="flex items-center gap-1.5">
-              <span className="inline-block w-2 h-2 rounded-full bg-brand-yellow" />
-              <span className="font-bold text-slate-700">Layout:</span> {state.layoutType}
-            </div>
-          ) : null}
-          <div className="flex items-center gap-1.5">
-            <span className="inline-block w-2 h-2 rounded-full bg-emerald-400" />
-            <span className="font-bold text-slate-700">Panels:</span> {panels.length}
+      <div className="grid grid-cols-2 gap-2">
+        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+          <div className="text-[11px] uppercase text-zinc-500">Panels</div>
+          <div className="mt-1 text-sm font-semibold text-zinc-100">{renderedPanels} / {panels.length}</div>
+        </div>
+        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+          <div className="text-[11px] uppercase text-zinc-500">Retries</div>
+          <div className="mt-1 text-sm font-semibold text-zinc-100">{failedPanels}</div>
+        </div>
+        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+          <div className="text-[11px] uppercase text-zinc-500">Cost</div>
+          <div className="mt-1 text-sm font-semibold text-zinc-100">
+            {comicCost
+              ? `$${(comicCost.totalBillableUsd > 0 ? comicCost.totalBillableUsd : comicCost.totalProviderCostUsd).toFixed(4)}`
+              : costReport
+                ? `$${costReport.cost_summary.totalCost.toFixed(4)}`
+                : 'n/a'}
           </div>
         </div>
-
-        {/* Action Bar */}
-        <div className="min-h-24 bg-white border-4 border-black rounded-xl p-4 flex flex-wrap items-center justify-between gap-3 shadow-comic">
-          <div className="flex items-center gap-4">
-            <Button variant="secondary" onClick={() => setShowRegenModal(true)} disabled={!selectedPanel} isLoading={isRegenerating} icon={<RefreshCw className="w-4 h-4" />}>Edit / Regenerate</Button>
-            <Button variant="outline" onClick={() => setShowHistoryModal(true)} disabled={!selectedPanel || (selectedPanel.imageIdHistory?.length || 0) <= 1} icon={<History className="w-4 h-4" />}>History</Button>
-            <Button variant="outline" onClick={onReturnToPreview} icon={<ArrowLeftRight className="w-4 h-4" />}>Back To Preview</Button>
-            <Button variant="outline" onClick={handleRunContinuityAudit} isLoading={auditLoading}>
-              Continuity Audit
-            </Button>
-            <Button
-              variant="outline"
-              onClick={handleFixFlaggedPanels}
-              disabled={!Object.values(auditScoresByPanel).some((score) => score.driftScore > 0.35)}
-            >
-              Fix Flagged
-            </Button>
-          </div>
-          <div className="flex items-center gap-4">
-            <button onClick={handleShare} className="flex items-center gap-2 text-sm font-bold text-slate-600 hover:text-black">
-              <Share2 size={16} /> {shareLink ? "Link Copied!" : "Share"}
-            </button>
-            {versions.length > 0 && (
-              <div className="relative">
-                <Button variant="outline" onClick={() => setShowVersionPicker(!showVersionPicker)}>
-                  Versions ({versions.length})
-                </Button>
-                {showVersionPicker && (
-                  <div className="absolute bottom-full mb-2 right-0 bg-white border-2 border-black rounded-lg shadow-comic p-2 z-50 w-72 max-h-56 overflow-y-auto">
-                    <div className="text-xs font-bold text-slate-500 uppercase mb-2 px-2">Version History</div>
-                    {versions.map(v => (
-                      <button
-                        key={v.id}
-                        onClick={() => {
-                          onUpdateProject({ state: v.state });
-                          setShowVersionPicker(false);
-                        }}
-                        className="w-full text-left p-2 hover:bg-slate-100 rounded text-xs transition-colors"
-                      >
-                        <div className="font-bold truncate">{v.name}</div>
-                        <div className="text-slate-500">{new Date(v.createdAt).toLocaleString()}</div>
-                        {v.reason && <div className="text-[10px] text-slate-400 italic">{v.reason}</div>}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-            <div className="flex gap-2">
-              <Button onClick={handleDownloadProjectData} variant="outline">Project ZIP</Button>
-              <Button onClick={handleDownloadHTML} variant="outline" icon={<FileCode className="w-4 h-4" />}>HTML</Button>
-              <Button onClick={handleDownloadPDF} icon={<Download className="w-4 h-4" />} className="bg-brand-yellow">PDF</Button>
-            </div>
-          </div>
+        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+          <div className="text-[11px] uppercase text-zinc-500">Model</div>
+          <div className="mt-1 truncate text-sm font-semibold text-zinc-100">{activeModel?.label || 'Default'}</div>
         </div>
       </div>
+
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950">
+        <div className="flex items-center gap-2 border-b border-zinc-800 px-3 py-2 text-sm font-semibold text-zinc-200">
+          <Terminal className="h-4 w-4" /> Agent stream
+        </div>
+        <div className="max-h-52 overflow-y-auto px-3 py-2 font-mono text-xs custom-scrollbar">
+          {recentAgentEvents.length === 0 ? (
+            <div className="py-2 text-zinc-600">No export events yet.</div>
+          ) : recentAgentEvents.map((event) => (
+            <div key={event.id} className="border-b border-zinc-900 py-2 text-zinc-400 last:border-0">
+              <span className="mr-2 text-zinc-600">{new Date(event.timestamp).toLocaleTimeString()}</span>
+              {event.message}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+
+  const actions = (
+    <div className="flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        onClick={handleShare}
+        className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm font-semibold text-zinc-100 transition-colors hover:border-zinc-400"
+      >
+        <Share2 className="h-4 w-4" /> Share
+      </button>
+      <button
+        type="button"
+        onClick={handleDownloadProjectData}
+        className="inline-flex items-center gap-2 rounded-lg bg-zinc-100 px-3 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-white"
+      >
+        <Download className="h-4 w-4" /> ZIP
+      </button>
+    </div>
+  );
+
+  return (
+    <>
+      <AgentStageShell
+        eyebrow="Export agent"
+        title="Review and deliver"
+        description="Finished panels are ready for fixes, continuity checks, and requested outputs."
+        icon={<Activity className="h-5 w-5" />}
+        actions={actions}
+        sidebar={sidebar}
+        minHeightClassName="min-h-[760px]"
+      >
+        <div className="space-y-5 p-5">
+          <div className="max-h-[65vh] overflow-y-auto rounded-lg bg-zinc-900 p-3 custom-scrollbar sm:p-5">
+            <div id="comic-render-area" className="mx-auto max-w-5xl rounded-lg bg-white p-4 shadow-2xl sm:p-6">
+              {state.coverImageUrl && (
+                <div className="mb-6 overflow-hidden rounded-lg border-4 border-black">
+                  <img src={state.coverImageUrl} alt={`${projectName} cover`} className="h-auto w-full object-cover" />
+                </div>
+              )}
+              {gridTemplate ? renderTemplatePages() : (
+                <div className={getLayoutClass()}>
+                  {panels.map((panel, idx) => renderPanelCard(panel, idx))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="grid gap-3 lg:grid-cols-[1fr_1fr]">
+            <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+              <div className="text-xs font-semibold uppercase text-zinc-500">Cost summary</div>
+              <div className="mt-1 text-xl font-semibold text-zinc-100">
+                {isCostLoading
+                  ? "Updating..."
+                  : comicCost
+                    ? `$${(comicCost.totalBillableUsd > 0 ? comicCost.totalBillableUsd : comicCost.totalProviderCostUsd).toFixed(4)}`
+                    : costReport
+                      ? `$${costReport.cost_summary.totalCost.toFixed(4)}`
+                      : "n/a"}
+              </div>
+              <div className="mt-1 text-[11px] font-mono text-zinc-500">
+                {costUpdatedAt ? `Updated ${new Date(costUpdatedAt).toLocaleTimeString()}` : "Waiting for data..."}
+              </div>
+              <div className="mt-2 select-all text-[11px] font-mono text-zinc-600" title="Reference these when reporting an issue">
+                Project {projectId} · Session {state.sessionId || "-"}
+              </div>
+              {regenError && (
+                <div className="mt-2 rounded-md border border-red-400/40 bg-red-400/10 px-3 py-2 text-xs text-red-100">{regenError}</div>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+              <div className="text-xs font-semibold uppercase text-zinc-500">Continuity</div>
+              {auditSummary ? (
+                <div className="mt-2 text-sm leading-6 text-zinc-300">{auditSummary}</div>
+              ) : (
+                <div className="mt-2 text-sm leading-6 text-zinc-500">No review audit has run for this build yet.</div>
+              )}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button variant="secondary" size="sm" onClick={handleRunContinuityAudit} isLoading={auditLoading}>
+                  Audit
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleFixFlaggedPanels}
+                  disabled={!Object.values(auditScoresByPanel).some((score) => score.driftScore > 0.35)}
+                >
+                  Fix Flagged
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {comicCost && (Object.keys(comicCost.byStage).length > 0 || Object.keys(comicCost.byModel).length > 0) && (
+            <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+              <div className="text-xs font-semibold uppercase text-zinc-500">Cost breakdown</div>
+              <div className="mt-3 grid gap-4 text-xs sm:grid-cols-2">
+                <div>
+                  <div className="mb-1 font-semibold text-zinc-200">By stage</div>
+                  {Object.entries(comicCost.byStage).sort((a, b) => b[1].usd - a[1].usd).slice(0, 6).map(([stage, v]) => (
+                    <div key={stage} className="flex justify-between gap-2 py-0.5"><span className="truncate text-zinc-500">{stage}</span><span className="shrink-0 font-mono text-zinc-300">${v.usd.toFixed(4)}</span></div>
+                  ))}
+                </div>
+                <div>
+                  <div className="mb-1 font-semibold text-zinc-200">By model</div>
+                  {Object.entries(comicCost.byModel).sort((a, b) => b[1].usd - a[1].usd).slice(0, 6).map(([model, v]) => (
+                    <div key={model} className="flex justify-between gap-2 py-0.5"><span className="truncate text-zinc-500">{model}</span><span className="shrink-0 font-mono text-zinc-300">${v.usd.toFixed(4)}</span></div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="rounded-lg border border-zinc-800 bg-zinc-950 px-4 py-3">
+            <div className="flex flex-wrap items-center gap-3 text-xs font-mono text-zinc-400">
+              <div><span className="text-zinc-600">Model:</span> {activeModel?.label || 'Default'}</div>
+              <div><span className="text-zinc-600">Layout:</span> {gridTemplate?.title || state.layoutType}</div>
+              <div><span className="text-zinc-600">Panels:</span> {panels.length}</div>
+              <div><span className="text-zinc-600">Requested:</span> {agentSettings.outputTargets.map(outputTargetLabel).join(', ')}</div>
+              {costReport && <div><span className="text-zinc-600">Artifacts:</span> {costReport.ai_usage.totalArtifacts}</div>}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+              <div className="flex flex-wrap gap-2">
+                <Button variant="secondary" onClick={() => setShowRegenModal(true)} disabled={!selectedPanel} isLoading={isRegenerating} icon={<RefreshCw className="h-4 w-4" />}>Edit Panel</Button>
+                <Button variant="secondary" onClick={() => setShowHistoryModal(true)} disabled={!selectedPanel || (selectedPanel.imageIdHistory?.length || 0) <= 1} icon={<History className="h-4 w-4" />}>History</Button>
+                <Button variant="secondary" onClick={onReturnToPreview} icon={<ArrowLeftRight className="h-4 w-4" />}>Layout</Button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {versions.length > 0 && (
+                  <div className="relative">
+                    <Button variant="secondary" onClick={() => setShowVersionPicker(!showVersionPicker)}>
+                      Versions ({versions.length})
+                    </Button>
+                    {showVersionPicker && (
+                      <div className="absolute bottom-full right-0 z-50 mb-2 max-h-56 w-72 overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-950 p-2 shadow-2xl">
+                        <div className="mb-2 px-2 text-xs font-semibold uppercase text-zinc-500">Version History</div>
+                        {versions.map(v => (
+                          <button
+                            key={v.id}
+                            onClick={() => {
+                              onUpdateProject({ state: v.state });
+                              setShowVersionPicker(false);
+                            }}
+                            className="w-full rounded p-2 text-left text-xs text-zinc-300 transition-colors hover:bg-zinc-900"
+                          >
+                            <div className="truncate font-semibold text-zinc-100">{v.name}</div>
+                            <div className="text-zinc-500">{new Date(v.createdAt).toLocaleString()}</div>
+                            {v.reason && <div className="text-[10px] italic text-zinc-600">{v.reason}</div>}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                <Button onClick={handleDownloadProjectData} variant={wantsComic ? 'primary' : 'secondary'}>Project ZIP</Button>
+                <Button onClick={handleDownloadHTML} variant={wantsHtml ? 'primary' : 'secondary'} icon={<FileCode className="h-4 w-4" />}>HTML</Button>
+                <Button onClick={handleDownloadPDF} icon={<Download className="h-4 w-4" />} variant={wantsBook ? 'primary' : 'secondary'}>
+                  {wantsBook ? 'Book/PDF' : 'PDF'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </AgentStageShell>
 
       {/* Modals */}
       {showHistoryModal && selectedPanel && (
@@ -782,6 +997,6 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
           <ShareModal projectId={projectId} onClose={() => setShowShareModal(false)} />
         </React.Suspense>
       )}
-    </div>
+    </>
   );
 };

@@ -271,13 +271,15 @@ imageRouter.post('/gemini', checkLimits('gemini'), async (req, res, next) => {
             dataUrl: IMAGE_INCLUDE_DATA_URL_LEGACY ? generated.dataUrl : undefined
           };
 
-          console.info('[METRICS] image_pipeline', {
-            provider: 'gemini',
-            upload_bytes_original: saved.originalBytes,
-            upload_bytes_stored: saved.storedBytes,
-            compression_ratio: Number(saved.compressionRatio.toFixed(4)),
-            image_save_ms: saved.saveMs
-          });
+          if (process.env.NODE_ENV !== 'production') {
+            console.info('[METRICS] image_pipeline', {
+              provider: 'gemini',
+              upload_bytes_original: saved.originalBytes,
+              upload_bytes_stored: saved.storedBytes,
+              compression_ratio: Number(saved.compressionRatio.toFixed(4)),
+              image_save_ms: saved.saveMs
+            });
+          }
         }
 
         // Settle billing in the background so the generated image returns immediately.
@@ -412,13 +414,15 @@ imageRouter.post('/flux', checkLimits('pixazo'), async (req, res, next) => {
             dataUrl: IMAGE_INCLUDE_DATA_URL_LEGACY ? generated.dataUrl : undefined
           };
 
-          console.info('[METRICS] image_pipeline', {
-            provider: 'flux',
-            upload_bytes_original: saved.originalBytes,
-            upload_bytes_stored: saved.storedBytes,
-            compression_ratio: Number(saved.compressionRatio.toFixed(4)),
-            image_save_ms: saved.saveMs
-          });
+          if (process.env.NODE_ENV !== 'production') {
+            console.info('[METRICS] image_pipeline', {
+              provider: 'flux',
+              upload_bytes_original: saved.originalBytes,
+              upload_bytes_stored: saved.storedBytes,
+              compression_ratio: Number(saved.compressionRatio.toFixed(4)),
+              image_save_ms: saved.saveMs
+            });
+          }
         }
 
         settledBilling = await settleReservedOperation({
@@ -552,13 +556,15 @@ imageRouter.post('/ideogram', checkLimits('ideogram'), async (req, res, next) =>
             dataUrl: IMAGE_INCLUDE_DATA_URL_LEGACY ? generated.dataUrl : undefined
           };
 
-          console.info('[METRICS] image_pipeline', {
-            provider: 'ideogram',
-            upload_bytes_original: saved.originalBytes,
-            upload_bytes_stored: saved.storedBytes,
-            compression_ratio: Number(saved.compressionRatio.toFixed(4)),
-            image_save_ms: saved.saveMs
-          });
+          if (process.env.NODE_ENV !== 'production') {
+            console.info('[METRICS] image_pipeline', {
+              provider: 'ideogram',
+              upload_bytes_original: saved.originalBytes,
+              upload_bytes_stored: saved.storedBytes,
+              compression_ratio: Number(saved.compressionRatio.toFixed(4)),
+              image_save_ms: saved.saveMs
+            });
+          }
         }
 
         settledBilling = await settleReservedOperation({
@@ -737,13 +743,15 @@ imageRouter.post('/openrouter', async (req, res, next) => {
             dataUrl: IMAGE_INCLUDE_DATA_URL_LEGACY ? dataUrl : undefined
           };
 
-          console.info('[METRICS] image_pipeline', {
-            provider: 'openrouter',
-            upload_bytes_original: saved.originalBytes,
-            upload_bytes_stored: saved.storedBytes,
-            compression_ratio: Number(saved.compressionRatio.toFixed(4)),
-            image_save_ms: saved.saveMs
-          });
+          if (process.env.NODE_ENV !== 'production') {
+            console.info('[METRICS] image_pipeline', {
+              provider: 'openrouter',
+              upload_bytes_original: saved.originalBytes,
+              upload_bytes_stored: saved.storedBytes,
+              compression_ratio: Number(saved.compressionRatio.toFixed(4)),
+              image_save_ms: saved.saveMs
+            });
+          }
         }
 
         // Settle billing in the background so the generated image returns immediately.

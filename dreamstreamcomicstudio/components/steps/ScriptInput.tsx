@@ -1,14 +1,27 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, ArrowRight } from 'lucide-react';
+import {
+  ArrowUp,
+  Bot,
+  Check,
+  FileText,
+  Image,
+  LayoutGrid,
+  Loader2,
+  Paperclip,
+  Settings2,
+  Sparkles,
+  Wand2,
+  X
+} from 'lucide-react';
 import { analyzeScriptDetailed } from '../../services/geminiService';
 import { ApiError } from '../../services/apiClient';
-import { Scene } from '../../types';
-import { Button } from '../Button';
+import { AgentConfirmPolicy, AgentOutputTarget, ComicAgentSettings, Scene } from '../../types';
 import { ScriptChecklist, analyzeScriptChecklist } from '../../services/scriptChecklist';
-import { StoryBuilder } from '../StoryBuilder';
-import { StoryBuilderState } from '../../types';
-import { AnalyzeScriptResponse } from '../../apiTypes';
-import { ScriptAnalysisReview } from './ScriptAnalysisReview';
+import {
+  agentConfirmLabel,
+  normalizeComicAgentSettings,
+  outputTargetLabel
+} from '../../services/comicAgentSettings';
 
 interface ScriptInputProps {
   initialScript: string;
@@ -17,10 +30,10 @@ interface ScriptInputProps {
   onScriptChange: (script: string) => void;
   initialCreativeDirection?: string;
   onCreativeDirectionChange?: (value: string) => void;
+  initialAgentSettings?: ComicAgentSettings;
+  onAgentSettingsChange?: (settings: ComicAgentSettings) => void;
   initialChecklist?: ScriptChecklist;
   onChecklistUpdate?: (checklist: ScriptChecklist) => void;
-  initialStoryBuilder?: StoryBuilderState;
-  onStoryBuilderUpdate?: (state: StoryBuilderState) => void;
 }
 
 const getAnalyzeErrorMessage = (error: unknown): string => {
@@ -46,9 +59,33 @@ const getAnalyzeErrorMessage = (error: unknown): string => {
   return 'Failed to analyze script. Please retry.';
 };
 
-export const ScriptInput: React.FC<ScriptInputProps> = ({ initialScript, projectId, onScenesGenerated, onScriptChange, initialChecklist, onChecklistUpdate, initialStoryBuilder, onStoryBuilderUpdate, initialCreativeDirection, onCreativeDirectionChange }) => {
+const CONFIRM_OPTIONS: Array<{ value: AgentConfirmPolicy; label: string }> = [
+  { value: 'big_spends', label: 'Big spends only' },
+  { value: 'always', label: 'Always' },
+  { value: 'never', label: 'Never' }
+];
+
+const OUTPUT_OPTIONS: Array<{ value: AgentOutputTarget; label: string }> = [
+  { value: 'comic', label: 'Comic' },
+  { value: 'book', label: 'Book' },
+  { value: 'html', label: 'HTML' }
+];
+
+export const ScriptInput: React.FC<ScriptInputProps> = ({
+  initialScript,
+  projectId,
+  onScenesGenerated,
+  onScriptChange,
+  initialChecklist,
+  onChecklistUpdate,
+  initialCreativeDirection,
+  onCreativeDirectionChange,
+  initialAgentSettings,
+  onAgentSettingsChange
+}) => {
   const [script, setScript] = useState(initialScript);
   const [creativeDirection, setCreativeDirection] = useState(initialCreativeDirection || '');
+  const [agentSettings, setAgentSettings] = useState<ComicAgentSettings>(() => normalizeComicAgentSettings(initialAgentSettings));
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [analysisStatus, setAnalysisStatus] = useState<string | null>(null);
@@ -63,15 +100,6 @@ export const ScriptInput: React.FC<ScriptInputProps> = ({ initialScript, project
   const analysisRequestIdRef = useRef(0);
   const analysisAbortRef = useRef<AbortController | null>(null);
   const [checklist, setChecklist] = useState<ScriptChecklist | null>(initialChecklist || null);
-  const [showChecklist, setShowChecklist] = useState(false);
-  const [awaitingConfirm, setAwaitingConfirm] = useState(false);
-  const lastChecklistScriptRef = useRef<string>(initialScript);
-  const [storyBuilderState, setStoryBuilderState] = useState<StoryBuilderState | undefined>(initialStoryBuilder);
-  const [pendingReview, setPendingReview] = useState<{
-    script: string;
-    scenes: Scene[];
-    diagnostics?: AnalyzeScriptResponse['diagnostics'];
-  } | null>(null);
 
   // Sync with initialScript if it changes externally (e.g. loading a project)
   useEffect(() => {
@@ -85,10 +113,8 @@ export const ScriptInput: React.FC<ScriptInputProps> = ({ initialScript, project
   }, [initialChecklist]);
 
   useEffect(() => {
-    if (initialStoryBuilder) {
-      setStoryBuilderState(initialStoryBuilder);
-    }
-  }, [initialStoryBuilder]);
+    setAgentSettings(normalizeComicAgentSettings(initialAgentSettings));
+  }, [initialAgentSettings]);
 
   useEffect(() => {
     return () => {
@@ -179,10 +205,6 @@ export const ScriptInput: React.FC<ScriptInputProps> = ({ initialScript, project
     setScript(newScript);
     onScriptChange(newScript);
     setError(null);
-    setPendingReview(null);
-    if (awaitingConfirm && newScript !== lastChecklistScriptRef.current) {
-      setAwaitingConfirm(false);
-    }
   };
 
   const runAnalysis = async (targetScript = script) => {
@@ -199,13 +221,9 @@ export const ScriptInput: React.FC<ScriptInputProps> = ({ initialScript, project
       const result = await analyzeScriptDetailed(targetScript, projectId, controller.signal, creativeDirection.trim() || undefined);
       if (analysisRequestIdRef.current !== requestId) return;
       if (result.scenes && result.scenes.length > 0) {
-        setPendingReview({
-          script: targetScript,
-          scenes: result.scenes,
-          diagnostics: result.diagnostics
-        });
+        onScenesGenerated(targetScript, result.scenes);
       } else {
-        setError("Could not identify scenes. Please check the format.");
+        setError("I couldn't find enough story structure yet. Add a little more about who is involved, where it happens, or what changes.");
       }
     } catch (e) {
       if (analysisRequestIdRef.current !== requestId) return;
@@ -221,27 +239,10 @@ export const ScriptInput: React.FC<ScriptInputProps> = ({ initialScript, project
   const handleAnalyze = () => {
     if (!script.trim()) return;
     setError(null);
-    if (!awaitingConfirm || script !== lastChecklistScriptRef.current) {
-      const nextChecklist = analyzeScriptChecklist(script);
-      setChecklist(nextChecklist);
-      onChecklistUpdate?.(nextChecklist);
-      setShowChecklist(true);
-      setAwaitingConfirm(true);
-      lastChecklistScriptRef.current = script;
-      return;
-    }
-    setShowChecklist(false);
+    const nextChecklist = analyzeScriptChecklist(script);
+    setChecklist(nextChecklist);
+    onChecklistUpdate?.(nextChecklist);
     void runAnalysis(script);
-  };
-
-  const handleConfirmAnalyze = () => {
-    setShowChecklist(false);
-    setAwaitingConfirm(false);
-    void runAnalysis(script);
-  };
-
-  const handleDismissChecklist = () => {
-    setShowChecklist(false);
   };
 
   const handleCancelAnalyze = () => {
@@ -259,176 +260,303 @@ Scene 2: Inside a noodle bar. It is crowded and smoky. K sits at the counter. A 
 VIVIAN: "You're looking for the ghost in the machine, aren't you?"
 K: "I'm just looking for dinner."`;
 
-  if (pendingReview) {
-    return (
-      <ScriptAnalysisReview
-        script={pendingReview.script}
-        scenes={pendingReview.scenes}
-        diagnostics={pendingReview.diagnostics}
-        onBackToScript={() => setPendingReview(null)}
-        onReanalyze={() => {
-          setPendingReview(null);
-          void runAnalysis(pendingReview.script);
-        }}
-        onApprove={(approvedScenes) => {
-          onScenesGenerated(pendingReview.script, approvedScenes);
-          setPendingReview(null);
-        }}
-      />
-    );
-  }
+  const scriptWordCount = script.trim().split(/\s+/).filter(Boolean).length;
+  const canStart = script.trim().length >= 10 && !isAnalyzing;
+  const foundContext = checklist?.found || [];
+  const needsContext = checklist?.missing || [];
+  const updateCreativeDirection = (value: string) => {
+    setCreativeDirection(value);
+    onCreativeDirectionChange?.(value);
+  };
+  const updateAgentSettings = (patch: Partial<ComicAgentSettings>) => {
+    const next = normalizeComicAgentSettings({
+      ...agentSettings,
+      ...patch,
+      updatedAt: Date.now()
+    });
+    setAgentSettings(next);
+    onAgentSettingsChange?.(next);
+  };
+  const toggleOutputTarget = (target: AgentOutputTarget) => {
+    const current = new Set(agentSettings.outputTargets);
+    if (current.has(target)) {
+      if (current.size === 1) return;
+      current.delete(target);
+    } else {
+      current.add(target);
+    }
+    updateAgentSettings({ outputTargets: Array.from(current) });
+  };
+  const confirmChipLabel = agentConfirmLabel(agentSettings.confirmPolicy);
 
   return (
-    <div className="max-w-5xl mx-auto space-y-8 animate-fade-in">
-      <div className="text-center space-y-2 bg-white p-6 rounded-xl border-4 border-black shadow-comic transform -rotate-1">
-        <h2 className="text-4xl font-display text-black">The Story Begins!</h2>
-        <p className="text-slate-600 font-comic text-lg">Paste your story below — plain prose is perfect. The AI breaks it into scenes for you.</p>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="md:col-span-2 space-y-4">
-            <div className="relative group">
-                <div className="absolute -top-3 -left-3 bg-brand-yellow px-3 py-1 border-2 border-black font-bold font-comic shadow-sm z-10 rotate-[-2deg]">
-                    SCRIPT EDITOR
-                </div>
-                <textarea
-                    value={script}
-                    onChange={(e) => handleChange(e.target.value)}
-                    placeholder="Paste your script here..."
-                    className="w-full h-96 bg-white border-4 border-black rounded-xl p-6 text-slate-800 placeholder-slate-400 focus:ring-0 focus:border-brand-blue focus:shadow-comic transition-all resize-none font-mono text-sm leading-relaxed shadow-[4px_4px_0px_0px_rgba(0,0,0,0.2)]"
-                />
-                <div className="absolute bottom-4 right-4">
-                     <button onClick={() => handleChange(sampleScript)} className="text-xs font-bold bg-slate-100 px-3 py-1 rounded border-2 border-black hover:bg-brand-yellow transition-colors">
-                        Load Sample
-                     </button>
-                </div>
+    <div className="mx-auto w-full max-w-7xl animate-fade-in">
+      <div className="min-h-[720px] overflow-hidden rounded-lg border border-zinc-800 bg-[#050505] text-zinc-100 shadow-2xl">
+        <div className="grid min-h-[720px] grid-cols-1 lg:grid-cols-[220px_1fr_320px]">
+          <aside className="hidden border-r border-zinc-800 bg-[#090909] px-3 py-5 lg:block">
+            <div className="mb-8 flex items-center gap-2 px-2">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-zinc-100 text-zinc-950">
+                <Bot className="h-5 w-5" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold">Comic Agent</div>
+                <div className="text-[11px] text-zinc-500">New build</div>
+              </div>
             </div>
-            <div className="bg-white p-4 rounded-xl border-4 border-black shadow-comic">
-                <label className="text-sm font-display flex items-center gap-2 mb-2">
-                    <Sparkles className="w-4 h-4 text-brand-blue" /> Creative direction
-                    <span className="text-xs font-normal text-slate-400">(optional — speak your mind about the story)</span>
-                </label>
-                <textarea
-                    value={creativeDirection}
-                    onChange={(e) => { setCreativeDirection(e.target.value); onCreativeDirectionChange?.(e.target.value); }}
-                    placeholder="e.g. 'Melancholic, rain-soaked noir; the boat is the real main character; keep it quiet and tense, not action-heavy.'"
-                    className="w-full h-24 bg-white border-2 border-black rounded-lg p-3 text-sm resize-none focus:border-brand-blue"
-                />
-                <p className="mt-1 text-[11px] text-slate-500">The AI uses this to interpret your story's tone &amp; intent across analysis, panels, and art — without inventing plot.</p>
-            </div>
-        </div>
-
-        <div className="space-y-6">
-            <div className="bg-white p-6 rounded-xl border-4 border-black shadow-comic relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-16 h-16 bg-brand-blue/20 rounded-bl-full -mr-8 -mt-8"></div>
-                <h3 className="text-xl font-display text-black mb-4 flex items-center">
-                    <Sparkles className="w-6 h-6 text-brand-yellow fill-brand-yellow mr-2" />
-                    AI Analysis
-                </h3>
-                <p className="text-sm text-slate-600 font-medium mb-4 leading-relaxed">
-                    Analysis runs on your selected text model. Free-form prose works — scene headings, dialogue, and character names are all optional.
-                </p>
-                {checklist && showChecklist && (
-                  <div className="mb-4 bg-slate-50 border-2 border-black rounded-lg p-4 text-xs space-y-3">
-                    <div className="font-bold uppercase text-slate-600">Script Checklist</div>
-                    <div>
-                      <div className="text-[11px] font-bold text-green-700 mb-1">Found</div>
-                      <div className="flex flex-wrap gap-2">
-                        {checklist.found.map((item) => (
-                          <span key={item} className="px-2 py-1 bg-green-100 border border-green-300 rounded">{item}</span>
-                        ))}
-                        {checklist.found.length === 0 && <span className="text-slate-500">None</span>}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-[11px] font-bold text-brand-red mb-1">Needs attention</div>
-                      <div className="flex flex-wrap gap-2">
-                        {checklist.missing.map((item) => (
-                          <span key={item} className="px-2 py-1 bg-red-100 border border-red-300 rounded">{item}</span>
-                        ))}
-                        {checklist.missing.length === 0 && <span className="text-slate-500">Ready to analyze — nothing required</span>}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-[11px] font-bold text-slate-500 mb-1">Optional tips</div>
-                      <ul className="list-disc list-inside space-y-1 text-slate-600">
-                        {checklist.suggestions.map((item) => (
-                          <li key={item}>{item}</li>
-                        ))}
-                        {checklist.suggestions.length === 0 && <li>No suggestions.</li>}
-                      </ul>
-                    </div>
-                    <div className="flex flex-wrap gap-2 pt-2">
-                      <Button size="sm" onClick={handleConfirmAnalyze}>
-                        {checklist.missing.length > 0 ? 'Proceed Anyway' : 'Analyze Now'}
-                      </Button>
-                      <Button size="sm" variant="secondary" onClick={handleDismissChecklist}>Edit Script</Button>
-                    </div>
+            <nav className="space-y-1">
+              {[
+                { label: 'Script', icon: FileText, active: true },
+                { label: 'Cast', icon: Bot },
+                { label: 'Pages', icon: LayoutGrid },
+                { label: 'Assets', icon: Image }
+              ].map((item) => {
+                const Icon = item.icon;
+                return (
+                  <div
+                    key={item.label}
+                    className={`flex h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium ${
+                      item.active ? 'bg-zinc-800 text-white' : 'text-zinc-400'
+                    }`}
+                  >
+                    <Icon className="h-4 w-4" />
+                    {item.label}
                   </div>
-                )}
-                <ul className="space-y-3 text-sm font-bold text-slate-700">
-                    <li className="flex items-center"><div className="w-3 h-3 border-2 border-black bg-brand-yellow mr-2"/> Scene Detection</li>
-                    <li className="flex items-center"><div className="w-3 h-3 border-2 border-black bg-brand-red mr-2"/> Character Extraction</li>
-                    <li className="flex items-center"><div className="w-3 h-3 border-2 border-black bg-brand-blue mr-2"/> Setting Visualization</li>
-                </ul>
+                );
+              })}
+            </nav>
+          </aside>
+
+          <section className="flex min-h-[720px] flex-col border-r border-zinc-800">
+            <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+              <div>
+                <h2 className="text-xl font-semibold tracking-tight">What should the comic become?</h2>
+                <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-zinc-500">
+                  <span>{scriptWordCount} words</span>
+                  <span>Any format accepted</span>
+                  <span>Comic + reader + export</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => handleChange(sampleScript)}
+                className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-xs font-semibold text-zinc-200 hover:bg-zinc-800"
+              >
+                <Wand2 className="h-4 w-4" />
+                Sample
+              </button>
             </div>
 
-            <Button 
-                onClick={handleAnalyze} 
-                isLoading={isAnalyzing}
-                className="w-full py-6 text-xl"
-                icon={<ArrowRight />}
-                disabled={script.length < 10}
-            >
-                Analyze Script
-            </Button>
+            <div className="flex-1 overflow-y-auto px-5 py-6">
+              <div className="mx-auto flex min-h-[360px] max-w-3xl flex-col items-center justify-center text-center">
+                <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900">
+                  <Sparkles className="h-7 w-7 text-emerald-300" />
+                </div>
+                <div className="max-w-xl text-2xl font-semibold text-zinc-100">Start with a script, outline, pasted notes, or a rough idea.</div>
+                <div className="mt-3 max-w-lg text-sm leading-6 text-zinc-500">
+                  The next action sends it to the comic agent. It will extract scenes, cast, world details, style intent, and move forward without a second confirmation screen.
+                </div>
+              </div>
 
-            {isAnalyzing && (
-                <div className="p-4 bg-slate-50 border-4 border-black rounded-xl shadow-comic">
-                    <div className="flex items-center justify-between text-xs font-bold uppercase">
-                        <span>AI Thinking</span>
-                        <span className="font-mono">
-                          {analysisEstimate !== null ? `~${analysisEstimate}s est` : "Estimating..."}
-                        </span>
+              {(checklist || isAnalyzing || error) && (
+                <div className="mx-auto mt-4 max-w-3xl space-y-3">
+                  {checklist && (
+                    <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+                      <div className="mb-3 flex items-center justify-between">
+                        <div className="text-sm font-semibold text-zinc-200">Agent read</div>
+                        <div className="text-[11px] text-zinc-500">{foundContext.length} strong signals</div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {foundContext.map((item) => (
+                          <span key={item} className="inline-flex items-center gap-1 rounded-full border border-emerald-700/60 bg-emerald-950/50 px-2.5 py-1 text-xs text-emerald-200">
+                            <Check className="h-3 w-3" />
+                            {item}
+                          </span>
+                        ))}
+                        {needsContext.slice(0, 4).map((item) => (
+                          <span key={item} className="rounded-full border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-xs text-zinc-400">
+                            {item}
+                          </span>
+                        ))}
+                      </div>
                     </div>
-                    <div className="mt-1 text-[11px] font-mono text-slate-500">
-                      Elapsed: {analysisElapsed}s {analysisEta !== null ? `• Remaining: ${analysisEta}s` : ""}
+                  )}
+
+                  {isAnalyzing && (
+                    <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+                      <div className="mb-3 flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-zinc-400">
+                        <span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Agent reading</span>
+                        <span>{analysisEstimate !== null ? `~${analysisEstimate}s` : 'Estimating'}</span>
+                      </div>
+                      <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
+                        <div className="h-full bg-emerald-300 transition-all" style={{ width: `${analysisProgress}%` }} />
+                      </div>
+                      <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
+                        <span>{analysisStatus || 'Reading story context'}</span>
+                        <span>{analysisElapsed}s elapsed{analysisEta !== null ? ` · ${analysisEta}s left` : ''}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleCancelAnalyze}
+                        className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-zinc-400 hover:text-red-300"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                        Stop
+                      </button>
                     </div>
-                    <div className="mt-2 h-2 bg-white border-2 border-black rounded-full overflow-hidden">
-                        <div
-                            className="h-full bg-brand-blue transition-all"
-                            style={{ width: `${analysisProgress}%` }}
-                        />
+                  )}
+
+                  {error && (
+                    <div className="rounded-lg border border-red-800 bg-red-950/50 p-4 text-sm font-semibold text-red-100">
+                      {error}
                     </div>
-                    {analysisStatus && (
-                        <div className="mt-2 text-xs font-comic text-slate-600">{analysisStatus}</div>
-                    )}
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="px-4 pb-5">
+              <div className="mx-auto max-w-4xl rounded-[24px] border border-zinc-700 bg-[#171717] p-3 shadow-[0_18px_60px_rgba(0,0,0,0.45)]">
+                <textarea
+                  value={script}
+                  onChange={(e) => handleChange(e.target.value)}
+                  placeholder="Paste anything: finished script, messy notes, a plot idea, dialogue, character details, or reference instructions..."
+                  className="min-h-28 max-h-64 w-full resize-y bg-transparent px-3 py-2 text-sm leading-6 text-zinc-100 placeholder-zinc-500 outline-none"
+                />
+                <div className="flex flex-wrap items-center gap-2 border-t border-zinc-800 px-1 pt-3">
+                  <button
+                    type="button"
+                    className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                    title="Attach references"
+                    aria-label="Attach references"
+                  >
+                    <Paperclip className="h-4 w-4" />
+                  </button>
+                  <div className="inline-flex h-10 items-center gap-2 rounded-full bg-zinc-100 px-4 text-sm font-semibold text-zinc-950">
+                    <Bot className="h-4 w-4" />
+                    Agent
+                  </div>
+                  <div className="inline-flex h-10 items-center gap-2 rounded-full bg-zinc-800 px-3 text-xs font-semibold text-zinc-300">
+                    <LayoutGrid className="h-4 w-4" />
+                    {agentSettings.autoPageCount ? 'Auto pages' : 'Manual pages'}
+                  </div>
+                  <div className="inline-flex h-10 items-center gap-2 rounded-full bg-zinc-800 px-3 text-xs font-semibold text-zinc-300">
+                    <Settings2 className="h-4 w-4" />
+                    {confirmChipLabel}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleAnalyze}
+                    disabled={!canStart}
+                    className="ml-auto flex h-11 min-w-11 items-center justify-center rounded-full bg-zinc-100 px-4 text-sm font-semibold text-zinc-950 transition hover:bg-white disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
+                    aria-label="Start comic agent"
+                  >
+                    {isAnalyzing ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
+                    <span className="ml-2 hidden sm:inline">Start agent</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <aside className="bg-[#111111] px-4 py-5">
+            <div className="mb-5 flex items-center gap-2 text-sm font-semibold">
+              <Settings2 className="h-4 w-4 text-zinc-400" />
+              Agent settings
+            </div>
+
+            <div className="space-y-5">
+              <div>
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Confirm before generating</div>
+                <div className="rounded-lg bg-zinc-900 p-1">
+                  {CONFIRM_OPTIONS.map((option) => {
+                    const selected = agentSettings.confirmPolicy === option.value;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => updateAgentSettings({ confirmPolicy: option.value })}
+                        className={`block w-full rounded-lg px-3 py-2 text-left text-sm font-medium transition-colors ${
+                          selected ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Output</div>
+                <div className="grid grid-cols-3 gap-2">
+                  {OUTPUT_OPTIONS.map((item) => (
                     <button
-                      onClick={handleCancelAnalyze}
-                      className="mt-3 text-xs font-bold underline decoration-2 underline-offset-2 text-slate-500 hover:text-brand-red"
+                      key={item.value}
+                      type="button"
+                      onClick={() => toggleOutputTarget(item.value)}
+                      className={`rounded-lg px-3 py-2 text-center text-sm font-medium transition-colors ${
+                        agentSettings.outputTargets.includes(item.value)
+                          ? 'bg-zinc-100 text-zinc-950'
+                          : 'bg-zinc-900 text-zinc-500 hover:text-zinc-300'
+                      }`}
                     >
-                      Cancel analysis
+                      {item.label}
                     </button>
+                  ))}
                 </div>
-            )}
-            
-            {error && (
-                <div className="p-4 bg-red-100 border-4 border-brand-red text-brand-red font-bold text-sm rounded-xl shadow-comic">
-                    {error}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => updateAgentSettings({ autoPageCount: !agentSettings.autoPageCount })}
+                  className={`rounded-lg px-3 py-2 text-left text-sm font-medium transition-colors ${
+                    agentSettings.autoPageCount ? 'bg-zinc-100 text-zinc-950' : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  Auto pages
+                </button>
+                <label className="rounded-lg bg-zinc-900 px-3 py-2">
+                  <span className="block text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Budget cap</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.25"
+                    value={agentSettings.budgetCapUsd ?? ''}
+                    onChange={(event) => {
+                      const value = event.target.value.trim();
+                      updateAgentSettings({ budgetCapUsd: value ? Number(value) : undefined });
+                    }}
+                    placeholder="$ optional"
+                    className="mt-1 w-full bg-transparent text-sm font-medium text-zinc-100 outline-none placeholder-zinc-600"
+                    aria-label="Budget cap in USD"
+                  />
+                </label>
+              </div>
+
+              <label className="block">
+                <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-zinc-500">Creative direction</span>
+                <textarea
+                  value={creativeDirection}
+                  onChange={(e) => updateCreativeDirection(e.target.value)}
+                  placeholder="Tone, visual references, must-keep details, pacing, audience..."
+                  className="h-36 w-full resize-none rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-sm leading-5 text-zinc-100 placeholder-zinc-600 outline-none focus:border-zinc-500"
+                />
+              </label>
+
+              <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+                <div className="text-sm font-semibold text-zinc-200">Context carried forward</div>
+                <div className="mt-3 space-y-2 text-sm text-zinc-400">
+                  <div className="flex items-center gap-2"><Check className="h-4 w-4 text-emerald-300" /> Cast traits</div>
+                  <div className="flex items-center gap-2"><Check className="h-4 w-4 text-emerald-300" /> World details</div>
+                  <div className="flex items-center gap-2"><Check className="h-4 w-4 text-emerald-300" /> Cover intent</div>
+                  <div className="flex items-center gap-2"><Check className="h-4 w-4 text-emerald-300" /> {agentSettings.outputTargets.map(outputTargetLabel).join(', ')}</div>
                 </div>
-            )}
+              </div>
+            </div>
+          </aside>
         </div>
       </div>
-
-      <StoryBuilder
-        value={storyBuilderState}
-        projectId={projectId}
-        onChange={(next) => {
-          setStoryBuilderState(next);
-          onStoryBuilderUpdate?.(next);
-        }}
-        onInsertScript={(scriptText) => handleChange(scriptText)}
-      />
     </div>
   );
 };

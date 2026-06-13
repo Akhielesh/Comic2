@@ -53,6 +53,17 @@ const extractLockedTraits = (text: string, limit = 5): string[] => {
   return traits;
 };
 
+const compactStructuredTraits = (entity: Character | Item | Location) => {
+  if (!entity.structured) return "";
+  return Object.entries(entity.structured)
+    .map(([key, value]) => {
+      const text = String(value || "").trim();
+      return text ? `${key}: ${text}` : "";
+    })
+    .filter(Boolean)
+    .join(". ");
+};
+
 const buildEntity = (
   kind: ContinuityEntity["kind"],
   entity: Character | Item | Location
@@ -62,7 +73,12 @@ const buildEntity = (
   name: entity.name,
   description: entity.description,
   lockedTraits: extractLockedTraits(
-    kind === "character" ? `${(entity as Character).bio || ""}. ${entity.description || ""}` : entity.description || ""
+    [
+      kind === "character" ? (entity as Character).bio || "" : "",
+      entity.description || "",
+      compactStructuredTraits(entity)
+    ].filter(Boolean).join(". "),
+    kind === "character" ? 12 : 6
   ),
   referenceImageIds: dedupe([...(entity.referenceImageIds || []), ...(entity.imageId ? [entity.imageId] : [])]),
   imageId: entity.imageId,
@@ -470,8 +486,8 @@ export const buildEntityTextContext = (state: ComicState, panel: ComicPanel): st
     const fullObj = fullChar || fullItem || fullLoc;
 
     if (fullObj) {
-      // Use the full object description if available
-      return `[${fullObj.name}]: ${fullObj.description}`;
+      const structuredTraits = compactStructuredTraits(fullObj);
+      return `[${fullObj.name}]: ${[fullObj.description, structuredTraits].filter(Boolean).join(". ")}`;
     }
     return `[${e.name}]: ${e.description}`;
   }).join("\n");

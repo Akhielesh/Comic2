@@ -18,11 +18,16 @@ export const buildCharacterStructuredDescription = (
 ) => {
   const parts = [
     clean(structured?.role) ? `${name} is ${clean(structured?.role)}` : '',
+    clean(structured?.genderPresentation) ? `Gender/presentation: ${clean(structured?.genderPresentation)}` : '',
+    clean(structured?.ageBand) ? `Age band: ${clean(structured?.ageBand)}` : '',
     clean(structured?.physicalTraits) ? `Physical traits: ${clean(structured?.physicalTraits)}` : '',
+    clean(structured?.distinguishingFeatures) ? `Distinguishing features: ${clean(structured?.distinguishingFeatures)}` : '',
     clean(structured?.outfit) ? `Outfit: ${clean(structured?.outfit)}` : '',
     clean(structured?.colorPalette) ? `Palette: ${clean(structured?.colorPalette)}` : '',
     clean(structured?.personality) ? `Personality cues: ${clean(structured?.personality)}` : '',
-    clean(structured?.constraints) ? `Constraints: ${clean(structured?.constraints)}` : ''
+    clean(structured?.constraints) ? `Constraints: ${clean(structured?.constraints)}` : '',
+    clean(structured?.mustKeep) ? `Must keep: ${clean(structured?.mustKeep)}` : '',
+    clean(structured?.evidence) ? `Script evidence: ${clean(structured?.evidence)}` : ''
   ];
   const structuredDescription = joinParts(parts);
   return structuredDescription || clean(fallbackDescription);

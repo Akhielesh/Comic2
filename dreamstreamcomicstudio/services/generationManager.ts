@@ -1,4 +1,4 @@
-import { Project, GenerationStatus, ComicPanel } from "../types";
+import { Project, GenerationStatus, ComicPanel, ComicAgentCardStatus } from "../types";
 import { generatePanelBreakdown, updateContinuitySummary } from "./geminiService";
 import { generateImage } from "./imageService";
 import { buildImagePrompt } from "./imagePrompt";
@@ -28,6 +28,7 @@ import { applyStyleLockResolution } from "./styleLock";
 import { hasMultiFrameLanguage, sanitizePanelDescription } from "./panelDescription";
 import { getModelForTask } from "./appSettings";
 import { GEMINI_IMAGE_MODEL_ID, getImageModelById } from "./imageModels";
+import { appendAgentEvent, patchAgentCard, transitionAgentRun } from "./comicAgentRun";
 
 const generationControllers = new Map<string, AbortController>();
 const generationCanceled = new Set<string>();
@@ -115,20 +116,53 @@ export const startBackgroundGeneration = async (
     totalPanels: state.scenes.length * 3
   };
 
+  const buildCardStatus = (status: GenerationStatus): ComicAgentCardStatus => {
+    if (status.isActive) return "active";
+    if (/^failed/i.test(status.currentStepDescription)) return "failed";
+    if (/^stopped/i.test(status.currentStepDescription)) return "blocked";
+    if (status.progress >= 99 || status.currentStepDescription === "Complete") return "done";
+    return "blocked";
+  };
+
   const updateStatus = (overrides: Partial<GenerationStatus>) => {
     currentStatus = { ...currentStatus, ...overrides };
     onUpdate(project.id, (prev) => ({
-      state: { ...prev.state, generationStatus: currentStatus }
+      state: {
+        ...prev.state,
+        generationStatus: currentStatus,
+        agentRun: patchAgentCard(prev.state.agentRun, "build", {
+          status: buildCardStatus(currentStatus),
+          summary: currentStatus.currentStepDescription,
+          progress: Math.round(Math.min(Math.max(currentStatus.progress || 0, 0), 100))
+        })
+      }
     }));
   };
 
   // Cap the in-memory log buffer so a long run can't grow status (and the per-tick state writes)
   // without bound. Storage drops logs entirely (see sanitizeProjectForStorage); this bounds memory.
   const MAX_RUN_LOGS = 200;
+  const persistedLogStatus = (message: string): "info" | "blocked" | "failed" => {
+    if (/error|failed/i.test(message)) return "failed";
+    if (/warning|stopped|limit|timeout|⚠/i.test(message)) return "blocked";
+    return "info";
+  };
+
   const addLog = (message: string) => {
     const newLog = { timestamp: Date.now(), message };
     const logs = [...currentStatus.logs, newLog];
     updateStatus({ logs: logs.length > MAX_RUN_LOGS ? logs.slice(-MAX_RUN_LOGS) : logs });
+    onUpdate(project.id, (prev) => ({
+      state: {
+        ...prev.state,
+        agentRun: appendAgentEvent(prev.state.agentRun, {
+          kind: "build",
+          status: persistedLogStatus(message),
+          message,
+          timestamp: newLog.timestamp
+        })
+      }
+    }));
   };
 
   const stopWithStatus = (description: string) => {
@@ -145,6 +179,20 @@ export const startBackgroundGeneration = async (
   const storyMood = classifyStoryMood(state.script, state.creativeDirection);
 
   try {
+    onUpdate(project.id, (prev) => ({
+      state: {
+        ...prev.state,
+        agentRun: transitionAgentRun(
+          prev.state,
+          [{ kind: "build", status: "active", summary: "Starting build run.", progress: 0 }],
+          {
+            kind: "build",
+            status: "info",
+            message: "Started the build agent."
+          }
+        )
+      }
+    }));
     addLog("Starting generation process...");
     addLog(`Story mood: ${storyMood.label} (${storyMood.brightness} palette). ${storyMood.summary}`);
 
@@ -359,24 +407,29 @@ export const startBackgroundGeneration = async (
 
     const existingPanels = state.panels.map(panelToPlan);
     const planByScene = groupPanelsByScene(existingPanels);
-    // Panels per scene come from the user's page count × the layout's panels-per-page,
-    // spread evenly across scenes (clamped 1–8 so a tiny script with many pages doesn't
-    // explode a single scene). No page count saved → the long-standing default of 3.
+    // Panels come from the user's page count times the layout's panels-per-page, then
+    // get distributed across scenes. A target smaller than the scene count is raised so
+    // every scene has at least one beat; otherwise a full comic can feel like it stopped
+    // early after only one tiny page.
     const panelsPerPage = getGridTemplate(state.gridTemplateId)?.panelCount || 3;
     const requestedPages = Math.max(0, Math.floor(state.pageCount || 0));
-    const panelsPerScene = requestedPages > 0 && state.scenes.length > 0
-      ? Math.min(8, Math.max(1, Math.round((requestedPages * panelsPerPage) / state.scenes.length)))
-      : 3;
+    const sceneCount = state.scenes.length;
+    const requestedPanelTarget = requestedPages > 0 && sceneCount > 0
+      ? Math.max(sceneCount, requestedPages * panelsPerPage)
+      : sceneCount * 3;
+    const basePanelsPerScene = sceneCount > 0 ? Math.floor(requestedPanelTarget / sceneCount) : 0;
+    const extraPanelScenes = sceneCount > 0 ? requestedPanelTarget % sceneCount : 0;
+    const panelTargetsByScene = state.scenes.map((_, index) =>
+      Math.max(1, basePanelsPerScene + (index < extraPanelScenes ? 1 : 0))
+    );
     if (requestedPages > 0) {
-      addLog(`Plan target: ${requestedPages} page${requestedPages === 1 ? '' : 's'} × ${panelsPerPage} panels ≈ ${panelsPerScene} panel${panelsPerScene === 1 ? '' : 's'} per scene.`);
+      addLog(`Plan target: ${requestedPages} page${requestedPages === 1 ? '' : 's'} x ${panelsPerPage} panels = ${requestedPanelTarget} total panels across ${sceneCount} scene${sceneCount === 1 ? '' : 's'}.`);
     }
     // Seed the estimate per-scene: a scene with an existing plan contributes its real
-    // panel count; a scene still needing planning is assumed to be panelsPerScene. This
-    // generalizes both the fresh run and the resume case, so the later
-    // `-panelsPerScene + breakdown.length` adjustment (which assumes the seed) stays
-    // correct instead of skewing the progress %/ETA.
+    // panel count; a scene still needing planning is assumed to be its distributed
+    // target. This generalizes both the fresh run and the resume case.
     let totalPanelsEstimate = state.scenes.reduce(
-      (sum, scene) => sum + (planByScene.get(scene.id)?.length || panelsPerScene),
+      (sum, scene, index) => sum + (planByScene.get(scene.id)?.length || panelTargetsByScene[index] || 3),
       0
     );
     let stepsCompleted = 0;
@@ -392,7 +445,7 @@ export const startBackgroundGeneration = async (
       return;
     }
 
-    for (const scene of state.scenes) {
+	    for (const [sceneIndex, scene] of state.scenes.entries()) {
       if (isCanceled(project.id)) {
         addLog("Generation stopped by user.");
         stopWithStatus("Stopped");
@@ -403,8 +456,9 @@ export const startBackgroundGeneration = async (
         continue;
       }
 
-      let breakdown = planByScene.get(scene.id) || [];
-      if (breakdown.length === 0) {
+	      let breakdown = planByScene.get(scene.id) || [];
+	      const targetPanelsForScene = panelTargetsByScene[sceneIndex] || 3;
+	      if (breakdown.length === 0) {
         updateStatus({ currentStepDescription: `Planning Scene ${scene.id}` });
         addLog(`Planning Scene ${scene.id}: ${scene.synopsis.substring(0, 30)}...`);
 
@@ -414,7 +468,7 @@ export const startBackgroundGeneration = async (
             state.stylePrompt,
             state.layoutType,
             project.id,
-            panelsPerScene,
+	            targetPanelsForScene,
             {
               abortSignal: controller.signal,
               stage: "preview",
@@ -460,7 +514,7 @@ export const startBackgroundGeneration = async (
             };
           }).map(normalizePanelDialogue);
 
-          totalPanelsEstimate = totalPanelsEstimate - panelsPerScene + breakdown.length;
+	          totalPanelsEstimate = totalPanelsEstimate - targetPanelsForScene + breakdown.length;
         } catch (e: any) {
           addLog(`Error planning scene ${scene.id}: ${e.message}`);
           throw e; // Stop generation if planning fails
@@ -768,9 +822,11 @@ export const startBackgroundGeneration = async (
     const averageRefCount = panelReferenceCounts.length
       ? Number((panelReferenceCounts.reduce((sum, value) => sum + value, 0) / panelReferenceCounts.length).toFixed(2))
       : 0;
-    addLog(
-      `[METRICS] panel_ref_count=${averageRefCount} zero_ref_panel=${zeroRefPanelCount} mixed_model_in_run=${mixedModelInRun} multi_frame_description_detected=${multiFrameDetectedCount} style_lock_resolved=${styleResolved ? 1 : 0} stale_downstream_fingerprint=${staleDownstreamFingerprint ? 1 : 0} dropped_entity_count=${droppedEntityCount} ungrounded_entity_count=${ungroundedEntityCount}`
-    );
+    if (import.meta.env.DEV) {
+      console.info(
+        `[METRICS] panel_ref_count=${averageRefCount} zero_ref_panel=${zeroRefPanelCount} mixed_model_in_run=${mixedModelInRun} multi_frame_description_detected=${multiFrameDetectedCount} style_lock_resolved=${styleResolved ? 1 : 0} stale_downstream_fingerprint=${staleDownstreamFingerprint ? 1 : 0} dropped_entity_count=${droppedEntityCount} ungrounded_entity_count=${ungroundedEntityCount}`
+      );
+    }
 
     // Persist a compact record of this run's understanding + outcome (mood -> style ->
     // result) so issues like "happy story rendered dark" can be analysed later.

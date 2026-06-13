@@ -63,7 +63,7 @@ export const IMAGE_MODEL_RANKING: RankedImageModel[] = [
   },
   {
     rank: 3,
-    id: 'openai/gpt-image-1',
+    id: 'gpt-image-1',
     name: 'GPT-Image-1',
     vendorId: 'openai',
     tier: 'flagship',
@@ -72,7 +72,7 @@ export const IMAGE_MODEL_RANKING: RankedImageModel[] = [
     usableInApp: false,
     approxUsdPerImage: 0.07,
     strengths: ['Strong instruction following', 'Reference + edit / inpaint', 'Good in-image text'],
-    note: 'Excellent editing + reference support; pricing scales with quality tier.',
+    note: 'Excellent editing + reference support; direct OpenAI model id, not currently selectable through the app image router.',
     source: 'OpenAI — image generation', sourceUrl: 'https://platform.openai.com/docs/guides/image-generation', asOf: '2026-Q1'
   },
   {

@@ -6,6 +6,7 @@ import {
   prependCappedHistory,
   sanitizeProjectForStorage,
 } from "./projectStorage";
+import { AGENT_EVENT_LIMIT, makeDefaultComicAgentRun } from "./comicAgentRun";
 
 const buildProject = (): Project => ({
   id: "project-1",
@@ -81,6 +82,31 @@ const buildProject = (): Project => ({
       imageIdHistory: ["panel-image-1", "panel-image-2"],
       imageUrlHistory: ["https://cdn.example/panel1.webp", "https://cdn.example/panel2.webp"]
     }],
+    pageStudio: {
+      brief: "A one-page comic.",
+      style: { source: "text", prompt: "clean ink" },
+      layout: { source: "auto" },
+      aspectRatio: "3:4",
+      resolution: "2K",
+      activePageId: "page-1",
+      stage: "edit",
+      pages: [{
+        id: "page-1",
+        prompt: "Generate a complete page.",
+        imageId: "page-current-image",
+        imageUrl: "https://cdn.example/page-current.webp",
+        baseImageId: "page-base-image",
+        baseImageUrl: "https://cdn.example/page-base.webp",
+        createdAt: Date.now(),
+        edits: [{
+          id: "edit-1",
+          instruction: "make the sky brighter",
+          imageId: "page-edit-image",
+          imageUrl: "https://cdn.example/page-edit.webp",
+          createdAt: Date.now()
+        }]
+      }]
+    },
     textLayout: "caption",
     pricingConfig: {
       currency: "USD",
@@ -105,7 +131,14 @@ describe("projectStorage", () => {
     expect((sanitized.state.styleVariants[0] as any).imageUrl).toBeUndefined();
     expect((sanitized.state.panels[0] as any).imageUrl).toBeUndefined();
     expect((sanitized.state.panels[0] as any).imageUrlHistory).toBeUndefined();
+    expect((sanitized.state.pageStudio?.pages[0] as any).imageUrl).toBeUndefined();
+    expect((sanitized.state.pageStudio?.pages[0] as any).baseImageUrl).toBeUndefined();
+    expect((sanitized.state.pageStudio?.pages[0].edits[0] as any).imageUrl).toBeUndefined();
+    expect(sanitized.state.pageStudio?.pages[0].imageId).toBe("page-current-image");
+    expect(sanitized.state.pageStudio?.pages[0].baseImageId).toBe("page-base-image");
+    expect(sanitized.state.pageStudio?.pages[0].edits[0].imageId).toBe("page-edit-image");
     expect(original.state.panels[0].imageUrl).toBeDefined();
+    expect(original.state.pageStudio?.pages[0].imageUrl).toBeDefined();
   });
 
   it("caps prepended image history", () => {
@@ -120,5 +153,25 @@ describe("projectStorage", () => {
     const next = appendCappedHistory(longHistory, "new-image");
     expect(next.length).toBe(MAX_IMAGE_HISTORY);
     expect(next[next.length - 1]).toBe("new-image");
+  });
+
+  it("caps persisted agent events without stripping the durable run", () => {
+    const project = buildProject();
+    project.state.agentRun = {
+      ...makeDefaultComicAgentRun(),
+      events: Array.from({ length: AGENT_EVENT_LIMIT + 5 }).map((_, index) => ({
+        id: `event-${index}`,
+        kind: "build",
+        status: "info",
+        message: `event-${index}`,
+        timestamp: index + 1
+      }))
+    };
+
+    const sanitized = sanitizeProjectForStorage(project);
+
+    expect(sanitized.state.agentRun?.events).toHaveLength(AGENT_EVENT_LIMIT);
+    expect(sanitized.state.agentRun?.events[0].message).toBe("event-5");
+    expect(sanitized.state.agentRun?.cards.length).toBeGreaterThan(0);
   });
 });

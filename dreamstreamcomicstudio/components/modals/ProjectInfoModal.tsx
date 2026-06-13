@@ -19,12 +19,12 @@ interface ProjectInfoModalProps {
 
 const STEP_LABELS: Record<number, string> = {
   [AppStep.SCRIPT_INPUT]: 'Script',
-  [AppStep.STORY_PLANNING]: 'Plan',
+  [AppStep.STORY_PLANNING]: 'Style',
   [AppStep.STYLE_SELECTION]: 'Style',
   [AppStep.REFERENCE_BUILDER]: 'World',
   [AppStep.COVER]: 'Cover',
   [AppStep.LAYOUT_SELECTION]: 'Layout',
-  [AppStep.COMBINED_PREVIEW]: 'Preview',
+  [AppStep.COMBINED_PREVIEW]: 'Layout',
   [AppStep.FULL_GENERATION]: 'Build',
   [AppStep.REVIEW_EXPORT]: 'Done'
 };

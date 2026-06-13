@@ -178,16 +178,19 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
     return () => document.removeEventListener('fullscreenchange', handleChange);
   }, []);
 
-  const pages = useMemo(() => {
-    const list: Array<{ type: 'cover' | 'panel'; panel?: ComicPanel; imageUrl?: string }> = [];
-    if (project.state.coverImageUrl) {
-      list.push({ type: 'cover', imageUrl: project.state.coverImageUrl });
-    }
-    project.state.panels.forEach((panel) => {
-      list.push({ type: 'panel', panel, imageUrl: panel.imageUrl });
-    });
-    return list;
-  }, [project.state.coverImageUrl, project.state.panels]);
+	  const pages = useMemo(() => {
+	    const list: Array<{ type: 'cover' | 'panel' | 'page'; panel?: ComicPanel; imageUrl?: string }> = [];
+	    if (project.state.coverImageUrl) {
+	      list.push({ type: 'cover', imageUrl: project.state.coverImageUrl });
+	    }
+	    project.state.panels.forEach((panel) => {
+	      list.push({ type: 'panel', panel, imageUrl: panel.imageUrl });
+	    });
+	    project.state.pageStudio?.pages?.forEach((page) => {
+	      list.push({ type: 'page', imageUrl: page.imageUrl });
+	    });
+	    return list;
+	  }, [project.state.coverImageUrl, project.state.panels, project.state.pageStudio?.pages]);
 
   // Preload nearby page images so a flip (forward OR back) never flashes blank.
   useEffect(() => {
@@ -470,12 +473,12 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
                     </div>
                   </div>
                 )}
-                <div className={`p-4 sm:p-8 ${getLayoutClass()}`}>
-                  {allPanelsMissingArt && (
-                    <div className="col-span-full text-center py-6 text-amber-700 font-bold border-2 border-amber-400 bg-amber-50 rounded-lg">
-                      All panel artwork is currently missing for this comic.
-                    </div>
-                  )}
+	                <div className={`p-4 sm:p-8 ${getLayoutClass()}`}>
+	                  {allPanelsMissingArt && (
+	                    <div className="col-span-full text-center py-6 text-amber-700 font-bold border-2 border-amber-400 bg-amber-50 rounded-lg">
+	                      All panel artwork is currently missing for this comic.
+	                    </div>
+	                  )}
                   {project.state.panels.map((panel, idx) => (
                     <RevealOnScroll key={idx} className={getPanelClass(idx)}>
                       <div className={`border-2 border-black shadow-sm relative ${fxOn ? 'comic-halftone' : ''}`}>
@@ -492,14 +495,25 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
                           </div>
                         )}
                         <PanelDialogue panel={panel} layout={textLayout} />
-                      </div>
-                    </RevealOnScroll>
-                  ))}
-                  {project.state.panels.length === 0 && (
-                    <div className="col-span-full text-center py-20 text-slate-400 font-display text-2xl">
-                      This comic hasn't been drawn yet!
-                    </div>
-                  )}
+	                      </div>
+	                    </RevealOnScroll>
+	                  ))}
+	                  {project.state.panels.length === 0 && project.state.pageStudio?.pages?.map((page, idx) => (
+	                    <RevealOnScroll key={page.id || idx} className="col-span-full">
+	                      {page.imageUrl ? (
+	                        <img src={page.imageUrl} alt={`${project.name} page ${idx + 1}`} loading="lazy" className="mx-auto block h-auto max-w-full animate-fade-in border-2 border-black shadow-sm" />
+	                      ) : (
+	                        <div className="w-full min-h-[280px] flex items-center justify-center bg-amber-50 text-amber-800 text-sm font-bold border-2 border-black">
+	                          Image missing for this page
+	                        </div>
+	                      )}
+	                    </RevealOnScroll>
+	                  ))}
+	                  {project.state.panels.length === 0 && (project.state.pageStudio?.pages?.length || 0) === 0 && (
+	                    <div className="col-span-full text-center py-20 text-slate-400 font-display text-2xl">
+	                      This comic hasn't been drawn yet!
+	                    </div>
+	                  )}
                 </div>
               </div>
             </div>
@@ -527,12 +541,12 @@ export const ComicReader: React.FC<ComicReaderProps> = ({
                       key={pageIndex}
                       className={`relative inline-flex max-h-full max-w-full ${fxOn ? 'comic-halftone' : ''} ${flipDirection === 'next' ? 'animate-page-flip-next' : flipDirection === 'prev' ? 'animate-page-flip-prev' : ''}`}
                     >
-                      {pages[pageIndex]?.imageUrl ? (
-                        <img
-                          src={pages[pageIndex].imageUrl}
-                          alt={pages[pageIndex]?.panel ? derivePanelTitle(pages[pageIndex].panel!, pageIndex) : 'Comic cover'}
-                          className="block max-h-full max-w-full w-auto h-auto object-contain mx-auto border-2 border-black shadow-comic bg-white"
-                        />
+	                      {pages[pageIndex]?.imageUrl ? (
+	                        <img
+	                          src={pages[pageIndex].imageUrl}
+	                          alt={pages[pageIndex]?.panel ? derivePanelTitle(pages[pageIndex].panel!, pageIndex) : pages[pageIndex]?.type === 'page' ? `${project.name} page ${pageIndex + 1}` : 'Comic cover'}
+	                          className="block max-h-full max-w-full w-auto h-auto object-contain mx-auto border-2 border-black shadow-comic bg-white"
+	                        />
                       ) : (
                         <div className="w-[70vw] max-w-md min-h-[300px] flex items-center justify-center bg-amber-50 text-amber-800 text-sm font-bold border-2 border-black rounded">
                           {pages[pageIndex]?.type === 'panel' ? 'Image missing for this panel' : 'Image missing for this page'}

@@ -31,7 +31,6 @@ const COMING_SOON_MODELS = [
 
 const FEATURE_ROUTING = [
   { id: "script_analysis", label: "Script Analysis" },
-  { id: "story_builder", label: "Story Builder" },
   { id: "panel_breakdown", label: "Panel Breakdown" },
   { id: "image_generation", label: "Image Generation" }
 ];

@@ -1,14 +1,14 @@
 import { post } from './apiClient';
 import { AspectRatio, ImageResolution } from '../types';
 import { LayoutAnalysisResponse, StyleAnalysisResponse } from '../apiTypes';
+import { generateImage } from './imageService';
 
 /**
- * PageStudio service — the single-sheet generation engine.
+ * PageStudio service — the legacy single-sheet generation engine.
  *
- * It deliberately talks to the existing provider-agnostic image endpoint
- * (`/api/image/openrouter`, which accepts reference images and works regardless
- * of the AI_PROVIDER flag) and the vision endpoints for style/layout intake.
- * No per-panel orchestration, no continuity bible — one page, then edits.
+ * It now uses the same image-service router as the main comic pipeline so model
+ * selection, reference fallback, storage, artifact logging and billing refresh
+ * stay consistent across every Comic Studio entry point.
  */
 
 export type StyleAnalysisInput = {
@@ -45,14 +45,6 @@ export type PageImageResult = {
   model?: string;
 };
 
-type ImageApiResponse = {
-  imageUrl?: string;
-  imageId?: string;
-  dataUrl?: string;
-  mimeType?: string;
-  model?: string;
-};
-
 export type GeneratePageInput = {
   prompt: string;
   aspectRatio: AspectRatio;
@@ -66,16 +58,34 @@ export type GeneratePageInput = {
 };
 
 const callImage = async (body: Record<string, unknown>, signal?: AbortSignal): Promise<PageImageResult> => {
-  const res = await post<Record<string, unknown>, ImageApiResponse>('/api/image/openrouter', body, {
-    signal,
-    stage: 'page_generation'
-  });
+  const referenceImages = Array.isArray(body.referenceImages)
+    ? body.referenceImages.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    : [];
+  const res = await generateImage(
+    String(body.prompt || ''),
+    body.aspectRatio as AspectRatio,
+    body.resolution as ImageResolution,
+    referenceImages,
+    typeof body.projectId === 'string' ? body.projectId : undefined,
+    {
+      abortSignal: signal,
+      stage: 'page_generation',
+      storage: body.storage === 'test' ? 'test' : 'project',
+      continuitySensitive: referenceImages.length > 0,
+      requiredReferences: Boolean(body.requiredReferences),
+      meta: {
+        source: 'page_studio',
+        referenceCount: referenceImages.length
+      }
+    }
+  );
+  if (!res) {
+    throw new Error('Page generation did not return an image.');
+  }
   return {
     imageUrl: res.imageUrl,
     imageId: res.imageId,
-    dataUrl: res.dataUrl,
-    mimeType: res.mimeType,
-    model: res.model
+    model: res.modelId
   };
 };
 
@@ -120,7 +130,8 @@ export const editPage = (input: EditPageInput): Promise<PageImageResult> =>
       resolution: input.resolution,
       referenceImages: [input.currentImage, ...(input.extraReferences || [])],
       projectId: input.projectId,
-      storage: 'project'
+      storage: 'project',
+      requiredReferences: true
     },
     input.signal
   );

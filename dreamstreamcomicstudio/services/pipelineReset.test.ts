@@ -123,7 +123,7 @@ const makeState = (): ComicState => ({
 });
 
 describe("pipeline reset matrix", () => {
-  it("script analysis hard-resets downstream stages", () => {
+  it("script analysis clears generated outputs while preserving grounded world context", () => {
     const state = makeState();
     const nextScenes = [
       {
@@ -142,13 +142,19 @@ describe("pipeline reset matrix", () => {
     expect(reset.styleVariants).toEqual([]);
     expect(reset.characters).toEqual([]);
     expect(reset.items).toEqual([]);
-    expect(reset.locations).toEqual([]);
+    expect(reset.locations).toEqual([
+      expect.objectContaining({
+        id: "loc-1",
+        name: "Attic",
+        referenceImageIds: ["loc-ref-1"]
+      })
+    ]);
     expect(reset.panels).toEqual([]);
     expect(reset.layoutType).toBe("grid");
     expect(reset.lastResetSourceStage).toBe("script_analysis");
     expect(reset.scriptHash).toBeDefined();
     expect(reset.sceneHash).toBeDefined();
-    expect(reset.worldHash).toBeUndefined();
+    expect(reset.worldHash).toBeDefined();
   });
 
   it("style confirm clears world generated images and downstream outputs", () => {

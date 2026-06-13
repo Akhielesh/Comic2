@@ -1,4 +1,5 @@
-import { Character, ComicPanel, Item, Location, Project, StyleVariant } from "../types";
+import { Character, ComicPanel, Item, Location, PageStudioPage, Project, StyleVariant } from "../types";
+import { AGENT_EVENT_LIMIT } from "./comicAgentRun";
 
 export const MAX_IMAGE_HISTORY = 5;
 
@@ -29,6 +30,14 @@ const stripVariantUrls = (variant: StyleVariant) => {
   delete (variant as any).imageUrl;
 };
 
+const stripPageStudioPageUrls = (page: PageStudioPage) => {
+  if (page.imageId) delete (page as any).imageUrl;
+  if (page.baseImageId) delete (page as any).baseImageUrl;
+  page.edits?.forEach((edit) => {
+    if (edit.imageId) delete (edit as any).imageUrl;
+  });
+};
+
 export const sanitizeProjectForStorage = (project: Project): Project => {
   const cloned = structuredClone(project);
 
@@ -37,6 +46,7 @@ export const sanitizeProjectForStorage = (project: Project): Project => {
   cloned.state.locations.forEach(stripEntityUrls);
   cloned.state.panels.forEach(stripPanelUrls);
   cloned.state.styleVariants.forEach(stripVariantUrls);
+  cloned.state.pageStudio?.pages?.forEach(stripPageStudioPageUrls);
   delete (cloned.state as any).coverImageUrl;
   delete (cloned.state as any).coverTemplateImageUrl;
   delete (cloned.state as any).styleImageUrl;
@@ -47,6 +57,13 @@ export const sanitizeProjectForStorage = (project: Project): Project => {
   const status = (cloned.state as any).generationStatus;
   if (status && Array.isArray(status.logs) && status.logs.length) {
     (cloned.state as any).generationStatus = { ...status, logs: [] };
+  }
+
+  if (cloned.state.agentRun?.events?.length) {
+    cloned.state.agentRun = {
+      ...cloned.state.agentRun,
+      events: cloned.state.agentRun.events.slice(-AGENT_EVENT_LIMIT)
+    };
   }
 
   return cloned;

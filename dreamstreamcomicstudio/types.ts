@@ -20,20 +20,6 @@ export interface AppSettings {
   lockedProvider?: ImageProviderId | null;
 }
 
-export type StoryBuilderState = {
-  templateId?: string;
-  genre?: string;
-  tone?: string;
-  setting?: string;
-  characters?: string;
-  conflict?: string;
-  ending?: string;
-  length?: 'short' | 'medium' | 'long';
-  outline?: string;
-  draftScript?: string;
-  lastUpdatedAt?: number;
-};
-
 export type SettingsState = {
   showGeminiKey?: boolean;
   showFluxKey?: boolean;
@@ -241,6 +227,7 @@ export interface PageStudioPage {
   imageId?: string;
   /** First-generation image, retained so edits can be undone back to the base. */
   baseImageUrl?: string;
+  baseImageId?: string;
   edits: PageStudioEdit[];
   createdAt: number;
 }
@@ -259,12 +246,16 @@ export interface PageStudioState {
 
 export interface CharacterStructuredDetails {
   role?: string;
+  genderPresentation?: string;
   ageBand?: string;
   physicalTraits?: string;
+  distinguishingFeatures?: string;
   outfit?: string;
   colorPalette?: string;
   personality?: string;
   constraints?: string;
+  mustKeep?: string;
+  evidence?: string;
 }
 
 export interface ItemStructuredDetails {
@@ -571,6 +562,62 @@ export interface GenerationSnapshot {
   storyMood?: StoryMood;
 }
 
+export type AgentConfirmPolicy = 'always' | 'big_spends' | 'never';
+export type AgentOutputTarget = 'comic' | 'book' | 'html';
+export type ComicExportTarget = AgentOutputTarget | 'project_zip' | 'share';
+
+export interface ComicAgentSettings {
+  /** How much the agent should pause before spending generation credits. */
+  confirmPolicy: AgentConfirmPolicy;
+  /** Deliverables the user wants waiting at the end of the build. */
+  outputTargets: AgentOutputTarget[];
+  /** Let the agent infer a page count from story length until the user overrides it. */
+  autoPageCount: boolean;
+  /** Optional soft cap used by planning/cost UI before a spend starts. */
+  budgetCapUsd?: number;
+  updatedAt?: number;
+}
+
+export type ComicAgentCardKind =
+  | 'prompt'
+  | 'style'
+  | 'cast'
+  | 'cover'
+  | 'layout'
+  | 'build'
+  | 'export';
+
+export type ComicAgentCardStatus = 'pending' | 'active' | 'done' | 'blocked' | 'failed';
+
+export interface ComicAgentCard {
+  kind: ComicAgentCardKind;
+  title: string;
+  status: ComicAgentCardStatus;
+  summary: string;
+  detail?: string;
+  progress?: number;
+  updatedAt: number;
+}
+
+export interface ComicAgentEvent {
+  id: string;
+  kind: ComicAgentCardKind | 'system';
+  status: ComicAgentCardStatus | 'info';
+  message: string;
+  timestamp: number;
+}
+
+export interface ComicAgentRun {
+  id: string;
+  status: 'idle' | 'active' | 'done' | 'blocked' | 'failed' | 'stopped';
+  activeCard: ComicAgentCardKind;
+  cards: ComicAgentCard[];
+  events: ComicAgentEvent[];
+  createdAt: number;
+  updatedAt: number;
+  completedAt?: number;
+}
+
 export interface ComicState {
   pipelineMode?: PipelineMode;
   step: number;
@@ -581,6 +628,10 @@ export interface ComicState {
    *  Captured directly or via the Universal Assistant; injected into analysis, panel, and
    *  image prompts so generation honours the user's voice. */
   creativeDirection?: string;
+  agentSettings?: ComicAgentSettings;
+  /** Durable card/event trail for the agentic comic flow. Unlike generationStatus.logs,
+   *  this is compact and persisted so reloads can show what happened and where to resume. */
+  agentRun?: ComicAgentRun;
   storyPlanning?: StoryPlanningState;
   scriptHash?: string;
   sceneHash?: string;
@@ -608,7 +659,6 @@ export interface ComicState {
   overview?: string;
   publishedAt?: number;
   comments?: ProjectComment[];
-  storyBuilder?: StoryBuilderState;
   isFeatured?: boolean;
   coverImageId?: string;
   coverImageUrl?: string;
@@ -672,6 +722,7 @@ export interface ComicState {
   // Background Process
   generationStatus?: GenerationStatus;
   generationArtifacts?: GenerationArtifact[];
+  exportedOutputs?: Partial<Record<ComicExportTarget, number>>;
 
   // Versioning
   versions?: ProjectVersion[];
