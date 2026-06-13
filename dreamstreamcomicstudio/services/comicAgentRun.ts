@@ -151,7 +151,16 @@ const deriveCardStatus = (
     const buildStatus = buildStatusFromState(state);
     if (buildStatus) return buildStatus;
   }
-  if (kind === "export" && state.publishedAt) return "done";
+  if (kind === "export") {
+    if (state.publishedAt) return "done";
+    // Delivering every output target the agent was asked for completes the card too,
+    // so the stream reads "done" once the comic/book/html are prepared — publishing
+    // stays a separate, optional action rather than a precondition for completion.
+    const targets = state.agentSettings?.outputTargets;
+    if (targets && targets.length > 0 && targets.every((target) => state.exportedOutputs?.[target])) {
+      return "done";
+    }
+  }
 
   const currentIndex = cardIndex(kind);
   const activeIndex = cardIndex(activeKind);
@@ -178,7 +187,7 @@ const deriveCardSummary = (state: ComicState, kind: ComicAgentCardKind, fallback
       return state.coverImageId || state.coverImageUrl ? "Cover image is ready." : fallback;
     case "layout":
       return state.pageCount
-        ? `${state.pageCount} page${state.pageCount === 1 ? "" : "s"} planned with ${state.layoutType.replace(/_/g, " ")} layout.`
+        ? `${state.pageCount} page${state.pageCount === 1 ? "" : "s"} planned with ${(state.layoutType || "grid").replace(/_/g, " ")} layout.`
         : fallback;
     case "build": {
       const rendered = state.panels?.filter((panel) => panel.imageUrl).length || 0;

@@ -156,4 +156,72 @@ describe("comicAgentRun", () => {
     expect(run.cards.find((card) => card.kind === "build")?.status).toBe("done");
     expect(run.cards.find((card) => card.kind === "export")?.summary).toBe("2 outputs prepared from review.");
   });
+
+  it("completes the export card once every selected output target is delivered", () => {
+    const state = makeState({
+      step: AppStep.REVIEW_EXPORT,
+      maxStepReached: AppStep.REVIEW_EXPORT,
+      panels: [{
+        id: "panel-1",
+        sceneId: 1,
+        description: "Maya opens the door.",
+        dialogue: "",
+        imageId: "image-1",
+        imageUrl: "https://example.com/panel.png",
+        imageIdHistory: ["image-1"]
+      }],
+      agentSettings: {
+        confirmPolicy: "big_spends",
+        outputTargets: ["comic", "html"],
+        autoPageCount: true,
+        updatedAt: 1
+      },
+      exportedOutputs: { comic: 111, html: 222 }
+    });
+
+    const run = syncAgentRunWithState(state);
+
+    expect(run.cards.find((card) => card.kind === "export")?.status).toBe("done");
+    expect(run.status).toBe("done");
+  });
+
+  it("leaves the export card active when a selected output target is still missing", () => {
+    const state = makeState({
+      step: AppStep.REVIEW_EXPORT,
+      maxStepReached: AppStep.REVIEW_EXPORT,
+      panels: [{
+        id: "panel-1",
+        sceneId: 1,
+        description: "Maya opens the door.",
+        dialogue: "",
+        imageId: "image-1",
+        imageUrl: "https://example.com/panel.png",
+        imageIdHistory: ["image-1"]
+      }],
+      agentSettings: {
+        confirmPolicy: "big_spends",
+        outputTargets: ["comic", "book", "html"],
+        autoPageCount: true,
+        updatedAt: 1
+      },
+      exportedOutputs: { comic: 111, html: 222 }
+    });
+
+    const run = syncAgentRunWithState(state);
+
+    expect(run.cards.find((card) => card.kind === "export")?.status).toBe("active");
+  });
+
+  it("does not crash deriving the layout summary when layoutType is missing", () => {
+    const state = makeState({
+      step: AppStep.LAYOUT_SELECTION,
+      maxStepReached: AppStep.LAYOUT_SELECTION,
+      pageCount: 3,
+      layoutType: undefined as unknown as ComicState["layoutType"]
+    });
+
+    const run = syncAgentRunWithState(state);
+
+    expect(run.cards.find((card) => card.kind === "layout")?.summary).toBe("3 pages planned with grid layout.");
+  });
 });
