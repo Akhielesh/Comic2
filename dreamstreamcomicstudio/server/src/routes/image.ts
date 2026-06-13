@@ -36,11 +36,24 @@ const idempotencyResponseCache = new Map<string, IdempotencyRecord>();
 const idempotencyInFlight = new Map<string, Promise<IdempotencyRecord>>();
 let idempotencyOperationCount = 0;
 const MAX_IDEMPOTENCY_CACHE_BYTES = 2_000_000;
+const MAX_IDEMPOTENCY_CACHE_ENTRIES = 1000; // hard cap so a burst of unique keys can't grow memory unbounded
 
 const cleanupExpiredIdempotencyRecords = (now: number) => {
   for (const [key, value] of idempotencyResponseCache.entries()) {
     if (value.expiresAt <= now) {
       idempotencyResponseCache.delete(key);
+    }
+  }
+  // Expiry alone can't bound memory when many distinct keys arrive inside one TTL window.
+  // Map preserves insertion order, so evicting from the front drops the oldest records
+  // (which, with a uniform TTL, are also the soonest to expire) until we're under the cap.
+  if (idempotencyResponseCache.size > MAX_IDEMPOTENCY_CACHE_ENTRIES) {
+    const overflow = idempotencyResponseCache.size - MAX_IDEMPOTENCY_CACHE_ENTRIES;
+    let removed = 0;
+    for (const key of idempotencyResponseCache.keys()) {
+      if (removed >= overflow) break;
+      idempotencyResponseCache.delete(key);
+      removed += 1;
     }
   }
 };
