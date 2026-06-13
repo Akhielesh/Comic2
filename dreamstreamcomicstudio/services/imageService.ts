@@ -24,6 +24,9 @@ export type GenerateImageOptions = {
   continuitySensitive?: boolean;
   requiredReferences?: boolean;
   lockedModelId?: string;
+  /** Strict consistency: skip cross-model fallback on error so a run stays on one model
+   *  (the failed panel surfaces a failureReason for same-model retry). Default: fallback on. */
+  disableModelFallback?: boolean;
 };
 
 export type GenerateImageResult = {
@@ -210,7 +213,9 @@ export const generateImage = async (
       referenceDropped: false
     };
   } catch (primaryError) {
-    if (!shouldAutoFallback(primaryError) || fallbackOrder.length === 0) {
+    // Strict consistency: never switch models mid-run — let the panel fail and retry on the
+    // same model, keeping the book uniform. Default (resilient) keeps cross-model fallback.
+    if (options?.disableModelFallback || !shouldAutoFallback(primaryError) || fallbackOrder.length === 0) {
       throw primaryError;
     }
 

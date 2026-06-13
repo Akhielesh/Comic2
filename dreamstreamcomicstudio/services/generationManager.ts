@@ -8,6 +8,7 @@ import { stableHash, hashScenes, hashWorld, hasStaleDownstreamFingerprint } from
 import { resolveAspectRatio } from "./imageUtils";
 import { getGridTemplate } from "./panelLayout";
 import { normalizePanelDialogue } from "./dialogueUtils";
+import { prefersStrictConsistency } from "./comicAgentSettings";
 import { CHARACTER_SHEET_MODEL, FEATURE_FLAGS, MAX_CONTINUITY_PANELS } from "./modelPolicy";
 import { applyGeneratedReference, collectAutoReferenceTasks } from "./autoReferences";
 import { createSystemNotification } from "./db";
@@ -640,6 +641,7 @@ export const startBackgroundGeneration = async (
                 continuitySensitive: true,
                 requiredReferences,
                 lockedModelId: lockedPanelModelId,
+                disableModelFallback: prefersStrictConsistency(state.agentSettings),
                 meta: {
                   source: {
                     type: "panel",
