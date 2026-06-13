@@ -5,6 +5,24 @@ All notable user-facing changes. Format loosely follows
 
 ## [Unreleased]
 
+### Fixed
+- **Reliability pass — builds finish cleaner and nothing silently disappears (2026-06-13):**
+  - Panels whose image comes back empty or blocked (the model returned nothing)
+    are now flagged as retryable failures instead of vanishing — they no longer
+    drop out of the progress count, and a user-canceled run leaves its in-flight
+    panels replannable instead of dead.
+  - Comic images that fail to load on a transient network/auth hiccup retry once
+    before giving up, and a genuine outage is logged instead of leaving a blank
+    panel with no explanation.
+  - The Build card in the agent stream stays **active** until the run truly
+    finishes (it no longer flips to "done" mid-render), and the Export card reads
+    **done** once every requested output (comic / book / HTML) is prepared —
+    publishing stays optional.
+  - The offline HTML export now omits panels that never rendered, so a comic with
+    a few failed frames no longer exports broken empty images.
+  - Hardened the server idempotency cache with a hard entry cap so a burst of
+    large, unique requests can't grow process memory without bound.
+
 ### Changed
 - **Comic Studio: one engine, three stages, comics that finish (2026-06-12):**
   - The creation flow is now presented as **Story → Cast → Pages** (the same

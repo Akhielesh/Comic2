@@ -30,6 +30,30 @@ describe('comicDeliverables', () => {
     expect(html).toContain('id="zoomTarget"');
   });
 
+  it('omits imageless (failed/planned) panels from the HTML export', () => {
+    const html = buildComicHtmlDocument({
+      projectName: 'Maya',
+      panels: [
+        ...panels,
+        {
+          id: 'panel-2',
+          sceneId: 1,
+          description: 'A panel that never rendered.',
+          dialogue: '',
+          imageIdHistory: [],
+          failureReason: 'No image was returned for this panel.'
+        }
+      ],
+      coverDataUrl: 'data:image/png;base64,cover',
+      textLayout: 'caption'
+    });
+
+    // Only the rendered panel makes the cut — no broken <img src=""> frames.
+    expect(html).toContain('data:image/png;base64,panel');
+    expect(html).not.toContain('src=""');
+    expect((html.match(/<div class="panel">/g) || []).length).toBe(1);
+  });
+
   it('builds a compact export manifest for agent-prepared outputs', () => {
     const manifest = JSON.parse(buildComicExportManifest({
       projectId: 'project-1',

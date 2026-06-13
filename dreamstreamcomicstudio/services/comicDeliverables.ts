@@ -58,7 +58,9 @@ export const buildComicHtmlDocument = ({
   </div>
   <div class="comic-container zoom-wrapper" id="zoomTarget">
     ${coverDataUrl ? `<div class="cover"><img src="${coverDataUrl}" alt="${escapeHtml(projectName)} cover" /></div>` : ''}
-    ${panels.map((panel) => `<div class="panel">
+    ${panels
+      .filter((panel) => panel.dataUrl || panel.imageUrl)
+      .map((panel) => `<div class="panel">
       <img src="${panel.dataUrl || panel.imageUrl || ''}" alt="${escapeHtml(panel.description || panel.id)}" />
       ${buildPanelDialogueHtml(panel, textLayout)}
     </div>`).join('')}
