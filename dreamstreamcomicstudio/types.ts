@@ -563,6 +563,9 @@ export interface GenerationSnapshot {
 }
 
 export type AgentConfirmPolicy = 'always' | 'big_spends' | 'never';
+/** Whether the agent may switch image models mid-run on failure (resilient) or must stay
+ *  on the chosen model for a uniform book, queueing failures for same-model retry (strict). */
+export type ConsistencyPolicy = 'strict' | 'resilient';
 export type AgentOutputTarget = 'comic' | 'book' | 'html';
 export type ComicExportTarget = AgentOutputTarget | 'project_zip' | 'share';
 
@@ -573,6 +576,8 @@ export interface ComicAgentSettings {
   outputTargets: AgentOutputTarget[];
   /** Let the agent infer a page count from story length until the user overrides it. */
   autoPageCount: boolean;
+  /** Cross-model fallback behavior mid-run. Defaults to 'resilient' (today's behavior). */
+  consistencyPolicy?: ConsistencyPolicy;
   /** Optional soft cap used by planning/cost UI before a spend starts. */
   budgetCapUsd?: number;
   updatedAt?: number;

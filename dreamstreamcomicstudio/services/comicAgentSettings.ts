@@ -1,7 +1,8 @@
-import type { AgentConfirmPolicy, AgentOutputTarget, ComicAgentSettings } from '../types';
+import type { AgentConfirmPolicy, AgentOutputTarget, ComicAgentSettings, ConsistencyPolicy } from '../types';
 
 const VALID_CONFIRM_POLICIES = new Set<AgentConfirmPolicy>(['always', 'big_spends', 'never']);
 const VALID_OUTPUT_TARGETS = new Set<AgentOutputTarget>(['comic', 'book', 'html']);
+const VALID_CONSISTENCY = new Set<ConsistencyPolicy>(['strict', 'resilient']);
 
 export const DEFAULT_AGENT_OUTPUT_TARGETS: AgentOutputTarget[] = ['comic', 'book', 'html'];
 
@@ -9,6 +10,7 @@ export const makeDefaultComicAgentSettings = (): ComicAgentSettings => ({
   confirmPolicy: 'big_spends',
   outputTargets: [...DEFAULT_AGENT_OUTPUT_TARGETS],
   autoPageCount: true,
+  consistencyPolicy: 'resilient',
   updatedAt: Date.now()
 });
 
@@ -21,16 +23,27 @@ export const normalizeComicAgentSettings = (settings?: Partial<ComicAgentSetting
     ? settings!.confirmPolicy as AgentConfirmPolicy
     : 'big_spends';
 
+  const consistencyPolicy = VALID_CONSISTENCY.has(settings?.consistencyPolicy as ConsistencyPolicy)
+    ? settings!.consistencyPolicy as ConsistencyPolicy
+    : 'resilient';
+
   return {
     confirmPolicy,
     outputTargets: outputTargets.length > 0 ? Array.from(new Set(outputTargets)) : [...DEFAULT_AGENT_OUTPUT_TARGETS],
     autoPageCount: settings?.autoPageCount !== false,
+    consistencyPolicy,
     budgetCapUsd: typeof settings?.budgetCapUsd === 'number' && Number.isFinite(settings.budgetCapUsd) && settings.budgetCapUsd > 0
       ? Math.round(settings.budgetCapUsd * 100) / 100
       : undefined,
     updatedAt: typeof settings?.updatedAt === 'number' ? settings.updatedAt : Date.now()
   };
 };
+
+/** Strict consistency = no cross-model fallback mid-run (uniform book; failures retry same model). */
+export const prefersStrictConsistency = (settings?: Partial<ComicAgentSettings> | null): boolean =>
+  normalizeComicAgentSettings(settings).consistencyPolicy === 'strict';
+
+export const consistencyLabel = (policy: ConsistencyPolicy) => (policy === 'strict' ? 'Strict (one model)' : 'Resilient (finish anyway)');
 
 export const agentConfirmLabel = (policy: AgentConfirmPolicy) => {
   switch (policy) {
