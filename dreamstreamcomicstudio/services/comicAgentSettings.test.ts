@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   makeDefaultComicAgentSettings,
   normalizeComicAgentSettings,
+  prefersStrictConsistency,
   shouldAutoRunComicAgent
 } from "./comicAgentSettings";
 
@@ -31,5 +32,13 @@ describe("comicAgentSettings", () => {
     expect(normalized.confirmPolicy).toBe("big_spends");
     expect(normalized.outputTargets).toEqual(["comic", "html"]);
     expect(normalized.budgetCapUsd).toBeUndefined();
+    expect(normalized.consistencyPolicy).toBe("resilient");
+  });
+
+  it("defaults to resilient consistency and only goes strict on request", () => {
+    expect(makeDefaultComicAgentSettings().consistencyPolicy).toBe("resilient");
+    expect(prefersStrictConsistency(undefined)).toBe(false);
+    expect(prefersStrictConsistency({ consistencyPolicy: "strict" })).toBe(true);
+    expect(prefersStrictConsistency({ consistencyPolicy: "bogus" as never })).toBe(false);
   });
 });

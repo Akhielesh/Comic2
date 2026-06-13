@@ -6,9 +6,10 @@
 
 import React from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import type { AgentConfirmPolicy, AgentOutputTarget, ComicAgentSettings } from '../../../types';
+import type { AgentConfirmPolicy, AgentOutputTarget, ComicAgentSettings, ConsistencyPolicy } from '../../../types';
 import {
   agentConfirmLabel,
+  consistencyLabel,
   DEFAULT_AGENT_OUTPUT_TARGETS,
   makeDefaultComicAgentSettings,
   normalizeComicAgentSettings,
@@ -25,6 +26,7 @@ export interface AgentSettingsPanelProps {
 
 const CONFIRM_OPTIONS: AgentConfirmPolicy[] = ['always', 'big_spends', 'never'];
 const OUTPUTS: AgentOutputTarget[] = ['comic', 'book', 'html'];
+const CONSISTENCY_OPTIONS: ConsistencyPolicy[] = ['resilient', 'strict'];
 
 const Row: React.FC<{ label: string; hint?: string; children: React.ReactNode }> = ({ label, hint, children }) => (
   <div className="space-y-2 border-t border-[var(--ds-hairline)] py-4 first:border-t-0 first:pt-0">
@@ -113,6 +115,26 @@ export const AgentSettingsPanel: React.FC<AgentSettingsPanelProps> = ({ open, se
                       </button>
                     );
                   })}
+                </div>
+              </Row>
+
+              <Row label="Consistency" hint="Keep one image model for a uniform book, or finish even if it must fall back.">
+                <div className="flex gap-2">
+                  {CONSISTENCY_OPTIONS.map((opt) => (
+                    <button
+                      key={opt}
+                      type="button"
+                      onClick={() => patch({ consistencyPolicy: opt })}
+                      aria-pressed={s.consistencyPolicy === opt}
+                      className={`flex-1 rounded-xl border px-3 py-2 text-[12px] font-medium transition-colors ${
+                        s.consistencyPolicy === opt
+                          ? 'border-[var(--ds-accent)] bg-[#D97757]/10 text-[var(--ds-ink)]'
+                          : 'border-[var(--ds-hairline)] text-[var(--ds-muted)] hover:bg-[var(--ds-hover)]'
+                      }`}
+                    >
+                      {consistencyLabel(opt)}
+                    </button>
+                  ))}
                 </div>
               </Row>
 
