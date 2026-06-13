@@ -40,6 +40,30 @@ export {
 } from './motion';
 
 export {
+  StreamList,
+  StreamItem,
+  AgentThinking,
+  ImageDevelop,
+  SelectPop,
+  CountUp,
+  PanelGrid,
+  PanelPop,
+  streamItemVariants,
+  streamListVariants,
+  panelPopVariants,
+} from './streamMotion';
+export type {
+  StreamListProps,
+  StreamItemProps,
+  AgentThinkingProps,
+  ImageDevelopProps,
+  SelectPopProps,
+  CountUpProps,
+  PanelGridProps,
+  PanelPopProps,
+} from './streamMotion';
+
+export {
   studioTheme,
   STUDIO_THEMES,
   STUDIO_THEME_ORDER,
