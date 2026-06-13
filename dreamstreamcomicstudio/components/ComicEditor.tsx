@@ -138,11 +138,11 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   const state = project.state;
   const [titleDraft, setTitleDraft] = useState(project.name);
   const [showVersions, setShowVersions] = useState(false);
-  // v3 Agent Stream is the centralized surface; the classic step wizard stays as
-  // "Detailed mode". Default to the stream when the flag is on; either way it's a
-  // non-destructive toggle, so production behavior is unchanged until we flip the flag.
+  // v3 Agent Stream is now the DEFAULT centralized surface; the classic step wizard stays
+  // available as "Detailed mode" (via the gear / settings escape hatch). Set
+  // VITE_COMIC_AGENT_ENABLED=false to fall back to the wizard by default.
   const [viewMode, setViewMode] = useState<'stream' | 'detailed'>(
-    import.meta.env.VITE_COMIC_AGENT_ENABLED === 'true' ? 'stream' : 'detailed',
+    import.meta.env.VITE_COMIC_AGENT_ENABLED === 'false' ? 'detailed' : 'stream',
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [deploymentParity, setDeploymentParity] = useState<DeploymentParityStatus | null>(null);
