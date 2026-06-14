@@ -290,6 +290,9 @@ const GRIPS: ResizeGrip[] = [
   { x: 1, y: 0, cls: 'right-0 top-8 bottom-8 w-1.5', cursor: 'cursor-ew-resize' },
   { x: -1, y: 0, cls: 'left-0 top-8 bottom-8 w-1.5', cursor: 'cursor-ew-resize' },
   { x: 0, y: 1, cls: 'bottom-0 left-8 right-8 h-1.5', cursor: 'cursor-ns-resize' },
+  // Top EDGE — centred between the top corner grips so the four-sides set is complete
+  // without overlapping the tile's header controls (which sit inset near the corners).
+  { x: 0, y: -1, cls: 'top-0 left-14 right-14 h-1.5', cursor: 'cursor-ns-resize' },
   { x: 1, y: 1, cls: 'bottom-0 right-0 h-3.5 w-3.5', cursor: 'cursor-nwse-resize' },
   { x: -1, y: 1, cls: 'bottom-0 left-0 h-3.5 w-3.5', cursor: 'cursor-nesw-resize' },
   { x: 1, y: -1, cls: 'top-0 right-9 h-3.5 w-3.5', cursor: 'cursor-nesw-resize' },
