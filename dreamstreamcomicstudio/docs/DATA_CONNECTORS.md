@@ -1,5 +1,12 @@
 # Data Connectors Registry
 
+> **Two different "connector" systems — don't conflate them.** This doc covers
+> **data-source connectors**: operator-keyed external APIs (weather/finance/news/maps)
+> wired as chat *tools*, keyed from env, no per-user credentials. The separate
+> **account connectors** framework (users connecting *their own* Gmail/Drive/Maps
+> accounts via OAuth/API-key, with encrypted per-user tokens) is documented in
+> [`CONNECTORS_FRAMEWORK.md`](./CONNECTORS_FRAMEWORK.md). The two share no tables/code.
+
 **AI agents: this is the authoritative map of which API serves which topic, its
 access/license terms, and how fully its data is rendered. When the user asks
 "do we cover topic X?" answer FROM THIS DOC + `toolCatalog.ts`; when a topic is

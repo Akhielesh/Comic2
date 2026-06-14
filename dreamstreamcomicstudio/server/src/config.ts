@@ -359,6 +359,55 @@ export const VENTURES_TICK_INTERVAL_MS = parseIntegerEnv(
 // (A4). Real usage-based cost metering lands with F1; until then this keeps budgets meaningful.
 export const VENTURES_BUILD_COST_ESTIMATE_USD = Number(process.env.VENTURES_BUILD_COST_ESTIMATE_USD || '0.05');
 
+// --- Account Connectors framework (Google Suite + API-key services) ----------------
+// Per-user OAuth connections (Gmail/Drive/Calendar/Sheets/YouTube) use a custom
+// server-side OAuth 2.0 + PKCE flow under a SINGLE Google OAuth client. Tokens are
+// encrypted at rest (lib/secureStore.ts) and refreshed automatically. The whole layer
+// is inert until GOOGLE_OAUTH_CLIENT_ID/SECRET are set — the catalog still renders and
+// reports each connector as "unconfigured" rather than crashing. API-key connectors
+// (Maps, YouTube public) use a shared platform key or a user-supplied key.
+export const CONNECTORS_ENABLED = parseBooleanEnv(process.env.CONNECTORS_ENABLED, true);
+export const GOOGLE_OAUTH_CLIENT_ID = (process.env.GOOGLE_OAUTH_CLIENT_ID || '').trim();
+export const GOOGLE_OAUTH_CLIENT_SECRET = (process.env.GOOGLE_OAUTH_CLIENT_SECRET || '').trim();
+// The OAuth callback URL registered with Google — MUST exactly match the console entry.
+// Defaults to <this backend>/api/connectors/oauth/callback.
+export const GOOGLE_OAUTH_REDIRECT_URL = (
+  process.env.GOOGLE_OAUTH_REDIRECT_URL
+  || `${EMAIL_PUBLIC_BASE_URL || `http://localhost:${PORT}`}/api/connectors/oauth/callback`
+).trim();
+// Where to send the browser AFTER the callback completes (the SPA Connectors page).
+export const CONNECTORS_APP_RETURN_URL = (
+  process.env.CONNECTORS_APP_RETURN_URL || `${APP_PUBLIC_URL}/?view=connectors`
+).trim();
+// Shared platform API keys for the api_key connectors (optional — a user can also
+// supply their own key per connection).
+export const GOOGLE_MAPS_API_KEY = (process.env.GOOGLE_MAPS_API_KEY || '').trim();
+export const YOUTUBE_API_KEY = (process.env.YOUTUBE_API_KEY || '').trim();
+// How long an in-flight OAuth handshake (PKCE state row) stays valid.
+export const CONNECTORS_OAUTH_STATE_TTL_MS = parseIntegerEnv(
+  process.env.CONNECTORS_OAUTH_STATE_TTL_MS,
+  10 * 60_000,
+  'CONNECTORS_OAUTH_STATE_TTL_MS',
+  60_000
+);
+// Background sync worker (npm run connectors:worker) — a SEPARATE process requiring
+// REDIS_URL, mirroring the ventures worker. Without Redis the queue is unavailable and
+// the API still works (manual + on-connect syncs run inline instead).
+export const CONNECTORS_QUEUE_PREFIX = (process.env.CONNECTORS_QUEUE_PREFIX || 'connectors').trim() || 'connectors';
+export const CONNECTORS_WORKER_CONCURRENCY = parseIntegerEnv(
+  process.env.CONNECTORS_WORKER_CONCURRENCY,
+  3,
+  'CONNECTORS_WORKER_CONCURRENCY',
+  1
+);
+// Max items materialized per sync page (keeps a single job bounded; paginate via cursor).
+export const CONNECTORS_SYNC_PAGE_SIZE = parseIntegerEnv(
+  process.env.CONNECTORS_SYNC_PAGE_SIZE,
+  50,
+  'CONNECTORS_SYNC_PAGE_SIZE',
+  1
+);
+
 export const REQUIRED_RUNTIME_ENV_VARS = ['CORS_ORIGIN', 'VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY'] as const;
 type RequiredRuntimeEnv = (typeof REQUIRED_RUNTIME_ENV_VARS)[number];
 export const REQUIRED_BILLING_ENV_VARS = [
