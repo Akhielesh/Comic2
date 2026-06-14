@@ -33,7 +33,11 @@ export type CatalogResult = {
 
 const refresh = async (): Promise<AnnotatedModel[]> => {
   const provider = getProvider();
-  const raw = await provider.listModels(resolveProviderContext());
+  // OpenRouter's /models is a PUBLIC list — fetch it ANONYMOUSLY so a rate-limited,
+  // throttled or invalid platform key can never starve the catalog (defense-in-depth
+  // around the outage). NVIDIA's /models needs auth, so it keeps the platform key.
+  const ctx = provider.id === 'openrouter' ? undefined : resolveProviderContext(undefined, provider.id);
+  const raw = await provider.listModels(ctx);
   const models = annotateModels(raw);
   // RESILIENCE: OpenRouter's /models is a large public list. A zero/empty result is a
   // transient upstream blip (rate-limit, cold-start, momentary outage), NOT "the catalog
