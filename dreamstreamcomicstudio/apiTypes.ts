@@ -618,7 +618,7 @@ export const REFRESHABLE_TOOLS = [
 // breaker, or 2048) rendered by components/chat/artifacts/GameCard.tsx. Each game
 // carries its own Compact / Medium / Large size control and a true fullscreen
 // toggle (its GameShell), independent of the frame's compact⇄detailed density.
-export type GameKind = 'snake' | 'breakout' | '2048';
+export type GameKind = 'snake' | 'breakout' | '2048' | 'memory';
 export interface GameArtifact {
   game: GameKind;
   title?: string;

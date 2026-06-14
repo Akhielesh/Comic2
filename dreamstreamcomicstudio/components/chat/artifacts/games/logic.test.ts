@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { slideRow, move, spawnTile, hasMoves, maxTile, emptyGrid, stepSnake, opposite, aabb } from './logic';
+import { slideRow, move, spawnTile, hasMoves, maxTile, emptyGrid, stepSnake, opposite, aabb, dealMemory } from './logic';
 
 describe('2048 slideRow', () => {
   it('slides tiles to the front', () => {
@@ -96,5 +96,20 @@ describe('shared helpers', () => {
   it('aabb detects overlap', () => {
     expect(aabb(0, 0, 10, 10, 5, 5, 10, 10)).toBe(true);
     expect(aabb(0, 0, 10, 10, 20, 20, 5, 5)).toBe(false);
+  });
+});
+
+describe('memory deal', () => {
+  it('produces 2 of every value, length = pairs*2', () => {
+    const deck = dealMemory(8);
+    expect(deck).toHaveLength(16);
+    for (let v = 0; v < 8; v++) {
+      expect(deck.filter((x) => x === v)).toHaveLength(2);
+    }
+  });
+  it('is deterministic for a fixed rng', () => {
+    const a = dealMemory(6, () => 0.5);
+    const b = dealMemory(6, () => 0.5);
+    expect(a).toEqual(b);
   });
 });

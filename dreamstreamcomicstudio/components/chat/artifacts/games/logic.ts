@@ -125,3 +125,17 @@ export const aabb = (
   ax: number, ay: number, aw: number, ah: number,
   bx: number, by: number, bw: number, bh: number
 ): boolean => ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+
+// ───────────────────────────── Memory ─────────────────────────────
+
+/** Build a shuffled deck of `pairs` matching pairs (each value 0..pairs-1 twice).
+ *  RNG is injected for reproducible tests. Fisher–Yates shuffle. */
+export const dealMemory = (pairs: number, rng: () => number = Math.random): number[] => {
+  const cards: number[] = [];
+  for (let i = 0; i < pairs; i++) cards.push(i, i);
+  for (let i = cards.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [cards[i], cards[j]] = [cards[j], cards[i]];
+  }
+  return cards;
+};
