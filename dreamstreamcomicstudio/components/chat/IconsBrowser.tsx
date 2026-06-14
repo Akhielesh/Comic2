@@ -8,7 +8,7 @@ import { TRANSITION } from './studioDesign';
 // Every mark is `currentColor`, so the grid previews them on the canvas ink and a
 // click copies the icon's name. Pure presentational; no data dependencies.
 
-const CATEGORIES = ['All', 'Travel', 'Finance', 'News', 'Planning', 'Places', 'Tech', 'Health', 'Science', 'Sports', 'Media', 'Tools', 'Education', 'Food', 'Transit', 'Weather'];
+const CATEGORIES = ['All', 'Travel', 'Finance', 'News', 'Planning', 'Places', 'Tech', 'Health', 'Science', 'Sports', 'Media', 'Tools', 'Education', 'Food', 'Transit', 'Crypto', 'Nature', 'Commerce', 'Weather'];
 
 // The weather set folded into the same browsable shape as the domain icons.
 const WEATHER_ENTRIES: { name: string; code: number; isDay?: boolean; keywords: string[] }[] = [

@@ -274,10 +274,51 @@ export const IconBike: React.FC<IconProps> = (p) => (
   <Svg {...p} label="bike"><circle cx="6" cy="17" r="3.2" /><circle cx="18" cy="17" r="3.2" /><path d="M6 17l4-7h5M9 7h3.5l3 10M14.5 10H18" /></Svg>
 );
 
+// ── Crypto ────────────────────────────────────────────────────────────────────────
+export const IconBitcoin: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="bitcoin"><circle cx="12" cy="12" r="9" /><path d="M10 8h3.3a2 2 0 0 1 0 4H10m0 0h3.7a2 2 0 0 1 0 4H10m0-8V6.5m0 9.5V18m2-12v2m0 8v2M9 8v8" /></Svg>
+);
+export const IconBlockchain: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="blockchain"><rect x="3" y="9" width="6" height="6" rx="1.2" /><rect x="15" y="9" width="6" height="6" rx="1.2" /><rect x="9" y="3" width="6" height="6" rx="1.2" /><rect x="9" y="15" width="6" height="6" rx="1.2" /><path d="M9 12H6.5M17.5 12H15M12 9V6.5M12 17.5V15" /></Svg>
+);
+
+// ── Nature ────────────────────────────────────────────────────────────────────────
+export const IconTree: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="tree"><path d="M12 21v-5M8 16h8l-3-4h2l-3-4h1.6L12 3.5 8.8 8H10.4l-3 4H9l-1 4Z" /></Svg>
+);
+export const IconDroplet: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="water"><path d="M12 3.5s6 6.3 6 10.5a6 6 0 0 1-12 0c0-4.2 6-10.5 6-10.5Z" /></Svg>
+);
+export const IconFire: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="fire"><path d="M12 3c.6 3.2 3.2 4.3 3.2 7.8A3.2 3.2 0 0 1 12 14a3.2 3.2 0 0 1-3.2-3.2c0-1 .3-1.8.8-2.6C10 9.6 9 11 9 12.6a3 3 0 0 0 6 0M12 21a6 6 0 0 0 6-6c0-1.4-.4-2.7-1-3.8" /></Svg>
+);
+
+// ── Commerce ──────────────────────────────────────────────────────────────────────
+export const IconCart: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="cart"><path d="M3 4h2l2.2 11.2A1.5 1.5 0 0 0 8.7 16.4H18l2-8H6.2" /><circle cx="9.5" cy="20" r="1.4" /><circle cx="17" cy="20" r="1.4" /></Svg>
+);
+export const IconGift: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="gift"><rect x="3.5" y="8" width="17" height="4.5" rx="1" /><path d="M5 12.5V20h14v-7.5M12 8v12M12 8S10.5 3 8 4.5 9.5 8 12 8ZM12 8s1.5-5 4-3.5S14.5 8 12 8Z" /></Svg>
+);
+export const IconTag: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="tag"><path d="M3 12V4h8l9 9-7 7-9-9Z" /><circle cx="7.5" cy="7.5" r="1.3" fill="currentColor" stroke="none" /></Svg>
+);
+export const IconPercent: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="discount"><path d="m6 18 12-12" /><circle cx="7.5" cy="7.5" r="2" /><circle cx="16.5" cy="16.5" r="2" /></Svg>
+);
+
+// ── Extra (existing categories) ─────────────────────────────────────────────────────
+export const IconHome: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="home"><path d="m3 11 9-7 9 7M5 9.5V20h14V9.5M9.5 20v-6h5v6" /></Svg>
+);
+export const IconStar: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="star"><path d="m12 3 2.6 5.4 6 .8-4.3 4.2 1 6L12 16.6 6.7 19.4l1-6-4.3-4.2 6-.8L12 3Z" /></Svg>
+);
+
 /** One catalog entry for the Gallery's Icons browser. */
 export interface DomainIconDef {
   name: string;
-  category: 'Travel' | 'Finance' | 'News' | 'Planning' | 'Places' | 'Tech' | 'Health' | 'Science' | 'Sports' | 'Media' | 'Tools' | 'Education' | 'Food' | 'Transit';
+  category: 'Travel' | 'Finance' | 'News' | 'Planning' | 'Places' | 'Tech' | 'Health' | 'Science' | 'Sports' | 'Media' | 'Tools' | 'Education' | 'Food' | 'Transit' | 'Crypto' | 'Nature' | 'Commerce';
   keywords: string[];
   Icon: React.FC<IconProps>;
 }
@@ -353,5 +394,16 @@ export const DOMAIN_ICONS: DomainIconDef[] = [
   { name: 'Car', category: 'Transit', keywords: ['drive', 'auto', 'vehicle', 'rental'], Icon: IconCar },
   { name: 'Train', category: 'Transit', keywords: ['rail', 'metro', 'subway', 'commute'], Icon: IconTrain },
   { name: 'Bus', category: 'Transit', keywords: ['transit', 'coach', 'public', 'commute'], Icon: IconBus },
-  { name: 'Bike', category: 'Transit', keywords: ['cycle', 'bicycle', 'ride', 'eco'], Icon: IconBike }
+  { name: 'Bike', category: 'Transit', keywords: ['cycle', 'bicycle', 'ride', 'eco'], Icon: IconBike },
+  { name: 'Bitcoin', category: 'Crypto', keywords: ['btc', 'coin', 'token', 'currency'], Icon: IconBitcoin },
+  { name: 'Blockchain', category: 'Crypto', keywords: ['blocks', 'web3', 'ledger', 'chain'], Icon: IconBlockchain },
+  { name: 'Tree', category: 'Nature', keywords: ['forest', 'park', 'eco', 'plant'], Icon: IconTree },
+  { name: 'Water', category: 'Nature', keywords: ['droplet', 'rain', 'liquid', 'hydration'], Icon: IconDroplet },
+  { name: 'Fire', category: 'Nature', keywords: ['flame', 'hot', 'trending', 'streak'], Icon: IconFire },
+  { name: 'Cart', category: 'Commerce', keywords: ['shop', 'buy', 'checkout', 'store'], Icon: IconCart },
+  { name: 'Gift', category: 'Commerce', keywords: ['present', 'reward', 'box', 'offer'], Icon: IconGift },
+  { name: 'Tag', category: 'Commerce', keywords: ['price', 'label', 'sale', 'category'], Icon: IconTag },
+  { name: 'Discount', category: 'Commerce', keywords: ['percent', 'sale', 'deal', 'off'], Icon: IconPercent },
+  { name: 'Home', category: 'Places', keywords: ['house', 'address', 'main', 'dashboard'], Icon: IconHome },
+  { name: 'Star', category: 'Planning', keywords: ['favorite', 'rating', 'bookmark', 'priority'], Icon: IconStar }
 ];
