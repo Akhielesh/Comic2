@@ -27,6 +27,7 @@ import { CULTURE_TOOLS } from './culture.js';
 import { DEV_TOOLS } from './dev.js';
 import { FINANCE_TERMINAL_TOOLS } from './financeTerminal.js';
 import { NANGO_TOOLS } from './nango.js';
+import { CONNECTOR_TOOL_NAMES, buildConnectorTool } from './connectors.js';
 import { VIDEO_TOOLS } from './videoRender.js';
 import { LIVE_TEMPLATE_TOOLS } from './liveTemplateTool.js';
 import { MARKET_WIDGET_TOOLS } from './marketWidgets.js';
@@ -1121,7 +1122,14 @@ const CONTEXTUAL_TOOL_NAMES = ['get_news', 'find_places'] as const;
 const META_TOOL_NAMES = ['run_agent_swarm', 'generate_image'] as const;
 
 /** The set of tool names a client is allowed to enable (allowlist). */
-export const KNOWN_TOOL_NAMES = [...Object.keys(STATIC_TOOLS), ...CONTEXTUAL_TOOL_NAMES, ...META_TOOL_NAMES];
+export const KNOWN_TOOL_NAMES = [
+  ...Object.keys(STATIC_TOOLS),
+  ...CONTEXTUAL_TOOL_NAMES,
+  // Per-user connector tools (Gmail/Drive/Calendar/Sheets/Maps + unified search),
+  // built per-request with the signed-in user's context.
+  ...CONNECTOR_TOOL_NAMES,
+  ...META_TOOL_NAMES
+];
 
 /** Resolve an allowlisted set of tool names to their implementations. */
 export const resolveTools = (names: string[] | undefined, ctx?: ToolContext): ChatTool[] => {
@@ -1142,6 +1150,13 @@ export const resolveTools = (names: string[] | undefined, ctx?: ToolContext): Ch
     if (name === 'run_python') {
       // Built per-request so the current turn's attachments (on ctx) reach the sandbox.
       tools.push(makeRunPythonTool(ctx));
+      continue;
+    }
+    // Per-user connector tools (built with ctx.userId so they only ever touch the
+    // signed-in user's own connections).
+    const connectorTool = buildConnectorTool(name, ctx);
+    if (connectorTool) {
+      tools.push(connectorTool);
       continue;
     }
     const tool = STATIC_TOOLS[name];

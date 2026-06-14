@@ -152,6 +152,26 @@ export const findConnectionsByAccount = async (
   return (data || []) as ConnectionRow[];
 };
 
+/**
+ * The user's most-recent usable connection for a connector (for AI tools that act on
+ * "my Gmail/Drive/…"). Skips disconnected rows; returns null if none.
+ */
+export const getActiveConnection = async (
+  userId: string,
+  connectorId: string
+): Promise<ConnectionRow | null> => {
+  const { data, error } = await getSupabaseAdmin()
+    .from('user_connections')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('connector_id', connectorId)
+    .neq('status', 'disconnected')
+    .order('updated_at', { ascending: false })
+    .limit(1);
+  if (error) throw new Error(`active connection lookup failed: ${error.message}`);
+  return ((data || [])[0] as ConnectionRow) || null;
+};
+
 export const listConnections = async (userId: string): Promise<ConnectionRow[]> => {
   const { data, error } = await getSupabaseAdmin()
     .from('user_connections')

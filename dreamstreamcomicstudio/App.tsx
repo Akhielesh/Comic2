@@ -764,6 +764,7 @@ const App: React.FC = () => {
       view === 'models' ||
       view === 'chat' ||
       view === 'codestudio' ||
+      view === 'connectors' ||
       view === 'privacy' ||
       view === 'terms'
     ) {
