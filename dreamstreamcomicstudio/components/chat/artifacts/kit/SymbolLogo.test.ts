@@ -23,4 +23,24 @@ describe('symbolLogoSources', () => {
     expect(symbolLogoSources('!!!')).toEqual([]);
     expect(symbolLogoSources('')).toEqual([]);
   });
+
+  it('returns no sources for indices, futures and forex (these CDNs have no logo → 404)', () => {
+    // Indices — with caret (^GSPC) and the bare code some feeds send (IXIC).
+    expect(symbolLogoSources('^GSPC')).toEqual([]);
+    expect(symbolLogoSources('^IXIC')).toEqual([]);
+    expect(symbolLogoSources('DJI')).toEqual([]);
+    // Futures (GC=F → GCF) and forex (EURUSD=X → EURUSDX) — the exact symbols that 404'd.
+    expect(symbolLogoSources('GC=F')).toEqual([]);
+    expect(symbolLogoSources('NG=F')).toEqual([]);
+    expect(symbolLogoSources('EURUSD=X')).toEqual([]);
+  });
+
+  it('routes Yahoo crypto pairs (BTC-USD, ETH-USDT) to the crypto path by base coin', () => {
+    expect(symbolLogoSources('BTC-USD')[0]).toBe('https://assets.parqet.com/logos/crypto/BTC');
+    expect(symbolLogoSources('ETH-USDT')[0]).toBe('https://assets.parqet.com/logos/crypto/ETH');
+  });
+
+  it('does NOT mistake a dual-class stock ticker (BRK-B) for a crypto pair', () => {
+    expect(symbolLogoSources('BRK-B')[0]).toBe('https://assets.parqet.com/logos/symbol/BRK-B');
+  });
 });
