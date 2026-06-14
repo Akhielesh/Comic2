@@ -12,6 +12,7 @@
 // to req.user.id so a user can only read connections they own + authorized.
 // ============================================================================
 
+import { randomBytes } from 'node:crypto';
 import { Router, type Response } from 'express';
 import {
   CONNECTORS_APP_RETURN_URL,
@@ -83,14 +84,32 @@ const appReturnUrl = (params: Record<string, string>): string => {
 const renderCallbackClose = (res: Response, params: { connected?: string; connector_error?: string }) => {
   const ok = !params.connector_error;
   const returnUrl = appReturnUrl(params as Record<string, string>);
+  // `error` can originate from an attacker-supplied ?error= on the callback URL. JSON.stringify
+  // escapes quotes but NOT "</script>", so escape `<` to prevent breaking out of the <script>
+  // block (the nonce CSP already blocks execution, but this closes the hole at the source).
   const payload = JSON.stringify({
     type: 'connector-oauth-result',
     connected: params.connected || '',
     error: params.connector_error || ''
-  });
-  const safeReturn = JSON.stringify(returnUrl);
+  }).replace(/</g, '\\u003c');
+  const safeReturn = JSON.stringify(returnUrl).replace(/</g, '\\u003c');
+  // Per-request nonce so the self-closing inline script runs under a strict CSP. The
+  // global API CSP is `default-src 'none'` (right for JSON endpoints) — but this is the
+  // ONE HTML page the API serves, and that policy would otherwise BLOCK this script,
+  // leaving the popup stuck open (which in turn makes the opener's close-detection spin).
+  const nonce = randomBytes(16).toString('hex');
   res
     .set('Content-Type', 'text/html; charset=utf-8')
+    // Keep window.opener alive so postMessage reaches the opener. The global COOP is
+    // `same-origin`, which severs the opener (killing this relay) AND makes the opener's
+    // popup handle log a "Cross-Origin-Opener-Policy would block the window.closed call"
+    // warning on every poll tick. `same-origin-allow-popups` is the correct value for an
+    // OAuth popup page: it preserves the opener relationship without de-isolating the API.
+    .set('Cross-Origin-Opener-Policy', 'same-origin-allow-popups')
+    .set(
+      'Content-Security-Policy',
+      `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`
+    )
     .send(`<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>${ok ? 'Connected' : 'Connection failed'}</title></head>
 <body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;color:#1a1915;background:#FAF9F5">
@@ -100,7 +119,7 @@ const renderCallbackClose = (res: Response, params: { connected?: string; connec
 <p style="color:#6e6a60;margin:.2rem 0">This window will close automatically…</p>
 <p style="margin-top:1rem"><a href=${safeReturn} style="color:#c2643f;text-decoration:none">Return to the app</a></p>
 </div>
-<script>(function(){
+<script nonce="${nonce}">(function(){
   try{ if(window.opener) window.opener.postMessage(${payload}, '*'); }catch(e){}
   setTimeout(function(){
     try{ window.close(); }catch(e){}

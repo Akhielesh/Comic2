@@ -131,6 +131,7 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
       } catch {
         /* ignore */
       }
+      popupRef.current = null;
       if (data.error) pushToast('error', `Couldn't connect: ${humanizeError(data.error)}`);
       else if (data.connected) pushToast('success', `${data.connected.replace(/_/g, ' ')} connected`);
       void refreshConnections();
@@ -139,18 +140,40 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
     return () => window.removeEventListener('message', onMessage);
   }, [pushToast, refreshConnections]);
 
-  const watchPopupClose = useCallback(
-    (popup: Window) => {
-      const timer = setInterval(() => {
-        if (popup.closed) {
-          clearInterval(timer);
-          setTimeout(() => setConnecting(null), 300);
-          void refreshConnections();
-        }
-      }, 800);
-    },
-    [refreshConnections]
-  );
+  // Reconcile when the user comes back from the OAuth popup. We deliberately DON'T poll
+  // `popup.closed`: reading it while the popup sits on Google's cross-origin consent page
+  // makes Chrome log a COOP "would block the window.closed call" warning on every tick
+  // (the spam you'd otherwise see). Instead the popup postMessages its result (handled
+  // above); this watcher only covers the "user dismissed the popup" case, via focus/
+  // visibility, plus a hard safety timeout so the connect spinner can never get stuck.
+  useEffect(() => {
+    if (!connecting) return;
+    let graceTimer: number | undefined;
+    const reconcile = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (!popupRef.current) return; // popup not opened yet (still fetching the consent URL)
+      window.clearTimeout(graceTimer);
+      // Give a late postMessage a beat to win the race (it clears `connecting`, which
+      // tears this watcher down) before assuming the user just closed the window.
+      graceTimer = window.setTimeout(() => {
+        popupRef.current = null;
+        void refreshConnections();
+        setConnecting(null);
+      }, 700);
+    };
+    window.addEventListener('focus', reconcile);
+    document.addEventListener('visibilitychange', reconcile);
+    const safety = window.setTimeout(() => {
+      popupRef.current = null;
+      setConnecting(null);
+    }, 3 * 60_000);
+    return () => {
+      window.removeEventListener('focus', reconcile);
+      document.removeEventListener('visibilitychange', reconcile);
+      window.clearTimeout(graceTimer);
+      window.clearTimeout(safety);
+    };
+  }, [connecting, refreshConnections]);
 
   const handleConnect = useCallback(
     async (entry: CatalogEntry, apiKey?: string) => {
@@ -171,13 +194,12 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
           return;
         }
         popupRef.current = popup;
-        watchPopupClose(popup);
       } catch (err) {
         setConnecting(null);
         pushToast('error', (err as Error)?.message || 'Connection failed');
       }
     },
-    [pushToast, refreshConnections, watchPopupClose]
+    [pushToast, refreshConnections]
   );
 
   // Seamless multi-service Google flow: disconnect any removed services, then (if new
@@ -201,7 +223,6 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
             return;
           }
           popupRef.current = popup;
-          watchPopupClose(popup);
         } else {
           setGoogleDialogOpen(false);
           setConnecting(null);
@@ -213,7 +234,7 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
         pushToast('error', (err as Error)?.message || 'Could not update Google services');
       }
     },
-    [connections, pushToast, refreshConnections, watchPopupClose]
+    [connections, pushToast, refreshConnections]
   );
 
   const handleSync = useCallback(
