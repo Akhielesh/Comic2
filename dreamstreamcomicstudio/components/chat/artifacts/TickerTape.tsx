@@ -1,6 +1,6 @@
 import React, { useId } from 'react';
 import type { TickerTapeArtifact, TickerTapeItem } from '../../../apiTypes';
-import { Surface, SurfaceTitle, SurfaceSubtitle, Sparkline, formatPrice, formatPercent, relativeTime, useCompact, useLiveData, BULL, BEAR, NEUTRAL } from './kit';
+import { Surface, SurfaceTitle, SurfaceSubtitle, Sparkline, SymbolLogo, formatPrice, formatPercent, relativeTime, useCompact, useLiveData, BULL, BEAR, NEUTRAL } from './kit';
 
 // Live ticker tape — the classic "infinite marquee ribbon", calm-studio edition.
 //  • detailed — a continuously left-scrolling strip of quote chips (symbol · price ·
@@ -110,6 +110,7 @@ export const TickerTape: React.FC<{ data: TickerTapeArtifact }> = ({ data }) => 
           const color = trendColor(it.changePercent);
           return (
             <li key={`${it.symbol}-${i}`} className="flex items-center gap-2 px-3 py-1.5 transition-colors duration-200 hover:bg-[var(--ds-well)]">
+              <SymbolLogo symbol={it.symbol} name={it.name} size={24} />
               <div className="min-w-0 flex-1">
                 <span className="block text-xs font-semibold leading-tight text-[var(--ds-ink)]">{it.symbol}</span>
                 {it.name && <span className="block truncate text-[10px] text-[var(--ds-muted)]">{it.name}</span>}

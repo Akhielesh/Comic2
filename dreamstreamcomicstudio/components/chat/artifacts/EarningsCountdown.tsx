@@ -1,6 +1,6 @@
 import React from 'react';
 import type { EarningsCalendarArtifact, EarningsItem } from '../../../apiTypes';
-import { Surface, SurfaceTitle, SurfaceSubtitle, Badge, relativeTime, shortDate, useCompact, useLiveData, withAlpha, BULL, BEAR, PALETTES } from './kit';
+import { Surface, SurfaceTitle, SurfaceSubtitle, Badge, SymbolLogo, relativeTime, shortDate, useCompact, useLiveData, withAlpha, BULL, BEAR, PALETTES } from './kit';
 
 // Earnings countdown — who reports next, as a horizontal scroll-snap carousel.
 //  • detailed — one snap card per report (date ascending): seeded-gradient ticker
@@ -12,15 +12,6 @@ import { Surface, SurfaceTitle, SurfaceSubtitle, Badge, relativeTime, shortDate,
 
 const VIOLET = PALETTES.violet.accent; // #8b5cf6
 const DAY_MS = 86_400_000;
-
-// Same seeded-avatar approach as NewsDigest: a stable hue pair hashed from the seed.
-const seededGradient = (seed: string): string => {
-  let h = 0;
-  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) % 360;
-  return `linear-gradient(135deg, hsl(${h} 45% 60%), hsl(${(h + 40) % 360} 45% 48%))`;
-};
-const tickerInitials = (symbol?: string): string =>
-  (symbol ?? '?').replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || '?';
 
 const SESSION_LABEL: Record<string, string> = {
   pre: 'before open',
@@ -55,12 +46,7 @@ const EarningsCard: React.FC<{ item: EarningsItem }> = ({ item }) => {
   return (
     <div className="min-w-[180px] max-w-[220px] shrink-0 snap-start rounded-xl bg-[var(--ds-well)] p-3">
       <div className="flex items-center gap-2">
-        <span
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-[11px] font-bold text-white"
-          style={{ background: seededGradient(item.symbol) }}
-        >
-          {tickerInitials(item.symbol)}
-        </span>
+        <SymbolLogo symbol={item.symbol} name={item.name} size={36} />
         <div className="min-w-0">
           <div className="truncate text-sm font-semibold text-[var(--ds-ink)]">{item.symbol}</div>
           {item.name && <div className="truncate text-[10px] text-[var(--ds-muted)]">{item.name}</div>}
@@ -134,12 +120,7 @@ export const EarningsCountdown: React.FC<{ data: EarningsCalendarArtifact }> = (
         <div className="divide-y divide-[var(--ds-hairline-soft)] border-t border-[var(--ds-hairline-soft)]">
           {picks.map((it, i) => (
             <div key={`${it.symbol}-${i}`} className="flex items-center gap-2 px-3 py-1.5">
-              <span
-                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-[9px] font-bold text-white"
-                style={{ background: seededGradient(it.symbol) }}
-              >
-                {tickerInitials(it.symbol)}
-              </span>
+              <SymbolLogo symbol={it.symbol} name={it.name} size={24} rounded="rounded-lg" />
               <span className="min-w-0 flex-1 truncate text-xs font-semibold text-[var(--ds-ink)]">{it.symbol}</span>
               <span className="shrink-0 text-xs tabular-nums text-[var(--ds-ink)]">
                 {countdownLabel(daysUntil(it.date)) || shortDate(it.date)}

@@ -11,6 +11,7 @@ import {
   RangeTabs,
   TrendPill,
   Badge,
+  SymbolLogo,
   resolveTheme,
   withAlpha,
   formatPrice,
@@ -144,14 +145,17 @@ export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => 
       <Surface
         accent={theme.accent}
         header={
-          <>
-            <SurfaceTitle>{data.name || data.symbol}</SurfaceTitle>
-            <SurfaceSubtitle>
-              {data.symbol}
-              {data.exchange ? ` · ${data.exchange}` : ''}
-              {market ? ` · ${market.label}` : ''}
-            </SurfaceSubtitle>
-          </>
+          <span className="flex min-w-0 items-center gap-2">
+            <SymbolLogo symbol={data.symbol} name={data.name} size={30} />
+            <span className="min-w-0">
+              <SurfaceTitle>{data.name || data.symbol}</SurfaceTitle>
+              <SurfaceSubtitle>
+                {data.symbol}
+                {data.exchange ? ` · ${data.exchange}` : ''}
+                {market ? ` · ${market.label}` : ''}
+              </SurfaceSubtitle>
+            </span>
+          </span>
         }
         right={
           <>
@@ -192,6 +196,7 @@ export const MarketCard: React.FC<{ data: StockQuoteArtifact }> = ({ data }) => 
       className="flex min-h-[calc(100%-1rem)] flex-col"
       header={
         <div className="flex items-center gap-2">
+          <SymbolLogo symbol={data.symbol} name={data.name} size={40} />
           <div className="min-w-0">
             <SurfaceTitle>{data.name || data.symbol}</SurfaceTitle>
             <SurfaceSubtitle>

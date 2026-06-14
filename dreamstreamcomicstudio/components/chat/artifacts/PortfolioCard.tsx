@@ -1,6 +1,6 @@
 import React from 'react';
 import type { PortfolioArtifact, PortfolioPosition } from '../../../apiTypes';
-import { Surface, SurfaceTitle, Sparkline, TrendPill, formatPrice, formatPercent, formatSigned, relativeTime, useCompact, useLiveData, BULL, BEAR, NEUTRAL, PALETTES } from './kit';
+import { Surface, SurfaceTitle, Sparkline, SymbolLogo, TrendPill, formatPrice, formatPercent, formatSigned, relativeTime, useCompact, useLiveData, BULL, BEAR, NEUTRAL, PALETTES } from './kit';
 
 // Portfolio hero — live-priced holdings with a weight donut and a P&L header.
 //  • compact — total value + day pill + the top three positions as one-line rows.
@@ -143,6 +143,7 @@ export const PortfolioCard: React.FC<{ data: PortfolioArtifact }> = ({ data }) =
           const weight = weightOf(p);
           return (
             <li key={`${p.symbol}-${i}`} className="flex items-center gap-2 px-3 py-2 transition-colors duration-200 hover:bg-[var(--ds-well)]">
+              <SymbolLogo symbol={p.symbol} name={p.name} size={26} />
               <div className="min-w-0 flex-1">
                 <span className="block text-xs font-semibold leading-tight text-[var(--ds-ink)]">{p.symbol}</span>
                 {p.name && <span className="block truncate text-[10px] text-[var(--ds-muted)]">{p.name}</span>}
