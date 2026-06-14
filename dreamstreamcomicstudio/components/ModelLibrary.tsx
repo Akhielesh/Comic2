@@ -41,6 +41,7 @@ import {
 } from '../services/modelCatalog';
 import { isProviderEnabled } from '../services/sourceGovernance';
 import { isTextProvider, PROVIDERS_ORDERED } from '../shared/providers';
+import { ProviderLogo, hasProviderLogo } from './providerLogos';
 import {
   setSelectedModel,
   setStageModel,
@@ -683,6 +684,31 @@ const VerifiedStrip: React.FC = () => {
           {nvidia.connected && nvidia.note && <div className="mt-1.5 text-[11px] text-slate-500 leading-snug">{nvidia.note}</div>}
         </div>
       </div>
+
+      {/* Direct BYOK providers — connection status from the live /verify per-provider map. */}
+      {data.providers && (() => {
+        const extra = PROVIDERS_ORDERED.filter((d) => d.id !== 'openrouter' && d.id !== 'nvidia' && data.providers?.[d.id]);
+        if (!extra.length) return null;
+        return (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-slate-500 font-bold">Direct providers:</span>
+            {extra.map((d) => {
+              const p = data.providers![d.id]!;
+              return (
+                <span
+                  key={d.id}
+                  title={`${d.label}: ${p.connected ? `connected · ${p.modelCount} models` : 'no key — add one in Settings → API Configuration to use these models'}`}
+                  className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border-2 font-bold ${p.connected ? 'border-black bg-white text-green-800' : 'border-slate-300 bg-slate-50 text-slate-400'}`}
+                >
+                  {hasProviderLogo(d.id) && <ProviderLogo provider={d.id} className="w-3 h-3" style={{ color: p.connected ? d.accent : undefined }} />}
+                  {d.short}
+                  <span className="text-[9px] font-semibold">{p.connected ? '✓' : '+ key'}</span>
+                </span>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       <div className="text-slate-500">Free/paid, credits and limits are reconciled against each source’s live API — not guessed.</div>
     </div>
