@@ -12,7 +12,7 @@
 // to req.user.id so a user can only read connections they own + authorized.
 // ============================================================================
 
-import { Router } from 'express';
+import { Router, type Response } from 'express';
 import {
   CONNECTORS_APP_RETURN_URL,
   CONNECTORS_ENABLED,
@@ -75,6 +75,41 @@ const appReturnUrl = (params: Record<string, string>): string => {
   }
 };
 
+// The OAuth popup lands here after Google. Rather than redirect into the full SPA
+// (which flashes the raw hosting URL in the popup), render a tiny page that messages
+// the opener and closes itself. The opener also detects the close and refreshes, so the
+// result lands even if the message is cross-origin. Falls back to the app if it can't
+// close (e.g. a full-page flow with no opener).
+const renderCallbackClose = (res: Response, params: { connected?: string; connector_error?: string }) => {
+  const ok = !params.connector_error;
+  const returnUrl = appReturnUrl(params as Record<string, string>);
+  const payload = JSON.stringify({
+    type: 'connector-oauth-result',
+    connected: params.connected || '',
+    error: params.connector_error || ''
+  });
+  const safeReturn = JSON.stringify(returnUrl);
+  res
+    .set('Content-Type', 'text/html; charset=utf-8')
+    .send(`<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>${ok ? 'Connected' : 'Connection failed'}</title></head>
+<body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;color:#1a1915;background:#FAF9F5">
+<div style="text-align:center;max-width:22rem;padding:1.5rem">
+<div style="font-size:30px;margin-bottom:.4rem">${ok ? '✅' : '⚠️'}</div>
+<p style="font-weight:600;margin:.2rem 0">${ok ? 'Connected' : 'Could not connect'}</p>
+<p style="color:#6e6a60;margin:.2rem 0">This window will close automatically…</p>
+<p style="margin-top:1rem"><a href=${safeReturn} style="color:#c2643f;text-decoration:none">Return to the app</a></p>
+</div>
+<script>(function(){
+  try{ if(window.opener) window.opener.postMessage(${payload}, '*'); }catch(e){}
+  setTimeout(function(){
+    try{ window.close(); }catch(e){}
+    setTimeout(function(){ if(!window.closed){ location.replace(${safeReturn}); } }, 500);
+  }, 80);
+})();</script>
+</body></html>`);
+};
+
 // ============================================================================
 // PUBLIC: OAuth callback
 // ============================================================================
@@ -86,8 +121,8 @@ connectorsPublicRouter.get('/oauth/callback', async (req, res) => {
   const code = String(req.query.code || '');
   const oauthError = String(req.query.error || '');
 
-  // Always resolve to a friendly app redirect rather than a bare JSON error.
-  const fail = (reason: string) => res.redirect(appReturnUrl({ connector_error: reason }));
+  // Resolve to a self-closing popup page rather than a bare JSON error.
+  const fail = (reason: string) => renderCallbackClose(res, { connector_error: reason });
 
   if (oauthError) return fail(oauthError);
   if (!stateParam || !code) return fail('missing_code_or_state');
@@ -136,7 +171,7 @@ connectorsPublicRouter.get('/oauth/callback', async (req, res) => {
       connected.push(id);
     }
 
-    return res.redirect(appReturnUrl({ connected: connected.join(',') }));
+    return renderCallbackClose(res, { connected: connected.join(',') });
   } catch (err) {
     logger.warn('connector_oauth_callback_failed', {
       connector: state.connectorIds.join(','),

@@ -120,7 +120,9 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
   // Listen for the popup's postMessage result.
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
-      if (e.origin !== window.location.origin) return;
+      // The self-closing callback page posts from the BACKEND origin, so we don't gate on
+      // e.origin here; the payload is non-sensitive (connector ids) and the authoritative
+      // update is the scoped refreshConnections() below.
       const data = e.data as { type?: string; connected?: string; error?: string };
       if (data?.type !== OAUTH_RESULT) return;
       setConnecting(null);
