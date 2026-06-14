@@ -18,9 +18,13 @@ export interface ComicStreamViewProps {
   costUsd?: number;
   /** True while the prompt-bar script analysis is running. */
   analyzing?: boolean;
+  /** When set, a spend confirmation is pending — render a gate card with the estimate. */
+  pendingGate?: { estimateUsd: number } | null;
   onBack?: () => void;
   onOpenSettings?: () => void;
   onSend?: (prompt: string) => void;
+  onConfirmGate?: () => void;
+  onCancelGate?: () => void;
   handlers?: StreamCardHandlers;
 }
 
@@ -44,9 +48,12 @@ export const ComicStreamView: React.FC<ComicStreamViewProps> = ({
   projectTitle = 'Untitled comic',
   costUsd,
   analyzing = false,
+  pendingGate = null,
   onBack,
   onOpenSettings,
   onSend,
+  onConfirmGate,
+  onCancelGate,
   handlers = {},
 }) => {
   const [draft, setDraft] = useState('');
@@ -108,6 +115,24 @@ export const ComicStreamView: React.FC<ComicStreamViewProps> = ({
               <StreamItem key="analyzing">
                 <div className="rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-5">
                   <AgentThinking label="Reading your script & planning the comic…" />
+                </div>
+              </StreamItem>
+            )}
+            {pendingGate && (
+              <StreamItem key="gate">
+                <div className="rounded-2xl border border-[var(--ds-accent)] bg-[#D97757]/5 p-5">
+                  <div className="mb-1 text-[15px] font-semibold text-[var(--ds-ink)]">Confirm before generating</div>
+                  <div className="mb-4 text-[13px] text-[var(--ds-muted)]">
+                    This run is estimated at <span className="font-semibold text-[var(--ds-ink)]">${pendingGate.estimateUsd.toFixed(2)}</span>. Generation hasn’t spent anything yet.
+                  </div>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={onConfirmGate} className="rounded-xl bg-[var(--ds-accent)] px-4 py-2 text-[13px] font-semibold text-white transition-colors hover:bg-[var(--ds-accent-hover)]">
+                      Run · ${pendingGate.estimateUsd.toFixed(2)}
+                    </button>
+                    <button type="button" onClick={onCancelGate} className="rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-4 py-2 text-[13px] font-semibold text-[var(--ds-ink)] transition-colors hover:bg-[var(--ds-hover)]">
+                      Not yet
+                    </button>
+                  </div>
                 </div>
               </StreamItem>
             )}

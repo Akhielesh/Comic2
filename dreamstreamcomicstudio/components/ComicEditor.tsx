@@ -22,6 +22,8 @@ import { ArrowLeft, Save, History, AlertTriangle, ImageIcon } from 'lucide-react
 import { VersionHistoryModal } from './modals/VersionHistoryModal';
 import { ProjectVersion } from '../types';
 import { analyzeScriptDetailed, checkDeploymentParity, DeploymentParityStatus } from '../services/geminiService';
+import { confirmGateNeeded } from '../services/comicAgentSettings';
+import { estimateComicCostUsd, planBeats } from '../services/beatPlanner';
 import { getFormFactorDefaultAspectRatio } from '../services/storyPlanning';
 import { TokenAvailabilityPill } from './TokenAvailabilityPill';
 import { getSelectedImageModel, MODEL_SELECTION_CHANGED } from '../services/modelSelection';
@@ -146,6 +148,19 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [streamAnalyzing, setStreamAnalyzing] = useState(false);
+  const [pendingGate, setPendingGate] = useState<{ estimateUsd: number } | null>(null);
+
+  // Approving the plan requests a build, but per the confirm policy we may pause with a
+  // spend gate first (the spec's trust feature). This only gates the *start* — it never
+  // touches the render loop.
+  const requestBuild = () => {
+    const estimateUsd = estimateComicCostUsd(planBeats(state.scenes || [], state.pageCount || 0, 3).totalPanels);
+    if (confirmGateNeeded(state.agentSettings, estimateUsd)) {
+      setPendingGate({ estimateUsd });
+    } else {
+      onStartGeneration(project.id);
+    }
+  };
 
   // Run script analysis directly from the stream's prompt bar so a comic starts end-to-end
   // inside the new surface (no bridge to Detailed mode). On success it reuses the same
@@ -631,6 +646,9 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           state={state}
           projectTitle={project.name}
           analyzing={streamAnalyzing}
+          pendingGate={pendingGate}
+          onConfirmGate={() => { setPendingGate(null); onStartGeneration(project.id); }}
+          onCancelGate={() => setPendingGate(null)}
           onBack={onBack}
           onOpenSettings={() => setSettingsOpen(true)}
           onSend={(text) => {
@@ -643,7 +661,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
             }
           }}
           handlers={{
-            onApprovePlan: () => onStartGeneration(project.id),
+            onApprovePlan: () => requestBuild(),
             onSelectStyle: (id) => updateState({ selectedStyleId: id }),
             onMoreStyles: () => { setViewMode('detailed'); goToStep(AppStep.STYLE_SELECTION); },
             onEditEntity: () => { setViewMode('detailed'); goToStep(AppStep.REFERENCE_BUILDER); },
