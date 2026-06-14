@@ -63,10 +63,16 @@ describe('googleApiFetch', () => {
     ).rejects.toBeInstanceOf(ConnectorAuthError);
   });
 
-  it('keeps a 403 "API disabled" as a hard (non-auth) error so it is not mistaken for a reconnect', async () => {
+  it('turns a 403 "API not enabled" into a concise, actionable hard error (not a reconnect)', async () => {
     (global.fetch as any).mockResolvedValue(
       mockResponse(
-        { error: { status: 'PERMISSION_DENIED', message: 'Gmail API has not been used in project 123 before or it is disabled.' } },
+        {
+          error: {
+            status: 'PERMISSION_DENIED',
+            message:
+              'Gmail API has not been used in project 683551717832 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/gmail.googleapis.com/overview?project=683551717832 then retry.'
+          }
+        },
         { status: 403 }
       )
     );
@@ -75,7 +81,8 @@ describe('googleApiFetch', () => {
     )) as Error;
     expect(err).toBeInstanceOf(Error);
     expect(err).not.toBeInstanceOf(ConnectorAuthError);
-    expect(err.message).toMatch(/disabled/i);
+    expect(err.message).toMatch(/isn't enabled/i);
+    expect(err.message).toContain('https://console.developers.google.com'); // keeps the enable link
   });
 
   it('treats a 403 rateLimitExceeded as retryable quota, not a hard error', async () => {

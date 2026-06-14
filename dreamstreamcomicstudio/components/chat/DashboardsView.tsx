@@ -18,10 +18,12 @@ import { useAuth } from '../../contexts/AuthContext';
 import { persistUiState, resolveInitialUiState } from '../../services/viewState';
 import { DensityProvider, relativeTime, type WidgetDensity } from './artifacts/kit';
 import { renderArtifactNode } from './artifacts/ChatArtifacts';
+import { DictationButton } from './DictationButton';
 import {
   AI_CHAT_TILE, TOOL_LABELS, WIDGET_BY_TOOL, WIDGET_CATEGORIES, buildTileFromFields, searchWidgets,
   type WidgetDef
 } from './widgetCatalog';
+import { resolveWidgetIntent, quickPickSuggestions, type WidgetSuggestion } from '../../services/widgetIntent';
 
 export { AI_CHAT_TILE };
 
@@ -616,21 +618,37 @@ const AddWidgetPanel: React.FC<{
   onClose: () => void;
 }> = ({ onAdd, onClose }) => {
   const [selected, setSelected] = useState<WidgetDef | null>(null);
-  const [term, setTerm] = useState('');
+  // One box: type or speak what you want. Drives both the smart suggestions and the
+  // catalog filter, so most people never open the full grid.
+  const [nl, setNl] = useState('');
+  const [browse, setBrowse] = useState(false);
   const [density, setDensity] = useState<WidgetDensity>('detailed');
   const [values, setValues] = useState<Record<string, string>>({});
+  const dictationBase = useRef('');
 
-  const pick = (def: WidgetDef) => {
+  const pick = (def: WidgetDef, prefill: Record<string, string> = {}) => {
     setSelected(def);
     setDensity(def.defaultDensity);
-    setValues(Object.fromEntries(def.fields.filter((f) => f.default).map((f) => [f.key, f.default!])));
+    setValues({ ...Object.fromEntries(def.fields.filter((f) => f.default).map((f) => [f.key, f.default!])), ...prefill });
   };
 
-  const matches = useMemo(() => searchWidgets(term), [term]);
+  // What the user means, ranked. Empty box → curated quick picks.
+  const suggestions = useMemo<WidgetSuggestion[]>(
+    () => (nl.trim() ? resolveWidgetIntent(nl) : quickPickSuggestions()),
+    [nl]
+  );
+
+  const matches = useMemo(() => searchWidgets(nl), [nl]);
   const grouped = useMemo(
     () => WIDGET_CATEGORIES.map((c) => ({ category: c, defs: matches.filter((w) => w.category === c) })).filter((g) => g.defs.length),
     [matches]
   );
+
+  // A suggestion is either pinned in one tap, or it opens the config form prefilled.
+  const applySuggestion = (s: WidgetSuggestion) => {
+    if (s.ready) onAdd({ tool: s.def.tool, args: s.args, label: s.label, density: s.density });
+    else pick(s.def, s.values || {});
+  };
 
   const draft = selected ? buildTileFromFields(selected, values, density) : null;
 
@@ -648,63 +666,118 @@ const AddWidgetPanel: React.FC<{
             onClick={() => setSelected(null)}
             className="rounded-lg px-2 py-1 text-xs font-medium text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]"
           >
-            ← All widgets
+            ← Back
           </button>
         ) : (
           <div className="text-sm font-semibold text-[var(--ds-ink)]">Add a widget</div>
-        )}
-        {!selected && (
-          <div className="relative ml-auto w-44 sm:w-56">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--ds-muted)]" />
-            <input
-              value={term}
-              onChange={(e) => setTerm(e.target.value)}
-              placeholder="Search widgets…"
-              aria-label="Search widgets"
-              className="w-full rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] py-1.5 pl-8 pr-2.5 text-xs text-[var(--ds-ink)] outline-none transition-colors placeholder:text-[var(--ds-muted)] focus:border-[var(--ds-accent)]"
-            />
-          </div>
         )}
         <button
           type="button"
           onClick={onClose}
           aria-label="Close add widget panel"
-          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)] ${selected ? 'ml-auto' : ''}`}
+          className="ml-auto flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]"
         >
           <X className="h-4 w-4" />
         </button>
       </div>
 
       {!selected ? (
-        // 1. The gallery: every widget, grouped, scrollable.
-        <div className="max-h-[420px] space-y-4 overflow-y-auto overscroll-contain pr-1 [scrollbar-width:thin]">
-          {grouped.length === 0 && (
-            <p className="py-6 text-center text-xs text-[var(--ds-muted)]">No widgets match “{term}”.</p>
-          )}
-          {grouped.map(({ category, defs }) => (
-            <section key={category}>
-              <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--ds-muted)]">{category}</h3>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">
-                {defs.map((def) => {
-                  const Icon = def.icon;
+        <div className="space-y-3">
+          {/* Tell it what you want — type or speak. */}
+          <div className="relative">
+            <Sparkles className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--ds-accent)]" />
+            <input
+              autoFocus
+              value={nl}
+              onChange={(e) => setNl(e.target.value)}
+              placeholder="What do you want to add? e.g. “rivian stock”, “weather tokyo”, “bitcoin”, “AI news”"
+              aria-label="Describe the widget to add"
+              className="w-full rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-well)] py-2.5 pl-9 pr-11 text-sm text-[var(--ds-ink)] outline-none transition-colors placeholder:text-[var(--ds-muted)] focus:border-[var(--ds-accent)]"
+            />
+            <span className="absolute right-1.5 top-1/2 -translate-y-1/2">
+              <DictationButton
+                onStart={() => { dictationBase.current = nl; }}
+                onPartial={(spoken) => setNl(dictationBase.current ? `${dictationBase.current} ${spoken}`.trim() : spoken)}
+                onFinal={(spoken) => setNl(dictationBase.current ? `${dictationBase.current} ${spoken}`.trim() : spoken)}
+              />
+            </span>
+          </div>
+
+          {/* Smart suggestions (or quick picks when the box is empty). */}
+          <div>
+            <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--ds-muted)]">
+              {nl.trim() ? 'Suggestions' : 'Quick add'}
+            </h3>
+            {suggestions.length === 0 ? (
+              <p className="py-3 text-center text-xs text-[var(--ds-muted)]">
+                No match — try a company, place, topic, or “browse all”.
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {suggestions.map((s) => {
+                  const Icon = s.def.icon;
                   return (
                     <button
-                      key={def.tool}
+                      key={s.key}
                       type="button"
-                      onClick={() => pick(def)}
-                      className="flex items-start gap-2 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 py-2.5 text-left transition-colors hover:border-[var(--ds-accent)] hover:bg-[var(--ds-hover)]"
+                      onClick={() => applySuggestion(s)}
+                      className="group flex items-center gap-2.5 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 py-2.5 text-left transition-colors hover:border-[var(--ds-accent)] hover:bg-[var(--ds-hover)]"
                     >
-                      <Icon className="mt-0.5 h-4 w-4 shrink-0 text-[var(--ds-muted)]" />
-                      <span className="min-w-0">
-                        <span className="block text-xs font-semibold text-[var(--ds-ink)]">{def.label}</span>
-                        <span className="block text-[10px] leading-snug text-[var(--ds-muted)] line-clamp-2">{def.blurb}</span>
+                      <Icon className="h-4 w-4 shrink-0 text-[var(--ds-accent)]" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-xs font-semibold text-[var(--ds-ink)]">{s.title}</span>
+                        <span className="block truncate text-[10px] text-[var(--ds-muted)]">{s.subtitle}</span>
+                      </span>
+                      <span className="shrink-0 text-[var(--ds-muted)] opacity-0 transition-opacity group-hover:opacity-100">
+                        {s.ready ? <Plus className="h-4 w-4" /> : <MoreHorizontal className="h-4 w-4" />}
                       </span>
                     </button>
                   );
                 })}
               </div>
-            </section>
-          ))}
+            )}
+          </div>
+
+          {/* Full catalog, one tap away — most users never need it. */}
+          <button
+            type="button"
+            onClick={() => setBrowse((b) => !b)}
+            className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--ds-hairline-soft)] py-1.5 text-[11px] font-medium text-[var(--ds-muted)] transition-colors hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]"
+          >
+            {browse ? 'Hide full catalog' : 'Browse the full catalog'}
+          </button>
+
+          {browse && (
+            <div className="max-h-[360px] space-y-4 overflow-y-auto overscroll-contain border-t border-[var(--ds-hairline-soft)] pt-3 pr-1 [scrollbar-width:thin]">
+              {grouped.length === 0 && (
+                <p className="py-6 text-center text-xs text-[var(--ds-muted)]">No widgets match “{nl}”.</p>
+              )}
+              {grouped.map(({ category, defs }) => (
+                <section key={category}>
+                  <h3 className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--ds-muted)]">{category}</h3>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">
+                    {defs.map((def) => {
+                      const Icon = def.icon;
+                      return (
+                        <button
+                          key={def.tool}
+                          type="button"
+                          onClick={() => pick(def)}
+                          className="flex items-start gap-2 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-3 py-2.5 text-left transition-colors hover:border-[var(--ds-accent)] hover:bg-[var(--ds-hover)]"
+                        >
+                          <Icon className="mt-0.5 h-4 w-4 shrink-0 text-[var(--ds-muted)]" />
+                          <span className="min-w-0">
+                            <span className="block text-xs font-semibold text-[var(--ds-ink)]">{def.label}</span>
+                            <span className="block text-[10px] leading-snug text-[var(--ds-muted)] line-clamp-2">{def.blurb}</span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+              ))}
+            </div>
+          )}
         </div>
       ) : (
         // 2. Configure the chosen widget: presets + its declared fields.
@@ -850,17 +923,29 @@ const AiCommandBar: React.FC<{
   /** Sidebar toggle from the host shell — the dashboards view owns its full
    *  height (no separate title header), so the toggle lives in this bar. */
   leading?: React.ReactNode;
-}> = ({ board, onResult, leading }) => {
+  /** Hand a link or explicit "ask …" off to the AI chat instead of the board grammar. */
+  onAsk?: (text: string) => void;
+}> = ({ board, onResult, leading, onAsk }) => {
   const [input, setInput] = useState('');
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<DashboardCommandResult | null>(null);
   // Chips are a first-paint affordance — gone after the first submit.
   const [virgin, setVirgin] = useState(true);
+  // Snapshot of the typed text when a dictation take starts, so speech appends.
+  const dictationBase = useRef('');
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     const command = input.trim();
     if (!command || pending) return;
+    // A pasted link or an explicit "ask/summarize …" isn't a board command — send it to
+    // the AI chat, where the model + tools can actually open/summarize/render it.
+    const askMatch = command.match(/^(?:ask|summari[sz]e)\s+(.+)/i);
+    if (onAsk && (/^https?:\/\/\S+$/i.test(command) || askMatch)) {
+      onAsk(askMatch ? askMatch[1] : command);
+      setInput('');
+      return;
+    }
     setPending(true);
     setResult(null);
     setVirgin(false);
@@ -892,9 +977,17 @@ const AiCommandBar: React.FC<{
             onChange={(e) => setInput(e.target.value)}
             disabled={pending}
             aria-label="Tell the AI what to build or change"
-            placeholder="Tell the AI what to build or change — “study dashboard for ML”, “change weather to Tokyo”, “stocks to NVDA”…"
+            placeholder="Tell the AI what to build, add or change — “add rivian”, “pin bitcoin”, “study dashboard for ML”, “change weather to Tokyo”…"
             className="min-w-0 flex-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-3 py-1.5 text-base text-[var(--ds-ink)] outline-none transition-colors placeholder:text-[var(--ds-muted)] focus:border-[var(--ds-accent)] disabled:opacity-60 sm:text-sm"
           />
+          <span className="shrink-0 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)]">
+            <DictationButton
+              disabled={pending}
+              onStart={() => { dictationBase.current = input; }}
+              onPartial={(spoken) => setInput(dictationBase.current ? `${dictationBase.current} ${spoken}`.trim() : spoken)}
+              onFinal={(spoken) => setInput(dictationBase.current ? `${dictationBase.current} ${spoken}`.trim() : spoken)}
+            />
+          </span>
           <button
             type="submit"
             disabled={pending || !input.trim()}
@@ -947,7 +1040,7 @@ const resolveInitialBoard = (): string | null => {
   return listDashboards()[0]?.id ?? null;
 };
 
-export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode }> = ({ sidebarControl }) => {
+export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode; onAsk?: (text: string) => void }> = ({ sidebarControl, onAsk }) => {
   const { user } = useAuth();
   const [dashboards, setDashboards] = useState<CustomDashboard[]>(() => listDashboards());
   // Continuity: reloading (or coming back later) reopens the LAST board the
@@ -1179,7 +1272,7 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode }> = ({
     return (
       <div className="h-full w-full overflow-y-auto bg-[var(--ds-canvas)]">
         {/* The AI bar also bootstraps the first board ("study dashboard for ML"). */}
-        <AiCommandBar board={null} onResult={handleAiResult} leading={sidebarControl} />
+        <AiCommandBar board={null} onResult={handleAiResult} leading={sidebarControl} onAsk={onAsk} />
         <div className="mx-auto w-full max-w-3xl px-4 py-12 text-center sm:py-16">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#D97757]/10">
             <LayoutDashboard className="h-7 w-7 text-[var(--ds-accent)]" />
@@ -1218,7 +1311,7 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode }> = ({
       {/* ---- sticky top: AI command bar + board switcher stay put on scroll, so the
               user can switch boards from anywhere without scrolling back up --------- */}
       <div className="sticky top-0 z-30 bg-[var(--ds-canvas)]">
-      <AiCommandBar board={active ?? null} onResult={handleAiResult} leading={sidebarControl} />
+      <AiCommandBar board={active ?? null} onResult={handleAiResult} leading={sidebarControl} onAsk={onAsk} />
       <div className="mx-auto w-full max-w-6xl px-3 sm:px-6">
         {/* --------------------------------------------------- switcher row ---
             One slim line that never wraps: the board pills scroll horizontally,

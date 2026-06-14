@@ -46,6 +46,8 @@ interface DashboardsViewProps {
   /** Renders the sidebar toggle inside the dashboards top bar (its own header is
    *  hidden for this view to reclaim the vertical space). */
   sidebarControl?: React.ReactNode;
+  /** Hand a pasted link / "ask …" from the dashboard bar off to a new chat. */
+  onAsk?: (text: string) => void;
 }
 interface CommandPaletteProps {
   open: boolean;
@@ -53,6 +55,7 @@ interface CommandPaletteProps {
   sessions: ChatSession[];
   onResume: (id: string) => void;
   onNavigate: (view: 'home' | 'library' | 'dashboards') => void;
+  onAsk: (text: string) => void;
 }
 
 const pickExport = <P,>(m: Record<string, unknown>, name: string): { default: React.ComponentType<P> } => ({
@@ -1436,6 +1439,7 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
             )}
             {resolvedView === 'dashboards' && (
               <DashboardsView
+                onAsk={(text) => handleStartChat(text)}
                 sidebarControl={
                   <button
                     onClick={() => setSidebarOpen((v) => !v)}
@@ -1494,6 +1498,7 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
             sessions={sessions}
             onResume={(id) => { setActiveId(id); setView('chat'); setPaletteOpen(false); }}
             onNavigate={(v) => { setView(v); setPaletteOpen(false); }}
+            onAsk={(text) => { setPaletteOpen(false); handleStartChat(text); }}
           />
         </Suspense>
       )}
