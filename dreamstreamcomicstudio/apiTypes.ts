@@ -2092,14 +2092,22 @@ export interface UIImageBlock { kind: 'image'; src: string; alt?: string; captio
 export interface UIProgressBlock { kind: 'progress'; value: number; max?: number; label?: string; color?: string }
 export interface UIMetricBlock { kind: 'metric'; label: string; value: string | number; unit?: string; delta?: number; deltaPercent?: number; spark?: number[] }
 export interface UISparklineBlock { kind: 'sparkline'; values: number[]; color?: string }
+export interface UITimelineBlock { kind: 'timeline'; items: { title: string; time?: string; text?: string; accent?: string }[] }
+export interface UIRatingBlock { kind: 'rating'; value: number; max?: number; count?: number; label?: string }
+export interface UITagsBlock { kind: 'tags'; items: string[] }
+export interface UIGaugeBlock { kind: 'gauge'; value: number; max?: number; label?: string; unit?: string; color?: string }
+export interface UIBarsBlock { kind: 'bars'; items: { label: string; value: number; color?: string }[]; max?: number }
+export interface UIStepsBlock { kind: 'steps'; items: { title: string; text?: string }[] }
+export interface UIQuoteBlock { kind: 'quote'; text: string; author?: string }
+export interface UIMapBlock { kind: 'map'; markers: { lat: number; lng: number; label: string; category?: string; color?: string }[]; connect?: boolean }
 export interface UIChartBlock { kind: 'chart'; chart: ChartArtifact }
 export interface UITableBlock { kind: 'table'; table: DataTableArtifact }
 
 export type UIBlock =
   | UIStackBlock | UIRowBlock | UIGridBlock | UISectionBlock | UIDividerBlock
   | UIHeadingBlock | UITextBlock | UIBadgeBlock | UIPillBlock | UIKeyValueBlock
-  | UICalloutBlock | UIImageBlock | UIProgressBlock
-  | UIMetricBlock | UISparklineBlock | UIChartBlock | UITableBlock;
+  | UICalloutBlock | UIImageBlock | UIProgressBlock | UITimelineBlock | UIRatingBlock | UITagsBlock | UIGaugeBlock | UIBarsBlock
+  | UIStepsBlock | UIQuoteBlock | UIMapBlock | UIMetricBlock | UISparklineBlock | UIChartBlock | UITableBlock;
 
 export interface GenerativeUIArtifact {
   title?: string;
@@ -2110,6 +2118,22 @@ export interface GenerativeUIArtifact {
   palette?: string;
   /** The block tree. */
   root: UIBlock;
+}
+
+// --- Custom React component (sandboxed) ---
+/** A bespoke, fully-custom widget: a self-contained React/TSX component the model (or
+ *  an MCP like 21st.dev) authors on demand, rendered in a sandboxed iframe (Sandpack)
+ *  so it can never touch the host page, cookies or our origin. For genuinely custom
+ *  interactivity beyond render_ui's block kit. Emitted by the `render_react` tool. */
+export interface ReactComponentArtifact {
+  /** A self-contained component module with `export default function App() {…}`. */
+  code: string;
+  title?: string;
+  description?: string;
+  /** Sandbox preview height in px (default 320). */
+  height?: number;
+  /** Extra npm dependencies the component imports, as { name: semver }. */
+  dependencies?: Record<string, string>;
 }
 
 // --- Finance terminal ---

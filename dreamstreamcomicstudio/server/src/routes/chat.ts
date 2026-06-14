@@ -901,6 +901,7 @@ You are given the recent conversation. Output 3 suggestions as a JSON array of s
 Rules:
 - Phrase each in the FIRST PERSON, exactly as the user would type it to the assistant ("Show me a worked example", "Turn this into steps I can follow", "Make it shorter").
 - Make them SPECIFIC to what was just discussed — reference the actual topic. A good suggestion moves the user forward: go deeper, see an example, apply it, compare options, visualize it, practice it, or get a downloadable resource.
+- When the topic naturally invites it, suggest moving into a RICH view the assistant can build: overlaying several assets on one comparison chart ("Compare it with its peers"), turning places/dates into a trip plan ("Plan a 3-day trip there"), or a visual dashboard/breakdown ("Show this as a dashboard"). Only when it genuinely fits — never force it.
 - Stay strictly RELEVANT to this conversation and this user. NEVER invent a different persona, profession, age, or life situation the conversation doesn't clearly support (do not assume a job hunt, years of experience, a company, or interests that were never shown). If the context is thin, keep the suggestions close to the literal topic.
 - Each under ~8 words. No numbering, no markdown, no surrounding quotes inside the strings.
 - If there's no useful follow-up (a plain greeting, a goodbye, or the request is fully resolved), return [].

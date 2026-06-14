@@ -494,6 +494,16 @@ export const ItineraryCard: React.FC<{ data: ItineraryArtifact }> = ({ data }) =
   // ── Detailed. ────────────────────────────────────────────────────────────────
   const hasTipsOrPacking = (data.tips?.length ?? 0) > 0 || (data.packing?.length ?? 0) > 0;
 
+  // Auto "trip at a glance" — light analysis from the plan itself, so the card explains
+  // the trip's SHAPE (est. cost, busiest day, transport legs) rather than just listing it.
+  const stopCostSum = days.reduce((sum, d) => sum + d.stops.reduce((s, st) => s + (typeof st.cost === 'number' ? st.cost : 0), 0), 0);
+  const estTotal = data.budget?.total ?? (stopCostSum > 0 ? stopCostSum : undefined);
+  let busiestIdx = 0;
+  days.forEach((d, i) => {
+    if (d.stops.length > days[busiestIdx].stops.length) busiestIdx = i;
+  });
+  const transportLegs = days.reduce((n, d) => n + d.stops.filter(isTransportStop).length, 0);
+
   return (
     <Surface
       accent={theme.accent}
@@ -523,6 +533,29 @@ export const ItineraryCard: React.FC<{ data: ItineraryArtifact }> = ({ data }) =
       }
       footer={<BudgetFooter data={data} currency={currency} />}
     >
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-[var(--ds-hairline-soft)] px-3 py-2 text-[11px] text-[var(--ds-muted)]">
+        <span>
+          <span className="font-semibold text-[var(--ds-ink)]">{days.length}</span> day{days.length === 1 ? '' : 's'}
+        </span>
+        <span>
+          <span className="font-semibold tabular-nums text-[var(--ds-ink)]">{totalStops}</span> stop{totalStops === 1 ? '' : 's'}
+        </span>
+        {estTotal != null && (
+          <span>
+            <span className="font-semibold tabular-nums text-[var(--ds-ink)]">{formatPrice(estTotal, currency)}</span> est.
+          </span>
+        )}
+        {days.length > 1 && days[busiestIdx]?.stops.length > 1 && (
+          <span>
+            Busiest <span className="font-semibold text-[var(--ds-ink)]">{days[busiestIdx].label ?? `Day ${busiestIdx + 1}`}</span>
+          </span>
+        )}
+        {transportLegs > 0 && (
+          <span>
+            <span className="font-semibold tabular-nums text-[var(--ds-ink)]">{transportLegs}</span> transport leg{transportLegs === 1 ? '' : 's'}
+          </span>
+        )}
+      </div>
       {data.weather?.daily && data.weather.daily.length > 0 && (
         <div className="px-3 pb-2">
           <ForecastStrip daily={data.weather.daily} />

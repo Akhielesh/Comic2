@@ -36,7 +36,7 @@ import { TRAVEL_WIDGET_TOOLS } from './travelWidgets.js';
 import { PRODUCTIVITY_TOOLS } from './productivity.js';
 import { REFRESHABLE_TOOLS, type ChatArtifact } from '../../../../apiTypes.js';
 import { generateAppTool } from './codeStudio.js';
-import { generativeUiTool } from './generativeUi.js';
+import { generativeUiTool, renderReactTool } from './generativeUi.js';
 import { convertDataTool } from './convertData.js';
 import { analyzeDataTool } from './analyzeData.js';
 import { transformDataTool } from './transformData.js';
@@ -199,10 +199,21 @@ const videoSearchTool: ChatTool = {
   }
 };
 
+// Great-circle distance (km) between two lat/lng points — used to decide whether a
+// leg is a short hop (straight line) or a flight-scale hop (drawn as a curved arc).
+const legKm = (a: { lat: number; lng: number }, b: { lat: number; lng: number }): number => {
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((a.lat * Math.PI) / 180) * Math.cos((b.lat * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
+};
+
 const mapTool: ChatTool = {
   name: 'show_map',
   description:
-    'Show an interactive map. Use whenever the user asks about a location, place, directions/route between places, "where is…", or wants to see somewhere on a map. Pass the place names; they are geocoded and shown as markers (in order) in a side panel. Keep your text brief and let the map carry it.',
+    'Show an interactive map. Use whenever the user asks about a location, place, directions/route between places, "where is…", or wants to see somewhere on a map. Pass the place names; they are geocoded and shown as markers (in order) in a side panel. Set route:true to connect them in order — long, flight-scale legs render as curved arcs automatically. Keep your text brief and let the map carry it.',
   parameters: {
     type: 'object',
     properties: {
@@ -222,11 +233,21 @@ const mapTool: ChatTool = {
     try {
       const markers = await geocodePlaces(places, signal);
       if (!markers.length) return { content: `Couldn't locate any of: ${places.join(', ')}.` };
-      const route = args?.route && markers.length > 1 ? markers.map((m) => ({ lat: m.lat, lng: m.lng })) : undefined;
+      // Connect the stops as per-leg segments so a flight-scale hop (> ~600 km) bows
+      // into a dashed curved arc while short legs stay straight — one polished route
+      // instead of a single straight line cutting across the globe.
+      const segments =
+        args?.route && markers.length > 1
+          ? markers.slice(1).map((m, i) => {
+              const a = markers[i];
+              const longHop = legKm(a, m) > 600;
+              return { points: [{ lat: a.lat, lng: a.lng }, { lat: m.lat, lng: m.lng }], arc: longHop, dashed: longHop };
+            })
+          : undefined;
       const content = `Showing a map with ${markers.length} location(s): ${markers.map((m) => m.label).join(', ')}. The interactive map is shown to the user.`;
       return {
         content,
-        artifacts: [{ type: 'map', data: { title: typeof args?.title === 'string' ? args.title : undefined, markers, route } }]
+        artifacts: [{ type: 'map', data: { title: typeof args?.title === 'string' ? args.title : undefined, markers, segments } }]
       };
     } catch (err) {
       return { content: `Map lookup failed: ${(err as Error)?.message || 'unknown error'}.` };
@@ -1072,6 +1093,7 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   show_metrics: metricsTool,
   create_dashboard: dashboardTool,
   render_ui: generativeUiTool,
+  render_react: renderReactTool,
   convert_data: convertDataTool,
   analyze_data: analyzeDataTool,
   transform_data: transformDataTool,

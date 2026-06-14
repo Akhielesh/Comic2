@@ -535,6 +535,76 @@ const getStockQuoteUncached = async (trimmed: string, signal?: AbortSignal): Pro
   }
 };
 
+/** Price history per range for ONE symbol, WITHOUT the heavy enrichment (peers,
+ * headlines, fundamentals) — for multi-symbol comparisons that only need the lines. */
+export interface StockRangeQuote {
+  symbol: string;
+  name?: string;
+  currency?: string;
+  last?: number;
+  ranges?: Partial<Record<StockRange, StockPoint[]>>;
+  /** ~30 closes fallback when ranges are unavailable (Stooq path). */
+  series?: StockPoint[];
+}
+
+const rangesCache = new TtlCache<StockRangeQuote>(60_000, 300);
+
+/** Bucketed price history for one asset, cheap enough to fan out across a comparison.
+ * Same range windows as get_stock, but skips peers/news/fundamentals. */
+export const getStockRanges = async (rawSymbol: string, signal?: AbortSignal): Promise<StockRangeQuote> => {
+  const trimmed = rawSymbol?.trim();
+  if (!trimmed) throw new Error('No ticker symbol was provided.');
+  void signal;
+  return rangesCache.getOrSet(trimmed.toLowerCase(), () => getStockRangesUncached(trimmed, undefined));
+};
+
+const getStockRangesUncached = async (trimmed: string, signal?: AbortSignal): Promise<StockRangeQuote> => {
+  const resolved = resolveMarketSymbol(trimmed);
+  const symbol = yahooSymbol(resolved);
+  const friendly = FRIENDLY_NAMES[resolved];
+  try {
+    const [intradayR, dailyR, maxR] = await Promise.allSettled([
+      yfChart(symbol, '1d', '2m', signal),
+      yfChart(symbol, '5y', '1d', signal),
+      yfChart(symbol, 'max', '1mo', signal)
+    ]);
+    const intraday = intradayR.status === 'fulfilled' ? intradayR.value : undefined;
+    const daily = dailyR.status === 'fulfilled' ? dailyR.value : undefined;
+    const max = maxR.status === 'fulfilled' ? maxR.value : undefined;
+    const primary = intraday || daily || max;
+    if (!primary) throw new Error('Yahoo chart unavailable');
+    const meta = primary.meta;
+    const last = num(meta.regularMarketPrice) ?? daily?.points.at(-1)?.close ?? intraday?.points.at(-1)?.close;
+    const dailyPts = daily?.points ?? [];
+    const ranges: Partial<Record<StockRange, StockPoint[]>> = {};
+    if (intraday && intraday.points.length > 1) ranges['1D'] = intraday.points;
+    if (dailyPts.length > 1) {
+      ranges['5D'] = sliceTail(dailyPts, 5);
+      ranges['1M'] = sliceTail(dailyPts, 22);
+      ranges['6M'] = sliceTail(dailyPts, 126);
+      ranges['1Y'] = sliceTail(dailyPts, 252);
+      ranges['5Y'] = dailyPts;
+    }
+    if (max && max.points.length > 1) ranges['MAX'] = max.points;
+    const name =
+      friendly ||
+      (typeof meta.shortName === 'string' && meta.shortName) ||
+      (typeof meta.longName === 'string' ? (meta.longName as string) : undefined) ||
+      symbol;
+    return {
+      symbol,
+      name,
+      currency: typeof meta.currency === 'string' ? meta.currency : undefined,
+      last,
+      ranges: Object.keys(ranges).length ? ranges : undefined
+    };
+  } catch {
+    // Stooq fallback: a basic quote with ~30 daily closes as `series`.
+    const q = await getStooqQuote(resolved, signal);
+    return { symbol: q.symbol, name: friendly || q.name, currency: q.currency, last: q.price, series: q.series };
+  }
+};
+
 /** A trimmed quote for building watchlists/heatmaps where the full enrichment
  * (fundamentals, peers, headlines) would be too slow across many symbols. */
 export interface LightQuote {

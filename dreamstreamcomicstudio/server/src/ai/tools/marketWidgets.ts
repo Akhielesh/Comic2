@@ -25,7 +25,7 @@ import type {
   StockComparisonSeries,
   StockRange
 } from '../../../../apiTypes.js';
-import { getLightQuote, getStockQuote } from './stocks.js';
+import { getLightQuote, getStockRanges } from './stocks.js';
 import { fetchJson, fetchText } from './http.js';
 import { TtlCache } from '../../lib/cache.js';
 
@@ -612,13 +612,13 @@ export const compareStocksTool: ChatTool = {
     if (symbols.length < 2) {
       return { content: 'A comparison needs at least two assets. Ask the user which assets to compare, or use get_stock for a single asset in depth.' };
     }
-    const settled = await Promise.allSettled(symbols.map((s) => getStockQuote(s, signal)));
+    const settled = await Promise.allSettled(symbols.map((s) => getStockRanges(s, signal)));
     const series: StockComparisonSeries[] = [];
     const failed: string[] = [];
     settled.forEach((r, i) => {
       if (r.status === 'fulfilled') {
         const q = r.value;
-        series.push({ symbol: q.symbol, name: q.name, last: q.price, currency: q.currency, ranges: q.ranges, series: q.series });
+        series.push({ symbol: q.symbol, name: q.name, last: q.last, currency: q.currency, ranges: q.ranges, series: q.series });
       } else {
         failed.push(symbols[i]);
       }
