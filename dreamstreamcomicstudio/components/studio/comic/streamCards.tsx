@@ -6,6 +6,7 @@
 
 import React from 'react';
 import type { ComicAgentCard, ComicState } from '../../../types';
+import { castTierLabel, resolveCastTier } from '../../../services/castTiers';
 import {
   AgentThinking,
   CountUp,
@@ -125,9 +126,12 @@ const StyleCard: React.FC<{ state: ComicState; card: ComicAgentCard; h: StreamCa
 const CastCard: React.FC<{ state: ComicState; h: StreamCardHandlers }> = ({ state, h }) => {
   const chars = state.characters || [];
   const entities = [
-    ...chars.map((c, i) => ({ id: c.id, name: c.name, tier: i === 0 ? 'lead' : 'support', ready: (c.referenceImageIds?.length || 0) > 0 })),
-    ...(state.locations || []).map((l) => ({ id: l.id, name: l.name, tier: 'extra', ready: true })),
-  ].slice(0, 6);
+    ...chars.map((c, i) => {
+      const tier = resolveCastTier(c, i);
+      return { id: c.id, name: c.name, tier, imageUrl: c.imageUrl, ready: !!c.imageUrl || (c.referenceImageIds?.length || 0) > 0 };
+    }),
+    ...(state.locations || []).map((l) => ({ id: l.id, name: l.name, tier: 'extra' as const, imageUrl: l.imageUrl, ready: !!l.imageUrl })),
+  ].slice(0, 8);
   return (
     <Surface title="Cast" right={<span className="text-[12px] text-[var(--ds-muted)]">{entities.filter((e) => e.ready).length} of {entities.length} sheets ready</span>}>
       {entities.length === 0 ? (
@@ -136,11 +140,11 @@ const CastCard: React.FC<{ state: ComicState; h: StreamCardHandlers }> = ({ stat
         <div className="flex flex-wrap gap-4">
           {entities.map((e) => (
             <button key={e.id} type="button" onClick={() => h.onEditEntity?.(e.id)} className="flex w-20 flex-col items-center gap-1.5 text-center">
-              <ImageDevelop active={e.ready} className="h-16 w-16" rounded="rounded-2xl">
+              <ImageDevelop src={e.imageUrl} active={e.ready} className="h-16 w-16" rounded="rounded-2xl">
                 <div className="h-16 w-16 rounded-2xl" style={{ background: TIER_TINTS[e.tier] }} />
               </ImageDevelop>
-              <span className="truncate text-[12px] font-semibold text-[var(--ds-ink)]">{e.name}</span>
-              <Pill accent={e.tier === 'lead'}>{e.ready ? e.tier : 'queued'}</Pill>
+              <span className="w-full truncate text-[12px] font-semibold text-[var(--ds-ink)]">{e.name}</span>
+              <Pill accent={e.tier === 'lead'}>{e.ready ? castTierLabel(e.tier) : 'queued'}</Pill>
             </button>
           ))}
         </div>
