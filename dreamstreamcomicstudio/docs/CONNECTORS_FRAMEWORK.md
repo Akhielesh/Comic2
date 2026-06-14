@@ -163,6 +163,10 @@ by sync status, per-connection, and a GIN FTS index over title/snippet/content_t
 
 ## 5. OAuth + security
 
+> **Operator setup:** exact, copy-paste provider runbooks live in
+> [`connectors/`](./connectors/README.md) — start with
+> [`connectors/google-setup.md`](./connectors/google-setup.md).
+
 1. `POST /api/connectors/:id/connect` → connector `initiate()` builds the Google consent
    URL with **PKCE (S256)**, `access_type=offline`, least-privilege scopes. The PKCE
    `code_verifier` is stored **encrypted**, keyed by a random one-time `state` nonce
