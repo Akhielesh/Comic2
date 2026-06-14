@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  confirmGateNeeded,
   makeDefaultComicAgentSettings,
   normalizeComicAgentSettings,
   prefersStrictConsistency,
@@ -40,5 +41,16 @@ describe("comicAgentSettings", () => {
     expect(prefersStrictConsistency(undefined)).toBe(false);
     expect(prefersStrictConsistency({ consistencyPolicy: "strict" })).toBe(true);
     expect(prefersStrictConsistency({ consistencyPolicy: "bogus" as never })).toBe(false);
+  });
+
+  it("gates spend per confirm policy", () => {
+    // always → always gate
+    expect(confirmGateNeeded({ confirmPolicy: "always" }, 0.01)).toBe(true);
+    // big_spends → gate over the $0.50 threshold, not under
+    expect(confirmGateNeeded({ confirmPolicy: "big_spends" }, 0.40)).toBe(false);
+    expect(confirmGateNeeded({ confirmPolicy: "big_spends" }, 0.80)).toBe(true);
+    // never → only gate over an explicit budget cap
+    expect(confirmGateNeeded({ confirmPolicy: "never" }, 5)).toBe(false);
+    expect(confirmGateNeeded({ confirmPolicy: "never", budgetCapUsd: 1 }, 2)).toBe(true);
   });
 });

@@ -21,6 +21,13 @@ export interface BeatPlan {
 
 const MAX_PANELS_PER_BEAT = 8;
 
+/** Conservative per-panel image price used for pre-spend estimates in the plan/gate UI. */
+export const PER_PANEL_USD = 0.025;
+
+/** Estimated USD for a comic of `totalPanels` panels (floor of $0.05 so it never reads $0.00). */
+export const estimateComicCostUsd = (totalPanels: number): number =>
+  Math.round(Math.max(0.05, totalPanels * PER_PANEL_USD) * 100) / 100;
+
 /**
  * Deterministic beat plan. `panelsPerPage` defaults to 3; `pageCount` 0/undefined means
  * "auto" (≈3 panels per scene). The target total is spread across scenes (earlier scenes

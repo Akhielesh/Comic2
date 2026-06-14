@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { planBeats } from './beatPlanner';
+import { estimateComicCostUsd, planBeats } from './beatPlanner';
 import type { Scene } from '../types';
 
 const scenes = (n: number): Scene[] =>
@@ -36,5 +36,12 @@ describe('planBeats', () => {
     const plan = planBeats(scenes(5), 1, 1); // target max(5, 1) = 5 across 5 scenes => 1 each
     expect(plan.beats).toHaveLength(5);
     expect(plan.beats.every((b) => b.panelCount >= 1)).toBe(true);
+  });
+});
+
+describe('estimateComicCostUsd', () => {
+  it('prices per panel with a $0.05 floor', () => {
+    expect(estimateComicCostUsd(0)).toBe(0.05);
+    expect(estimateComicCostUsd(16)).toBe(0.4);
   });
 });

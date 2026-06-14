@@ -43,6 +43,23 @@ export const normalizeComicAgentSettings = (settings?: Partial<ComicAgentSetting
 export const prefersStrictConsistency = (settings?: Partial<ComicAgentSettings> | null): boolean =>
   normalizeComicAgentSettings(settings).consistencyPolicy === 'strict';
 
+/** Default "big spend" threshold (USD) above which 'big_spends' mode pauses for confirmation. */
+export const DEFAULT_BIG_SPEND_THRESHOLD_USD = 0.5;
+
+/**
+ * Whether a run costing `estimateUsd` should pause for an explicit confirm gate:
+ * - always   → always gate
+ * - big_spends → gate over the threshold, or over the budget cap
+ * - never    → gate only if it would exceed the budget cap
+ */
+export const confirmGateNeeded = (settings: Partial<ComicAgentSettings> | null | undefined, estimateUsd: number): boolean => {
+  const s = normalizeComicAgentSettings(settings);
+  const overCap = typeof s.budgetCapUsd === 'number' && estimateUsd > s.budgetCapUsd;
+  if (s.confirmPolicy === 'always') return true;
+  if (s.confirmPolicy === 'never') return overCap;
+  return estimateUsd > DEFAULT_BIG_SPEND_THRESHOLD_USD || overCap;
+};
+
 export const consistencyLabel = (policy: ConsistencyPolicy) => (policy === 'strict' ? 'Strict (one model)' : 'Resilient (finish anyway)');
 
 export const agentConfirmLabel = (policy: AgentConfirmPolicy) => {
