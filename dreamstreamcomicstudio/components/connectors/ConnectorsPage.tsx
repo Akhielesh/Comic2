@@ -1,11 +1,12 @@
 // ============================================================================
-// Connectors — a top-level primary nav section (NOT under Settings/Tools)
+// Connectors — managed in Chat Studio → Settings → Connectors
 // ============================================================================
 //
-// Catalog grid of available connectors + management of the user's live connections
-// (status, scopes, force re-sync, reconnect, disconnect). Built on the house "calm
-// studio" design tokens (--ds-*). OAuth uses a consent popup that posts its result
-// back to this page; API-key connectors connect inline.
+// macOS-settings-style grouped rows (not a marketing card grid) so it sits cleanly
+// inside the settings modal. Catalog + live-connection management (status, force
+// re-sync, reconnect, disconnect). Built on the calm-studio --ds-* tokens via the
+// shadcn-pattern primitives in ./ui. OAuth uses a consent popup that posts its result
+// back (relayed globally in App.tsx); API-key connectors connect inline.
 // ============================================================================
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -18,10 +19,12 @@ import {
   Plus,
   AlertTriangle,
   CheckCircle2,
+  Settings2,
   X
 } from 'lucide-react';
 import { Skeleton } from '../studio/kit/Shimmer';
 import { ConnectorIcon, statusVisual } from './connectorIcons';
+import { Button, Group, IconTile, Section } from './ui';
 import { ConnectDialog } from './ConnectDialog';
 import { GoogleConnectDialog } from './GoogleConnectDialog';
 import {
@@ -95,25 +98,15 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
     void load();
   }, [load]);
 
-  // If THIS page is the OAuth popup (it loaded the SPA after the callback redirect),
-  // relay the result to the opener and close. Otherwise, if a full-page redirect
-  // carried the params, surface them and clean the URL.
+  // Full-page fallback: if a full-page redirect (popup blocked) landed back here with a
+  // result while this view is mounted, surface it and clean the URL. (The popup path is
+  // relayed globally in App.tsx.)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const connected = params.get('connected');
     const error = params.get('connector_error');
     if (!connected && !error) return;
-
-    if (window.opener && window.opener !== window) {
-      try {
-        window.opener.postMessage({ type: OAUTH_RESULT, connected, error }, window.location.origin);
-      } catch {
-        /* ignore */
-      }
-      window.close();
-      return;
-    }
-    // Full-page fallback: toast + scrub the params so a refresh doesn't repeat them.
+    if (window.opener && window.opener !== window) return; // handled globally in App.tsx
     if (error) pushToast('error', `Couldn't connect: ${humanizeError(error)}`);
     else if (connected) pushToast('success', `${connected.replace(/_/g, ' ')} connected`);
     params.delete('connected');
@@ -149,9 +142,6 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
       const timer = setInterval(() => {
         if (popup.closed) {
           clearInterval(timer);
-          // The message handler usually fires first; this clears state if the user
-          // simply closed the window, and re-syncs in case the connection landed.
-          setConnecting((c) => c);
           setTimeout(() => setConnecting(null), 300);
           void refreshConnections();
         }
@@ -172,7 +162,6 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
           await refreshConnections();
           return;
         }
-        // OAuth: open the consent popup; fall back to a full redirect if blocked.
         setDialogEntry(null);
         const popup = window.open(result.authorizationUrl, 'connector_oauth', 'width=520,height=700');
         if (!popup) {
@@ -211,7 +200,6 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
           }
           popupRef.current = popup;
           watchPopupClose(popup);
-          // Result arrives via the postMessage listener (clears state + refreshes).
         } else {
           setGoogleDialogOpen(false);
           setConnecting(null);
@@ -232,7 +220,6 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
       try {
         await syncConnection(conn.id);
         pushToast('info', 'Sync started');
-        // Reflect the 'syncing' state quickly, then poll once shortly after.
         await refreshConnections();
         setTimeout(() => void refreshConnections(), 4000);
       } catch (err) {
@@ -279,8 +266,8 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
     return map;
   }, [connections]);
 
-  // Google OAuth services group into ONE card + one consent; everything else stays a
-  // standalone card.
+  // Google OAuth services group into ONE row + one consent; everything else stays a
+  // standalone row.
   const googleServices = useMemo(() => (catalog || []).filter((c) => c.providerGroup === 'google'), [catalog]);
   const otherCatalog = useMemo(() => (catalog || []).filter((c) => c.providerGroup !== 'google'), [catalog]);
   const googleConnectedIds = useMemo(() => {
@@ -291,111 +278,111 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
   const googleConfigured = googleServices.some((g) => g.configured);
 
   const isLoading = catalog === null || connections === null;
+  const hasConnections = (connections?.length ?? 0) > 0;
 
   return (
     <div className={embedded ? 'text-[var(--ds-ink)]' : 'min-h-screen bg-[var(--ds-canvas)] text-[var(--ds-ink)]'}>
-      <div className={embedded ? '' : 'mx-auto max-w-5xl px-4 py-8 sm:px-6 md:py-10'}>
-        {/* Header — full-page only; in the Chat settings tab the modal supplies the title. */}
+      <div className={embedded ? '' : 'mx-auto max-w-2xl px-4 py-8 sm:px-6 md:py-10'}>
         {!embedded && (
-        <header className="mb-8 flex items-start justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <Plug className="h-6 w-6 text-[var(--ds-accent)]" aria-hidden />
-              <h1 className="text-2xl font-semibold tracking-tight">Connectors</h1>
+          <header className="mb-6 flex items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <Plug className="h-6 w-6 text-[var(--ds-accent)]" aria-hidden />
+                <h1 className="text-2xl font-semibold tracking-tight">Connectors</h1>
+              </div>
+              <p className="mt-1 max-w-xl text-sm text-[var(--ds-muted)]">
+                Connect your accounts so the assistant can use that data in chat, analysis and dashboards.
+              </p>
             </div>
-            <p className="mt-1 max-w-xl text-sm text-[var(--ds-muted)]">
-              Connect your accounts — Gmail, Maps and more — so the studio can use that data in chat, analysis and dashboards.
-            </p>
-          </div>
-          {onBack && (
-            <button
-              type="button"
-              onClick={onBack}
-              className="rounded-xl border border-[var(--ds-hairline)] px-3 py-1.5 text-sm text-[var(--ds-muted)] hover:bg-[var(--ds-hover)] hover:text-[var(--ds-ink)]"
-            >
-              Back
-            </button>
-          )}
-        </header>
+            {onBack && (
+              <Button variant="outline" size="sm" onClick={onBack}>
+                Back
+              </Button>
+            )}
+          </header>
         )}
 
         {loadError && (
-          <div className="mb-6 flex items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-700">
-            <AlertTriangle className="h-4 w-4" /> {loadError}
+          <div className="mb-5 flex items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-700">
+            <AlertTriangle className="h-4 w-4 shrink-0" /> {loadError}
             <button onClick={() => void load()} className="ml-auto font-medium underline">
               Retry
             </button>
           </div>
         )}
 
-        {/* Your connections */}
-        {!isLoading && (connections?.length ?? 0) > 0 && (
-          <section className="mb-10" aria-labelledby="your-connections">
-            <h2 id="your-connections" className="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--ds-muted)]">
-              Your connections
-            </h2>
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              {connections!.map((conn) => (
-                <ConnectionCard
-                  key={conn.id}
-                  conn={conn}
-                  entry={catalog?.find((c) => c.id === conn.connectorId)}
-                  busy={busyConn === conn.id}
-                  onSync={() => handleSync(conn)}
-                  onDisconnect={() => handleDisconnect(conn)}
-                  onReconnect={() => handleReconnect(conn)}
-                />
-              ))}
-            </div>
-          </section>
-        )}
-
-        {/* Catalog */}
-        <section aria-labelledby="catalog-heading">
-          <h2 id="catalog-heading" className="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--ds-muted)]">
-            Available connectors
-          </h2>
-
-          {isLoading ? (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-4">
-                  <Skeleton className="h-10 w-10" />
-                  <Skeleton className="mt-3 h-4 w-1/2" />
-                  <Skeleton className="mt-2 h-3 w-full" />
-                  <Skeleton className="mt-1.5 h-3 w-2/3" />
-                  <Skeleton className="mt-4 h-9 w-full" pill />
+        {isLoading ? (
+          <Group>
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="flex items-center gap-3 p-4">
+                <Skeleton className="h-9 w-9" />
+                <div className="flex-1">
+                  <Skeleton className="h-3.5 w-1/3" />
+                  <Skeleton className="mt-2 h-3 w-2/3" />
                 </div>
-              ))}
-            </div>
-          ) : catalog && catalog.length > 0 ? (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {googleServices.length > 0 && (
-                <GoogleGroupCard
-                  services={googleServices}
-                  connectedCount={googleConnectedIds.size}
-                  configured={googleConfigured}
-                  connecting={connecting === 'google'}
-                  onManage={() => setGoogleDialogOpen(true)}
-                />
+                <Skeleton className="h-8 w-20" pill />
+              </div>
+            ))}
+          </Group>
+        ) : (
+          <>
+            {hasConnections && (
+              <Section
+                title="Your connections"
+                subtitle="Accounts the studio can read on your behalf. Sync, reconnect or disconnect anytime."
+              >
+                <Group>
+                  {connections!.map((conn) => (
+                    <ConnectionRow
+                      key={conn.id}
+                      conn={conn}
+                      entry={catalog?.find((c) => c.id === conn.connectorId)}
+                      busy={busyConn === conn.id}
+                      onSync={() => handleSync(conn)}
+                      onDisconnect={() => handleDisconnect(conn)}
+                      onReconnect={() => handleReconnect(conn)}
+                    />
+                  ))}
+                </Group>
+              </Section>
+            )}
+
+            <Section
+              title="Add a connection"
+              subtitle="Give the assistant access to your data — read-only, encrypted, revocable."
+            >
+              {catalog && catalog.length > 0 ? (
+                <Group>
+                  {googleServices.length > 0 && (
+                    <GoogleRow
+                      services={googleServices}
+                      connectedIds={googleConnectedIds}
+                      configured={googleConfigured}
+                      connecting={connecting === 'google'}
+                      onManage={() => setGoogleDialogOpen(true)}
+                    />
+                  )}
+                  {otherCatalog.map((entry) => (
+                    <ProviderRow
+                      key={entry.id}
+                      entry={entry}
+                      connectionCount={connectionsByConnector.get(entry.id)?.length ?? 0}
+                      connecting={connecting === entry.id}
+                      onConnect={() => setDialogEntry(entry)}
+                    />
+                  ))}
+                </Group>
+              ) : (
+                <Group>
+                  <div className="p-8 text-center">
+                    <Plug className="mx-auto h-7 w-7 text-[var(--ds-faint)]" aria-hidden />
+                    <p className="mt-2 text-sm text-[var(--ds-muted)]">No connectors are available yet.</p>
+                  </div>
+                </Group>
               )}
-              {otherCatalog.map((entry) => (
-                <CatalogCard
-                  key={entry.id}
-                  entry={entry}
-                  connectionCount={connectionsByConnector.get(entry.id)?.length ?? 0}
-                  connecting={connecting === entry.id}
-                  onConnect={() => setDialogEntry(entry)}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="rounded-2xl border border-dashed border-[var(--ds-hairline)] p-10 text-center">
-              <Plug className="mx-auto h-8 w-8 text-[var(--ds-faint)]" aria-hidden />
-              <p className="mt-3 text-sm text-[var(--ds-muted)]">No connectors are available yet.</p>
-            </div>
-          )}
-        </section>
+            </Section>
+          </>
+        )}
       </div>
 
       {dialogEntry && (
@@ -419,7 +406,7 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
       )}
 
       {/* Toasts */}
-      <div className="pointer-events-none fixed bottom-4 right-4 z-[110] flex w-full max-w-sm flex-col gap-2">
+      <div className="pointer-events-none fixed bottom-4 right-4 z-[120] flex w-full max-w-sm flex-col gap-2">
         {toasts.map((t) => (
           <div
             key={t.id}
@@ -452,9 +439,81 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
   );
 };
 
-// ---- Catalog card ----------------------------------------------------------
+// ---- small inline bits ------------------------------------------------------
 
-const CatalogCard: React.FC<{
+const ConnectedBadge: React.FC<{ count?: number }> = ({ count = 1 }) => (
+  <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+    <CheckCircle2 className="h-3 w-3" /> Connected{count > 1 ? ` · ${count}` : ''}
+  </span>
+);
+
+const NotConfiguredBadge: React.FC = () => (
+  <span
+    title="The server's Google OAuth client isn't configured yet."
+    className="shrink-0 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700"
+  >
+    Unavailable
+  </span>
+);
+
+// ---- Google group row (one row, one consent for the whole suite) ------------
+
+const GoogleRow: React.FC<{
+  services: CatalogEntry[];
+  connectedIds: Set<string>;
+  configured: boolean;
+  connecting: boolean;
+  onManage: () => void;
+}> = ({ services, connectedIds, configured, connecting, onManage }) => {
+  const connected = connectedIds.size > 0;
+  return (
+    <div className="flex items-start gap-3 p-3 sm:p-4">
+      <IconTile className="h-10 w-10">
+        <Plug className="h-5 w-5" aria-hidden />
+      </IconTile>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-semibold">Google</span>
+          {connected ? <ConnectedBadge count={connectedIds.size} /> : !configured && <NotConfiguredBadge />}
+        </div>
+        <p className="mt-0.5 text-xs text-[var(--ds-muted)]">
+          Gmail, Drive, Calendar, Sheets &amp; YouTube — one sign-in for the services you pick.
+        </p>
+        <div className="mt-2 flex flex-wrap gap-1">
+          {services.map((s) => {
+            const on = connectedIds.has(s.id);
+            return (
+              <span
+                key={s.id}
+                title={`${s.displayName}${on ? ' (connected)' : ''}`}
+                className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] ${
+                  on ? 'bg-emerald-500/10 text-emerald-700' : 'bg-[var(--ds-well)] text-[var(--ds-muted)]'
+                }`}
+              >
+                <ConnectorIcon name={s.icon} className="h-3 w-3" />
+                {s.displayName.replace(/^Google /, '')}
+              </span>
+            );
+          })}
+        </div>
+      </div>
+      <Button
+        size="sm"
+        variant={connected ? 'outline' : 'primary'}
+        onClick={onManage}
+        disabled={connecting}
+        className="mt-0.5 shrink-0"
+      >
+        {connecting ? <Loader2 className="animate-spin" /> : connected ? <Settings2 /> : <Plug />}
+        {connected ? 'Manage' : 'Connect'}
+      </Button>
+    </div>
+  );
+};
+
+// ---- Standalone provider row (Maps, …) --------------------------------------
+
+const ProviderRow: React.FC<{
   entry: CatalogEntry;
   connectionCount: number;
   connecting: boolean;
@@ -462,100 +521,37 @@ const CatalogCard: React.FC<{
 }> = ({ entry, connectionCount, connecting, onConnect }) => {
   const connected = connectionCount > 0;
   return (
-    <div className="flex flex-col rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors hover:border-[var(--ds-hairline)]/80">
-      <div className="flex items-start justify-between">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#D97757]/10 text-[var(--ds-accent)]">
-          <ConnectorIcon name={entry.icon} className="h-5 w-5" />
-        </div>
-        {connected && (
-          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700">
-            <CheckCircle2 className="h-3 w-3" /> Connected{connectionCount > 1 ? ` ·${connectionCount}` : ''}
+    <div className="flex items-center gap-3 p-3 sm:p-4">
+      <IconTile className="h-10 w-10">
+        <ConnectorIcon name={entry.icon} className="h-5 w-5" />
+      </IconTile>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-semibold">{entry.displayName}</span>
+          {connected ? <ConnectedBadge count={connectionCount} /> : !entry.configured && <NotConfiguredBadge />}
+          <span className="rounded bg-[var(--ds-well)] px-1.5 py-0.5 text-[10px] text-[var(--ds-muted)]">
+            {entry.authType === 'api_key' ? 'API key' : 'OAuth'}
           </span>
-        )}
+        </div>
+        <p className="mt-0.5 line-clamp-2 text-xs text-[var(--ds-muted)]">{entry.description}</p>
       </div>
-      <h3 className="mt-3 text-base font-semibold">{entry.displayName}</h3>
-      <p className="mt-1 flex-1 text-sm text-[var(--ds-muted)]">{entry.description}</p>
-      <div className="mt-2 flex flex-wrap gap-1">
-        <span className="rounded-md bg-[var(--ds-well)] px-1.5 py-0.5 text-[11px] text-[var(--ds-muted)]">
-          {entry.authType === 'api_key' ? 'API key' : 'OAuth'}
-        </span>
-        {entry.capabilities.syncable && (
-          <span className="rounded-md bg-[var(--ds-well)] px-1.5 py-0.5 text-[11px] text-[var(--ds-muted)]">Syncs</span>
-        )}
-        {entry.capabilities.realtime && (
-          <span className="rounded-md bg-[var(--ds-well)] px-1.5 py-0.5 text-[11px] text-[var(--ds-muted)]">Realtime</span>
-        )}
-      </div>
-      <button
-        type="button"
+      <Button
+        size="sm"
+        variant={connected ? 'outline' : 'primary'}
         onClick={onConnect}
         disabled={connecting}
-        className="mt-4 inline-flex items-center justify-center gap-2 rounded-xl bg-[var(--ds-accent)] px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[var(--ds-accent-hover)] focus-visible:ring-2 focus-visible:ring-[#D97757]/40 disabled:opacity-60"
+        className="shrink-0"
       >
-        {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : connected ? <Plus className="h-4 w-4" /> : <Plug className="h-4 w-4" />}
-        {connected ? 'Add account' : 'Connect'}
-      </button>
+        {connecting ? <Loader2 className="animate-spin" /> : connected ? <Plus /> : <Plug />}
+        {connected ? 'Add' : 'Connect'}
+      </Button>
     </div>
   );
 };
 
-// ---- Google group card (one card, one consent for the whole suite) ---------
+// ---- Connection (management) row --------------------------------------------
 
-const GoogleGroupCard: React.FC<{
-  services: CatalogEntry[];
-  connectedCount: number;
-  configured: boolean;
-  connecting: boolean;
-  onManage: () => void;
-}> = ({ services, connectedCount, configured, connecting, onManage }) => {
-  const connected = connectedCount > 0;
-  return (
-    <div className="flex flex-col rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)] sm:col-span-2">
-      <div className="flex items-start justify-between">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#D97757]/10 text-[var(--ds-accent)]">
-          <Plug className="h-5 w-5" aria-hidden />
-        </div>
-        {connected && (
-          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700">
-            <CheckCircle2 className="h-3 w-3" /> {connectedCount} connected
-          </span>
-        )}
-      </div>
-      <h3 className="mt-3 text-base font-semibold">Google</h3>
-      <p className="mt-1 flex-1 text-sm text-[var(--ds-muted)]">
-        Connect Gmail, Drive, Calendar, Sheets &amp; YouTube — one sign-in covers the services you pick, and you can
-        change your choices anytime.
-      </p>
-      <div className="mt-3 flex flex-wrap gap-1.5">
-        {services.map((s) => (
-          <span
-            key={s.id}
-            title={s.displayName}
-            className="flex h-7 w-7 items-center justify-center rounded-md bg-[var(--ds-well)] text-[var(--ds-muted)]"
-          >
-            <ConnectorIcon name={s.icon} className="h-4 w-4" />
-          </span>
-        ))}
-      </div>
-      <button
-        type="button"
-        onClick={onManage}
-        disabled={connecting}
-        className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--ds-accent)] px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[var(--ds-accent-hover)] focus-visible:ring-2 focus-visible:ring-[#D97757]/40 disabled:opacity-60 sm:w-auto sm:self-start sm:px-5"
-      >
-        {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plug className="h-4 w-4" />}
-        {connected ? 'Manage services' : 'Connect Google'}
-      </button>
-      {!configured && (
-        <p className="mt-2 text-xs text-amber-700">Needs the server's Google OAuth client to be configured.</p>
-      )}
-    </div>
-  );
-};
-
-// ---- Connection (management) card ------------------------------------------
-
-const ConnectionCard: React.FC<{
+const ConnectionRow: React.FC<{
   conn: ConnectionSummary;
   entry?: CatalogEntry;
   busy: boolean;
@@ -566,81 +562,65 @@ const ConnectionCard: React.FC<{
   const vis = statusVisual(conn.status);
   const StatusIcon = vis.Icon;
   const syncable = entry?.capabilities.syncable ?? false;
-  const [showScopes, setShowScopes] = useState(false);
+  const scopeSummary = conn.grantedScopes.map((s) => s.split('/').pop()).filter(Boolean).join(', ');
+  const meta = [
+    entry?.displayName || conn.connectorId,
+    conn.sync?.itemsSynced ? `${conn.sync.itemsSynced.toLocaleString()} items` : null,
+    conn.lastSyncAt ? `synced ${new Date(conn.lastSyncAt).toLocaleDateString()}` : 'not synced yet'
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
   return (
-    <div className="rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-4">
-      <div className="flex items-start gap-3">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#D97757]/10 text-[var(--ds-accent)]">
-          <ConnectorIcon name={entry?.icon || 'Plug'} className="h-4.5 w-4.5" />
+    <div className="flex items-center gap-3 p-3 sm:p-4">
+      <IconTile className="h-10 w-10">
+        <ConnectorIcon name={entry?.icon || 'Plug'} className="h-5 w-5" />
+      </IconTile>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="truncate text-sm font-medium" title={scopeSummary ? `Access: ${scopeSummary}` : undefined}>
+            {conn.accountLabel || conn.accountIdentifier}
+          </span>
+          <span className={`inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${vis.tint}`}>
+            <StatusIcon className={`h-3 w-3 ${conn.status === 'syncing' ? 'animate-spin' : ''}`} /> {vis.label}
+          </span>
         </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <p className="truncate text-sm font-semibold">{entry?.displayName || conn.connectorId}</p>
-            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${vis.tint}`}>
-              <StatusIcon className={`h-3 w-3 ${conn.status === 'syncing' ? 'animate-spin' : ''}`} /> {vis.label}
-            </span>
-          </div>
-          <p className="truncate text-xs text-[var(--ds-muted)]">{conn.accountLabel || conn.accountIdentifier}</p>
-          <p className="mt-1 text-[11px] text-[var(--ds-faint)]">
-            {conn.sync?.itemsSynced ? `${conn.sync.itemsSynced} items · ` : ''}
-            {conn.lastSyncAt ? `synced ${new Date(conn.lastSyncAt).toLocaleString()}` : 'not synced yet'}
+        <p className="truncate text-xs text-[var(--ds-muted)]">{meta}</p>
+        {conn.lastError && vis.needsReconnect && (
+          <p className="truncate text-[11px] text-amber-700" title={conn.lastError}>
+            {conn.lastError}
           </p>
-          {conn.lastError && vis.needsReconnect && (
-            <p className="mt-1 text-[11px] text-amber-700">{conn.lastError}</p>
-          )}
-          {conn.grantedScopes.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setShowScopes((s) => !s)}
-              aria-expanded={showScopes}
-              className="mt-1 text-[11px] text-[var(--ds-muted)] underline-offset-2 hover:underline"
-            >
-              {showScopes ? 'Hide' : 'View'} granted access
-            </button>
-          )}
-          {showScopes && (
-            <ul className="mt-1 space-y-0.5">
-              {conn.grantedScopes.map((s) => (
-                <li key={s} className="truncate text-[11px] text-[var(--ds-muted)]">
-                  • {s.split('/').pop()}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        )}
       </div>
-
-      <div className="mt-3 flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-1">
         {vis.needsReconnect ? (
-          <button
-            type="button"
-            onClick={onReconnect}
-            disabled={busy}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--ds-accent)] px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-[var(--ds-accent-hover)] disabled:opacity-60"
-          >
-            <RotateCw className="h-3.5 w-3.5" /> Reconnect
-          </button>
+          <Button size="sm" variant="primary" onClick={onReconnect} disabled={busy}>
+            <RotateCw /> Reconnect
+          </Button>
         ) : (
           syncable && (
-            <button
-              type="button"
+            <Button
+              size="icon"
+              variant="ghost"
+              title="Sync now"
+              aria-label="Sync now"
               onClick={onSync}
               disabled={busy || conn.status === 'syncing'}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--ds-hairline)] px-2.5 py-1.5 text-xs font-medium text-[var(--ds-ink)] hover:bg-[var(--ds-hover)] disabled:opacity-50"
             >
-              <RefreshCw className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`} /> Sync now
-            </button>
+              <RefreshCw className={busy ? 'animate-spin' : ''} />
+            </Button>
           )
         )}
-        <button
-          type="button"
+        <Button
+          size="icon"
+          variant="destructive"
+          title="Disconnect"
+          aria-label="Disconnect"
           onClick={onDisconnect}
           disabled={busy}
-          className="ml-auto inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-500/10 disabled:opacity-50"
         >
-          <Trash2 className="h-3.5 w-3.5" /> Disconnect
-        </button>
+          <Trash2 />
+        </Button>
       </div>
     </div>
   );
