@@ -185,7 +185,7 @@ export const NewsReaderPane: React.FC<{ item: NewsItem }> = ({ item }) => {
         onScroll={syncProgress}
         tabIndex={0}
         aria-label={`Article: ${item.title}`}
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-width:thin] focus:outline-none"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-auto [scrollbar-width:thin] focus:outline-none"
       >
         <article key={item.url} className="ds-news-reader-in px-4 pb-4 pt-3 sm:px-5">
           <h2 className="text-[17px] font-semibold leading-snug tracking-tight text-[var(--ds-ink)]">{title}</h2>

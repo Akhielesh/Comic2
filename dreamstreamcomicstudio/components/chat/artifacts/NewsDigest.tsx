@@ -260,7 +260,7 @@ export const NewsDigest: React.FC<{ data: NewsResultsArtifact }> = ({ data }) =>
       <ul
         role="listbox"
         aria-label="Stories"
-        className="min-h-0 w-[38%] min-w-[200px] shrink-0 divide-y divide-[var(--ds-hairline-soft)] overflow-y-auto overscroll-contain border-r border-[var(--ds-hairline-soft)] [scrollbar-width:thin]"
+        className="min-h-0 w-[38%] min-w-[200px] shrink-0 divide-y divide-[var(--ds-hairline-soft)] overflow-y-auto overscroll-auto border-r border-[var(--ds-hairline-soft)] [scrollbar-width:thin]"
       >
         {items.map((n, i) => {
           const selected = i === selectedIndex;

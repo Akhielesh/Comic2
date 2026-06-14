@@ -548,7 +548,10 @@ const TileCard: React.FC<{
       {hasCard ? (
         <>
           <div
-            className={effectiveHeight != null ? 'overflow-y-auto overscroll-contain [scrollbar-width:thin]' : undefined}
+            // overscroll-AUTO (not contain): once the tile's inner scroll reaches its
+            // top/bottom, the wheel chains to the page so a fixed-height widget inside a
+            // longer dashboard keeps scrolling the page instead of feeling stuck.
+            className={effectiveHeight != null ? 'overflow-y-auto overscroll-auto [scrollbar-width:thin]' : undefined}
             style={effectiveHeight != null ? { height: effectiveHeight } : undefined}
           >
             <DensityProvider value={tile.density}>{renderArtifactCard(artifact!)}</DensityProvider>
