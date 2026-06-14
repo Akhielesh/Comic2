@@ -1718,6 +1718,8 @@ export interface MapMarker {
   /** Coarse category for the pin glyph: food, cafe, bar, hotel, park, sight,
    *  shop, transit, flight, activity — anything else gets the default dot. */
   category?: string;
+  /** Pin color override (e.g. day-coded markers on a whole-trip map). Defaults to accent. */
+  color?: string;
 }
 /** Route summary shown as a chip on the map (mode + time + distance + tolls). */
 export interface MapRouteInfo {
@@ -1728,13 +1730,30 @@ export interface MapRouteInfo {
   /** Free-text toll estimate, e.g. "$25–40 tolls". */
   tollCost?: string;
 }
+/** One colored leg of a multi-segment route — e.g. a day's path on a whole-trip map,
+ *  or a flight drawn as a curved arc. Each segment animates in sequentially. */
+export interface MapRouteSegment {
+  /** Ordered points for this leg. */
+  points: { lat: number; lng: number }[];
+  /** Line color (defaults to the accent). */
+  color?: string;
+  /** Short legend label, e.g. "Day 1" or "Tokyo → Kyoto". */
+  label?: string;
+  /** Dashed line (used for flights/ferries and inter-day connectors). */
+  dashed?: boolean;
+  /** Bow the leg into a curved arc between its endpoints — for flights/long hops. */
+  arc?: boolean;
+}
 export interface MapArtifact {
   title?: string;
   markers: MapMarker[];
   /** Summary of the drawn route, rendered as a glass chip over the map. */
   routeInfo?: MapRouteInfo;
-  /** Ordered points for a drawn route/path between places, if any. */
+  /** Ordered points for a single drawn route/path between places, if any. */
   route?: { lat: number; lng: number }[];
+  /** Multiple colored legs (day-by-day trip route, flight arcs). When present they
+   *  draw in sequentially and a color legend is shown; coexists with `route`. */
+  segments?: MapRouteSegment[];
 }
 
 export interface StockPoint {

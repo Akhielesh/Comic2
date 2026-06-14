@@ -423,6 +423,28 @@ const mapArtifact: MapArtifact = {
   routeInfo: { mode: 'walk' }
 };
 
+// Multi-city trip overview: day-colored legs, a straight dashed connector, and a
+// curved dashed FLIGHT ARC — exercises the segment + arc + legend rendering.
+const tripMapDemo: MapArtifact = {
+  title: 'West-to-east trip',
+  markers: [
+    { lat: 37.8079, lng: -122.475, label: '1. Golden Gate', category: 'sight', color: '#3B82F6', description: 'Day 1 · San Francisco' },
+    { lat: 37.8087, lng: -122.4098, label: '2. Fisherman’s Wharf', category: 'food', color: '#3B82F6', description: 'Day 1' },
+    { lat: 37.7694, lng: -122.4862, label: '3. Golden Gate Park', category: 'park', color: '#3B82F6', description: 'Day 1' },
+    { lat: 34.1184, lng: -118.3004, label: '1. Griffith Observatory', category: 'sight', color: '#10b981', description: 'Day 2 · Los Angeles' },
+    { lat: 34.0099, lng: -118.496, label: '2. Santa Monica Pier', category: 'activity', color: '#10b981', description: 'Day 2' },
+    { lat: 40.7484, lng: -73.9857, label: '1. Empire State', category: 'sight', color: '#f59e0b', description: 'Day 3 · New York' },
+    { lat: 40.7812, lng: -73.9665, label: '2. Central Park', category: 'park', color: '#f59e0b', description: 'Day 3' }
+  ],
+  segments: [
+    { label: 'Day 1 · SF', color: '#3B82F6', points: [{ lat: 37.8079, lng: -122.475 }, { lat: 37.8087, lng: -122.4098 }, { lat: 37.7694, lng: -122.4862 }] },
+    { color: '#94a3b8', dashed: true, points: [{ lat: 37.7694, lng: -122.4862 }, { lat: 34.1184, lng: -118.3004 }] },
+    { label: 'Day 2 · LA', color: '#10b981', points: [{ lat: 34.1184, lng: -118.3004 }, { lat: 34.0099, lng: -118.496 }] },
+    { color: '#94a3b8', dashed: true, arc: true, points: [{ lat: 34.0099, lng: -118.496 }, { lat: 40.7484, lng: -73.9857 }] },
+    { label: 'Day 3 · NYC', color: '#f59e0b', points: [{ lat: 40.7484, lng: -73.9857 }, { lat: 40.7812, lng: -73.9665 }] }
+  ]
+};
+
 const directionsDemo: DirectionsArtifact = {
   origin: { label: 'Lincoln Memorial', lat: 38.8893, lng: -77.0502 },
   destination: { label: 'Georgetown Waterfront', lat: 38.9015, lng: -77.0633 },
@@ -1205,6 +1227,7 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'News digest (compact · source-branded · snippets)', type: 'news_results', category: 'News & knowledge', node: <NewsDigest data={news} /> },
   { title: 'Places (local) card', type: 'places_results', category: 'World & media', node: <PlacesResults data={places} /> },
   { title: 'Map (markers · route)', type: 'map', category: 'World & media', node: <MapArtifactCard data={mapArtifact} /> },
+  { title: 'Trip map (day-colored legs · flight arcs · sequential draw)', type: 'map', category: 'World & media', node: <MapArtifactCard data={tripMapDemo} /> },
   { title: 'Directions (drive/walk/bike toggle · animated route · alternatives)', type: 'directions', category: 'World & media', node: <DirectionsCard data={directionsDemo} /> },
   { title: 'Video results', type: 'video_results', category: 'World & media', node: <VideoResults data={videos} /> },
   { title: 'Agent swarm trace', type: 'swarm_trace', category: 'Agents & code', node: <SwarmTraceCard data={swarm} /> },

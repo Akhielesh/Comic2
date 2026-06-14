@@ -21,7 +21,7 @@ import {
   LayoutDashboard
 } from 'lucide-react';
 import { createDashboard } from '../../../services/customDashboards';
-import type { ItineraryArtifact, ItineraryDay, ItineraryStop, ItineraryStopKind, ItineraryTransport, MapArtifact } from '../../../apiTypes';
+import type { ItineraryArtifact, ItineraryDay, ItineraryStop, ItineraryStopKind, ItineraryTransport, MapArtifact, MapMarker, MapRouteSegment } from '../../../apiTypes';
 import { Surface, SurfaceTitle, SurfaceSubtitle, Expandable, useCompact, resolveTheme, formatPrice } from './kit';
 import { InlineMap } from './InlineMap';
 
@@ -50,6 +50,8 @@ const KIND_ICONS: Record<ItineraryStopKind, React.ComponentType<{ className?: st
 };
 
 const TRANSPORT_KINDS = new Set<ItineraryStopKind>(['flight', 'transit', 'train', 'bus', 'car', 'ferry', 'walk']);
+// Distinct, legible hues for color-coding days on the whole-trip overview map.
+const DAY_COLORS = ['#3B82F6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#ef4444', '#84cc16'];
 const MODE_ICONS: Record<NonNullable<ItineraryTransport['mode']>, React.ComponentType<{ className?: string; style?: React.CSSProperties }>> = {
   flight: Plane,
   train: TrainFront,
@@ -381,6 +383,8 @@ export const ItineraryCard: React.FC<{ data: ItineraryArtifact }> = ({ data }) =
   const compact = useCompact();
   const theme = resolveTheme({ palette: (data.palette as never) ?? 'ocean' });
   const [activeDay, setActiveDay] = useState(0);
+  // Map scope: the active day's route ⇄ the whole trip color-coded by day.
+  const [mapScope, setMapScope] = useState<'day' | 'trip'>('day');
   // "Save as dashboard" confirmation beat.
   const [savedBoard, setSavedBoard] = useState(false);
   const currency = data.currency ?? 'USD';
@@ -413,6 +417,48 @@ export const ItineraryCard: React.FC<{ data: ItineraryArtifact }> = ({ data }) =
       routeInfo: points.length > 1 ? { mode: modes[0] ?? 'walk' } : undefined
     };
   }, [day, activeDay]);
+
+  // Whole-trip overview: every located stop, color-coded by day, with one route
+  // segment per day and dashed connectors between days (curved arcs for long hops /
+  // flights). Null unless ≥2 days actually have mapped stops.
+  const tripMap = useMemo<MapArtifact | null>(() => {
+    const dayLocated = days.map((d) =>
+      d.stops.filter((s): s is ItineraryStop & { lat: number; lng: number } => typeof s.lat === 'number' && typeof s.lng === 'number')
+    );
+    const idxWithPts = dayLocated.map((l, i) => (l.length ? i : -1)).filter((i) => i >= 0);
+    const totalLocated = dayLocated.reduce((n, l) => n + l.length, 0);
+    if (idxWithPts.length < 2 || totalLocated < 2) return null;
+
+    const markers: MapMarker[] = [];
+    const segments: MapRouteSegment[] = [];
+    dayLocated.forEach((located, di) => {
+      if (!located.length) return;
+      const color = DAY_COLORS[di % DAY_COLORS.length];
+      const dayLabel = days[di].label ?? `Day ${di + 1}`;
+      located.forEach((s, i) => {
+        markers.push({
+          lat: s.lat,
+          lng: s.lng,
+          label: `${i + 1}. ${s.name}`,
+          category: s.kind,
+          color,
+          description: [dayLabel, s.time, s.address].filter(Boolean).join(' · ') || undefined
+        });
+      });
+      if (located.length > 1) {
+        segments.push({ points: located.map((s) => ({ lat: s.lat, lng: s.lng })), color, label: dayLabel });
+      }
+    });
+    // Dashed connectors between consecutive mapped days; arc the long hops (flights).
+    for (let k = 0; k < idxWithPts.length - 1; k++) {
+      const a = dayLocated[idxWithPts[k]][dayLocated[idxWithPts[k]].length - 1];
+      const b = dayLocated[idxWithPts[k + 1]][0];
+      if (a.lat === b.lat && a.lng === b.lng) continue;
+      const gap = Math.hypot(b.lat - a.lat, b.lng - a.lng);
+      segments.push({ points: [{ lat: a.lat, lng: a.lng }, { lat: b.lat, lng: b.lng }], color: '#94a3b8', dashed: true, arc: gap > 1 });
+    }
+    return { title: data.title, markers, segments };
+  }, [days, data.title]);
 
   if (days.length === 0) return null;
 
@@ -530,11 +576,35 @@ export const ItineraryCard: React.FC<{ data: ItineraryArtifact }> = ({ data }) =
         )}
       </ul>
 
-      {dayMap && (
-        <div className="border-t border-[var(--ds-hairline-soft)] px-3 py-2">
-          <InlineMap data={dayMap} height={200} />
-        </div>
-      )}
+      {(() => {
+        const shownMap = mapScope === 'trip' ? (tripMap ?? dayMap) : (dayMap ?? tripMap);
+        if (!shownMap) return null;
+        const showToggle = !!tripMap && !!dayMap;
+        const isTrip = mapScope === 'trip' && !!tripMap;
+        return (
+          <div className="border-t border-[var(--ds-hairline-soft)] px-3 py-2">
+            {showToggle && (
+              <div className="mb-2 inline-flex rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-well-strong)] p-0.5 text-[11px] font-semibold">
+                {(['day', 'trip'] as const).map((sc) => (
+                  <button
+                    key={sc}
+                    onClick={() => setMapScope(sc)}
+                    aria-pressed={mapScope === sc}
+                    className={`rounded-md px-2 py-0.5 transition-all duration-200 ${
+                      mapScope === sc
+                        ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-[0_1px_2px_rgba(0,0,0,0.12)]'
+                        : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
+                    }`}
+                  >
+                    {sc === 'day' ? 'This day' : 'Whole trip'}
+                  </button>
+                ))}
+              </div>
+            )}
+            <InlineMap data={shownMap} height={isTrip ? 240 : 200} />
+          </div>
+        );
+      })()}
 
       {hasTipsOrPacking && (
         <Expandable moreLabel="Tips & packing" lessLabel="Tips & packing">

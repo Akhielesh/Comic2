@@ -71,6 +71,51 @@ const routeKm = (pts: { lat: number; lng: number }[]): number => {
   return km;
 };
 
+const prefersReducedMotion = (): boolean =>
+  typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Quadratic-bezier arc between two points (planar lat/lng — for visualization, not
+// geodesy). Bows perpendicular to the chord so flights / long hops read as curves.
+const buildArc = (a: { lat: number; lng: number }, b: { lat: number; lng: number }, curvature = 0.22, samples = 48): [number, number][] => {
+  const dLat = b.lat - a.lat;
+  const dLng = b.lng - a.lng;
+  const dist = Math.hypot(dLat, dLng);
+  if (dist === 0) return [[a.lat, a.lng]];
+  const mLat = (a.lat + b.lat) / 2;
+  const mLng = (a.lng + b.lng) / 2;
+  const nLat = -dLng / dist;
+  const nLng = dLat / dist;
+  const off = dist * curvature;
+  const cLat = mLat + nLat * off;
+  const cLng = mLng + nLng * off;
+  const out: [number, number][] = [];
+  for (let i = 0; i <= samples; i++) {
+    const t = i / samples;
+    const inv = 1 - t;
+    out.push([inv * inv * a.lat + 2 * inv * t * cLat + t * t * b.lat, inv * inv * a.lng + 2 * inv * t * cLng + t * t * b.lng]);
+  }
+  return out;
+};
+
+// Stroke-dash "draw-in" for a Leaflet polyline's SVG path, sequenced via `delayMs`
+// so a multi-leg trip route paints leg by leg. No-op under reduced motion.
+const animateDraw = (poly: L.Polyline, delayMs: number): void => {
+  if (prefersReducedMotion()) return;
+  const path = poly.getElement() as SVGPathElement | null;
+  if (!path || typeof path.getTotalLength !== 'function') return;
+  const len = path.getTotalLength();
+  if (!len || !Number.isFinite(len)) return;
+  path.animate(
+    [
+      { strokeDasharray: String(len), strokeDashoffset: String(len) },
+      { strokeDasharray: String(len), strokeDashoffset: '0' }
+    ],
+    { duration: 700, delay: delayMs, easing: 'cubic-bezier(0.4, 0, 0.2, 1)', fill: 'backwards' }
+  );
+};
+
 // Rough door-to-door speed (km/h) per mode for the ≈duration estimate.
 const MODE_SPEEDS: Record<string, number> = { walk: 4.5, transit: 22, train: 80, bus: 45, drive: 75, car: 75, ferry: 28, flight: 700 };
 const MODE_GLYPHS: Record<string, string> = { walk: '🚶', transit: '🚇', train: '🚆', bus: '🚌', drive: '🚗', car: '🚗', ferry: '⛴️', flight: '✈️' };
@@ -130,7 +175,7 @@ const MapPanel: React.FC<{ data: MapArtifact; radar?: boolean }> = ({ data, rada
     const latlngs: [number, number][] = data.markers.map((m) => [m.lat, m.lng]);
     const markers = data.markers.map((m) => {
       const marker = L.marker([m.lat, m.lng], {
-        icon: makePin(accent, leadingNumber(m.label), m.category ? PLACE_KIND_GLYPHS[placeKind(m.category)] : undefined)
+        icon: makePin(m.color || accent, leadingNumber(m.label), m.category ? PLACE_KIND_GLYPHS[placeKind(m.category)] : undefined)
       })
         .addTo(map)
         .bindPopup(
@@ -165,7 +210,49 @@ const MapPanel: React.FC<{ data: MapArtifact; radar?: boolean }> = ({ data, rada
       const pts = data.route.map((p) => [p.lat, p.lng] as [number, number]);
       // Soft halo under a solid accent line — reads cleanly on both light and dark tiles.
       L.polyline(pts, { color: '#ffffff', weight: 7, opacity: 0.55, lineCap: 'round', lineJoin: 'round' }).addTo(map);
-      L.polyline(pts, { color: accent, weight: 3.5, opacity: 0.95, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+      const line = L.polyline(pts, { color: accent, weight: 3.5, opacity: 0.95, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+      animateDraw(line, 0);
+    }
+
+    // Multi-segment route — day-by-day colored legs and curved flight arcs. Each leg
+    // draws in after the previous one so the trip "unfolds"; a color legend names them.
+    if (data.segments && data.segments.length) {
+      data.segments.forEach((seg, i) => {
+        if (!seg.points || seg.points.length < 1) return;
+        const pts: [number, number][] =
+          seg.arc && seg.points.length >= 2
+            ? buildArc(seg.points[0], seg.points[seg.points.length - 1])
+            : seg.points.map((p) => [p.lat, p.lng] as [number, number]);
+        if (pts.length < 2) return;
+        const color = seg.color || accent;
+        const dash = seg.dashed || seg.arc ? '6 8' : undefined;
+        L.polyline(pts, { color: '#ffffff', weight: 6, opacity: 0.4, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+        const line = L.polyline(pts, { color, weight: 3.5, opacity: 0.95, lineCap: 'round', lineJoin: 'round', dashArray: dash }).addTo(map);
+        animateDraw(line, i * 220);
+      });
+
+      const labeled = data.segments.filter((s) => s.label);
+      if (labeled.length > 1) {
+        const Legend = L.Control.extend({
+          options: { position: 'topright' as const },
+          onAdd: () => {
+            const el = L.DomUtil.create('div', 'ds-map-legend');
+            el.setAttribute(
+              'style',
+              'background:var(--ds-surface-strong);border:1px solid var(--ds-hairline);border-radius:10px;padding:5px 8px;font:600 11px/1.5 ui-sans-serif,system-ui,sans-serif;color:var(--ds-ink);backdrop-filter:blur(8px);box-shadow:0 1px 2px rgba(0,0,0,0.06);display:flex;flex-direction:column;gap:3px;max-width:170px;'
+            );
+            el.innerHTML = labeled
+              .map(
+                (s) =>
+                  `<span style="display:flex;align-items:center;gap:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i style="width:10px;height:10px;border-radius:9999px;background:${s.color || accent};display:inline-block;flex:none"></i>${escapeHtml(String(s.label))}</span>`
+              )
+              .join('');
+            L.DomEvent.disableClickPropagation(el);
+            return el;
+          }
+        });
+        map.addControl(new Legend());
+      }
     }
 
     // Route summary chip — the user's mode (drive/walk/transit) with ≈time, distance
@@ -200,10 +287,14 @@ const MapPanel: React.FC<{ data: MapArtifact; radar?: boolean }> = ({ data, rada
       }
     }
 
-    if (latlngs.length === 1) {
-      map.setView(latlngs[0], 13);
-    } else if (latlngs.length > 1) {
-      map.fitBounds(L.latLngBounds(latlngs).pad(0.2));
+    // Frame everything that's drawn — markers AND every segment point (so a flight
+    // arc bowing out of the marker cluster isn't clipped).
+    const segPts: [number, number][] = (data.segments ?? []).flatMap((s) => s.points.map((p) => [p.lat, p.lng] as [number, number]));
+    const fitPts = [...latlngs, ...segPts];
+    if (fitPts.length === 1) {
+      map.setView(fitPts[0], 13);
+    } else if (fitPts.length > 1) {
+      map.fitBounds(L.latLngBounds(fitPts).pad(0.2));
     } else {
       map.setView([20, 0], 2);
     }
