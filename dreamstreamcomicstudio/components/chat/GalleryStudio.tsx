@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import { Search, X, Eye, Braces, Copy, Check, ExternalLink, Loader2, Zap, PanelsTopLeft, Sparkles, Layers } from 'lucide-react';
+import { Search, X, Eye, Braces, Copy, Check, ExternalLink, Loader2, Zap, PanelsTopLeft, Sparkles, Layers, Shapes } from 'lucide-react';
+import { IconsBrowser } from './IconsBrowser';
 import { GALLERY_DEMOS } from './ComponentGallery';
 import { DENSITY_AWARE_TYPES, renderArtifactNode } from './artifacts/ChatArtifacts';
 import { DensityProvider, type WidgetDensity } from './artifacts/kit';
@@ -112,6 +113,7 @@ export interface GalleryStudioProps {
 }
 
 export const GalleryStudio: React.FC<GalleryStudioProps> = ({ sidebarControl, onTry }) => {
+  const [view, setView] = useState<'widgets' | 'icons'>('widgets');
   const [query, setQuery] = useState('');
   const [cat, setCat] = useState('All');
   const [selectedId, setSelectedId] = useState(ENTRIES[0]?.id ?? '');
@@ -209,23 +211,41 @@ export const GalleryStudio: React.FC<GalleryStudioProps> = ({ sidebarControl, on
           {sidebarControl}
           <PanelsTopLeft className="hidden h-4 w-4 shrink-0 text-[var(--ds-accent)] sm:block" />
           <span className={`text-sm ${HEADING}`}>Gallery</span>
-          <span className="text-[11px] text-[var(--ds-muted)]">{filtered.length} of {ENTRIES.length} widgets</span>
-          <div className="relative ml-auto w-full max-w-xs">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--ds-muted)]" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search widgets, tools, tags…"
-              className="w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] py-1.5 pl-8 pr-7 text-[13px] text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-muted)] focus:border-[#D97757]/40"
-            />
-            {query && (
-              <button onClick={() => setQuery('')} className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--ds-muted)] hover:text-[var(--ds-ink)]" aria-label="Clear search">
-                <X className="h-3.5 w-3.5" />
+          {/* Widgets ⇄ Icons view toggle. */}
+          <div className="inline-flex shrink-0 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-well-strong)] p-0.5 text-[11px] font-semibold">
+            {([['widgets', PanelsTopLeft, 'Widgets'], ['icons', Shapes, 'Icons']] as const).map(([id, Icon, label]) => (
+              <button
+                key={id}
+                onClick={() => setView(id)}
+                className={`flex items-center gap-1 rounded-md px-2 py-0.5 ${TRANSITION} ${
+                  view === id ? 'bg-[var(--ds-raised)] text-[var(--ds-ink)] shadow-[0_1px_2px_rgba(0,0,0,0.12)]' : 'text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
+                }`}
+              >
+                <Icon className="h-3.5 w-3.5" /> {label}
               </button>
-            )}
+            ))}
           </div>
+          {view === 'widgets' && (
+            <>
+              <span className="hidden text-[11px] text-[var(--ds-muted)] sm:inline">{filtered.length} of {ENTRIES.length} widgets</span>
+              <div className="relative ml-auto w-full max-w-xs">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--ds-muted)]" />
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search widgets, tools, tags…"
+                  className="w-full rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] py-1.5 pl-8 pr-7 text-[13px] text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-muted)] focus:border-[#D97757]/40"
+                />
+                {query && (
+                  <button onClick={() => setQuery('')} className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--ds-muted)] hover:text-[var(--ds-ink)]" aria-label="Clear search">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+            </>
+          )}
         </div>
-        <div className="mt-2 flex flex-wrap gap-1.5">
+        <div className={`mt-2 flex flex-wrap gap-1.5 ${view === 'icons' ? 'hidden' : ''}`}>
           {CATEGORIES.map((c) => (
             <button
               key={c}
@@ -240,7 +260,10 @@ export const GalleryStudio: React.FC<GalleryStudioProps> = ({ sidebarControl, on
         </div>
       </div>
 
-      {/* Body — master list + detail. */}
+      {/* Body — the Icons browser, or the widgets master list + detail. */}
+      {view === 'icons' ? (
+        <IconsBrowser />
+      ) : (
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         {/* List */}
         <div className="shrink-0 overflow-y-auto border-b border-[var(--ds-hairline)] p-2 md:max-h-none md:w-72 md:border-b-0 md:border-r" style={{ maxHeight: '38vh' }}>
@@ -431,6 +454,7 @@ export const GalleryStudio: React.FC<GalleryStudioProps> = ({ sidebarControl, on
           )}
         </div>
       </div>
+      )}
     </div>
   );
 };
