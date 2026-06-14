@@ -16,6 +16,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import type { WidgetDensity } from './artifacts/kit';
 import type { DashboardTile } from '../../services/customDashboards';
+import { coerceSymbol } from '../../services/symbolResolve';
 
 // 'ai_chat' is a special tile: a mini assistant box on the board (no live-data tool).
 export const AI_CHAT_TILE = 'ai_chat';
@@ -419,6 +420,9 @@ export const buildTileFromFields = (
       if (!f.select) labelParts.push(raw);
     }
   }
+  // get_stock: accept a company name typed straight into the field ("rivian" → RIVN),
+  // so the symbol box is forgiving instead of erroring on anything but an exact ticker.
+  if (def.tool === 'get_stock' && typeof args.symbol === 'string') args.symbol = coerceSymbol(args.symbol);
   // get_news: a query overrides the section; drop the topic so the card is honest.
   if (def.tool === 'get_news' && typeof args.query === 'string' && args.query) delete args.topic;
   // show_macro_tiles requires a tile list — only its presets can add it.

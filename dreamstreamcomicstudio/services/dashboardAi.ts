@@ -11,6 +11,9 @@ import {
   type CustomDashboard,
   type DashboardTile
 } from './customDashboards';
+import { resolveWidgetIntent } from './widgetIntent';
+import { resolveStockSymbol } from './symbolResolve';
+import type { WidgetDensity } from '../components/chat/artifacts/kit';
 
 export interface DashboardCommandResult {
   kind: 'created' | 'updated' | 'error';
@@ -24,7 +27,13 @@ type TileSpec = Omit<DashboardTile, 'id'>;
 export type DashboardPlan =
   | { kind: 'create'; name: string; icon?: string; tiles: TileSpec[] }
   | { kind: 'edit'; tool: string; args: Record<string, unknown>; label: string }
+  | { kind: 'add'; tool: string; args: Record<string, unknown>; label: string; density: WidgetDensity }
   | { kind: 'error'; message: string };
+
+// "add/pin/track/watch <thing>" — a single-widget intent. We let the smart resolver
+// turn the rest of the phrase into the right tile (so "pin rivian" → RIVN stock, "track
+// bitcoin" → crypto price, "add weather tokyo" → weather), instead of guessing here.
+const ADD_RE = /^(?:add|pin|track|watch)\s+(?:a\s+|an\s+|the\s+)?(.+)/i;
 
 // "change/set/switch/update [the] weather [widget] to Tokyo" → tool edit.
 const EDIT_RE =
@@ -32,7 +41,10 @@ const EDIT_RE =
 
 const EDIT_TOOLS: Record<string, (v: string) => { tool: string; args: Record<string, unknown>; label: string }> = {
   weather: (v) => ({ tool: 'get_weather', args: { location: v }, label: `Weather · ${v}` }),
-  stock: (v) => ({ tool: 'get_stock', args: { symbol: v }, label: `${v.toUpperCase()}` }),
+  stock: (v) => {
+    const r = resolveStockSymbol(v);
+    return { tool: 'get_stock', args: { symbol: r?.symbol ?? v }, label: r?.name ?? v.toUpperCase() };
+  },
   news: (v) => ({ tool: 'get_news', args: { query: v }, label: `News · ${v}` }),
   crypto: (v) => ({ tool: 'crypto_price', args: { coin: v }, label: `${v} price` }),
   coin: (v) => ({ tool: 'crypto_price', args: { coin: v }, label: `${v} price` }),
@@ -96,6 +108,13 @@ export const parseDashboardCommand = (raw: string): DashboardPlan => {
     const value = edit[2].trim().replace(/[.!]$/, '');
     const make = EDIT_TOOLS[noun];
     if (make && value) return { kind: 'edit', ...make(value) };
+  }
+
+  // "add/pin/track/watch X" → resolve to one ready-to-pin widget via the smart resolver.
+  const addM = command.match(ADD_RE);
+  if (addM) {
+    const s = resolveWidgetIntent(addM[1].replace(/\bwidget\b/i, '').trim())[0];
+    if (s && s.ready) return { kind: 'add', tool: s.def.tool, args: s.args, label: s.label, density: s.density };
   }
 
   const c = command.toLowerCase();
@@ -169,6 +188,16 @@ export const runDashboardCommand = async (
 ): Promise<DashboardCommandResult> => {
   const plan = parseDashboardCommand(command);
   if (plan.kind === 'error') return { kind: 'error', message: plan.message };
+
+  if (plan.kind === 'add') {
+    const tile = { tool: plan.tool, args: plan.args, label: plan.label, density: plan.density };
+    if (!board) {
+      const dash = createDashboard(plan.label, '⚡', [tile]);
+      return { kind: 'created', dashboardId: dash.id, message: `Started “${dash.name}” with that widget.` };
+    }
+    const added = addTile(board.id, tile);
+    return { kind: 'updated', dashboardId: board.id, changedTileIds: [added.id], message: `Pinned ${plan.label} to “${board.name}”.` };
+  }
 
   if (plan.kind === 'edit') {
     if (!board) {

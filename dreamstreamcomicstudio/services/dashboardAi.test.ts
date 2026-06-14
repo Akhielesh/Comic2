@@ -17,6 +17,8 @@ describe('parseDashboardCommand — edits', () => {
   });
   it('parses crypto and fx', () => {
     expect(parseDashboardCommand('switch crypto to solana')).toMatchObject({ kind: 'edit', tool: 'crypto_price', args: { coin: 'solana' } });
+    // A company name in an edit resolves to its ticker too.
+    expect(parseDashboardCommand('change stocks to rivian')).toMatchObject({ kind: 'edit', tool: 'get_stock', args: { symbol: 'RIVN' } });
     expect(parseDashboardCommand('change fx to USD to EUR')).toMatchObject({ kind: 'edit', tool: 'exchange_rate', args: { from: 'USD', to: 'EUR' } });
   });
 });
@@ -53,6 +55,23 @@ describe('parseDashboardCommand — board templates', () => {
   });
   it('rejects empty commands', () => {
     expect(parseDashboardCommand('   ').kind).toBe('error');
+  });
+});
+
+describe('parseDashboardCommand — add a single widget', () => {
+  it('pins a company by name via the resolver (add rivian → RIVN)', () => {
+    expect(parseDashboardCommand('add rivian')).toMatchObject({ kind: 'add', tool: 'get_stock', args: { symbol: 'RIVN' } });
+  });
+  it('handles pin/track/watch verbs', () => {
+    expect(parseDashboardCommand('pin bitcoin')).toMatchObject({ kind: 'add', tool: 'crypto_price', args: { coin: 'bitcoin' } });
+    expect(parseDashboardCommand('track tesla')).toMatchObject({ kind: 'add', tool: 'get_stock', args: { symbol: 'TSLA' } });
+    expect(parseDashboardCommand('add weather tokyo')).toMatchObject({ kind: 'add', tool: 'get_weather', args: { location: 'tokyo' } });
+  });
+  it('strips a trailing "widget" noun', () => {
+    expect(parseDashboardCommand('add a weather widget for paris')).toMatchObject({ kind: 'add', tool: 'get_weather' });
+  });
+  it('still builds a topic board for non-add phrasing', () => {
+    expect(parseDashboardCommand('quantum computing').kind).toBe('create');
   });
 });
 
