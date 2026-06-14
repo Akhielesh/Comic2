@@ -58,6 +58,11 @@ const ENTRIES: StudioEntry[] = GALLERY_DEMOS.map((d, i) => {
 });
 
 const CATEGORIES = ['All', ...[...new Set(ENTRIES.map((e) => e.category))]];
+const CATEGORY_COUNT: Record<string, number> = ENTRIES.reduce<Record<string, number>>((acc, e) => {
+  acc.All = (acc.All ?? 0) + 1;
+  acc[e.category] = (acc[e.category] ?? 0) + 1;
+  return acc;
+}, {});
 
 const KIND_BADGE: Record<WidgetKind, string> = {
   api: 'text-emerald-600 bg-emerald-500/10 border-emerald-500/25',
@@ -174,7 +179,7 @@ export const GalleryStudio: React.FC<GalleryStudioProps> = ({ sidebarControl, on
                 cat === c ? 'border-transparent bg-[var(--ds-accent)] text-white' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
               }`}
             >
-              {c}
+              {c} <span className={cat === c ? 'opacity-80' : 'opacity-60'}>{CATEGORY_COUNT[c] ?? 0}</span>
             </button>
           ))}
         </div>
