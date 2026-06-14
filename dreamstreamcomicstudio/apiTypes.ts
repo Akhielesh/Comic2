@@ -2097,6 +2097,8 @@ export interface UIRatingBlock { kind: 'rating'; value: number; max?: number; co
 export interface UITagsBlock { kind: 'tags'; items: string[] }
 export interface UIGaugeBlock { kind: 'gauge'; value: number; max?: number; label?: string; unit?: string; color?: string }
 export interface UIBarsBlock { kind: 'bars'; items: { label: string; value: number; color?: string }[]; max?: number }
+export interface UIStepsBlock { kind: 'steps'; items: { title: string; text?: string }[] }
+export interface UIQuoteBlock { kind: 'quote'; text: string; author?: string }
 export interface UIChartBlock { kind: 'chart'; chart: ChartArtifact }
 export interface UITableBlock { kind: 'table'; table: DataTableArtifact }
 
@@ -2104,7 +2106,7 @@ export type UIBlock =
   | UIStackBlock | UIRowBlock | UIGridBlock | UISectionBlock | UIDividerBlock
   | UIHeadingBlock | UITextBlock | UIBadgeBlock | UIPillBlock | UIKeyValueBlock
   | UICalloutBlock | UIImageBlock | UIProgressBlock | UITimelineBlock | UIRatingBlock | UITagsBlock | UIGaugeBlock | UIBarsBlock
-  | UIMetricBlock | UISparklineBlock | UIChartBlock | UITableBlock;
+  | UIStepsBlock | UIQuoteBlock | UIMetricBlock | UISparklineBlock | UIChartBlock | UITableBlock;
 
 export interface GenerativeUIArtifact {
   title?: string;

@@ -38,6 +38,8 @@ type NormalizedUIBlock =
   | { kind: 'tags'; items: string[] }
   | { kind: 'gauge'; value: number; max: number; label?: string; unit?: string; color?: string }
   | { kind: 'bars'; items: { label: string; value: number; color?: string }[]; max?: number }
+  | { kind: 'steps'; items: { title: string; text?: string }[] }
+  | { kind: 'quote'; text: string; author?: string }
   | { kind: 'chart'; chart: ChartArtifact }
   | { kind: 'table'; table: DataTableArtifact };
 
@@ -182,6 +184,20 @@ function normBlock(raw: unknown, depth: number, ctx: { n: number }): NormBlock |
             .slice(0, 40)
         : [];
       return items.length ? { kind, items, max: num(raw.max) } : { kind: '_invalid' };
+    }
+    case 'steps': {
+      const items = Array.isArray(raw.items)
+        ? raw.items
+            .filter(isObj)
+            .map((it) => ({ title: str(it.title, 200) ?? '', text: str(it.text, 1000) }))
+            .filter((it) => it.title || it.text)
+            .slice(0, 30)
+        : [];
+      return items.length ? { kind, items } : { kind: '_invalid' };
+    }
+    case 'quote': {
+      const text = str(raw.text, 2000);
+      return text ? { kind, text, author: str(raw.author, 120) } : { kind: '_invalid' };
     }
     case 'chart':
       return isObj(raw.chart) && Array.isArray((raw.chart as Record<string, unknown>).series)
@@ -405,6 +421,27 @@ const Block: React.FC<{ block: NormBlock }> = ({ block }) => {
         </div>
       );
     }
+    case 'steps':
+      return (
+        <ol className="flex flex-col gap-2">
+          {block.items.map((it, i) => (
+            <li key={i} className="flex gap-2.5">
+              <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-[#D97757]/12 text-[11px] font-bold text-[var(--ds-accent)]">{i + 1}</span>
+              <div className="min-w-0">
+                {it.title && <div className="text-sm font-semibold text-[var(--ds-ink)]">{it.title}</div>}
+                {it.text && <p className="whitespace-pre-wrap break-words text-xs text-[var(--ds-muted)]">{it.text}</p>}
+              </div>
+            </li>
+          ))}
+        </ol>
+      );
+    case 'quote':
+      return (
+        <blockquote className="rounded-r-xl border-l-2 border-[var(--ds-accent)] bg-[var(--ds-well)] px-3 py-2">
+          <p className="whitespace-pre-wrap break-words text-sm italic text-[var(--ds-ink)]">“{block.text}”</p>
+          {block.author && <footer className="mt-1 text-[11px] font-medium text-[var(--ds-muted)]">— {block.author}</footer>}
+        </blockquote>
+      );
     case 'chart':
       return <ChartCard data={block.chart} />;
     case 'table':

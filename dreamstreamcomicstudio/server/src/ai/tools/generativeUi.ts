@@ -40,6 +40,8 @@ const BLOCK_GUIDE = [
   '- badge {text, tone?:neutral|good|warn|bad|info}',
   '- pill {label?, change?, changePercent?}',
   '- keyValue {items:[{label,value}]}',
+  '- steps {items:[{title, text?}]} — numbered how-to / process steps',
+  '- quote {text, author?} — pull quote / testimonial',
   '- callout {tone?:info|good|warn|bad, title?, text}',
   '- image {src(https/data-image only), alt?, caption?, ratio?:1:1|4:3|16:9}',
   '- progress {value, max?, label?}',
