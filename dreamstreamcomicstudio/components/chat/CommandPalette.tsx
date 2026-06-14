@@ -1,37 +1,30 @@
 // CommandPalette — the global ⌘K search for Chat Studio. One box that finds
-// chat sessions, slash-command skills, and navigation targets, with full
-// keyboard navigation (↑↓ / Enter / Esc) and mouse-hover sync.
+// chat sessions and navigation targets, with full keyboard navigation
+// (↑↓ / Enter / Esc) and mouse-hover sync.
 //
 // Selection semantics:
 //   session  → onResume(id) + close
-//   skill    → no-arg skills run immediately via onRunSkill(skill, '');
-//              arg-required skills close the palette and pre-fill the composer
-//              through the existing `dreamstream:compose` window event.
 //   nav      → onNavigate(view) + close
 //
 // Calm-studio language only: token vars (--ds-*), hairline, rounded-2xl,
 // soft ambient shadow. Works in light and dark (.dark on <html>).
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Home, LayoutDashboard, MessageSquare, Search, Sparkles } from 'lucide-react';
+import { Home, LayoutDashboard, Library, MessageSquare, Search } from 'lucide-react';
 import type { ChatSession } from '../../services/chatStorage';
-import type { ChatSkill } from '../../services/chatSkills';
 
-type NavView = 'home' | 'skills' | 'dashboards';
+type NavView = 'home' | 'library' | 'dashboards';
 
 interface CommandPaletteProps {
   open: boolean;
   onClose: () => void;
   sessions: ChatSession[];
-  skills: ChatSkill[];
   onResume: (id: string) => void;
-  onRunSkill: (skill: ChatSkill, arg: string) => void;
   onNavigate: (view: NavView) => void;
 }
 
 type PaletteItem =
   | { kind: 'session'; session: ChatSession }
-  | { kind: 'skill'; skill: ChatSkill }
   | { kind: 'nav'; view: NavView; label: string };
 
 interface PaletteGroup {
@@ -41,7 +34,7 @@ interface PaletteGroup {
 
 const NAV_ACTIONS: { view: NavView; label: string; keywords: string }[] = [
   { view: 'home', label: 'Go to Home', keywords: 'home start landing greeting' },
-  { view: 'skills', label: 'Browse Skills', keywords: 'skills commands slash recipes' },
+  { view: 'library', label: 'Open Library', keywords: 'library files images uploads media assets gallery' },
   { view: 'dashboards', label: 'Open Dashboards', keywords: 'dashboards boards charts analytics pulse' }
 ];
 
@@ -71,7 +64,7 @@ const relativeTime = (ts: number): string => {
 
 const NAV_ICONS: Record<NavView, React.ComponentType<{ className?: string }>> = {
   home: Home,
-  skills: Sparkles,
+  library: Library,
   dashboards: LayoutDashboard
 };
 
@@ -79,9 +72,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   open,
   onClose,
   sessions,
-  skills,
   onResume,
-  onRunSkill,
   onNavigate
 }) => {
   const [query, setQuery] = useState('');
@@ -119,13 +110,6 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
         : sessions.filter((s) => (s.turns?.length || 0) > 0).slice(0, 5)
     ).map((session) => ({ kind: 'session' as const, session }));
 
-    const skillHits: PaletteItem[] = pick(
-      skills,
-      (sk) => [sk.command, sk.label],
-      (sk) => `${(sk.aliases || []).join(' ')} ${sk.description}`,
-      6
-    ).map((skill) => ({ kind: 'skill' as const, skill }));
-
     const navHits: PaletteItem[] = pick(NAV_ACTIONS, (n) => [n.label, n.view], (n) => n.keywords, 3).map((n) => ({
       kind: 'nav' as const,
       view: n.view,
@@ -134,10 +118,9 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
 
     const out: PaletteGroup[] = [];
     if (sessionHits.length) out.push({ label: q ? 'Chats' : 'Recent chats', items: sessionHits });
-    if (skillHits.length) out.push({ label: 'Skills', items: skillHits });
     if (navHits.length) out.push({ label: 'Go to', items: navHits });
     return out;
-  }, [query, sessions, skills, sessionSearch]);
+  }, [query, sessions, sessionSearch]);
 
   const flat = useMemo(() => groups.flatMap((g) => g.items), [groups]);
 
@@ -146,22 +129,12 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       if (item.kind === 'session') {
         onResume(item.session.id);
         onClose();
-      } else if (item.kind === 'nav') {
-        onNavigate(item.view);
-        onClose();
-      } else if (item.skill.argRequired) {
-        // Needs an argument: close and pre-fill the composer (`/command `) via
-        // the existing compose bridge so the user can type the argument.
-        onClose();
-        window.dispatchEvent(
-          new CustomEvent('dreamstream:compose', { detail: { text: `/${item.skill.command} ` } })
-        );
       } else {
-        onRunSkill(item.skill, '');
+        onNavigate(item.view);
         onClose();
       }
     },
-    [onResume, onRunSkill, onNavigate, onClose]
+    [onResume, onNavigate, onClose]
   );
 
   // Reset state each time the palette opens; focus the input.
@@ -247,13 +220,13 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
               setQuery(e.target.value);
               setActive(0);
             }}
-            placeholder="Search chats, skills, pages…"
+            placeholder="Search chats and pages…"
             // 16px on mobile so iOS doesn't zoom the page on focus.
             className="w-full bg-transparent text-base text-[var(--ds-ink)] outline-none placeholder:text-[var(--ds-muted)] sm:text-sm"
             autoFocus
             spellCheck={false}
             autoComplete="off"
-            aria-label="Search chats, skills, pages"
+            aria-label="Search chats and pages"
           />
         </div>
 
@@ -273,12 +246,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                   flatIndex += 1;
                   const i = flatIndex;
                   const isActive = i === active;
-                  const key =
-                    item.kind === 'session'
-                      ? `s:${item.session.id}`
-                      : item.kind === 'skill'
-                        ? `k:${item.skill.command}`
-                        : `n:${item.view}`;
+                  const key = item.kind === 'session' ? `s:${item.session.id}` : `n:${item.view}`;
                   const rowClass = `flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors duration-100 ${
                     isActive ? 'bg-[#D97757]/10 text-[var(--ds-ink)]' : 'text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]'
                   }`;
@@ -298,29 +266,6 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                         <span className="flex-1 truncate text-sm">{item.session.title}</span>
                         <span className="shrink-0 text-[11px] text-[var(--ds-muted)]">
                           {relativeTime(item.session.updatedAt)}
-                        </span>
-                      </button>
-                    );
-                  }
-                  if (item.kind === 'skill') {
-                    return (
-                      <button
-                        key={key}
-                        type="button"
-                        role="option"
-                        aria-selected={isActive}
-                        data-active={isActive}
-                        onClick={() => select(item)}
-                        onMouseMove={() => setActive(i)}
-                        className={rowClass}
-                      >
-                        <span className="w-4 shrink-0 text-center text-sm leading-none" aria-hidden="true">
-                          {item.skill.emoji}
-                        </span>
-                        <span className="flex-1 truncate text-sm">{item.skill.label}</span>
-                        <span className="shrink-0 rounded-md bg-[var(--ds-well)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--ds-muted)]">
-                          /{item.skill.command}
-                          {item.skill.argRequired ? ' …' : ''}
                         </span>
                       </button>
                     );

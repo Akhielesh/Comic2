@@ -1,15 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Send, Paperclip, X, Brain, Square, Loader2, LayoutGrid, FileText, Wand2, Undo2, Network, Server, Slash } from 'lucide-react';
+import { Send, Paperclip, X, Brain, Square, Loader2, LayoutGrid, FileText, Wand2, Undo2, Server } from 'lucide-react';
 import type { ChatReasoningLevel } from '../../apiTypes';
 import type { ChatAttachment } from '../../services/chatStorage';
 import { enhancePrompt } from '../../services/chatApi';
 import { REASONING_LEVELS, type ChatModelFeatures } from '../../services/chatFeatures';
 import type { ChatConnector } from '../../services/chatConnectors';
 import type { McpServerConfig } from '../../apiTypes';
-import { type ChatSkill, isSlashQuery, slashQuery, filterSkills, parseSkillInput } from '../../services/chatSkills';
 import { DictationButton } from './DictationButton';
 import {
-  CANVAS_BG, GLASS_STRONG, HAIRLINE, MUTED, LABEL, TRANSITION, SHADOW_SOFT,
+  CANVAS_BG, GLASS_STRONG, HAIRLINE, MUTED, TRANSITION, SHADOW_SOFT,
   RADIUS_PANEL, PILL, CONTROL_BTN, ACCENT_BG, ACCENT_BG_HOVER, ACCENT_TEXT, ACCENT_SOFT_BG
 } from './studioDesign';
 
@@ -18,8 +17,6 @@ interface ChatComposerProps {
   features: ChatModelFeatures;
   reasoningLevel: ChatReasoningLevel;
   webSearch: boolean;
-  swarm: boolean;
-  swarmSupported: boolean;
   dreamstreamAccess: boolean;
   enabledTools: string[];
   toolsSupported: boolean;
@@ -27,14 +24,11 @@ interface ChatComposerProps {
   enabledMcpServers: string[];
   onReasoningChange: (level: ChatReasoningLevel) => void;
   onWebToggle: (on: boolean) => void;
-  onSwarmToggle: (on: boolean) => void;
   onDreamstreamToggle: (on: boolean) => void;
   onToggleConnector: (connector: ChatConnector, on: boolean) => void;
   onToggleMcpServer: (id: string, on: boolean) => void;
   onSend: (text: string, attachments: ChatAttachment[]) => void;
-  /** Run a `/`-command skill (a recipe) instead of a plain message. */
-  onRunSkill: (skill: ChatSkill, arg: string) => void;
-  /** When set, prefill the composer with this text (e.g. clicking a skill suggestion). */
+  /** When set, prefill the composer with this text (e.g. a suggested follow-up). */
   seedText?: string;
   onSeedConsumed?: () => void;
   onStop: () => void;
@@ -62,8 +56,6 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   features,
   reasoningLevel,
   webSearch,
-  swarm,
-  swarmSupported,
   dreamstreamAccess,
   enabledTools,
   toolsSupported,
@@ -71,12 +63,10 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   enabledMcpServers,
   onReasoningChange,
   onWebToggle,
-  onSwarmToggle,
   onDreamstreamToggle,
   onToggleConnector,
   onToggleMcpServer,
   onSend,
-  onRunSkill,
   seedText,
   onSeedConsumed,
   onStop
@@ -86,9 +76,6 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   const [enhancing, setEnhancing] = useState(false);
   // Holds the pre-enhancement draft so the user can undo a suggestion they dislike.
   const [beforeEnhance, setBeforeEnhance] = useState<string | null>(null);
-  // Slash-command ("skills") menu: open while typing `/cmd` with no space yet.
-  const [skillIndex, setSkillIndex] = useState(0);
-  const [menuDismissed, setMenuDismissed] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   // Draft snapshot taken when a dictation take starts, so streamed partials replace
@@ -109,11 +96,10 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
     });
   };
 
-  // Prefill from a clicked suggestion (e.g. a skill chip), then focus the box.
+  // Prefill from a suggested follow-up, then focus the box.
   useEffect(() => {
     if (!seedText) return;
     setText(seedText);
-    setMenuDismissed(true);
     onSeedConsumed?.();
     requestAnimationFrame(() => {
       const el = textareaRef.current;
@@ -134,7 +120,6 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
       const draft = (e as CustomEvent<{ text?: string }>).detail?.text;
       if (!draft) return;
       setText(draft);
-      setMenuDismissed(true);
       requestAnimationFrame(() => {
         const el = textareaRef.current;
         if (el) {
@@ -161,24 +146,30 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
     return () => window.removeEventListener('dreamstream:send', onSendEvent);
   }, [busy, onSend]);
 
-  const skillMatches = isSlashQuery(text) && !menuDismissed ? filterSkills(slashQuery(text)) : [];
-  const menuOpen = skillMatches.length > 0;
-  const activeSkill = menuOpen ? skillMatches[Math.min(skillIndex, skillMatches.length - 1)] : null;
-
-  // Pick a skill from the menu: drop its command into the input so the user can type the
-  // argument (or run immediately if the skill takes no argument).
-  const acceptSkill = (skill: ChatSkill) => {
-    if (!skill.argRequired) {
-      onRunSkill(skill, '');
-      setText('');
-      setMenuDismissed(false);
-      if (textareaRef.current) textareaRef.current.style.height = 'auto';
-      return;
-    }
-    setText(`/${skill.command} `);
-    setMenuDismissed(true);
-    requestAnimationFrame(() => textareaRef.current?.focus());
-  };
+  // Attach a file handed in from elsewhere (e.g. the Library's "Use in chat"): drop it
+  // into the draft as an attachment and focus the box so the user can ask about it.
+  useEffect(() => {
+    const onAttach = (e: Event) => {
+      const d = (e as CustomEvent<{ name?: string; mimeType?: string; dataUrl?: string; kind?: 'image' | 'document' }>).detail;
+      if (!d?.dataUrl) return;
+      setAttachments((prev) => {
+        if (prev.length >= MAX_ATTACHMENTS) return prev;
+        return [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            name: d.name || 'attachment',
+            mimeType: d.mimeType || 'application/octet-stream',
+            kind: d.kind || (d.mimeType?.startsWith('image/') ? 'image' : 'document'),
+            dataUrl: d.dataUrl as string
+          }
+        ];
+      });
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    };
+    window.addEventListener('dreamstream:attach', onAttach);
+    return () => window.removeEventListener('dreamstream:attach', onAttach);
+  }, []);
 
   const canSend = (text.trim().length > 0 || attachments.length > 0) && !busy;
   const canEnhance = text.trim().length > 2 && !busy && !enhancing;
@@ -213,50 +204,17 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
     setText('');
     setAttachments([]);
     setBeforeEnhance(null);
-    setMenuDismissed(false);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
   };
 
   const submit = () => {
     if (busy) return;
-    // A complete `/command arg` runs the matching skill (recipe) instead of sending text.
-    const parsed = parseSkillInput(text.trim());
-    if (parsed) {
-      if (parsed.arg || !parsed.skill.argRequired) {
-        onRunSkill(parsed.skill, parsed.arg);
-        resetInput();
-      }
-      // `/research` with no argument yet: keep it in the box, wait for the topic.
-      return;
-    }
     if (!canSend) return;
     onSend(text.trim(), attachments);
     resetInput();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (menuOpen) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setSkillIndex((i) => (i + 1) % skillMatches.length);
-        return;
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setSkillIndex((i) => (i - 1 + skillMatches.length) % skillMatches.length);
-        return;
-      }
-      if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
-        e.preventDefault();
-        if (activeSkill) acceptSkill(activeSkill);
-        return;
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        setMenuDismissed(true);
-        return;
-      }
-    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       submit();
@@ -308,15 +266,6 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
               ))}
             </select>
           </label>
-        )}
-        {swarmSupported && (
-          <button
-            onClick={() => onSwarmToggle(!swarm)}
-            className={`flex items-center gap-1.5 text-[11px] font-medium ${PILL} px-2.5 py-1 ${swarm ? `${ACCENT_SOFT_BG} ${ACCENT_TEXT} border-[#D97757]/30` : `${MUTED} hover:bg-[var(--ds-hover)]`}`}
-            title="Agent swarm: a planner splits your goal across specialized agents (news, finance, weather, research…) that work in parallel, then a lead agent synthesizes the answer."
-          >
-            <Network className="w-3.5 h-3.5" /> Swarm {swarm ? 'on' : 'off'}
-          </button>
         )}
         <button
           onClick={() => onDreamstreamToggle(!dreamstreamAccess)}
@@ -378,75 +327,6 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
       )}
 
       <div className="relative flex items-end gap-2">
-        {/* Slash-command (skills) menu — refined palette style */}
-        {menuOpen && (
-          <div
-            className={`absolute bottom-full left-0 right-0 z-20 mb-2 overflow-hidden rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] backdrop-blur-md shadow-[0_2px_4px_rgba(0,0,0,0.04),0_16px_40px_var(--ds-hairline)] animate-fade-in`}
-          >
-            <ul className="max-h-72 overflow-y-auto p-1.5">
-              {skillMatches.map((s, i) => {
-                const active = i === Math.min(skillIndex, skillMatches.length - 1);
-                return (
-                  <li key={s.command}>
-                    <button
-                      type="button"
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        acceptSkill(s);
-                      }}
-                      onMouseEnter={() => setSkillIndex(i)}
-                      className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left ${TRANSITION} ${active ? 'bg-[#D97757]/10' : 'hover:bg-[var(--ds-hover)]'}`}
-                    >
-                      <span
-                        aria-hidden
-                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-base leading-none ${TRANSITION} ${active ? 'bg-[#D97757]/10' : 'bg-[var(--ds-well)]'}`}
-                      >
-                        {s.emoji}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="flex items-baseline gap-1.5">
-                          <code className="text-[12px] font-semibold text-[var(--ds-ink)]">/{s.command}</code>
-                          <span className={`truncate text-[11px] ${MUTED}`}>
-                            {s.argRequired ? `<${s.argName}>` : `[${s.argName}]`}
-                          </span>
-                        </span>
-                        <span className={`block truncate text-[11px] ${MUTED}`}>{s.description}</span>
-                      </span>
-                      <span
-                        className={`ml-2 shrink-0 self-start pt-0.5 text-[9px] font-semibold uppercase tracking-wider ${
-                          active ? ACCENT_TEXT : MUTED
-                        }`}
-                      >
-                        {s.category}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-            <div
-              className={`flex items-center justify-between border-t border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] px-3 py-1.5 ${LABEL}`}
-            >
-              <span className="flex items-center gap-1">
-                <Slash className="h-3 w-3" /> Skills
-              </span>
-              <span className="flex items-center gap-2 normal-case tracking-normal">
-                <span className="flex items-center gap-1">
-                  <kbd className={`rounded border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-1 py-px font-sans text-[9px] ${MUTED}`}>↑↓</kbd>
-                  choose
-                </span>
-                <span className="flex items-center gap-1">
-                  <kbd className={`rounded border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-1 py-px font-sans text-[9px] ${MUTED}`}>↵</kbd>
-                  pick
-                </span>
-                <span className="flex items-center gap-1">
-                  <kbd className={`rounded border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-1 py-px font-sans text-[9px] ${MUTED}`}>esc</kbd>
-                  dismiss
-                </span>
-              </span>
-            </div>
-          </div>
-        )}
         {(
           <>
             <input
@@ -493,14 +373,12 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
           onChange={(e) => {
             const v = e.target.value;
             setText(v);
-            setSkillIndex(0);
-            if (!v.startsWith('/')) setMenuDismissed(false);
             if (beforeEnhance !== null) setBeforeEnhance(null);
             autoGrow(e.target);
           }}
           onKeyDown={handleKeyDown}
           rows={1}
-          placeholder="Message the model…  (type / for skills · Enter to send)"
+          placeholder="Message the model…  (Enter to send)"
           className="flex-1 resize-none bg-transparent rounded-xl px-3 py-2.5 text-base sm:text-sm text-[var(--ds-ink)] placeholder:text-[var(--ds-muted)] outline-none max-h-[200px]"
         />
 

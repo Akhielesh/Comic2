@@ -1,23 +1,22 @@
 // ChatHome — the chat "home dash" (Pulse-style landing). Shown instead of an empty
 // conversation: a time-of-day greeting, a prominent "start" affordance with curated
-// starter prompts, resumable recent-session cards, skill shortcuts, and a small,
-// honestly-computed insights strip derived purely from local session data.
+// starter prompts, resumable recent-session cards, quick links to the Library and
+// Dashboards, and a small, honestly-computed insights strip derived purely from local
+// session data.
 //
 // Calm-studio language only: token vars (--ds-*), hairlines, rounded-2xl, soft
 // ambient shadows. No comic styles inside the chat shell.
 
 import React, { useMemo } from 'react';
-import { ArrowRight, ArrowUp, LayoutDashboard } from 'lucide-react';
+import { ArrowRight, ArrowUp, LayoutDashboard, Library } from 'lucide-react';
 import type { ChatSession } from '../../services/chatStorage';
-import type { ChatSkill } from '../../services/chatSkills';
 
 interface ChatHomeProps {
   userName?: string;
   sessions: ChatSession[];
-  skills: ChatSkill[];
   onResume: (sessionId: string) => void;
   onStartChat: (seedText?: string) => void;
-  onRunSkill: (skill: ChatSkill, arg: string) => void;
+  onOpenLibrary: () => void;
   onOpenDashboards: () => void;
 }
 
@@ -73,7 +72,7 @@ const localDayIndex = (ts: number): number => {
  * Honest, locally-derived stats. Everything here is computed from the sessions
  * prop alone — anything that can't be computed is simply omitted (no fake data).
  */
-const buildInsights = (sessions: ChatSession[], skills: ChatSkill[]): string[] => {
+const buildInsights = (sessions: ChatSession[]): string[] => {
   const nonEmpty = sessions.filter((s) => (s.turns?.length || 0) > 0);
   if (nonEmpty.length === 0) return [];
   const chips: string[] = [];
@@ -98,30 +97,9 @@ const buildInsights = (sessions: ChatSession[], skills: ChatSkill[]): string[] =
   }
   if (streak >= 2) chips.push(`${streak}-day streak`);
 
-  // 3) Most-used skill (user turns that start with a known /command or alias).
-  const aliasToCommand = new Map<string, string>();
-  for (const sk of skills) {
-    aliasToCommand.set(sk.command, sk.command);
-    for (const a of sk.aliases || []) aliasToCommand.set(a, sk.command);
-  }
-  const counts = new Map<string, number>();
-  for (const s of nonEmpty) {
-    for (const t of s.turns) {
-      if (t.role !== 'user') continue;
-      const m = /^\/([a-zA-Z]+)\b/.exec(t.content || '');
-      const cmd = m ? aliasToCommand.get(m[1].toLowerCase()) : undefined;
-      if (cmd) counts.set(cmd, (counts.get(cmd) || 0) + 1);
-    }
-  }
-  let topCmd: string | null = null;
-  let topCount = 0;
-  for (const [cmd, n] of counts) {
-    if (n > topCount) {
-      topCmd = cmd;
-      topCount = n;
-    }
-  }
-  if (topCmd && topCount >= 2) chips.push(`most used skill: /${topCmd}`);
+  // 3) Total messages exchanged — a quiet sense of momentum from local data only.
+  const totalTurns = nonEmpty.reduce((n, s) => n + (s.turns?.length || 0), 0);
+  if (totalTurns >= 10) chips.push(`${totalTurns} messages`);
 
   return chips;
 };
@@ -144,10 +122,9 @@ const STARTERS: { emoji: string; text: string }[] = [
 export const ChatHome: React.FC<ChatHomeProps> = ({
   userName,
   sessions,
-  skills,
   onResume,
   onStartChat,
-  onRunSkill,
+  onOpenLibrary,
   onOpenDashboards
 }) => {
   const recent = useMemo(
@@ -159,17 +136,9 @@ export const ChatHome: React.FC<ChatHomeProps> = ({
         .slice(0, 6),
     [sessions]
   );
-  const insights = useMemo(() => buildInsights(sessions, skills), [sessions, skills]);
+  const insights = useMemo(() => buildInsights(sessions), [sessions]);
   const greeting = greetingFor(new Date().getHours());
   const hasRecent = recent.length > 0;
-  const featuredSkills = skills.slice(0, 5);
-
-  const handleSkill = (skill: ChatSkill) => {
-    // Skills that need an argument pre-fill the composer (`/command `) so the
-    // user types the argument; no-arg skills run immediately.
-    if (skill.argRequired) onStartChat(`/${skill.command} `);
-    else onRunSkill(skill, '');
-  };
 
   return (
     <div className="h-full w-full overflow-y-auto">
@@ -182,8 +151,8 @@ export const ChatHome: React.FC<ChatHomeProps> = ({
           </h1>
           <p className="mt-1.5 text-sm text-[var(--ds-muted)]">
             {hasRecent
-              ? 'Pick up a conversation, run a skill, or start something new.'
-              : 'Start a conversation, run a skill, or explore your dashboards.'}
+              ? 'Pick up a conversation or start something new.'
+              : 'Start a conversation, or explore your library and dashboards.'}
           </p>
         </header>
 
@@ -279,34 +248,30 @@ export const ChatHome: React.FC<ChatHomeProps> = ({
           </section>
         )}
 
-        {/* 4 — Skills (the Dashboards promo always renders, so the section always shows) */}
+        {/* 4 — Do more: quick links to the Library and Dashboards */}
         <section className="mt-10">
-            <h2 className={SECTION_LABEL}>Do more with skills</h2>
-            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {featuredSkills.map((sk) => (
-                <button
-                  key={sk.command}
-                  type="button"
-                  onClick={() => handleSkill(sk)}
-                  className={`${CARD} group flex flex-col items-start p-4 text-left hover:-translate-y-px hover:bg-[var(--ds-surface-strong)]`}
-                >
-                  <div className="flex w-full items-center gap-2">
-                    <span className="text-lg" aria-hidden="true">
-                      {sk.emoji}
-                    </span>
-                    <span className="flex-1 truncate text-sm font-semibold text-[var(--ds-ink)]">{sk.label}</span>
-                    <span className="rounded-md bg-[var(--ds-well)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--ds-muted)]">
-                      /{sk.command}
-                    </span>
-                  </div>
-                  <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-[var(--ds-muted)]">{sk.description}</p>
-                </button>
-              ))}
-              {/* Quiet Dashboards promo */}
+            <h2 className={SECTION_LABEL}>Do more</h2>
+            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <button
+                type="button"
+                onClick={onOpenLibrary}
+                className={`${CARD} group flex flex-col items-start p-4 text-left hover:-translate-y-px hover:bg-[var(--ds-surface-strong)]`}
+              >
+                <div className="flex w-full items-center gap-2">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#D97757]/10 text-[var(--ds-accent)]">
+                    <Library className="h-4 w-4" />
+                  </span>
+                  <span className="flex-1 text-sm font-semibold text-[var(--ds-ink)]">Library</span>
+                  <ArrowRight className="h-3.5 w-3.5 text-[var(--ds-muted)] opacity-0 transition-opacity duration-200 group-hover:opacity-100" />
+                </div>
+                <p className="mt-1.5 text-xs leading-relaxed text-[var(--ds-muted)]">
+                  Every file you've shared and image your chats have made — collected and searchable.
+                </p>
+              </button>
               <button
                 type="button"
                 onClick={onOpenDashboards}
-                className="group flex flex-col items-start rounded-2xl border border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] p-4 text-left transition-all duration-200 hover:-translate-y-px hover:bg-[var(--ds-hover)]"
+                className={`${CARD} group flex flex-col items-start p-4 text-left hover:-translate-y-px hover:bg-[var(--ds-surface-strong)]`}
               >
                 <div className="flex w-full items-center gap-2">
                   <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#D97757]/10 text-[var(--ds-accent)]">

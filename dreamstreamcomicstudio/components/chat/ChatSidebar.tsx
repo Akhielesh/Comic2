@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Plus, MoreVertical, MoreHorizontal, Trash2, Pencil, ArrowLeft, GitBranch, Check, X,
-  FolderPlus, ChevronDown, ChevronRight, FolderInput, Loader2, Search, Sparkles,
+  FolderPlus, ChevronDown, ChevronRight, FolderInput, Loader2, Search, Library,
   LayoutDashboard, LayoutGrid, Wrench, Settings, PanelLeftClose, PanelLeftOpen,
   Sun, Moon, Monitor
 } from 'lucide-react';
@@ -21,8 +21,8 @@ interface ChatSidebarProps {
   /** Ids of chats currently generating an answer (shows a spinner). */
   generatingIds?: Set<string>;
   hasMemory: boolean;
-  /** Which main view is showing — used to highlight Skills/Dashboards rows. */
-  view?: 'chat' | 'home' | 'skills' | 'dashboards' | 'gallery';
+  /** Which main view is showing — used to highlight Library/Dashboards rows. */
+  view?: 'chat' | 'home' | 'library' | 'dashboards' | 'gallery';
   /** Admin-only surfaces (Tools, Gallery) are hidden unless true. */
   isAdmin?: boolean;
   userName?: string;
@@ -40,7 +40,7 @@ interface ChatSidebarProps {
   onBack: () => void;
   /** Opens the command palette. */
   onOpenSearch: () => void;
-  onOpenSkills: () => void;
+  onOpenLibrary: () => void;
   onOpenDashboards: () => void;
   onOpenGallery: () => void;
   onOpenTools: () => void;
@@ -306,7 +306,7 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
   userName, userEmail, planLabel,
   onSelect, onNew, onDelete, onRename, onMoveToProject,
   onNewProject, onEditProject, onDeleteProject, onEditMemory, onBack,
-  onOpenSearch, onOpenSkills, onOpenDashboards, onOpenGallery, onOpenTools
+  onOpenSearch, onOpenLibrary, onOpenDashboards, onOpenGallery, onOpenTools
 }) => {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [dragOver, setDragOver] = useState<string | null>(null);
@@ -325,6 +325,10 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
     const map = new Map<string, ChatSession[]>();
     const unfiled: ChatSession[] = [];
     for (const s of sessions) {
+      // Don't list a chat until it actually has messages — an untouched "New chat"
+      // placeholder (and any empty rows left over from older builds) stays out of the
+      // list, so opening a new chat never piles up blank entries in the sidebar.
+      if (s.turns.length === 0) continue;
       if (s.projectId && projects.some((p) => p.id === s.projectId)) {
         const list = map.get(s.projectId) || [];
         list.push(s);
@@ -395,8 +399,8 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
         <button onClick={onOpenSearch} title="Search" className={`${CONTROL_BTN} p-1.5`}>
           <Search className="w-4 h-4" />
         </button>
-        <button onClick={onOpenSkills} title="Skills" className={`${CONTROL_BTN} p-1.5 ${view === 'skills' ? 'bg-[#D97757]/10' : ''}`}>
-          <Sparkles className="w-4 h-4" />
+        <button onClick={onOpenLibrary} title="Library" className={`${CONTROL_BTN} p-1.5 ${view === 'library' ? 'bg-[#D97757]/10' : ''}`}>
+          <Library className="w-4 h-4" />
         </button>
         <button onClick={onOpenDashboards} title="Dashboards" className={`${CONTROL_BTN} p-1.5 ${view === 'dashboards' ? 'bg-[#D97757]/10' : ''}`}>
           <LayoutDashboard className="w-4 h-4" />
@@ -434,8 +438,8 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
           <Search className={`w-4 h-4 shrink-0 ${MUTED}`} /> Search
           <kbd className={`ml-auto text-[10px] font-medium ${MUTED} border border-[var(--ds-hairline-soft)] rounded px-1`}>⌘K</kbd>
         </button>
-        <button onClick={onOpenSkills} className={view === 'skills' ? NAV_ROW_ACTIVE : NAV_ROW}>
-          <Sparkles className={`w-4 h-4 shrink-0 ${view === 'skills' ? ACCENT_TEXT : MUTED}`} /> Skills
+        <button onClick={onOpenLibrary} className={view === 'library' ? NAV_ROW_ACTIVE : NAV_ROW}>
+          <Library className={`w-4 h-4 shrink-0 ${view === 'library' ? ACCENT_TEXT : MUTED}`} /> Library
         </button>
         <button onClick={onOpenDashboards} className={view === 'dashboards' ? NAV_ROW_ACTIVE : NAV_ROW}>
           <LayoutDashboard className={`w-4 h-4 shrink-0 ${view === 'dashboards' ? ACCENT_TEXT : MUTED}`} /> Dashboards
