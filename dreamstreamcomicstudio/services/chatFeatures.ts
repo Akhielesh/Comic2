@@ -22,11 +22,13 @@ export interface ChatModelFeatures {
   contextLength: number;
 }
 
+// Three plain choices instead of four near-identical levels — most users only want
+// "off / think a bit / think hard". (The wire protocol still accepts 'low' for any
+// older session that carried it.)
 export const REASONING_LEVELS: { value: ChatReasoningLevel; label: string }[] = [
   { value: 'none', label: 'Off' },
-  { value: 'low', label: 'Low' },
-  { value: 'medium', label: 'Medium' },
-  { value: 'high', label: 'High' }
+  { value: 'medium', label: 'Standard' },
+  { value: 'high', label: 'Extended' }
 ];
 
 export const deriveModelFeatures = (model: CatalogModel | null): ChatModelFeatures => {

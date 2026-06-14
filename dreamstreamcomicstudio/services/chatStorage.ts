@@ -32,8 +32,13 @@ export interface ChatAttachment {
   id: string;
   name: string;
   mimeType: string;
-  /** 'image' is sent to vision models; 'document' (e.g. PDF) is viewer-only. */
-  kind?: 'image' | 'document';
+  /**
+   * 'image'    → sent to vision models.
+   * 'document' → viewer-only (PDF/CSV…); read by server tools, not inlined to the model.
+   * 'text'     → a long block the user pasted; shown as a compact chip and inlined into
+   *              the message so the model reads it without flooding the composer.
+   */
+  kind?: 'image' | 'document' | 'text';
   /** data:...;base64,... — images go to vision models; documents open in the viewer. */
   dataUrl: string;
 }

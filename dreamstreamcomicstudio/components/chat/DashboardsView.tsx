@@ -971,6 +971,11 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode }> = ({
   // Scroll the active pill into view when the selection changes (not every render —
   // tile-state re-renders would otherwise fight the user scrolling the strip).
   const activePillRef = useRef<HTMLButtonElement>(null);
+  // The inline add-widget panel; the floating add button scrolls it into view on open.
+  const addPanelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (addOpen) addPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [addOpen]);
 
   const inflight = useRef(new Set<string>());
   const tileStatesRef = useRef(tileStates);
@@ -1210,13 +1215,15 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode }> = ({
 
   return (
     <div className="h-full w-full overflow-y-auto bg-[var(--ds-canvas)]">
-      {/* -------------------------------------------- sticky AI command bar --- */}
+      {/* ---- sticky top: AI command bar + board switcher stay put on scroll, so the
+              user can switch boards from anywhere without scrolling back up --------- */}
+      <div className="sticky top-0 z-30 bg-[var(--ds-canvas)]">
       <AiCommandBar board={active ?? null} onResult={handleAiResult} leading={sidebarControl} />
-      <div className="mx-auto w-full max-w-6xl px-3 py-3 sm:px-6 sm:py-4">
+      <div className="mx-auto w-full max-w-6xl px-3 sm:px-6">
         {/* --------------------------------------------------- switcher row ---
             One slim line that never wraps: the board pills scroll horizontally,
             with a name filter once the strip gets crowded. */}
-        <header className="mb-3 flex items-center gap-1.5">
+        <header className="flex items-center gap-1.5 border-b border-[var(--ds-hairline-soft)] py-2">
           {manyBoards && (
             <div className="relative shrink-0">
               <button
@@ -1369,12 +1376,17 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode }> = ({
             </div>
           )}
         </header>
+      </div>
+      </div>
+      {/* ---- scrolling content: picks + tile grid ----------------------------- */}
+      <div className="mx-auto w-full max-w-6xl px-3 py-3 sm:px-6 sm:py-4">
 
         {/* ------------------------------------------------------ pulse strip --- */}
         {/* Smart picks mined from the user's memory and recent chats (the greeting
-            lives in the sticky AI bar). One tap pins a pick as a live tile.
-            Hidden while the board is locked. */}
-        {active && !locked && smartPicks.length > 0 && (
+            lives in the sticky AI bar). One tap pins a pick as a live tile. Shown only
+            on an EMPTY board as a starting point — once tiles exist it gets out of the
+            way (and stays hidden while the board is locked). */}
+        {active && !locked && active.tiles.length === 0 && smartPicks.length > 0 && (
           <div className="mb-4 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-4 py-3 shadow-[0_1px_3px_rgba(0,0,0,0.05)]">
             <div className="flex items-center gap-1.5 text-sm font-semibold text-[var(--ds-ink)]">
               <Sparkles className="h-4 w-4 text-[var(--ds-accent)]" />
@@ -1493,7 +1505,7 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode }> = ({
 
             {/* Add widget — hidden on a locked board. */}
             {locked ? null : addOpen ? (
-              <div className="md:col-span-2 xl:col-span-3">
+              <div ref={addPanelRef} className="md:col-span-2 xl:col-span-3">
                 <AddWidgetPanel onAdd={handleAddTile} onClose={() => setAddOpen(false)} />
               </div>
             ) : (
@@ -1514,6 +1526,20 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode }> = ({
           </div>
         )}
       </div>
+
+      {/* Always-reachable add: a quiet floating button so the user never has to scroll to
+          the end of the grid to pin a widget. Opens the inline panel and scrolls to it. */}
+      {active && !locked && !addOpen && (
+        <button
+          type="button"
+          onClick={() => setAddOpen(true)}
+          title="Add a widget"
+          aria-label="Add a widget"
+          className="fixed bottom-6 right-6 z-30 flex h-12 w-12 items-center justify-center rounded-full bg-[var(--ds-accent)] text-white shadow-lg transition-all duration-200 hover:-translate-y-px hover:bg-[var(--ds-accent-hover)]"
+        >
+          <Plus className="h-5 w-5" />
+        </button>
+      )}
     </div>
   );
 };

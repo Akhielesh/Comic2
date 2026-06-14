@@ -10,14 +10,37 @@
 // chat sessions that already live in IndexedDB. This keeps it always in sync and avoids
 // a second copy of every asset.
 
+import type { ChatToolImage } from '../apiTypes';
 import type { ChatSession } from './chatStorage';
 import { listChatSessions } from './chatStorage';
 
 /** Coarse media class used by the All / Images / Files tabs. */
 export type LibraryItemKind = 'image' | 'file';
 
-/** Where the asset came from — drives the "Uploaded by you" vs "Generated" filter. */
-export type LibraryItemOrigin = 'upload' | 'generated';
+/**
+ * Where the asset came from — these are genuinely different things and must not be
+ * conflated:
+ *   • upload    — a file the user attached.
+ *   • generated — an image a model *created* (image-generation tool; embedded as a
+ *                 data URL, or tagged with a generation provider).
+ *   • sourced   — an image *found* on the web / returned by a tool or MCP (image
+ *                 search etc.) — a pointer to someone else's image, not ours.
+ */
+export type LibraryItemOrigin = 'upload' | 'generated' | 'sourced';
+
+// Providers that the image-generation tool stamps onto a generated image's `source`.
+const GENERATED_SOURCES = new Set([
+  'gemini', 'ideogram', 'flux', 'openai', 'xai', 'dall-e', 'dalle', 'imagen',
+  'minimax', 'pixazo', 'stability', 'stable diffusion', 'tencent', 'zai'
+]);
+
+// A model-CREATED image embeds its result as a data URL (or carries a known generator
+// in `source`); a SEARCHED/sourced image is a remote http(s) pointer with no generator.
+const isGeneratedImage = (img: ChatToolImage): boolean => {
+  if (img.url.startsWith('data:')) return true;
+  const s = (img.source || '').toLowerCase().trim();
+  return s ? GENERATED_SOURCES.has(s) : false;
+};
 
 export interface LibraryItem {
   /** Stable, de-duplicating id (prefixed by source so uploads and URLs never collide). */
@@ -88,17 +111,19 @@ export const collectLibraryItems = (sessions: ChatSession[]): LibraryItem[] => {
         }
       }
 
-      // 2) Images the model produced / surfaced — current answer plus regenerate history.
+      // 2) Images on assistant turns — current answer plus regenerate history. These
+      //    split into model-CREATED ('generated') vs web/tool-SOURCED ('sourced').
       const imageLists = [turn.images, ...((turn.variants || []).map((v) => v.images))];
       for (const list of imageLists) {
         if (!list) continue;
         for (const img of list) {
           if (!img.url) continue;
+          const generated = isGeneratedImage(img);
           push({
             id: `img:${img.url}`,
             kind: 'image',
-            origin: 'generated',
-            name: img.title || 'Generated image',
+            origin: generated ? 'generated' : 'sourced',
+            name: img.title || (generated ? 'Generated image' : 'Web image'),
             url: img.url,
             thumbnail: img.thumbnail,
             mimeType: 'image/*',
