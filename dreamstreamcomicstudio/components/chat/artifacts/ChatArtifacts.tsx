@@ -182,7 +182,8 @@ export const DENSITY_AWARE_TYPES = new Set([
   'trip_budget',
   'local_cheatsheet',
   'loyalty_wallet',
-  'widget_stack'
+  'widget_stack',
+  'react_component'
 ]);
 
 // Holds the freshest version of a single artifact. When the server stamped an
