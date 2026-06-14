@@ -99,6 +99,53 @@ const tagText = (block: string, tag: string): string | undefined => {
   return inner;
 };
 
+// Google News RSS tags the outlet as `<source url="https://www.wsj.com">The Wall
+// Street Journal</source>`. The url attribute is the AUTHORITATIVE publisher
+// homepage — far better than the news.google.com redirect link for picking the real
+// favicon. Pull its hostname (sans www) as the canonical source domain. Pure.
+export const sourceDomainOf = (block: string): string | undefined => {
+  const m = block.match(/<source\b[^>]*\burl=["']([^"']+)["']/i);
+  if (!m) return undefined;
+  try {
+    return new URL(decodeEntities(m[1])).hostname.replace(/^www\./i, '').toLowerCase() || undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+// Hard paywalls: outlets whose articles render as a wall (no readable body in-app),
+// so a card full of them is a row of dead "open link" stories. We DEPRIORITIZE these
+// and drop them entirely when there are enough open alternatives (see prioritizeNews).
+const HARD_PAYWALL_DOMAINS = new Set([
+  'wsj.com',
+  'ft.com',
+  'economist.com',
+  'bloomberg.com',
+  'nytimes.com',
+  'washingtonpost.com',
+  'theinformation.com',
+  'barrons.com',
+  'newyorker.com',
+  'wired.com',
+  'theatlantic.com',
+  'businessinsider.com',
+  'seekingalpha.com',
+  'foreignpolicy.com',
+  'hbr.org',
+  'thetimes.co.uk',
+  'telegraph.co.uk'
+]);
+
+/** True when the host (or a parent domain) is a known hard paywall. Pure. */
+export const isPaywalled = (domain?: string): boolean => {
+  if (!domain) return false;
+  const d = domain.replace(/^www\./i, '').toLowerCase();
+  if (HARD_PAYWALL_DOMAINS.has(d)) return true;
+  // Match subdomains too (e.g. "europe.wsj.com").
+  for (const base of HARD_PAYWALL_DOMAINS) if (d.endsWith(`.${base}`)) return true;
+  return false;
+};
+
 /**
  * Parse a Google News RSS document into structured items. Pure + testable.
  *
@@ -138,15 +185,36 @@ export const parseNewsRss = (xml: string, limit = 10): NewsItem[] => {
     // A snippet that still looks like markup/links after stripping adds nothing — drop it.
     if (snippet && /href=|<\w|news\.google\.com/i.test(snippet)) snippet = undefined;
 
+    const sourceDomain = sourceDomainOf(block);
+    const paywall = isPaywalled(sourceDomain);
+
     items.push({
       title,
       url: stripTags(link),
       source: sourceName,
+      ...(sourceDomain ? { sourceDomain } : {}),
       publishedAt,
-      snippet
+      snippet,
+      ...(paywall ? { paywall: true } : {})
     });
   }
   return items;
+};
+
+/**
+ * Smart paywall policy: keep readable (open) stories first; only fall back to
+ * paywalled ones to fill the card when there aren't enough open alternatives. This
+ * "automatically removes" dead WSJ/FT/NYT links from a healthy feed while never
+ * leaving a thin business/finance feed empty. Stable (preserves feed order). Pure.
+ */
+export const prioritizeNews = (items: NewsItem[], limit: number): NewsItem[] => {
+  const open = items.filter((i) => !i.paywall);
+  const walled = items.filter((i) => i.paywall);
+  // Enough open stories → drop paywalled entirely. Otherwise top up with the best
+  // (highest-ranked) paywalled ones so the card stays full.
+  const MIN_OPEN = 5;
+  const ranked = open.length >= Math.min(MIN_OPEN, limit) ? open : [...open, ...walled];
+  return ranked.slice(0, limit);
 };
 
 export const fetchNews = async (
@@ -168,7 +236,9 @@ export const fetchNews = async (
     });
     if (!res.ok) throw new Error(`Google News returned ${res.status}`);
     const xml = await res.text();
-    const items = parseNewsRss(xml, limit);
+    // Over-fetch, then drop hard-paywalled stories when enough open ones remain, so
+    // the final card is full of readable articles rather than dead "open link" rows.
+    const items = prioritizeNews(parseNewsRss(xml, Math.max(limit * 2, 24)), limit);
     // Emit the EFFECTIVE topic so the client's topic chips highlight correctly:
     // a free-text query has no topic; a topical/headline feed normalizes to its
     // section key, defaulting to 'top' for the plain top-headlines feed.

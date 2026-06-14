@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Newspaper } from 'lucide-react';
+import { Newspaper, Lock } from 'lucide-react';
 import type { NewsResultsArtifact, NewsItem } from '../../../apiTypes';
 import { Surface, SurfaceTitle, SurfaceSubtitle, relativeTime, useCompact, useLiveData } from './kit';
 import { ArticleReader } from './ArticleReader';
@@ -19,9 +19,13 @@ import { NewsReaderPane, hostOf, prefetchArticle } from './NewsReader';
 //    with that topic (no model round-trip); the split stays put and the first new
 //    story is selected.
 
-const faviconUrl = (url: string): string | null => {
-  const host = hostOf(url);
-  return host ? `https://www.google.com/s2/favicons?domain=${host}&sz=64` : null;
+// The REAL publisher favicon. Prefer the feed-resolved publisher domain (e.g.
+// "wsj.com"); never derive the icon from the news.google.com redirect host (that's
+// what made every story show Google's logo). sz=128 stays crisp on retina at 16px.
+const faviconFor = (item: NewsItem): string | null => {
+  const host = hostOf(item.url);
+  const domain = item.sourceDomain || (host && !/(^|\.)news\.google\.com$/i.test(host) ? host : '');
+  return domain ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=128` : null;
 };
 const seededGradient = (seed: string): string => {
   let h = 0;
@@ -45,7 +49,7 @@ const heading = (data: NewsResultsArtifact): string => {
 
 const SourceIcon: React.FC<{ item: NewsItem; size?: number }> = ({ item, size = 16 }) => {
   const [failed, setFailed] = useState(false);
-  const fav = faviconUrl(item.url);
+  const fav = faviconFor(item);
   if (fav && !failed) {
     return <img src={fav} alt="" width={size} height={size} loading="lazy" onError={() => setFailed(true)} className="rounded ring-1 ring-[var(--ds-hairline-soft)]" style={{ width: size, height: size }} />;
   }
@@ -72,7 +76,12 @@ const MetaLine: React.FC<{ item: NewsItem; showSentiment?: boolean }> = ({ item,
   const time = relativeTime(item.publishedAt);
   return (
     <span className="flex min-w-0 items-center gap-1.5 text-[10px] text-[var(--ds-muted)]">
-      <span className="truncate font-medium">{item.source || hostOf(item.url)}</span>
+      <span className="truncate font-medium">{item.source || item.sourceDomain || hostOf(item.url)}</span>
+      {item.paywall && (
+        <span className="inline-flex shrink-0 items-center gap-0.5 text-[var(--ds-faint)]" title="Subscription / paywalled — full text may not load in-app">
+          <Lock className="h-2.5 w-2.5" />
+        </span>
+      )}
       {time && <span className="shrink-0">· {time}</span>}
       {item.readMinutes ? <span className="shrink-0">· {item.readMinutes} min</span> : null}
       {showSentiment && item.sentiment && (

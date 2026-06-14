@@ -1657,6 +1657,10 @@ export interface NewsItem {
   url: string;
   /** Publication / outlet name, when known. */
   source?: string;
+  /** The publisher's real homepage host (e.g. "wsj.com"), parsed from the feed's
+   *  <source url> attribute. Drives the real publisher favicon instead of the
+   *  news.google.com redirector's logo. */
+  sourceDomain?: string;
   /** ISO timestamp of publication, when known. */
   publishedAt?: string;
   snippet?: string;
@@ -1666,6 +1670,9 @@ export interface NewsItem {
   sentiment?: 'positive' | 'neutral' | 'negative';
   /** Estimated read time in minutes. */
   readMinutes?: number;
+  /** True when the publisher is a hard paywall (content can't be read in-app). The
+   *  feed deprioritizes/drops these so cards aren't full of dead "open link" stories. */
+  paywall?: boolean;
 }
 export interface NewsResultsArtifact {
   /** The query used (empty for a topical/top-headlines feed). */
