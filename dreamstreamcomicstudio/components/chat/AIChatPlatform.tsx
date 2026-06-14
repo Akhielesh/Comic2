@@ -25,7 +25,7 @@ const CodeStudioPanel = lazy(() => import('./CodeStudioPanel'));
 // `pickExport` tolerates both default and named exports from those modules.
 // ---------------------------------------------------------------------------
 
-type StudioView = 'chat' | 'home' | 'skills' | 'dashboards';
+type StudioView = 'chat' | 'home' | 'skills' | 'dashboards' | 'gallery';
 
 interface ChatHomeProps {
   userName?: string;
@@ -63,6 +63,7 @@ const ChatHome = lazy(() => import('./ChatHome').then((m) => pickExport<ChatHome
 const SkillsView = lazy(() => import('./SkillsView').then((m) => pickExport<SkillsViewProps>(m, 'SkillsView')));
 import { FloatingVideoDock } from './FloatingVideoDock';
 const DashboardsView = lazy(() => import('./DashboardsView').then((m) => pickExport<DashboardsViewProps>(m, 'DashboardsView')));
+const GalleryStudio = lazy(() => import('./GalleryStudio').then((m) => pickExport<{ sidebarControl?: React.ReactNode }>(m, 'GalleryStudio')));
 const CommandPalette = lazy(() => import('./CommandPalette').then((m) => pickExport<CommandPaletteProps>(m, 'CommandPalette')));
 import { deriveModelFeatures } from '../../services/chatFeatures';
 import { getCapabilities } from '../../services/modelCapabilities';
@@ -198,7 +199,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   // always lands back on 'chat'; a null active session falls back to 'home'.
   // Continuity: a reload restores the last view (URL ?cview= → session memory),
   // so refreshing on Dashboards no longer bounces the user back to the default.
-  const isStudioView = (v: string): v is StudioView => v === 'chat' || v === 'home' || v === 'skills' || v === 'dashboards';
+  const isStudioView = (v: string): v is StudioView => v === 'chat' || v === 'home' || v === 'skills' || v === 'dashboards' || v === 'gallery';
   const [view, setView] = useState<StudioView>(() => resolveInitialUiState('chat.view', 'cview', isStudioView, 'chat'));
   useEffect(() => {
     persistUiState('chat.view', 'cview', view === 'chat' ? null : view);
@@ -1293,7 +1294,7 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
             onOpenSearch={() => { setPaletteOpen(true); closeOnMobile(); }}
             onOpenSkills={() => { setView('skills'); closeOnMobile(); }}
             onOpenDashboards={() => { setView('dashboards'); closeOnMobile(); }}
-            onOpenGallery={() => { setSettingsTab('gallery'); closeOnMobile(); }}
+            onOpenGallery={() => { setView('gallery'); closeOnMobile(); }}
             onOpenTools={() => { setSettingsTab('tools'); closeOnMobile(); }}
           />
         );
@@ -1361,7 +1362,7 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
             `relative z-20` lifts it above the scrolling content below. Dashboards
             skip it entirely (the toggle moves into their own sticky bar) so the
             board content starts at the very top — no wasted title strip. */}
-        {resolvedView !== 'dashboards' && (
+        {resolvedView !== 'dashboards' && resolvedView !== 'gallery' && (
         <div className={`relative z-20 flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-3 border-b border-[var(--ds-hairline)] ${GLASS}`}>
           <button
             onClick={() => setSidebarOpen((v) => !v)}
@@ -1399,6 +1400,19 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
             )}
             {resolvedView === 'dashboards' && (
               <DashboardsView
+                sidebarControl={
+                  <button
+                    onClick={() => setSidebarOpen((v) => !v)}
+                    className={`${CONTROL_BTN} p-2 sm:p-1.5 tap-target shrink-0`}
+                    title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+                  >
+                    {sidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
+                  </button>
+                }
+              />
+            )}
+            {resolvedView === 'gallery' && (
+              <GalleryStudio
                 sidebarControl={
                   <button
                     onClick={() => setSidebarOpen((v) => !v)}
