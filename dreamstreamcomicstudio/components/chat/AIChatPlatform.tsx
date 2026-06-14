@@ -53,6 +53,7 @@ interface CommandPaletteProps {
   sessions: ChatSession[];
   onResume: (id: string) => void;
   onNavigate: (view: 'home' | 'library' | 'dashboards') => void;
+  onAsk: (text: string) => void;
 }
 
 const pickExport = <P,>(m: Record<string, unknown>, name: string): { default: React.ComponentType<P> } => ({
@@ -1494,6 +1495,7 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
             sessions={sessions}
             onResume={(id) => { setActiveId(id); setView('chat'); setPaletteOpen(false); }}
             onNavigate={(v) => { setView(v); setPaletteOpen(false); }}
+            onAsk={(text) => { setPaletteOpen(false); handleStartChat(text); }}
           />
         </Suspense>
       )}

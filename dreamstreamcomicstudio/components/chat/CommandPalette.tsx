@@ -10,7 +10,7 @@
 // soft ambient shadow. Works in light and dark (.dark on <html>).
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Home, LayoutDashboard, Library, MessageSquare, Search } from 'lucide-react';
+import { Home, LayoutDashboard, Library, MessageSquare, Search, Sparkles } from 'lucide-react';
 import type { ChatSession } from '../../services/chatStorage';
 
 type NavView = 'home' | 'library' | 'dashboards';
@@ -21,11 +21,14 @@ interface CommandPaletteProps {
   sessions: ChatSession[];
   onResume: (id: string) => void;
   onNavigate: (view: NavView) => void;
+  /** Escalate the typed text into a new chat (the "ask AI anything" path). */
+  onAsk: (text: string) => void;
 }
 
 type PaletteItem =
   | { kind: 'session'; session: ChatSession }
-  | { kind: 'nav'; view: NavView; label: string };
+  | { kind: 'nav'; view: NavView; label: string }
+  | { kind: 'ask'; text: string };
 
 interface PaletteGroup {
   label: string;
@@ -73,7 +76,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   onClose,
   sessions,
   onResume,
-  onNavigate
+  onNavigate,
+  onAsk
 }) => {
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
@@ -118,6 +122,9 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
 
     const out: PaletteGroup[] = [];
     if (sessionHits.length) out.push({ label: q ? 'Chats' : 'Recent chats', items: sessionHits });
+    // Anything typed can always be escalated to the AI — the "ask me anything" path.
+    const asked = query.trim();
+    if (asked) out.push({ label: 'Ask', items: [{ kind: 'ask', text: asked }] });
     if (navHits.length) out.push({ label: 'Go to', items: navHits });
     return out;
   }, [query, sessions, sessionSearch]);
@@ -126,15 +133,12 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
 
   const select = useCallback(
     (item: PaletteItem) => {
-      if (item.kind === 'session') {
-        onResume(item.session.id);
-        onClose();
-      } else {
-        onNavigate(item.view);
-        onClose();
-      }
+      if (item.kind === 'session') onResume(item.session.id);
+      else if (item.kind === 'ask') onAsk(item.text);
+      else onNavigate(item.view);
+      onClose();
     },
-    [onResume, onNavigate, onClose]
+    [onResume, onNavigate, onAsk, onClose]
   );
 
   // Reset state each time the palette opens; focus the input.
@@ -246,7 +250,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                   flatIndex += 1;
                   const i = flatIndex;
                   const isActive = i === active;
-                  const key = item.kind === 'session' ? `s:${item.session.id}` : `n:${item.view}`;
+                  const key = item.kind === 'session' ? `s:${item.session.id}` : item.kind === 'ask' ? 'ask' : `n:${item.view}`;
                   const rowClass = `flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-left transition-colors duration-100 ${
                     isActive ? 'bg-[#D97757]/10 text-[var(--ds-ink)]' : 'text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]'
                   }`;
@@ -267,6 +271,26 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                         <span className="shrink-0 text-[11px] text-[var(--ds-muted)]">
                           {relativeTime(item.session.updatedAt)}
                         </span>
+                      </button>
+                    );
+                  }
+                  if (item.kind === 'ask') {
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        role="option"
+                        aria-selected={isActive}
+                        data-active={isActive}
+                        onClick={() => select(item)}
+                        onMouseMove={() => setActive(i)}
+                        className={rowClass}
+                      >
+                        <Sparkles className="h-4 w-4 shrink-0 text-[var(--ds-accent)]" />
+                        <span className="flex-1 truncate text-sm">
+                          Ask AI <span className="text-[var(--ds-muted)]">— “{item.text}”</span>
+                        </span>
+                        <span className="shrink-0 text-[10px] font-medium uppercase tracking-wider text-[var(--ds-muted)]">Enter</span>
                       </button>
                     );
                   }
