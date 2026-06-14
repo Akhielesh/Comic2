@@ -11,7 +11,7 @@
 import {
   ArrowRightLeft, Banknote, Bitcoin, CalendarClock, CalendarRange, CandlestickChart, Clapperboard,
   CloudSun, Coins, Gauge, Landmark, LineChart, Map as MapIcon, MapPin, MessageCircle, Navigation,
-  Newspaper, PiggyBank, Plane, Route, Scale, Sparkles, TrendingUp
+  Newspaper, PiggyBank, Plane, Route, Scale, Sparkles, TrendingUp, Youtube
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { WidgetDensity } from './artifacts/kit';
@@ -20,6 +20,10 @@ import { coerceSymbol } from '../../services/symbolResolve';
 
 // 'ai_chat' is a special tile: a mini assistant box on the board (no live-data tool).
 export const AI_CHAT_TILE = 'ai_chat';
+
+// 'embed' is a special tile: a pinned, playable video (YouTube/Vimeo) — no live-data
+// fetch, rendered from its `url` arg via the videoEmbed util.
+export const EMBED_TILE = 'embed';
 
 export type WidgetCategory = 'Essentials' | 'Markets' | 'Crypto' | 'Travel & places' | 'Calendars & more';
 
@@ -133,6 +137,15 @@ export const WIDGET_CATALOG: WidgetDef[] = [
     category: 'Essentials',
     defaultDensity: 'detailed',
     fields: [{ key: 'query', label: 'Search videos for', placeholder: 'how to make croissants…' }]
+  },
+  {
+    tool: EMBED_TILE,
+    label: 'Embed a video',
+    icon: Youtube,
+    blurb: 'Paste a YouTube or Vimeo link to play it on the board',
+    category: 'Essentials',
+    defaultDensity: 'detailed',
+    fields: [{ key: 'url', label: 'Video link', placeholder: 'https://youtube.com/watch?v=…' }]
   },
   // -------------------------------------------------------------- Markets ----
   {
@@ -419,6 +432,11 @@ export const buildTileFromFields = (
       args[f.key] = raw;
       if (!f.select) labelParts.push(raw);
     }
+  }
+  // embed: a pinned video — keep the label clean ("Video") rather than the raw URL.
+  if (def.tool === EMBED_TILE) {
+    if (typeof args.url !== 'string' || !args.url) return null;
+    return { tool: def.tool, args, label: 'Video', density };
   }
   // get_stock: accept a company name typed straight into the field ("rivian" → RIVN),
   // so the symbol box is forgiving instead of erroring on anything but an exact ticker.

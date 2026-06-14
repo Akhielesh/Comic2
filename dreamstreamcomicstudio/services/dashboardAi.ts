@@ -13,6 +13,8 @@ import {
 } from './customDashboards';
 import { resolveWidgetIntent } from './widgetIntent';
 import { resolveStockSymbol } from './symbolResolve';
+import { EMBED_TILE } from '../components/chat/widgetCatalog';
+import { isEmbeddableVideo } from '../components/chat/videoEmbed';
 import type { WidgetDensity } from '../components/chat/artifacts/kit';
 
 export interface DashboardCommandResult {
@@ -86,6 +88,11 @@ const DIRECTIONS_TO_FROM_RE = /(?:directions|route|commute|how\s+(?:do\s+i|to)\s
 export const parseDashboardCommand = (raw: string): DashboardPlan => {
   const command = raw.trim();
   if (!command) return { kind: 'error', message: 'Tell me what to build or change.' };
+
+  // A pasted YouTube/Vimeo link → pin it as a playable video tile.
+  if (/^https?:\/\/\S+$/i.test(command) && isEmbeddableVideo(command)) {
+    return { kind: 'add', tool: EMBED_TILE, args: { url: command }, label: 'Video', density: 'detailed' };
+  }
 
   const dir = command.match(DIRECTIONS_RE) ?? command.match(DIRECTIONS_TO_FROM_RE);
   if (dir) {
