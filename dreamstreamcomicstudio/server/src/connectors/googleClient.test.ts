@@ -54,6 +54,30 @@ describe('googleApiFetch', () => {
     );
   });
 
+  it('treats a 403 insufficient-scope as a reconnect-worthy auth error', async () => {
+    (global.fetch as any).mockResolvedValue(
+      mockResponse({ error: { status: 'PERMISSION_DENIED', message: 'Request had insufficient authentication scopes.' } }, { status: 403 })
+    );
+    await expect(
+      googleApiFetch('https://gmail.googleapis.com/x', { accessToken: 't', maxRetries: 0 })
+    ).rejects.toBeInstanceOf(ConnectorAuthError);
+  });
+
+  it('keeps a 403 "API disabled" as a hard (non-auth) error so it is not mistaken for a reconnect', async () => {
+    (global.fetch as any).mockResolvedValue(
+      mockResponse(
+        { error: { status: 'PERMISSION_DENIED', message: 'Gmail API has not been used in project 123 before or it is disabled.' } },
+        { status: 403 }
+      )
+    );
+    const err = (await googleApiFetch('https://gmail.googleapis.com/x', { accessToken: 't', maxRetries: 0 }).catch(
+      (e) => e
+    )) as Error;
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(ConnectorAuthError);
+    expect(err.message).toMatch(/disabled/i);
+  });
+
   it('treats a 403 rateLimitExceeded as retryable quota, not a hard error', async () => {
     (global.fetch as any).mockResolvedValue(
       mockResponse({ error: { errors: [{ reason: 'rateLimitExceeded' }], message: 'rateLimitExceeded' } }, { status: 403 })

@@ -173,6 +173,13 @@ export const googleApiFetch = async <T = unknown>(
 
     // Other 4xx/5xx — non-retryable (or out of retries). Shape a clear error.
     const reason = extractGoogleError(body) || `HTTP ${res.status}`;
+    // A 403 for missing/insufficient OAuth scope is fixable by re-consenting, so surface it
+    // as an auth error → the connection is marked "reconnect" (actionable) rather than a dead
+    // "error". Quota 403s were already handled above; an API-disabled 403 (admin must enable
+    // it in Cloud Console) has no "insufficient scope" wording, so it stays a hard error.
+    if (res.status === 403 && /insufficient.{0,20}(scope|permission|authentication)|ACCESS_TOKEN_SCOPE_INSUFFICIENT/i.test(body)) {
+      throw new ConnectorAuthError('unauthorized', `Reconnect needed — additional Google permission required: ${reason}`);
+    }
     throw new Error(`Google API ${host} error: ${reason}`);
   }
 

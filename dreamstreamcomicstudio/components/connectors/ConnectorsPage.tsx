@@ -632,8 +632,11 @@ const ConnectionRow: React.FC<{
           </span>
         </div>
         <p className="truncate text-xs text-[var(--ds-muted)]">{meta}</p>
-        {conn.lastError && vis.needsReconnect && (
-          <p className="truncate text-[11px] text-amber-700" title={conn.lastError}>
+        {conn.lastError && (conn.status === 'error' || vis.needsReconnect) && (
+          <p
+            className={`mt-0.5 line-clamp-2 text-[11px] ${conn.status === 'error' ? 'text-rose-600' : 'text-amber-700'}`}
+            title={conn.lastError}
+          >
             {conn.lastError}
           </p>
         )}
