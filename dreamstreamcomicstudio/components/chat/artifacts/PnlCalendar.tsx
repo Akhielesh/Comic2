@@ -1,21 +1,27 @@
-import React from 'react';
+import React, { useState } from 'react';
 import type { PnlCalendarArtifact, PnlDay } from '../../../apiTypes';
 import { Surface, SurfaceTitle, SurfaceSubtitle, formatPrice, formatSigned, shortDate, useCompact, withAlpha, BULL, BEAR } from './kit';
 
 // P&L calendar — a GitHub-contribution-style heatmap of daily profit and loss.
-//  • detailed — ISO-week columns × Mon-first weekday rows of 10px rounded cells:
-//    green/red intensity scales with |value| against the 90th-percentile day
+//  • detailed — ISO-week columns × Mon-first weekday rows of larger 13px rounded
+//    cells: green/red intensity scales with |value| against the 90th-percentile day
 //    (clamped 0.15–1); empty/zero days stay hairline-toned so the grid reads in
-//    both themes. Month labels mark column boundaries, M/W/F label the rows, and
-//    every traded cell carries a "Jun 3 · +$420 · note" tooltip. A stats footer
-//    shows total, green-day rate, and best/worst day.
+//    both themes. Month labels mark column boundaries, M/W/F label the rows, an
+//    interactive readout above the grid names the hovered day, an intensity legend
+//    explains the colour scale, and a richer stats footer shows total, green-day
+//    rate, average/day, current green streak, and best/worst day.
 //  • compact — total + win rate beside a 14-day mini strip of the latest cells.
 
+// Compact mini-strip cells.
 const CELL = 10;
 const GAP = 2;
 const PITCH = CELL + GAP;
-const LEFT = 18; // weekday label gutter
-const TOP = 12; // month label band
+// Detailed grid — deliberately larger / more expansive than the mini strip.
+const D_CELL = 13;
+const D_GAP = 3;
+const D_PITCH = D_CELL + D_GAP;
+const LEFT = 22; // weekday label gutter
+const TOP = 16; // month label band
 const DAY_MS = 86_400_000;
 
 /** Parse an ISO day as a LOCAL date so weekday bucketing doesn't shift by TZ. */
@@ -33,6 +39,7 @@ const weekday = (d: Date): number => (d.getDay() + 6) % 7;
 
 export const PnlCalendar: React.FC<{ data: PnlCalendarArtifact }> = ({ data }) => {
   const compact = useCompact();
+  const [hovered, setHovered] = useState<(PnlDay & { dt: Date }) | null>(null);
 
   const entries = (data.days ?? [])
     .map((d) => ({ ...d, dt: parseDay(d.date) }))
@@ -64,6 +71,11 @@ export const PnlCalendar: React.FC<{ data: PnlCalendarArtifact }> = ({ data }) =
   const winRate = Math.round((entries.filter((e) => e.value > 0).length / entries.length) * 100);
   const best = entries.reduce((a, b) => (b.value > a.value ? b : a));
   const worst = entries.reduce((a, b) => (b.value < a.value ? b : a));
+  const avg = total / entries.length;
+  // Current green streak: consecutive most-recent traded days that closed positive.
+  const chrono = [...entries].sort((a, b) => a.dt.getTime() - b.dt.getTime());
+  let streak = 0;
+  for (let i = chrono.length - 1; i >= 0 && chrono[i].value > 0; i -= 1) streak += 1;
 
   const header = (
     <>
@@ -111,23 +123,44 @@ export const PnlCalendar: React.FC<{ data: PnlCalendarArtifact }> = ({ data }) =
   const weeks: Date[] = [];
   for (let d = start; d <= end; d = addDays(d, 7)) weeks.push(d);
 
-  const width = LEFT + weeks.length * PITCH - GAP;
-  const height = TOP + 7 * PITCH - GAP;
+  const width = LEFT + weeks.length * D_PITCH - D_GAP;
+  const height = TOP + 7 * D_PITCH - D_GAP;
+  const fmtDay = (d: Date): string => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const hoveredKey = hovered ? keyOf(hovered.dt) : null;
+
+  // Intensity legend — small swatches from loss → neutral → profit, GitHub-style.
+  const swatch = (fill: string, key: string) => (
+    <span key={key} className="h-[11px] w-[11px] rounded-[3px]" style={{ background: fill }} />
+  );
+  const legend = (
+    <div className="ml-auto flex items-center gap-1 text-[10px] text-[var(--ds-muted)]">
+      <span>Loss</span>
+      {[0.85, 0.5, 0.25].map((a, i) => swatch(withAlpha(BEAR, a), `l-${i}`))}
+      {swatch('var(--ds-hairline-soft)', 'zero')}
+      {[0.25, 0.5, 0.85].map((a, i) => swatch(withAlpha(BULL, a), `g-${i}`))}
+      <span>Profit</span>
+    </div>
+  );
 
   const footer = (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-[var(--ds-muted)]">
+    <div className="flex w-full flex-wrap items-center gap-x-4 gap-y-1.5 text-[10.5px] text-[var(--ds-muted)]">
       <span>
         total{' '}
-        <span
-          className="font-semibold tabular-nums"
-          style={{ color: total > 0 ? BULL : total < 0 ? BEAR : 'var(--ds-ink)' }}
-        >
+        <span className="font-semibold tabular-nums" style={{ color: total > 0 ? BULL : total < 0 ? BEAR : 'var(--ds-ink)' }}>
           {fmtVal(total)}
         </span>
       </span>
       <span>
-        <span className="font-semibold tabular-nums text-[var(--ds-ink)]">{winRate}%</span> green days
+        <span className="font-semibold tabular-nums text-[var(--ds-ink)]">{winRate}%</span> green
       </span>
+      <span>
+        avg <span className="font-semibold tabular-nums" style={{ color: avg > 0 ? BULL : avg < 0 ? BEAR : 'var(--ds-ink)' }}>{fmtVal(avg)}</span>/day
+      </span>
+      {streak > 0 && (
+        <span>
+          <span className="font-semibold tabular-nums" style={{ color: BULL }}>{streak}</span>-day streak
+        </span>
+      )}
       <span>
         best <span className="font-semibold tabular-nums" style={{ color: BULL }}>{fmtVal(best.value)}</span> · {shortDate(best.date)}
       </span>
@@ -139,22 +172,40 @@ export const PnlCalendar: React.FC<{ data: PnlCalendarArtifact }> = ({ data }) =
 
   return (
     <Surface header={header} footer={footer}>
-      <div className="overflow-x-auto px-3 pb-3 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        <svg width={width} height={height} role="img" aria-label="Daily P&L heatmap">
+      {/* Readout: names the hovered day (date · value · note), else the tracked range + legend. */}
+      <div className="flex min-h-[20px] items-center gap-2 px-3 pt-0.5 text-[11px]">
+        {hovered ? (
+          <>
+            <span className="font-medium text-[var(--ds-ink)]">{shortDate(hovered.date)}</span>
+            <span className="font-semibold tabular-nums" style={{ color: hovered.value > 0 ? BULL : hovered.value < 0 ? BEAR : 'var(--ds-ink)' }}>
+              {fmtVal(hovered.value)}
+            </span>
+            {hovered.note && <span className="min-w-0 truncate text-[var(--ds-muted)]">{hovered.note}</span>}
+          </>
+        ) : (
+          <span className="text-[var(--ds-muted)]">
+            {fmtDay(minDate)} – {fmtDay(maxDate)}
+          </span>
+        )}
+        <span className="ml-auto hidden sm:flex">{legend}</span>
+      </div>
+
+      <div className="overflow-x-auto px-3 pb-2 pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <svg width={width} height={height} role="img" aria-label="Daily P&L heatmap" onMouseLeave={() => setHovered(null)}>
           {/* Month labels where the column's Monday enters a new month. */}
           {weeks.map((monday, w) => {
             if (w > 0 && monday.getMonth() === weeks[w - 1].getMonth()) return null;
             // Skip a leading stub label that would collide with next week's change.
             if (w === 0 && weeks.length > 1 && weeks[1].getMonth() !== monday.getMonth()) return null;
             return (
-              <text key={`m-${w}`} x={LEFT + w * PITCH} y={8} fontSize="9" fill="var(--ds-muted)">
+              <text key={`m-${w}`} x={LEFT + w * D_PITCH} y={10} fontSize="10" fontWeight={600} fill="var(--ds-muted)">
                 {monday.toLocaleDateString(undefined, { month: 'short' })}
               </text>
             );
           })}
           {/* Weekday labels on Mon/Wed/Fri rows. */}
           {([[0, 'M'], [2, 'W'], [4, 'F']] as const).map(([row, label]) => (
-            <text key={label} x={0} y={TOP + row * PITCH + CELL - 2} fontSize="9" fill="var(--ds-muted)">
+            <text key={label} x={0} y={TOP + row * D_PITCH + D_CELL - 3} fontSize="10" fill="var(--ds-muted)">
               {label}
             </text>
           ))}
@@ -162,15 +213,20 @@ export const PnlCalendar: React.FC<{ data: PnlCalendarArtifact }> = ({ data }) =
             Array.from({ length: 7 }, (_, row) => {
               const d = addDays(monday, row);
               const day = byKey.get(keyOf(d));
+              const isHovered = hoveredKey === keyOf(d);
               return (
                 <rect
                   key={`${w}-${row}`}
-                  x={LEFT + w * PITCH}
-                  y={TOP + row * PITCH}
-                  width={CELL}
-                  height={CELL}
-                  rx={2}
+                  x={LEFT + w * D_PITCH}
+                  y={TOP + row * D_PITCH}
+                  width={D_CELL}
+                  height={D_CELL}
+                  rx={3}
                   fill={cellFill(day)}
+                  stroke={isHovered ? 'var(--ds-ink)' : 'transparent'}
+                  strokeWidth={1.5}
+                  style={{ cursor: day ? 'pointer' : 'default' }}
+                  onMouseEnter={() => setHovered(day ?? null)}
                 >
                   {day && <title>{cellTitle(day)}</title>}
                 </rect>
