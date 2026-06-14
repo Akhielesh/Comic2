@@ -49,6 +49,24 @@
   .animate-scale-in { animation: none; }
 }
 
+/* Widget gallery — horizontal scroll-snap track for multi-card answers. The track
+   hides its scrollbar (controls live in the chrome: arrows + dots + edge fades) and
+   each card does a calm staggered reveal on mount. Programmatic scrolls set their own
+   `behavior`, so we deliberately do NOT force smooth user scrolling here. */
+.ds-gallery-track {
+  scrollbar-width: none;       /* Firefox */
+  -ms-overflow-style: none;    /* legacy Edge/IE */
+}
+.ds-gallery-track::-webkit-scrollbar { width: 0; height: 0; display: none; }
+@keyframes dsGalleryReveal {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to   { opacity: 1; transform: none; }
+}
+.ds-gallery-item { animation: dsGalleryReveal 0.42s cubic-bezier(0.22, 0.61, 0.36, 1) both; }
+@media (prefers-reduced-motion: reduce) {
+  .ds-gallery-item { animation: none; }
+}
+
 /* Row actions (edit / copy / overflow menu) that hide until hover on real pointer
    devices, but stay VISIBLE on touch — where `:hover` never fires, so an
    `opacity-0 group-hover:opacity-100` button is permanently unreachable. Pair with a

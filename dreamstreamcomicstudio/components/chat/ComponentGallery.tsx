@@ -5,6 +5,7 @@ import { DENSITY_AWARE_TYPES } from './artifacts/ChatArtifacts';
 import { WeatherStation } from './artifacts/WeatherStation';
 import { NewsDigest } from './artifacts/NewsDigest';
 import { MarketCard } from './artifacts/MarketCard';
+import { ComparisonChart } from './artifacts/ComparisonChart';
 import { VideoResults } from './artifacts/VideoResults';
 import { PlacesResults } from './artifacts/PlacesResults';
 import { SwarmTraceCard } from './artifacts/SwarmTraceCard';
@@ -73,7 +74,7 @@ import type {
   ChartArtifact, MetricBoardArtifact, MapArtifact, DirectionsArtifact,
   DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact,
   RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact, CodeExerciseArtifact,
-  GenerativeUIArtifact
+  GenerativeUIArtifact, StockComparisonArtifact
 } from '../../apiTypes';
 
 const sqlExerciseDemo: SqlExerciseArtifact = {
@@ -251,6 +252,32 @@ const stock: StockQuoteArtifact = {
     { symbol: 'NVDA', name: 'NVIDIA Corp', price: 214.12, changePercent: -0.09, currency: 'USD' },
     { symbol: 'AMZN', name: 'Amazon.com Inc', price: 253.92, changePercent: 1.56, currency: 'USD' },
     { symbol: 'GOOGL', name: 'Alphabet Inc', price: 182.4, changePercent: 0.83, currency: 'USD' }
+  ]
+};
+
+// Comparison overlay — three assets at very different price scales (a stock, a
+// volatile growth name, a commodity) so the % rebasing + range tabs + legend toggle
+// are all exercised.
+const cmpRanges = (vals: number[]): NonNullable<StockComparisonArtifact['series'][number]['ranges']> => ({
+  '5D': toSeries(vals.slice(-5)),
+  '1M': toSeries(vals.slice(-22)),
+  '6M': toSeries(vals.slice(-126)),
+  '1Y': toSeries(vals.slice(-252)),
+  MAX: toSeries(vals)
+});
+const cmpAapl = walk(260, 150, 0.22, 5);
+const cmpTsla = walk(260, 240, 0.05, 12);
+const cmpGold = walk(260, 1800, 1.1, 16);
+const comparison: StockComparisonArtifact = {
+  title: 'AAPL vs TSLA vs Gold',
+  asOf: new Date().toISOString(),
+  defaultRange: '1Y',
+  mode: 'percent',
+  palette: 'brand',
+  series: [
+    { symbol: 'AAPL', name: 'Apple Inc.', currency: 'USD', last: cmpAapl[cmpAapl.length - 1], ranges: cmpRanges(cmpAapl) },
+    { symbol: 'TSLA', name: 'Tesla Inc.', currency: 'USD', last: cmpTsla[cmpTsla.length - 1], ranges: cmpRanges(cmpTsla) },
+    { symbol: 'GC=F', name: 'Gold', currency: 'USD', last: cmpGold[cmpGold.length - 1], ranges: cmpRanges(cmpGold) }
   ]
 };
 
@@ -1174,6 +1201,7 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Travel itinerary (day tabs · map · budget · live weather)', type: 'itinerary', category: 'World & media', node: <ItineraryCard data={itineraryDemo} /> },
   { title: 'Weather station (animated · gauges · map)', type: 'weather', category: 'World & media', node: <WeatherStation data={weather} /> },
   { title: 'Market card (hover · range timeline · candlesticks)', type: 'stock_quote', category: 'Finance', node: <MarketCard data={stock} /> },
+  { title: 'Comparison chart (overlay 2–6 assets · % rebase ⇄ price · range tabs · legend toggle)', type: 'stock_comparison', category: 'Finance', node: <ComparisonChart data={comparison} /> },
   { title: 'News digest (compact · source-branded · snippets)', type: 'news_results', category: 'News & knowledge', node: <NewsDigest data={news} /> },
   { title: 'Places (local) card', type: 'places_results', category: 'World & media', node: <PlacesResults data={places} /> },
   { title: 'Map (markers · route)', type: 'map', category: 'World & media', node: <MapArtifactCard data={mapArtifact} /> },

@@ -150,6 +150,21 @@ export const WIDGET_CATALOG: WidgetDef[] = [
     ]
   },
   {
+    tool: 'compare_stocks',
+    label: 'Compare assets',
+    icon: LineChart,
+    blurb: 'Overlay 2–6 stocks, commodities or crypto on one trend chart',
+    category: 'Markets',
+    defaultDensity: 'detailed',
+    fields: [{ key: 'symbols', label: 'Symbols to compare (comma-separated)', placeholder: 'AAPL, TSLA, NVDA', list: true }],
+    presets: [
+      { label: 'Big tech', args: { symbols: ['AAPL', 'MSFT', 'NVDA', 'GOOGL'] }, tileLabel: 'Big tech' },
+      { label: 'Gold · oil · S&P', args: { symbols: ['GC=F', 'CL=F', '^GSPC'] }, tileLabel: 'Gold · oil · S&P' },
+      { label: 'AI chips', args: { symbols: ['NVDA', 'AMD', 'INTC'] }, tileLabel: 'AI chips' },
+      { label: 'Crypto majors', args: { symbols: ['BTC-USD', 'ETH-USD', 'SOL-USD'] }, tileLabel: 'Crypto' }
+    ]
+  },
+  {
     tool: 'get_market_sentiment',
     label: 'Fear & Greed',
     icon: Gauge,

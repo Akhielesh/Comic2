@@ -20,9 +20,12 @@ import type {
   YieldCurveSnapshot,
   PortfolioArtifact,
   PortfolioPosition,
-  CurrencyConverterArtifact
+  CurrencyConverterArtifact,
+  StockComparisonArtifact,
+  StockComparisonSeries,
+  StockRange
 } from '../../../../apiTypes.js';
-import { getLightQuote } from './stocks.js';
+import { getLightQuote, getStockQuote } from './stocks.js';
 import { fetchJson, fetchText } from './http.js';
 import { TtlCache } from '../../lib/cache.js';
 
@@ -572,8 +575,88 @@ export const currencyConverterTool: ChatTool = {
   }
 };
 
+// ----------------------------------------------------------- compare assets ---
+
+const COMPARE_RANGES: StockRange[] = ['1D', '5D', '1M', '6M', '1Y', '5Y', 'MAX'];
+// Window preference for the short text read (the model never restates the card).
+const READ_PREF: StockRange[] = ['1Y', '6M', '5Y', '1M', 'MAX', '5D', '1D'];
+
+const pctOverRange = (s: StockComparisonSeries, range: StockRange): number | null => {
+  const pts = s.ranges?.[range] ?? s.series ?? [];
+  if (pts.length < 2) return null;
+  const first = pts[0].close;
+  const last = pts[pts.length - 1].close;
+  return first ? (last / first - 1) * 100 : null;
+};
+
+export const compareStocksTool: ChatTool = {
+  name: 'compare_stocks',
+  description:
+    'Overlay 2–6 assets on ONE interactive chart to compare their TRENDS over time — stocks, ETFs, indices, commodities (gold, oil, metals), FX and crypto, even across very different price scales. Use it for ANY "compare X vs Y", "X vs Y vs Z", "how have gold, oil and the S&P moved", "AAPL against TSLA and NVDA", "metals vs the dollar". Returns one card with a %-change view (rebased to the start of the window — the right way to compare assets at different prices) AND an absolute-price view, plus 1D/5D/1M/6M/1Y/5Y/MAX range tabs and a legend that toggles each line. Prefer THIS over several separate get_stock cards whenever the user wants to compare/contrast trends; use get_stock for ONE asset in depth. Pass tickers or plain names.',
+  parameters: {
+    type: 'object',
+    properties: {
+      symbols: {
+        type: 'array',
+        items: { type: 'string' },
+        description: '2–6 tickers or asset names to overlay, e.g. ["AAPL","TSLA","NVDA"] or ["gold","crude oil","S&P 500"].'
+      },
+      range: { type: 'string', enum: COMPARE_RANGES, description: 'Initial time window (default 1Y).' },
+      mode: { type: 'string', enum: ['percent', 'price'], description: '"percent" (rebased % change, best for comparison; default) or "price" (absolute).' },
+      title: { type: 'string', description: 'Optional chart title, e.g. "AI chipmakers".' }
+    },
+    required: ['symbols']
+  },
+  execute: async (args, signal) => {
+    const symbols = symbolList(args?.symbols).slice(0, 6);
+    if (symbols.length < 2) {
+      return { content: 'A comparison needs at least two assets. Ask the user which assets to compare, or use get_stock for a single asset in depth.' };
+    }
+    const settled = await Promise.allSettled(symbols.map((s) => getStockQuote(s, signal)));
+    const series: StockComparisonSeries[] = [];
+    const failed: string[] = [];
+    settled.forEach((r, i) => {
+      if (r.status === 'fulfilled') {
+        const q = r.value;
+        series.push({ symbol: q.symbol, name: q.name, last: q.price, currency: q.currency, ranges: q.ranges, series: q.series });
+      } else {
+        failed.push(symbols[i]);
+      }
+    });
+    if (series.length < 2) {
+      return {
+        content: `Could not fetch enough live data to compare (${failed.join(', ') || 'no data'} unavailable). No card was shown — tell the user market data is temporarily unavailable and do NOT invent prices.`,
+        notice: { level: 'error' as const, message: `Comparison unavailable — ${failed.join(', ') || 'no data'}.` }
+      };
+    }
+    const requested = typeof args?.range === 'string' && (COMPARE_RANGES as string[]).includes(args.range) ? (args.range as StockRange) : undefined;
+    const mode: 'percent' | 'price' = args?.mode === 'price' ? 'price' : 'percent';
+    const data: StockComparisonArtifact = {
+      title: strArg(args?.title),
+      series,
+      defaultRange: requested,
+      mode,
+      asOf: new Date().toISOString()
+    };
+    const readRange = requested ?? READ_PREF.find((r) => series.every((s) => (s.ranges?.[r]?.length ?? 0) >= 2)) ?? 'MAX';
+    const moves = series
+      .map((s) => {
+        const p = pctOverRange(s, readRange) ?? pctOverRange(s, 'MAX');
+        return `${s.symbol} ${p == null ? '—' : `${p >= 0 ? '+' : ''}${p.toFixed(1)}%`}`;
+      })
+      .join(', ');
+    const content = `Comparison overlay for ${series.map((s) => s.symbol).join(', ')} over ${readRange} (${mode === 'percent' ? '% change, rebased to the window start' : 'price'}): ${moves}${failed.length ? ` · ${failed.join(', ')} unavailable` : ''}. The user sees ONE interactive chart with range tabs (1D…MAX) and a %⇄price toggle — add a short read on RELATIVE performance and where they diverged, not a restatement of the numbers.`;
+    return {
+      content,
+      artifacts: [{ type: 'stock_comparison', data }],
+      ...(failed.length ? { notice: { level: 'info' as const, message: `${failed.length} symbol(s) could not be quoted and were left off the comparison.` } } : {})
+    };
+  }
+};
+
 export const MARKET_WIDGET_TOOLS: ChatTool[] = [
   tickerTapeTool,
+  compareStocksTool,
   marketSentimentTool,
   yieldCurveTool,
   portfolioTool,

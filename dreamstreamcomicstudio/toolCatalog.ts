@@ -195,6 +195,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['ticker tape', 'ticker', 'tape', 'market strip', 'watchlist strip', 'tickers', 'prices at a glance', 'marquee', 'how are markets']
   },
   {
+    name: 'compare_stocks', label: 'Compare assets', category: 'finance', kind: 'builtin', provider: 'Yahoo Finance (Stooq fallback)',
+    description: 'Overlay 2–6 assets (stocks, ETFs, indices, commodities, FX, crypto) on ONE interactive chart to compare TRENDS — % change rebased to the window start (the right way to compare different price scales, e.g. gold vs oil vs the S&P) or absolute price, with 1D…MAX range tabs and a legend that toggles each line. The go-to for "compare X vs Y", "X vs Y vs Z" and "how have gold, oil and the S&P moved".',
+    auth: 'none', rateLimit: 'Fair use (keyless quotes)',
+    dataShape: 'One overlay chart: rebased %/price lines + range tabs + legend toggle.', docsUrl: 'https://finance.yahoo.com',
+    keywords: ['compare', 'comparison', 'versus', 'vs', 'overlay', 'relative performance', 'against', 'gold vs oil', 'trend comparison', 'outperform', 'correlation']
+  },
+  {
     name: 'get_market_sentiment', label: 'Fear & Greed', category: 'finance', kind: 'api', provider: 'CNN Fear & Greed · alternative.me',
     description: 'Live Fear & Greed sentiment gauges for stocks (CNN, with component indicators) and crypto (alternative.me), with history.',
     auth: 'none', rateLimit: 'Fair use (public endpoints)',

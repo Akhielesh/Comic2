@@ -589,6 +589,7 @@ export const REFRESHABLE_TOOLS = [
   'get_weather',
   'get_news',
   'get_stock',
+  'compare_stocks',
   'find_places',
   'crypto_price',
   'exchange_rate',
@@ -1811,6 +1812,46 @@ export interface StockQuoteArtifact {
   headlines?: NewsItem[];
   /** Related / peer companies with their own quotes. */
   related?: StockPeer[];
+}
+
+// --- Multi-symbol comparison ("compare trends") ---
+/** One asset overlaid on a comparison chart. Carries the same pre-bucketed history
+ *  per range as a quote card, plus a headline price, so the card can switch
+ *  timeframes and rebase to % without a round-trip. */
+export interface StockComparisonSeries {
+  symbol: string;
+  name?: string;
+  /** Explicit line color; otherwise the card assigns one from the palette ramp. */
+  color?: string;
+  /** Latest price (for the absolute-price overlay + legend). */
+  last?: number;
+  /** ISO 4217 currency of `last` (default USD). */
+  currency?: string;
+  /** Pre-bucketed closing-price history per range (same shape as StockQuoteArtifact.ranges). */
+  ranges?: Partial<Record<StockRange, StockPoint[]>>;
+  /** Closing prices used when `ranges` is absent (sub-ranges are then derived from it). */
+  series?: StockPoint[];
+}
+/** A multi-symbol "compare trends" chart: 2–6 assets overlaid on one chart, switchable
+ *  across time ranges (1D…MAX) and between % change — rebased to the start of the
+ *  window, the right way to compare assets at very different price scales (gold vs oil
+ *  vs the S&P) — and absolute price. Emitted by the `compare_stocks` tool. */
+export interface StockComparisonArtifact {
+  title?: string;
+  subtitle?: string;
+  /** When the snapshot was taken (ISO). */
+  asOf?: string;
+  /** 2–6 assets to overlay. */
+  series: StockComparisonSeries[];
+  /** Range tabs to expose; defaults to the ranges every series shares. */
+  ranges?: StockRange[];
+  /** Initially-selected range (default: a sensible shared window). */
+  defaultRange?: StockRange;
+  /** Default y-axis: 'percent' (rebased — best for comparison) or 'price' (absolute). */
+  mode?: 'percent' | 'price';
+  /** Named palette for the series color ramp. */
+  palette?: string;
+  density?: 'compact' | 'detailed';
 }
 
 // --- Generic data visualization ---
