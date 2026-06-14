@@ -98,11 +98,11 @@ export const PlacesResults: React.FC<{ data: PlacesResultsArtifact }> = ({ data 
       }
     >
       <div className="px-3 pb-2.5">
-        <div className="overflow-hidden rounded-xl ring-1 ring-[var(--ds-hairline)]">
+        <div className="animate-scale-in overflow-hidden rounded-xl ring-1 ring-[var(--ds-hairline)]">
           <InlineMap data={mapData} height={210} />
         </div>
       </div>
-      <ul className="divide-y divide-[var(--ds-hairline-soft)] border-t border-[var(--ds-hairline-soft)]">
+      <ul className="studio-stagger divide-y divide-[var(--ds-hairline-soft)] border-t border-[var(--ds-hairline-soft)]">
         {data.results.map((p, i) => (
           <PlaceRow key={`${p.name}-${i}`} place={p} index={i + 1} source={`${data.query} near ${data.near}`} />
         ))}
@@ -130,22 +130,24 @@ const PlaceRow: React.FC<{ place: PlaceResult; index: number; source?: string }>
   const openNow = !!place.openingHours && /\bopen\b/i.test(place.openingHours) && !/\bclosed\b/i.test(place.openingHours);
 
   return (
-    <li className="group/place flex gap-3 px-3 py-3 transition-colors duration-200 hover:bg-[var(--ds-well)]">
+    <li className="group/place relative flex gap-3 px-3 py-3 transition-colors duration-200 hover:bg-[var(--ds-well)]">
+      {/* Accent rail slides in on hover. */}
+      <span className="absolute inset-y-2 left-0 w-0.5 origin-top scale-y-0 rounded-r-full bg-[var(--ds-accent)] transition-transform duration-200 group-hover/place:scale-y-100" aria-hidden />
       {/* Imagery — larger, rounded, with a rank chip + a gentle zoom on hover. */}
-      <div className="relative h-[76px] w-[76px] shrink-0 overflow-hidden rounded-xl bg-[var(--ds-well)] ring-1 ring-[var(--ds-hairline)]">
+      <div className="relative h-[76px] w-[76px] shrink-0 overflow-hidden rounded-xl bg-[var(--ds-well)] ring-1 ring-[var(--ds-hairline)] transition-all duration-300 group-hover/place:ring-[#D97757]/40 group-hover/place:shadow-[0_6px_18px_-8px_rgba(0,0,0,0.3)]">
         {place.image ? (
           <img
             src={place.image}
             alt={place.name}
             loading="lazy"
-            className="h-full w-full object-cover transition-transform duration-300 group-hover/place:scale-105"
+            className="h-full w-full object-cover transition-transform duration-500 group-hover/place:scale-110"
           />
         ) : (
-          <div className="flex h-full w-full items-center justify-center">
+          <div className="flex h-full w-full items-center justify-center transition-transform duration-300 group-hover/place:scale-110">
             <KindIcon className="h-7 w-7 text-[var(--ds-faint)]" />
           </div>
         )}
-        <span className="absolute left-1 top-1 grid h-5 min-w-[1.25rem] place-items-center rounded-md bg-black/55 px-1 text-[10px] font-bold leading-none text-white backdrop-blur-sm">
+        <span className="absolute left-1 top-1 grid h-5 min-w-[1.25rem] place-items-center rounded-md bg-black/55 px-1 text-[10px] font-bold leading-none text-white backdrop-blur-sm transition-transform duration-200 group-hover/place:scale-110">
           {index}
         </span>
       </div>

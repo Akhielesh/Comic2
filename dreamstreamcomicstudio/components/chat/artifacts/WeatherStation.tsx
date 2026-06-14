@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Wind, Droplets, MapPin, Sun, Umbrella, Gauge, Eye, Cloud, Thermometer, Leaf, Map as MapIcon, BarChart3 } from 'lucide-react';
 import type { WeatherArtifact } from '../../../apiTypes';
-import { Surface, Chart, LinearGauge, SunArc, Badge, WeatherIcon, useCompact } from './kit';
+import { Surface, Chart, LinearGauge, SunArc, Badge, WeatherIcon, useCompact, useCountUp } from './kit';
 import type { ChartPoint } from './kit';
 import { prefersReducedMotion, useMeasure } from './kit/Chart';
 import { InlineMap } from './InlineMap';
@@ -136,8 +136,8 @@ const SkyScene: React.FC<{ sky: Sky; isDay: boolean }> = ({ sky, isDay }) => (
 // A single sensor tile in the conditions grid. Uniform height + a fixed rhythm (label
 // pinned top, value anchored bottom) so the whole grid reads as one clean, even block.
 const Tile: React.FC<{ icon: React.ReactNode; label: string; children: React.ReactNode }> = ({ icon, label, children }) => (
-  <div className="flex min-h-[88px] flex-col gap-1.5 rounded-xl border border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] p-2.5">
-    <span className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">
+  <div className="group/tile flex min-h-[88px] flex-col gap-1.5 rounded-xl border border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] p-2.5 transition-all duration-200 hover:-translate-y-0.5 hover:border-[var(--ds-hairline)] hover:bg-[var(--ds-well-strong)] hover:shadow-[0_4px_14px_-6px_rgba(0,0,0,0.25)]">
+    <span className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)] transition-colors duration-200 group-hover/tile:text-[var(--ds-ink)]">
       {icon}
       {label}
     </span>
@@ -179,6 +179,8 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
   const bg = HERO_BG[sky][c.isDay ? 'day' : 'night'];
   const t = useMemo(() => (valC: number) => (unit === 'F' ? cToF(valC) : Math.round(valC)), [unit]);
   const today = data.daily[0];
+  // The headline temperature glides into place (and morphs on a °C↔°F switch).
+  const heroTemp = Math.round(useCountUp(t(c.tempC), { duration: 700 }));
 
   const hourlyPoints: ChartPoint[] = useMemo(
     () => (data.hourly ?? []).map((h) => ({ label: hourLabel(h.time), value: unit === 'F' ? cToF(h.tempC) : Math.round(h.tempC) })),
@@ -197,7 +199,7 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
               <span className="truncate">{data.location}</span>
             </div>
             <div className="mt-0.5 text-4xl font-semibold leading-none tracking-tight text-[var(--ds-ink)]">
-              {t(c.tempC)}°<span className="align-top text-lg text-[var(--ds-muted)]">{unit}</span>
+              {heroTemp}°<span className="align-top text-lg text-[var(--ds-muted)]">{unit}</span>
             </div>
             <div className="mt-1 truncate text-[11px] text-[var(--ds-muted)]">
               {c.description}
@@ -306,7 +308,7 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
           <div className="flex animate-fade-in items-start justify-between gap-3 px-3 pb-3 pt-1">
             <div className="min-w-0">
               <div className="flex items-end gap-1 leading-none">
-                <span className="text-6xl font-semibold tracking-tight tabular-nums text-[var(--ds-ink)]">{t(c.tempC)}°</span>
+                <span className="text-6xl font-semibold tracking-tight tabular-nums text-[var(--ds-ink)]">{heroTemp}°</span>
                 <span className="mb-1 text-2xl font-medium text-[var(--ds-muted)]">{unit}</span>
               </div>
               <div className="mt-2 text-sm font-semibold text-[var(--ds-ink)]">{c.description}</div>
@@ -329,8 +331,9 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
           </div>
 
           {/* Conditions grid — one uniform, value-forward treatment per metric (a thin
-              indicator where it's a 0–100 quantity). Reads as a single calm block. */}
-          <div className="grid grid-cols-2 gap-2 px-3 pb-3 sm:grid-cols-4">
+              indicator where it's a 0–100 quantity). Tiles reveal with a soft stagger
+              and lift on hover. Reads as a single calm block. */}
+          <div className="studio-stagger grid grid-cols-2 gap-2 px-3 pb-3 sm:grid-cols-4">
             {typeof uv === 'number' && (
               <Tile icon={<Sun className="h-3 w-3" />} label="UV index">
                 <TileValue value={Math.round(uv)} color={uvBand(uv).color} />
