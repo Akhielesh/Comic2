@@ -859,6 +859,52 @@ export const TOOL_CATALOG: ToolMeta[] = [
     dataShape: 'code_studio artifact: file tree + live Sandpack preview.', docsUrl: 'https://dreamstream.app',
     keywords: ['build an app', 'create an app', 'make an app', 'build a game', 'create a game', 'landing page', 'todo app', 'react app', 'web app', 'webapp', 'website', 'web page', 'webpage', 'build me', 'make me', 'write code', 'generate code', 'implement', 'scaffold', 'prototype', 'mockup', 'clone', 'create a component', 'build a tool', 'game', 'dashboard', 'calculator', 'simulator', 'visualizer']
   },
+  // ------------------------------------------------------------ connectors -----
+  // Per-user account connectors (Gmail/Drive/Calendar/Sheets/Maps). These act on the
+  // SIGNED-IN user's OWN connected accounts; they report "connect it in Connectors"
+  // until the user has authorized the source. See docs/CONNECTORS_FRAMEWORK.md.
+  {
+    name: 'gmail_search', label: 'Gmail (your inbox)', category: 'productivity', kind: 'builtin', provider: 'Google (your connected account)',
+    description: "Search the signed-in user's own Gmail and return matching messages. Supports Gmail operators (from:, subject:, newer_than:7d, has:attachment).",
+    auth: 'required', authEnv: 'GOOGLE_OAUTH_CLIENT_ID', rateLimit: 'Bounded by the user\'s Gmail API quota',
+    dataShape: 'Matched messages: subject, sender, date, snippet + links.', docsUrl: 'https://developers.google.com/gmail/api',
+    keywords: ['my email', 'my emails', 'my gmail', 'my inbox', 'search my mail', 'email from', 'check my email', 'unread email', 'message from', 'my messages']
+  },
+  {
+    name: 'drive_search', label: 'Drive (your files)', category: 'productivity', kind: 'builtin', provider: 'Google (your connected account)',
+    description: "Search the signed-in user's own Google Drive files by name and return matches (name, type, link, modified date).",
+    auth: 'required', authEnv: 'GOOGLE_OAUTH_CLIENT_ID', rateLimit: 'Bounded by the user\'s Drive API quota',
+    dataShape: 'Matched files: name, type, owner, modified date + links.', docsUrl: 'https://developers.google.com/drive/api',
+    keywords: ['my files', 'my drive', 'google drive', 'my documents', 'my doc', 'my spreadsheet', 'my slides', 'find my file', 'my folder']
+  },
+  {
+    name: 'calendar_agenda', label: 'Calendar (your schedule)', category: 'productivity', kind: 'builtin', provider: 'Google (your connected account)',
+    description: "Read the signed-in user's own Google Calendar for upcoming events and answer schedule/availability questions.",
+    auth: 'required', authEnv: 'GOOGLE_OAUTH_CLIENT_ID', rateLimit: 'Bounded by the user\'s Calendar API quota',
+    dataShape: 'Upcoming events: title, start/end, location, attendee count + links.', docsUrl: 'https://developers.google.com/calendar/api',
+    keywords: ['my calendar', 'my schedule', 'my agenda', 'my meetings', 'upcoming events', 'next meeting', 'am i free', 'what do i have', 'my appointments']
+  },
+  {
+    name: 'sheets_read', label: 'Sheets (read a range)', category: 'productivity', kind: 'builtin', provider: 'Google (your connected account)',
+    description: "Read a range of cells from one of the signed-in user's own Google Sheets as structured rows for analysis/summary. Needs the spreadsheetId + an A1 range.",
+    auth: 'required', authEnv: 'GOOGLE_OAUTH_CLIENT_ID', rateLimit: 'Bounded by the user\'s Sheets API quota',
+    dataShape: 'Rows keyed by the header row (structured records).', docsUrl: 'https://developers.google.com/sheets/api',
+    keywords: ['my spreadsheet', 'my google sheet', 'read my sheet', 'sheet range', 'analyze my sheet', 'data in my sheet']
+  },
+  {
+    name: 'maps_lookup', label: 'Google Maps (geocode/places)', category: 'places', kind: 'builtin', provider: 'Google Maps (API key)',
+    description: 'Geocode an address (address→coordinates) or text-search places/businesses via the connected Google Maps key.',
+    auth: 'required', authEnv: 'GOOGLE_MAPS_API_KEY', rateLimit: 'Bounded by the Maps API key quota/budget',
+    dataShape: 'Places/geocode results: name, formatted address, location, rating + map links.', docsUrl: 'https://developers.google.com/maps/documentation',
+    keywords: ['geocode', 'google places', 'google maps', 'address to coordinates', 'lat long of', 'place lookup', 'find the address']
+  },
+  {
+    name: 'connected_data_search', label: 'Search my connected data', category: 'productivity', kind: 'builtin', provider: 'Your connected accounts (synced)',
+    description: "Unified RAG search across EVERYTHING the user connected and synced (their Gmail, Drive, Calendar, YouTube) in one query. Use when the source isn't specified.",
+    auth: 'required', authEnv: 'GOOGLE_OAUTH_CLIENT_ID', rateLimit: 'Local query over synced data',
+    dataShape: 'Top matching items across sources: title, source, snippet, date + links.', docsUrl: 'https://dreamstream.app',
+    keywords: ['across my accounts', 'my connected data', 'search my stuff', 'what do i have about', 'in my accounts', 'my synced data', 'search everything i connected']
+  },
   // ----------------------------------------------------------------- agents -----
   {
     name: 'run_agent_swarm', label: 'Agent swarm', category: 'agents', kind: 'builtin', provider: 'DreamStream orchestrator',
