@@ -923,7 +923,9 @@ const AiCommandBar: React.FC<{
   /** Sidebar toggle from the host shell — the dashboards view owns its full
    *  height (no separate title header), so the toggle lives in this bar. */
   leading?: React.ReactNode;
-}> = ({ board, onResult, leading }) => {
+  /** Hand a link or explicit "ask …" off to the AI chat instead of the board grammar. */
+  onAsk?: (text: string) => void;
+}> = ({ board, onResult, leading, onAsk }) => {
   const [input, setInput] = useState('');
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<DashboardCommandResult | null>(null);
@@ -936,6 +938,14 @@ const AiCommandBar: React.FC<{
     e.preventDefault();
     const command = input.trim();
     if (!command || pending) return;
+    // A pasted link or an explicit "ask/summarize …" isn't a board command — send it to
+    // the AI chat, where the model + tools can actually open/summarize/render it.
+    const askMatch = command.match(/^(?:ask|summari[sz]e)\s+(.+)/i);
+    if (onAsk && (/^https?:\/\/\S+$/i.test(command) || askMatch)) {
+      onAsk(askMatch ? askMatch[1] : command);
+      setInput('');
+      return;
+    }
     setPending(true);
     setResult(null);
     setVirgin(false);
@@ -1030,7 +1040,7 @@ const resolveInitialBoard = (): string | null => {
   return listDashboards()[0]?.id ?? null;
 };
 
-export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode }> = ({ sidebarControl }) => {
+export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode; onAsk?: (text: string) => void }> = ({ sidebarControl, onAsk }) => {
   const { user } = useAuth();
   const [dashboards, setDashboards] = useState<CustomDashboard[]>(() => listDashboards());
   // Continuity: reloading (or coming back later) reopens the LAST board the
@@ -1262,7 +1272,7 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode }> = ({
     return (
       <div className="h-full w-full overflow-y-auto bg-[var(--ds-canvas)]">
         {/* The AI bar also bootstraps the first board ("study dashboard for ML"). */}
-        <AiCommandBar board={null} onResult={handleAiResult} leading={sidebarControl} />
+        <AiCommandBar board={null} onResult={handleAiResult} leading={sidebarControl} onAsk={onAsk} />
         <div className="mx-auto w-full max-w-3xl px-4 py-12 text-center sm:py-16">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-[#D97757]/10">
             <LayoutDashboard className="h-7 w-7 text-[var(--ds-accent)]" />
@@ -1301,7 +1311,7 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode }> = ({
       {/* ---- sticky top: AI command bar + board switcher stay put on scroll, so the
               user can switch boards from anywhere without scrolling back up --------- */}
       <div className="sticky top-0 z-30 bg-[var(--ds-canvas)]">
-      <AiCommandBar board={active ?? null} onResult={handleAiResult} leading={sidebarControl} />
+      <AiCommandBar board={active ?? null} onResult={handleAiResult} leading={sidebarControl} onAsk={onAsk} />
       <div className="mx-auto w-full max-w-6xl px-3 sm:px-6">
         {/* --------------------------------------------------- switcher row ---
             One slim line that never wraps: the board pills scroll horizontally,

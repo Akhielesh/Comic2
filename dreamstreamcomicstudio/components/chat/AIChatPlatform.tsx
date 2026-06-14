@@ -46,6 +46,8 @@ interface DashboardsViewProps {
   /** Renders the sidebar toggle inside the dashboards top bar (its own header is
    *  hidden for this view to reclaim the vertical space). */
   sidebarControl?: React.ReactNode;
+  /** Hand a pasted link / "ask …" from the dashboard bar off to a new chat. */
+  onAsk?: (text: string) => void;
 }
 interface CommandPaletteProps {
   open: boolean;
@@ -1437,6 +1439,7 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
             )}
             {resolvedView === 'dashboards' && (
               <DashboardsView
+                onAsk={(text) => handleStartChat(text)}
                 sidebarControl={
                   <button
                     onClick={() => setSidebarOpen((v) => !v)}
