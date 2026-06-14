@@ -8,5 +8,8 @@ export { useThemeColors } from './useThemeColors';
 export type { GameColors } from './useThemeColors';
 export { dirFromKey, isGameKey, useSwipe } from './useInput';
 export type { Dir } from './useInput';
+export { useGameAudio } from './useGameAudio';
+export type { GameAudio, SoundName } from './useGameAudio';
+export { useGamepad } from './useGamepad';
 export { GameShell } from './GameShell';
 export type { GameSize, GameDims } from './GameShell';

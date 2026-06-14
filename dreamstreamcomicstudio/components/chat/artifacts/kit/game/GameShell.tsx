@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Maximize2, Minimize2, RotateCcw } from 'lucide-react';
+import { Maximize2, Minimize2, RotateCcw, Volume2, VolumeX } from 'lucide-react';
 import { Surface } from '../Surface';
 import { useCompact } from '../density';
 import { isGameKey } from './useInput';
+import type { GameAudio } from './useGameAudio';
 
 // The shared chrome every game sits in — the game-world equivalent of WidgetFrame.
 // It owns the three things the brief asked for and the chat's house style can't give
@@ -72,12 +73,14 @@ interface GameShellProps {
   onKeyDown?: (e: React.KeyboardEvent) => void;
   /** Restart handler — renders a quiet restart button in the header when given. */
   onRestart?: () => void;
+  /** Audio controller — renders a mute toggle in the header when given. */
+  audio?: Pick<GameAudio, 'muted' | 'setMuted'>;
   /** Render the playfield for the resolved pixel dimensions. */
   children: (dims: GameDims) => React.ReactNode;
 }
 
 export const GameShell: React.FC<GameShellProps> = ({
-  title, subtitle, storageKey, aspect = 1, status, hint, onKeyDown, onRestart, children
+  title, subtitle, storageKey, aspect = 1, status, hint, onKeyDown, onRestart, audio, children
 }) => {
   const frameCompact = useCompact();
   const [size, setSize] = useState<GameSize>(() => readSize(storageKey) ?? (frameCompact ? 'compact' : 'medium'));
@@ -172,6 +175,17 @@ export const GameShell: React.FC<GameShellProps> = ({
           {onRestart && (
             <button onClick={onRestart} title="New game" aria-label="New game" className={ctrlBtn}>
               <RotateCcw className="h-3 w-3" />
+            </button>
+          )}
+          {audio && (
+            <button
+              onClick={() => audio.setMuted(!audio.muted)}
+              title={audio.muted ? 'Unmute' : 'Mute'}
+              aria-label={audio.muted ? 'Unmute sound' : 'Mute sound'}
+              aria-pressed={audio.muted}
+              className={ctrlBtn}
+            >
+              {audio.muted ? <VolumeX className="h-3 w-3" /> : <Volume2 className="h-3 w-3" />}
             </button>
           )}
           {!fullscreen && (

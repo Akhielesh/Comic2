@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { GameShell, useGameLoop, useThemeColors, dirFromKey, useSwipe, type Dir } from '../kit/game';
+import { GameShell, useGameLoop, useThemeColors, useGameAudio, useGamepad, dirFromKey, useSwipe, type Dir } from '../kit/game';
 import { withAlpha } from '../kit';
 import { stepSnake, opposite, type Point } from './logic';
 
@@ -46,6 +46,7 @@ export const SnakeGame: React.FC<{ difficulty?: string }> = ({ difficulty = 'nor
   const speed = DIFF_SPEED[difficulty] ?? DIFF_SPEED.normal;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const colors = useThemeColors();
+  const audio = useGameAudio();
 
   const [phase, setPhase] = useState<Phase>('idle');
   const [score, setScore] = useState(0);
@@ -127,6 +128,7 @@ export const SnakeGame: React.FC<{ difficulty?: string }> = ({ difficulty = 'nor
       if (res.dead) {
         setPhase('over');
         setBest((b) => { const nb = Math.max(b, score); if (nb !== b) writeBest(nb); return nb; });
+        audio.play('lose');
         break;
       }
       snake.current = res.snake;
@@ -134,6 +136,7 @@ export const SnakeGame: React.FC<{ difficulty?: string }> = ({ difficulty = 'nor
         food.current = randFood(snake.current);
         interval.current = Math.max(speed.min, interval.current - speed.step);
         setScore((s) => s + 1);
+        audio.play('eat');
       }
     }
     draw();
@@ -172,6 +175,8 @@ export const SnakeGame: React.FC<{ difficulty?: string }> = ({ difficulty = 'nor
     else if (k) steer(k);
   };
 
+  useGamepad({ onDir: steer, onAction: action });
+
   return (
     <GameShell
       title="Snake"
@@ -180,6 +185,7 @@ export const SnakeGame: React.FC<{ difficulty?: string }> = ({ difficulty = 'nor
       aspect={1}
       onKeyDown={onKeyDown}
       onRestart={start}
+      audio={audio}
       status={<span className="tabular-nums">Score <b className="text-[var(--ds-ink)]">{score}</b> · Best <b className="text-[var(--ds-ink)]">{best}</b></span>}
       hint="Arrows / WASD / swipe"
     >

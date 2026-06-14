@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { GameShell } from '../kit/game';
+import { GameShell, useGameAudio } from '../kit/game';
 import { dealMemory } from './logic';
 
 // Memory match — flip two cards, keep the pairs. A turn-based DOM game (no loop):
@@ -23,6 +23,7 @@ export const MemoryGame: React.FC<{ difficulty?: string }> = ({ difficulty = 'no
   const diff = LAYOUT[difficulty] ? difficulty : 'normal';
   const { cols, rows } = LAYOUT[diff];
   const pairs = (cols * rows) / 2;
+  const audio = useGameAudio();
 
   const [deck, setDeck] = useState<number[]>(() => dealMemory(pairs));
   const [flipped, setFlipped] = useState<number[]>([]);
@@ -51,18 +52,21 @@ export const MemoryGame: React.FC<{ difficulty?: string }> = ({ difficulty = 'no
   useEffect(() => {
     if (!won) return;
     setBest((b) => { const nb = b === 0 ? moves : Math.min(b, moves); if (nb !== b) writeBest(diff, nb); return nb; });
-  }, [won, moves, diff]);
+    audio.play('win');
+  }, [won, moves, diff, audio]);
 
   const flip = (i: number) => {
     if (lock.current || flipped.includes(i) || matched.has(i)) return;
     const next = [...flipped, i];
     setFlipped(next);
+    audio.play('flip');
     if (next.length === 2) {
       setMoves((m) => m + 1);
       const [a, b] = next;
       if (deck[a] === deck[b]) {
         setMatched((prev) => new Set(prev).add(a).add(b));
         setFlipped([]);
+        audio.play('match');
       } else {
         lock.current = true;
         timer.current = window.setTimeout(() => { setFlipped([]); lock.current = false; timer.current = null; }, 750);
@@ -77,6 +81,7 @@ export const MemoryGame: React.FC<{ difficulty?: string }> = ({ difficulty = 'no
       storageKey="memory"
       aspect={cols / rows}
       onRestart={newGame}
+      audio={audio}
       status={
         <span className="tabular-nums">
           Moves <b className="text-[var(--ds-ink)]">{moves}</b>

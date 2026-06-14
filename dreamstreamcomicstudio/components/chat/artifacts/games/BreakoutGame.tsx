@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Heart } from 'lucide-react';
-import { GameShell, useGameLoop, useThemeColors, dirFromKey } from '../kit/game';
+import { GameShell, useGameLoop, useThemeColors, useGameAudio, useGamepad, dirFromKey } from '../kit/game';
 import { withAlpha } from '../kit';
 
 // Brick-breaker on a canvas. The whole simulation runs in a NORMALIZED [0,1] space
@@ -42,6 +42,7 @@ export const BreakoutGame: React.FC<{ difficulty?: string }> = ({ difficulty = '
   const baseSpeed = DIFF_SPEED[difficulty] ?? DIFF_SPEED.normal;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const colors = useThemeColors();
+  const audio = useGameAudio();
 
   const [phase, setPhase] = useState<Phase>('idle');
   const [score, setScore] = useState(0);
@@ -153,6 +154,7 @@ export const BreakoutGame: React.FC<{ difficulty?: string }> = ({ difficulty = '
         b.vx = Math.sin(ang) * speed.current;
         b.vy = -Math.abs(Math.cos(ang) * speed.current);
         b.y = pTop - BALL_R;
+        audio.play('flip');
       }
     }
 
@@ -169,7 +171,8 @@ export const BreakoutGame: React.FC<{ difficulty?: string }> = ({ difficulty = '
           bricks.current[r][cc] = false;
           remaining.current -= 1;
           setScore((s) => s + 10);
-          if (remaining.current === 0) { setPhase('won'); resetBall(); }
+          if (remaining.current === 0) { setPhase('won'); resetBall(); audio.play('win'); }
+          else audio.play('hit');
           break outer;
         }
       }
@@ -179,8 +182,9 @@ export const BreakoutGame: React.FC<{ difficulty?: string }> = ({ difficulty = '
     if (b.y - BALL_R > 1) {
       setLives((lv) => {
         const next = lv - 1;
-        if (next <= 0) { setPhase('over'); resetBall(); return 0; }
+        if (next <= 0) { setPhase('over'); resetBall(); audio.play('lose'); return 0; }
         resetBall();
+        audio.play('hit');
         return next;
       });
     }
@@ -221,6 +225,15 @@ export const BreakoutGame: React.FC<{ difficulty?: string }> = ({ difficulty = '
     }
   };
 
+  useGamepad({
+    onAxis: (x) => {
+      paddleX.current = Math.max(PADDLE_W / 2, Math.min(1 - PADDLE_W / 2, (x + 1) / 2));
+      if (ball.current.vx === 0 && ball.current.vy === 0) resetBall();
+      if (phaseRef.current !== 'running') draw();
+    },
+    onAction: action
+  });
+
   return (
     <GameShell
       title="Brick breaker"
@@ -229,6 +242,7 @@ export const BreakoutGame: React.FC<{ difficulty?: string }> = ({ difficulty = '
       aspect={1}
       onKeyDown={onKeyDown}
       onRestart={() => startLevel(1, true)}
+      audio={audio}
       status={
         <span className="flex items-center gap-2 tabular-nums">
           <span>Score <b className="text-[var(--ds-ink)]">{score}</b></span>

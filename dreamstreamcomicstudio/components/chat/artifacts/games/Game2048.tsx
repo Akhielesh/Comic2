@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { GameShell, useThemeColors, dirFromKey, useSwipe, type Dir } from '../kit/game';
+import { GameShell, useThemeColors, useGameAudio, useGamepad, dirFromKey, useSwipe, type Dir } from '../kit/game';
 import { withAlpha } from '../kit';
 import { emptyGrid, move, spawnTile, hasMoves, maxTile, type Grid } from './logic';
 
@@ -19,6 +19,7 @@ type Phase = 'playing' | 'won' | 'over';
 
 export const Game2048: React.FC = () => {
   const colors = useThemeColors();
+  const audio = useGameAudio();
   const [grid, setGrid] = useState<Grid>(start);
   const [score, setScore] = useState(0);
   const [best, setBest] = useState(readBest);
@@ -26,6 +27,8 @@ export const Game2048: React.FC = () => {
   const keepGoing = useRef(false);
   const phaseRef = useRef<Phase>('playing');
   phaseRef.current = phase;
+  const gridRef = useRef<Grid>(grid);
+  gridRef.current = grid;
 
   const tileColor = (v: number): { bg: string; fg: string } => {
     const exp = Math.log2(v); // 1..11
@@ -35,22 +38,23 @@ export const Game2048: React.FC = () => {
 
   const doMove = useCallback((dir: Dir) => {
     if (phaseRef.current === 'over') return;
-    setGrid((g) => {
-      const res = move(g, dir);
-      if (!res.moved) return g;
-      const next = spawnTile(res.grid);
-      if (res.gained) {
-        setScore((s) => {
-          const ns = s + res.gained;
-          setBest((b) => { const nb = Math.max(b, ns); if (nb !== b) writeBest(nb); return nb; });
-          return ns;
-        });
-      }
-      if (!keepGoing.current && maxTile(next) >= 2048) setPhase('won');
-      else if (!hasMoves(next)) setPhase('over');
-      return next;
-    });
-  }, []);
+    const res = move(gridRef.current, dir);
+    if (!res.moved) return;
+    const next = spawnTile(res.grid);
+    setGrid(next);
+    if (res.gained) {
+      setScore((s) => {
+        const ns = s + res.gained;
+        setBest((b) => { const nb = Math.max(b, ns); if (nb !== b) writeBest(nb); return nb; });
+        return ns;
+      });
+      audio.play('match');
+    } else {
+      audio.play('flip');
+    }
+    if (!keepGoing.current && maxTile(next) >= 2048) { setPhase('won'); audio.play('win'); }
+    else if (!hasMoves(next)) { setPhase('over'); audio.play('lose'); }
+  }, [audio]);
 
   const newGame = useCallback(() => {
     keepGoing.current = false;
@@ -65,6 +69,7 @@ export const Game2048: React.FC = () => {
   };
 
   const swipe = useSwipe(doMove);
+  useGamepad({ onDir: doMove });
 
   // Sync best on first load (covers SSR-safe initial state).
   useEffect(() => { setBest((b) => Math.max(b, readBest())); }, []);
@@ -77,6 +82,7 @@ export const Game2048: React.FC = () => {
       aspect={1}
       onKeyDown={onKeyDown}
       onRestart={newGame}
+      audio={audio}
       status={<span className="tabular-nums">Score <b className="text-[var(--ds-ink)]">{score}</b> · Best <b className="text-[var(--ds-ink)]">{best}</b></span>}
       hint="Arrows / WASD / swipe"
     >
