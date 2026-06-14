@@ -99,6 +99,9 @@ export interface ChatTurn {
 export interface ChatSession {
   id: string;
   title: string;
+  /** True while the title was set automatically (deterministic fallback or the AI
+   *  auto-title). A manual rename sets it false so the AI title never clobbers it. */
+  titleAuto?: boolean;
   modelId: string | null;
   modelName?: string;
   source: ModelSourceId | null;

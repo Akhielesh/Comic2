@@ -119,6 +119,24 @@ export const enhancePrompt = (text: string, options?: { signal?: AbortSignal }):
   post<{ text: string }, { enhanced: string; model?: string }>('/api/chat/enhance', { text }, options);
 
 /**
+ * Name a conversation from what the user is actually trying to do (a concise, specific
+ * AI title) rather than the first 48 chars of their opening message. Runs once after
+ * the first exchange; best-effort — returns an empty title on failure / no key, and the
+ * caller keeps the deterministic fallback. The caller only adopts it when the title is
+ * still auto-generated (a manual rename always wins).
+ */
+export const generateChatTitle = (
+  messages: ChatRequest['messages'],
+  source?: string,
+  options?: { signal?: AbortSignal }
+): Promise<{ title: string; model?: string }> =>
+  post<{ messages: ChatRequest['messages']; source?: string }, { title: string; model?: string }>(
+    '/api/chat/title',
+    { messages, source },
+    options
+  );
+
+/**
  * Distill durable facts about the user from a recent exchange and merge them into
  * their long-term memory. Returns the updated memory (or the existing one if there
  * was nothing new / no key configured). Best-effort — callers ignore failures.

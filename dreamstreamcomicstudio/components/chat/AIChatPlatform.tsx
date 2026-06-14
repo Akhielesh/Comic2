@@ -72,7 +72,7 @@ import { fetchModelCatalog, prettyModelLabel, sourceLabel, type CatalogModel } f
 import { setActiveModelInfo } from '../../services/activeModelBeacon';
 import type { ChatReasoningLevel, ChatRequestMessage, ChatMessagePart, UniversalAssistantContext } from '../../apiTypes';
 import type { Project } from '../../types';
-import { sendChatMessageStream, runSwarmStream, updateChatMemory, friendlyChatError } from '../../services/chatApi';
+import { sendChatMessageStream, runSwarmStream, updateChatMemory, generateChatTitle, friendlyChatError } from '../../services/chatApi';
 import { runRecipe } from '../../services/recipes';
 import { CHAT_SKILLS, type ChatSkill } from '../../services/chatSkills';
 import { gatherClientContext } from '../../services/clientContext';
@@ -564,7 +564,22 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   };
 
   const handleRename = (id: string, title: string) => {
-    updateSession(id, (s) => ({ ...s, title, updatedAt: Date.now() }));
+    // A manual rename locks the title — the AI auto-title must never clobber it.
+    updateSession(id, (s) => ({ ...s, title, titleAuto: false, updatedAt: Date.now() }));
+  };
+
+  // After the first message, name the chat from what the user is actually trying to do
+  // (a concise AI title) instead of the first 48 chars. Fire-and-forget + guarded: it
+  // only adopts the result while the title is still auto (a manual rename wins).
+  const autoTitleSession = async (sessionId: string, firstMessage: string, source?: ModelSourceId | null) => {
+    try {
+      const { title } = await generateChatTitle([{ role: 'user', content: firstMessage }], source ?? undefined);
+      const next = title.trim();
+      if (!next) return;
+      updateSession(sessionId, (s) => (s.titleAuto === false ? s : { ...s, title: next, titleAuto: true, updatedAt: Date.now() }));
+    } catch {
+      /* keep the deterministic fallback title */
+    }
   };
 
   const handleMoveToProject = (sessionId: string, projectId: string | null) => {
@@ -987,8 +1002,14 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       ...s,
       turns: baseTurns,
       title: isFirst && text ? deriveSessionTitle(text) : s.title,
+      titleAuto: isFirst && text ? true : s.titleAuto,
       updatedAt: Date.now()
     }));
+
+    // Kick off the AI title from the user's intent (non-blocking) the moment we have
+    // their first message — the deterministic title shows instantly, the better one
+    // swaps in a beat later.
+    if (isFirst && text) void autoTitleSession(sessionId, text, reqSource);
 
     await runGeneration({ sessionId, baseTurns, reqModel, reqSource, reqTools });
   };
