@@ -16,7 +16,6 @@ const PageStudio = lazyImportWithRetry(() => import('./components/pagestudio/Pag
 const ModelLibrary = lazyImportWithRetry(() => import('./components/ModelLibrary').then(module => ({ default: module.ModelLibrary })));
 const HowItWorks = lazyImportWithRetry(() => import('./components/HowItWorks').then(module => ({ default: module.HowItWorks })));
 const AIChatPlatform = lazyImportWithRetry(() => import('./components/chat/AIChatPlatform').then(module => ({ default: module.AIChatPlatform })));
-const ConnectorsPage = lazyImportWithRetry(() => import('./components/connectors/ConnectorsPage').then(module => ({ default: module.ConnectorsPage })));
 const CodeStudioView = lazyImportWithRetry(() => import('./components/studio/CodeStudioView').then(module => ({ default: module.CodeStudioView })));
 const OperatorConsoleView = lazyImportWithRetry(() => import('./components/ventures/OperatorConsole').then(module => ({ default: module.OperatorConsole })));
 import { StudioErrorBoundary } from './components/studio/kit/ErrorBoundary';
@@ -67,7 +66,6 @@ type AppView =
   | 'pagestudio'
   | 'codestudio'
   | 'ventures'
-  | 'connectors'
   | 'shared';
 
 // Top-level views whose identity is persisted in the URL (?view=) so a refresh restores the page.
@@ -76,7 +74,7 @@ type AppView =
 // (editor/pagestudio/profile are excluded: they need a loaded project/profile that
 //  isn't encoded here, so restoring them blind would render a broken page — they fall back to home.)
 const RESTORABLE_VIEWS = new Set<AppView>([
-  'dashboard', 'chat', 'codestudio', 'ventures', 'connectors', 'gallery', 'learn', 'how-it-works', 'privacy', 'terms', 'settings',
+  'dashboard', 'chat', 'codestudio', 'ventures', 'gallery', 'learn', 'how-it-works', 'privacy', 'terms', 'settings',
 ]);
 
 /** Where to send the user after they sign in (see the ?next= hand-back below). */
@@ -764,7 +762,6 @@ const App: React.FC = () => {
       view === 'models' ||
       view === 'chat' ||
       view === 'codestudio' ||
-      view === 'connectors' ||
       view === 'privacy' ||
       view === 'terms'
     ) {
@@ -938,7 +935,7 @@ const App: React.FC = () => {
   }
 
   // Protection: studio/creation views require an authenticated user. Reading stays open to all.
-  const isProtectedViewStrict = ['dashboard', 'editor', 'learn', 'settings', 'pagestudio', 'chat', 'codestudio', 'connectors'].includes(currentView);
+  const isProtectedViewStrict = ['dashboard', 'editor', 'learn', 'settings', 'pagestudio', 'chat', 'codestudio'].includes(currentView);
   const effectiveView: AppView = !user && isProtectedViewStrict ? 'auth' : currentView;
 
   // Product gate (product_access): confined accounts only reach their active studios.
@@ -1097,10 +1094,6 @@ const App: React.FC = () => {
             <Suspense fallback={<div className="min-h-screen bg-neutral-950" />}>
               <OperatorConsoleView isAdmin={isAdmin} onBack={() => setCurrentView(user ? 'dashboard' : 'home')} />
             </Suspense>
-          )}
-
-          {effectiveView === 'connectors' && (
-            <ConnectorsPage onBack={() => setCurrentView(user ? 'dashboard' : 'home')} />
           )}
 
           {effectiveView === 'how-it-works' && (

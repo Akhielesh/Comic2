@@ -54,7 +54,7 @@ const humanizeError = (code: string): string => {
   }
 };
 
-export const ConnectorsPage: React.FC<{ onBack?: () => void }> = ({ onBack }) => {
+export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean }> = ({ onBack, embedded }) => {
   const [catalog, setCatalog] = useState<CatalogEntry[] | null>(null);
   const [connections, setConnections] = useState<ConnectionSummary[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -293,9 +293,10 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void }> = ({ onBack }) =>
   const isLoading = catalog === null || connections === null;
 
   return (
-    <div className="min-h-screen bg-[var(--ds-canvas)] text-[var(--ds-ink)]">
-      <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6 md:py-10">
-        {/* Header */}
+    <div className={embedded ? 'text-[var(--ds-ink)]' : 'min-h-screen bg-[var(--ds-canvas)] text-[var(--ds-ink)]'}>
+      <div className={embedded ? '' : 'mx-auto max-w-5xl px-4 py-8 sm:px-6 md:py-10'}>
+        {/* Header — full-page only; in the Chat settings tab the modal supplies the title. */}
+        {!embedded && (
         <header className="mb-8 flex items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2">
@@ -316,6 +317,7 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void }> = ({ onBack }) =>
             </button>
           )}
         </header>
+        )}
 
         {loadError && (
           <div className="mb-6 flex items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-700">

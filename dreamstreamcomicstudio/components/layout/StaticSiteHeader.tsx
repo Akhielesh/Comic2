@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Bot, Mail, Sparkles, BookOpen, Compass, Palette, LayoutGrid, MessageSquare, Cpu, Code2, Menu, X, Radio, Plug } from 'lucide-react';
+import { Bot, Mail, Sparkles, BookOpen, Compass, Palette, LayoutGrid, MessageSquare, Cpu, Code2, Menu, X, Radio } from 'lucide-react';
 import { Button } from '../Button';
 import { BrandLockup } from './BrandLockup';
 import { NavDropdown } from './NavDropdown';
@@ -74,10 +74,6 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
     { heading: 'Models', items: [
       { label: 'Browse Models', onClick: () => onNavigate('models') },
     ] },
-    ...(isAuthenticated ? [{ heading: 'Connectors', items: [
-      { label: 'Browse Connectors', onClick: () => onNavigate('connectors') },
-      { label: 'Your Connections', onClick: () => onNavigate('connectors') },
-    ] }] : []),
   ];
 
   return (
@@ -180,17 +176,6 @@ export const StaticSiteHeader: React.FC<StaticSiteHeaderProps> = ({
                 { label: 'Use in Chat Studio', description: 'Start a conversation with any model', icon: <MessageSquare size={16} />, onClick: () => onNavigate('chat') },
               ]}
             />
-            {/* Connectors — a top-level category (NOT nested under Settings/Tools). */}
-            {isAuthenticated && (
-              <NavDropdown
-                label="Connectors"
-                icon={<Plug size={14} />}
-                items={[
-                  { label: 'Browse Connectors', description: 'Connect Gmail, Maps & more', icon: <Plug size={16} />, onClick: () => onNavigate('connectors') },
-                  { label: 'Your Connections', description: 'Manage your synced accounts', icon: <LayoutGrid size={16} />, onClick: () => onNavigate('connectors') },
-                ]}
-              />
-            )}
           </nav>
 
           {/* Auth controls */}
