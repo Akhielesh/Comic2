@@ -215,10 +215,69 @@ export const IconShare: React.FC<IconProps> = (p) => (
   <Svg {...p} label="share"><circle cx="6" cy="12" r="2.5" /><circle cx="17" cy="6" r="2.5" /><circle cx="17" cy="18" r="2.5" /><path d="m8.2 10.8 6.6-3.6M8.2 13.2l6.6 3.6" /></Svg>
 );
 
+// ── Tools / system ────────────────────────────────────────────────────────────────
+export const IconSliders: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="settings"><path d="M4 6h10M18 6h2M4 12h2M10 12h10M4 18h8M16 18h4" /><circle cx="16" cy="6" r="2" /><circle cx="8" cy="12" r="2" /><circle cx="14" cy="18" r="2" /></Svg>
+);
+export const IconWrench: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="tools"><path d="M14.7 6.3a4 4 0 0 0-5.4 4.6l-5.1 5.1a1.6 1.6 0 0 0 2.3 2.3l5.1-5.1a4 4 0 0 0 4.6-5.4l-2.3 2.3-1.5-1.5 2.3-2.3Z" /></Svg>
+);
+export const IconShield: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="security"><path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6l-7-3Z" /><path d="m9 12 2 2 4-4" /></Svg>
+);
+export const IconKey: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="key"><circle cx="8" cy="8" r="4" /><path d="m10.8 10.8 8.2 8.2M16 16l2-2M19 19l1.5-1.5" /></Svg>
+);
+export const IconLink: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="link"><path d="m9 15 6-6M10.5 6.5 12 5a4 4 0 0 1 6 6l-1.5 1.5M13.5 17.5 12 19a4 4 0 0 1-6-6l1.5-1.5" /></Svg>
+);
+export const IconSearch: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="search"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></Svg>
+);
+
+// ── Education ─────────────────────────────────────────────────────────────────────
+export const IconBook: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="book"><path d="M5 5a2 2 0 0 1 2-2h12v15H7a2 2 0 0 0-2 2V5Z" /><path d="M5 18a2 2 0 0 0 2 2h12M9 7h6" /></Svg>
+);
+export const IconGradCap: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="education"><path d="m2 8 10-4 10 4-10 4L2 8Z" /><path d="M6 10v5c0 1.1 2.7 2.5 6 2.5s6-1.4 6-2.5v-5M21 9v5" /></Svg>
+);
+export const IconPencil: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="write"><path d="m4 20 1-4L16 5l3 3L8 19l-4 1ZM14 7l3 3" /></Svg>
+);
+export const IconLightbulb: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="idea"><path d="M9.5 18h5M10.5 21h3M12 3a6 6 0 0 0-3.8 10.6c.7.6 1.1 1.2 1.2 2.4h5.2c.1-1.2.5-1.8 1.2-2.4A6 6 0 0 0 12 3Z" /></Svg>
+);
+
+// ── Food ────────────────────────────────────────────────────────────────────────
+export const IconPizza: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="pizza"><path d="M12 3 3 7c2 7 6 12 9 14 3-2 7-7 9-14L12 3Z" /><circle cx="10" cy="9.5" r="1" fill="currentColor" stroke="none" /><circle cx="13.5" cy="12.5" r="1" fill="currentColor" stroke="none" /></Svg>
+);
+export const IconWine: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="drinks"><path d="M7 3h10l-1 5a4 4 0 0 1-8 0L7 3ZM12 13v6M9 21h6M6.5 8h11" /></Svg>
+);
+export const IconIceCream: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="dessert"><path d="M8 10a4 4 0 1 1 8 0M8 10h8l-4 10-4-10Z" /></Svg>
+);
+
+// ── Transit ─────────────────────────────────────────────────────────────────────
+export const IconCar: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="car"><path d="m5 11 1.5-4.5A2 2 0 0 1 8.4 5h7.2a2 2 0 0 1 1.9 1.5L19 11M4 11h16v5H4zM5 16v2M19 16v2" /><circle cx="7.5" cy="13.5" r="1" fill="currentColor" stroke="none" /><circle cx="16.5" cy="13.5" r="1" fill="currentColor" stroke="none" /></Svg>
+);
+export const IconTrain: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="train"><rect x="6" y="3" width="12" height="14" rx="3" /><path d="M6 11h12M9 3v8M15 3v8M8 21l2-3M16 21l-2-3" /><circle cx="9" cy="14" r="1" fill="currentColor" stroke="none" /><circle cx="15" cy="14" r="1" fill="currentColor" stroke="none" /></Svg>
+);
+export const IconBus: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="bus"><rect x="4" y="4" width="16" height="13" rx="2.5" /><path d="M4 11h16M8 4v7M16 4v7M6 21v-2M18 21v-2" /><circle cx="8" cy="14" r="1" fill="currentColor" stroke="none" /><circle cx="16" cy="14" r="1" fill="currentColor" stroke="none" /></Svg>
+);
+export const IconBike: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="bike"><circle cx="6" cy="17" r="3.2" /><circle cx="18" cy="17" r="3.2" /><path d="M6 17l4-7h5M9 7h3.5l3 10M14.5 10H18" /></Svg>
+);
+
 /** One catalog entry for the Gallery's Icons browser. */
 export interface DomainIconDef {
   name: string;
-  category: 'Travel' | 'Finance' | 'News' | 'Planning' | 'Places' | 'Tech' | 'Health' | 'Science' | 'Sports' | 'Media';
+  category: 'Travel' | 'Finance' | 'News' | 'Planning' | 'Places' | 'Tech' | 'Health' | 'Science' | 'Sports' | 'Media' | 'Tools' | 'Education' | 'Food' | 'Transit';
   keywords: string[];
   Icon: React.FC<IconProps>;
 }
@@ -277,5 +336,22 @@ export const DOMAIN_ICONS: DomainIconDef[] = [
   { name: 'Mail', category: 'Media', keywords: ['email', 'message', 'inbox', 'send'], Icon: IconMail },
   { name: 'Chat', category: 'Media', keywords: ['message', 'talk', 'comment', 'reply'], Icon: IconChat },
   { name: 'Phone', category: 'Media', keywords: ['call', 'contact', 'telephone', 'dial'], Icon: IconPhone },
-  { name: 'Share', category: 'Media', keywords: ['network', 'send', 'connect', 'distribute'], Icon: IconShare }
+  { name: 'Share', category: 'Media', keywords: ['network', 'send', 'connect', 'distribute'], Icon: IconShare },
+  { name: 'Settings', category: 'Tools', keywords: ['controls', 'sliders', 'config', 'preferences'], Icon: IconSliders },
+  { name: 'Wrench', category: 'Tools', keywords: ['tools', 'fix', 'repair', 'build'], Icon: IconWrench },
+  { name: 'Shield', category: 'Tools', keywords: ['security', 'protect', 'safe', 'privacy'], Icon: IconShield },
+  { name: 'Key', category: 'Tools', keywords: ['access', 'auth', 'password', 'secret'], Icon: IconKey },
+  { name: 'Link', category: 'Tools', keywords: ['url', 'chain', 'connect', 'hyperlink'], Icon: IconLink },
+  { name: 'Search', category: 'Tools', keywords: ['find', 'magnify', 'lookup', 'query'], Icon: IconSearch },
+  { name: 'Book', category: 'Education', keywords: ['read', 'learn', 'guide', 'docs'], Icon: IconBook },
+  { name: 'Grad cap', category: 'Education', keywords: ['school', 'study', 'degree', 'learn'], Icon: IconGradCap },
+  { name: 'Pencil', category: 'Education', keywords: ['write', 'edit', 'note', 'draw'], Icon: IconPencil },
+  { name: 'Idea', category: 'Education', keywords: ['lightbulb', 'insight', 'tip', 'inspiration'], Icon: IconLightbulb },
+  { name: 'Pizza', category: 'Food', keywords: ['restaurant', 'dining', 'slice', 'italian'], Icon: IconPizza },
+  { name: 'Drinks', category: 'Food', keywords: ['wine', 'bar', 'glass', 'beverage'], Icon: IconWine },
+  { name: 'Dessert', category: 'Food', keywords: ['ice cream', 'sweet', 'treat', 'cone'], Icon: IconIceCream },
+  { name: 'Car', category: 'Transit', keywords: ['drive', 'auto', 'vehicle', 'rental'], Icon: IconCar },
+  { name: 'Train', category: 'Transit', keywords: ['rail', 'metro', 'subway', 'commute'], Icon: IconTrain },
+  { name: 'Bus', category: 'Transit', keywords: ['transit', 'coach', 'public', 'commute'], Icon: IconBus },
+  { name: 'Bike', category: 'Transit', keywords: ['cycle', 'bicycle', 'ride', 'eco'], Icon: IconBike }
 ];
