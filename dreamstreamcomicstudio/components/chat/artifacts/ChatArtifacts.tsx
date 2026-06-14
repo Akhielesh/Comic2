@@ -61,7 +61,8 @@ import { LocalCheatsheet } from './LocalCheatsheet';
 import { LoyaltyWallet } from './LoyaltyWallet';
 import { WidgetStack } from './WidgetStack';
 import { ClarifyCard } from './ClarifyCard';
-import type { ClarifyArtifact } from '../../../apiTypes';
+import { GameCard } from './GameCard';
+import type { ClarifyArtifact, GameArtifact } from '../../../apiTypes';
 
 // Renderer registry for typed rich-output artifacts. Adding a new rich component is
 // a single entry here — the chat loop and storage never change.
@@ -124,7 +125,8 @@ const ARTIFACT_RENDERERS: Record<string, (data: unknown, key: number) => React.R
   local_cheatsheet: (d, k) => <LocalCheatsheet key={k} data={d as LocalCheatsheetArtifact} />,
   loyalty_wallet: (d, k) => <LoyaltyWallet key={k} data={d as LoyaltyWalletArtifact} />,
   widget_stack: (d, k) => <WidgetStack key={k} data={d as WidgetStackArtifact} renderEmbedded={renderArtifactNode} />,
-  clarify: (d, k) => <ClarifyCard key={k} data={d as ClarifyArtifact} />
+  clarify: (d, k) => <ClarifyCard key={k} data={d as ClarifyArtifact} />,
+  game: (d, k) => <GameCard key={k} data={d as GameArtifact} />
 };
 
 /** Render an artifact's bare card via the registry (no frame/boundary). Used by the
@@ -183,7 +185,8 @@ export const DENSITY_AWARE_TYPES = new Set([
   'local_cheatsheet',
   'loyalty_wallet',
   'widget_stack',
-  'react_component'
+  'react_component',
+  'game'
 ]);
 
 // Holds the freshest version of a single artifact. When the server stamped an
@@ -253,7 +256,7 @@ const renderArtifact = (artifact: ChatArtifact, key: number): React.ReactNode =>
 // KPI boards, news) ride a narrower column so several pack into view at once — e.g.
 // "compare gold, oil and the S&P" → three quote cards you swipe through instead of a
 // tall stack you scroll past.
-const WIDE_IN_GALLERY = new Set(['weather', 'map', 'directions', 'places_results', 'video_results', 'swarm_trace', 'code_studio', 'recipe_card', 'recipe_run', 'research_report', 'quiz', 'document', 'flashcards', 'sql_exercise', 'resource_bundle', 'code_exercise', 'generative_ui', 'dashboard', 'learning_path', 'itinerary', 'ticker_tape', 'portfolio', 'goal_tracker', 'code_review', 'live_monitor', 'macro_tiles', 'econ_calendar', 'earnings_calendar', 'central_bank_watch', 'pnl_calendar', 'flight_status', 'local_cheatsheet', 'widget_stack', 'stock_comparison', 'react_component']);
+const WIDE_IN_GALLERY = new Set(['weather', 'map', 'directions', 'places_results', 'video_results', 'swarm_trace', 'code_studio', 'recipe_card', 'recipe_run', 'research_report', 'quiz', 'document', 'flashcards', 'sql_exercise', 'resource_bundle', 'code_exercise', 'generative_ui', 'dashboard', 'learning_path', 'itinerary', 'ticker_tape', 'portfolio', 'goal_tracker', 'code_review', 'live_monitor', 'macro_tiles', 'econ_calendar', 'earnings_calendar', 'central_bank_watch', 'pnl_calendar', 'flight_status', 'local_cheatsheet', 'widget_stack', 'stock_comparison', 'react_component', 'game']);
 
 // When an assistant turn produces several cards, present them as a horizontal
 // scrolling gallery (snap + edge fades + arrows + dots) rather than a tall vertical

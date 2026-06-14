@@ -63,7 +63,8 @@ export const ARTIFACT_TOOLS: Record<string, string[]> = {
   local_cheatsheet: ['render_cheatsheet'],
   loyalty_wallet: ['render_loyalty_wallet'],
   widget_stack: ['create_widget_stack'],
-  clarify: ['ask_user']
+  clarify: ['ask_user'],
+  game: ['play_game']
 };
 
 /** Artifact types the MODEL composes directly (no single producing data tool). */
@@ -98,7 +99,8 @@ export const EXAMPLE_PROMPT: Record<string, string> = {
   learning_path: 'Create a 2-week learning path for SQL',
   video_results: 'Find videos explaining transformers in ML',
   currency_converter: 'Convert 100 USD to EUR',
-  world_clocks: 'World clocks for New York, London and Tokyo'
+  world_clocks: 'World clocks for New York, London and Tokyo',
+  game: "Let's play Snake"
 };
 
 /** A widget's source kind — drives the badge + a tag. */

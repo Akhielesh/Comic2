@@ -613,6 +613,19 @@ export const REFRESHABLE_TOOLS = [
   'get_cot_positioning'
 ] as const;
 
+// --- Game artifact (playable mini-games) -----------------------------------
+// Emitted by the `play_game` tool: a full, playable game widget (Snake, Brick
+// breaker, or 2048) rendered by components/chat/artifacts/GameCard.tsx. Each game
+// carries its own Compact / Medium / Large size control and a true fullscreen
+// toggle (its GameShell), independent of the frame's compact⇄detailed density.
+export type GameKind = 'snake' | 'breakout' | '2048';
+export interface GameArtifact {
+  game: GameKind;
+  title?: string;
+  difficulty?: 'easy' | 'normal' | 'hard';
+  density?: 'compact' | 'detailed';
+}
+
 // --- Directions artifact (multi-modal routes on a live map) ----------------
 // Emitted by the `get_directions` tool: real drive/walk/bike routes (FOSSGIS
 // OSRM) with alternatives, rendered as a Google-Maps-style card with a mode
