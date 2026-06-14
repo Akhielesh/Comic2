@@ -65,16 +65,80 @@ const mineTopics = (text: string): string[] => {
 
 const CRYPTO_IDS: Record<string, string> = { btc: 'bitcoin', bitcoin: 'bitcoin', eth: 'ethereum', ethereum: 'ethereum' };
 
+/** Whole-name patterns that signal a throwaway/test board. */
+const JUNK_NAME = /^(new (dash)?board|board|dashboard|abc+|xyz+|aaa+|zzz+|\d+|[a-z])$/i;
+/** Leading tokens that signal a scratch board even with trailing words ("Test 123"). */
+const JUNK_FIRST_WORD =
+  /^(test\w*|testing|untitled|asdf\w*|qwerty\w*|temp\w*|tmp|foo|bar|baz|sample|demo|example|placeholder|xxx+)$/;
+
+/** True when a dashboard name reads as a test/placeholder/gibberish board. */
+export const isJunkDashboardName = (name?: string): boolean => {
+  const n = (name || '').trim();
+  if (!n) return false; // an empty name isn't junk; rely on other signal
+  if (JUNK_NAME.test(n)) return true;
+  const first = n.toLowerCase().split(/\s+/)[0].replace(/[^a-z0-9]/g, '');
+  if (JUNK_FIRST_WORD.test(first)) return true;
+  // A single low-information token with no vowels ("xkcd", "qwrt") reads as junk.
+  return /^[a-z]{3,8}$/i.test(n) && !/[aeiou]/i.test(n);
+};
+
+/** Words inside a dashboard NAME that must never be mistaken for a place token. */
+const NAME_NONPLACE = new Set([
+  'Trip', 'Travel', 'Vacation', 'Holiday', 'Getaway', 'Visit', 'Tour', 'Itinerary', 'Plan', 'Planner',
+  'My', 'The', 'Dashboard', 'Board', 'Pulse', 'Daily', 'Weekly', 'Market', 'Markets', 'News', 'Watch'
+]);
+
+/** Bare ALL-CAPS tickers in a SHORT deliberate board name (e.g. "NVDA & TSLA"). Safe
+ *  here precisely because a board name is short and intentional, unlike free prose. */
+const mineNameTickers = (name: string): string[] => {
+  const out = new Set<string>();
+  for (const m of name.matchAll(/\b([A-Z]{2,5})\b/g)) {
+    const sym = m[1].toUpperCase();
+    if (!TICKER_STOPWORDS.has(sym)) out.add(sym);
+  }
+  return [...out].slice(0, 4);
+};
+
+/** A place named in a travel-themed board ("Lisbon Trip", "Tokyo getaway"). */
+const mineNamePlaces = (name: string): string[] => {
+  if (!/\b(trip|travel|vacation|holiday|getaway|visit|tour|itinerary|weekend)\b/i.test(name)) return [];
+  const out = new Set<string>();
+  for (const m of name.matchAll(/\b([A-Z][a-z]{2,})\b/g)) if (!NAME_NONPLACE.has(m[1])) out.add(m[1]);
+  return [...out].slice(0, 2);
+};
+
+/** The coarse category a tile/pick belongs to — used to bias picks toward the board's
+ *  established theme (a finance board surfaces tickers first; a travel board, places). */
+type PickCategory = 'finance' | 'travel' | 'news' | 'other';
+const toolCategory = (tool: string): PickCategory => {
+  if (tool === 'get_stock' || tool === 'crypto_price' || tool.startsWith('get_market')) return 'finance';
+  if (tool === 'get_weather' || tool === 'get_directions' || tool === 'get_places') return 'travel';
+  if (tool === 'get_news') return 'news';
+  return 'other';
+};
+
+/** Extra context that sharpens picks: the board's own name + the widgets already on it. */
+export interface SmartPickContext {
+  dashboardName?: string;
+  tiles?: Array<{ tool: string; label?: string; args?: Record<string, unknown> }>;
+}
+
 /**
- * Derive smart dashboard picks from the user's memory text and recent chat titles.
- * `existingKeys` (tool:args of tiles already pinned) suppresses duplicates.
+ * Derive smart dashboard picks from the board's own intent (its NAME), the widgets
+ * already on it, and the user's memory + recent chat titles — in that priority order.
+ * `existingKeys` (tool:args of pinned tiles) suppresses duplicates. A test/placeholder
+ * board name suppresses picks entirely (no random suggestions on a throwaway board).
  */
 export const deriveSmartPicks = (
   memory: string,
   sessionTitles: string[],
-  existingKeys: Set<string> = new Set()
+  existingKeys: Set<string> = new Set(),
+  context: SmartPickContext = {}
 ): SmartPick[] => {
-  const corpus = `${memory}\n${sessionTitles.join('\n')}`;
+  const name = (context.dashboardName || '').trim();
+  // Don't pollute a test/scratch board with suggestions.
+  if (isJunkDashboardName(name)) return [];
+
   const picks: SmartPick[] = [];
   const seen = new Set(existingKeys);
   const push = (pick: SmartPick) => {
@@ -84,42 +148,49 @@ export const deriveSmartPicks = (
     picks.push(pick);
   };
 
-  for (const sym of mineTickers(corpus)) {
+  const stockPick = (sym: string, reason: string) => {
     const crypto = CRYPTO_IDS[sym.toLowerCase()];
     if (crypto) {
-      push({
-        label: `${crypto === 'bitcoin' ? 'Bitcoin' : 'Ethereum'} price`,
-        reason: 'mentioned in your chats',
-        tile: { tool: 'crypto_price', args: { coin: crypto }, label: crypto === 'bitcoin' ? 'Bitcoin' : 'Ethereum', density: 'compact' }
-      });
+      const label = crypto === 'bitcoin' ? 'Bitcoin' : 'Ethereum';
+      push({ label: `${label} price`, reason, tile: { tool: 'crypto_price', args: { coin: crypto }, label, density: 'compact' } });
     } else {
-      push({
-        label: `${sym} stock`,
-        reason: 'mentioned in your chats',
-        tile: { tool: 'get_stock', args: { symbol: sym }, label: sym, density: 'compact' }
-      });
+      push({ label: `${sym} stock`, reason, tile: { tool: 'get_stock', args: { symbol: sym }, label: sym, density: 'compact' } });
     }
+  };
+  const placePick = (place: string, reason: string) =>
+    push({ label: `Weather · ${place}`, reason, tile: { tool: 'get_weather', args: { location: place }, label: place, density: 'compact' } });
+  const topicPick = (topic: string, reason: string) =>
+    push({ label: `News · ${topic}`, reason, tile: { tool: 'get_news', args: { query: topic }, label: topic, density: 'compact' } });
+
+  // 1) The board's NAME is the strongest intent signal — mine it first.
+  if (name) {
+    for (const sym of mineNameTickers(name)) stockPick(sym, "from this dashboard's name");
+    for (const place of mineNamePlaces(name)) placePick(place, "from this dashboard's name");
+    for (const sym of mineTickers(name)) stockPick(sym, "from this dashboard's name");
+    for (const place of minePlaces(name)) placePick(place, "from this dashboard's name");
   }
 
-  for (const place of minePlaces(corpus)) {
-    push({
-      label: `Weather · ${place}`,
-      reason: 'a place from your chats',
-      tile: { tool: 'get_weather', args: { location: place }, label: place, density: 'compact' }
+  // 2) Then the user's broader context (memory + recent chats).
+  const corpus = `${memory}\n${sessionTitles.join('\n')}`;
+  for (const sym of mineTickers(corpus)) stockPick(sym, 'mentioned in your chats');
+  for (const place of minePlaces(corpus)) placePick(place, 'a place from your chats');
+  for (const topic of mineTopics(corpus)) topicPick(topic, 'a topic you follow');
+
+  // 3) Bias toward the board's established theme: picks matching a category already on
+  //    the board float to the top (stable), so a finance board leads with tickers, a
+  //    travel board with places — relevance over a flat mined list.
+  const boardCats = new Set<PickCategory>((context.tiles ?? []).map((t) => toolCategory(t.tool)).filter((c) => c !== 'other'));
+  if (boardCats.size > 0) {
+    picks.sort((a, b) => {
+      const am = boardCats.has(toolCategory(a.tile.tool)) ? 0 : 1;
+      const bm = boardCats.has(toolCategory(b.tile.tool)) ? 0 : 1;
+      return am - bm;
     });
   }
 
-  for (const topic of mineTopics(corpus)) {
-    push({
-      label: `News · ${topic}`,
-      reason: 'a topic you follow',
-      tile: { tool: 'get_news', args: { query: topic }, label: topic, density: 'compact' }
-    });
-  }
-
-  // NO generic fallbacks: picks must come from the user's own context (memory,
-  // chats). When there isn't enough signal the row simply doesn't render —
-  // a canned "Top headlines / S&P 500" suggestion is noise, not personalization.
+  // NO generic fallbacks: picks must come from the user's own context (board name,
+  // widgets, memory, chats). When there isn't enough signal the row simply doesn't
+  // render — a canned "Top headlines / S&P 500" suggestion is noise, not personalization.
   return picks.slice(0, 6);
 };
 

@@ -1097,8 +1097,12 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode }> = ({
 
   // Smart picks: mined from the user's memory + recent chats, minus what's pinned.
   const smartPicks = useMemo<SmartPick[]>(() => {
-    const existing = new Set((active?.tiles ?? []).map((t) => tileKey({ tool: t.tool, args: t.args, density: t.density })));
-    return deriveSmartPicks(getChatMemory(user?.id), sessionTitles, existing);
+    const tiles = active?.tiles ?? [];
+    const existing = new Set(tiles.map((t) => tileKey({ tool: t.tool, args: t.args, density: t.density })));
+    return deriveSmartPicks(getChatMemory(user?.id), sessionTitles, existing, {
+      dashboardName: active?.name,
+      tiles: tiles.map((t) => ({ tool: t.tool, label: t.label, args: t.args }))
+    });
   }, [active, sessionTitles, user?.id]);
 
   const addPick = (pick: SmartPick) => {
