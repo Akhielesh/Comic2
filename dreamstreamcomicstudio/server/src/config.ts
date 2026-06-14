@@ -418,9 +418,12 @@ export const GOOGLE_OAUTH_REDIRECT_URL = (
   process.env.GOOGLE_OAUTH_REDIRECT_URL
   || `${EMAIL_PUBLIC_BASE_URL || `http://localhost:${PORT}`}/api/connectors/oauth/callback`
 ).trim();
-// Where to send the browser AFTER the callback completes (the SPA Connectors page).
+// Where the browser lands AFTER the callback completes. Must be the SAME origin as the
+// app the user clicked "Connect" from (the popup posts its result to window.opener on
+// this origin). The connect/error params are appended by the callback; a global relay in
+// App.tsx reads them on whatever page loads, so any same-origin path works.
 export const CONNECTORS_APP_RETURN_URL = (
-  process.env.CONNECTORS_APP_RETURN_URL || `${APP_PUBLIC_URL}/?view=connectors`
+  process.env.CONNECTORS_APP_RETURN_URL || `${APP_PUBLIC_URL}/`
 ).trim();
 // Shared platform API keys for the api_key connectors (optional — a user can also
 // supply their own key per connection).

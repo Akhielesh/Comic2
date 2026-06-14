@@ -281,6 +281,10 @@ const AddKeyForm: React.FC<{ provider: ApiKeyProvider; onChange: () => void }> =
     onChange();
   };
 
+  // Gentle, non-blocking format hint: most providers' keys carry a known prefix.
+  const prefix = getProviderDef(provider)?.keyPrefix;
+  const prefixMismatch = Boolean(prefix && key.trim() && !key.trim().startsWith(prefix));
+
   return (
     <div className={`border border-dashed border-[var(--ds-hairline)] rounded-xl p-3 space-y-2 bg-[var(--ds-well)]`}>
       <div className="flex flex-col sm:flex-row gap-2">
@@ -288,9 +292,12 @@ const AddKeyForm: React.FC<{ provider: ApiKeyProvider; onChange: () => void }> =
         <input type="number" min={0} step="0.01" value={limit} onChange={(e) => setLimit(e.target.value)} placeholder="Limit $/mo (optional)" className={`${INPUT} sm:w-44 font-mono`} />
       </div>
       <div className="flex gap-2">
-        <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={`Paste ${PROVIDER_META[provider].label} API key`} className={`${INPUT} font-mono`} />
+        <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={`Paste ${PROVIDER_META[provider].label} API key${prefix ? ` (${prefix}…)` : ''}`} className={`${INPUT} font-mono ${prefixMismatch ? 'border-amber-500' : ''}`} />
         <PrimaryBtn onClick={() => void add()} disabled={!key.trim()}><Plus className="w-3.5 h-3.5" /> Add</PrimaryBtn>
       </div>
+      {prefixMismatch && (
+        <p className="text-[11px] text-amber-600 flex items-center gap-1"><AlertTriangle className="w-3 h-3 shrink-0" /> Most {PROVIDER_META[provider].label} keys start with <span className="font-mono">{prefix}</span> — double-check you pasted the right one.</p>
+      )}
     </div>
   );
 };
