@@ -9,13 +9,15 @@
 import React, { useState } from 'react';
 import type { ComicState } from '../../../types';
 import { syncAgentRunWithState } from '../../../services/comicAgentRun';
-import { StreamItem, StreamList } from '../kit';
+import { AgentThinking, StreamItem, StreamList } from '../kit';
 import { CardForKind, type StreamCardHandlers } from './streamCards';
 
 export interface ComicStreamViewProps {
   state: ComicState;
   projectTitle?: string;
   costUsd?: number;
+  /** True while the prompt-bar script analysis is running. */
+  analyzing?: boolean;
   onBack?: () => void;
   onOpenSettings?: () => void;
   onSend?: (prompt: string) => void;
@@ -41,6 +43,7 @@ export const ComicStreamView: React.FC<ComicStreamViewProps> = ({
   state,
   projectTitle = 'Untitled comic',
   costUsd,
+  analyzing = false,
   onBack,
   onOpenSettings,
   onSend,
@@ -54,7 +57,7 @@ export const ComicStreamView: React.FC<ComicStreamViewProps> = ({
 
   const send = () => {
     const text = draft.trim();
-    if (!text) return;
+    if (!text || analyzing) return;
     onSend?.(text);
     setDraft('');
   };
@@ -101,6 +104,13 @@ export const ComicStreamView: React.FC<ComicStreamViewProps> = ({
               if (!content) return null;
               return <StreamItem key={card.kind}>{content}</StreamItem>;
             })}
+            {analyzing && (
+              <StreamItem key="analyzing">
+                <div className="rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-5">
+                  <AgentThinking label="Reading your script & planning the comic…" />
+                </div>
+              </StreamItem>
+            )}
           </StreamList>
 
           {/* Floating prompt bar */}
@@ -118,7 +128,7 @@ export const ComicStreamView: React.FC<ComicStreamViewProps> = ({
               <Chip>3:4 ▾</Chip>
               <Chip>{state.pageCount ? `${state.pageCount}p` : '12p'} ▾</Chip>
               <Chip>Model ▾</Chip>
-              <button type="button" onClick={send} aria-label="Send" className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--ds-accent)] text-white transition-colors hover:bg-[var(--ds-accent-hover)]">→</button>
+              <button type="button" onClick={send} disabled={analyzing} aria-label="Send" className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--ds-accent)] text-white transition-colors hover:bg-[var(--ds-accent-hover)] disabled:opacity-50">{analyzing ? '…' : '→'}</button>
             </div>
           </div>
         </main>

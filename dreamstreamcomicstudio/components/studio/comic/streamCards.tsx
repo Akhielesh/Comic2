@@ -72,7 +72,7 @@ const PlanCard: React.FC<{ state: ComicState; card: ComicAgentCard; h: StreamCar
     return (
       <div className="flex items-center gap-2 text-[13px] text-[var(--ds-muted)]">
         <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--ds-accent)]" />
-        <AgentThinking label="Reading your script & planning beats…" />
+        Paste or type your story in the bar below — I’ll plan the comic before anything spends.
       </div>
     );
   }

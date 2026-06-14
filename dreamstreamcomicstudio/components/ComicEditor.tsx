@@ -21,7 +21,7 @@ import { transitionAgentRun } from '../services/comicAgentRun';
 import { ArrowLeft, Save, History, AlertTriangle, ImageIcon } from 'lucide-react';
 import { VersionHistoryModal } from './modals/VersionHistoryModal';
 import { ProjectVersion } from '../types';
-import { checkDeploymentParity, DeploymentParityStatus } from '../services/geminiService';
+import { analyzeScriptDetailed, checkDeploymentParity, DeploymentParityStatus } from '../services/geminiService';
 import { getFormFactorDefaultAspectRatio } from '../services/storyPlanning';
 import { TokenAvailabilityPill } from './TokenAvailabilityPill';
 import { getSelectedImageModel, MODEL_SELECTION_CHANGED } from '../services/modelSelection';
@@ -145,6 +145,29 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
     import.meta.env.VITE_COMIC_AGENT_ENABLED === 'false' ? 'detailed' : 'stream',
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [streamAnalyzing, setStreamAnalyzing] = useState(false);
+
+  // Run script analysis directly from the stream's prompt bar so a comic starts end-to-end
+  // inside the new surface (no bridge to Detailed mode). On success it reuses the same
+  // reset path as the wizard, so scenes/world/continuity are populated identically.
+  const runStreamAnalysis = async (text: string) => {
+    const script = text.trim();
+    if (!script || streamAnalyzing) return;
+    setStreamAnalyzing(true);
+    setNavError(null);
+    try {
+      const result = await analyzeScriptDetailed(script, project.id, undefined, (state.creativeDirection || '').trim() || undefined);
+      if (result?.scenes?.length) {
+        applyReset('analyze from stream', (prev) => resetFromScriptAnalysis(prev, script, result.scenes));
+      } else {
+        setNavError('Could not analyze that script — add a little more detail and try again.');
+      }
+    } catch {
+      setNavError('Failed to analyze the script. Please try again.');
+    } finally {
+      setStreamAnalyzing(false);
+    }
+  };
   const [deploymentParity, setDeploymentParity] = useState<DeploymentParityStatus | null>(null);
   const [navError, setNavError] = useState<string | null>(null);
   const previousStepRef = useRef<AppStep>(state.step);
@@ -607,15 +630,14 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
         <ComicStreamView
           state={state}
           projectTitle={project.name}
+          analyzing={streamAnalyzing}
           onBack={onBack}
           onOpenSettings={() => setSettingsOpen(true)}
           onSend={(text) => {
-            // Phase A bridge: a brand-new script routes to analysis in Detailed mode;
-            // a mid-build note is captured as creative direction for the next run.
+            // No scenes yet → analyze the script right here (the comic starts in the stream).
+            // Once scenes exist, a typed note becomes creative direction for the next run.
             if ((state.scenes?.length || 0) === 0) {
-              updateState({ script: text });
-              setViewMode('detailed');
-              goToStep(AppStep.SCRIPT_INPUT);
+              void runStreamAnalysis(text);
             } else {
               updateState({ creativeDirection: text });
             }
