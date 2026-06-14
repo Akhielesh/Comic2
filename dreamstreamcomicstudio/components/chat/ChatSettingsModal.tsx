@@ -26,6 +26,8 @@ type Tab = 'general' | 'memory' | 'agents' | 'recipes' | 'tools' | 'system' | 'g
 
 interface ChatSettingsModalProps {
   userId?: string;
+  /** Tools, System and Gallery tabs are admin-only — hidden unless true. */
+  isAdmin?: boolean;
   initialTab?: Tab;
   onMemoryChange: (memory: string) => void;
   onAgentsChange: (agents: CustomAgentDef[]) => void;
@@ -41,6 +43,9 @@ const TABS = [
   ['system', 'System', Activity],
   ['gallery', 'Gallery', LayoutGrid]
 ] as const;
+
+/** Admin-only tabs — the Tools dashboard, System dashboard, and component Gallery. */
+const ADMIN_TABS = new Set<Tab>(['tools', 'system', 'gallery']);
 
 // Shared field styles: recessed wells, ≥16px font on mobile.
 const FIELD =
@@ -61,9 +66,11 @@ const Group: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 );
 
 export const ChatSettingsModal: React.FC<ChatSettingsModalProps> = ({
-  userId, initialTab = 'memory', onMemoryChange, onAgentsChange, onClose
+  userId, isAdmin = false, initialTab = 'memory', onMemoryChange, onAgentsChange, onClose
 }) => {
-  const [tab, setTab] = useState<Tab>(initialTab);
+  const visibleTabs = TABS.filter(([id]) => isAdmin || !ADMIN_TABS.has(id));
+  const safeInitial: Tab = ADMIN_TABS.has(initialTab) && !isAdmin ? 'memory' : initialTab;
+  const [tab, setTab] = useState<Tab>(safeInitial);
   const activeLabel = TABS.find(([id]) => id === tab)?.[1] ?? 'Settings';
 
   const closeBtn = (
@@ -90,7 +97,7 @@ export const ChatSettingsModal: React.FC<ChatSettingsModalProps> = ({
               {closeBtn}
             </div>
             <div className="flex gap-1 overflow-x-auto px-3 pb-2">
-              {TABS.map(([id, label, Icon]) => (
+              {visibleTabs.map(([id, label, Icon]) => (
                 <button
                   key={id}
                   onClick={() => setTab(id)}
@@ -110,7 +117,7 @@ export const ChatSettingsModal: React.FC<ChatSettingsModalProps> = ({
             {/* Desktop: vertical tab rail */}
             <nav className="hidden w-44 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] p-3 sm:flex">
               <SectionLabel className="px-2.5 pb-2 pt-1">Settings</SectionLabel>
-              {TABS.map(([id, label, Icon]) => (
+              {visibleTabs.map(([id, label, Icon]) => (
                 <button
                   key={id}
                   onClick={() => setTab(id)}
@@ -137,9 +144,9 @@ export const ChatSettingsModal: React.FC<ChatSettingsModalProps> = ({
                 {tab === 'memory' && <MemoryTab userId={userId} onMemoryChange={onMemoryChange} />}
                 {tab === 'agents' && <AgentsTab userId={userId} onAgentsChange={onAgentsChange} />}
                 {tab === 'recipes' && <RecipeStudio userId={userId} />}
-                {tab === 'tools' && <ToolsDashboard />}
-                {tab === 'system' && <SystemDashboard />}
-                {tab === 'gallery' && <ComponentGallery />}
+                {tab === 'tools' && isAdmin && <ToolsDashboard />}
+                {tab === 'system' && isAdmin && <SystemDashboard />}
+                {tab === 'gallery' && isAdmin && <ComponentGallery />}
               </div>
             </div>
           </div>

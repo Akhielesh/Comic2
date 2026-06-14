@@ -15,6 +15,7 @@ import type { PlaygroundData } from './MultiFilePlayground';
 import type { ChatArtifact, CodeStudioArtifact, MapArtifact } from '../../apiTypes';
 import { CANVAS_BG, SIDEBAR_BG, GLASS, HEADING, INK, ACCENT_TEXT, CONTROL_BTN, TRANSITION } from './studioDesign';
 import { persistUiState, resolveInitialUiState } from '../../services/viewState';
+import { getAdminAccess } from '../../services/billing';
 
 const MapPanel = lazy(() => import('./MapPanel'));
 const MultiFilePlayground = lazy(() => import('./MultiFilePlayground'));
@@ -204,6 +205,16 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   useEffect(() => {
     persistUiState('chat.view', 'cview', view === 'chat' ? null : view);
   }, [view]);
+  // Admin-only surfaces (Tools, System, Gallery). Default FALSE so non-admins never see
+  // these options; confirmed admins get them after /api/admin/me resolves.
+  const [isAdmin, setIsAdmin] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    getAdminAccess()
+      .then((a) => { if (alive) setIsAdmin(!!a.isAdmin); })
+      .catch(() => { /* not an admin / not signed in — stay false */ });
+    return () => { alive = false; };
+  }, []);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [catalog, setCatalog] = useState<Map<string, CatalogModel>>(new Map());
   // Per-session generation state, so several chats can stream at the same time and a
@@ -1127,7 +1138,9 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   }
 
   // No open session → land on Home (also covers the brief tick after a delete).
-  const resolvedView: StudioView = view === 'chat' && !activeSession ? 'home' : view;
+  let resolvedView: StudioView = view === 'chat' && !activeSession ? 'home' : view;
+  // Gallery is an admin-only surface — a non-admin who deep-links ?cview=gallery falls back home.
+  if (resolvedView === 'gallery' && !isAdmin) resolvedView = activeSession ? 'chat' : 'home';
   const accountName =
     (user?.user_metadata?.full_name as string | undefined) ||
     (user?.user_metadata?.name as string | undefined) ||
@@ -1278,6 +1291,7 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
             activeId={activeId}
             generatingIds={busyIds}
             hasMemory={Boolean(memory.trim())}
+            isAdmin={isAdmin}
             view={resolvedView}
             userName={accountName}
             userEmail={user?.email || undefined}
@@ -1294,8 +1308,8 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
             onOpenSearch={() => { setPaletteOpen(true); closeOnMobile(); }}
             onOpenSkills={() => { setView('skills'); closeOnMobile(); }}
             onOpenDashboards={() => { setView('dashboards'); closeOnMobile(); }}
-            onOpenGallery={() => { setView('gallery'); closeOnMobile(); }}
-            onOpenTools={() => { setSettingsTab('tools'); closeOnMobile(); }}
+            onOpenGallery={() => { if (!isAdmin) return; setView('gallery'); closeOnMobile(); }}
+            onOpenTools={() => { if (!isAdmin) return; setSettingsTab('tools'); closeOnMobile(); }}
           />
         );
         if (isDesktop) return sidebar;
@@ -1411,7 +1425,7 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
                 }
               />
             )}
-            {resolvedView === 'gallery' && (
+            {resolvedView === 'gallery' && isAdmin && (
               <GalleryStudio
                 sidebarControl={
                   <button
@@ -1487,6 +1501,7 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
       {settingsTab && (
         <ChatSettingsModal
           userId={user?.id}
+          isAdmin={isAdmin}
           initialTab={settingsTab}
           onMemoryChange={setMemory}
           onAgentsChange={setCustomAgents}

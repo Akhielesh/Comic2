@@ -23,6 +23,8 @@ interface ChatSidebarProps {
   hasMemory: boolean;
   /** Which main view is showing — used to highlight Skills/Dashboards rows. */
   view?: 'chat' | 'home' | 'skills' | 'dashboards' | 'gallery';
+  /** Admin-only surfaces (Tools, Gallery) are hidden unless true. */
+  isAdmin?: boolean;
   userName?: string;
   userEmail?: string;
   planLabel?: string;
@@ -300,7 +302,7 @@ const FooterAccount: React.FC<{
 // ---------------------------------------------------------------------------
 
 export const ChatSidebar: React.FC<ChatSidebarProps> = ({
-  sessions, projects, activeId, generatingIds, hasMemory, view = 'chat',
+  sessions, projects, activeId, generatingIds, hasMemory, isAdmin = false, view = 'chat',
   userName, userEmail, planLabel,
   onSelect, onNew, onDelete, onRename, onMoveToProject,
   onNewProject, onEditProject, onDeleteProject, onEditMemory, onBack,
@@ -438,17 +440,21 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
         <button onClick={onOpenDashboards} className={view === 'dashboards' ? NAV_ROW_ACTIVE : NAV_ROW}>
           <LayoutDashboard className={`w-4 h-4 shrink-0 ${view === 'dashboards' ? ACCENT_TEXT : MUTED}`} /> Dashboards
         </button>
-        <button onClick={onOpenGallery} className={view === 'gallery' ? NAV_ROW_ACTIVE : NAV_ROW}>
-          <LayoutGrid className={`w-4 h-4 shrink-0 ${view === 'gallery' ? ACCENT_TEXT : MUTED}`} /> Gallery
-        </button>
+        {isAdmin && (
+          <button onClick={onOpenGallery} className={view === 'gallery' ? NAV_ROW_ACTIVE : NAV_ROW}>
+            <LayoutGrid className={`w-4 h-4 shrink-0 ${view === 'gallery' ? ACCENT_TEXT : MUTED}`} /> Gallery
+          </button>
+        )}
         <button onClick={() => setMoreOpen((v) => !v)} className={NAV_ROW} aria-expanded={moreOpen}>
           <ChevronDown className={`w-4 h-4 shrink-0 ${MUTED} ${TRANSITION} ${moreOpen ? '' : '-rotate-90'}`} /> More
         </button>
         {moreOpen && (
           <div className="pl-4 space-y-px">
-            <button onClick={onOpenTools} className={NAV_ROW}>
-              <Wrench className={`w-4 h-4 shrink-0 ${MUTED}`} /> Tools
-            </button>
+            {isAdmin && (
+              <button onClick={onOpenTools} className={NAV_ROW}>
+                <Wrench className={`w-4 h-4 shrink-0 ${MUTED}`} /> Tools
+              </button>
+            )}
             <button onClick={onNewProject} className={NAV_ROW}>
               <FolderPlus className={`w-4 h-4 shrink-0 ${MUTED}`} /> Projects
             </button>
