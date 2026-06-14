@@ -63,6 +63,50 @@ This gives you a real Google **organization** + admin console for `dreamstreamst
 > email and works immediately, but you don't get the org/admin console. Cloud Identity is
 > the cleaner long-term answer.
 
+### ⚠️ You will NOT see Gmail for your domain account — and that's correct
+
+Cloud Identity Free gives you an **identity + admin console + Google Cloud org**, but **no
+Gmail mailbox**. So:
+
+- In the app launcher you'll see Drive/Calendar/Cloud etc., but **Gmail will say "Activate"
+  / be missing**. That button is an **upsell to paid Google Workspace** — ignore it unless
+  you actually want company inboxes (see below).
+- **Do NOT change your MX records to Google.** Your domain's inbound email stays on
+  **Cloudflare Email Routing** (that's what delivers `support@`, `privacy@`,
+  `you@dreamstreamstudio.ai` to your real inbox). Switching MX to Google would break that.
+- You do **not** need Gmail for any of this setup. The domain account is only the **owner
+  login** for Google Cloud + the OAuth app. The consent-screen support email works as a
+  plain identity/Group; users emailing it reach you via Cloudflare routing.
+
+**When to upgrade to Google Workspace (~$7/user/mo):** only if you want real
+send-and-receive **company mailboxes** (compose/reply as `support@dreamstreamstudio.ai`
+inside Gmail) for yourself and teammates. For running the connectors, **Cloud Identity
+Free is $0 and already enough** — the upgrade is purely an email/collaboration decision.
+
+#### Setting up Workspace mailboxes for the team (when you want them)
+
+1. **admin.google.com → Billing → Get/Upgrade subscription** → pick a plan
+   (**Business Starter ≈ $7/user/mo** is plenty; Standard adds 2 TB/Meet recording). A
+   ~14-day free trial is usually offered. Because you already own the domain via Cloud
+   Identity, this **upgrades in place** — same org, same admin.
+2. **Activate Gmail → set Google's MX records.** The wizard gives you Google MX entries.
+   In **Cloudflare DNS**, **replace the Email Routing MX records with Google's MX**
+   (Cloudflare stays your DNS host — only the MX records change). ⚠️ This **supersedes
+   Cloudflare Email Routing**: once MX points to Google, Gmail receives all domain mail, so
+   manage `support@`/`privacy@` as **Gmail mailboxes or Google Groups** instead of
+   Cloudflare forwards.
+3. **Directory → Users → Add new user** for each teammate → creates
+   `name@dreamstreamstudio.ai` with its own mailbox (one license each = per-mailbox cost).
+4. **Directory → Groups** → create `support@` and `privacy@` as Groups (or shared
+   mailboxes) so they're not tied to one person.
+5. **Re-check SPF / DKIM / DMARC** so **both** Gmail *and* the app's transactional sender
+   (the Cloudflare email-worker) pass: SPF should `include` Google + the worker's sender,
+   enable DKIM for each, and keep DMARC aligned. (Deliverability config — do this once.)
+
+**Cost** = per mailbox (you + N teammates). **None of this affects the connector OAuth
+setup** — that works identically on Cloud Identity Free or Workspace, so you can upgrade
+before or after wiring the connectors.
+
 ### Professional contact addresses (for the consent screen)
 
 Users will see a **support email** on the Google consent screen. Make it a domain address:
@@ -237,6 +281,31 @@ first (sensitive, not restricted), you can launch those without CASA and add Gma
 once the assessment clears.
 
 ---
+
+## Troubleshooting — test email bounces with `550 NoSuchUser` / `gsmtp`
+
+**Symptom:** sending to `you@dreamstreamstudio.ai` bounces:
+`550 5.1.1 The email account that you tried to reach does not exist … gsmtp`.
+
+**Cause:** your domain's **MX records point to Google**, but Cloud Identity Free has **no
+Gmail mailbox**, so Google rejects all inbound mail. (`gsmtp` in the bounce = Google is
+acting as your mail host — it shouldn't be, on the free path.)
+
+**Fix (free path — email stays on Cloudflare):**
+1. **Cloudflare → Email → Email Routing** → make sure it's **Enabled**; if prompted, click
+   **Add records** (this adds Cloudflare's MX + SPF automatically).
+2. **Cloudflare → DNS → Records** → **delete any Google MX** records
+   (`aspmx.l.google.com`, `alt1.aspmx.l.google.com`, `alt2…`, `smtp.google.com`, etc.).
+   Keep **only** the three `route1.mx.cloudflare.net` / `route2…` / `route3…` MX records.
+3. **Email Routing → Destination addresses** → confirm your real inbox is listed and
+   **Verified** (click the verification link Cloudflare emailed you).
+4. **Email Routing → Routing rules** → add the exact address you're testing (e.g.
+   `akhielesh@…`) **or** turn on **Catch-all** → forward to your inbox. An address with no
+   route + no catch-all is rejected even once MX is correct.
+5. Wait a few minutes for DNS to propagate, then resend the test.
+
+(If you later choose Workspace, you do the **opposite** — point MX at Google — and Gmail
+mailboxes/Groups handle the mail instead.)
 
 ## Quick checklist
 
