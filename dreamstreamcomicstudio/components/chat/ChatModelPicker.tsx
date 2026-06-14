@@ -15,6 +15,7 @@ import { searchModels } from '../../services/modelSearch';
 import { isProviderEnabled } from '../../services/sourceGovernance';
 import { hasUsableKey } from '../../services/apiKeys';
 import { getProviderDef, PROVIDERS_ORDERED } from '../../shared/providers';
+import { ProviderLogo, hasProviderLogo } from '../providerLogos';
 import { fetchModelSpeed, speedTier, speedLabel, isTimeoutProneFreeModel, type ModelSpeed } from '../../services/modelSpeed';
 import {
   GLASS_STRONG, HAIRLINE, MUTED, INK, HEADING, TRANSITION, SHADOW_SOFT,
@@ -204,7 +205,9 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
                       title={connected ? undefined : `No ${d.label} key — add one to use these models`}
                       className={`text-[11px] font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 ${TRANSITION} ${providerFilter === d.id ? `${ACCENT_BG} text-white border border-transparent` : `${HAIRLINE} bg-[var(--ds-surface-soft)] ${MUTED} hover:bg-[var(--ds-hover)]`}`}
                     >
-                      <span className="w-1.5 h-1.5 rounded-full" style={{ background: providerFilter === d.id ? '#fff' : d.accent }} />
+                      {hasProviderLogo(d.id)
+                        ? <ProviderLogo provider={d.id} className="w-3 h-3" style={providerFilter === d.id ? undefined : { color: d.accent }} />
+                        : <span className="w-1.5 h-1.5 rounded-full" style={{ background: providerFilter === d.id ? '#fff' : d.accent }} />}
                       {d.short}
                       {!connected && <Key className="w-2.5 h-2.5 opacity-70" />}
                     </button>
@@ -298,7 +301,9 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
                           <div className="flex items-start justify-between gap-2">
                             <div className="min-w-0">
                               <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)] flex items-center gap-1">
-                                <span className="w-1.5 h-1.5 rounded-full" style={{ background: def?.accent || 'var(--ds-muted)' }} />
+                                {hasProviderLogo(model.source)
+                                  ? <ProviderLogo provider={model.source} className="w-3 h-3" style={{ color: def?.accent }} />
+                                  : <span className="w-1.5 h-1.5 rounded-full" style={{ background: def?.accent || 'var(--ds-muted)' }} />}
                                 {sourceShortLabel(providerOrigin(model))}
                               </div>
                               <div className={`font-semibold leading-tight truncate flex items-center gap-1.5 ${INK}`}>

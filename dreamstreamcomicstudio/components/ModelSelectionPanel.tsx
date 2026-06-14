@@ -16,6 +16,7 @@ import { getActiveKey, hasUsableKey } from '../services/apiKeys';
 import { getCapabilities, featureSupport } from '../services/modelCapabilities';
 import { useModelSourceScope } from '../hooks/useModelSourceScope';
 import { PROVIDERS_ORDERED, getProviderDef } from '../shared/providers';
+import { ProviderLogo, hasProviderLogo } from './providerLogos';
 import {
   GLASS, HAIRLINE, SHADOW_SOFT, INK, MUTED, HEADING, TRANSITION, ACCENT_TEXT, ACCENT_SOFT_BG, MENU
 } from './chat/studioDesign';
@@ -37,7 +38,9 @@ const SourceBadge: React.FC<{ source?: ModelSource }> = ({ source }) => {
   const def = getProviderDef(source);
   return (
     <span className={`${CHIP} flex items-center gap-1`}>
-      <span className="w-1.5 h-1.5 rounded-full" style={{ background: def?.accent || 'var(--ds-muted)' }} />
+      {hasProviderLogo(source)
+        ? <ProviderLogo provider={source} className="w-2.5 h-2.5" style={{ color: def?.accent }} />
+        : <span className="w-1.5 h-1.5 rounded-full" style={{ background: def?.accent || 'var(--ds-muted)' }} />}
       {sourceShortLabel(source)}
     </span>
   );
