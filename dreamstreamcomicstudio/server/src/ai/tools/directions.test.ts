@@ -4,6 +4,7 @@ import {
   buildGoogleMapsUrl,
   buildTransitUrl,
   downsamplePath,
+  simplifyPath,
   parseOsrmRoutes,
   pickDefaultMode
 } from './directions.js';
@@ -93,18 +94,34 @@ describe('parseOsrmRoutes', () => {
     expect(r.distanceKm).toBe(0.1);
   });
 
-  it('downsamples long geometries to ≤ 240 points, keeping both endpoints', () => {
+  it('RDP-collapses a perfectly straight geometry to its two endpoints', () => {
+    // A dead-straight diagonal — every interior point is collinear, so the
+    // shape-preserving simplifier keeps only the two pins (no corner-cutting risk).
     const coords = Array.from({ length: 1258 }, (_, i) => [-77 + i * 0.0001, 38 + i * 0.0001]);
     const json = {
       code: 'Ok',
       routes: [{ geometry: { coordinates: coords, type: 'LineString' }, legs: [], duration: 3269.1, distance: 45924.4 }]
     };
     const [route] = parseOsrmRoutes(json);
-    expect(route.path.length).toBeLessThanOrEqual(240);
-    expect(route.path[0]).toEqual([38, -77]);
-    expect(route.path.at(-1)).toEqual([coords.at(-1)![1], coords.at(-1)![0]]);
+    expect(route.path).toEqual([[38, -77], [coords.at(-1)![1], coords.at(-1)![0]]]);
     expect(route.distanceKm).toBe(45.9);
     expect(route.durationMin).toBe(54);
+  });
+
+  it('caps a pathologically winding geometry at MAX_RENDER_POINTS, keeping both ends', () => {
+    // A sawtooth where every interior vertex is a real bend (~111 m off the chord,
+    // far above the ~3 m tolerance): RDP keeps them all, so the uniform-stride
+    // safety net must clamp the result to ≤ 1200 without dropping either endpoint.
+    const coords = Array.from({ length: 2600 }, (_, i) => [-77 + i * 0.001, 38 + (i % 2) * 0.001]);
+    const json = {
+      code: 'Ok',
+      routes: [{ geometry: { coordinates: coords, type: 'LineString' }, legs: [], duration: 600, distance: 1000 }]
+    };
+    const [route] = parseOsrmRoutes(json);
+    expect(route.path.length).toBeGreaterThan(240); // not the old 240 stride — it's far richer now
+    expect(route.path.length).toBeLessThanOrEqual(1200);
+    expect(route.path[0]).toEqual([38, -77]);
+    expect(route.path.at(-1)).toEqual([coords.at(-1)![1], coords.at(-1)![0]]);
   });
 
   it('returns [] for non-Ok codes, garbage, and routes without geometry', () => {
