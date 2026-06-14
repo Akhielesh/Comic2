@@ -483,7 +483,15 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   // BYOK image generation: built with the user's OWN image-account keys (gemini/ideogram/flux),
   // appended when the user enabled the generate_image tool and a key is configured. Provider-agnostic
   // (uses its own image keys, not the chat model's provider).
-  const imageKeys = (req as { apiKeys?: ImageKeys }).apiKeys || {};
+  const ak = (req as { apiKeys?: Record<string, any> }).apiKeys || {};
+  const imageKeys: ImageKeys = {
+    geminiKey: ak.geminiKey,
+    ideogramKey: ak.ideogramKey,
+    pixazoKey: ak.pixazoKey,
+    // OpenAI / xAI image keys come from the generic resolved provider map (BYOK only).
+    openaiKey: ak.providerKeys?.openai?.byok ? ak.providerKeys.openai.key : undefined,
+    xaiKey: ak.providerKeys?.xai?.byok ? ak.providerKeys.xai.key : undefined
+  };
   const imageRequested = Array.isArray(body.tools) && body.tools.some((t) => t === 'generate_image');
   if (imageRequested && imageGenAvailable(imageKeys)) metaTools.push(makeImageTool(imageKeys));
 

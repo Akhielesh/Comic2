@@ -9,14 +9,24 @@ import type { ChatTool, ToolExecResult } from './types.js';
 import { generateGeminiImage } from '../image.js';
 import { generateIdeogramImage } from '../ideogram.js';
 import { generateFluxImage } from '../flux.js';
+import { getProvider, resolveProviderContext } from '../gateway.js';
 
 export interface ImageKeys {
   geminiKey?: string | null;
   ideogramKey?: string | null;
   pixazoKey?: string | null;
+  /** OpenAI image generation (gpt-image-1) when the user has connected an OpenAI key. */
+  openaiKey?: string | null;
+  /** xAI image generation (grok-2-image) when the user has connected an xAI key. */
+  xaiKey?: string | null;
 }
 
-export const imageGenAvailable = (k: ImageKeys): boolean => Boolean(k.geminiKey || k.ideogramKey || k.pixazoKey);
+export const imageGenAvailable = (k: ImageKeys): boolean =>
+  Boolean(k.geminiKey || k.ideogramKey || k.pixazoKey || k.openaiKey || k.xaiKey);
+
+// Default image model per direct provider (OpenAI-compatible /images/generations).
+const OPENAI_IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1';
+const XAI_IMAGE_MODEL = process.env.XAI_IMAGE_MODEL || 'grok-2-image';
 
 const ASPECTS = new Set(['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3']);
 
@@ -24,7 +34,7 @@ const ASPECTS = new Set(['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3']);
 export const makeImageTool = (keys: ImageKeys): ChatTool => ({
   name: 'generate_image',
   description:
-    "Generate a real image from a text prompt using the user's own image-generation account (BYOK: Gemini / Ideogram / Flux). Use for illustrations, hero/cover images, icons, OG/share images, or to replace placeholder art with real visuals. Be descriptive (subject, style, palette, mood). The image is shown to the user.",
+    "Generate a real image from a text prompt using the user's own image-generation account (BYOK: Gemini / Ideogram / Flux / OpenAI / xAI). Use for illustrations, hero/cover images, icons, OG/share images, or to replace placeholder art with real visuals. Be descriptive (subject, style, palette, mood). The image is shown to the user.",
   parameters: {
     type: 'object',
     properties: {
@@ -49,9 +59,21 @@ export const makeImageTool = (keys: ImageKeys): ChatTool => ({
       } else if (keys.pixazoKey) {
         provider = 'Flux';
         dataUrl = (await generateFluxImage(keys.pixazoKey, { prompt, aspectRatio, resolution: '1024x1024' })).dataUrl;
+      } else if (keys.openaiKey) {
+        provider = 'OpenAI';
+        dataUrl = (await getProvider('openai').generateImage(
+          { model: OPENAI_IMAGE_MODEL, prompt: `${prompt}\n\n(Aspect ratio: ${aspectRatio})` },
+          resolveProviderContext(keys.openaiKey, 'openai')
+        )).imageDataUrl;
+      } else if (keys.xaiKey) {
+        provider = 'xAI';
+        dataUrl = (await getProvider('xai').generateImage(
+          { model: XAI_IMAGE_MODEL, prompt: `${prompt}\n\n(Aspect ratio: ${aspectRatio})` },
+          resolveProviderContext(keys.xaiKey, 'xai')
+        )).imageDataUrl;
       } else {
         return {
-          content: 'No image-generation key is configured for your account. Add a Gemini, Ideogram, or Flux/Pixazo key in Settings to generate images.',
+          content: 'No image-generation key is configured for your account. Add a Gemini, Ideogram, Flux/Pixazo, OpenAI or xAI key in Settings to generate images.',
           notice: { level: 'warn', message: 'No image-generation key', fix: 'Add an image key in Settings → API Configuration.' },
         };
       }
