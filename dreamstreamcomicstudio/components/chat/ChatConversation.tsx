@@ -10,12 +10,11 @@ import type { McpServerConfig } from '../../apiTypes';
 import { estimateTokens } from '../../services/chatUtils';
 import { ChatMessageView } from './ChatMessageView';
 import { ChatComposer } from './ChatComposer';
-import { CHAT_SKILLS, type ChatSkill } from '../../services/chatSkills';
 import { ChatContextMeter } from './ChatContextMeter';
 import { ChatModelSuggester } from './ChatModelSuggester';
 import { FollowUpChips } from './FollowUpChips';
 import {
-  CANVAS_BG, GLASS, HAIRLINE, MENU, MUTED, INK, LABEL, TRANSITION, SHADOW_SOFT,
+  CANVAS_BG, GLASS, HAIRLINE, MENU, MUTED, INK, TRANSITION, SHADOW_SOFT,
   CONTROL_BTN, PILL, HEADING, ACCENT_TEXT, ACCENT_SOFT_BG, HOVER_LIFT
 } from './studioDesign';
 
@@ -27,9 +26,6 @@ interface ChatConversationProps {
   onToggleSidebar: () => void;
   onOpenModelPicker: () => void;
   onSend: (text: string, attachments: ChatAttachment[]) => void;
-  onRunSkill: (skill: ChatSkill, arg: string) => void;
-  /** Click a skill suggestion → prefill the composer with its command. */
-  onPickSkill: (skill: ChatSkill) => void;
   seedText?: string;
   onSeedConsumed?: () => void;
   onStop: () => void;
@@ -39,7 +35,6 @@ interface ChatConversationProps {
   onSelectVariant: (turnId: string, index: number) => void;
   onReasoningChange: (level: ChatReasoningLevel) => void;
   onWebToggle: (on: boolean) => void;
-  onSwarmToggle: (on: boolean) => void;
   onDreamstreamToggle: (on: boolean) => void;
   onToggleConnector: (connector: ChatConnector, on: boolean) => void;
   mcpServers: McpServerConfig[];
@@ -132,8 +127,6 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
   onToggleSidebar,
   onOpenModelPicker,
   onSend,
-  onRunSkill,
-  onPickSkill,
   seedText,
   onSeedConsumed,
   onStop,
@@ -143,7 +136,6 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
   onSelectVariant,
   onReasoningChange,
   onWebToggle,
-  onSwarmToggle,
   onDreamstreamToggle,
   onToggleConnector,
   mcpServers,
@@ -336,25 +328,6 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
               ))}
             </div>
 
-            {/* Skills: type `/` in the box, or tap one to get started. */}
-            <div className="w-full mt-4">
-              <div className={`mb-1.5 ${LABEL}`}>
-                Skills — type <code className="rounded bg-[var(--ds-well-strong)] px-1">/</code> in the box
-              </div>
-              <div className="flex flex-wrap justify-center gap-1.5">
-                {CHAT_SKILLS.slice(0, 7).map((s) => (
-                  <button
-                    key={s.command}
-                    onClick={() => onPickSkill(s)}
-                    title={s.description}
-                    className={`flex items-center gap-1 ${PILL} px-2.5 py-1 text-[11px] font-medium hover:bg-[var(--ds-raised)] ${HOVER_LIFT}`}
-                  >
-                    <span>{s.emoji}</span> /{s.command}
-                  </button>
-                ))}
-              </div>
-            </div>
-
             <div className="w-full mt-4 flex flex-col items-center">
               <ChatModelSuggester models={suggestModels} onStart={onStartWithModel} />
             </div>
@@ -401,8 +374,6 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
         features={features}
         reasoningLevel={session.reasoningLevel}
         webSearch={session.webSearch}
-        swarm={Boolean(session.swarm)}
-        swarmSupported={session.source !== 'nvidia'}
         dreamstreamAccess={session.dreamstreamAccess}
         enabledTools={session.tools}
         toolsSupported={session.source !== 'nvidia'}
@@ -410,12 +381,10 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
         enabledMcpServers={session.mcpServers || []}
         onReasoningChange={onReasoningChange}
         onWebToggle={onWebToggle}
-        onSwarmToggle={onSwarmToggle}
         onDreamstreamToggle={onDreamstreamToggle}
         onToggleConnector={onToggleConnector}
         onToggleMcpServer={onToggleMcpServer}
         onSend={onSend}
-        onRunSkill={onRunSkill}
         seedText={seedText}
         onSeedConsumed={onSeedConsumed}
         onStop={onStop}
