@@ -7,6 +7,7 @@
 import React from 'react';
 import type { ComicAgentCard, ComicState } from '../../../types';
 import { castTierLabel, resolveCastTier } from '../../../services/castTiers';
+import { planBeats } from '../../../services/beatPlanner';
 import {
   AgentThinking,
   CountUp,
@@ -66,8 +67,9 @@ const GhostBtn: React.FC<{ children: React.ReactNode; onClick?: () => void }> = 
 
 const PlanCard: React.FC<{ state: ComicState; card: ComicAgentCard; h: StreamCardHandlers }> = ({ state, card, h }) => {
   const scenes = state.scenes || [];
-  const pages = state.pageCount || Math.max(1, Math.ceil((scenes.length || 1) / 2));
-  const panelTotal = Math.max(scenes.length * 3, state.panels?.length || 0);
+  const plan = planBeats(scenes, state.pageCount || 0, 3);
+  const pages = plan.pages;
+  const panelTotal = Math.max(plan.totalPanels, state.panels?.length || 0);
   const done = card.status === 'done';
   if (scenes.length === 0) {
     return (
@@ -80,13 +82,13 @@ const PlanCard: React.FC<{ state: ComicState; card: ComicAgentCard; h: StreamCar
   return (
     <Surface title="Plan" right={<Pill accent>Estimate · <CountUp value={Math.max(0.05, panelTotal * 0.025)} prefix="$" /></Pill>}>
       <div className="space-y-1.5">
-        {scenes.slice(0, 6).map((s, i) => (
-          <div key={s.id ?? i} className="flex items-center justify-between text-[13px]">
+        {plan.beats.slice(0, 6).map((b, i) => (
+          <div key={b.id} className="flex items-center justify-between text-[13px]">
             <span className="flex items-center gap-2 truncate">
               <span className="rounded-md bg-[var(--ds-surface-soft)] px-2 py-0.5 text-[12px] text-[var(--ds-ink)]">Beat {i + 1}</span>
-              <span className="truncate text-[var(--ds-muted)]">{s.synopsis || s.setting || `Scene ${i + 1}`}</span>
+              <span className="truncate text-[var(--ds-muted)]">{b.synopsis}</span>
             </span>
-            <span className="shrink-0 text-[12px] text-[var(--ds-muted)]">~3 panels</span>
+            <span className="shrink-0 text-[12px] text-[var(--ds-muted)]">{b.panelCount} panel{b.panelCount === 1 ? '' : 's'}</span>
           </div>
         ))}
       </div>
