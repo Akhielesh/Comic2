@@ -686,7 +686,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
   return (
     <div className="min-h-screen flex flex-col">
       <StepIndicator currentStep={state.step} maxStepReached={state.maxStepReached} onStepClick={goToStep} />
-      <div className="py-1.5 px-4 border-b border-slate-200 bg-white/60 backdrop-blur-sm sticky top-[50px] z-30 flex items-center gap-3">
+      <div className="px-4 py-2 border-b-4 border-black bg-white flex items-center gap-3">
         <button onClick={onBack} title="Back to Dashboard" className="flex items-center shrink-0 text-xs font-bold text-slate-500 hover:text-black transition-colors">
           <ArrowLeft className="w-4 h-4 sm:mr-1" /> <span className="hidden sm:inline">Dashboard</span>
         </button>
@@ -716,18 +716,7 @@ export const ComicEditor: React.FC<ComicEditorProps> = ({ project, onUpdate, onS
           </div>
         )}
 
-        {/* Active model + usage/limit, surfaced on the studio page */}
         <div className="ml-auto flex items-center gap-2 shrink-0">
-          <button
-            onClick={() => setViewMode('stream')}
-            className="px-2.5 py-1 text-[11px] font-bold rounded-full border-2 border-black bg-brand-yellow hover:-translate-y-px transition-transform shrink-0"
-            title="Switch to the new Agent Stream view"
-          >
-            ✨ Stream view
-          </button>
-          <ComicCostChip projectId={project.id} />
-          <ActiveImageModelChip />
-          <TokenAvailabilityPill />
           <button
             onClick={saveVersion}
             className="p-1.5 hover:bg-slate-100 rounded-full text-slate-600 hover:text-black transition-colors"

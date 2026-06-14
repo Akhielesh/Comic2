@@ -41,24 +41,24 @@ const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reje
 // ---------------------------------------------------------------------------
 
 const SLOT_COLORS = [
-    'bg-sky-300/20',
-    'bg-emerald-300/20',
-    'bg-rose-300/20',
-    'bg-zinc-200/20',
-    'bg-emerald-200/40',
-    'bg-purple-200/40',
-    'bg-amber-200/40',
-    'bg-pink-200/40',
-    'bg-cyan-200/40',
+    'bg-brand-blue/20',
+    'bg-brand-red/20',
+    'bg-brand-yellow/30',
+    'bg-green-300/30',
+    'bg-purple-300/30',
+    'bg-pink-300/30',
+    'bg-amber-300/30',
+    'bg-cyan-300/30',
+    'bg-sky-300/30',
 ];
 
 function SlotPreview({ slots }: { slots: PanelSlot[] }) {
     return (
-        <div className="w-full h-full relative overflow-hidden rounded-md border border-zinc-700 bg-zinc-950">
+        <div className="w-full h-full relative overflow-hidden rounded-md border-2 border-black bg-slate-100">
             {slots.map((slot, i) => (
                 <div
                     key={slot.id}
-                    className={`absolute ${SLOT_COLORS[i % SLOT_COLORS.length]} rounded-sm border border-zinc-600`}
+                    className={`absolute ${SLOT_COLORS[i % SLOT_COLORS.length]} rounded-sm border-2 border-black`}
                     style={{
                         left: `${slot.x}%`,
                         top: `${slot.y}%`,
@@ -239,41 +239,41 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
         return (
             <div
                 key={template.id}
-                className={`group relative flex flex-col overflow-hidden rounded-lg border bg-zinc-950 transition-colors ${isSelected
-                    ? 'border-emerald-300 ring-2 ring-emerald-300/30'
+                className={`group relative flex flex-col overflow-hidden rounded-xl border-4 border-black bg-white shadow-comic transition-colors ${isSelected
+                    ? 'border-brand-blue ring-2 ring-brand-blue'
                     : isIncompatible
-                        ? 'border-zinc-800 opacity-45'
-                        : 'border-zinc-800 hover:border-zinc-500'
+                        ? 'border-black opacity-45'
+                        : 'border-black hover:border-brand-blue'
                     }`}
             >
-                <div className="relative aspect-[3/4] border-b border-zinc-800 bg-zinc-900 p-3">
+                <div className="relative aspect-[3/4] border-b-2 border-black bg-slate-100 p-3">
                     <SlotPreview slots={template.panelSlots} />
                     {isSelected && (
-                        <div className="absolute right-2 top-2 rounded-full border border-zinc-950 bg-emerald-300 p-1 text-zinc-950">
+                        <div className="absolute right-2 top-2 rounded-full border-2 border-black bg-brand-blue p-1 text-white">
                             <Check size={16} strokeWidth={3} />
                         </div>
                     )}
-                    <div className="absolute bottom-2 left-2 flex items-center gap-1 rounded-full bg-zinc-950 px-2 py-1 text-[10px] font-semibold text-zinc-200 ring-1 ring-zinc-700">
+                    <div className="absolute bottom-2 left-2 flex items-center gap-1 rounded-full border-2 border-black bg-white px-2 py-1 text-[10px] font-semibold text-black">
                         <Grid size={10} />
                         {template.panelCount} panel{template.panelCount !== 1 ? 's' : ''}
                     </div>
                     {isIncompatible && (
-                        <div className="absolute left-2 top-2 rounded-full bg-amber-950 px-2 py-0.5 text-[9px] font-semibold text-amber-200 ring-1 ring-amber-800">
+                        <div className="absolute left-2 top-2 rounded-full bg-amber-100 px-2 py-0.5 text-[9px] font-semibold text-amber-700 border-2 border-black">
                             Not optimal
                         </div>
                     )}
                     {template.id === recommendedTemplateId && (
-                        <div className="absolute left-2 top-2 rounded-full bg-emerald-950 px-2 py-0.5 text-[9px] font-semibold text-emerald-200 ring-1 ring-emerald-800">
+                        <div className="absolute left-2 top-2 rounded-full bg-green-100 px-2 py-0.5 text-[9px] font-semibold text-green-700 border-2 border-black">
                             Recommended
                         </div>
                     )}
                 </div>
                 <div className="flex flex-1 flex-col p-4">
-                    <h3 className="mb-2 text-sm font-semibold text-zinc-100">{template.title}</h3>
-                    <p className="mb-3 flex-1 text-xs leading-5 text-zinc-500">{template.description}</p>
+                    <h3 className="mb-2 font-display text-black">{template.title}</h3>
+                    <p className="mb-3 flex-1 text-xs leading-5 text-slate-600 font-comic">{template.description}</p>
                     <div className="mb-4 flex flex-wrap gap-1">
                         {template.tags.slice(0, 3).map(tag => (
-                            <span key={tag} className="rounded-full bg-zinc-900 px-2 py-0.5 text-[9px] font-semibold text-zinc-500 ring-1 ring-zinc-800">
+                            <span key={tag} className="rounded-full border-2 border-black bg-white px-2 py-0.5 text-[9px] font-bold text-slate-600">
                                 {tag}
                             </span>
                         ))}
@@ -281,7 +281,7 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                     <Button
                         onClick={() => handleSelectTemplate(template)}
                         variant={isSelected ? "secondary" : "outline"}
-                        className={`w-full ${isSelected ? 'border-emerald-300' : 'border-zinc-700 text-zinc-300 hover:bg-zinc-900 hover:text-white'}`}
+                        className={`w-full ${isSelected ? 'border-2 border-brand-blue' : 'border-2 border-black text-black hover:bg-brand-yellow'}`}
                         disabled={isIncompatible}
                     >
                         {isSelected ? "Selected" : isIncompatible ? "Unavailable" : "Select"}
@@ -302,7 +302,7 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                     variant="secondary"
                     onClick={startBuild}
                     icon={<ArrowRight className="h-4 w-4" />}
-                    className="border-zinc-100"
+                    className="border-2 border-black"
                 >
                     {autoRunAgent && !shouldConfirmSpend ? 'Autopilot build' : 'Start build'}
                 </Button>
@@ -310,15 +310,15 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
             sidebar={(
                 <div className="space-y-5">
                     <div>
-                        <div className="text-sm font-semibold text-zinc-200">Pages</div>
-                        <p className="mt-1 text-sm leading-6 text-zinc-500">
+                        <div className="font-display text-black uppercase">Pages</div>
+                        <p className="mt-1 text-sm leading-6 text-slate-600 font-comic">
                             {plannedPanelTarget} panels across {scenes.length} scene{scenes.length === 1 ? '' : 's'}.
                         </p>
                         <div className="mt-4 flex items-center gap-3">
                             <button
                                 type="button"
                                 onClick={() => setPageCount((n) => Math.max(minimumPageCount, n - 1))}
-                                className="flex h-11 w-11 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-950 text-xl font-semibold text-zinc-200 hover:border-zinc-500"
+                                className="flex h-11 w-11 items-center justify-center rounded-xl border-2 border-black bg-white text-xl font-semibold text-black hover:bg-brand-yellow"
                                 aria-label="Fewer pages"
                             >
                                 -
@@ -329,13 +329,13 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                                 max={60}
                                 value={pageCount}
                                 onChange={(e) => setPageCount(Math.min(60, Math.max(minimumPageCount, Math.floor(Number(e.target.value) || minimumPageCount))))}
-                                className="h-11 w-24 rounded-lg border border-zinc-700 bg-zinc-950 text-center text-lg font-semibold text-zinc-100 outline-none focus:border-zinc-400"
+                                className="h-11 w-24 rounded-xl border-2 border-black bg-white text-center text-lg font-semibold text-black outline-none focus:border-brand-blue"
                                 aria-label="Page count"
                             />
                             <button
                                 type="button"
                                 onClick={() => setPageCount((n) => Math.min(60, n + 1))}
-                                className="flex h-11 w-11 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-950 text-xl font-semibold text-zinc-200 hover:border-zinc-500"
+                                className="flex h-11 w-11 items-center justify-center rounded-xl border-2 border-black bg-white text-xl font-semibold text-black hover:bg-brand-yellow"
                                 aria-label="More pages"
                             >
                                 +
@@ -343,20 +343,20 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                         </div>
                     </div>
 
-                    <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+                    <div className="rounded-xl border-2 border-black bg-slate-50 p-4">
                         <div className="mb-3 flex items-center justify-between gap-2">
-                            <span className="text-sm font-semibold text-zinc-200">Cost guard</span>
-                            <span className={budgetExceeded ? 'text-sm font-semibold text-red-300' : 'text-sm font-mono text-zinc-100'}>
+                            <span className="font-display text-black uppercase">Cost guard</span>
+                            <span className={budgetExceeded ? 'text-sm font-semibold text-brand-red' : 'text-sm font-mono text-black'}>
                                 ${costProjection.minUsd.toFixed(2)}-${costProjection.maxUsd.toFixed(2)}
                             </span>
                         </div>
-                        <div className="flex flex-wrap gap-2 text-xs text-zinc-400">
-                            <span className="rounded-full bg-zinc-900 px-2 py-1 ring-1 ring-zinc-800">{agentConfirmLabel(agentSettings.confirmPolicy)}</span>
+                        <div className="flex flex-wrap gap-2 text-xs text-slate-600">
+                            <span className="rounded-full border-2 border-black bg-white px-2 py-1">{agentConfirmLabel(agentSettings.confirmPolicy)}</span>
                             {agentSettings.outputTargets.map((target) => (
-                                <span key={target} className="rounded-full bg-zinc-900 px-2 py-1 ring-1 ring-zinc-800">{outputTargetLabel(target)}</span>
+                                <span key={target} className="rounded-full border-2 border-black bg-white px-2 py-1">{outputTargetLabel(target)}</span>
                             ))}
                             {agentSettings.budgetCapUsd && (
-                                <span className={`rounded-full px-2 py-1 ring-1 ${budgetExceeded ? 'bg-red-950 text-red-200 ring-red-800' : 'bg-zinc-900 ring-zinc-800'}`}>
+                                <span className={`rounded-full px-2 py-1 ${budgetExceeded ? 'bg-red-100 text-red-700 border-2 border-black' : 'bg-white border-2 border-black'}`}>
                                     Cap ${agentSettings.budgetCapUsd.toFixed(2)}
                                 </span>
                             )}
@@ -364,14 +364,14 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                     </div>
 
                     <div>
-                        <div className="mb-2 text-xs font-semibold uppercase text-zinc-500">Lettering</div>
+                        <div className="mb-2 text-xs font-semibold uppercase text-slate-600">Lettering</div>
                         <div className="grid grid-cols-2 gap-2">
                             {(['caption', 'speech_bubbles', 'chat_bubbles', 'none'] as TextLayout[]).map(layout => (
                                 <button
                                     key={layout}
                                     type="button"
                                     onClick={() => onTextLayoutChange?.(layout)}
-                                    className={`rounded-lg px-3 py-2 text-left text-xs font-semibold capitalize transition-colors ${currentTextLayout === layout ? 'bg-zinc-100 text-zinc-950' : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200'}`}
+                                    className={`rounded-xl px-3 py-2 text-left text-xs font-semibold capitalize transition-colors ${currentTextLayout === layout ? 'bg-brand-yellow text-black border-2 border-black' : 'bg-white text-slate-600 border-2 border-black hover:bg-brand-yellow hover:text-black'}`}
                                 >
                                     {layout.replace(/_/g, ' ')}
                                 </button>
@@ -380,14 +380,14 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                     </div>
 
                     <div>
-                        <div className="mb-2 text-xs font-semibold uppercase text-zinc-500">Dialogue</div>
+                        <div className="mb-2 text-xs font-semibold uppercase text-slate-600">Dialogue</div>
                         <div className="grid grid-cols-2 gap-2">
                             {(['universal', 'per_panel'] as const).map(mode => (
                                 <button
                                     key={mode}
                                     type="button"
                                     onClick={() => onDialogueModeChange?.(mode)}
-                                    className={`rounded-lg px-3 py-2 text-left text-xs font-semibold transition-colors ${currentDialogueMode === mode ? 'bg-zinc-100 text-zinc-950' : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200'}`}
+                                    className={`rounded-xl px-3 py-2 text-left text-xs font-semibold transition-colors ${currentDialogueMode === mode ? 'bg-brand-yellow text-black border-2 border-black' : 'bg-white text-slate-600 border-2 border-black hover:bg-brand-yellow hover:text-black'}`}
                                 >
                                     {mode === 'universal' ? 'Universal' : 'Per panel'}
                                 </button>
@@ -400,7 +400,7 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                                         key={style}
                                         type="button"
                                         onClick={() => onDialogueStyleChange?.(style)}
-                                        className={`rounded-lg px-3 py-2 text-left text-xs font-semibold capitalize transition-colors ${currentDialogueStyle === style ? 'bg-emerald-300 text-zinc-950' : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200'}`}
+                                        className={`rounded-xl px-3 py-2 text-left text-xs font-semibold capitalize transition-colors ${currentDialogueStyle === style ? 'bg-brand-blue text-white border-2 border-black' : 'bg-white text-slate-600 border-2 border-black hover:bg-brand-yellow hover:text-black'}`}
                                     >
                                         {style}
                                     </button>
@@ -413,17 +413,17 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
             )}
         >
             <div className="flex min-h-[680px] flex-col">
-                <div className="flex flex-col gap-3 border-b border-zinc-800 px-5 py-4 md:flex-row md:items-center md:justify-between">
+                <div className="flex flex-col gap-3 border-b-2 border-black px-5 py-4 md:flex-row md:items-center md:justify-between">
                     <div>
-                        <div className="text-sm font-semibold text-zinc-200">Layout board</div>
-                        <div className="mt-1 text-xs text-zinc-500">
+                        <div className="font-display text-black uppercase">Layout board</div>
+                        <div className="mt-1 text-xs text-slate-600 font-comic">
                             {recommendedTemplateId
                                 ? `Recommended: ${getTemplateById(recommendedTemplateId).title}${recommendedReason ? ` - ${recommendedReason}` : ''}`
                                 : 'Choose a grid'}
                         </div>
                     </div>
                     {selectedFormFactor && (
-                        <div className="rounded-full bg-zinc-900 px-3 py-1 text-xs font-semibold text-zinc-400">
+                        <div className="rounded-full border-2 border-black bg-white px-3 py-1 text-xs font-bold text-black">
                             {selectedFormFactor} format
                         </div>
                     )}
@@ -433,14 +433,14 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
                         {displayTemplates.map(t => renderTemplateCard(t))}
 
-                        <div className={`group relative flex flex-col overflow-hidden rounded-lg border bg-zinc-950 transition-colors md:col-span-2 xl:col-span-1 ${selectedCustom ? 'border-emerald-300 ring-2 ring-emerald-300/30' : 'border-zinc-800 hover:border-zinc-500'}`}>
-                            <div className="relative flex aspect-[3/4] flex-col gap-2 border-b border-zinc-800 bg-zinc-900 p-3">
+                        <div className={`group relative flex flex-col overflow-hidden rounded-xl border-4 border-black bg-white shadow-comic transition-colors md:col-span-2 xl:col-span-1 ${selectedCustom ? 'border-brand-blue ring-2 ring-brand-blue' : 'border-black hover:border-brand-blue'}`}>
+                            <div className="relative flex aspect-[3/4] flex-col gap-2 border-b-2 border-black bg-slate-100 p-3">
                                 {selectedCustom && (
-                                    <div className="absolute right-2 top-2 z-10 rounded-full border border-zinc-950 bg-emerald-300 p-1 text-zinc-950">
+                                    <div className="absolute right-2 top-2 z-10 rounded-full border-2 border-black bg-brand-blue p-1 text-white">
                                         <Check size={16} strokeWidth={3} />
                                     </div>
                                 )}
-                                <label className="flex flex-1 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-zinc-700 p-3 text-center text-zinc-500 hover:border-zinc-500 hover:text-zinc-300">
+                                <label className="flex flex-1 cursor-pointer flex-col items-center justify-center rounded-xl border-dashed border-2 border-black p-3 text-center text-slate-600 hover:bg-brand-yellow/20 hover:text-black">
                                     <UploadCloud size={28} />
                                     <span className="mt-2 text-xs font-semibold">Upload layout refs</span>
                                     <input type="file" multiple accept="image/*" className="hidden" onChange={handleFileChange} />
@@ -448,7 +448,7 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                                 {customImages.length > 0 && (
                                     <div className="grid h-1/2 grid-cols-2 gap-2">
                                         {customImages.map((src, i) => (
-                                            <button key={i} type="button" onClick={() => setPreviewImage(src)} className="overflow-hidden rounded border border-zinc-700">
+                                            <button key={i} type="button" onClick={() => setPreviewImage(src)} className="overflow-hidden rounded border-2 border-black">
                                                 <img src={src} className="h-full w-full object-cover" />
                                             </button>
                                         ))}
@@ -456,11 +456,11 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                                 )}
                             </div>
                             <div className="flex flex-1 flex-col p-4">
-                                <h3 className="mb-2 text-sm font-semibold text-zinc-100">Custom layout</h3>
-                                <p className="mb-3 flex-1 text-xs leading-5 text-zinc-500">Analyze up to four reference images.</p>
+                                <h3 className="mb-2 font-display text-black uppercase">Custom layout</h3>
+                                <p className="mb-3 flex-1 text-xs leading-5 text-slate-600 font-comic">Analyze up to four reference images.</p>
 
                                 {customLayoutPrompt && (
-                                    <div className="mb-3 rounded-lg border border-zinc-800 bg-zinc-900 p-3 text-xs leading-5 text-zinc-300">
+                                    <div className="mb-3 rounded-xl border-2 border-black bg-slate-50 p-3 text-xs leading-5 text-black">
                                         {customLayoutPrompt}
                                     </div>
                                 )}
@@ -469,7 +469,7 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                                     <Button
                                         onClick={() => setSelectedCustom(true)}
                                         variant={selectedCustom ? "secondary" : "outline"}
-                                        className={`w-full ${selectedCustom ? 'border-emerald-300' : 'border-zinc-700 text-zinc-300 hover:bg-zinc-900 hover:text-white'}`}
+                                        className={`w-full ${selectedCustom ? 'border-2 border-brand-blue' : 'border-2 border-black text-black hover:bg-brand-yellow'}`}
                                         icon={<Check />}
                                     >
                                         {selectedCustom ? "Selected" : "Use layout"}
@@ -480,7 +480,7 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                                         variant="outline"
                                         isLoading={isAnalyzing}
                                         disabled={customImages.length === 0}
-                                        className="w-full border-zinc-700 text-zinc-300 hover:bg-zinc-900 hover:text-white"
+                                        className="w-full border-2 border-black text-black hover:bg-brand-yellow"
                                         icon={<Wand2 />}
                                     >
                                         Read refs
@@ -491,8 +491,8 @@ export const LayoutSelector: React.FC<LayoutSelectorProps> = ({
                     </div>
 
                     {incompatibleTemplates.length > 0 && (
-                        <details className="mt-5 rounded-lg border border-zinc-800 bg-zinc-950 p-4">
-                            <summary className="cursor-pointer select-none text-sm font-semibold text-zinc-400">
+                        <details className="mt-5 rounded-xl border-2 border-black bg-slate-50 p-4">
+                            <summary className="cursor-pointer select-none text-sm font-semibold text-slate-600">
                                 Show {incompatibleTemplates.length} layout{incompatibleTemplates.length !== 1 ? 's' : ''} outside {selectedFormFactor}
                             </summary>
                             <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">

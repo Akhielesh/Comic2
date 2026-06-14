@@ -691,43 +691,43 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
 
   const sidebar = (
     <div className="space-y-5">
-      <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
-        <div className="text-xs font-semibold uppercase text-zinc-500">Deliverables</div>
+      <div className="rounded-xl border-2 border-black bg-white p-4">
+        <div className="text-xs font-display uppercase text-slate-600">Deliverables</div>
         <div className="mt-3 space-y-2">
           {agentSettings.outputTargets.map((target) => (
-            <div key={target} className="flex items-center justify-between gap-3 rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2">
+            <div key={target} className="flex items-center justify-between gap-3 rounded-lg border-2 border-black bg-slate-50 px-3 py-2">
               <div>
-                <div className="text-sm font-semibold text-zinc-100">{outputTargetLabel(target)}</div>
-                <div className="text-[11px] text-zinc-500">
+                <div className="text-sm font-bold text-black">{outputTargetLabel(target)}</div>
+                <div className="text-[11px] text-slate-600 font-comic">
                   {outputDelivered(target)
                     ? `Prepared ${new Date(exportedOutputs[target] || 0).toLocaleTimeString()}`
                     : 'Waiting'}
                 </div>
               </div>
-              <span className={`flex h-6 w-6 items-center justify-center rounded-full border ${outputDelivered(target) ? 'border-emerald-400/60 bg-emerald-400/10 text-emerald-200' : 'border-zinc-700 text-zinc-500'}`}>
+              <span className={`flex h-6 w-6 items-center justify-center rounded-full border-2 border-black ${outputDelivered(target) ? 'bg-green-100 text-green-700' : 'bg-white text-slate-400'}`}>
                 {outputDelivered(target) ? <Check className="h-3.5 w-3.5" /> : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
               </span>
             </div>
           ))}
         </div>
-        <div className="mt-4 h-2 overflow-hidden rounded-full bg-zinc-800">
-          <div className="h-full rounded-full bg-zinc-100 transition-all duration-500" style={{ width: `${exportProgress}%` }} />
+        <div className="mt-4 h-2 overflow-hidden rounded-full border-2 border-black bg-white">
+          <div className="h-full bg-brand-blue transition-all duration-500" style={{ width: `${exportProgress}%` }} />
         </div>
-        <div className="mt-2 text-xs text-zinc-500">{deliveredOutputCount} of {requestedOutputCount} requested outputs prepared</div>
+        <div className="mt-2 text-xs text-slate-600 font-comic">{deliveredOutputCount} of {requestedOutputCount} requested outputs prepared</div>
       </div>
 
       <div className="grid grid-cols-2 gap-2">
-        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-          <div className="text-[11px] uppercase text-zinc-500">Panels</div>
-          <div className="mt-1 text-sm font-semibold text-zinc-100">{renderedPanels} / {panels.length}</div>
+        <div className="rounded-xl border-2 border-black bg-white p-3">
+          <div className="text-[11px] uppercase text-slate-600 font-bold">Panels</div>
+          <div className="mt-1 text-sm font-bold text-black">{renderedPanels} / {panels.length}</div>
         </div>
-        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-          <div className="text-[11px] uppercase text-zinc-500">Retries</div>
-          <div className="mt-1 text-sm font-semibold text-zinc-100">{failedPanels}</div>
+        <div className="rounded-xl border-2 border-black bg-white p-3">
+          <div className="text-[11px] uppercase text-slate-600 font-bold">Retries</div>
+          <div className="mt-1 text-sm font-bold text-black">{failedPanels}</div>
         </div>
-        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-          <div className="text-[11px] uppercase text-zinc-500">Cost</div>
-          <div className="mt-1 text-sm font-semibold text-zinc-100">
+        <div className="rounded-xl border-2 border-black bg-white p-3">
+          <div className="text-[11px] uppercase text-slate-600 font-bold">Cost</div>
+          <div className="mt-1 text-sm font-bold text-black">
             {comicCost
               ? `$${(comicCost.totalBillableUsd > 0 ? comicCost.totalBillableUsd : comicCost.totalProviderCostUsd).toFixed(4)}`
               : costReport
@@ -735,22 +735,22 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
                 : 'n/a'}
           </div>
         </div>
-        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-          <div className="text-[11px] uppercase text-zinc-500">Model</div>
-          <div className="mt-1 truncate text-sm font-semibold text-zinc-100">{activeModel?.label || 'Default'}</div>
+        <div className="rounded-xl border-2 border-black bg-white p-3">
+          <div className="text-[11px] uppercase text-slate-600 font-bold">Model</div>
+          <div className="mt-1 truncate text-sm font-bold text-black">{activeModel?.label || 'Default'}</div>
         </div>
       </div>
 
-      <div className="rounded-lg border border-zinc-800 bg-zinc-950">
-        <div className="flex items-center gap-2 border-b border-zinc-800 px-3 py-2 text-sm font-semibold text-zinc-200">
+      <div className="rounded-xl border-2 border-black bg-white">
+        <div className="flex items-center gap-2 border-b-2 border-black px-3 py-2 text-sm font-display uppercase text-black">
           <Terminal className="h-4 w-4" /> Agent stream
         </div>
         <div className="max-h-52 overflow-y-auto px-3 py-2 font-mono text-xs custom-scrollbar">
           {recentAgentEvents.length === 0 ? (
-            <div className="py-2 text-zinc-600">No export events yet.</div>
+            <div className="py-2 text-slate-400">No export events yet.</div>
           ) : recentAgentEvents.map((event) => (
-            <div key={event.id} className="border-b border-zinc-900 py-2 text-zinc-400 last:border-0">
-              <span className="mr-2 text-zinc-600">{new Date(event.timestamp).toLocaleTimeString()}</span>
+            <div key={event.id} className="border-b border-slate-200 py-2 text-slate-600 last:border-0">
+              <span className="mr-2 text-slate-400">{new Date(event.timestamp).toLocaleTimeString()}</span>
               {event.message}
             </div>
           ))}
@@ -764,14 +764,14 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
       <button
         type="button"
         onClick={handleShare}
-        className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm font-semibold text-zinc-100 transition-colors hover:border-zinc-400"
+        className="inline-flex items-center gap-2 rounded-xl border-2 border-black bg-white px-3 py-2 text-sm font-bold text-black transition-colors hover:bg-brand-yellow"
       >
         <Share2 className="h-4 w-4" /> Share
       </button>
       <button
         type="button"
         onClick={handleDownloadProjectData}
-        className="inline-flex items-center gap-2 rounded-lg bg-zinc-100 px-3 py-2 text-sm font-semibold text-zinc-950 transition-colors hover:bg-white"
+        className="inline-flex items-center gap-2 rounded-xl border-2 border-black bg-brand-blue px-3 py-2 text-sm font-bold text-white transition-colors hover:bg-brand-blue/80"
       >
         <Download className="h-4 w-4" /> ZIP
       </button>
@@ -790,8 +790,8 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
         minHeightClassName="min-h-[760px]"
       >
         <div className="space-y-5 p-5">
-          <div className="max-h-[65vh] overflow-y-auto rounded-lg bg-zinc-900 p-3 custom-scrollbar sm:p-5">
-            <div id="comic-render-area" className="mx-auto max-w-5xl rounded-lg bg-white p-4 shadow-2xl sm:p-6">
+          <div className="max-h-[65vh] overflow-y-auto rounded-xl border-2 border-black bg-slate-100 p-3 custom-scrollbar sm:p-5">
+            <div id="comic-render-area" className="mx-auto max-w-5xl rounded-xl bg-white p-4 shadow-comic sm:p-6">
               {state.coverImageUrl && (
                 <div className="mb-6 overflow-hidden rounded-lg border-4 border-black">
                   <img src={state.coverImageUrl} alt={`${projectName} cover`} className="h-auto w-full object-cover" />
@@ -806,9 +806,9 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
           </div>
 
           <div className="grid gap-3 lg:grid-cols-[1fr_1fr]">
-            <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
-              <div className="text-xs font-semibold uppercase text-zinc-500">Cost summary</div>
-              <div className="mt-1 text-xl font-semibold text-zinc-100">
+            <div className="rounded-xl border-2 border-black bg-white p-4">
+              <div className="text-xs font-display uppercase text-slate-600">Cost summary</div>
+              <div className="mt-1 text-xl font-display text-black">
                 {isCostLoading
                   ? "Updating..."
                   : comicCost
@@ -817,23 +817,23 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
                       ? `$${costReport.cost_summary.totalCost.toFixed(4)}`
                       : "n/a"}
               </div>
-              <div className="mt-1 text-[11px] font-mono text-zinc-500">
+              <div className="mt-1 text-[11px] font-mono text-slate-600">
                 {costUpdatedAt ? `Updated ${new Date(costUpdatedAt).toLocaleTimeString()}` : "Waiting for data..."}
               </div>
-              <div className="mt-2 select-all text-[11px] font-mono text-zinc-600" title="Reference these when reporting an issue">
+              <div className="mt-2 select-all text-[11px] font-mono text-slate-400" title="Reference these when reporting an issue">
                 Project {projectId} · Session {state.sessionId || "-"}
               </div>
               {regenError && (
-                <div className="mt-2 rounded-md border border-red-400/40 bg-red-400/10 px-3 py-2 text-xs text-red-100">{regenError}</div>
+                <div className="mt-2 rounded-lg border-2 border-brand-red bg-red-100 px-3 py-2 text-xs font-bold text-red-700">{regenError}</div>
               )}
             </div>
 
-            <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
-              <div className="text-xs font-semibold uppercase text-zinc-500">Continuity</div>
+            <div className="rounded-xl border-2 border-black bg-white p-4">
+              <div className="text-xs font-display uppercase text-slate-600">Continuity</div>
               {auditSummary ? (
-                <div className="mt-2 text-sm leading-6 text-zinc-300">{auditSummary}</div>
+                <div className="mt-2 text-sm leading-6 text-black font-comic">{auditSummary}</div>
               ) : (
-                <div className="mt-2 text-sm leading-6 text-zinc-500">No review audit has run for this build yet.</div>
+                <div className="mt-2 text-sm leading-6 text-slate-600 font-comic">No review audit has run for this build yet.</div>
               )}
               <div className="mt-3 flex flex-wrap gap-2">
                 <Button variant="secondary" size="sm" onClick={handleRunContinuityAudit} isLoading={auditLoading}>
@@ -852,36 +852,36 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
           </div>
 
           {comicCost && (Object.keys(comicCost.byStage).length > 0 || Object.keys(comicCost.byModel).length > 0) && (
-            <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
-              <div className="text-xs font-semibold uppercase text-zinc-500">Cost breakdown</div>
+            <div className="rounded-xl border-2 border-black bg-white p-4">
+              <div className="text-xs font-display uppercase text-slate-600">Cost breakdown</div>
               <div className="mt-3 grid gap-4 text-xs sm:grid-cols-2">
                 <div>
-                  <div className="mb-1 font-semibold text-zinc-200">By stage</div>
+                  <div className="mb-1 font-bold text-black">By stage</div>
                   {Object.entries(comicCost.byStage).sort((a, b) => b[1].usd - a[1].usd).slice(0, 6).map(([stage, v]) => (
-                    <div key={stage} className="flex justify-between gap-2 py-0.5"><span className="truncate text-zinc-500">{stage}</span><span className="shrink-0 font-mono text-zinc-300">${v.usd.toFixed(4)}</span></div>
+                    <div key={stage} className="flex justify-between gap-2 py-0.5"><span className="truncate text-slate-600">{stage}</span><span className="shrink-0 font-mono text-black">${v.usd.toFixed(4)}</span></div>
                   ))}
                 </div>
                 <div>
-                  <div className="mb-1 font-semibold text-zinc-200">By model</div>
+                  <div className="mb-1 font-bold text-black">By model</div>
                   {Object.entries(comicCost.byModel).sort((a, b) => b[1].usd - a[1].usd).slice(0, 6).map(([model, v]) => (
-                    <div key={model} className="flex justify-between gap-2 py-0.5"><span className="truncate text-zinc-500">{model}</span><span className="shrink-0 font-mono text-zinc-300">${v.usd.toFixed(4)}</span></div>
+                    <div key={model} className="flex justify-between gap-2 py-0.5"><span className="truncate text-slate-600">{model}</span><span className="shrink-0 font-mono text-black">${v.usd.toFixed(4)}</span></div>
                   ))}
                 </div>
               </div>
             </div>
           )}
 
-          <div className="rounded-lg border border-zinc-800 bg-zinc-950 px-4 py-3">
-            <div className="flex flex-wrap items-center gap-3 text-xs font-mono text-zinc-400">
-              <div><span className="text-zinc-600">Model:</span> {activeModel?.label || 'Default'}</div>
-              <div><span className="text-zinc-600">Layout:</span> {gridTemplate?.title || state.layoutType}</div>
-              <div><span className="text-zinc-600">Panels:</span> {panels.length}</div>
-              <div><span className="text-zinc-600">Requested:</span> {agentSettings.outputTargets.map(outputTargetLabel).join(', ')}</div>
-              {costReport && <div><span className="text-zinc-600">Artifacts:</span> {costReport.ai_usage.totalArtifacts}</div>}
+          <div className="rounded-xl border-2 border-black bg-white px-4 py-3">
+            <div className="flex flex-wrap items-center gap-3 text-xs font-mono text-slate-600">
+              <div><span className="text-slate-400">Model:</span> {activeModel?.label || 'Default'}</div>
+              <div><span className="text-slate-400">Layout:</span> {gridTemplate?.title || state.layoutType}</div>
+              <div><span className="text-slate-400">Panels:</span> {panels.length}</div>
+              <div><span className="text-slate-400">Requested:</span> {agentSettings.outputTargets.map(outputTargetLabel).join(', ')}</div>
+              {costReport && <div><span className="text-slate-400">Artifacts:</span> {costReport.ai_usage.totalArtifacts}</div>}
             </div>
           </div>
 
-          <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+          <div className="rounded-xl border-2 border-black bg-white p-4">
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
               <div className="flex flex-wrap gap-2">
                 <Button variant="secondary" onClick={() => setShowRegenModal(true)} disabled={!selectedPanel} isLoading={isRegenerating} icon={<RefreshCw className="h-4 w-4" />}>Edit Panel</Button>
@@ -895,8 +895,8 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
                       Versions ({versions.length})
                     </Button>
                     {showVersionPicker && (
-                      <div className="absolute bottom-full right-0 z-50 mb-2 max-h-56 w-72 overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-950 p-2 shadow-2xl">
-                        <div className="mb-2 px-2 text-xs font-semibold uppercase text-zinc-500">Version History</div>
+                      <div className="absolute bottom-full right-0 z-50 mb-2 max-h-56 w-72 overflow-y-auto rounded-xl border-4 border-black bg-white p-2 shadow-comic">
+                        <div className="mb-2 px-2 text-xs font-display uppercase text-slate-600">Version History</div>
                         {versions.map(v => (
                           <button
                             key={v.id}
@@ -904,11 +904,11 @@ export const ReviewExport: React.FC<ReviewExportProps> = ({ project, onUpdatePro
                               onUpdateProject({ state: v.state });
                               setShowVersionPicker(false);
                             }}
-                            className="w-full rounded p-2 text-left text-xs text-zinc-300 transition-colors hover:bg-zinc-900"
+                            className="w-full rounded-lg p-2 text-left text-xs text-slate-600 transition-colors hover:bg-brand-yellow/30"
                           >
-                            <div className="truncate font-semibold text-zinc-100">{v.name}</div>
-                            <div className="text-zinc-500">{new Date(v.createdAt).toLocaleString()}</div>
-                            {v.reason && <div className="text-[10px] italic text-zinc-600">{v.reason}</div>}
+                            <div className="truncate font-bold text-black">{v.name}</div>
+                            <div className="text-slate-600">{new Date(v.createdAt).toLocaleString()}</div>
+                            {v.reason && <div className="text-[10px] italic text-slate-400">{v.reason}</div>}
                           </button>
                         ))}
                       </div>

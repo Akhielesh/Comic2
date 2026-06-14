@@ -22,7 +22,7 @@ declare const html2canvas: any;
 declare const jspdf: any;
 
 const LoaderIcon = () => (
-  <svg className="animate-spin h-8 w-8 text-zinc-100" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+  <svg className="animate-spin h-8 w-8 text-black" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
   </svg>
@@ -519,26 +519,26 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
       ? (entity.description || entity.bio || '')
       : (entity.description || '');
     return (
-      <div id={`card-${entity.id}`} key={entity.id} className="group relative flex flex-col overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950">
+      <div id={`card-${entity.id}`} key={entity.id} className="group relative flex flex-col overflow-hidden rounded-xl border-4 border-black bg-white shadow-comic">
         {/* Selection Checkbox */}
         <div
           className="absolute left-3 top-3 z-20 cursor-pointer"
           onClick={() => toggleSelection(entity.id)}
           data-export-ignore="true"
         >
-          {isSelected ? <CheckSquare className="h-7 w-7 rounded-md bg-emerald-300 text-zinc-950 ring-2 ring-zinc-950" /> : <Square className="h-7 w-7 rounded-md bg-zinc-950/70 text-zinc-400 opacity-50 ring-1 ring-zinc-700 group-hover:opacity-100" />}
+          {isSelected ? <CheckSquare className="h-7 w-7 rounded-md bg-brand-blue text-white ring-2 ring-black" /> : <Square className="h-7 w-7 rounded-md bg-white/70 text-slate-400 opacity-50 border-2 border-black group-hover:opacity-100" />}
         </div>
 
         {/* Image Area */}
-        <div className="relative aspect-square cursor-pointer border-b border-zinc-800 bg-zinc-900" onClick={() => entity.imageUrl && setPreviewImage({ url: entity.imageUrl, title: entity.name })}>
+        <div className="relative aspect-square cursor-pointer border-b-4 border-black bg-slate-100" onClick={() => entity.imageUrl && setPreviewImage({ url: entity.imageUrl, title: entity.name })}>
           {entity.imageUrl ? (
             <img src={entity.imageUrl} className="h-full w-full object-cover" />
           ) : (
-            <div className="flex h-full w-full items-center justify-center bg-[radial-gradient(#27272a_1px,transparent_1px)] text-zinc-600 [background-size:10px_10px]">
+            <div className="flex h-full w-full items-center justify-center bg-[radial-gradient(#cbd5e1_1px,transparent_1px)] text-slate-400 [background-size:10px_10px]">
               {type === 'characters' ? <Users size={40} /> : type === 'items' ? <Box size={40} /> : <MapPin size={40} />}
             </div>
           )}
-          {generatingIds.has(entity.id) && <div className="absolute inset-0 flex items-center justify-center bg-black/70 backdrop-blur-sm"><LoaderIcon /></div>}
+          {generatingIds.has(entity.id) && <div className="absolute inset-0 flex items-center justify-center bg-white/70 backdrop-blur-sm"><LoaderIcon /></div>}
         </div>
 
         {/* Content Area */}
@@ -548,12 +548,12 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
               <input
                 value={entity.name}
                 onChange={(e) => updateEntity(type, entity.id, { name: e.target.value })}
-                className="w-full border-b border-transparent bg-transparent text-xl font-semibold text-zinc-100 outline-none hover:border-zinc-700 focus:border-zinc-400"
+                className="w-full border-b border-transparent bg-transparent text-xl font-display text-black outline-none hover:border-black focus:border-brand-blue"
               />
               {consistencyWarnings[entity.id] && consistencyWarnings[entity.id].length > 0 && (
                 <div className="group relative">
                   <AlertCircle className="w-5 h-5 text-amber-500 cursor-help" />
-                  <div className="absolute right-0 top-6 z-30 hidden w-48 rounded border border-amber-800 bg-amber-950 p-2 text-[10px] text-amber-100 shadow-lg group-hover:block">
+                  <div className="absolute right-0 top-6 z-30 hidden w-48 rounded border-2 border-black bg-amber-100 p-2 text-[10px] text-amber-800 shadow-lg group-hover:block">
                     <strong>AI Insight:</strong>
                     <ul className="list-disc pl-3 mt-1 space-y-1">
                       {consistencyWarnings[entity.id].map((w, i) => <li key={i}>{w}</li>)}
@@ -572,18 +572,18 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
                   updateEntity(type, entity.id, { description: value });
                 }
               }}
-              className="mt-2 w-full resize-none rounded border border-transparent bg-transparent p-1 text-sm leading-5 text-zinc-500 outline-none hover:border-zinc-800 focus:border-zinc-500 focus:text-zinc-200"
+              className="mt-2 w-full resize-none rounded border border-transparent bg-transparent p-1 text-sm leading-5 text-slate-600 font-comic outline-none hover:border-black focus:border-brand-blue focus:text-black"
               rows={3}
               placeholder="Enter description..."
             />
           </div>
 
           <div className="space-y-2">
-            <div className="text-[10px] font-semibold uppercase text-zinc-500">Structured fields</div>
+            <div className="text-[10px] font-display uppercase text-black">Structured fields</div>
             <div className="grid grid-cols-1 gap-2">
               {STRUCTURED_FIELDS[type].map((field) => (
                 <div key={field.key} className="space-y-1">
-                  <label className="text-[10px] font-semibold uppercase text-zinc-500">{field.label}</label>
+                  <label className="text-[10px] font-semibold uppercase text-slate-600">{field.label}</label>
                   <input
                     value={entity.structured?.[field.key] || ''}
                     onChange={(e) => {
@@ -593,7 +593,7 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
                       };
                       updateEntity(type, entity.id, { structured });
                     }}
-                    className="w-full rounded border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 outline-none placeholder-zinc-600 focus:border-zinc-500"
+                    className="w-full rounded border-2 border-black bg-white px-2 py-1.5 text-xs text-black outline-none placeholder-slate-400 focus:border-brand-blue"
                     placeholder={field.placeholder}
                   />
                 </div>
@@ -604,10 +604,10 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
           {/* Refs */}
           <div className="flex gap-2">
             {(entity.referenceImageIds || []).map((id: string, i: number) => (
-              <img key={i} src={referenceUrlMap[id]} className="h-10 w-10 rounded border border-zinc-700 object-cover" />
+              <img key={i} src={referenceUrlMap[id]} className="h-10 w-10 rounded border-2 border-black object-cover" />
             ))}
-            <label className="flex h-10 w-10 cursor-pointer items-center justify-center rounded border border-dashed border-zinc-700 hover:border-zinc-500 hover:bg-zinc-900">
-              <UploadCloud size={16} className="text-zinc-500" />
+            <label className="flex h-10 w-10 cursor-pointer items-center justify-center rounded border-dashed border-2 border-black hover:bg-brand-yellow/20">
+              <UploadCloud size={16} className="text-slate-600" />
               <input type="file" hidden multiple onChange={(e) => handleRefUpload(type, entity.id, e.target.files)} />
             </label>
           </div>
@@ -628,8 +628,8 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
 
   if (isLoading) {
     return (
-      <div className="mx-auto flex max-w-2xl flex-col items-center justify-center space-y-6 rounded-lg border border-zinc-800 bg-zinc-950 py-20 text-zinc-100 shadow-2xl">
-        <div className="h-12 w-12 animate-spin rounded-full border-2 border-zinc-700 border-t-zinc-100"></div>
+      <div className="mx-auto flex max-w-2xl flex-col items-center justify-center space-y-6 rounded-xl border-4 border-black bg-white py-20 text-black shadow-comic">
+        <div className="h-12 w-12 animate-spin rounded-full border-2 border-slate-300 border-t-black"></div>
         <p className="text-xl font-semibold">Scouting locations and casting characters...</p>
       </div>
     )
@@ -639,12 +639,12 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
   // dead screen — let them retry or skip straight to building the cast by hand.
   if (extractError && !hasAnyWorld) {
     return (
-      <div className="mx-auto flex max-w-2xl flex-col items-center justify-center space-y-5 rounded-lg border border-zinc-800 bg-zinc-950 px-6 py-16 text-center text-zinc-100 shadow-2xl">
-        <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-red-950 text-red-200 ring-1 ring-red-800">
+      <div className="mx-auto flex max-w-2xl flex-col items-center justify-center space-y-5 rounded-xl border-4 border-black bg-white px-6 py-16 text-center text-black shadow-comic">
+        <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-red-100 text-red-700 border-2 border-black">
           <AlertCircle className="h-7 w-7" />
         </div>
         <p className="text-xl font-semibold">Couldn't auto-build your world</p>
-        <p className="max-w-md text-sm leading-6 text-zinc-500">{extractError}</p>
+        <p className="max-w-md text-sm leading-6 text-slate-600 font-comic">{extractError}</p>
         <div className="flex flex-wrap items-center justify-center gap-3">
           <Button onClick={runExtraction} icon={<RefreshCw className="w-4 h-4" />}>Retry extraction</Button>
           <Button variant="secondary" onClick={() => setExtractError(null)} icon={<Wand2 className="w-4 h-4" />}>
@@ -671,9 +671,9 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
         tabIndex={0}
         onClick={handleActivate}
         onKeyDown={handleKeyDown}
-        className="group flex min-h-[300px] cursor-pointer flex-col items-center justify-center gap-4 rounded-lg border border-dashed border-zinc-700 bg-zinc-950 text-zinc-500 transition-all hover:border-zinc-500 hover:bg-zinc-900 hover:text-zinc-200"
+        className="group flex min-h-[300px] cursor-pointer flex-col items-center justify-center gap-4 rounded-xl border-dashed border-2 border-black bg-slate-50 text-slate-600 transition-all hover:bg-brand-yellow/20 hover:text-black"
       >
-        <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-zinc-900 transition-colors group-hover:bg-zinc-800">
+        <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-white border-2 border-black transition-colors group-hover:bg-brand-yellow">
           <Users className="w-8 h-8" />
         </div>
         <div className="text-sm font-semibold">Add {type === 'characters' ? 'character' : type === 'items' ? 'prop' : 'location'}</div>
@@ -697,7 +697,7 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
           variant="secondary"
           onClick={onConfirm}
           disabled={!canConfirmWorld}
-          className="border-zinc-100"
+          className="border-2 border-black"
           icon={<Check className="h-4 w-4" />}
         >
           {autoRunAgent && canConfirmWorld ? 'Autopilot locking' : 'Use world'}
@@ -706,7 +706,7 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
       sidebar={(
         <div className="space-y-5">
           <div>
-            <div className="text-sm font-semibold text-zinc-200">Extracted</div>
+            <div className="text-sm font-display text-black uppercase">Extracted</div>
             <div className="mt-3 grid grid-cols-3 gap-2">
               {[
                 { key: 'characters', label: 'Cast', count: characters.length },
@@ -717,7 +717,7 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
                   key={item.key}
                   type="button"
                   onClick={() => { setActiveTab(item.key as Tab); setSelectedIds(new Set()); }}
-                  className={`rounded-lg px-3 py-2 text-left transition-colors ${activeTab === item.key ? 'bg-zinc-100 text-zinc-950' : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200'}`}
+                  className={`rounded-xl px-3 py-2 text-left transition-colors ${activeTab === item.key ? 'bg-brand-yellow text-black border-2 border-black' : 'bg-white text-slate-600 border-2 border-black hover:bg-brand-yellow hover:text-black'}`}
                 >
                   <span className="block text-lg font-semibold">{item.count}</span>
                   <span className="text-[10px] font-semibold uppercase">{item.label}</span>
@@ -726,9 +726,9 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
             </div>
           </div>
 
-          <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
-            <div className="text-sm font-semibold text-zinc-200">Continuity</div>
-            <div className="mt-2 text-sm leading-6 text-zinc-500">
+          <div className="rounded-xl border-2 border-black bg-slate-50 p-4">
+            <div className="text-sm font-display text-black uppercase">Continuity</div>
+            <div className="mt-2 text-sm leading-6 text-slate-600 font-comic">
               {requiresContaminationAck
                 ? `${contaminationDrops.length} dropped item${contaminationDrops.length === 1 ? '' : 's'} need review.`
                 : 'World data is grounded and ready to lock.'}
@@ -740,28 +740,28 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
               onClick={handleCheckConsistency}
               isLoading={isCheckingConsistency}
               variant="secondary"
-              className="w-full border-zinc-100"
+              className="w-full border-2 border-black"
               icon={<Zap className="w-4 h-4 text-amber-500" />}
             >
               Check continuity
             </Button>
           )}
           {selectedIds.size > 0 ? (
-            <Button variant="secondary" onClick={downloadSelectedAsPDF} className="w-full border-zinc-100" icon={<Download />}>Download {selectedIds.size}</Button>
+            <Button variant="secondary" onClick={downloadSelectedAsPDF} className="w-full border-2 border-black" icon={<Download />}>Download {selectedIds.size}</Button>
           ) : (
-            <Button variant="secondary" onClick={handleGenerateAll} isLoading={isBatchGenerating} className="w-full border-zinc-100" icon={<Wand2 />}>Generate refs</Button>
+            <Button variant="secondary" onClick={handleGenerateAll} isLoading={isBatchGenerating} className="w-full border-2 border-black" icon={<Wand2 />}>Generate refs</Button>
           )}
 
         </div>
       )}
     >
       <div className="flex min-h-[680px] flex-col">
-        <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+        <div className="flex items-center justify-between border-b-2 border-black px-5 py-4">
           <div>
-            <div className="text-sm font-semibold text-zinc-200">
+            <div className="text-sm font-display text-black uppercase">
               {activeTab === 'characters' ? 'Cast board' : activeTab === 'items' ? 'Props board' : 'Places board'}
             </div>
-            <div className="mt-1 text-xs text-zinc-500">
+            <div className="mt-1 text-xs text-slate-600">
               {activeList.length} {activeTab === 'characters' ? 'character' : activeTab === 'items' ? 'prop' : 'place'}{activeList.length === 1 ? '' : 's'}
             </div>
           </div>
@@ -769,7 +769,7 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
             size="sm"
             variant="outline"
             onClick={() => addEntity(activeTab)}
-            className="border-zinc-700 text-zinc-300 hover:bg-zinc-900 hover:text-white"
+            className="border-2 border-black text-black hover:bg-brand-yellow"
           >
             Add
           </Button>
@@ -777,17 +777,17 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
 
         <div className="flex-1 overflow-y-auto p-5">
           {requiresContaminationAck && (
-            <div className="mb-5 rounded-lg border border-red-800 bg-red-950/50 p-4 text-red-100">
+            <div className="mb-5 rounded-lg border-2 border-brand-red bg-red-100 p-4 text-red-700">
               <div className="flex items-start gap-2">
-                <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-300" />
+                <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-brand-red" />
                 <div>
                   <div className="text-sm font-semibold">Script contamination block</div>
-                  <div className="mt-1 text-sm leading-6 text-red-100/80">
+                  <div className="mt-1 text-sm leading-6 text-red-700">
                     Proposed entities not found in the source were dropped. Review before continuing.
                   </div>
                 </div>
               </div>
-              <div className="mt-3 max-h-40 overflow-auto rounded-lg border border-red-900 bg-zinc-950 p-3 text-xs font-mono text-red-100/80">
+              <div className="mt-3 max-h-40 overflow-auto rounded-lg border-2 border-black bg-white p-3 text-xs font-mono text-red-700">
                 {contaminationDrops.map((entry, index) => (
                   <div key={`${entry.kind}-${entry.name}-${index}`}>
                     [{entry.kind}] {entry.name} - {entry.reason}
@@ -802,7 +802,7 @@ export const ReferenceBuilder: React.FC<ReferenceBuilderProps> = ({
                   onChange={(event) => setWorldDiagnosticsAcknowledged(event.target.checked)}
                   className="h-4 w-4"
                 />
-                <label htmlFor="world-contamination-ack" className="text-sm font-semibold text-red-100">
+                <label htmlFor="world-contamination-ack" className="text-sm font-semibold text-red-700">
                   I reviewed dropped entities.
                 </label>
               </div>

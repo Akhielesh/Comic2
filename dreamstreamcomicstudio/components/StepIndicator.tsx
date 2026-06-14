@@ -8,109 +8,55 @@ interface StepIndicatorProps {
   onStepClick: (step: AppStep) => void;
 }
 
-// The live flow is grouped into three agent phases. Story-Planning and the manual
-// panel Preview are intentionally absent: scene review is automatic, and panel
-// planning happens inside the build.
-const STAGES: { label: string; steps: { id: AppStep; label: string }[] }[] = [
-  {
-    label: 'Prompt',
-    steps: [
-      { id: AppStep.SCRIPT_INPUT, label: 'Script' },
-      { id: AppStep.STYLE_SELECTION, label: 'Style' }
-    ]
-  },
-  {
-    label: 'Design',
-    steps: [
-      { id: AppStep.REFERENCE_BUILDER, label: 'Cast' },
-      { id: AppStep.COVER, label: 'Cover' }
-    ]
-  },
-  {
-    label: 'Build',
-    steps: [
-      { id: AppStep.LAYOUT_SELECTION, label: 'Pages' },
-      { id: AppStep.FULL_GENERATION, label: 'Build' },
-      { id: AppStep.REVIEW_EXPORT, label: 'Export' }
-    ]
-  }
+// Classic flat comic wizard — the original Dreamstream studio track restored. Scene review
+// is automatic and panel planning happens inside the build, so there's no Story-Planning or
+// manual Preview step (those enum slots stay reserved for old saves). Steps are referenced
+// symbolically, so the current enum numbering is respected.
+const steps = [
+  { id: AppStep.SCRIPT_INPUT, label: 'Script' },
+  { id: AppStep.STYLE_SELECTION, label: 'Style' },
+  { id: AppStep.REFERENCE_BUILDER, label: 'World' },
+  { id: AppStep.COVER, label: 'Cover' },
+  { id: AppStep.LAYOUT_SELECTION, label: 'Layout' },
+  { id: AppStep.FULL_GENERATION, label: 'Build' },
+  { id: AppStep.REVIEW_EXPORT, label: 'Done' },
 ];
 
 export const StepIndicator: React.FC<StepIndicatorProps> = ({ currentStep, maxStepReached, onStepClick }) => {
   return (
-    <div className="w-full py-2 sticky top-0 z-40 bg-zinc-950/95 backdrop-blur-sm border-b border-zinc-800">
-      <div className="max-w-5xl mx-auto px-4 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        <div className="flex items-center gap-2 sm:gap-3">
-          {STAGES.map((stage, stageIndex) => {
-            const firstStep = stage.steps[0].id;
-            const lastStep = stage.steps[stage.steps.length - 1].id;
-            const isCurrentStage = currentStep >= firstStep && currentStep <= lastStep;
-            const isCompletedStage = currentStep > lastStep;
-            const isReachableStage = firstStep <= maxStepReached;
+    <div className="w-full py-6 sticky top-0 z-40 bg-brand-blue/90 backdrop-blur-sm border-b-4 border-black">
+      <div className="max-w-6xl mx-auto px-4">
+        <div className="flex items-center justify-between relative">
+          {/* Connecting line */}
+          <div className="absolute left-0 top-1/2 w-full h-2 bg-black/30 -z-10 rounded-full" />
+
+          {steps.map((step, index) => {
+            const isCompleted = currentStep > step.id;
+            const isCurrent = currentStep === step.id;
+            const isReachable = step.id <= maxStepReached;
 
             return (
-              <React.Fragment key={stage.label}>
-                {stageIndex > 0 && <div className="h-px w-2 sm:w-8 shrink-0 bg-zinc-700" />}
+              <div
+                key={step.id}
+                className={`flex flex-col items-center relative group ${isReachable ? 'cursor-pointer' : 'cursor-not-allowed'}`}
+                onClick={() => isReachable && onStepClick(step.id)}
+              >
                 <div
-                  className={`
-                    flex items-center gap-1.5 rounded-full border px-1.5 py-1 sm:px-2 shrink-0 transition-all
-                    ${isCurrentStage ? 'bg-white border-white' :
-                      isCompletedStage ? 'bg-emerald-300 border-emerald-300 cursor-pointer' :
-                      isReachableStage ? 'bg-zinc-900 border-zinc-700 cursor-pointer' :
-                      'bg-zinc-900 border-zinc-800 opacity-60 cursor-not-allowed'}
-                  `}
-                  onClick={() => {
-                    if (!isCurrentStage && isReachableStage) {
-                      onStepClick(Math.min(firstStep, maxStepReached) as AppStep);
-                    }
-                  }}
-                  title={stage.label}
+                  className={`w-10 h-10 rounded-full flex items-center justify-center border-2 border-black transition-all duration-300 z-10 ${
+                    isCompleted ? 'bg-brand-yellow text-black shadow-comic' :
+                    isCurrent ? 'bg-white text-black scale-125 shadow-comic' :
+                    'bg-slate-800 text-white/50 border-slate-600'}`}
                 >
-                  <div
-                    className={`
-                      w-5 h-5 rounded-full flex items-center justify-center border shrink-0
-                      ${isCompletedStage ? 'bg-zinc-950 text-emerald-300 border-zinc-950' : isCurrentStage ? 'bg-zinc-950 text-white border-zinc-950' : 'bg-zinc-800 text-white/60 border-zinc-700'}
-                    `}
-                  >
-                    {isCompletedStage ? <Check size={12} strokeWidth={4} /> : <span className="text-[10px] font-semibold">{stageIndex + 1}</span>}
-                  </div>
-                  <span className={`text-xs font-semibold whitespace-nowrap ${isCurrentStage ? '' : 'hidden sm:inline'} ${isCurrentStage || isCompletedStage ? 'text-zinc-950' : 'text-white/70'}`}>
-                    {stage.label}
-                  </span>
-
-                  {/* Sub-steps of the active stage, inline and clickable */}
-                  {isCurrentStage && (
-                    <div className="flex items-center gap-1 pl-1">
-                      {stage.steps.map((step) => {
-                        const isCurrent = currentStep === step.id;
-                        const isDone = currentStep > step.id;
-                        const isReachable = step.id <= maxStepReached;
-                        return (
-                          <button
-                            key={step.id}
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              if (isReachable) onStepClick(step.id);
-                            }}
-                            disabled={!isReachable}
-                            title={step.label}
-                            className={`
-                              rounded-full border px-1.5 py-0.5 text-[10px] font-semibold whitespace-nowrap transition-all
-                              ${isCurrent ? 'bg-zinc-950 text-white border-zinc-950' :
-                                isDone ? 'bg-emerald-300 text-zinc-950 border-emerald-300' :
-                                isReachable ? 'bg-white text-zinc-600 border-zinc-300 hover:border-zinc-950' :
-                                'bg-white/60 text-zinc-400 border-zinc-200 cursor-not-allowed'}
-                            `}
-                          >
-                            {step.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
+                  {isCompleted ? <Check size={20} strokeWidth={4} /> : <span className="text-sm font-display">{index + 1}</span>}
                 </div>
-              </React.Fragment>
+                <div
+                  className={`absolute top-12 px-2 py-1 rounded border-2 border-black text-xs font-bold uppercase tracking-wider shadow-comic transition-all whitespace-nowrap ${
+                    isCurrent ? 'bg-brand-yellow text-black rotate-2 opacity-100' :
+                    (isReachable ? 'bg-white text-black -rotate-1 opacity-0 group-hover:opacity-100' : 'opacity-0')}`}
+                >
+                  {step.label}
+                </div>
+              </div>
             );
           })}
         </div>
