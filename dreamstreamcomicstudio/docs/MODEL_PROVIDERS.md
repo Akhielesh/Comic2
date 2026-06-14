@@ -75,6 +75,15 @@ keyless) plus the live `/models` list when a key is present, de-duplicated.
 Regression coverage: `server/src/services/modelCatalog.test.ts`,
 `server/src/middleware/keys.test.ts`, `server/src/ai/providers/*.test.ts`.
 
+## Image generation
+
+The new providers are primarily text. Two also do image generation via the chat
+`generate_image` tool (BYOK only, no platform billing): **OpenAI** (`gpt-image-1`) and
+**xAI** (`grok-2-image`), wired in `server/src/ai/tools/imageGen.ts` through the provider
+gateway. This is purely additive — the comic-studio image path (Gemini/Flux/Ideogram) and
+the billed `/api/image/*` endpoints are untouched. Override the models with
+`OPENAI_IMAGE_MODEL` / `XAI_IMAGE_MODEL`.
+
 ## Where models surface
 
 - **API settings** (`components/ApiConfiguration.tsx`): the provider list — status,

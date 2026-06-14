@@ -5,6 +5,12 @@ vi.mock('../image.js', () => ({
 }));
 vi.mock('../ideogram.js', () => ({ generateIdeogramImage: vi.fn(async () => ({ dataUrl: 'data:image/png;base64,IDEO' })) }));
 vi.mock('../flux.js', () => ({ generateFluxImage: vi.fn(async () => ({ dataUrl: 'data:image/png;base64,FLUX' })) }));
+vi.mock('../gateway.js', () => ({
+  getProvider: (id: string) => ({
+    generateImage: vi.fn(async () => ({ imageDataUrl: `data:image/png;base64,${id.toUpperCase()}`, images: [], model: id, usage: {} }))
+  }),
+  resolveProviderContext: (apiKey: string) => ({ apiKey, byok: true })
+}));
 
 import { makeImageTool, imageGenAvailable } from './imageGen.js';
 
@@ -14,6 +20,15 @@ describe('imageGen (BYOK)', () => {
     expect(imageGenAvailable({ geminiKey: 'k' })).toBe(true);
     expect(imageGenAvailable({ ideogramKey: 'k' })).toBe(true);
     expect(imageGenAvailable({ pixazoKey: 'k' })).toBe(true);
+    expect(imageGenAvailable({ openaiKey: 'k' })).toBe(true);
+    expect(imageGenAvailable({ xaiKey: 'k' })).toBe(true);
+  });
+
+  it('generates via OpenAI / xAI through the provider gateway when only those keys are present', async () => {
+    expect((await makeImageTool({ openaiKey: 'k' }).execute({ prompt: 'x' })).images?.[0].url).toContain('OPENAI');
+    const xai = await makeImageTool({ xaiKey: 'k' }).execute({ prompt: 'x' });
+    expect(xai.images?.[0].url).toContain('XAI');
+    expect(xai.content).toMatch(/xAI/);
   });
 
   it('generates via Gemini with the user key and returns the image', async () => {
