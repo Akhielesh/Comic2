@@ -213,6 +213,23 @@ One scoped surface, always filtered by `userId`:
 Permission model: the Chat Studio can only read connections the requesting user owns —
 enforced in code (every query takes `userId`) **and** by RLS.
 
+### AI tools — the model can call the user's connected accounts
+
+`server/src/ai/tools/connectors.ts` registers per-user **agent tools** so the chat model
+can act on connected accounts live (not just via injected RAG context):
+`gmail_search`, `drive_search`, `calendar_agenda`, `sheets_read`, `maps_lookup`, and
+`connected_data_search` (unified RAG over everything synced). They are **contextual
+tools** built per request with `ctx.userId` (threaded from `req.user.id` in
+`routes/chat.ts`), so a tool only ever touches the **signed-in user's own** connections,
+and degrades honestly: no user → "sign in"; not connected → "connect it in Connectors";
+revoked token → "reconnect". Each has a `toolCatalog.ts` entry so the smart router
+surfaces it on relevant intents ("my email", "my calendar", "my files", …).
+
+These are deliberately **not** added to the outbound MCP allowlist
+(`OUTBOUND_TOOL_NAMES` in `routes/mcp.ts`): that endpoint authenticates with a shared
+bearer token, not a user session, so per-user connector tools can't be safely exposed
+there without a user-binding step (a follow-up if external agents need them).
+
 ---
 
 ## 7. Background sync
