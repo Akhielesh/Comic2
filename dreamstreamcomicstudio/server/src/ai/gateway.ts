@@ -99,6 +99,26 @@ const PLATFORM_KEYS: Partial<Record<AIProviderId, string>> = {
 const platformKeyFor = (providerId?: string): string =>
   (providerId && PLATFORM_KEYS[providerId as AIProviderId]) || OPENROUTER_API_KEY;
 
+// Sensible default chat model per DIRECT provider, used by Auto when the user pinned no
+// model but their request resolves to that provider (e.g. they only connected an OpenAI
+// key). Without this, Auto would hand the provider an OpenRouter slug it doesn't recognise.
+// Deliberately conservative, widely-available, tool-capable ids. OpenRouter/NVIDIA keep
+// their own existing default logic.
+const DEFAULT_TEXT_MODELS: Partial<Record<AIProviderId, string>> = {
+  openai: 'gpt-4o-mini',
+  anthropic: 'claude-3-5-haiku-20241022',
+  gemini: 'gemini-2.5-flash',
+  deepseek: 'deepseek-chat',
+  zai: 'glm-4.6',
+  minimax: 'MiniMax-M2',
+  tencent: 'hunyuan-turbos-latest',
+  xai: 'grok-3-mini'
+};
+
+/** The default chat model id for a direct provider (undefined for openrouter/nvidia). */
+export const defaultModelForProvider = (providerId?: string): string | undefined =>
+  providerId ? DEFAULT_TEXT_MODELS[providerId as AIProviderId] : undefined;
+
 // The platform's implicit default provider is the unified gateway (OpenRouter), or NVIDIA
 // when explicitly selected. The direct BYOK providers (openai/anthropic/gemini/…) are chosen
 // per-request by source — they must NEVER become the implicit default just because they were

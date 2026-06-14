@@ -12,6 +12,7 @@ import { sanitizeCustomAgents } from '../ai/agents/registry.js';
 import type { AgentDefinition } from '../ai/agents/registry.js';
 import { loadCustomAgentDefinitions } from '../services/customAgents.js';
 import { pickTextModel, pickTextModelChain, markModelDown, TEXT_FALLBACK } from '../ai/autoRouter.js';
+import { defaultModelForProvider } from '../ai/gateway.js';
 import { NVIDIA_TEXT_MODEL, OPENROUTER_TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS, JSON_TOOL_PROTOCOL_ENABLED } from '../config.js';
 import type { AIProviderId, ChatMessage, MessagePart } from '../ai/providers/types.js';
 import { isTextProvider, providerLabel } from '../../../shared/providers.js';
@@ -234,11 +235,18 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   // than a free one — free models are 10-30x slower (9-22s vs ~1s) and frequently 429/404,
   // which is why chats felt slow and "stuck on gpt-4o-mini". gemini-2.5-flash answers in ~0.7s.
   const freeOnly = (req.header('X-Free-Only') || '').toLowerCase() === 'true';
+  // Direct providers (openai/anthropic/gemini/deepseek/zai/minimax/tencent/xai) need their
+  // OWN default model when nothing is pinned — handing them an OpenRouter slug would 404.
+  const directDefault = resolved.provider !== 'openrouter' && resolved.provider !== 'nvidia'
+    ? defaultModelForProvider(resolved.provider)
+    : undefined;
   let model = requestedModel || (resolved.provider === 'nvidia'
     ? NVIDIA_TEXT_MODEL
-    : freeOnly
-      ? await pickTextModel({ preferFree: true, prefer: (m) => (m.supportedParameters || []).includes('tools') })
-      : OPENROUTER_TEXT_MODEL);
+    : directDefault
+      ? directDefault
+      : freeOnly
+        ? await pickTextModel({ preferFree: true, prefer: (m) => (m.supportedParameters || []).includes('tools') })
+        : OPENROUTER_TEXT_MODEL);
   if (resolved.provider === 'nvidia' && !model.includes('/')) model = NVIDIA_TEXT_MODEL;
 
   // Capability guard: a pinned special-purpose model (safety classifier, code-apply
