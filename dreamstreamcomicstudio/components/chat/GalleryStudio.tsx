@@ -132,6 +132,15 @@ export const GalleryStudio: React.FC<GalleryStudioProps> = ({ sidebarControl, on
 
   const selected = filtered.find((e) => e.id === selectedId) ?? filtered[0];
 
+  // When browsing "All", group the list into category sections (sticky sub-headers)
+  // so a long catalog stays navigable; a filtered category renders flat.
+  const grouped = useMemo<[string, StudioEntry[]][] | null>(() => {
+    if (cat !== 'All') return null;
+    const map = new Map<string, StudioEntry[]>();
+    for (const e of filtered) (map.get(e.category) ?? map.set(e.category, []).get(e.category)!).push(e);
+    return [...map.entries()];
+  }, [filtered, cat]);
+
   const loadLive = async () => {
     if (!selected?.tool) return;
     const args = selected.widgetDef?.presets?.[0]?.args ?? {};
@@ -154,6 +163,43 @@ export const GalleryStudio: React.FC<GalleryStudioProps> = ({ sidebarControl, on
   };
 
   const liveForSelected = live && selected && live.id === selected.id ? live : null;
+
+  // One catalog row — kind-colored rail + dot, title, multi-source mark, category·tool.
+  const renderItem = (e: StudioEntry) => {
+    const active = selected?.id === e.id;
+    return (
+      <button
+        key={e.id}
+        onClick={() => {
+          setSelectedId(e.id);
+          setTab('preview');
+        }}
+        title={KIND_LABEL[e.kind]}
+        className={`group/item relative mb-0.5 flex w-full items-start gap-2.5 rounded-xl py-2 pl-3 pr-2.5 text-left ${TRANSITION} ${
+          active ? 'bg-[#D97757]/10' : 'hover:bg-[var(--ds-hover)]'
+        }`}
+      >
+        {/* kind accent rail */}
+        <span
+          className={`absolute inset-y-1.5 left-0 w-0.5 rounded-full ${KIND_DOT[e.kind]} ${
+            active ? 'opacity-100' : 'opacity-0 group-hover/item:opacity-60'
+          }`}
+        />
+        <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${KIND_DOT[e.kind]}`} />
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1.5">
+            <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-[var(--ds-ink)]">{cleanTitle(e.title)}</span>
+            {e.multiSource && <Layers className="h-3 w-3 shrink-0 text-[var(--ds-muted)]" />}
+          </span>
+          <span className="mt-0.5 flex items-center gap-1 text-[10px] text-[var(--ds-muted)]">
+            <span className="shrink-0">{e.category}</span>
+            {e.tool && <span className="opacity-40">·</span>}
+            {e.tool && <code className="min-w-0 truncate font-mono">{e.tool}</code>}
+          </span>
+        </span>
+      </button>
+    );
+  };
 
   return (
     <div className={`flex h-full w-full flex-col overflow-hidden ${CANVAS_BG}`}>
@@ -199,41 +245,17 @@ export const GalleryStudio: React.FC<GalleryStudioProps> = ({ sidebarControl, on
         {/* List */}
         <div className="shrink-0 overflow-y-auto border-b border-[var(--ds-hairline)] p-2 md:max-h-none md:w-72 md:border-b-0 md:border-r" style={{ maxHeight: '38vh' }}>
           {filtered.length === 0 && <p className="px-2 py-6 text-center text-xs text-[var(--ds-muted)]">No widgets match “{query}”.</p>}
-          {filtered.map((e) => {
-            const active = selected?.id === e.id;
-            return (
-              <button
-                key={e.id}
-                onClick={() => {
-                  setSelectedId(e.id);
-                  setTab('preview');
-                }}
-                title={KIND_LABEL[e.kind]}
-                className={`group/item relative mb-0.5 flex w-full items-start gap-2.5 rounded-xl py-2 pl-3 pr-2.5 text-left ${TRANSITION} ${
-                  active ? 'bg-[#D97757]/10' : 'hover:bg-[var(--ds-hover)]'
-                }`}
-              >
-                {/* kind accent rail */}
-                <span
-                  className={`absolute inset-y-1.5 left-0 w-0.5 rounded-full ${KIND_DOT[e.kind]} ${
-                    active ? 'opacity-100' : 'opacity-0 group-hover/item:opacity-60'
-                  }`}
-                />
-                <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${KIND_DOT[e.kind]}`} />
-                <span className="min-w-0 flex-1">
-                  <span className="flex items-center gap-1.5">
-                    <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-[var(--ds-ink)]">{cleanTitle(e.title)}</span>
-                    {e.multiSource && <Layers className="h-3 w-3 shrink-0 text-[var(--ds-muted)]" />}
-                  </span>
-                  <span className="mt-0.5 flex items-center gap-1 text-[10px] text-[var(--ds-muted)]">
-                    <span className="shrink-0">{e.category}</span>
-                    {e.tool && <span className="opacity-40">·</span>}
-                    {e.tool && <code className="min-w-0 truncate font-mono">{e.tool}</code>}
-                  </span>
-                </span>
-              </button>
-            );
-          })}
+          {grouped
+            ? grouped.map(([category, items]) => (
+                <div key={category} className="mb-1">
+                  <div className="sticky top-0 z-10 flex items-center gap-1.5 bg-[var(--ds-canvas)] px-3 pb-1 pt-1.5 text-[10px] font-bold uppercase tracking-wider text-[var(--ds-muted)]">
+                    <span className="truncate">{category}</span>
+                    <span className="rounded-full bg-[var(--ds-well-strong)] px-1.5 py-px text-[9px] font-semibold tabular-nums text-[var(--ds-muted)]">{items.length}</span>
+                  </div>
+                  {items.map(renderItem)}
+                </div>
+              ))
+            : filtered.map(renderItem)}
         </div>
 
         {/* Detail */}
