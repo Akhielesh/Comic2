@@ -1,4 +1,5 @@
 import React, { useId } from 'react';
+import { useMountFlag } from './motion';
 
 // Dependency-free SVG data-viz gauges shared across cards (weather UV/AQI/humidity/
 // pressure, KPI tiles, etc.). All themeable via a color or color-band function and
@@ -76,6 +77,8 @@ export const LinearGauge: React.FC<{
 }> = ({ value, min = 0, max, bands, color = '#3B82F6', height = 8, showMarker = false }) => {
   const id = useId().replace(/:/g, '');
   const frac = Math.max(0, Math.min(1, (value - min) / (max - min || 1)));
+  // Grow the fill in from 0 on mount (and animate on value changes) for a little life.
+  const grown = useMountFlag([]);
   return (
     <div className="relative w-full overflow-hidden rounded-full bg-[var(--ds-hairline)]" style={{ height }}>
       {bands ? (
@@ -86,7 +89,7 @@ export const LinearGauge: React.FC<{
           })}
         </div>
       ) : (
-        <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${frac * 100}%`, backgroundColor: color, transition: 'width 0.7s ease-out' }} />
+        <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${(grown ? frac : 0) * 100}%`, backgroundColor: color, transition: 'width 0.7s ease-out' }} />
       )}
       {(showMarker || bands) && (
         <div

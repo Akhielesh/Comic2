@@ -18,6 +18,7 @@ export { WeatherIcon, weatherKind } from './WeatherIcon';
 export type { WeatherIconProps, WeatherKind } from './WeatherIcon';
 export { DOMAIN_ICONS } from './DomainIcons';
 export type { DomainIconDef, IconProps } from './DomainIcons';
+export { useCountUp, useMountFlag } from './motion';
 export { TrendPill, Badge, Chip } from './Pills';
 export { resolveTheme, withAlpha, PALETTES, BULL, BEAR, NEUTRAL } from './theme';
 export type { PaletteName, Palette, ThemeInput, ResolvedTheme } from './theme';
