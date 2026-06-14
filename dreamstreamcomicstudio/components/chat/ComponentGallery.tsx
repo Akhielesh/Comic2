@@ -58,6 +58,7 @@ import { WidgetStack } from './artifacts/WidgetStack';
 import { ClarifyCard } from './artifacts/ClarifyCard';
 import { EmailTerminal } from './artifacts/EmailTerminal';
 import { EmailCompose } from './artifacts/EmailCompose';
+import { GameCard } from './artifacts/GameCard';
 import { ModelPopularityCard } from '../models/ModelPopularityPanel';
 import type { ModelPopularity } from '../../services/modelPopularity';
 import type { ClarifyArtifact } from '../../apiTypes';
@@ -554,6 +555,7 @@ export type GalleryCategory =
   | 'World & media'
   | 'Travel & life'
   | 'Learning'
+  | 'Games'
   | 'Agents & code';
 
 const codeStudioDemo: CodeStudioArtifact = {
@@ -1351,7 +1353,11 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Trip budget burn (fuel gauge · pace verdict · categories)', type: 'trip_budget', category: 'Travel & life', node: <TripBudget data={tripBudgetDemo} /> },
   { title: 'Destination cheat-sheet (emergency · plugs · phrases · scams)', type: 'local_cheatsheet', category: 'Travel & life', node: <LocalCheatsheet data={cheatsheetDemo} /> },
   { title: 'Loyalty wallet (stacked cards · tier progress · redemption tips)', type: 'loyalty_wallet', category: 'Travel & life', node: <LoyaltyWallet data={loyaltyDemo} /> },
-  { title: 'Smart stack (auto-rotating live cards · per-card refresh)', type: 'widget_stack', category: 'Agents & code', node: <WidgetStack data={widgetStackDemo} renderEmbedded={renderArtifactNode} /> }
+  { title: 'Smart stack (auto-rotating live cards · per-card refresh)', type: 'widget_stack', category: 'Agents & code', node: <WidgetStack data={widgetStackDemo} renderEmbedded={renderArtifactNode} /> },
+  { title: 'Snake (canvas engine · rising speed · keyboard + swipe · S/M/L + fullscreen)', type: 'game', category: 'Games', node: <GameCard data={{ game: 'snake' }} /> },
+  { title: 'Brick breaker (paddle physics · brick collisions · lives · levels)', type: 'game', category: 'Games', node: <GameCard data={{ game: 'breakout' }} /> },
+  { title: '2048 (slide & merge · win + game over · animated tiles)', type: 'game', category: 'Games', node: <GameCard data={{ game: '2048' }} /> },
+  { title: 'Memory match (flip-card concentration · move counter · best score)', type: 'game', category: 'Games', node: <GameCard data={{ game: 'memory' }} /> }
 ];
 
 /** Artifact types that have a live demo in the gallery (used by the coverage test). */
@@ -1364,6 +1370,7 @@ const CATEGORY_ORDER: GalleryCategory[] = [
   'World & media',
   'Travel & life',
   'Learning',
+  'Games',
   'Agents & code'
 ];
 

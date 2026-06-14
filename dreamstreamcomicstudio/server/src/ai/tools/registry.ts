@@ -913,6 +913,33 @@ const bundleTool: ChatTool = {
   }
 };
 
+// Drop a fully playable mini-game into the chat. Pure + local — it just emits a
+// `game` artifact; the client renders the real, interactive game (each ships with
+// its own Compact/Medium/Large size control and a fullscreen toggle).
+const playGameTool: ChatTool = {
+  name: 'play_game',
+  description:
+    'Drop a fully playable mini-game into the chat for the user to play right now. Use whenever the user wants to play a game, take a break, or asks for one by name. Supported games: "snake" (classic grid snake), "breakout" (brick breaker / paddle), "2048" (slide-and-merge puzzle), "memory" (flip-card matching / concentration). Pick the one the user names; default to "snake" if they just say "a game". Optional `difficulty` ("easy"|"normal"|"hard") tunes Snake/Breakout speed and the Memory board size. The game card carries everything (controls, score, sizes, fullscreen) — keep your reply to one short line.',
+  parameters: {
+    type: 'object',
+    properties: {
+      game: { type: 'string', enum: ['snake', 'breakout', '2048', 'memory'], description: 'Which game to launch.' },
+      difficulty: { type: 'string', enum: ['easy', 'normal', 'hard'], description: 'Speed (Snake/Breakout) or board size (Memory). Optional, default normal.' }
+    },
+    required: ['game']
+  },
+  execute: async (args) => {
+    const games = new Set(['snake', 'breakout', '2048', 'memory']);
+    const game = games.has(String(args?.game)) ? String(args.game) : 'snake';
+    const difficulty = ['easy', 'normal', 'hard'].includes(String(args?.difficulty)) ? String(args.difficulty) : undefined;
+    const label = game === 'breakout' ? 'Brick breaker' : game === '2048' ? '2048' : game === 'memory' ? 'Memory match' : 'Snake';
+    return {
+      content: `Launched ${label} — a fully playable game card is shown to the user (keyboard + touch, Compact/Medium/Large sizes and a fullscreen toggle). Invite them to play; one short line is enough.`,
+      artifacts: [{ type: 'game', data: { game, ...(difficulty ? { difficulty } : {}) } }]
+    };
+  }
+};
+
 // Turn one refresh-whitelisted tool call into a LIVE MONITOR: the widget re-runs
 // the call on an interval client-side (via /api/chat/tool-refresh), so the embedded
 // card stays fresh without any model round-trip. This is the /loop skill's engine.
@@ -1110,6 +1137,7 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   plan_trip: planTripTool,
   create_monitor: monitorTool,
   create_widget_stack: stackTool,
+  play_game: playGameTool,
   generate_app: generateAppTool,
   ...Object.fromEntries(FREE_API_TOOLS.map((t) => [t.name, t]))
 };

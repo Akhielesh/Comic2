@@ -541,6 +541,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['trivia', 'quiz', 'quiz me', 'questions', 'ask me', 'game night', 'trivia questions']
   },
   {
+    name: 'play_game', label: 'Mini-games', category: 'entertainment', kind: 'builtin', provider: 'DreamStream (in-app, plays locally)',
+    description: 'Drop a fully playable mini-game into the chat — Snake, Brick breaker (paddle), 2048 or Memory match — with keyboard + touch controls, Compact/Medium/Large sizes and a fullscreen toggle.',
+    auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',
+    dataShape: 'Interactive game card: canvas/DOM game, score + best, resizable, fullscreen.', docsUrl: 'https://dreamstream.app',
+    keywords: ['game', 'games', 'play', 'play a game', 'snake', 'breakout', 'brick breaker', '2048', 'memory', 'memory match', 'concentration', 'matching game', 'arcade', 'mini game', 'bored', 'take a break']
+  },
+  {
     name: 'tv_show', label: 'TV shows', category: 'entertainment', kind: 'api', provider: 'TVMaze',
     description: 'TV show genres, premiere, network, rating and summary.',
     auth: 'none', rateLimit: '~20 calls / 10s (no key)',

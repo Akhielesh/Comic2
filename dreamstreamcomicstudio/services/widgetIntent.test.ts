@@ -70,6 +70,13 @@ describe('resolveWidgetIntent', () => {
     expect(s.def.tool).toBeTruthy();
   });
 
+  it('turns a pasted video link into a playable embed suggestion', () => {
+    const s = top('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+    expect(s.def.tool).toBe('embed');
+    expect(s.args.url).toContain('youtube.com');
+    expect(s.ready).toBe(true);
+  });
+
   it('returns nothing for an empty query, and quick picks are available', () => {
     expect(resolveWidgetIntent('')).toEqual([]);
     expect(quickPickSuggestions().length).toBeGreaterThan(0);

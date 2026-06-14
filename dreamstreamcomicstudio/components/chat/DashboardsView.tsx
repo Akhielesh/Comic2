@@ -18,14 +18,17 @@ import { useAuth } from '../../contexts/AuthContext';
 import { persistUiState, resolveInitialUiState } from '../../services/viewState';
 import { DensityProvider, relativeTime, type WidgetDensity } from './artifacts/kit';
 import { renderArtifactNode } from './artifacts/ChatArtifacts';
+import { GameCard } from './artifacts/GameCard';
+import type { GameKind } from '../../apiTypes';
 import { DictationButton } from './DictationButton';
 import {
-  AI_CHAT_TILE, TOOL_LABELS, WIDGET_BY_TOOL, WIDGET_CATEGORIES, buildTileFromFields, searchWidgets,
+  AI_CHAT_TILE, EMBED_TILE, GAME_TILE, TOOL_LABELS, WIDGET_BY_TOOL, WIDGET_CATEGORIES, buildTileFromFields, searchWidgets,
   type WidgetDef
 } from './widgetCatalog';
+import { toVideoEmbed, isEmbeddableVideo } from './videoEmbed';
 import { resolveWidgetIntent, quickPickSuggestions, type WidgetSuggestion } from '../../services/widgetIntent';
 
-export { AI_CHAT_TILE };
+export { AI_CHAT_TILE, EMBED_TILE };
 
 // Custom Dashboards — personal, persistent boards of live widget tiles.
 //
@@ -48,6 +51,57 @@ export { AI_CHAT_TILE };
 /** A small assistant box living on the board: ask → answer renders as markdown.
  *  Keeps the last exchange only — it's a pulse-glance tool, not a full thread
  *  (the sidebar's New chat is one click away for that). */
+// A pinned, playable video tile. No live-data fetch — it just renders the embed for
+// its URL. Unembeddable links fall back to a quiet "open original" card.
+const EmbedTile: React.FC<{ tile: DashboardTile }> = ({ tile }) => {
+  const url = typeof tile.args.url === 'string' ? tile.args.url : '';
+  const embed = url ? toVideoEmbed(url) : null;
+  if (embed) {
+    // A board tile shouldn't autoplay (multiple tiles would fight) — build a clean,
+    // click-to-play embed URL from the resolved provider + id.
+    const src =
+      embed.provider === 'youtube'
+        ? `https://www.youtube-nocookie.com/embed/${embed.id}?rel=0&modestbranding=1`
+        : `https://player.vimeo.com/video/${embed.id}`;
+    return (
+      <div className="h-full w-full overflow-hidden rounded-2xl border border-[var(--ds-hairline)] bg-black">
+        <iframe
+          src={src}
+          title={tile.label || 'Video'}
+          allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+          allowFullScreen
+          className="h-full min-h-[180px] w-full border-0"
+        />
+      </div>
+    );
+  }
+  return (
+    <div className="flex h-full min-h-[120px] flex-col items-start justify-center gap-1.5 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-4">
+      <span className="text-xs font-medium text-[var(--ds-ink)]">Link</span>
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="truncate text-xs text-[var(--ds-accent)] hover:underline"
+      >
+        {url || 'No link'}
+      </a>
+    </div>
+  );
+};
+
+// A fully playable game tile (no live-data fetch) — renders the same GameCard the
+// chat uses, with its own size + fullscreen controls.
+const GameTile: React.FC<{ tile: DashboardTile }> = ({ tile }) => {
+  const game = (typeof tile.args.game === 'string' ? tile.args.game : 'snake') as GameKind;
+  const difficulty = typeof tile.args.difficulty === 'string' ? tile.args.difficulty : undefined;
+  return (
+    <div className="h-full w-full">
+      <GameCard data={{ game, ...(difficulty ? { difficulty: difficulty as 'easy' | 'normal' | 'hard' } : {}) }} />
+    </div>
+  );
+};
+
 const AiChatTile: React.FC = () => {
   const [draft, setDraft] = useState('');
   const [exchange, setExchange] = useState<{ q: string; a: string } | null>(null);
@@ -938,10 +992,11 @@ const AiCommandBar: React.FC<{
     e.preventDefault();
     const command = input.trim();
     if (!command || pending) return;
-    // A pasted link or an explicit "ask/summarize …" isn't a board command — send it to
-    // the AI chat, where the model + tools can actually open/summarize/render it.
+    // An explicit "ask/summarize …", or a non-video link, isn't a board command — send it
+    // to the AI chat. (A video link falls through to become a playable embed tile.)
     const askMatch = command.match(/^(?:ask|summari[sz]e)\s+(.+)/i);
-    if (onAsk && (/^https?:\/\/\S+$/i.test(command) || askMatch)) {
+    const isLink = /^https?:\/\/\S+$/i.test(command);
+    if (onAsk && (askMatch || (isLink && !isEmbeddableVideo(command)))) {
       onAsk(askMatch ? askMatch[1] : command);
       setInput('');
       return;
@@ -1113,7 +1168,7 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode; onAsk?
   }, [active?.id]);
 
   const fetchTile = useCallback(async (tile: DashboardTile) => {
-    if (tile.tool === AI_CHAT_TILE || tile.tool === PINNED_TILE) return; // no live-data fetch
+    if (tile.tool === AI_CHAT_TILE || tile.tool === PINNED_TILE || tile.tool === EMBED_TILE || tile.tool === GAME_TILE) return; // no live-data fetch
     if (inflight.current.has(tile.id)) return;
     inflight.current.add(tile.id);
     setTileStates((prev) => ({ ...prev, [tile.id]: { ...prev[tile.id], loading: true } }));
@@ -1542,9 +1597,9 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode; onAsk?
                   setDropIndex(null);
                 }}
               >
-                {tile.tool === AI_CHAT_TILE ? (
+                {tile.tool === AI_CHAT_TILE || tile.tool === EMBED_TILE || tile.tool === GAME_TILE ? (
                   <div
-                    className="group/tile relative"
+                    className="group/tile relative h-full"
                     style={tileHeight(tile) != null ? { height: tileHeight(tile)! } : undefined}
                   >
                     {!locked && (
@@ -1558,7 +1613,7 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode; onAsk?
                         </button>
                       </div>
                     )}
-                    <AiChatTile />
+                    {tile.tool === AI_CHAT_TILE ? <AiChatTile /> : tile.tool === GAME_TILE ? <GameTile tile={tile} /> : <EmbedTile tile={tile} />}
                   </div>
                 ) : (
                 <TileCard

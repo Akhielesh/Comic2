@@ -73,6 +73,9 @@ describe('parseDashboardCommand — add a single widget', () => {
   it('still builds a topic board for non-add phrasing', () => {
     expect(parseDashboardCommand('quantum computing').kind).toBe('create');
   });
+  it('pins a pasted video link as an embed tile', () => {
+    expect(parseDashboardCommand('https://youtu.be/dQw4w9WgXcQ')).toMatchObject({ kind: 'add', tool: 'embed' });
+  });
 });
 
 describe('extractTopic', () => {

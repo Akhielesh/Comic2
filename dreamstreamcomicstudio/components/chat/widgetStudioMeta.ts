@@ -67,7 +67,8 @@ export const ARTIFACT_TOOLS: Record<string, string[]> = {
   // Email widgets — fed by the user's connected (read-only) Gmail.
   email_inbox: ['gmail_inbox', 'gmail_search'],
   email_unread: ['gmail_unread'],
-  email_compose: ['gmail_compose']
+  email_compose: ['gmail_compose'],
+  game: ['play_game']
 };
 
 /** Artifact types the MODEL composes directly (no single producing data tool). */
@@ -105,7 +106,8 @@ export const EXAMPLE_PROMPT: Record<string, string> = {
   world_clocks: 'World clocks for New York, London and Tokyo',
   email_inbox: 'Open my Gmail inbox',
   email_unread: 'Show my unread emails',
-  email_compose: 'Draft an email to alex@example.com about rescheduling Friday'
+  email_compose: 'Draft an email to alex@example.com about rescheduling Friday',
+  game: "Let's play Snake"
 };
 
 /** A widget's source kind — drives the badge + a tag. */

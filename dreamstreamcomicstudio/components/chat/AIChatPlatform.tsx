@@ -82,7 +82,7 @@ import { toggleConnector, type ChatConnector } from '../../services/chatConnecto
 import { recommendModels, detectTools } from '../../services/chatSuggest';
 import { isSourceInScope } from '../../services/sourceGovernance';
 import type { ModelSourceId } from '../../services/modelSelection';
-import { listMcpServers, getMcpServersByIds, onMcpServersChanged } from '../../services/mcpServers';
+import { listAllMcpServers, getMcpServersByIds, onMcpServersChanged } from '../../services/mcpServers';
 import { recordToolEvents } from '../../services/toolAnalytics';
 import { captureError, captureEvent } from '../../services/telemetry';
 import { isLegacyStudioEnabled } from '../../services/studioFlags';
@@ -255,7 +255,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   const [composerSeed, setComposerSeed] = useState('');
   const [settingsTab, setSettingsTab] = useState<'memory' | 'agents' | 'tools' | 'gallery' | null>(null);
   const [customAgents, setCustomAgents] = useState(() => listCustomAgents());
-  const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(() => listMcpServers());
+  const [mcpServers, setMcpServers] = useState<McpServerConfig[]>(() => listAllMcpServers());
   const [panel, setPanel] = useState<ChatArtifact | null>(null);
   const [panelFullscreen, setPanelFullscreen] = useState(false);
   const [panelWidth, setPanelWidth] = useState(440);
@@ -312,7 +312,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     };
   }, [overlayOpen]);
 
-  useEffect(() => onMcpServersChanged(() => setMcpServers(listMcpServers())), []);
+  useEffect(() => onMcpServersChanged(() => setMcpServers(listAllMcpServers())), []);
 
   // ⌘K / Ctrl-K toggles the command palette from anywhere in the studio.
   useEffect(() => {
