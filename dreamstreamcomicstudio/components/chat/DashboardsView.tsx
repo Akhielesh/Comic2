@@ -965,7 +965,7 @@ const AiCommandBar: React.FC<{
             onChange={(e) => setInput(e.target.value)}
             disabled={pending}
             aria-label="Tell the AI what to build or change"
-            placeholder="Tell the AI what to build or change — “study dashboard for ML”, “change weather to Tokyo”, “stocks to NVDA”…"
+            placeholder="Tell the AI what to build, add or change — “add rivian”, “pin bitcoin”, “study dashboard for ML”, “change weather to Tokyo”…"
             className="min-w-0 flex-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-3 py-1.5 text-base text-[var(--ds-ink)] outline-none transition-colors placeholder:text-[var(--ds-muted)] focus:border-[var(--ds-accent)] disabled:opacity-60 sm:text-sm"
           />
           <button
