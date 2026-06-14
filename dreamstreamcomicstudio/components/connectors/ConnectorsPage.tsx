@@ -37,6 +37,7 @@ import {
   type CatalogEntry,
   type ConnectionSummary
 } from '../../services/connectorsApi';
+import { appStatus } from '../../services/appStatus';
 
 type Toast = { id: number; tone: 'success' | 'error' | 'info'; message: string };
 
@@ -132,8 +133,12 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
         /* ignore */
       }
       popupRef.current = null;
-      if (data.error) pushToast('error', `Couldn't connect: ${humanizeError(data.error)}`);
-      else if (data.connected) pushToast('success', `${data.connected.replace(/_/g, ' ')} connected`);
+      if (data.error) {
+        pushToast('error', `Couldn't connect: ${humanizeError(data.error)}`);
+        appStatus.report('error', 'Connection failed', { detail: humanizeError(data.error), source: 'connectors' });
+      } else if (data.connected) {
+        pushToast('success', `${data.connected.replace(/_/g, ' ')} connected`);
+      }
       void refreshConnections();
     };
     window.addEventListener('message', onMessage);
@@ -175,6 +180,15 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
     };
   }, [connecting, refreshConnections]);
 
+  // Mirror the connect lifecycle into the global status bar, so "Connecting Gmail…" shows
+  // there (and clears) without anyone watching the per-button spinner.
+  useEffect(() => {
+    if (!connecting) return;
+    const name = connecting === 'google' ? 'Google' : catalog?.find((c) => c.id === connecting)?.displayName || connecting;
+    const aid = appStatus.begin(`Connecting ${name}…`);
+    return () => appStatus.end(aid);
+  }, [connecting, catalog]);
+
   const handleConnect = useCallback(
     async (entry: CatalogEntry, apiKey?: string) => {
       setConnecting(entry.id);
@@ -195,8 +209,10 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
         }
         popupRef.current = popup;
       } catch (err) {
+        const msg = (err as Error)?.message || 'Connection failed';
         setConnecting(null);
-        pushToast('error', (err as Error)?.message || 'Connection failed');
+        pushToast('error', msg);
+        appStatus.report('error', `Couldn't connect ${entry.displayName}`, { detail: msg, source: 'connectors' });
       }
     },
     [pushToast, refreshConnections]
@@ -230,8 +246,10 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
           await refreshConnections();
         }
       } catch (err) {
+        const msg = (err as Error)?.message || 'Could not update Google services';
         setConnecting(null);
-        pushToast('error', (err as Error)?.message || 'Could not update Google services');
+        pushToast('error', msg);
+        appStatus.report('error', "Couldn't update Google services", { detail: msg, source: 'connectors' });
       }
     },
     [connections, pushToast, refreshConnections]
@@ -240,14 +258,19 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void; embedded?: boolean 
   const handleSync = useCallback(
     async (conn: ConnectionSummary) => {
       setBusyConn(conn.id);
+      const label = conn.accountLabel || conn.accountIdentifier || conn.connectorId;
+      const aid = appStatus.begin(`Syncing ${label}…`);
       try {
         await syncConnection(conn.id);
         pushToast('info', 'Sync started');
         await refreshConnections();
         setTimeout(() => void refreshConnections(), 4000);
       } catch (err) {
-        pushToast('error', (err as Error)?.message || 'Sync failed to start');
+        const msg = (err as Error)?.message || 'Sync failed to start';
+        pushToast('error', msg);
+        appStatus.report('error', `Sync failed: ${label}`, { detail: msg, source: 'connectors' });
       } finally {
+        appStatus.end(aid);
         setBusyConn(null);
       }
     },

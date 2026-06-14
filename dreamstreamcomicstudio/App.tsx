@@ -40,6 +40,8 @@ import { Project } from './types';
 import { Loader2 } from 'lucide-react';
 import { SystemDiagnosticsResponse } from './apiTypes';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
+import { AppStatusBar } from './components/status/AppStatusBar';
+import { installAppStatusCapture } from './services/appStatus';
 import { StaticSiteHeader } from './components/layout/StaticSiteHeader';
 import { LegalMicroLinks } from './components/layout/LegalMicroLinks';
 import { FeedbackWidget } from './components/feedback/FeedbackWidget';
@@ -294,6 +296,8 @@ const App: React.FC = () => {
     const id = window.setTimeout(() => setInviteNotice(null), 8000);
     return () => window.clearTimeout(id);
   }, [inviteNotice]);
+  // Route uncaught errors / rejections / failed loads into the in-app status bar.
+  useEffect(() => installAppStatusCapture(), []);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [publicProject, setPublicProject] = useState<Project | null>(null);
   const [viewedProfile, setViewedProfile] = useState<string | null>(null); // username
@@ -1239,6 +1243,7 @@ const App: React.FC = () => {
 
         {showFeedbackWidget && <FeedbackWidget />}
 
+        <AppStatusBar />
       </div>
     </ErrorBoundary>
   );

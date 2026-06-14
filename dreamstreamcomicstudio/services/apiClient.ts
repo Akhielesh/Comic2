@@ -8,6 +8,7 @@ import { isProviderEnabled, allowedSourcesHeader } from './sourceGovernance';
 import { PROVIDERS_ORDERED } from '../shared/providers';
 import { withRetry, type RetryOptions } from './retry';
 import { isRetryableError } from './apiErrors';
+import { appStatus } from './appStatus';
 
 let cachedAccessToken: string | undefined;
 
@@ -76,6 +77,12 @@ const safeFetch = async (url: string, init: RequestInit): Promise<Response> => {
     if (err instanceof DOMException && err.name === 'AbortError') throw err;
     if ((err as Error)?.name === 'AbortError') throw err;
     const target = url || 'the API server';
+    // Surface "backend unreachable" in the in-app status bar — this is the failure users
+    // hit most and can't otherwise see without the DevTools console/network tab.
+    appStatus.report('error', "Couldn't reach the server", {
+      detail: `${(err as Error)?.message || 'network error'} · ${url}`,
+      source: 'network'
+    });
     throw new ApiError(
       `Couldn't reach the AI server (${target}). This is usually a connectivity or CORS issue, or the API URL isn't configured. ` +
         `Check your internet connection and try again — if it persists, the server may be misconfigured.`,
