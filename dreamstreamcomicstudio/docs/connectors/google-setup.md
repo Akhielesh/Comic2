@@ -80,8 +80,32 @@ Gmail mailbox**. So:
 
 **When to upgrade to Google Workspace (~$7/user/mo):** only if you want real
 send-and-receive **company mailboxes** (compose/reply as `support@dreamstreamstudio.ai`
-inside Gmail). For running the connectors, **stay on Cloud Identity Free — it's $0 and
-already enough.**
+inside Gmail) for yourself and teammates. For running the connectors, **Cloud Identity
+Free is $0 and already enough** — the upgrade is purely an email/collaboration decision.
+
+#### Setting up Workspace mailboxes for the team (when you want them)
+
+1. **admin.google.com → Billing → Get/Upgrade subscription** → pick a plan
+   (**Business Starter ≈ $7/user/mo** is plenty; Standard adds 2 TB/Meet recording). A
+   ~14-day free trial is usually offered. Because you already own the domain via Cloud
+   Identity, this **upgrades in place** — same org, same admin.
+2. **Activate Gmail → set Google's MX records.** The wizard gives you Google MX entries.
+   In **Cloudflare DNS**, **replace the Email Routing MX records with Google's MX**
+   (Cloudflare stays your DNS host — only the MX records change). ⚠️ This **supersedes
+   Cloudflare Email Routing**: once MX points to Google, Gmail receives all domain mail, so
+   manage `support@`/`privacy@` as **Gmail mailboxes or Google Groups** instead of
+   Cloudflare forwards.
+3. **Directory → Users → Add new user** for each teammate → creates
+   `name@dreamstreamstudio.ai` with its own mailbox (one license each = per-mailbox cost).
+4. **Directory → Groups** → create `support@` and `privacy@` as Groups (or shared
+   mailboxes) so they're not tied to one person.
+5. **Re-check SPF / DKIM / DMARC** so **both** Gmail *and* the app's transactional sender
+   (the Cloudflare email-worker) pass: SPF should `include` Google + the worker's sender,
+   enable DKIM for each, and keep DMARC aligned. (Deliverability config — do this once.)
+
+**Cost** = per mailbox (you + N teammates). **None of this affects the connector OAuth
+setup** — that works identically on Cloud Identity Free or Workspace, so you can upgrade
+before or after wiring the connectors.
 
 ### Professional contact addresses (for the consent screen)
 
