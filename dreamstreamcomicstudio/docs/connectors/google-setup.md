@@ -282,6 +282,31 @@ once the assessment clears.
 
 ---
 
+## Troubleshooting — test email bounces with `550 NoSuchUser` / `gsmtp`
+
+**Symptom:** sending to `you@dreamstreamstudio.ai` bounces:
+`550 5.1.1 The email account that you tried to reach does not exist … gsmtp`.
+
+**Cause:** your domain's **MX records point to Google**, but Cloud Identity Free has **no
+Gmail mailbox**, so Google rejects all inbound mail. (`gsmtp` in the bounce = Google is
+acting as your mail host — it shouldn't be, on the free path.)
+
+**Fix (free path — email stays on Cloudflare):**
+1. **Cloudflare → Email → Email Routing** → make sure it's **Enabled**; if prompted, click
+   **Add records** (this adds Cloudflare's MX + SPF automatically).
+2. **Cloudflare → DNS → Records** → **delete any Google MX** records
+   (`aspmx.l.google.com`, `alt1.aspmx.l.google.com`, `alt2…`, `smtp.google.com`, etc.).
+   Keep **only** the three `route1.mx.cloudflare.net` / `route2…` / `route3…` MX records.
+3. **Email Routing → Destination addresses** → confirm your real inbox is listed and
+   **Verified** (click the verification link Cloudflare emailed you).
+4. **Email Routing → Routing rules** → add the exact address you're testing (e.g.
+   `akhielesh@…`) **or** turn on **Catch-all** → forward to your inbox. An address with no
+   route + no catch-all is rejected even once MX is correct.
+5. Wait a few minutes for DNS to propagate, then resend the test.
+
+(If you later choose Workspace, you do the **opposite** — point MX at Google — and Gmail
+mailboxes/Groups handle the mail instead.)
+
 ## Quick checklist
 
 - [ ] Cloud Identity on `dreamstreamstudio.ai`, domain TXT verified (Part 1)
