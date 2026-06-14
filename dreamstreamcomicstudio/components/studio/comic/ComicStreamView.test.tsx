@@ -69,9 +69,16 @@ describe('ComicStreamView', () => {
     expect(screen.getByText(/This comic ·/)).toBeInTheDocument();
   });
 
-  it('shows the planning "thinking" state before scenes exist', () => {
+  it('shows a thinking banner while analyzing a fresh script', () => {
+    mockMatchMedia(false);
+    render(<ComicStreamView analyzing state={makeState({ step: AppStep.SCRIPT_INPUT, scenes: [], styleVariants: [], characters: [], panels: [] })} />);
+    expect(screen.getByRole('status')).toBeInTheDocument();
+  });
+
+  it('prompts for a script (no thinking) when idle and empty', () => {
     mockMatchMedia(false);
     render(<ComicStreamView state={makeState({ step: AppStep.SCRIPT_INPUT, scenes: [], styleVariants: [], characters: [], panels: [] })} />);
-    expect(screen.getByRole('status')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.getByText(/Paste or type your story/)).toBeInTheDocument();
   });
 });
