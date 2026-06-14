@@ -180,6 +180,15 @@ export const googleApiFetch = async <T = unknown>(
     if (res.status === 403 && /insufficient.{0,20}(scope|permission|authentication)|ACCESS_TOKEN_SCOPE_INSUFFICIENT/i.test(body)) {
       throw new ConnectorAuthError('unauthorized', `Reconnect needed — additional Google permission required: ${reason}`);
     }
+    // A 403 because the API itself isn't enabled for the project is an admin toggle in the
+    // Cloud Console (reconnecting won't help) — keep it a hard error, but replace Google's
+    // wall of text with a concise, actionable message that preserves the enable link.
+    if (res.status === 403 && /accessNotConfigured|SERVICE_DISABLED|has not been used in project|\bis disabled\b/i.test(body)) {
+      const enableUrl = (body.match(/https:\/\/console\.[^\s"'\\]+/) || [])[0];
+      throw new Error(
+        `${host} isn't enabled for this Google Cloud project — enable the API${enableUrl ? ` at ${enableUrl}` : ''}, wait ~1 minute, then Sync.`
+      );
+    }
     throw new Error(`Google API ${host} error: ${reason}`);
   }
 
