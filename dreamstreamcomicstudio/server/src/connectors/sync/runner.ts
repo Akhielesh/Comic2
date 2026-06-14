@@ -26,6 +26,7 @@ import {
   type ConnectionRow
 } from '../store.js';
 import type { ConnectorSyncMode } from './queue.js';
+import { logPageStart, logPageDone, logReconnect, logError, logRunStart, logRunEnd, type RunOutcome } from './syncLog.js';
 
 export interface SyncPageResult {
   status: 'ok' | 'reconnect' | 'skipped' | 'not_found';
@@ -61,6 +62,10 @@ export const runConnectorSyncPage = async (
   const effectiveMode = resolveMode(mode, syncState);
   const cursor = (syncState?.cursor as Record<string, unknown>) || {};
 
+  const startedAt = Date.now();
+  const tag = { connectorId: connection.connector_id, account: connection.account_identifier, connectionId, mode: effectiveMode };
+  logPageStart({ ...tag, cursorIn: cursor });
+
   await upsertSyncState(connectionId, userId, { status: 'syncing', last_error: null });
   if (connection.status === 'connected' || connection.status === 'error') {
     await setConnectionStatus(connectionId, 'syncing');
@@ -91,18 +96,30 @@ export const runConnectorSyncPage = async (
     await markConnectionSynced(connectionId);
     await setConnectionStatus(connectionId, 'connected', null);
 
+    logPageDone({
+      ...tag,
+      items: result.items,
+      written,
+      hasMore: result.hasMore,
+      cursorOut: result.cursor,
+      total: itemsSynced,
+      ms: Date.now() - startedAt
+    });
+
     return { status: 'ok', mode: effectiveMode, hasMore: result.hasMore, itemsSynced: written };
   } catch (err) {
     if (err instanceof ConnectorAuthError) {
       // Terminal until the user reconnects — mark + DON'T retry.
       await markReconnectIfAuth(connection, err);
       await upsertSyncState(connectionId, userId, { status: 'error', last_error: err.message });
+      logReconnect({ ...tag, message: err.message });
       return { status: 'reconnect', mode: effectiveMode, hasMore: false, itemsSynced: 0 };
     }
     // Rate limit / transient → record + rethrow so the queue retries with backoff.
     const message = err instanceof ConnectorRateLimitError ? `rate limited: ${err.message}` : (err as Error)?.message || 'sync failed';
     await upsertSyncState(connectionId, userId, { status: 'error', last_error: message });
     await setConnectionStatus(connectionId, 'error', message);
+    logError({ ...tag, message, willRetry: true });
     throw err;
   }
 };
@@ -118,17 +135,38 @@ export const runConnectorSyncInline = async (
   mode: ConnectorSyncMode,
   maxPages = 8
 ): Promise<{ itemsSynced: number; pages: number; status: SyncPageResult['status'] }> => {
+  const startedAt = Date.now();
+  logRunStart({ connectionId, mode, maxPages });
+
   let total = 0;
   let pages = 0;
   let nextMode: ConnectorSyncMode = mode;
-  for (; pages < maxPages; ) {
-    const r = await runConnectorSyncPage(userId, connectionId, nextMode);
-    pages++;
-    total += r.itemsSynced;
-    if (r.status !== 'ok') return { itemsSynced: total, pages, status: r.status };
-    if (!r.hasMore) return { itemsSynced: total, pages, status: 'ok' };
-    // Continue the SAME sync run (full pagination stays full).
-    nextMode = r.mode;
+  let status: SyncPageResult['status'] = 'ok';
+  let lastHasMore = false;
+  try {
+    for (; pages < maxPages; ) {
+      const r = await runConnectorSyncPage(userId, connectionId, nextMode);
+      pages++;
+      total += r.itemsSynced;
+      lastHasMore = r.status === 'ok' && r.hasMore;
+      if (r.status !== 'ok') {
+        status = r.status;
+        break;
+      }
+      if (!r.hasMore) break;
+      // Continue the SAME sync run (full pagination stays full).
+      nextMode = r.mode;
+    }
+  } catch (err) {
+    // A transient/rate-limit page error propagates (triggerSync's caller handles it) — but
+    // log the run end so the inline path isn't silent on failure.
+    logRunEnd({ connectionId, mode, outcome: 'error', pages, total, ms: Date.now() - startedAt, note: (err as Error)?.message });
+    throw err;
   }
-  return { itemsSynced: total, pages, status: 'ok' };
+
+  // 'capped' = the page budget ran out while more remained: only part of the account was
+  // ingested this run, and sync_state stays 'syncing' until the next sync continues it.
+  const outcome: RunOutcome = status !== 'ok' ? (status as RunOutcome) : lastHasMore && pages >= maxPages ? 'capped' : 'drained';
+  logRunEnd({ connectionId, mode, outcome, pages, total, ms: Date.now() - startedAt });
+  return { itemsSynced: total, pages, status };
 };

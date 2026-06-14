@@ -19,6 +19,7 @@ import {
   type ConnectorSyncJobData
 } from './queue.js';
 import { runConnectorSyncPage } from './runner.js';
+import { logNote } from './syncLog.js';
 import { purgeExpiredOAuthState } from '../store.js';
 import '../index.js';
 
@@ -43,17 +44,21 @@ export const startConnectorWorker = async () => {
     { connection, concurrency: CONNECTORS_WORKER_CONCURRENCY }
   );
 
-  worker.on('ready', () => console.log('[Connectors Worker] Ready'));
+  // Per-page detail (what each page captured) is logged by the runner via syncLog; the
+  // worker only narrates job lifecycle so the two don't double up.
+  worker.on('ready', () => logNote('connector_worker_ready', 'worker ready — draining the sync queue', 'info'));
   worker.on('failed', (job, error) =>
-    console.error('[Connectors Worker] Sync failed', { id: job?.id, error: error?.message })
-  );
-  worker.on('completed', (job) =>
-    console.log('[Connectors Worker] Sync page done', { id: job?.id, result: job?.returnvalue })
+    logNote('connector_worker_job_failed', `job ${job?.id || '?'} failed — ${error?.message || 'unknown error'} (BullMQ will retry)`, 'error', {
+      id: job?.id,
+      error: error?.message
+    })
   );
 
   // Periodic housekeeping: drop expired OAuth handshake rows.
   const interval = setInterval(() => {
-    purgeExpiredOAuthState().catch((e) => console.error('[Connectors Worker] purge error', (e as Error)?.message));
+    purgeExpiredOAuthState().catch((e) =>
+      logNote('connector_oauth_state_purge_error', `OAuth-state purge error — ${(e as Error)?.message}`, 'warn', { error: (e as Error)?.message })
+    );
   }, 15 * 60_000);
   worker.on('closing', () => clearInterval(interval));
 

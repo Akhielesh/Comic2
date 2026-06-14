@@ -453,6 +453,26 @@ export const CONNECTORS_SYNC_PAGE_SIZE = parseIntegerEnv(
   'CONNECTORS_SYNC_PAGE_SIZE',
   1
 );
+// Sync diagnostics — see EXACTLY what each connector sync captures (see connectors/sync/syncLog.ts).
+// Page-level START/DONE lines always print (one per ~PAGE_SIZE items); this knob only gates the
+// per-item detail:
+//   'off'     → page-level summaries only (default)
+//   'on'      → reserved alias for the page summaries (same as off today; explicit opt-in)
+//   'verbose' → ALSO list every captured item (kind + title) so you can eyeball what landed
+export const CONNECTORS_SYNC_DEBUG = ((): 'off' | 'on' | 'verbose' => {
+  const v = (process.env.CONNECTORS_SYNC_DEBUG || '').trim().toLowerCase();
+  if (v === 'verbose' || v === '2') return 'verbose';
+  if (v === 'on' || v === 'true' || v === '1') return 'on';
+  return 'off';
+})();
+// Force ANSI color for the sync log on/off. Unset ⇒ auto (color when stdout is a TTY, e.g. `npm
+// run dev`/`connectors:worker` locally; plain structured JSON in production where it's not a TTY).
+export const CONNECTORS_SYNC_COLOR = ((): boolean | null => {
+  const v = (process.env.CONNECTORS_SYNC_COLOR || '').trim().toLowerCase();
+  if (v === 'true' || v === '1') return true;
+  if (v === 'false' || v === '0') return false;
+  return null;
+})();
 
 export const REQUIRED_RUNTIME_ENV_VARS = ['CORS_ORIGIN', 'VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY'] as const;
 type RequiredRuntimeEnv = (typeof REQUIRED_RUNTIME_ENV_VARS)[number];
