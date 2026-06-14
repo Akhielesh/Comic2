@@ -734,19 +734,19 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
     // scenes, route back there instead of offering a second, duplicate analyzer.
     return (
       <div className="mx-auto max-w-2xl animate-fade-in p-8 text-center">
-        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-8 text-zinc-100 shadow-2xl">
+        <div className="rounded-xl border-4 border-black bg-white p-8 text-black shadow-comic">
           <div className="flex items-center justify-center gap-2 mb-3">
-            <AlertCircle className="h-8 w-8 text-amber-300" />
-            <h2 className="text-2xl font-semibold">Analyze your script first</h2>
+            <AlertCircle className="h-8 w-8 text-brand-yellow" />
+            <h2 className="text-2xl font-display text-black">Analyze your script first</h2>
           </div>
-          <p className="mb-2 text-sm font-semibold text-zinc-200">Style previews are rendered from your real opening scene.</p>
-          <p className="mb-6 text-sm leading-6 text-zinc-500">
+          <p className="mb-2 text-sm font-display text-black">Style previews are rendered from your real opening scene.</p>
+          <p className="mb-6 text-sm leading-6 text-slate-600 font-comic">
             Head back to the <strong>Script</strong> step to break your story into scenes, then return here to choose a style.
           </p>
           <Button onClick={() => onBackToScript?.()} icon={<ArrowLeft className="w-4 h-4" />}>
             Go to Script step
           </Button>
-          {error && <div className="mt-4 text-sm font-semibold text-red-300">{error}</div>}
+          {error && <div className="mt-4 text-sm font-bold text-brand-red">{error}</div>}
         </div>
       </div>
     );
@@ -802,7 +802,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
           onClick={handleGenerateSelected}
           isLoading={isBatchGenerating}
           disabled={generatableCount === 0 || autoRunAgent}
-          className="border-zinc-100"
+          className="border-2 border-black"
           icon={<Wand2 className="h-4 w-4" />}
         >
           {autoRunAgent ? 'Autopilot on' : 'Generate previews'}
@@ -811,24 +811,24 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
       sidebar={(
         <div className="space-y-5">
           <div>
-            <div className="text-sm font-semibold text-zinc-200">Story read</div>
-            <div className="mt-3 rounded-lg border border-zinc-800 bg-zinc-950 p-4">
-              <div className="flex items-center gap-2 text-sm font-semibold text-zinc-100">
-                <Sparkles className="h-4 w-4 text-emerald-300" />
+            <div className="text-sm font-display uppercase text-black">Story read</div>
+            <div className="mt-3 rounded-xl border-2 border-black bg-white p-4">
+              <div className="flex items-center gap-2 text-sm font-display text-black">
+                <Sparkles className="h-4 w-4 text-brand-blue" />
                 {storyMood.label}
               </div>
-              <div className="mt-2 text-sm leading-6 text-zinc-500">{storyMood.palette}</div>
+              <div className="mt-2 text-sm leading-6 text-slate-600 font-comic">{storyMood.palette}</div>
             </div>
           </div>
 
           <div>
-            <div className="mb-2 text-xs font-semibold uppercase text-zinc-500">Recommended</div>
+            <div className="mb-2 text-xs font-display uppercase text-black">Recommended</div>
             <div className="flex flex-wrap gap-2">
               {recommendedStyleIds
                 .map((id) => STYLE_PRESETS.find((style) => style.id === id))
                 .filter((style): style is StylePreset => !!style)
                 .map((style) => (
-                  <span key={style.id} className="rounded-full bg-zinc-900 px-2 py-1 text-xs font-semibold text-zinc-300 ring-1 ring-zinc-800">
+                  <span key={style.id} className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600 border-2 border-black">
                     {style.label}
                   </span>
                 ))}
@@ -836,7 +836,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
             <Button
               onClick={selectRecommended}
               variant="secondary"
-              className="mt-3 w-full border-zinc-100"
+              className="mt-3 w-full border-2 border-black"
               icon={<Sparkles className="h-4 w-4" />}
             >
               Select recommended
@@ -844,15 +844,15 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
           </div>
 
           <div>
-            <div className="mb-2 text-xs font-semibold uppercase text-zinc-500">Custom ratio</div>
-            <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-              <label className="flex items-center justify-between gap-3 text-sm font-semibold text-zinc-300">
+            <div className="mb-2 text-xs font-display uppercase text-black">Custom ratio</div>
+            <div className="rounded-xl border-2 border-black bg-white p-3">
+              <label className="flex items-center justify-between gap-3 text-sm font-display text-black">
                 Enable
                 <input
                   type="checkbox"
                   checked={customRatioEnabled}
                   onChange={(e) => handleToggleCustomRatio(e.target.checked)}
-                  className="accent-white"
+                  className="accent-black"
                 />
               </label>
               <div className="mt-3 flex items-center gap-2">
@@ -862,45 +862,45 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
                   onBlur={(e) => customRatioEnabled && commitCustomRatio(e.target.value, true)}
                   placeholder="4:5"
                   disabled={!customRatioEnabled}
-                  className="h-10 w-24 rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-sm font-mono text-zinc-100 outline-none placeholder-zinc-600 disabled:opacity-50"
+                  className="h-10 w-24 rounded-xl border-2 border-black bg-white px-3 text-sm font-mono text-black outline-none placeholder-slate-400 focus:border-brand-blue disabled:opacity-50"
                 />
-                {customRatioLabel && <span className="text-xs font-mono text-zinc-500">{customRatioLabel}</span>}
+                {customRatioLabel && <span className="text-xs font-mono text-slate-600">{customRatioLabel}</span>}
               </div>
-              {customRatioError && <div className="mt-2 text-xs font-semibold text-red-300">{customRatioError}</div>}
+              {customRatioError && <div className="mt-2 text-xs font-bold text-brand-red">{customRatioError}</div>}
             </div>
           </div>
 
           <div>
-            <div className="mb-2 text-xs font-semibold uppercase text-zinc-500">Style notes</div>
+            <div className="mb-2 text-xs font-display uppercase text-black">Style notes</div>
             <textarea
               value={customPrompt}
               onChange={(e) => setCustomPrompt(e.target.value)}
               placeholder="Notes for every preview..."
-              className="h-28 w-full resize-none rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-sm leading-5 text-zinc-100 outline-none placeholder-zinc-600 focus:border-zinc-500"
+              className="h-28 w-full resize-none rounded-xl border-2 border-black bg-white p-3 text-sm leading-5 text-black outline-none placeholder-slate-400 focus:border-brand-blue"
             />
           </div>
 
           {(generationStats.total > 0 || isBatchGenerating) && (
-            <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
-              <div className="flex items-center justify-between text-xs font-semibold uppercase text-zinc-500">
+            <div className="rounded-xl border-2 border-black bg-white p-4">
+              <div className="flex items-center justify-between text-xs font-display uppercase text-black">
                 <span>Progress</span>
                 <span>{generationStats.eta !== null ? `${generationStats.eta}s` : 'Estimating'}</span>
               </div>
-              <div className="mt-2 h-2 overflow-hidden rounded-full bg-zinc-800">
+              <div className="mt-2 h-2 overflow-hidden rounded-full border-2 border-black bg-white">
                 <div
-                  className="h-full bg-emerald-300 transition-all"
+                  className="h-full bg-brand-blue transition-all"
                   style={{
                     width: `${generationStats.total ? Math.round((generationStats.completed / generationStats.total) * 100) : 0}%`
                   }}
                 />
               </div>
-              <div className="mt-2 text-xs text-zinc-500">
+              <div className="mt-2 text-xs text-slate-600">
                 {generationStats.completed}/{generationStats.total} done, {generationStats.elapsed}s elapsed
               </div>
             </div>
           )}
           {error && (
-            <div className="rounded-lg border border-red-800 bg-red-950/50 p-3 text-sm font-semibold text-red-100">
+            <div className="rounded-xl border-2 border-brand-red bg-red-100 p-3 text-sm font-bold text-red-700">
               {error}
             </div>
           )}
@@ -908,14 +908,14 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
       )}
     >
       <div className="flex min-h-[680px] flex-col">
-        <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+        <div className="flex items-center justify-between border-b-2 border-black px-5 py-4">
           <div>
-            <div className="text-sm font-semibold text-zinc-200">Style board</div>
-            <div className="mt-1 text-xs text-zinc-500">
+            <div className="text-sm font-display uppercase text-black">Style board</div>
+            <div className="mt-1 text-xs text-slate-600">
               {generatableCount} selected, {galleryItems.length} preview{galleryItems.length === 1 ? '' : 's'}
             </div>
           </div>
-          <div className="rounded-full bg-zinc-900 px-3 py-1 text-xs font-semibold text-zinc-400">
+          <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
             {visibleStyles.length} styles
           </div>
         </div>
@@ -923,49 +923,49 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
         <div className="flex-1 overflow-y-auto p-5">
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_390px]">
             <div className="space-y-5">
-              <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950">
-                <div className="flex flex-col gap-3 border-b border-zinc-800 p-4 md:flex-row md:items-center md:justify-between">
+              <div className="overflow-hidden rounded-xl border-4 border-black bg-white shadow-comic">
+                <div className="flex flex-col gap-3 border-b-2 border-black p-4 md:flex-row md:items-center md:justify-between">
                   <div>
-                    <h3 className="text-base font-semibold text-zinc-100">Styles</h3>
-                    <div className="mt-1 text-xs text-zinc-500">Pick the looks the agent should test.</div>
+                    <h3 className="text-base font-display text-black">Styles</h3>
+                    <div className="mt-1 text-xs text-slate-600">Pick the looks the agent should test.</div>
                   </div>
-                  <div className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 md:w-72">
-                    <Search className="h-4 w-4 shrink-0 text-zinc-500" />
+                  <div className="flex items-center gap-2 rounded-xl border-2 border-black bg-white px-3 py-2 md:w-72">
+                    <Search className="h-4 w-4 shrink-0 text-slate-600" />
                     <input
                       value={styleSearch}
                       onChange={(e) => setStyleSearch(e.target.value)}
                       placeholder="Search styles"
-                      className="min-w-0 flex-1 bg-transparent text-sm text-zinc-100 outline-none placeholder-zinc-600"
+                      className="min-w-0 flex-1 bg-transparent text-sm text-black outline-none placeholder-slate-400"
                     />
                     {styleSearch && (
-                      <button type="button" onClick={() => setStyleSearch('')} className="text-zinc-500 hover:text-zinc-100" aria-label="Clear style search">
+                      <button type="button" onClick={() => setStyleSearch('')} className="text-slate-600 hover:text-black" aria-label="Clear style search">
                         <X className="h-4 w-4" />
                       </button>
                     )}
                   </div>
                 </div>
 
-                <div className="border-b border-zinc-800 p-4">
+                <div className="border-b-2 border-black p-4">
                   <button
                     type="button"
                     onClick={() => setShowAdvancedFormFactors(!showAdvancedFormFactors)}
-                    className="flex w-full items-center justify-between gap-3 rounded-lg bg-zinc-900 px-3 py-3 text-left hover:bg-zinc-800"
+                    className="flex w-full items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-3 text-left hover:bg-brand-yellow"
                   >
                     <div>
-                      <div className="text-xs font-semibold uppercase text-zinc-400">Global form factors</div>
-                      <div className="mt-1 text-xs text-zinc-500">Apply one or two output sizes to selected styles.</div>
+                      <div className="text-xs font-display uppercase text-black">Global form factors</div>
+                      <div className="mt-1 text-xs text-slate-600">Apply one or two output sizes to selected styles.</div>
                     </div>
-                    <ChevronDown className={`h-4 w-4 shrink-0 text-zinc-400 transition-transform ${showAdvancedFormFactors ? 'rotate-180' : ''}`} />
+                    <ChevronDown className={`h-4 w-4 shrink-0 text-slate-600 transition-transform ${showAdvancedFormFactors ? 'rotate-180' : ''}`} />
                   </button>
 
                   {showAdvancedFormFactors && (
                     <div className="mt-3 animate-fade-in">
                       <div className="mb-2 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                        <div className="text-xs text-zinc-500">Select up to 2 variants per style.</div>
+                        <div className="text-xs text-slate-600">Select up to 2 variants per style.</div>
                         <Button
                           onClick={applyGlobalToSelected}
                           variant="secondary"
-                          className="h-8 min-h-0 border-zinc-100 px-3 py-1 text-xs"
+                          className="h-8 min-h-0 border-2 border-black px-3 py-1 text-xs"
                         >
                           Apply
                         </Button>
@@ -980,7 +980,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
                               type="button"
                               onClick={() => toggleGlobalFormFactor(factor.id)}
                               disabled={disabled}
-                              className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 transition ${checked ? 'bg-zinc-100 text-zinc-950 ring-zinc-100' : 'bg-zinc-900 text-zinc-400 ring-zinc-800 hover:text-zinc-100'} ${disabled ? 'cursor-not-allowed opacity-40' : ''}`}
+                              className={`rounded-full px-3 py-1 text-xs font-semibold border-2 border-black transition ${checked ? 'bg-brand-yellow text-black' : 'bg-white text-slate-600 hover:bg-brand-yellow hover:text-black'} ${disabled ? 'cursor-not-allowed opacity-40' : ''}`}
                             >
                               {factor.label}
                             </button>
@@ -992,30 +992,30 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
                 </div>
 
                 <div className="grid max-h-[620px] grid-cols-1 gap-3 overflow-y-auto p-4 custom-scrollbar md:grid-cols-2">
-                  <div className={`rounded-lg border p-4 transition ${(customStyleInput || customStyles.length) ? 'border-emerald-400/70 bg-emerald-400/5' : 'border-dashed border-zinc-700 bg-zinc-900/60'}`}>
-                    <div className="text-sm font-semibold text-zinc-100">Custom styles</div>
+                  <div className={`rounded-xl border-2 border-black p-4 transition ${(customStyleInput || customStyles.length) ? 'border-brand-blue bg-brand-blue/10' : 'border-dashed bg-slate-50'}`}>
+                    <div className="text-sm font-display text-black">Custom styles</div>
                     <textarea
                       value={customStyleInput}
                       onChange={(e) => setCustomStyleInput(e.target.value)}
                       onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); addCustomStyle(); } }}
                       placeholder="Pixel noir, soft watercolor, newspaper print..."
-                      className="mt-3 h-24 w-full resize-none rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-xs leading-5 text-zinc-100 outline-none placeholder-zinc-600 focus:border-zinc-500"
+                      className="mt-3 h-24 w-full resize-none rounded-xl border-2 border-black bg-white p-3 text-xs leading-5 text-black outline-none placeholder-slate-400 focus:border-brand-blue"
                     />
                     <button
                       type="button"
                       onClick={addCustomStyle}
                       disabled={!customStyleInput.trim()}
-                      className="mt-3 flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-zinc-100 px-3 text-xs font-semibold text-zinc-950 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"
+                      className="mt-3 flex h-9 w-full items-center justify-center gap-2 rounded-xl bg-brand-yellow px-3 text-xs font-semibold text-black border-2 border-black transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       <Plus className="h-3.5 w-3.5" /> Add style
                     </button>
                     {customStyles.length > 0 && (
                       <div className="mt-3 space-y-2">
                         {customStyles.map((s, i) => (
-                          <div key={s.id} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-950 p-2 text-xs text-zinc-300">
-                            <span className="shrink-0 font-semibold text-zinc-500">{i + 1}.</span>
+                          <div key={s.id} className="flex items-start gap-2 rounded-xl border-2 border-black bg-white p-2 text-xs text-black">
+                            <span className="shrink-0 font-semibold text-slate-600">{i + 1}.</span>
                             <span className="line-clamp-2 flex-1">{s.prompt}</span>
-                            <button type="button" onClick={() => removeCustomStyle(s.id)} className="shrink-0 text-zinc-500 hover:text-red-300" aria-label="Remove style">
+                            <button type="button" onClick={() => removeCustomStyle(s.id)} className="shrink-0 text-slate-600 hover:text-brand-red" aria-label="Remove style">
                               <X className="h-3.5 w-3.5" />
                             </button>
                           </div>
@@ -1025,7 +1025,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
                     {(() => {
                       const readyCount = customStyles.length + (customStyleInput.trim() ? 1 : 0);
                       return readyCount > 0 ? (
-                        <div className="mt-3 flex items-center gap-1 text-xs font-semibold text-emerald-300">
+                        <div className="mt-3 flex items-center gap-1 text-xs font-semibold text-brand-blue">
                           <Check className="h-3.5 w-3.5" /> {readyCount} custom {readyCount === 1 ? 'style' : 'styles'} queued
                         </div>
                       ) : null;
@@ -1037,34 +1037,34 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
                       type="button"
                       onClick={handleSuggestTheme}
                       disabled={isSuggestingValues || !script}
-                      className="flex min-h-48 flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-zinc-700 bg-zinc-900/60 p-5 text-center transition hover:border-zinc-500 hover:bg-zinc-900 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="flex min-h-48 flex-col items-center justify-center gap-3 rounded-xl border-dashed border-2 border-black bg-slate-50 p-5 text-center transition hover:bg-brand-yellow disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-zinc-100 text-zinc-950">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-yellow text-black border-2 border-black">
                         {isSuggestingValues ? <Sparkles className="h-5 w-5 animate-pulse" /> : <Wand2 className="h-5 w-5" />}
                       </div>
                       <div>
-                        <div className="text-sm font-semibold text-zinc-100">AI suggested theme</div>
-                        <div className="mt-1 text-xs leading-5 text-zinc-500">Let the agent invent one story-specific look.</div>
+                        <div className="text-sm font-display text-black">AI suggested theme</div>
+                        <div className="mt-1 text-xs leading-5 text-slate-600 font-comic">Let the agent invent one story-specific look.</div>
                       </div>
                     </button>
                   )}
 
                   {aiTheme && (
-                    <div className={`rounded-lg border p-4 transition ${styleSelections[aiTheme.id]?.selected ? 'border-violet-300 bg-violet-300/10' : 'border-zinc-800 bg-zinc-900/60'}`}>
+                    <div className={`rounded-xl border-2 border-black p-4 transition ${styleSelections[aiTheme.id]?.selected ? 'border-brand-yellow bg-brand-yellow/10' : 'bg-white'}`}>
                       <button
                         type="button"
                         onClick={() => toggleStyle(aiTheme.id)}
                         className="flex w-full items-start justify-between gap-3 text-left"
                       >
                         <div className="min-w-0">
-                          <div className="text-sm font-semibold text-zinc-100">{aiTheme.label}</div>
-                          <div className="mt-1 line-clamp-3 text-xs leading-5 text-zinc-500">{aiTheme.prompt}</div>
+                          <div className="text-sm font-display text-black">{aiTheme.label}</div>
+                          <div className="mt-1 line-clamp-3 text-xs leading-5 text-slate-600 font-comic">{aiTheme.prompt}</div>
                         </div>
-                        <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full ring-1 ${styleSelections[aiTheme.id]?.selected ? 'bg-zinc-100 text-zinc-950 ring-zinc-100' : 'bg-zinc-950 text-transparent ring-zinc-700'}`}>
+                        <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 border-black ${styleSelections[aiTheme.id]?.selected ? 'bg-brand-blue text-white' : 'bg-white text-transparent'}`}>
                           {styleSelections[aiTheme.id]?.selected && <Check className="h-4 w-4" />}
                         </div>
                       </button>
-                      <button type="button" onClick={() => setAiTheme(null)} className="mt-3 text-xs font-semibold text-zinc-500 hover:text-red-300">Remove</button>
+                      <button type="button" onClick={() => setAiTheme(null)} className="mt-3 text-xs font-semibold text-slate-600 hover:text-brand-red">Remove</button>
                     </div>
                   )}
 
@@ -1077,7 +1077,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
                     return (
                       <div
                         key={style.id}
-                        className={`rounded-lg border p-4 transition ${isSelected ? 'border-emerald-300 bg-emerald-300/10' : 'border-zinc-800 bg-zinc-900/60 hover:border-zinc-600'}`}
+                        className={`rounded-xl border-2 border-black p-4 transition ${isSelected ? 'border-brand-blue bg-brand-blue/10' : 'bg-white hover:bg-slate-50'}`}
                       >
                         <button
                           type="button"
@@ -1085,16 +1085,16 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
                           className="flex w-full items-start justify-between gap-3 text-left"
                         >
                           <div className="min-w-0">
-                            <div className="text-sm font-semibold text-zinc-100">{style.label}</div>
-                            <div className="mt-1 text-xs leading-5 text-zinc-500">{style.description}</div>
+                            <div className="text-sm font-display text-black">{style.label}</div>
+                            <div className="mt-1 text-xs leading-5 text-slate-600 font-comic">{style.description}</div>
                           </div>
-                          <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full ring-1 ${isSelected ? 'bg-zinc-100 text-zinc-950 ring-zinc-100' : 'bg-zinc-950 text-transparent ring-zinc-700'}`}>
+                          <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 border-black ${isSelected ? 'bg-brand-blue text-white' : 'bg-white text-transparent'}`}>
                             {isSelected && <Check className="h-4 w-4" />}
                           </div>
                         </button>
 
                         <details className="group mt-3">
-                          <summary className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-zinc-500 hover:text-zinc-300">
+                          <summary className="flex cursor-pointer items-center gap-2 text-xs font-semibold text-slate-600 hover:text-black">
                             <ChevronDown className="h-3.5 w-3.5" /> Form factors
                           </summary>
                           <div className="mt-3 flex flex-wrap gap-2">
@@ -1107,7 +1107,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
                                   type="button"
                                   onClick={() => toggleFormFactor(style.id, factor.id)}
                                   disabled={disabled}
-                                  className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 transition ${checked ? 'bg-zinc-100 text-zinc-950 ring-zinc-100' : 'bg-zinc-950 text-zinc-400 ring-zinc-800 hover:text-zinc-100'} ${disabled ? 'cursor-not-allowed opacity-40' : ''}`}
+                                  className={`rounded-full px-2.5 py-1 text-[11px] font-semibold border-2 border-black transition ${checked ? 'bg-brand-yellow text-black' : 'bg-white text-slate-600 hover:bg-brand-yellow hover:text-black'} ${disabled ? 'cursor-not-allowed opacity-40' : ''}`}
                                 >
                                   {factor.label}
                                 </button>
@@ -1115,7 +1115,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
                             })}
                           </div>
                           {maxed && (
-                            <div className="mt-2 text-xs text-zinc-600">Limit reached. Remove one to select another.</div>
+                            <div className="mt-2 text-xs text-slate-600">Limit reached. Remove one to select another.</div>
                           )}
                         </details>
                       </div>
@@ -1123,17 +1123,17 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
                   })}
                 </div>
                 {visibleStyles.length === 0 && !aiTheme && !customStyleInput && (
-                  <div className="border-t border-zinc-800 p-4 text-sm text-zinc-500">No styles match your search.</div>
+                  <div className="border-t-2 border-black p-4 text-sm text-slate-600">No styles match your search.</div>
                 )}
               </div>
 
             </div>
 
             <div className="space-y-5">
-              <div className="overflow-hidden rounded-lg border border-zinc-800 bg-zinc-950">
-                <div className="border-b border-zinc-800 p-4">
-                  <h3 className="text-base font-semibold text-zinc-100">Generated gallery</h3>
-                  <div className="mt-1 text-xs text-zinc-500">
+              <div className="overflow-hidden rounded-xl border-4 border-black bg-white shadow-comic">
+                <div className="border-b-2 border-black p-4">
+                  <h3 className="text-base font-display text-black">Generated gallery</h3>
+                  <div className="mt-1 text-xs text-slate-600">
                     {initialVariants.length === 0 ? 'No previews yet.' : 'Choose the visual system for every panel.'}
                   </div>
                 </div>
@@ -1141,30 +1141,30 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
                 <div className="max-h-[720px] overflow-y-auto p-4 custom-scrollbar">
                   {pendingPreviews.length > 0 && (
                     <div className="mb-4">
-                      <div className="mb-2 text-xs font-semibold uppercase text-zinc-500">Generating previews</div>
+                      <div className="mb-2 text-xs font-display uppercase text-black">Generating previews</div>
                       <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
                         {pendingPreviews.map((preview) => (
                           <div
                             key={preview.id}
-                            className={`overflow-hidden rounded-lg border bg-zinc-900 ${preview.status === 'failed' ? 'border-red-500/70' : 'border-zinc-800'}`}
+                            className={`overflow-hidden rounded-xl border-2 border-black bg-white ${preview.status === 'failed' ? 'border-brand-red' : ''}`}
                           >
-                            <div className="flex aspect-square items-center justify-center bg-zinc-950">
-                              <div className="text-xs font-semibold text-zinc-500">
+                            <div className="flex aspect-square items-center justify-center bg-slate-100">
+                              <div className="text-xs font-semibold text-slate-600">
                                 {preview.status === 'failed' ? 'Failed' : 'Generating...'}
                               </div>
                             </div>
                             <div className="space-y-2 p-3 text-center">
-                              <div className="text-xs font-semibold text-zinc-200">{preview.category}</div>
+                              <div className="text-xs font-semibold text-black">{preview.category}</div>
                               <div className="flex flex-wrap justify-center gap-1.5">
                                 {customRatioLabel ? (
                                   <>
-                                    <span className="rounded-full bg-zinc-800 px-2 py-1 text-[11px] font-semibold text-zinc-400">Model {preview.aspectRatio}</span>
-                                    <span className="rounded-full bg-emerald-300/10 px-2 py-1 text-[11px] font-semibold text-emerald-300">Custom {customRatioLabel}</span>
+                                    <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">Model {preview.aspectRatio}</span>
+                                    <span className="rounded-full bg-brand-blue/10 px-2 py-1 text-[11px] font-semibold text-brand-blue">Custom {customRatioLabel}</span>
                                   </>
                                 ) : (
-                                  <span className="rounded-full bg-zinc-800 px-2 py-1 text-[11px] font-semibold text-zinc-400">{preview.aspectRatio}</span>
+                                  <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">{preview.aspectRatio}</span>
                                 )}
-                                <span className="rounded-full bg-zinc-800 px-2 py-1 text-[11px] font-semibold text-zinc-400">{preview.resolution}</span>
+                                <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">{preview.resolution}</span>
                               </div>
                             </div>
                           </div>
@@ -1176,18 +1176,18 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
                     {initialVariants.map((variant) => {
                       const isSelected = selectedStyleId === variant.id;
                       return (
-                        <div key={variant.id} className={`group flex flex-col overflow-hidden rounded-lg border bg-zinc-900 ${isSelected ? 'border-emerald-300 ring-2 ring-emerald-300/20' : 'border-zinc-800'}`}>
+                        <div key={variant.id} className={`group flex flex-col overflow-hidden rounded-xl border-2 border-black bg-white ${isSelected ? 'border-brand-blue ring-2 ring-brand-blue' : ''}`}>
                       <div
-                        className="relative aspect-square cursor-pointer overflow-hidden bg-zinc-950"
+                        className="relative aspect-square cursor-pointer overflow-hidden bg-slate-100"
                         onClick={() => variant.imageUrl && setGalleryActiveId(variant.id)}
                       >
                         {variant.imageUrl ? (
                           <img src={variant.imageUrl} alt={variant.category} className="w-full h-full object-cover" />
                         ) : (
-                          <div className="flex h-full w-full items-center justify-center text-xs font-semibold text-zinc-600">No Preview</div>
+                          <div className="flex h-full w-full items-center justify-center text-xs font-semibold text-slate-400">No Preview</div>
                         )}
                         {isSelected && (
-                          <div className="absolute right-2 top-2 z-20 rounded-full bg-emerald-300 p-1 text-zinc-950">
+                          <div className="absolute right-2 top-2 z-20 rounded-full bg-brand-blue p-1 text-white">
                             <Check className="h-4 w-4" strokeWidth={3} />
                           </div>
                         )}
@@ -1208,18 +1208,18 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
                           </div>
                         </div>
                       </div>
-                      <div className={`space-y-2 p-3 text-center ${isSelected ? 'bg-emerald-300/10' : ''}`}>
-                        <div className="line-clamp-1 text-xs font-semibold text-zinc-200">{variant.category}</div>
+                      <div className={`space-y-2 p-3 text-center ${isSelected ? 'bg-brand-blue/10' : ''}`}>
+                        <div className="line-clamp-1 text-xs font-semibold text-black">{variant.category}</div>
                         <div className="flex flex-wrap items-center justify-center gap-1.5">
                           {customRatioLabel ? (
                             <>
-                              <span className="rounded-full bg-zinc-800 px-2 py-1 text-[11px] font-semibold text-zinc-400">Model {variant.aspectRatio}</span>
-                              <span className="rounded-full bg-emerald-300/10 px-2 py-1 text-[11px] font-semibold text-emerald-300">Custom {customRatioLabel}</span>
+                              <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">Model {variant.aspectRatio}</span>
+                              <span className="rounded-full bg-brand-blue/10 px-2 py-1 text-[11px] font-semibold text-brand-blue">Custom {customRatioLabel}</span>
                             </>
                           ) : (
-                            <span className="rounded-full bg-zinc-800 px-2 py-1 text-[11px] font-semibold text-zinc-400">{variant.aspectRatio}</span>
+                            <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">{variant.aspectRatio}</span>
                           )}
-                          <span className="rounded-full bg-zinc-800 px-2 py-1 text-[11px] font-semibold text-zinc-400">{variant.resolution}</span>
+                          <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">{variant.resolution}</span>
                         </div>
                       </div>
                     </div>
@@ -1236,18 +1236,18 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
       {activeGalleryItem && (
         <ModalPortal>
           <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/90 p-4 backdrop-blur-md" onClick={() => setGalleryActiveId(null)}>
-            <div className="relative flex max-h-[90vh] w-full max-w-6xl flex-col gap-4 rounded-lg border border-zinc-800 bg-zinc-950 p-4 text-zinc-100 shadow-2xl md:p-6" onClick={(e) => e.stopPropagation()}>
+            <div className="relative flex max-h-[90vh] w-full max-w-6xl flex-col gap-4 rounded-xl border-4 border-black bg-white p-4 text-black shadow-comic md:p-6" onClick={(e) => e.stopPropagation()}>
               <div className="flex items-center justify-between gap-4">
                 <div>
-                  <div className="text-xs font-semibold uppercase text-zinc-500">Style preview</div>
-                  <div className="text-2xl font-semibold">{activeGalleryItem.category}</div>
+                  <div className="text-xs font-display uppercase text-slate-600">Style preview</div>
+                  <div className="text-2xl font-display text-black">{activeGalleryItem.category}</div>
                 </div>
-                <button type="button" onClick={() => setGalleryActiveId(null)} className="text-zinc-500 hover:text-zinc-100" aria-label="Close style preview">
+                <button type="button" onClick={() => setGalleryActiveId(null)} className="text-slate-600 hover:text-black" aria-label="Close style preview">
                   <X className="h-6 w-6" />
                 </button>
               </div>
 
-              <div className="relative flex min-h-[260px] items-center justify-center overflow-hidden rounded-lg border border-zinc-800 bg-black">
+              <div className="relative flex min-h-[260px] items-center justify-center overflow-hidden rounded-xl border-2 border-black bg-slate-100">
                 {activeGalleryItem.imageUrl && (
                   <img src={activeGalleryItem.imageUrl} alt={activeGalleryItem.category} className="max-h-[60vh] w-auto object-contain" />
                 )}
@@ -1259,7 +1259,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
                         const nextIndex = (activeGalleryIndex - 1 + galleryItems.length) % galleryItems.length;
                         setGalleryActiveId(galleryItems[nextIndex].id);
                       }}
-                      className="absolute left-3 top-1/2 -translate-y-1/2 rounded-full border border-zinc-700 bg-zinc-950/90 p-2 text-zinc-100 hover:bg-zinc-800"
+                      className="absolute left-3 top-1/2 -translate-y-1/2 rounded-full border-2 border-black bg-white p-2 text-black hover:bg-brand-yellow"
                       aria-label="Previous style preview"
                     >
                       <ChevronLeft className="w-5 h-5" />
@@ -1270,7 +1270,7 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
                         const nextIndex = (activeGalleryIndex + 1) % galleryItems.length;
                         setGalleryActiveId(galleryItems[nextIndex].id);
                       }}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full border border-zinc-700 bg-zinc-950/90 p-2 text-zinc-100 hover:bg-zinc-800"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full border-2 border-black bg-white p-2 text-black hover:bg-brand-yellow"
                       aria-label="Next style preview"
                     >
                       <ChevronRight className="w-5 h-5" />
@@ -1282,32 +1282,32 @@ export const StyleSelection: React.FC<StyleSelectionProps> = ({
               <div className="flex flex-wrap gap-2 text-xs font-semibold">
                 {customRatioLabel ? (
                   <>
-                    <span className="rounded-full bg-zinc-800 px-2 py-1 text-zinc-400">Model {activeGalleryItem.aspectRatio}</span>
-                    <span className="rounded-full bg-emerald-300/10 px-2 py-1 text-emerald-300">Custom {customRatioLabel}</span>
+                    <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600">Model {activeGalleryItem.aspectRatio}</span>
+                    <span className="rounded-full bg-brand-blue/10 px-2 py-1 text-brand-blue">Custom {customRatioLabel}</span>
                   </>
                 ) : (
-                  <span className="rounded-full bg-zinc-800 px-2 py-1 text-zinc-400">{activeGalleryItem.aspectRatio}</span>
+                  <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600">{activeGalleryItem.aspectRatio}</span>
                 )}
-                <span className="rounded-full bg-zinc-800 px-2 py-1 text-zinc-400">{activeGalleryItem.resolution}</span>
-                <span className="rounded-full bg-zinc-800 px-2 py-1 text-zinc-400">Style: {activeGalleryItem.category}</span>
+                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600">{activeGalleryItem.resolution}</span>
+                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600">Style: {activeGalleryItem.category}</span>
               </div>
 
               {activePromptPreview && (
-                <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-3 text-xs leading-5 text-zinc-500">
-                  <span className="font-semibold text-zinc-300">Prompt:</span> {activePromptPreview}
+                <div className="rounded-xl border-2 border-black bg-slate-50 p-3 text-xs leading-5 text-slate-600">
+                  <span className="font-semibold text-black">Prompt:</span> {activePromptPreview}
                 </div>
               )}
 
               {galleryItems.length > 1 && (
-                <div className="border-t border-zinc-800 pt-3">
-                  <div className="mb-2 text-xs font-semibold uppercase text-zinc-500">More previews</div>
+                <div className="border-t-2 border-black pt-3">
+                  <div className="mb-2 text-xs font-display uppercase text-slate-600">More previews</div>
                   <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
                     {galleryItems.map((variant) => (
                       <button
                         key={variant.id}
                         type="button"
                         onClick={() => setGalleryActiveId(variant.id)}
-                        className={`h-16 w-16 overflow-hidden rounded-lg border ${variant.id === activeGalleryItem.id ? 'border-emerald-300 ring-2 ring-emerald-300/30' : 'border-zinc-800'}`}
+                        className={`h-16 w-16 overflow-hidden rounded-xl border-2 border-black ${variant.id === activeGalleryItem.id ? 'border-brand-blue ring-2 ring-brand-blue' : ''}`}
                       >
                         <img src={variant.imageUrl} alt={variant.category} className="w-full h-full object-cover" />
                       </button>

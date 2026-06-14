@@ -57,13 +57,13 @@ type PhaseState = 'waiting' | 'active' | 'done' | 'warning';
 const phaseBadgeClass = (state: PhaseState) => {
   switch (state) {
     case 'active':
-      return 'border-zinc-100 bg-zinc-100 text-zinc-950';
+      return 'border-2 border-black bg-brand-blue text-white';
     case 'done':
-      return 'border-emerald-400/70 bg-emerald-400/10 text-emerald-200';
+      return 'border-2 border-black bg-green-100 text-green-700';
     case 'warning':
-      return 'border-amber-400/60 bg-amber-400/10 text-amber-200';
+      return 'border-2 border-black bg-amber-100 text-amber-700';
     default:
-      return 'border-zinc-800 bg-zinc-950 text-zinc-500';
+      return 'border-2 border-black bg-white text-slate-600';
   }
 };
 
@@ -191,24 +191,24 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
   const sidebar = (
     <div className="space-y-5">
       <div className="space-y-2">
-        <div className="text-xs font-semibold uppercase text-zinc-500">Run Status</div>
-        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+        <div className="text-xs font-display uppercase text-slate-600">Run Status</div>
+        <div className="rounded-xl border-2 border-black bg-white p-4">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="text-2xl font-semibold text-zinc-100">{percent}%</div>
-              <div className="mt-1 text-xs text-zinc-500">{description}</div>
+              <div className="text-2xl font-display text-black">{percent}%</div>
+              <div className="mt-1 text-xs text-slate-600 font-comic">{description}</div>
             </div>
             {status?.isActive ? (
-              <Loader2 className="h-5 w-5 animate-spin text-zinc-100" />
+              <Loader2 className="h-5 w-5 animate-spin text-black" />
             ) : isDone ? (
-              <Check className="h-5 w-5 text-emerald-300" />
+              <Check className="h-5 w-5 text-green-600" />
             ) : (
-              <Activity className="h-5 w-5 text-zinc-500" />
+              <Activity className="h-5 w-5 text-slate-600" />
             )}
           </div>
-          <div className="mt-4 h-2 overflow-hidden rounded-full bg-zinc-800">
+          <div className="mt-4 h-2 overflow-hidden rounded-full border-2 border-black bg-white">
             <div
-              className={`h-full rounded-full transition-all duration-700 ${isFailed ? 'bg-amber-400' : 'bg-zinc-100'}`}
+              className={`h-full transition-all duration-700 ${isFailed ? 'bg-amber-400' : 'bg-brand-blue'}`}
               style={{ width: `${Math.max(percent, status?.isActive ? 3 : 0)}%` }}
             />
           </div>
@@ -216,31 +216,31 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
       </div>
 
       <div className="grid grid-cols-2 gap-2">
-        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-          <div className="flex items-center gap-1.5 text-[11px] uppercase text-zinc-500">
+        <div className="rounded-xl border-2 border-black bg-white p-3">
+          <div className="flex items-center gap-1.5 text-[11px] uppercase text-slate-600 font-bold">
             <Clock className="h-3 w-3" /> Elapsed
           </div>
-          <div className="mt-1 text-sm font-semibold text-zinc-100">{formatDuration(elapsedSec)}</div>
+          <div className="mt-1 text-sm font-bold text-black">{formatDuration(elapsedSec)}</div>
         </div>
-        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-          <div className="text-[11px] uppercase text-zinc-500">Left</div>
-          <div className="mt-1 text-sm font-semibold text-zinc-100">{remainingDisplay}</div>
+        <div className="rounded-xl border-2 border-black bg-white p-3">
+          <div className="text-[11px] uppercase text-slate-600 font-bold">Left</div>
+          <div className="mt-1 text-sm font-bold text-black">{remainingDisplay}</div>
         </div>
-        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-          <div className="text-[11px] uppercase text-zinc-500">Panels</div>
-          <div className="mt-1 text-sm font-semibold text-zinc-100">{doneCount} / {total}</div>
+        <div className="rounded-xl border-2 border-black bg-white p-3">
+          <div className="text-[11px] uppercase text-slate-600 font-bold">Panels</div>
+          <div className="mt-1 text-sm font-bold text-black">{doneCount} / {total}</div>
         </div>
-        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-          <div className="text-[11px] uppercase text-zinc-500">Retries</div>
-          <div className="mt-1 text-sm font-semibold text-zinc-100">{failedCount}</div>
+        <div className="rounded-xl border-2 border-black bg-white p-3">
+          <div className="text-[11px] uppercase text-slate-600 font-bold">Retries</div>
+          <div className="mt-1 text-sm font-bold text-black">{failedCount}</div>
         </div>
       </div>
 
       <div className="space-y-2">
-        <div className="text-xs font-semibold uppercase text-zinc-500">Outputs</div>
+        <div className="text-xs font-display uppercase text-slate-600">Outputs</div>
         <div className="flex flex-wrap gap-2">
           {outputTargets.map((target) => (
-            <span key={target} className="rounded-full border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300">
+            <span key={target} className="rounded-full border-2 border-black px-2.5 py-1 text-xs font-bold text-black">
               {outputTargetLabel(target)}
             </span>
           ))}
@@ -248,8 +248,8 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
       </div>
 
       {(failedCount > 0 || fallbackCount > 0 || billingHit || latestProblem) && (
-        <div className="rounded-lg border border-amber-400/40 bg-amber-400/10 p-3 text-xs leading-5 text-amber-100">
-          <div className="mb-1 flex items-center gap-2 font-semibold">
+        <div className="rounded-xl border-2 border-black bg-amber-100 p-3 text-xs leading-5 text-amber-800 font-comic">
+          <div className="mb-1 flex items-center gap-2 font-bold">
             <AlertTriangle className="h-4 w-4" />
             {latestProblem ? summarizeFailure(latestProblem.message) : 'Build notice'}
           </div>
@@ -264,7 +264,7 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
           type="button"
           onClick={() => setShowStopConfirm(true)}
           disabled={!status?.isActive}
-          className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-2.5 text-sm font-semibold text-zinc-100 transition-colors hover:border-zinc-400 disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex w-full items-center justify-center gap-2 rounded-xl border-2 border-black bg-white px-4 py-2.5 text-sm font-bold text-black transition-colors hover:bg-brand-yellow disabled:cursor-not-allowed disabled:opacity-40"
         >
           <Square className="h-4 w-4" /> Stop
         </button>
@@ -276,14 +276,14 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
               onCancel();
               setShowStopConfirm(false);
             }}
-            className="rounded-lg border border-red-400/60 bg-red-400/10 px-3 py-2 text-sm font-semibold text-red-100"
+            className="rounded-xl border-2 border-black bg-red-100 px-3 py-2 text-sm font-bold text-red-700"
           >
             Confirm
           </button>
           <button
             type="button"
             onClick={() => setShowStopConfirm(false)}
-            className="rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm font-semibold text-zinc-200"
+            className="rounded-xl border-2 border-black bg-white px-3 py-2 text-sm font-bold text-black"
           >
             Cancel
           </button>
@@ -298,7 +298,7 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
             hasTriggeredStart.current = true;
             onStart();
           }}
-          className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-zinc-100 px-4 py-2.5 text-sm font-semibold text-zinc-950 transition-colors hover:bg-white"
+          className="inline-flex w-full items-center justify-center gap-2 rounded-xl border-2 border-black bg-brand-yellow px-4 py-2.5 text-sm font-bold text-black transition-colors hover:bg-brand-yellow/80"
         >
           <RefreshCw className="h-4 w-4" /> Retry
         </button>
@@ -309,12 +309,12 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
   const actions = (
     <div className="flex items-center gap-2">
       {status?.isActive && !isFailed && (
-        <span className="hidden rounded-full border border-zinc-800 px-3 py-1 text-xs text-zinc-400 sm:inline-flex">
+        <span className="hidden rounded-full border-2 border-black px-3 py-1 text-xs font-bold text-slate-600 sm:inline-flex">
           {TIPS[tipIndex]}
         </span>
       )}
       {isDone && (
-        <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/50 bg-emerald-400/10 px-3 py-1 text-xs font-semibold text-emerald-200">
+        <span className="inline-flex items-center gap-1.5 rounded-full border-2 border-black bg-green-100 px-3 py-1 text-xs font-bold text-green-700">
           <Check className="h-3.5 w-3.5" /> Ready
         </span>
       )}
@@ -350,7 +350,7 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
                     : stateForPhase === 'warning' ? <AlertTriangle className="h-4 w-4" />
                     : <span className="h-2 w-2 rounded-full bg-current opacity-40" />}
                 </div>
-                <div className="mt-5 h-1 rounded-full bg-current/15">
+                <div className="mt-5 h-1 rounded-full bg-current/20">
                   <div
                     className="h-full rounded-full bg-current transition-all duration-500"
                     style={{
@@ -370,10 +370,10 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
         <section className="space-y-3">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
             <div>
-              <div className="text-xs font-semibold uppercase text-zinc-500">Panel Wall</div>
-              <h3 className="mt-1 text-lg font-semibold text-zinc-100">{doneCount} of {total} rendered</h3>
+              <div className="text-xs font-display uppercase text-slate-600">Panel Wall</div>
+              <h3 className="mt-1 text-lg font-display text-black">{doneCount} of {total} rendered</h3>
             </div>
-            <div className="text-xs text-zinc-500">{description}</div>
+            <div className="text-xs text-slate-600 font-comic">{description}</div>
           </div>
 
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 md:grid-cols-5 xl:grid-cols-6">
@@ -381,9 +381,9 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
               const panel = state.panels[index];
               if (panel?.imageUrl) {
                 return (
-                  <div key={panel.id || `done-${index}`} className="group relative aspect-square overflow-hidden rounded-md border border-zinc-700 bg-zinc-950">
+                  <div key={panel.id || `done-${index}`} className="group relative aspect-square overflow-hidden rounded-md border-2 border-black bg-white">
                     <img src={panel.imageUrl} alt={panel.description || `Panel ${index + 1}`} className="h-full w-full object-cover" />
-                    <div className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-emerald-300 text-zinc-950">
+                    <div className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full border-2 border-black bg-green-400 text-black">
                       <Check className="h-3 w-3" strokeWidth={3} />
                     </div>
                     <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 pb-1.5 pt-6 text-[10px] font-semibold text-white opacity-0 transition-opacity group-hover:opacity-100">
@@ -398,10 +398,10 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
                   <div
                     key={panel.id || `failed-${index}`}
                     title={panel.failureReason}
-                    className="flex aspect-square flex-col items-center justify-center rounded-md border border-amber-400/50 bg-amber-400/10 text-amber-200"
+                    className="flex aspect-square flex-col items-center justify-center rounded-md border-2 border-black bg-amber-100 text-amber-700"
                   >
                     <AlertTriangle className="h-4 w-4" />
-                    <span className="mt-1 text-[10px] font-semibold">Panel {index + 1}</span>
+                    <span className="mt-1 text-[10px] font-bold">Panel {index + 1}</span>
                   </div>
                 );
               }
@@ -410,40 +410,40 @@ export const ComicGenerator: React.FC<ComicGeneratorProps> = ({
               return (
                 <div
                   key={panel?.id || `pending-${index}`}
-                  className={`relative aspect-square overflow-hidden rounded-md border ${isNext ? 'border-zinc-100' : 'border-zinc-800'} bg-zinc-950`}
+                  className={`relative aspect-square overflow-hidden rounded-md border-2 ${isNext ? 'border-brand-blue' : 'border-black'} bg-slate-50`}
                 >
-                  <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,.08),rgba(255,255,255,.02))]" />
+                  <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(0,0,0,.04),rgba(0,0,0,.01))]" />
                   {isNext && (
                     <div className="absolute inset-0 flex items-center justify-center">
-                      <Loader2 className="h-5 w-5 animate-spin text-zinc-100" />
+                      <Loader2 className="h-5 w-5 animate-spin text-black" />
                     </div>
                   )}
-                  <span className="absolute bottom-1.5 left-2 text-[10px] font-semibold text-zinc-600">Panel {index + 1}</span>
+                  <span className="absolute bottom-1.5 left-2 text-[10px] font-bold text-slate-400">Panel {index + 1}</span>
                 </div>
               );
             })}
           </div>
         </section>
 
-        <section className="rounded-lg border border-zinc-800 bg-zinc-950">
-          <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3">
-            <div className="flex items-center gap-2 text-sm font-semibold text-zinc-200">
+        <section className="rounded-xl border-2 border-black bg-white">
+          <div className="flex items-center justify-between border-b-2 border-black px-4 py-3">
+            <div className="flex items-center gap-2 text-sm font-display uppercase text-black">
               <Terminal className="h-4 w-4" /> Agent stream
             </div>
-            <div className="text-xs text-zinc-600">{recentLogs.length} recent</div>
+            <div className="text-xs text-slate-600 font-comic">{recentLogs.length} recent</div>
           </div>
           <div className="max-h-64 overflow-y-auto px-4 py-3 font-mono text-xs custom-scrollbar">
             {recentLogs.length === 0 ? (
-              <div className="text-zinc-600">Waiting for first event...</div>
+              <div className="text-slate-400">Waiting for first event...</div>
             ) : (
               recentLogs.map((log) => (
-                <div key={`${log.timestamp}-${log.message}`} className="border-b border-zinc-900 py-2 text-zinc-400 last:border-0">
-                  <span className="mr-2 text-zinc-600">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                <div key={`${log.timestamp}-${log.message}`} className="border-b border-slate-200 py-2 text-slate-600 last:border-0">
+                  <span className="mr-2 text-slate-400">{new Date(log.timestamp).toLocaleTimeString()}</span>
                   {log.message}
                 </div>
               ))
             )}
-            {status?.isActive && <div className="py-2 text-zinc-500">_</div>}
+            {status?.isActive && <div className="py-2 text-slate-400">_</div>}
           </div>
         </section>
       </div>

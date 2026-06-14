@@ -291,16 +291,16 @@ K: "I'm just looking for dinner."`;
 
   return (
     <div className="mx-auto w-full max-w-7xl animate-fade-in">
-      <div className="min-h-[720px] overflow-hidden rounded-lg border border-zinc-800 bg-[#050505] text-zinc-100 shadow-2xl">
+      <div className="min-h-[720px] overflow-hidden rounded-xl border-4 border-black bg-white text-black shadow-comic">
         <div className="grid min-h-[720px] grid-cols-1 lg:grid-cols-[220px_1fr_320px]">
-          <aside className="hidden border-r border-zinc-800 bg-[#090909] px-3 py-5 lg:block">
+          <aside className="hidden border-r-4 border-black bg-amber-50 px-3 py-5 lg:block">
             <div className="mb-8 flex items-center gap-2 px-2">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-zinc-100 text-zinc-950">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl border-2 border-black bg-brand-yellow text-black">
                 <Bot className="h-5 w-5" />
               </div>
               <div>
-                <div className="text-sm font-semibold">Comic Agent</div>
-                <div className="text-[11px] text-zinc-500">New build</div>
+                <div className="text-sm font-display uppercase text-black">Comic Agent</div>
+                <div className="text-[11px] text-slate-600 font-comic">New build</div>
               </div>
             </div>
             <nav className="space-y-1">
@@ -314,8 +314,8 @@ K: "I'm just looking for dinner."`;
                 return (
                   <div
                     key={item.label}
-                    className={`flex h-11 items-center gap-3 rounded-lg px-3 text-sm font-medium ${
-                      item.active ? 'bg-zinc-800 text-white' : 'text-zinc-400'
+                    className={`flex h-11 items-center gap-3 rounded-xl px-3 text-sm font-bold font-comic ${
+                      item.active ? 'border-2 border-black bg-brand-yellow text-black' : 'text-slate-600'
                     }`}
                   >
                     <Icon className="h-4 w-4" />
@@ -326,11 +326,11 @@ K: "I'm just looking for dinner."`;
             </nav>
           </aside>
 
-          <section className="flex min-h-[720px] flex-col border-r border-zinc-800">
-            <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+          <section className="flex min-h-[720px] flex-col border-r-4 border-black">
+            <div className="flex items-center justify-between border-b-4 border-black px-5 py-4">
               <div>
-                <h2 className="text-xl font-semibold tracking-tight">What should the comic become?</h2>
-                <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-zinc-500">
+                <h2 className="text-xl font-display uppercase tracking-tight text-black">What should the comic become?</h2>
+                <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-slate-600 font-comic">
                   <span>{scriptWordCount} words</span>
                   <span>Any format accepted</span>
                   <span>Comic + reader + export</span>
@@ -339,7 +339,7 @@ K: "I'm just looking for dinner."`;
               <button
                 type="button"
                 onClick={() => handleChange(sampleScript)}
-                className="inline-flex h-9 items-center gap-2 rounded-lg border border-zinc-700 bg-zinc-900 px-3 text-xs font-semibold text-zinc-200 hover:bg-zinc-800"
+                className="inline-flex h-9 items-center gap-2 rounded-xl border-2 border-black bg-slate-100 px-3 text-xs font-bold text-black hover:bg-brand-yellow"
               >
                 <Wand2 className="h-4 w-4" />
                 Sample
@@ -348,11 +348,11 @@ K: "I'm just looking for dinner."`;
 
             <div className="flex-1 overflow-y-auto px-5 py-6">
               <div className="mx-auto flex min-h-[360px] max-w-3xl flex-col items-center justify-center text-center">
-                <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900">
-                  <Sparkles className="h-7 w-7 text-emerald-300" />
+                <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-xl border-2 border-black bg-brand-yellow">
+                  <Sparkles className="h-7 w-7 text-black fill-black" />
                 </div>
-                <div className="max-w-xl text-2xl font-semibold text-zinc-100">Start with a script, outline, pasted notes, or a rough idea.</div>
-                <div className="mt-3 max-w-lg text-sm leading-6 text-zinc-500">
+                <div className="max-w-xl text-2xl font-display text-black">Start with a script, outline, pasted notes, or a rough idea.</div>
+                <div className="mt-3 max-w-lg text-sm leading-6 text-slate-600 font-comic">
                   The next action sends it to the comic agent. It will extract scenes, cast, world details, style intent, and move forward without a second confirmation screen.
                 </div>
               </div>
@@ -360,20 +360,20 @@ K: "I'm just looking for dinner."`;
               {(checklist || isAnalyzing || error) && (
                 <div className="mx-auto mt-4 max-w-3xl space-y-3">
                   {checklist && (
-                    <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+                    <div className="rounded-xl border-2 border-black bg-amber-50 p-4">
                       <div className="mb-3 flex items-center justify-between">
-                        <div className="text-sm font-semibold text-zinc-200">Agent read</div>
-                        <div className="text-[11px] text-zinc-500">{foundContext.length} strong signals</div>
+                        <div className="text-sm font-display uppercase text-black">Agent read</div>
+                        <div className="text-[11px] text-slate-600 font-comic">{foundContext.length} strong signals</div>
                       </div>
                       <div className="flex flex-wrap gap-2">
                         {foundContext.map((item) => (
-                          <span key={item} className="inline-flex items-center gap-1 rounded-full border border-emerald-700/60 bg-emerald-950/50 px-2.5 py-1 text-xs text-emerald-200">
+                          <span key={item} className="inline-flex items-center gap-1 rounded-full border-2 border-black bg-green-100 px-2.5 py-1 text-xs font-bold text-green-700">
                             <Check className="h-3 w-3" />
                             {item}
                           </span>
                         ))}
                         {needsContext.slice(0, 4).map((item) => (
-                          <span key={item} className="rounded-full border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-xs text-zinc-400">
+                          <span key={item} className="rounded-full border-2 border-black bg-white px-2.5 py-1 text-xs font-bold text-slate-600">
                             {item}
                           </span>
                         ))}
@@ -382,22 +382,22 @@ K: "I'm just looking for dinner."`;
                   )}
 
                   {isAnalyzing && (
-                    <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
-                      <div className="mb-3 flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-zinc-400">
+                    <div className="rounded-xl border-2 border-black bg-white p-4">
+                      <div className="mb-3 flex items-center justify-between text-xs font-bold uppercase tracking-wide text-slate-600">
                         <span className="inline-flex items-center gap-2"><Loader2 className="h-4 w-4 animate-spin" /> Agent reading</span>
                         <span>{analysisEstimate !== null ? `~${analysisEstimate}s` : 'Estimating'}</span>
                       </div>
-                      <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
-                        <div className="h-full bg-emerald-300 transition-all" style={{ width: `${analysisProgress}%` }} />
+                      <div className="h-2 overflow-hidden rounded-full border-2 border-black bg-white">
+                        <div className="h-full bg-brand-blue transition-all" style={{ width: `${analysisProgress}%` }} />
                       </div>
-                      <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
+                      <div className="mt-2 flex items-center justify-between text-xs text-slate-600 font-comic">
                         <span>{analysisStatus || 'Reading story context'}</span>
                         <span>{analysisElapsed}s elapsed{analysisEta !== null ? ` · ${analysisEta}s left` : ''}</span>
                       </div>
                       <button
                         type="button"
                         onClick={handleCancelAnalyze}
-                        className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-zinc-400 hover:text-red-300"
+                        className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-slate-600 hover:text-brand-red"
                       >
                         <X className="h-3.5 w-3.5" />
                         Stop
@@ -406,7 +406,7 @@ K: "I'm just looking for dinner."`;
                   )}
 
                   {error && (
-                    <div className="rounded-lg border border-red-800 bg-red-950/50 p-4 text-sm font-semibold text-red-100">
+                    <div className="rounded-xl border-2 border-black bg-red-100 p-4 text-sm font-bold text-red-700">
                       {error}
                     </div>
                   )}
@@ -415,31 +415,31 @@ K: "I'm just looking for dinner."`;
             </div>
 
             <div className="px-4 pb-5">
-              <div className="mx-auto max-w-4xl rounded-[24px] border border-zinc-700 bg-[#171717] p-3 shadow-[0_18px_60px_rgba(0,0,0,0.45)]">
+              <div className="mx-auto max-w-4xl rounded-xl border-4 border-black bg-white p-3 shadow-comic">
                 <textarea
                   value={script}
                   onChange={(e) => handleChange(e.target.value)}
                   placeholder="Paste anything: finished script, messy notes, a plot idea, dialogue, character details, or reference instructions..."
-                  className="min-h-28 max-h-64 w-full resize-y bg-transparent px-3 py-2 text-sm leading-6 text-zinc-100 placeholder-zinc-500 outline-none"
+                  className="min-h-28 max-h-64 w-full resize-y bg-transparent px-3 py-2 text-sm leading-6 text-black placeholder-slate-400 outline-none"
                 />
-                <div className="flex flex-wrap items-center gap-2 border-t border-zinc-800 px-1 pt-3">
+                <div className="flex flex-wrap items-center gap-2 border-t-2 border-black px-1 pt-3">
                   <button
                     type="button"
-                    className="flex h-10 w-10 items-center justify-center rounded-full bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                    className="flex h-10 w-10 items-center justify-center rounded-full border-2 border-black bg-white text-black hover:bg-brand-yellow"
                     title="Attach references"
                     aria-label="Attach references"
                   >
                     <Paperclip className="h-4 w-4" />
                   </button>
-                  <div className="inline-flex h-10 items-center gap-2 rounded-full bg-zinc-100 px-4 text-sm font-semibold text-zinc-950">
+                  <div className="inline-flex h-10 items-center gap-2 rounded-full border-2 border-black bg-brand-yellow px-4 text-sm font-bold text-black">
                     <Bot className="h-4 w-4" />
                     Agent
                   </div>
-                  <div className="inline-flex h-10 items-center gap-2 rounded-full bg-zinc-800 px-3 text-xs font-semibold text-zinc-300">
+                  <div className="inline-flex h-10 items-center gap-2 rounded-full border-2 border-black bg-white px-3 text-xs font-bold text-black">
                     <LayoutGrid className="h-4 w-4" />
                     {agentSettings.autoPageCount ? 'Auto pages' : 'Manual pages'}
                   </div>
-                  <div className="inline-flex h-10 items-center gap-2 rounded-full bg-zinc-800 px-3 text-xs font-semibold text-zinc-300">
+                  <div className="inline-flex h-10 items-center gap-2 rounded-full border-2 border-black bg-white px-3 text-xs font-bold text-black">
                     <Settings2 className="h-4 w-4" />
                     {confirmChipLabel}
                   </div>
@@ -447,7 +447,7 @@ K: "I'm just looking for dinner."`;
                     type="button"
                     onClick={handleAnalyze}
                     disabled={!canStart}
-                    className="ml-auto flex h-11 min-w-11 items-center justify-center rounded-full bg-zinc-100 px-4 text-sm font-semibold text-zinc-950 transition hover:bg-white disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500"
+                    className="ml-auto flex h-11 min-w-11 items-center justify-center rounded-full border-2 border-black bg-brand-blue px-4 text-sm font-bold text-white transition hover:bg-brand-blue/80 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                     aria-label="Start comic agent"
                   >
                     {isAnalyzing ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
@@ -458,16 +458,16 @@ K: "I'm just looking for dinner."`;
             </div>
           </section>
 
-          <aside className="bg-[#111111] px-4 py-5">
-            <div className="mb-5 flex items-center gap-2 text-sm font-semibold">
-              <Settings2 className="h-4 w-4 text-zinc-400" />
+          <aside className="bg-amber-50 px-4 py-5">
+            <div className="mb-5 flex items-center gap-2 text-sm font-display uppercase text-black">
+              <Settings2 className="h-4 w-4 text-slate-600" />
               Agent settings
             </div>
 
             <div className="space-y-5">
               <div>
-                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Confirm before generating</div>
-                <div className="rounded-lg bg-zinc-900 p-1">
+                <div className="mb-2 text-xs font-display uppercase tracking-wide text-slate-600">Confirm before generating</div>
+                <div className="rounded-xl border-2 border-black bg-white p-1">
                   {CONFIRM_OPTIONS.map((option) => {
                     const selected = agentSettings.confirmPolicy === option.value;
                     return (
@@ -475,8 +475,8 @@ K: "I'm just looking for dinner."`;
                         key={option.value}
                         type="button"
                         onClick={() => updateAgentSettings({ confirmPolicy: option.value })}
-                        className={`block w-full rounded-lg px-3 py-2 text-left text-sm font-medium transition-colors ${
-                          selected ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+                        className={`block w-full rounded-lg px-3 py-2 text-left text-sm font-bold transition-colors ${
+                          selected ? 'bg-brand-yellow text-black border-2 border-black' : 'text-slate-600 hover:bg-brand-yellow/30 hover:text-black'
                         }`}
                       >
                         {option.label}
@@ -487,17 +487,17 @@ K: "I'm just looking for dinner."`;
               </div>
 
               <div>
-                <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-500">Output</div>
+                <div className="mb-2 text-xs font-display uppercase tracking-wide text-slate-600">Output</div>
                 <div className="grid grid-cols-3 gap-2">
                   {OUTPUT_OPTIONS.map((item) => (
                     <button
                       key={item.value}
                       type="button"
                       onClick={() => toggleOutputTarget(item.value)}
-                      className={`rounded-lg px-3 py-2 text-center text-sm font-medium transition-colors ${
+                      className={`rounded-lg border-2 border-black px-3 py-2 text-center text-sm font-bold transition-colors ${
                         agentSettings.outputTargets.includes(item.value)
-                          ? 'bg-zinc-100 text-zinc-950'
-                          : 'bg-zinc-900 text-zinc-500 hover:text-zinc-300'
+                          ? 'bg-brand-yellow text-black'
+                          : 'bg-white text-slate-600 hover:bg-brand-yellow/30 hover:text-black'
                       }`}
                     >
                       {item.label}
@@ -510,14 +510,14 @@ K: "I'm just looking for dinner."`;
                 <button
                   type="button"
                   onClick={() => updateAgentSettings({ autoPageCount: !agentSettings.autoPageCount })}
-                  className={`rounded-lg px-3 py-2 text-left text-sm font-medium transition-colors ${
-                    agentSettings.autoPageCount ? 'bg-zinc-100 text-zinc-950' : 'bg-zinc-900 text-zinc-400 hover:text-zinc-200'
+                  className={`rounded-lg border-2 border-black px-3 py-2 text-left text-sm font-bold transition-colors ${
+                    agentSettings.autoPageCount ? 'bg-brand-yellow text-black' : 'bg-white text-slate-600 hover:bg-brand-yellow/30 hover:text-black'
                   }`}
                 >
                   Auto pages
                 </button>
-                <label className="rounded-lg bg-zinc-900 px-3 py-2">
-                  <span className="block text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Budget cap</span>
+                <label className="rounded-lg border-2 border-black bg-white px-3 py-2">
+                  <span className="block text-[10px] font-bold uppercase tracking-wide text-slate-600">Budget cap</span>
                   <input
                     type="number"
                     min="0"
@@ -528,29 +528,29 @@ K: "I'm just looking for dinner."`;
                       updateAgentSettings({ budgetCapUsd: value ? Number(value) : undefined });
                     }}
                     placeholder="$ optional"
-                    className="mt-1 w-full bg-transparent text-sm font-medium text-zinc-100 outline-none placeholder-zinc-600"
+                    className="mt-1 w-full bg-transparent text-sm font-bold text-black outline-none placeholder-slate-400"
                     aria-label="Budget cap in USD"
                   />
                 </label>
               </div>
 
               <label className="block">
-                <span className="mb-2 block text-xs font-semibold uppercase tracking-wide text-zinc-500">Creative direction</span>
+                <span className="mb-2 block text-xs font-display uppercase tracking-wide text-slate-600">Creative direction</span>
                 <textarea
                   value={creativeDirection}
                   onChange={(e) => updateCreativeDirection(e.target.value)}
                   placeholder="Tone, visual references, must-keep details, pacing, audience..."
-                  className="h-36 w-full resize-none rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-sm leading-5 text-zinc-100 placeholder-zinc-600 outline-none focus:border-zinc-500"
+                  className="h-36 w-full resize-none rounded-xl border-2 border-black bg-white p-3 text-sm leading-5 text-black placeholder-slate-400 outline-none focus:border-brand-blue"
                 />
               </label>
 
-              <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
-                <div className="text-sm font-semibold text-zinc-200">Context carried forward</div>
-                <div className="mt-3 space-y-2 text-sm text-zinc-400">
-                  <div className="flex items-center gap-2"><Check className="h-4 w-4 text-emerald-300" /> Cast traits</div>
-                  <div className="flex items-center gap-2"><Check className="h-4 w-4 text-emerald-300" /> World details</div>
-                  <div className="flex items-center gap-2"><Check className="h-4 w-4 text-emerald-300" /> Cover intent</div>
-                  <div className="flex items-center gap-2"><Check className="h-4 w-4 text-emerald-300" /> {agentSettings.outputTargets.map(outputTargetLabel).join(', ')}</div>
+              <div className="rounded-xl border-2 border-black bg-white p-4">
+                <div className="text-sm font-display uppercase text-black">Context carried forward</div>
+                <div className="mt-3 space-y-2 text-sm text-slate-600 font-comic">
+                  <div className="flex items-center gap-2"><Check className="h-4 w-4 text-green-600" /> Cast traits</div>
+                  <div className="flex items-center gap-2"><Check className="h-4 w-4 text-green-600" /> World details</div>
+                  <div className="flex items-center gap-2"><Check className="h-4 w-4 text-green-600" /> Cover intent</div>
+                  <div className="flex items-center gap-2"><Check className="h-4 w-4 text-green-600" /> {agentSettings.outputTargets.map(outputTargetLabel).join(', ')}</div>
                 </div>
               </div>
             </div>

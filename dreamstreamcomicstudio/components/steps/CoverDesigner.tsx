@@ -246,17 +246,17 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
 
   return (
     <div className="mx-auto w-full max-w-7xl animate-fade-in">
-      <div className="overflow-hidden rounded-lg border border-zinc-800 bg-[#050505] text-zinc-100 shadow-2xl">
-        <div className="flex flex-col gap-4 border-b border-zinc-800 px-5 py-4 md:flex-row md:items-center md:justify-between">
+      <div className="overflow-hidden rounded-xl border-4 border-black bg-white text-black shadow-comic">
+        <div className="flex flex-col gap-4 border-b border-2 border-black px-5 py-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-950">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-yellow text-black border-2 border-black">
               <Sparkles className="h-5 w-5" />
             </div>
             <div>
-              <div className="text-xs font-semibold uppercase text-zinc-500">Cover agent</div>
-              <h2 className="text-xl font-semibold text-zinc-100">Design the front cover</h2>
+              <div className="text-xs font-display uppercase text-black">Cover agent</div>
+              <h2 className="text-xl font-display text-black">Design the front cover</h2>
               {autoRunAgent && (
-                <p className="mt-1 max-w-2xl text-sm leading-6 text-zinc-500">
+                <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600 font-comic">
                   Autopilot will generate, pick, and continue from the first successful cover.
                 </p>
               )}
@@ -266,7 +266,7 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
             <Button
               variant="outline"
               onClick={handleSkip}
-              className="border-zinc-700 text-zinc-300 hover:bg-zinc-900 hover:text-white"
+              className="border-2 border-black text-black hover:bg-brand-yellow"
             >
               Skip
             </Button>
@@ -274,7 +274,7 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
               variant="secondary"
               onClick={onConfirm}
               disabled={isGenerating}
-              className="border-zinc-100"
+              className="border-2 border-black"
             >
               Use cover
             </Button>
@@ -282,37 +282,37 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
         </div>
 
         <div className="grid min-h-[680px] grid-cols-1 lg:grid-cols-[360px_1fr]">
-          <section className="border-b border-zinc-800 bg-[#111111] px-5 py-5 lg:border-b-0 lg:border-r">
+          <section className="border-b border-2 border-black bg-amber-50 px-5 py-5 lg:border-b-0 lg:border-r">
             <div className="mb-5">
-              <div className="text-sm font-semibold text-zinc-200">Brief</div>
-              <p className="mt-1 text-sm leading-6 text-zinc-500">
+              <div className="text-sm font-display uppercase text-black">Brief</div>
+              <p className="mt-1 text-sm leading-6 text-slate-600 font-comic">
                 Title, tone, and optional reference art are carried into the cover concepts.
               </p>
             </div>
 
             <div className="space-y-4">
               <label className="block">
-                <span className="mb-2 block text-xs font-semibold uppercase text-zinc-500">Title</span>
+                <span className="mb-2 block text-xs font-display uppercase text-black">Title</span>
                 <input
                   value={coverTitle}
                   onChange={(e) => setCoverTitle(e.target.value)}
                   placeholder="Cover title"
-                  className="h-11 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none placeholder-zinc-600 focus:border-zinc-500"
+                  className="h-11 w-full rounded-xl border-2 border-black bg-white px-3 text-sm text-black outline-none placeholder-slate-400 focus:border-brand-blue"
                 />
               </label>
 
               <label className="block">
-                <span className="mb-2 block text-xs font-semibold uppercase text-zinc-500">Tagline</span>
+                <span className="mb-2 block text-xs font-display uppercase text-black">Tagline</span>
                 <input
                   value={coverTagline}
                   onChange={(e) => setCoverTagline(e.target.value)}
                   placeholder="Optional"
-                  className="h-11 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 text-sm text-zinc-100 outline-none placeholder-zinc-600 focus:border-zinc-500"
+                  className="h-11 w-full rounded-xl border-2 border-black bg-white px-3 text-sm text-black outline-none placeholder-slate-400 focus:border-brand-blue"
                 />
               </label>
 
               <label className="block">
-                <span className="mb-2 block text-xs font-semibold uppercase text-zinc-500">Direction</span>
+                <span className="mb-2 block text-xs font-display uppercase text-black">Direction</span>
                 <textarea
                   value={roughIdea}
                   onChange={(e) => {
@@ -320,13 +320,13 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
                     onUpdate({ coverPrompt: e.target.value });
                   }}
                   placeholder="Example: Maya above the flooded city, defiant, dramatic moonlight."
-                  className="h-32 w-full resize-none rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-sm leading-6 text-zinc-100 outline-none placeholder-zinc-600 focus:border-zinc-500"
+                  className="h-32 w-full resize-none rounded-xl border-2 border-black bg-white p-3 text-sm leading-6 text-black outline-none placeholder-slate-400 focus:border-brand-blue"
                 />
               </label>
 
               <div>
-                <div className="mb-2 text-xs font-semibold uppercase text-zinc-500">Reference</div>
-                <label className="flex min-h-16 cursor-pointer items-center gap-3 rounded-lg border border-dashed border-zinc-700 bg-zinc-950 px-4 py-3 text-sm text-zinc-400 hover:border-zinc-500 hover:text-zinc-200">
+                <div className="mb-2 text-xs font-display uppercase text-black">Reference</div>
+                <label className="flex min-h-16 cursor-pointer items-center gap-3 rounded-xl border-dashed border-2 border-black bg-slate-50 px-4 py-3 text-sm text-slate-600 hover:bg-brand-yellow/20 hover:text-black">
                   <UploadCloud className="h-4 w-4 shrink-0" />
                   <span>Upload cover layout or mood reference</span>
                   <input type="file" hidden accept="image/*" onChange={(e) => handleUpload(e.target.files)} />
@@ -335,7 +335,7 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
                   <button
                     type="button"
                     onClick={() => setPreviewImage(state.coverTemplateImageUrl || null)}
-                    className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-zinc-300 hover:text-white"
+                    className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-slate-600 hover:text-black"
                   >
                     <ImageIcon className="h-3.5 w-3.5" /> View uploaded reference
                   </button>
@@ -347,38 +347,38 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
                 onClick={() => handleDesignCovers(false)}
                 isLoading={isGenerating}
                 icon={<Wand2 className="h-4 w-4" />}
-                className="w-full border-zinc-100"
+                className="w-full border-2 border-black"
               >
                 {candidates.length > 0 ? 'New options' : 'Create options'}
               </Button>
 
               {progressLine && (
-                <div className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs font-semibold text-zinc-300">
-                  <Sparkles className="h-3.5 w-3.5 animate-pulse text-emerald-300" />
+                <div className="flex items-center gap-2 rounded-xl border-2 border-black bg-slate-50 px-3 py-2 text-xs font-bold text-black">
+                  <Sparkles className="h-3.5 w-3.5 animate-pulse text-brand-blue" />
                   {progressLine}
                 </div>
               )}
 
               {error && (
-                <div className="rounded-lg border border-red-800 bg-red-950/50 px-3 py-2 text-sm font-semibold text-red-100">
+                <div className="rounded-xl border-2 border-brand-red bg-red-100 px-3 py-2 text-sm font-bold text-red-700">
                   {error}
                 </div>
               )}
             </div>
 
-            <div className="mt-6 rounded-lg border border-zinc-800 bg-zinc-950 p-4">
-              <div className="text-sm font-semibold text-zinc-200">Context used</div>
-              <div className="mt-3 space-y-2 text-sm text-zinc-400">
+            <div className="mt-6 rounded-xl border-2 border-black bg-slate-50 p-4">
+              <div className="text-sm font-display uppercase text-black">Context used</div>
+              <div className="mt-3 space-y-2 text-sm text-slate-600">
                 <div className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-emerald-300" />
+                  <Check className="h-4 w-4 text-green-600" />
                   {state.characters.length || 0} character{state.characters.length === 1 ? '' : 's'}
                 </div>
                 <div className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-emerald-300" />
+                  <Check className="h-4 w-4 text-green-600" />
                   {state.scenes[0]?.setting || 'Story setting'}
                 </div>
                 <div className="flex items-center gap-2">
-                  <Check className="h-4 w-4 text-emerald-300" />
+                  <Check className="h-4 w-4 text-green-600" />
                   {state.stylePrompt ? 'Locked style prompt' : 'Default comic style'}
                 </div>
               </div>
@@ -386,14 +386,14 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
           </section>
 
           <section className="flex min-h-[680px] flex-col">
-            <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+            <div className="flex items-center justify-between border-b border-2 border-black px-5 py-4">
               <div>
-                <div className="text-sm font-semibold text-zinc-200">Cover board</div>
-                <div className="mt-1 text-xs text-zinc-500">
+                <div className="text-sm font-display uppercase text-black">Cover board</div>
+                <div className="mt-1 text-xs text-slate-600">
                   {state.coverImageUrl ? 'Selected cover ready' : 'No cover selected yet'}
                 </div>
               </div>
-              <div className="rounded-full bg-zinc-900 px-3 py-1 text-xs font-semibold text-zinc-400">
+              <div className="rounded-full border-2 border-black bg-white px-3 py-1 text-xs font-bold text-black">
                 {candidates.length} option{candidates.length === 1 ? '' : 's'}
               </div>
             </div>
@@ -404,38 +404,38 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
                   <button
                     type="button"
                     onClick={() => setPreviewImage(state.coverImageUrl || null)}
-                    className="group overflow-hidden rounded-lg border border-zinc-700 bg-zinc-950 text-left shadow-[0_24px_80px_rgba(0,0,0,0.35)]"
+                    className="group overflow-hidden rounded-xl border-2 border-black bg-white text-left shadow-comic"
                   >
                     <img src={state.coverImageUrl} alt="Selected cover" className="h-auto w-full object-cover transition duration-200 group-hover:opacity-90" />
                   </button>
-                  <div className="flex flex-col justify-between rounded-lg border border-zinc-800 bg-zinc-950 p-5">
+                  <div className="flex flex-col justify-between rounded-xl border-2 border-black bg-white p-5">
                     <div>
-                      <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-emerald-950 px-3 py-1 text-xs font-semibold text-emerald-200">
+                      <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700 border-2 border-black">
                         <Check className="h-3.5 w-3.5" />
                         Selected
                       </div>
-                      <h3 className="text-2xl font-semibold text-zinc-100">{selectedConceptName}</h3>
-                      <p className="mt-3 text-sm leading-6 text-zinc-400">{selectedConceptBrief}</p>
+                      <h3 className="text-2xl font-display text-black">{selectedConceptName}</h3>
+                      <p className="mt-3 text-sm leading-6 text-slate-600 font-comic">{selectedConceptBrief}</p>
                     </div>
-                    <div className="mt-6 grid gap-3 text-sm text-zinc-400 sm:grid-cols-2">
-                      <div className="rounded-lg bg-zinc-900 p-3">
-                        <div className="text-xs font-semibold uppercase text-zinc-500">Masthead</div>
-                        <div className="mt-1 truncate text-zinc-200">{coverTitle || projectName || 'Untitled'}</div>
+                    <div className="mt-6 grid gap-3 text-sm text-slate-600 sm:grid-cols-2">
+                      <div className="rounded-xl bg-slate-50 border-2 border-black p-3">
+                        <div className="text-xs font-display uppercase text-black">Masthead</div>
+                        <div className="mt-1 truncate text-black">{coverTitle || projectName || 'Untitled'}</div>
                       </div>
-                      <div className="rounded-lg bg-zinc-900 p-3">
-                        <div className="text-xs font-semibold uppercase text-zinc-500">Tagline</div>
-                        <div className="mt-1 truncate text-zinc-200">{coverTagline || 'None'}</div>
+                      <div className="rounded-xl bg-slate-50 border-2 border-black p-3">
+                        <div className="text-xs font-display uppercase text-black">Tagline</div>
+                        <div className="mt-1 truncate text-black">{coverTagline || 'None'}</div>
                       </div>
                     </div>
                   </div>
                 </div>
               ) : (
-                <div className="flex min-h-[360px] flex-col items-center justify-center rounded-lg border border-dashed border-zinc-800 bg-zinc-950 px-6 text-center">
-                  <RefreshCw className={`h-6 w-6 text-zinc-500 ${isGenerating ? 'animate-spin' : ''}`} />
-                  <div className="mt-4 text-lg font-semibold text-zinc-200">
+                <div className="flex min-h-[360px] flex-col items-center justify-center rounded-xl border-dashed border-2 border-black bg-slate-50 px-6 text-center">
+                  <RefreshCw className={`h-6 w-6 text-slate-600 ${isGenerating ? 'animate-spin' : ''}`} />
+                  <div className="mt-4 text-lg font-display text-black">
                     {isGenerating ? 'Designing cover options' : 'Create cover options'}
                   </div>
-                  <p className="mt-2 max-w-md text-sm leading-6 text-zinc-500">
+                  <p className="mt-2 max-w-md text-sm leading-6 text-slate-600 font-comic">
                     The agent will create distinct cover concepts from the story, style, cast, setting, and brief.
                   </p>
                 </div>
@@ -443,13 +443,13 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
 
               <div className="mt-6">
                 <div className="mb-3 flex items-center justify-between">
-                  <h3 className="text-sm font-semibold text-zinc-200">Generated options</h3>
+                  <h3 className="text-sm font-display uppercase text-black">Generated options</h3>
                   {candidates.length > 0 && (
                     <button
                       type="button"
                       onClick={() => handleDesignCovers(false)}
                       disabled={isGenerating}
-                      className="text-xs font-semibold text-zinc-400 hover:text-white disabled:opacity-50"
+                      className="text-xs font-bold text-slate-600 hover:text-black disabled:opacity-50"
                     >
                       Refresh
                     </button>
@@ -465,27 +465,27 @@ export const CoverDesigner: React.FC<CoverDesignerProps> = ({ state, projectId, 
                           key={candidate.id}
                           type="button"
                           onClick={() => selectCoverCandidate(candidate)}
-                          className={`overflow-hidden rounded-lg border text-left transition ${
+                          className={`overflow-hidden rounded-xl border-2 text-left transition ${
                             selected
-                              ? 'border-emerald-300 bg-zinc-900 ring-2 ring-emerald-300/30'
-                              : 'border-zinc-800 bg-zinc-950 hover:border-zinc-500'
+                              ? 'border-brand-blue bg-white ring-2 ring-brand-blue'
+                              : 'border-black bg-white hover:border-brand-blue'
                           }`}
                           title={candidate.conceptBrief}
                         >
                           <img src={candidate.imageUrl} alt={candidate.conceptName} className="h-40 w-full object-cover" />
-                          <div className="border-t border-zinc-800 p-3">
+                          <div className="border-t border-2 border-black p-3">
                             <div className="flex items-center justify-between gap-2">
-                              <div className="truncate text-sm font-semibold text-zinc-100">{candidate.conceptName}</div>
-                              {selected && <Check className="h-4 w-4 shrink-0 text-emerald-300" />}
+                              <div className="truncate text-sm font-display text-black">{candidate.conceptName}</div>
+                              {selected && <Check className="h-4 w-4 shrink-0 text-green-600" />}
                             </div>
-                            <div className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-500">{candidate.conceptBrief}</div>
+                            <div className="mt-1 line-clamp-2 text-xs leading-5 text-slate-600">{candidate.conceptBrief}</div>
                           </div>
                         </button>
                       );
                     })}
                   </div>
                 ) : (
-                  <div className="rounded-lg border border-zinc-800 bg-zinc-950 px-4 py-5 text-sm text-zinc-500">
+                  <div className="rounded-xl border-2 border-black bg-slate-50 px-4 py-5 text-sm text-slate-600">
                     Cover concepts will appear here after generation.
                   </div>
                 )}
