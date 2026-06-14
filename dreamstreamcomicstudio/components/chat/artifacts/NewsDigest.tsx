@@ -196,7 +196,7 @@ export const NewsDigest: React.FC<{ data: NewsResultsArtifact }> = ({ data }) =>
         }
         right={headerRight}
       >
-        <ul className="divide-y divide-[var(--ds-hairline-soft)] border-t border-[var(--ds-hairline-soft)]">
+        <ul className="studio-stagger divide-y divide-[var(--ds-hairline-soft)] border-t border-[var(--ds-hairline-soft)]">
           {items.slice(0, 3).map((n, i) => (
             <li key={`${n.url}-${i}`}>
               <button type="button" onClick={() => setReading(n)} className="flex w-full items-start gap-2 px-3 py-1.5 text-left transition-colors duration-200 hover:bg-[var(--ds-well)]">
@@ -324,7 +324,7 @@ export const NewsDigest: React.FC<{ data: NewsResultsArtifact }> = ({ data }) =>
 
       {/* Remaining stories as clean divided rows — each opens the in-app reader. */}
       {visibleRest.length > 0 && (
-        <ul className="divide-y divide-[var(--ds-hairline-soft)] border-t border-[var(--ds-hairline-soft)]">
+        <ul className="studio-stagger divide-y divide-[var(--ds-hairline-soft)] border-t border-[var(--ds-hairline-soft)]">
           {visibleRest.map((n, i) => (
             <li key={`${n.url}-${i}`}>
               <button type="button" onClick={() => setReading(n)} className="flex w-full items-start gap-2 px-3 py-2 text-left transition-colors duration-200 hover:bg-[var(--ds-well)]">

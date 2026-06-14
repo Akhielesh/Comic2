@@ -138,7 +138,7 @@ export const PortfolioCard: React.FC<{ data: PortfolioArtifact }> = ({ data }) =
         </div>
       )}
 
-      <ul className="divide-y divide-[var(--ds-hairline-soft)] border-t border-[var(--ds-hairline-soft)]">
+      <ul className="studio-stagger divide-y divide-[var(--ds-hairline-soft)] border-t border-[var(--ds-hairline-soft)]">
         {sorted.map((p, i) => {
           const weight = weightOf(p);
           return (

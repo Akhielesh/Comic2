@@ -105,7 +105,7 @@ export const TickerTape: React.FC<{ data: TickerTapeArtifact }> = ({ data }) => 
       </div>
 
       {/* The same quotes as readable divided rows. */}
-      <ul className="divide-y divide-[var(--ds-hairline-soft)]">
+      <ul className="studio-stagger divide-y divide-[var(--ds-hairline-soft)]">
         {items.map((it, i) => {
           const color = trendColor(it.changePercent);
           return (
