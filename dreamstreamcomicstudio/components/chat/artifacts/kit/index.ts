@@ -12,6 +12,8 @@ export type { ChartPoint, Candle, ChartVariant } from './Chart';
 export { Sparkline } from './Sparkline';
 export { RadialGauge, LinearGauge, Compass, SunArc } from './Gauges';
 export { RangeTabs } from './RangeTabs';
+export { SymbolLogo, symbolLogoSources } from './SymbolLogo';
+export type { SymbolLogoProps } from './SymbolLogo';
 export { TrendPill, Badge, Chip } from './Pills';
 export { resolveTheme, withAlpha, PALETTES, BULL, BEAR, NEUTRAL } from './theme';
 export type { PaletteName, Palette, ThemeInput, ResolvedTheme } from './theme';
