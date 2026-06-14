@@ -137,16 +137,36 @@ const buildDreamStreamContext = (projects: Project[]): UniversalAssistantContext
   } as UniversalAssistantContext['appSnapshot']
 });
 
+// Decode a base64 data: URL back to its text (UTF-8 safe). Used to inline 'text'
+// (pasted-block) attachments into the message so the model reads them.
+const decodeTextAttachment = (dataUrl: string): string => {
+  try {
+    const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+    return decodeURIComponent(escape(atob(b64)));
+  } catch {
+    return '';
+  }
+};
+
 const toRequestMessage = (turn: ChatTurn): ChatRequestMessage => {
-  // Only image attachments go to the model; documents (PDFs) are viewer-only.
-  const imageAtts = (turn.attachments || []).filter((a) => a.kind !== 'document');
+  const atts = turn.attachments || [];
+  // Pasted long-text chips are folded back into the prompt so the model sees every word.
+  let text = turn.content || '';
+  for (const a of atts) {
+    if (a.kind !== 'text') continue;
+    const body = decodeTextAttachment(a.dataUrl);
+    if (body) text += `${text ? '\n\n' : ''}[Pasted text — ${a.name}]\n"""\n${body}\n"""`;
+  }
+  // Only true images go to the model as image parts; documents (PDFs/CSVs) are
+  // viewer-/tool-only, and 'text' was just inlined above.
+  const imageAtts = atts.filter((a) => a.kind === 'image');
   if (imageAtts.length > 0) {
     const parts: ChatMessagePart[] = [];
-    if (turn.content) parts.push({ type: 'text', text: turn.content });
+    if (text) parts.push({ type: 'text', text });
     for (const att of imageAtts) parts.push({ type: 'image_url', image_url: { url: att.dataUrl } });
     return { role: turn.role, content: parts };
   }
-  return { role: turn.role, content: turn.content };
+  return { role: turn.role, content: text };
 };
 
 // Project a stored variant's fields onto the visible assistant turn (used when
@@ -792,12 +812,16 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       const clientContext = await gatherClientContext().catch(() => undefined);
       // Files attached to the CURRENT user turn — sent so server-side tools (run_python)
       // can read/convert/process them. Only THIS turn's files, not the whole history.
+      // 'text' (pasted-block) attachments are skipped — they're already inlined into the
+      // message by toRequestMessage, so sending them again would duplicate the payload.
       const currentUserTurn = [...baseTurns].reverse().find((t) => t.role === 'user');
-      const turnAttachments = (currentUserTurn?.attachments || []).map((a) => ({
-        name: a.name,
-        mimeType: a.mimeType,
-        dataUri: a.dataUrl
-      }));
+      const turnAttachments = (currentUserTurn?.attachments || [])
+        .filter((a) => a.kind !== 'text')
+        .map((a) => ({
+          name: a.name,
+          mimeType: a.mimeType,
+          dataUri: a.dataUrl
+        }));
       const reqBody = {
         messages: reqMessages,
         model: reqModel,

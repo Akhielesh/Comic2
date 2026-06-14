@@ -79,7 +79,7 @@ export interface SymbolLogoProps {
   className?: string;
 }
 
-export const SymbolLogo: React.FC<SymbolLogoProps> = ({ symbol, name, size = 36, kind, rounded = 'rounded-xl', className = '' }) => {
+export const SymbolLogo: React.FC<SymbolLogoProps> = ({ symbol, name, size = 36, kind, rounded = 'rounded-full', className = '' }) => {
   const sources = symbolLogoSources(symbol, kind).filter((u) => !DEAD.has(u));
   const [idx, setIdx] = useState(0);
   useEffect(() => setIdx(0), [symbol, kind]);
@@ -88,6 +88,8 @@ export const SymbolLogo: React.FC<SymbolLogoProps> = ({ symbol, name, size = 36,
   const style = { width: size, height: size } as const;
 
   if (src) {
+    // A clean circular brand chip: the mark sits on white (so coloured logos read in
+    // dark mode) and fills the frame edge-to-edge — no boxed-in "squared off" look.
     return (
       <span className={`inline-flex shrink-0 items-center justify-center overflow-hidden bg-white ring-1 ring-[var(--ds-hairline-soft)] ${rounded} ${className}`} style={style}>
         <img
@@ -96,7 +98,7 @@ export const SymbolLogo: React.FC<SymbolLogoProps> = ({ symbol, name, size = 36,
           width={size}
           height={size}
           loading="lazy"
-          className="h-full w-full object-contain p-[3px]"
+          className="h-full w-full object-contain p-px"
           onError={() => {
             DEAD.add(src);
             setIdx((i) => i + 1);
