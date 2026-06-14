@@ -63,6 +63,26 @@ This gives you a real Google **organization** + admin console for `dreamstreamst
 > email and works immediately, but you don't get the org/admin console. Cloud Identity is
 > the cleaner long-term answer.
 
+### ⚠️ You will NOT see Gmail for your domain account — and that's correct
+
+Cloud Identity Free gives you an **identity + admin console + Google Cloud org**, but **no
+Gmail mailbox**. So:
+
+- In the app launcher you'll see Drive/Calendar/Cloud etc., but **Gmail will say "Activate"
+  / be missing**. That button is an **upsell to paid Google Workspace** — ignore it unless
+  you actually want company inboxes (see below).
+- **Do NOT change your MX records to Google.** Your domain's inbound email stays on
+  **Cloudflare Email Routing** (that's what delivers `support@`, `privacy@`,
+  `you@dreamstreamstudio.ai` to your real inbox). Switching MX to Google would break that.
+- You do **not** need Gmail for any of this setup. The domain account is only the **owner
+  login** for Google Cloud + the OAuth app. The consent-screen support email works as a
+  plain identity/Group; users emailing it reach you via Cloudflare routing.
+
+**When to upgrade to Google Workspace (~$7/user/mo):** only if you want real
+send-and-receive **company mailboxes** (compose/reply as `support@dreamstreamstudio.ai`
+inside Gmail). For running the connectors, **stay on Cloud Identity Free — it's $0 and
+already enough.**
+
 ### Professional contact addresses (for the consent screen)
 
 Users will see a **support email** on the Google consent screen. Make it a domain address:
