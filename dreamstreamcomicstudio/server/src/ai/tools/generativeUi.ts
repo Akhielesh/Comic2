@@ -43,9 +43,14 @@ const BLOCK_GUIDE = [
   '- callout {tone?:info|good|warn|bad, title?, text}',
   '- image {src(https/data-image only), alt?, caption?, ratio?:1:1|4:3|16:9}',
   '- progress {value, max?, label?}',
+  '- rating {value:0-5, max?, count?, label?} — star rating',
+  '- tags {items:string[]} — a row of chips',
+  '- timeline {items:[{title, time?, text?, accent?}]} — vertical dated timeline (trips, processes, histories)',
   'Data-viz blocks:',
   '- metric {label, value, unit?, delta?, deltaPercent?, spark?:number[]}',
   '- sparkline {values:number[]}',
+  '- gauge {value, max?, label?, unit?, color?} — radial gauge',
+  '- bars {items:[{label, value, color?}], max?} — labeled horizontal bars (quick category breakdown)',
   '- chart {chart:<same shape as render_chart>}',
   '- table {table:<same shape as render_table>}'
 ].join('\n');

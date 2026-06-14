@@ -2092,13 +2092,18 @@ export interface UIImageBlock { kind: 'image'; src: string; alt?: string; captio
 export interface UIProgressBlock { kind: 'progress'; value: number; max?: number; label?: string; color?: string }
 export interface UIMetricBlock { kind: 'metric'; label: string; value: string | number; unit?: string; delta?: number; deltaPercent?: number; spark?: number[] }
 export interface UISparklineBlock { kind: 'sparkline'; values: number[]; color?: string }
+export interface UITimelineBlock { kind: 'timeline'; items: { title: string; time?: string; text?: string; accent?: string }[] }
+export interface UIRatingBlock { kind: 'rating'; value: number; max?: number; count?: number; label?: string }
+export interface UITagsBlock { kind: 'tags'; items: string[] }
+export interface UIGaugeBlock { kind: 'gauge'; value: number; max?: number; label?: string; unit?: string; color?: string }
+export interface UIBarsBlock { kind: 'bars'; items: { label: string; value: number; color?: string }[]; max?: number }
 export interface UIChartBlock { kind: 'chart'; chart: ChartArtifact }
 export interface UITableBlock { kind: 'table'; table: DataTableArtifact }
 
 export type UIBlock =
   | UIStackBlock | UIRowBlock | UIGridBlock | UISectionBlock | UIDividerBlock
   | UIHeadingBlock | UITextBlock | UIBadgeBlock | UIPillBlock | UIKeyValueBlock
-  | UICalloutBlock | UIImageBlock | UIProgressBlock
+  | UICalloutBlock | UIImageBlock | UIProgressBlock | UITimelineBlock | UIRatingBlock | UITagsBlock | UIGaugeBlock | UIBarsBlock
   | UIMetricBlock | UISparklineBlock | UIChartBlock | UITableBlock;
 
 export interface GenerativeUIArtifact {

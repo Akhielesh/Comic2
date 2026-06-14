@@ -607,7 +607,7 @@ const researchReportDemo: ResearchReportArtifact = {
 // barChart demo as an embedded chart block).
 const generativeUiDemo: GenerativeUIArtifact = {
   title: 'Q3 performance — composed layout',
-  subtitle: 'Agent-built from blocks · grid · metrics · chart · callout',
+  subtitle: 'Agent-built from blocks · metrics · chart · gauge · bars · timeline · rating · tags',
   palette: 'brand',
   accent: '#3B82F6',
   root: {
@@ -625,6 +625,33 @@ const generativeUiDemo: GenerativeUIArtifact = {
         ]
       },
       { kind: 'chart', chart: barChart },
+      {
+        kind: 'section',
+        title: 'Highlights',
+        accent: '#3B82F6',
+        children: [
+          {
+            kind: 'row',
+            gap: 3,
+            wrap: true,
+            align: 'center',
+            children: [
+              { kind: 'gauge', value: 78, max: 100, label: 'Health', unit: 'score' },
+              { kind: 'bars', items: [{ label: 'EU', value: 540, color: '#3B82F6' }, { label: 'US', value: 420, color: '#10b981' }, { label: 'APAC', value: 324, color: '#f59e0b' }] }
+            ]
+          },
+          { kind: 'rating', value: 4.6, count: 1280, label: 'CSAT' },
+          { kind: 'tags', items: ['EU launch', 'Mobile', 'Enterprise', 'Self-serve'] },
+          {
+            kind: 'timeline',
+            items: [
+              { title: 'EU launch', time: 'Jul 2', text: 'Live in 6 countries', accent: '#3B82F6' },
+              { title: 'Pricing refresh', time: 'Aug 9', text: 'New self-serve tier' },
+              { title: 'Mobile GA', time: 'Sep 1', accent: '#10b981' }
+            ]
+          }
+        ]
+      },
       {
         kind: 'row',
         gap: 2,

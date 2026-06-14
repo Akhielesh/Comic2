@@ -1,6 +1,7 @@
 import React from 'react';
+import { Star } from 'lucide-react';
 import type { GenerativeUIArtifact, ChartArtifact, DataTableArtifact } from '../../../apiTypes';
-import { Surface, SurfaceTitle, SurfaceSubtitle, Sparkline, TrendPill, Badge, LinearGauge, compactNumber } from './kit';
+import { Surface, SurfaceTitle, SurfaceSubtitle, Sparkline, TrendPill, Badge, LinearGauge, RadialGauge, compactNumber } from './kit';
 import { ChartCard } from './ChartCard';
 import { DataTableCard } from './DataTableCard';
 
@@ -32,6 +33,11 @@ type NormalizedUIBlock =
   | { kind: 'progress'; value: number; max: number; label?: string; color?: string }
   | { kind: 'metric'; label: string; value: string | number; unit?: string; delta?: number; deltaPercent?: number; spark?: number[] }
   | { kind: 'sparkline'; values: number[]; color?: string }
+  | { kind: 'timeline'; items: { title: string; time?: string; text?: string; accent?: string }[] }
+  | { kind: 'rating'; value: number; max: number; count?: number; label?: string }
+  | { kind: 'tags'; items: string[] }
+  | { kind: 'gauge'; value: number; max: number; label?: string; unit?: string; color?: string }
+  | { kind: 'bars'; items: { label: string; value: number; color?: string }[]; max?: number }
   | { kind: 'chart'; chart: ChartArtifact }
   | { kind: 'table'; table: DataTableArtifact };
 
@@ -144,6 +150,38 @@ function normBlock(raw: unknown, depth: number, ctx: { n: number }): NormBlock |
     case 'sparkline': {
       const values = numArray(raw.values);
       return values && values.length > 1 ? { kind, values, color: str(raw.color, 16) } : { kind: '_invalid' };
+    }
+    case 'timeline': {
+      const items = Array.isArray(raw.items)
+        ? raw.items
+            .filter(isObj)
+            .map((it) => ({ title: str(it.title, 200) ?? '', time: str(it.time, 80), text: str(it.text, 1000), accent: str(it.accent, 16) }))
+            .filter((it) => it.title || it.text)
+            .slice(0, 40)
+        : [];
+      return items.length ? { kind, items } : { kind: '_invalid' };
+    }
+    case 'rating': {
+      const value = num(raw.value);
+      return value === undefined ? { kind: '_invalid' } : { kind, value: Math.max(0, value), max: clampInt(raw.max, 1, 10, 5), count: num(raw.count), label: str(raw.label, 80) };
+    }
+    case 'tags': {
+      const items = Array.isArray(raw.items) ? raw.items.map((t) => str(t, 60)).filter((t): t is string => !!t).slice(0, 40) : [];
+      return items.length ? { kind, items } : { kind: '_invalid' };
+    }
+    case 'gauge': {
+      const value = num(raw.value);
+      return value === undefined ? { kind: '_invalid' } : { kind, value, max: num(raw.max) ?? 100, label: str(raw.label, 80), unit: str(raw.unit, 24), color: str(raw.color, 16) };
+    }
+    case 'bars': {
+      const items = Array.isArray(raw.items)
+        ? raw.items
+            .filter(isObj)
+            .map((it) => ({ label: str(it.label, 120) ?? '', value: num(it.value) ?? 0, color: str(it.color, 16) }))
+            .filter((it) => it.label)
+            .slice(0, 40)
+        : [];
+      return items.length ? { kind, items, max: num(raw.max) } : { kind: '_invalid' };
     }
     case 'chart':
       return isObj(raw.chart) && Array.isArray((raw.chart as Record<string, unknown>).series)
@@ -297,6 +335,76 @@ const Block: React.FC<{ block: NormBlock }> = ({ block }) => {
     }
     case 'sparkline':
       return <Sparkline values={block.values} color={block.color ?? '#3B82F6'} height={40} />;
+    case 'timeline':
+      return (
+        <ol className="relative ml-1 border-l border-[var(--ds-hairline)] pl-4">
+          {block.items.map((it, i) => (
+            <li key={i} className="relative pb-3 last:pb-0">
+              <span
+                className="absolute -left-[1.32rem] top-1 h-2.5 w-2.5 rounded-full border-2 border-[var(--ds-surface)]"
+                style={{ backgroundColor: it.accent || 'var(--ds-accent)' }}
+              />
+              <div className="flex items-baseline justify-between gap-2">
+                {it.title && <span className="text-sm font-semibold text-[var(--ds-ink)]">{it.title}</span>}
+                {it.time && <span className="shrink-0 text-[10px] font-medium tabular-nums text-[var(--ds-muted)]">{it.time}</span>}
+              </div>
+              {it.text && <p className="mt-0.5 whitespace-pre-wrap break-words text-xs text-[var(--ds-muted)]">{it.text}</p>}
+            </li>
+          ))}
+        </ol>
+      );
+    case 'rating': {
+      const full = Math.round(block.value);
+      return (
+        <span className="inline-flex items-center gap-1.5">
+          <span className="inline-flex">
+            {Array.from({ length: block.max }, (_, i) => (
+              <Star key={i} className="h-3.5 w-3.5" style={{ color: i < full ? '#f59e0b' : 'var(--ds-faint)', fill: i < full ? '#f59e0b' : 'transparent' }} />
+            ))}
+          </span>
+          <span className="text-xs font-semibold tabular-nums text-[var(--ds-ink)]">{block.value.toFixed(1)}</span>
+          {typeof block.count === 'number' && <span className="text-[11px] text-[var(--ds-muted)]">({compactNumber(block.count)})</span>}
+          {block.label && <span className="text-[11px] text-[var(--ds-muted)]">{block.label}</span>}
+        </span>
+      );
+    }
+    case 'tags':
+      return (
+        <div className="flex flex-wrap gap-1.5">
+          {block.items.map((t, i) => (
+            <span key={i} className="rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-2 py-0.5 text-[11px] font-medium text-[var(--ds-ink)]">
+              {t}
+            </span>
+          ))}
+        </div>
+      );
+    case 'gauge':
+      return (
+        <div className="flex justify-center">
+          <RadialGauge value={block.value} max={block.max} label={block.label} unit={block.unit} color={block.color ?? '#3B82F6'} size={92} />
+        </div>
+      );
+    case 'bars': {
+      const max = block.max ?? Math.max(...block.items.map((b) => b.value), 1);
+      return (
+        <div className="flex flex-col gap-1.5">
+          {block.items.map((b, i) => (
+            <div key={i}>
+              <div className="mb-0.5 flex items-baseline justify-between gap-2">
+                <span className="truncate text-xs text-[var(--ds-ink)]">{b.label}</span>
+                <span className="shrink-0 text-xs font-semibold tabular-nums text-[var(--ds-muted)]">{formatMetric(b.value)}</span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-[var(--ds-well-strong)]">
+                <div
+                  className="h-full rounded-full"
+                  style={{ width: `${Math.max(2, Math.min(100, (b.value / (max || 1)) * 100))}%`, backgroundColor: b.color || 'var(--ds-accent)' }}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+      );
+    }
     case 'chart':
       return <ChartCard data={block.chart} />;
     case 'table':
