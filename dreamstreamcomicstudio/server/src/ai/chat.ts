@@ -18,6 +18,7 @@ import { toToolSpec, type ChatTool } from './tools/registry.js';
 import { buildJsonToolSystemBlock, extractToolCall, stripToolCallJson, formatToolResult } from './tools/jsonToolProtocol.js';
 import { JSON_TOOL_PROTOCOL_ENABLED, CHAT_MAX_OUTPUT_TOKENS } from '../config.js';
 import { buildUserMemoryBlock } from '../services/userMemory.js';
+import { buildConnectorContextBlock } from '../connectors/retrieval.js';
 
 export type ChatReasoningLevel = 'none' | 'low' | 'medium' | 'high';
 
@@ -82,6 +83,13 @@ export interface RunChatParams {
    */
   userId?: string;
   userMemory?: boolean;
+  /**
+   * Explicit opt-in to inject RAG context from the user's connected ACCOUNT
+   * connectors (Gmail/Drive/Calendar/…). When set with userId, the top matching
+   * normalized items are retrieved (scoped to the user) and injected as a system
+   * block — same fail-open, time-boxed pattern as userMemory.
+   */
+  connectorContext?: boolean;
   /** Agentic tools the model may call (DuckDuckGo, etc.). OpenRouter only. */
   tools?: ChatTool[];
   /** Runtime situational context (date/timezone/locale/units/location). */
@@ -399,6 +407,22 @@ export const runChat = async (
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_500))
     ]);
     if (memoryBlock) systemContent += memoryBlock;
+  }
+  // RAG over the user's connected ACCOUNT connectors (Gmail/Drive/…). Same fail-open,
+  // time-boxed contract as memory: a slow or failing lookup just means "no connector context".
+  if (params.userId && params.connectorContext) {
+    const lastUser = [...params.messages].reverse().find((m) => m.role === 'user');
+    const connectorQuery =
+      typeof lastUser?.content === 'string'
+        ? lastUser.content
+        : Array.isArray(lastUser?.content)
+          ? lastUser!.content.map((p) => ('text' in p ? p.text : '')).join(' ')
+          : '';
+    const connectorBlock = await Promise.race([
+      buildConnectorContextBlock(params.userId, connectorQuery).catch(() => null),
+      new Promise<string | null>((resolve) => setTimeout(() => resolve(null), 2_500))
+    ]);
+    if (connectorBlock) systemContent += connectorBlock;
   }
   if (params.dreamstreamContextJson) {
     systemContent += dreamstreamBlock(params.dreamstreamContextJson);

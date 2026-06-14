@@ -60,6 +60,9 @@ import { prewarmCatalog, startCatalogRefreshLoop } from './services/modelCatalog
 import { keysRouter } from './routes/keys.js';
 import { venturesRouter } from './routes/ventures.js';
 import { startInlineVenturesRunner } from './ventures/inlineRunner.js';
+import { connectorsPublicRouter, connectorsRouter } from './routes/connectors.js';
+import { connectorsWebhookRouter } from './connectors/sync/webhooks.js';
+import { seedConnectorCatalog } from './connectors/index.js';
 
 validateRuntimeConfig();
 
@@ -183,6 +186,13 @@ app.use('/api/usage', systemRateLimit, usageRouter);
 // kill every tile with a 401. Keyless tools, budget-guarded + rate-limited.
 app.use('/api/chat', systemRateLimit, optionalAuth, attachAccountContext, chatPublicRouter);
 
+// Account-connector OAuth callback + provider push webhooks. These are reached by a
+// browser redirect / provider POST that carries NO app session, so they mount BEFORE
+// the global requireAuth and authenticate via the one-time PKCE `state` row / a shared
+// webhook token instead.
+app.use('/api/connectors', systemRateLimit, connectorsPublicRouter);
+app.use('/api/connectors/webhooks', systemRateLimit, connectorsWebhookRouter);
+
 // Protect all API routes
 app.use('/api', requireAuth);
 // Per-request account context (AsyncLocalStorage) so deep tool code — e.g. the
@@ -229,6 +239,8 @@ app.use('/api/ventures', systemRateLimit, venturesRouter);
 app.use('/api/invites', systemRateLimit, invitesRouter);
 // Account: server-side encrypted BYOK key storage (authenticated).
 app.use('/api/account', systemRateLimit, accountRouter);
+// Account connectors (authenticated): catalog, connect, sync, disconnect, query, dashboard.
+app.use('/api/connectors', systemRateLimit, connectorsRouter);
 // Learning execution (sandboxed SQL playground). Auth'd + text-tier rate limited.
 app.use('/api/learn', textRateLimit, learnRouter);
 
@@ -253,4 +265,6 @@ app.listen(PORT, () => {
   startCatalogRefreshLoop();
   // Autopilot pilot loop (in-process). No-op unless VENTURES_ENABLED && VENTURES_PILOT_INLINE.
   startInlineVenturesRunner();
+  // Persist the code-defined connector catalog (enablement/admin config). Best-effort.
+  void seedConnectorCatalog();
 });
