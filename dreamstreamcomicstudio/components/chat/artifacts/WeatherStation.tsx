@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Wind, Droplets, MapPin, Sun, Umbrella, Gauge, Eye, Cloud, Thermometer, Leaf, Map as MapIcon, BarChart3 } from 'lucide-react';
 import type { WeatherArtifact } from '../../../apiTypes';
-import { Surface, Chart, LinearGauge, SunArc, Badge, useCompact } from './kit';
+import { Surface, Chart, LinearGauge, SunArc, Badge, WeatherIcon, useCompact } from './kit';
 import type { ChartPoint } from './kit';
 import { prefersReducedMotion, useMeasure } from './kit/Chart';
 import { InlineMap } from './InlineMap';
@@ -21,19 +21,6 @@ import { InlineMap } from './InlineMap';
 // the day-range bars draw in with a soft stagger.
 
 // --- helpers (shared with the legacy card's logic) ---
-const glyph = (code: number, isDay = true): string => {
-  if (code === 0) return isDay ? '☀️' : '🌙';
-  if (code <= 2) return isDay ? '🌤️' : '☁️';
-  if (code === 3) return '☁️';
-  if (code <= 48) return '🌫️';
-  if (code <= 57) return '🌦️';
-  if (code <= 67) return '🌧️';
-  if (code <= 77) return '❄️';
-  if (code <= 82) return '🌧️';
-  if (code <= 86) return '🌨️';
-  return '⛈️';
-};
-
 type Sky = 'clear' | 'cloud' | 'rain' | 'snow' | 'storm' | 'fog';
 const skyOf = (code: number): Sky => {
   if (code === 0 || code === 1) return 'clear';
@@ -221,14 +208,14 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
               )}
             </div>
           </div>
-          <div className="shrink-0 text-4xl leading-none">{glyph(c.code, c.isDay)}</div>
+          <WeatherIcon code={c.code} isDay={c.isDay} size={44} className="shrink-0" />
         </div>
         {nextHours.length > 1 && (
           <div className="flex justify-between border-t border-[var(--ds-hairline-soft)] px-3 py-2">
             {nextHours.map((h) => (
               <div key={h.time} className="flex min-w-0 flex-col items-center gap-0.5">
                 <span className="text-[10px] text-[var(--ds-muted)]">{hourLabel(h.time)}</span>
-                <span className="text-sm leading-none">{glyph(h.code, h.isDay ?? c.isDay)}</span>
+                <WeatherIcon code={h.code} isDay={h.isDay ?? c.isDay} size={18} still />
                 <span className="text-[11px] font-semibold text-[var(--ds-ink)]">{t(h.tempC)}°</span>
               </div>
             ))}
@@ -335,7 +322,9 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
             {/* Animated weather mark — a living glyph in a calm, bordered tile. */}
             <div className={`relative h-20 w-24 shrink-0 overflow-hidden rounded-2xl border border-[var(--ds-hairline-soft)] bg-gradient-to-br ${bg} opacity-95`}>
               <SkyScene sky={sky} isDay={c.isDay} />
-              <span className="absolute inset-0 flex items-center justify-center text-4xl drop-shadow-sm">{glyph(c.code, c.isDay)}</span>
+              <span className="absolute inset-0 flex items-center justify-center">
+                <WeatherIcon code={c.code} isDay={c.isDay} size={46} className="drop-shadow-[0_1px_2px_rgba(0,0,0,0.35)]" />
+              </span>
             </div>
           </div>
 
@@ -416,7 +405,7 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
               <div className="flex overflow-x-auto px-2 pb-1 pt-0.5">
                 {(data.hourly ?? []).map((h) => (
                   <div key={h.time} className="flex min-w-[30px] flex-1 shrink-0 flex-col items-center gap-0.5 text-center">
-                    <span className="text-base leading-none">{glyph(h.code, h.isDay ?? c.isDay)}</span>
+                    <WeatherIcon code={h.code} isDay={h.isDay ?? c.isDay} size={20} still />
                     {typeof h.precipProb === 'number' && h.precipProb > 0 && <span className="text-[9px] font-semibold text-sky-600">{h.precipProb}%</span>}
                   </div>
                 ))}
@@ -437,7 +426,7 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
                   return (
                     <div key={d.date} className="flex items-center gap-2 text-xs">
                       <span className="w-9 font-semibold text-[var(--ds-ink)]">{dayName(d.date)}</span>
-                      <span className="w-5 text-center text-base leading-none" title={d.description}>{glyph(d.code)}</span>
+                      <span className="flex w-5 justify-center" title={d.description}><WeatherIcon code={d.code} size={20} still /></span>
                       {typeof d.precipProb === 'number' && d.precipProb > 0 ? (
                         <span className="w-8 text-[10px] font-semibold text-sky-600">{d.precipProb}%</span>
                       ) : (
