@@ -234,7 +234,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={onClose} aria-hidden="true" />
 
       <div
-        className={`relative flex w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] backdrop-blur-md ${SOFT_SHADOW}`}
+        className={`relative flex w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface-strong)] backdrop-blur-md ${SOFT_SHADOW} transition-shadow duration-300 focus-within:border-[#D97757]/40 focus-within:shadow-[0_0_0_1px_rgba(217,119,87,0.30),0_2px_10px_rgba(217,119,87,0.12),0_22px_60px_rgba(217,119,87,0.12)]`}
       >
         {/* Search input */}
         <div className="flex items-center gap-2.5 border-b border-[var(--ds-hairline-soft)] px-4 py-3">
