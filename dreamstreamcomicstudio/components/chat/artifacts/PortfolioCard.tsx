@@ -1,6 +1,6 @@
 import React from 'react';
 import type { PortfolioArtifact, PortfolioPosition } from '../../../apiTypes';
-import { Surface, SurfaceTitle, Sparkline, SymbolLogo, TrendPill, formatPrice, formatPercent, formatSigned, relativeTime, useCompact, useLiveData, BULL, BEAR, NEUTRAL, PALETTES } from './kit';
+import { Surface, SurfaceTitle, Sparkline, SymbolLogo, TrendPill, formatPrice, formatPercent, formatSigned, relativeTime, useCountUp, useCompact, useLiveData, BULL, BEAR, NEUTRAL, PALETTES } from './kit';
 
 // Portfolio hero — live-priced holdings with a weight donut and a P&L header.
 //  • compact — total value + day pill + the top three positions as one-line rows.
@@ -64,6 +64,8 @@ export const PortfolioCard: React.FC<{ data: PortfolioArtifact }> = ({ data }) =
   const sorted = [...positions].sort((a, b) => (valueOf(b) ?? 0) - (valueOf(a) ?? 0));
   const summed = sorted.reduce((sum, p) => sum + (valueOf(p) ?? 0), 0);
   const totalValue = totals.value ?? (summed > 0 ? summed : undefined);
+  // The headline portfolio value glides into place on mount / refresh.
+  const animatedTotal = useCountUp(totalValue ?? 0, { duration: 800 });
   const weightOf = (p: PortfolioPosition): number | undefined => {
     if (typeof p.weightPct === 'number') return p.weightPct;
     const v = valueOf(p);
@@ -75,7 +77,7 @@ export const PortfolioCard: React.FC<{ data: PortfolioArtifact }> = ({ data }) =
   const headerRight = (
     <div className="flex flex-col items-end gap-1">
       <span className="text-xl font-semibold leading-none tracking-tight tabular-nums text-[var(--ds-ink)]">
-        {formatPrice(totalValue, currency)}
+        {formatPrice(typeof totalValue === 'number' ? animatedTotal : totalValue, currency)}
       </span>
       {hasDay && <TrendPill change={totals.dayPnl} changePercent={totals.dayPnlPercent} size="sm" />}
       {!compact && typeof totals.totalPnl === 'number' && (
