@@ -20,6 +20,7 @@ import {
 } from '../services/apiKeys';
 import { getProviderDef, type ProviderId } from '../shared/providers';
 import { ProviderLogo, hasProviderLogo } from './providerLogos';
+import { fetchModelCatalog } from '../services/modelCatalog';
 import { isProviderEnabled, setProviderEnabled } from '../services/sourceGovernance';
 import { validateApiKey } from '../services/keyValidation';
 import { listMcpServers, addMcpServer, removeMcpServer } from '../services/mcpServers';
@@ -439,10 +440,11 @@ const DreamStreamAllowancePanel: React.FC = () => {
 const ProviderCard: React.FC<{
   provider: ApiKeyProvider;
   keys: ManagedApiKey[];
+  count?: number;
   open: boolean;
   onToggleOpen: () => void;
   onChange: () => void;
-}> = ({ provider, keys, open, onToggleOpen, onChange }) => {
+}> = ({ provider, keys, count, open, onToggleOpen, onChange }) => {
   const meta = PROVIDER_META[provider];
   const def = getProviderDef(provider);
   const accountMeta = getAccountKeyMeta();
@@ -482,6 +484,9 @@ const ProviderCard: React.FC<{
           </span>
         </button>
 
+        {typeof count === 'number' && count > 0 && (
+          <span className={`text-[11px] ${MUTED} shrink-0 hidden sm:inline tabular-nums`}>{count} model{count === 1 ? '' : 's'}</span>
+        )}
         <span className={`${BADGE_BASE} ${status.cls} shrink-0`}>{status.label}</span>
 
         {/* Governance on/off toggle */}
@@ -529,6 +534,7 @@ export const ApiConfiguration: React.FC = () => {
     const initial = listKeys();
     return ALL_PROVIDERS.find((p) => !initial.some((k) => k.provider === p)) ?? null;
   });
+  const [counts, setCounts] = useState<Record<string, number>>({});
   const refresh = () => { setKeys(listKeys()); setGovVersion((v) => v + 1); };
 
   useEffect(() => {
@@ -538,6 +544,20 @@ export const ApiConfiguration: React.FC = () => {
       setKeys(listKeys());
     }, VALIDATION_STALE_MS);
     return () => clearInterval(id);
+  }, []);
+
+  // Live per-provider model counts, so each provider row shows what it actually offers.
+  useEffect(() => {
+    let active = true;
+    fetchModelCatalog()
+      .then((res) => {
+        if (!active) return;
+        const c: Record<string, number> = {};
+        for (const m of res.models) c[m.source] = (c[m.source] || 0) + 1;
+        setCounts(c);
+      })
+      .catch(() => { /* counts are a nicety; never block the panel */ });
+    return () => { active = false; };
   }, []);
 
   const enabledProviders = ALL_PROVIDERS.filter(isProviderEnabled).length;
@@ -572,6 +592,7 @@ export const ApiConfiguration: React.FC = () => {
             key={provider}
             provider={provider}
             keys={keys}
+            count={counts[provider]}
             open={open === provider}
             onToggleOpen={() => setOpen(open === provider ? null : provider)}
             onChange={refresh}
