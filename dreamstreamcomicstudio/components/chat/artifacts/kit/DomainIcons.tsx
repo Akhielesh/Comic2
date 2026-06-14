@@ -131,10 +131,94 @@ export const IconPin: React.FC<IconProps> = (p) => (
   <Svg {...p} label="pin"><path d="M12 21s7-5.5 7-11a7 7 0 1 0-14 0c0 5.5 7 11 7 11Z" /><circle cx="12" cy="10" r="2.5" /></Svg>
 );
 
+// ── Tech ──────────────────────────────────────────────────────────────────────────
+export const IconChip: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="chip"><rect x="6" y="6" width="12" height="12" rx="2" /><rect x="9.5" y="9.5" width="5" height="5" rx="1" /><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3" /></Svg>
+);
+export const IconCode: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="code"><path d="m8 8-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14" /></Svg>
+);
+export const IconCloud: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="cloud"><path d="M7 18.5a4.2 4.2 0 0 1-.5-8.4 5.5 5.5 0 0 1 10.6-1.1A4.1 4.1 0 0 1 17 18.5H7Z" /></Svg>
+);
+export const IconDatabase: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="database"><ellipse cx="12" cy="6" rx="7" ry="3" /><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3" /></Svg>
+);
+export const IconRobot: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="robot"><rect x="5" y="8" width="14" height="11" rx="3" /><path d="M12 4.5v3.5M3 12v3M21 12v3M9.5 16h5" /><circle cx="12" cy="3.5" r="1.2" /><circle cx="9.5" cy="13" r="1" fill="currentColor" stroke="none" /><circle cx="14.5" cy="13" r="1" fill="currentColor" stroke="none" /></Svg>
+);
+export const IconRocket: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="rocket"><path d="M5 15c-1 1-1.4 4-1.4 4s3-.4 4-1.4M9.5 18.5A14 14 0 0 1 18 5.5C19.5 5 20 4 20 4s-1 .5-1.5 2A14 14 0 0 1 5.5 14.5" /><circle cx="14.5" cy="9.5" r="1.6" /></Svg>
+);
+
+// ── Health ────────────────────────────────────────────────────────────────────────
+export const IconHeartPulse: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="health"><path d="M12 20S5 15.5 5 10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 1-.2 1.9-.6 2.8" /><path d="M7.5 11h2l1-1.6 1.6 3.2 1-1.6h3" /></Svg>
+);
+export const IconDumbbell: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="fitness"><path d="M3 9v6M6 7v10M18 7v10M21 9v6M6 12h12" /></Svg>
+);
+export const IconLeaf: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="wellness"><path d="M5 19c0-8 6-14 14-14 0 8-6 14-14 14ZM5 19c2.5-4.5 5.5-7 9.5-9" /></Svg>
+);
+export const IconActivity: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="vitals"><path d="M3 12h4l2.5-7 4.5 14L17 12h4" /></Svg>
+);
+
+// ── Science ─────────────────────────────────────────────────────────────────────
+export const IconFlask: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="flask"><path d="M9 3h6M10 3v6.5l-4.7 8.3A1.5 1.5 0 0 0 6.6 20h10.8a1.5 1.5 0 0 0 1.3-2.2L14 9.5V3M7.5 14h9" /></Svg>
+);
+export const IconAtom: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="atom"><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none" /><ellipse cx="12" cy="12" rx="9" ry="3.7" /><ellipse cx="12" cy="12" rx="9" ry="3.7" transform="rotate(60 12 12)" /><ellipse cx="12" cy="12" rx="9" ry="3.7" transform="rotate(120 12 12)" /></Svg>
+);
+export const IconDna: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="dna"><path d="M7 3c0 5 10 7 10 12s-10 4-10 9M17 3c0 5-10 7-10 12s10 4 10 9M8.5 7h7M8.5 17h7M10 5h4M10 19h4" /></Svg>
+);
+
+// ── Sports ──────────────────────────────────────────────────────────────────────
+export const IconTrophy: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="trophy"><path d="M8 4h8v5a4 4 0 0 1-8 0V4ZM8 6H5.5a2.5 2.5 0 0 0 2.6 2.9M16 6h2.5A2.5 2.5 0 0 1 15.9 8.9M12 13v3M9 19h6l-.7-3H9.7L9 19Z" /></Svg>
+);
+export const IconMedal: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="medal"><circle cx="12" cy="15" r="5" /><path d="M9 3 7 8M15 3l2 5M11 3l1 4 1-4" /><path d="m12 13 .8 1.7 1.8.2-1.4 1.2.5 1.8L12 17l-1.7.9.5-1.8-1.4-1.2 1.8-.2L12 13Z" /></Svg>
+);
+export const IconBall: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="sports ball"><circle cx="12" cy="12" r="9" /><path d="m12 7.5 3 2.2-1.1 3.6h-3.8L9 9.7l3-2.2ZM12 7.5V3.2M15 9.7l3.6-2M13.9 13.3l1.8 3.6M10.1 13.3l-1.8 3.6M9 9.7 5.4 7.7" /></Svg>
+);
+
+// ── Entertainment ─────────────────────────────────────────────────────────────────
+export const IconFilm: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="film"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M7.5 5v14M16.5 5v14M3 9.5h4.5M3 14.5h4.5M16.5 9.5H21M16.5 14.5H21" /></Svg>
+);
+export const IconMusic: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="music"><path d="M9 18V6l11-2v12" /><circle cx="6" cy="18" r="3" /><circle cx="17" cy="16" r="3" /></Svg>
+);
+export const IconCamera: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="camera"><path d="M4 8h3l1.5-2.2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z" /><circle cx="12" cy="13" r="3.2" /></Svg>
+);
+export const IconHeadphones: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="headphones"><path d="M4 14v-2a8 8 0 0 1 16 0v2" /><path d="M4 14a2 2 0 0 1 2 2v2a2 2 0 0 1-4 0v-2a2 2 0 0 1 2-2ZM20 14a2 2 0 0 0-2 2v2a2 2 0 0 0 4 0v-2a2 2 0 0 0-2-2Z" /></Svg>
+);
+
+// ── Communication ─────────────────────────────────────────────────────────────────
+export const IconMail: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="mail"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3.5 7 8.5 6 8.5-6" /></Svg>
+);
+export const IconChat: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="chat"><path d="M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H9l-4 4v-4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z" /><path d="M8.5 10h7M8.5 13h4" /></Svg>
+);
+export const IconPhone: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="phone"><path d="M6 3h3l1.5 5-2 1.5a11 11 0 0 0 5 5l1.5-2 5 1.5v3a2 2 0 0 1-2.2 2A16 16 0 0 1 4 5.2 2 2 0 0 1 6 3Z" /></Svg>
+);
+export const IconShare: React.FC<IconProps> = (p) => (
+  <Svg {...p} label="share"><circle cx="6" cy="12" r="2.5" /><circle cx="17" cy="6" r="2.5" /><circle cx="17" cy="18" r="2.5" /><path d="m8.2 10.8 6.6-3.6M8.2 13.2l6.6 3.6" /></Svg>
+);
+
 /** One catalog entry for the Gallery's Icons browser. */
 export interface DomainIconDef {
   name: string;
-  category: 'Travel' | 'Finance' | 'News' | 'Planning' | 'Places';
+  category: 'Travel' | 'Finance' | 'News' | 'Planning' | 'Places' | 'Tech' | 'Health' | 'Science' | 'Sports' | 'Media';
   keywords: string[];
   Icon: React.FC<IconProps>;
 }
@@ -169,5 +253,29 @@ export const DOMAIN_ICONS: DomainIconDef[] = [
   { name: 'Restaurant', category: 'Places', keywords: ['food', 'dining', 'eat', 'fork'], Icon: IconFork },
   { name: 'Coffee', category: 'Places', keywords: ['cafe', 'drink', 'tea', 'break'], Icon: IconCoffee },
   { name: 'Shopping', category: 'Places', keywords: ['store', 'retail', 'buy', 'bag'], Icon: IconBag },
-  { name: 'Pin', category: 'Places', keywords: ['location', 'map', 'place', 'marker'], Icon: IconPin }
+  { name: 'Pin', category: 'Places', keywords: ['location', 'map', 'place', 'marker'], Icon: IconPin },
+  { name: 'Chip', category: 'Tech', keywords: ['cpu', 'processor', 'hardware', 'compute'], Icon: IconChip },
+  { name: 'Code', category: 'Tech', keywords: ['dev', 'programming', 'brackets', 'software'], Icon: IconCode },
+  { name: 'Cloud', category: 'Tech', keywords: ['server', 'hosting', 'sync', 'storage'], Icon: IconCloud },
+  { name: 'Database', category: 'Tech', keywords: ['data', 'store', 'sql', 'records'], Icon: IconDatabase },
+  { name: 'Robot', category: 'Tech', keywords: ['ai', 'bot', 'agent', 'automation'], Icon: IconRobot },
+  { name: 'Rocket', category: 'Tech', keywords: ['launch', 'startup', 'ship', 'fast'], Icon: IconRocket },
+  { name: 'Health', category: 'Health', keywords: ['heart', 'pulse', 'medical', 'vitals'], Icon: IconHeartPulse },
+  { name: 'Fitness', category: 'Health', keywords: ['gym', 'workout', 'weights', 'exercise'], Icon: IconDumbbell },
+  { name: 'Wellness', category: 'Health', keywords: ['leaf', 'nature', 'calm', 'eco'], Icon: IconLeaf },
+  { name: 'Vitals', category: 'Health', keywords: ['activity', 'heartbeat', 'monitor', 'pulse'], Icon: IconActivity },
+  { name: 'Flask', category: 'Science', keywords: ['lab', 'chemistry', 'experiment', 'research'], Icon: IconFlask },
+  { name: 'Atom', category: 'Science', keywords: ['physics', 'nuclear', 'particle', 'science'], Icon: IconAtom },
+  { name: 'DNA', category: 'Science', keywords: ['biology', 'genetics', 'helix', 'health'], Icon: IconDna },
+  { name: 'Trophy', category: 'Sports', keywords: ['win', 'champion', 'award', 'first'], Icon: IconTrophy },
+  { name: 'Medal', category: 'Sports', keywords: ['award', 'rank', 'achievement', 'win'], Icon: IconMedal },
+  { name: 'Ball', category: 'Sports', keywords: ['soccer', 'football', 'game', 'play'], Icon: IconBall },
+  { name: 'Film', category: 'Media', keywords: ['movie', 'video', 'cinema', 'watch'], Icon: IconFilm },
+  { name: 'Music', category: 'Media', keywords: ['song', 'audio', 'track', 'play'], Icon: IconMusic },
+  { name: 'Camera', category: 'Media', keywords: ['photo', 'picture', 'shoot', 'lens'], Icon: IconCamera },
+  { name: 'Headphones', category: 'Media', keywords: ['audio', 'podcast', 'listen', 'sound'], Icon: IconHeadphones },
+  { name: 'Mail', category: 'Media', keywords: ['email', 'message', 'inbox', 'send'], Icon: IconMail },
+  { name: 'Chat', category: 'Media', keywords: ['message', 'talk', 'comment', 'reply'], Icon: IconChat },
+  { name: 'Phone', category: 'Media', keywords: ['call', 'contact', 'telephone', 'dial'], Icon: IconPhone },
+  { name: 'Share', category: 'Media', keywords: ['network', 'send', 'connect', 'distribute'], Icon: IconShare }
 ];
