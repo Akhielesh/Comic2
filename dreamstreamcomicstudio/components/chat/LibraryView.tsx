@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Search, LayoutGrid, List, FileText, Download, ExternalLink, MessageSquare,
-  Sparkles, Upload, X, ImageOff, ArrowUpRight
+  Sparkles, Upload, Globe, X, ImageOff, ArrowUpRight
 } from 'lucide-react';
 import type { ChatSession } from '../../services/chatStorage';
 import {
@@ -35,23 +35,30 @@ const KIND_TABS: { value: KindTab; label: string }[] = [
 const ORIGIN_FILTERS: { value: OriginFilter; label: string; icon: React.FC<{ className?: string }> }[] = [
   { value: 'all', label: 'All sources', icon: LayoutGrid },
   { value: 'upload', label: 'Uploads', icon: Upload },
-  { value: 'generated', label: 'Generated', icon: Sparkles }
+  { value: 'generated', label: 'Generated', icon: Sparkles },
+  { value: 'sourced', label: 'From web', icon: Globe }
 ];
+
+const ORIGIN_META: Record<LibraryItemOrigin, { label: string; title: string; icon: React.FC<{ className?: string }>; accent: boolean }> = {
+  upload: { label: 'Upload', title: 'Uploaded by you', icon: Upload, accent: false },
+  generated: { label: 'Generated', title: 'Created by a model in a chat', icon: Sparkles, accent: true },
+  sourced: { label: 'Web', title: 'Found on the web by a tool — not generated', icon: Globe, accent: false }
+};
 
 const isPreviewable = (item: LibraryItem): boolean =>
   item.kind === 'image' || (item.mimeType || '').includes('pdf');
 
 const OriginBadge: React.FC<{ origin: LibraryItemOrigin }> = ({ origin }) => {
-  const generated = origin === 'generated';
-  const Icon = generated ? Sparkles : Upload;
+  const meta = ORIGIN_META[origin];
+  const Icon = meta.icon;
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
-        generated ? `${ACCENT_SOFT_BG} ${ACCENT_TEXT}` : `bg-[var(--ds-well)] ${MUTED}`
+        meta.accent ? `${ACCENT_SOFT_BG} ${ACCENT_TEXT}` : `bg-[var(--ds-well)] ${MUTED}`
       }`}
-      title={generated ? 'Generated in a chat' : 'Uploaded by you'}
+      title={meta.title}
     >
-      <Icon className="w-3 h-3" /> {generated ? 'Generated' : 'Upload'}
+      <Icon className="w-3 h-3" /> {meta.label}
     </span>
   );
 };

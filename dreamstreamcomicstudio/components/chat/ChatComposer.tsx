@@ -8,7 +8,7 @@ import type { ChatConnector } from '../../services/chatConnectors';
 import type { McpServerConfig } from '../../apiTypes';
 import { DictationButton } from './DictationButton';
 import {
-  CANVAS_BG, GLASS_STRONG, HAIRLINE, MUTED, TRANSITION, SHADOW_SOFT,
+  CANVAS_BG, GLASS_STRONG, HAIRLINE, MUTED, INK, TRANSITION, SHADOW_SOFT,
   RADIUS_PANEL, PILL, CONTROL_BTN, ACCENT_BG, ACCENT_BG_HOVER, ACCENT_TEXT, ACCENT_SOFT_BG
 } from './studioDesign';
 
@@ -50,6 +50,33 @@ const fileToAttachment = (file: File): Promise<ChatAttachment> =>
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+
+// Pasting a wall of text shouldn't bury the composer (and degrades quality). Past this
+// many characters we stash it as a "Pasted text" chip instead; it's inlined back into
+// the message at send time so the model still reads all of it.
+const PASTE_TO_FILE_THRESHOLD = 1200;
+
+// UTF-8-safe base64 of arbitrary text (btoa alone breaks on non-Latin1 chars).
+const encodeText = (text: string): string => {
+  try { return btoa(unescape(encodeURIComponent(text))); } catch { return btoa(text); }
+};
+const decodeTextLen = (dataUrl: string): number => {
+  try {
+    const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
+    return decodeURIComponent(escape(atob(b64))).length;
+  } catch { return 0; }
+};
+const pastedChars = (dataUrl: string): string => {
+  const n = decodeTextLen(dataUrl);
+  return n >= 1000 ? `${Math.round(n / 100) / 10}k chars` : `${n} chars`;
+};
+const textAttachment = (text: string): ChatAttachment => ({
+  id: crypto.randomUUID(),
+  name: `pasted-text-${Date.now()}.txt`,
+  mimeType: 'text/plain',
+  kind: 'text',
+  dataUrl: `data:text/plain;base64,${encodeText(text)}`
+});
 
 export const ChatComposer: React.FC<ChatComposerProps> = ({
   busy,
@@ -248,6 +275,24 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   };
 
+  // Smart paste: dropped/pasted images become attachments, and a very long text paste
+  // is stashed as a compact "Pasted text" chip instead of flooding the box.
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const dt = e.clipboardData;
+    if (!dt) return;
+    if (dt.files && dt.files.length > 0) {
+      e.preventDefault();
+      void handleFiles(dt.files);
+      return;
+    }
+    const pasted = dt.getData('text/plain');
+    if (pasted && pasted.length >= PASTE_TO_FILE_THRESHOLD && attachments.length < MAX_ATTACHMENTS) {
+      e.preventDefault();
+      setAttachments((prev) => [...prev, textAttachment(pasted)].slice(0, MAX_ATTACHMENTS));
+    }
+    // Otherwise let the textarea insert the text normally.
+  };
+
   return (
     <div className={`${CANVAS_BG} px-3 pt-1 pb-[max(0.75rem,env(safe-area-inset-bottom))]`}>
       <div className={`${GLASS_STRONG} ${HAIRLINE} ${SHADOW_SOFT} ${RADIUS_PANEL} p-3 transition-shadow duration-300 focus-within:border-[#D97757]/40 focus-within:shadow-[0_0_0_1px_rgba(217,119,87,0.35),0_2px_10px_rgba(217,119,87,0.14),0_18px_46px_rgba(217,119,87,0.10)]`}>
@@ -296,7 +341,15 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
         <div className="flex flex-wrap gap-2 mb-2">
           {attachments.map((att) => (
             <div key={att.id} className="relative">
-              {att.kind === 'document' ? (
+              {att.kind === 'text' ? (
+                <div className={`h-14 max-w-[180px] rounded-xl ${HAIRLINE} bg-[var(--ds-surface-soft)] flex items-center gap-2 pl-2.5 pr-3`}>
+                  <FileText className={`w-5 h-5 shrink-0 ${ACCENT_TEXT}`} />
+                  <span className="min-w-0">
+                    <span className={`block text-[11px] font-medium ${INK} truncate`}>Pasted text</span>
+                    <span className={`block text-[10px] ${MUTED}`}>{pastedChars(att.dataUrl)}</span>
+                  </span>
+                </div>
+              ) : att.kind === 'document' ? (
                 <div className={`w-14 h-14 rounded-xl ${HAIRLINE} bg-[var(--ds-surface-soft)] flex flex-col items-center justify-center p-1`}>
                   <FileText className={`w-5 h-5 ${ACCENT_TEXT}`} />
                   <span className={`text-[8px] font-medium ${MUTED} truncate w-full text-center mt-0.5`}>{att.name}</span>
@@ -377,6 +430,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
             autoGrow(e.target);
           }}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           rows={1}
           placeholder="Message the model…  (Enter to send)"
           className="flex-1 resize-none bg-transparent rounded-xl px-3 py-2.5 text-base sm:text-sm text-[var(--ds-ink)] placeholder:text-[var(--ds-muted)] outline-none max-h-[200px]"
