@@ -12,6 +12,7 @@ import {
   type DashboardTile
 } from './customDashboards';
 import { resolveWidgetIntent } from './widgetIntent';
+import { resolveStockSymbol } from './symbolResolve';
 import type { WidgetDensity } from '../components/chat/artifacts/kit';
 
 export interface DashboardCommandResult {
@@ -40,7 +41,10 @@ const EDIT_RE =
 
 const EDIT_TOOLS: Record<string, (v: string) => { tool: string; args: Record<string, unknown>; label: string }> = {
   weather: (v) => ({ tool: 'get_weather', args: { location: v }, label: `Weather · ${v}` }),
-  stock: (v) => ({ tool: 'get_stock', args: { symbol: v }, label: `${v.toUpperCase()}` }),
+  stock: (v) => {
+    const r = resolveStockSymbol(v);
+    return { tool: 'get_stock', args: { symbol: r?.symbol ?? v }, label: r?.name ?? v.toUpperCase() };
+  },
   news: (v) => ({ tool: 'get_news', args: { query: v }, label: `News · ${v}` }),
   crypto: (v) => ({ tool: 'crypto_price', args: { coin: v }, label: `${v} price` }),
   coin: (v) => ({ tool: 'crypto_price', args: { coin: v }, label: `${v} price` }),

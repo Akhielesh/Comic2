@@ -17,6 +17,8 @@ describe('parseDashboardCommand — edits', () => {
   });
   it('parses crypto and fx', () => {
     expect(parseDashboardCommand('switch crypto to solana')).toMatchObject({ kind: 'edit', tool: 'crypto_price', args: { coin: 'solana' } });
+    // A company name in an edit resolves to its ticker too.
+    expect(parseDashboardCommand('change stocks to rivian')).toMatchObject({ kind: 'edit', tool: 'get_stock', args: { symbol: 'RIVN' } });
     expect(parseDashboardCommand('change fx to USD to EUR')).toMatchObject({ kind: 'edit', tool: 'exchange_rate', args: { from: 'USD', to: 'EUR' } });
   });
 });
