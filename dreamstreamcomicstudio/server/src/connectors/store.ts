@@ -389,7 +389,8 @@ export const countItems = async (userId: string, connectionId: string): Promise<
 export const saveOAuthState = async (input: {
   state: string;
   userId: string;
-  connectorId: string;
+  /** All services in this single consent (≥1). The first is the primary. */
+  connectorIds: string[];
   codeVerifier: string;
   redirectUri: string;
   scopes: string[];
@@ -400,7 +401,8 @@ export const saveOAuthState = async (input: {
   const { error } = await getSupabaseAdmin().from('connector_oauth_state').insert({
     state: input.state,
     user_id: input.userId,
-    connector_id: input.connectorId,
+    connector_id: input.connectorIds[0],
+    connector_ids: input.connectorIds,
     encrypted_verifier: enc.ciphertext,
     verifier_iv: enc.iv,
     redirect_uri: input.redirectUri,
@@ -412,7 +414,8 @@ export const saveOAuthState = async (input: {
 
 export interface ConsumedOAuthState {
   userId: string;
-  connectorId: string;
+  /** All services to materialize from this single grant. */
+  connectorIds: string[];
   codeVerifier: string;
   redirectUri: string;
   scopes: string[];
@@ -426,7 +429,7 @@ export const consumeOAuthState = async (state: string): Promise<ConsumedOAuthSta
   const admin = getSupabaseAdmin();
   const { data, error } = await admin
     .from('connector_oauth_state')
-    .select('user_id, connector_id, encrypted_verifier, verifier_iv, redirect_uri, scopes, expires_at')
+    .select('user_id, connector_id, connector_ids, encrypted_verifier, verifier_iv, redirect_uri, scopes, expires_at')
     .eq('state', state)
     .maybeSingle();
   if (error) throw new Error(`oauth state read failed: ${error.message}`);
@@ -439,9 +442,10 @@ export const consumeOAuthState = async (state: string): Promise<ConsumedOAuthSta
   const codeVerifier = decryptSecret(String(data.encrypted_verifier), String(data.verifier_iv));
   if (!codeVerifier) return null;
 
+  const ids = (data.connector_ids as string[] | null) || [];
   return {
     userId: String(data.user_id),
-    connectorId: String(data.connector_id),
+    connectorIds: ids.length ? ids : [String(data.connector_id)],
     codeVerifier,
     redirectUri: String(data.redirect_uri),
     scopes: (data.scopes as string[]) || []

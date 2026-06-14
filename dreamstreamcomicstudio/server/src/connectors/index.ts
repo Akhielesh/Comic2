@@ -10,10 +10,22 @@
 import { connectorRegistry } from './registry.js';
 import { upsertCatalog } from './store.js';
 import { GmailConnector } from './connectors/gmail.js';
+import { GoogleDriveConnector } from './connectors/googleDrive.js';
+import { GoogleCalendarConnector } from './connectors/googleCalendar.js';
+import { GoogleSheetsConnector } from './connectors/googleSheets.js';
+import { YouTubeConnector } from './connectors/youtube.js';
 import { GoogleMapsConnector } from './connectors/googleMaps.js';
 
-// v1 slice: Gmail (per-user OAuth) + Google Maps (API key) — two auth models, one path.
-connectorRegistry.registerAll([new GmailConnector(), new GoogleMapsConnector()]);
+// Google Suite (per-user OAuth, one consent for the whole group) + Google Maps (API key).
+// Adding a connector = one line here.
+connectorRegistry.registerAll([
+  new GmailConnector(),
+  new GoogleDriveConnector(),
+  new GoogleCalendarConnector(),
+  new GoogleSheetsConnector(),
+  new YouTubeConnector(),
+  new GoogleMapsConnector()
+]);
 
 export { connectorRegistry };
 

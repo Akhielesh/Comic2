@@ -49,6 +49,7 @@ export class GmailConnector extends GoogleOAuthConnector {
     icon: 'Mail',
     category: 'google_workspace',
     authType: 'user_oauth',
+    providerGroup: 'google',
     requiredScopes: [
       'https://www.googleapis.com/auth/gmail.readonly',
       'https://www.googleapis.com/auth/userinfo.email',

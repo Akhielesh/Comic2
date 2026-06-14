@@ -246,7 +246,10 @@ for each row execute function public.touch_updated_at();
 create table if not exists public.connector_oauth_state (
   state               text primary key,                 -- random base64url nonce
   user_id             uuid not null references auth.users(id) on delete cascade,
-  connector_id        text not null,
+  connector_id        text not null,                    -- primary/initiating connector
+  -- All services included in this single consent (a multi-service Google grant). The
+  -- callback creates one connection per id, sharing the granted token.
+  connector_ids       text[] not null default '{}',
   encrypted_verifier  text not null,                    -- PKCE code_verifier (ciphertext)
   verifier_iv         text not null,
   redirect_uri        text not null,

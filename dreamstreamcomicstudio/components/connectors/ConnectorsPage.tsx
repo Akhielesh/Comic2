@@ -23,10 +23,12 @@ import {
 import { Skeleton } from '../studio/kit/Shimmer';
 import { ConnectorIcon, statusVisual } from './connectorIcons';
 import { ConnectDialog } from './ConnectDialog';
+import { GoogleConnectDialog } from './GoogleConnectDialog';
 import {
   fetchCatalog,
   fetchConnections,
   connectConnector,
+  connectGoogleServices,
   syncConnection,
   disconnectConnection,
   type CatalogEntry,
@@ -57,6 +59,7 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void }> = ({ onBack }) =>
   const [connections, setConnections] = useState<ConnectionSummary[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [dialogEntry, setDialogEntry] = useState<CatalogEntry | null>(null);
+  const [googleDialogOpen, setGoogleDialogOpen] = useState(false);
   const [connecting, setConnecting] = useState<string | null>(null);
   const [busyConn, setBusyConn] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -186,6 +189,43 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void }> = ({ onBack }) =>
     [pushToast, refreshConnections, watchPopupClose]
   );
 
+  // Seamless multi-service Google flow: disconnect any removed services, then (if new
+  // services were added) run ONE consent covering the full selection.
+  const handleGoogleSubmit = useCallback(
+    async (selected: string[], toDisconnect: string[]) => {
+      setConnecting('google');
+      try {
+        for (const id of toDisconnect) {
+          const conns = (connections || []).filter((c) => c.connectorId === id);
+          for (const c of conns) await disconnectConnection(c.id);
+        }
+        const connectedSet = new Set((connections || []).map((c) => c.connectorId));
+        const needConsent = selected.some((id) => !connectedSet.has(id));
+        if (needConsent && selected.length) {
+          const { authorizationUrl } = await connectGoogleServices(selected);
+          setGoogleDialogOpen(false);
+          const popup = window.open(authorizationUrl, 'connector_oauth', 'width=520,height=700');
+          if (!popup) {
+            window.location.assign(authorizationUrl);
+            return;
+          }
+          popupRef.current = popup;
+          watchPopupClose(popup);
+          // Result arrives via the postMessage listener (clears state + refreshes).
+        } else {
+          setGoogleDialogOpen(false);
+          setConnecting(null);
+          if (toDisconnect.length) pushToast('success', 'Google services updated');
+          await refreshConnections();
+        }
+      } catch (err) {
+        setConnecting(null);
+        pushToast('error', (err as Error)?.message || 'Could not update Google services');
+      }
+    },
+    [connections, pushToast, refreshConnections, watchPopupClose]
+  );
+
   const handleSync = useCallback(
     async (conn: ConnectionSummary) => {
       setBusyConn(conn.id);
@@ -238,6 +278,17 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void }> = ({ onBack }) =>
     }
     return map;
   }, [connections]);
+
+  // Google OAuth services group into ONE card + one consent; everything else stays a
+  // standalone card.
+  const googleServices = useMemo(() => (catalog || []).filter((c) => c.providerGroup === 'google'), [catalog]);
+  const otherCatalog = useMemo(() => (catalog || []).filter((c) => c.providerGroup !== 'google'), [catalog]);
+  const googleConnectedIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const c of connections || []) if (googleServices.some((g) => g.id === c.connectorId)) ids.add(c.connectorId);
+    return ids;
+  }, [connections, googleServices]);
+  const googleConfigured = googleServices.some((g) => g.configured);
 
   const isLoading = catalog === null || connections === null;
 
@@ -317,7 +368,16 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void }> = ({ onBack }) =>
             </div>
           ) : catalog && catalog.length > 0 ? (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {catalog.map((entry) => (
+              {googleServices.length > 0 && (
+                <GoogleGroupCard
+                  services={googleServices}
+                  connectedCount={googleConnectedIds.size}
+                  configured={googleConfigured}
+                  connecting={connecting === 'google'}
+                  onManage={() => setGoogleDialogOpen(true)}
+                />
+              )}
+              {otherCatalog.map((entry) => (
                 <CatalogCard
                   key={entry.id}
                   entry={entry}
@@ -342,6 +402,17 @@ export const ConnectorsPage: React.FC<{ onBack?: () => void }> = ({ onBack }) =>
           submitting={connecting === dialogEntry.id}
           onSubmit={(apiKey) => void handleConnect(dialogEntry, apiKey)}
           onClose={() => setDialogEntry(null)}
+        />
+      )}
+
+      {googleDialogOpen && (
+        <GoogleConnectDialog
+          services={googleServices}
+          connectedIds={googleConnectedIds}
+          configured={googleConfigured}
+          submitting={connecting === 'google'}
+          onSubmit={(selected, toDisconnect) => void handleGoogleSubmit(selected, toDisconnect)}
+          onClose={() => setGoogleDialogOpen(false)}
         />
       )}
 
@@ -422,6 +493,60 @@ const CatalogCard: React.FC<{
         {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : connected ? <Plus className="h-4 w-4" /> : <Plug className="h-4 w-4" />}
         {connected ? 'Add account' : 'Connect'}
       </button>
+    </div>
+  );
+};
+
+// ---- Google group card (one card, one consent for the whole suite) ---------
+
+const GoogleGroupCard: React.FC<{
+  services: CatalogEntry[];
+  connectedCount: number;
+  configured: boolean;
+  connecting: boolean;
+  onManage: () => void;
+}> = ({ services, connectedCount, configured, connecting, onManage }) => {
+  const connected = connectedCount > 0;
+  return (
+    <div className="flex flex-col rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)] sm:col-span-2">
+      <div className="flex items-start justify-between">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#D97757]/10 text-[var(--ds-accent)]">
+          <Plug className="h-5 w-5" aria-hidden />
+        </div>
+        {connected && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700">
+            <CheckCircle2 className="h-3 w-3" /> {connectedCount} connected
+          </span>
+        )}
+      </div>
+      <h3 className="mt-3 text-base font-semibold">Google</h3>
+      <p className="mt-1 flex-1 text-sm text-[var(--ds-muted)]">
+        Connect Gmail, Drive, Calendar, Sheets &amp; YouTube — one sign-in covers the services you pick, and you can
+        change your choices anytime.
+      </p>
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {services.map((s) => (
+          <span
+            key={s.id}
+            title={s.displayName}
+            className="flex h-7 w-7 items-center justify-center rounded-md bg-[var(--ds-well)] text-[var(--ds-muted)]"
+          >
+            <ConnectorIcon name={s.icon} className="h-4 w-4" />
+          </span>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={onManage}
+        disabled={connecting}
+        className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[var(--ds-accent)] px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[var(--ds-accent-hover)] focus-visible:ring-2 focus-visible:ring-[#D97757]/40 disabled:opacity-60 sm:w-auto sm:self-start sm:px-5"
+      >
+        {connecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plug className="h-4 w-4" />}
+        {connected ? 'Manage services' : 'Connect Google'}
+      </button>
+      {!configured && (
+        <p className="mt-2 text-xs text-amber-700">Needs the server's Google OAuth client to be configured.</p>
+      )}
     </div>
   );
 };

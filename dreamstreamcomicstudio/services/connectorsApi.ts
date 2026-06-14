@@ -21,6 +21,8 @@ export interface CatalogEntry {
   icon: string;
   category: string;
   authType: ConnectorAuthType;
+  /** Connectors sharing one Google consent screen are grouped under 'google'. */
+  providerGroup?: 'google';
   requiredScopes: string[];
   capabilities: ConnectorCapabilities;
   userProvidesKey: boolean;
@@ -74,6 +76,13 @@ export type ConnectResult =
 
 export const connectConnector = (connectorId: string, body: { apiKey?: string } = {}): Promise<ConnectResult> =>
   post<{ apiKey?: string }, ConnectResult & { ok: boolean }>(`/api/connectors/${encodeURIComponent(connectorId)}/connect`, body);
+
+/** Connect several Google services in ONE consent. Returns the consent URL to open. */
+export const connectGoogleServices = (services: string[]): Promise<{ authorizationUrl: string }> =>
+  post<{ services: string[] }, { ok: boolean; mode: 'redirect'; authorizationUrl: string }>(
+    '/api/connectors/google/connect',
+    { services }
+  );
 
 export const syncConnection = (connectionId: string, full = false): Promise<{ queued: boolean }> =>
   post<{ full: boolean }, { ok: boolean; queued: boolean }>(

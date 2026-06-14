@@ -20,7 +20,13 @@ import {
 } from '../config.js';
 import { connectorRegistry } from '../connectors/index.js';
 import { buildClientCatalog } from '../connectors/catalog.js';
-import { googleRedirectUri } from '../connectors/oauth.js';
+import {
+  buildGoogleAuthUrl,
+  generatePkce,
+  generateState,
+  googleRedirectUri,
+  isGoogleOAuthConfigured
+} from '../connectors/oauth.js';
 import { getValidAccessToken } from '../connectors/credentials.js';
 import { triggerSync } from '../connectors/sync/trigger.js';
 import { connectorDashboardData, retrieveItems } from '../connectors/retrieval.js';
@@ -96,11 +102,13 @@ connectorsPublicRouter.get('/oauth/callback', async (req, res) => {
   // Unknown/expired/replayed state → CSRF guard trips here.
   if (!state) return fail('invalid_or_expired_state');
 
-  const connector = connectorRegistry.get(state.connectorId);
-  if (!connector) return fail('unknown_connector');
+  // The auth code is single-use, so we exchange it ONCE (via the primary connector) and
+  // apply the resulting Google token to every service in this consent.
+  const primary = connectorRegistry.get(state.connectorIds[0]);
+  if (!primary) return fail('unknown_connector');
 
   try {
-    const result = await connector.handleCallback({
+    const result = await primary.handleCallback({
       code,
       codeVerifier: state.codeVerifier,
       redirectUri: state.redirectUri,
@@ -108,26 +116,30 @@ connectorsPublicRouter.get('/oauth/callback', async (req, res) => {
       scopes: state.scopes
     });
 
-    const connection = await upsertConnection({
-      userId: state.userId,
-      connectorId: state.connectorId,
-      authType: 'user_oauth',
-      accountIdentifier: result.accountIdentifier,
-      accountLabel: result.accountLabel ?? null,
-      grantedScopes: result.grantedScopes,
-      status: 'connected'
-    });
-    await saveCredentials(connection.id, state.userId, 'oauth2', result.tokens);
-
-    // Kick off the initial full sync (queued or inline).
-    if (connector.metadata.capabilities.syncable) {
-      await triggerSync(state.userId, connection.id, 'full');
+    const connected: string[] = [];
+    for (const id of state.connectorIds) {
+      const connector = connectorRegistry.get(id);
+      if (!connector) continue;
+      const connection = await upsertConnection({
+        userId: state.userId,
+        connectorId: id,
+        authType: 'user_oauth',
+        accountIdentifier: result.accountIdentifier,
+        accountLabel: result.accountLabel ?? null,
+        grantedScopes: result.grantedScopes,
+        status: 'connected'
+      });
+      await saveCredentials(connection.id, state.userId, 'oauth2', result.tokens);
+      if (connector.metadata.capabilities.syncable) {
+        await triggerSync(state.userId, connection.id, 'full');
+      }
+      connected.push(id);
     }
 
-    return res.redirect(appReturnUrl({ connected: state.connectorId }));
+    return res.redirect(appReturnUrl({ connected: connected.join(',') }));
   } catch (err) {
     logger.warn('connector_oauth_callback_failed', {
-      connector: state.connectorId,
+      connector: state.connectorIds.join(','),
       message: (err as Error)?.message
     });
     const reason = err instanceof ConnectorAuthError ? err.code : 'callback_failed';
@@ -206,7 +218,7 @@ connectorsRouter.post('/:connectorId/connect', async (req, res, next) => {
       await saveOAuthState({
         state: result.state,
         userId,
-        connectorId: connector.metadata.id,
+        connectorIds: [connector.metadata.id],
         codeVerifier: result.codeVerifier,
         redirectUri,
         scopes,
@@ -233,6 +245,51 @@ connectorsRouter.post('/:connectorId/connect', async (req, res, next) => {
     if (err instanceof ConnectorAuthError) {
       return res.status(400).json({ error: { message: err.message, code: err.code } });
     }
+    next(err);
+  }
+});
+
+// POST /google/connect — connect MULTIPLE Google services in ONE consent.
+// Body: { services: string[] }. Builds a single grant for the union of the selected
+// services' scopes; the callback materializes a connection per service from that one
+// token. This is the seamless "pick your Google services" flow.
+connectorsRouter.post('/google/connect', async (req, res, next) => {
+  try {
+    const userId = requireUser(req, res);
+    if (!userId) return;
+
+    const requested: string[] = Array.isArray(req.body?.services) ? req.body.services.map(String) : [];
+    const chosen = requested
+      .map((id) => connectorRegistry.get(id))
+      .filter((c): c is NonNullable<typeof c> =>
+        Boolean(c && c.metadata.authType === 'user_oauth' && c.metadata.providerGroup === 'google')
+      );
+    if (!chosen.length) {
+      return res.status(400).json({ error: { message: 'Select at least one Google service to connect' } });
+    }
+    if (!isGoogleOAuthConfigured()) {
+      return res.status(400).json({ error: { message: 'Google OAuth is not configured on the server', code: 'no_credentials' } });
+    }
+
+    // Union of least-privilege scopes across the selected services (deduped).
+    const scopes = [...new Set(chosen.flatMap((c) => c.metadata.requiredScopes))];
+    const redirectUri = googleRedirectUri();
+    const { codeVerifier, codeChallenge } = generatePkce();
+    const state = generateState();
+    const authorizationUrl = buildGoogleAuthUrl({ scopes, state, codeChallenge, redirectUri });
+
+    await saveOAuthState({
+      state,
+      userId,
+      connectorIds: chosen.map((c) => c.metadata.id),
+      codeVerifier,
+      redirectUri,
+      scopes,
+      expiresAt: new Date(Date.now() + CONNECTORS_OAUTH_STATE_TTL_MS).toISOString()
+    });
+
+    res.json({ ok: true, mode: 'redirect', authorizationUrl });
+  } catch (err) {
     next(err);
   }
 });

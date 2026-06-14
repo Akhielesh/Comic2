@@ -19,6 +19,7 @@ export interface ClientCatalogEntry {
   icon: string;
   category: ConnectorCategory;
   authType: ConnectorAuthType;
+  providerGroup?: 'google';
   requiredScopes: string[];
   capabilities: ConnectorCapabilities;
   userProvidesKey: boolean;
@@ -48,6 +49,7 @@ export const buildClientCatalog = async (): Promise<ClientCatalogEntry[]> => {
         icon: m.icon,
         category: m.category,
         authType: m.authType,
+        providerGroup: m.providerGroup,
         requiredScopes: m.requiredScopes,
         capabilities: m.capabilities,
         userProvidesKey: Boolean(m.userProvidesKey),

@@ -52,6 +52,12 @@ export interface ConnectorMetadata {
   icon: string;
   category: ConnectorCategory;
   authType: ConnectorAuthType;
+  /**
+   * Connectors that share ONE provider OAuth client + a single consent screen. The UI
+   * groups these into one "Connect Google" card and grants their union of scopes in a
+   * single popup. Undefined → the connector connects on its own.
+   */
+  providerGroup?: 'google';
   /** OAuth scopes requested (least-privilege). Empty for api_key connectors. */
   requiredScopes: string[];
   capabilities: ConnectorCapabilities;

@@ -52,8 +52,12 @@ server/src/connectors/
   retrieval.ts      # unified query interface (RAG block, structured rows, dashboard aggregates)
   index.ts          # >>> register connectors here (the ONE place) + seed catalog <<<
   connectors/
-    gmail.ts        # Gmail connector (OAuth)
-    googleMaps.ts   # Google Maps connector (API key)
+    gmail.ts          # Gmail (OAuth)            ┐
+    googleDrive.ts    # Drive (OAuth)            │ providerGroup: 'google'
+    googleCalendar.ts # Calendar (OAuth)         │ — one consent screen for
+    googleSheets.ts   # Sheets (OAuth, on-demand)│   the whole suite
+    youtube.ts        # YouTube own channel(OAuth)┘
+    googleMaps.ts     # Google Maps (API key)
   sync/
     queue.ts        # BullMQ queue (REDIS_URL)
     runner.ts       # one idempotent, resumable page per call
@@ -176,6 +180,18 @@ by sync status, per-connection, and a GIN FTS index over title/snippet/content_t
    with `Retry-After`** on 429 / 403-quota / 5xx, and a typed 401 → reconnect.
 
 Tokens are never logged; the credentials table is deny-all to clients.
+
+### Seamless multi-service Google connect
+
+Connectors with `providerGroup: 'google'` (Gmail, Drive, Calendar, Sheets, YouTube)
+render as **one "Google" card**. The user ticks the services they want and
+`POST /api/connectors/google/connect { services }` builds **one consent** for the
+**union** of those services' least-privilege scopes. `connector_oauth_state.connector_ids`
+records the selection; the callback exchanges the single-use code **once** and
+materializes a connection per service from that one token (incremental consent via
+`include_granted_scopes=true`). Re-opening the dialog lets the user **add** services
+(re-consents incrementally) or **remove** them (disconnects) — settings are changeable
+anytime. Target: one click in the dialog + one Google screen.
 
 ---
 
