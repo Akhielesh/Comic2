@@ -7,7 +7,8 @@
 // unrecognized phrase simply falls back to a keyword search over the catalog.
 
 import type { WidgetDensity } from '../components/chat/artifacts/kit';
-import { WIDGET_BY_TOOL, searchWidgets, type WidgetDef } from '../components/chat/widgetCatalog';
+import { EMBED_TILE, WIDGET_BY_TOOL, searchWidgets, type WidgetDef } from '../components/chat/widgetCatalog';
+import { isEmbeddableVideo } from '../components/chat/videoEmbed';
 import { resolveStockSymbol } from './symbolResolve';
 
 export interface WidgetSuggestion {
@@ -98,6 +99,11 @@ export const resolveWidgetIntent = (queryRaw: string): WidgetSuggestion[] => {
     seen.add(s.key);
     out.push(s);
   };
+
+  // 0) A pasted YouTube/Vimeo link → a playable embed tile.
+  if (/^https?:\/\/\S+$/i.test(query) && isEmbeddableVideo(query)) {
+    add(mk(EMBED_TILE, 'Embed this video', 'Plays on the board', { url: query }, 'Video', true));
+  }
 
   // 1) Direct, no-config tools named outright.
   for (const d of DIRECT_TOOLS) {
