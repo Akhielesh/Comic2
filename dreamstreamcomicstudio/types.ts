@@ -276,12 +276,17 @@ export interface LocationStructuredDetails {
   constraints?: string;
 }
 
+/** How much screen time an entity gets — drives reference-sheet strategy (v3 spec §3.3).
+ *  lead = sheet always; support = sheet when budget allows; extra = descriptor-locked, no sheet. */
+export type CastTier = 'lead' | 'support' | 'extra';
+
 export interface Character {
   id: string;
   name: string;
   bio: string; // Backstory/Personality
   description: string; // Visual prompt
   structured?: CharacterStructuredDetails;
+  castTier?: CastTier;
   imageId?: string;
   imageUrl?: string;
   referenceImageIds: string[];
