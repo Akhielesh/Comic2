@@ -70,7 +70,7 @@ server/sql/account_connectors.sql        # schema (UP)
 server/sql/account_connectors_down.sql   # schema (DOWN, reversible)
 
 services/connectorsApi.ts                # client API
-components/connectors/ConnectorsPage.tsx # top-level "Connectors" nav section
+components/connectors/ConnectorsPage.tsx # Connectors UI (Chat Studio settings tab; supports embedded mode)
 components/connectors/ConnectDialog.tsx  # connect flow (OAuth popup / API-key form)
 components/connectors/connectorIcons.tsx # icon + status visuals
 ```

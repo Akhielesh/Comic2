@@ -19,6 +19,7 @@ import {
   getAccountKeyMeta
 } from '../services/apiKeys';
 import { getProviderDef, type ProviderId } from '../shared/providers';
+import { ProviderLogo, hasProviderLogo } from './providerLogos';
 import { isProviderEnabled, setProviderEnabled } from '../services/sourceGovernance';
 import { validateApiKey } from '../services/keyValidation';
 import { listMcpServers, addMcpServer, removeMcpServer } from '../services/mcpServers';
@@ -458,7 +459,11 @@ const ProviderCard: React.FC<{
       <div className="w-full flex items-center gap-3 px-3.5 py-3">
         <button onClick={onToggleOpen} className="flex items-center gap-2.5 min-w-0 flex-1 text-left">
           {open ? <ChevronDown className={`w-4 h-4 shrink-0 ${MUTED}`} /> : <ChevronRight className={`w-4 h-4 shrink-0 ${MUTED}`} />}
-          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: def?.accent || 'var(--ds-muted)' }} />
+          <span className="shrink-0 grid place-items-center w-6 h-6 rounded-lg bg-[var(--ds-well)]" style={{ color: def?.accent || 'var(--ds-muted)' }}>
+            {hasProviderLogo(provider)
+              ? <ProviderLogo provider={provider} className="w-4 h-4" title={meta.label} />
+              : <span className="w-2.5 h-2.5 rounded-full" style={{ background: def?.accent || 'var(--ds-muted)' }} />}
+          </span>
           <span className="min-w-0">
             <span className="flex items-center gap-2">
               <span className={`font-semibold text-sm truncate ${INK}`}>{meta.label}</span>
