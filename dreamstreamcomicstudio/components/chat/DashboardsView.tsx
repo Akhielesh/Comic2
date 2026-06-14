@@ -18,9 +18,11 @@ import { useAuth } from '../../contexts/AuthContext';
 import { persistUiState, resolveInitialUiState } from '../../services/viewState';
 import { DensityProvider, relativeTime, type WidgetDensity } from './artifacts/kit';
 import { renderArtifactNode } from './artifacts/ChatArtifacts';
+import { GameCard } from './artifacts/GameCard';
+import type { GameKind } from '../../apiTypes';
 import { DictationButton } from './DictationButton';
 import {
-  AI_CHAT_TILE, EMBED_TILE, TOOL_LABELS, WIDGET_BY_TOOL, WIDGET_CATEGORIES, buildTileFromFields, searchWidgets,
+  AI_CHAT_TILE, EMBED_TILE, GAME_TILE, TOOL_LABELS, WIDGET_BY_TOOL, WIDGET_CATEGORIES, buildTileFromFields, searchWidgets,
   type WidgetDef
 } from './widgetCatalog';
 import { toVideoEmbed, isEmbeddableVideo } from './videoEmbed';
@@ -84,6 +86,18 @@ const EmbedTile: React.FC<{ tile: DashboardTile }> = ({ tile }) => {
       >
         {url || 'No link'}
       </a>
+    </div>
+  );
+};
+
+// A fully playable game tile (no live-data fetch) — renders the same GameCard the
+// chat uses, with its own size + fullscreen controls.
+const GameTile: React.FC<{ tile: DashboardTile }> = ({ tile }) => {
+  const game = (typeof tile.args.game === 'string' ? tile.args.game : 'snake') as GameKind;
+  const difficulty = typeof tile.args.difficulty === 'string' ? tile.args.difficulty : undefined;
+  return (
+    <div className="h-full w-full">
+      <GameCard data={{ game, ...(difficulty ? { difficulty: difficulty as 'easy' | 'normal' | 'hard' } : {}) }} />
     </div>
   );
 };
@@ -1154,7 +1168,7 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode; onAsk?
   }, [active?.id]);
 
   const fetchTile = useCallback(async (tile: DashboardTile) => {
-    if (tile.tool === AI_CHAT_TILE || tile.tool === PINNED_TILE || tile.tool === EMBED_TILE) return; // no live-data fetch
+    if (tile.tool === AI_CHAT_TILE || tile.tool === PINNED_TILE || tile.tool === EMBED_TILE || tile.tool === GAME_TILE) return; // no live-data fetch
     if (inflight.current.has(tile.id)) return;
     inflight.current.add(tile.id);
     setTileStates((prev) => ({ ...prev, [tile.id]: { ...prev[tile.id], loading: true } }));
@@ -1583,7 +1597,7 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode; onAsk?
                   setDropIndex(null);
                 }}
               >
-                {tile.tool === AI_CHAT_TILE || tile.tool === EMBED_TILE ? (
+                {tile.tool === AI_CHAT_TILE || tile.tool === EMBED_TILE || tile.tool === GAME_TILE ? (
                   <div
                     className="group/tile relative h-full"
                     style={tileHeight(tile) != null ? { height: tileHeight(tile)! } : undefined}
@@ -1599,7 +1613,7 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode; onAsk?
                         </button>
                       </div>
                     )}
-                    {tile.tool === AI_CHAT_TILE ? <AiChatTile /> : <EmbedTile tile={tile} />}
+                    {tile.tool === AI_CHAT_TILE ? <AiChatTile /> : tile.tool === GAME_TILE ? <GameTile tile={tile} /> : <EmbedTile tile={tile} />}
                   </div>
                 ) : (
                 <TileCard

@@ -10,7 +10,7 @@
 
 import {
   ArrowRightLeft, Banknote, Bitcoin, CalendarClock, CalendarRange, CandlestickChart, Clapperboard,
-  CloudSun, Coins, Gauge, Landmark, LineChart, Map as MapIcon, MapPin, MessageCircle, Navigation,
+  CloudSun, Coins, Gamepad2, Gauge, Landmark, LineChart, Map as MapIcon, MapPin, MessageCircle, Navigation,
   Newspaper, PiggyBank, Plane, Route, Scale, Sparkles, TrendingUp, Youtube
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -25,9 +25,13 @@ export const AI_CHAT_TILE = 'ai_chat';
 // fetch, rendered from its `url` arg via the videoEmbed util.
 export const EMBED_TILE = 'embed';
 
-export type WidgetCategory = 'Essentials' | 'Markets' | 'Crypto' | 'Travel & places' | 'Calendars & more';
+// 'play_game' is a special tile: a fully playable mini-game (no live-data fetch),
+// rendered from its `game` arg by GameCard. Matches the server `play_game` tool.
+export const GAME_TILE = 'play_game';
 
-export const WIDGET_CATEGORIES: WidgetCategory[] = ['Essentials', 'Markets', 'Crypto', 'Travel & places', 'Calendars & more'];
+export type WidgetCategory = 'Essentials' | 'Markets' | 'Crypto' | 'Travel & places' | 'Calendars & more' | 'Games';
+
+export const WIDGET_CATEGORIES: WidgetCategory[] = ['Essentials', 'Markets', 'Crypto', 'Travel & places', 'Calendars & more', 'Games'];
 
 export interface WidgetField {
   key: string;
@@ -146,6 +150,32 @@ export const WIDGET_CATALOG: WidgetDef[] = [
     category: 'Essentials',
     defaultDensity: 'detailed',
     fields: [{ key: 'url', label: 'Video link', placeholder: 'https://youtube.com/watch?v=…' }]
+  },
+  // ----------------------------------------------------------------- Games ----
+  {
+    tool: GAME_TILE,
+    label: 'Games',
+    icon: Gamepad2,
+    blurb: 'Play Snake, Brick breaker, 2048 or Memory right on the board',
+    category: 'Games',
+    defaultDensity: 'detailed',
+    fields: [{
+      key: 'game',
+      label: 'Game',
+      default: 'snake',
+      select: [
+        { value: 'snake', label: 'Snake' },
+        { value: 'breakout', label: 'Brick breaker' },
+        { value: '2048', label: '2048' },
+        { value: 'memory', label: 'Memory match' }
+      ]
+    }],
+    presets: [
+      { label: 'Snake', args: { game: 'snake' }, tileLabel: 'Snake' },
+      { label: 'Brick breaker', args: { game: 'breakout' }, tileLabel: 'Brick breaker' },
+      { label: '2048', args: { game: '2048' }, tileLabel: '2048' },
+      { label: 'Memory match', args: { game: 'memory' }, tileLabel: 'Memory match' }
+    ]
   },
   // -------------------------------------------------------------- Markets ----
   {
@@ -437,6 +467,12 @@ export const buildTileFromFields = (
   if (def.tool === EMBED_TILE) {
     if (typeof args.url !== 'string' || !args.url) return null;
     return { tool: def.tool, args, label: 'Video', density };
+  }
+  // play_game: a local playable tile — label by the chosen game.
+  if (def.tool === GAME_TILE) {
+    const game = typeof args.game === 'string' && args.game ? args.game : 'snake';
+    const labels: Record<string, string> = { snake: 'Snake', breakout: 'Brick breaker', '2048': '2048', memory: 'Memory match' };
+    return { tool: def.tool, args: { game }, label: labels[game] ?? 'Game', density };
   }
   // get_stock: accept a company name typed straight into the field ("rivian" → RIVN),
   // so the symbol box is forgiving instead of erroring on anything but an exact ticker.
