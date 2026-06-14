@@ -5,6 +5,11 @@
 // Messages, threads, search → normalized `document` items. Full backfill paginates
 // via messages.list; incremental sync resumes from a Gmail historyId (users.history)
 // so it's idempotent and resumable. Scope is least-privilege gmail.readonly.
+//
+// On top of the sync pipeline, fetch() also serves the Chat Studio EMAIL WIDGETS
+// (the email "terminal"): the resources `inbox` / `unread` / `search` return rich
+// EmailMessage rows (sender, flags, labels, link), `message` reads a single message's
+// full decoded body, and `thread` reads a whole conversation. All read-only.
 // ============================================================================
 
 import { GoogleOAuthConnector } from '../base.js';
@@ -19,18 +24,28 @@ import type {
 } from '../types.js';
 
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
+// Cap a decoded body so a giant email can't bloat a response/transport.
+const MAX_BODY_CHARS = 20_000;
 
 interface GmailMessageRef { id: string; threadId?: string }
 interface GmailListResponse { messages?: GmailMessageRef[]; nextPageToken?: string; resultSizeEstimate?: number }
 interface GmailHeader { name: string; value: string }
+interface GmailPart {
+  mimeType?: string;
+  filename?: string;
+  headers?: GmailHeader[];
+  body?: { data?: string; size?: number; attachmentId?: string };
+  parts?: GmailPart[];
+}
 interface GmailMessage {
   id: string;
   threadId?: string;
   snippet?: string;
   internalDate?: string;
   labelIds?: string[];
-  payload?: { headers?: GmailHeader[] };
+  payload?: { headers?: GmailHeader[] } & GmailPart;
 }
+interface GmailThreadResponse { id?: string; messages?: GmailMessage[] }
 interface GmailProfile { emailAddress?: string; historyId?: string; messagesTotal?: number }
 interface GmailHistoryResponse {
   history?: Array<{ messagesAdded?: Array<{ message?: { id: string } }> }>;
@@ -38,8 +53,86 @@ interface GmailHistoryResponse {
   nextPageToken?: string;
 }
 
+/** Rich email row consumed by the Chat Studio email widgets (mirrors apiTypes EmailMessage). */
+interface EmailMessageView {
+  id: string;
+  threadId: string | null;
+  subject: string;
+  from: { name: string; email: string } | null;
+  to: string | null;
+  snippet: string | null;
+  date: string | null;
+  unread: boolean;
+  starred: boolean;
+  important: boolean;
+  labels: string[];
+  url: string;
+  body?: string;
+}
+
 const header = (msg: GmailMessage, name: string): string | undefined =>
   msg.payload?.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value;
+
+const safeIso = (s: string): string | null => {
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? new Date(t).toISOString() : null;
+};
+
+/** Parse a `"Name" <email>` header into its parts (falls back to the raw string). */
+const parseAddress = (raw?: string): { name: string; email: string } | null => {
+  if (!raw) return null;
+  const m = raw.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/);
+  if (m) return { name: (m[1] || '').trim() || m[2].trim(), email: m[2].trim() };
+  const v = raw.trim();
+  return v ? { name: v, email: v } : null;
+};
+
+const decodeB64Url = (data?: string): string => {
+  if (!data) return '';
+  try {
+    return Buffer.from(data.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8');
+  } catch {
+    return '';
+  }
+};
+
+const stripHtml = (html: string): string =>
+  html
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<\/(p|div|br|li|tr|h[1-6])>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+/** Walk a MIME tree, preferring text/plain, falling back to stripped text/html. */
+const extractPlainText = (payload?: GmailPart): string => {
+  if (!payload) return '';
+  const walk = (part: GmailPart | undefined, prefer: string): string => {
+    if (!part) return '';
+    if (part.mimeType === prefer && part.body?.data) return decodeB64Url(part.body.data);
+    for (const p of part.parts || []) {
+      const r = walk(p, prefer);
+      if (r) return r;
+    }
+    return '';
+  };
+  const plain = walk(payload, 'text/plain');
+  const text = plain || stripHtml(walk(payload, 'text/html'));
+  return text.length > MAX_BODY_CHARS ? `${text.slice(0, MAX_BODY_CHARS)}\n…` : text;
+};
+
+const clampMax = (v: unknown, fallback: number, cap: number): number => {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.min(cap, Math.floor(n)) : fallback;
+};
 
 export class GmailConnector extends GoogleOAuthConnector {
   readonly metadata: ConnectorMetadata = {
@@ -75,9 +168,16 @@ export class GmailConnector extends GoogleOAuthConnector {
   private getMessage(token: string, id: string, signal?: AbortSignal): Promise<GmailMessage> {
     // metadataHeaders repeats, so pass it via an explicit query string.
     return googleApiFetch<GmailMessage>(
-      `${GMAIL_BASE}/messages/${encodeURIComponent(id)}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`,
+      `${GMAIL_BASE}/messages/${encodeURIComponent(id)}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date`,
       { accessToken: token, signal }
     );
+  }
+
+  private getFullMessage(token: string, id: string, signal?: AbortSignal): Promise<GmailMessage> {
+    return googleApiFetch<GmailMessage>(`${GMAIL_BASE}/messages/${encodeURIComponent(id)}?format=full`, {
+      accessToken: token,
+      signal
+    });
   }
 
   private getProfile(token: string, signal?: AbortSignal): Promise<GmailProfile> {
@@ -95,12 +195,11 @@ export class GmailConnector extends GoogleOAuthConnector {
     });
   }
 
-  /** Fetch full metadata for ids and normalize them into documents. */
+  /** Fetch full metadata for ids and normalize them into documents (sync pipeline). */
   private async fetchAndNormalize(token: string, ids: string[], signal?: AbortSignal): Promise<NormalizedItem[]> {
     const out: NormalizedItem[] = [];
     for (const id of ids) {
       if (signal?.aborted) break;
-      // Request the headers we render via an explicit metadataHeaders list.
       const msg = await googleApiFetch<GmailMessage>(
         `${GMAIL_BASE}/messages/${encodeURIComponent(id)}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`,
         { accessToken: token, signal }
@@ -110,7 +209,56 @@ export class GmailConnector extends GoogleOAuthConnector {
     return out;
   }
 
-  // --- Data lifecycle ---
+  // --- Email-widget data path (rich rows + bodies) ---
+
+  /** Map a Gmail message to the rich row the email widgets render. */
+  private toEmailView(msg: GmailMessage, withBody = false): EmailMessageView {
+    const labels = msg.labelIds || [];
+    const internalMs = msg.internalDate ? Number(msg.internalDate) : NaN;
+    const date = Number.isFinite(internalMs)
+      ? new Date(internalMs).toISOString()
+      : header(msg, 'Date')
+        ? safeIso(header(msg, 'Date') as string)
+        : null;
+    return {
+      id: msg.id,
+      threadId: msg.threadId || null,
+      subject: header(msg, 'Subject') || '(no subject)',
+      from: parseAddress(header(msg, 'From')),
+      to: header(msg, 'To') || null,
+      snippet: msg.snippet || null,
+      date,
+      unread: labels.includes('UNREAD'),
+      starred: labels.includes('STARRED'),
+      important: labels.includes('IMPORTANT'),
+      labels,
+      url: `https://mail.google.com/mail/u/0/#all/${msg.id}`,
+      ...(withBody ? { body: extractPlainText(msg.payload) } : {})
+    };
+  }
+
+  /** List messages matching `q` and hydrate each into a rich email row. */
+  private async listEmails(
+    token: string,
+    opts: { q?: string; pageToken?: string; max?: number; signal?: AbortSignal }
+  ): Promise<{ emails: EmailMessageView[]; nextCursor: string | null }> {
+    const list = await this.listMessages(token, {
+      q: opts.q,
+      pageToken: opts.pageToken,
+      maxResults: opts.max ?? 25,
+      signal: opts.signal
+    });
+    const ids = (list.messages || []).map((m) => m.id);
+    const emails: EmailMessageView[] = [];
+    for (const id of ids) {
+      if (opts.signal?.aborted) break;
+      const msg = await this.getMessage(token, id, opts.signal);
+      emails.push(this.toEmailView(msg));
+    }
+    return { emails, nextCursor: list.nextPageToken || null };
+  }
+
+  // --- Data lifecycle (sync) ---
 
   async syncFull(ctx: SyncContext): Promise<SyncResult> {
     const token = await ctx.getAccessToken();
@@ -171,19 +319,57 @@ export class GmailConnector extends GoogleOAuthConnector {
 
   async fetch(input: FetchInput): Promise<unknown> {
     const token = await input.getAccessToken();
-    if (input.resource === 'search') {
-      const q = String((input.params.q ?? input.params.query) || '');
-      const maxResults = Math.min(25, Number(input.params.maxResults) || 10);
-      const list = await this.listMessages(token, { q, maxResults, signal: input.signal });
-      const items = await this.fetchAndNormalize(token, (list.messages || []).map((m) => m.id), input.signal);
-      return { items };
+    const resource = input.resource;
+    const p = input.params || {};
+
+    // Email widgets: an inbox / unread / search list of rich rows.
+    if (resource === 'inbox' || resource === 'unread' || resource === 'list' || resource === 'search') {
+      const extra = String(p.q ?? p.query ?? '').trim();
+      const base = resource === 'unread' ? 'is:unread' : resource === 'search' ? '' : 'in:inbox';
+      const q = [base, extra].filter(Boolean).join(' ') || undefined;
+      const { emails, nextCursor } = await this.listEmails(token, {
+        q,
+        pageToken: typeof p.cursor === 'string' ? p.cursor : undefined,
+        max: clampMax(p.max, 25, 50),
+        signal: input.signal
+      });
+      const box = resource === 'unread' ? 'unread' : 'inbox';
+      // Keep `items` for the legacy text tool (gmail_search) that reads NormalizedItem rows.
+      const items: NormalizedItem[] = emails.map((e) => ({
+        kind: 'document',
+        externalId: e.id,
+        title: e.subject,
+        snippet: e.snippet,
+        contentText: e.snippet,
+        author: e.from?.name || e.from?.email || null,
+        url: e.url,
+        occurredAt: e.date,
+        payload: { threadId: e.threadId, from: e.from, unread: e.unread }
+      }));
+      return { box, emails, nextCursor, items };
     }
-    if (input.resource === 'message') {
-      const id = String(input.params.id || '');
-      const msg = await this.getMessage(token, id, input.signal);
-      return { message: msg, items: this.normalize(msg) };
+
+    // A single message with its full decoded body (the reading pane).
+    if (resource === 'message' || resource === 'body') {
+      const id = String(p.id || '');
+      if (!id) throw new Error('message id is required');
+      const msg = await this.getFullMessage(token, id, input.signal);
+      return { email: this.toEmailView(msg, true), items: this.normalize(msg) };
     }
-    throw new Error(`Unsupported Gmail resource: ${input.resource}`);
+
+    // A whole conversation, each message with its body.
+    if (resource === 'thread') {
+      const id = String(p.id ?? p.threadId ?? '');
+      if (!id) throw new Error('thread id is required');
+      const thread = await googleApiFetch<GmailThreadResponse>(
+        `${GMAIL_BASE}/threads/${encodeURIComponent(id)}?format=full`,
+        { accessToken: token, signal: input.signal }
+      );
+      const emails = (thread.messages || []).map((m) => this.toEmailView(m, true));
+      return { threadId: id, emails, subject: emails[0]?.subject || null };
+    }
+
+    throw new Error(`Unsupported Gmail resource: ${resource}`);
   }
 
   normalize(raw: unknown): NormalizedItem[] {
@@ -218,8 +404,3 @@ export class GmailConnector extends GoogleOAuthConnector {
     ];
   }
 }
-
-const safeIso = (s: string): string | null => {
-  const t = Date.parse(s);
-  return Number.isFinite(t) ? new Date(t).toISOString() : null;
-};

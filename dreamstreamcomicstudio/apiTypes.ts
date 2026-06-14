@@ -1682,6 +1682,60 @@ export interface NewsResultsArtifact {
   items: NewsItem[];
 }
 
+// --- Email widgets (the Chat Studio "email terminal") ----------------------
+// Emitted by the gmail_inbox / gmail_unread / gmail_compose tools over the user's
+// READ-ONLY Gmail connection. The list/reader widgets self-serve search, paging and
+// body reads via the authenticated connectors fetch endpoint (services/emailApi.ts),
+// scoped to `connectionId`; compose hands off to Gmail (we never send on their behalf).
+export interface EmailMessage {
+  id: string;
+  threadId?: string | null;
+  subject: string;
+  from?: { name: string; email: string } | null;
+  /** Raw `To` header (recipients), when present. */
+  to?: string | null;
+  snippet?: string | null;
+  /** ISO timestamp (internalDate / Date header). */
+  date?: string | null;
+  unread?: boolean;
+  starred?: boolean;
+  important?: boolean;
+  labels?: string[];
+  /** Deep-link to the message in Gmail. */
+  url: string;
+  /** Full decoded plain-text body — only present after an on-demand read. */
+  body?: string;
+}
+export interface EmailInboxArtifact {
+  /** Which mailbox view this is. */
+  box: 'inbox' | 'unread';
+  account?: string;
+  accountLabel?: string | null;
+  /** The connection id — lets the widget fetch more / search / read bodies (server-scoped). */
+  connectionId: string;
+  /** Active Gmail query the list was pre-filtered with, if any. */
+  query?: string;
+  emails: EmailMessage[];
+  /** Gmail pageToken for "load more", or null when the list is exhausted. */
+  nextCursor?: string | null;
+  density?: 'compact' | 'detailed';
+}
+/** Unread is the same shape as inbox (box: 'unread'); kept as an alias for clarity. */
+export type EmailUnreadArtifact = EmailInboxArtifact;
+export interface EmailComposeArtifact {
+  to?: string;
+  cc?: string;
+  subject?: string;
+  body?: string;
+  /** The connected account this would be sent from (display only). */
+  account?: string;
+  /** One-click Gmail web-compose deep-link (prefilled). */
+  gmailUrl: string;
+  /** mailto: fallback for the user's default mail client. */
+  mailto: string;
+  density?: 'compact' | 'detailed';
+}
+
 // A nearby place / point of interest (local search). Sourced from OpenStreetMap
 // (keyless), enriched best-effort with a photo from the place's website.
 export interface PlaceResult {

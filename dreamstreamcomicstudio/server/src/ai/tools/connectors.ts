@@ -132,6 +132,135 @@ const makeGmailSearch = (ctx?: ToolContext): ChatTool => ({
     fetchAndFormat(ctx, 'gmail', 'Gmail', 'search', { q: String(args.query || ''), maxResults: Number(args.max) || 10 }, String(args.query || ''))
 });
 
+// ---- Gmail email widgets (the "email terminal") -----------------------------
+// Read-only: we surface an interactive inbox/unread/compose widget. Compose builds a
+// Gmail deep-link (we don't send on the user's behalf — the connection is read-only).
+
+interface EmailRowLike {
+  id?: string;
+  subject?: string;
+  snippet?: string | null;
+  url?: string;
+  unread?: boolean;
+}
+
+const enc = (s: string): string => encodeURIComponent(s || '');
+
+/** Gmail web compose deep-link (prefilled). The user reviews + sends in Gmail. */
+const buildGmailComposeUrl = (d: { to?: string; cc?: string; subject?: string; body?: string }): string => {
+  const q = [
+    `to=${enc(d.to || '')}`,
+    d.cc ? `cc=${enc(d.cc)}` : '',
+    `su=${enc(d.subject || '')}`,
+    `body=${enc(d.body || '')}`
+  ]
+    .filter(Boolean)
+    .join('&');
+  return `https://mail.google.com/mail/?view=cm&fs=1&${q}`;
+};
+
+const buildMailto = (d: { to?: string; cc?: string; subject?: string; body?: string }): string => {
+  const q = [d.cc ? `cc=${enc(d.cc)}` : '', `subject=${enc(d.subject || '')}`, `body=${enc(d.body || '')}`]
+    .filter(Boolean)
+    .join('&');
+  return `mailto:${enc(d.to || '')}?${q}`;
+};
+
+/** Resolve Gmail, list a box (inbox/unread) as rich rows, and return an email-widget artifact. */
+const emailWidget = async (
+  ctx: ToolContext | undefined,
+  box: 'inbox' | 'unread',
+  opts: { q?: string; max?: number }
+): Promise<ToolExecResult> => {
+  const r = await resolve(ctx, 'gmail', 'Gmail');
+  if ('fail' in r) return r.fail;
+  try {
+    const data = (await r.connector.fetch({
+      connection: toConnectionRef(r.connection),
+      getAccessToken: () => getValidAccessToken(r.connection, r.connector),
+      resource: box,
+      params: { q: opts.q || '', max: Math.min(50, opts.max || 25) }
+    })) as { emails?: EmailRowLike[]; nextCursor?: string | null };
+    const emails = data.emails || [];
+    const artifactData = {
+      box,
+      account: r.connection.account_identifier,
+      accountLabel: r.connection.account_label,
+      connectionId: r.connection.id,
+      query: opts.q || '',
+      emails,
+      nextCursor: data.nextCursor ?? null
+    };
+    const noun = box === 'unread' ? 'unread message' : 'message';
+    const summary = emails.length
+      ? `Loaded ${emails.length} ${noun}${emails.length === 1 ? '' : 's'} from ${r.connection.account_identifier}${opts.q ? ` matching "${opts.q}"` : ''}. An interactive email widget is shown — the user can search, open and reply from it. Briefly note the top senders/subjects; don't dump the whole list.`
+      : `No ${noun}s${opts.q ? ` matching "${opts.q}"` : ''} in ${r.connection.account_identifier}.`;
+    return {
+      content: summary,
+      artifacts: [{ type: box === 'unread' ? 'email_unread' : 'email_inbox', data: artifactData }],
+      citations: emails
+        .filter((e) => e.url)
+        .slice(0, 10)
+        .map((e) => ({ url: e.url as string, title: e.subject || undefined }))
+    };
+  } catch (err) {
+    if (err instanceof ConnectorAuthError) return needsAuth('Gmail');
+    return { content: `Gmail request failed: ${(err as Error)?.message || 'unknown error'}.`, notice: { level: 'warn', message: 'Gmail error' } };
+  }
+};
+
+const makeGmailInbox = (ctx?: ToolContext): ChatTool => ({
+  name: 'gmail_inbox',
+  description:
+    "Open the signed-in user's Gmail as an interactive INBOX widget — a large email terminal with a searchable message list, a reading pane, and per-message open/reply actions. Use for 'show/open my email', 'my inbox', 'go through my emails', 'check my mail'. Optional `query` pre-filters with Gmail operators (from:, subject:, has:attachment, newer_than:7d).",
+  parameters: obj({
+    query: { type: 'string', description: 'Optional Gmail search to pre-filter the inbox (e.g. "from:bob newer_than:7d").' },
+    max: { type: 'number', description: 'Messages to load (default 25, cap 50).' }
+  }),
+  execute: (args) => emailWidget(ctx, 'inbox', { q: String(args.query || ''), max: Number(args.max) || 25 })
+});
+
+const makeGmailUnread = (ctx?: ToolContext): ChatTool => ({
+  name: 'gmail_unread',
+  description:
+    "Show the signed-in user's UNREAD Gmail as an interactive widget (an unread-only email terminal). Use for 'unread emails', 'what's new in my inbox', 'do I have new mail', 'any new emails'.",
+  parameters: obj({ max: { type: 'number', description: 'Messages to load (default 25, cap 50).' } }),
+  execute: (args) => emailWidget(ctx, 'unread', { max: Number(args.max) || 25 })
+});
+
+const makeGmailCompose = (ctx?: ToolContext): ChatTool => ({
+  name: 'gmail_compose',
+  description:
+    "Draft an email and show a COMPOSE widget the user can review and open in Gmail to send. The connection is read-only, so this prepares the draft + a one-click Gmail compose link — it does NOT send on the user's behalf. Use for 'write/draft an email to…', 'compose a message', 'draft a reply to…'. Write a complete, well-formed `body`.",
+  parameters: obj(
+    {
+      to: { type: 'string', description: 'Recipient email address(es), comma-separated.' },
+      subject: { type: 'string', description: 'Subject line.' },
+      body: { type: 'string', description: 'The full email body to draft for the user.' },
+      cc: { type: 'string', description: 'Optional cc address(es).' }
+    },
+    ['body']
+  ),
+  execute: async (args): Promise<ToolExecResult> => {
+    const to = String(args.to || '');
+    const cc = String(args.cc || '');
+    const subject = String(args.subject || '');
+    const body = String(args.body || '');
+    let account: string | undefined;
+    const r = await resolve(ctx, 'gmail', 'Gmail');
+    if (!('fail' in r)) account = r.connection.account_identifier;
+    return {
+      content: `Prepared an email draft${to ? ` to ${to}` : ''}${subject ? ` — "${subject}"` : ''}. A compose widget is shown; the user can edit it and click “Open in Gmail” to send (the connection is read-only, so it isn't sent automatically).`,
+      artifacts: [
+        {
+          type: 'email_compose',
+          data: { to, cc, subject, body, account, gmailUrl: buildGmailComposeUrl({ to, cc, subject, body }), mailto: buildMailto({ to, cc, subject, body }) }
+        }
+      ]
+    };
+  }
+});
+
 const makeDriveSearch = (ctx?: ToolContext): ChatTool => ({
   name: 'drive_search',
   description:
@@ -235,6 +364,9 @@ const makeConnectedSearch = (ctx?: ToolContext): ChatTool => ({
 
 const FACTORIES: Record<string, (ctx?: ToolContext) => ChatTool> = {
   gmail_search: makeGmailSearch,
+  gmail_inbox: makeGmailInbox,
+  gmail_unread: makeGmailUnread,
+  gmail_compose: makeGmailCompose,
   drive_search: makeDriveSearch,
   calendar_agenda: makeCalendarAgenda,
   sheets_read: makeSheetsRead,

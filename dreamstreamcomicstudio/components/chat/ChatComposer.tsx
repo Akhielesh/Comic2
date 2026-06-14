@@ -5,6 +5,8 @@ import type { ChatAttachment } from '../../services/chatStorage';
 import { enhancePrompt } from '../../services/chatApi';
 import { REASONING_LEVELS, type ChatModelFeatures } from '../../services/chatFeatures';
 import type { ChatConnector } from '../../services/chatConnectors';
+import { CHAT_CONNECTORS } from '../../services/chatConnectors';
+import { ComposerSlashMenu, filterSlashCommands, type SlashCommand } from './ComposerSlashMenu';
 import type { McpServerConfig } from '../../apiTypes';
 import { DictationButton } from './DictationButton';
 import {
@@ -99,6 +101,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   onStop
 }) => {
   const [text, setText] = useState('');
+  const [slashIndex, setSlashIndex] = useState(0);
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [enhancing, setEnhancing] = useState(false);
   // Holds the pre-enhancement draft so the user can undo a suggestion they dislike.
@@ -241,7 +244,63 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
     resetInput();
   };
 
+  // "/" launcher: when the whole draft is "/word" (no space yet), offer connector/tool
+  // commands. Picking one either runs a ready prompt or seeds the box, and enables the
+  // matching tool group so the model can act on it. Natural language still works on its own.
+  const slashMatch = /^\/(\S*)$/.exec(text);
+  const slashItems = slashMatch ? filterSlashCommands(slashMatch[1]) : [];
+  const slashOpen = slashMatch !== null && slashItems.length > 0;
+
+  // Keep the highlight in range as the query narrows the list.
+  useEffect(() => {
+    setSlashIndex(0);
+  }, [text]);
+
+  const pickSlash = (cmd?: SlashCommand) => {
+    if (!cmd) return;
+    if (cmd.toolCategory && toolsSupported) {
+      const conn = CHAT_CONNECTORS.find((c) => c.category === cmd.toolCategory);
+      if (conn) onToggleConnector(conn, true);
+    }
+    if (cmd.send && !busy) {
+      onSend(cmd.prompt, []);
+      resetInput();
+      return;
+    }
+    setText(cmd.prompt);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        el.focus();
+        autoGrow(el);
+        el.setSelectionRange(el.value.length, el.value.length);
+      }
+    });
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (slashOpen) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSlashIndex((i) => Math.min(slashItems.length - 1, i + 1));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSlashIndex((i) => Math.max(0, i - 1));
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        pickSlash(slashItems[slashIndex]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setText('');
+        return;
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       submit();
@@ -380,6 +439,9 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
       )}
 
       <div className="relative flex items-end gap-2">
+        {slashOpen && (
+          <ComposerSlashMenu items={slashItems} activeIndex={slashIndex} onPick={pickSlash} onHover={setSlashIndex} />
+        )}
         {(
           <>
             <input

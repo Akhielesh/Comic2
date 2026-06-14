@@ -56,6 +56,8 @@ import { LocalCheatsheet } from './artifacts/LocalCheatsheet';
 import { LoyaltyWallet } from './artifacts/LoyaltyWallet';
 import { WidgetStack } from './artifacts/WidgetStack';
 import { ClarifyCard } from './artifacts/ClarifyCard';
+import { EmailTerminal } from './artifacts/EmailTerminal';
+import { EmailCompose } from './artifacts/EmailCompose';
 import { ModelPopularityCard } from '../models/ModelPopularityPanel';
 import type { ModelPopularity } from '../../services/modelPopularity';
 import type { ClarifyArtifact } from '../../apiTypes';
@@ -75,7 +77,8 @@ import type {
   ChartArtifact, MetricBoardArtifact, MapArtifact, DirectionsArtifact,
   DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact,
   RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact, CodeExerciseArtifact,
-  GenerativeUIArtifact, StockComparisonArtifact, ReactComponentArtifact
+  GenerativeUIArtifact, StockComparisonArtifact, ReactComponentArtifact,
+  EmailInboxArtifact, EmailComposeArtifact
 } from '../../apiTypes';
 
 const sqlExerciseDemo: SqlExerciseArtifact = {
@@ -1269,6 +1272,23 @@ const modelPopularityDemo: ModelPopularity = {
   ]
 };
 
+const emailDemoMessages: EmailInboxArtifact['emails'] = [
+  { id: 'm1', threadId: 't1', subject: 'Q3 board deck — final v4 (with appendix)', from: { name: 'Dana Whitfield', email: 'dana@northwind.co' }, to: 'you@gmail.com', snippet: 'Hi — attaching the final board deck. The appendix now has the cohort retention curves you asked for…', date: new Date(Date.now() - 36 * 60_000).toISOString(), unread: true, starred: true, labels: ['INBOX', 'UNREAD', 'STARRED'], url: 'https://mail.google.com/mail/u/0/#all/m1', body: 'Hi —\n\nAttaching the final board deck. The appendix now has the cohort retention curves you asked for, plus the updated ARR bridge.\n\nLet me know if you want the speaker notes exported too.\n\nThanks,\nDana' },
+  { id: 'm2', threadId: 't2', subject: 'Re: invoice #4471', from: { name: 'Billing · Vercel', email: 'billing@vercel.com' }, to: 'you@gmail.com', snippet: 'Your receipt for the Pro plan is attached. Next charge: Jul 1.', date: new Date(Date.now() - 3 * 3600_000).toISOString(), unread: true, labels: ['INBOX', 'UNREAD'], url: 'https://mail.google.com/mail/u/0/#all/m2', body: 'Your receipt for the Pro plan is attached.\n\nNext charge: Jul 1, 2026 — $20.00.\n\n— Vercel Billing' },
+  { id: 'm3', threadId: 't3', subject: 'Lunch Thursday?', from: { name: 'Marcus Lee', email: 'marcus@gmail.com' }, to: 'you@gmail.com', snippet: 'Free around 12:30 near the office? That new ramen place finally opened.', date: new Date(Date.now() - 26 * 3600_000).toISOString(), unread: false, labels: ['INBOX'], url: 'https://mail.google.com/mail/u/0/#all/m3', body: "Free around 12:30 near the office? That new ramen place finally opened and the queue's died down.\n\n— M" },
+  { id: 'm4', threadId: 't4', subject: 'Your weekly analytics digest', from: { name: 'Plausible', email: 'reports@plausible.io' }, to: 'you@gmail.com', snippet: '12,480 visitors this week (+8%). Top page: /pricing.', date: new Date(Date.now() - 2 * 24 * 3600_000).toISOString(), unread: false, labels: ['INBOX'], url: 'https://mail.google.com/mail/u/0/#all/m4', body: '12,480 visitors this week (+8% vs last week).\n\nTop page: /pricing\nTop source: Hacker News\n\nView the full dashboard online.' }
+];
+const emailInboxDemo: EmailInboxArtifact = { box: 'inbox', account: 'you@gmail.com', accountLabel: 'you@gmail.com', connectionId: 'demo-connection', emails: emailDemoMessages, nextCursor: null };
+const emailUnreadDemo: EmailInboxArtifact = { box: 'unread', account: 'you@gmail.com', accountLabel: 'you@gmail.com', connectionId: 'demo-connection', emails: emailDemoMessages.filter((m) => m.unread), nextCursor: null };
+const emailComposeDemo: EmailComposeArtifact = {
+  to: 'dana@northwind.co',
+  subject: 'Re: Q3 board deck — final v4 (with appendix)',
+  body: 'Hi Dana,\n\nThis looks great — the retention curves are exactly what I needed. One small ask: could you also export the speaker notes?\n\nThanks for turning this around so fast.\n\nBest,',
+  account: 'you@gmail.com',
+  gmailUrl: 'https://mail.google.com/mail/?view=cm&fs=1&to=dana%40northwind.co&su=Re%3A%20Q3%20board%20deck',
+  mailto: 'mailto:dana@northwind.co?subject=Re%3A%20Q3%20board%20deck'
+};
+
 export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Model popularity ranking (What DreamStream users run · share bars · req/user counts)', category: 'Data & charts', node: <ModelPopularityCard data={modelPopularityDemo} /> },
   { title: 'Guided learning path (modules · tracked progress · practice prompts)', type: 'learning_path', category: 'Learning', node: <LearningPathCard data={learningPathDemo} /> },
@@ -1278,6 +1298,9 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Comparison chart (overlay 2–6 assets · % rebase ⇄ price · range tabs · legend toggle)', type: 'stock_comparison', category: 'Finance', node: <ComparisonChart data={comparison} /> },
   { title: 'Custom React component (agent-written TSX · sandboxed run · code view)', type: 'react_component', category: 'Agents & code', node: <LiveComponentCard data={reactComponentDemo} /> },
   { title: 'News digest (compact · source-branded · snippets)', type: 'news_results', category: 'News & knowledge', node: <NewsDigest data={news} /> },
+  { title: 'Email terminal (inbox · search · reading pane · open/reply)', type: 'email_inbox', category: 'News & knowledge', node: <EmailTerminal data={emailInboxDemo} /> },
+  { title: 'Unread email (unread-only inbox terminal)', type: 'email_unread', category: 'News & knowledge', node: <EmailTerminal data={emailUnreadDemo} /> },
+  { title: 'Email compose (editable draft · open in Gmail · mailto)', type: 'email_compose', category: 'News & knowledge', node: <EmailCompose data={emailComposeDemo} /> },
   { title: 'Places (local) card', type: 'places_results', category: 'World & media', node: <PlacesResults data={places} /> },
   { title: 'Map (markers · route)', type: 'map', category: 'World & media', node: <MapArtifactCard data={mapArtifact} /> },
   { title: 'Trip map (day-colored legs · flight arcs · sequential draw)', type: 'map', category: 'World & media', node: <MapArtifactCard data={tripMapDemo} /> },

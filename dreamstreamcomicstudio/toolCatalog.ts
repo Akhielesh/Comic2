@@ -871,6 +871,27 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['my email', 'my emails', 'my gmail', 'my inbox', 'search my mail', 'email from', 'check my email', 'unread email', 'message from', 'my messages']
   },
   {
+    name: 'gmail_inbox', label: 'Gmail inbox (email terminal)', category: 'productivity', kind: 'builtin', provider: 'Google (your connected account)',
+    description: "Open the signed-in user's Gmail as a big interactive inbox widget (searchable list + reading pane + open/reply). Optional query pre-filters with Gmail operators.",
+    auth: 'required', authEnv: 'GOOGLE_OAUTH_CLIENT_ID', rateLimit: 'Bounded by the user\'s Gmail API quota',
+    dataShape: 'Interactive email list: sender, subject, snippet, date, unread/star flags + a reading pane.', docsUrl: 'https://developers.google.com/gmail/api',
+    keywords: ['my email', 'my inbox', 'open my email', 'show my email', 'go through my emails', 'check my mail', 'open gmail', 'my gmail', 'read my email', 'email terminal']
+  },
+  {
+    name: 'gmail_unread', label: 'Gmail unread', category: 'productivity', kind: 'builtin', provider: 'Google (your connected account)',
+    description: "Show the signed-in user's UNREAD Gmail as an interactive widget (unread-only email terminal).",
+    auth: 'required', authEnv: 'GOOGLE_OAUTH_CLIENT_ID', rateLimit: 'Bounded by the user\'s Gmail API quota',
+    dataShape: 'Interactive list of unread messages: sender, subject, snippet, date + a reading pane.', docsUrl: 'https://developers.google.com/gmail/api',
+    keywords: ['unread email', 'unread emails', 'new mail', 'new emails', "what's new in my inbox", 'do i have new mail', 'any new emails', 'unread messages']
+  },
+  {
+    name: 'gmail_compose', label: 'Gmail compose (draft)', category: 'productivity', kind: 'builtin', provider: 'Google (your connected account)',
+    description: "Draft an email and show a compose widget with a one-click 'Open in Gmail' link. Read-only connection — it prepares the draft, it does not send.",
+    auth: 'optional', authEnv: 'GOOGLE_OAUTH_CLIENT_ID', rateLimit: 'No API call — builds a Gmail compose link',
+    dataShape: 'Editable compose form (to/cc/subject/body) + Gmail compose + mailto links.', docsUrl: 'https://developers.google.com/gmail/api',
+    keywords: ['write an email', 'draft an email', 'compose an email', 'compose a message', 'draft a reply', 'write a message', 'send an email', 'email to']
+  },
+  {
     name: 'drive_search', label: 'Drive (your files)', category: 'productivity', kind: 'builtin', provider: 'Google (your connected account)',
     description: "Search the signed-in user's own Google Drive files by name and return matches (name, type, link, modified date).",
     auth: 'required', authEnv: 'GOOGLE_OAUTH_CLIENT_ID', rateLimit: 'Bounded by the user\'s Drive API quota',

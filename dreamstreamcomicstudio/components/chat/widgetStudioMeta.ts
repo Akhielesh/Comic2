@@ -63,7 +63,11 @@ export const ARTIFACT_TOOLS: Record<string, string[]> = {
   local_cheatsheet: ['render_cheatsheet'],
   loyalty_wallet: ['render_loyalty_wallet'],
   widget_stack: ['create_widget_stack'],
-  clarify: ['ask_user']
+  clarify: ['ask_user'],
+  // Email widgets — fed by the user's connected (read-only) Gmail.
+  email_inbox: ['gmail_inbox', 'gmail_search'],
+  email_unread: ['gmail_unread'],
+  email_compose: ['gmail_compose']
 };
 
 /** Artifact types the MODEL composes directly (no single producing data tool). */
@@ -98,7 +102,10 @@ export const EXAMPLE_PROMPT: Record<string, string> = {
   learning_path: 'Create a 2-week learning path for SQL',
   video_results: 'Find videos explaining transformers in ML',
   currency_converter: 'Convert 100 USD to EUR',
-  world_clocks: 'World clocks for New York, London and Tokyo'
+  world_clocks: 'World clocks for New York, London and Tokyo',
+  email_inbox: 'Open my Gmail inbox',
+  email_unread: 'Show my unread emails',
+  email_compose: 'Draft an email to alex@example.com about rescheduling Friday'
 };
 
 /** A widget's source kind — drives the badge + a tag. */
