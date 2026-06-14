@@ -6,7 +6,7 @@ import { DensityProvider, type WidgetDensity } from './artifacts/kit';
 import { REFRESHABLE_TOOLS, type ChatArtifact } from '../../apiTypes';
 import { TOOL_CATALOG, type ToolMeta } from '../../toolCatalog';
 import { WIDGET_CATALOG, type WidgetDef } from './widgetCatalog';
-import { ARTIFACT_TOOL, MODEL_AUTHORED, deriveTags, KIND_LABEL, type WidgetKind } from './widgetStudioMeta';
+import { ARTIFACT_TOOLS, MODEL_AUTHORED, deriveTags, KIND_LABEL, type WidgetKind } from './widgetStudioMeta';
 import { refreshArtifact } from '../../services/chatApi';
 import { CANVAS_BG, GLASS, HEADING, MUTED, TRANSITION } from './studioDesign';
 
@@ -16,6 +16,12 @@ import { CANVAS_BG, GLASS, HEADING, MUTED, TRANSITION } from './studioDesign';
 // schema (real JSON), connection point, provider/auth/rate-limit, capabilities and an
 // example invocation — the surface for benchmarking, standardizing and refining widgets.
 
+/** One data source that can feed a visual. */
+interface Source {
+  tool: string;
+  meta?: ToolMeta;
+}
+
 interface StudioEntry {
   id: string;
   title: string;
@@ -23,11 +29,14 @@ interface StudioEntry {
   category: string;
   node: React.ReactNode;
   data: unknown;
-  tool?: string;
-  toolMeta?: ToolMeta;
+  /** Every tool/API that can feed this visual (primary first). */
+  sources: Source[];
+  tool?: string; // primary
+  toolMeta?: ToolMeta; // primary
   widgetDef?: WidgetDef;
   refreshable: boolean;
   densityAware: boolean;
+  multiSource: boolean;
   kind: WidgetKind;
   tags: string[];
 }
@@ -35,14 +44,17 @@ interface StudioEntry {
 const ENTRIES: StudioEntry[] = GALLERY_DEMOS.map((d, i) => {
   const type = d.type;
   const data = React.isValidElement(d.node) ? (d.node.props as { data?: unknown }).data : undefined;
-  const tool = type ? ARTIFACT_TOOL[type] : undefined;
-  const toolMeta = tool ? TOOL_CATALOG.find((t) => t.name === tool) : undefined;
+  const toolNames = type ? ARTIFACT_TOOLS[type] ?? [] : [];
+  const sources: Source[] = toolNames.map((tool) => ({ tool, meta: TOOL_CATALOG.find((t) => t.name === tool) }));
+  const tool = sources[0]?.tool;
+  const toolMeta = sources[0]?.meta;
   const widgetDef = tool ? WIDGET_CATALOG.find((w) => w.tool === tool) : undefined;
-  const refreshable = !!tool && (REFRESHABLE_TOOLS as readonly string[]).includes(tool);
+  const refreshable = toolNames.some((t) => (REFRESHABLE_TOOLS as readonly string[]).includes(t));
   const densityAware = !!type && DENSITY_AWARE_TYPES.has(type);
+  const multiSource = toolNames.length > 1;
   const kind: WidgetKind = type && MODEL_AUTHORED.has(type) ? 'model-authored' : ((toolMeta?.kind as WidgetKind) ?? (type ? 'builtin' : 'static'));
-  const tags = deriveTags({ category: d.category, kind, refreshable, densityAware, toolMeta, title: d.title });
-  return { id: `${type ?? 'misc'}-${i}`, title: d.title, type, category: d.category ?? 'Other', node: d.node, data, tool, toolMeta, widgetDef, refreshable, densityAware, kind, tags };
+  const tags = deriveTags({ category: d.category, kind, refreshable, densityAware, multiSource, toolMeta, title: d.title });
+  return { id: `${type ?? 'misc'}-${i}`, title: d.title, type, category: d.category ?? 'Other', node: d.node, data, sources, tool, toolMeta, widgetDef, refreshable, densityAware, multiSource, kind, tags };
 });
 
 const CATEGORIES = ['All', ...[...new Set(ENTRIES.map((e) => e.category))]];
@@ -97,7 +109,7 @@ export const GalleryStudio: React.FC<GalleryStudioProps> = ({ sidebarControl }) 
     return ENTRIES.filter((e) => {
       if (cat !== 'All' && e.category !== cat) return false;
       if (!q) return true;
-      const hay = [e.title, e.type, e.tool, e.category, e.toolMeta?.provider, ...e.tags].filter(Boolean).join(' ').toLowerCase();
+      const hay = [e.title, e.type, e.category, ...e.tags, ...e.sources.map((s) => s.tool), ...e.sources.map((s) => s.meta?.provider)].filter(Boolean).join(' ').toLowerCase();
       return hay.includes(q);
     });
   }, [query, cat]);
@@ -275,7 +287,7 @@ export const GalleryStudio: React.FC<GalleryStudioProps> = ({ sidebarControl }) 
                     <div className="mb-1 text-[10px] font-bold uppercase tracking-wider text-[var(--ds-muted)]">Connection & spec</div>
                     <dl>
                       <SpecRow label="Artifact type"><code className="font-mono">{selected.type ?? '—'}</code></SpecRow>
-                      <SpecRow label="Tool / source"><code className="font-mono">{selected.tool ?? (selected.kind === 'model-authored' ? 'model-authored' : '—')}</code></SpecRow>
+                      <SpecRow label="Primary source"><code className="font-mono">{selected.tool ?? (selected.kind === 'model-authored' ? 'model-authored' : '—')}</code></SpecRow>
                       <SpecRow label="Kind">{KIND_LABEL[selected.kind]}</SpecRow>
                       <SpecRow label="Provider">{selected.toolMeta?.provider}</SpecRow>
                       <SpecRow label="Auth">{selected.toolMeta?.auth}{selected.toolMeta?.authEnv ? ` · ${selected.toolMeta.authEnv}` : ''}</SpecRow>
@@ -292,6 +304,26 @@ export const GalleryStudio: React.FC<GalleryStudioProps> = ({ sidebarControl }) 
                         )}
                       </SpecRow>
                     </dl>
+                    {/* Data sources — a visual is decoupled from any one source; these are
+                        all the tools/APIs that can feed it (and render_* accept anything). */}
+                    {selected.sources.length > 0 && (
+                      <div className="mt-2">
+                        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">
+                          Data sources{selected.sources.length > 1 ? ` (${selected.sources.length})` : ''}
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {selected.sources.map((s) => (
+                            <span key={s.tool} title={s.meta?.provider} className="inline-flex items-center gap-1 rounded-full border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-2 py-0.5 text-[10px]">
+                              <code className="font-mono text-[var(--ds-ink)]">{s.tool}</code>
+                              {s.meta?.provider && <span className="text-[var(--ds-muted)]">· {s.meta.provider}</span>}
+                            </span>
+                          ))}
+                        </div>
+                        {selected.multiSource && (
+                          <p className="mt-1 text-[10px] text-[var(--ds-muted)]">This visual is general-purpose — the same component renders data from any of these.</p>
+                        )}
+                      </div>
+                    )}
                     {selected.toolMeta?.dataShape && (
                       <p className="mt-2 text-[11px] leading-snug text-[var(--ds-muted)]">
                         <span className="font-semibold text-[var(--ds-ink)]">Data shape: </span>
