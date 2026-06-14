@@ -929,6 +929,8 @@ const AiCommandBar: React.FC<{
   const [result, setResult] = useState<DashboardCommandResult | null>(null);
   // Chips are a first-paint affordance — gone after the first submit.
   const [virgin, setVirgin] = useState(true);
+  // Snapshot of the typed text when a dictation take starts, so speech appends.
+  const dictationBase = useRef('');
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -968,6 +970,14 @@ const AiCommandBar: React.FC<{
             placeholder="Tell the AI what to build, add or change — “add rivian”, “pin bitcoin”, “study dashboard for ML”, “change weather to Tokyo”…"
             className="min-w-0 flex-1 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-3 py-1.5 text-base text-[var(--ds-ink)] outline-none transition-colors placeholder:text-[var(--ds-muted)] focus:border-[var(--ds-accent)] disabled:opacity-60 sm:text-sm"
           />
+          <span className="shrink-0 rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)]">
+            <DictationButton
+              disabled={pending}
+              onStart={() => { dictationBase.current = input; }}
+              onPartial={(spoken) => setInput(dictationBase.current ? `${dictationBase.current} ${spoken}`.trim() : spoken)}
+              onFinal={(spoken) => setInput(dictationBase.current ? `${dictationBase.current} ${spoken}`.trim() : spoken)}
+            />
+          </span>
           <button
             type="submit"
             disabled={pending || !input.trim()}
