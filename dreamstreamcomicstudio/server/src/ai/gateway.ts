@@ -99,9 +99,16 @@ const PLATFORM_KEYS: Partial<Record<AIProviderId, string>> = {
 const platformKeyFor = (providerId?: string): string =>
   (providerId && PLATFORM_KEYS[providerId as AIProviderId]) || OPENROUTER_API_KEY;
 
+// The platform's implicit default provider is the unified gateway (OpenRouter), or NVIDIA
+// when explicitly selected. The direct BYOK providers (openai/anthropic/gemini/…) are chosen
+// per-request by source — they must NEVER become the implicit default just because they were
+// added to the registry. Without this guard, AI_PROVIDER's default ('gemini') would flip the
+// default catalog + generation off OpenRouter the moment a 'gemini' provider was registered.
+const DEFAULT_CAPABLE_PROVIDERS = new Set(['openrouter', 'nvidia']);
+
 /** The provider id the platform runs by default (from AI_PROVIDER, fallback openrouter). */
 export const defaultProviderId = (): string =>
-  PROVIDERS[AI_PROVIDER] ? AI_PROVIDER : 'openrouter';
+  DEFAULT_CAPABLE_PROVIDERS.has(AI_PROVIDER) ? AI_PROVIDER : 'openrouter';
 
 /** True when the unified OpenRouter path should handle the default generation flow. */
 export const isOpenRouterEnabled = (): boolean => AI_PROVIDER === 'openrouter';

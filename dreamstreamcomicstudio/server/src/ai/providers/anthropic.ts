@@ -101,8 +101,8 @@ const partsToBlocks = (content: string | MessagePart[]): Record<string, unknown>
   return blocks;
 };
 
-/** Convert our OpenAI-style messages to Anthropic { system, messages }. */
-const toAnthropic = (messages: ChatMessage[]): { system?: string; messages: Record<string, unknown>[] } => {
+/** Convert our OpenAI-style messages to Anthropic { system, messages }. Exported for tests. */
+export const toAnthropic = (messages: ChatMessage[]): { system?: string; messages: Record<string, unknown>[] } => {
   const systemParts: string[] = [];
   const turns: { role: 'user' | 'assistant'; blocks: Record<string, unknown>[] }[] = [];
 
