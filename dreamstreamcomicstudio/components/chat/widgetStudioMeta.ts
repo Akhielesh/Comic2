@@ -56,7 +56,8 @@ export const ARTIFACT_TOOL: Record<string, string> = {
   local_cheatsheet: 'render_cheatsheet',
   loyalty_wallet: 'render_loyalty_wallet',
   widget_stack: 'create_widget_stack',
-  clarify: 'ask_user'
+  clarify: 'ask_user',
+  react_component: 'render_react'
 };
 
 /** Artifact types the MODEL composes directly (no single producing data tool). */

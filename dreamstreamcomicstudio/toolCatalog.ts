@@ -669,6 +669,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['layout', 'dashboard', 'compose', 'custom', 'arrange', 'panel', 'structure', 'align', 'build ui', 'overview', 'summary card', 'side by side', 'comparison layout']
   },
   {
+    name: 'render_react', label: 'Custom React component', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (sandboxed Sandpack)',
+    description: 'Render a fully-custom interactive widget by writing a self-contained React (TSX) component, run in a sandboxed iframe. For genuinely bespoke interactions/visualizations beyond the render_ui block kit. The substrate where a 21st.dev / shadcn MCP\'s generated component lands.',
+    auth: 'none', rateLimit: 'Unlimited (runs client-side in a sandbox)',
+    dataShape: 'A self-contained React component, rendered in a sandboxed iframe (tap to run).', docsUrl: 'https://dreamstream.app',
+    keywords: ['react', 'component', 'custom widget', 'tsx', 'jsx', 'interactive', 'code widget', 'build component', 'bespoke', 'simulator', 'calculator', 'sandbox', '21st.dev', 'shadcn']
+  },
+  {
     name: 'convert_data', label: 'Convert data', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app, deterministic)',
     description: 'Deterministically parse and convert raw tabular data (CSV / TSV / JSON) between formats and preview it as a table — no hand-transcription. For "turn this into a CSV", "parse this data", "convert this JSON to a table", or reshaping pasted data before charting.',
     auth: 'none', rateLimit: 'Unlimited (parses locally, no API)',

@@ -2120,6 +2120,22 @@ export interface GenerativeUIArtifact {
   root: UIBlock;
 }
 
+// --- Custom React component (sandboxed) ---
+/** A bespoke, fully-custom widget: a self-contained React/TSX component the model (or
+ *  an MCP like 21st.dev) authors on demand, rendered in a sandboxed iframe (Sandpack)
+ *  so it can never touch the host page, cookies or our origin. For genuinely custom
+ *  interactivity beyond render_ui's block kit. Emitted by the `render_react` tool. */
+export interface ReactComponentArtifact {
+  /** A self-contained component module with `export default function App() {…}`. */
+  code: string;
+  title?: string;
+  description?: string;
+  /** Sandbox preview height in px (default 320). */
+  height?: number;
+  /** Extra npm dependencies the component imports, as { name: semver }. */
+  dependencies?: Record<string, string>;
+}
+
 // --- Finance terminal ---
 // The flagship composite: a single artifact that assembles a focus quote, a KPI
 // ribbon, a watchlist/movers table, a sector heatmap, supporting charts and a news

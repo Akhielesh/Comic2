@@ -6,6 +6,7 @@ import { WeatherStation } from './artifacts/WeatherStation';
 import { NewsDigest } from './artifacts/NewsDigest';
 import { MarketCard } from './artifacts/MarketCard';
 import { ComparisonChart } from './artifacts/ComparisonChart';
+import { LiveComponentCard } from './artifacts/LiveComponentCard';
 import { VideoResults } from './artifacts/VideoResults';
 import { PlacesResults } from './artifacts/PlacesResults';
 import { SwarmTraceCard } from './artifacts/SwarmTraceCard';
@@ -74,7 +75,7 @@ import type {
   ChartArtifact, MetricBoardArtifact, MapArtifact, DirectionsArtifact,
   DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact,
   RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact, CodeExerciseArtifact,
-  GenerativeUIArtifact, StockComparisonArtifact
+  GenerativeUIArtifact, StockComparisonArtifact, ReactComponentArtifact
 } from '../../apiTypes';
 
 const sqlExerciseDemo: SqlExerciseArtifact = {
@@ -279,6 +280,30 @@ const comparison: StockComparisonArtifact = {
     { symbol: 'TSLA', name: 'Tesla Inc.', currency: 'USD', last: cmpTsla[cmpTsla.length - 1], ranges: cmpRanges(cmpTsla) },
     { symbol: 'GC=F', name: 'Gold', currency: 'USD', last: cmpGold[cmpGold.length - 1], ranges: cmpRanges(cmpGold) }
   ]
+};
+
+const reactComponentDemo: ReactComponentArtifact = {
+  title: 'Custom React component',
+  description: 'Agent-written TSX, run in a sandboxed iframe (tap to run).',
+  height: 280,
+  code: `import { useState } from 'react';
+
+export default function App() {
+  const [count, setCount] = useState(0);
+  const btn = { background: '#8b5cf6', color: '#fff', border: 'none', borderRadius: 10, padding: '8px 16px', fontSize: 18, cursor: 'pointer' };
+  return (
+    <div style={{ fontFamily: 'system-ui, sans-serif', padding: 24, textAlign: 'center' }}>
+      <h2 style={{ margin: 0 }}>Custom counter</h2>
+      <p style={{ color: '#888', marginTop: 4 }}>A real React component, fully sandboxed.</p>
+      <div style={{ fontSize: 56, fontWeight: 700, margin: '12px 0' }}>{count}</div>
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+        <button style={btn} onClick={() => setCount((c) => c - 1)}>–</button>
+        <button style={{ ...btn, background: '#eee', color: '#333' }} onClick={() => setCount(0)}>reset</button>
+        <button style={btn} onClick={() => setCount((c) => c + 1)}>+</button>
+      </div>
+    </div>
+  );
+}`
 };
 
 const videos: VideoResultsArtifact = {
@@ -1251,6 +1276,7 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Weather station (animated · gauges · map)', type: 'weather', category: 'World & media', node: <WeatherStation data={weather} /> },
   { title: 'Market card (hover · range timeline · candlesticks)', type: 'stock_quote', category: 'Finance', node: <MarketCard data={stock} /> },
   { title: 'Comparison chart (overlay 2–6 assets · % rebase ⇄ price · range tabs · legend toggle)', type: 'stock_comparison', category: 'Finance', node: <ComparisonChart data={comparison} /> },
+  { title: 'Custom React component (agent-written TSX · sandboxed run · code view)', type: 'react_component', category: 'Agents & code', node: <LiveComponentCard data={reactComponentDemo} /> },
   { title: 'News digest (compact · source-branded · snippets)', type: 'news_results', category: 'News & knowledge', node: <NewsDigest data={news} /> },
   { title: 'Places (local) card', type: 'places_results', category: 'World & media', node: <PlacesResults data={places} /> },
   { title: 'Map (markers · route)', type: 'map', category: 'World & media', node: <MapArtifactCard data={mapArtifact} /> },

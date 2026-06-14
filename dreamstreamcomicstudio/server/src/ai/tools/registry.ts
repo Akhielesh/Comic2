@@ -36,7 +36,7 @@ import { TRAVEL_WIDGET_TOOLS } from './travelWidgets.js';
 import { PRODUCTIVITY_TOOLS } from './productivity.js';
 import { REFRESHABLE_TOOLS, type ChatArtifact } from '../../../../apiTypes.js';
 import { generateAppTool } from './codeStudio.js';
-import { generativeUiTool } from './generativeUi.js';
+import { generativeUiTool, renderReactTool } from './generativeUi.js';
 import { convertDataTool } from './convertData.js';
 import { analyzeDataTool } from './analyzeData.js';
 import { transformDataTool } from './transformData.js';
@@ -1093,6 +1093,7 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   show_metrics: metricsTool,
   create_dashboard: dashboardTool,
   render_ui: generativeUiTool,
+  render_react: renderReactTool,
   convert_data: convertDataTool,
   analyze_data: analyzeDataTool,
   transform_data: transformDataTool,

@@ -97,3 +97,51 @@ export const generativeUiTool: ChatTool = {
     };
   }
 };
+
+// `render_react` — a fully-custom widget: the model writes a self-contained React
+// component which the CLIENT runs in a sandboxed iframe (Sandpack) on demand. The
+// server only bounds size + coerces deps; the iframe is the isolation boundary. This
+// is the in-house substrate for "custom widgets on demand" (and where a 21st.dev /
+// shadcn MCP's generated TSX will land, unchanged).
+const coerceDeps = (v: unknown): Record<string, string> | undefined => {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (typeof k === 'string' && typeof val === 'string' && k.length < 100 && val.length < 60) out[k] = val;
+  }
+  return Object.keys(out).length ? out : undefined;
+};
+
+export const renderReactTool: ChatTool = {
+  name: 'render_react',
+  description:
+    'Render a BESPOKE, fully-custom interactive widget by writing a self-contained React component (TSX). Use this ONLY when render_ui\'s block kit genuinely cannot express what is needed — a custom interaction, a small tool/calculator/simulator, or a novel visualization. Provide `code`: a COMPLETE module that DEFAULT-EXPORTS a React component (`export default function App() { … }`), using React + inline styles (or list extra npm packages in `dependencies`). It runs in a SANDBOXED iframe (no access to the page, cookies, storage or our data). Keep it small and self-contained. Prefer render_ui / render_chart / render_table for standard data displays; reach for this when the user wants something genuinely custom.',
+  parameters: {
+    type: 'object',
+    properties: {
+      code: { type: 'string', description: 'A complete TSX module that default-exports a React component: `export default function App() { … }`.' },
+      title: { type: 'string', description: 'Short widget title.' },
+      description: { type: 'string', description: 'One-line description of what it does.' },
+      height: { type: 'number', description: 'Preview height in px (default 320, max 720).' },
+      dependencies: { type: 'object', description: 'Optional extra npm deps as { "name": "semver" }, e.g. { "recharts": "2.x" }.' }
+    },
+    required: ['code']
+  },
+  execute: async (args) => {
+    const code = typeof args?.code === 'string' ? args.code : '';
+    if (!code.trim()) return { content: 'No component code was provided to render_react.' };
+    if (code.length > 24000) return { content: 'The component code is too large — keep custom widgets compact and self-contained.' };
+    const height = typeof args?.height === 'number' && Number.isFinite(args.height) ? Math.max(160, Math.min(720, args.height)) : undefined;
+    const data = {
+      code,
+      title: typeof args?.title === 'string' ? args.title : undefined,
+      description: typeof args?.description === 'string' ? args.description : undefined,
+      height,
+      dependencies: coerceDeps(args?.dependencies)
+    };
+    return {
+      content: 'A custom interactive React component is shown to the user (it runs sandboxed; they tap "Run"). Briefly say what it does and how to use it — do NOT paste the code.',
+      artifacts: [{ type: 'react_component', data }]
+    };
+  }
+};
