@@ -192,6 +192,24 @@ const App: React.FC = () => {
     if (studioHandoffRequestId > 0) setCurrentView('codestudio');
   }, [studioHandoffRequestId]);
 
+  // Connector OAuth popup relay: when THIS page was opened as the Google consent popup
+  // (window.opener is set) and the callback bounced back with a result, post it to the
+  // opener (the Connectors UI in Chat settings) and close — independent of the active
+  // view, so it works now that Connectors lives in a settings tab rather than its own page.
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.opener || window.opener === window) return;
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get('connected');
+    const error = params.get('connector_error');
+    if (!connected && !error) return;
+    try {
+      window.opener.postMessage({ type: 'connector-oauth-result', connected, error }, window.location.origin);
+    } catch {
+      /* cross-origin opener; the opener's own polling will reconcile on close */
+    }
+    window.close();
+  }, []);
+
   // Standalone Stream Studio accounts (confined, and stream_studio is the ONLY active
   // product) live at /live.html — send them there once instead of showing a suite they
   // can't use. The ref guards against repeat assignments while the SPA stays mounted;
