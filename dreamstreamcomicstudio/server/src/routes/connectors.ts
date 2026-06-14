@@ -194,6 +194,53 @@ connectorsRouter.get('/connections', async (req, res, next) => {
   }
 });
 
+// POST /google/connect — connect MULTIPLE Google services in ONE consent.
+// Body: { services: string[] }. Builds a single grant for the union of the selected
+// services' scopes; the callback materializes a connection per service from that one
+// token. This is the seamless "pick your Google services" flow.
+// IMPORTANT: this MUST be registered BEFORE '/:connectorId/connect' — otherwise Express
+// matches '/google/connect' as connectorId="google" (an unknown connector) and 404s.
+connectorsRouter.post('/google/connect', async (req, res, next) => {
+  try {
+    const userId = requireUser(req, res);
+    if (!userId) return;
+
+    const requested: string[] = Array.isArray(req.body?.services) ? req.body.services.map(String) : [];
+    const chosen = requested
+      .map((id) => connectorRegistry.get(id))
+      .filter((c): c is NonNullable<typeof c> =>
+        Boolean(c && c.metadata.authType === 'user_oauth' && c.metadata.providerGroup === 'google')
+      );
+    if (!chosen.length) {
+      return res.status(400).json({ error: { message: 'Select at least one Google service to connect' } });
+    }
+    if (!isGoogleOAuthConfigured()) {
+      return res.status(400).json({ error: { message: 'Google OAuth is not configured on the server', code: 'no_credentials' } });
+    }
+
+    // Union of least-privilege scopes across the selected services (deduped).
+    const scopes = [...new Set(chosen.flatMap((c) => c.metadata.requiredScopes))];
+    const redirectUri = googleRedirectUri();
+    const { codeVerifier, codeChallenge } = generatePkce();
+    const state = generateState();
+    const authorizationUrl = buildGoogleAuthUrl({ scopes, state, codeChallenge, redirectUri });
+
+    await saveOAuthState({
+      state,
+      userId,
+      connectorIds: chosen.map((c) => c.metadata.id),
+      codeVerifier,
+      redirectUri,
+      scopes,
+      expiresAt: new Date(Date.now() + CONNECTORS_OAUTH_STATE_TTL_MS).toISOString()
+    });
+
+    res.json({ ok: true, mode: 'redirect', authorizationUrl });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // POST /:connectorId/connect — begin connecting.
 //   OAuth   → { mode:'redirect', authorizationUrl }
 //   api_key → { mode:'completed', connection }  (body: { apiKey })
@@ -245,51 +292,6 @@ connectorsRouter.post('/:connectorId/connect', async (req, res, next) => {
     if (err instanceof ConnectorAuthError) {
       return res.status(400).json({ error: { message: err.message, code: err.code } });
     }
-    next(err);
-  }
-});
-
-// POST /google/connect — connect MULTIPLE Google services in ONE consent.
-// Body: { services: string[] }. Builds a single grant for the union of the selected
-// services' scopes; the callback materializes a connection per service from that one
-// token. This is the seamless "pick your Google services" flow.
-connectorsRouter.post('/google/connect', async (req, res, next) => {
-  try {
-    const userId = requireUser(req, res);
-    if (!userId) return;
-
-    const requested: string[] = Array.isArray(req.body?.services) ? req.body.services.map(String) : [];
-    const chosen = requested
-      .map((id) => connectorRegistry.get(id))
-      .filter((c): c is NonNullable<typeof c> =>
-        Boolean(c && c.metadata.authType === 'user_oauth' && c.metadata.providerGroup === 'google')
-      );
-    if (!chosen.length) {
-      return res.status(400).json({ error: { message: 'Select at least one Google service to connect' } });
-    }
-    if (!isGoogleOAuthConfigured()) {
-      return res.status(400).json({ error: { message: 'Google OAuth is not configured on the server', code: 'no_credentials' } });
-    }
-
-    // Union of least-privilege scopes across the selected services (deduped).
-    const scopes = [...new Set(chosen.flatMap((c) => c.metadata.requiredScopes))];
-    const redirectUri = googleRedirectUri();
-    const { codeVerifier, codeChallenge } = generatePkce();
-    const state = generateState();
-    const authorizationUrl = buildGoogleAuthUrl({ scopes, state, codeChallenge, redirectUri });
-
-    await saveOAuthState({
-      state,
-      userId,
-      connectorIds: chosen.map((c) => c.metadata.id),
-      codeVerifier,
-      redirectUri,
-      scopes,
-      expiresAt: new Date(Date.now() + CONNECTORS_OAUTH_STATE_TTL_MS).toISOString()
-    });
-
-    res.json({ ok: true, mode: 'redirect', authorizationUrl });
-  } catch (err) {
     next(err);
   }
 });
