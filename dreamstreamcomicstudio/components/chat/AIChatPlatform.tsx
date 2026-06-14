@@ -26,20 +26,21 @@ const CodeStudioPanel = lazy(() => import('./CodeStudioPanel'));
 // `pickExport` tolerates both default and named exports from those modules.
 // ---------------------------------------------------------------------------
 
-type StudioView = 'chat' | 'home' | 'skills' | 'dashboards' | 'gallery';
+type StudioView = 'chat' | 'home' | 'library' | 'dashboards' | 'gallery';
 
 interface ChatHomeProps {
   userName?: string;
   sessions: ChatSession[];
-  skills: ChatSkill[];
   onResume: (sessionId: string) => void;
   onStartChat: (seedText?: string) => void;
-  onRunSkill: (skill: ChatSkill, arg: string) => void;
+  onOpenLibrary: () => void;
   onOpenDashboards: () => void;
 }
-interface SkillsViewProps {
-  skills: ChatSkill[];
-  onRunSkill: (skill: ChatSkill, arg: string) => void;
+interface LibraryViewProps {
+  sessions: ChatSession[];
+  onOpenSource: (sessionId: string) => void;
+  onUseInChat: (item: LibraryItem) => void;
+  sidebarControl?: React.ReactNode;
 }
 interface DashboardsViewProps {
   /** Renders the sidebar toggle inside the dashboards top bar (its own header is
@@ -50,10 +51,8 @@ interface CommandPaletteProps {
   open: boolean;
   onClose: () => void;
   sessions: ChatSession[];
-  skills: ChatSkill[];
   onResume: (id: string) => void;
-  onRunSkill: (skill: ChatSkill, arg: string) => void;
-  onNavigate: (view: 'home' | 'skills' | 'dashboards') => void;
+  onNavigate: (view: 'home' | 'library' | 'dashboards') => void;
 }
 
 const pickExport = <P,>(m: Record<string, unknown>, name: string): { default: React.ComponentType<P> } => ({
@@ -61,7 +60,7 @@ const pickExport = <P,>(m: Record<string, unknown>, name: string): { default: Re
 });
 
 const ChatHome = lazy(() => import('./ChatHome').then((m) => pickExport<ChatHomeProps>(m, 'ChatHome')));
-const SkillsView = lazy(() => import('./SkillsView').then((m) => pickExport<SkillsViewProps>(m, 'SkillsView')));
+const LibraryView = lazy(() => import('./LibraryView').then((m) => pickExport<LibraryViewProps>(m, 'LibraryView')));
 import { FloatingVideoDock } from './FloatingVideoDock';
 const DashboardsView = lazy(() => import('./DashboardsView').then((m) => pickExport<DashboardsViewProps>(m, 'DashboardsView')));
 const GalleryStudio = lazy(() => import('./GalleryStudio').then((m) => pickExport<{ sidebarControl?: React.ReactNode; onTry?: (prompt: string) => void }>(m, 'GalleryStudio')));
@@ -74,7 +73,7 @@ import type { ChatReasoningLevel, ChatRequestMessage, ChatMessagePart, Universal
 import type { Project } from '../../types';
 import { sendChatMessageStream, runSwarmStream, updateChatMemory, generateChatTitle, friendlyChatError } from '../../services/chatApi';
 import { runRecipe } from '../../services/recipes';
-import { CHAT_SKILLS, type ChatSkill } from '../../services/chatSkills';
+import type { LibraryItem } from '../../services/chatLibrary';
 import { gatherClientContext } from '../../services/clientContext';
 import { toggleConnector, type ChatConnector } from '../../services/chatConnectors';
 import { recommendModels, detectTools } from '../../services/chatSuggest';
@@ -200,7 +199,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   // always lands back on 'chat'; a null active session falls back to 'home'.
   // Continuity: a reload restores the last view (URL ?cview= → session memory),
   // so refreshing on Dashboards no longer bounces the user back to the default.
-  const isStudioView = (v: string): v is StudioView => v === 'chat' || v === 'home' || v === 'skills' || v === 'dashboards' || v === 'gallery';
+  const isStudioView = (v: string): v is StudioView => v === 'chat' || v === 'home' || v === 'library' || v === 'dashboards' || v === 'gallery';
   const [view, setView] = useState<StudioView>(() => resolveInitialUiState('chat.view', 'cview', isStudioView, 'chat'));
   useEffect(() => {
     persistUiState('chat.view', 'cview', view === 'chat' ? null : view);
@@ -509,6 +508,24 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
   };
 
   const handleNew = () => {
+    // BUG FIX: "New chat" used to mint AND persist a fresh empty session on every click,
+    // so repeatedly tapping it (or tapping it without ever typing) piled up identical
+    // "New chat" rows in the sidebar. Two changes fix that:
+    //   1) If an untouched, blank chat already exists, just focus it instead of making
+    //      another — clicking "New chat" can never produce more than one empty row.
+    //   2) A brand-new chat is an IN-MEMORY placeholder only (not written to storage /
+    //      cloud); it gets persisted on the first real message (via updateSession in
+    //      handleSend), exactly like the initial seed session. An unused new chat never
+    //      clutters the list or syncs to other devices.
+    const blank =
+      activeSession && activeSession.turns.length === 0
+        ? activeSession
+        : sessions.find((s) => s.turns.length === 0);
+    if (blank) {
+      setActiveId(blank.id);
+      setView('chat');
+      return;
+    }
     const base = createEmptySession(
       activeSession
         ? {
@@ -527,7 +544,6 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           }
         : {}
     );
-    void saveChatSession(base);
     setSessions((prev) => [base, ...prev]);
     setActiveId(base.id);
     setView('chat');
@@ -1014,69 +1030,25 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     await runGeneration({ sessionId, baseTurns, reqModel, reqSource, reqTools });
   };
 
-  // Run a `/`-command skill: append a user turn showing the command, then stream the
-  // matching recipe's result back into the conversation (same machinery as a normal turn).
-  const handleRunSkill = async (skill: ChatSkill, arg: string) => {
-    if (!activeSession || busy) return;
-    const sessionId = activeSession.id;
-    const display = `/${skill.command}${arg ? ` ${arg}` : ''}`;
-    const userTurn: ChatTurn = {
-      id: crypto.randomUUID(),
-      role: 'user',
-      content: display,
-      createdAt: Date.now()
-    };
-    const isFirst = activeSession.turns.length === 0;
-    const baseTurns = [...activeSession.turns, userTurn];
-    updateSession(sessionId, (s) => ({
-      ...s,
-      turns: baseTurns,
-      title: isFirst ? `${skill.label}: ${arg || skill.label}`.slice(0, 60) : s.title,
-      updatedAt: Date.now()
-    }));
-    await runGeneration({
-      sessionId,
-      baseTurns,
-      reqModel: activeSession.modelId || undefined,
-      reqSource: activeSession.source || undefined,
-      reqTools: [],
-      recipeRun: { recipeId: skill.recipeId, values: skill.buildValues(arg) }
-    });
-  };
-
-  // Run a skill from outside the conversation (Home / Skills view / command palette):
-  // make sure a session exists and is active first, then reuse the exact composer
-  // skill-run path. When a session has to be created, the run is queued until React
-  // flushes the new session into state (handleRunSkill reads `activeSession`).
-  const pendingSkillRef = useRef<{ skill: ChatSkill; arg: string } | null>(null);
-  const handleRunSkillFrom = (skill: ChatSkill, arg: string) => {
+  // Library → "Use in a new chat": open a fresh chat and hand the composer the picked
+  // file as an attachment. The composer listens for `dreamstream:attach` and adds it to
+  // the draft so the user can ask about it. Works for both uploaded files (data URLs) and
+  // generated/searched images (remote URLs — vision models accept those too).
+  const handleUseLibraryItem = (item: LibraryItem) => {
+    handleNew();
     setView('chat');
-    if (activeSession) {
-      void handleRunSkill(skill, arg);
-      return;
-    }
-    pendingSkillRef.current = { skill, arg };
-    const base = createEmptySession();
-    void saveChatSession(base);
-    setSessions((prev) => [base, ...prev]);
-    setActiveId(base.id);
-  };
-  useEffect(() => {
-    if (!pendingSkillRef.current || !activeSession) return;
-    const { skill, arg } = pendingSkillRef.current;
-    pendingSkillRef.current = null;
-    void handleRunSkill(skill, arg);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSession]);
-
-  // Click a skill chip: no-arg skills run immediately; otherwise prefill the composer
-  // with the command so the user can type the argument.
-  const handlePickSkill = (skill: ChatSkill) => {
-    if (!skill.argRequired) {
-      void handleRunSkill(skill, '');
-      return;
-    }
-    setComposerSeed(`/${skill.command} `);
+    requestAnimationFrame(() => {
+      window.dispatchEvent(
+        new CustomEvent('dreamstream:attach', {
+          detail: {
+            name: item.name,
+            mimeType: item.mimeType || (item.kind === 'image' ? 'image/*' : 'application/octet-stream'),
+            dataUrl: item.url,
+            kind: item.kind === 'file' ? 'document' : 'image'
+          }
+        })
+      );
+    });
   };
 
   // Regenerate an assistant turn: re-run the prompt that produced it, keeping the
@@ -1327,7 +1299,7 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
             onEditMemory={handleEditMemory}
             onBack={onBack}
             onOpenSearch={() => { setPaletteOpen(true); closeOnMobile(); }}
-            onOpenSkills={() => { setView('skills'); closeOnMobile(); }}
+            onOpenLibrary={() => { setView('library'); closeOnMobile(); }}
             onOpenDashboards={() => { setView('dashboards'); closeOnMobile(); }}
             onOpenGallery={() => { if (!isAdmin) return; setView('gallery'); closeOnMobile(); }}
             onOpenTools={() => { if (!isAdmin) return; setSettingsTab('tools'); closeOnMobile(); }}
@@ -1361,8 +1333,6 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
         onOpenModelPicker={() => setShowModelPicker(true)}
         onSend={handleSend}
-        onRunSkill={handleRunSkill}
-        onPickSkill={handlePickSkill}
         seedText={composerSeed}
         onSeedConsumed={() => setComposerSeed('')}
         onStop={handleStop}
@@ -1375,9 +1345,6 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
         }
         onWebToggle={(on) =>
           activeId && updateSession(activeId, (s) => ({ ...s, webSearch: on, updatedAt: Date.now() }))
-        }
-        onSwarmToggle={(on) =>
-          activeId && updateSession(activeId, (s) => ({ ...s, swarm: on, updatedAt: Date.now() }))
         }
         onDreamstreamToggle={(on) =>
           activeId && updateSession(activeId, (s) => ({ ...s, dreamstreamAccess: on, updatedAt: Date.now() }))
@@ -1397,7 +1364,7 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
             `relative z-20` lifts it above the scrolling content below. Dashboards
             skip it entirely (the toggle moves into their own sticky bar) so the
             board content starts at the very top — no wasted title strip. */}
-        {resolvedView !== 'dashboards' && resolvedView !== 'gallery' && (
+        {resolvedView !== 'dashboards' && resolvedView !== 'gallery' && resolvedView !== 'library' && (
         <div className={`relative z-20 flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-3 border-b border-[var(--ds-hairline)] ${GLASS}`}>
           <button
             onClick={() => setSidebarOpen((v) => !v)}
@@ -1406,9 +1373,7 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
           >
             {sidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
           </button>
-          <span className={`text-sm ${HEADING}`}>
-            {resolvedView === 'skills' ? 'Skills' : 'Home'}
-          </span>
+          <span className={`text-sm ${HEADING}`}>Home</span>
         </div>
         )}
         <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain [-webkit-overflow-scrolling:touch]">
@@ -1423,15 +1388,27 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
               <ChatHome
                 userName={accountName}
                 sessions={sessions}
-                skills={CHAT_SKILLS}
                 onResume={(sessionId) => { setActiveId(sessionId); setView('chat'); }}
                 onStartChat={handleStartChat}
-                onRunSkill={handleRunSkillFrom}
+                onOpenLibrary={() => setView('library')}
                 onOpenDashboards={() => setView('dashboards')}
               />
             )}
-            {resolvedView === 'skills' && (
-              <SkillsView skills={CHAT_SKILLS} onRunSkill={handleRunSkillFrom} />
+            {resolvedView === 'library' && (
+              <LibraryView
+                sessions={sessions}
+                onOpenSource={(sessionId) => { setActiveId(sessionId); setView('chat'); }}
+                onUseInChat={handleUseLibraryItem}
+                sidebarControl={
+                  <button
+                    onClick={() => setSidebarOpen((v) => !v)}
+                    className={`${CONTROL_BTN} p-2 sm:p-1.5 tap-target shrink-0`}
+                    title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+                  >
+                    {sidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
+                  </button>
+                }
+              />
             )}
             {resolvedView === 'dashboards' && (
               <DashboardsView
@@ -1491,9 +1468,7 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
             open={paletteOpen}
             onClose={() => setPaletteOpen(false)}
             sessions={sessions}
-            skills={CHAT_SKILLS}
             onResume={(id) => { setActiveId(id); setView('chat'); setPaletteOpen(false); }}
-            onRunSkill={(skill, arg) => { setPaletteOpen(false); handleRunSkillFrom(skill, arg); }}
             onNavigate={(v) => { setView(v); setPaletteOpen(false); }}
           />
         </Suspense>

@@ -35,11 +35,13 @@ interface ChatSettingsModalProps {
   onClose: () => void;
 }
 
+// NOTE: the 'agents' (multi-agent Swarm) and 'recipes' (slash-command Skills) tabs are
+// intentionally omitted while those features are on hold — their composer/sidebar entry
+// points were removed, so their settings surfaces are hidden too. The tab components and
+// Tab union are kept so re-enabling is just a matter of re-listing them here.
 const TABS = [
   ['general', 'General', Settings2],
   ['memory', 'Memory', Brain],
-  ['agents', 'Agents', Network],
-  ['recipes', 'Recipes', BookOpen],
   ['tools', 'Tools', Wrench],
   ['connectors', 'Connectors', Plug],
   ['system', 'System', Activity],
