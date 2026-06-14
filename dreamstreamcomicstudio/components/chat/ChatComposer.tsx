@@ -292,7 +292,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
 
   return (
     <div className={`${CANVAS_BG} px-3 pt-1 pb-[max(0.75rem,env(safe-area-inset-bottom))]`}>
-      <div className={`${GLASS_STRONG} ${HAIRLINE} ${SHADOW_SOFT} ${RADIUS_PANEL} p-3`}>
+      <div className={`${GLASS_STRONG} ${HAIRLINE} ${SHADOW_SOFT} ${RADIUS_PANEL} p-3 transition-shadow duration-300 focus-within:border-[#D97757]/40 focus-within:shadow-[0_0_0_1px_rgba(217,119,87,0.35),0_2px_10px_rgba(217,119,87,0.14),0_18px_46px_rgba(217,119,87,0.10)]`}>
       {/* Feature toggles */}
       <div className="flex flex-wrap items-center gap-2 mb-2">
         {features.reasoning && (
