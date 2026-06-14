@@ -4,6 +4,7 @@ import type { GenerativeUIArtifact, ChartArtifact, DataTableArtifact } from '../
 import { Surface, SurfaceTitle, SurfaceSubtitle, Sparkline, TrendPill, Badge, LinearGauge, RadialGauge, compactNumber } from './kit';
 import { ChartCard } from './ChartCard';
 import { DataTableCard } from './DataTableCard';
+import { InlineMap } from './InlineMap';
 
 // Renders an agent-composed layout (the `generative_ui` artifact) from a whitelisted
 // block tree. Every block maps to a Primitive-Kit element or an existing card — there
@@ -40,6 +41,7 @@ type NormalizedUIBlock =
   | { kind: 'bars'; items: { label: string; value: number; color?: string }[]; max?: number }
   | { kind: 'steps'; items: { title: string; text?: string }[] }
   | { kind: 'quote'; text: string; author?: string }
+  | { kind: 'map'; markers: { lat: number; lng: number; label: string; category?: string; color?: string }[]; connect: boolean }
   | { kind: 'chart'; chart: ChartArtifact }
   | { kind: 'table'; table: DataTableArtifact };
 
@@ -198,6 +200,17 @@ function normBlock(raw: unknown, depth: number, ctx: { n: number }): NormBlock |
     case 'quote': {
       const text = str(raw.text, 2000);
       return text ? { kind, text, author: str(raw.author, 120) } : { kind: '_invalid' };
+    }
+    case 'map': {
+      const markers = Array.isArray(raw.markers)
+        ? raw.markers
+            .filter(isObj)
+            .map((m) => ({ lat: num(m.lat), lng: num(m.lng), label: str(m.label, 120) ?? '', category: str(m.category, 40), color: str(m.color, 16) }))
+            .filter((m) => m.lat !== undefined && m.lng !== undefined)
+            .map((m) => ({ lat: m.lat as number, lng: m.lng as number, label: m.label, category: m.category, color: m.color }))
+            .slice(0, 40)
+        : [];
+      return markers.length ? { kind, markers, connect: raw.connect === true } : { kind: '_invalid' };
     }
     case 'chart':
       return isObj(raw.chart) && Array.isArray((raw.chart as Record<string, unknown>).series)
@@ -441,6 +454,15 @@ const Block: React.FC<{ block: NormBlock }> = ({ block }) => {
           <p className="whitespace-pre-wrap break-words text-sm italic text-[var(--ds-ink)]">“{block.text}”</p>
           {block.author && <footer className="mt-1 text-[11px] font-medium text-[var(--ds-muted)]">— {block.author}</footer>}
         </blockquote>
+      );
+    case 'map':
+      return (
+        <div className="overflow-hidden rounded-xl border border-[var(--ds-hairline)]">
+          <InlineMap
+            data={{ markers: block.markers, route: block.connect && block.markers.length > 1 ? block.markers.map((m) => ({ lat: m.lat, lng: m.lng })) : undefined }}
+            height={200}
+          />
+        </div>
       );
     case 'chart':
       return <ChartCard data={block.chart} />;

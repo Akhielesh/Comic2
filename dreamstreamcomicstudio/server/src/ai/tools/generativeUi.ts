@@ -54,7 +54,8 @@ const BLOCK_GUIDE = [
   '- gauge {value, max?, label?, unit?, color?} — radial gauge',
   '- bars {items:[{label, value, color?}], max?} — labeled horizontal bars (quick category breakdown)',
   '- chart {chart:<same shape as render_chart>}',
-  '- table {table:<same shape as render_table>}'
+  '- table {table:<same shape as render_table>}',
+  '- map {markers:[{lat, lng, label, category?}], connect?} — an interactive map; set connect:true to draw a route through the markers in order (only with real coordinates you know)'
 ].join('\n');
 
 export const generativeUiTool: ChatTool = {
