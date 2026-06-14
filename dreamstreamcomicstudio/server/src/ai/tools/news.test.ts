@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { parseNewsRss, buildNewsUrl } from './news.js';
+import { parseNewsRss, buildNewsUrl, sourceDomainOf, isPaywalled, prioritizeNews } from './news.js';
+import type { NewsItem } from '../../../../apiTypes.js';
 
 const SAMPLE_RSS = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel>
@@ -32,6 +33,14 @@ describe('parseNewsRss', () => {
     expect(items[1].source).toBe('ESPN');
   });
 
+  it('resolves the real publisher domain from the <source url> attribute (not news.google.com)', () => {
+    const items = parseNewsRss(SAMPLE_RSS);
+    expect(items[0].sourceDomain).toBe('reuters.com');
+    expect(items[1].sourceDomain).toBe('espn.com');
+    // Neither is a hard paywall, so no flag is attached.
+    expect(items[0].paywall).toBeUndefined();
+  });
+
   it('respects the limit', () => {
     expect(parseNewsRss(SAMPLE_RSS, 1)).toHaveLength(1);
   });
@@ -44,6 +53,41 @@ describe('parseNewsRss', () => {
     const items = parseNewsRss(SAMPLE_RSS);
     // The description is just the headline + source, so no distinct snippet survives.
     expect(items[0].snippet).toBeUndefined();
+  });
+});
+
+describe('sourceDomainOf + isPaywalled', () => {
+  it('parses the source url attribute into a clean host', () => {
+    expect(sourceDomainOf('<source url="https://www.wsj.com">The Wall Street Journal</source>')).toBe('wsj.com');
+    expect(sourceDomainOf("<source url='https://apnews.com/'>AP</source>")).toBe('apnews.com');
+    expect(sourceDomainOf('<source>No URL</source>')).toBeUndefined();
+  });
+
+  it('flags hard paywalls (incl. subdomains) and clears open outlets', () => {
+    expect(isPaywalled('wsj.com')).toBe(true);
+    expect(isPaywalled('europe.wsj.com')).toBe(true);
+    expect(isPaywalled('nytimes.com')).toBe(true);
+    expect(isPaywalled('reuters.com')).toBe(false);
+    expect(isPaywalled(undefined)).toBe(false);
+  });
+});
+
+describe('prioritizeNews', () => {
+  const item = (n: number, paywall = false): NewsItem => ({ title: `t${n}`, url: `https://x/${n}`, paywall });
+
+  it('drops paywalled stories when there are enough open ones', () => {
+    const out = prioritizeNews([item(1), item(2, true), item(3), item(4), item(5), item(6)], 5);
+    expect(out.map((i) => i.title)).toEqual(['t1', 't3', 't4', 't5', 't6']);
+    expect(out.some((i) => i.paywall)).toBe(false);
+  });
+
+  it('tops up with paywalled stories when open ones are too few (never an empty card)', () => {
+    const out = prioritizeNews([item(1), item(2, true), item(3, true)], 5);
+    expect(out.map((i) => i.title)).toEqual(['t1', 't2', 't3']); // open first, then walled
+  });
+
+  it('respects the limit', () => {
+    expect(prioritizeNews([item(1), item(2), item(3)], 2)).toHaveLength(2);
   });
 });
 

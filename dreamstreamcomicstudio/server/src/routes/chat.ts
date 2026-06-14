@@ -671,6 +671,79 @@ chatRouter.post('/enhance', async (req, res, next) => {
   }
 });
 
+// Auto-title: name a conversation from what the user is actually trying to do, not
+// the first 48 characters of their opening message. Runs once after the first
+// exchange; the client only adopts it while the title is still auto (a manual
+// rename wins). Fast model, no tools — cheap enough to run on every new chat.
+const TITLE_SYSTEM_PROMPT = `You write a short, specific title for a chat conversation, based on what the USER is trying to accomplish.
+
+Rules:
+- 2 to 5 words. Title Case. NO trailing punctuation, NO quotes, NO markdown.
+- Capture the user's actual goal/topic — not a generic restatement of their wording. (e.g. "iPhone 16 vs Pixel 9", "Lisbon Trip Planning", "Debugging a CORS Error", "NVDA Earnings Outlook".)
+- Use concrete nouns from the request (places, products, tickers, technologies, people). Keep names/casing as the user wrote them.
+- If the message is vague small talk or a test ("hi", "test", "asdf"), return exactly: New chat
+- Return ONLY the title text. Nothing else.`;
+
+/** Clean a model title down to a safe single line (strip quotes/markdown, cap length). */
+const sanitizeTitle = (raw: string): string => {
+  const line = (raw || '').split('\n').map((l) => l.trim()).find(Boolean) || '';
+  const clean = line
+    .replace(/^["'“”`*#\-\s]+/, '')
+    .replace(/["'“”`*\s]+$/, '')
+    .replace(/[.:]+$/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return clean.length > 60 ? `${clean.slice(0, 60)}…` : clean;
+};
+
+chatRouter.post('/title', async (req, res, next) => {
+  try {
+    const body = (req.body || {}) as { messages?: unknown; source?: string };
+    const incoming = Array.isArray(body.messages) ? body.messages : [];
+    const turns = incoming
+      .map(sanitizeMessage)
+      .filter((m): m is ChatMessage => m !== null)
+      .slice(0, 4); // the opening exchange is all we need
+    if (turns.length === 0 || !turns.some((t) => t.role === 'user')) {
+      return res.json({ title: '' });
+    }
+
+    const resolved = resolveChatProvider(req, body.source);
+    if (!resolved) return res.json({ title: '' }); // silent no-op without a key
+
+    const transcript = turns
+      .map((t) => {
+        const text =
+          typeof t.content === 'string'
+            ? t.content
+            : Array.isArray(t.content)
+              ? t.content.map((p) => ('text' in p ? p.text : '')).join(' ')
+              : '';
+        return `${t.role === 'user' ? 'User' : 'Assistant'}: ${text}`;
+      })
+      .join('\n')
+      .slice(0, 4000);
+
+    const model = resolved.provider === 'nvidia' ? NVIDIA_TEXT_MODEL : OPENROUTER_TEXT_MODEL;
+    const result = await runChat({
+      provider: resolved.provider,
+      apiKey: resolved.apiKey,
+      model,
+      messages: [{ role: 'user', content: `Conversation:\n${transcript}\n\nWrite the title.` }],
+      systemOverride: TITLE_SYSTEM_PROMPT,
+      temperature: 0.3,
+      maxTokens: 24,
+      fallbackModel: resolved.provider === 'openrouter' ? TEXT_FALLBACK : undefined,
+      fallbackModels: resolved.provider === 'openrouter' ? [OPENROUTER_TEXT_MODEL, TEXT_FALLBACK] : undefined,
+      timeoutMs: TEXT_REQUEST_TIMEOUT_MS
+    });
+    const title = sanitizeTitle(result.text || '');
+    res.json({ title: /^new chat$/i.test(title) ? '' : title, model: result.model });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Auto-memory: distill durable facts about the user from a recent exchange and
 // merge them into their long-term memory, so future chats are personalized without
 // the user hand-writing notes. Conservative by design — facts only, no transient
