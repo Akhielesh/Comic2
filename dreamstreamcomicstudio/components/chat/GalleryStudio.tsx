@@ -265,8 +265,9 @@ export const GalleryStudio: React.FC<GalleryStudioProps> = ({ sidebarControl, on
         <IconsBrowser />
       ) : (
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-        {/* List */}
-        <div className="shrink-0 overflow-y-auto border-b border-[var(--ds-hairline)] p-2 md:max-h-none md:w-72 md:border-b-0 md:border-r" style={{ maxHeight: '38vh' }}>
+        {/* List — fills the full column height on desktop (the inline 38vh cap was
+            overriding md:max-h-none, leaving the rail stunted with dead space). */}
+        <div className="max-h-[38vh] min-h-0 shrink-0 overflow-y-auto border-b border-[var(--ds-hairline)] p-2 [scrollbar-width:thin] md:max-h-none md:w-72 md:border-b-0 md:border-r lg:w-80">
           {filtered.length === 0 && <p className="px-2 py-6 text-center text-xs text-[var(--ds-muted)]">No widgets match “{query}”.</p>}
           {grouped
             ? grouped.map(([category, items]) => (
