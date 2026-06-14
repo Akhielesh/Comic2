@@ -64,7 +64,7 @@ const ChatHome = lazy(() => import('./ChatHome').then((m) => pickExport<ChatHome
 const SkillsView = lazy(() => import('./SkillsView').then((m) => pickExport<SkillsViewProps>(m, 'SkillsView')));
 import { FloatingVideoDock } from './FloatingVideoDock';
 const DashboardsView = lazy(() => import('./DashboardsView').then((m) => pickExport<DashboardsViewProps>(m, 'DashboardsView')));
-const GalleryStudio = lazy(() => import('./GalleryStudio').then((m) => pickExport<{ sidebarControl?: React.ReactNode }>(m, 'GalleryStudio')));
+const GalleryStudio = lazy(() => import('./GalleryStudio').then((m) => pickExport<{ sidebarControl?: React.ReactNode; onTry?: (prompt: string) => void }>(m, 'GalleryStudio')));
 const CommandPalette = lazy(() => import('./CommandPalette').then((m) => pickExport<CommandPaletteProps>(m, 'CommandPalette')));
 import { deriveModelFeatures } from '../../services/chatFeatures';
 import { getCapabilities } from '../../services/modelCapabilities';
@@ -1427,6 +1427,7 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
             )}
             {resolvedView === 'gallery' && isAdmin && (
               <GalleryStudio
+                onTry={(prompt) => { handleStartChat(prompt); setView('chat'); }}
                 sidebarControl={
                   <button
                     onClick={() => setSidebarOpen((v) => !v)}

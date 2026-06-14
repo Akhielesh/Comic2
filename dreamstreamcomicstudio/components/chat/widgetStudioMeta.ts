@@ -69,6 +69,38 @@ export const ARTIFACT_TOOLS: Record<string, string[]> = {
 /** Artifact types the MODEL composes directly (no single producing data tool). */
 export const MODEL_AUTHORED = new Set(['swarm_trace', 'recipe_card', 'recipe_run', 'research_report']);
 
+/** A natural-language prompt that makes the chat agent produce each widget — for the
+ *  Studio's "Open in chat" action (benchmark a widget against real, live data). */
+export const EXAMPLE_PROMPT: Record<string, string> = {
+  weather: "What's the weather in Tokyo?",
+  stock_quote: 'Show me the NVDA stock',
+  stock_comparison: 'Compare AAPL, TSLA and gold over the last year',
+  chart: 'Chart this revenue series: 12, 14, 13, 18, 22, 25 across 6 months',
+  data_table: 'Make a comparison table of the iPhone 15, 16 and 17',
+  metric_board: 'Show key stats for the npm package react',
+  market_heatmap: 'Show a sector heatmap of the S&P 500',
+  finance_terminal: 'Build a finance terminal for NVDA, AMD and Intel',
+  ticker_tape: 'Show a live market ticker tape',
+  market_sentiment: "What's the market fear & greed right now?",
+  yield_curve: 'Show the US Treasury yield curve',
+  portfolio: 'Build a watchlist of AAPL, MSFT and GOOGL',
+  map: 'Map New York, London and Tokyo with a route',
+  directions: 'Directions from the Eiffel Tower to the Louvre',
+  places_results: 'Best coffee near Times Square',
+  news_results: 'Latest AI chip news',
+  itinerary: 'Plan 3 days in Tokyo',
+  trip_budget: 'Make a $2000 budget for a 5-day Tokyo trip',
+  packing_list: 'Packing list for 5 days in Tokyo in July',
+  generative_ui: 'Give me a Q3 dashboard: revenue, active users and churn with a chart and a takeaway',
+  react_component: 'Build a custom interactive tip calculator widget',
+  quiz: 'Make a 5-question quiz on the water cycle',
+  flashcards: 'Flashcards for Spanish travel phrases',
+  learning_path: 'Create a 2-week learning path for SQL',
+  video_results: 'Find videos explaining transformers in ML',
+  currency_converter: 'Convert 100 USD to EUR',
+  world_clocks: 'World clocks for New York, London and Tokyo'
+};
+
 /** A widget's source kind — drives the badge + a tag. */
 export type WidgetKind = 'api' | 'mcp' | 'builtin' | 'model-authored' | 'static';
 

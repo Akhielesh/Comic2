@@ -1,12 +1,12 @@
 import React, { useMemo, useState } from 'react';
-import { Search, X, Eye, Braces, Copy, Check, ExternalLink, Loader2, Zap, PanelsTopLeft } from 'lucide-react';
+import { Search, X, Eye, Braces, Copy, Check, ExternalLink, Loader2, Zap, PanelsTopLeft, Sparkles } from 'lucide-react';
 import { GALLERY_DEMOS } from './ComponentGallery';
 import { DENSITY_AWARE_TYPES, renderArtifactNode } from './artifacts/ChatArtifacts';
 import { DensityProvider, type WidgetDensity } from './artifacts/kit';
 import { REFRESHABLE_TOOLS, type ChatArtifact } from '../../apiTypes';
 import { TOOL_CATALOG, type ToolMeta } from '../../toolCatalog';
 import { WIDGET_CATALOG, type WidgetDef } from './widgetCatalog';
-import { ARTIFACT_TOOLS, MODEL_AUTHORED, deriveTags, KIND_LABEL, type WidgetKind } from './widgetStudioMeta';
+import { ARTIFACT_TOOLS, MODEL_AUTHORED, deriveTags, KIND_LABEL, EXAMPLE_PROMPT, type WidgetKind } from './widgetStudioMeta';
 import { refreshArtifact } from '../../services/chatApi';
 import { CANVAS_BG, GLASS, HEADING, MUTED, TRANSITION } from './studioDesign';
 
@@ -93,9 +93,11 @@ const SpecRow: React.FC<{ label: string; children: React.ReactNode }> = ({ label
 
 export interface GalleryStudioProps {
   sidebarControl?: React.ReactNode;
+  /** Seed a new chat with an example prompt that produces the selected widget. */
+  onTry?: (prompt: string) => void;
 }
 
-export const GalleryStudio: React.FC<GalleryStudioProps> = ({ sidebarControl }) => {
+export const GalleryStudio: React.FC<GalleryStudioProps> = ({ sidebarControl, onTry }) => {
   const [query, setQuery] = useState('');
   const [cat, setCat] = useState('All');
   const [selectedId, setSelectedId] = useState(ENTRIES[0]?.id ?? '');
@@ -218,6 +220,15 @@ export const GalleryStudio: React.FC<GalleryStudioProps> = ({ sidebarControl }) 
                 <h2 className="text-base font-semibold tracking-tight text-[var(--ds-ink)]">{cleanTitle(selected.title)}</h2>
                 <Badge kind={selected.kind} />
                 {selected.type && <code className="rounded bg-[var(--ds-well-strong)] px-1.5 py-0.5 text-[11px] text-[var(--ds-muted)]">{selected.type}</code>}
+                {onTry && selected.kind !== 'static' && (
+                  <button
+                    onClick={() => onTry((selected.type && EXAMPLE_PROMPT[selected.type]) || `Show me a ${cleanTitle(selected.title).toLowerCase()}`)}
+                    className="ml-auto inline-flex items-center gap-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 py-1 text-[11px] font-semibold text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]"
+                    title="Seed a new chat with a prompt that produces this widget (live data)"
+                  >
+                    <Sparkles className="h-3.5 w-3.5 text-[var(--ds-accent)]" /> Open in chat
+                  </button>
+                )}
               </div>
               <div className="mt-1.5 flex flex-wrap gap-1">
                 {selected.tags.map((t) => (
