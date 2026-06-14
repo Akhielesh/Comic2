@@ -29,8 +29,12 @@ const MODE_PROFILES: Record<DirectionsMode, string> = {
 };
 const MODE_ORDER: DirectionsMode[] = ['drive', 'bike', 'walk'];
 const OSRM_TIMEOUT_MS = 9_000;
-/** Max points kept per route geometry — plenty for a card-sized polyline. */
+/** Default uniform-stride cap (used by the standalone downsamplePath helper). */
 const MAX_PATH_POINTS = 240;
+/** Cap applied to a route AFTER shape-preserving simplification. High enough that a
+ *  faithfully-simplified route is never re-decimated (Leaflet renders it fine); only
+ *  pathological geometries hit the uniform-stride fallback. */
+const MAX_RENDER_POINTS = 1200;
 /** A walk this short (best route, minutes) makes 'walk' the default mode. */
 const WALK_DEFAULT_MAX_MIN = 25;
 
@@ -71,6 +75,53 @@ export const downsamplePath = (
   return out;
 };
 
+/** Perpendicular distance (planar lat/lng degrees) from point `p` to segment a→b.
+ *  Good enough at city/route scale to drive the shape-preserving simplifier below. */
+const perpDist = (p: [number, number], a: [number, number], b: [number, number]): number => {
+  const dy = b[0] - a[0];
+  const dx = b[1] - a[1];
+  if (dx === 0 && dy === 0) return Math.hypot(p[0] - a[0], p[1] - a[1]);
+  const t = ((p[0] - a[0]) * dy + (p[1] - a[1]) * dx) / (dy * dy + dx * dx);
+  const cl = Math.max(0, Math.min(1, t));
+  return Math.hypot(p[0] - (a[0] + cl * dy), p[1] - (a[1] + cl * dx));
+};
+
+/** Ramer–Douglas–Peucker simplification — keeps every bend above `tolerance`
+ *  (≈3 m by default) and the endpoints, dropping only redundant near-collinear
+ *  points. This makes the drawn route FAITHFULLY hug the roads instead of cutting
+ *  corners the way a blind uniform stride does. Iterative (no recursion blowups on
+ *  long geometries). Pure. */
+export const simplifyPath = (
+  path: Array<[number, number]>,
+  tolerance = 0.00003
+): Array<[number, number]> => {
+  if (path.length <= 2) return path;
+  const keep = new Array<boolean>(path.length).fill(false);
+  keep[0] = true;
+  keep[path.length - 1] = true;
+  const stack: Array<[number, number]> = [[0, path.length - 1]];
+  while (stack.length) {
+    const seg = stack.pop()!;
+    const [s, e] = seg;
+    let maxD = 0;
+    let idx = -1;
+    for (let i = s + 1; i < e; i += 1) {
+      const d = perpDist(path[i], path[s], path[e]);
+      if (d > maxD) {
+        maxD = d;
+        idx = i;
+      }
+    }
+    if (maxD > tolerance && idx !== -1) {
+      keep[idx] = true;
+      stack.push([s, idx], [idx, e]);
+    }
+  }
+  const out: Array<[number, number]> = [];
+  for (let i = 0; i < path.length; i += 1) if (keep[i]) out.push(path[i]);
+  return out;
+};
+
 /** Parse an OSRM /route/v1 response into DirectionsRoutes (pure + testable).
  *  Converts GeoJSON [lng,lat] → Leaflet [lat,lng], rounds distance to 0.1 km and
  *  duration to whole minutes, downsamples geometry, and turns the legs' road-name
@@ -99,7 +150,9 @@ export const parseOsrmRoutes = (json: any): DirectionsRoute[] => {
       ...(summary ? { summary } : {}),
       distanceKm: Math.round(distance / 100) / 10,
       durationMin: Math.max(1, Math.round(duration / 60)),
-      path: downsamplePath(path)
+      // Shape-preserving simplify FIRST (faithful to the roads), then a high cap as a
+      // safety net — never the blind 240-stride that cut corners on real routes.
+      path: downsamplePath(simplifyPath(path), MAX_RENDER_POINTS)
     });
   }
   return out;

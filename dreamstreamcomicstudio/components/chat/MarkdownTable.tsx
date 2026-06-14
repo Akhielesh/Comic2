@@ -72,7 +72,9 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
   const [copied, setCopied] = useState(false);
 
   // Per-column numeric profile: a column is "numeric" if most non-empty cells parse
-  // as numbers; we keep min/max to scale in-cell magnitude bars.
+  // as numbers; we keep min/max to scale in-cell magnitude bars. A column that spans
+  // zero (has both negatives and positives) is "diverging" — its bars grow out from a
+  // zero baseline and its numbers are tinted by sign (a delta/% column).
   const colStats = useMemo(() => {
     return headers.map((_, ci) => {
       let numeric = 0;
@@ -91,11 +93,14 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
         }
       }
       const isNumeric = total > 0 && numeric / total >= 0.6;
-      return { isNumeric, min, max: max === min ? min + 1 : max };
+      const diverging = isNumeric && min < 0 && max > 0;
+      return { isNumeric, diverging, min, max: max === min ? min + 1 : max };
     });
   }, [headers, rows]);
 
   const hasNumericCol = colStats.some((s) => s.isNumeric);
+  // First column is treated as the row label (emphasised) when it isn't itself numeric.
+  const labelCol = headers.length > 1 && !colStats[0]?.isNumeric;
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -200,29 +205,48 @@ export const MarkdownTable: React.FC<{ node?: any; children?: React.ReactNode }>
           </thead>
           <tbody>
             {visible.map((row, ri) => (
-              <tr key={ri} className="border-b border-[var(--ds-hairline-soft)] transition-colors duration-200 last:border-0 hover:bg-[var(--ds-well)]">
+              <tr key={ri} className="group/row border-b border-[var(--ds-hairline-soft)] transition-colors duration-200 last:border-0 hover:bg-[var(--ds-well)]">
                 {headers.map((_, ci) => {
                   const cell = row[ci];
                   const stat = colStats[ci];
                   const n = stat.isNumeric ? asNumber(cell?.text ?? '') : null;
-                  const pct = n !== null ? Math.max(0, Math.min(1, (n - stat.min) / (stat.max - stat.min))) : 0;
+                  const span = stat.max - stat.min || 1;
+                  // Unipolar: fraction of the column range. Diverging: a segment between
+                  // the zero baseline and the value, anchored at whichever is left.
+                  const pct = n !== null ? Math.max(0, Math.min(1, (n - stat.min) / span)) : 0;
+                  const zeroPos = stat.diverging ? Math.max(0, Math.min(1, (0 - stat.min) / span)) : 0;
+                  const barLeft = stat.diverging ? Math.min(zeroPos, pct) : undefined;
+                  const barWidth = stat.diverging ? Math.abs(pct - zeroPos) : pct;
+                  const signed = stat.diverging && n !== null;
+                  const tone = signed ? (n! > 0 ? 'text-emerald-600' : n! < 0 ? 'text-rose-600' : 'text-[var(--ds-ink)]') : '';
                   return (
                     <td
                       key={ci}
-                      className={`relative px-2.5 py-1.5 align-top text-[var(--ds-ink)] ${
-                        stat.isNumeric ? 'text-right font-medium tabular-nums' : ''
-                      }`}
+                      className={`relative px-2.5 py-[7px] align-top ${
+                        stat.isNumeric ? `text-right tabular-nums ${tone || 'text-[var(--ds-ink)]'} font-medium` : ''
+                      } ${ci === 0 && labelCol ? 'font-medium text-[var(--ds-ink)]' : !stat.isNumeric ? 'text-[var(--ds-muted)]' : ''}`}
                     >
+                      {/* Magnitude bar — a clean 3px footer that never fights the number. */}
                       {showBars && n !== null && (
                         <span
-                          className="pointer-events-none absolute inset-y-1 left-1 rounded-sm bg-blue-500/10"
-                          style={{ width: `calc(${pct * 100}% - 4px)` }}
+                          className={`pointer-events-none absolute bottom-0 h-[3px] rounded-full ${
+                            signed
+                              ? n! >= 0
+                                ? 'bg-emerald-500/45'
+                                : 'bg-rose-500/45'
+                              : 'bg-[#D97757]/35'
+                          }`}
+                          style={
+                            stat.diverging
+                              ? { left: `${barLeft! * 100}%`, width: `${Math.max(barWidth * 100, n === 0 ? 0 : 1.5)}%` }
+                              : { right: '0', width: `${Math.max(pct * 100, pct > 0 ? 1.5 : 0)}%` }
+                          }
                           aria-hidden
                         />
                       )}
                       <span className="relative">
                         {cell?.href ? (
-                          <a href={cell.href} target="_blank" rel="noopener noreferrer" className="text-blue-600 transition-colors duration-200 hover:underline">
+                          <a href={cell.href} target="_blank" rel="noopener noreferrer" className="text-[var(--ds-accent)] underline-offset-2 transition-colors duration-200 hover:underline">
                             {cell.text}
                           </a>
                         ) : (
