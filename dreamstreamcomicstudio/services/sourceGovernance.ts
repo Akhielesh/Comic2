@@ -11,6 +11,7 @@
 // Default: every source enabled (no behaviour change until the user opts in).
 
 import { ALL_PROVIDERS, hasUsableKey, type ApiKeyProvider } from './apiKeys';
+import { TEXT_PROVIDER_IDS, type ProviderId } from '../shared/providers';
 
 const STORAGE = 'dreamstream_source_governance';
 export const SOURCE_GOVERNANCE_CHANGED = 'dreamstream:source-governance:changed';
@@ -92,9 +93,9 @@ export const onSourceGovernanceChanged = (handler: () => void): (() => void) => 
 // When several active sources offer the same model, the pickers' cross-source
 // grouping (services/modelGrouping.ts) asks the user to choose — never silent.
 
-/** The sources that actually serve catalog models (gemini/pixazo/ideogram are legacy image paths). */
-export const MODEL_SOURCES = ['openrouter', 'nvidia'] as const;
-export type ModelSourceProvider = (typeof MODEL_SOURCES)[number];
+/** The sources that serve catalog text models — the full provider registry. */
+export const MODEL_SOURCES = TEXT_PROVIDER_IDS;
+export type ModelSourceProvider = ProviderId;
 
 export interface ModelSourceScope {
   /** Sources whose models should be listed/selectable right now. */

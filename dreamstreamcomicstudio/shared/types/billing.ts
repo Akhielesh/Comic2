@@ -1,3 +1,8 @@
+import type { ProviderId } from '../providers.js';
+
+/** Any provider that can be billed/metered (every text provider + legacy image + internal). */
+export type BillingProvider = ProviderId | 'pixazo' | 'ideogram' | 'internal';
+
 export type BillingPlanTier = 'free' | 'creator' | 'pro' | 'studio' | 'custom' | 'admin';
 // NOTE: `pro` remains in BillingPlanTier for backward-compatible reads only.
 export type PurchasablePlanTier = 'creator' | 'studio';
@@ -60,7 +65,7 @@ export type TokenBreakdownLine = {
 };
 
 export type TokenEstimateRequest = {
-  provider: 'gemini' | 'pixazo' | 'openrouter' | 'nvidia' | 'ideogram' | 'internal';
+  provider: BillingProvider;
   model: string;
   operation: string;
   inputTokens?: number;

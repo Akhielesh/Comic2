@@ -1,4 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
+import { PROVIDERS_ORDERED, type ProviderId } from '../../../shared/providers.js';
+
+/** Resolved key + BYOK flag for one provider. */
+export type ResolvedProviderKey = { key: string | null; byok: boolean };
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -22,6 +26,12 @@ declare module 'express-serve-static-core' {
       ideogramKey?: string | null;
       /** True when the Ideogram key came from the end-user (BYOK), not the platform. */
       ideogramByok?: boolean;
+      /**
+       * Generic per-provider resolved keys for every direct text provider in the shared
+       * registry (openrouter, nvidia, openai, anthropic, gemini, deepseek, zai, minimax,
+       * tencent, xai). Routes that work across providers read this instead of named fields.
+       */
+      providerKeys?: Partial<Record<ProviderId, ResolvedProviderKey>>;
     };
   }
 }
@@ -43,8 +53,19 @@ export const allowedProviderFilter = (req: Request): ((provider: string) => bool
 export const attachKeys = (req: Request, _res: Response, next: NextFunction) => {
   const allow = allowedProviderFilter(req);
 
-  const geminiHeaderKey = allow('gemini') ? (req.header('X-Gemini-Key') || null) : null;
-  const geminiKey = allow('gemini') ? (geminiHeaderKey || process.env.GEMINI_API_KEY || null) : null;
+  // Resolve every text provider from its header → platform env, honoring governance.
+  const providerKeys: Partial<Record<ProviderId, ResolvedProviderKey>> = {};
+  for (const def of PROVIDERS_ORDERED) {
+    if (!allow(def.id)) {
+      providerKeys[def.id] = { key: null, byok: false };
+      continue;
+    }
+    const headerKey = req.header(def.header) || null;
+    const key = headerKey || process.env[def.keyEnv] || null;
+    providerKeys[def.id] = { key, byok: Boolean(headerKey) };
+  }
+
+  // Legacy image-only providers (kept out of the text registry).
   const pixazoHeaderKey = allow('pixazo') ? (req.header('X-Pixazo-Key') || req.header('X-Flux-Key') || null) : null;
   const pixazoKey = allow('pixazo')
     ? (pixazoHeaderKey
@@ -53,23 +74,26 @@ export const attachKeys = (req: Request, _res: Response, next: NextFunction) => 
       || process.env.FLUX_API_KEY
       || null)
     : null;
-  const openRouterHeaderKey = allow('openrouter') ? (req.header('X-OpenRouter-Key') || null) : null;
-  const openRouterKey = allow('openrouter') ? (openRouterHeaderKey || process.env.OPENROUTER_API_KEY || null) : null;
-  const nvidiaHeaderKey = allow('nvidia') ? (req.header('X-Nvidia-Key') || null) : null;
-  const nvidiaKey = allow('nvidia') ? (nvidiaHeaderKey || process.env.NVIDIA_API_KEY || null) : null;
   const ideogramHeaderKey = allow('ideogram') ? (req.header('X-Ideogram-Key') || null) : null;
   const ideogramKey = allow('ideogram') ? (ideogramHeaderKey || process.env.IDEOGRAM_API_KEY || null) : null;
+
+  const or = providerKeys.openrouter || { key: null, byok: false };
+  const nv = providerKeys.nvidia || { key: null, byok: false };
+  const gem = providerKeys.gemini || { key: null, byok: false };
+
   req.apiKeys = {
-    geminiKey,
-    geminiByok: Boolean(geminiHeaderKey),
+    // Named fields kept for the many existing call sites that read them directly.
+    geminiKey: gem.key,
+    geminiByok: gem.byok,
     pixazoKey,
     pixazoByok: Boolean(pixazoHeaderKey),
-    openRouterKey,
-    openRouterByok: Boolean(openRouterHeaderKey),
-    nvidiaKey,
-    nvidiaByok: Boolean(nvidiaHeaderKey),
+    openRouterKey: or.key,
+    openRouterByok: or.byok,
+    nvidiaKey: nv.key,
+    nvidiaByok: nv.byok,
     ideogramKey,
-    ideogramByok: Boolean(ideogramHeaderKey)
+    ideogramByok: Boolean(ideogramHeaderKey),
+    providerKeys
   };
   next();
 };

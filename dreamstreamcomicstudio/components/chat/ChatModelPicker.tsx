@@ -6,7 +6,8 @@ import {
   sourceLabel,
   providerOrigin,
   costLabel,
-  type CatalogModel
+  type CatalogModel,
+  type ModelSource
 } from '../../services/modelCatalog';
 import { getCapabilities } from '../../services/modelCapabilities';
 import { searchModels } from '../../services/modelSearch';
@@ -35,7 +36,7 @@ const SpeedBadge: React.FC<{ speed?: ModelSpeed }> = ({ speed }) => {
   );
 };
 
-type LockSource = 'openrouter' | 'nvidia' | null;
+type LockSource = ModelSource | null;
 
 interface ChatModelPickerProps {
   selectedModelId: string | null;

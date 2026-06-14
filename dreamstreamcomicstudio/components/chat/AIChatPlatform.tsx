@@ -610,14 +610,14 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     setShowModelPicker(false);
   };
 
-  const handleSelectAuto = (lockedSource: 'openrouter' | 'nvidia' | null) => {
+  const handleSelectAuto = (lockedSource: ModelSourceId | null) => {
     if (activeId) {
       updateSession(activeId, (s) => ({
         ...s,
         autoMode: true,
         lockedSource,
         modelId: null,
-        modelName: lockedSource ? `Auto · ${lockedSource === 'openrouter' ? 'OpenRouter' : 'NVIDIA'}` : 'Auto',
+        modelName: lockedSource ? `Auto · ${sourceLabel(lockedSource)}` : 'Auto',
         source: null,
         updatedAt: Date.now()
       }));

@@ -6,9 +6,12 @@
 //
 // See docs/decisions/0003-multi-key-api-configuration-and-usage-limits.md
 
+import type { ProviderId } from '../shared/providers';
+
 export type ModelMode = 'default' | 'free' | 'specific';
 export type ModelSlot = 'image' | 'text';
-export type ModelSourceId = 'openrouter' | 'nvidia';
+/** A provider/source a selected model can be served from (the full shared registry). */
+export type ModelSourceId = ProviderId;
 
 export interface ModelSelection {
   mode: ModelMode;

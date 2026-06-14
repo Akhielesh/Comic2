@@ -9,14 +9,19 @@
 import { getProviderModels } from '../services/modelCatalog.js';
 import { persistHarvestedModels } from '../services/modelCatalogStore.js';
 import { getSupabaseCapabilityStatus } from '../services/supabase.js';
+import { PROVIDERS_ORDERED } from '../../../shared/providers.js';
+import type { AIProviderId } from '../ai/providers/types.js';
 
-type SourceSpec = { id: 'openrouter' | 'nvidia'; key: string | null };
+type SourceSpec = { id: AIProviderId; key: string | null };
 
 export const refreshModelCatalog = async (): Promise<{ source: string; count: number }[]> => {
-  const sources: SourceSpec[] = [
-    { id: 'openrouter', key: process.env.OPENROUTER_API_KEY || null },
-    { id: 'nvidia', key: process.env.NVIDIA_API_KEY || null }
-  ];
+  // Harvest every provider's public model metadata with its platform key (when set), so the
+  // logged-out models page stays fresh. OpenRouter's list is public; the others ship a curated
+  // seed and add live ids when a platform key exists. Never stores keys.
+  const sources: SourceSpec[] = PROVIDERS_ORDERED.map((def) => ({
+    id: def.id as AIProviderId,
+    key: process.env[def.keyEnv] || null
+  }));
 
   const results: { source: string; count: number }[] = [];
   for (const { id, key } of sources) {

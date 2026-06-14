@@ -7,7 +7,10 @@
 //
 // See docs/decisions/0003-multi-key-api-configuration-and-usage-limits.md
 
-export type ApiKeyProvider = 'openrouter' | 'nvidia' | 'gemini' | 'pixazo' | 'ideogram';
+import { PROVIDERS_ORDERED, type ProviderId } from '../shared/providers';
+
+// Every text provider (from the shared registry) plus the legacy image-only BYOK paths.
+export type ApiKeyProvider = ProviderId | 'pixazo' | 'ideogram';
 
 /** Result of the last live validity check for a key (see services/keyValidation.ts). */
 export type KeyValidationState = 'unknown' | 'valid' | 'invalid' | 'unsupported';
@@ -35,32 +38,23 @@ export interface ManagedApiKey {
   validationMessage?: string;
 }
 
-export const PROVIDER_META: Record<ApiKeyProvider, {
+export interface ProviderMeta {
   label: string;
   /** Request header the key is sent in. */
   header: string;
   /** Where the user gets a key. */
   keysUrl: string;
   hint: string;
-}> = {
-  openrouter: {
-    label: 'OpenRouter',
-    header: 'X-OpenRouter-Key',
-    keysUrl: 'https://openrouter.ai/keys',
-    hint: 'Unified gateway for text + image models. Recommended.'
-  },
-  nvidia: {
-    label: 'NVIDIA Build',
-    header: 'X-Nvidia-Key',
-    keysUrl: 'https://build.nvidia.com/settings/api-keys',
-    hint: 'Generous free tier for text/LLM models (nvapi- key). Image stays on OpenRouter/Flux.'
-  },
-  gemini: {
-    label: 'Google Gemini',
-    header: 'X-Gemini-Key',
-    keysUrl: 'https://aistudio.google.com/app/apikey',
-    hint: 'Direct Google AI Studio key (legacy text + image path).'
-  },
+}
+
+// Text-provider metadata is derived from the single shared registry so the client and
+// server never drift; the two legacy image-only providers are appended explicitly.
+const TEXT_PROVIDER_META = Object.fromEntries(
+  PROVIDERS_ORDERED.map((d) => [d.id, { label: d.label, header: d.header, keysUrl: d.keysUrl, hint: d.blurb }])
+) as Record<ProviderId, ProviderMeta>;
+
+export const PROVIDER_META: Record<ApiKeyProvider, ProviderMeta> = {
+  ...TEXT_PROVIDER_META,
   pixazo: {
     label: 'Pixazo / Flux',
     header: 'X-Pixazo-Key',
@@ -75,7 +69,7 @@ export const PROVIDER_META: Record<ApiKeyProvider, {
   }
 };
 
-export const ALL_PROVIDERS: ApiKeyProvider[] = ['openrouter', 'nvidia', 'gemini', 'pixazo', 'ideogram'];
+export const ALL_PROVIDERS: ApiKeyProvider[] = [...PROVIDERS_ORDERED.map((d) => d.id), 'pixazo', 'ideogram'];
 
 const STORAGE = 'dreamstream_api_keys_v2';
 const MIGRATED_FLAG = 'dreamstream_api_keys_migrated';
@@ -91,10 +85,19 @@ const emitKeysChanged = () => {
 };
 
 // Legacy single-key storage locations (kept for back-compat + one-time migration).
+// The newer direct providers never had a single-key slot; their entries exist only so
+// clearAllKeys()/migration can iterate ALL_PROVIDERS uniformly (the removes are no-ops).
 const LEGACY_KEYS: Record<ApiKeyProvider, string> = {
   openrouter: 'dreamstream_openrouter_key',
   nvidia: 'dreamstream_nvidia_key',
   gemini: 'dreamstream_api_key',
+  openai: 'dreamstream_openai_key',
+  anthropic: 'dreamstream_anthropic_key',
+  deepseek: 'dreamstream_deepseek_key',
+  zai: 'dreamstream_zai_key',
+  minimax: 'dreamstream_minimax_key',
+  tencent: 'dreamstream_tencent_key',
+  xai: 'dreamstream_xai_key',
   pixazo: 'dreamstream_flux_key',
   ideogram: 'dreamstream_ideogram_key'
 };

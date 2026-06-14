@@ -14,6 +14,7 @@ import { loadCustomAgentDefinitions } from '../services/customAgents.js';
 import { pickTextModel, pickTextModelChain, markModelDown, TEXT_FALLBACK } from '../ai/autoRouter.js';
 import { NVIDIA_TEXT_MODEL, OPENROUTER_TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS, JSON_TOOL_PROTOCOL_ENABLED } from '../config.js';
 import type { AIProviderId, ChatMessage, MessagePart } from '../ai/providers/types.js';
+import { isTextProvider, providerLabel } from '../../../shared/providers.js';
 import { assertModelAllowedForUser } from '../services/modelAccessPolicy.js';
 import { getCatalog } from '../services/modelCatalog.js';
 import { productFitForModel } from '../../../shared/modelCapabilities.js';
@@ -133,21 +134,30 @@ const sanitizeClientContext = (raw: unknown): ChatClientContext | undefined => {
 
 type ResolvedProvider = { provider: AIProviderId; apiKey: string };
 
+// Auto-selection preference when no source is pinned: the unified gateways first, then
+// the direct vendor providers in registry order.
+const AUTO_PROVIDER_ORDER: AIProviderId[] = [
+  'openrouter', 'nvidia', 'openai', 'anthropic', 'gemini', 'deepseek', 'zai', 'minimax', 'tencent', 'xai'
+];
+
 const resolveChatProvider = (req: any, requestedSource?: string): ResolvedProvider | null => {
   const source = String(requestedSource || req.header('X-Text-Source') || '').trim().toLowerCase();
-  const openRouterKey = req.apiKeys?.openRouterKey as string | undefined;
-  const nvidiaKey = req.apiKeys?.nvidiaKey as string | undefined;
+  const providerKeys = (req.apiKeys?.providerKeys || {}) as Partial<Record<string, { key: string | null; byok: boolean }>>;
+  const keyFor = (id: string): string | undefined => providerKeys[id]?.key || undefined;
 
-  // Honor an EXPLICITLY requested source — never silently reroute to a different
-  // provider. Sending e.g. an NVIDIA model id to OpenRouter just 404s and then
-  // falls back to an unrelated model, which is exactly what made "source selection"
-  // feel broken. If the requested source has no usable key, fail clearly instead.
-  if (source === 'nvidia') return nvidiaKey ? { provider: 'nvidia', apiKey: nvidiaKey } : null;
-  if (source === 'openrouter') return openRouterKey ? { provider: 'openrouter', apiKey: openRouterKey } : null;
+  // Honor an EXPLICITLY requested source — never silently reroute to a different provider
+  // (sending e.g. an NVIDIA model id to OpenRouter just 404s). If the requested source has
+  // no usable key, fail clearly instead so the UI can say "add a key".
+  if (source && isTextProvider(source)) {
+    const key = keyFor(source);
+    return key ? { provider: source, apiKey: key } : null;
+  }
 
-  // No specific source requested: use whatever key is available (auto).
-  if (openRouterKey) return { provider: 'openrouter', apiKey: openRouterKey };
-  if (nvidiaKey) return { provider: 'nvidia', apiKey: nvidiaKey };
+  // No specific source requested: use whatever key is available (auto), in preference order.
+  for (const id of AUTO_PROVIDER_ORDER) {
+    const key = keyFor(id);
+    if (key) return { provider: id, apiKey: key };
+  }
   return null;
 };
 
@@ -184,10 +194,10 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
     // Source-aware message: if the user pinned a source we couldn't honor, say so
     // explicitly rather than the generic "needs a key" (which hid the real cause).
     const requestedSource = String(body.source || req.header('X-Text-Source') || '').trim().toLowerCase();
-    const sourceLabel = requestedSource === 'nvidia' ? 'NVIDIA' : requestedSource === 'openrouter' ? 'OpenRouter' : '';
+    const sourceLabel = isTextProvider(requestedSource) ? providerLabel(requestedSource) : '';
     const message = sourceLabel
       ? `You selected ${sourceLabel} as the source, but no active ${sourceLabel} key is available (it may be missing, or ${sourceLabel} is turned off under Sources). Add a ${sourceLabel} key in Settings → API Configuration, or switch the source.`
-      : 'Chat needs an OpenRouter or NVIDIA key. Add one in Settings → API Configuration, or configure a platform key on the server.';
+      : 'Chat needs a provider key. Add an OpenRouter, NVIDIA, OpenAI, Anthropic or other provider key in Settings → API Configuration, or configure a platform key on the server.';
     return {
       error: {
         status: 503,

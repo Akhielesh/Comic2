@@ -12,8 +12,9 @@
 // in that header. Mounted before requireAuth (BYOK validation needs no app login).
 
 import { Request, Response, Router } from 'express';
-import { GEMINI_BASE_URL, NVIDIA_BASE_URL } from '../config.js';
+import { GEMINI_BASE_URL, NVIDIA_BASE_URL, ANTHROPIC_VERSION } from '../config.js';
 import { fetchOpenRouterKeyStatus } from '../ai/providers/openrouter.js';
+import { getProviderDef, isTextProvider, type ProviderDef } from '../../../shared/providers.js';
 
 export const keysRouter = Router();
 
@@ -128,6 +129,46 @@ const validateGemini = async (key: string): Promise<ValidationResult> => {
   }
 };
 
+// Generic validator for the direct providers: a cheap, read-only GET on the provider's
+// model-list endpoint. 200 proves the key works; 401/403 proves it's invalid/revoked.
+// Providers with no public listing (modelsPath null, e.g. Z.AI / MiniMax) are stored but
+// reported 'unsupported' (can't be live-checked) — same honest treatment as Pixazo.
+const validateDirectProvider = async (def: ProviderDef, key: string): Promise<ValidationResult> => {
+  if (!def.modelsPath) {
+    return {
+      provider: def.id,
+      status: 'unsupported',
+      valid: false,
+      message: `Stored — ${def.label} has no public model-list endpoint, so the key can’t be live-checked here.`
+    };
+  }
+  const baseUrl = process.env[def.baseUrlEnv] || def.baseUrl;
+  const headers: Record<string, string> =
+    def.api === 'anthropic'
+      ? { 'x-api-key': key, 'anthropic-version': ANTHROPIC_VERSION }
+      : { Authorization: `Bearer ${key}` };
+  try {
+    const res = await timedFetch(`${baseUrl}${def.modelsPath}`, { headers });
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      const count = Array.isArray((data as any)?.data) ? (data as any).data.length : undefined;
+      return {
+        provider: def.id,
+        status: 'valid',
+        valid: true,
+        message: count != null ? `Valid — ${count} models reachable.` : `Valid ${def.label} key.`,
+        detail: count != null ? { modelCount: count } : undefined
+      };
+    }
+    if (res.status === 401 || res.status === 403) {
+      return { provider: def.id, status: 'invalid', valid: false, message: `Rejected by ${def.label} (auth failed) — key is invalid, revoked, or out of credits.` };
+    }
+    return { provider: def.id, status: 'invalid', valid: false, message: `${def.label} returned ${res.status}.` };
+  } catch (err) {
+    return { provider: def.id, status: 'invalid', valid: false, message: `Could not reach ${def.label}: ${(err as Error)?.message || 'network error'}.` };
+  }
+};
+
 keysRouter.post('/validate', async (req: Request, res: Response) => {
   const provider = String(req.body?.provider || '').trim().toLowerCase();
   const keys = req.apiKeys || {};
@@ -154,8 +195,14 @@ keysRouter.post('/validate', async (req: Request, res: Response) => {
           : 'No Pixazo key provided.'
       };
       break;
-    default:
-      return res.status(400).json({ error: { message: `Unknown provider "${provider}".` } });
+    default: {
+      // Direct providers (openai, anthropic, deepseek, zai, minimax, tencent, xai).
+      const def = isTextProvider(provider) ? getProviderDef(provider) : undefined;
+      if (!def) return res.status(400).json({ error: { message: `Unknown provider "${provider}".` } });
+      const key = req.apiKeys?.providerKeys?.[def.id]?.key;
+      result = key ? await validateDirectProvider(def, key) : missing(def.id);
+      break;
+    }
   }
 
   res.json(result);
