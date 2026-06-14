@@ -9,6 +9,7 @@ import {
   ContinuityBible,
   SceneContinuityBinding
 } from './types.js';
+import type { ProviderId } from './shared/providers.js';
 import type {
   BillingSummaryResponse,
   LimitExceededDetails,
@@ -516,7 +517,7 @@ export type ChatRequest = {
   /** Explicit catalog model id; falls back to the X-Text-Model header, then an auto pick. */
   model?: string;
   /** Provider for the chosen model. Falls back to the X-Text-Source header, then OpenRouter. */
-  source?: 'openrouter' | 'nvidia';
+  source?: ProviderId;
   reasoningLevel?: ChatReasoningLevel;
   webSearch?: boolean;
   /** Optional custom persona/system prompt for this conversation. */
@@ -2260,7 +2261,7 @@ export type ChatResponse = {
   model: string;
   /** The model the user/app asked for, before any plan coercion or rate-limit fallback. */
   requestedModel?: string;
-  source: 'openrouter' | 'nvidia';
+  source: ProviderId;
   reasoningLevel: ChatReasoningLevel;
   webSearch: boolean;
   /** Step-by-step reasoning trace, when the model exposed one. */

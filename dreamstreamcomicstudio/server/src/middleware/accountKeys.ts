@@ -28,8 +28,9 @@ import {
   getBillingPrefs,
   isPlatformFundedProvider
 } from '../services/platformAllowance.js';
+import { isTextProvider, TEXT_PROVIDER_IDS, type ProviderId } from '../../../shared/providers.js';
 
-export type AccountKeyProvider = 'openrouter' | 'nvidia' | 'gemini' | 'pixazo' | 'ideogram';
+export type AccountKeyProvider = ProviderId | 'pixazo' | 'ideogram';
 
 type AccountKeys = Partial<Record<AccountKeyProvider, string>>;
 
@@ -49,7 +50,8 @@ export const invalidateAccountKeys = (userId: string): void => {
 export const canonicalAccountProvider = (provider: string): AccountKeyProvider | null => {
   const p = provider.trim().toLowerCase();
   if (p === 'flux') return 'pixazo';
-  if (p === 'openrouter' || p === 'nvidia' || p === 'gemini' || p === 'pixazo' || p === 'ideogram') return p;
+  if (p === 'pixazo' || p === 'ideogram') return p;
+  if (isTextProvider(p)) return p;
   return null;
 };
 
@@ -120,7 +122,11 @@ export const attachAccountKeys = async (req: Request, _res: Response, next: Next
     const k = req.apiKeys;
     if (!userId || !k || !isSecureStoreAvailable()) return next();
     if (!getSupabaseCapabilityStatus().storagePersistenceEnabled) return next();
-    if (PROVIDER_FIELDS.every(({ byokField }) => k[byokField])) return next();
+    // Skip the account lookup only when EVERY provider already carries a header BYOK key.
+    const allHeaderByok =
+      PROVIDER_FIELDS.every(({ byokField }) => k[byokField]) &&
+      TEXT_PROVIDER_IDS.every((id) => k.providerKeys?.[id]?.byok);
+    if (allHeaderByok) return next();
 
     const account = await cache.getOrSet(userId, () => queryAccountKeys(userId));
     if (Object.keys(account).length === 0) return next();
@@ -160,6 +166,22 @@ export const attachAccountKeys = async (req: Request, _res: Response, next: Next
       k[keyField] = account[provider];
       k[byokField] = true;
     }
+
+    // Direct providers without a named field (openai/anthropic/deepseek/zai/minimax/
+    // tencent/xai): inject the account key straight into the generic provider map. These
+    // are BYOK-only (not platform-funded), so the allowance suppression above never applies.
+    const named = new Set(PROVIDER_FIELDS.map((f) => f.provider as string));
+    if (!k.providerKeys) k.providerKeys = {};
+    for (const id of TEXT_PROVIDER_IDS) {
+      if (named.has(id)) continue;
+      if (k.providerKeys[id]?.byok || !account[id] || !allow(id)) continue;
+      k.providerKeys[id] = { key: account[id]!, byok: true };
+    }
+    // Mirror the (possibly just-injected) named keys back into the generic map so every
+    // provider can be read uniformly from req.apiKeys.providerKeys.
+    k.providerKeys.openrouter = { key: k.openRouterKey ?? null, byok: Boolean(k.openRouterByok) };
+    k.providerKeys.nvidia = { key: k.nvidiaKey ?? null, byok: Boolean(k.nvidiaByok) };
+    k.providerKeys.gemini = { key: k.geminiKey ?? null, byok: Boolean(k.geminiByok) };
     next();
   } catch (err) {
     // Account keys are an enhancement on top of header/env keys — never block a request.

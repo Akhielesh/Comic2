@@ -1,11 +1,12 @@
 // Provider-agnostic AI interface.
 //
-// OpenRouter is the first (and currently only) implementation, but every route
-// talks to this interface rather than a concrete vendor SDK. That keeps model
-// choice and pricing in one control plane and avoids re-coupling to a single
-// provider the way the legacy Gemini/Pixazo code did.
+// Every route talks to this interface rather than a concrete vendor SDK, so model
+// choice and pricing live in one control plane (and adding a provider never touches
+// route code). The set of providers is the shared registry in shared/providers.ts.
 
-export type AIProviderId = 'openrouter' | 'nvidia';
+import type { ProviderId } from '../../../../shared/providers.js';
+
+export type AIProviderId = ProviderId;
 
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
 

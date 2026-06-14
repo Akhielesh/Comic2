@@ -236,6 +236,49 @@ export const NVIDIA_REQUEST_TIMEOUT_MS = parseIntegerEnv(
   1_000
 );
 
+// --- Direct BYOK providers (OpenAI-compatible + Anthropic) -------------------------
+// Each is a "bring your own key" text source. A platform key is OPTIONAL and only used
+// to populate the shared catalog / serve allowance traffic when no user key is present.
+// Base URLs are overridable so a proxy/Azure-style gateway can be slotted in. See
+// shared/providers.ts for the canonical registry these mirror.
+const providerTimeout = (name: string, fallback = 60_000) =>
+  parseIntegerEnv(process.env[name], fallback, name, 1_000);
+
+export const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
+export const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
+export const OPENAI_REQUEST_TIMEOUT_MS = providerTimeout('OPENAI_REQUEST_TIMEOUT_MS');
+
+export const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || '';
+export const ANTHROPIC_BASE_URL = process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com/v1';
+export const ANTHROPIC_VERSION = process.env.ANTHROPIC_VERSION || '2023-06-01';
+export const ANTHROPIC_REQUEST_TIMEOUT_MS = providerTimeout('ANTHROPIC_REQUEST_TIMEOUT_MS');
+
+// Google Gemini via its OpenAI-compatible endpoint (the legacy native SDK path is separate).
+export const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+export const GEMINI_OPENAI_BASE_URL =
+  process.env.GEMINI_OPENAI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta/openai';
+export const GEMINI_REQUEST_TIMEOUT_MS = providerTimeout('GEMINI_REQUEST_TIMEOUT_MS');
+
+export const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
+export const DEEPSEEK_BASE_URL = process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com';
+export const DEEPSEEK_REQUEST_TIMEOUT_MS = providerTimeout('DEEPSEEK_REQUEST_TIMEOUT_MS');
+
+export const ZAI_API_KEY = process.env.ZAI_API_KEY || '';
+export const ZAI_BASE_URL = process.env.ZAI_BASE_URL || 'https://api.z.ai/api/paas/v4';
+export const ZAI_REQUEST_TIMEOUT_MS = providerTimeout('ZAI_REQUEST_TIMEOUT_MS');
+
+export const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY || '';
+export const MINIMAX_BASE_URL = process.env.MINIMAX_BASE_URL || 'https://api.minimax.io/v1';
+export const MINIMAX_REQUEST_TIMEOUT_MS = providerTimeout('MINIMAX_REQUEST_TIMEOUT_MS');
+
+export const TENCENT_API_KEY = process.env.TENCENT_API_KEY || process.env.HUNYUAN_API_KEY || '';
+export const TENCENT_BASE_URL = process.env.TENCENT_BASE_URL || 'https://api.hunyuan.cloud.tencent.com/v1';
+export const TENCENT_REQUEST_TIMEOUT_MS = providerTimeout('TENCENT_REQUEST_TIMEOUT_MS');
+
+export const XAI_API_KEY = process.env.XAI_API_KEY || '';
+export const XAI_BASE_URL = process.env.XAI_BASE_URL || 'https://api.x.ai/v1';
+export const XAI_REQUEST_TIMEOUT_MS = providerTimeout('XAI_REQUEST_TIMEOUT_MS');
+
 export const STORAGE_BUCKET = process.env.STORAGE_BUCKET || 'comic-assets';
 export const IMAGE_INCLUDE_DATA_URL_LEGACY = (process.env.IMAGE_INCLUDE_DATA_URL_LEGACY || '').toLowerCase() === 'true';
 // Redis connection string (BullMQ broker) — used by the ventures queue/worker.

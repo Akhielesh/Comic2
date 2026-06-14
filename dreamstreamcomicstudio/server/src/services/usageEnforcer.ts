@@ -1,5 +1,6 @@
 import type { Request } from 'express';
-import type { LimitExceededDetails, ReservationState, TokenEstimateRequest, TokenEstimateResponse } from '../../../shared/types/billing.js';
+import type { BillingProvider, LimitExceededDetails, ReservationState, TokenEstimateRequest, TokenEstimateResponse } from '../../../shared/types/billing.js';
+import { isTextProvider, type ProviderId } from '../../../shared/providers.js';
 import type { CapabilityNotice } from '../../../apiTypes.js';
 import {
   reserveUsageTokens,
@@ -32,7 +33,7 @@ declare module 'express-serve-static-core' {
   }
 }
 
-const resolveProviderFromOperation = (operation: string): 'gemini' | 'pixazo' | 'openrouter' | 'nvidia' | 'ideogram' | 'internal' => {
+const resolveProviderFromOperation = (operation: string): BillingProvider => {
   const normalized = operation.toLowerCase();
   if (normalized.includes('openrouter')) return 'openrouter';
   if (normalized.includes('ideogram')) return 'ideogram';
@@ -54,12 +55,18 @@ const resolveModelFromRequest = (req: Request, fallbackModel: string) => {
 // resolved from the user's account store is still the user's key, and billing it as
 // platform usage would double-charge them. Header checks remain as a fallback for
 // callers that run before the middleware.
-export const hasByokForProvider = (req: Request, provider: 'gemini' | 'pixazo' | 'openrouter' | 'nvidia' | 'ideogram' | 'internal') => {
-  if (provider === 'gemini') return Boolean(req.apiKeys?.geminiByok ?? req.header('X-Gemini-Key'));
+export const hasByokForProvider = (req: Request, provider: BillingProvider) => {
   if (provider === 'pixazo') return Boolean(req.apiKeys?.pixazoByok ?? (req.header('X-Pixazo-Key') || req.header('X-Flux-Key')));
-  if (provider === 'openrouter') return Boolean(req.apiKeys?.openRouterByok ?? req.header('X-OpenRouter-Key'));
-  if (provider === 'nvidia') return Boolean(req.apiKeys?.nvidiaByok ?? req.header('X-Nvidia-Key'));
   if (provider === 'ideogram') return Boolean(req.apiKeys?.ideogramByok ?? req.header('X-Ideogram-Key'));
+  // Every text provider's BYOK-ness comes from the resolved generic key map.
+  if (isTextProvider(provider)) {
+    const pk = req.apiKeys?.providerKeys?.[provider as ProviderId];
+    if (pk) return Boolean(pk.byok);
+    // Fallbacks for the named legacy fields (callers that ran before the middleware).
+    if (provider === 'gemini') return Boolean(req.apiKeys?.geminiByok ?? req.header('X-Gemini-Key'));
+    if (provider === 'openrouter') return Boolean(req.apiKeys?.openRouterByok ?? req.header('X-OpenRouter-Key'));
+    if (provider === 'nvidia') return Boolean(req.apiKeys?.nvidiaByok ?? req.header('X-Nvidia-Key'));
+  }
   return false;
 };
 
@@ -67,7 +74,7 @@ export const reserveForOperation = async (input: {
   req: Request;
   operation: string;
   fallbackModel: string;
-  provider?: 'gemini' | 'pixazo' | 'openrouter' | 'nvidia' | 'ideogram' | 'internal';
+  provider?: BillingProvider;
   resolution?: TokenEstimateRequest['resolution'];
   imageUnits?: number;
   inputTokens?: number;
@@ -81,7 +88,7 @@ export const reserveForOperation = async (input: {
       allowed: true;
       reservation: ReservationState;
       seed: {
-        provider: 'gemini' | 'pixazo' | 'openrouter' | 'nvidia' | 'ideogram' | 'internal';
+        provider: BillingProvider;
         model: string;
         operation: string;
         inputTokens?: number;
@@ -96,7 +103,7 @@ export const reserveForOperation = async (input: {
         byok?: boolean;
         metadata?: Record<string, unknown>;
       };
-      provider: 'gemini' | 'pixazo' | 'openrouter' | 'nvidia' | 'ideogram' | 'internal';
+      provider: BillingProvider;
       model: string;
     }
   | { allowed: false; details: LimitExceededDetails }
@@ -205,7 +212,7 @@ export const settleReservedOperation = async (input: {
   provider: string;
   model: string;
   seed: {
-    provider: 'gemini' | 'pixazo' | 'openrouter' | 'nvidia' | 'ideogram' | 'internal';
+    provider: BillingProvider;
     model: string;
     operation: string;
     inputTokens?: number;

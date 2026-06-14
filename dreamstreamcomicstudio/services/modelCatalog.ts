@@ -1,10 +1,11 @@
 import { get } from './apiClient';
 import type { CostClass } from '../shared/pricing';
+import { providerLabel, providerShortLabel, TEXT_PROVIDER_IDS, type ProviderId } from '../shared/providers';
 
 export type Band = 'free' | 'low' | 'medium' | 'high';
 export type DreamStreamRole = 'text-brain' | 'dialogue' | 'panel-art' | 'cover' | 'qc';
 
-export type ModelSource = 'openrouter' | 'nvidia';
+export type ModelSource = ProviderId;
 
 export interface CatalogModel {
   id: string;
@@ -45,7 +46,7 @@ export interface CatalogResponse {
   models: CatalogModel[];
   count: number;
   total: number;
-  sources?: { openrouter: number; nvidia: number };
+  sources?: Partial<Record<ModelSource, number>>;
   fetchedAt: number | null;
   degraded: boolean;
   message?: string;
@@ -149,6 +150,9 @@ export interface ModelVerification {
     };
     nvidia: { connected: boolean; modelCount: number; note?: string };
   };
+  /** Per-provider connection + model count for every direct source (openrouter, nvidia,
+   *  openai, anthropic, gemini, deepseek, zai, minimax, tencent, xai). */
+  providers?: Partial<Record<ModelSource, { connected: boolean; modelCount: number }>>;
 }
 
 export const fetchModelVerification = (): Promise<ModelVerification> =>
@@ -165,15 +169,20 @@ export const costLabel = (model: CatalogModel): string => {
 };
 
 /** Friendly, display-ready source labels — used everywhere a source is shown. */
-export const SOURCE_LABEL: Record<ModelSource, string> = {
-  openrouter: 'OpenRouter',
-  nvidia: 'NVIDIA'
-};
+export const SOURCE_LABEL: Record<ModelSource, string> = Object.fromEntries(
+  TEXT_PROVIDER_IDS.map((s) => [s, providerLabel(s)])
+) as Record<ModelSource, string>;
 
 /** Map a source id (or any provider string) to its display label. Empty for null. */
 export const sourceLabel = (source?: ModelSource | string | null): string => {
   if (!source) return '';
-  return SOURCE_LABEL[source as ModelSource] || String(source);
+  return providerLabel(source) || String(source);
+};
+
+/** Short badge label for a source id (e.g. "Gemini", "Grok"). */
+export const sourceShortLabel = (source?: ModelSource | string | null): string => {
+  if (!source) return '';
+  return providerShortLabel(source) || String(source);
 };
 
 export const providerOrigin = (model: CatalogModel): string => {

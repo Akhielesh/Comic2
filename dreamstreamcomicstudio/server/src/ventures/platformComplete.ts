@@ -18,12 +18,16 @@ import { CircuitBreaker } from '../ai/reliability/circuitBreaker.js';
 import { incr } from '../observability/metrics.js';
 import type { AIProviderId } from '../ai/providers/types.js';
 
+// The worker only fails over across the platform-funded gateways (the direct BYOK providers
+// have no platform key pool here).
+type PlatformProvider = 'openrouter' | 'nvidia';
+
 // Module-level pools + breakers (shared across ticks in the worker process).
-const pools: Record<AIProviderId, KeyPool> = {
+const pools: Record<PlatformProvider, KeyPool> = {
   openrouter: new KeyPool(OPENROUTER_API_KEYS),
   nvidia: new KeyPool(NVIDIA_API_KEYS)
 };
-const breakers: Record<AIProviderId, CircuitBreaker> = {
+const breakers: Record<PlatformProvider, CircuitBreaker> = {
   openrouter: new CircuitBreaker({ failureThreshold: 4, cooldownMs: 30_000 }),
   nvidia: new CircuitBreaker({ failureThreshold: 4, cooldownMs: 30_000 })
 };
@@ -38,7 +42,7 @@ export interface PlatformComplete {
 
 /** A resilient platform-key `complete(prompt)`, or null if no platform key is configured. */
 export const getPlatformComplete = async (maxTokens = 4000): Promise<PlatformComplete | null> => {
-  const candidates: AIProviderId[] = [];
+  const candidates: PlatformProvider[] = [];
   if (pools.openrouter.size > 0) candidates.push('openrouter');
   if (pools.nvidia.size > 0) candidates.push('nvidia');
   if (candidates.length === 0) return null;
@@ -47,7 +51,7 @@ export const getPlatformComplete = async (maxTokens = 4000): Promise<PlatformCom
   // weak/free coders produce the "terrible code" the owner flagged); NVIDIA uses its configured
   // default (a pooled openrouter model id wouldn't be valid on NVIDIA).
   const orModel = await pickCodingModel({ costPref: 'quality' }).catch(() => TEXT_FALLBACK);
-  const models: Record<AIProviderId, string> = { openrouter: orModel, nvidia: NVIDIA_TEXT_MODEL };
+  const models: Record<PlatformProvider, string> = { openrouter: orModel, nvidia: NVIDIA_TEXT_MODEL };
 
   const complete = async (prompt: string): Promise<string> => {
     let lastErr: unknown = new Error('No model provider available for the build.');

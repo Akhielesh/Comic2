@@ -5,6 +5,7 @@ import { getSelectedTextModel, getModelForStage, getSelectedTextSource, getSourc
 import { supabase } from './supabase';
 import { isFreeOnly } from './freeOnlyMode';
 import { isProviderEnabled, allowedSourcesHeader } from './sourceGovernance';
+import { PROVIDERS_ORDERED } from '../shared/providers';
 import { withRetry, type RetryOptions } from './retry';
 import { isRetryableError } from './apiErrors';
 
@@ -22,6 +23,22 @@ const getGeminiKey = () => {
   } catch {
     return null;
   }
+};
+
+// Resolve the BYOK header for every enabled text provider from the shared registry, so a
+// key the user added for ANY provider is attached to requests (honoring governance). The
+// original providers keep their legacy single-key fallbacks. Image-only providers
+// (pixazo/ideogram) are attached separately by the callers.
+const providerKeyHeaders = (): Record<string, string> => {
+  const headers: Record<string, string> = {};
+  for (const def of PROVIDERS_ORDERED) {
+    if (!isProviderEnabled(def.id)) continue;
+    let key = getActiveKeyValue(def.id);
+    if (!key && def.id === 'openrouter') key = getOpenRouterKey();
+    if (!key && def.id === 'gemini') key = getGeminiKey();
+    if (key) headers[def.header] = key;
+  }
+  return headers;
 };
 
 export class ApiError extends Error {
@@ -81,10 +98,8 @@ const getAuthToken = async (): Promise<string | undefined> => {
 // Build the common request headers (provider keys honoring governance, auth token,
 // model/source selection, free-only, allowed-sources). Shared by post + postStream.
 const buildRequestHeaders = async (options?: { apiKey?: string; modelId?: string; stage?: string }): Promise<Record<string, string>> => {
-  const geminiKey = isProviderEnabled('gemini') ? (getActiveKeyValue('gemini') || getGeminiKey()) : null;
+  const providerHeaders = providerKeyHeaders();
   const fluxKey = isProviderEnabled('pixazo') ? (getActiveKeyValue('pixazo') || getFluxKeyInfo().key) : null;
-  const openRouterKey = isProviderEnabled('openrouter') ? (getActiveKeyValue('openrouter') || getOpenRouterKey()) : null;
-  const nvidiaKey = isProviderEnabled('nvidia') ? getActiveKeyValue('nvidia') : null;
   const ideogramKey = isProviderEnabled('ideogram') ? getActiveKeyValue('ideogram') : null;
   const token = await getAuthToken();
   const textModel = options?.stage ? getModelForStage(options.stage) : getSelectedTextModel();
@@ -92,10 +107,10 @@ const buildRequestHeaders = async (options?: { apiKey?: string; modelId?: string
 
   return {
     'Content-Type': 'application/json',
-    ...(options?.apiKey ? { 'X-Gemini-Key': options.apiKey } : (geminiKey ? { 'X-Gemini-Key': geminiKey } : {})),
+    ...providerHeaders,
+    // Explicit per-call Gemini key override (used by the legacy image path) wins.
+    ...(options?.apiKey ? { 'X-Gemini-Key': options.apiKey } : {}),
     ...(fluxKey ? { 'X-Pixazo-Key': fluxKey } : {}),
-    ...(openRouterKey ? { 'X-OpenRouter-Key': openRouterKey } : {}),
-    ...(nvidiaKey ? { 'X-Nvidia-Key': nvidiaKey } : {}),
     ...(ideogramKey ? { 'X-Ideogram-Key': ideogramKey } : {}),
     ...(textModel ? { 'X-Text-Model': textModel } : {}),
     ...(textSource ? { 'X-Text-Source': textSource as string } : {}),
@@ -177,20 +192,16 @@ export const patch = async <TReq, TRes>(path: string, body: TReq, options?: { si
 };
 
 export const get = async <TRes>(path: string, options?: { modelId?: string; signal?: AbortSignal }): Promise<TRes> => {
-  const geminiKey = isProviderEnabled('gemini') ? (getActiveKeyValue('gemini') || getGeminiKey()) : null;
+  const providerHeaders = providerKeyHeaders();
   const fluxKey = isProviderEnabled('pixazo') ? (getActiveKeyValue('pixazo') || getFluxKeyInfo().key) : null;
-  const openRouterKey = isProviderEnabled('openrouter') ? (getActiveKeyValue('openrouter') || getOpenRouterKey()) : null;
-  const nvidiaKey = isProviderEnabled('nvidia') ? getActiveKeyValue('nvidia') : null;
   const ideogramKey = isProviderEnabled('ideogram') ? getActiveKeyValue('ideogram') : null;
   const token = await getAuthToken();
 
   const res = await safeFetch(buildApiUrl(path), {
     signal: options?.signal,
     headers: {
-      ...(geminiKey ? { 'X-Gemini-Key': geminiKey } : {}),
+      ...providerHeaders,
       ...(fluxKey ? { 'X-Pixazo-Key': fluxKey } : {}),
-      ...(openRouterKey ? { 'X-OpenRouter-Key': openRouterKey } : {}),
-      ...(nvidiaKey ? { 'X-Nvidia-Key': nvidiaKey } : {}),
       ...(ideogramKey ? { 'X-Ideogram-Key': ideogramKey } : {}),
       ...(getSelectedTextModel() ? { 'X-Text-Model': getSelectedTextModel() as string } : {}),
       ...(getSelectedTextSource() ? { 'X-Text-Source': getSelectedTextSource() as string } : {}),

@@ -47,5 +47,13 @@ export const modelLinks = (model: CatalogModel): ModelLink[] => {
 /** Short, honest descriptor of where a source actually hosts/serves models. */
 export const SOURCE_HOSTING_NOTE: Record<ModelSource, string> = {
   openrouter: 'Unified gateway — routes your request to an upstream host; pay-per-token, some free variants.',
-  nvidia: 'NVIDIA DGX Cloud (NIM) — credit-based free tier, then billed to your nvapi- key.'
+  nvidia: 'NVIDIA DGX Cloud (NIM) — credit-based free tier, then billed to your nvapi- key.',
+  openai: 'OpenAI’s own API — billed directly to your OpenAI key.',
+  anthropic: 'Anthropic’s native Messages API — billed directly to your Anthropic key.',
+  gemini: 'Google AI Studio (Gemini) — free tier available, then billed to your Google key.',
+  deepseek: 'DeepSeek’s API — very low cost, billed directly to your DeepSeek key.',
+  zai: 'Z.AI (GLM) — billed directly to your Z.AI key.',
+  minimax: 'MiniMax — billed directly to your MiniMax key.',
+  tencent: 'Tencent Hunyuan — billed directly to your Tencent key.',
+  xai: 'xAI (Grok) — billed directly to your xAI key.'
 };

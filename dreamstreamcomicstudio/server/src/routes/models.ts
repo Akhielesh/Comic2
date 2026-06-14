@@ -7,38 +7,48 @@ import { getModelPopularity, parsePopularityWindow } from '../services/usageAnal
 import { requireAuth } from '../middleware/auth.js';
 import { listModelScores, listMonthlyUsage, loadScoreMap } from '../services/modelStats.js';
 import type { AnnotatedModel } from '../ai/catalogAnnotations.js';
+import { getProviderDef, TEXT_PROVIDER_IDS, type ProviderId } from '../../../shared/providers.js';
+import type { AIProviderId } from '../ai/providers/types.js';
 
 export const modelsRouter = Router();
 
 const parseBool = (value: unknown): boolean => value === 'true' || value === '1';
 
 const parseSource = (value: unknown): CatalogFilters['source'] =>
-  value === 'nvidia' ? 'nvidia' : value === 'openrouter' ? 'openrouter' : undefined;
+  typeof value === 'string' && TEXT_PROVIDER_IDS.includes(value as ProviderId) ? (value as AIProviderId) : undefined;
 
-// NVIDIA's catalog needs an authenticated /models call (unlike OpenRouter's public list).
-// With a key (BYOK X-Nvidia-Key or a platform NVIDIA_API_KEY) we fetch live AND harvest the
-// public metadata into the cache. Without a key — i.e. a logged-out/anonymous visitor on the
-// public models page — we serve the cached NVIDIA catalog so it's still populated. We never
-// store the key; only the public model list (the same data on build.nvidia.com) is cached.
-const withNvidiaModels = async (req: Request, base: AnnotatedModel[]): Promise<AnnotatedModel[]> => {
-  // Attach the probed hosted-API callability so the UI can flag NVIDIA's download-only
-  // NIMs (which 404 "not found for account") — whether the list is live or cached.
+// Every direct provider beyond OpenRouter (which is the public `base` list). Each
+// contributes its curated catalog (always — so logged-out visitors see the models) plus
+// its live /models list when a key is present (BYOK header or a platform env key).
+const DIRECT_SOURCES: AIProviderId[] = TEXT_PROVIDER_IDS.filter((id) => id !== 'openrouter') as AIProviderId[];
+
+// Merge the direct providers' models into the base (OpenRouter) catalog.
+//
+// NVIDIA's /models needs auth (unlike OpenRouter's public list): with a key we fetch live
+// AND harvest the public metadata into the cache; without one we serve the cached list so the
+// public models page stays populated. The OpenAI-compatible / Anthropic providers ship a
+// curated seed, so they're populated even keyless; a key augments them with live ids. We never
+// store keys — only public model metadata is cached.
+const withDirectProviderModels = async (req: Request, base: AnnotatedModel[]): Promise<AnnotatedModel[]> => {
+  const nvidiaCallability = await loadCallabilityMap('nvidia').catch(() => new Map<string, boolean>());
   const attachCallability = (models: AnnotatedModel[], map: Map<string, boolean>): AnnotatedModel[] =>
     models.map((m) => (map.has(m.id) ? { ...m, apiCallable: map.get(m.id) } : m));
 
-  const nvidiaKey = req.header('X-Nvidia-Key') || process.env.NVIDIA_API_KEY || null;
-  if (nvidiaKey) {
-    const nvidia = await getProviderModels('nvidia', nvidiaKey);
-    if (nvidia.length) {
-      void persistHarvestedModels('nvidia', nvidia); // fire-and-forget cache top-up
-      const callability = await loadCallabilityMap('nvidia');
-      return [...base, ...attachCallability(nvidia, callability)];
-    }
-  }
-  // No key or the live fetch failed → fall back to the harvested cache (already merges
-  // api_callable in loadPersistedModels).
-  const cached = await loadPersistedModels('nvidia');
-  return cached.length ? [...base, ...cached] : base;
+  const lists = await Promise.all(
+    DIRECT_SOURCES.map(async (id): Promise<AnnotatedModel[]> => {
+      const def = getProviderDef(id);
+      const key = (def ? req.header(def.header) : null) || (def ? process.env[def.keyEnv] : null) || null;
+      let models = await getProviderModels(id, key);
+      if (id === 'nvidia') {
+        if (!models.length) models = await loadPersistedModels('nvidia');
+        else void persistHarvestedModels('nvidia', models); // fire-and-forget cache top-up
+        models = attachCallability(models, nvidiaCallability);
+      }
+      return models;
+    })
+  );
+
+  return [...base, ...lists.flat()];
 };
 
 // GET /api/models/catalog
@@ -57,7 +67,7 @@ modelsRouter.get('/catalog', async (req: Request, res: Response) => {
   };
 
   const result = await getCatalog(parseBool(req.query.refresh));
-  const allModels = await withNvidiaModels(req, result.models);
+  const allModels = await withDirectProviderModels(req, result.models);
   let models = filterCatalog(allModels, filters);
   // Attach the latest DRS Benchmark Score (when a bench run has been published)
   // so the Library can rank and badge models by measured behavior, not vibes.
@@ -66,14 +76,15 @@ modelsRouter.get('/catalog', async (req: Request, res: Response) => {
     models = models.map((m) => (scoreMap.has(m.id) ? { ...m, drsScore: scoreMap.get(m.id) } : m));
   }
 
+  // Per-source counts for every provider (openrouter, nvidia, openai, anthropic, …).
+  const sources: Record<string, number> = {};
+  for (const id of TEXT_PROVIDER_IDS) sources[id] = allModels.filter((m) => m.source === id).length;
+
   res.json({
     models,
     count: models.length,
     total: allModels.length,
-    sources: {
-      openrouter: allModels.filter((m) => m.source === 'openrouter').length,
-      nvidia: allModels.filter((m) => m.source === 'nvidia').length
-    },
+    sources,
     fetchedAt: result.fetchedAt,
     degraded: result.degraded,
     message: result.message
@@ -139,7 +150,15 @@ modelsRouter.get('/verify', requireAuth, async (req: Request, res: Response) => 
   const nvidiaKey = req.header('X-Nvidia-Key') || process.env.NVIDIA_API_KEY || null;
 
   const result = await getCatalog(true); // force live refresh of the OpenRouter catalog
-  const allModels = await withNvidiaModels(req, result.models);
+  const allModels = await withDirectProviderModels(req, result.models);
+
+  // Per-provider connection + model count (which sources have a usable key right now).
+  const providers: Record<string, { connected: boolean; modelCount: number }> = {};
+  for (const id of TEXT_PROVIDER_IDS) {
+    const def = getProviderDef(id);
+    const key = (def ? req.header(def.header) : null) || (def ? process.env[def.keyEnv] : null) || null;
+    providers[id] = { connected: Boolean(key), modelCount: allModels.filter((m) => m.source === id).length };
+  }
 
   // Live, authoritative OpenRouter data: per-KEY status (/key) AND account CREDITS (/credits).
   // These can differ — a key may carry its own spend cap distinct from account credits remaining.
@@ -170,6 +189,9 @@ modelsRouter.get('/verify', requireAuth, async (req: Request, res: Response) => 
         modelCount: allModels.filter((m) => m.source === 'nvidia').length,
         note: 'NVIDIA Build is credit-based (free tier ~1,000 credits, 40 req/min); per-call USD cost is not reported.'
       }
-    }
+    },
+    // Per-provider connection + counts for every direct source (openrouter, nvidia, openai,
+    // anthropic, gemini, deepseek, zai, minimax, tencent, xai).
+    providers
   });
 });
