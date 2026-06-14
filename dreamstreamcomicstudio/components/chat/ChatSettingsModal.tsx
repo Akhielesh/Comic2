@@ -1,13 +1,14 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
   X, Brain, Network, Wrench, Plus, Trash2, Check, Pencil, Bot, Activity,
-  LayoutGrid, BookOpen, Settings2, Sun, Moon, Monitor, Upload, Loader2, Sparkles
+  LayoutGrid, BookOpen, Settings2, Sun, Moon, Monitor, Upload, Loader2, Sparkles, Plug
 } from 'lucide-react';
 import { ModalPortal } from '../modals/ModalPortal';
 import { SystemDashboard } from './SystemDashboard';
 import { ComponentGallery } from './ComponentGallery';
 import { RecipeStudio } from './RecipeStudio';
 import { ToolsDashboard } from './ToolsDashboard';
+import { ConnectorsPage } from '../connectors/ConnectorsPage';
 import type { CustomAgentDef } from '../../apiTypes';
 import { getChatMemory, setChatMemory } from '../../services/chatStorage';
 import { importChatMemory } from '../../services/chatApi';
@@ -22,7 +23,7 @@ import {
   parseMemoryItems, formatMemoryItems
 } from '../../services/chatAgents';
 
-type Tab = 'general' | 'memory' | 'agents' | 'recipes' | 'tools' | 'system' | 'gallery';
+type Tab = 'general' | 'memory' | 'agents' | 'recipes' | 'tools' | 'connectors' | 'system' | 'gallery';
 
 interface ChatSettingsModalProps {
   userId?: string;
@@ -38,6 +39,7 @@ const TABS = [
   ['agents', 'Agents', Network],
   ['recipes', 'Recipes', BookOpen],
   ['tools', 'Tools', Wrench],
+  ['connectors', 'Connectors', Plug],
   ['system', 'System', Activity],
   ['gallery', 'Gallery', LayoutGrid]
 ] as const;
@@ -138,6 +140,7 @@ export const ChatSettingsModal: React.FC<ChatSettingsModalProps> = ({
                 {tab === 'agents' && <AgentsTab userId={userId} onAgentsChange={onAgentsChange} />}
                 {tab === 'recipes' && <RecipeStudio userId={userId} />}
                 {tab === 'tools' && <ToolsDashboard />}
+                {tab === 'connectors' && <ConnectorsPage embedded />}
                 {tab === 'system' && <SystemDashboard />}
                 {tab === 'gallery' && <ComponentGallery />}
               </div>
