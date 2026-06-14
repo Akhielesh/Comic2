@@ -60,6 +60,7 @@ interface ChatMessageViewProps {
 export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionId, busy, isLast, onBranch, onRegenerate, onEdit, onSelectVariant }) => {
   const [copied, setCopied] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+  const [noticesOpen, setNoticesOpen] = useState(false);
   const [branchOpen, setBranchOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editDraft, setEditDraft] = useState(turn.content);
@@ -288,23 +289,48 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
             if (hit) hit.count += 1;
             else grouped.set(key, { n, count: 1 });
           }
+          const entries = [...grouped.values()];
+          const hasError = entries.some((e) => e.n.level === 'error');
+          const Banner: React.FC<{ n: (typeof turn.notices)[number]; count: number }> = ({ n, count }) => (
+            <div
+              className={`flex items-start gap-1.5 text-[11px] rounded px-2 py-1 border ${
+                n.level === 'error' ? 'bg-red-500/10 border-red-500/30 text-red-600' : 'bg-amber-500/10 border-amber-500/30 text-amber-600'
+              }`}
+            >
+              {n.level === 'error' ? <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" /> : <Info className="w-3 h-3 shrink-0 mt-0.5" />}
+              <span>
+                {n.message}
+                {n.fix ? <span className="font-bold"> ({n.fix})</span> : ''}
+                {count > 1 && <span className="ml-1 opacity-70">×{count}</span>}
+              </span>
+            </div>
+          );
+          // A couple of distinct notices read fine inline; many (e.g. a basket of
+          // failed tickers) collapse behind one summary so they aren't a scroll wall.
+          if (entries.length <= 2) {
+            return (
+              <div className="w-full mt-1 space-y-1">
+                {entries.map((e, i) => <Banner key={i} n={e.n} count={e.count} />)}
+              </div>
+            );
+          }
           return (
-            <div className="w-full mt-1 space-y-1">
-              {[...grouped.values()].map(({ n, count }, i) => (
-                <div
-                  key={i}
-                  className={`flex items-start gap-1.5 text-[11px] rounded px-2 py-1 border ${
-                    n.level === 'error' ? 'bg-red-500/10 border-red-500/30 text-red-600' : 'bg-amber-500/10 border-amber-500/30 text-amber-600'
-                  }`}
-                >
-                  {n.level === 'error' ? <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" /> : <Info className="w-3 h-3 shrink-0 mt-0.5" />}
-                  <span>
-                    {n.message}
-                    {n.fix ? <span className="font-bold"> ({n.fix})</span> : ''}
-                    {count > 1 && <span className="ml-1 opacity-70">×{count}</span>}
-                  </span>
+            <div className="w-full mt-1">
+              <button
+                onClick={() => setNoticesOpen((v) => !v)}
+                className={`flex w-full items-center gap-1.5 rounded border px-2 py-1 text-[11px] font-semibold transition-colors ${
+                  hasError ? 'bg-red-500/10 border-red-500/30 text-red-600' : 'bg-amber-500/10 border-amber-500/30 text-amber-600'
+                }`}
+              >
+                {hasError ? <AlertTriangle className="w-3 h-3 shrink-0" /> : <Info className="w-3 h-3 shrink-0" />}
+                <span>{entries.length} notices</span>
+                {noticesOpen ? <ChevronUp className="ml-auto w-3 h-3" /> : <ChevronDown className="ml-auto w-3 h-3" />}
+              </button>
+              {noticesOpen && (
+                <div className="mt-1 space-y-1">
+                  {entries.map((e, i) => <Banner key={i} n={e.n} count={e.count} />)}
                 </div>
-              ))}
+              )}
             </div>
           );
         })()}
