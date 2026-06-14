@@ -74,6 +74,13 @@ const PrimaryBtn: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement>> = ({ c
 
 // ── MCP servers (custom connectors) ──────────────────────────────────────────
 
+// One-tap presets for popular remote MCPs. DeepWiki ships as a built-in composer toggle
+// already (no key); these two prefill the form but need the user's API token.
+const RECOMMENDED_MCP: { name: string; url: string }[] = [
+  { name: 'Hugging Face', url: 'https://huggingface.co/mcp' },
+  { name: 'Context7', url: 'https://mcp.context7.com/mcp' }
+];
+
 const McpServersPanel: React.FC = () => {
   const [servers, setServers] = useState<McpServerConfig[]>(() => listMcpServers());
   const [name, setName] = useState('');
@@ -98,8 +105,24 @@ const McpServersPanel: React.FC = () => {
       </div>
       <p className={`text-[11px] ${MUTED} mt-1 mb-3`}>
         Add your own remote MCP servers (https). Their tools appear as connectors in the chat composer.
-        Stored on this device.
+        Stored on this device. <span className="font-medium">DeepWiki is already built in</span> — just toggle it on in the composer.
       </p>
+
+      <div className="mb-3 flex flex-wrap items-center gap-1.5">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-[var(--ds-muted)]">Recommended</span>
+        {RECOMMENDED_MCP.map((m) => (
+          <button
+            key={m.url}
+            type="button"
+            onClick={() => { setName(m.name); setUrl(m.url); }}
+            className={`inline-flex items-center gap-1 ${HAIRLINE} rounded-full px-2.5 py-1 text-[11px] font-medium bg-[var(--ds-surface-soft)] ${MUTED} hover:text-[var(--ds-ink)] hover:bg-[var(--ds-hover)]`}
+            title={`Prefill ${m.name} — then paste your API token below`}
+          >
+            <Plus className="w-3 h-3" /> {m.name}
+          </button>
+        ))}
+        <span className={`text-[10px] ${MUTED}`}>needs an API token</span>
+      </div>
 
       {servers.length > 0 && (
         <div className="space-y-1.5 mb-3">
