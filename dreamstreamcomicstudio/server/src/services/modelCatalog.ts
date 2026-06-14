@@ -35,6 +35,15 @@ const refresh = async (): Promise<AnnotatedModel[]> => {
   const provider = getProvider();
   const raw = await provider.listModels(resolveProviderContext());
   const models = annotateModels(raw);
+  // RESILIENCE: OpenRouter's /models is a large public list. A zero/empty result is a
+  // transient upstream blip (rate-limit, cold-start, momentary outage), NOT "the catalog
+  // is empty now". Caching it would serve an empty catalog for a full TTL AND persisting
+  // it would clobber the durable Supabase index — exactly the "OpenRouter models
+  // disappeared" outage. Treat empty as a FAILED refresh: throw so getCatalog() keeps
+  // serving the last-good in-memory/Supabase snapshot, and never overwrite either with [].
+  if (models.length === 0) {
+    throw new Error('Model source returned an empty list — keeping the last-good catalog.');
+  }
   cache = { models, fetchedAt: Date.now() };
   // Durable index: mirror the live OpenRouter catalog into Supabase so cold starts can serve it
   // instantly (stale-while-revalidate) instead of doing a slow live fetch on the request path.

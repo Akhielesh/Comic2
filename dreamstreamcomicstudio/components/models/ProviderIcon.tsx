@@ -1,5 +1,7 @@
 import React from 'react';
 import { getModelVendor, getVendorById, type VendorMeta } from '../../services/modelVendors';
+import { ProviderLogo, hasProviderLogo } from '../providerLogos';
+import { getProviderDef } from '../../shared/providers';
 
 // Official provider marks, rendered inline so the catalog never depends on a CDN.
 // Every vendor in VENDOR_META either has a real brand SVG here or falls back to a
@@ -210,6 +212,12 @@ export const ModelProviderIcon: React.FC<{ model: { id: string }; className?: st
   <ProviderIcon vendorId={getModelVendor(model).id} className={className} />
 );
 
-/** Icon for the upstream SOURCE gateway (where the request is routed), not the maker. */
-export const SourceIcon: React.FC<{ source: 'openrouter' | 'nvidia' | string; className?: string }> = ({ source, className }) =>
-  source === 'nvidia' ? <NvidiaMark className={className} /> : <OpenRouterMark className={className} />;
+/** Icon for the upstream SOURCE gateway (where the request is routed), not the maker.
+ *  Renders the real brand mark for every provider in the registry (OpenRouter, NVIDIA,
+ *  OpenAI, Anthropic, Gemini, DeepSeek, Z.AI, MiniMax, Tencent, xAI), tinted to its accent. */
+export const SourceIcon: React.FC<{ source: 'openrouter' | 'nvidia' | string; className?: string }> = ({ source, className }) => {
+  if (hasProviderLogo(source)) {
+    return <ProviderLogo provider={source} className={className ?? 'w-4 h-4'} style={{ color: getProviderDef(source)?.accent }} />;
+  }
+  return source === 'nvidia' ? <NvidiaMark className={className} /> : <OpenRouterMark className={className} />;
+};
