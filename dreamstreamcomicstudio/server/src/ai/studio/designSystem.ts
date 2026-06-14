@@ -436,6 +436,16 @@ export const CURATED_MCP_CATALOG: CuratedMcp[] = [
     license: 'Elastic License v2',
     free: true,
     envVar: 'STUDIO_NANGO_MCP_URL'
+  },
+  {
+    id: 'shadcn',
+    name: 'shadcn/ui registry',
+    what: 'Browse and pull source for shadcn/ui (and compatible registry) components — canonical Radix + Tailwind component source the agent can adapt into a custom render_react widget.',
+    transport: 'stdio',
+    pkg: 'shadcn (npx shadcn@latest mcp)',
+    license: 'MIT',
+    free: true,
+    envVar: 'STUDIO_SHADCN_MCP_URL'
   }
 ];
 

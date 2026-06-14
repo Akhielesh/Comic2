@@ -81,5 +81,25 @@ services:
     ports:
       - "8002:8002" # → STUDIO_MAGICUI_MCP_URL=http://<host>:8002/mcp
 
+  # 21st.dev Magic: AI component builder/refiner + logo search from the 21st.dev universe.
+  # OPT-IN (profile "magic"): `docker compose --profile magic up -d`. Requires a 21st.dev API key
+  # (free tier) set as MAGIC_API_KEY in this directory's .env — it lives ONLY here, never in the repo
+  # or the app server. NOTE: the component-BUILDER opens an interactive 21st.dev canvas (IDE-oriented);
+  # the inspiration + logo-search tools work headlessly. For fully-automated chat generation,
+  # shadcn-mcp / magicui-mcp (which return component source directly) are the practical ones; the app
+  # pairs either with render_react to display the result sandboxed.
+  magic-mcp:
+    image: node:20-alpine
+    restart: unless-stopped
+    profiles: ["magic"]
+    command: >
+      npx -y supergateway
+      --stdio "npx -y @21st-dev/magic@latest"
+      --outputTransport streamableHttp --port 8003
+    environment:
+      API_KEY: ${MAGIC_API_KEY:-}
+    ports:
+      - "8003:8003" # → STUDIO_MAGIC_MCP_URL=http://<host>:8003/mcp
+
 volumes:
   nango-db-data:
