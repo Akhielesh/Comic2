@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Search, X, Loader2, Check, Sparkles, Globe, Eye, Brain, AlertTriangle, EyeOff, Wand2, Zap, Gauge } from 'lucide-react';
+import { Search, X, Loader2, Check, Sparkles, Globe, Eye, Brain, AlertTriangle, EyeOff, Wand2, Zap, Gauge, Key, ExternalLink } from 'lucide-react';
 import { ModalPortal } from '../modals/ModalPortal';
 import {
   fetchModelCatalog,
   sourceLabel,
+  sourceShortLabel,
   providerOrigin,
   costLabel,
   type CatalogModel,
@@ -11,13 +12,23 @@ import {
 } from '../../services/modelCatalog';
 import { getCapabilities } from '../../services/modelCapabilities';
 import { searchModels } from '../../services/modelSearch';
-import { isProviderEnabled, MODEL_SOURCES } from '../../services/sourceGovernance';
-import { useModelSourceScope } from '../../hooks/useModelSourceScope';
+import { isProviderEnabled } from '../../services/sourceGovernance';
+import { hasUsableKey } from '../../services/apiKeys';
+import { getProviderDef, PROVIDERS_ORDERED } from '../../shared/providers';
 import { fetchModelSpeed, speedTier, speedLabel, isTimeoutProneFreeModel, type ModelSpeed } from '../../services/modelSpeed';
 import {
   GLASS_STRONG, HAIRLINE, MUTED, INK, HEADING, TRANSITION, SHADOW_SOFT,
   CONTROL_BTN, ACCENT_BG, ACCENT_BG_HOVER, ACCENT_TEXT, ACCENT_SOFT_BG, HOVER_LIFT
 } from './studioDesign';
+
+// Whether a model can actually be used right now: platform-served providers (OpenRouter,
+// NVIDIA, Gemini) work on the platform key/allowance; the direct BYOK providers need the
+// user's own key. Returns the reason so the card can show "Add a key" with a link.
+const keyGate = (source: string): { ok: true } | { ok: false; needsKey: true } => {
+  const def = getProviderDef(source);
+  if (def?.platformServed) return { ok: true };
+  return hasUsableKey(source as any) ? { ok: true } : { ok: false, needsKey: true };
+};
 
 // Measured-latency badge (from real chat telemetry) so slow models are obvious before
 // you pick one — the durable fix for getting stuck on a 60-250s free model.
@@ -63,8 +74,6 @@ const FACETS: { key: Facet; label: string }[] = [
 
 const CapabilityChips: React.FC<{ model: CatalogModel; speed?: ModelSpeed }> = ({ model, speed }) => {
   const caps = getCapabilities(model);
-  // No measured speed yet AND it's a very large free model → warn it may time out. This is the
-  // gap the SpeedBadge can't cover: a model that always times out leaves no latency samples.
   const timeoutProne = !speed && isTimeoutProneFreeModel(model.id, caps.isFree);
   return (
     <div className="flex flex-wrap items-center gap-1">
@@ -100,14 +109,13 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [facet, setFacet] = useState<Facet>('all');
+  const [providerFilter, setProviderFilter] = useState<ModelSource | 'all'>('all');
   const [speed, setSpeed] = useState<Record<string, ModelSpeed>>({});
-  // Measured per-model latency (best-effort) so the picker can flag slow models.
   useEffect(() => { let on = true; fetchModelSpeed().then((s) => { if (on) setSpeed(s); }); return () => { on = false; }; }, []);
 
   useEffect(() => {
     let active = true;
     setLoading(true);
-    // Text-capable models only (exclude pure image generators from the chat picker).
     fetchModelCatalog({ modality: 'text' })
       .then((res) => {
         if (!active) return;
@@ -118,23 +126,22 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
         if (!active) return;
         setError(err?.message || 'Failed to load the model catalog.');
       })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, []);
 
-  // Same Settings-level source scope as the Model Library and comic Model panel:
-  // a source that's off in Settings (or keyless while another source is connected)
-  // doesn't offer models here either.
-  const sourceScope = useModelSourceScope();
+  // The providers that actually have models in the catalog, in registry order — used for
+  // the provider filter row. A model whose source is turned off in Settings is excluded.
+  const providersPresent = useMemo(() => {
+    const present = new Set(models.map((m) => m.source).filter(isProviderEnabled));
+    return PROVIDERS_ORDERED.filter((d) => present.has(d.id));
+  }, [models]);
+
   const filtered = useMemo(() => {
-    // Ranked, typo-tolerant search (aliases like "claude" → Anthropic work too),
-    // then the facet chips narrow the ranked list.
     return searchModels(models, query).filter((model) => {
-      if (!sourceScope.active.includes(model.source)) return false;
+      // Governance: a source turned off in Settings is hidden entirely.
+      if (!isProviderEnabled(model.source)) return false;
+      if (providerFilter !== 'all' && model.source !== providerFilter) return false;
       const caps = getCapabilities(model);
       if (facet === 'free' && !caps.isFree) return false;
       if (facet === 'reasoning' && !caps.reasoning) return false;
@@ -142,7 +149,7 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
       if (facet === 'web' && model.source !== 'openrouter') return false;
       return true;
     });
-  }, [models, query, facet, sourceScope]);
+  }, [models, query, facet, providerFilter]);
 
   return (
     <ModalPortal>
@@ -178,6 +185,33 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
                 </button>
               ))}
             </div>
+            {/* Provider filter — pick a provider to see only its models (or All). */}
+            {providersPresent.length > 1 && (
+              <div className="flex flex-wrap gap-1.5 items-center">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)] mr-0.5">Provider</span>
+                <button
+                  onClick={() => setProviderFilter('all')}
+                  className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${TRANSITION} ${providerFilter === 'all' ? `${ACCENT_BG} text-white border border-transparent` : `${HAIRLINE} bg-[var(--ds-surface-soft)] ${MUTED} hover:bg-[var(--ds-hover)]`}`}
+                >
+                  All
+                </button>
+                {providersPresent.map((d) => {
+                  const connected = keyGate(d.id).ok;
+                  return (
+                    <button
+                      key={d.id}
+                      onClick={() => setProviderFilter(d.id)}
+                      title={connected ? undefined : `No ${d.label} key — add one to use these models`}
+                      className={`text-[11px] font-semibold px-2 py-0.5 rounded-full flex items-center gap-1 ${TRANSITION} ${providerFilter === d.id ? `${ACCENT_BG} text-white border border-transparent` : `${HAIRLINE} bg-[var(--ds-surface-soft)] ${MUTED} hover:bg-[var(--ds-hover)]`}`}
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full" style={{ background: providerFilter === d.id ? '#fff' : d.accent }} />
+                      {d.short}
+                      {!connected && <Key className="w-2.5 h-2.5 opacity-70" />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {hasMessages && (
@@ -201,18 +235,17 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
                 </div>
               </div>
             </div>
-            {/* Lock-source choices come from governance, not a hardcoded list: a source
-                turned off in Settings can't be offered as an Auto lock target. With a
-                single enabled source there's nothing to lock, so the row hides. */}
+            {/* Lock-source choices: only sources that are enabled AND usable right now (platform
+                or a key on file) can be a lock target. With a single one there's nothing to lock. */}
             {(() => {
-              const lockable = MODEL_SOURCES.filter(isProviderEnabled);
+              const lockable = PROVIDERS_ORDERED.filter((d) => isProviderEnabled(d.id) && keyGate(d.id).ok);
               if (lockable.length < 2) return null;
               const options: { key: LockSource; label: string }[] = [
                 { key: null, label: 'Any' },
-                ...lockable.map((s) => ({ key: s as LockSource, label: sourceLabel(s) }))
+                ...lockable.map((d) => ({ key: d.id as LockSource, label: d.short }))
               ];
               return (
-                <div className="flex items-center gap-1.5 mt-2">
+                <div className="flex items-center gap-1.5 mt-2 flex-wrap">
                   <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">Lock source:</span>
                   {options.map((opt) => {
                     const active = autoMode && (lockedSource ?? null) === opt.key;
@@ -244,8 +277,10 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
                     {filtered.map((model) => {
                       const isSelected = model.id === selectedModelId;
                       const visionIncompatible = Boolean(conversationHasImages) && !getCapabilities(model).imageInput;
-                      const sourceOff = !isProviderEnabled(model.source);
-                      const incompatible = visionIncompatible || sourceOff;
+                      const gate = keyGate(model.source);
+                      const needsKey = !gate.ok;
+                      const def = getProviderDef(model.source);
+                      const incompatible = visionIncompatible || needsKey;
                       return (
                         <button
                           key={`${model.source}:${model.id}`}
@@ -258,11 +293,14 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
                                 ? `border border-[#D97757]/40 ${ACCENT_SOFT_BG} ${SHADOW_SOFT}`
                                 : `${HAIRLINE} bg-[var(--ds-surface-soft)] ${SHADOW_SOFT} hover:bg-[var(--ds-raised)] ${HOVER_LIFT}`
                           }`}
-                          title={sourceOff ? `${sourceLabel(providerOrigin(model))} is turned off in Settings → API Configuration` : visionIncompatible ? 'This model can’t read the images already in this chat' : undefined}
+                          title={needsKey ? `Add a ${sourceLabel(model.source)} key in Settings → API Configuration to use this model` : visionIncompatible ? 'This model can’t read the images already in this chat' : undefined}
                         >
                           <div className="flex items-start justify-between gap-2">
                             <div className="min-w-0">
-                              <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">{sourceLabel(providerOrigin(model))}</div>
+                              <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)] flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full" style={{ background: def?.accent || 'var(--ds-muted)' }} />
+                                {sourceShortLabel(providerOrigin(model))}
+                              </div>
                               <div className={`font-semibold leading-tight truncate flex items-center gap-1.5 ${INK}`}>
                                 {isSelected && <Check className={`w-4 h-4 ${ACCENT_TEXT} shrink-0`} />}
                                 {model.name}
@@ -276,8 +314,21 @@ export const ChatModelPicker: React.FC<ChatModelPickerProps> = ({ selectedModelI
                           {model.description && (
                             <p className={`text-[11px] ${MUTED} mt-1.5 line-clamp-2`}>{model.description}</p>
                           )}
-                          {sourceOff ? (
-                            <p className={`text-[11px] font-semibold ${MUTED} mt-1.5 flex items-center gap-1`}><EyeOff className="w-3 h-3" /> {sourceLabel(providerOrigin(model))} is turned off in Settings</p>
+                          {needsKey ? (
+                            <p className={`text-[11px] font-semibold mt-1.5 flex items-center gap-1 ${ACCENT_TEXT}`}>
+                              <Key className="w-3 h-3" /> Add a {sourceLabel(model.source)} key to use this
+                              {def?.keysUrl && (
+                                <a
+                                  href={def.keysUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="inline-flex items-center gap-0.5 underline hover:no-underline"
+                                >
+                                  Get key <ExternalLink className="w-2.5 h-2.5" />
+                                </a>
+                              )}
+                            </p>
                           ) : visionIncompatible && (
                             <p className="text-[11px] font-semibold text-red-600 mt-1.5 flex items-center gap-1"><EyeOff className="w-3 h-3" /> No vision — can’t read this chat’s images</p>
                           )}

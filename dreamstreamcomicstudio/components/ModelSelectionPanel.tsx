@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Image as ImageIcon, Type as TypeIcon, Loader2, AlertTriangle, Sparkles, Search, ChevronDown, Check, Lock, Layers } from 'lucide-react';
 import { groupModelsBySource, axisDisplay, DIFF_AXIS_LABEL, SOURCE_HOSTING } from '../services/modelGrouping';
-import { fetchModelCatalog, SOURCE_LABEL, type CatalogModel, type ModelSource } from '../services/modelCatalog';
+import { fetchModelCatalog, SOURCE_LABEL, sourceShortLabel, type CatalogModel, type ModelSource } from '../services/modelCatalog';
 import {
   getModelSelection,
   setSelectedModel,
@@ -15,10 +15,16 @@ import {
 import { getActiveKey, hasUsableKey } from '../services/apiKeys';
 import { getCapabilities, featureSupport } from '../services/modelCapabilities';
 import { useModelSourceScope } from '../hooks/useModelSourceScope';
+import { PROVIDERS_ORDERED, getProviderDef } from '../shared/providers';
+import {
+  GLASS, HAIRLINE, SHADOW_SOFT, INK, MUTED, HEADING, TRANSITION, ACCENT_TEXT, ACCENT_SOFT_BG, MENU
+} from './chat/studioDesign';
 
-// Planning stages that need structured (JSON) output. Surfaced under "Advanced" so a
-// user can pin a specific model per stage; models without JSON are flagged (the server
-// still gates + falls back, but this prevents a surprising downgrade).
+const PANEL = `${GLASS} ${HAIRLINE} ${SHADOW_SOFT} rounded-2xl`;
+const SELECT = `${HAIRLINE} rounded-lg px-2 py-1 text-xs bg-[var(--ds-surface-soft)] text-[var(--ds-ink)] outline-none ${TRANSITION}`;
+const CHIP = `text-[9px] font-semibold uppercase px-1 py-0.5 rounded ${HAIRLINE} bg-[var(--ds-well)] ${MUTED} shrink-0`;
+
+// Planning stages that need structured (JSON) output.
 const STRUCTURED_TEXT_STAGES: { stage: string; label: string }[] = [
   { stage: 'analyze_script', label: 'Script analysis' },
   { stage: 'extract_world', label: 'World extraction' },
@@ -26,18 +32,20 @@ const STRUCTURED_TEXT_STAGES: { stage: string; label: string }[] = [
   { stage: 'continuity_audit', label: 'Continuity audit' }
 ];
 
-const SourceBadge: React.FC<{ source?: ModelSource }> = ({ source }) =>
-  source ? (
-    <span className="text-[9px] font-bold uppercase px-1 py-0.5 rounded border border-black bg-slate-100 text-slate-600 shrink-0">
-      {SOURCE_LABEL[source] || source}
+const SourceBadge: React.FC<{ source?: ModelSource }> = ({ source }) => {
+  if (!source) return null;
+  const def = getProviderDef(source);
+  return (
+    <span className={`${CHIP} flex items-center gap-1`}>
+      <span className="w-1.5 h-1.5 rounded-full" style={{ background: def?.accent || 'var(--ds-muted)' }} />
+      {sourceShortLabel(source)}
     </span>
-  ) : null;
+  );
+};
 
-// NVIDIA Build lists many "download-only" NIMs that aren't on the hosted API (they
-// 404 "not found for account"). We flag them so they're clearly not selectable.
 const DownloadOnlyBadge: React.FC = () => (
   <span
-    className="text-[9px] font-bold uppercase px-1 py-0.5 rounded border border-amber-400 bg-amber-50 text-amber-700 shrink-0"
+    className="text-[9px] font-semibold uppercase px-1 py-0.5 rounded border border-amber-400/50 bg-amber-500/10 text-amber-600 shrink-0"
     title="Listed on NVIDIA Build but download-only — not callable via the hosted API"
   >
     Download-only
@@ -57,22 +65,11 @@ const CapBadges: React.FC<{ model?: CatalogModel }> = ({ model }) => {
   if (c.isPremium) tags.push('Premium');
   return (
     <div className="flex flex-wrap gap-1 mt-1">
-      {tags.map((t) => (
-        <span key={t} className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border border-black bg-slate-100">{t}</span>
-      ))}
+      {tags.map((t) => <span key={t} className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${HAIRLINE} bg-[var(--ds-well)] ${MUTED}`}>{t}</span>)}
     </div>
   );
 };
 
-/**
- * A searchable, source-aware model picker.
- *
- * Replaces the old native <select> (which had no search and — critically — never
- * recorded the model's *source*). When you pick a model we persist its source
- * alongside the id via setSelectedModel(), so usage attribution, the header pill,
- * and server routing all reflect the source actually in use (e.g. NVIDIA stays
- * NVIDIA instead of silently defaulting to OpenRouter).
- */
 const Slot: React.FC<{
   slot: ModelSlot;
   icon: React.ReactNode;
@@ -93,8 +90,6 @@ const Slot: React.FC<{
     });
   }, [models, query]);
 
-  // Group variants of the same underlying model across sources, so identical offerings dedupe
-  // (pick a source) and differing ones split with the real technical diff shown.
   const groups = useMemo(() => groupModelsBySource(filtered), [filtered]);
 
   const choose = (model: CatalogModel | null) => {
@@ -104,56 +99,55 @@ const Slot: React.FC<{
   };
 
   const rowClass = (id: string) =>
-    `w-full text-left px-2 py-1.5 text-sm hover:bg-brand-yellow/20 border-b border-slate-100 flex items-center gap-1.5 flex-wrap ${id === selectedId ? 'bg-brand-blue/10' : ''}`;
+    `w-full text-left px-2 py-1.5 text-sm hover:bg-[var(--ds-hover)] border-b border-[var(--ds-hairline)] flex items-center gap-1.5 flex-wrap ${TRANSITION} ${id === selectedId ? ACCENT_SOFT_BG : ''}`;
 
   return (
-    <div className="border-2 border-black rounded-lg p-3 bg-white">
-      <div className="flex items-center gap-2 text-sm font-bold mb-2">{icon} {label}</div>
+    <div className={`${HAIRLINE} rounded-xl p-3 bg-[var(--ds-surface-soft)]`}>
+      <div className={`flex items-center gap-2 text-sm font-semibold mb-2 ${INK}`}>{icon} {label}</div>
 
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center justify-between gap-2 border-2 border-black rounded px-2 py-1.5 text-sm bg-white text-left"
+        className={`w-full flex items-center justify-between gap-2 ${HAIRLINE} rounded-lg px-2 py-1.5 text-sm bg-[var(--ds-surface)] text-left ${TRANSITION}`}
       >
         <span className="truncate flex items-center gap-1.5">
           {selected ? (
             <>
               <SourceBadge source={selected.source} />
-              <span className="truncate">{selected.name}</span>
-              {selected.isFree && <span className="text-[10px] font-bold text-green-700">· free</span>}
+              <span className={`truncate ${INK}`}>{selected.name}</span>
+              {selected.isFree && <span className="text-[10px] font-semibold text-green-600">· free</span>}
             </>
           ) : (
-            <span className="text-slate-600">Auto — best model, free-first (recommended)</span>
+            <span className={MUTED}>Auto — best model, free-first (recommended)</span>
           )}
         </span>
-        <ChevronDown className={`w-4 h-4 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+        <ChevronDown className={`w-4 h-4 shrink-0 transition-transform ${MUTED} ${open ? 'rotate-180' : ''}`} />
       </button>
 
       {open && (
-        <div className="mt-2 border-2 border-black rounded-lg overflow-hidden shadow-comic">
-          <div className="relative border-b-2 border-black">
-            <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" />
+        <div className={`mt-2 ${MENU} overflow-hidden`}>
+          <div className="relative border-b border-[var(--ds-hairline)]">
+            <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-[var(--ds-muted)]" />
             <input
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder={`Search ${label.toLowerCase()} models or source…`}
-              className="w-full pl-7 pr-2 py-1.5 text-sm focus:outline-none"
+              className="w-full pl-7 pr-2 py-1.5 text-sm bg-transparent focus:outline-none text-[var(--ds-ink)]"
             />
           </div>
           <div className="max-h-60 overflow-y-auto">
             <button
               type="button"
               onClick={() => choose(null)}
-              className={`w-full text-left px-2 py-1.5 text-sm hover:bg-brand-yellow/20 border-b border-slate-100 ${selectedId ? '' : 'bg-brand-blue/10 font-bold'}`}
+              className={`w-full text-left px-2 py-1.5 text-sm hover:bg-[var(--ds-hover)] border-b border-[var(--ds-hairline)] ${TRANSITION} ${selectedId ? '' : `${ACCENT_SOFT_BG} font-semibold`}`}
             >
               Auto — best model, free-first
             </button>
             {groups.length === 0 ? (
-              <div className="px-2 py-3 text-xs text-slate-400">No models match “{query}”.</div>
+              <div className={`px-2 py-3 text-xs ${MUTED}`}>No models match “{query}”.</div>
             ) : (
               groups.map((g) => {
-                // Single offering → one plain row.
                 if (g.variants.length === 1) {
                   const m = g.variants[0];
                   const dl = m.apiCallable === false;
@@ -167,51 +161,49 @@ const Slot: React.FC<{
                       className={`${rowClass(m.id)} ${dl ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                       <SourceBadge source={m.source} />
-                      <span className="truncate flex-1 min-w-0">{m.name}</span>
+                      <span className={`truncate flex-1 min-w-0 ${INK}`}>{m.name}</span>
                       {dl && <DownloadOnlyBadge />}
-                      {m.isFree && !dl && <span className="text-[10px] font-bold text-green-700">free</span>}
-                      {m.id === selectedId && <Check className="w-3.5 h-3.5 text-brand-blue shrink-0" />}
+                      {m.isFree && !dl && <span className="text-[10px] font-semibold text-green-600">free</span>}
+                      {m.id === selectedId && <Check className={`w-3.5 h-3.5 ${ACCENT_TEXT} shrink-0`} />}
                     </button>
                   );
                 }
-                // Same model from multiple offerings → grouped: header + one row per source.
                 return (
-                  <div key={g.key} className="border-b border-slate-100 bg-slate-50/40">
+                  <div key={g.key} className="border-b border-[var(--ds-hairline)] bg-[var(--ds-well)]">
                     <div className="px-2 pt-1.5 pb-0.5 flex items-center gap-1.5">
-                      <Layers className="w-3 h-3 text-slate-500 shrink-0" />
-                      <span className="font-bold text-[12px] truncate flex-1 min-w-0">{g.name}</span>
-                      <span className="text-[9px] font-bold uppercase px-1 py-0.5 rounded border border-slate-300 bg-white text-slate-500 shrink-0">
+                      <Layers className="w-3 h-3 text-[var(--ds-muted)] shrink-0" />
+                      <span className={`font-semibold text-[12px] truncate flex-1 min-w-0 ${INK}`}>{g.name}</span>
+                      <span className={CHIP}>
                         {g.variants.length} {g.multiSource ? 'sources' : 'variants'} · {g.identical ? 'identical' : 'differ'}
                       </span>
                     </div>
                     {g.identical ? (
-                      <div className="px-2 pb-1 text-[10px] text-slate-400">Same specs — just pick a source (hosting differs).</div>
+                      <div className={`px-2 pb-1 text-[10px] ${MUTED}`}>Same specs — just pick a source (hosting differs).</div>
                     ) : (
-                      <div className="px-2 pb-1 text-[10px] text-slate-400">Differs by: {g.differences.map((d) => DIFF_AXIS_LABEL[d]).join(', ')}</div>
+                      <div className={`px-2 pb-1 text-[10px] ${MUTED}`}>Differs by: {g.differences.map((d) => DIFF_AXIS_LABEL[d]).join(', ')}</div>
                     )}
                     {g.variants.map((m) => {
                       const dl = m.apiCallable === false;
                       return (
-                      <button
-                        key={m.id}
-                        type="button"
-                        onClick={() => choose(m)}
-                        disabled={dl}
-                        title={dl ? 'Download-only on NVIDIA — not callable via the hosted API' : SOURCE_HOSTING[m.source]}
-                        className={`${rowClass(m.id)} pl-6 ${dl ? 'opacity-50 cursor-not-allowed' : ''}`}
-                      >
-                        <SourceBadge source={m.source} />
-                        <span className="font-semibold shrink-0">{SOURCE_LABEL[m.source]}</span>
-                        {dl && <DownloadOnlyBadge />}
-                        {m.isFree && !dl && <span className="text-[10px] font-bold text-green-700">free</span>}
-                        {/* The actual technical difference, per source. */}
-                        {g.differences.map((axis) => (
-                          <span key={axis} className="text-[9px] px-1 py-0.5 rounded border border-slate-300 bg-white text-slate-600">
-                            {axisDisplay(m, axis)}
-                          </span>
-                        ))}
-                        {m.id === selectedId && <Check className="w-3.5 h-3.5 text-brand-blue shrink-0 ml-auto" />}
-                      </button>
+                        <button
+                          key={m.id}
+                          type="button"
+                          onClick={() => choose(m)}
+                          disabled={dl}
+                          title={dl ? 'Download-only on NVIDIA — not callable via the hosted API' : SOURCE_HOSTING[m.source]}
+                          className={`${rowClass(m.id)} pl-6 ${dl ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        >
+                          <SourceBadge source={m.source} />
+                          <span className={`font-semibold shrink-0 ${INK}`}>{sourceShortLabel(m.source)}</span>
+                          {dl && <DownloadOnlyBadge />}
+                          {m.isFree && !dl && <span className="text-[10px] font-semibold text-green-600">free</span>}
+                          {g.differences.map((axis) => (
+                            <span key={axis} className={`text-[9px] px-1 py-0.5 rounded ${HAIRLINE} bg-[var(--ds-surface)] ${MUTED}`}>
+                              {axisDisplay(m, axis)}
+                            </span>
+                          ))}
+                          {m.id === selectedId && <Check className={`w-3.5 h-3.5 ${ACCENT_TEXT} shrink-0 ml-auto`} />}
+                        </button>
                       );
                     })}
                   </div>
@@ -225,16 +217,16 @@ const Slot: React.FC<{
       {selected ? (
         <CapBadges model={selected} />
       ) : (
-        <div className="text-[11px] text-slate-500 mt-1">Auto-selected (prefers free when available).</div>
+        <div className={`text-[11px] ${MUTED} mt-1`}>Auto-selected (prefers free when available).</div>
       )}
       {selected && slot === 'image' && !getCapabilities(selected).multiImageRefs && (
-        <div className="text-[11px] text-amber-700 mt-1 flex items-start gap-1">
+        <div className="text-[11px] text-amber-600 mt-1 flex items-start gap-1">
           <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
           {featureSupport(getCapabilities(selected), 'character-consistency').reason}
         </div>
       )}
       {selected && slot === 'text' && !getCapabilities(selected).structuredJson && (
-        <div className="text-[11px] text-amber-700 mt-1 flex items-start gap-1">
+        <div className="text-[11px] text-amber-600 mt-1 flex items-start gap-1">
           <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
           No structured-output mode — planning steps (script, world, panels, audit) will use a JSON-capable model instead.
         </div>
@@ -243,11 +235,6 @@ const Slot: React.FC<{
   );
 };
 
-/**
- * Default / Free / Specific model selection for image and text, driven by the live
- * model catalog (OpenRouter + any connected NVIDIA key). Reflected everywhere via
- * modelSelection (pill, editor, checklist).
- */
 export const ModelSelectionPanel: React.FC = () => {
   const [catalog, setCatalog] = useState<CatalogModel[]>([]);
   const [loading, setLoading] = useState(true);
@@ -270,82 +257,85 @@ export const ModelSelectionPanel: React.FC = () => {
     return () => window.removeEventListener(MODEL_SELECTION_CHANGED, h);
   }, []);
 
-  // Settings-level source scope (Allowed-sources toggles + connected keys) decides which
-  // sources' models are offered at all; a hard lock then narrows further to one source.
   const sourceScope = useModelSourceScope();
   const locked = (sel.lockedSource ?? null) as ModelSourceId | null;
-  const inScope = (m: CatalogModel) =>
-    sourceScope.active.includes(m.source) && (!locked || m.source === locked);
+  const inScope = (m: CatalogModel) => sourceScope.active.includes(m.source) && (!locked || m.source === locked);
   const imageModels = useMemo(() => catalog.filter((m) => m.supportsImageOutput && inScope(m)), [catalog, locked, sourceScope]);
   const textModels = useMemo(() => catalog.filter((m) => !m.supportsImageOutput && inScope(m)), [catalog, locked, sourceScope]);
-  const hasOpenRouter = hasUsableKey('openrouter');
-  const hasNvidia = hasUsableKey('nvidia');
   const sourceAvailable = (s: ModelSourceId) => sourceScope.active.includes(s);
-  // Why a source can't be picked right now — for disabled <option> labels.
   const sourceUnavailableNote = (s: ModelSourceId): string => {
     if (sourceScope.active.includes(s)) return '';
     return sourceScope.hidden.includes(s) ? ' — no key connected' : ' — off in Settings';
   };
 
+  // Every source that appears in the catalog, in registry order — the source options that
+  // can be locked/preferred (so the new providers are selectable, not just OR/NVIDIA).
+  const sourcesInCatalog = useMemo(() => {
+    const present = new Set(catalog.map((m) => m.source));
+    return PROVIDERS_ORDERED.filter((d) => present.has(d.id));
+  }, [catalog]);
+
+  const noConnectedKey = sourceScope.reason === 'enabled' || sourceScope.active.every((s) => !hasUsableKey(s));
+
   const textModelObj = useMemo(() => catalog.find((m) => m.id === sel.textModel) || null, [catalog, sel.textModel]);
   const imageModelObj = useMemo(() => catalog.find((m) => m.id === sel.imageModel) || null, [catalog, sel.imageModel]);
 
   return (
-    <div className="bg-white border-2 border-black rounded-xl shadow-comic p-4 space-y-3">
+    <div className={`${PANEL} p-4 space-y-3`}>
       <div>
-        <h4 className="font-display text-lg flex items-center gap-2"><Sparkles className="w-4 h-4" /> Models</h4>
-        <p className="text-[11px] text-slate-500">Search and pick the image and text models, or leave on Auto. Each model shows its source (OpenRouter / NVIDIA) — the source you pick is the one billed and used.</p>
+        <h4 className={`${HEADING} text-base flex items-center gap-2`}><Sparkles className={`w-4 h-4 ${ACCENT_TEXT}`} /> Default models</h4>
+        <p className={`text-[11px] ${MUTED}`}>Search and pick the image and text models, or leave on Auto. Each model shows its provider — the source you pick is the one billed and used.</p>
         {sourceScope.reason === 'connected' && (
-          <p className="text-[11px] text-slate-600 mt-1">
+          <p className={`text-[11px] ${MUTED} mt-1`}>
             Scoped to your connected source{sourceScope.active.length > 1 ? 's' : ''}:{' '}
-            <span className="font-bold">{sourceScope.active.map((s) => SOURCE_LABEL[s as ModelSource]).join(' + ')}</span>
-            {sourceScope.hidden.length > 0 && <> — {sourceScope.hidden.map((s) => SOURCE_LABEL[s as ModelSource]).join(' + ')} is hidden until you add a key</>}
+            <span className={`font-semibold ${INK}`}>{sourceScope.active.map((s) => sourceShortLabel(s)).join(' + ')}</span>
+            {sourceScope.hidden.length > 0 && <> — {sourceScope.hidden.map((s) => sourceShortLabel(s)).join(' + ')} is hidden until you add a key</>}
             {sourceScope.active.length > 1 && <>. The same model on several sources asks you to pick one</>}.
           </p>
         )}
         {sourceScope.reason === 'none' && (
-          <p className="text-[11px] text-brand-red font-bold mt-1 flex items-start gap-1">
+          <p className="text-[11px] text-red-600 font-semibold mt-1 flex items-start gap-1">
             <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
-            All model sources are off in Settings → API Configuration → Allowed sources, so there are no models to pick.
+            All model sources are off in Settings → Providers, so there are no models to pick.
           </p>
         )}
       </div>
 
       {/* Hard source lock — restrict the whole library AND all routing to one source. */}
-      <div className={`border-2 rounded-lg p-2.5 ${locked ? 'border-black bg-brand-blue/10' : 'border-slate-300 bg-white'}`}>
-        <label className="flex items-center gap-2 text-xs font-bold">
+      <div className={`${HAIRLINE} rounded-xl p-2.5 ${locked ? ACCENT_SOFT_BG : 'bg-[var(--ds-surface-soft)]'}`}>
+        <label className={`flex items-center gap-2 text-xs font-semibold ${INK}`}>
           <Lock className="w-3.5 h-3.5 shrink-0" />
-          Lock to one source
+          Lock to one provider
           <select
             value={locked || ''}
             onChange={(e) => setLockedSource((e.target.value || null) as ModelSourceId | null)}
-            className="ml-auto border-2 border-black rounded px-2 py-1 bg-white font-normal"
+            className={`ml-auto ${SELECT} font-normal`}
           >
             <option value="">Off — use any active source</option>
-            <option value="nvidia" disabled={!sourceAvailable('nvidia')}>NVIDIA Build only{sourceUnavailableNote('nvidia')}</option>
-            <option value="openrouter" disabled={!sourceAvailable('openrouter')}>OpenRouter only{sourceUnavailableNote('openrouter')}</option>
+            {sourcesInCatalog.map((d) => (
+              <option key={d.id} value={d.id} disabled={!sourceAvailable(d.id)}>{d.label} only{sourceUnavailableNote(d.id)}</option>
+            ))}
           </select>
         </label>
         {locked && (
-          <p className="text-[11px] text-slate-600 mt-1.5">
-            Only <span className="font-bold">{SOURCE_LABEL[locked]}</span> models are shown and used — every image,
-            text, and per-stage call routes to {SOURCE_LABEL[locked]} with no fallback to other providers.
-            {locked === 'nvidia' && !hasNvidia && ' Add an NVIDIA key above to generate.'}
-            {locked === 'openrouter' && !hasOpenRouter && ' Add an OpenRouter key above to generate.'}
+          <p className={`text-[11px] ${MUTED} mt-1.5`}>
+            Only <span className={`font-semibold ${INK}`}>{SOURCE_LABEL[locked]}</span> models are shown and used — every image,
+            text, and per-stage call routes to {SOURCE_LABEL[locked]} with no fallback.
+            {!hasUsableKey(locked) && !getProviderDef(locked)?.platformServed && ` Add a ${SOURCE_LABEL[locked]} key above to generate.`}
           </p>
         )}
       </div>
 
-      {!hasOpenRouter && !hasNvidia && (
-        <div className="text-[11px] bg-amber-100 border-2 border-black rounded-lg p-2 flex gap-1.5">
-          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-          Add an OpenRouter or NVIDIA key above to use these models for generation.
+      {noConnectedKey && (
+        <div className={`text-[11px] bg-amber-500/10 ${HAIRLINE} rounded-xl p-2 flex gap-1.5 ${INK}`}>
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-500" />
+          Add a provider key above to use these models for generation. Platform-served providers (OpenRouter, NVIDIA, Gemini) also work on the shared allowance.
         </div>
       )}
 
       {!loading && !degraded && (
-        <div className="border-2 border-black rounded-lg bg-slate-50 p-2.5 text-xs space-y-1.5">
-          <div className="text-[10px] font-bold uppercase text-slate-500">Active generation sources</div>
+        <div className={`${HAIRLINE} rounded-xl bg-[var(--ds-surface-soft)] p-2.5 text-xs space-y-1.5`}>
+          <div className={`text-[10px] font-semibold uppercase ${MUTED}`}>Active generation sources</div>
           {[
             { slot: 'text' as const, label: 'Text', model: textModelObj, source: sel.textSource ?? sel.preferredTextSource },
             { slot: 'image' as const, label: 'Image', model: imageModelObj, source: sel.imageSource ?? sel.preferredImageSource }
@@ -355,23 +345,23 @@ export const ModelSelectionPanel: React.FC = () => {
             const key = src ? getActiveKey(src) : null;
             return (
               <div key={slot} className="flex items-center gap-1.5 flex-wrap">
-                <span className="font-bold w-12 shrink-0">{label}</span>
+                <span className={`font-semibold w-12 shrink-0 ${INK}`}>{label}</span>
                 {!src ? (
-                  <span className="text-slate-500">Auto — server picks (free-first)</span>
+                  <span className={MUTED}>Auto — server picks (free-first)</span>
                 ) : (
                   <>
                     <SourceBadge source={src} />
-                    <span className="truncate max-w-[11rem]">{pinned ? model!.name : 'Auto (default source)'}</span>
+                    <span className={`truncate max-w-[11rem] ${INK}`}>{pinned ? model!.name : 'Auto (default source)'}</span>
                     {!sourceAvailable(src as ModelSourceId) ? (
-                      // The pick predates the source becoming unavailable (toggled off / key
-                      // removed) — say so here instead of letting generation fail mysteriously.
-                      <span className="text-amber-700 font-bold flex items-center gap-0.5">
+                      <span className="text-amber-600 font-semibold flex items-center gap-0.5">
                         <AlertTriangle className="w-3 h-3" /> {SOURCE_LABEL[src]}{sourceUnavailableNote(src as ModelSourceId)} — pick another model or fix it in Settings
                       </span>
                     ) : key ? (
-                      <span className="text-green-700 font-bold flex items-center gap-0.5"><Check className="w-3 h-3" /> {key.label}</span>
+                      <span className="text-green-600 font-semibold flex items-center gap-0.5"><Check className="w-3 h-3" /> {key.label}</span>
+                    ) : getProviderDef(src)?.platformServed ? (
+                      <span className={`${MUTED} flex items-center gap-0.5`}>platform-served</span>
                     ) : (
-                      <span className="text-amber-700 font-bold flex items-center gap-0.5">
+                      <span className="text-amber-600 font-semibold flex items-center gap-0.5">
                         <AlertTriangle className="w-3 h-3" /> No {SOURCE_LABEL[src]} key — add one above
                       </span>
                     )}
@@ -381,9 +371,9 @@ export const ModelSelectionPanel: React.FC = () => {
             );
           })}
 
-          <div className="pt-1.5 mt-0.5 border-t border-dashed border-slate-300">
-            <div className="text-[10px] font-bold uppercase text-slate-500 mb-1">
-              Preferred default source <span className="font-normal normal-case text-slate-400">
+          <div className="pt-1.5 mt-0.5 border-t border-dashed border-[var(--ds-hairline)]">
+            <div className={`text-[10px] font-semibold uppercase ${MUTED} mb-1`}>
+              Preferred default source <span className="font-normal normal-case opacity-70">
                 {locked ? `— overridden while locked to ${SOURCE_LABEL[locked]}` : '— used for Auto, when no model is pinned'}
               </span>
             </div>
@@ -393,16 +383,17 @@ export const ModelSelectionPanel: React.FC = () => {
                 { slot: 'image' as ModelSlot, label: 'Image', value: sel.preferredImageSource }
               ]).map(({ slot, label, value }) => (
                 <label key={slot} className={`flex flex-col gap-0.5 ${locked ? 'opacity-50' : ''}`}>
-                  <span className="font-bold">{label}</span>
+                  <span className={`font-semibold ${INK}`}>{label}</span>
                   <select
                     value={locked ? '' : (value || '')}
                     disabled={!!locked}
                     onChange={(e) => setPreferredSource(slot, (e.target.value || null) as ModelSource | null)}
-                    className="border-2 border-black rounded px-2 py-1 bg-white disabled:bg-slate-100"
+                    className={`${SELECT} disabled:opacity-60`}
                   >
                     <option value="">Auto (server default)</option>
-                    <option value="openrouter" disabled={!sourceAvailable('openrouter')}>OpenRouter{sourceUnavailableNote('openrouter')}</option>
-                    <option value="nvidia" disabled={!sourceAvailable('nvidia')}>NVIDIA{sourceUnavailableNote('nvidia')}</option>
+                    {sourcesInCatalog.map((d) => (
+                      <option key={d.id} value={d.id} disabled={!sourceAvailable(d.id)}>{d.short}{sourceUnavailableNote(d.id)}</option>
+                    ))}
                   </select>
                 </label>
               ))}
@@ -412,9 +403,9 @@ export const ModelSelectionPanel: React.FC = () => {
       )}
 
       {loading ? (
-        <div className="flex items-center gap-2 text-slate-400 text-sm py-4"><Loader2 className="w-4 h-4 animate-spin" /> Loading live model catalog…</div>
+        <div className={`flex items-center gap-2 ${MUTED} text-sm py-4`}><Loader2 className="w-4 h-4 animate-spin" /> Loading live model catalog…</div>
       ) : degraded ? (
-        <div className="text-[11px] bg-amber-100 border-2 border-black rounded-lg p-2">Live catalog unavailable — Auto will be used. Add an OpenRouter key or set OPENROUTER_API_KEY.</div>
+        <div className={`text-[11px] bg-amber-500/10 ${HAIRLINE} rounded-xl p-2 ${INK}`}>Live catalog unavailable — Auto will be used. Add an OpenRouter key or set OPENROUTER_API_KEY.</div>
       ) : (
         <div className="grid sm:grid-cols-2 gap-3">
           <Slot slot="image" icon={<ImageIcon className="w-4 h-4" />} label="Image" models={imageModels} selectedId={sel.imageModel} />
@@ -423,17 +414,17 @@ export const ModelSelectionPanel: React.FC = () => {
       )}
 
       {!loading && !degraded && textModels.length > 0 && (
-        <div className="border-t-2 border-black/10 pt-2">
+        <div className="border-t border-[var(--ds-hairline)] pt-2">
           <button
             type="button"
             onClick={() => setShowAdvanced((v) => !v)}
-            className="text-[11px] font-bold uppercase tracking-wide text-slate-600 hover:text-black"
+            className={`text-[11px] font-semibold uppercase tracking-wide ${MUTED} hover:text-[var(--ds-ink)] ${TRANSITION}`}
           >
             {showAdvanced ? '▾' : '▸'} Advanced — per-stage text model
           </button>
           {showAdvanced && (
             <div className="mt-2 space-y-2">
-              <p className="text-[11px] text-slate-500">
+              <p className={`text-[11px] ${MUTED}`}>
                 Override the text model for specific planning steps. These steps need structured (JSON)
                 output — models without it are flagged, and the server falls back to a capable model.
               </p>
@@ -443,7 +434,7 @@ export const ModelSelectionPanel: React.FC = () => {
                 const lacksJson = !!selectedModel && !getCapabilities(selectedModel).structuredJson;
                 return (
                   <div key={stage} className="flex flex-col gap-1">
-                    <label className="text-[11px] font-bold">{label}</label>
+                    <label className={`text-[11px] font-semibold ${INK}`}>{label}</label>
                     <select
                       value={current}
                       onChange={(e) => {
@@ -451,17 +442,17 @@ export const ModelSelectionPanel: React.FC = () => {
                         const model = id ? textModels.find((m) => m.id === id) : null;
                         setStageModel(stage, id, model?.source ?? null);
                       }}
-                      className="w-full border-2 border-black rounded px-2 py-1 text-xs bg-white"
+                      className={`w-full ${SELECT}`}
                     >
                       <option value="">Use Text model above</option>
                       {textModels.map((m) => (
                         <option key={m.id} value={m.id}>
-                          [{SOURCE_LABEL[m.source] || m.source}] {m.name}{m.isFree ? ' · free' : ''}{getCapabilities(m).structuredJson ? '' : ' · no JSON'}
+                          [{sourceShortLabel(m.source)}] {m.name}{m.isFree ? ' · free' : ''}{getCapabilities(m).structuredJson ? '' : ' · no JSON'}
                         </option>
                       ))}
                     </select>
                     {lacksJson && (
-                      <div className="text-[11px] text-amber-700 flex items-start gap-1">
+                      <div className="text-[11px] text-amber-600 flex items-start gap-1">
                         <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
                         No structured-output mode — the server will use a JSON-capable model instead.
                       </div>

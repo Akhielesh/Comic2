@@ -34,10 +34,13 @@ import {
   costLabel,
   providerOrigin,
   sourceLabel,
+  sourceShortLabel,
   type Band,
   type CatalogModel,
   type ModelVerification
 } from '../services/modelCatalog';
+import { isProviderEnabled } from '../services/sourceGovernance';
+import { isTextProvider, PROVIDERS_ORDERED } from '../shared/providers';
 import {
   setSelectedModel,
   setStageModel,
@@ -77,24 +80,26 @@ import type { ModelSource } from '../services/modelCatalog';
 interface ModelLibraryProps {
   onBack: () => void;
   /** Launch the AI Chat Platform pre-loaded with this model. */
-  onStartChat?: (model: { id: string; name: string; source: 'openrouter' | 'nvidia' }) => void;
+  onStartChat?: (model: { id: string; name: string; source: ModelSource }) => void;
 }
 
 /** A model can be tried in chat when it outputs text (i.e. not a pure image generator). */
 const canChatWith = (model: CatalogModel): boolean => !model.supportsImageOutput;
 
-type FilterKey = 'all' | 'free' | 'image' | 'text' | 'refs' | 'editing' | 'reasoning' | 'openrouter' | 'nvidia';
+// Capability/cost facets are fixed; source facets (one per provider) are generated from
+// the catalog at render time, so any provider — OpenRouter, NVIDIA, OpenAI, Anthropic, … —
+// becomes a "Source: X" chip the moment it has models.
+type BaseFilterKey = 'all' | 'free' | 'image' | 'text' | 'refs' | 'editing' | 'reasoning';
+type FilterKey = BaseFilterKey | ModelSource;
 
-const FILTERS: { key: FilterKey; label: string }[] = [
+const FILTERS: { key: BaseFilterKey; label: string }[] = [
   { key: 'all', label: 'All' },
   { key: 'free', label: 'Free' },
   { key: 'image', label: 'Image' },
   { key: 'text', label: 'Text' },
   { key: 'refs', label: 'Reference-capable' },
   { key: 'editing', label: 'Image editing' },
-  { key: 'reasoning', label: 'Reasoning' },
-  { key: 'openrouter', label: 'Source: OpenRouter' },
-  { key: 'nvidia', label: 'Source: NVIDIA Build' }
+  { key: 'reasoning', label: 'Reasoning' }
 ];
 
 const TONE_CLASS: Record<CapabilityTone, string> = {
@@ -154,22 +159,22 @@ const COST_CLASS_GLOSSARY: Record<string, keyof typeof GLOSSARY> = {
 };
 
 // Each active filter chip must match (AND), so you can combine e.g. Free + Image + Reasoning.
-const FILTER_PREDICATES: Record<Exclude<FilterKey, 'all'>, (m: CatalogModel, c: ReturnType<typeof getCapabilities>) => boolean> = {
+const FILTER_PREDICATES: Record<Exclude<BaseFilterKey, 'all'>, (m: CatalogModel, c: ReturnType<typeof getCapabilities>) => boolean> = {
   free: (m) => m.isFree,
   image: (m) => m.supportsImageOutput,
   text: (m) => !m.supportsImageOutput,
   refs: (m) => m.supportsImageInput,
   editing: (_m, c) => c.imageEditing,
-  reasoning: (_m, c) => c.reasoning,
-  openrouter: (m) => m.source === 'openrouter',
-  nvidia: (m) => m.source === 'nvidia'
+  reasoning: (_m, c) => c.reasoning
 };
 
 const matchesFilter = (model: CatalogModel, filters: Set<FilterKey>, domains: Set<DomainId>, vendors: Set<string>): boolean => {
   const caps = getCapabilities(model);
   for (const f of filters) {
     if (f === 'all') continue;
-    const predicate = FILTER_PREDICATES[f];
+    // A source facet (e.g. 'openai') keeps only that provider's models.
+    if (isTextProvider(f)) { if (model.source !== f) return false; continue; }
+    const predicate = FILTER_PREDICATES[f as Exclude<BaseFilterKey, 'all'>];
     if (predicate && !predicate(model, caps)) return false;
   }
 
@@ -287,7 +292,7 @@ const ModelCard: React.FC<{
   onOpen: () => void;
   onUse: (slot: ModelSlot) => void;
   onToggleCompare: () => void;
-  onStartChat?: (model: { id: string; name: string; source: 'openrouter' | 'nvidia' }) => void;
+  onStartChat?: (model: { id: string; name: string; source: ModelSource }) => void;
 }> = ({ model, selection, compared, onOpen, onUse, onToggleCompare, onStartChat }) => (
   <div
     onClick={onOpen}
@@ -338,7 +343,7 @@ const ModelCard: React.FC<{
         <UseModelControl model={model} selection={selection} onUse={onUse} />
         {onStartChat && canChatWith(model) && model.apiCallable !== false && (
           <button
-            onClick={(e) => { e.stopPropagation(); onStartChat({ id: model.id, name: model.name, source: providerOrigin(model) as 'openrouter' | 'nvidia' }); }}
+            onClick={(e) => { e.stopPropagation(); onStartChat({ id: model.id, name: model.name, source: providerOrigin(model) as ModelSource }); }}
             className="text-[11px] font-bold px-2 py-0.5 rounded border-2 border-black bg-brand-blue text-white hover:bg-blue-600 flex items-center gap-1 whitespace-nowrap"
             title="Try this model in Chat Studio"
           >
@@ -360,7 +365,7 @@ const ModelCard: React.FC<{
   </div>
 );
 
-const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; onClose: () => void; onUse: (slot: ModelSlot) => void; onStartChat?: (model: { id: string; name: string; source: 'openrouter' | 'nvidia' }) => void }> = ({ model, selection, onClose, onUse, onStartChat }) => (
+const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; onClose: () => void; onUse: (slot: ModelSlot) => void; onStartChat?: (model: { id: string; name: string; source: ModelSource }) => void }> = ({ model, selection, onClose, onUse, onStartChat }) => (
   <div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
     <div className="bg-white border-4 border-black rounded-xl shadow-comic max-w-2xl w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
       <div className="sticky top-0 z-10 bg-white rounded-t-lg border-b-2 border-black px-5 py-4 flex items-start justify-between gap-3 shadow-[0_2px_0_0_rgba(0,0,0,0.06)]">
@@ -394,7 +399,7 @@ const DetailModal: React.FC<{ model: CatalogModel; selection: ModelSelection; on
             <FeedbackButtons modelId={model.id} showCounts />
             {onStartChat && canChatWith(model) && (
               <button
-                onClick={() => onStartChat({ id: model.id, name: model.name, source: providerOrigin(model) as 'openrouter' | 'nvidia' })}
+                onClick={() => onStartChat({ id: model.id, name: model.name, source: providerOrigin(model) as ModelSource })}
                 className="text-[11px] font-bold px-2.5 py-1 rounded border-2 border-black bg-brand-blue text-white hover:bg-blue-600 flex items-center gap-1"
               >
                 <MessageSquare className="w-3.5 h-3.5" /> Chat with this model
@@ -748,28 +753,39 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
   // toggles + connected keys allow, so this page always agrees with Settings and
   // the pickers (no more "model shows here but can't be used there").
   const sourceScope = useModelSourceScope();
+  // Browse the FULL catalog of every ENABLED provider (not just connected ones), so users
+  // can discover models from any provider and then choose who serves them. Whether a model
+  // is usable at run time still depends on having a key — surfaced when selecting/chatting.
   const scopedModels = useMemo(
-    () => models.filter((m) => sourceScope.active.includes(m.source)),
+    () => models.filter((m) => isProviderEnabled(m.source)),
     [models, sourceScope]
   );
 
-  // Drop a source filter chip whose source left the scope (key removed / source
-  // turned off in Settings) so a stale chip can't filter the page to zero results.
+  // The providers that actually have models, in registry order — drives the source chips.
+  const sourcesPresent = useMemo(() => {
+    const present = new Set(scopedModels.map((m) => m.source));
+    return PROVIDERS_ORDERED.filter((d) => present.has(d.id));
+  }, [scopedModels]);
+
+  // Drop a source filter chip whose source left the scope (turned off in Settings / no
+  // longer present) so a stale chip can't filter the page to zero results.
   useEffect(() => {
     setFilters((prev) => {
-      if (!prev.has('openrouter') && !prev.has('nvidia')) return prev;
+      const present = new Set(sourcesPresent.map((d) => d.id as string));
+      let changed = false;
       const next = new Set(prev);
-      if (!sourceScope.active.includes('openrouter')) next.delete('openrouter');
-      if (!sourceScope.active.includes('nvidia')) next.delete('nvidia');
-      return next.size === prev.size ? prev : next;
+      for (const f of prev) {
+        if (isTextProvider(f) && !present.has(f)) { next.delete(f); changed = true; }
+      }
+      return changed ? next : prev;
     });
-  }, [sourceScope]);
+  }, [sourcesPresent]);
 
-  // Source chips are only offered when there's a real choice between active sources.
-  const filterChips = FILTERS.filter((f) =>
-    (f.key !== 'openrouter' && f.key !== 'nvidia') ||
-    (sourceScope.active.length > 1 && sourceScope.active.includes(f.key))
-  );
+  // Base capability facets, plus a "Source: X" chip per provider present (when >1 source).
+  const filterChips: { key: FilterKey; label: string }[] = [
+    ...FILTERS,
+    ...(sourcesPresent.length > 1 ? sourcesPresent.map((d) => ({ key: d.id as FilterKey, label: `Source: ${d.short}` })) : [])
+  ];
 
   const visible = useMemo(() => {
     // Ranked search first (typo-tolerant, alias-aware), then chip filters, then sort.
@@ -849,14 +865,12 @@ export const ModelLibrary: React.FC<ModelLibraryProps> = ({ onBack, onStartChat 
           <div className="mt-4 border-2 border-black rounded-xl bg-white p-3 text-xs flex flex-wrap items-center gap-2">
             <ShieldCheck className="w-4 h-4 shrink-0 text-brand-blue" />
             <span className="flex-1 min-w-[220px]">
-              Showing models from your connected source{sourceScope.active.length > 1 ? 's' : ''}:{' '}
+              Browsing every provider. Connected:{' '}
               <span className="font-bold">{sourceScope.active.map((s) => sourceLabel(s)).join(' + ')}</span>.
-              {sourceScope.hidden.length > 0 && (
-                <> {sourceScope.hidden.map((s) => sourceLabel(s)).join(' + ')} models are hidden until you add a key in Settings → API Configuration.</>
+              {sourcesPresent.some((d) => !d.platformServed && !sourceScope.active.includes(d.id)) && (
+                <> Other providers are browsable too — add a key in <span className="font-bold">Settings → API Configuration</span> to use their models.</>
               )}
-              {sourceScope.active.length > 1 && (
-                <> Where the same model exists on more than one source, you choose the source when selecting it.</>
-              )}
+              <> Where the same model exists on more than one provider, you choose the source when selecting it.</>
             </span>
           </div>
         ) : null}

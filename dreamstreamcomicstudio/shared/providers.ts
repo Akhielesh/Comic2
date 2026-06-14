@@ -66,6 +66,12 @@ export interface ProviderDef {
   accent: string;
   /** Free tier available without adding funds (drives the "free tier" hint). */
   freeTier?: boolean;
+  /**
+   * True when the platform can serve this provider with its own key / monthly allowance, so a
+   * user without a personal key can still use it (openrouter, nvidia, gemini). The remaining
+   * direct providers are BYOK-only: without a key their models are greyed out with "Add a key".
+   */
+  platformServed?: boolean;
   /** Sort weight for settings/listing (lower = first). */
   order: number;
 }
@@ -90,6 +96,7 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderDef> = {
     badge: 'bg-indigo-500/10 text-indigo-500',
     accent: '#6366f1',
     freeTier: true,
+    platformServed: true,
     order: 0
   },
   nvidia: {
@@ -110,6 +117,7 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderDef> = {
     badge: 'bg-green-500/10 text-green-600',
     accent: '#76b900',
     freeTier: true,
+    platformServed: true,
     order: 1
   },
   openai: {
@@ -167,6 +175,7 @@ export const PROVIDER_REGISTRY: Record<ProviderId, ProviderDef> = {
     badge: 'bg-blue-500/10 text-blue-500',
     accent: '#4285f4',
     freeTier: true,
+    platformServed: true,
     order: 4
   },
   deepseek: {
