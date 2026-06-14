@@ -34,7 +34,7 @@ const prefersReducedMotion = (): boolean =>
 
 /** Closing prices for a series in a given range — from pre-bucketed ranges if present,
  *  otherwise sliced off the flat `series`. */
-const pointsForRange = (s: StockComparisonSeries, range: StockRange): StockPoint[] => {
+export const pointsForRange = (s: StockComparisonSeries, range: StockRange): StockPoint[] => {
   const bucket = s.ranges?.[range];
   if (bucket && bucket.length >= 2) return bucket;
   const flat = s.series ?? [];
@@ -44,12 +44,12 @@ const pointsForRange = (s: StockComparisonSeries, range: StockRange): StockPoint
 };
 
 /** Ranges that AT LEAST TWO series can draw — so a tab never shows an empty chart. */
-const sharedRanges = (series: StockComparisonSeries[]): StockRange[] =>
+export const sharedRanges = (series: StockComparisonSeries[]): StockRange[] =>
   RANGE_ORDER.filter((r) => series.filter((s) => pointsForRange(s, r).length >= 2).length >= 2);
 
 /** Linear-resample an array to exactly `n` samples over its own index domain, so
  *  series of different lengths align start-to-end on a shared x-axis. */
-const resample = (arr: number[], n: number): number[] => {
+export const resample = (arr: number[], n: number): number[] => {
   const m = arr.length;
   if (m === 0) return new Array(n).fill(NaN);
   if (m === n) return arr.slice();
