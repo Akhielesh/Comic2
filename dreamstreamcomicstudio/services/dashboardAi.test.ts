@@ -56,6 +56,23 @@ describe('parseDashboardCommand — board templates', () => {
   });
 });
 
+describe('parseDashboardCommand — add a single widget', () => {
+  it('pins a company by name via the resolver (add rivian → RIVN)', () => {
+    expect(parseDashboardCommand('add rivian')).toMatchObject({ kind: 'add', tool: 'get_stock', args: { symbol: 'RIVN' } });
+  });
+  it('handles pin/track/watch verbs', () => {
+    expect(parseDashboardCommand('pin bitcoin')).toMatchObject({ kind: 'add', tool: 'crypto_price', args: { coin: 'bitcoin' } });
+    expect(parseDashboardCommand('track tesla')).toMatchObject({ kind: 'add', tool: 'get_stock', args: { symbol: 'TSLA' } });
+    expect(parseDashboardCommand('add weather tokyo')).toMatchObject({ kind: 'add', tool: 'get_weather', args: { location: 'tokyo' } });
+  });
+  it('strips a trailing "widget" noun', () => {
+    expect(parseDashboardCommand('add a weather widget for paris')).toMatchObject({ kind: 'add', tool: 'get_weather' });
+  });
+  it('still builds a topic board for non-add phrasing', () => {
+    expect(parseDashboardCommand('quantum computing').kind).toBe('create');
+  });
+});
+
 describe('extractTopic', () => {
   it('strips filler down to the subject', () => {
     expect(extractTopic('build me a study dashboard for linear algebra')).toBe('linear algebra');
