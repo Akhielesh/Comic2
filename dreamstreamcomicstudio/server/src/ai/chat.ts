@@ -42,8 +42,12 @@ export interface ChatToolImage {
   source?: string;
 }
 
-/** Max model⇄tool round-trips before we force a final answer. */
-const MAX_TOOL_ITERATIONS = 6;
+/** Max model⇄tool round-trips before we force a final answer. Each round can fire
+ *  several tools in parallel, so this bounds *rounds*, not total tool calls. Set to 9
+ *  (up from 6) so deeper multi-source research — search → read several → fetch quotes →
+ *  news → synthesize — finishes instead of truncating; the model still stops early when
+ *  done, so typical turns are unaffected. */
+const MAX_TOOL_ITERATIONS = 9;
 
 export interface RunChatParams {
   provider: AIProviderId;
