@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Search, X, Eye, Braces, Copy, Check, ExternalLink, Loader2, Zap, PanelsTopLeft, Sparkles } from 'lucide-react';
+import { Search, X, Eye, Braces, Copy, Check, ExternalLink, Loader2, Zap, PanelsTopLeft, Sparkles, Layers } from 'lucide-react';
 import { GALLERY_DEMOS } from './ComponentGallery';
 import { DENSITY_AWARE_TYPES, renderArtifactNode } from './artifacts/ChatArtifacts';
 import { DensityProvider, type WidgetDensity } from './artifacts/kit';
@@ -58,6 +58,11 @@ const ENTRIES: StudioEntry[] = GALLERY_DEMOS.map((d, i) => {
 });
 
 const CATEGORIES = ['All', ...[...new Set(ENTRIES.map((e) => e.category))]];
+const CATEGORY_COUNT: Record<string, number> = ENTRIES.reduce<Record<string, number>>((acc, e) => {
+  acc.All = (acc.All ?? 0) + 1;
+  acc[e.category] = (acc[e.category] ?? 0) + 1;
+  return acc;
+}, {});
 
 const KIND_BADGE: Record<WidgetKind, string> = {
   api: 'text-emerald-600 bg-emerald-500/10 border-emerald-500/25',
@@ -65,6 +70,15 @@ const KIND_BADGE: Record<WidgetKind, string> = {
   builtin: 'text-sky-600 bg-sky-500/10 border-sky-500/25',
   'model-authored': 'text-amber-600 bg-amber-500/10 border-amber-500/25',
   static: 'text-[var(--ds-muted)] bg-[var(--ds-well-strong)] border-[var(--ds-hairline)]'
+};
+
+// Per-kind accent color for the list rail (dot + left bar) — quick visual scanning.
+const KIND_DOT: Record<WidgetKind, string> = {
+  api: 'bg-emerald-500',
+  mcp: 'bg-violet-500',
+  builtin: 'bg-sky-500',
+  'model-authored': 'bg-amber-500',
+  static: 'bg-[var(--ds-faint)]'
 };
 
 const cleanTitle = (t: string): string => t.replace(/\s*\(.*\)\s*$/, '').trim();
@@ -174,7 +188,7 @@ export const GalleryStudio: React.FC<GalleryStudioProps> = ({ sidebarControl, on
                 cat === c ? 'border-transparent bg-[var(--ds-accent)] text-white' : 'border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] text-[var(--ds-muted)] hover:text-[var(--ds-ink)]'
               }`}
             >
-              {c}
+              {c} <span className={cat === c ? 'opacity-80' : 'opacity-60'}>{CATEGORY_COUNT[c] ?? 0}</span>
             </button>
           ))}
         </div>
@@ -194,18 +208,29 @@ export const GalleryStudio: React.FC<GalleryStudioProps> = ({ sidebarControl, on
                   setSelectedId(e.id);
                   setTab('preview');
                 }}
-                className={`mb-1 w-full rounded-xl border px-2.5 py-2 text-left ${TRANSITION} ${
-                  active ? 'border-[#D97757]/40 bg-[#D97757]/10' : 'border-transparent hover:bg-[var(--ds-hover)]'
+                title={KIND_LABEL[e.kind]}
+                className={`group/item relative mb-0.5 flex w-full items-start gap-2.5 rounded-xl py-2 pl-3 pr-2.5 text-left ${TRANSITION} ${
+                  active ? 'bg-[#D97757]/10' : 'hover:bg-[var(--ds-hover)]'
                 }`}
               >
-                <div className="flex items-center gap-2">
-                  <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-[var(--ds-ink)]">{cleanTitle(e.title)}</span>
-                  <Badge kind={e.kind} />
-                </div>
-                <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-[var(--ds-muted)]">
-                  <span className="truncate">{e.category}</span>
-                  {e.tool && <span className="truncate font-mono opacity-80">· {e.tool}</span>}
-                </div>
+                {/* kind accent rail */}
+                <span
+                  className={`absolute inset-y-1.5 left-0 w-0.5 rounded-full ${KIND_DOT[e.kind]} ${
+                    active ? 'opacity-100' : 'opacity-0 group-hover/item:opacity-60'
+                  }`}
+                />
+                <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${KIND_DOT[e.kind]}`} />
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-1.5">
+                    <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-[var(--ds-ink)]">{cleanTitle(e.title)}</span>
+                    {e.multiSource && <Layers className="h-3 w-3 shrink-0 text-[var(--ds-muted)]" />}
+                  </span>
+                  <span className="mt-0.5 flex items-center gap-1 text-[10px] text-[var(--ds-muted)]">
+                    <span className="shrink-0">{e.category}</span>
+                    {e.tool && <span className="opacity-40">·</span>}
+                    {e.tool && <code className="min-w-0 truncate font-mono">{e.tool}</code>}
+                  </span>
+                </span>
               </button>
             );
           })}

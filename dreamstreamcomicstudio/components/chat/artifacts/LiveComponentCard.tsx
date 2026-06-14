@@ -1,7 +1,7 @@
 import React, { lazy, Suspense, useState } from 'react';
 import { Play, Code2, Eye, Loader2 } from 'lucide-react';
 import type { ReactComponentArtifact } from '../../../apiTypes';
-import { Surface, SurfaceTitle, SurfaceSubtitle, Badge } from './kit';
+import { Surface, SurfaceTitle, SurfaceSubtitle, Badge, useCompact } from './kit';
 
 // Renders a bespoke, model-/MCP-authored React component. The code runs in Sandpack's
 // SANDBOXED iframe (loaded only on tap — no silent execution, and the heavy bundler
@@ -14,10 +14,32 @@ const LiveComponentSandbox = lazy(() => import('./LiveComponentSandbox'));
 const ACCENT = '#8b5cf6';
 
 export const LiveComponentCard: React.FC<{ data: ReactComponentArtifact }> = ({ data }) => {
+  const compact = useCompact();
   const [running, setRunning] = useState(false);
   const [tab, setTab] = useState<'preview' | 'code'>('preview');
   const height = Math.max(160, Math.min(720, data.height ?? 320));
   const hasCode = typeof data.code === 'string' && data.code.trim().length > 0;
+  const lineCount = hasCode ? data.code.split('\n').length : 0;
+
+  // Compact: a glance — header + a one-line summary (don't load the heavy sandbox).
+  if (compact) {
+    return (
+      <Surface
+        accent={ACCENT}
+        header={
+          <>
+            <SurfaceTitle>{data.title || 'Custom component'}</SurfaceTitle>
+            {data.description && <SurfaceSubtitle>{data.description}</SurfaceSubtitle>}
+          </>
+        }
+        right={<Badge color={ACCENT}>React · sandboxed</Badge>}
+      >
+        <p className="px-3 pb-3 text-[11px] text-[var(--ds-muted)]">
+          {hasCode ? `Interactive React widget · ${lineCount} lines · expand to run the live preview.` : 'No component code was provided.'}
+        </p>
+      </Surface>
+    );
+  }
 
   return (
     <Surface

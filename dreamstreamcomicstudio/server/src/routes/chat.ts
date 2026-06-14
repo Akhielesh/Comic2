@@ -389,13 +389,15 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
     : [];
 
   const toolContext =
-    clientContext || attachments.length
+    clientContext || attachments.length || req.user?.id
       ? {
           timezone: clientContext?.timezone,
           locale: clientContext?.locale,
           units: clientContext?.units,
           location: clientContext?.location,
-          ...(attachments.length ? { attachments } : {})
+          ...(attachments.length ? { attachments } : {}),
+          // Scopes connector tools (gmail_search, drive_search, …) to THIS user.
+          ...(req.user?.id ? { userId: req.user.id } : {})
         }
       : undefined;
 

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Wind, Droplets, MapPin, Sun, Umbrella, Gauge, Eye, Cloud, Thermometer, Leaf, Map as MapIcon, BarChart3 } from 'lucide-react';
 import type { WeatherArtifact } from '../../../apiTypes';
-import { Surface, Chart, RadialGauge, LinearGauge, Compass, SunArc, Badge, useCompact } from './kit';
+import { Surface, Chart, LinearGauge, SunArc, Badge, useCompact } from './kit';
 import type { ChartPoint } from './kit';
 import { prefersReducedMotion, useMeasure } from './kit/Chart';
 import { InlineMap } from './InlineMap';
@@ -146,14 +146,23 @@ const SkyScene: React.FC<{ sky: Sky; isDay: boolean }> = ({ sky, isDay }) => (
   </svg>
 );
 
-// A single sensor tile in the conditions grid.
+// A single sensor tile in the conditions grid. Uniform height + a fixed rhythm (label
+// pinned top, value anchored bottom) so the whole grid reads as one clean, even block.
 const Tile: React.FC<{ icon: React.ReactNode; label: string; children: React.ReactNode }> = ({ icon, label, children }) => (
-  <div className="flex flex-col items-center gap-1 rounded-xl border border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] p-2 text-center">
+  <div className="flex min-h-[88px] flex-col gap-1.5 rounded-xl border border-[var(--ds-hairline-soft)] bg-[var(--ds-well)] p-2.5">
     <span className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)]">
       {icon}
       {label}
     </span>
-    <div className="flex w-full flex-1 flex-col items-center justify-center">{children}</div>
+    <div className="flex flex-1 flex-col justify-end">{children}</div>
+  </div>
+);
+
+// The big number + unit inside a tile — one consistent treatment across every metric.
+const TileValue: React.FC<{ value: React.ReactNode; unit?: string; color?: string }> = ({ value, unit, color }) => (
+  <div className="flex items-baseline gap-1">
+    <span className="text-2xl font-semibold leading-none tracking-tight tabular-nums" style={{ color: color ?? 'var(--ds-ink)' }}>{value}</span>
+    {unit && <span className="text-[11px] font-medium text-[var(--ds-muted)]">{unit}</span>}
   </div>
 );
 
@@ -330,18 +339,19 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
             </div>
           </div>
 
-          {/* Sensor gauge grid */}
-          <div className="grid grid-cols-2 gap-2 p-3 sm:grid-cols-4">
+          {/* Conditions grid — one uniform, value-forward treatment per metric (a thin
+              indicator where it's a 0–100 quantity). Reads as a single calm block. */}
+          <div className="grid grid-cols-2 gap-2 px-3 pb-3 sm:grid-cols-4">
             {typeof uv === 'number' && (
               <Tile icon={<Sun className="h-3 w-3" />} label="UV index">
-                <RadialGauge value={uv} max={11} display={String(Math.round(uv))} color={uvBand(uv).color} size={68} />
-                <span className="text-[10px] font-semibold" style={{ color: uvBand(uv).color }}>{uvBand(uv).label}</span>
+                <TileValue value={Math.round(uv)} color={uvBand(uv).color} />
+                <span className="mt-0.5 text-[10px] font-semibold" style={{ color: uvBand(uv).color }}>{uvBand(uv).label}</span>
               </Tile>
             )}
             {typeof c.windKph === 'number' && (
               <Tile icon={<Wind className="h-3 w-3" />} label="Wind">
-                <Compass direction={c.windDir} speed={c.windKph} size={72} color="#3B82F6" />
-                <span className="text-[10px] font-semibold text-[var(--ds-muted)]">
+                <TileValue value={Math.round(c.windKph)} unit="km/h" />
+                <span className="mt-0.5 text-[10px] font-semibold text-[var(--ds-muted)]">
                   {cardinal(c.windDir)}
                   {typeof c.windGustKph === 'number' ? ` · gust ${Math.round(c.windGustKph)}` : ''}
                 </span>
@@ -349,39 +359,39 @@ export const WeatherStation: React.FC<{ data: WeatherArtifact }> = ({ data }) =>
             )}
             {typeof c.humidity === 'number' && (
               <Tile icon={<Droplets className="h-3 w-3" />} label="Humidity">
-                <span className="text-2xl font-semibold tracking-tight text-[var(--ds-ink)]">{c.humidity}%</span>
-                <div className="mt-1 w-full px-1"><LinearGauge value={c.humidity} max={100} color="#0ea5e9" /></div>
+                <TileValue value={c.humidity} unit="%" />
+                <div className="mt-1.5"><LinearGauge value={c.humidity} max={100} color="#0ea5e9" height={5} /></div>
                 {typeof c.dewPointC === 'number' && <span className="mt-1 text-[10px] text-[var(--ds-muted)]">Dew {t(c.dewPointC)}°</span>}
               </Tile>
             )}
             {typeof c.pressureHpa === 'number' && (
               <Tile icon={<Gauge className="h-3 w-3" />} label="Pressure">
-                <RadialGauge value={c.pressureHpa} min={980} max={1040} display={String(Math.round(c.pressureHpa))} unit="hPa" color="#8b5cf6" size={68} />
+                <TileValue value={Math.round(c.pressureHpa)} unit="hPa" />
+                <span className="mt-0.5 text-[10px] text-[var(--ds-muted)]">{c.pressureHpa >= 1013 ? 'High' : 'Low'}</span>
               </Tile>
             )}
             {typeof c.precipProb === 'number' && (
               <Tile icon={<Umbrella className="h-3 w-3" />} label="Precip">
-                <span className="text-2xl font-semibold tracking-tight text-[var(--ds-ink)]">{c.precipProb}%</span>
-                <div className="mt-1 w-full px-1"><LinearGauge value={c.precipProb} max={100} color="#3B82F6" /></div>
+                <TileValue value={c.precipProb} unit="%" />
+                <div className="mt-1.5"><LinearGauge value={c.precipProb} max={100} color="#3B82F6" height={5} /></div>
               </Tile>
             )}
             {typeof c.cloudCover === 'number' && (
               <Tile icon={<Cloud className="h-3 w-3" />} label="Cloud">
-                <span className="text-2xl font-semibold tracking-tight text-[var(--ds-ink)]">{c.cloudCover}%</span>
-                <div className="mt-1 w-full px-1"><LinearGauge value={c.cloudCover} max={100} color="#64748b" /></div>
+                <TileValue value={c.cloudCover} unit="%" />
+                <div className="mt-1.5"><LinearGauge value={c.cloudCover} max={100} color="#64748b" height={5} /></div>
               </Tile>
             )}
             {typeof c.visibilityKm === 'number' && (
               <Tile icon={<Eye className="h-3 w-3" />} label="Visibility">
-                <span className="text-2xl font-semibold tracking-tight text-[var(--ds-ink)]">{c.visibilityKm}</span>
-                <span className="text-[10px] font-semibold text-[var(--ds-muted)]">km</span>
-                <div className="mt-1 w-full px-1"><LinearGauge value={Math.min(c.visibilityKm, 20)} max={20} color="#14b8a6" /></div>
+                <TileValue value={c.visibilityKm} unit="km" />
+                <div className="mt-1.5"><LinearGauge value={Math.min(c.visibilityKm, 20)} max={20} color="#14b8a6" height={5} /></div>
               </Tile>
             )}
             {typeof c.feelsLikeC === 'number' && (
               <Tile icon={<Thermometer className="h-3 w-3" />} label="Feels like">
-                <span className="text-2xl font-semibold tracking-tight text-[var(--ds-ink)]">{t(c.feelsLikeC)}°</span>
-                <span className="text-[10px] text-[var(--ds-muted)]">Actual {t(c.tempC)}°</span>
+                <TileValue value={`${t(c.feelsLikeC)}°`} />
+                <span className="mt-0.5 text-[10px] text-[var(--ds-muted)]">Actual {t(c.tempC)}°</span>
               </Tile>
             )}
           </div>

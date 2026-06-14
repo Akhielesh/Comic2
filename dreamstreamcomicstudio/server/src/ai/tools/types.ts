@@ -16,6 +16,8 @@ export interface ToolContext {
   location?: { city?: string; region?: string; country?: string; lat?: number; lng?: number };
   /** Files attached to the current user turn (base64 data URIs) — read by run_python. */
   attachments?: { name: string; mimeType: string; dataUri: string }[];
+  /** The signed-in user — required for connector tools to scope to THEIR connections. */
+  userId?: string;
 }
 
 export interface ToolExecResult {
