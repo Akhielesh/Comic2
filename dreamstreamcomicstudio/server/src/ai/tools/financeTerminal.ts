@@ -12,6 +12,7 @@
 import type { ChatTool, ToolExecResult } from './types.js';
 import { getStockQuote, getLightQuote, type LightQuote } from './stocks.js';
 import type {
+  ChartArtifact,
   DataTableArtifact,
   DataTableColumn,
   DataTableRowCell,
@@ -344,6 +345,23 @@ const buildTerminalTool: ChatTool = {
 
     const news = focus?.headlines?.slice(0, 6).map((h) => ({ title: h.title, url: h.url, source: h.source, publishedAt: h.publishedAt }));
 
+    // Relative-performance overlay: rebase each watchlist member's recent sparkline to
+    // % change from a common start, so the terminal shows who's leading on ONE chart
+    // (not just today's % in the table/heatmap) — a true side-by-side trend compare.
+    const sparked = watch.filter((q) => q.spark && q.spark.length > 1);
+    let perfChart: ChartArtifact | undefined;
+    if (sparked.length >= 2) {
+      const n = Math.min(...sparked.map((q) => q.spark!.length));
+      if (n >= 2) {
+        const series = sparked.map((q) => {
+          const tail = q.spark!.slice(-n);
+          const base = tail[0] || tail.find((v) => v) || 1;
+          return { name: q.symbol, points: tail.map((c, i) => ({ x: i, y: base ? (c / base - 1) * 100 : 0 })) };
+        });
+        perfChart = { variant: 'line', title: 'Relative performance', subtitle: `% change · last ${n} sessions`, series, unit: '%', palette: 'brand' };
+      }
+    }
+
     const data: FinanceTerminalArtifact = {
       title: str(args.title) || (focus ? `${focus.name || focus.symbol} terminal` : 'Markets terminal'),
       subtitle: str(args.subtitle),
@@ -353,6 +371,7 @@ const buildTerminalTool: ChatTool = {
       metrics,
       table,
       heatmap,
+      charts: perfChart ? [perfChart] : undefined,
       news
     };
 
