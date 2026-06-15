@@ -52,6 +52,7 @@ import { CentralBankWatch } from './artifacts/CentralBankWatch';
 import { PnlCalendar } from './artifacts/PnlCalendar';
 import { DebtClock } from './artifacts/DebtClock';
 import { FlightStatus } from './artifacts/FlightStatus';
+import { FlightResults } from './artifacts/FlightResults';
 import { TripBudget } from './artifacts/TripBudget';
 import { LocalCheatsheet } from './artifacts/LocalCheatsheet';
 import { LoyaltyWallet } from './artifacts/LoyaltyWallet';
@@ -82,7 +83,7 @@ import type {
   DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact,
   RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact, CodeExerciseArtifact,
   GenerativeUIArtifact, StockComparisonArtifact, ReactComponentArtifact,
-  EmailInboxArtifact, EmailComposeArtifact, AgentActivityArtifact, CalendarAgendaArtifact, CalendarEventDraftArtifact
+  EmailInboxArtifact, EmailComposeArtifact, AgentActivityArtifact, CalendarAgendaArtifact, CalendarEventDraftArtifact, FlightResultsArtifact
 } from '../../apiTypes';
 
 const sqlExerciseDemo: SqlExerciseArtifact = {
@@ -1209,6 +1210,21 @@ const flightDemo: FlightStatusArtifact = {
   asOf: '2026-06-10T14:30:00Z'
 };
 
+const flightResultsDemo: FlightResultsArtifact = {
+  origin: 'IAD',
+  destination: 'BLR',
+  departureDate: '2026-07-07',
+  adults: 1,
+  live: true,
+  searchUrl: 'https://www.google.com/travel/flights',
+  offers: [
+    { airline: 'Virgin Atlantic', airlineCode: 'VS', price: 488, currency: 'USD', durationMinutes: 1710, stops: 1, layovers: ['11h 05m in LHR'], departTime: '2026-07-07T22:55:00', arriveTime: '2026-07-09T12:55:00', departCode: 'IAD', arriveCode: 'BLR' },
+    { airline: 'Virgin Atlantic', airlineCode: 'VS', price: 745, currency: 'USD', durationMinutes: 1305, stops: 1, layovers: ['4h 20m in LHR'], departCode: 'IAD', arriveCode: 'BLR' },
+    { airline: 'Etihad', airlineCode: 'EY', price: 864, currency: 'USD', durationMinutes: 1155, stops: 1, layovers: ['2h 00m in AUH'], departTime: '2026-07-07T15:10:00', arriveTime: '2026-07-08T19:55:00', departCode: 'IAD', arriveCode: 'BLR' },
+    { airline: 'Lufthansa', airlineCode: 'LH', price: 924, currency: 'USD', durationMinutes: 1315, stops: 1, layovers: ['2h 15m in FRA'], departCode: 'IAD', arriveCode: 'BLR' }
+  ]
+};
+
 const tripBudgetDemo: TripBudgetArtifact = {
   title: 'Japan trip budget',
   currency: 'USD',
@@ -1410,6 +1426,7 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'National debt clock (live odometer · $/second drift)', type: 'debt_clock', category: 'Finance', node: <DebtClock data={debtDemo} /> },
   { title: 'Calendar heatmap (daily P&L · win rate · best/worst)', type: 'pnl_calendar', category: 'Data & charts', node: <PnlCalendar data={pnlDemo} /> },
   { title: 'Flight tracker (route arc · live progress · delays)', type: 'flight_status', category: 'Travel & life', node: <FlightStatus data={flightDemo} /> },
+  { title: 'Flight deals (real fares · cheapest/fastest badges · layovers · Google Flights link)', type: 'flight_results', category: 'Travel & life', node: <FlightResults data={flightResultsDemo} /> },
   { title: 'Trip budget burn (fuel gauge · pace verdict · categories)', type: 'trip_budget', category: 'Travel & life', node: <TripBudget data={tripBudgetDemo} /> },
   { title: 'Destination cheat-sheet (emergency · plugs · phrases · scams)', type: 'local_cheatsheet', category: 'Travel & life', node: <LocalCheatsheet data={cheatsheetDemo} /> },
   { title: 'Loyalty wallet (stacked cards · tier progress · redemption tips)', type: 'loyalty_wallet', category: 'Travel & life', node: <LoyaltyWallet data={loyaltyDemo} /> },

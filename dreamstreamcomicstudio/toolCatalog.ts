@@ -359,6 +359,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['flight status', 'track flight', 'is my flight on time', 'flight delayed', 'where is flight', 'arrival time', 'departure status', 'flight tracker']
   },
   {
+    name: 'search_flights', label: 'Flight deals', category: 'travel', kind: 'builtin', provider: 'Amadeus (Self-Service, when keyed)',
+    description: 'Search REAL airline fares for a route + date (one-way or round-trip) — airline, price, total duration, stops and layovers, cheapest first, with a Google Flights link. Live with Amadeus keys (AMADEUS_API_KEY + AMADEUS_API_SECRET); falls back to web search otherwise.',
+    auth: 'optional', authEnv: 'AMADEUS_API_KEY', rateLimit: 'Amadeus self-service: free quota then pay-as-you-go',
+    dataShape: 'Flight-deals card: rows of airline, price, total duration, stops/layovers; cheapest & fastest badged.', docsUrl: 'https://developers.amadeus.com/self-service/category/flights',
+    keywords: ['flight deals', 'cheap flights', 'cheapest flight', 'book a flight', 'flights to', 'flights from', 'airfare', 'one way flight', 'round trip flight', 'flight prices', 'best flights', 'plane tickets', 'find flights']
+  },
+  {
     name: 'render_trip_budget', label: 'Trip budget burn', category: 'travel', kind: 'builtin', provider: 'DreamStream (in-app)',
     description: 'A budget fuel-gauge for a trip — spent vs total with banded warning zones, per-category bars, and a pace verdict computed from the trip dates.',
     auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',

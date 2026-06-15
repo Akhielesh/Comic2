@@ -59,6 +59,7 @@ export const ARTIFACT_TOOLS: Record<string, string[]> = {
   pnl_calendar: ['render_pnl_calendar'],
   debt_clock: ['get_national_debt'],
   flight_status: ['get_flight_status'],
+  flight_results: ['search_flights'],
   trip_budget: ['render_trip_budget'],
   local_cheatsheet: ['render_cheatsheet'],
   loyalty_wallet: ['render_loyalty_wallet'],

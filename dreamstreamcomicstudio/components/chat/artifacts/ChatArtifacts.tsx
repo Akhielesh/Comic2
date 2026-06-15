@@ -57,6 +57,7 @@ import { CentralBankWatch } from './CentralBankWatch';
 import { PnlCalendar } from './PnlCalendar';
 import { DebtClock } from './DebtClock';
 import { FlightStatus } from './FlightStatus';
+import { FlightResults } from './FlightResults';
 import { TripBudget } from './TripBudget';
 import { LocalCheatsheet } from './LocalCheatsheet';
 import { LoyaltyWallet } from './LoyaltyWallet';
@@ -67,7 +68,7 @@ import { EmailTerminal } from './EmailTerminal';
 import { EmailCompose } from './EmailCompose';
 import { CalendarAgenda } from './CalendarAgenda';
 import { CalendarEventDraft } from './CalendarEventDraft';
-import type { ClarifyArtifact, GameArtifact, EmailInboxArtifact, EmailComposeArtifact, AgentActivityArtifact, CalendarAgendaArtifact, CalendarEventDraftArtifact } from '../../../apiTypes';
+import type { ClarifyArtifact, GameArtifact, EmailInboxArtifact, EmailComposeArtifact, AgentActivityArtifact, CalendarAgendaArtifact, CalendarEventDraftArtifact, FlightResultsArtifact } from '../../../apiTypes';
 
 // Renderer registry for typed rich-output artifacts. Adding a new rich component is
 // a single entry here — the chat loop and storage never change.
@@ -127,6 +128,7 @@ const ARTIFACT_RENDERERS: Record<string, (data: unknown, key: number) => React.R
   pnl_calendar: (d, k) => <PnlCalendar key={k} data={d as PnlCalendarArtifact} />,
   debt_clock: (d, k) => <DebtClock key={k} data={d as DebtClockArtifact} />,
   flight_status: (d, k) => <FlightStatus key={k} data={d as FlightStatusArtifact} />,
+  flight_results: (d, k) => <FlightResults key={k} data={d as FlightResultsArtifact} />,
   trip_budget: (d, k) => <TripBudget key={k} data={d as TripBudgetArtifact} />,
   local_cheatsheet: (d, k) => <LocalCheatsheet key={k} data={d as LocalCheatsheetArtifact} />,
   loyalty_wallet: (d, k) => <LoyaltyWallet key={k} data={d as LoyaltyWalletArtifact} />,
@@ -193,6 +195,7 @@ export const DENSITY_AWARE_TYPES = new Set([
   'pnl_calendar',
   'debt_clock',
   'flight_status',
+  'flight_results',
   'trip_budget',
   'local_cheatsheet',
   'loyalty_wallet',
@@ -273,7 +276,7 @@ const renderArtifact = (artifact: ChatArtifact, key: number): React.ReactNode =>
 // KPI boards, news) ride a narrower column so several pack into view at once — e.g.
 // "compare gold, oil and the S&P" → three quote cards you swipe through instead of a
 // tall stack you scroll past.
-const WIDE_IN_GALLERY = new Set(['weather', 'map', 'directions', 'places_results', 'video_results', 'swarm_trace', 'agent_activity', 'code_studio', 'recipe_card', 'recipe_run', 'research_report', 'quiz', 'document', 'flashcards', 'sql_exercise', 'resource_bundle', 'code_exercise', 'generative_ui', 'dashboard', 'learning_path', 'itinerary', 'ticker_tape', 'portfolio', 'goal_tracker', 'code_review', 'live_monitor', 'macro_tiles', 'econ_calendar', 'earnings_calendar', 'central_bank_watch', 'pnl_calendar', 'flight_status', 'local_cheatsheet', 'widget_stack', 'stock_comparison', 'react_component', 'game', 'email_inbox', 'email_unread', 'email_compose', 'calendar_agenda', 'calendar_event_draft']);
+const WIDE_IN_GALLERY = new Set(['weather', 'map', 'directions', 'places_results', 'video_results', 'swarm_trace', 'agent_activity', 'code_studio', 'recipe_card', 'recipe_run', 'research_report', 'quiz', 'document', 'flashcards', 'sql_exercise', 'resource_bundle', 'code_exercise', 'generative_ui', 'dashboard', 'learning_path', 'itinerary', 'ticker_tape', 'portfolio', 'goal_tracker', 'code_review', 'live_monitor', 'macro_tiles', 'econ_calendar', 'earnings_calendar', 'central_bank_watch', 'pnl_calendar', 'flight_status', 'flight_results', 'local_cheatsheet', 'widget_stack', 'stock_comparison', 'react_component', 'game', 'email_inbox', 'email_unread', 'email_compose', 'calendar_agenda', 'calendar_event_draft']);
 
 // When an assistant turn produces several cards, present them as a horizontal
 // scrolling gallery (snap + edge fades + arrows + dots) rather than a tall vertical
