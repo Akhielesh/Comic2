@@ -7,6 +7,7 @@
 import type { ToolSpec } from '../providers/types.js';
 import { ddgImageSearch, ddgVideoSearch, type ImageResult } from './duckduckgo.js';
 import { webSearch } from './search.js';
+import { readArticle, isFetchableUrl } from './readArticle.js';
 import { getWeatherDetailed } from './weather.js';
 import { geocodePlaces } from './maps.js';
 import { getDirections } from './directions.js';
@@ -1109,8 +1110,60 @@ const FREE_API_TOOLS: ChatTool[] = [
 ];
 
 /** All context-free built-in tools, keyed by the name the model/clients reference. */
+// Read a web page / article and return its full readable text. Closes the gap where
+// web_search only returns short snippets: with this the model can actually READ the
+// most relevant result(s) before answering (the search→read chain), and read any URL
+// the user pastes. SSRF-guarded inside readArticle (public http/https only).
+const readUrlTool: ChatTool = {
+  name: 'read_url',
+  description:
+    "Fetch a web page or article and return its full readable text (title, headings, paragraphs). Use this AFTER web_search / get_news to actually READ the most relevant 1–3 result URLs before answering — search only returns short snippets, so open the page whenever the answer needs detail, quotes, exact numbers, or specifics. Also use it whenever the user gives you a URL to read, summarize, or quote.",
+  parameters: {
+    type: 'object',
+    properties: {
+      url: { type: 'string', description: 'The full public http(s) URL of the page/article to read.' }
+    },
+    required: ['url']
+  },
+  execute: async (args, signal) => {
+    const url = String(args?.url || '').trim();
+    if (!url) return { content: 'No URL was provided.' };
+    if (!isFetchableUrl(url)) {
+      return {
+        content: `That URL can't be fetched (only public http/https web pages are supported): ${url}`,
+        notice: { level: 'warn', message: 'URL not fetchable' }
+      };
+    }
+    try {
+      const data = await readArticle(url, signal);
+      if (!data.ok || !data.blocks.length) {
+        return {
+          content: `Could not extract readable content from ${url} (the page may be paywalled, JavaScript-only, or blocking automated reads). Do NOT fabricate its contents — tell the user it couldn't be read, then try a different source or web_search.`,
+          notice: { level: 'warn', message: `Couldn't read ${data.host || url}` }
+        };
+      }
+      const sourceUrl = data.resolvedUrl || url;
+      const body = data.blocks
+        .map((b) => (b.type === 'h' ? `\n## ${b.text}` : b.text))
+        .join('\n')
+        .slice(0, 8000);
+      const header = data.title ? `# ${data.title}${data.byline ? `\nBy ${data.byline}` : ''}\n` : '';
+      return {
+        content: `${header}Source: ${sourceUrl}\n\n${body}`,
+        citations: [{ url: sourceUrl, title: data.title || data.host || sourceUrl }]
+      };
+    } catch (err) {
+      return {
+        content: `Failed to read ${url}: ${(err as Error)?.message || 'unknown error'}.`,
+        notice: { level: 'error', message: 'Page read failed.' }
+      };
+    }
+  }
+};
+
 const STATIC_TOOLS: Record<string, ChatTool> = {
   web_search: webSearchTool,
+  read_url: readUrlTool,
   image_search: imageSearchTool,
   video_search: videoSearchTool,
   get_weather: weatherTool,
