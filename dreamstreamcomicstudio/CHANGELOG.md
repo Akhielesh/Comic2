@@ -39,6 +39,17 @@ All notable user-facing changes. Format loosely follows
     projects open in the standard editor. (ADR 0004)
 
 ### Fixed
+- **"Build me a chart/app" no longer silently does nothing (2026-06-15):**
+  - A tool call's arguments arrive as streamed JSON fragments, and a big payload (a
+    whole chart spec, a generated app, a UI layout — all of it rides inside those
+    arguments) could be cut off mid-JSON by the output-token budget. The agent loop
+    used to swap the unreadable arguments for an empty object and run the tool with no
+    input, so the tool returned a plausible "no data" result and the model dead-ended —
+    the user saw nothing built, with no explanation. The loop now recovers the common
+    salvageable cases (fenced/trailing-comma JSON) via the shared coercion helper, and
+    when the arguments are genuinely truncated it tells the model so it re-issues the
+    call with complete JSON instead of faking an empty run. One shared chokepoint, so
+    every tool (and MCP tool) benefits.
 - **Long chats stay smooth while a reply streams (2026-06-15):**
   - Every streamed token re-renders the whole thread, and the message renderer was
     re-parsing **every** prior turn's full Markdown on **every** token — so a 40-turn

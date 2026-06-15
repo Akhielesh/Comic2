@@ -17,6 +17,7 @@ import type { AIProviderId } from './providers/types.js';
 import { toToolSpec, type ChatTool } from './tools/registry.js';
 import { buildJsonToolSystemBlock, extractToolCall, stripToolCallJson, formatToolResult } from './tools/jsonToolProtocol.js';
 import { capToolOutput, CHAT_TOOL_OUTPUT_MAX } from './tools/capToolOutput.js';
+import { coerceJsonOrNull } from './jsonCoerce.js';
 import { JSON_TOOL_PROTOCOL_ENABLED, CHAT_MAX_OUTPUT_TOKENS } from '../config.js';
 import { buildUserMemoryBlock } from '../services/userMemory.js';
 import { buildConnectorContextBlock } from '../connectors/retrieval.js';
@@ -43,6 +44,40 @@ export interface ChatToolImage {
   thumbnail?: string;
   source?: string;
 }
+
+/**
+ * Parse a tool call's raw `arguments` string defensively.
+ *
+ * The provider passes `arguments` through verbatim, and for streamed calls it's the
+ * concatenation of streamed fragments — which the output-token budget can cut off
+ * mid-JSON (the whole chart/app/UI payload rides INSIDE this string). The old
+ * `try { JSON.parse } catch { {} }` silently ran the tool with NO arguments, so the tool
+ * hit its own "no input" guard and returned a plausible empty result — the model then
+ * saw a fake success and dead-ended ("build me a chart silently produced nothing").
+ *
+ * Instead: fast-path valid JSON objects, recover fenced/trailing-comma/prose-wrapped
+ * JSON via the shared, tested `coerceJsonOrNull`, and report genuinely-unreadable input
+ * as `malformed` so the loop can tell the model to RE-ISSUE the call rather than fake an
+ * empty run. Valid-but-non-object JSON (an array/scalar) is treated as empty args, not
+ * malformed — it isn't corrupt, just unusable as args.
+ */
+export const parseToolArguments = (
+  raw: string | undefined
+): { args: Record<string, unknown>; recovered: boolean; malformed: boolean } => {
+  if (!raw || !raw.trim() || raw.trim() === '{}') return { args: {}, recovered: false, malformed: false };
+  try {
+    const p = JSON.parse(raw);
+    if (p && typeof p === 'object' && !Array.isArray(p)) return { args: p as Record<string, unknown>, recovered: false, malformed: false };
+    // Valid JSON but not an object (array/scalar) — use empty args, don't flag a retry.
+    return { args: {}, recovered: false, malformed: false };
+  } catch {
+    /* not valid JSON — fall through to recovery */
+  }
+  const c = coerceJsonOrNull(raw);
+  if (c && typeof c === 'object' && !Array.isArray(c)) return { args: c as Record<string, unknown>, recovered: true, malformed: false };
+  // Genuinely unreadable (truncated mid-JSON / garbage) — surface it so the model retries.
+  return { args: {}, recovered: false, malformed: true };
+};
 
 /** Max model⇄tool round-trips before we force a final answer. Each round can fire
  *  several tools in parallel, so this bounds *rounds*, not total tool calls. Set to 9
@@ -698,12 +733,7 @@ export const runChat = async (
     const settled = await Promise.all(
       result.toolCalls.map(async (call, index) => {
         const tool = tools.find((t) => t.name === call.name);
-        let parsed: Record<string, unknown> = {};
-        try {
-          parsed = call.arguments ? JSON.parse(call.arguments) : {};
-        } catch {
-          parsed = {};
-        }
+        const { args: parsed, malformed } = parseToolArguments(call.arguments);
         const query = typeof parsed.query === 'string' ? parsed.query : undefined;
         // Announce every tool in this round as it STARTS (all light up at once), then
         // settle each independently below — the client renders this as a live step list.
@@ -711,6 +741,22 @@ export const runChat = async (
         if (!tool) {
           params.onToolEvent?.({ phase: 'end', tool: call.name, query, ok: false, summary: 'Unknown tool', index, iteration: iterations });
           return { call, query, args: parsed, ok: false as const, content: `Unknown tool: ${call.name}`, summary: 'Unknown tool' };
+        }
+        if (malformed) {
+          // The streamed arguments were truncated/garbled (the output-token budget can cut
+          // off a big render_chart/generate_app payload mid-JSON). Don't run the tool on
+          // empty args and hand back a fake "no input" result — tell the model so it
+          // re-issues the call with complete JSON next round (within MAX_TOOL_ITERATIONS).
+          const summary = 'Unreadable tool arguments';
+          params.onToolEvent?.({ phase: 'end', tool: call.name, query, ok: false, summary, index, iteration: iterations });
+          return {
+            call,
+            query,
+            args: parsed,
+            ok: false as const,
+            content: `The arguments for ${call.name} were truncated or malformed and could not be parsed. Re-issue the call with complete, valid JSON arguments (split a large payload into smaller pieces if needed).`,
+            summary
+          };
         }
         try {
           const out = await tool.execute(parsed, params.signal);
