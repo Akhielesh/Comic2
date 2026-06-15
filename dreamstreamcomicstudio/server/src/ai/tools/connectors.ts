@@ -300,6 +300,8 @@ interface CalEventView {
   end?: string | null;
   allDay?: boolean;
   location?: string | null;
+  responseStatus?: string | null;
+  htmlLink?: string | null;
   attendees?: { email?: string; name?: string; responseStatus?: string; self?: boolean }[];
 }
 
@@ -318,18 +320,35 @@ const calendarAgendaWidget = async (
     })) as { events?: CalEventView[]; timezone?: string | null; window?: { timeMin: string; timeMax: string } };
     const events = data.events || [];
     const canWrite = GoogleCalendarConnector.hasWriteScope(r.connection.granted_scopes);
+    const tz = data.timezone || ctx?.timezone || undefined;
     const artifactData = {
       account: r.connection.account_identifier,
       accountLabel: r.connection.account_label,
       connectionId: r.connection.id,
       canWrite,
-      timezone: data.timezone || ctx?.timezone || null,
+      timezone: tz || null,
       query: opts.q || '',
       window: data.window,
       events
     };
+    // Give the MODEL the actual events (not just a count) so it can answer "what do I
+    // have" — the widget shows the same detail visually. Times render in the user's tz.
+    const fmtWhen = (ev: CalEventView): string => {
+      if (!ev.start) return 'TBD';
+      const d = new Date(ev.start);
+      if (!Number.isFinite(d.getTime())) return 'TBD';
+      const optsFmt: Intl.DateTimeFormatOptions = ev.allDay
+        ? { weekday: 'short', month: 'short', day: 'numeric', ...(tz ? { timeZone: tz } : {}) }
+        : { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', ...(tz ? { timeZone: tz } : {}) };
+      try { return d.toLocaleString('en-US', optsFmt); } catch { return d.toISOString(); }
+    };
+    const lines = events.slice(0, 25).map((e) => {
+      const rsvp = e.responseStatus && e.responseStatus !== 'accepted' ? ` [${e.responseStatus}]` : '';
+      const loc = e.location ? ` @ ${e.location}` : '';
+      return `- ${fmtWhen(e)} — ${e.title}${loc}${rsvp} (id: ${e.id})`;
+    });
     const summary = events.length
-      ? `Loaded ${events.length} event${events.length === 1 ? '' : 's'} from ${r.connection.account_identifier}${opts.q ? ` matching "${opts.q}"` : ''}. An interactive calendar widget is shown (agenda / week / month views; click an event for details${canWrite ? '; create/RSVP/edit from chat with confirmation' : ''}). Call out the next 1–2 commitments and any gaps; don't list everything.`
+      ? `The user's calendar (${r.connection.account_identifier}) — ${events.length} event${events.length === 1 ? '' : 's'}${opts.q ? ` matching "${opts.q}"` : ''}. An interactive calendar widget is shown (agenda / week / month views; click an event for details${canWrite ? '; you can create/RSVP/edit from chat — those need the user to confirm a card' : ''}).\n\n${lines.join('\n')}\n\nAnswer the user's question from these events (next commitments, free time, conflicts). Reference events by their title/time, not the id.`
       : `No events${opts.q ? ` matching "${opts.q}"` : ''} in the next ${opts.days || 14} days on ${r.connection.account_identifier}. The user looks free in that window.`;
     return {
       content: summary,

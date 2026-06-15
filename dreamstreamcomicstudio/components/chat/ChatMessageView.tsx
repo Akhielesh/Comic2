@@ -177,14 +177,6 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
               )}
             </div>
           )}
-          {liveReasoning && (
-            <details open className="mb-2">
-              <summary className="flex items-center gap-1.5 text-[11px] font-bold text-indigo-500 cursor-pointer select-none">
-                <Brain className="w-3.5 h-3.5 animate-pulse" /> Thinking…
-              </summary>
-              <pre className="mt-1 text-[11px] whitespace-pre-wrap break-words text-[var(--ds-muted)] max-h-40 overflow-y-auto font-sans border-l-2 border-indigo-400/40 pl-2">{turn.reasoning}</pre>
-            </details>
-          )}
           {isUser && editing ? (
             <div className="w-full">
               <textarea
@@ -243,6 +235,18 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
                 </button>
               ))}
             </div>
+          )}
+
+          {/* Live "thinking" trace — rendered AFTER the answer so it reads in the same
+              place as the finished "How it answered" disclosure (both are the reasoning,
+              so showing them in one spot — the end — is the logical order). */}
+          {liveReasoning && (
+            <details open className="mt-2">
+              <summary className="flex items-center gap-1.5 text-[11px] font-bold text-indigo-500 cursor-pointer select-none">
+                <Brain className="w-3.5 h-3.5 animate-pulse" /> Thinking…
+              </summary>
+              <pre className="mt-1 text-[11px] whitespace-pre-wrap break-words text-[var(--ds-muted)] max-h-40 overflow-y-auto font-sans border-l-2 border-indigo-400/40 pl-2">{turn.reasoning}</pre>
+            </details>
           )}
         </div>
 
