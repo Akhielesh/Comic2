@@ -53,6 +53,21 @@ This is enforced by `components/chat/gallery.coverage.test.ts`: every artifact t
 `ARTIFACT_TYPES` must have a matching entry in `GALLERY_DEMO_TYPES`. If you add a
 renderer without a gallery demo, that test fails. **Do not skip the gallery demo.**
 
+### Quality standard — scaffold it, don't wing it
+
+The full, enforced quality bar for widgets lives in **`docs/COMPONENT_QUALITY.md`**
+(calm-studio language, the three hard rules, density, a11y, and a "definition of
+done" checklist). Two mechanisms keep it from drifting — use them every time:
+
+- **Scaffold new widgets with `npm run new:widget`** (e.g. `-- --name SprintBurndown
+  --type sprint_burndown --title "…"`). It generates a compliant, density-aware
+  component and prints the exact wiring snippets for all four registration points.
+- **`npm run lint:widgets`** runs the build-breaking gate
+  (`components/chat/artifacts/widget-quality.test.ts` + the gallery coverage test):
+  no comic styles, no opacity modifier on a `var()` color, and no off-palette hex in
+  class names (only `--ds-*` tokens, the `#D97757` accent, or a `kit/theme.ts` palette
+  color). Run it (and `npm run typecheck`) before calling a widget done.
+
 ### Shared visual kit
 
 Build new visuals from the dependency-free Primitive Kit in

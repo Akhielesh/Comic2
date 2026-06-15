@@ -16,6 +16,8 @@
     "preview": "vite preview",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest",
+    "lint:widgets": "vitest run components/chat/artifacts/widget-quality.test.ts components/chat/gallery.coverage.test.ts",
+    "new:widget": "node scripts/new-widget.mjs",
     "openrouter:smoketest": "node scripts/openrouter-smoketest.mjs",
     "validate:sources": "node scripts/source-model-validate.mjs",
     "bench:models": "node scripts/model-bench.mjs",

@@ -425,7 +425,7 @@ const AgendaView: React.FC<{ events: CalendarEventView[]; now: number; onOpen: (
     <div className="max-h-[28rem] overflow-y-auto [scrollbar-width:thin]">
       {groups.map((g) => (
         <section key={g.key}>
-          <div className="sticky top-0 z-[1] border-b border-[var(--ds-hairline-soft)] bg-[var(--ds-well)]/95 px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)] backdrop-blur-sm">{g.label}</div>
+          <div className="sticky top-0 z-[1] border-b border-[var(--ds-hairline-soft)] bg-[color-mix(in_srgb,var(--ds-well)_92%,transparent)] px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--ds-muted)] backdrop-blur-sm">{g.label}</div>
           <ul className="divide-y divide-[var(--ds-hairline-soft)]">
             {g.events.map((ev) => <li key={ev.id}><EventRow ev={ev} onOpen={onOpen} /></li>)}
           </ul>
