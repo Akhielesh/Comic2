@@ -60,6 +60,13 @@ All notable user-facing changes. Format loosely follows
     is lost.
 
 ### Fixed
+- **A money figure with no source gets flagged as unverified (2026-06-15):**
+  - The research/swarm modes already warn when the model states a figure it didn't
+    actually source; the everyday chat didn't. Now, if a normal answer quotes a
+    monetary figure ($/€/£/¥ or USD/EUR/GBP) but no tool succeeded and no source was
+    attached, it adds a short "treat that number as unverified" note. Deliberately
+    narrow — it only triggers on unsourced *money* claims, never on general knowledge
+    (boiling points, years, percentages, math), so it can't nag a correct answer.
 - **Web answers stop wasting time on pages that block us (2026-06-15):**
   - Reading a web page has a ~9s timeout, and the agent would re-pay it again and again on
     a host that hard-blocks automated reads — one real flight query logged "Couldn't read

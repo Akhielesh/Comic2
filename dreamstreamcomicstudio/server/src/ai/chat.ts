@@ -456,6 +456,29 @@ export const dedupeCitations = (citations: { url: string; title?: string }[]) =>
   return out;
 };
 
+// Final-answer fabrication guard (notice-only). Mirrors the swarm verifier's figure
+// check (agents/verify.ts) for the DEFAULT chat loop, which has none. CONSERVATIVE BY
+// CONSTRUCTION: matches only CURRENCY-denominated figures ($/€/£/¥ + number, or number +
+// USD/EUR/GBP) — never percentages, plain numbers, years, temperatures or math — so it
+// can't fire on legitimate general-knowledge answers ("water boils at 100°C", "WWII ended
+// in 1945"). It flags only an unsourced MONEY claim, which genuinely deserves a caveat.
+const CHAT_FIGURE_RE = /(?:[$€£¥]\s?\d[\d,]*(?:\.\d+)?|\b\d[\d,]*(?:\.\d+)?\s?(?:USD|EUR|GBP)\b)/;
+
+export const detectUnsourcedFigures = (
+  finalText: string,
+  toolEvents: ChatToolEvent[],
+  citations: { url: string; title?: string }[]
+): boolean => {
+  const text = (finalText || '').trim();
+  if (!text) return false;
+  // Grounded if any tool succeeded OR any source is attached — never flag those.
+  if (toolEvents.some((t) => t.ok) || citations.length > 0) return false;
+  return CHAT_FIGURE_RE.test(text);
+};
+
+const UNSOURCED_FIGURE_NOTICE =
+  'The answer states a monetary figure that no tool or source confirmed — treat that number as unverified, not a current/live value.';
+
 export const runChat = async (
   params: RunChatParams
 ): Promise<{
@@ -737,6 +760,9 @@ export const runChat = async (
     }
 
     const merged = dedupeCitations(citations);
+    if (detectUnsourcedFigures(final, toolEvents, merged)) {
+      addNotice({ tool: 'agent', level: 'warn', message: UNSOURCED_FIGURE_NOTICE });
+    }
     return {
       text: final,
       usage: buildUsage(lastUserSeed(), final, undefined),
@@ -894,6 +920,9 @@ export const runChat = async (
         : '';
 
   const mergedCitations = dedupeCitations(citations);
+  if (detectUnsourcedFigures(result.text || '', toolEvents, mergedCitations)) {
+    addNotice({ tool: 'agent', level: 'warn', message: UNSOURCED_FIGURE_NOTICE });
+  }
 
   return {
     text: result.text,
