@@ -15,6 +15,7 @@
 import { GoogleOAuthConnector } from '../base.js';
 import { googleApiFetch } from '../googleClient.js';
 import { CONNECTORS_SYNC_PAGE_SIZE } from '../../config.js';
+import { ConnectorAuthError } from '../types.js';
 import type {
   ConnectorMetadata,
   FetchInput,
@@ -78,13 +79,29 @@ const safeIso = (s: string): string | null => {
   return Number.isFinite(t) ? new Date(t).toISOString() : null;
 };
 
-/** Parse a `"Name" <email>` header into its parts (falls back to the raw string). */
+/** Epoch-ms → ISO, guarding the ±8.64e15 Date range so a corrupt internalDate can't throw. */
+const msToIso = (ms: number): string | null => {
+  if (!Number.isFinite(ms) || Math.abs(ms) > 8.64e15) return null;
+  try {
+    return new Date(ms).toISOString();
+  } catch {
+    return null;
+  }
+};
+
+/** Parse a `"Name" <email>` header into its parts. Handles display names containing
+ *  commas (matches the first `<email>`) and a bare/multi address (takes the first). */
 const parseAddress = (raw?: string): { name: string; email: string } | null => {
   if (!raw) return null;
-  const m = raw.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/);
+  const s = raw.trim();
+  if (!s) return null;
+  // First `Name <email>` — the non-anchored match tolerates a trailing address list
+  // and a display name with commas ("Doe, Jane" <jane@x.com>).
+  const m = s.match(/"?([^"<]*?)"?\s*<([^>]+)>/);
   if (m) return { name: (m[1] || '').trim() || m[2].trim(), email: m[2].trim() };
-  const v = raw.trim();
-  return v ? { name: v, email: v } : null;
+  // No angle brackets → a bare address (or comma-separated list): use the first.
+  const first = s.split(',')[0].trim();
+  return first ? { name: first, email: first } : null;
 };
 
 const decodeB64Url = (data?: string): string => {
@@ -98,8 +115,10 @@ const decodeB64Url = (data?: string): string => {
 
 const stripHtml = (html: string): string =>
   html
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    // Drop style/script blocks — tolerate UNCLOSED tags (strip to end of string) so a
+    // truncated/obfuscated <script> can't leak its source into the "plain text" body.
+    .replace(/<style\b[^>]*>[\s\S]*?(?:<\/style>|$)/gi, ' ')
+    .replace(/<script\b[^>]*>[\s\S]*?(?:<\/script>|$)/gi, ' ')
     .replace(/<\/(p|div|br|li|tr|h[1-6])>/gi, '\n')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
@@ -112,20 +131,26 @@ const stripHtml = (html: string): string =>
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
-/** Walk a MIME tree, preferring text/plain, falling back to stripped text/html. */
+/** Walk a MIME tree collecting body leaves of a mime type, SKIPPING attachment parts
+ *  (they carry a filename) — so multi-part bodies aren't truncated to the first segment
+ *  and an attachment's text isn't surfaced as the message body. */
+const collectParts = (part: GmailPart | undefined, prefer: string, out: string[]): void => {
+  if (!part || part.filename) return; // a filename ⇒ attachment, not body
+  if (part.mimeType === prefer && part.body?.data) out.push(decodeB64Url(part.body.data));
+  for (const p of part.parts || []) collectParts(p, prefer, out);
+};
+
+/** The message body as plain text: all text/plain leaves joined, else stripped text/html. */
 const extractPlainText = (payload?: GmailPart): string => {
   if (!payload) return '';
-  const walk = (part: GmailPart | undefined, prefer: string): string => {
-    if (!part) return '';
-    if (part.mimeType === prefer && part.body?.data) return decodeB64Url(part.body.data);
-    for (const p of part.parts || []) {
-      const r = walk(p, prefer);
-      if (r) return r;
-    }
-    return '';
-  };
-  const plain = walk(payload, 'text/plain');
-  const text = plain || stripHtml(walk(payload, 'text/html'));
+  const plain: string[] = [];
+  collectParts(payload, 'text/plain', plain);
+  let text = plain.join('\n\n').trim();
+  if (!text) {
+    const html: string[] = [];
+    collectParts(payload, 'text/html', html);
+    text = stripHtml(html.join('\n')).trim();
+  }
   return text.length > MAX_BODY_CHARS ? `${text.slice(0, MAX_BODY_CHARS)}\n…` : text;
 };
 
@@ -215,11 +240,7 @@ export class GmailConnector extends GoogleOAuthConnector {
   private toEmailView(msg: GmailMessage, withBody = false): EmailMessageView {
     const labels = msg.labelIds || [];
     const internalMs = msg.internalDate ? Number(msg.internalDate) : NaN;
-    const date = Number.isFinite(internalMs)
-      ? new Date(internalMs).toISOString()
-      : header(msg, 'Date')
-        ? safeIso(header(msg, 'Date') as string)
-        : null;
+    const date = msToIso(internalMs) ?? (header(msg, 'Date') ? safeIso(header(msg, 'Date') as string) : null);
     return {
       id: msg.id,
       threadId: msg.threadId || null,
@@ -252,8 +273,14 @@ export class GmailConnector extends GoogleOAuthConnector {
     const emails: EmailMessageView[] = [];
     for (const id of ids) {
       if (opts.signal?.aborted) break;
-      const msg = await this.getMessage(token, id, opts.signal);
-      emails.push(this.toEmailView(msg));
+      try {
+        emails.push(this.toEmailView(await this.getMessage(token, id, opts.signal)));
+      } catch (err) {
+        // Auth failure is terminal → bubble up so the caller can prompt a reconnect.
+        if (err instanceof ConnectorAuthError) throw err;
+        // A transient error / a message deleted between list and get (404) shouldn't
+        // blank the whole page — skip that one and keep the rest of the inbox.
+      }
     }
     return { emails, nextCursor: list.nextPageToken || null };
   }
@@ -330,7 +357,8 @@ export class GmailConnector extends GoogleOAuthConnector {
       const { emails, nextCursor } = await this.listEmails(token, {
         q,
         pageToken: typeof p.cursor === 'string' ? p.cursor : undefined,
-        max: clampMax(p.max, 25, 50),
+        // Honor BOTH `max` (widgets) and `maxResults` (the legacy gmail_search text tool).
+        max: clampMax(p.max ?? p.maxResults, 25, 50),
         signal: input.signal
       });
       const box = resource === 'unread' ? 'unread' : 'inbox';
@@ -379,11 +407,7 @@ export class GmailConnector extends GoogleOAuthConnector {
     const subject = header(msg, 'Subject');
     const dateHeader = header(msg, 'Date');
     const internalMs = msg.internalDate ? Number(msg.internalDate) : NaN;
-    const occurredAt = Number.isFinite(internalMs)
-      ? new Date(internalMs).toISOString()
-      : dateHeader
-        ? safeIso(dateHeader)
-        : null;
+    const occurredAt = msToIso(internalMs) ?? (dateHeader ? safeIso(dateHeader) : null);
     return [
       {
         kind: 'document',

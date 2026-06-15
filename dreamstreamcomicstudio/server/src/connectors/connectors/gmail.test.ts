@@ -156,4 +156,49 @@ describe('GmailConnector sync (mocked Google)', () => {
     });
     expect(out.items[0].externalId).toBe('a');
   });
+
+  it('reads a message body (decodes text/plain, skips attachments) + parses a comma display-name From', async () => {
+    const b64 = (s: string) => Buffer.from(s).toString('base64url');
+    const full = {
+      id: 'mx',
+      threadId: 't',
+      internalDate: '1700000000000',
+      labelIds: ['INBOX', 'UNREAD'],
+      payload: {
+        headers: [
+          { name: 'From', value: '"Doe, Jane" <jane@x.com>' },
+          { name: 'Subject', value: 'Hi' }
+        ],
+        mimeType: 'multipart/mixed',
+        parts: [
+          { mimeType: 'text/plain', body: { data: b64('Hello body') } },
+          { mimeType: 'application/pdf', filename: 'a.pdf', body: { data: b64('PDFDATA') } }
+        ]
+      }
+    };
+    global.fetch = router({ message: () => full }) as any;
+    const out: any = await new GmailConnector().fetch({
+      connection: ctx().connection,
+      getAccessToken: async () => 'tok',
+      resource: 'message',
+      params: { id: 'mx' }
+    });
+    expect(out.email.body).toBe('Hello body'); // attachment text NOT surfaced
+    expect(out.email.from).toEqual({ name: 'Doe, Jane', email: 'jane@x.com' });
+    expect(out.email.unread).toBe(true);
+  });
+
+  it('inbox skips a message that fails to fetch and returns the rest', async () => {
+    global.fetch = router({
+      list: () => ({ messages: [{ id: 'a' }, { id: 'bad' }, { id: 'c' }] }),
+      message: (id) => (id === 'bad' ? { __status: 404, body: 'not found' } : sampleMessage(id))
+    }) as any;
+    const out: any = await new GmailConnector().fetch({
+      connection: ctx().connection,
+      getAccessToken: async () => 'tok',
+      resource: 'inbox',
+      params: {}
+    });
+    expect(out.emails.map((e: any) => e.id)).toEqual(['a', 'c']);
+  });
 });

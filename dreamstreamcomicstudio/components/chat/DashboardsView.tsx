@@ -123,7 +123,9 @@ const EmailTile: React.FC<{ tile: DashboardTile }> = ({ tile }) => {
     (async () => {
       try {
         const conns = await fetchConnections();
-        const gmail = conns.find((c) => c.connectorId === 'gmail' && c.status !== 'disconnected');
+        // Only a usable (connected/syncing) Gmail drives the terminal; an expired/error
+        // connection routes to the reconnect guidance instead of a dead-end fetch loop.
+        const gmail = conns.find((c) => c.connectorId === 'gmail' && (c.status === 'connected' || c.status === 'syncing'));
         if (!gmail) {
           if (active) setState({ status: 'disconnected' });
           return;
@@ -152,9 +154,10 @@ const EmailTile: React.FC<{ tile: DashboardTile }> = ({ tile }) => {
 
   if (state.status === 'ready' && state.data) {
     return (
-      <div className="h-full">
+      <div className="h-full min-h-[260px]">
         <DensityProvider value={tile.density}>
-          <EmailTerminal data={state.data} />
+          {/* Key by connection+box so switching the source remounts with fresh state. */}
+          <EmailTerminal key={`${state.data.connectionId}:${state.data.box}`} data={state.data} />
         </DensityProvider>
       </div>
     );
@@ -172,7 +175,7 @@ const EmailTile: React.FC<{ tile: DashboardTile }> = ({ tile }) => {
           <Mail className="h-6 w-6 text-[var(--ds-muted)]" />
           <p className="text-xs font-medium text-[var(--ds-ink)]">Gmail isn’t connected</p>
           <p className="max-w-[15rem] text-[11px] text-[var(--ds-muted)]">
-            Open <span className="font-medium">Settings → Connectors</span> to link Gmail (read-only) — then this widget fills in.
+            Open <span className="font-medium">Settings → Connectors</span> to connect or reconnect Gmail (read-only) — then this widget fills in.
           </p>
         </>
       ) : (
@@ -207,7 +210,9 @@ const EmailComposeTile: React.FC<{ tile: DashboardTile }> = ({ tile }) => {
   return (
     <div className="h-full">
       <DensityProvider value={tile.density}>
-        <EmailCompose data={data} />
+        {/* Key by the seeded args so editing To/Subject via the tile config remounts
+            the compose form with the new values (its fields seed from props once). */}
+        <EmailCompose key={`${to}|${subject}`} data={data} />
       </DensityProvider>
     </div>
   );
