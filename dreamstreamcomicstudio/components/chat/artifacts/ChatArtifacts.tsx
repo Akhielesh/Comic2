@@ -64,7 +64,9 @@ import { ClarifyCard } from './ClarifyCard';
 import { GameCard } from './GameCard';
 import { EmailTerminal } from './EmailTerminal';
 import { EmailCompose } from './EmailCompose';
-import type { ClarifyArtifact, GameArtifact, EmailInboxArtifact, EmailComposeArtifact } from '../../../apiTypes';
+import { CalendarAgenda } from './CalendarAgenda';
+import { CalendarEventDraft } from './CalendarEventDraft';
+import type { ClarifyArtifact, GameArtifact, EmailInboxArtifact, EmailComposeArtifact, CalendarAgendaArtifact, CalendarEventDraftArtifact } from '../../../apiTypes';
 
 // Renderer registry for typed rich-output artifacts. Adding a new rich component is
 // a single entry here — the chat loop and storage never change.
@@ -131,7 +133,9 @@ const ARTIFACT_RENDERERS: Record<string, (data: unknown, key: number) => React.R
   game: (d, k) => <GameCard key={k} data={d as GameArtifact} />,
   email_inbox: (d, k) => <EmailTerminal key={k} data={d as EmailInboxArtifact} />,
   email_unread: (d, k) => <EmailTerminal key={k} data={d as EmailInboxArtifact} />,
-  email_compose: (d, k) => <EmailCompose key={k} data={d as EmailComposeArtifact} />
+  email_compose: (d, k) => <EmailCompose key={k} data={d as EmailComposeArtifact} />,
+  calendar_agenda: (d, k) => <CalendarAgenda key={k} data={d as CalendarAgendaArtifact} />,
+  calendar_event_draft: (d, k) => <CalendarEventDraft key={k} data={d as CalendarEventDraftArtifact} />
 };
 
 /** Render an artifact's bare card via the registry (no frame/boundary). Used by the
@@ -194,7 +198,9 @@ export const DENSITY_AWARE_TYPES = new Set([
   'game',
   'email_inbox',
   'email_unread',
-  'email_compose'
+  'email_compose',
+  'calendar_agenda',
+  'calendar_event_draft'
 ]);
 
 // Holds the freshest version of a single artifact. When the server stamped an
@@ -264,7 +270,7 @@ const renderArtifact = (artifact: ChatArtifact, key: number): React.ReactNode =>
 // KPI boards, news) ride a narrower column so several pack into view at once — e.g.
 // "compare gold, oil and the S&P" → three quote cards you swipe through instead of a
 // tall stack you scroll past.
-const WIDE_IN_GALLERY = new Set(['weather', 'map', 'directions', 'places_results', 'video_results', 'swarm_trace', 'code_studio', 'recipe_card', 'recipe_run', 'research_report', 'quiz', 'document', 'flashcards', 'sql_exercise', 'resource_bundle', 'code_exercise', 'generative_ui', 'dashboard', 'learning_path', 'itinerary', 'ticker_tape', 'portfolio', 'goal_tracker', 'code_review', 'live_monitor', 'macro_tiles', 'econ_calendar', 'earnings_calendar', 'central_bank_watch', 'pnl_calendar', 'flight_status', 'local_cheatsheet', 'widget_stack', 'stock_comparison', 'react_component', 'game', 'email_inbox', 'email_unread', 'email_compose']);
+const WIDE_IN_GALLERY = new Set(['weather', 'map', 'directions', 'places_results', 'video_results', 'swarm_trace', 'code_studio', 'recipe_card', 'recipe_run', 'research_report', 'quiz', 'document', 'flashcards', 'sql_exercise', 'resource_bundle', 'code_exercise', 'generative_ui', 'dashboard', 'learning_path', 'itinerary', 'ticker_tape', 'portfolio', 'goal_tracker', 'code_review', 'live_monitor', 'macro_tiles', 'econ_calendar', 'earnings_calendar', 'central_bank_watch', 'pnl_calendar', 'flight_status', 'local_cheatsheet', 'widget_stack', 'stock_comparison', 'react_component', 'game', 'email_inbox', 'email_unread', 'email_compose', 'calendar_agenda', 'calendar_event_draft']);
 
 // When an assistant turn produces several cards, present them as a horizontal
 // scrolling gallery (snap + edge fades + arrows + dots) rather than a tall vertical

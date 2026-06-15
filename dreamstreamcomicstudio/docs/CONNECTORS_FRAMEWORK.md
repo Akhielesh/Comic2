@@ -92,7 +92,8 @@ interface AccountConnector {
   // Data lifecycle
   syncFull(ctx): Promise<SyncResult>;          // full backfill, paginates via cursor
   syncIncremental(ctx): Promise<SyncResult>;   // resumes from ctx.cursor
-  fetch(input): Promise<unknown>;              // on-demand (Maps geocode, Gmail search)
+  fetch(input): Promise<unknown>;              // on-demand READ (Maps geocode, Gmail search, Calendar agenda)
+  mutate?(input): Promise<unknown>;            // optional on-demand WRITE (Calendar create/update/delete/RSVP)
   normalize(raw): NormalizedItem[];            // raw → unified model
 }
 ```
@@ -224,6 +225,18 @@ tools** built per request with `ctx.userId` (threaded from `req.user.id` in
 and degrades honestly: no user → "sign in"; not connected → "connect it in Connectors";
 revoked token → "reconnect". Each has a `toolCatalog.ts` entry so the smart router
 surfaces it on relevant intents ("my email", "my calendar", "my files", …).
+
+**Calendar read + write.** `calendar_agenda` emits an interactive agenda artifact
+(`CalendarAgenda.tsx`: agenda/week/month views, click-to-detail, addable as a dashboard
+tile via `CALENDAR_TILE`). The write tools — `calendar_create_event`,
+`calendar_update_event`, `calendar_delete_event`, `calendar_rsvp` — **never mutate from a
+model turn**: they emit a `calendar_event_draft` confirmation card, and only the user's
+explicit confirm calls `POST /connections/:id/mutate` → the connector's `mutate()`. That
+route enforces ownership **and** a non-readonly grant (Google Calendar scope is now
+`calendar.events`, up from `calendar.events.readonly`, so existing connections must
+reconnect to consent before writes are allowed; read-only ones get an actionable
+`insufficient_scope`). A dedicated `scheduling` agent bundles these tools. The same write
+path backs the inline create/edit/RSVP/delete in the calendar widget (`services/calendarApi.ts`).
 
 These are deliberately **not** added to the outbound MCP allowlist
 (`OUTBOUND_TOOL_NAMES` in `routes/mcp.ts`): that endpoint authenticates with a shared

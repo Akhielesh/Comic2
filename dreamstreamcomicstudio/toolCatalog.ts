@@ -907,10 +907,38 @@ export const TOOL_CATALOG: ToolMeta[] = [
   },
   {
     name: 'calendar_agenda', label: 'Calendar (your schedule)', category: 'productivity', kind: 'builtin', provider: 'Google (your connected account)',
-    description: "Read the signed-in user's own Google Calendar for upcoming events and answer schedule/availability questions.",
+    description: "Open the signed-in user's own Google Calendar as an interactive agenda widget (agenda/week/month views, click-to-detail) and answer schedule/availability questions.",
     auth: 'required', authEnv: 'GOOGLE_OAUTH_CLIENT_ID', rateLimit: 'Bounded by the user\'s Calendar API quota',
-    dataShape: 'Upcoming events: title, start/end, location, attendee count + links.', docsUrl: 'https://developers.google.com/calendar/api',
-    keywords: ['my calendar', 'my schedule', 'my agenda', 'my meetings', 'upcoming events', 'next meeting', 'am i free', 'what do i have', 'my appointments']
+    dataShape: 'Interactive calendar widget: events with start/end, location, attendees, RSVP status + links.', docsUrl: 'https://developers.google.com/calendar/api',
+    keywords: ['my calendar', 'my schedule', 'my agenda', 'my meetings', 'upcoming events', 'next meeting', 'am i free', 'what do i have', 'my appointments', 'this week', 'today', 'tomorrow', 'free time']
+  },
+  {
+    name: 'calendar_create_event', label: 'Calendar — create event', category: 'productivity', kind: 'builtin', provider: 'Google (your connected account)',
+    description: "Prepare a NEW Google Calendar event (a confirmation card the user approves — never created silently). Use for 'add/schedule/book … on my calendar'.",
+    auth: 'required', authEnv: 'GOOGLE_OAUTH_CLIENT_ID', rateLimit: 'Bounded by the user\'s Calendar API quota',
+    dataShape: 'A confirmation card (title, time, location, attendees) with a Create button.', docsUrl: 'https://developers.google.com/calendar/api',
+    keywords: ['add to my calendar', 'schedule a meeting', 'create an event', 'book a meeting', 'put on my calendar', 'set up a meeting', 'new event', 'schedule', 'remind me to meet', 'block time']
+  },
+  {
+    name: 'calendar_update_event', label: 'Calendar — edit event', category: 'productivity', kind: 'builtin', provider: 'Google (your connected account)',
+    description: "Prepare an EDIT to an existing calendar event (reschedule/rename/move) as a confirmation card the user approves. Needs the eventId from calendar_agenda.",
+    auth: 'required', authEnv: 'GOOGLE_OAUTH_CLIENT_ID', rateLimit: 'Bounded by the user\'s Calendar API quota',
+    dataShape: 'A confirmation card showing the change with a Save button.', docsUrl: 'https://developers.google.com/calendar/api',
+    keywords: ['reschedule', 'move my meeting', 'change the time', 'edit event', 'update my calendar', 'push back the meeting', 'rename the event']
+  },
+  {
+    name: 'calendar_delete_event', label: 'Calendar — delete event', category: 'productivity', kind: 'builtin', provider: 'Google (your connected account)',
+    description: "Prepare to DELETE/cancel an event as a confirmation card the user approves. Needs the eventId from calendar_agenda.",
+    auth: 'required', authEnv: 'GOOGLE_OAUTH_CLIENT_ID', rateLimit: 'Bounded by the user\'s Calendar API quota',
+    dataShape: 'A confirmation card with a Delete button.', docsUrl: 'https://developers.google.com/calendar/api',
+    keywords: ['cancel the meeting', 'delete event', 'remove from my calendar', 'cancel my appointment', 'clear my calendar']
+  },
+  {
+    name: 'calendar_rsvp', label: 'Calendar — RSVP', category: 'productivity', kind: 'builtin', provider: 'Google (your connected account)',
+    description: "Prepare an RSVP (accept/decline/tentative) to an invitation as a confirmation card the user approves. Needs the eventId from calendar_agenda.",
+    auth: 'required', authEnv: 'GOOGLE_OAUTH_CLIENT_ID', rateLimit: 'Bounded by the user\'s Calendar API quota',
+    dataShape: 'A confirmation card with accept/decline/tentative buttons.', docsUrl: 'https://developers.google.com/calendar/api',
+    keywords: ['accept the invite', 'decline the meeting', 'rsvp', 'respond to the invitation', 'maybe attend', 'tentative']
   },
   {
     name: 'sheets_read', label: 'Sheets (read a range)', category: 'productivity', kind: 'builtin', provider: 'Google (your connected account)',

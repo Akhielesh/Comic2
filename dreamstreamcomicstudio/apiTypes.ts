@@ -1749,6 +1749,78 @@ export interface EmailComposeArtifact {
   density?: 'compact' | 'detailed';
 }
 
+// --- Calendar (your connected Google Calendar) -------------------------------
+// READ surfaces an interactive agenda widget (agenda/week/month views, click an
+// event for a detail popover). WRITES never happen from a model turn: the four
+// write tools emit a CalendarEventDraftArtifact (a confirmation card) and the
+// confirm button calls the scoped /connections/:id/mutate route via calendarApi.
+export type CalendarRsvp = 'accepted' | 'declined' | 'tentative' | 'needsAction';
+export interface CalendarAttendee {
+  email?: string;
+  name?: string;
+  responseStatus?: string;
+  self?: boolean;
+  organizer?: boolean;
+}
+export interface CalendarEventView {
+  id: string;
+  title: string;
+  description?: string | null;
+  location?: string | null;
+  /** ISO 8601 start/end. */
+  start?: string | null;
+  end?: string | null;
+  allDay?: boolean;
+  status?: string | null;
+  /** Open-in-Google-Calendar link. */
+  htmlLink?: string | null;
+  /** Google Meet / video link, when present. */
+  hangoutLink?: string | null;
+  organizer?: { email?: string; name?: string } | null;
+  attendees?: CalendarAttendee[];
+  /** The signed-in user's own RSVP for this event. */
+  responseStatus?: string | null;
+  colorId?: string | null;
+  recurring?: boolean;
+}
+export interface CalendarAgendaArtifact {
+  account?: string;
+  accountLabel?: string | null;
+  /** The connection id — lets the widget refetch / act on events (server-scoped). */
+  connectionId?: string;
+  /** Whether the connection granted write access (gates inline create/RSVP actions). */
+  canWrite?: boolean;
+  /** IANA timezone the calendar is in (for honest local times). */
+  timezone?: string | null;
+  query?: string;
+  window?: { timeMin: string; timeMax: string };
+  events: CalendarEventView[];
+  density?: 'compact' | 'detailed';
+}
+/** A draft event/action the user reviews and confirms — emitted by the write tools. */
+export interface CalendarEventDraftArtifact {
+  action: 'create' | 'update' | 'delete' | 'rsvp';
+  /** The resolved active calendar connection (absent → not connected; widget guides). */
+  connectionId?: string;
+  account?: string;
+  /** False when the connection is read-only (widget prompts to reconnect for write). */
+  canWrite?: boolean;
+  event: {
+    eventId?: string;
+    title?: string;
+    description?: string;
+    location?: string;
+    start?: string;
+    end?: string;
+    allDay?: boolean;
+    attendees?: string[];
+    timeZone?: string;
+  };
+  /** For action 'rsvp'. */
+  response?: 'accepted' | 'declined' | 'tentative';
+  density?: 'compact' | 'detailed';
+}
+
 // A nearby place / point of interest (local search). Sourced from OpenStreetMap
 // (keyless), enriched best-effort with a photo from the place's website.
 export interface PlaceResult {

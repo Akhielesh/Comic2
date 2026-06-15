@@ -9,7 +9,7 @@
 // an optional key or AI-provided context.
 
 import {
-  ArrowRightLeft, Banknote, Bitcoin, CalendarClock, CalendarRange, CandlestickChart, Clapperboard,
+  ArrowRightLeft, Banknote, Bitcoin, CalendarClock, CalendarDays, CalendarRange, CandlestickChart, Clapperboard,
   CloudSun, Coins, Gamepad2, Gauge, Landmark, LineChart, Mail, Map as MapIcon, MapPin, MessageCircle, Navigation,
   Newspaper, PenSquare, PiggyBank, Plane, Route, Scale, Sparkles, TrendingUp, Youtube
 } from 'lucide-react';
@@ -34,6 +34,11 @@ export const GAME_TILE = 'play_game';
 // refresh — the tile resolves the connection and self-fetches via services/emailApi.
 export const EMAIL_TILE = 'email_inbox';
 export const EMAIL_COMPOSE_TILE = 'email_compose';
+
+// Calendar is a connector tile too: it resolves the user's connected Google Calendar
+// at render time and self-fetches the live agenda (no live-data tool refresh). Its tool
+// id matches the chat tool so pinning from chat lands on the same live tile.
+export const CALENDAR_TILE = 'calendar_agenda';
 
 export type WidgetCategory = 'Essentials' | 'Markets' | 'Crypto' | 'Travel & places' | 'Calendars & more' | 'Connected' | 'Games';
 
@@ -462,6 +467,32 @@ export const WIDGET_CATALOG: WidgetDef[] = [
       { key: 'to', label: 'To', placeholder: 'recipient@example.com', optional: true },
       { key: 'subject', label: 'Subject', placeholder: 'Optional', optional: true }
     ]
+  },
+  {
+    tool: CALENDAR_TILE,
+    label: 'Calendar',
+    icon: CalendarDays,
+    blurb: 'Your Google Calendar — agenda, week & month views, create / RSVP right on the board',
+    category: 'Connected',
+    defaultDensity: 'detailed',
+    fields: [
+      {
+        key: 'view',
+        label: 'Default view',
+        default: 'agenda',
+        select: [
+          { value: 'agenda', label: 'Agenda' },
+          { value: 'week', label: 'Week' },
+          { value: 'month', label: 'Month' }
+        ]
+      }
+    ],
+    presets: [
+      { label: 'Agenda', args: { view: 'agenda' }, tileLabel: 'Agenda' },
+      { label: 'This week', args: { view: 'week' }, tileLabel: 'Week' },
+      { label: 'Month', args: { view: 'month' }, tileLabel: 'Month' }
+    ],
+    note: 'Needs your Google Calendar connected in Settings → Connectors (reconnect for edit access).'
   }
 ];
 
@@ -524,6 +555,12 @@ export const buildTileFromFields = (
   }
   if (def.tool === EMAIL_COMPOSE_TILE) {
     return { tool: def.tool, args, label: 'Compose', density };
+  }
+  // calendar: a connector tile resolving the user's Google Calendar at render time.
+  if (def.tool === CALENDAR_TILE) {
+    const view = args.view === 'week' ? 'week' : args.view === 'month' ? 'month' : 'agenda';
+    const labels: Record<string, string> = { agenda: 'Calendar', week: 'Week', month: 'Month' };
+    return { tool: def.tool, args: { view }, label: labels[view], density };
   }
   // get_stock: accept a company name typed straight into the field ("rivian" → RIVN),
   // so the symbol box is forgiving instead of erroring on anything but an exact ticker.

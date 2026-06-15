@@ -68,6 +68,9 @@ export const ARTIFACT_TOOLS: Record<string, string[]> = {
   email_inbox: ['gmail_inbox', 'gmail_search'],
   email_unread: ['gmail_unread'],
   email_compose: ['gmail_compose'],
+  // Calendar — read agenda + the confirmed write tools that emit a draft card.
+  calendar_agenda: ['calendar_agenda'],
+  calendar_event_draft: ['calendar_create_event', 'calendar_update_event', 'calendar_delete_event', 'calendar_rsvp'],
   game: ['play_game']
 };
 
@@ -107,6 +110,8 @@ export const EXAMPLE_PROMPT: Record<string, string> = {
   email_inbox: 'Open my Gmail inbox',
   email_unread: 'Show my unread emails',
   email_compose: 'Draft an email to alex@example.com about rescheduling Friday',
+  calendar_agenda: "What's on my calendar this week?",
+  calendar_event_draft: 'Add lunch with Priya tomorrow at 12:30 to my calendar',
   game: "Let's play Snake"
 };
 

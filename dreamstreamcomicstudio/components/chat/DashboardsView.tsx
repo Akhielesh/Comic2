@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  LayoutDashboard, Loader2, Lock, LockOpen, Mail, Maximize2, MessageCircle, Minimize2,
+  CalendarDays, LayoutDashboard, Loader2, Lock, LockOpen, Mail, Maximize2, MessageCircle, Minimize2,
   MoreHorizontal, MoreVertical, Pencil, Plus, RefreshCw, Search, Send, Sparkles, Trash2, X
 } from 'lucide-react';
 import type { ChatArtifact } from '../../apiTypes';
@@ -21,12 +21,14 @@ import { renderArtifactNode } from './artifacts/ChatArtifacts';
 import { GameCard } from './artifacts/GameCard';
 import { EmailTerminal } from './artifacts/EmailTerminal';
 import { EmailCompose } from './artifacts/EmailCompose';
-import type { GameKind, EmailInboxArtifact, EmailComposeArtifact } from '../../apiTypes';
+import { CalendarAgenda } from './artifacts/CalendarAgenda';
+import type { GameKind, EmailInboxArtifact, EmailComposeArtifact, CalendarAgendaArtifact } from '../../apiTypes';
 import { fetchEmails } from '../../services/emailApi';
+import { fetchAgenda } from '../../services/calendarApi';
 import { fetchConnections } from '../../services/connectorsApi';
 import { DictationButton } from './DictationButton';
 import {
-  AI_CHAT_TILE, EMAIL_TILE, EMAIL_COMPOSE_TILE, EMBED_TILE, GAME_TILE, TOOL_LABELS, WIDGET_BY_TOOL, WIDGET_CATEGORIES, buildTileFromFields, searchWidgets,
+  AI_CHAT_TILE, CALENDAR_TILE, EMAIL_TILE, EMAIL_COMPOSE_TILE, EMBED_TILE, GAME_TILE, TOOL_LABELS, WIDGET_BY_TOOL, WIDGET_CATEGORIES, buildTileFromFields, searchWidgets,
   type WidgetDef
 } from './widgetCatalog';
 import { toVideoEmbed, isEmbeddableVideo } from './videoEmbed';
@@ -214,6 +216,95 @@ const EmailComposeTile: React.FC<{ tile: DashboardTile }> = ({ tile }) => {
             the compose form with the new values (its fields seed from props once). */}
         <EmailCompose key={`${to}|${subject}`} data={data} />
       </DensityProvider>
+    </div>
+  );
+};
+
+// A connector tile: the live Google Calendar agenda. Resolves the user's connected
+// calendar at render time and self-fetches the agenda window. Honest disconnected/error
+// states; write affordances appear only when the connection granted edit access.
+const calendarHasWrite = (scopes: string[]): boolean => (scopes || []).some((s) => /\/auth\/calendar(\.events)?$/.test(s));
+
+const CalendarTile: React.FC<{ tile: DashboardTile }> = ({ tile }) => {
+  const view = (tile.args.view === 'week' ? 'week' : tile.args.view === 'month' ? 'month' : 'agenda') as 'agenda' | 'week' | 'month';
+  const [state, setState] = useState<{ status: 'loading' | 'ready' | 'disconnected' | 'error'; data?: CalendarAgendaArtifact; error?: string }>({
+    status: 'loading'
+  });
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    setState({ status: 'loading' });
+    (async () => {
+      try {
+        const conns = await fetchConnections();
+        const cal = conns.find((c) => c.connectorId === 'google_calendar' && (c.status === 'connected' || c.status === 'syncing'));
+        if (!cal) {
+          if (active) setState({ status: 'disconnected' });
+          return;
+        }
+        const res = await fetchAgenda(cal.id, { days: 45 });
+        if (active)
+          setState({
+            status: 'ready',
+            data: {
+              connectionId: cal.id,
+              account: cal.accountIdentifier,
+              accountLabel: cal.accountLabel,
+              canWrite: calendarHasWrite(cal.grantedScopes),
+              timezone: res.timezone,
+              window: res.window,
+              events: res.events
+            }
+          });
+      } catch (e) {
+        if (active) setState({ status: 'error', error: (e as Error)?.message || 'Could not load your calendar' });
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [reloadKey]);
+
+  if (state.status === 'ready' && state.data) {
+    return (
+      <div className="h-full min-h-[280px]">
+        <DensityProvider value={tile.density}>
+          <CalendarAgenda key={`${state.data.connectionId}:${view}`} data={state.data} initialView={view} />
+        </DensityProvider>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full min-h-[160px] flex-col items-center justify-center gap-2 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-5 text-center">
+      {state.status === 'loading' ? (
+        <>
+          <Loader2 className="h-5 w-5 animate-spin text-[var(--ds-accent)]" />
+          <p className="text-xs text-[var(--ds-muted)]">Loading your calendar…</p>
+        </>
+      ) : state.status === 'disconnected' ? (
+        <>
+          <CalendarDays className="h-6 w-6 text-[var(--ds-muted)]" />
+          <p className="text-xs font-medium text-[var(--ds-ink)]">Calendar isn’t connected</p>
+          <p className="max-w-[15rem] text-[11px] text-[var(--ds-muted)]">
+            Open <span className="font-medium">Settings → Connectors</span> to connect Google Calendar — then this widget fills in.
+          </p>
+        </>
+      ) : (
+        <>
+          <CalendarDays className="h-6 w-6 text-[var(--ds-muted)]" />
+          <p className="text-xs font-medium text-[var(--ds-ink)]">Couldn’t load your calendar</p>
+          <p className="max-w-[15rem] text-[11px] text-[var(--ds-muted)]">{state.error}</p>
+          <button
+            type="button"
+            onClick={() => setReloadKey((k) => k + 1)}
+            className="mt-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 py-1 text-[11px] font-medium text-[var(--ds-ink)] transition-colors hover:bg-[var(--ds-hover)]"
+          >
+            Retry
+          </button>
+        </>
+      )}
     </div>
   );
 };
@@ -1290,7 +1381,8 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode; onAsk?
       tile.tool === EMBED_TILE ||
       tile.tool === GAME_TILE ||
       tile.tool === EMAIL_TILE ||
-      tile.tool === EMAIL_COMPOSE_TILE
+      tile.tool === EMAIL_COMPOSE_TILE ||
+      tile.tool === CALENDAR_TILE
     )
       return; // no live-data tool refresh (these self-render / self-fetch)
     if (inflight.current.has(tile.id)) return;
@@ -1721,7 +1813,7 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode; onAsk?
                   setDropIndex(null);
                 }}
               >
-                {tile.tool === AI_CHAT_TILE || tile.tool === EMBED_TILE || tile.tool === GAME_TILE || tile.tool === EMAIL_TILE || tile.tool === EMAIL_COMPOSE_TILE ? (
+                {tile.tool === AI_CHAT_TILE || tile.tool === EMBED_TILE || tile.tool === GAME_TILE || tile.tool === EMAIL_TILE || tile.tool === EMAIL_COMPOSE_TILE || tile.tool === CALENDAR_TILE ? (
                   <div
                     className="group/tile relative h-full"
                     style={tileHeight(tile) != null ? { height: tileHeight(tile)! } : undefined}
@@ -1745,6 +1837,8 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode; onAsk?
                       <EmailTile tile={tile} />
                     ) : tile.tool === EMAIL_COMPOSE_TILE ? (
                       <EmailComposeTile tile={tile} />
+                    ) : tile.tool === CALENDAR_TILE ? (
+                      <CalendarTile tile={tile} />
                     ) : (
                       <EmbedTile tile={tile} />
                     )}
