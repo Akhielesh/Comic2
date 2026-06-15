@@ -10,10 +10,11 @@ import { ChatProjectModal } from './ChatProjectModal';
 import { ChatSettingsModal } from './ChatSettingsModal';
 import { listCustomAgents } from '../../services/chatAgents';
 import { ChatPanelContext } from './panelContext';
+import { applyAgentStep } from './agentActivity';
 import { AllowanceBanner } from './AllowanceBanner';
 import { MediaPanel, type MediaPanelData } from './MediaPanel';
 import type { PlaygroundData } from './MultiFilePlayground';
-import type { ChatArtifact, CodeStudioArtifact, MapArtifact } from '../../apiTypes';
+import type { ChatArtifact, CodeStudioArtifact, MapArtifact, AgentActivityEvent, AgentActivityArtifact } from '../../apiTypes';
 import { CANVAS_BG, SIDEBAR_BG, GLASS, HEADING, INK, ACCENT_TEXT, CONTROL_BTN, TRANSITION } from './studioDesign';
 import { persistUiState, resolveInitialUiState } from '../../services/viewState';
 import { getAdminAccess } from '../../services/billing';
@@ -882,6 +883,23 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           )
         }));
 
+      // Live tool-loop steps → an `agent_activity` artifact on the turn, so the user
+      // watches the DEFAULT agent work (search → read → fetch → synthesize) during the
+      // long tool-grounded window before the answer streams. Transient: the finalize
+      // step replaces the turn's artifacts with the server's, so this card yields to the
+      // persistent collapsed "How it answered" panel once the answer lands.
+      const onAgentStep = (event: AgentActivityEvent) =>
+        setSessionState((s) => ({
+          ...s,
+          turns: s.turns.map((t) => {
+            if (t.id !== aiTurnId) return t;
+            const prior = (t.artifacts || []).find((a) => a.type === 'agent_activity')?.data as AgentActivityArtifact | undefined;
+            const data = applyAgentStep(prior, event);
+            const others = (t.artifacts || []).filter((a) => a.type !== 'agent_activity');
+            return { ...t, artifacts: [{ type: 'agent_activity', data }, ...others] };
+          })
+        }));
+
       // Three generation paths: a `/`-skill recipe, the agent swarm, or a normal stream.
       const useSwarm = Boolean(session.swarm) && reqSource === 'openrouter';
       const res = recipeRun
@@ -915,7 +933,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           })()
         : useSwarm
           ? await runSwarmStream(reqBody, { signal: controller.signal, onDelta, onReasoning, onTrace })
-          : await sendChatMessageStream(reqBody, { signal: controller.signal, onDelta, onReasoning, onReset });
+          : await sendChatMessageStream(reqBody, { signal: controller.signal, onDelta, onReasoning, onReset, onAgentStep });
 
       // Finalize: snapshot this answer as a variant and show it as the active one.
       updateSession(sessionId, (s) => ({

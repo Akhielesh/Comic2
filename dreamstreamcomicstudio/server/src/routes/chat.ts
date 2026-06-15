@@ -1296,7 +1296,11 @@ chatRouter.post('/stream', async (req, res) => {
       },
       // Tell the client to drop the previous turn's streamed pre-tool narration before
       // the next turn streams, so multi-step answers don't accumulate preamble on screen.
-      onReset: () => send('reset', {})
+      onReset: () => send('reset', {}),
+      // Live tool-loop steps → the client renders an `agent_activity` card so the user
+      // watches the agent work (search → read → fetch → synthesize) during the long
+      // pre-answer window instead of staring at a bare spinner.
+      onToolEvent: (e) => send('agent_step', e)
     });
 
     // Adaptive speed: if the served model differs from the (free) primary we led the chain

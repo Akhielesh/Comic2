@@ -7,7 +7,7 @@
 // flow through one control plane.
 
 import type { ChatMessage } from './providers/types.js';
-import type { ChatArtifact, ChatClientContext, CapabilityNotice } from '../../../apiTypes.js';
+import type { ChatArtifact, ChatClientContext, CapabilityNotice, AgentActivityEvent } from '../../../apiTypes.js';
 import { logCapabilityNotice } from './capabilities.js';
 import { composePersona } from './persona.js';
 import { getProvider, resolveProviderContext } from './gateway.js';
@@ -116,6 +116,14 @@ export interface RunChatParams {
    * finalize. Lets the live view match the saved answer.
    */
   onReset?: () => void;
+  /**
+   * Live per-tool activity for the DEFAULT chat loop, streamed step-by-step so the
+   * client can show the agent working (search → read → fetch → synthesize) during the
+   * long tool-grounded window before any answer streams. `start` fires when a tool
+   * begins, `end` when it settles. No-op when the turn runs no tools — so plain chat is
+   * completely unaffected.
+   */
+  onToolEvent?: (event: AgentActivityEvent) => void;
 }
 
 // Guardrail framing for the DreamStream connector. The context is read-only and
@@ -610,13 +618,16 @@ export const runChat = async (
         break;
       }
       convo.push({ role: 'assistant', content: r.text || '' });
+      const query = typeof call.arguments.query === 'string' ? call.arguments.query : undefined;
+      // Announce the tool as it STARTS so the client can show the agent working live.
+      params.onToolEvent?.({ phase: 'start', tool: call.name, query, index: 0, iteration: i });
       const toolDef = tools.find((t) => t.name === call.name);
       if (!toolDef) {
+        params.onToolEvent?.({ phase: 'end', tool: call.name, query, ok: false, summary: 'Unknown tool', index: 0, iteration: i });
         toolEvents.push({ tool: call.name, ok: false, summary: 'Unknown tool' });
         convo.push({ role: 'user', content: formatToolResult(call.name, `Unknown tool: ${call.name}`) });
         continue;
       }
-      const query = typeof call.arguments.query === 'string' ? call.arguments.query : undefined;
       try {
         const out = await toolDef.execute(call.arguments, params.signal);
         if (out.images) images.push(...out.images);
@@ -626,11 +637,13 @@ export const runChat = async (
         if (out.artifacts) artifacts.push(...out.artifacts.map((a) => ({ ...a, origin: { tool: call.name, args: call.arguments } })));
         if (out.notice) addNotice({ tool: call.name, ...out.notice });
         toolEvents.push({ tool: call.name, query, ok: true, summary: out.content.slice(0, 160) });
+        params.onToolEvent?.({ phase: 'end', tool: call.name, query, ok: true, summary: out.content.slice(0, 160), index: 0, iteration: i });
         convo.push({ role: 'user', content: formatToolResult(call.name, out.content) });
       } catch (err) {
         const message = (err as Error)?.message || 'tool failed';
         addNotice({ tool: call.name, level: 'error', message });
         toolEvents.push({ tool: call.name, query, ok: false, summary: message });
+        params.onToolEvent?.({ phase: 'end', tool: call.name, query, ok: false, summary: message, index: 0, iteration: i });
         convo.push({ role: 'user', content: formatToolResult(call.name, `Error: ${message}`) });
       }
     }
@@ -681,7 +694,7 @@ export const runChat = async (
     // append their results in the original call order. This cuts latency sharply
     // when the model requests several tools at once (e.g. news + weather + map).
     const settled = await Promise.all(
-      result.toolCalls.map(async (call) => {
+      result.toolCalls.map(async (call, index) => {
         const tool = tools.find((t) => t.name === call.name);
         let parsed: Record<string, unknown> = {};
         try {
@@ -690,14 +703,20 @@ export const runChat = async (
           parsed = {};
         }
         const query = typeof parsed.query === 'string' ? parsed.query : undefined;
+        // Announce every tool in this round as it STARTS (all light up at once), then
+        // settle each independently below — the client renders this as a live step list.
+        params.onToolEvent?.({ phase: 'start', tool: call.name, query, index, iteration: iterations });
         if (!tool) {
+          params.onToolEvent?.({ phase: 'end', tool: call.name, query, ok: false, summary: 'Unknown tool', index, iteration: iterations });
           return { call, query, args: parsed, ok: false as const, content: `Unknown tool: ${call.name}`, summary: 'Unknown tool' };
         }
         try {
           const out = await tool.execute(parsed, params.signal);
+          params.onToolEvent?.({ phase: 'end', tool: call.name, query, ok: true, summary: out.content.slice(0, 160), index, iteration: iterations });
           return { call, query, args: parsed, ok: true as const, out, content: out.content, summary: out.content.slice(0, 160) };
         } catch (err) {
           const message = (err as Error)?.message || 'tool failed';
+          params.onToolEvent?.({ phase: 'end', tool: call.name, query, ok: false, summary: message, index, iteration: iterations });
           return { call, query, args: parsed, ok: false as const, content: `Error: ${message}`, summary: message };
         }
       })

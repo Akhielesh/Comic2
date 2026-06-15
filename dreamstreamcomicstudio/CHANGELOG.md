@@ -39,6 +39,18 @@ All notable user-facing changes. Format loosely follows
     projects open in the standard editor. (ADR 0004)
 
 ### Added
+- **You can watch the agent work — live activity trace in normal chat (2026-06-15):**
+  - Tool-grounded answers can take 20–60s before the first word appears while the
+    agent searches, reads pages and pulls live data. That window used to be a bare
+    spinner. Now the default chat loop streams a live **Agent activity** card that
+    fills in step-by-step — "Searching the web → Reading the page → Pulling market
+    data → …" — each row flipping from a spinner to a ✓ (or a ✗ with the reason) as
+    it settles, with the query and a one-line result under it. The swarm and deep-
+    research modes already did this; the everyday loop finally does too.
+  - The card is **transient**: once the answer lands it's replaced by the existing
+    collapsed "How it answered" panel, so there's no duplication. It's purely
+    additive — plain chats that run no tools look exactly as before. It has compact
+    and detailed density modes and a live Gallery demo (Settings → Gallery).
 - **Finance data works IN PRODUCTION — edge egress relay (2026-06-12):**
   - Direct production probing (newly possible via the public widget-refresh route)
     revealed that Yahoo Finance and Stooq block the backend host's egress IPs —

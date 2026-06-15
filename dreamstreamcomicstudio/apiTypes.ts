@@ -2301,6 +2301,54 @@ export interface SwarmTraceArtifact {
   agents: SwarmAgentRun[];
 }
 
+// --- Live agent activity (the DEFAULT chat tool loop) ---
+// The default chat agent's tool loop, streamed step-by-step so the user watches it
+// work (search → read → fetch → synthesize) during the 20–60s tool-grounded window
+// BEFORE any answer streams. It's the default-loop analogue of the swarm trace.
+// Transient on the turn: the finalize step replaces the turn's artifacts with the
+// server's, so the live card yields to the persistent "How it answered" panel once
+// the answer lands — no duplication.
+export type AgentActivityStatus = 'running' | 'done' | 'error';
+
+export interface AgentActivityStep {
+  /** Tool name as the agent called it (e.g. "web_search", "read_url"). */
+  tool: string;
+  /** The query/argument the agent passed, when present. */
+  query?: string;
+  status: AgentActivityStatus;
+  /** Short result/error summary, filled when the step settles. */
+  summary?: string;
+  /** 0-based model⇄tool round this step belongs to. */
+  round?: number;
+  /** Internal: stable id the client uses to match a `start` event to its `end`. */
+  id?: string;
+}
+
+export interface AgentActivityArtifact {
+  steps: AgentActivityStep[];
+  /** True once the loop finished (all steps settled). */
+  done?: boolean;
+}
+
+/**
+ * One live tool-loop event streamed over SSE (`agent_step`) from the default chat
+ * loop: `start` when a tool begins, `end` when it settles. No-op turns (no tools)
+ * emit none, so behavior is unchanged for plain chat.
+ */
+export interface AgentActivityEvent {
+  phase: 'start' | 'end';
+  tool: string;
+  query?: string;
+  /** Present on `end`. */
+  ok?: boolean;
+  /** Present on `end`: short result/error summary. */
+  summary?: string;
+  /** Index within the round (orders concurrently-dispatched tools). */
+  index: number;
+  /** 0-based model⇄tool round. */
+  iteration: number;
+}
+
 /** A premium deep-research report header — summarizes the investigation behind the brief. */
 export interface ResearchReportArtifact {
   topic: string;

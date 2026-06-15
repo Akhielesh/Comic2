@@ -1,5 +1,5 @@
 import { get, post, postStream, ApiError } from './apiClient';
-import type { ChatArtifact, ChatRequest, ChatResponse, SwarmTraceArtifact, SystemDashboard } from '../apiTypes';
+import type { AgentActivityEvent, ChatArtifact, ChatRequest, ChatResponse, SwarmTraceArtifact, SystemDashboard } from '../apiTypes';
 
 /**
  * True when an error looks like a transport/connectivity failure rather than a
@@ -197,6 +197,12 @@ export interface ChatStreamHandlers {
    * the final answer on screen.
    */
   onReset?: () => void;
+  /**
+   * Live tool-loop activity (default chat loop): one event as each tool starts and
+   * settles, so the UI can show the agent working (search → read → fetch) during the
+   * long tool-grounded window before the answer streams.
+   */
+  onAgentStep?: (event: AgentActivityEvent) => void;
   signal?: AbortSignal;
 }
 
@@ -308,6 +314,12 @@ export const sendChatMessageStream = async (
       } else if (event === 'reasoning' && typeof parsed.reasoning === 'string') {
         receivedAny = true;
         handlers.onReasoning?.(parsed.reasoning);
+      } else if (event === 'agent_step') {
+        // Live tool-loop step. Counts as activity (a tool-grounded turn is alive) but
+        // NOT as answer content, so the empty-answer recovery path still keys off
+        // `receivedContent` and fires correctly when only steps — no text — arrived.
+        receivedAny = true;
+        handlers.onAgentStep?.(parsed as unknown as AgentActivityEvent);
       } else if (event === 'reset') {
         // A reset wipes the content streamed so far from the screen (pre-tool narration
         // dropped before the real answer). So any content counted before this point did
