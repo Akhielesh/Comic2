@@ -10,6 +10,7 @@ import { LiveComponentCard } from './artifacts/LiveComponentCard';
 import { VideoResults } from './artifacts/VideoResults';
 import { PlacesResults } from './artifacts/PlacesResults';
 import { SwarmTraceCard } from './artifacts/SwarmTraceCard';
+import { AgentActivityCard } from './artifacts/AgentActivityCard';
 import { ChartCard } from './artifacts/ChartCard';
 import { MetricBoard } from './artifacts/MetricBoard';
 import { MapArtifactCard } from './artifacts/MapArtifactCard';
@@ -81,7 +82,7 @@ import type {
   DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact,
   RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact, CodeExerciseArtifact,
   GenerativeUIArtifact, StockComparisonArtifact, ReactComponentArtifact,
-  EmailInboxArtifact, EmailComposeArtifact, CalendarAgendaArtifact, CalendarEventDraftArtifact
+  EmailInboxArtifact, EmailComposeArtifact, AgentActivityArtifact, CalendarAgendaArtifact, CalendarEventDraftArtifact
 } from '../../apiTypes';
 
 const sqlExerciseDemo: SqlExerciseArtifact = {
@@ -332,6 +333,16 @@ const swarm: SwarmTraceArtifact = {
     { id: 'tech', name: 'Tech Reporter', task: 'Latest tech news', status: 'done', summary: 'Found 3 major releases…', confidence: 0.9, flags: [], toolEvents: [{ tool: 'get_news', query: 'tech', ok: true }] },
     { id: 'finance', name: 'Markets Analyst', task: 'Market summary', status: 'done', summary: 'Indices up 0.8%…', confidence: 0.55, flags: ['hedged'], toolEvents: [{ tool: 'get_stock', ok: true }] },
     { id: 'research', name: 'Web Researcher', task: 'Context', status: 'done', summary: 'Background gathered from memory only.', confidence: 0.35, flags: ['no_sources'] }
+  ]
+};
+
+const agentActivity: AgentActivityArtifact = {
+  done: false,
+  steps: [
+    { tool: 'web_search', query: 'NVDA vs AMD latest results', status: 'done', summary: 'Top 6 sources gathered', round: 1 },
+    { tool: 'get_stock', query: 'NVDA', status: 'done', summary: 'NVDA $1,024.30 (+2.1%)', round: 1 },
+    { tool: 'read_url', query: 'reuters.com/markets/ai-chips', status: 'done', summary: 'Read 1,840 words', round: 2 },
+    { tool: 'get_news', query: 'AI chips', status: 'running', round: 2 }
   ]
 };
 
@@ -1346,6 +1357,7 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Directions (drive/walk/bike toggle · animated route · alternatives)', type: 'directions', category: 'World & media', node: <DirectionsCard data={directionsDemo} /> },
   { title: 'Video results', type: 'video_results', category: 'World & media', node: <VideoResults data={videos} /> },
   { title: 'Agent swarm trace', type: 'swarm_trace', category: 'Agents & code', node: <SwarmTraceCard data={swarm} /> },
+  { title: 'Agent activity (live tool-loop trace · search → read → fetch → synthesize)', type: 'agent_activity', category: 'Agents & code', node: <AgentActivityCard data={agentActivity} /> },
   { title: 'Chart — grouped bars (legend · hover)', type: 'chart', category: 'Data & charts', node: <ChartCard data={barChart} /> },
   { title: 'Chart — donut', category: 'Data & charts', node: <ChartCard data={donutChart} /> },
   { title: 'Metric board (KPIs · sparklines · rings)', type: 'metric_board', category: 'Data & charts', node: <MetricBoard data={board} /> },

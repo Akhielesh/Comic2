@@ -7,7 +7,7 @@
 // flow through one control plane.
 
 import type { ChatMessage } from './providers/types.js';
-import type { ChatArtifact, ChatClientContext, CapabilityNotice } from '../../../apiTypes.js';
+import type { ChatArtifact, ChatClientContext, CapabilityNotice, AgentActivityEvent } from '../../../apiTypes.js';
 import { logCapabilityNotice } from './capabilities.js';
 import { composePersona } from './persona.js';
 import { getProvider, resolveProviderContext } from './gateway.js';
@@ -16,6 +16,10 @@ import { buildUsage } from './usage.js';
 import type { AIProviderId } from './providers/types.js';
 import { toToolSpec, type ChatTool } from './tools/registry.js';
 import { buildJsonToolSystemBlock, extractToolCall, stripToolCallJson, formatToolResult } from './tools/jsonToolProtocol.js';
+import { capToolOutput, CHAT_TOOL_OUTPUT_MAX } from './tools/capToolOutput.js';
+import { spotlightToolOutput } from './tools/spotlight.js';
+import { verifyToolOutput } from './tools/verifyToolOutput.js';
+import { coerceJsonOrNull } from './jsonCoerce.js';
 import { JSON_TOOL_PROTOCOL_ENABLED, CHAT_MAX_OUTPUT_TOKENS } from '../config.js';
 import { buildUserMemoryBlock } from '../services/userMemory.js';
 import { buildConnectorContextBlock } from '../connectors/retrieval.js';
@@ -42,6 +46,40 @@ export interface ChatToolImage {
   thumbnail?: string;
   source?: string;
 }
+
+/**
+ * Parse a tool call's raw `arguments` string defensively.
+ *
+ * The provider passes `arguments` through verbatim, and for streamed calls it's the
+ * concatenation of streamed fragments — which the output-token budget can cut off
+ * mid-JSON (the whole chart/app/UI payload rides INSIDE this string). The old
+ * `try { JSON.parse } catch { {} }` silently ran the tool with NO arguments, so the tool
+ * hit its own "no input" guard and returned a plausible empty result — the model then
+ * saw a fake success and dead-ended ("build me a chart silently produced nothing").
+ *
+ * Instead: fast-path valid JSON objects, recover fenced/trailing-comma/prose-wrapped
+ * JSON via the shared, tested `coerceJsonOrNull`, and report genuinely-unreadable input
+ * as `malformed` so the loop can tell the model to RE-ISSUE the call rather than fake an
+ * empty run. Valid-but-non-object JSON (an array/scalar) is treated as empty args, not
+ * malformed — it isn't corrupt, just unusable as args.
+ */
+export const parseToolArguments = (
+  raw: string | undefined
+): { args: Record<string, unknown>; recovered: boolean; malformed: boolean } => {
+  if (!raw || !raw.trim() || raw.trim() === '{}') return { args: {}, recovered: false, malformed: false };
+  try {
+    const p = JSON.parse(raw);
+    if (p && typeof p === 'object' && !Array.isArray(p)) return { args: p as Record<string, unknown>, recovered: false, malformed: false };
+    // Valid JSON but not an object (array/scalar) — use empty args, don't flag a retry.
+    return { args: {}, recovered: false, malformed: false };
+  } catch {
+    /* not valid JSON — fall through to recovery */
+  }
+  const c = coerceJsonOrNull(raw);
+  if (c && typeof c === 'object' && !Array.isArray(c)) return { args: c as Record<string, unknown>, recovered: true, malformed: false };
+  // Genuinely unreadable (truncated mid-JSON / garbage) — surface it so the model retries.
+  return { args: {}, recovered: false, malformed: true };
+};
 
 /** Max model⇄tool round-trips before we force a final answer. Each round can fire
  *  several tools in parallel, so this bounds *rounds*, not total tool calls. Set to 9
@@ -116,6 +154,14 @@ export interface RunChatParams {
    * finalize. Lets the live view match the saved answer.
    */
   onReset?: () => void;
+  /**
+   * Live per-tool activity for the DEFAULT chat loop, streamed step-by-step so the
+   * client can show the agent working (search → read → fetch → synthesize) during the
+   * long tool-grounded window before any answer streams. `start` fires when a tool
+   * begins, `end` when it settles. No-op when the turn runs no tools — so plain chat is
+   * completely unaffected.
+   */
+  onToolEvent?: (event: AgentActivityEvent) => void;
 }
 
 // Guardrail framing for the DreamStream connector. The context is read-only and
@@ -366,12 +412,46 @@ const answerTokenBudget = (provider: AIProviderId, level?: ChatReasoningLevel): 
   return base + reasoningHeadroom;
 };
 
-const dedupeCitations = (citations: { url: string; title?: string }[]) => {
+/**
+ * Canonicalize a URL into a stable DEDUP KEY (the original URL is kept for display).
+ * Citations accumulate across up to MAX_TOOL_ITERATIONS rounds from ~30 producers, and
+ * external feeds return the same article in trivially different forms — `http`/`https`,
+ * a trailing slash, `www.`, host casing, a `#fragment`, or `?utm_*`/`gclid`/`fbclid`
+ * tracking params. Exact-string dedup let every variant through, inflating the numbered
+ * "Web sources (N)" list. This collapses those variants. Fail-open: a non-URL string
+ * keys on itself, so behavior is never worse than today.
+ */
+export const canonicalizeCitationUrl = (raw: string): string => {
+  const trimmed = (raw || '').trim();
+  try {
+    const u = new URL(trimmed);
+    // http/https are the same resource for dedup purposes.
+    u.protocol = u.protocol === 'http:' ? 'https:' : u.protocol;
+    u.hostname = u.hostname.replace(/^www\./i, '').toLowerCase();
+    u.hash = '';
+    // Strip ONLY tracking params — keep load-bearing ones (e.g. youtube ?v=, ?id=).
+    for (const k of [...u.searchParams.keys()]) {
+      if (/^utm_/i.test(k) || /^(gclid|fbclid|mc_eid|igshid|ref|ref_src)$/i.test(k)) {
+        u.searchParams.delete(k);
+      }
+    }
+    if (u.pathname.length > 1) u.pathname = u.pathname.replace(/\/+$/, '');
+    return u.toString();
+  } catch {
+    return trimmed;
+  }
+};
+
+export const dedupeCitations = (citations: { url: string; title?: string }[]) => {
   const seen = new Set<string>();
   const out: { url: string; title?: string }[] = [];
   for (const c of citations) {
-    if (!c.url || seen.has(c.url)) continue;
-    seen.add(c.url);
+    if (!c.url) continue;
+    // Key on the canonical form, but keep the FIRST-SEEN original object (display URL,
+    // title, order) — the earliest/most-relevant tool result wins.
+    const key = canonicalizeCitationUrl(c.url);
+    if (seen.has(key)) continue;
+    seen.add(key);
     out.push(c);
   }
   return out;
@@ -612,13 +692,16 @@ export const runChat = async (
         break;
       }
       convo.push({ role: 'assistant', content: r.text || '' });
+      const query = typeof call.arguments.query === 'string' ? call.arguments.query : undefined;
+      // Announce the tool as it STARTS so the client can show the agent working live.
+      params.onToolEvent?.({ phase: 'start', tool: call.name, query, index: 0, iteration: i });
       const toolDef = tools.find((t) => t.name === call.name);
       if (!toolDef) {
+        params.onToolEvent?.({ phase: 'end', tool: call.name, query, ok: false, summary: 'Unknown tool', index: 0, iteration: i });
         toolEvents.push({ tool: call.name, ok: false, summary: 'Unknown tool' });
         convo.push({ role: 'user', content: formatToolResult(call.name, `Unknown tool: ${call.name}`) });
         continue;
       }
-      const query = typeof call.arguments.query === 'string' ? call.arguments.query : undefined;
       try {
         const out = await toolDef.execute(call.arguments, params.signal);
         if (out.images) images.push(...out.images);
@@ -627,12 +710,19 @@ export const runChat = async (
         // refresh control can re-execute the same tool for live data.
         if (out.artifacts) artifacts.push(...out.artifacts.map((a) => ({ ...a, origin: { tool: call.name, args: call.arguments } })));
         if (out.notice) addNotice({ tool: call.name, ...out.notice });
+        // Deterministic post-check: flag silently-degraded output (e.g. a chart whose
+        // non-numeric values were coerced to 0) so the model knows not to trust it.
+        const verify = verifyToolOutput(call.name, call.arguments, out);
+        if (verify) addNotice({ tool: call.name, ...verify });
         toolEvents.push({ tool: call.name, query, ok: true, summary: out.content.slice(0, 160) });
-        convo.push({ role: 'user', content: formatToolResult(call.name, out.content) });
+        params.onToolEvent?.({ phase: 'end', tool: call.name, query, ok: true, summary: out.content.slice(0, 160), index: 0, iteration: i });
+        // Bound the model-facing text (the trace summary above stays full-fidelity).
+        convo.push({ role: 'user', content: formatToolResult(call.name, spotlightToolOutput(call.name, capToolOutput(out.content, { max: CHAT_TOOL_OUTPUT_MAX, toolName: call.name }))) });
       } catch (err) {
         const message = (err as Error)?.message || 'tool failed';
         addNotice({ tool: call.name, level: 'error', message });
         toolEvents.push({ tool: call.name, query, ok: false, summary: message });
+        params.onToolEvent?.({ phase: 'end', tool: call.name, query, ok: false, summary: message, index: 0, iteration: i });
         convo.push({ role: 'user', content: formatToolResult(call.name, `Error: ${message}`) });
       }
     }
@@ -683,23 +773,40 @@ export const runChat = async (
     // append their results in the original call order. This cuts latency sharply
     // when the model requests several tools at once (e.g. news + weather + map).
     const settled = await Promise.all(
-      result.toolCalls.map(async (call) => {
+      result.toolCalls.map(async (call, index) => {
         const tool = tools.find((t) => t.name === call.name);
-        let parsed: Record<string, unknown> = {};
-        try {
-          parsed = call.arguments ? JSON.parse(call.arguments) : {};
-        } catch {
-          parsed = {};
-        }
+        const { args: parsed, malformed } = parseToolArguments(call.arguments);
         const query = typeof parsed.query === 'string' ? parsed.query : undefined;
+        // Announce every tool in this round as it STARTS (all light up at once), then
+        // settle each independently below — the client renders this as a live step list.
+        params.onToolEvent?.({ phase: 'start', tool: call.name, query, index, iteration: iterations });
         if (!tool) {
+          params.onToolEvent?.({ phase: 'end', tool: call.name, query, ok: false, summary: 'Unknown tool', index, iteration: iterations });
           return { call, query, args: parsed, ok: false as const, content: `Unknown tool: ${call.name}`, summary: 'Unknown tool' };
+        }
+        if (malformed) {
+          // The streamed arguments were truncated/garbled (the output-token budget can cut
+          // off a big render_chart/generate_app payload mid-JSON). Don't run the tool on
+          // empty args and hand back a fake "no input" result — tell the model so it
+          // re-issues the call with complete JSON next round (within MAX_TOOL_ITERATIONS).
+          const summary = 'Unreadable tool arguments';
+          params.onToolEvent?.({ phase: 'end', tool: call.name, query, ok: false, summary, index, iteration: iterations });
+          return {
+            call,
+            query,
+            args: parsed,
+            ok: false as const,
+            content: `The arguments for ${call.name} were truncated or malformed and could not be parsed. Re-issue the call with complete, valid JSON arguments (split a large payload into smaller pieces if needed).`,
+            summary
+          };
         }
         try {
           const out = await tool.execute(parsed, params.signal);
+          params.onToolEvent?.({ phase: 'end', tool: call.name, query, ok: true, summary: out.content.slice(0, 160), index, iteration: iterations });
           return { call, query, args: parsed, ok: true as const, out, content: out.content, summary: out.content.slice(0, 160) };
         } catch (err) {
           const message = (err as Error)?.message || 'tool failed';
+          params.onToolEvent?.({ phase: 'end', tool: call.name, query, ok: false, summary: message, index, iteration: iterations });
           return { call, query, args: parsed, ok: false as const, content: `Error: ${message}`, summary: message };
         }
       })
@@ -713,12 +820,23 @@ export const runChat = async (
         if (r.out.artifacts) artifacts.push(...r.out.artifacts.map((a) => ({ ...a, origin: { tool: r.call.name, args: r.args ?? {} } })));
         // A tool can flag a degraded/missing-data situation it wants surfaced.
         if (r.out.notice) addNotice({ tool: r.call.name, ...r.out.notice });
+        // Deterministic post-check: flag silently-degraded output (coerced/dropped chart
+        // data, a no-op python run) so the model doesn't treat a mangled result as good.
+        const verify = verifyToolOutput(r.call.name, r.args ?? {}, r.out);
+        if (verify) addNotice({ tool: r.call.name, ...verify });
       } else if (!r.ok) {
         // A tool that errored is itself a capability gap worth recording.
         addNotice({ tool: r.call.name, level: 'error', message: r.summary || 'Tool failed.' });
       }
       toolEvents.push({ tool: r.call.name, query: r.query, ok: r.ok, summary: r.summary });
-      messages.push({ role: 'tool', tool_call_id: r.call.id, content: r.content });
+      // Bound the model-facing tool result so one chatty tool/MCP can't overflow the
+      // context window (a turn-killing provider 400) or inflate every later round's
+      // payload. The trace summary above keeps the full short summary; only the text
+      // re-fed to the model is capped. MCP results are pre-capped tighter at their source.
+      // Spotlight successful (untrusted) tool results as data; leave our own short
+      // error/"unknown tool" strings unwrapped.
+      const capped = capToolOutput(r.content, { max: CHAT_TOOL_OUTPUT_MAX, toolName: r.call.name });
+      messages.push({ role: 'tool', tool_call_id: r.call.id, content: r.ok ? spotlightToolOutput(r.call.name, capped) : capped });
     }
 
     // Next turn. On the final allowed iteration, drop tools to force a written answer.

@@ -11,6 +11,7 @@
 import { lookup } from 'node:dns/promises';
 import type { McpServerConfig } from '../../../../apiTypes.js';
 import type { ChatTool, ToolExecResult } from './registry.js';
+import { capToolOutput, MCP_TOOL_OUTPUT_MAX } from './capToolOutput.js';
 
 const MCP_TIMEOUT_MS = 15_000;
 const TOOLS_CACHE_TTL_MS = 5 * 60_000;
@@ -299,7 +300,10 @@ const callMcpTool = async (
     }
   }
 
-  const text = textParts.join('\n').trim();
+  // Cap third-party MCP output at the source (tighter than built-ins): `textParts.join`
+  // and the `structuredContent` JSON above are both unbounded, so a verbose MCP server
+  // could otherwise blow the model's context window. Empty/short results pass through.
+  const text = capToolOutput(textParts.join('\n').trim(), { max: MCP_TOOL_OUTPUT_MAX, toolName });
   if (result?.isError) {
     return {
       content: text || 'The tool reported an error.',

@@ -21,6 +21,13 @@ export interface ReadArticleResult {
   blocks: { type: 'h' | 'p'; text: string }[];
   /** Whether we got a usable amount of text. */
   ok: boolean;
+  /**
+   * Why a read failed (ok=false). `fetch_failed` = the request itself errored (timeout,
+   * connection refused, 403/anti-bot, SSRF block) → the HOST is likely blocking automated
+   * reads, so callers can skip the whole host instead of burning the timeout again.
+   * `empty` = fetched fine but no readable content (this PAGE only — paywall/JS-rendered).
+   */
+  reason?: 'fetch_failed' | 'empty';
   /** The publisher URL when `url` was an aggregator redirect (Google News). */
   resolvedUrl?: string;
   resolvedHost?: string;
@@ -117,6 +124,10 @@ export const readArticle = async (url: string, signal?: AbortSignal): Promise<Re
     await assertSafePublicUrl(target);
     html = await fetchText(target, { timeoutMs: 9000, accept: 'text/html,*/*', signal });
   } catch {
+    // The request itself failed (timeout / refused / anti-bot 403 / SSRF) — the host is
+    // likely blocking automated reads. Flag it so the caller can skip the host next time
+    // instead of re-paying the 9s timeout.
+    base.reason = 'fetch_failed';
     return base;
   }
 
@@ -172,7 +183,10 @@ export const readArticle = async (url: string, signal?: AbortSignal): Promise<Re
     byline: byline?.slice(0, 160),
     image,
     blocks: blocks.slice(0, 80),
-    ok: charCount >= 240 // a couple of real paragraphs
+    ok: charCount >= 240, // a couple of real paragraphs
+    // Fetched fine but thin → this PAGE is paywalled/JS-only; the host isn't blocking us,
+    // so don't penalize the whole host (only `fetch_failed` does that).
+    reason: charCount >= 240 ? undefined : 'empty'
   };
   if (direct.ok) return direct;
 

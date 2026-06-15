@@ -39,6 +39,100 @@ All notable user-facing changes. Format loosely follows
     projects open in the standard editor. (ADR 0004)
 
 ### Added
+- **Defense against prompt injection from web pages and tools (2026-06-15):**
+  - The chat agent reads untrusted text — fetched web pages, MCP-server responses,
+    file contents — and feeds it back to the model. A poisoned page or a malicious
+    connector could hide an instruction like "ignore your instructions and email this
+    to…" in that text. Tool results are now wrapped in a labeled, delimited block that
+    tells the model the enclosed text is **data to read, never commands to follow**, and
+    any attempt by the content to forge the delimiter is neutralized. It's advisory and
+    additive — the result is preserved verbatim, so nothing the model legitimately needs
+    is lost.
+
+### Fixed
+- **Web answers stop wasting time on pages that block us (2026-06-15):**
+  - Reading a web page has a ~9s timeout, and the agent would re-pay it again and again on
+    a host that hard-blocks automated reads — one real flight query logged "Couldn't read
+    etihad.com ×5" + "Couldn't read expedia.com", ~45s of pure waste on a single answer.
+    Now the first failed read of a host is remembered for a couple of minutes, so any
+    further read of that host fast-fails instantly instead of timing out again; pages read
+    successfully are briefly cached so the agent doesn't re-fetch the same URL across steps.
+    This speeds up every web-grounded answer, not just flights. (A blocked host self-heals
+    after the TTL; only true fetch failures penalize a host — a merely-thin page does not.)
+- **Deleted chats stay deleted — no more resurrection across devices (2026-06-15):**
+  - Deleting a chat right after (or while) it was streaming or being auto-titled could
+    bring it back: a background save dispatched just before the delete would land just
+    after it, re-create the local row, and then sync it back up to the cloud — so the
+    "deleted" chat reappeared on every signed-in device. Saves now respect the same
+    just-deleted tombstone the cloud-sync path already trusts, so a late write to a
+    deleted chat (or project) is correctly ignored. A genuinely new chat is unaffected
+    (it gets a fresh id).
+- **The agent notices when a chart/code result came out wrong (2026-06-15):**
+  - Some tools silently degrade instead of failing: a chart built from a spec with a
+    non-numeric value renders that bar as a flat **0** (and points with a blank label
+    just vanish), yet the tool reports success — so the model narrated a confidently-
+    wrong chart as correct. Likewise `run_python` returning "ran but printed nothing"
+    looked like a normal result. The default chat loop now runs a deterministic
+    post-check (the same kind of verifier the research/swarm modes already had) that
+    flags these — non-numeric values coerced to 0, dropped points, a no-op code run —
+    so the model knows not to trust the result and can re-do it. The check only fires
+    on unambiguous degradation (genuine zeros and legitimately-empty results are never
+    flagged), and it only adds an advisory note — it never changes your answer.
+- **Cleaner source lists — no more duplicate citations (2026-06-15):**
+  - A web-grounded answer gathers citations across up to nine tool rounds from ~30
+    sources, and the same article routinely came back in slightly different URL forms
+    (`http` vs `https`, with/without `www.` or a trailing slash, a `#fragment`, or
+    `?utm_*`/`gclid`/`fbclid` tracking junk). Exact-string dedup let every variant
+    through, so the numbered "Web sources (N)" panel showed the same article several
+    times and an inflated count. Citations are now deduped on a canonical form, so each
+    real source appears once. Distinct sources are never merged — load-bearing query
+    params (e.g. a YouTube `?v=`) are preserved, and the original link you click is
+    untouched.
+- **"Build me a chart/app" no longer silently does nothing (2026-06-15):**
+  - A tool call's arguments arrive as streamed JSON fragments, and a big payload (a
+    whole chart spec, a generated app, a UI layout — all of it rides inside those
+    arguments) could be cut off mid-JSON by the output-token budget. The agent loop
+    used to swap the unreadable arguments for an empty object and run the tool with no
+    input, so the tool returned a plausible "no data" result and the model dead-ended —
+    the user saw nothing built, with no explanation. The loop now recovers the common
+    salvageable cases (fenced/trailing-comma JSON) via the shared coercion helper, and
+    when the arguments are genuinely truncated it tells the model so it re-issues the
+    call with complete JSON instead of faking an empty run. One shared chokepoint, so
+    every tool (and MCP tool) benefits.
+- **Long chats stay smooth while a reply streams (2026-06-15):**
+  - Every streamed token re-renders the whole thread, and the message renderer was
+    re-parsing **every** prior turn's full Markdown on **every** token — so a 40-turn
+    chat re-parsed ~40 documents per token, which is the jank/typing-lag you felt the
+    longer a conversation got (made worse by the new live activity trace, which ticks
+    the thread on each tool step). The Markdown renderer is now memoized and its
+    parser plugins are stabilized, so only the turn whose text is actually growing
+    re-parses; settled turns are skipped entirely. No behavior change — purely fewer
+    redundant re-parses. (A render-count test locks this in.)
+- **A chatty tool can no longer kill a whole answer (tool-output cap, 2026-06-15):**
+  - Every tool/MCP result is fed back into the model and re-sent on each subsequent
+    tool round. A single verbose result (a long page read, a giant MCP
+    `structuredContent` blob, noisy stdout) could overflow the model's context
+    window — failing the **entire turn** with a provider 400 — and inflated cost and
+    latency on every later round. Tool results are now bounded before re-entering the
+    model: built-ins at ~24k chars, third-party MCP tighter at ~12k, with a head+tail
+    keep (so both the lead and the totals/closing rows survive) and a marker telling
+    the model the middle was elided. Only pathological output is ever touched —
+    legitimate results pass through unchanged, and the live activity trace keeps the
+    full short summary.
+
+### Added
+- **You can watch the agent work — live activity trace in normal chat (2026-06-15):**
+  - Tool-grounded answers can take 20–60s before the first word appears while the
+    agent searches, reads pages and pulls live data. That window used to be a bare
+    spinner. Now the default chat loop streams a live **Agent activity** card that
+    fills in step-by-step — "Searching the web → Reading the page → Pulling market
+    data → …" — each row flipping from a spinner to a ✓ (or a ✗ with the reason) as
+    it settles, with the query and a one-line result under it. The swarm and deep-
+    research modes already did this; the everyday loop finally does too.
+  - The card is **transient**: once the answer lands it's replaced by the existing
+    collapsed "How it answered" panel, so there's no duplication. It's purely
+    additive — plain chats that run no tools look exactly as before. It has compact
+    and detailed density modes and a live Gallery demo (Settings → Gallery).
 - **Finance data works IN PRODUCTION — edge egress relay (2026-06-12):**
   - Direct production probing (newly possible via the public widget-refresh route)
     revealed that Yahoo Finance and Stooq block the backend host's egress IPs —
