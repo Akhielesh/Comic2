@@ -124,6 +124,14 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['search the web', 'web search', 'look up', 'google', 'search for', 'find online', 'browse', 'website']
   },
   {
+    name: 'read_url', label: 'Read page', category: 'search', kind: 'builtin', provider: 'Direct fetch + readability extraction (Jina Reader fallback)',
+    description: 'Fetch a web page/article and return its full readable text. Reads the page behind a search result (the search→read chain) or any URL the user pastes — search alone only returns short snippets.',
+    auth: 'none', rateLimit: 'Best-effort direct fetch; some sites paywall or block automated reads.',
+    dataShape: 'Extracted article: title, byline, headings + paragraphs (capped), with a citation.',
+    docsUrl: 'https://r.jina.ai',
+    keywords: ['read', 'read this', 'read the page', 'read the article', 'read this url', 'open the link', 'open this link', 'summarize this', 'summarize the article', 'summarize this page', 'what does this say', 'full text', 'full article', 'fetch the page', 'this link', 'this url', 'reader mode']
+  },
+  {
     name: 'image_search', label: 'Image search', category: 'search', kind: 'builtin', provider: 'DuckDuckGo',
     description: 'Find images/photos/pictures of something on the web.',
     auth: 'none', rateLimit: 'Fair use (no key)',
@@ -1089,6 +1097,9 @@ export const scoreTools = (
  */
 export const CORE_ALWAYS_TOOLS: string[] = [
   'web_search',
+  // Always paired with web_search so the model can READ the page behind a result, not
+  // just the snippet — the search→read chain that turns shallow answers into sourced ones.
+  'read_url',
   'render_chart',
   'render_table',
   'show_metrics',

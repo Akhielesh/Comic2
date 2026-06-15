@@ -201,6 +201,13 @@ export const OPENROUTER_APP_URL = process.env.OPENROUTER_APP_URL || 'https://dre
 export const OPENROUTER_APP_TITLE = process.env.OPENROUTER_APP_TITLE || 'DreamStream Comic Studio';
 // Default model IDs (overridable). These intentionally route Gemini-family models THROUGH OpenRouter.
 export const OPENROUTER_TEXT_MODEL = process.env.OPENROUTER_TEXT_MODEL || 'google/gemini-2.5-flash';
+// Strong, tool-capable model for NON-TRIVIAL ("real") chat turns. Complexity-tiered
+// routing (see routes/chat.ts) leads with this for anything past a greeting / thanks /
+// bare arithmetic, so multi-step tool use, retrieval and reasoning actually hold up —
+// the speed-first OPENROUTER_TEXT_MODEL stays the trivial-turn default and a fallback.
+// Empty (the default) means "pick the best available strong tool model from the live
+// catalog at request time" (pickSmartChatModel); set this to pin a specific slug.
+export const OPENROUTER_SMART_TEXT_MODEL = process.env.OPENROUTER_SMART_TEXT_MODEL || '';
 export const OPENROUTER_IMAGE_MODEL = process.env.OPENROUTER_IMAGE_MODEL || 'google/gemini-2.5-flash-image';
 export const OPENROUTER_FREE_TEXT_MODEL = process.env.OPENROUTER_FREE_TEXT_MODEL || 'google/gemini-2.0-flash-exp:free';
 export const OPENROUTER_REQUEST_TIMEOUT_MS = parseIntegerEnv(
