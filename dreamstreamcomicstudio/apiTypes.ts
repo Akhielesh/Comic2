@@ -1293,6 +1293,39 @@ export interface FlightStatusArtifact {
   density?: 'compact' | 'detailed';
 }
 
+// --- Flight fare results (search_flights → Amadeus) ---
+// A real flight-deals card: airline, price, total duration, stops + layovers, sorted
+// cheapest first, with a Google Flights deep-link to open the full live results.
+export interface FlightOffer {
+  airline: string;
+  airlineCode?: string;
+  price: number;
+  currency: string;
+  durationMinutes: number;
+  stops: number;
+  /** Human layover labels, e.g. ["11h 5m in LHR"]. */
+  layovers?: string[];
+  /** ISO datetimes for the whole journey's first departure / last arrival. */
+  departTime?: string;
+  arriveTime?: string;
+  departCode: string;
+  arriveCode: string;
+}
+export interface FlightResultsArtifact {
+  origin: string;
+  destination: string;
+  departureDate: string;
+  returnDate?: string;
+  adults?: number;
+  offers: FlightOffer[];
+  /** Google Flights deep-link for the full live results. */
+  searchUrl?: string;
+  /** True when fares came from a live provider (Amadeus). */
+  live?: boolean;
+  asOf?: string;
+  density?: 'compact' | 'detailed';
+}
+
 // --- Trip budget burn ---
 // Emitted by `render_trip_budget`. The card computes burn pace client-side
 // ("at this rate you exceed budget by day N") from the dates + spend.

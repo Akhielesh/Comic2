@@ -38,6 +38,7 @@ import { MARKET_WIDGET_TOOLS } from './marketWidgets.js';
 import { MACRO_WIDGET_TOOLS } from './macroData.js';
 import { MARKET_INTEL_TOOLS } from './marketIntel.js';
 import { TRAVEL_WIDGET_TOOLS } from './travelWidgets.js';
+import { FLIGHT_TOOLS } from './flights.js';
 import { PRODUCTIVITY_TOOLS } from './productivity.js';
 import { REFRESHABLE_TOOLS, type ChatArtifact } from '../../../../apiTypes.js';
 import { generateAppTool } from './codeStudio.js';
@@ -1100,6 +1101,7 @@ const FREE_API_TOOLS: ChatTool[] = [
   ...MARKET_INTEL_TOOLS,
   // Travel widgets (boarding pass, world clocks, packing list, trip countdown).
   ...TRAVEL_WIDGET_TOOLS,
+  ...FLIGHT_TOOLS,
   // Productivity widgets (/goal, /code-review, what-changed) + GitHub PR fetcher.
   ...PRODUCTIVITY_TOOLS,
   ...GEO_TOOLS,

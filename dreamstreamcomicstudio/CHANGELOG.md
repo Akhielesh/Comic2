@@ -39,6 +39,16 @@ All notable user-facing changes. Format loosely follows
     projects open in the standard editor. (ADR 0004)
 
 ### Added
+- **Real flight-fare search — a proper flight-deals card (2026-06-15):**
+  - "Best flights from X to Y on <date>" had no real data source, so the agent searched
+    the web and came back with deal-aggregator snippets for the wrong dates. There's now
+    a `search_flights` tool backed by **Amadeus** (real airline fares from the global GDS)
+    that returns a flight-deals card: airline, price, total duration, stops and layovers,
+    sorted cheapest-first, with the cheapest and fastest options badged and a Google
+    Flights deep-link to open the full live results. Free to enable — create an account at
+    developers.amadeus.com and set `AMADEUS_API_KEY` / `AMADEUS_API_SECRET`; until then the
+    agent falls back to web search and says a live flight card needs the keys (it never
+    invents fares).
 - **Defense against prompt injection from web pages and tools (2026-06-15):**
   - The chat agent reads untrusted text — fetched web pages, MCP-server responses,
     file contents — and feeds it back to the model. A poisoned page or a malicious
