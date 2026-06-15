@@ -254,6 +254,33 @@ export const STRONG_CODING_PRIORITY = [
   'devstral', 'codestral', 'gemini-2.5-pro', 'gemini-2.5', 'gemini-2.0-flash', 'qwen3'
 ];
 
+// Strength ranking for general AGENTIC CHAT (not code): the most reliable tool-users
+// first (Claude / GPT-class), then capable generalists. Leads non-trivial chat turns with
+// a model that can actually CHAIN tools, retrieve and reason — instead of the speed-first
+// fast default that produced shallow "couldn't pull it" answers on specific topics. Kept
+// distinct from STRONG_CODING_PRIORITY so a history/finance/research question isn't pulled
+// toward a code-specialist model. Needles match catalog ids (substring, case-insensitive).
+export const STRONG_CHAT_PRIORITY = [
+  'claude-sonnet-4', 'claude-opus-4', 'claude-3.7', 'claude-sonnet', 'claude',
+  'gpt-5', 'gpt-4.1', 'gpt-4o', 'o4-mini', 'o3',
+  'gemini-2.5-pro', 'grok-4', 'grok', 'deepseek-chat', 'v3.2', 'v3.1',
+  'qwen3', 'glm-4.6', 'kimi-k2', 'llama-3.3-70b'
+];
+
+/**
+ * Best available STRONG, tool-capable chat model from the LIVE catalog. Catalog-aware, so
+ * it never returns a retired/404 slug; prefers models that advertise `tools` support and
+ * ranks by STRONG_CHAT_PRIORITY. Falls back to TEXT_FALLBACK (via pickTextModel) when the
+ * catalog is unavailable. Callers keep the fast model + cheap net as fallbacks, so a
+ * down/rate-limited pick never yields "no response".
+ */
+export const pickSmartChatModel = (): Promise<string> =>
+  pickTextModel({
+    costPref: 'quality',
+    rankOrder: STRONG_CHAT_PRIORITY,
+    prefer: (m) => (m.supportedParameters || []).includes('tools')
+  });
+
 /** True when a model id looks like a strong coding model. */
 export const prefersCodingModel = (m: AnnotatedModel): boolean => {
   const id = m.id.toLowerCase();

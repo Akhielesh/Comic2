@@ -592,6 +592,33 @@ const FACTORIES: Record<string, (ctx?: ToolContext) => ChatTool> = {
 /** The connector tool names (registered as contextual tools in the registry). */
 export const CONNECTOR_TOOL_NAMES = Object.keys(FACTORIES);
 
+// connector_id (as stored on a user_connections row) → its PRIMARY tool name. Used to
+// force-include the right tool when a user actually has that account linked, so the
+// keyword router can't silently drop e.g. gmail_search just because the message didn't
+// literally say "gmail"/"email". Kept beside FACTORIES so the two stay in sync.
+const CONNECTOR_PRIMARY_TOOL: Record<string, string> = {
+  gmail: 'gmail_search',
+  google_drive: 'drive_search',
+  google_calendar: 'calendar_agenda',
+  google_sheets: 'sheets_read',
+  google_maps: 'maps_lookup'
+};
+
+/**
+ * Given the connector ids a user has linked, return the connector tool names to ALWAYS
+ * offer the model this turn: each linked connector's primary tool, plus the unified
+ * `connected_data_search` whenever the user has at least one linked account.
+ */
+export const primaryConnectorToolNames = (connectorIds: string[]): string[] => {
+  const names = new Set<string>();
+  for (const id of connectorIds) {
+    const tool = CONNECTOR_PRIMARY_TOOL[id];
+    if (tool) names.add(tool);
+  }
+  if (names.size) names.add('connected_data_search');
+  return Array.from(names);
+};
+
 /** Build a connector tool by name with the per-request context, or null if unknown. */
 export const buildConnectorTool = (name: string, ctx?: ToolContext): ChatTool | null => {
   const factory = FACTORIES[name];

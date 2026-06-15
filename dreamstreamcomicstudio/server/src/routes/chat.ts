@@ -11,9 +11,11 @@ import { makeImageTool, imageGenAvailable, type ImageKeys } from '../ai/tools/im
 import { sanitizeCustomAgents } from '../ai/agents/registry.js';
 import type { AgentDefinition } from '../ai/agents/registry.js';
 import { loadCustomAgentDefinitions } from '../services/customAgents.js';
-import { pickTextModel, pickTextModelChain, markModelDown, TEXT_FALLBACK } from '../ai/autoRouter.js';
+import { pickTextModel, pickTextModelChain, pickSmartChatModel, markModelDown, TEXT_FALLBACK } from '../ai/autoRouter.js';
 import { defaultModelForProvider } from '../ai/gateway.js';
-import { NVIDIA_TEXT_MODEL, OPENROUTER_TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS, JSON_TOOL_PROTOCOL_ENABLED } from '../config.js';
+import { NVIDIA_TEXT_MODEL, OPENROUTER_TEXT_MODEL, OPENROUTER_SMART_TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS, JSON_TOOL_PROTOCOL_ENABLED } from '../config.js';
+import { listConnections } from '../connectors/store.js';
+import { primaryConnectorToolNames } from '../ai/tools/connectors.js';
 import type { AIProviderId, ChatMessage, MessagePart } from '../ai/providers/types.js';
 import { isTextProvider, providerLabel } from '../../../shared/providers.js';
 import { assertModelAllowedForUser } from '../services/modelAccessPolicy.js';
@@ -169,6 +171,8 @@ type PreparedChat = {
   requestedModel: string;
   reasoningLevel: ChatReasoningLevel;
   webSearch: boolean;
+  /** Sampling temperature: lowered on non-trivial turns for factual precision; undefined keeps the model default. */
+  temperature?: number;
   systemPrompt?: string;
   /** OpenRouter server-side fallback chain (≤3) so dead/rate-limited models don't yield empty. */
   fallbackModels?: string[];
@@ -330,8 +334,19 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
       }).catch(() => [model]);
       fallbackModels = chain.length ? chain : [model];
       model = fallbackModels[0] || model;
+    } else if (!isTrivialChat(lastUserText)) {
+      // Complexity-tiered (DEFAULT for real questions): anything past a greeting / thanks /
+      // bare arithmetic leads with a STRONG, tool-capable model so multi-step tool use,
+      // retrieval and reasoning actually hold up. The speed-first fast model was the
+      // dominant cause of shallow, "couldn't pull it" answers on specific topics. The fast
+      // model + cheap net stay as fallbacks, so a down/429 strong pick never yields "no
+      // response" (OpenRouter routes to the first available id in the chain).
+      const smart = OPENROUTER_SMART_TEXT_MODEL || (await pickSmartChatModel().catch(() => OPENROUTER_TEXT_MODEL));
+      fallbackModels = Array.from(new Set([smart, OPENROUTER_TEXT_MODEL, TEXT_FALLBACK]));
+      model = fallbackModels[0];
     } else {
-      // Default: FAST. Lead with the quick capable model, gpt-4o-mini as the reliable net.
+      // Trivial / conversational turn (greeting, thanks, tiny arithmetic): the fast model is
+      // plenty and keeps "hi" instant — no need to pay strong-model latency/cost here.
       fallbackModels = Array.from(new Set([OPENROUTER_TEXT_MODEL, TEXT_FALLBACK]));
       model = fallbackModels[0];
     }
@@ -344,6 +359,11 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   // the single biggest reason the SIMPLEST chats felt slow ("hi" shouldn't trigger a search).
   // The web_search TOOL stays on the table, so any real question still grounds live on demand.
   const webSearch = resolved.provider === 'openrouter' && !isTrivialChat(lastUserText);
+  // Lower the sampling temperature on non-trivial turns (the same set that gets the strong
+  // model + live grounding): factual/agentic answers want precision, not the 0.7 creative
+  // default that added hallucination noise to tool selection and synthesis. Trivial/small-talk
+  // turns keep the model's own default (undefined) so casual replies stay natural.
+  const chatTemperature = webSearch ? 0.3 : undefined;
   const systemPrompt =
     typeof body.systemPrompt === 'string' && body.systemPrompt.trim() ? body.systemPrompt.trim().slice(0, 8000) : undefined;
 
@@ -445,6 +465,24 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   // actually read/convert/process them with real code (its keywords may not match).
   if (toolsEnabledForProvider && attachments.length) {
     routedToolNames = Array.from(new Set(['run_python', ...routedToolNames])).slice(0, MAX_MODEL_TOOLS);
+  }
+  // Connected-account tools are ALWAYS on the table when the user actually has that
+  // connector linked — otherwise the keyword router silently drops e.g. gmail_search unless
+  // the message literally says "gmail"/"email", so "what did my boss send me?" never reached
+  // the inbox and the model answered generically (or pretended it looked). Force-include the
+  // primary tool for each linked connector; an honest "reconnect" prompt still beats a silent
+  // drop. Best-effort: a connector lookup must never block or fail a chat.
+  if (toolsEnabledForProvider && req.user?.id) {
+    try {
+      const connections = await listConnections(req.user.id);
+      const linkedIds = connections.filter((c) => c.status !== 'disconnected').map((c) => c.connector_id);
+      const connectorTools = primaryConnectorToolNames(linkedIds);
+      if (connectorTools.length) {
+        routedToolNames = Array.from(new Set([...connectorTools, ...routedToolNames])).slice(0, MAX_MODEL_TOOLS);
+      }
+    } catch {
+      /* connector lookup is best-effort — never block a chat on it */
+    }
   }
   const builtinTools = toolsEnabledForProvider ? resolveTools(routedToolNames, toolContext) : [];
 
@@ -576,7 +614,7 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   }
 
   return {
-    prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, systemPrompt, fallbackModels, dreamstreamContextJson, tools: [...builtinTools, ...metaTools, ...mcpTools], clientContext, customAgents, attachments, userId: req.user?.id }
+    prepared: { resolved, messages, model, requestedModel, reasoningLevel, webSearch, temperature: chatTemperature, systemPrompt, fallbackModels, dreamstreamContextJson, tools: [...builtinTools, ...metaTools, ...mcpTools], clientContext, customAgents, attachments, userId: req.user?.id }
   };
 };
 
@@ -629,6 +667,7 @@ const runChatParams = (p: PreparedChat) => ({
   systemPrompt: p.systemPrompt,
   reasoningLevel: p.reasoningLevel,
   webSearch: p.webSearch,
+  temperature: p.temperature,
   dreamstreamContextJson: p.dreamstreamContextJson,
   userId: p.userId,
   userMemory: Boolean(p.userId),
