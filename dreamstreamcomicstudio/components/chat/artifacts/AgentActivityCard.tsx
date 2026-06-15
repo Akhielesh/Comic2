@@ -36,13 +36,6 @@ const statusIcon = (status: AgentActivityStatus) => {
   }
 };
 
-// Status → dot color for the compact glance row.
-const STATUS_DOT: Record<AgentActivityStatus, string> = {
-  running: 'bg-[#D97757] animate-pulse',
-  done: 'bg-emerald-500',
-  error: 'bg-red-500'
-};
-
 // Human-friendly labels for the tools the default agent loop can run. Anything not
 // listed falls back to a title-cased version of the raw tool name, so new tools (and
 // MCP tools like `mcp_*`) still read cleanly without a registry edit here.
@@ -130,27 +123,24 @@ export const AgentActivityCard: React.FC<{ data: AgentActivityArtifact }> = ({ d
     </div>
   );
 
-  // ── Compact: one status dot per step + a done/total count.
+  // ── Compact: one tight row — status icon, label, and a done/total count. Small and
+  // calm (the chunky header/dots are gone); the labelled step list lives in the expanded
+  // view. While working it currently shows the latest running tool for a little context.
   if (compact) {
+    const current = working ? steps.find((s) => s.status === 'running') : undefined;
     return (
-      <Surface
-        accent="#D97757"
-        header={header}
-        right={
-          <span className="text-[11px] text-[var(--ds-muted)] tabular-nums">
-            {settled}/{steps.length}
+      <Surface accent="#D97757">
+        <div className="flex items-center gap-2 px-3 py-2">
+          {working ? (
+            <Loader2 className="w-3.5 h-3.5 shrink-0 text-[#D97757] animate-spin" />
+          ) : (
+            <Sparkles className="w-3.5 h-3.5 shrink-0 text-[#D97757]" />
+          )}
+          <span className="shrink-0 text-[12px] font-semibold text-[var(--ds-ink)]">{working ? 'Working…' : 'Agent activity'}</span>
+          {current && <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--ds-muted)]">{labelFor(current.tool)}</span>}
+          <span className="ml-auto shrink-0 text-[11px] tabular-nums text-[var(--ds-muted)]">
+            {working ? `${settled}/${steps.length}` : `${steps.length} tool${steps.length === 1 ? '' : 's'}`}
           </span>
-        }
-      >
-        <div className="flex items-center gap-1.5 px-3 pb-3">
-          {steps.map((s, i) => (
-            <span
-              key={(s.id || s.tool) + i}
-              title={`${labelFor(s.tool)} · ${s.status}`}
-              className={`h-2 w-2 rounded-full ${STATUS_DOT[s.status] ?? 'bg-[var(--ds-faint)]'}`}
-            />
-          ))}
-          {working && <span className="ml-1 text-[11px] text-[var(--ds-muted)]">working…</span>}
         </div>
       </Surface>
     );
