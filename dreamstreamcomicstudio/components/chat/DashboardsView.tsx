@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  LayoutDashboard, Loader2, Lock, LockOpen, Maximize2, MessageCircle, Minimize2,
+  LayoutDashboard, Loader2, Lock, LockOpen, Mail, Maximize2, MessageCircle, Minimize2,
   MoreHorizontal, MoreVertical, Pencil, Plus, RefreshCw, Search, Send, Sparkles, Trash2, X
 } from 'lucide-react';
 import type { ChatArtifact } from '../../apiTypes';
@@ -19,10 +19,14 @@ import { persistUiState, resolveInitialUiState } from '../../services/viewState'
 import { DensityProvider, relativeTime, type WidgetDensity } from './artifacts/kit';
 import { renderArtifactNode } from './artifacts/ChatArtifacts';
 import { GameCard } from './artifacts/GameCard';
-import type { GameKind } from '../../apiTypes';
+import { EmailTerminal } from './artifacts/EmailTerminal';
+import { EmailCompose } from './artifacts/EmailCompose';
+import type { GameKind, EmailInboxArtifact, EmailComposeArtifact } from '../../apiTypes';
+import { fetchEmails } from '../../services/emailApi';
+import { fetchConnections } from '../../services/connectorsApi';
 import { DictationButton } from './DictationButton';
 import {
-  AI_CHAT_TILE, EMBED_TILE, GAME_TILE, TOOL_LABELS, WIDGET_BY_TOOL, WIDGET_CATEGORIES, buildTileFromFields, searchWidgets,
+  AI_CHAT_TILE, EMAIL_TILE, EMAIL_COMPOSE_TILE, EMBED_TILE, GAME_TILE, TOOL_LABELS, WIDGET_BY_TOOL, WIDGET_CATEGORIES, buildTileFromFields, searchWidgets,
   type WidgetDef
 } from './widgetCatalog';
 import { toVideoEmbed, isEmbeddableVideo } from './videoEmbed';
@@ -98,6 +102,113 @@ const GameTile: React.FC<{ tile: DashboardTile }> = ({ tile }) => {
   return (
     <div className="h-full w-full">
       <GameCard data={{ game, ...(difficulty ? { difficulty: difficulty as 'easy' | 'normal' | 'hard' } : {}) }} />
+    </div>
+  );
+};
+
+// A connector tile: the live Gmail email terminal. Resolves the user's connected
+// (read-only) Gmail at render time and self-fetches the first page via the
+// authenticated email API — no live-data tool refresh. Honest empty/disconnected/error
+// states so the tile never silently renders blank.
+const EmailTile: React.FC<{ tile: DashboardTile }> = ({ tile }) => {
+  const box = (tile.args.box === 'unread' ? 'unread' : 'inbox') as 'inbox' | 'unread';
+  const [state, setState] = useState<{ status: 'loading' | 'ready' | 'disconnected' | 'error'; data?: EmailInboxArtifact; error?: string }>({
+    status: 'loading'
+  });
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    setState({ status: 'loading' });
+    (async () => {
+      try {
+        const conns = await fetchConnections();
+        const gmail = conns.find((c) => c.connectorId === 'gmail' && c.status !== 'disconnected');
+        if (!gmail) {
+          if (active) setState({ status: 'disconnected' });
+          return;
+        }
+        const res = await fetchEmails(gmail.id, { box, max: 25 });
+        if (active)
+          setState({
+            status: 'ready',
+            data: {
+              box,
+              connectionId: gmail.id,
+              account: gmail.accountIdentifier,
+              accountLabel: gmail.accountLabel,
+              emails: res.emails,
+              nextCursor: res.nextCursor
+            }
+          });
+      } catch (e) {
+        if (active) setState({ status: 'error', error: (e as Error)?.message || 'Could not load email' });
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [box, reloadKey]);
+
+  if (state.status === 'ready' && state.data) {
+    return (
+      <div className="h-full">
+        <DensityProvider value={tile.density}>
+          <EmailTerminal data={state.data} />
+        </DensityProvider>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full min-h-[160px] flex-col items-center justify-center gap-2 rounded-2xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] p-5 text-center">
+      {state.status === 'loading' ? (
+        <>
+          <Loader2 className="h-5 w-5 animate-spin text-[var(--ds-accent)]" />
+          <p className="text-xs text-[var(--ds-muted)]">Loading {box === 'unread' ? 'unread email' : 'inbox'}…</p>
+        </>
+      ) : state.status === 'disconnected' ? (
+        <>
+          <Mail className="h-6 w-6 text-[var(--ds-muted)]" />
+          <p className="text-xs font-medium text-[var(--ds-ink)]">Gmail isn’t connected</p>
+          <p className="max-w-[15rem] text-[11px] text-[var(--ds-muted)]">
+            Open <span className="font-medium">Settings → Connectors</span> to link Gmail (read-only) — then this widget fills in.
+          </p>
+        </>
+      ) : (
+        <>
+          <Mail className="h-6 w-6 text-[var(--ds-muted)]" />
+          <p className="text-xs font-medium text-[var(--ds-ink)]">Couldn’t load email</p>
+          <p className="max-w-[15rem] text-[11px] text-[var(--ds-muted)]">{state.error}</p>
+          <button
+            type="button"
+            onClick={() => setReloadKey((k) => k + 1)}
+            className="mt-1 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-surface-soft)] px-2.5 py-1 text-[11px] font-medium text-[var(--ds-ink)] transition-colors hover:bg-[var(--ds-hover)]"
+          >
+            Retry
+          </button>
+        </>
+      )}
+    </div>
+  );
+};
+
+// A connector tile: a compose pad that opens in Gmail to send (read-only — never sends).
+const EmailComposeTile: React.FC<{ tile: DashboardTile }> = ({ tile }) => {
+  const to = typeof tile.args.to === 'string' ? tile.args.to : '';
+  const subject = typeof tile.args.subject === 'string' ? tile.args.subject : '';
+  const enc = (s: string) => encodeURIComponent(s || '');
+  const data: EmailComposeArtifact = {
+    to,
+    subject,
+    gmailUrl: `https://mail.google.com/mail/?view=cm&fs=1&to=${enc(to)}&su=${enc(subject)}`,
+    mailto: `mailto:${enc(to)}?subject=${enc(subject)}`
+  };
+  return (
+    <div className="h-full">
+      <DensityProvider value={tile.density}>
+        <EmailCompose data={data} />
+      </DensityProvider>
     </div>
   );
 };
@@ -1168,7 +1279,15 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode; onAsk?
   }, [active?.id]);
 
   const fetchTile = useCallback(async (tile: DashboardTile) => {
-    if (tile.tool === AI_CHAT_TILE || tile.tool === PINNED_TILE || tile.tool === EMBED_TILE || tile.tool === GAME_TILE) return; // no live-data fetch
+    if (
+      tile.tool === AI_CHAT_TILE ||
+      tile.tool === PINNED_TILE ||
+      tile.tool === EMBED_TILE ||
+      tile.tool === GAME_TILE ||
+      tile.tool === EMAIL_TILE ||
+      tile.tool === EMAIL_COMPOSE_TILE
+    )
+      return; // no live-data tool refresh (these self-render / self-fetch)
     if (inflight.current.has(tile.id)) return;
     inflight.current.add(tile.id);
     setTileStates((prev) => ({ ...prev, [tile.id]: { ...prev[tile.id], loading: true } }));
@@ -1597,7 +1716,7 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode; onAsk?
                   setDropIndex(null);
                 }}
               >
-                {tile.tool === AI_CHAT_TILE || tile.tool === EMBED_TILE || tile.tool === GAME_TILE ? (
+                {tile.tool === AI_CHAT_TILE || tile.tool === EMBED_TILE || tile.tool === GAME_TILE || tile.tool === EMAIL_TILE || tile.tool === EMAIL_COMPOSE_TILE ? (
                   <div
                     className="group/tile relative h-full"
                     style={tileHeight(tile) != null ? { height: tileHeight(tile)! } : undefined}
@@ -1613,7 +1732,17 @@ export const DashboardsView: React.FC<{ sidebarControl?: React.ReactNode; onAsk?
                         </button>
                       </div>
                     )}
-                    {tile.tool === AI_CHAT_TILE ? <AiChatTile /> : tile.tool === GAME_TILE ? <GameTile tile={tile} /> : <EmbedTile tile={tile} />}
+                    {tile.tool === AI_CHAT_TILE ? (
+                      <AiChatTile />
+                    ) : tile.tool === GAME_TILE ? (
+                      <GameTile tile={tile} />
+                    ) : tile.tool === EMAIL_TILE ? (
+                      <EmailTile tile={tile} />
+                    ) : tile.tool === EMAIL_COMPOSE_TILE ? (
+                      <EmailComposeTile tile={tile} />
+                    ) : (
+                      <EmbedTile tile={tile} />
+                    )}
                   </div>
                 ) : (
                 <TileCard

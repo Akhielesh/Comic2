@@ -10,8 +10,8 @@
 
 import {
   ArrowRightLeft, Banknote, Bitcoin, CalendarClock, CalendarRange, CandlestickChart, Clapperboard,
-  CloudSun, Coins, Gamepad2, Gauge, Landmark, LineChart, Map as MapIcon, MapPin, MessageCircle, Navigation,
-  Newspaper, PiggyBank, Plane, Route, Scale, Sparkles, TrendingUp, Youtube
+  CloudSun, Coins, Gamepad2, Gauge, Landmark, LineChart, Mail, Map as MapIcon, MapPin, MessageCircle, Navigation,
+  Newspaper, PenSquare, PiggyBank, Plane, Route, Scale, Sparkles, TrendingUp, Youtube
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { WidgetDensity } from './artifacts/kit';
@@ -29,9 +29,15 @@ export const EMBED_TILE = 'embed';
 // rendered from its `game` arg by GameCard. Matches the server `play_game` tool.
 export const GAME_TILE = 'play_game';
 
-export type WidgetCategory = 'Essentials' | 'Markets' | 'Crypto' | 'Travel & places' | 'Calendars & more' | 'Games';
+// Email tiles are special connector tiles: they render the live Gmail email terminal /
+// compose widget against the user's connected (read-only) Gmail. No live-data tool
+// refresh — the tile resolves the connection and self-fetches via services/emailApi.
+export const EMAIL_TILE = 'email_inbox';
+export const EMAIL_COMPOSE_TILE = 'email_compose';
 
-export const WIDGET_CATEGORIES: WidgetCategory[] = ['Essentials', 'Markets', 'Crypto', 'Travel & places', 'Calendars & more', 'Games'];
+export type WidgetCategory = 'Essentials' | 'Markets' | 'Crypto' | 'Travel & places' | 'Calendars & more' | 'Connected' | 'Games';
+
+export const WIDGET_CATEGORIES: WidgetCategory[] = ['Essentials', 'Markets', 'Crypto', 'Travel & places', 'Calendars & more', 'Connected', 'Games'];
 
 export interface WidgetField {
   key: string;
@@ -419,6 +425,43 @@ export const WIDGET_CATALOG: WidgetDef[] = [
     defaultDensity: 'compact',
     fields: [],
     note: 'Live events need a (free) Finnhub key on the server.'
+  },
+  // ----------------------------------------------------- Connected accounts ----
+  {
+    tool: EMAIL_TILE,
+    label: 'Email',
+    icon: Mail,
+    blurb: 'Your Gmail inbox or unread — search and read right on the board',
+    category: 'Connected',
+    defaultDensity: 'detailed',
+    fields: [
+      {
+        key: 'box',
+        label: 'Show',
+        default: 'inbox',
+        select: [
+          { value: 'inbox', label: 'Inbox' },
+          { value: 'unread', label: 'Unread only' }
+        ]
+      }
+    ],
+    presets: [
+      { label: 'Inbox', args: { box: 'inbox' }, tileLabel: 'Inbox' },
+      { label: 'Unread', args: { box: 'unread' }, tileLabel: 'Unread email' }
+    ],
+    note: 'Needs your Gmail connected (read-only) in Settings → Connectors.'
+  },
+  {
+    tool: EMAIL_COMPOSE_TILE,
+    label: 'Compose email',
+    icon: PenSquare,
+    blurb: 'A quick draft pad that opens in Gmail to send',
+    category: 'Connected',
+    defaultDensity: 'detailed',
+    fields: [
+      { key: 'to', label: 'To', placeholder: 'recipient@example.com', optional: true },
+      { key: 'subject', label: 'Subject', placeholder: 'Optional', optional: true }
+    ]
   }
 ];
 
@@ -473,6 +516,14 @@ export const buildTileFromFields = (
     const game = typeof args.game === 'string' && args.game ? args.game : 'snake';
     const labels: Record<string, string> = { snake: 'Snake', breakout: 'Brick breaker', '2048': '2048', memory: 'Memory match' };
     return { tool: def.tool, args: { game }, label: labels[game] ?? 'Game', density };
+  }
+  // email: a connector tile that resolves the user's Gmail at render time — label by box.
+  if (def.tool === EMAIL_TILE) {
+    const box = args.box === 'unread' ? 'unread' : 'inbox';
+    return { tool: def.tool, args: { box }, label: box === 'unread' ? 'Unread email' : 'Inbox', density };
+  }
+  if (def.tool === EMAIL_COMPOSE_TILE) {
+    return { tool: def.tool, args, label: 'Compose', density };
   }
   // get_stock: accept a company name typed straight into the field ("rivian" → RIVN),
   // so the symbol box is forgiving instead of erroring on anything but an exact ticker.
