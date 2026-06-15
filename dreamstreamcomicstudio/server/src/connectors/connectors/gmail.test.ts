@@ -157,13 +157,13 @@ describe('GmailConnector sync (mocked Google)', () => {
     expect(out.items[0].externalId).toBe('a');
   });
 
-  it('reads a message body (decodes text/plain, skips attachments) + parses a comma display-name From', async () => {
+  it('reads a message: text + HTML body, attachments, category, comma display-name From', async () => {
     const b64 = (s: string) => Buffer.from(s).toString('base64url');
     const full = {
       id: 'mx',
       threadId: 't',
       internalDate: '1700000000000',
-      labelIds: ['INBOX', 'UNREAD'],
+      labelIds: ['INBOX', 'UNREAD', 'CATEGORY_PERSONAL'],
       payload: {
         headers: [
           { name: 'From', value: '"Doe, Jane" <jane@x.com>' },
@@ -171,8 +171,14 @@ describe('GmailConnector sync (mocked Google)', () => {
         ],
         mimeType: 'multipart/mixed',
         parts: [
-          { mimeType: 'text/plain', body: { data: b64('Hello body') } },
-          { mimeType: 'application/pdf', filename: 'a.pdf', body: { data: b64('PDFDATA') } }
+          {
+            mimeType: 'multipart/alternative',
+            parts: [
+              { mimeType: 'text/plain', body: { data: b64('Hello body') } },
+              { mimeType: 'text/html', body: { data: b64('<p>Hello <b>body</b></p>') } }
+            ]
+          },
+          { mimeType: 'application/pdf', filename: 'a.pdf', body: { attachmentId: 'att-1', size: 1234 } }
         ]
       }
     };
@@ -184,8 +190,28 @@ describe('GmailConnector sync (mocked Google)', () => {
       params: { id: 'mx' }
     });
     expect(out.email.body).toBe('Hello body'); // attachment text NOT surfaced
+    expect(out.email.html).toContain('<b>body</b>'); // original HTML preserved
     expect(out.email.from).toEqual({ name: 'Doe, Jane', email: 'jane@x.com' });
     expect(out.email.unread).toBe(true);
+    expect(out.email.category).toBe('primary'); // CATEGORY_PERSONAL → primary
+    expect(out.email.attachments).toEqual([
+      { attachmentId: 'att-1', filename: 'a.pdf', mimeType: 'application/pdf', size: 1234, inline: false, contentId: null }
+    ]);
+    expect(out.email.hasAttachments).toBe(true);
+  });
+
+  it('fetches an attachment as base64url data', async () => {
+    global.fetch = vi.fn(async (url: string) =>
+      mockResponse(String(url).includes('/attachments/') ? { data: 'aGVsbG8', size: 5 } : {})
+    ) as any;
+    const out: any = await new GmailConnector().fetch({
+      connection: ctx().connection,
+      getAccessToken: async () => 'tok',
+      resource: 'attachment',
+      params: { id: 'mx', attachmentId: 'att-1' }
+    });
+    expect(out.data).toBe('aGVsbG8');
+    expect(out.size).toBe(5);
   });
 
   it('inbox skips a message that fails to fetch and returns the rest', async () => {
