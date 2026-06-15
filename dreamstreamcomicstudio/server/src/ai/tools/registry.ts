@@ -9,6 +9,8 @@ import { ddgImageSearch, ddgVideoSearch, type ImageResult, type VideoSearchResul
 import { youtubeVideoSearch } from './youtubeSearch.js';
 import { webSearch } from './search.js';
 import { readArticle, isFetchableUrl } from './readArticle.js';
+import { hostOf } from './http.js';
+import { isHostBlocked, markHostBlocked, getCachedPage, setCachedPage } from './readCache.js';
 import { getWeatherDetailed } from './weather.js';
 import { geocodePlaces } from './maps.js';
 import { getDirections } from './directions.js';
@@ -1138,9 +1140,27 @@ const readUrlTool: ChatTool = {
         notice: { level: 'warn', message: 'URL not fetchable' }
       };
     }
+    const host = hostOf(url);
+    // Fast-fail a host that already hard-blocked us this session, instead of re-paying the
+    // ~9s fetch timeout (this is what turned "Couldn't read etihad.com ×5" into ~45s wasted).
+    if (isHostBlocked(host)) {
+      return {
+        content: `Skipped ${url} — ${host} already blocked automated reads moments ago. Do NOT fabricate its contents; answer from web_search snippets or a different source instead.`,
+        notice: { level: 'warn', message: `Couldn't read ${host}` }
+      };
+    }
+    // Reuse a page read very recently (the agent often re-reads the same URL across rounds).
+    const cached = getCachedPage(url);
+    if (cached) return { content: cached, citations: [{ url, title: host || url }] };
     try {
       const data = await readArticle(url, signal);
       if (!data.ok || !data.blocks.length) {
+        // Only a fetch-level failure means the HOST blocks reads — penalize the whole host.
+        // A merely-thin page (`empty`) is page-specific, so don't skip the rest of the host.
+        if (data.reason === 'fetch_failed') {
+          markHostBlocked(host);
+          if (data.resolvedHost && data.resolvedHost !== host) markHostBlocked(data.resolvedHost);
+        }
         return {
           content: `Could not extract readable content from ${url} (the page may be paywalled, JavaScript-only, or blocking automated reads). Do NOT fabricate its contents — tell the user it couldn't be read, then try a different source or web_search.`,
           notice: { level: 'warn', message: `Couldn't read ${data.host || url}` }
@@ -1152,8 +1172,10 @@ const readUrlTool: ChatTool = {
         .join('\n')
         .slice(0, 8000);
       const header = data.title ? `# ${data.title}${data.byline ? `\nBy ${data.byline}` : ''}\n` : '';
+      const content = `${header}Source: ${sourceUrl}\n\n${body}`;
+      setCachedPage(url, content);
       return {
-        content: `${header}Source: ${sourceUrl}\n\n${body}`,
+        content,
         citations: [{ url: sourceUrl, title: data.title || data.host || sourceUrl }]
       };
     } catch (err) {

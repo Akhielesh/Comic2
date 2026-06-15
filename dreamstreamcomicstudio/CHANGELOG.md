@@ -50,6 +50,15 @@ All notable user-facing changes. Format loosely follows
     is lost.
 
 ### Fixed
+- **Web answers stop wasting time on pages that block us (2026-06-15):**
+  - Reading a web page has a ~9s timeout, and the agent would re-pay it again and again on
+    a host that hard-blocks automated reads — one real flight query logged "Couldn't read
+    etihad.com ×5" + "Couldn't read expedia.com", ~45s of pure waste on a single answer.
+    Now the first failed read of a host is remembered for a couple of minutes, so any
+    further read of that host fast-fails instantly instead of timing out again; pages read
+    successfully are briefly cached so the agent doesn't re-fetch the same URL across steps.
+    This speeds up every web-grounded answer, not just flights. (A blocked host self-heals
+    after the TTL; only true fetch failures penalize a host — a merely-thin page does not.)
 - **Deleted chats stay deleted — no more resurrection across devices (2026-06-15):**
   - Deleting a chat right after (or while) it was streaming or being auto-titled could
     bring it back: a background save dispatched just before the delete would land just
