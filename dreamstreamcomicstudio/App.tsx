@@ -48,6 +48,9 @@ import { FeedbackWidget } from './components/feedback/FeedbackWidget';
 // Lazy so its markdown renderer (react-markdown ≈ 158 kB) isn't pulled into the
 // first-paint bundle — the floating assistant isn't needed for initial render.
 const UniversalAssistant = lazyImportWithRetry(() => import('./components/UniversalAssistant').then(module => ({ default: module.UniversalAssistant })));
+// Global right-click / text-selection "Ask the AI" quick-finder. Lazy so its chat
+// streaming + popover code isn't in the first-paint bundle.
+const QuickFinder = lazyImportWithRetry(() => import('./components/QuickFinder').then(module => ({ default: module.QuickFinder })));
 
 type AppView =
   | 'home'
@@ -978,6 +981,9 @@ const App: React.FC = () => {
   const showSharedLegalLinks = effectiveView !== 'home' && effectiveView !== 'reader' && effectiveView !== 'shared' && effectiveView !== 'pagestudio' && effectiveView !== 'chat' && effectiveView !== 'codestudio';
   // Hide the floating Universal Assistant on the full-screen chat product to avoid two stacked chat surfaces.
   const showUniversalAssistant = effectiveView !== 'auth-callback' && effectiveView !== 'shared' && effectiveView !== 'chat' && effectiveView !== 'codestudio';
+  // The quick-finder works app-wide (including the chat view — select an answer to
+  // explain it), except on the bare auth/share screens.
+  const showQuickFinder = effectiveView !== 'auth-callback' && effectiveView !== 'auth' && effectiveView !== 'shared';
   // The global "Send feedback" pill (bottom-right). Hidden on the immersive chat /
   // code studio surfaces (they have their own inline feedback) and on the bare
   // auth-callback / shared viewer screens.
@@ -1242,6 +1248,22 @@ const App: React.FC = () => {
         )}
 
         {showFeedbackWidget && <FeedbackWidget />}
+
+        {showQuickFinder && (
+          <Suspense fallback={null}>
+            <QuickFinder
+              onAskInChat={(prompt) => {
+                // Route the selection into the main chat: switch to it, then seed the
+                // composer a beat later so ChatComposer has mounted its listener.
+                setCurrentView('chat');
+                window.setTimeout(
+                  () => window.dispatchEvent(new CustomEvent('dreamstream:compose', { detail: { text: prompt } })),
+                  350
+                );
+              }}
+            />
+          </Suspense>
+        )}
 
         <AppStatusBar />
       </div>

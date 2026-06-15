@@ -178,6 +178,21 @@ export interface FetchInput {
   signal?: AbortSignal;
 }
 
+/**
+ * A write/mutation against the connected account (create/update/delete/RSVP …).
+ * Optional on the contract — only connectors that expose writes implement `mutate`.
+ * Always invoked behind an explicit in-product confirmation and a server-side
+ * scope check, never silently from a model turn.
+ */
+export interface MutateInput {
+  connection: ConnectionRef;
+  getAccessToken: () => Promise<string>;
+  /** Connector-defined action, e.g. 'create' | 'update' | 'delete' | 'rsvp'. */
+  action: string;
+  params: Record<string, unknown>;
+  signal?: AbortSignal;
+}
+
 // ---- The contract -----------------------------------------------------------
 
 export interface AccountConnector {
@@ -207,6 +222,13 @@ export interface AccountConnector {
 
   /** On-demand read for query-style connectors (e.g. Maps geocode/places). */
   fetch(input: FetchInput): Promise<unknown>;
+
+  /**
+   * On-demand WRITE for connectors that support it (e.g. Calendar create/update/
+   * delete/RSVP). Optional: read-only connectors omit it. The control plane only
+   * calls this after confirming the user owns the connection and granted a write scope.
+   */
+  mutate?(input: MutateInput): Promise<unknown>;
 
   /** Map a raw provider payload to normalized items. */
   normalize(raw: unknown): NormalizedItem[];

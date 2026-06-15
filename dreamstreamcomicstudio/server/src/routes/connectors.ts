@@ -20,6 +20,7 @@ import {
   CONNECTORS_OAUTH_STATE_TTL_MS
 } from '../config.js';
 import { connectorRegistry } from '../connectors/index.js';
+import { GoogleCalendarConnector } from '../connectors/connectors/googleCalendar.js';
 import { buildClientCatalog } from '../connectors/catalog.js';
 import {
   buildGoogleAuthUrl,
@@ -466,6 +467,65 @@ connectorsRouter.post('/connections/:connectionId/fetch', async (req, res, next)
         resource,
         params
       });
+      res.json({ ok: true, data });
+    } catch (err) {
+      if (err instanceof ConnectorAuthError) {
+        await setConnectionStatus(conn.id, 'expired', 'Authorization is no longer valid — please reconnect.').catch(() => {});
+        return res.status(401).json({ error: { message: err.message, code: err.code } });
+      }
+      throw err;
+    }
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /mutate — on-demand connector WRITE (e.g. Calendar create/update/delete/RSVP).
+// Always user-confirmed in the UI before it reaches here; we additionally enforce that
+// the connector supports writes AND the connection granted a write scope (a read-only
+// grant is sent back to reconnect rather than failing deep in the Google API).
+connectorsRouter.post('/connections/:connectionId/mutate', async (req, res, next) => {
+  try {
+    const userId = requireUser(req, res);
+    if (!userId) return;
+    const conn = await getOwnedConnection(userId, String(req.params.connectionId || ''));
+    if (!conn) return res.status(404).json({ error: { message: 'Connection not found' } });
+
+    const connector = connectorRegistry.get(conn.connector_id);
+    if (!connector) return res.status(404).json({ error: { message: 'Unknown connector' } });
+    if (typeof connector.mutate !== 'function') {
+      return res.status(400).json({ error: { message: 'This connector does not support writes' } });
+    }
+    // Calendar writes need a non-readonly scope; a readonly grant must reconnect to consent.
+    if (conn.connector_id === 'google_calendar' && !GoogleCalendarConnector.hasWriteScope(conn.granted_scopes)) {
+      return res.status(403).json({
+        error: {
+          message: 'This Google Calendar connection is read-only. Reconnect it in Connectors to grant edit access.',
+          code: 'insufficient_scope'
+        }
+      });
+    }
+
+    const action = String(req.body?.action || '');
+    const params = (req.body?.params || {}) as Record<string, unknown>;
+    try {
+      const data = await connector.mutate({
+        connection: {
+          id: conn.id,
+          userId,
+          connectorId: conn.connector_id,
+          accountIdentifier: conn.account_identifier,
+          grantedScopes: conn.granted_scopes,
+          metadata: conn.metadata
+        },
+        getAccessToken: () => getValidAccessToken(conn, connector),
+        action,
+        params
+      });
+      // A successful write makes the synced copy stale — refresh it in the background.
+      if (connector.metadata.capabilities.syncable) {
+        triggerSync(userId, conn.id, 'auto').catch(() => {});
+      }
       res.json({ ok: true, data });
     } catch (err) {
       if (err instanceof ConnectorAuthError) {

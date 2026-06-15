@@ -19,6 +19,7 @@ import { getActiveConnection, toConnectionRef, type ConnectionRow } from '../../
 import { getValidAccessToken } from '../../connectors/credentials.js';
 import { retrieveItems } from '../../connectors/retrieval.js';
 import { ConnectorAuthError, type AccountConnector, type NormalizedItem } from '../../connectors/types.js';
+import { GoogleCalendarConnector } from '../../connectors/connectors/googleCalendar.js';
 
 interface DisplayItem {
   title?: string | null;
@@ -285,12 +286,206 @@ const makeDriveSearch = (ctx?: ToolContext): ChatTool => ({
   execute: (args) => fetchAndFormat(ctx, 'google_drive', 'Google Drive', 'search', { q: String(args.query || '') }, String(args.query || ''))
 });
 
+// ---- Google Calendar (read agenda widget + confirmed writes) ----------------
+// The agenda is an interactive widget (month/week/agenda views + click-to-detail).
+// Writes (create/update/delete/RSVP) NEVER fire from the model — each returns a draft
+// artifact the user reviews and confirms; the confirm button calls the scoped
+// /connections/:id/mutate route. The draft carries the resolved connection so the
+// widget knows whether write access is granted (and can prompt to reconnect if not).
+
+interface CalEventView {
+  id: string;
+  title: string;
+  start?: string | null;
+  end?: string | null;
+  allDay?: boolean;
+  location?: string | null;
+  attendees?: { email?: string; name?: string; responseStatus?: string; self?: boolean }[];
+}
+
+const calendarAgendaWidget = async (
+  ctx: ToolContext | undefined,
+  opts: { q?: string; days?: number }
+): Promise<ToolExecResult> => {
+  const r = await resolve(ctx, 'google_calendar', 'Calendar');
+  if ('fail' in r) return r.fail;
+  try {
+    const data = (await r.connector.fetch({
+      connection: toConnectionRef(r.connection),
+      getAccessToken: () => getValidAccessToken(r.connection, r.connector),
+      resource: 'agenda',
+      params: { q: opts.q || '', days: opts.days || 14 }
+    })) as { events?: CalEventView[]; timezone?: string | null; window?: { timeMin: string; timeMax: string } };
+    const events = data.events || [];
+    const canWrite = GoogleCalendarConnector.hasWriteScope(r.connection.granted_scopes);
+    const artifactData = {
+      account: r.connection.account_identifier,
+      accountLabel: r.connection.account_label,
+      connectionId: r.connection.id,
+      canWrite,
+      timezone: data.timezone || ctx?.timezone || null,
+      query: opts.q || '',
+      window: data.window,
+      events
+    };
+    const summary = events.length
+      ? `Loaded ${events.length} event${events.length === 1 ? '' : 's'} from ${r.connection.account_identifier}${opts.q ? ` matching "${opts.q}"` : ''}. An interactive calendar widget is shown (agenda / week / month views; click an event for details${canWrite ? '; create/RSVP/edit from chat with confirmation' : ''}). Call out the next 1–2 commitments and any gaps; don't list everything.`
+      : `No events${opts.q ? ` matching "${opts.q}"` : ''} in the next ${opts.days || 14} days on ${r.connection.account_identifier}. The user looks free in that window.`;
+    return {
+      content: summary,
+      artifacts: [{ type: 'calendar_agenda', data: artifactData }],
+      citations: events
+        .filter((e) => (e as { htmlLink?: string }).htmlLink)
+        .slice(0, 8)
+        .map((e) => ({ url: (e as { htmlLink?: string }).htmlLink as string, title: e.title }))
+    };
+  } catch (err) {
+    if (err instanceof ConnectorAuthError) return needsAuth('Calendar');
+    return { content: `Calendar request failed: ${(err as Error)?.message || 'unknown error'}.`, notice: { level: 'warn', message: 'Calendar error' } };
+  }
+};
+
 const makeCalendarAgenda = (ctx?: ToolContext): ChatTool => ({
   name: 'calendar_agenda',
   description:
-    "Look at the signed-in user's OWN Google Calendar (their connected account) for upcoming events. Use for 'my schedule', 'what's on my calendar', 'my next meeting', 'am I free…'.",
-  parameters: obj({ query: { type: 'string', description: 'Optional free-text filter, e.g. "standup" or "with Alice".' } }),
-  execute: (args) => fetchAndFormat(ctx, 'google_calendar', 'Calendar', 'search', { q: String(args.query || '') }, String(args.query || ''))
+    "Open the signed-in user's OWN Google Calendar as an interactive AGENDA widget (agenda/week/month views, click an event for details). Use for 'my schedule', 'what's on my calendar', 'my next meeting', 'am I free…', 'this week'. Optional `query` filters events; `days` sets the look-ahead window (default 14).",
+  parameters: obj({
+    query: { type: 'string', description: 'Optional free-text filter, e.g. "standup" or "with Alice".' },
+    days: { type: 'number', description: 'Days ahead to include (default 14, max 90).' }
+  }),
+  execute: (args) => calendarAgendaWidget(ctx, { q: String(args.query || ''), days: Number(args.days) || 14 })
+});
+
+/** Build a calendar write-DRAFT artifact (the user confirms it; the model never writes). */
+const calendarDraft = async (
+  ctx: ToolContext | undefined,
+  action: 'create' | 'update' | 'delete' | 'rsvp',
+  event: Record<string, unknown>,
+  extra: Record<string, unknown> = {}
+): Promise<ToolExecResult> => {
+  const r = await resolve(ctx, 'google_calendar', 'Calendar');
+  const connected = !('fail' in r);
+  const connection = connected ? r.connection : undefined;
+  const canWrite = connection ? GoogleCalendarConnector.hasWriteScope(connection.granted_scopes) : false;
+  const verb = action === 'create' ? 'create' : action === 'update' ? 'update' : action === 'delete' ? 'delete' : 'RSVP to';
+  const title = typeof event.title === 'string' && event.title ? `"${event.title}"` : 'the event';
+  const note = !connected
+    ? ' (Calendar isn’t connected yet — the user can connect it in Connectors, then confirm.)'
+    : !canWrite
+      ? ' (This Calendar connection is read-only — the user needs to reconnect to grant edit access, then confirm.)'
+      : '';
+  return {
+    content: `Prepared a request to ${verb} ${title}. A confirmation card is shown — nothing changes until the user clicks confirm.${note}`,
+    artifacts: [
+      {
+        type: 'calendar_event_draft',
+        data: {
+          action,
+          connectionId: connection?.id,
+          account: connection?.account_identifier,
+          canWrite,
+          event,
+          ...extra
+        }
+      }
+    ]
+  };
+};
+
+const makeCalendarCreateEvent = (ctx?: ToolContext): ChatTool => ({
+  name: 'calendar_create_event',
+  description:
+    "Prepare a NEW event on the user's Google Calendar. Shows a confirmation card the user reviews and confirms — it does NOT create the event itself. Use for 'add/schedule/create … on my calendar', 'book a meeting', 'put X on my calendar'. Give ISO 8601 `start` (and `end`); set `allDay` for date-only events. Resolve relative dates ('tomorrow 3pm') to absolute ISO using the user's timezone.",
+  parameters: obj(
+    {
+      title: { type: 'string', description: 'Event title / summary.' },
+      start: { type: 'string', description: 'Start in ISO 8601 (e.g. 2026-06-16T15:00:00). For all-day, a date 2026-06-16.' },
+      end: { type: 'string', description: 'End in ISO 8601. Optional — defaults to +1h (or same day for all-day).' },
+      allDay: { type: 'boolean', description: 'True for an all-day event (use dates, not times).' },
+      location: { type: 'string', description: 'Optional location.' },
+      description: { type: 'string', description: 'Optional notes/agenda for the event body.' },
+      attendees: { type: 'array', items: { type: 'string' }, description: 'Optional attendee email addresses to invite.' }
+    },
+    ['title', 'start']
+  ),
+  execute: (args) =>
+    calendarDraft(ctx, 'create', {
+      title: String(args.title || ''),
+      start: String(args.start || ''),
+      end: args.end ? String(args.end) : undefined,
+      allDay: Boolean(args.allDay),
+      location: args.location ? String(args.location) : undefined,
+      description: args.description ? String(args.description) : undefined,
+      attendees: Array.isArray(args.attendees) ? args.attendees.map(String) : undefined,
+      timeZone: ctx?.timezone
+    })
+});
+
+const makeCalendarUpdateEvent = (ctx?: ToolContext): ChatTool => ({
+  name: 'calendar_update_event',
+  description:
+    "Prepare an EDIT to an existing calendar event (reschedule, rename, change location/notes/attendees). Shows a confirmation card; it does NOT edit until confirmed. Requires the `eventId` (from the agenda widget — call calendar_agenda first if you don't have it). Only include the fields that change.",
+  parameters: obj(
+    {
+      eventId: { type: 'string', description: 'The id of the event to edit (from calendar_agenda).' },
+      title: { type: 'string', description: 'New title (optional).' },
+      start: { type: 'string', description: 'New start in ISO 8601 (optional).' },
+      end: { type: 'string', description: 'New end in ISO 8601 (optional).' },
+      allDay: { type: 'boolean', description: 'Set true if making it all-day.' },
+      location: { type: 'string', description: 'New location (optional).' },
+      description: { type: 'string', description: 'New description (optional).' },
+      attendees: { type: 'array', items: { type: 'string' }, description: 'Replacement attendee email list (optional).' }
+    },
+    ['eventId']
+  ),
+  execute: (args) =>
+    calendarDraft(ctx, 'update', {
+      eventId: String(args.eventId || ''),
+      title: args.title !== undefined ? String(args.title) : undefined,
+      start: args.start ? String(args.start) : undefined,
+      end: args.end ? String(args.end) : undefined,
+      allDay: args.allDay !== undefined ? Boolean(args.allDay) : undefined,
+      location: args.location !== undefined ? String(args.location) : undefined,
+      description: args.description !== undefined ? String(args.description) : undefined,
+      attendees: Array.isArray(args.attendees) ? args.attendees.map(String) : undefined,
+      timeZone: ctx?.timezone
+    })
+});
+
+const makeCalendarDeleteEvent = (ctx?: ToolContext): ChatTool => ({
+  name: 'calendar_delete_event',
+  description:
+    "Prepare to DELETE/cancel an event from the user's calendar. Shows a confirmation card; it does NOT delete until confirmed. Requires the `eventId` (from calendar_agenda) — pass the event `title` too so the confirmation is clear.",
+  parameters: obj(
+    {
+      eventId: { type: 'string', description: 'The id of the event to delete (from calendar_agenda).' },
+      title: { type: 'string', description: 'The event title, for the confirmation card.' }
+    },
+    ['eventId']
+  ),
+  execute: (args) =>
+    calendarDraft(ctx, 'delete', { eventId: String(args.eventId || ''), title: args.title ? String(args.title) : undefined })
+});
+
+const makeCalendarRsvp = (ctx?: ToolContext): ChatTool => ({
+  name: 'calendar_rsvp',
+  description:
+    "Prepare an RSVP (accept / decline / tentative) to an event the user was invited to. Shows a confirmation card; it does NOT send the response until confirmed. Requires the `eventId` (from calendar_agenda).",
+  parameters: obj(
+    {
+      eventId: { type: 'string', description: 'The id of the event to respond to (from calendar_agenda).' },
+      response: { type: 'string', enum: ['accepted', 'declined', 'tentative'], description: 'The RSVP response.' },
+      title: { type: 'string', description: 'The event title, for the confirmation card.' }
+    },
+    ['eventId', 'response']
+  ),
+  execute: (args) =>
+    calendarDraft(
+      ctx,
+      'rsvp',
+      { eventId: String(args.eventId || ''), title: args.title ? String(args.title) : undefined },
+      { response: args.response === 'declined' ? 'declined' : args.response === 'tentative' ? 'tentative' : 'accepted' }
+    )
 });
 
 const makeSheetsRead = (ctx?: ToolContext): ChatTool => ({
@@ -385,6 +580,10 @@ const FACTORIES: Record<string, (ctx?: ToolContext) => ChatTool> = {
   gmail_compose: makeGmailCompose,
   drive_search: makeDriveSearch,
   calendar_agenda: makeCalendarAgenda,
+  calendar_create_event: makeCalendarCreateEvent,
+  calendar_update_event: makeCalendarUpdateEvent,
+  calendar_delete_event: makeCalendarDeleteEvent,
+  calendar_rsvp: makeCalendarRsvp,
   sheets_read: makeSheetsRead,
   maps_lookup: makeMapsLookup,
   connected_data_search: makeConnectedSearch

@@ -59,6 +59,8 @@ import { WidgetStack } from './artifacts/WidgetStack';
 import { ClarifyCard } from './artifacts/ClarifyCard';
 import { EmailTerminal } from './artifacts/EmailTerminal';
 import { EmailCompose } from './artifacts/EmailCompose';
+import { CalendarAgenda } from './artifacts/CalendarAgenda';
+import { CalendarEventDraft } from './artifacts/CalendarEventDraft';
 import { GameCard } from './artifacts/GameCard';
 import { ModelPopularityCard } from '../models/ModelPopularityPanel';
 import type { ModelPopularity } from '../../services/modelPopularity';
@@ -80,7 +82,7 @@ import type {
   DataTableArtifact, HeatmapArtifact, FinanceTerminalArtifact, CodeStudioArtifact,
   RecipeCardArtifact, RecipeRunArtifact, ResearchReportArtifact, QuizArtifact, DocumentArtifact, FlashcardsArtifact, SqlExerciseArtifact, ResourceBundleArtifact, CodeExerciseArtifact,
   GenerativeUIArtifact, StockComparisonArtifact, ReactComponentArtifact,
-  EmailInboxArtifact, EmailComposeArtifact, AgentActivityArtifact
+  EmailInboxArtifact, EmailComposeArtifact, AgentActivityArtifact, CalendarAgendaArtifact, CalendarEventDraftArtifact
 } from '../../apiTypes';
 
 const sqlExerciseDemo: SqlExerciseArtifact = {
@@ -1309,6 +1311,32 @@ const emailComposeDemo: EmailComposeArtifact = {
   mailto: 'mailto:dana@northwind.co?subject=Re%3A%20Q3%20board%20deck'
 };
 
+// Calendar demos — events anchored to "now" so the agenda/week/month views always look live.
+const calAt = (days: number, hh: number, mm = 0): string => {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  d.setHours(hh, mm, 0, 0);
+  return d.toISOString();
+};
+const calDay = (days: number): string => calAt(days, 0).slice(0, 10);
+const calendarAgendaDemo: CalendarAgendaArtifact = {
+  account: 'you@gmail.com', accountLabel: 'you@gmail.com', connectionId: 'demo-connection', canWrite: true, timezone: 'America/New_York',
+  window: { timeMin: new Date().toISOString(), timeMax: calAt(14, 23) },
+  events: [
+    { id: 'e1', title: 'Morning standup', start: calAt(0, 9, 30), end: calAt(0, 9, 45), colorId: '7', responseStatus: 'accepted', hangoutLink: 'https://meet.google.com/abc-defg-hij', htmlLink: 'https://calendar.google.com/', attendees: [{ email: 'you@gmail.com', self: true, responseStatus: 'accepted' }, { email: 'team@northwind.co' }] },
+    { id: 'e2', title: '1:1 with Dana', start: calAt(0, 11, 0), end: calAt(0, 11, 30), colorId: '2', htmlLink: 'https://calendar.google.com/' },
+    { id: 'e3', title: 'Design review — Studio v2', start: calAt(0, 14, 0), end: calAt(0, 15, 0), colorId: '3', location: 'Room 4 / Meet', responseStatus: 'tentative', attendees: [{ email: 'you@gmail.com', self: true, responseStatus: 'tentative' }, { email: 'a@x.co' }, { email: 'b@x.co' }] },
+    { id: 'e4', title: 'Dentist', start: calAt(1, 8, 0), end: calAt(1, 8, 45), colorId: '6', location: '5th Ave Dental' },
+    { id: 'e5', title: 'Lunch w/ Marcus', start: calAt(1, 12, 30), end: calAt(1, 13, 30), colorId: '5', location: 'Ichiran Ramen', responseStatus: 'needsAction', attendees: [{ email: 'you@gmail.com', self: true, responseStatus: 'needsAction' }, { email: 'marcus@gmail.com', organizer: true }] },
+    { id: 'e6', title: 'Project Tarkan launch', start: calDay(3), allDay: true, colorId: '10', htmlLink: 'https://calendar.google.com/' },
+    { id: 'e7', title: 'Quarterly planning', start: calAt(5, 10, 0), end: calAt(5, 12, 0), colorId: '9', location: 'Boardroom', attendees: [{ email: 'you@gmail.com', self: true, responseStatus: 'accepted' }] }
+  ]
+};
+const calendarDraftDemo: CalendarEventDraftArtifact = {
+  action: 'create', connectionId: 'demo-connection', account: 'you@gmail.com', canWrite: true,
+  event: { title: 'Coffee with Priya', start: calAt(2, 15, 0), end: calAt(2, 15, 30), location: 'Blue Bottle, 5th Ave', attendees: ['priya@example.com'], timeZone: 'America/New_York' }
+};
+
 export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Model popularity ranking (What DreamStream users run · share bars · req/user counts)', category: 'Data & charts', node: <ModelPopularityCard data={modelPopularityDemo} /> },
   { title: 'Guided learning path (modules · tracked progress · practice prompts)', type: 'learning_path', category: 'Learning', node: <LearningPathCard data={learningPathDemo} /> },
@@ -1321,6 +1349,8 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Email terminal (inbox · search · reading pane · open/reply)', type: 'email_inbox', category: 'News & knowledge', node: <EmailTerminal data={emailInboxDemo} /> },
   { title: 'Unread email (unread-only inbox terminal)', type: 'email_unread', category: 'News & knowledge', node: <EmailTerminal data={emailUnreadDemo} /> },
   { title: 'Email compose (editable draft · open in Gmail · mailto)', type: 'email_compose', category: 'News & knowledge', node: <EmailCompose data={emailComposeDemo} /> },
+  { title: 'Calendar agenda (agenda · week · month views · click-to-detail · create/RSVP/edit)', type: 'calendar_agenda', category: 'News & knowledge', node: <CalendarAgenda data={calendarAgendaDemo} /> },
+  { title: 'Calendar event draft (AI-prepared action · confirm to create/edit/delete/RSVP)', type: 'calendar_event_draft', category: 'News & knowledge', node: <CalendarEventDraft data={calendarDraftDemo} /> },
   { title: 'Places (local) card', type: 'places_results', category: 'World & media', node: <PlacesResults data={places} /> },
   { title: 'Map (markers · route)', type: 'map', category: 'World & media', node: <MapArtifactCard data={mapArtifact} /> },
   { title: 'Trip map (day-colored legs · flight arcs · sequential draw)', type: 'map', category: 'World & media', node: <MapArtifactCard data={tripMapDemo} /> },
