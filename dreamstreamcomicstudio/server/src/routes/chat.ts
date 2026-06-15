@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { ChatRequest, ChatResponse, ChatClientContext } from '../../../apiTypes.js';
 import { REFRESHABLE_TOOLS } from '../../../apiTypes.js';
-import { runChat, isStudyIntent, isTripIntent, isTrivialChat, type ChatReasoningLevel, type ChatAttachmentInput } from '../ai/chat.js';
+import { runChat, isStudyIntent, isTripIntent, isTrivialChat, isFastLaneChat, type ChatReasoningLevel, type ChatAttachmentInput } from '../ai/chat.js';
 import { runSwarm } from '../ai/agents/orchestrator.js';
 import { makeSwarmTool, SWARM_TOOL_NAME } from '../ai/agents/swarmTool.js';
 import { makeDelegateTool } from '../ai/agents/delegateTool.js';
@@ -233,6 +233,12 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
         ? lastUserMessage!.content.map((p) => ('text' in p ? p.text : '')).join(' ')
         : '';
 
+  // Does this turn carry attachments (images/files)? Those want the strong, multimodal path,
+  // so they never take the fast lane even if the prompt text reads simple.
+  const hasAttachmentParts =
+    messages.some((m) => Array.isArray(m.content) && m.content.some((p) => p.type === 'image_url')) ||
+    (Array.isArray(body.attachments) && body.attachments.length > 0);
+
   const requestedModel = (typeof body.model === 'string' ? body.model.trim() : '') || (req.header('X-Text-Model') || '').trim();
   // Free-only is a user choice (header). When ON we use the cooldown-aware FREE chain (slower
   // but free). When OFF (the default) the chat leads with a FAST, capable, cheap model rather
@@ -318,6 +324,22 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   // "no response": OpenRouter routes to the first available model in the list. The primary
   // is first; the cheap paid TEXT_FALLBACK is the guaranteed last resort. This is the fix
   // for free models being 404 (retired) / 429 (rate-limited), which left chats empty.
+  // FAST LANE: a focused general-knowledge / conversational question (no live data, no web or
+  // connector action, no attachment, no artifact build) the model can answer from its own
+  // training. We treat it like a trivial turn — fast model, no reflexive web search — so basic
+  // questions return in ~1s instead of paying strong-model + always-on-search latency. Only the
+  // DEFAULT path (no pinned model, not free-only) qualifies; the web_search TOOL stays available.
+  const fastLane =
+    resolved.provider === 'openrouter' &&
+    !requestedModel &&
+    !freeOnly &&
+    !hasAttachmentParts &&
+    // Study/trip prompts get tool-grounded guidance later in prepareChat that assumes the
+    // strong path — keep them off the fast lane so the model tier and that guidance agree.
+    !isStudyIntent(lastUserText) &&
+    !isTripIntent(lastUserText) &&
+    isFastLaneChat(lastUserText);
+
   let fallbackModels: string[] | undefined;
   if (resolved.provider === 'openrouter') {
     if (requestedModel) {
@@ -334,9 +356,10 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
       }).catch(() => [model]);
       fallbackModels = chain.length ? chain : [model];
       model = fallbackModels[0] || model;
-    } else if (!isTrivialChat(lastUserText)) {
+    } else if (!isTrivialChat(lastUserText) && !fastLane) {
       // Complexity-tiered (DEFAULT for real questions): anything past a greeting / thanks /
-      // bare arithmetic leads with a STRONG, tool-capable model so multi-step tool use,
+      // bare arithmetic (and not a fast-lane knowledge question) leads with a STRONG,
+      // tool-capable model so multi-step tool use,
       // retrieval and reasoning actually hold up. The speed-first fast model was the
       // dominant cause of shallow, "couldn't pull it" answers on specific topics. The fast
       // model + cheap net stay as fallbacks, so a down/429 strong pick never yields "no
@@ -345,8 +368,9 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
       fallbackModels = Array.from(new Set([smart, OPENROUTER_TEXT_MODEL, TEXT_FALLBACK]));
       model = fallbackModels[0];
     } else {
-      // Trivial / conversational turn (greeting, thanks, tiny arithmetic): the fast model is
-      // plenty and keeps "hi" instant — no need to pay strong-model latency/cost here.
+      // Trivial / conversational turn (greeting, thanks, tiny arithmetic) OR a fast-lane
+      // knowledge question: the fast model is plenty and keeps these instant — no need to pay
+      // strong-model latency/cost here.
       fallbackModels = Array.from(new Set([OPENROUTER_TEXT_MODEL, TEXT_FALLBACK]));
       model = fallbackModels[0];
     }
@@ -358,7 +382,9 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   // thanks, bare arithmetic) — that reflexive search round-trip fires on EVERY message and is
   // the single biggest reason the SIMPLEST chats felt slow ("hi" shouldn't trigger a search).
   // The web_search TOOL stays on the table, so any real question still grounds live on demand.
-  const webSearch = resolved.provider === 'openrouter' && !isTrivialChat(lastUserText);
+  // Fast-lane knowledge questions also skip the reflexive plugin (they answer from training; the
+  // model can still call web_search if it decides it needs live data).
+  const webSearch = resolved.provider === 'openrouter' && !isTrivialChat(lastUserText) && !fastLane;
   // Lower the sampling temperature on non-trivial turns (the same set that gets the strong
   // model + live grounding): factual/agentic answers want precision, not the 0.7 creative
   // default that added hallucination noise to tool selection and synthesis. Trivial/small-talk

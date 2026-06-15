@@ -13,7 +13,7 @@ import {
 import { getCapabilities } from '../../services/modelCapabilities';
 import { searchModels } from '../../services/modelSearch';
 import { isProviderEnabled } from '../../services/sourceGovernance';
-import { hasUsableKey } from '../../services/apiKeys';
+import { isModelSourceUsable } from '../../services/apiKeys';
 import { getProviderDef, PROVIDERS_ORDERED } from '../../shared/providers';
 import { ProviderLogo, hasProviderLogo } from '../providerLogos';
 import { fetchModelSpeed, speedTier, speedLabel, isTimeoutProneFreeModel, type ModelSpeed } from '../../services/modelSpeed';
@@ -25,11 +25,8 @@ import {
 // Whether a model can actually be used right now: platform-served providers (OpenRouter,
 // NVIDIA, Gemini) work on the platform key/allowance; the direct BYOK providers need the
 // user's own key. Returns the reason so the card can show "Add a key" with a link.
-const keyGate = (source: string): { ok: true } | { ok: false; needsKey: true } => {
-  const def = getProviderDef(source);
-  if (def?.platformServed) return { ok: true };
-  return hasUsableKey(source as any) ? { ok: true } : { ok: false, needsKey: true };
-};
+const keyGate = (source: string): { ok: true } | { ok: false; needsKey: true } =>
+  isModelSourceUsable(source) ? { ok: true } : { ok: false, needsKey: true };
 
 // Measured-latency badge (from real chat telemetry) so slow models are obvious before
 // you pick one — the durable fix for getting stuck on a 60-250s free model.

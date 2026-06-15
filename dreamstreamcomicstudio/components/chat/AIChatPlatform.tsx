@@ -3,6 +3,7 @@ import { Code2, ExternalLink, Loader2, Map as MapIcon, Maximize2, Minimize2, Pan
 import { useAuth } from '../../contexts/AuthContext';
 import { initTheme } from '../../services/theme';
 import { getLockedChatModel, getShowChatModelSelector, onAppSettingsChanged } from '../../services/appSettings';
+import { applyLockedChatModel } from '../../services/chatModelResolve';
 import { ChatSidebar } from './ChatSidebar';
 import { ChatConversation } from './ChatConversation';
 import { ChatModelPicker } from './ChatModelPicker';
@@ -760,12 +761,20 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           ? []
           : Array.from(new Set([...(activeSession.tools || []), ...detectTools(text)]));
     }
-    // A model locked in Settings overrides the session/auto choice (a suggester override
-    // still wins). This is what makes "lock the model from settings" actually take effect.
-    const locked = getLockedChatModel();
-    if (locked && !overrideModel) {
-      reqModel = locked.id;
-      reqSource = locked.source as ModelSourceId;
+    // A model locked in Settings fills in for Auto chats (and chats with no pinned model) —
+    // that's what makes "lock the model from settings" take effect as a default. But it must
+    // NEVER replace a model the user explicitly pinned on THIS chat: that silent swap was the
+    // bug where switching between chats surfaced the wrong (previous/locked) model. A one-off
+    // suggester/branch override still wins over both. (See services/chatModelResolve.ts.)
+    const effectiveLock = applyLockedChatModel({
+      locked: getLockedChatModel(),
+      hasOverride: Boolean(overrideModel),
+      autoMode: Boolean(activeSession?.autoMode),
+      sessionModelId: activeSession?.modelId
+    });
+    if (effectiveLock) {
+      reqModel = effectiveLock.id;
+      reqSource = effectiveLock.source as ModelSourceId;
     }
     return { reqModel, reqSource, reqTools };
   };

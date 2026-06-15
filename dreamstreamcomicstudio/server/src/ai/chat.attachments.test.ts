@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildAttachmentsBlock, isTrivialChat } from './chat.js';
+import { buildAttachmentsBlock, isTrivialChat, isFastLaneChat } from './chat.js';
 
 const dataUri = (mime: string, content: string): string =>
   `data:${mime};base64,${Buffer.from(content, 'utf8').toString('base64')}`;
@@ -86,5 +86,50 @@ describe('isTrivialChat', () => {
     expect(isTrivialChat('summarize the attached report')).toBe(false);
     expect(isTrivialChat('latest news on nvidia')).toBe(false);
     expect(isTrivialChat('hi, can you explain how recursion works?')).toBe(false);
+  });
+});
+
+describe('isFastLaneChat', () => {
+  it('fast-lanes focused knowledge questions the model can answer from training', () => {
+    for (const t of [
+      'what is the capital of France',
+      'why is the sky blue?',
+      'explain how recursion works',
+      'what is photosynthesis',
+      'tell me about Paris',
+      "what's the difference between TCP and UDP",
+      'how do I reverse a string in python?',
+      'define entropy'
+    ]) {
+      expect(isFastLaneChat(t)).toBe(true);
+    }
+  });
+
+  it('does NOT fast-lane questions that need live data, the web, or connectors', () => {
+    for (const t of [
+      'latest news on nvidia',
+      "what's the price of bitcoin",
+      'who won the 2024 election',
+      'what is the weather in Tokyo',
+      'search the web for the best laptop',
+      'summarize my inbox',
+      'check my calendar for tomorrow',
+      'when is the next SpaceX launch'
+    ]) {
+      expect(isFastLaneChat(t)).toBe(false);
+    }
+  });
+
+  it('does NOT fast-lane artifact builds or long, open-ended instructions', () => {
+    expect(isFastLaneChat('build me a dashboard app')).toBe(false);
+    expect(isFastLaneChat('write a 2000 word essay on the French revolution')).toBe(false);
+    expect(isFastLaneChat('x'.repeat(300))).toBe(false);
+  });
+
+  it('keeps trivial turns out of the fast lane (they already route fast on their own)', () => {
+    expect(isFastLaneChat('hi')).toBe(false);
+    expect(isFastLaneChat('thanks')).toBe(false);
+    expect(isFastLaneChat('2+2')).toBe(false);
+    expect(isFastLaneChat('')).toBe(false);
   });
 });

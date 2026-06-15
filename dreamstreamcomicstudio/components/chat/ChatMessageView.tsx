@@ -13,6 +13,7 @@ import { CodeStudioCard } from './artifacts/CodeStudioCard';
 import { SourceCard } from './SourceCard';
 import { useChatPanel } from './panelContext';
 import type { ChatTurn } from '../../services/chatStorage';
+import { prettyModelLabel } from '../../services/modelCatalog';
 import { extractCodeBlocks, codeBlockFilename, downloadTextFile, triggerDownload, buildPlaygroundFiles, buildStudioArtifact } from '../../services/chatUtils';
 import { FeedbackButtons } from '../feedback/FeedbackButtons';
 import {
@@ -339,11 +340,16 @@ export const ChatMessageView: React.FC<ChatMessageViewProps> = ({ turn, sessionI
           );
         })()}
 
-        {/* Model-switch transparency: shown when the answer came from a different model. */}
+        {/* Model-switch transparency: shown when the answer came from a different model. This is
+            ROUTINE resilience (an automatic reroute that still produced a good answer), not a
+            failure — so it reads as a calm, muted note, never an alarming red/amber warning. */}
         {!isUser && !turn.error && turn.requestedModel && turn.model && turn.requestedModel !== turn.model && (
-          <div className="mt-1 flex items-start gap-1 text-[10px] text-amber-600 bg-amber-500/10 border border-amber-500/30 rounded px-2 py-1 max-w-full">
-            <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
-            <span><span className="font-bold">{turn.requestedModel}</span> was unavailable or rate-limited, so this was answered by <span className="font-bold">{turn.model}</span>.</span>
+          <div className="mt-1 flex items-start gap-1.5 text-[10px] text-[var(--ds-muted)] bg-[var(--ds-surface-soft)] border border-[var(--ds-hairline)] rounded px-2 py-1 max-w-full">
+            <RefreshCw className="w-3 h-3 shrink-0 mt-0.5" />
+            <span>
+              Answered by <span className="font-semibold text-[var(--ds-ink)]">{prettyModelLabel(turn.model)}</span>
+              {' — '}your pick <span className="font-semibold text-[var(--ds-ink)]">{prettyModelLabel(turn.requestedModel)}</span> was busy, so it auto-rerouted to keep things fast.
+            </span>
           </div>
         )}
 

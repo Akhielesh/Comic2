@@ -392,6 +392,47 @@ export const isTrivialChat = (text: string): boolean => {
   return false;
 };
 
+// "Fast lane": a focused, general-knowledge or conversational question the model can answer
+// well from its OWN training — it does NOT need live/fresh data (news, prices, weather,
+// "latest"), a specific recent year, a web lookup, the user's connected accounts, or a
+// multi-step build. For these we lead with the FAST model and skip the always-on web
+// round-trip, the same way trivial greetings do — but the web_search TOOL stays on the table,
+// so if the model decides it actually needs to ground live, it still can. This is what keeps
+// "why is the sky blue?" / "explain recursion" at ~1s instead of paying strong-model + reflexive
+// search latency on EVERY message. Deliberately conservative: anything that smells like current
+// events, real-time data, a web/connector action or an artifact build stays on the strong path.
+const FAST_LANE_DISQUALIFIERS: RegExp[] = [
+  // Freshness / current events / real-time
+  /\b(latest|current(?:ly)?|today|tonight|right now|as of|this (?:week|month|year|morning|afternoon|evening)|yesterday|tomorrow|recent(?:ly)?|upcoming|news|headlines?|breaking|live|trending|nowadays)\b/i,
+  // A specific recent calendar year usually implies "as of <year>" / current state
+  /\b20[12]\d\b/,
+  // Markets / finance / real-time numbers
+  /\b(price[sd]?|stock|shares?|ticker|market cap|quotes?|exchange rate|conversion rate|crypto|bitcoin|ethereum|ipo|earnings)\b/i,
+  // Weather / location / "near me"
+  /\b(weather|forecast|near me|nearby|open now|opening hours|directions to)\b/i,
+  // Events / results / schedules
+  /\b(who won|final score|standings|fixtures?|election|when (?:is|are|was|were|does|do|did|will)|release date|out yet)\b/i,
+  // Explicit web action
+  /\b(search (?:for|the web|online)|look ?up|google (?:it|for)|browse|find (?:me )?(?:online|on the web|on the internet)|on the web|https?:\/\/|www\.)\b/i,
+  // The user's connected accounts (needs tools/connectors, not knowledge)
+  /\b(my (?:e-?mail|inbox|calendar|drive|files?|messages?|account|schedule)|send (?:an? )?(?:e-?mail|message)|reply to|draft (?:an? )?(?:e-?mail|reply)|add to (?:my )?calendar|schedule (?:a|an|my))\b/i,
+  // Multi-step builds / artifact generation (these want the tool loop + strong model)
+  /\b(build|generate|create|make|render|design|code|write)\b.{0,24}\b(app|application|website|web ?page|landing page|dashboard|chart|graph|diagram|comic|component|game|spreadsheet|table|report|essay|story)\b/i
+];
+
+// Shapes that read as an answerable knowledge question rather than an open-ended instruction.
+const ANSWERABLE_SHAPE_RE =
+  /(?:\?\s*$)|^(?:what|why|how|when|where|who|which|whose|whom|is|are|was|were|do(?:es)?|did|can|could|should|would|will|define|explain|describe|summari[sz]e|tell me|give me (?:a |an |the )?(?:summary|overview|example|definition)|list|name|compare|difference between|meaning of|pros and cons|how (?:do(?: i| you)?|to)|what(?:'s| is) the (?:difference|syntax|meaning))\b/i;
+
+export const isFastLaneChat = (text: string): boolean => {
+  const t = (text || '').trim();
+  if (!t) return false; // empty is "trivial", handled elsewhere
+  if (isTrivialChat(t)) return false; // keep the two sets distinct — trivial already routes fast
+  if (t.length > 240) return false; // long prompts tend to be real, multi-part tasks
+  if (FAST_LANE_DISQUALIFIERS.some((re) => re.test(t))) return false;
+  return ANSWERABLE_SHAPE_RE.test(t);
+};
+
 // Output-token budget for a chat answer. The old flat 2048 cap truncated long answers and —
 // worse — cut off generate_app/render_chart tool-call arguments mid-JSON (the entire app or
 // chart rides inside those arguments), so "build me an app/chart" silently produced nothing.

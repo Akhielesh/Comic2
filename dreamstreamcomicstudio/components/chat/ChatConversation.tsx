@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { PanelLeftOpen, PanelLeftClose, ChevronDown, Sparkles, Cpu, Pencil, Check, X, Hash, Braces } from 'lucide-react';
+import { PanelLeftOpen, PanelLeftClose, ChevronDown, Sparkles, Pencil, Check, X, Hash, Braces } from 'lucide-react';
 import type { ChatSession, ChatAttachment } from '../../services/chatStorage';
 import { serializeDebugBundle } from '../../services/chatDebug';
 import type { ChatReasoningLevel } from '../../apiTypes';
@@ -12,6 +12,7 @@ import { ChatMessageView } from './ChatMessageView';
 import { ChatComposer } from './ChatComposer';
 import { ChatContextMeter } from './ChatContextMeter';
 import { ChatModelSuggester } from './ChatModelSuggester';
+import { ChatModelChip } from './ChatModelChip';
 import { FollowUpChips } from './FollowUpChips';
 import {
   CANVAS_BG, GLASS, HAIRLINE, MENU, MUTED, INK, TRANSITION, SHADOW_SOFT,
@@ -251,15 +252,14 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
         </button>
 
         {showModelSelector !== false && (
-          <button
+          <ChatModelChip
+            modelId={session.modelId}
+            modelName={session.modelName}
+            source={session.source}
+            autoMode={session.autoMode}
+            lockedSource={session.lockedSource}
             onClick={onOpenModelPicker}
-            className={`flex items-center gap-2 ${CONTROL_BTN} px-3 py-2 sm:py-1.5 min-w-0`}
-            title="Switch model"
-          >
-            <Cpu className={`w-4 h-4 shrink-0 ${ACCENT_TEXT}`} />
-            <span className={`font-semibold text-sm truncate max-w-[120px] sm:max-w-[180px] ${INK}`}>{modelLabel}</span>
-            <ChevronDown className="w-4 h-4 shrink-0 text-[var(--ds-muted)]" />
-          </button>
+          />
         )}
 
         {/* Editable session title */}

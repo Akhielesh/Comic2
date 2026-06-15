@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Zap, KeyRound } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { getActiveKey, usageFraction, PROVIDER_META, ALL_PROVIDERS, type ApiKeyProvider } from '../services/apiKeys';
+import { getActiveKey, usageFraction, usageColor, PROVIDER_META, ALL_PROVIDERS, type ApiKeyProvider } from '../services/apiKeys';
 import {
   getSelectedImageModel,
   getSelectedTextModel,
@@ -19,9 +19,6 @@ interface TokenAvailabilityPillProps {
 
 // Provider priority for the "headline" key shown in the pill.
 const PROVIDER_PRIORITY: ApiKeyProvider[] = ['openrouter', 'nvidia', 'gemini', 'pixazo'];
-
-const usageColor = (frac: number) =>
-  frac >= 1 ? 'text-red-500' : frac >= 0.8 ? 'text-amber-500' : 'text-[var(--ds-muted)]';
 
 /**
  * Header pill showing the ACTIVE API key's usage instead of the legacy CT credits.

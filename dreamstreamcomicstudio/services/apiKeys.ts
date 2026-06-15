@@ -7,7 +7,7 @@
 //
 // See docs/decisions/0003-multi-key-api-configuration-and-usage-limits.md
 
-import { PROVIDERS_ORDERED, type ProviderId } from '../shared/providers';
+import { PROVIDERS_ORDERED, getProviderDef, type ProviderId } from '../shared/providers';
 
 // Every text provider (from the shared registry) plus the legacy image-only BYOK paths.
 export type ApiKeyProvider = ProviderId | 'pixazo' | 'ideogram';
@@ -334,6 +334,22 @@ export const usageFraction = (key: ManagedApiKey): number => {
 
 export const isOverLimit = (key: ManagedApiKey): boolean =>
   Boolean(key.limitUsd && key.limitUsd > 0 && key.usedUsd >= key.limitUsd);
+
+/** Tailwind text-color class for a usage fraction — shared by the header pill + composer chip. */
+export const usageColor = (frac: number): string =>
+  frac >= 1 ? 'text-red-500' : frac >= 0.8 ? 'text-amber-500' : 'text-[var(--ds-muted)]';
+
+/**
+ * Can a model from this source actually be used right now? Platform-served providers run on the
+ * shared platform key/allowance; the rest (BYOK) need a usable key on file. Single source of
+ * truth for the picker's "Add a key" gate and the composer chip's "no key" state, so the two
+ * surfaces can never disagree about whether a model is usable.
+ */
+export const isModelSourceUsable = (source: string): boolean => {
+  const def = getProviderDef(source);
+  if (def?.platformServed) return true;
+  return hasUsableKey(source as ApiKeyProvider);
+};
 
 /**
  * Resolve the active key for a generation. `key` is null when none is configured;
