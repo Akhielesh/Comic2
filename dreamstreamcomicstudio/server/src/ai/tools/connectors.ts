@@ -300,6 +300,8 @@ interface CalEventView {
   end?: string | null;
   allDay?: boolean;
   location?: string | null;
+  responseStatus?: string | null;
+  htmlLink?: string | null;
   attendees?: { email?: string; name?: string; responseStatus?: string; self?: boolean }[];
 }
 
@@ -318,18 +320,35 @@ const calendarAgendaWidget = async (
     })) as { events?: CalEventView[]; timezone?: string | null; window?: { timeMin: string; timeMax: string } };
     const events = data.events || [];
     const canWrite = GoogleCalendarConnector.hasWriteScope(r.connection.granted_scopes);
+    const tz = data.timezone || ctx?.timezone || undefined;
     const artifactData = {
       account: r.connection.account_identifier,
       accountLabel: r.connection.account_label,
       connectionId: r.connection.id,
       canWrite,
-      timezone: data.timezone || ctx?.timezone || null,
+      timezone: tz || null,
       query: opts.q || '',
       window: data.window,
       events
     };
+    // Give the MODEL the actual events (not just a count) so it can answer "what do I
+    // have" — the widget shows the same detail visually. Times render in the user's tz.
+    const fmtWhen = (ev: CalEventView): string => {
+      if (!ev.start) return 'TBD';
+      const d = new Date(ev.start);
+      if (!Number.isFinite(d.getTime())) return 'TBD';
+      const optsFmt: Intl.DateTimeFormatOptions = ev.allDay
+        ? { weekday: 'short', month: 'short', day: 'numeric', ...(tz ? { timeZone: tz } : {}) }
+        : { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', ...(tz ? { timeZone: tz } : {}) };
+      try { return d.toLocaleString('en-US', optsFmt); } catch { return d.toISOString(); }
+    };
+    const lines = events.slice(0, 25).map((e) => {
+      const rsvp = e.responseStatus && e.responseStatus !== 'accepted' ? ` [${e.responseStatus}]` : '';
+      const loc = e.location ? ` @ ${e.location}` : '';
+      return `- ${fmtWhen(e)} — ${e.title}${loc}${rsvp} (id: ${e.id})`;
+    });
     const summary = events.length
-      ? `Loaded ${events.length} event${events.length === 1 ? '' : 's'} from ${r.connection.account_identifier}${opts.q ? ` matching "${opts.q}"` : ''}. An interactive calendar widget is shown (agenda / week / month views; click an event for details${canWrite ? '; create/RSVP/edit from chat with confirmation' : ''}). Call out the next 1–2 commitments and any gaps; don't list everything.`
+      ? `The user's calendar (${r.connection.account_identifier}) — ${events.length} event${events.length === 1 ? '' : 's'}${opts.q ? ` matching "${opts.q}"` : ''}. An interactive calendar widget is shown (agenda / week / month views; click an event for details${canWrite ? '; you can create/RSVP/edit from chat — those need the user to confirm a card' : ''}).\n\n${lines.join('\n')}\n\nAnswer the user's question from these events (next commitments, free time, conflicts). Reference events by their title/time, not the id.`
       : `No events${opts.q ? ` matching "${opts.q}"` : ''} in the next ${opts.days || 14} days on ${r.connection.account_identifier}. The user looks free in that window.`;
     return {
       content: summary,
@@ -392,6 +411,48 @@ const calendarDraft = async (
   };
 };
 
+/** Normalize a loose event object from the model into the draft event shape. */
+const normEvent = (e: unknown, tz?: string): Record<string, unknown> => {
+  const o = (e || {}) as Record<string, unknown>;
+  return {
+    title: String(o.title || ''),
+    start: o.start ? String(o.start) : undefined,
+    end: o.end ? String(o.end) : undefined,
+    allDay: Boolean(o.allDay),
+    location: o.location ? String(o.location) : undefined,
+    description: o.description ? String(o.description) : undefined,
+    attendees: Array.isArray(o.attendees) ? o.attendees.map(String) : undefined,
+    timeZone: tz
+  };
+};
+
+/** A BATCH create draft — one card listing several events with an "Add all" action. */
+const calendarDraftMulti = async (
+  ctx: ToolContext | undefined,
+  events: Record<string, unknown>[]
+): Promise<ToolExecResult> => {
+  const r = await resolve(ctx, 'google_calendar', 'Calendar');
+  const connected = !('fail' in r);
+  const connection = connected ? r.connection : undefined;
+  const canWrite = connection ? GoogleCalendarConnector.hasWriteScope(connection.granted_scopes) : false;
+  const note = !connected
+    ? ' (Calendar isn’t connected yet — connect it in Connectors, then confirm.)'
+    : !canWrite
+      ? ' (This Calendar connection is read-only — reconnect to grant edit access, then confirm.)'
+      : '';
+  return {
+    content: `Prepared ${events.length} events to add. A confirmation card lists them with an “Add all” action — nothing changes until the user confirms.${note} Tell the user what you found and that they can review/confirm.`,
+    artifacts: [
+      {
+        type: 'calendar_event_draft',
+        // `event` mirrors the first so older single-event code paths stay safe; the card
+        // renders the full `events` list when present.
+        data: { action: 'create', connectionId: connection?.id, account: connection?.account_identifier, canWrite, event: events[0], events }
+      }
+    ]
+  };
+};
+
 const makeCalendarCreateEvent = (ctx?: ToolContext): ChatTool => ({
   name: 'calendar_create_event',
   description:
@@ -419,6 +480,41 @@ const makeCalendarCreateEvent = (ctx?: ToolContext): ChatTool => ({
       attendees: Array.isArray(args.attendees) ? args.attendees.map(String) : undefined,
       timeZone: ctx?.timezone
     })
+});
+
+const makeCalendarCreateEvents = (ctx?: ToolContext): ChatTool => ({
+  name: 'calendar_create_events',
+  description:
+    "Prepare SEVERAL new calendar events at once — e.g. a trip itinerary, a multi-day plan, recurring study/workout blocks, or events you parsed out of an email/booking. Shows ONE confirmation card listing them with an 'Add all' action; it does NOT create anything until the user confirms. Use this (instead of calling calendar_create_event repeatedly) whenever 2+ events are implied. Give each an ISO 8601 `start` (set `allDay` for date-only).",
+  parameters: obj(
+    {
+      events: {
+        type: 'array',
+        description: 'The events to add (2 or more).',
+        items: {
+          type: 'object',
+          properties: {
+            title: { type: 'string' },
+            start: { type: 'string', description: 'ISO 8601 start (or a date for all-day).' },
+            end: { type: 'string', description: 'ISO 8601 end (optional).' },
+            allDay: { type: 'boolean' },
+            location: { type: 'string' },
+            description: { type: 'string' },
+            attendees: { type: 'array', items: { type: 'string' } }
+          },
+          required: ['title', 'start']
+        }
+      }
+    },
+    ['events']
+  ),
+  execute: async (args): Promise<ToolExecResult> => {
+    const list = Array.isArray(args.events) ? args.events : [];
+    const events = list.map((e) => normEvent(e, ctx?.timezone)).filter((e) => e.title && e.start);
+    if (!events.length) return { content: 'No valid events to add — give each one a title and an ISO 8601 start time.' };
+    if (events.length === 1) return calendarDraft(ctx, 'create', events[0]);
+    return calendarDraftMulti(ctx, events);
+  }
 });
 
 const makeCalendarUpdateEvent = (ctx?: ToolContext): ChatTool => ({
@@ -581,6 +677,7 @@ const FACTORIES: Record<string, (ctx?: ToolContext) => ChatTool> = {
   drive_search: makeDriveSearch,
   calendar_agenda: makeCalendarAgenda,
   calendar_create_event: makeCalendarCreateEvent,
+  calendar_create_events: makeCalendarCreateEvents,
   calendar_update_event: makeCalendarUpdateEvent,
   calendar_delete_event: makeCalendarDeleteEvent,
   calendar_rsvp: makeCalendarRsvp,
@@ -596,12 +693,18 @@ export const CONNECTOR_TOOL_NAMES = Object.keys(FACTORIES);
 // force-include the right tool when a user actually has that account linked, so the
 // keyword router can't silently drop e.g. gmail_search just because the message didn't
 // literally say "gmail"/"email". Kept beside FACTORIES so the two stay in sync.
-const CONNECTOR_PRIMARY_TOOL: Record<string, string> = {
-  gmail: 'gmail_search',
-  google_drive: 'drive_search',
-  google_calendar: 'calendar_agenda',
-  google_sheets: 'sheets_read',
-  google_maps: 'maps_lookup'
+// Per connector, the tool(s) to ALWAYS offer the model when that account is linked, so
+// the AI can be proactive without the keyword router having to guess. Calendar gets its
+// read AND create tools always-on: that's what lets the AI *notice* a plannable event in
+// the conversation (or an email/booking) and OFFER to add it — single or as a batch —
+// without being explicitly told. (Edits/deletes/RSVP still route on demand, since they
+// need an eventId the agenda surfaces first.)
+const CONNECTOR_PRIMARY_TOOL: Record<string, string[]> = {
+  gmail: ['gmail_search'],
+  google_drive: ['drive_search'],
+  google_calendar: ['calendar_agenda', 'calendar_create_event', 'calendar_create_events'],
+  google_sheets: ['sheets_read'],
+  google_maps: ['maps_lookup']
 };
 
 /**
@@ -612,8 +715,7 @@ const CONNECTOR_PRIMARY_TOOL: Record<string, string> = {
 export const primaryConnectorToolNames = (connectorIds: string[]): string[] => {
   const names = new Set<string>();
   for (const id of connectorIds) {
-    const tool = CONNECTOR_PRIMARY_TOOL[id];
-    if (tool) names.add(tool);
+    for (const tool of CONNECTOR_PRIMARY_TOOL[id] || []) names.add(tool);
   }
   if (names.size) names.add('connected_data_search');
   return Array.from(names);

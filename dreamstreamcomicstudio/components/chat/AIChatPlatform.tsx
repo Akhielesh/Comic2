@@ -208,6 +208,26 @@ const composeSystemPrompt = (memory: string, persona?: string): string | undefin
   return parts.length ? parts.join('\n\n') : undefined;
 };
 
+// When a turn ends — finishes, errors, or is STOPPED — any LIVE trace card must stop
+// showing "working…": settle still-running/pending work to a terminal state so the
+// `swarm_trace` and `agent_activity` cards never spin forever after the answer is done
+// or the run was aborted. (On a clean finish the trace is usually replaced by the
+// server's final artifacts anyway; this guards the abort/error paths that keep it.)
+const settleLiveTrace = <T extends { type: string; data: unknown }>(artifacts?: T[]): T[] | undefined =>
+  artifacts?.map((a) => {
+    if (a.type === 'swarm_trace') {
+      const d = (a.data || {}) as { agents?: { status?: string }[] };
+      if (!Array.isArray(d.agents)) return a;
+      return { ...a, data: { ...d, agents: d.agents.map((g) => (g?.status === 'running' || g?.status === 'pending' ? { ...g, status: 'done' } : g)) } } as T;
+    }
+    if (a.type === 'agent_activity') {
+      const d = (a.data || {}) as { steps?: { status?: string }[]; done?: boolean };
+      const steps = Array.isArray(d.steps) ? d.steps.map((s) => (s?.status === 'running' ? { ...s, status: 'done' } : s)) : d.steps;
+      return { ...a, data: { ...d, steps, done: true } } as T;
+    }
+    return a;
+  });
+
 export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects }) => {
   const { user } = useAuth();
   // Apply the persisted light/dark theme to <html> as soon as the studio mounts,
@@ -950,7 +970,7 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
             citations: res.citations,
             toolEvents: res.toolEvents,
             images: res.images,
-            artifacts: res.artifacts,
+            artifacts: settleLiveTrace(res.artifacts),
             notices: res.notices,
             durationMs: Date.now() - turnStartedAt,
             createdAt: Date.now()
@@ -1002,7 +1022,12 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
       updateMemoryInBackground(baseTurns, res.text || '');
     } catch (err) {
       if (controller.signal.aborted) {
-        updateSession(sessionId, (s) => ({ ...s, updatedAt: Date.now() }));
+        // Stopped mid-run: settle the live agent trace so its card doesn't spin forever.
+        updateSession(sessionId, (s) => ({
+          ...s,
+          turns: s.turns.map((t) => (t.id === aiTurnId ? { ...t, artifacts: settleLiveTrace(t.artifacts) } : t)),
+          updatedAt: Date.now()
+        }));
         return;
       }
       const friendly = friendlyChatError(err);
@@ -1032,10 +1057,11 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
           // else). Surface the failure as a soft note appended below the partial content.
           const partial = (t.content || '').trim();
           if (partial) {
-            return { ...t, content: `${t.content}\n\n---\n*⚠️ Response interrupted: ${friendly}*` };
+            return { ...t, artifacts: settleLiveTrace(t.artifacts), content: `${t.content}\n\n---\n*⚠️ Response interrupted: ${friendly}*` };
           }
           return {
             ...t,
+            artifacts: settleLiveTrace(t.artifacts),
             content: `**Couldn't complete that.** ${friendly} If this keeps happening, check your API key in Settings → API Configuration.`,
             error: true
           };

@@ -1352,6 +1352,16 @@ const calendarDraftDemo: CalendarEventDraftArtifact = {
   action: 'create', connectionId: 'demo-connection', account: 'you@gmail.com', canWrite: true,
   event: { title: 'Coffee with Priya', start: calAt(2, 15, 0), end: calAt(2, 15, 30), location: 'Blue Bottle, 5th Ave', attendees: ['priya@example.com'], timeZone: 'America/New_York' }
 };
+const calendarBatchDraftDemo: CalendarEventDraftArtifact = {
+  action: 'create', connectionId: 'demo-connection', account: 'you@gmail.com', canWrite: true,
+  event: { title: 'Flight to Tokyo (NH 11)', start: calAt(7, 11, 0), end: calAt(7, 14, 30), timeZone: 'America/New_York' },
+  events: [
+    { title: 'Flight to Tokyo (NH 11)', start: calAt(7, 11, 0), end: calAt(7, 14, 30), location: 'SFO → HND', timeZone: 'America/New_York' },
+    { title: 'Hotel check-in — Park Hyatt', start: calDay(8), allDay: true },
+    { title: 'Team dinner', start: calAt(8, 19, 0), end: calAt(8, 21, 0), location: 'Shinjuku' },
+    { title: 'Client workshop', start: calAt(9, 10, 0), end: calAt(9, 16, 0), location: 'Roppongi office', attendees: ['lead@client.co'] }
+  ]
+};
 
 export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Model popularity ranking (What DreamStream users run · share bars · req/user counts)', category: 'Data & charts', node: <ModelPopularityCard data={modelPopularityDemo} /> },
@@ -1367,6 +1377,7 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Email compose (editable draft · open in Gmail · mailto)', type: 'email_compose', category: 'News & knowledge', node: <EmailCompose data={emailComposeDemo} /> },
   { title: 'Calendar agenda (agenda · week · month views · click-to-detail · create/RSVP/edit)', type: 'calendar_agenda', category: 'News & knowledge', node: <CalendarAgenda data={calendarAgendaDemo} /> },
   { title: 'Calendar event draft (AI-prepared action · confirm to create/edit/delete/RSVP)', type: 'calendar_event_draft', category: 'News & knowledge', node: <CalendarEventDraft data={calendarDraftDemo} /> },
+  { title: 'Calendar batch draft (AI parsed an itinerary · review/remove · Add all)', type: 'calendar_event_draft', category: 'News & knowledge', node: <CalendarEventDraft data={calendarBatchDraftDemo} /> },
   { title: 'Places (local) card', type: 'places_results', category: 'World & media', node: <PlacesResults data={places} /> },
   { title: 'Map (markers · route)', type: 'map', category: 'World & media', node: <MapArtifactCard data={mapArtifact} /> },
   { title: 'Trip map (day-colored legs · flight arcs · sequential draw)', type: 'map', category: 'World & media', node: <MapArtifactCard data={tripMapDemo} /> },

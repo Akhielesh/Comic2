@@ -16,14 +16,6 @@ const statusIcon = (status: SwarmAgentStatus) => {
   }
 };
 
-// Status → dot color for the compact glance row.
-const STATUS_DOT: Record<SwarmAgentStatus, string> = {
-  pending: 'bg-[var(--ds-faint)]',
-  running: 'bg-fuchsia-500 animate-pulse',
-  done: 'bg-emerald-500',
-  error: 'bg-red-500'
-};
-
 // Verifier confidence (0–1) → a colored chip. Green = well-supported, amber = thin,
 // red = weak/unverified. Mirrors the server-side verify.ts banding.
 const confidenceStyle = (c: number): string =>
@@ -59,37 +51,22 @@ export const SwarmTraceCard: React.FC<{ data: SwarmTraceArtifact }> = ({ data })
   const scored = data.agents.filter((a) => typeof a.confidence === 'number');
   const overall = scored.length ? scored.reduce((s, a) => s + (a.confidence || 0), 0) / scored.length : undefined;
 
-  // ── Compact: the goal, one status dot per agent, and the done/total count.
+  // ── Compact: one tight row — status icon, label, goal, and done/total. Small and calm
+  // (the chunky header/dots are gone); the full per-agent trace lives in the expanded view.
   if (compact) {
     return (
-      <Surface
-        accent="#c026d3"
-        header={
-          <div className="flex items-start gap-2">
-            <span className="mt-0.5 shrink-0 rounded-lg bg-[var(--ds-well-strong)] p-1.5 text-fuchsia-700">
-              <Network className="w-4 h-4" />
-            </span>
-            <div className="min-w-0">
-              <SurfaceTitle>Agent swarm</SurfaceTitle>
-              {data.goal && <SurfaceSubtitle>{data.goal}</SurfaceSubtitle>}
-            </div>
-          </div>
-        }
-        right={
-          <span className="text-[11px] text-[var(--ds-muted)] tabular-nums">
-            {done}/{data.agents.length} done
+      <Surface accent="#c026d3">
+        <div className="flex items-center gap-2 px-3 py-2">
+          {running ? (
+            <Loader2 className="w-3.5 h-3.5 shrink-0 text-fuchsia-600 animate-spin" />
+          ) : (
+            <Network className="w-3.5 h-3.5 shrink-0 text-fuchsia-700" />
+          )}
+          <span className="shrink-0 text-[12px] font-semibold text-[var(--ds-ink)]">Agents</span>
+          {data.goal && <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--ds-muted)]">{data.goal}</span>}
+          <span className="ml-auto shrink-0 text-[11px] tabular-nums text-[var(--ds-muted)]">
+            {running ? `${done}/${data.agents.length}` : `${data.agents.length} agent${data.agents.length === 1 ? '' : 's'}`}
           </span>
-        }
-      >
-        <div className="flex items-center gap-1.5 px-3 pb-3">
-          {data.agents.map((a, i) => (
-            <span
-              key={a.id + i}
-              title={`${a.name} · ${a.status}`}
-              className={`h-2 w-2 rounded-full ${STATUS_DOT[a.status] ?? 'bg-[var(--ds-faint)]'}`}
-            />
-          ))}
-          {running && <span className="ml-1 text-[11px] text-[var(--ds-muted)]">working…</span>}
         </div>
       </Surface>
     );

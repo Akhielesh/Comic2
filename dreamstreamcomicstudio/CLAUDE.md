@@ -1,5 +1,31 @@
 # Project conventions
 
+## Product ideology — build hungry, ship excellence (READ FIRST)
+
+This is the core operating principle for anyone (human or AI) working on this app. It is
+not optional polish — it is how we work.
+
+- **Go beyond the literal ask.** A request is the floor, not the ceiling. Deliver what was
+  asked, then ask "what would make this genuinely excellent?" and build that too. A task is
+  not done when it works — it's done when it's something to be proud of. Assume your first
+  pass is "decent, not good enough" and push it further.
+- **Be proactive and smart, especially across connectors.** The whole point of connecting
+  so many sources (Calendar, Gmail, Drive, Maps, finance, web…) is for the AI to *notice
+  patterns and act*, not to passively answer one literal question. If the user is planning
+  an event, the AI offers to add it; if an email implies a task, surface it; if data implies
+  a next step, propose it. Find the patterns the user *didn't* spell out. Anticipate.
+- **Push, push, push.** Plan ahead, look around the corner, and keep improving. When you
+  finish something, look for the adjacent feature/flow/edge case that makes it shine and do
+  that without being asked. Hunger for features and quality is part of the product, not a
+  favor to the user — they shouldn't have to keep asking for excellence.
+- **Always ask: how is this better?** Before calling something done, articulate what makes
+  it better than the obvious version — better UX, fewer steps, smarter defaults, more
+  honest failure states, one less thing the user has to think about. If you can't name how
+  it's better, it isn't finished.
+- **Guardrails stay.** Hunger never means cutting safety, honesty, or user consent: writes
+  to a user's accounts still confirm; sensitive actions stay gated; we never fabricate. We
+  go beyond *within* the honesty contract below, not around it.
+
 ## Rich-output components (chat artifacts) — MUST READ before adding one
 
 The chat renders typed "artifact" cards (weather, stock, news, charts, maps, …).
