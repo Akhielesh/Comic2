@@ -632,6 +632,11 @@ const runChatParams = (p: PreparedChat) => ({
   dreamstreamContextJson: p.dreamstreamContextJson,
   userId: p.userId,
   userMemory: Boolean(p.userId),
+  // RAG over the signed-in user's CONNECTED accounts (Gmail/Drive/Calendar/…). Fail-open
+  // + time-boxed inside chat.ts, and returns nothing when they have no synced items, so
+  // it's safe to enable for any signed-in user. (Was declared but never set → connector
+  // context never reached the model.)
+  connectorContext: Boolean(p.userId),
   tools: p.tools,
   clientContext: p.clientContext,
   attachments: p.attachments,

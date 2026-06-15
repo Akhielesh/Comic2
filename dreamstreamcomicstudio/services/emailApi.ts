@@ -37,9 +37,17 @@ export const fetchEmails = (
   });
 };
 
-/** Read one message's full decoded body (the reading pane). */
+/** Read one message in full — decoded text + ORIGINAL HTML body + attachments. */
 export const fetchEmailBody = (connectionId: string, id: string): Promise<EmailMessage> =>
   fetchResource<{ email: EmailMessage }>(connectionId, 'message', { id }).then((d) => d.email);
+
+/** Raw attachment bytes (base64url) for an inline image or a download. */
+export const fetchAttachment = (
+  connectionId: string,
+  messageId: string,
+  attachmentId: string
+): Promise<{ data: string; size: number | null }> =>
+  fetchResource<{ data: string; size: number | null }>(connectionId, 'attachment', { id: messageId, attachmentId });
 
 /** Read a whole conversation (each message with its body). */
 export const fetchEmailThread = (

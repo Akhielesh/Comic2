@@ -1700,6 +1700,20 @@ export interface NewsResultsArtifact {
 // READ-ONLY Gmail connection. The list/reader widgets self-serve search, paging and
 // body reads via the authenticated connectors fetch endpoint (services/emailApi.ts),
 // scoped to `connectionId`; compose hands off to Gmail (we never send on their behalf).
+export type EmailCategory = 'primary' | 'social' | 'promotions' | 'updates' | 'forums';
+
+/** A message attachment (downloadable) or an inline image referenced by the HTML body. */
+export interface EmailAttachment {
+  attachmentId: string;
+  filename: string;
+  mimeType: string;
+  size?: number;
+  /** Inline (embedded in the HTML via Content-ID) vs a regular downloadable attachment. */
+  inline?: boolean;
+  /** Content-ID, for resolving `cid:` references in the HTML body to the attachment. */
+  contentId?: string | null;
+}
+
 export interface EmailMessage {
   id: string;
   threadId?: string | null;
@@ -1714,10 +1728,23 @@ export interface EmailMessage {
   starred?: boolean;
   important?: boolean;
   labels?: string[];
+  /** Gmail inbox category, derived from CATEGORY_* labels. */
+  category?: EmailCategory | null;
+  /** True when the message carries downloadable attachments (known after a full read). */
+  hasAttachments?: boolean;
   /** Deep-link to the message in Gmail. */
   url: string;
-  /** Full decoded plain-text body — only present after an on-demand read. */
+  /** Full decoded PLAIN-TEXT body — only present after an on-demand read. */
   body?: string;
+  /** Alias of the plain-text body (the reader prefers `html`, falls back to this). */
+  text?: string | null;
+  /** The original HTML body (rendered in a sandboxed iframe) — present after a read. */
+  html?: string | null;
+  /** Attachments + inline images — present after a full read. */
+  attachments?: EmailAttachment[];
+  /** For multi-account aggregation: which connection/account this message came from. */
+  connectionId?: string;
+  account?: string | null;
 }
 export interface EmailInboxArtifact {
   /** Which mailbox view this is. */
@@ -1728,9 +1755,15 @@ export interface EmailInboxArtifact {
   connectionId: string;
   /** Active Gmail query the list was pre-filtered with, if any. */
   query?: string;
+  /** Active category tab (defaults to Primary in the UI). */
+  category?: EmailCategory;
   emails: EmailMessage[];
   /** Gmail pageToken for "load more", or null when the list is exhausted. */
   nextCursor?: string | null;
+  /** True when `emails` is aggregated across multiple accounts (each carries connectionId). */
+  aggregated?: boolean;
+  /** The accounts represented (for the account filter), when aggregated. */
+  accounts?: Array<{ connectionId: string; account: string; label?: string | null }>;
   density?: 'compact' | 'detailed';
 }
 /** Unread is the same shape as inbox (box: 'unread'); kept as an alias for clarity. */

@@ -22,10 +22,11 @@ import { GameCard } from './artifacts/GameCard';
 import { EmailTerminal } from './artifacts/EmailTerminal';
 import { EmailCompose } from './artifacts/EmailCompose';
 import { CalendarAgenda } from './artifacts/CalendarAgenda';
-import type { GameKind, EmailInboxArtifact, EmailComposeArtifact, CalendarAgendaArtifact } from '../../apiTypes';
+import type { GameKind, EmailInboxArtifact, EmailComposeArtifact, EmailMessage, CalendarAgendaArtifact } from '../../apiTypes';
 import { fetchEmails } from '../../services/emailApi';
 import { fetchAgenda } from '../../services/calendarApi';
 import { fetchConnections } from '../../services/connectorsApi';
+import { getLockedChatModel } from '../../services/appSettings';
 import { DictationButton } from './DictationButton';
 import {
   AI_CHAT_TILE, CALENDAR_TILE, EMAIL_TILE, EMAIL_COMPOSE_TILE, EMBED_TILE, GAME_TILE, TOOL_LABELS, WIDGET_BY_TOOL, WIDGET_CATEGORIES, buildTileFromFields, searchWidgets,
@@ -125,24 +126,46 @@ const EmailTile: React.FC<{ tile: DashboardTile }> = ({ tile }) => {
     (async () => {
       try {
         const conns = await fetchConnections();
-        // Only a usable (connected/syncing) Gmail drives the terminal; an expired/error
-        // connection routes to the reconnect guidance instead of a dead-end fetch loop.
-        const gmail = conns.find((c) => c.connectorId === 'gmail' && (c.status === 'connected' || c.status === 'syncing'));
-        if (!gmail) {
+        // Every usable (connected/syncing) Gmail; expired/error route to reconnect guidance.
+        const gmails = conns.filter((c) => c.connectorId === 'gmail' && (c.status === 'connected' || c.status === 'syncing'));
+        if (!gmails.length) {
           if (active) setState({ status: 'disconnected' });
           return;
         }
-        const res = await fetchEmails(gmail.id, { box, max: 25 });
+        // Relevant mail by default (Primary category) — promos/social/updates are hidden.
+        const q = 'category:primary';
+        if (gmails.length === 1) {
+          const g = gmails[0];
+          const res = await fetchEmails(g.id, { box, q, max: 25 });
+          if (active)
+            setState({
+              status: 'ready',
+              data: { box, category: 'primary', connectionId: g.id, account: g.accountIdentifier, accountLabel: g.accountLabel, emails: res.emails, nextCursor: res.nextCursor }
+            });
+          return;
+        }
+        // Multi-account: merge each account's Primary page into one smart inbox.
+        const per = await Promise.all(
+          gmails.map((g) =>
+            fetchEmails(g.id, { box, q, max: 25 })
+              .then((r): EmailMessage[] => r.emails.map((e) => ({ ...e, connectionId: g.id, account: g.accountIdentifier })))
+              .catch((): EmailMessage[] => [])
+          )
+        );
+        const merged = per.flat().sort((a, b) => (b.date || '').localeCompare(a.date || ''));
         if (active)
           setState({
             status: 'ready',
             data: {
               box,
-              connectionId: gmail.id,
-              account: gmail.accountIdentifier,
-              accountLabel: gmail.accountLabel,
-              emails: res.emails,
-              nextCursor: res.nextCursor
+              category: 'primary',
+              aggregated: true,
+              accounts: gmails.map((g) => ({ connectionId: g.id, account: g.accountIdentifier, label: g.accountLabel })),
+              connectionId: gmails[0].id,
+              account: '',
+              accountLabel: `${gmails.length} accounts`,
+              emails: merged,
+              nextCursor: null
             }
           });
       } catch (e) {
@@ -321,7 +344,12 @@ const AiChatTile: React.FC = () => {
     setDraft('');
     setExchange({ q, a: '' });
     try {
-      const res = await sendChatMessage({ messages: [{ role: 'user', content: q }] } as never);
+      // Honor a model locked in Chat Studio settings; else the server default.
+      const locked = getLockedChatModel();
+      const res = await sendChatMessage({
+        messages: [{ role: 'user', content: q }],
+        ...(locked ? { model: locked.id, source: locked.source } : {})
+      } as never);
       setExchange({ q, a: res.text || '(no response)' });
     } catch (err) {
       setExchange({ q, a: `Couldn't answer: ${(err as Error)?.message || 'request failed'}` });

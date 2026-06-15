@@ -167,24 +167,36 @@ const buildMailto = (d: { to?: string; cc?: string; subject?: string; body?: str
   return `mailto:${enc(d.to || '')}?${q}`;
 };
 
-/** Resolve Gmail, list a box (inbox/unread) as rich rows, and return an email-widget artifact. */
+const EMAIL_CATEGORIES = ['primary', 'social', 'promotions', 'updates', 'forums', 'all'] as const;
+type EmailCat = (typeof EMAIL_CATEGORIES)[number];
+
+/** Resolve Gmail, list a box (inbox/unread) as rich rows, and return an email-widget artifact.
+ *  Defaults to the PRIMARY category (the relevant mail) — promos/social/updates are hidden
+ *  unless the user asks for them; everything stays searchable. */
 const emailWidget = async (
   ctx: ToolContext | undefined,
   box: 'inbox' | 'unread',
-  opts: { q?: string; max?: number }
+  opts: { q?: string; max?: number; category?: EmailCat }
 ): Promise<ToolExecResult> => {
   const r = await resolve(ctx, 'gmail', 'Gmail');
   if ('fail' in r) return r.fail;
+  const category: EmailCat = EMAIL_CATEGORIES.includes(opts.category as EmailCat) ? (opts.category as EmailCat) : 'primary';
+  // A free-text query searches ALL mail (category filter would fight it); otherwise scope
+  // to the chosen category. 'all' means no category filter.
+  const userQ = (opts.q || '').trim();
+  const catQ = userQ || category === 'all' ? '' : `category:${category}`;
+  const q = [catQ, userQ].filter(Boolean).join(' ');
   try {
     const data = (await r.connector.fetch({
       connection: toConnectionRef(r.connection),
       getAccessToken: () => getValidAccessToken(r.connection, r.connector),
       resource: box,
-      params: { q: opts.q || '', max: Math.min(50, opts.max || 25) }
+      params: { q, max: Math.min(50, opts.max || 25) }
     })) as { emails?: EmailRowLike[]; nextCursor?: string | null };
     const emails = data.emails || [];
     const artifactData = {
       box,
+      category: userQ ? undefined : category === 'all' ? undefined : category,
       account: r.connection.account_identifier,
       accountLabel: r.connection.account_label,
       connectionId: r.connection.id,
@@ -215,18 +227,22 @@ const makeGmailInbox = (ctx?: ToolContext): ChatTool => ({
   description:
     "Open the signed-in user's Gmail as an interactive INBOX widget — a large email terminal with a searchable message list, a reading pane, and per-message open/reply actions. Use for 'show/open my email', 'my inbox', 'go through my emails', 'check my mail'. Optional `query` pre-filters with Gmail operators (from:, subject:, has:attachment, newer_than:7d).",
   parameters: obj({
-    query: { type: 'string', description: 'Optional Gmail search to pre-filter the inbox (e.g. "from:bob newer_than:7d").' },
+    query: { type: 'string', description: 'Optional Gmail search to pre-filter the inbox (e.g. "from:bob newer_than:7d"). Searches ALL mail.' },
+    category: { type: 'string', enum: [...EMAIL_CATEGORIES], description: 'Which inbox category to show. Default "primary" (the relevant mail; hides promotions/social/updates). Use "promotions"/"social"/"updates"/"forums" or "all" when asked.' },
     max: { type: 'number', description: 'Messages to load (default 25, cap 50).' }
   }),
-  execute: (args) => emailWidget(ctx, 'inbox', { q: String(args.query || ''), max: Number(args.max) || 25 })
+  execute: (args) => emailWidget(ctx, 'inbox', { q: String(args.query || ''), category: args.category as EmailCat, max: Number(args.max) || 25 })
 });
 
 const makeGmailUnread = (ctx?: ToolContext): ChatTool => ({
   name: 'gmail_unread',
   description:
-    "Show the signed-in user's UNREAD Gmail as an interactive widget (an unread-only email terminal). Use for 'unread emails', 'what's new in my inbox', 'do I have new mail', 'any new emails'.",
-  parameters: obj({ max: { type: 'number', description: 'Messages to load (default 25, cap 50).' } }),
-  execute: (args) => emailWidget(ctx, 'unread', { max: Number(args.max) || 25 })
+    "Show the signed-in user's UNREAD Gmail as an interactive widget (an unread-only email terminal, Primary category by default). Use for 'unread emails', 'what's new in my inbox', 'do I have new mail', 'any new emails'.",
+  parameters: obj({
+    category: { type: 'string', enum: [...EMAIL_CATEGORIES], description: 'Inbox category (default "primary").' },
+    max: { type: 'number', description: 'Messages to load (default 25, cap 50).' }
+  }),
+  execute: (args) => emailWidget(ctx, 'unread', { category: args.category as EmailCat, max: Number(args.max) || 25 })
 });
 
 const makeGmailCompose = (ctx?: ToolContext): ChatTool => ({

@@ -27,6 +27,22 @@ import type {
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
 // Cap a decoded body so a giant email can't bloat a response/transport.
 const MAX_BODY_CHARS = 20_000;
+// HTML can be much larger than the plain-text body (markup + base64 inline css); the
+// sandboxed renderer handles big docs, but cap it so one email can't bloat transport.
+const MAX_HTML_CHARS = 800_000;
+
+type EmailCategoryV = 'primary' | 'social' | 'promotions' | 'updates' | 'forums';
+const CATEGORY_BY_LABEL: Record<string, EmailCategoryV> = {
+  CATEGORY_PERSONAL: 'primary',
+  CATEGORY_SOCIAL: 'social',
+  CATEGORY_PROMOTIONS: 'promotions',
+  CATEGORY_UPDATES: 'updates',
+  CATEGORY_FORUMS: 'forums'
+};
+const categoryOf = (labels: string[]): EmailCategoryV | null => {
+  for (const l of labels) if (CATEGORY_BY_LABEL[l]) return CATEGORY_BY_LABEL[l];
+  return null;
+};
 
 interface GmailMessageRef { id: string; threadId?: string }
 interface GmailListResponse { messages?: GmailMessageRef[]; nextPageToken?: string; resultSizeEstimate?: number }
@@ -54,6 +70,15 @@ interface GmailHistoryResponse {
   nextPageToken?: string;
 }
 
+interface AttachmentView {
+  attachmentId: string;
+  filename: string;
+  mimeType: string;
+  size?: number;
+  inline?: boolean;
+  contentId?: string | null;
+}
+
 /** Rich email row consumed by the Chat Studio email widgets (mirrors apiTypes EmailMessage). */
 interface EmailMessageView {
   id: string;
@@ -66,9 +91,14 @@ interface EmailMessageView {
   unread: boolean;
   starred: boolean;
   important: boolean;
+  category: EmailCategoryV | null;
   labels: string[];
   url: string;
+  hasAttachments?: boolean;
   body?: string;
+  text?: string;
+  html?: string | null;
+  attachments?: AttachmentView[];
 }
 
 const header = (msg: GmailMessage, name: string): string | undefined =>
@@ -154,6 +184,45 @@ const extractPlainText = (payload?: GmailPart): string => {
   return text.length > MAX_BODY_CHARS ? `${text.slice(0, MAX_BODY_CHARS)}\n…` : text;
 };
 
+/** The ORIGINAL HTML body (joined text/html leaves), capped. Rendered client-side in a
+ *  sandboxed, script-less iframe — never trusted/executed here. */
+const extractHtml = (payload?: GmailPart): string => {
+  if (!payload) return '';
+  const html: string[] = [];
+  collectParts(payload, 'text/html', html);
+  const joined = html.join('\n');
+  return joined.length > MAX_HTML_CHARS ? joined.slice(0, MAX_HTML_CHARS) : joined;
+};
+
+const partHeader = (part: GmailPart, name: string): string | undefined =>
+  part.headers?.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value;
+
+/** Walk the MIME tree for attachments + inline images (anything with a body.attachmentId
+ *  and a filename or Content-ID). Inline parts back `cid:` references in the HTML body. */
+const extractAttachments = (payload?: GmailPart): AttachmentView[] => {
+  const out: AttachmentView[] = [];
+  const walk = (part?: GmailPart): void => {
+    if (!part) return;
+    const attachmentId = part.body?.attachmentId;
+    const cidRaw = partHeader(part, 'Content-ID');
+    const contentId = cidRaw ? cidRaw.replace(/^<|>$/g, '').trim() : null;
+    const disposition = (partHeader(part, 'Content-Disposition') || '').toLowerCase();
+    if (attachmentId && (part.filename || contentId)) {
+      out.push({
+        attachmentId,
+        filename: part.filename || (contentId ? `inline-${contentId}` : 'attachment'),
+        mimeType: part.mimeType || 'application/octet-stream',
+        size: part.body?.size,
+        inline: disposition.includes('inline') || (!!contentId && (part.mimeType || '').startsWith('image/')),
+        contentId
+      });
+    }
+    for (const p of part.parts || []) walk(p);
+  };
+  walk(payload);
+  return out;
+};
+
 const clampMax = (v: unknown, fallback: number, cap: number): number => {
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? Math.min(cap, Math.floor(n)) : fallback;
@@ -236,12 +305,13 @@ export class GmailConnector extends GoogleOAuthConnector {
 
   // --- Email-widget data path (rich rows + bodies) ---
 
-  /** Map a Gmail message to the rich row the email widgets render. */
-  private toEmailView(msg: GmailMessage, withBody = false): EmailMessageView {
+  /** Map a Gmail message to the rich row the email widgets render. `full` adds the
+   *  decoded text + original HTML body + attachments (needs format=full). */
+  private toEmailView(msg: GmailMessage, full = false): EmailMessageView {
     const labels = msg.labelIds || [];
     const internalMs = msg.internalDate ? Number(msg.internalDate) : NaN;
     const date = msToIso(internalMs) ?? (header(msg, 'Date') ? safeIso(header(msg, 'Date') as string) : null);
-    return {
+    const view: EmailMessageView = {
       id: msg.id,
       threadId: msg.threadId || null,
       subject: header(msg, 'Subject') || '(no subject)',
@@ -252,10 +322,19 @@ export class GmailConnector extends GoogleOAuthConnector {
       unread: labels.includes('UNREAD'),
       starred: labels.includes('STARRED'),
       important: labels.includes('IMPORTANT'),
+      category: categoryOf(labels),
       labels,
-      url: `https://mail.google.com/mail/u/0/#all/${msg.id}`,
-      ...(withBody ? { body: extractPlainText(msg.payload) } : {})
+      url: `https://mail.google.com/mail/u/0/#all/${msg.id}`
     };
+    if (full) {
+      const attachments = extractAttachments(msg.payload);
+      view.text = extractPlainText(msg.payload);
+      view.body = view.text;
+      view.html = extractHtml(msg.payload) || null;
+      view.attachments = attachments;
+      view.hasAttachments = attachments.some((a) => !a.inline);
+    }
+    return view;
   }
 
   /** List messages matching `q` and hydrate each into a rich email row. */
@@ -395,6 +474,19 @@ export class GmailConnector extends GoogleOAuthConnector {
       );
       const emails = (thread.messages || []).map((m) => this.toEmailView(m, true));
       return { threadId: id, emails, subject: emails[0]?.subject || null };
+    }
+
+    // Raw attachment / inline-image bytes (base64url) for download + cid: resolution.
+    if (resource === 'attachment') {
+      const id = String(p.id ?? p.messageId ?? '');
+      const attachmentId = String(p.attachmentId ?? '');
+      if (!id || !attachmentId) throw new Error('message id and attachmentId are required');
+      const res = await googleApiFetch<{ data?: string; size?: number }>(
+        `${GMAIL_BASE}/messages/${encodeURIComponent(id)}/attachments/${encodeURIComponent(attachmentId)}`,
+        { accessToken: token, signal: input.signal }
+      );
+      // Return base64url as-is; the client builds the data URL with the known mimeType.
+      return { data: res.data || '', size: res.size ?? null };
     }
 
     throw new Error(`Unsupported Gmail resource: ${resource}`);

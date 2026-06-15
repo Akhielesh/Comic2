@@ -5,7 +5,8 @@
 // uniform interface, so adding a connector never touches the loop or the routes.
 
 import type { ToolSpec } from '../providers/types.js';
-import { ddgImageSearch, ddgVideoSearch, type ImageResult } from './duckduckgo.js';
+import { ddgImageSearch, ddgVideoSearch, type ImageResult, type VideoSearchResult } from './duckduckgo.js';
+import { youtubeVideoSearch } from './youtubeSearch.js';
 import { webSearch } from './search.js';
 import { getWeatherDetailed } from './weather.js';
 import { geocodePlaces } from './maps.js';
@@ -168,7 +169,7 @@ const weatherTool: ChatTool = {
 const videoSearchTool: ChatTool = {
   name: 'video_search',
   description:
-    'Find videos (tutorials, how-tos, reviews, clips) via DuckDuckGo. Use whenever the user wants to watch or see how to do something (e.g. "how to make X"), or asks for videos/tutorials — alongside a normal web_search for text. Returns video cards shown to the user.',
+    'Find videos to watch (tutorials, how-tos, reviews, clips) — prefers the YouTube Data API when configured, else DuckDuckGo. Use whenever the user types a topic and wants to find/see videos (e.g. "how to make X", "lo-fi beats", "Rivian review"); results render as playable cards. This is the "type a topic → get videos right here" search.',
   parameters: {
     type: 'object',
     properties: {
@@ -180,7 +181,10 @@ const videoSearchTool: ChatTool = {
     const query = String(args?.query || '').trim();
     if (!query) return { content: 'No video query was provided.' };
     try {
-      const results = await ddgVideoSearch(query, signal);
+      // Prefer YouTube (reliable, real results) when a key is set; the keyless DuckDuckGo
+      // scraper is the fallback (and the recovery path if YouTube errors / returns empty).
+      const fromYt = await youtubeVideoSearch(query, signal).catch(() => [] as VideoSearchResult[]);
+      const results = fromYt.length ? fromYt : await ddgVideoSearch(query, signal);
       if (!results.length) {
         return {
           content: `No videos found for "${query}".`,
