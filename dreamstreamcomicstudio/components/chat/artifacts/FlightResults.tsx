@@ -20,11 +20,6 @@ const stopsLabel = (n: number): string => (n === 0 ? 'Non-stop' : `${n} stop${n 
 export const FlightResults: React.FC<{ data: FlightResultsArtifact }> = ({ data }) => {
   const compact = useCompact();
   const offers = data?.offers || [];
-  if (!offers.length) return null;
-
-  const cheapest = offers.reduce((a, b) => (b.price < a.price ? b : a), offers[0]);
-  const fastest = offers.reduce((a, b) => (b.durationMinutes < a.durationMinutes ? b : a), offers[0]);
-  const rows = compact ? offers.slice(0, 3) : offers;
 
   const header = (
     <div className="flex items-start gap-2">
@@ -45,6 +40,34 @@ export const FlightResults: React.FC<{ data: FlightResultsArtifact }> = ({ data 
       </div>
     </div>
   );
+
+  // No live fares (e.g. no provider key) — still give an accurate, useful result: a card
+  // with a direct Google Flights link for the EXACT route + date, never fabricated prices.
+  if (!offers.length) {
+    if (!data?.searchUrl) return null;
+    return (
+      <Surface accent="#D97757" header={header}>
+        <div className="px-3 pb-3 pt-1">
+          <a
+            href={data.searchUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--ds-hairline)] px-3 py-2 text-[13px] font-semibold text-[var(--ds-ink)] transition-colors hover:bg-[var(--ds-hover)]"
+          >
+            <Plane className="h-4 w-4 text-[#D97757]" /> See live fares on Google Flights
+            <ExternalLink className="h-3.5 w-3.5 text-[var(--ds-muted)]" />
+          </a>
+          <p className="mt-2 text-[11px] text-[var(--ds-faint)]">
+            Real-time {data.returnDate ? 'round-trip' : 'one-way'} fares for this exact route and date.
+          </p>
+        </div>
+      </Surface>
+    );
+  }
+
+  const cheapest = offers.reduce((a, b) => (b.price < a.price ? b : a), offers[0]);
+  const fastest = offers.reduce((a, b) => (b.durationMinutes < a.durationMinutes ? b : a), offers[0]);
+  const rows = compact ? offers.slice(0, 3) : offers;
 
   const right = data.searchUrl ? (
     <a

@@ -60,6 +60,19 @@ All notable user-facing changes. Format loosely follows
     is lost.
 
 ### Fixed
+- **Flight questions actually use the flight tool now — fast + no made-up fares (2026-06-15):**
+  - A query like *"best deal from IAD to Bengaluru for July 7th one way"* was still
+    routing to generic web search (the answer quoted a $1,148 "within 6 months" price and
+    August fares for a July question) because the flight tool's routing keywords all
+    required the word **"flight"** — which that phrasing never uses. Routing now catches
+    natural flight wording ("one way", "round trip", "fly to/from", "nonstop", etc.), so
+    the flight tool is actually invoked.
+  - And it's useful **even without the Amadeus key**: instead of falling back to web search
+    (which returns date-inaccurate "from $X" teasers the model then quotes), it now returns
+    an **instant card with a Google Flights deep-link for the exact route + date** — fast,
+    accurate, and it never fabricates a fare. With the Amadeus key it additionally shows the
+    real fare table. The agent is explicitly told not to quote flight prices from web
+    snippets.
 - **A money figure with no source gets flagged as unverified (2026-06-15):**
   - The research/swarm modes already warn when the model states a figure it didn't
     actually source; the everyday chat didn't. Now, if a normal answer quotes a

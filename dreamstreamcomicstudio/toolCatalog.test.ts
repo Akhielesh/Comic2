@@ -50,6 +50,13 @@ describe('scoreTools (smart routing)', () => {
     expect(topNames('where is the ISS right now')).toContain('iss_location');
   });
 
+  it('surfaces search_flights for natural flight queries WITHOUT the word "flight"', () => {
+    // The real failure: this query routed to web_search because no keyword matched.
+    expect(topNames('best deal from iad to bengaluru for july 7th one way', 3)).toContain('search_flights');
+    expect(topNames('cheapest flights to tokyo round trip', 3)).toContain('search_flights');
+    expect(topNames('fly from SFO to London nonstop', 3)).toContain('search_flights');
+  });
+
   it('returns nothing for a message with no tool intent', () => {
     expect(scoreTools('please rewrite this paragraph to be more concise')).toEqual([]);
   });

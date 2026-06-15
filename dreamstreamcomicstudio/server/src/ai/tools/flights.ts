@@ -144,9 +144,26 @@ export const flightSearchTool: ChatTool = {
       return { content: 'Flight search needs a departure date as YYYY-MM-DD.' };
     }
     if (!amadeusEnabled()) {
+      // No live-fare provider configured — but DON'T fall back to web search for fares:
+      // aggregator snippets are not date-accurate (they show "from $X" teasers and other
+      // dates) and the model ends up quoting wrong, generic numbers. Instead return an
+      // instant card with a Google Flights deep-link to the EXACT route + date, so the
+      // user gets real, current fares in one tap and we never fabricate a price.
+      const artifact: FlightResultsArtifact = {
+        origin,
+        destination,
+        departureDate,
+        returnDate,
+        adults: Math.max(1, Math.min(9, Number(args?.adults) || 1)),
+        offers: [],
+        searchUrl: googleFlightsUrl(origin, destination, departureDate, returnDate),
+        live: false,
+        asOf: new Date().toISOString()
+      };
       return {
-        content: `Flight fare search isn't configured (set AMADEUS_API_KEY and AMADEUS_API_SECRET — free at developers.amadeus.com). Fall back to web_search for ${origin}→${destination} on ${departureDate}, and tell the user a live flight card needs the Amadeus keys.`,
-        notice: { level: 'warn', message: 'Flight search needs Amadeus API keys', fix: 'Set AMADEUS_API_KEY and AMADEUS_API_SECRET in environment settings (free self-service account).' }
+        content: `I can't quote exact ${origin}→${destination} fares for ${departureDate} (no live flight provider configured). A card with a direct Google Flights link for that exact route and date is shown — that's the accurate, current source. Do NOT quote specific prices or airlines from web_search for this; aggregator snippets aren't date-specific and would mislead. Briefly tell the user to tap the card for live ${departureDate} fares.`,
+        artifacts: [{ type: 'flight_results', data: artifact }],
+        notice: { level: 'info', message: 'Showing a live Google Flights link — add AMADEUS_API_KEY/SECRET to show fares inline.', fix: 'Create a free app at developers.amadeus.com and set AMADEUS_API_KEY + AMADEUS_API_SECRET.' }
       };
     }
     try {

@@ -360,10 +360,10 @@ export const TOOL_CATALOG: ToolMeta[] = [
   },
   {
     name: 'search_flights', label: 'Flight deals', category: 'travel', kind: 'builtin', provider: 'Amadeus (Self-Service, when keyed)',
-    description: 'Search REAL airline fares for a route + date (one-way or round-trip) — airline, price, total duration, stops and layovers, cheapest first, with a Google Flights link. Live with Amadeus keys (AMADEUS_API_KEY + AMADEUS_API_SECRET); falls back to web search otherwise.',
+    description: 'Search flights for a route + date (one-way or round-trip). ALWAYS use this for flight price/deal/option questions instead of web_search — even without the Amadeus key it returns a card with a live Google Flights link for the exact route+date (web snippets are NOT date-accurate for fares). With Amadeus keys (AMADEUS_API_KEY + AMADEUS_API_SECRET) it also shows real fares: airline, price, total duration, stops and layovers, cheapest first.',
     auth: 'optional', authEnv: 'AMADEUS_API_KEY', rateLimit: 'Amadeus self-service: free quota then pay-as-you-go',
     dataShape: 'Flight-deals card: rows of airline, price, total duration, stops/layovers; cheapest & fastest badged.', docsUrl: 'https://developers.amadeus.com/self-service/category/flights',
-    keywords: ['flight deals', 'cheap flights', 'cheapest flight', 'book a flight', 'flights to', 'flights from', 'airfare', 'one way flight', 'round trip flight', 'flight prices', 'best flights', 'plane tickets', 'find flights']
+    keywords: ['flight deals', 'cheap flights', 'cheapest flight', 'book a flight', 'flights to', 'flights from', 'airfare', 'one way flight', 'round trip flight', 'flight prices', 'best flights', 'plane tickets', 'find flights', 'one way', 'one-way', 'round trip', 'round-trip', 'roundtrip', 'fly to', 'fly from', 'flying to', 'flying from', 'fly', 'flying', 'nonstop', 'non-stop', 'layover', 'airline', 'airlines', 'tickets to', 'deal from', 'deal to']
   },
   {
     name: 'render_trip_budget', label: 'Trip budget burn', category: 'travel', kind: 'builtin', provider: 'DreamStream (in-app)',

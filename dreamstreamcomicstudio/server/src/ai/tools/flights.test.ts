@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { isoDurationToMinutes, toFlightOffer, googleFlightsUrl, flightSearchTool, amadeusEnabled } from './flights.js';
+import type { FlightResultsArtifact } from '../../../../apiTypes.js';
 
 describe('isoDurationToMinutes', () => {
   it('parses ISO-8601 flight durations', () => {
@@ -77,10 +78,18 @@ describe('search_flights tool (no keys / validation)', () => {
     expect(r.artifacts).toBeUndefined();
   });
 
-  it('without keys, returns a clear notice and tells the model to fall back to web search', async () => {
+  it('without keys, returns an instant Google Flights deep-link card (no fabricated fares)', async () => {
     const r = await flightSearchTool.execute({ origin: 'IAD', destination: 'BLR', departureDate: '2026-07-07' });
-    expect(r.content).toMatch(/web_search/);
+    // Accurate + useful WITHOUT a provider: a real deep-link, not a guessed fare.
+    expect(r.artifacts).toHaveLength(1);
+    const data = r.artifacts![0].data as FlightResultsArtifact;
+    expect(r.artifacts![0].type).toBe('flight_results');
+    expect(data.offers).toEqual([]);
+    expect(data.live).toBe(false);
+    expect(data.searchUrl).toContain('google.com/travel/flights');
+    expect(decodeURIComponent(data.searchUrl!)).toContain('IAD');
     expect(r.notice?.message).toMatch(/Amadeus/i);
-    expect(r.artifacts).toBeUndefined();
+    // Must steer the model AWAY from quoting date-inaccurate web-snippet fares.
+    expect(r.content).toMatch(/do not quote/i);
   });
 });
