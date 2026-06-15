@@ -16,6 +16,7 @@ import { buildUsage } from './usage.js';
 import type { AIProviderId } from './providers/types.js';
 import { toToolSpec, type ChatTool } from './tools/registry.js';
 import { buildJsonToolSystemBlock, extractToolCall, stripToolCallJson, formatToolResult } from './tools/jsonToolProtocol.js';
+import { capToolOutput, CHAT_TOOL_OUTPUT_MAX } from './tools/capToolOutput.js';
 import { JSON_TOOL_PROTOCOL_ENABLED, CHAT_MAX_OUTPUT_TOKENS } from '../config.js';
 import { buildUserMemoryBlock } from '../services/userMemory.js';
 import { buildConnectorContextBlock } from '../connectors/retrieval.js';
@@ -638,7 +639,8 @@ export const runChat = async (
         if (out.notice) addNotice({ tool: call.name, ...out.notice });
         toolEvents.push({ tool: call.name, query, ok: true, summary: out.content.slice(0, 160) });
         params.onToolEvent?.({ phase: 'end', tool: call.name, query, ok: true, summary: out.content.slice(0, 160), index: 0, iteration: i });
-        convo.push({ role: 'user', content: formatToolResult(call.name, out.content) });
+        // Bound the model-facing text (the trace summary above stays full-fidelity).
+        convo.push({ role: 'user', content: formatToolResult(call.name, capToolOutput(out.content, { max: CHAT_TOOL_OUTPUT_MAX, toolName: call.name })) });
       } catch (err) {
         const message = (err as Error)?.message || 'tool failed';
         addNotice({ tool: call.name, level: 'error', message });
@@ -735,7 +737,11 @@ export const runChat = async (
         addNotice({ tool: r.call.name, level: 'error', message: r.summary || 'Tool failed.' });
       }
       toolEvents.push({ tool: r.call.name, query: r.query, ok: r.ok, summary: r.summary });
-      messages.push({ role: 'tool', tool_call_id: r.call.id, content: r.content });
+      // Bound the model-facing tool result so one chatty tool/MCP can't overflow the
+      // context window (a turn-killing provider 400) or inflate every later round's
+      // payload. The trace summary above keeps the full short summary; only the text
+      // re-fed to the model is capped. MCP results are pre-capped tighter at their source.
+      messages.push({ role: 'tool', tool_call_id: r.call.id, content: capToolOutput(r.content, { max: CHAT_TOOL_OUTPUT_MAX, toolName: r.call.name }) });
     }
 
     // Next turn. On the final allowed iteration, drop tools to force a written answer.

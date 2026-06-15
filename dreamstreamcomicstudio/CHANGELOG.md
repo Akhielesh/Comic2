@@ -38,6 +38,19 @@ All notable user-facing changes. Format loosely follows
     shipped a working generation path) and the admin Test Lab. Old ComicForge
     projects open in the standard editor. (ADR 0004)
 
+### Fixed
+- **A chatty tool can no longer kill a whole answer (tool-output cap, 2026-06-15):**
+  - Every tool/MCP result is fed back into the model and re-sent on each subsequent
+    tool round. A single verbose result (a long page read, a giant MCP
+    `structuredContent` blob, noisy stdout) could overflow the model's context
+    window — failing the **entire turn** with a provider 400 — and inflated cost and
+    latency on every later round. Tool results are now bounded before re-entering the
+    model: built-ins at ~24k chars, third-party MCP tighter at ~12k, with a head+tail
+    keep (so both the lead and the totals/closing rows survive) and a marker telling
+    the model the middle was elided. Only pathological output is ever touched —
+    legitimate results pass through unchanged, and the live activity trace keeps the
+    full short summary.
+
 ### Added
 - **You can watch the agent work — live activity trace in normal chat (2026-06-15):**
   - Tool-grounded answers can take 20–60s before the first word appears while the
