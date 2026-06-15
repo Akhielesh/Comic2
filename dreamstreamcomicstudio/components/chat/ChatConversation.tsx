@@ -24,6 +24,8 @@ interface ChatConversationProps {
   busy: boolean;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
+  /** Show the model picker button (Settings can hide it; default true). */
+  showModelSelector?: boolean;
   onOpenModelPicker: () => void;
   onSend: (text: string, attachments: ChatAttachment[]) => void;
   seedText?: string;
@@ -125,6 +127,7 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
   busy,
   sidebarOpen,
   onToggleSidebar,
+  showModelSelector,
   onOpenModelPicker,
   onSend,
   seedText,
@@ -247,15 +250,17 @@ export const ChatConversation: React.FC<ChatConversationProps> = ({
           {sidebarOpen ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
         </button>
 
-        <button
-          onClick={onOpenModelPicker}
-          className={`flex items-center gap-2 ${CONTROL_BTN} px-3 py-2 sm:py-1.5 min-w-0`}
-          title="Switch model"
-        >
-          <Cpu className={`w-4 h-4 shrink-0 ${ACCENT_TEXT}`} />
-          <span className={`font-semibold text-sm truncate max-w-[120px] sm:max-w-[180px] ${INK}`}>{modelLabel}</span>
-          <ChevronDown className="w-4 h-4 shrink-0 text-[var(--ds-muted)]" />
-        </button>
+        {showModelSelector !== false && (
+          <button
+            onClick={onOpenModelPicker}
+            className={`flex items-center gap-2 ${CONTROL_BTN} px-3 py-2 sm:py-1.5 min-w-0`}
+            title="Switch model"
+          >
+            <Cpu className={`w-4 h-4 shrink-0 ${ACCENT_TEXT}`} />
+            <span className={`font-semibold text-sm truncate max-w-[120px] sm:max-w-[180px] ${INK}`}>{modelLabel}</span>
+            <ChevronDown className="w-4 h-4 shrink-0 text-[var(--ds-muted)]" />
+          </button>
+        )}
 
         {/* Editable session title */}
         <div className="flex-1 min-w-0 hidden sm:flex items-center">

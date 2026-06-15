@@ -2,6 +2,7 @@ import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'rea
 import { Code2, ExternalLink, Loader2, Map as MapIcon, Maximize2, Minimize2, PanelLeftClose, PanelLeftOpen, X } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { initTheme } from '../../services/theme';
+import { getLockedChatModel, getShowChatModelSelector, onAppSettingsChanged } from '../../services/appSettings';
 import { ChatSidebar } from './ChatSidebar';
 import { ChatConversation } from './ChatConversation';
 import { ChatModelPicker } from './ChatModelPicker';
@@ -249,6 +250,9 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
     () => typeof window === 'undefined' || window.matchMedia('(min-width: 768px)').matches
   );
   const [showModelPicker, setShowModelPicker] = useState(false);
+  // The in-chat model picker can be hidden from Settings (model controlled there instead).
+  const [showModelSelector, setShowModelSelector] = useState(() => getShowChatModelSelector());
+  useEffect(() => onAppSettingsChanged(() => setShowModelSelector(getShowChatModelSelector())), []);
   const [initialized, setInitialized] = useState(false);
   const [memory, setMemory] = useState('');
   // Text to prefill the composer with (e.g. clicking a skill chip in the empty state).
@@ -734,6 +738,13 @@ export const AIChatPlatform: React.FC<AIChatPlatformProps> = ({ onBack, projects
         reqSource === 'nvidia'
           ? []
           : Array.from(new Set([...(activeSession.tools || []), ...detectTools(text)]));
+    }
+    // A model locked in Settings overrides the session/auto choice (a suggester override
+    // still wins). This is what makes "lock the model from settings" actually take effect.
+    const locked = getLockedChatModel();
+    if (locked && !overrideModel) {
+      reqModel = locked.id;
+      reqSource = locked.source as ModelSourceId;
     }
     return { reqModel, reqSource, reqTools };
   };
@@ -1358,6 +1369,7 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
         busy={busy}
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
+        showModelSelector={showModelSelector}
         onOpenModelPicker={() => setShowModelPicker(true)}
         onSend={handleSend}
         seedText={composerSeed}
@@ -1503,7 +1515,7 @@ ${jsFile ? `<script>${jsFile.content}</script>` : '<p>No runnable entry file fou
         </Suspense>
       )}
 
-      {showModelPicker && activeSession && (
+      {showModelPicker && activeSession && showModelSelector && (
         <ChatModelPicker
           selectedModelId={activeSession.modelId}
           hasMessages={activeSession.turns.length > 0}

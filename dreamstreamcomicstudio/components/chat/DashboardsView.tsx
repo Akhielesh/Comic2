@@ -24,6 +24,7 @@ import { EmailCompose } from './artifacts/EmailCompose';
 import type { GameKind, EmailInboxArtifact, EmailComposeArtifact, EmailMessage } from '../../apiTypes';
 import { fetchEmails } from '../../services/emailApi';
 import { fetchConnections } from '../../services/connectorsApi';
+import { getLockedChatModel } from '../../services/appSettings';
 import { DictationButton } from './DictationButton';
 import {
   AI_CHAT_TILE, EMAIL_TILE, EMAIL_COMPOSE_TILE, EMBED_TILE, GAME_TILE, TOOL_LABELS, WIDGET_BY_TOOL, WIDGET_CATEGORIES, buildTileFromFields, searchWidgets,
@@ -252,7 +253,12 @@ const AiChatTile: React.FC = () => {
     setDraft('');
     setExchange({ q, a: '' });
     try {
-      const res = await sendChatMessage({ messages: [{ role: 'user', content: q }] } as never);
+      // Honor a model locked in Chat Studio settings; else the server default.
+      const locked = getLockedChatModel();
+      const res = await sendChatMessage({
+        messages: [{ role: 'user', content: q }],
+        ...(locked ? { model: locked.id, source: locked.source } : {})
+      } as never);
       setExchange({ q, a: res.text || '(no response)' });
     } catch (err) {
       setExchange({ q, a: `Couldn't answer: ${(err as Error)?.message || 'request failed'}` });

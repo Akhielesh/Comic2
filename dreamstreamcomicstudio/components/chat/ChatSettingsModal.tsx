@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   X, Brain, Network, Wrench, Plus, Trash2, Check, Pencil, Bot, Activity,
   LayoutGrid, BookOpen, Settings2, Sun, Moon, Monitor, Upload, Loader2, Sparkles, Plug
@@ -17,6 +17,10 @@ import {
   type MemoryImportSource
 } from '../../services/memoryImport';
 import { useTheme, type ThemePreference } from '../../services/theme';
+import { fetchModelCatalog, type CatalogModel } from '../../services/modelCatalog';
+import {
+  getLockedChatModel, setLockedChatModel, getShowChatModelSelector, setShowChatModelSelector
+} from '../../services/appSettings';
 import {
   BUILTIN_AGENTS, AGENT_TOOLS, TOOL_LABEL,
   listCustomAgents, saveCustomAgent, deleteCustomAgent, newCustomAgent,
@@ -186,11 +190,115 @@ const ThemePreviewSwatch: React.FC<{ value: ThemePreference }> = ({ value }) => 
   );
 };
 
+// Lock a model for every chat (+ the dashboard's mini-AI) and optionally hide the
+// in-chat model picker — so the model is controlled here instead of per-conversation.
+const ModelSettingsSection: React.FC = () => {
+  const [catalog, setCatalog] = useState<CatalogModel[]>([]);
+  const [locked, setLocked] = useState(() => getLockedChatModel());
+  const [showSelector, setShowSelectorState] = useState(() => getShowChatModelSelector());
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let on = true;
+    fetchModelCatalog({ modality: 'text' })
+      .then((res) => {
+        if (on) setCatalog(res.models || []);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (on) setLoading(false);
+      });
+    return () => {
+      on = false;
+    };
+  }, []);
+
+  const grouped = useMemo(() => {
+    const by: Record<string, CatalogModel[]> = {};
+    for (const m of catalog) (by[m.source || 'other'] ||= []).push(m);
+    return Object.entries(by).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [catalog]);
+
+  const onPick = (id: string) => {
+    if (!id) {
+      setLockedChatModel(null);
+      setLocked(null);
+      return;
+    }
+    const m = catalog.find((c) => c.id === id);
+    if (!m) return;
+    const next = { id: m.id, source: m.source, name: m.name };
+    setLockedChatModel(next);
+    setLocked(next);
+  };
+
+  const onToggle = () => {
+    const next = !showSelector;
+    setShowChatModelSelector(next);
+    setShowSelectorState(next);
+  };
+
+  return (
+    <section>
+      <SectionLabel className="mb-2 px-1">Model</SectionLabel>
+      <Group>
+        <div className="px-4 py-4">
+          <div className="text-sm font-medium text-[var(--ds-ink)]">Locked model</div>
+          <div className="mt-0.5 text-xs text-[var(--ds-muted)]">
+            Pin every chat (and the dashboard’s Ask-AI tile) to one model. “Auto” lets each chat choose.
+          </div>
+          <select
+            value={locked?.id || ''}
+            onChange={(e) => onPick(e.target.value)}
+            disabled={loading}
+            className="mt-3 w-full rounded-xl border border-[var(--ds-hairline)] bg-[var(--ds-surface)] px-3 py-2 text-sm text-[var(--ds-ink)] outline-none transition-colors focus:border-[var(--ds-accent)] disabled:opacity-60"
+          >
+            <option value="">Auto — let each chat choose</option>
+            {locked && !catalog.some((c) => c.id === locked.id) && <option value={locked.id}>{locked.name}</option>}
+            {grouped.map(([source, models]) => (
+              <optgroup key={source} label={source}>
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+          {locked ? (
+            <p className="mt-1.5 text-[11px] text-[var(--ds-muted)]">
+              Locked to <span className="font-medium text-[var(--ds-ink)]">{locked.name}</span>. Choose “Auto” to unlock.
+            </p>
+          ) : (
+            <p className="mt-1.5 text-[11px] text-[var(--ds-muted)]">{loading ? 'Loading models…' : 'No lock — chats use their own selector.'}</p>
+          )}
+        </div>
+        <div className="flex items-center justify-between gap-3 border-t border-[var(--ds-hairline-soft)] px-4 py-4">
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-[var(--ds-ink)]">Show model selector in chat</div>
+            <div className="mt-0.5 text-xs text-[var(--ds-muted)]">Hide the in-chat picker for a cleaner UI — the locked model above still applies.</div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={showSelector}
+            onClick={onToggle}
+            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${showSelector ? 'bg-[var(--ds-accent)]' : 'bg-[var(--ds-hairline)]'}`}
+          >
+            <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${showSelector ? 'translate-x-[22px]' : 'translate-x-0.5'}`} />
+          </button>
+        </div>
+      </Group>
+    </section>
+  );
+};
+
 const GeneralTab: React.FC = () => {
   const { preference, setPreference } = useTheme();
 
   return (
     <div className="space-y-6">
+      <ModelSettingsSection />
       <section>
         <SectionLabel className="mb-2 px-1">Appearance</SectionLabel>
         <Group>

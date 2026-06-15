@@ -45,6 +45,18 @@ const notifySettingsChanged = () => {
   if (settingsChangeListener && !settingsSyncSuspended) {
     try { settingsChangeListener(); } catch { /* never break local writes */ }
   }
+  // Local UI reactivity: any open view (chat header, composer) can re-read settings.
+  if (typeof window !== "undefined") {
+    try { window.dispatchEvent(new CustomEvent("dreamstream:settings-changed")); } catch { /* ignore */ }
+  }
+};
+
+/** Subscribe to local settings changes (e.g. to live-hide the in-chat model picker). */
+export const onAppSettingsChanged = (handler: () => void): (() => void) => {
+  if (typeof window === "undefined") return () => undefined;
+  const h = () => handler();
+  window.addEventListener("dreamstream:settings-changed", h);
+  return () => window.removeEventListener("dreamstream:settings-changed", h);
 };
 
 export const getLockedImageProvider = () => IMAGE_PROVIDER_LOCK;
@@ -182,14 +194,27 @@ export const getOpenRouterKeySuffix = () => {
   return key ? key.slice(-4) : null;
 };
 
-export const getSettingsState = (): {
+export interface LockedChatModel {
+  id: string;
+  source: string;
+  name: string;
+}
+
+interface AppSettingsState {
   showGeminiKey?: boolean;
   showFluxKey?: boolean;
   modelRouting?: Record<string, string>;
   defaultImageModel?: string;
   defaultTextModel?: string;
   defaultTextModelKey?: string;
-} => {
+  /** When set, every chat (and the dashboard's mini-AI) is forced onto this model. */
+  lockedChatModel?: LockedChatModel | null;
+  /** Show the in-chat model selector (default true). Off → the picker is hidden; the
+   *  model is controlled from settings instead. */
+  showChatModelSelector?: boolean;
+}
+
+export const getSettingsState = (): AppSettingsState => {
   const raw = getFromStorage(SETTINGS_KEY);
   if (!raw) return {};
   try {
@@ -199,16 +224,29 @@ export const getSettingsState = (): {
   }
 };
 
-export const setSettingsState = (next: {
-  showGeminiKey?: boolean;
-  showFluxKey?: boolean;
-  modelRouting?: Record<string, string>;
-  defaultImageModel?: string;
-  defaultTextModel?: string;
-  defaultTextModelKey?: string;
-}) => {
+export const setSettingsState = (next: AppSettingsState) => {
   setInStorage(SETTINGS_KEY, JSON.stringify(next));
   notifySettingsChanged();
+};
+
+/** The model every chat is pinned to, or null when chats choose their own. */
+export const getLockedChatModel = (): LockedChatModel | null => {
+  const m = getSettingsState().lockedChatModel;
+  return m && m.id && m.source ? m : null;
+};
+
+export const setLockedChatModel = (model: LockedChatModel | null) => {
+  const next = { ...getSettingsState() };
+  if (model && model.id && model.source) next.lockedChatModel = { id: model.id, source: model.source, name: model.name || model.id };
+  else delete next.lockedChatModel;
+  setSettingsState(next);
+};
+
+/** Whether the in-chat model picker is shown (default true). */
+export const getShowChatModelSelector = (): boolean => getSettingsState().showChatModelSelector !== false;
+
+export const setShowChatModelSelector = (show: boolean) => {
+  setSettingsState({ ...getSettingsState(), showChatModelSelector: show });
 };
 
 export const getDefaultImageModel = (): string => {
