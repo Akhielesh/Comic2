@@ -1849,6 +1849,8 @@ export interface CalendarEventDraftArtifact {
     attendees?: string[];
     timeZone?: string;
   };
+  /** Present for a BATCH create ('Add all'): several events confirmed from one card. */
+  events?: Array<CalendarEventDraftArtifact['event']>;
   /** For action 'rsvp'. */
   response?: 'accepted' | 'declined' | 'tentative';
   density?: 'compact' | 'detailed';

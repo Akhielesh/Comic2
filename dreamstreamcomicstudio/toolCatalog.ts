@@ -928,6 +928,13 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['add to my calendar', 'schedule a meeting', 'create an event', 'book a meeting', 'put on my calendar', 'set up a meeting', 'new event', 'schedule', 'remind me to meet', 'block time']
   },
   {
+    name: 'calendar_create_events', label: 'Calendar — add multiple events', category: 'productivity', kind: 'builtin', provider: 'Google (your connected account)',
+    description: "Prepare SEVERAL new events at once (a trip itinerary, a multi-day plan, events parsed from an email) as ONE confirmation card with 'Add all'. Nothing is created until the user confirms.",
+    auth: 'required', authEnv: 'GOOGLE_OAUTH_CLIENT_ID', rateLimit: 'Bounded by the user\'s Calendar API quota',
+    dataShape: 'A confirmation card listing all events with an Add-all button.', docsUrl: 'https://developers.google.com/calendar/api',
+    keywords: ['add these to my calendar', 'schedule all', 'add my itinerary', 'block out my week', 'add the trip to my calendar', 'put all of these on my calendar', 'multiple events']
+  },
+  {
     name: 'calendar_update_event', label: 'Calendar — edit event', category: 'productivity', kind: 'builtin', provider: 'Google (your connected account)',
     description: "Prepare an EDIT to an existing calendar event (reschedule/rename/move) as a confirmation card the user approves. Needs the eventId from calendar_agenda.",
     auth: 'required', authEnv: 'GOOGLE_OAUTH_CLIENT_ID', rateLimit: 'Bounded by the user\'s Calendar API quota',

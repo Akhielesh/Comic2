@@ -70,7 +70,7 @@ export const ARTIFACT_TOOLS: Record<string, string[]> = {
   email_compose: ['gmail_compose'],
   // Calendar — read agenda + the confirmed write tools that emit a draft card.
   calendar_agenda: ['calendar_agenda'],
-  calendar_event_draft: ['calendar_create_event', 'calendar_update_event', 'calendar_delete_event', 'calendar_rsvp'],
+  calendar_event_draft: ['calendar_create_event', 'calendar_create_events', 'calendar_update_event', 'calendar_delete_event', 'calendar_rsvp'],
   game: ['play_game']
 };
 

@@ -27,7 +27,130 @@ const fmtWhen = (start?: string, end?: string, allDay?: boolean): string => {
   return `${datePart} · ${startT}${endT ? ` – ${endT}` : ''}`;
 };
 
+type RowStatus = 'idle' | 'busy' | 'done' | 'error';
+
+// BATCH create: one card listing several events with an "Add all" action. Each row gets
+// its own live status as they're created sequentially; rows can be removed before adding.
+const BatchEventDraft: React.FC<{ data: CalendarEventDraftArtifact }> = ({ data }) => {
+  const [events, setEvents] = useState(() => (data.events || []).filter((e) => e && e.title));
+  const [statuses, setStatuses] = useState<RowStatus[]>(() => (data.events || []).filter((e) => e && e.title).map(() => 'idle'));
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | undefined>();
+  const blocked = !data.connectionId ? 'not_connected' : !data.canWrite ? 'read_only' : null;
+  const doneCount = statuses.filter((s) => s === 'done').length;
+  const failCount = statuses.filter((s) => s === 'error').length;
+  const allSettled = events.length > 0 && statuses.every((s) => s === 'done' || s === 'error');
+
+  const addAll = async () => {
+    if (!data.connectionId || blocked || running) return;
+    setRunning(true); setError(undefined);
+    for (let i = 0; i < events.length; i++) {
+      if (statuses[i] === 'done') continue;
+      setStatuses((s) => s.map((v, j) => (j === i ? 'busy' : v)));
+      try {
+        const e = events[i];
+        await mutateEvent(data.connectionId, 'create', {
+          title: e.title,
+          ...(e.start ? { start: e.start } : {}),
+          ...(e.end ? { end: e.end } : {}),
+          ...(e.allDay !== undefined ? { allDay: e.allDay } : {}),
+          ...(e.location ? { location: e.location } : {}),
+          ...(e.description ? { description: e.description } : {}),
+          ...(e.attendees ? { attendees: e.attendees } : {}),
+          ...(e.timeZone ? { timeZone: e.timeZone } : {})
+        });
+        setStatuses((s) => s.map((v, j) => (j === i ? 'done' : v)));
+      } catch (err) {
+        setStatuses((s) => s.map((v, j) => (j === i ? 'error' : v)));
+        setError((err as Error)?.message || 'Some events couldn’t be added.');
+      }
+    }
+    setRunning(false);
+  };
+
+  const removeRow = (i: number) => {
+    if (running) return;
+    setEvents((list) => list.filter((_, j) => j !== i));
+    setStatuses((s) => s.filter((_, j) => j !== i));
+  };
+
+  const header = (
+    <>
+      <SurfaceTitle>Add {events.length} event{events.length === 1 ? '' : 's'}</SurfaceTitle>
+      <SurfaceSubtitle>{data.account || 'Google Calendar'}{allSettled ? ` · ${doneCount} added${failCount ? `, ${failCount} failed` : ''}` : ''}</SurfaceSubtitle>
+    </>
+  );
+
+  const rowIcon = (s: RowStatus) =>
+    s === 'busy' ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-[var(--ds-accent)]" />
+      : s === 'done' ? <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
+        : s === 'error' ? <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-rose-500" />
+          : <CalendarPlus className="h-3.5 w-3.5 shrink-0 text-[var(--ds-faint)]" />;
+
+  if (!events.length) {
+    return (
+      <Surface header={header} accent="#10b981">
+        <div className="px-3.5 py-4 text-[13px] text-[var(--ds-muted)]">{doneCount ? `Added ${doneCount} event${doneCount === 1 ? '' : 's'} to your calendar.` : 'Nothing to add.'}</div>
+      </Surface>
+    );
+  }
+
+  return (
+    <Surface header={header} accent={allSettled && !failCount ? '#10b981' : 'var(--ds-accent)'}>
+      <div className="space-y-2.5 px-3.5 py-3">
+        <ul className="max-h-72 space-y-1 overflow-y-auto [scrollbar-width:thin]">
+          {events.map((e, i) => (
+            <li key={i} className="flex items-start gap-2 rounded-lg border border-[var(--ds-hairline-soft)] px-2.5 py-1.5">
+              <span className="mt-0.5">{rowIcon(statuses[i])}</span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[13px] font-medium text-[var(--ds-ink)]">{e.title}</p>
+                <p className="truncate text-[11px] tabular-nums text-[var(--ds-muted)]">{fmtWhen(e.start, e.end, e.allDay)}{e.location ? ` · ${e.location}` : ''}</p>
+              </div>
+              {!running && statuses[i] === 'idle' && (
+                <button onClick={() => removeRow(i)} aria-label="Remove" className="shrink-0 rounded-md p-1 text-[var(--ds-faint)] hover:bg-[var(--ds-hover)] hover:text-rose-500">
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+
+        {blocked === 'not_connected' && (
+          <div className="flex items-start gap-2 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-2.5 py-2 text-[12px] text-[var(--ds-muted)]">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" /><span>Connect Google Calendar in <span className="font-medium text-[var(--ds-ink)]">Settings → Connectors</span>, then ask again.</span>
+          </div>
+        )}
+        {blocked === 'read_only' && (
+          <div className="flex items-start gap-2 rounded-lg border border-[var(--ds-hairline)] bg-[var(--ds-well)] px-2.5 py-2 text-[12px] text-[var(--ds-muted)]">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" /><span>This calendar is <span className="font-medium text-[var(--ds-ink)]">read-only</span>. Reconnect in Connectors to grant edit access.</span>
+          </div>
+        )}
+        {error && <p className="text-[12px] text-rose-600">{error}</p>}
+
+        <div className="flex items-center justify-end gap-2 border-t border-[var(--ds-hairline-soft)] pt-2.5">
+          {allSettled ? (
+            <span className="inline-flex items-center gap-1.5 text-[13px] font-medium text-emerald-600"><Check className="h-4 w-4" /> Added {doneCount} of {events.length}</span>
+          ) : (
+            <button
+              onClick={addAll}
+              disabled={running || !!blocked}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--ds-accent)] px-3.5 py-1.5 text-[13px] font-semibold text-white transition-colors hover:bg-[var(--ds-accent-hover)] disabled:opacity-50"
+            >
+              {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CalendarPlus className="h-3.5 w-3.5" />}
+              {running ? `Adding ${doneCount}/${events.length}…` : `Add all ${events.length}`}
+            </button>
+          )}
+        </div>
+      </div>
+    </Surface>
+  );
+};
+
 export const CalendarEventDraft: React.FC<{ data: CalendarEventDraftArtifact }> = ({ data }) => {
+  // Batch create (an itinerary / multiple parsed events) → the "Add all" card.
+  if (data.action === 'create' && Array.isArray(data.events) && data.events.length > 1) {
+    return <BatchEventDraft data={data} />;
+  }
   const meta = ACTION_META[data.action] || ACTION_META.create;
   const { Icon } = meta;
   const [status, setStatus] = useState<'idle' | 'busy' | 'done' | 'error'>('idle');
