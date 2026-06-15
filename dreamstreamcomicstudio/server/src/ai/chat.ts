@@ -17,6 +17,7 @@ import type { AIProviderId } from './providers/types.js';
 import { toToolSpec, type ChatTool } from './tools/registry.js';
 import { buildJsonToolSystemBlock, extractToolCall, stripToolCallJson, formatToolResult } from './tools/jsonToolProtocol.js';
 import { capToolOutput, CHAT_TOOL_OUTPUT_MAX } from './tools/capToolOutput.js';
+import { verifyToolOutput } from './tools/verifyToolOutput.js';
 import { coerceJsonOrNull } from './jsonCoerce.js';
 import { JSON_TOOL_PROTOCOL_ENABLED, CHAT_MAX_OUTPUT_TOKENS } from '../config.js';
 import { buildUserMemoryBlock } from '../services/userMemory.js';
@@ -706,6 +707,10 @@ export const runChat = async (
         // refresh control can re-execute the same tool for live data.
         if (out.artifacts) artifacts.push(...out.artifacts.map((a) => ({ ...a, origin: { tool: call.name, args: call.arguments } })));
         if (out.notice) addNotice({ tool: call.name, ...out.notice });
+        // Deterministic post-check: flag silently-degraded output (e.g. a chart whose
+        // non-numeric values were coerced to 0) so the model knows not to trust it.
+        const verify = verifyToolOutput(call.name, call.arguments, out);
+        if (verify) addNotice({ tool: call.name, ...verify });
         toolEvents.push({ tool: call.name, query, ok: true, summary: out.content.slice(0, 160) });
         params.onToolEvent?.({ phase: 'end', tool: call.name, query, ok: true, summary: out.content.slice(0, 160), index: 0, iteration: i });
         // Bound the model-facing text (the trace summary above stays full-fidelity).
@@ -812,6 +817,10 @@ export const runChat = async (
         if (r.out.artifacts) artifacts.push(...r.out.artifacts.map((a) => ({ ...a, origin: { tool: r.call.name, args: r.args ?? {} } })));
         // A tool can flag a degraded/missing-data situation it wants surfaced.
         if (r.out.notice) addNotice({ tool: r.call.name, ...r.out.notice });
+        // Deterministic post-check: flag silently-degraded output (coerced/dropped chart
+        // data, a no-op python run) so the model doesn't treat a mangled result as good.
+        const verify = verifyToolOutput(r.call.name, r.args ?? {}, r.out);
+        if (verify) addNotice({ tool: r.call.name, ...verify });
       } else if (!r.ok) {
         // A tool that errored is itself a capability gap worth recording.
         addNotice({ tool: r.call.name, level: 'error', message: r.summary || 'Tool failed.' });

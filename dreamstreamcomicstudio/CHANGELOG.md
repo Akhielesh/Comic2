@@ -39,6 +39,17 @@ All notable user-facing changes. Format loosely follows
     projects open in the standard editor. (ADR 0004)
 
 ### Fixed
+- **The agent notices when a chart/code result came out wrong (2026-06-15):**
+  - Some tools silently degrade instead of failing: a chart built from a spec with a
+    non-numeric value renders that bar as a flat **0** (and points with a blank label
+    just vanish), yet the tool reports success — so the model narrated a confidently-
+    wrong chart as correct. Likewise `run_python` returning "ran but printed nothing"
+    looked like a normal result. The default chat loop now runs a deterministic
+    post-check (the same kind of verifier the research/swarm modes already had) that
+    flags these — non-numeric values coerced to 0, dropped points, a no-op code run —
+    so the model knows not to trust the result and can re-do it. The check only fires
+    on unambiguous degradation (genuine zeros and legitimately-empty results are never
+    flagged), and it only adds an advisory note — it never changes your answer.
 - **Cleaner source lists — no more duplicate citations (2026-06-15):**
   - A web-grounded answer gathers citations across up to nine tool rounds from ~30
     sources, and the same article routinely came back in slightly different URL forms
