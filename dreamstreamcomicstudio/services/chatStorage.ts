@@ -229,6 +229,12 @@ export const getChatSession = async (id: string): Promise<ChatSession | undefine
 };
 
 export const saveChatSession = async (session: ChatSession): Promise<void> => {
+  // Never resurrect a chat the user deleted THIS session. Many saves are fire-and-forget
+  // (stream finalize, a late auto-title, background memory updates) and can land AFTER a
+  // delete — without this guard that late put re-creates the local row and pushSession then
+  // syncs it back to every device. Same tombstone syncFromCloud already trusts; a genuinely
+  // new chat gets a fresh uuid, so it can never collide with a deleted id.
+  if (deletedThisSession.has(session.id)) return;
   try {
     await runTransaction('readwrite', (store) => store.put(session));
   } catch {
@@ -268,6 +274,9 @@ export const listChatProjects = async (): Promise<ChatProject[]> => {
 };
 
 export const saveChatProject = async (project: ChatProject): Promise<void> => {
+  // Same resurrection guard as saveChatSession — a late save mustn't re-create a project
+  // the user deleted this session (deleteChatProject already tombstones the id).
+  if (deletedThisSession.has(project.id)) return;
   try {
     await runTransaction('readwrite', (store) => store.put(project), PROJECTS_STORE);
   } catch {

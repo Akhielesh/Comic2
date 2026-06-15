@@ -39,6 +39,14 @@ All notable user-facing changes. Format loosely follows
     projects open in the standard editor. (ADR 0004)
 
 ### Fixed
+- **Deleted chats stay deleted — no more resurrection across devices (2026-06-15):**
+  - Deleting a chat right after (or while) it was streaming or being auto-titled could
+    bring it back: a background save dispatched just before the delete would land just
+    after it, re-create the local row, and then sync it back up to the cloud — so the
+    "deleted" chat reappeared on every signed-in device. Saves now respect the same
+    just-deleted tombstone the cloud-sync path already trusts, so a late write to a
+    deleted chat (or project) is correctly ignored. A genuinely new chat is unaffected
+    (it gets a fresh id).
 - **The agent notices when a chart/code result came out wrong (2026-06-15):**
   - Some tools silently degrade instead of failing: a chart built from a spec with a
     non-numeric value renders that bar as a flat **0** (and points with a blank label
