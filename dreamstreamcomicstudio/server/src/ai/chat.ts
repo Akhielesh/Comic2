@@ -409,12 +409,46 @@ const answerTokenBudget = (provider: AIProviderId, level?: ChatReasoningLevel): 
   return base + reasoningHeadroom;
 };
 
-const dedupeCitations = (citations: { url: string; title?: string }[]) => {
+/**
+ * Canonicalize a URL into a stable DEDUP KEY (the original URL is kept for display).
+ * Citations accumulate across up to MAX_TOOL_ITERATIONS rounds from ~30 producers, and
+ * external feeds return the same article in trivially different forms — `http`/`https`,
+ * a trailing slash, `www.`, host casing, a `#fragment`, or `?utm_*`/`gclid`/`fbclid`
+ * tracking params. Exact-string dedup let every variant through, inflating the numbered
+ * "Web sources (N)" list. This collapses those variants. Fail-open: a non-URL string
+ * keys on itself, so behavior is never worse than today.
+ */
+export const canonicalizeCitationUrl = (raw: string): string => {
+  const trimmed = (raw || '').trim();
+  try {
+    const u = new URL(trimmed);
+    // http/https are the same resource for dedup purposes.
+    u.protocol = u.protocol === 'http:' ? 'https:' : u.protocol;
+    u.hostname = u.hostname.replace(/^www\./i, '').toLowerCase();
+    u.hash = '';
+    // Strip ONLY tracking params — keep load-bearing ones (e.g. youtube ?v=, ?id=).
+    for (const k of [...u.searchParams.keys()]) {
+      if (/^utm_/i.test(k) || /^(gclid|fbclid|mc_eid|igshid|ref|ref_src)$/i.test(k)) {
+        u.searchParams.delete(k);
+      }
+    }
+    if (u.pathname.length > 1) u.pathname = u.pathname.replace(/\/+$/, '');
+    return u.toString();
+  } catch {
+    return trimmed;
+  }
+};
+
+export const dedupeCitations = (citations: { url: string; title?: string }[]) => {
   const seen = new Set<string>();
   const out: { url: string; title?: string }[] = [];
   for (const c of citations) {
-    if (!c.url || seen.has(c.url)) continue;
-    seen.add(c.url);
+    if (!c.url) continue;
+    // Key on the canonical form, but keep the FIRST-SEEN original object (display URL,
+    // title, order) — the earliest/most-relevant tool result wins.
+    const key = canonicalizeCitationUrl(c.url);
+    if (seen.has(key)) continue;
+    seen.add(key);
     out.push(c);
   }
   return out;

@@ -39,6 +39,16 @@ All notable user-facing changes. Format loosely follows
     projects open in the standard editor. (ADR 0004)
 
 ### Fixed
+- **Cleaner source lists — no more duplicate citations (2026-06-15):**
+  - A web-grounded answer gathers citations across up to nine tool rounds from ~30
+    sources, and the same article routinely came back in slightly different URL forms
+    (`http` vs `https`, with/without `www.` or a trailing slash, a `#fragment`, or
+    `?utm_*`/`gclid`/`fbclid` tracking junk). Exact-string dedup let every variant
+    through, so the numbered "Web sources (N)" panel showed the same article several
+    times and an inflated count. Citations are now deduped on a canonical form, so each
+    real source appears once. Distinct sources are never merged — load-bearing query
+    params (e.g. a YouTube `?v=`) are preserved, and the original link you click is
+    untouched.
 - **"Build me a chart/app" no longer silently does nothing (2026-06-15):**
   - A tool call's arguments arrive as streamed JSON fragments, and a big payload (a
     whole chart spec, a generated app, a UI layout — all of it rides inside those
