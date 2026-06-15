@@ -39,6 +39,15 @@ All notable user-facing changes. Format loosely follows
     projects open in the standard editor. (ADR 0004)
 
 ### Fixed
+- **Long chats stay smooth while a reply streams (2026-06-15):**
+  - Every streamed token re-renders the whole thread, and the message renderer was
+    re-parsing **every** prior turn's full Markdown on **every** token — so a 40-turn
+    chat re-parsed ~40 documents per token, which is the jank/typing-lag you felt the
+    longer a conversation got (made worse by the new live activity trace, which ticks
+    the thread on each tool step). The Markdown renderer is now memoized and its
+    parser plugins are stabilized, so only the turn whose text is actually growing
+    re-parses; settled turns are skipped entirely. No behavior change — purely fewer
+    redundant re-parses. (A render-count test locks this in.)
 - **A chatty tool can no longer kill a whole answer (tool-output cap, 2026-06-15):**
   - Every tool/MCP result is fed back into the model and re-sent on each subsequent
     tool round. A single verbose result (a long page read, a giant MCP

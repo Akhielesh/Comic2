@@ -42,19 +42,32 @@ const components: Components = {
   }
 };
 
+// Hoisted to module scope so ReactMarkdown sees a STABLE plugin-array identity across
+// renders. A fresh array literal each render (the old inline `[remarkGfm]` /
+// `[[rehypeSanitize, sanitizeSchema]]`) makes react-markdown re-run the whole
+// remark→rehype→sanitize parse even when `text` is unchanged.
+const REMARK_PLUGINS: React.ComponentProps<typeof ReactMarkdown>['remarkPlugins'] = [remarkGfm];
+const REHYPE_PLUGINS: React.ComponentProps<typeof ReactMarkdown>['rehypePlugins'] = [[rehypeSanitize, sanitizeSchema]];
+
 interface ChatMarkdownProps {
   text: string;
   className?: string;
 }
 
-export const ChatMarkdown: React.FC<ChatMarkdownProps> = ({ text, className = '' }) => (
+// Memoized: the chat thread re-renders every turn on each streamed token, and without
+// this, react-markdown re-parses EVERY prior turn's full body per token (a 40-turn chat
+// re-parses ~40 documents per token). Props are two stable primitives (`text`,
+// `className`), so default shallow comparison is exactly right — a memo bail skips the
+// parse for every turn except the one whose text is actually streaming.
+export const ChatMarkdown = React.memo<ChatMarkdownProps>(({ text, className = '' }) => (
   <div className={`message-body ${className}`}>
     <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      rehypePlugins={[[rehypeSanitize, sanitizeSchema]]}
+      remarkPlugins={REMARK_PLUGINS}
+      rehypePlugins={REHYPE_PLUGINS}
       components={components}
     >
       {text}
     </ReactMarkdown>
   </div>
-);
+));
+ChatMarkdown.displayName = 'ChatMarkdown';
