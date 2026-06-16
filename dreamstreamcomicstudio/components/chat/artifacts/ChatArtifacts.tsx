@@ -68,6 +68,8 @@ import { EmailTerminal } from './EmailTerminal';
 import { EmailCompose } from './EmailCompose';
 import { CalendarAgenda } from './CalendarAgenda';
 import { CalendarEventDraft } from './CalendarEventDraft';
+import { IconSetCard } from './IconSetCard';
+import type { IconSetArtifact } from '../../../apiTypes';
 import type { ClarifyArtifact, GameArtifact, EmailInboxArtifact, EmailComposeArtifact, AgentActivityArtifact, CalendarAgendaArtifact, CalendarEventDraftArtifact, FlightResultsArtifact } from '../../../apiTypes';
 
 // Renderer registry for typed rich-output artifacts. Adding a new rich component is
@@ -139,7 +141,8 @@ const ARTIFACT_RENDERERS: Record<string, (data: unknown, key: number) => React.R
   email_unread: (d, k) => <EmailTerminal key={k} data={d as EmailInboxArtifact} />,
   email_compose: (d, k) => <EmailCompose key={k} data={d as EmailComposeArtifact} />,
   calendar_agenda: (d, k) => <CalendarAgenda key={k} data={d as CalendarAgendaArtifact} />,
-  calendar_event_draft: (d, k) => <CalendarEventDraft key={k} data={d as CalendarEventDraftArtifact} />
+  calendar_event_draft: (d, k) => <CalendarEventDraft key={k} data={d as CalendarEventDraftArtifact} />,
+  icon_set: (d, k) => <IconSetCard key={k} data={d as IconSetArtifact} />
 };
 
 /** Render an artifact's bare card via the registry (no frame/boundary). Used by the
@@ -206,7 +209,8 @@ export const DENSITY_AWARE_TYPES = new Set([
   'email_unread',
   'email_compose',
   'calendar_agenda',
-  'calendar_event_draft'
+  'calendar_event_draft',
+  'icon_set'
 ]);
 
 // Holds the freshest version of a single artifact. When the server stamped an

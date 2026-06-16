@@ -726,6 +726,14 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['convert image', 'jpg', 'jpeg', 'png', 'webp', 'avif', 'resize', 'thumbnail', 'image format', 'compress image', 'shrink image', 'to png', 'to jpg']
   },
   {
+    name: 'icon_search', label: 'Icon search', category: 'media', kind: 'api', provider: 'Iconify',
+    description: 'Search 200,000+ open-source SVG icons (Lucide, Material Symbols, Heroicons, Tabler, Phosphor, Simple Icons brand logos, and 150+ more sets) and show a pickable grid — each result has an id like "lucide:rocket" to reference in a component or app, or to drop into a UI.',
+    auth: 'none', rateLimit: 'Unlimited (free public API, no key)',
+    dataShape: 'A grid of SVG icons with copyable set:name ids.', docsUrl: 'https://iconify.design',
+    keywords: ['icon', 'icons', 'svg icon', 'glyph', 'symbol', 'pictogram', 'logo', 'lucide', 'iconify', 'material icon', 'heroicons', 'tabler', 'phosphor', 'ui icon'],
+    license: 'attribution', licenseNote: 'Icons are open-source but per-set licenses vary (mostly MIT/Apache/CC-BY) — check the set before commercial use.'
+  },
+  {
     name: 'create_dashboard', label: 'Glass dashboard', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app SVG)',
     description: 'Compose a customizable, drag-to-rearrange dashboard of live widgets — clocks across time zones, countdowns, stats, charts, checklists, progress rings, a minimalist globe with flight arcs, notes and links. Built for trackers, trip plans, study boards and overviews.',
     auth: 'none', rateLimit: 'Unlimited (renders locally, no API)',

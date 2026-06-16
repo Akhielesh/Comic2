@@ -1068,6 +1068,17 @@ export interface GoalTrackerArtifact {
   density?: 'compact' | 'detailed';
 }
 
+// --- Icon search (Iconify) ---
+// Emitted by the `icon_search` tool. Each icon `body` is the inner SVG markup,
+// server-sanitized (see server/src/ai/tools/icons.ts) before it reaches the client.
+export interface IconSetArtifact {
+  query?: string;
+  /** Total matches Iconify reported (≥ the number shown). */
+  total?: number;
+  icons: { id: string; name: string; prefix: string; body: string; width: number; height: number }[];
+  density?: 'compact' | 'detailed';
+}
+
 // --- Code review card ---
 // Emitted by `render_code_review` (the /code-review skill). For GitHub PRs the
 // recipe first pulls the real diff via `fetch_github_pr`, so findings cite real
