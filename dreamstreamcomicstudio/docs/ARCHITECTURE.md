@@ -3,6 +3,15 @@
 DreamStream Comic Studio turns scripts into comics with an AI pipeline. This is a
 high-level map; see `features/` and `decisions/` for detail.
 
+> **For the complete, live-verified dependency map** (all 5 Cloudflare Workers, R2,
+> Durable Objects, Supabase, the Railway backend, every external API + MCP server, and the
+> per-service cost model) see **[`infrastructure/INFRA_MAP.md`](infrastructure/INFRA_MAP.md)**.
+> The simplified diagram below intentionally omits the Workers tier — notably
+> `dreamstream-api` (the `/api/*` reverse proxy that fronts this backend),
+> `dreamstream-data-egress` (market-data relay, load-bearing for finance widgets),
+> `dreamstream-live` (EventRoom DO + R2), `dreamstream-studio` (container sandboxes), and
+> `dreamstream-email`.
+
 ## Topology
 
 ```

@@ -129,18 +129,31 @@ for the production push — that's fine, proceed once allowed.)
 
 ## Railway cost control (backend)
 
+> **Authoritative infra docs live in [`docs/infrastructure/`](docs/infrastructure/README.md):**
+> `INFRA_MAP.md` (dependency map), `COST_RUNBOOK.md` (full optimization playbook +
+> monthly checklist), `ENV_MATRIX.md`, `SECURITY_FINDINGS.md`. This section is the
+> quick reference; the runbook is the source of truth.
+
 The Railway-hosted Express backend (built from `Dreamstrream-v1`, `railway.json` +
 root `Dockerfile`) is the only paid always-on service; the frontend (Cloudflare Pages)
-and the 5 Workers are effectively free. The bill is dominated by **memory held 24/7**.
-Standing setup to keep it cheap (single-user scale):
+and the **5 DreamStream Workers** (`dreamstream-api`, `-data-egress`, `-live`, `-email`,
+`-studio`) are effectively free. The bill is dominated by **memory held 24/7**.
+(The `atlasd` / `akhieleshpersonalwebsite` workers on the same Cloudflare account are
+*not* part of DreamStream.) Standing setup to keep it cheap (single-user scale):
 
 - **Serverless / App-Sleeping must be ON** for the backend service (Railway → service →
   Settings → Serverless). It scales to zero when idle. This is a dashboard/MCP toggle —
   it is **not** a `railway.json` field. Set via Railway MCP `update_service
-  sleep_application=true`.
-- **No Redis.** `REDIS_URL` unset is intentional: rate-limiting falls back to in-memory
-  and connector sync runs in-process. A live Redis connection both adds an always-on
-  charge AND emits constant outbound traffic that blocks Serverless from ever sleeping.
+  sleep_application=true`. **Gotcha:** the backend's Railway **project is named
+  `hospitable-enthusiasm`** and the **service** is `Comic2` (there is no project literally
+  called "comic2"); the MCP call works against it (verified 2026-06-16). Domain
+  `comic2-production.up.railway.app`, custom `dreamstreamstudio.ai`.
+- **No Redis *on the always-on backend*.** `REDIS_URL` unset is intentional: rate-limiting
+  falls back to in-memory and connector sync runs in-process. A live Redis connection both
+  adds an always-on charge AND emits constant outbound traffic that blocks Serverless from
+  ever sleeping. (Redis *is* the BullMQ broker for the **separate** `ventures:worker` /
+  `connectors:worker` processes — but those are not run by default and must never be folded
+  into the always-on backend.)
 - **Memory baseline:** Pyodide (`server/src/services/pyodideRunner.ts`) loads packages
   on demand via `loadPackagesFromImports` — never re-add eager preloading (WASM memory
   never shrinks, so it permanently pins ~500MB). Node heap is capped in the Dockerfile

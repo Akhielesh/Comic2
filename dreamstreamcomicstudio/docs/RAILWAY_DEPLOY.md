@@ -3,6 +3,17 @@
 The Express/TypeScript API in this folder is what runs on Railway. The frontend
 (Vite/React) is built and served separately on Cloudflare Pages.
 
+> 💸 **Cost control is mandatory, not optional.** This backend is the only paid always-on
+> service. Before/after deploying you MUST:
+> 1. Enable **App-Sleeping / Serverless** (Settings → Serverless, or MCP
+>    `update_service sleep_application=true`) — scales to zero when idle.
+> 2. Leave **`REDIS_URL` unset** on this service (a live Redis blocks sleeping).
+> 3. Keep the Node heap cap (`NODE_OPTIONS=--max-old-space-size=512`, in the Dockerfile).
+>
+> The service lives in Railway project **`hospitable-enthusiasm`** as service **`Comic2`**.
+> Full model + monthly checklist: **[`infrastructure/COST_RUNBOOK.md`](infrastructure/COST_RUNBOOK.md)**.
+> Required env vars: **[`infrastructure/ENV_MATRIX.md`](infrastructure/ENV_MATRIX.md)**.
+
 ## One-time Railway service settings
 
 1. **Root directory:** `dreamstreamcomicstudio`
