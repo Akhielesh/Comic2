@@ -655,9 +655,9 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['call api', 'proxy', 'fetch from', 'api request', 'get data from', 'post to', 'nango']
   },
   {
-    name: 'generate_image', label: 'Image generation', category: 'dev', kind: 'builtin', provider: 'Gemini · Ideogram · Flux (BYOK — your account)',
-    description: 'Generate a real image from a text prompt using your own image-generation account key (Gemini/Ideogram/Flux). For illustrations, hero/cover images, icons, OG/share images.',
-    auth: 'required', authEnv: 'GEMINI_API_KEY', rateLimit: "Your provider account's limits",
+    name: 'generate_image', label: 'Image generation', category: 'dev', kind: 'builtin', provider: 'Pollinations (free) · Gemini · Ideogram · Flux · OpenAI · xAI (BYOK)',
+    description: 'Generate a real image from a text prompt. Free out of the box (Pollinations, no key); uses your connected image key (Gemini/Ideogram/Flux/OpenAI/xAI) automatically for higher fidelity. For illustrations, hero/cover images, icons, OG/share images.',
+    auth: 'optional', authEnv: 'GEMINI_API_KEY', rateLimit: 'Free via Pollinations; your account limits with a key',
     dataShape: 'An image (shown to the user) + a short confirmation.', docsUrl: 'https://ai.google.dev/gemini-api/docs/imagen',
     keywords: ['image', 'generate image', 'illustration', 'picture', 'art', 'hero image', 'icon', 'og image', 'cover', 'render image', 'imagen', 'ideogram', 'flux']
   },

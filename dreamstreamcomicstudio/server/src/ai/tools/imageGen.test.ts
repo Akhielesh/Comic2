@@ -42,9 +42,12 @@ describe('imageGen (BYOK)', () => {
     expect((await makeImageTool({ pixazoKey: 'k' }).execute({ prompt: 'x' })).images?.[0].url).toContain('FLUX');
   });
 
-  it('returns a clear notice when no key is configured', async () => {
-    const r = await makeImageTool({}).execute({ prompt: 'x' });
-    expect(r.notice?.message).toMatch(/no image/i);
+  it('falls back to free Pollinations (no key, no error notice) when no BYOK key is configured', async () => {
+    const r = await makeImageTool({}).execute({ prompt: 'a fox', aspectRatio: '16:9' });
+    expect(r.notice).toBeUndefined();
+    expect(r.images?.[0].url).toContain('image.pollinations.ai');
+    expect(r.images?.[0].url).toContain('width=1280');
+    expect(r.content).toMatch(/free/i);
   });
 
   it('requires a prompt', async () => {
