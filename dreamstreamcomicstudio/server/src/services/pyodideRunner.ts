@@ -28,7 +28,6 @@ const OUTPUT_DIR = '/output';
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_TIMEOUT_MS = 30_000;
 const MAX_OUTPUT_BYTES = 20 * 1024 * 1024; // 20MB total cap across all produced files
-const PRELOAD_PACKAGES = ['numpy', 'Pillow', 'pandas'] as const;
 
 export interface RunPythonFile {
   name: string;
@@ -51,21 +50,20 @@ export interface RunPythonResult {
 
 let pyodidePromise: Promise<PyodideInterface> | null = null;
 
-/** Lazily load (and cache) the single Pyodide instance, preloading common packages. */
+/**
+ * Lazily load (and cache) the single Pyodide instance.
+ *
+ * COST NOTE: we deliberately do NOT eagerly preload numpy/Pillow/pandas here.
+ * Pyodide's WASM linear memory never shrinks once allocated, so preloading pandas
+ * (which pulls in numpy) permanently pinned ~500MB+ to the always-on server after a
+ * single Python run — the dominant driver of the Railway memory bill. Packages are
+ * now loaded on demand per run via `loadPackagesFromImports` (see runPython), so a
+ * script that doesn't touch pandas never pays for it, and cold starts are faster.
+ */
 export function getPyodide(): Promise<PyodideInterface> {
   if (!pyodidePromise) {
     pyodidePromise = (async () => {
-      const py = await loadPyodide();
-      // Best-effort preload — continue if any one wheel fails to fetch (e.g. offline).
-      for (const pkg of PRELOAD_PACKAGES) {
-        try {
-          await py.loadPackage(pkg);
-        } catch (err) {
-          // eslint-disable-next-line no-console
-          console.warn(`[pyodideRunner] preload of ${pkg} failed (continuing):`, (err as Error)?.message);
-        }
-      }
-      return py;
+      return loadPyodide();
     })();
     // If load fails, allow a later retry rather than caching a rejected promise forever.
     pyodidePromise.catch(() => {
@@ -137,6 +135,15 @@ export async function runPython(opts: {
     const timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(1_000, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS));
     const py = await getPyodide();
     const fs = py.FS as unknown as PyFS;
+
+    // Load ONLY the packages this script imports (numpy/pandas/Pillow/etc.), on demand.
+    // Best-effort: if detection misses something, the script's own `import` raises a
+    // normal ModuleNotFoundError that surfaces to the user — we don't preload the world.
+    try {
+      await py.loadPackagesFromImports(opts.code);
+    } catch (err) {
+      console.warn('[pyodideRunner] loadPackagesFromImports failed (continuing):', (err as Error)?.message);
+    }
 
     let stdout = '';
     let stderr = '';
