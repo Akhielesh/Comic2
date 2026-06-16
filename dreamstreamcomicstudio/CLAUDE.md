@@ -127,6 +127,30 @@ Do this without waiting to be asked. Never force-push production; if the merge i
 genuinely ambiguous or risky, pause and ask. (The auto-mode classifier may still prompt
 for the production push — that's fine, proceed once allowed.)
 
+## Railway cost control (backend)
+
+The Railway-hosted Express backend (built from `Dreamstrream-v1`, `railway.json` +
+root `Dockerfile`) is the only paid always-on service; the frontend (Cloudflare Pages)
+and the 5 Workers are effectively free. The bill is dominated by **memory held 24/7**.
+Standing setup to keep it cheap (single-user scale):
+
+- **Serverless / App-Sleeping must be ON** for the backend service (Railway → service →
+  Settings → Serverless). It scales to zero when idle. This is a dashboard/MCP toggle —
+  it is **not** a `railway.json` field. Set via Railway MCP `update_service
+  sleep_application=true`.
+- **No Redis.** `REDIS_URL` unset is intentional: rate-limiting falls back to in-memory
+  and connector sync runs in-process. A live Redis connection both adds an always-on
+  charge AND emits constant outbound traffic that blocks Serverless from ever sleeping.
+- **Memory baseline:** Pyodide (`server/src/services/pyodideRunner.ts`) loads packages
+  on demand via `loadPackagesFromImports` — never re-add eager preloading (WASM memory
+  never shrinks, so it permanently pins ~500MB). Node heap is capped in the Dockerfile
+  (`NODE_OPTIONS=--max-old-space-size=512`).
+- Background timers (`providerUsage` flusher, `modelCatalog` refresh) are `.unref()`'d and
+  send no network when idle — keep them that way so Serverless can sleep.
+
+The Railway MCP (`.mcp.json`) needs an **Account/Team** token (railway.com/account/tokens)
+in `RAILWAY_API_TOKEN` — a Project token (36-char UUID) fails account-level calls.
+
 ## Data connectors
 
 Before answering "do we have data/API coverage for topic X?", adding a data
