@@ -10,6 +10,8 @@
 // charging the caller's key.
 
 import { getCatalog } from '../services/modelCatalog.js';
+import { loadScoreMap } from '../services/modelStats.js';
+import { getModelLatency } from '../services/telemetryAnalytics.js';
 import type { AnnotatedModel } from './catalogAnnotations.js';
 
 // Last-resort fallbacks if the live catalog can't be reached. Kept to current,
@@ -80,6 +82,49 @@ const byImagePrice = (a: AnnotatedModel, b: AnnotatedModel) =>
 const byContextDesc = (a: AnnotatedModel, b: AnnotatedModel) =>
   (b.contextLength || 0) - (a.contextLength || 0);
 
+// --- Latency-aware ranking -------------------------------------------------------
+// The only "best model" tie-break used to be largest context window. On a free/unfunded
+// key (where no frontier model is in the catalog) that selects the huge :free reasoners
+// that queue 30-320s — the dominant cause of "Auto is slow" (55% of real turns ran >25s).
+// Instead, rank by MEASURED speed: live chat_turn p50 latency (tool-free), then bench
+// quality, then context. Both signals are cached here and inside their services, and
+// degrade to empty maps (→ context tie-break) when telemetry/bench/Supabase is absent,
+// so this never blocks or hard-fails a pick.
+const UNMEASURED_P50_MS = 12_000; // neutral: unmeasured models rank between fast and slow ones
+let speedSignalCache: {
+  p50: Record<string, { p50Ms: number; samples: number }>;
+  score: Map<string, number>;
+  at: number;
+} | null = null;
+const SPEED_SIGNAL_TTL_MS = 60_000;
+const loadSpeedSignals = async (): Promise<NonNullable<typeof speedSignalCache>> => {
+  if (speedSignalCache && Date.now() - speedSignalCache.at < SPEED_SIGNAL_TTL_MS) return speedSignalCache;
+  let p50: Record<string, { p50Ms: number; samples: number }> = {};
+  let score = new Map<string, number>();
+  try {
+    [p50, score] = await Promise.all([getModelLatency(7), loadScoreMap()]);
+  } catch {
+    /* degrade to context tie-break */
+  }
+  speedSignalCache = { p50, score, at: Date.now() };
+  return speedSignalCache;
+};
+/** Pick the fastest-then-best model id from a candidate list, using measured p50 + bench score. */
+const rankBySpeedThenQuality = async (models: AnnotatedModel[]): Promise<string | undefined> => {
+  if (models.length <= 1) return models[0]?.id;
+  const { p50, score } = await loadSpeedSignals();
+  const speedOf = (id: string) => p50[id]?.p50Ms ?? UNMEASURED_P50_MS;
+  return [...models].sort((a, b) => {
+    const sa = speedOf(a.id);
+    const sb = speedOf(b.id);
+    if (sa !== sb) return sa - sb; // fastest measured first
+    const qa = score.get(a.id) ?? 0;
+    const qb = score.get(b.id) ?? 0;
+    if (qa !== qb) return qb - qa; // then highest bench quality
+    return byContextDesc(a, b); // then largest context
+  })[0]?.id;
+};
+
 /**
  * Spend preference for auto-selection.
  *  - 'free'      free-first; falls back to cheapest paid when no free model exists.
@@ -146,14 +191,18 @@ export const pickTextModel = async (opts?: PickOpts): Promise<string> => {
     } catch {
       throw new NoFreeModelAvailableError('text', opts?.stageHint);
     }
-    const text = models.filter(isTextModel).filter(gate).filter(isFreeVerified);
-    if (text.length === 0) throw new NoFreeModelAvailableError('text', opts?.stageHint);
+    const allFree = models.filter(isTextModel).filter(gate).filter(isFreeVerified);
+    if (allFree.length === 0) throw new NoFreeModelAvailableError('text', opts?.stageHint);
+    // Skip recently-failed and huge (200B+) frees that queue past the timeout; if that
+    // empties the pool, fall back to the full free set rather than blocking.
+    const healthy = allFree.filter((m) => !isModelDown(m.id) && !isTimeoutProneFree(m));
+    const text = healthy.length ? healthy : allFree;
     const ranked = opts?.prefer ? [...text.filter(opts.prefer), ...text.filter((m) => !opts.prefer!(m))] : text;
     for (const needle of (opts?.rankOrder ?? FREE_TEXT_PRIORITY)) {
       const hit = ranked.find((m) => m.id.toLowerCase().includes(needle));
       if (hit) return hit.id;
     }
-    return ranked[0].id;
+    return (await rankBySpeedThenQuality(ranked)) || ranked[0].id;
   }
   try {
     const { models } = await getCatalog();
@@ -164,13 +213,20 @@ export const pickTextModel = async (opts?: PickOpts): Promise<string> => {
       if (preferred.length) text = preferred;
     }
     if (costPref === 'quality') {
-      // Honor an explicit strength ranking (the studio passes STRONG_CODING_PRIORITY so the best
-      // available coder wins, free or paid) before falling back to the largest-context model.
+      // Apply the same health hygiene the free path uses: skip recently-failed models and the
+      // huge (200B+) free reasoners that queue past the timeout. This path previously skipped it
+      // and fell through to "largest context wins", which on a free/unfunded key selected exactly
+      // those 30-320s :free models (the production "Auto is slow" root cause).
+      const healthy = text.filter((m) => !isModelDown(m.id) && !isTimeoutProneFree(m));
+      const pool = healthy.length ? healthy : text;
+      // Honor an explicit strength ranking first (the studio passes STRONG_CODING_PRIORITY / chat
+      // passes STRONG_CHAT_PRIORITY so a frontier model wins when the key can call it), then rank
+      // the remainder by MEASURED speed + bench quality instead of raw context size.
       for (const needle of (opts?.rankOrder ?? [])) {
-        const hit = text.find((m) => m.id.toLowerCase().includes(needle));
+        const hit = pool.find((m) => m.id.toLowerCase().includes(needle));
         if (hit) return hit.id;
       }
-      return [...text].sort(byContextDesc)[0]?.id || TEXT_FALLBACK;
+      return (await rankBySpeedThenQuality(pool)) || TEXT_FALLBACK;
     }
     if (costPref === 'free') {
       // Same hygiene as pickTextModelChain: skip recently-failed models and the huge
@@ -182,7 +238,9 @@ export const pickTextModel = async (opts?: PickOpts): Promise<string> => {
           const hit = free.find((m) => m.id.toLowerCase().includes(needle));
           if (hit) return hit.id;
         }
-        return free[0].id;
+        // Final tie-break by measured speed so an unnamed-but-slow free (e.g. nex-n2-pro:free,
+        // which no priority needle matches) never wins by arbitrary order.
+        return (await rankBySpeedThenQuality(free)) || free[0].id;
       }
     }
     // 'cheap' (or 'free' with no free model available) → cheapest eligible text model.

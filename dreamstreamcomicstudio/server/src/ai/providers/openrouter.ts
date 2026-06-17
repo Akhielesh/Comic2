@@ -18,7 +18,7 @@ import {
   REASONING_EFFORT
 } from '../../config.js';
 import { withRetry } from '../utils.js';
-import { modelTimeoutError } from './errors.js';
+import { modelTimeoutError, makeProviderError } from './errors.js';
 import { coerceJson, coerceJsonOrNull } from '../jsonCoerce.js';
 import { classifyModel, hasFreeSuffix } from '../../../../shared/pricing.js';
 import type {
@@ -66,7 +66,14 @@ const openRouterFetch = async <T = any>(
     });
     if (!res.ok) {
       const errBody = await res.text().catch(() => '');
-      throw new Error(`OpenRouter ${path} failed: ${res.status} ${res.statusText} ${errBody.slice(0, 500)}`);
+      // Tag with a server-safe status + user-safe publicMessage so a provider 403 spend-cap /
+      // 402 credits / 5xx isn't mislabeled as a generic 500 "Unexpected server error" and the
+      // raw provider JSON never leaks to the user. The original text stays as the log message
+      // (and keeps the existing message-based retriable detection working).
+      throw makeProviderError(
+        res.status,
+        `OpenRouter ${path} failed: ${res.status} ${res.statusText} ${errBody.slice(0, 500)}`
+      );
     }
     return (await res.json()) as T;
   } catch (err) {
