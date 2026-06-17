@@ -10,6 +10,7 @@
 // ============================================================================
 
 import { getSupabaseAdmin } from '../services/supabase.js';
+import { isUuid } from '../lib/uuid.js';
 import { decryptSecret, encryptSecret } from '../lib/secureStore.js';
 import type {
   ConnectionRef,
@@ -119,6 +120,10 @@ export const upsertConnection = async (input: {
 };
 
 export const getConnection = async (connectionId: string): Promise<ConnectionRow | null> => {
+  // Guard non-UUID ids (e.g. the "demo-connection" placeholder from Gallery demo confirm
+  // cards) before they reach the Postgres `uuid` column, which would otherwise 500 with
+  // "invalid input syntax for type uuid". Treat them as "not found" so callers return 404.
+  if (!isUuid(connectionId)) return null;
   const { data, error } = await getSupabaseAdmin()
     .from('user_connections')
     .select('*')

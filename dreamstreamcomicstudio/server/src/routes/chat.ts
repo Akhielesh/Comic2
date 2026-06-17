@@ -17,6 +17,7 @@ import { NVIDIA_TEXT_MODEL, OPENROUTER_TEXT_MODEL, OPENROUTER_SMART_TEXT_MODEL, 
 import { listConnections } from '../connectors/store.js';
 import { primaryConnectorToolNames } from '../ai/tools/connectors.js';
 import type { AIProviderId, ChatMessage, MessagePart } from '../ai/providers/types.js';
+import { safeClientMessage } from '../ai/providers/errors.js';
 import { isTextProvider, providerLabel } from '../../../shared/providers.js';
 import { assertModelAllowedForUser } from '../services/modelAccessPolicy.js';
 import { getCatalog } from '../services/modelCatalog.js';
@@ -1407,7 +1408,7 @@ chatRouter.post('/stream', async (req, res) => {
         metadata: { route: req.path, historyLength: p.messages.length }
       });
     }
-    send('error', { message: (error as Error)?.message || 'The request failed.' });
+    send('error', { message: safeClientMessage(error, 'The request failed. Please try again.') });
   } finally {
     clearInterval(heartbeat);
     res.end();
@@ -1527,7 +1528,7 @@ chatRouter.post('/swarm', async (req, res) => {
         metadata: { route: req.path, historyLength: p.messages.length, swarm: true }
       });
     }
-    send('error', { message: (error as Error)?.message || 'The swarm failed.' });
+    send('error', { message: safeClientMessage(error, 'The swarm failed. Please try again.') });
   } finally {
     clearInterval(heartbeat);
     res.end();

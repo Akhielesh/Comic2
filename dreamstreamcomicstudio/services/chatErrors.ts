@@ -38,5 +38,32 @@ export const friendlyChatError = (err: unknown): string => {
   ) {
     return "That model isn't available on your provider account (it's listed in the catalog but your key can't call it). Pick a different model or source.";
   }
+  // Shared-key spend cap hit (OpenRouter 403 "Key limit exceeded (total limit)") or out of
+  // credits (402 "requires more credits"). Never leak the raw provider JSON — give an action.
+  if (
+    lower.includes('key limit exceeded') ||
+    (lower.includes('403') && lower.includes('limit')) ||
+    lower.includes('payment required') ||
+    lower.includes('requires more credits') ||
+    lower.includes('insufficient credits') ||
+    lower.includes('quota')
+  ) {
+    return 'The shared AI service is at capacity right now. Try again shortly, switch to a free model, or add your own API key in Settings.';
+  }
+  // Rate limited.
+  if (lower.includes('429') || lower.includes('rate limit') || lower.includes('too many requests')) {
+    return 'Too many requests right now — wait a moment and try again, or switch to a different model.';
+  }
+  // Internal/DB error strings (e.g. Postgres "invalid input syntax for type uuid",
+  // "violates foreign key constraint", "schema cache") must never reach the user verbatim.
+  if (
+    lower.includes('invalid input syntax') ||
+    lower.includes('violates foreign key') ||
+    lower.includes('schema cache') ||
+    lower.includes('relation') && lower.includes('does not exist') ||
+    /\buuid\b/.test(lower)
+  ) {
+    return 'Something went wrong on our end with that request. Please try again.';
+  }
   return msg;
 };
