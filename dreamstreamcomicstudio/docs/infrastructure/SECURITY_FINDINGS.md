@@ -8,6 +8,33 @@ repo config). **Companion:** `INFRA_MAP.md`. Re-run `get_advisors` after any DDL
 
 ---
 
+## ✅ Fixed 2026-06-16 (see `server/sql/security_hardening_2026_06.sql`)
+
+- **`search_path` pinned** on the 8 non-admin functions flagged
+  `function_search_path_mutable` (`handle_new_user`, `increment_project_like/view`,
+  `redeem_coupon`, `collect_active_image_paths`, `increment_venture_spend`,
+  `match_user_memories`, `touch_updated_at`). Verified `search_path=public` on all 8.
+- **Public bucket enumeration closed** — dropped the broad `Public Access` SELECT policy
+  on `storage.objects` so clients can no longer list every object in `comic-assets`.
+  Image display (public URLs / signed URLs) unaffected; verified 0 such policies remain.
+
+## ⏳ Deferred by decision / risk (not applied)
+
+- **Admin SECURITY DEFINER functions** (`admin_reset_user` etc.) — left **as-is per owner**.
+- **GraphQL anon/authenticated table exposure (140)** — RLS gates rows; a blanket `anon`
+  SELECT revoke would break the frontend's direct reads of owner-scoped tables, so it needs
+  per-table review + app testing, not a blind fix.
+- **`notifications` always-true INSERT** — tightening risks breaking cross-user notification
+  creation; audit the insert path first.
+- **`vector` extension in `public`** — moving it risks breaking pgvector usage; low real
+  risk, left in place.
+- **Leaked-password protection** — enable in Supabase **Authentication → Settings** (no
+  SQL/MCP path; manual one-click).
+- **Typo'd duplicate bucket `comic-aasets`** — left untouched (may hold orphaned objects;
+  never delete without verifying empty/backed up).
+
+---
+
 ## Supabase advisors — "Comic" project (`bdjfmxfmhqhzvgrhbbzm`)
 
 **216 advisories: 189 WARN, 27 INFO.** Grouped:
