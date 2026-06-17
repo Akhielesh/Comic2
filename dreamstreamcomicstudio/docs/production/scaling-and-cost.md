@@ -1,5 +1,12 @@
 # Part 3: Scaling and Cost Control
 
+> ⚠️ **Superseded for current operations (2026-06).** This describes a multi-instance,
+> always-on growth model (100–1000 users). The app currently runs at **single-user scale**
+> on a **scale-to-zero** model: one Railway backend with **App-Sleeping ON**, **no Redis**
+> on the backend, Cloudflare Pages + 5 Workers (mostly free). For how cost actually works
+> today and how to keep it down, use **[`../infrastructure/COST_RUNBOOK.md`](../infrastructure/COST_RUNBOOK.md)**.
+> Keep this doc as the reference for *if/when* you scale to many users.
+
 ## Growth Stages
 
 1. Stage A (up to 100 active users): 1 backend instance.
