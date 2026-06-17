@@ -72,7 +72,9 @@ in the dashboard. **This fixed fee is probably your largest remaining Railway co
 - **studio-worker Containers** (`standard-3` = 2 vCPU / 8 GiB, max 50 instances) are the
   **only Cloudflare resource that is not free.** They cost per running instance.
   - Ensure sandboxes **stop** when done (the worker has `stop`; confirm idle auto-stop).
-  - Lower `max_instances` from 50 to a small number (e.g. 2–3) for single-user.
+  - ✅ **`max_instances` lowered 50 → 3** (`studio-worker/wrangler.jsonc`, 2026-06-16) to
+    cap the worst-case Container bill for single-user scale. Raise only if concurrent
+    Studio usage needs it.
   - If the Studio feature isn't in active use, consider not deploying studio-worker.
 - **R2** (`dreamstream-live`): confirm the DO alarm janitor is actually purging (segments
   @24h, recordings @7d) so storage stays near zero. 10 GB free.

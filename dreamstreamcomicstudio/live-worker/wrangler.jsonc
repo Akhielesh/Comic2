@@ -18,9 +18,10 @@
   ],
 
   "vars": {
-    // Comma-separated list of origins allowed to call the API, or "*" while testing.
-    // Tighten to "https://dreamstream.example" before real events.
-    "ALLOWED_ORIGINS": "*"
+    // Comma-separated list of origins allowed to call the API (was "*" while testing).
+    // Tightened to the known production frontends (security finding H4). If you add a
+    // custom domain or preview host that needs the live API, append it here before deploy.
+    "ALLOWED_ORIGINS": "https://dreamstreamstudio.ai,https://comic2.pages.dev"
   },
 
   // Public URL: https://dreamstreamstudio.ai/live-api/* (same zone the studio worker

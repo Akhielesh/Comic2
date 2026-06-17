@@ -92,9 +92,13 @@ All 5 are `compatibility_date: 2026-01-01`. Routes are carved out of the
 |---|---|---|---|---|
 | **dreamstream-api** | `api-proxy/` | `dreamstreamstudio.ai/api/*` | var `BACKEND_ORIGIN` → Railway | Same-origin reverse proxy to the Railway backend; sets `X-Forwarded-For` from `CF-Connecting-IP`; pass-through (no auth); 502 if backend down. **This is what makes the Pages frontend talk to Railway same-origin.** |
 | **dreamstream-live** | `live-worker/` | `dreamstreamstudio.ai/live-api/*` | DO `EVENT_ROOM` (`EventRoom`), R2 `LIVE_BUCKET` (`dreamstream-live`), var `ALLOWED_ORIGINS` | Live-stream API. R2 segment rail (zero egress). EventRoom DO = chat/presence/lobby/moderation/WebRTC signaling. DO **alarm** janitor purges segments @24h, recordings @7d (keeps R2 bounded). |
-| **dreamstream-studio** | `studio-worker/` | `*.dreamstreamstudio.ai/*` (wildcard previews) | DO `Sandbox` (`@cloudflare/sandbox`), **Container `standard-3` = 2 vCPU / 8 GiB, max 50**, secret `STUDIO_HMAC_SECRET`, var `STUDIO_PREVIEW_DOMAIN`, optional `CLOUDFLARE_API_TOKEN`/`VERCEL_TOKEN` | Per-user code sandbox/container. HMAC-signed control POSTs from the backend (`STUDIO_WORKER_URL`): `launch`/`deploy`/`logs`/`stop`. ⚠️ **Containers are the one Cloudflare cost that is NOT free** — see `COST_RUNBOOK.md` §3. |
+| **dreamstream-studio** | `studio-worker/` | `*.dreamstreamstudio.ai/*` (wildcard previews) | DO `Sandbox` (`@cloudflare/sandbox`), **Container `standard-3` = 2 vCPU / 8 GiB, max 3** (capped from 50 on 2026-06-16), secret `STUDIO_HMAC_SECRET`, var `STUDIO_PREVIEW_DOMAIN`, optional `CLOUDFLARE_API_TOKEN`/`VERCEL_TOKEN` | Per-user code sandbox/container. HMAC-signed control POSTs from the backend (`STUDIO_WORKER_URL`): `launch`/`deploy`/`logs`/`stop`. ⚠️ **Containers are the one Cloudflare cost that is NOT free** — see `COST_RUNBOOK.md` §3. |
 | **dreamstream-email** | `email-worker/` | none (`*.workers.dev`) | `send_email` binding `EMAIL`, secrets `EMAIL_HMAC_SECRET` + `SUPABASE_AUTH_HOOK_SECRET`, vars `EMAIL_FROM`/`SUPABASE_VERIFY_URL`/brand | Transactional email. `POST /send` (HMAC `x-email-signature`); `POST /auth-hook` = Supabase Send Email Hook (Standard Webhooks sig). Caps live in backend config (200/day, 2500/mo). |
 | **dreamstream-data-egress** | `data-egress/` | `dreamstreamstudio.ai/egress/*` | optional secret `EGRESS_SHARED_SECRET` | HTTPS GET relay for **exactly 3 allowlisted hosts** (Yahoo Finance, Stooq, Treasury FiscalData) when the backend's datacenter IP is blocked. `x-egress-key` equality gate. Load-bearing for finance widgets. |
+
+> **`dreamstream-live` `ALLOWED_ORIGINS`** was tightened from `"*"` to the known
+> frontends (`https://dreamstreamstudio.ai,https://comic2.pages.dev`) on 2026-06-16
+> (security finding H4). Append any new custom/preview origin that needs the live API.
 
 ---
 

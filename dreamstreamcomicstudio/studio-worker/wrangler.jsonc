@@ -8,12 +8,15 @@
 
   // The container image (Dockerfile in this dir). standard-3 = 2 vCPU / 8 GiB / 16 GB —
   // a good default for npm install + a Vite dev server (see CLOUDFLARE_STUDIO_PLAN §8).
+  // COST: Containers are the only NON-free Cloudflare resource here — billed per running
+  // instance. max_instances caps the worst case. 3 is ample for single-user scale; raise
+  // it only when concurrent Studio usage actually needs it. See docs/infrastructure/COST_RUNBOOK.md §3.
   "containers": [
     {
       "class_name": "Sandbox",
       "image": "./Dockerfile",
       "instance_type": "standard-3",
-      "max_instances": 50
+      "max_instances": 3
     }
   ],
 
