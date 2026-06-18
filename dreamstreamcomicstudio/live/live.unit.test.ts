@@ -1,10 +1,34 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_PRESET_ID, QUALITY_PRESETS, presetById } from './config';
+import {
+  DEFAULT_PRESET_ID,
+  FALLBACK_PAGES_LIVE_WORKER_BASE,
+  QUALITY_PRESETS,
+  presetById,
+  resolveWorkerBase,
+} from './config';
 import { classifyLiveWorkerProbeResponse } from './api';
 import { pickSupportedMime, lensLabel, recordingFilename } from './media';
 import { Ema, fmtBps, fmtBytes, fmtDuration } from './metrics';
 
 describe('live worker readiness probe', () => {
+  it('routes the temporary Pages launch domain to the public workers.dev worker', () => {
+    expect(resolveWorkerBase(undefined, { hostname: 'comic2.pages.dev', origin: 'https://comic2.pages.dev' })).toBe(
+      FALLBACK_PAGES_LIVE_WORKER_BASE,
+    );
+  });
+
+  it('keeps custom domains on their same-origin /live-api worker route', () => {
+    expect(resolveWorkerBase(undefined, { hostname: 'dreamstreamstudio.ai', origin: 'https://dreamstreamstudio.ai' })).toBe(
+      'https://dreamstreamstudio.ai/live-api',
+    );
+  });
+
+  it('lets an explicit build-time worker base override host heuristics', () => {
+    expect(resolveWorkerBase('https://worker.example.test/', { hostname: 'comic2.pages.dev', origin: 'https://comic2.pages.dev' })).toBe(
+      'https://worker.example.test',
+    );
+  });
+
   it('accepts the no-write missing-event JSON 404 as reachable', () => {
     const body = JSON.stringify({ error: 'not found' });
     const result = classifyLiveWorkerProbeResponse(

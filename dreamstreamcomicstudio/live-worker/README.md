@@ -32,13 +32,26 @@ npx wrangler r2 bucket create dreamstream-live   # once
 cd live-worker && npx wrangler deploy
 ```
 
-Then set in the frontend build environment (Cloudflare Pages):
+The worker is also exposed on workers.dev for the temporary Pages launch domain:
+
+```
+https://dreamstream-live.akhieleshsrirangam.workers.dev
+```
+
+`comic2.pages.dev` uses that workers.dev base automatically from `live/config.ts`.
+Custom domains keep using same-origin `/live-api` so `dreamstreamstudio.ai/live-api/*`
+continues to work after the Cloudflare challenge/routing issue is fixed.
+
+If you move accounts or workers.dev subdomains, either update
+`FALLBACK_PAGES_LIVE_WORKER_BASE` in `live/config.ts` or set this in the frontend
+build environment (Cloudflare Pages):
 
 ```
 VITE_LIVE_WORKER_URL=https://dreamstream-live.<your-subdomain>.workers.dev
 ```
 
-and tighten `ALLOWED_ORIGINS` in `wrangler.jsonc` to your site origin.
+Keep `ALLOWED_ORIGINS` in `wrangler.jsonc` tightened to the site origins that should
+call the worker.
 
 ## API
 

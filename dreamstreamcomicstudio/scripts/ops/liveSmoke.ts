@@ -28,7 +28,8 @@ export const DEFAULT_SMOKE_TARGETS: SmokeTarget[] = [
   { name: 'primary app', url: 'https://dreamstreamstudio.ai/', kind: 'frontend' },
   { name: 'fallback app', url: 'https://comic2.pages.dev/', kind: 'frontend' },
   { name: 'stream studio', url: 'https://comic2.pages.dev/live.html', kind: 'frontend' },
-  { name: 'stream worker route', url: 'https://comic2.pages.dev/live-api/api/events/smokeprobe', kind: 'live-api' },
+  { name: 'fallback live worker', url: 'https://dreamstream-live.akhieleshsrirangam.workers.dev/api/events/smokeprobe', kind: 'live-api' },
+  { name: 'custom-domain live worker', url: 'https://dreamstreamstudio.ai/live-api/api/events/smokeprobe', kind: 'live-api' },
   { name: 'railway api', url: 'https://comic2-production.up.railway.app/api/health', kind: 'api' }
 ];
 
@@ -107,12 +108,25 @@ const classifyLiveApi = (response: Response, body: string): Pick<SmokeResult, 's
     return { status: 'fail', detail: 'Cloudflare challenge/interstitial returned instead of live-worker JSON' };
   }
 
+  const json = parseJsonBody(body);
+  if (json && typeof json === 'object') {
+    const code = String((json as { error_code?: unknown }).error_code ?? '');
+    const name = String((json as { error_name?: unknown }).error_name ?? '').toLowerCase();
+    if (code === '1042' || name.includes('workers_dev_script_not_found')) {
+      return { status: 'fail', detail: 'workers.dev host is not deployed/enabled for the live worker' };
+    }
+  }
+
+  const lowerBody = body.toLowerCase();
+  if (lowerBody.includes('error 1042') || lowerBody.includes('workers_dev_script_not_found')) {
+    return { status: 'fail', detail: 'workers.dev host is not deployed/enabled for the live worker' };
+  }
+
   const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
   if (contentType.includes('text/html') || looksLikeAppShell(body)) {
     return { status: 'fail', detail: 'live-worker probe returned website HTML instead of worker JSON' };
   }
 
-  const json = parseJsonBody(body);
   if (!json || typeof json !== 'object') {
     return { status: 'fail', detail: 'live-worker probe did not return JSON' };
   }
@@ -149,11 +163,15 @@ export function classifySmokeResponse(
   };
 }
 
-const fetchWithTimeout = async (fetcher: SmokeFetcher, url: string, timeoutMs: number): Promise<Response> => {
+const fetchWithTimeout = async (fetcher: SmokeFetcher, target: SmokeTarget, timeoutMs: number): Promise<Response> => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetcher(url, { signal: controller.signal, redirect: 'follow' });
+    return await fetcher(target.url, {
+      signal: controller.signal,
+      redirect: 'follow',
+      headers: target.kind === 'frontend' ? undefined : { accept: 'application/json' },
+    });
   } finally {
     clearTimeout(timeout);
   }
@@ -168,7 +186,7 @@ export async function runLiveSmoke(options: RunLiveSmokeOptions = {}): Promise<S
   for (const target of targets) {
     const started = Date.now();
     try {
-      const response = await fetchWithTimeout(fetcher, target.url, timeoutMs);
+      const response = await fetchWithTimeout(fetcher, target, timeoutMs);
       const body = await response.text();
       results.push(classifySmokeResponse(target, response, body, Date.now() - started));
     } catch (error) {

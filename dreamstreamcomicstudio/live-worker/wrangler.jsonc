@@ -5,6 +5,7 @@
   "name": "dreamstream-live",
   "main": "src/index.ts",
   "compatibility_date": "2026-01-01",
+  "workers_dev": true,
 
   "durable_objects": {
     "bindings": [{ "class_name": "EventRoom", "name": "EVENT_ROOM" }]
@@ -24,9 +25,12 @@
     "ALLOWED_ORIGINS": "https://dreamstreamstudio.ai,https://comic2.pages.dev"
   },
 
-  // Public URL: https://dreamstreamstudio.ai/live-api/* (same zone the studio worker
-  // uses — Workers routes take precedence over Pages on matching paths, so the rest
-  // of the site is untouched). The worker strips the /live-api prefix on arrival.
+  // Public URLs:
+  // - https://dreamstreamstudio.ai/live-api/* for the custom domain.
+  // - https://dreamstream-live.akhieleshsrirangam.workers.dev/* for the temporary
+  //   comic2.pages.dev launch fallback. The Pages domain cannot own a custom
+  //   Workers route, so the frontend uses workers.dev there.
+  // The worker strips the /live-api prefix when present.
   "routes": [
     { "pattern": "dreamstreamstudio.ai/live-api/*", "zone_name": "dreamstreamstudio.ai" }
   ]

@@ -82,7 +82,7 @@ describe('live smoke classification', () => {
   it('accepts the live-worker route when a no-write missing-event probe returns JSON 404', () => {
     const body = JSON.stringify({ error: 'not found' });
     const result = classifySmokeResponse(
-      { name: 'stream worker route', url: 'https://comic2.pages.dev/live-api/api/events/smokeprobe', kind: 'live-api' },
+      { name: 'fallback live worker', url: 'https://dreamstream-live.akhieleshsrirangam.workers.dev/api/events/smokeprobe', kind: 'live-api' },
       jsonResponse({ error: 'not found' }, { status: 404 }),
       body,
       70
@@ -95,7 +95,7 @@ describe('live smoke classification', () => {
   it('rejects live-worker probes that are routed to the static website shell', () => {
     const body = '<!doctype html><div id="root"></div><script type="module" src="/assets/index.js"></script>';
     const result = classifySmokeResponse(
-      { name: 'stream worker route', url: 'https://comic2.pages.dev/live-api/api/events/smokeprobe', kind: 'live-api' },
+      { name: 'custom-domain live worker', url: 'https://dreamstreamstudio.ai/live-api/api/events/smokeprobe', kind: 'live-api' },
       htmlResponse(body),
       body,
       70
@@ -103,6 +103,23 @@ describe('live smoke classification', () => {
 
     expect(result.status).toBe('fail');
     expect(result.detail).toContain('website HTML');
+  });
+
+  it('calls out Cloudflare workers.dev 1042 host errors as deployment blockers', () => {
+    const body = JSON.stringify({
+      error_code: 1042,
+      error_name: 'workers_dev_script_not_found',
+      detail: 'No Workers script was found for this host on workers.dev.'
+    });
+    const result = classifySmokeResponse(
+      { name: 'fallback live worker', url: 'https://dreamstream-live.akhieleshsrirangam.workers.dev/api/events/smokeprobe', kind: 'live-api' },
+      jsonResponse(JSON.parse(body), { status: 404 }),
+      body,
+      70
+    );
+
+    expect(result.status).toBe('fail');
+    expect(result.detail).toContain('workers.dev host is not deployed');
   });
 
   it('runs all targets through an injected fetcher and reports failures clearly', async () => {

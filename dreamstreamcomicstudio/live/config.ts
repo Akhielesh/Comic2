@@ -50,23 +50,38 @@ export const LIMITS: { label: string; value: string }[] = [
   { label: 'Cost guardrails', value: 'Closing the studio tab ends the stream instantly (restartable); silent drops auto-end after a 2-minute grace' },
 ];
 
-const explicitBase = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_LIVE_WORKER_URL;
-const isLocalhost = typeof location !== 'undefined' && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+export const FALLBACK_PAGES_LIVE_WORKER_BASE = 'https://dreamstream-live.akhieleshsrirangam.workers.dev';
 
-/** Worker base: explicit env override → local wrangler dev → same-origin
- *  `/live-api` (the live-worker is mounted on that path via a Workers route on
- *  whatever domain serves the app, e.g. dreamstreamstudio.ai/live-api). Using
- *  the page's own origin — instead of a hardcoded domain — keeps viewer links
- *  working on any deployment of the site. */
-export const WORKER_BASE: string = (
-  explicitBase ||
-  (isLocalhost
-    ? 'http://127.0.0.1:8788'
-    : typeof location !== 'undefined'
-      ? `${location.origin}/live-api`
-      : 'https://dreamstreamstudio.ai/live-api')
-).replace(/\/$/, '');
+const explicitBase = (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_LIVE_WORKER_URL;
+const runtimeLocation = typeof location !== 'undefined' ? location : null;
+
+export function isLocalLiveHost(hostname: string): boolean {
+  return /^(localhost|127\.0\.0\.1|\[::1\])$/.test(hostname);
+}
+
+export function resolveWorkerBase(
+  explicit: string | undefined,
+  pageLocation: Pick<Location, 'hostname' | 'origin'> | null,
+): string {
+  const trimmedExplicit = explicit?.trim();
+  if (trimmedExplicit) return trimmedExplicit.replace(/\/$/, '');
+
+  if (!pageLocation) return 'https://dreamstreamstudio.ai/live-api';
+  if (isLocalLiveHost(pageLocation.hostname)) return 'http://127.0.0.1:8788';
+
+  // Temporary launch fallback: Cloudflare Pages' `comic2.pages.dev` domain does
+  // not support the custom-zone Worker route at `/live-api/*`; without this the
+  // SPA fallback returns index.html and hosts create dead events. Keep custom
+  // domains same-origin, but point the Pages production host at workers.dev.
+  if (pageLocation.hostname === 'comic2.pages.dev') return FALLBACK_PAGES_LIVE_WORKER_BASE;
+
+  return `${pageLocation.origin}/live-api`;
+}
+
+/** Worker base: explicit env override → local wrangler dev → temporary Pages
+ *  workers.dev fallback → same-origin `/live-api` for the custom domain. */
+export const WORKER_BASE: string = resolveWorkerBase(explicitBase, runtimeLocation);
 
 /** True when running on localhost — share links minted here won't work on
  *  other devices; the studio shows a heads-up so hosts aren't surprised. */
-export const IS_LOCAL_DEV = isLocalhost;
+export const IS_LOCAL_DEV = runtimeLocation ? isLocalLiveHost(runtimeLocation.hostname) : false;
