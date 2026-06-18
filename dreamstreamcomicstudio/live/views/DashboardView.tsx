@@ -1,6 +1,7 @@
 // Dashboard — live-now hero, lifetime stats, your streams (hydrated from the
 // worker — cloud truth) and your recording downloads.
 import React, { useEffect, useMemo, useState } from 'react';
+import { probeLiveWorker, type LiveWorkerProbeResult } from '../api';
 import { addMyEvent, hydrateMyEvents, listMyRecordings, type MyEvent } from '../events';
 import { fetchStudioAccess, pushEventToCloud, syncMyEvents, type StudioAccess } from '../sync';
 import { fmtBytes, fmtDuration } from '../metrics';
@@ -90,11 +91,17 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
   const [events, setEvents] = useState<MyEvent[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [access, setAccess] = useState<StudioAccess | null>(null);
+  const [backendProbe, setBackendProbe] = useState<LiveWorkerProbeResult | null>(null);
   const prefs = useMemo(loadPrefs, []);
   const recordings = useMemo(listMyRecordings, []);
 
   useEffect(() => {
     let cancelled = false;
+
+    void probeLiveWorker().then((result) => {
+      if (!cancelled) setBackendProbe(result);
+    });
+
     (async () => {
       // Account sync first: cloud events land in the registry before hydrate,
       // so past sessions from other devices show up here.
@@ -197,6 +204,15 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
         <Btn variant="ghost" icon="link" onClick={() => void importByLink()}>Import event</Btn>
         <Btn variant="solid" icon="plus" onClick={() => nav.create()}>New event</Btn>
       </div>
+
+      {backendProbe && !backendProbe.ok && (
+        <div className="banner warn" role="status" style={{ marginBottom: 18 }}>
+          <Icon name="alert" size={15} />
+          <span>
+            <b>Streaming backend check failed.</b> {backendProbe.detail}. Creating a new event is blocked on this deployment until the live-worker route or <code>VITE_LIVE_WORKER_URL</code> returns worker JSON.
+          </span>
+        </div>
+      )}
 
       {/* live now hero */}
       {live.map((ev) => (
