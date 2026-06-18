@@ -8,6 +8,120 @@ export interface CreatedEvent {
   hostKey: string;
 }
 
+export interface LiveWorkerProbeResult {
+  ok: boolean;
+  baseUrl: string;
+  httpStatus: number;
+  detail: string;
+}
+
+const CLOUDFLARE_CHALLENGE_MARKERS = [
+  'just a moment...',
+  'checking your browser',
+  'verify you are human',
+  'security verification',
+  'cf_chl_',
+  'cf-mitigated',
+  'cloudflare challenge',
+];
+
+const APP_SHELL_MARKERS = ['id="root"', "id='root'", 'id="live-root"', "id='live-root'", '/assets/', 'type="module"'];
+
+const lowerHeader = (res: Response, name: string): string => res.headers.get(name)?.toLowerCase() ?? '';
+
+function bodyLooksLikeAppShell(body: string): boolean {
+  const lower = body.toLowerCase();
+  return (lower.includes('<!doctype html') || lower.includes('<html')) && APP_SHELL_MARKERS.some((marker) => lower.includes(marker));
+}
+
+function bodyLooksLikeCloudflareChallenge(res: Response, body: string): boolean {
+  const lower = body.toLowerCase();
+  if (lowerHeader(res, 'cf-mitigated').includes('challenge')) return true;
+  return CLOUDFLARE_CHALLENGE_MARKERS.some((marker) => lower.includes(marker))
+    && (lower.includes('cloudflare') || lowerHeader(res, 'server').includes('cloudflare'));
+}
+
+function parseJsonBody(body: string): unknown {
+  try {
+    return JSON.parse(body);
+  } catch {
+    return null;
+  }
+}
+
+export function classifyLiveWorkerProbeResponse(
+  res: Response,
+  body: string,
+  baseUrl = WORKER_BASE,
+): LiveWorkerProbeResult {
+  const contentType = lowerHeader(res, 'content-type');
+
+  if (bodyLooksLikeCloudflareChallenge(res, body)) {
+    return {
+      ok: false,
+      baseUrl,
+      httpStatus: res.status,
+      detail: 'Cloudflare security verification returned instead of live-worker JSON',
+    };
+  }
+
+  if (contentType.includes('text/html') || bodyLooksLikeAppShell(body)) {
+    return {
+      ok: false,
+      baseUrl,
+      httpStatus: res.status,
+      detail: 'request reached the website shell instead of the live-worker route',
+    };
+  }
+
+  const json = parseJsonBody(body);
+  if (res.status === 404 && json && typeof json === 'object' && String((json as { error?: unknown }).error ?? '').toLowerCase().includes('not found')) {
+    return {
+      ok: true,
+      baseUrl,
+      httpStatus: res.status,
+      detail: 'live-worker route reachable (missing-event probe returned JSON 404)',
+    };
+  }
+
+  if (res.ok && json && typeof json === 'object') {
+    return { ok: true, baseUrl, httpStatus: res.status, detail: 'live-worker route reachable' };
+  }
+
+  return {
+    ok: false,
+    baseUrl,
+    httpStatus: res.status,
+    detail: json && typeof json === 'object'
+      ? `unexpected live-worker probe HTTP ${res.status}`
+      : 'live-worker probe did not return JSON',
+  };
+}
+
+export async function probeLiveWorker(timeoutMs = 5_000): Promise<LiveWorkerProbeResult> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${WORKER_BASE}/api/events/smokeprobe`, {
+      method: 'GET',
+      cache: 'no-store',
+      headers: { accept: 'application/json' },
+      signal: controller.signal,
+    });
+    const body = await res.text();
+    return classifyLiveWorkerProbeResponse(res, body);
+  } catch (error) {
+    return {
+      ok: false,
+      baseUrl: WORKER_BASE,
+      httpStatus: 0,
+      detail: error instanceof Error ? `request failed: ${error.message}` : 'request failed',
+    };
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
 /** 405/HTML responses mean we reached the static website, not the live-worker. */
 function assertWorkerResponse(res: Response): void {
   if (res.status === 405 || res.headers.get('content-type')?.includes('text/html')) {

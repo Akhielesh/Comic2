@@ -1,7 +1,7 @@
 // Create / schedule an event — title, host name, when (now / scheduled),
 // description + cover for the invite page, quality, access, auto-record.
-import React, { useMemo, useState } from 'react';
-import { createEvent } from '../api';
+import React, { useEffect, useMemo, useState } from 'react';
+import { createEvent, probeLiveWorker, type LiveWorkerProbeResult } from '../api';
 import { LIMITS, QUALITY_PRESETS, SEGMENT_MS, presetById } from '../config';
 import { addMyEvent } from '../events';
 import { pushEventToCloud } from '../sync';
@@ -28,11 +28,20 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
   const [rec, setRec] = useState(prefs.autoRecord);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [backendProbe, setBackendProbe] = useState<LiveWorkerProbeResult | null>(null);
   const [created, setCreated] = useState<{ id: string; hostKey: string } | null>(null);
 
   const preset = presetById(quality);
   const scheduled = when === 'later';
   const scheduledMs = scheduled && date ? new Date(`${date}T${time || '18:00'}`).getTime() : null;
+
+  useEffect(() => {
+    let cancelled = false;
+    void probeLiveWorker().then((result) => {
+      if (!cancelled) setBackendProbe(result);
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   const submit = async () => {
     setBusy(true);
@@ -40,6 +49,13 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
     const cleanTitle = title.trim() || 'Untitled stream';
     const cleanHost = host.trim() || 'Host';
     try {
+      const readiness = backendProbe?.ok ? backendProbe : await probeLiveWorker();
+      setBackendProbe(readiness);
+      if (!readiness.ok) {
+        setError(`Streaming backend is not reachable: ${readiness.detail}`);
+        return;
+      }
+
       const res = await createEvent({
         title: cleanTitle,
         host: cleanHost,
@@ -123,6 +139,15 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
           <p className="page-sub">Go live now, or schedule one and share an invite — like an event page for your stream.</p>
         </div>
       </div>
+
+      {backendProbe && !backendProbe.ok && (
+        <div className="banner warn" role="status" style={{ marginBottom: 18 }}>
+          <Icon name="alert" size={15} />
+          <span>
+            <b>Streaming backend check failed.</b> {backendProbe.detail}. Event creation is blocked on this deployment until the live-worker route or <code>VITE_LIVE_WORKER_URL</code> points at reachable JSON.
+          </span>
+        </div>
+      )}
 
       <div className="create-grid">
         <div className="card card-pad" style={{ display: 'grid', gap: 20 }}>
