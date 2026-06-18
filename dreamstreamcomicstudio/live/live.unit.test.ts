@@ -1,7 +1,46 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_PRESET_ID, QUALITY_PRESETS, presetById } from './config';
+import { classifyLiveWorkerProbeResponse } from './api';
 import { pickSupportedMime, lensLabel, recordingFilename } from './media';
 import { Ema, fmtBps, fmtBytes, fmtDuration } from './metrics';
+
+describe('live worker readiness probe', () => {
+  it('accepts the no-write missing-event JSON 404 as reachable', () => {
+    const body = JSON.stringify({ error: 'not found' });
+    const result = classifyLiveWorkerProbeResponse(
+      new Response(body, { status: 404, headers: { 'content-type': 'application/json' } }),
+      body,
+      'https://example.test/live-api',
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.detail).toContain('live-worker route reachable');
+  });
+
+  it('blocks website HTML so hosts do not submit into a dead /live-api route', () => {
+    const body = '<!doctype html><div id="root"></div><script type="module" src="/assets/index.js"></script>';
+    const result = classifyLiveWorkerProbeResponse(
+      new Response(body, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }),
+      body,
+      'https://comic2.pages.dev/live-api',
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain('website shell');
+  });
+
+  it('calls out Cloudflare challenges separately from generic API failures', () => {
+    const body = '<title>Just a moment...</title><p>Cloudflare security verification</p>';
+    const result = classifyLiveWorkerProbeResponse(
+      new Response(body, { status: 403, headers: { server: 'cloudflare', 'content-type': 'text/html' } }),
+      body,
+      'https://dreamstreamstudio.ai/live-api',
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain('Cloudflare security verification');
+  });
+});
 
 describe('quality presets', () => {
   it('are ordered from cheapest to richest', () => {
