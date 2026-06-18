@@ -8,7 +8,8 @@ agent** can get oriented quickly and avoid re-deriving context.
 
 | Path | What lives here | When to add/update |
 |------|-----------------|--------------------|
-| `VISION.md` | Product vision, the Connector Standard (3 lanes), Google-services phased plan + costs, prioritized roadmap. | When product direction or priorities change. |
+| `VISION.md` | Long-term product vision, Connector Standard (3 lanes), Google-services phased plan + costs, prioritized roadmap. | When long-term product direction or priorities change. |
+| `launch/JUNE_25_STREAM_STUDIO_MVP.md` | **Active June 25 launch source of truth:** Stream Studio wedge, ICP, cuts, blockers, smoke checklist, approval guardrails. | Every launch-scope/product-positioning change until the beta is proven. |
 | `ARCHITECTURE.md` | System overview: frontend, backend, data, AI gateway, billing, deploy. | When a major module or data flow changes. |
 | `decisions/` | **ADRs** (Architecture Decision Records) — one file per significant decision, numbered. | Whenever you make a non-obvious, hard-to-reverse, or cross-cutting choice. |
 | `SOLUTION_LOG.md` | Chronological **problem → root cause → fix** log, with files + commit. | Every time you fix a real bug or land a feature worth explaining later. |

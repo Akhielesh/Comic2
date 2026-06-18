@@ -28,3 +28,6 @@ dist-ssr
 
 # model bench output (npm run bench:models)
 bench-results/
+
+# Supabase CLI local link/cache files
+supabase/.temp/

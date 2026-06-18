@@ -5,6 +5,20 @@ where the platform is going, the standardized way new data sources join it, and
 an honest prioritization. Update it when direction changes — don't fork new
 vision docs._
 
+## June 25 launch override — Stream Studio wedge
+
+As of 2026-06-18, the active near-term launch source of truth is
+[`launch/JUNE_25_STREAM_STUDIO_MVP.md`](launch/JUNE_25_STREAM_STUDIO_MVP.md).
+
+The long-term vision below still matters, but it is **not** the June 25 launch
+positioning. For the beta push, DreamStream leads with **Stream Studio**:
+private creator live events from browser to replay. Chat and Comic Studio support
+planning/repurposing; Code Studio and broad-suite claims stay parked until the
+Stream Studio workflow is proven with real users.
+
+No pricing, subscription, paid-infra, or spending decision is made without owner
+approval and an explicit benefit/cost memo.
+
 ## The one-sentence vision
 
 **DreamStream becomes the user's personal AI workspace: they connect the

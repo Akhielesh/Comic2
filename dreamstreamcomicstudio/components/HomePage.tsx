@@ -1,8 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Sparkles, Zap, Users, BookOpen, Check, HelpCircle, Mail, Info, ChevronRight, MessageSquare, Bot, Shield, Cpu, ArrowRight, Code2, Lock, Radio } from 'lucide-react';
 import { Button } from './Button';
 import { WaitlistForm } from './WaitlistForm';
-import { getStudioStats, StudioStats } from '../services/stats';
 import { useAuth } from '../contexts/AuthContext';
 
 interface HomePageProps {
@@ -37,11 +36,6 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
   const { user } = useAuth();
   const [activeStage, setActiveStage] = useState(1);
   const [faqOpen, setFaqOpen] = useState<number | null>(null);
-  const [stats, setStats] = useState<StudioStats>({ userCount: 0, comicCount: 0 });
-
-  useEffect(() => {
-    getStudioStats().then(setStats);
-  }, []);
 
   const toggleFaq = (index: number) => setFaqOpen(faqOpen === index ? null : index);
 
@@ -57,124 +51,123 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
         <div className="max-w-7xl mx-auto grid lg:grid-cols-2 gap-12 items-center">
           <div className="space-y-8 relative z-10">
             <div className="inline-flex items-center gap-2 bg-black text-white px-4 py-2 rounded-full font-mono text-xs font-bold tracking-widest uppercase">
-              <Sparkles size={12} className="text-brand-yellow" /> One studio · three AI products
+              <Radio size={12} className="text-brand-yellow" /> Stream Studio private beta
             </div>
             <h1 className="text-6xl md:text-7xl font-display leading-[0.9]">
-              Dream it. Stream it. <span className="text-brand-blue">Create it.</span>
+              Private live events, <span className="text-brand-blue">from browser to replay.</span>
             </h1>
-            <p className="text-xl font-comic text-slate-600 max-w-lg leading-relaxed">
-              DreamStream Studio is your home for AI-powered creation — craft cinematic comics, brainstorm with 100+ AI models, and soon, build with code.
+            <p className="text-xl font-comic text-slate-600 max-w-xl leading-relaxed">
+              Host polished creator sessions without OBS or webinar bloat: invite viewers, manage lobby/chat, bring guests on air, record the moment, and share the replay.
             </p>
             <div className="flex flex-wrap gap-4">
-              <Button onClick={onEnterStudio} className="text-xl px-10 py-5 shadow-comic hover:shadow-none transition-all" icon={<Zap />}>
-                Start Creating
+              <Button onClick={() => { window.location.href = '/live.html'; }} className="text-xl px-10 py-5 shadow-comic hover:shadow-none transition-all" icon={<Radio />}>
+                Open Stream Studio
               </Button>
               <button
-                onClick={() => onNavigate?.('chat')}
-                className="px-8 py-4 border-4 border-black rounded-xl font-bold hover:bg-brand-blue hover:text-white transition-colors flex items-center gap-2"
+                onClick={scrollToUpdates}
+                className="px-8 py-4 border-4 border-black rounded-xl font-bold hover:bg-brand-yellow transition-colors flex items-center gap-2"
               >
-                <Bot size={18} /> Explore Chat Studio
+                <Mail size={18} /> Request access
               </button>
               <button
                 onClick={() => onNavigate?.('how-it-works')}
-                className="px-8 py-4 border-4 border-black rounded-xl font-bold hover:bg-brand-yellow transition-colors"
+                className="px-8 py-4 border-4 border-black rounded-xl font-bold hover:bg-brand-blue hover:text-white transition-colors"
               >
-                How It Works
+                See how it works
               </button>
             </div>
-            <div className="flex items-center gap-6 text-sm font-bold text-slate-500">
+            <div className="flex flex-wrap items-center gap-6 text-sm font-bold text-slate-500">
               <div className="flex items-center gap-2">
-                <Check size={16} className="text-green-600" /> Invite-only early access
+                <Check size={16} className="text-green-600" /> Viewer links need only a name
               </div>
               <div className="flex items-center gap-2">
-                <Check size={16} className="text-green-600" /> Bring your own API keys
+                <Check size={16} className="text-green-600" /> Recording + replay workflow
+              </div>
+              <div className="flex items-center gap-2">
+                <Check size={16} className="text-green-600" /> Cost-conscious beta limits
               </div>
             </div>
           </div>
 
-          {/* Stats Cards */}
+          {/* Stream Studio value cards */}
           <div className="relative">
             <div className="absolute inset-0 bg-brand-yellow/20 rounded-full blur-3xl transform translate-x-10 translate-y-10" />
             <div className="relative grid grid-cols-2 gap-4">
               <div className="bg-white border-4 border-black rounded-2xl p-6 shadow-comic transform rotate-2 hover:rotate-0 transition-transform duration-300">
-                <div className="flex items-center gap-3 mb-2">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center border-2 border-black">
+                    <Radio size={20} />
+                  </div>
+                  <div className="text-xl font-display">Go live fast</div>
+                </div>
+                <p className="text-sm font-comic text-slate-600">Camera, mic, screen, scenes, and guest seats from the browser.</p>
+              </div>
+              <div className="bg-white border-4 border-black rounded-2xl p-6 shadow-comic transform -rotate-1 hover:rotate-0 transition-transform duration-300 mt-8">
+                <div className="flex items-center gap-3 mb-3">
                   <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center border-2 border-black">
                     <Users size={20} />
                   </div>
-                  <div>
-                    <div className="text-2xl font-display">{stats.userCount.toLocaleString()}</div>
-                    <div className="text-xs font-bold text-slate-500 uppercase">Creators</div>
-                  </div>
+                  <div className="text-xl font-display">Control the room</div>
                 </div>
+                <p className="text-sm font-comic text-slate-600">Lobby approval, chat, reactions, moderation, and audience-safe viewer links.</p>
               </div>
-              <div className="bg-white border-4 border-black rounded-2xl p-6 shadow-comic transform -rotate-1 hover:rotate-0 transition-transform duration-300 mt-8">
-                <div className="flex items-center gap-3 mb-2">
-                  <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center border-2 border-black">
-                    <BookOpen size={20} />
-                  </div>
-                  <div>
-                    <div className="text-2xl font-display">{stats.comicCount.toLocaleString()}</div>
-                    <div className="text-xs font-bold text-slate-500 uppercase">Public Comics</div>
-                  </div>
-                </div>
-              </div>
-              <div className="col-span-2 bg-black text-white border-4 border-black rounded-2xl p-6 shadow-comic transform rotate-1 hover:rotate-0 transition-transform duration-300 flex items-center justify-between">
+              <div className="col-span-2 bg-black text-white border-4 border-black rounded-2xl p-6 shadow-comic transform rotate-1 hover:rotate-0 transition-transform duration-300 flex items-center justify-between gap-4">
                 <div>
-                  <div className="text-brand-yellow font-display text-xl">Community Challenge</div>
-                  <div className="text-sm font-mono text-zinc-400">New events are launching soon.</div>
+                  <div className="text-brand-yellow font-display text-xl">Leave with a replay</div>
+                  <div className="text-sm font-mono text-zinc-400">Record locally, preserve key sessions, and turn events into reusable content.</div>
                 </div>
-                <Button size="sm" variant="secondary" onClick={() => alert('Community Challenge is coming soon.')}>Coming Soon</Button>
+                <a href="/live.html" className="shrink-0 px-4 py-2 bg-brand-yellow text-black border-2 border-white rounded-lg font-bold hover:bg-white transition-colors">Try beta</a>
               </div>
             </div>
           </div>
         </div>
       </section>
 
-      {/* Three products under one roof */}
+      {/* Launch focus */}
       <section className="py-20 px-6 bg-white border-t-4 border-black">
         <div className="max-w-7xl mx-auto">
           <div className="text-center mb-14">
             <div className="inline-flex items-center gap-2 bg-black text-white px-4 py-2 rounded-full font-mono text-xs font-bold uppercase tracking-widest mb-4">
-              <Sparkles size={12} className="text-brand-yellow" /> The DreamStream Studio suite
+              <Sparkles size={12} className="text-brand-yellow" /> June beta focus
             </div>
-            <h2 className="text-4xl md:text-5xl font-display mb-4">Four products. One studio.</h2>
-            <p className="font-comic text-slate-600 max-w-xl mx-auto">
-              Everything you need to dream up, build and ship your ideas — under a single account.
+            <h2 className="text-4xl md:text-5xl font-display mb-4">One flagship workflow. Supporting creative tools.</h2>
+            <p className="font-comic text-slate-600 max-w-2xl mx-auto">
+              Stream Studio is the launch wedge: private creator events that start in the browser and end with replayable content. Chat and Comic Studio support planning and repurposing; Code stays parked until the live workflow is proven.
             </p>
           </div>
 
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {/* Comic Studio — live */}
-            <div className="bg-white border-4 border-black rounded-2xl p-7 shadow-comic flex flex-col transition-transform duration-300 hover:-translate-y-1">
+            {/* Stream Studio — launch focus */}
+            <div className="bg-white border-4 border-black rounded-2xl p-7 shadow-comic flex flex-col transition-transform duration-300 hover:-translate-y-1 lg:col-span-2">
               <div className="flex items-center justify-between mb-5">
-                <div className="w-14 h-14 bg-brand-yellow border-2 border-black rounded-xl flex items-center justify-center shadow-[3px_3px_0px_0px_rgba(0,0,0,0.8)] transform -rotate-2">
-                  <BookOpen size={26} />
+                <div className="w-14 h-14 bg-brand-red border-2 border-black rounded-xl flex items-center justify-center shadow-[3px_3px_0px_0px_rgba(0,0,0,0.8)] transform -rotate-2 text-white">
+                  <Radio size={26} />
                 </div>
-                <span className="text-[10px] font-extrabold uppercase tracking-wider bg-green-100 text-green-700 border-2 border-green-600 rounded-full px-2.5 py-1">Live</span>
+                <span className="text-[10px] font-extrabold uppercase tracking-wider bg-yellow-100 text-yellow-700 border-2 border-yellow-600 rounded-full px-2.5 py-1">Launch focus</span>
               </div>
-              <h3 className="text-2xl font-display mb-2">Comic Studio</h3>
+              <h3 className="text-3xl font-display mb-2">Stream Studio</h3>
               <p className="text-sm font-comic text-slate-600 leading-relaxed flex-1">
-                Turn a script into cinematic, consistent comics — characters, worlds, storyboards, panels, lettering and export.
+                Create a private event, share a viewer link, approve the room, go live with guests, chat in real time, record the session, and leave with a replay. Built for intimate creator workshops, coaching calls, classes, and paid-community sessions.
               </p>
-              <button
-                onClick={onEnterStudio}
-                className="mt-6 inline-flex items-center gap-2 font-bold text-sm text-black hover:gap-3 transition-all"
+              <a
+                href="/live.html"
+                className="mt-6 inline-flex items-center gap-2 font-bold text-sm text-brand-red hover:gap-3 transition-all"
               >
-                Start creating <ArrowRight size={16} />
-              </button>
+                Open Stream Studio <ArrowRight size={16} />
+              </a>
             </div>
 
-            {/* AI Chat — live */}
+            {/* AI Chat — supporting */}
             <div className="bg-white border-4 border-black rounded-2xl p-7 shadow-comic flex flex-col transition-transform duration-300 hover:-translate-y-1">
               <div className="flex items-center justify-between mb-5">
                 <div className="w-14 h-14 bg-brand-blue border-2 border-black rounded-xl flex items-center justify-center shadow-[3px_3px_0px_0px_rgba(0,0,0,0.8)] transform rotate-2 text-white">
                   <Bot size={26} />
                 </div>
-                <span className="text-[10px] font-extrabold uppercase tracking-wider bg-green-100 text-green-700 border-2 border-green-600 rounded-full px-2.5 py-1">Live</span>
+                <span className="text-[10px] font-extrabold uppercase tracking-wider bg-blue-100 text-blue-700 border-2 border-blue-600 rounded-full px-2.5 py-1">Support</span>
               </div>
               <h3 className="text-2xl font-display mb-2">Chat Studio</h3>
               <p className="text-sm font-comic text-slate-600 leading-relaxed flex-1">
-                Brainstorm and build with 100+ models — Claude, Gemini, GPT — with rich, interactive outputs and persistent threads.
+                Plan session topics, write descriptions, brainstorm audience hooks, and turn raw ideas into usable creator scripts.
               </p>
               <button
                 onClick={() => onNavigate?.('chat')}
@@ -184,24 +177,24 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               </button>
             </div>
 
-            {/* Stream Studio — beta */}
+            {/* Comic Studio — supporting */}
             <div className="bg-white border-4 border-black rounded-2xl p-7 shadow-comic flex flex-col transition-transform duration-300 hover:-translate-y-1">
               <div className="flex items-center justify-between mb-5">
-                <div className="w-14 h-14 bg-brand-red border-2 border-black rounded-xl flex items-center justify-center shadow-[3px_3px_0px_0px_rgba(0,0,0,0.8)] transform -rotate-2 text-white">
-                  <Radio size={26} />
+                <div className="w-14 h-14 bg-brand-yellow border-2 border-black rounded-xl flex items-center justify-center shadow-[3px_3px_0px_0px_rgba(0,0,0,0.8)] transform -rotate-2">
+                  <BookOpen size={26} />
                 </div>
-                <span className="text-[10px] font-extrabold uppercase tracking-wider bg-yellow-100 text-yellow-700 border-2 border-yellow-600 rounded-full px-2.5 py-1">Beta</span>
+                <span className="text-[10px] font-extrabold uppercase tracking-wider bg-yellow-100 text-yellow-700 border-2 border-yellow-600 rounded-full px-2.5 py-1">Support</span>
               </div>
-              <h3 className="text-2xl font-display mb-2">Stream Studio</h3>
+              <h3 className="text-2xl font-display mb-2">Comic Studio</h3>
               <p className="text-sm font-comic text-slate-600 leading-relaxed flex-1">
-                Go live from your phone or laptop — real camera lenses, live chat with your audience, a gated lobby, and full-quality recordings.
+                Repurpose stream ideas into visual stories, characters, and shareable creative assets after the live session.
               </p>
-              <a
-                href="/live.html"
-                className="mt-6 inline-flex items-center gap-2 font-bold text-sm text-brand-red hover:gap-3 transition-all"
+              <button
+                onClick={onEnterStudio}
+                className="mt-6 inline-flex items-center gap-2 font-bold text-sm text-black hover:gap-3 transition-all"
               >
-                Go live <ArrowRight size={16} />
-              </a>
+                Explore Comic Studio <ArrowRight size={16} />
+              </button>
             </div>
 
             {/* Code — coming soon */}
@@ -415,7 +408,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
             </div>
             <h2 className="text-3xl md:text-4xl font-display mb-3">Want to stay updated?</h2>
             <p className="font-comic text-slate-600 max-w-xl mx-auto mb-7">
-              Get product updates, early access invites, and the heads-up when <span className="font-bold text-black">Code</span> and new features go live. No spam — just the good stuff.
+              Get Stream Studio beta updates, early access invites, launch notes, and the heads-up when new creator workflows go live. No spam — just the useful stuff.
             </p>
             <div className="max-w-lg mx-auto">
               <WaitlistForm kind="updates" source="home-stay-updated" buttonLabel="Keep me posted" />
@@ -440,7 +433,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
               </div>
             </div>
             <p className="text-zinc-400 font-comic max-w-sm">
-              One studio for AI-powered creation — comics, chat, live streams, and soon code. Built for creators who want control, from first idea to final ship.
+              Stream Studio is the launch focus for private creator events: host from the browser, invite viewers, manage interaction, record, and replay. Chat and Comic Studio support the broader creator workflow.
             </p>
           </div>
           <div>
@@ -475,11 +468,11 @@ export const HomePage: React.FC<HomePageProps> = ({ onEnterStudio, onViewComics,
           <h3 className="text-center font-display text-2xl mb-8">Frequently Asked Questions</h3>
           <div className="space-y-2">
             {[
-              { q: "Is it really free?", a: "Yes. You can start free and bring your own API keys, so generation runs on your own provider account." },
-              { q: "Can I use my own API keys?", a: "Yes. Add one or more provider keys (e.g. OpenRouter, Gemini) in Settings → API Configuration; generation runs on your keys." },
-              { q: "Do I own the comics I create?", a: "Yes, you own full commercial rights to all comics generated on the platform, subject to the AI model's specific terms." },
-              { q: "How is cost shown?", a: "Each action shows an estimated cost before running and the actual cost after, with a per-comic breakdown by stage and model." },
-              { q: "What happens at limits?", a: "If you set a usage limit on a key, you'll be alerted as you approach it and stopped before exceeding it." }
+              { q: "Who is Stream Studio for?", a: "Creators, educators, coaches, workshop hosts, and small communities that want private live sessions without OBS or heavy webinar software." },
+              { q: "Do viewers need accounts?", a: "Viewer links are designed so guests can join with just a name. Hosts can use lobby and moderation controls to keep the room safe." },
+              { q: "Can I record and replay a session?", a: "The studio supports local recording and replay-oriented workflows. Beta limits and retention are shown in the product so creators know what is preserved." },
+              { q: "Is this a full webinar or enterprise streaming platform?", a: "Not for this beta. The focus is intimate, creator-led events and workshops, not enterprise webinars, massive streams, or gaming-grade ultra-low latency." },
+              { q: "When will paid subscriptions start?", a: "Subscription packaging is still being evaluated. We will not activate paid plans until the beta workflow, costs, and user value are proven." }
             ].map((faq, i) => (
               <div key={i} className="border border-zinc-800 rounded-lg overflow-hidden">
                 <button

@@ -36,7 +36,9 @@
     "consistency:metrics": "tsx scripts/consistency_metrics.ts",
     "verify:world-contract": "tsx scripts/verify_world_contract_bundle.ts",
     "ops:verify:cors": "scripts/ops/verify-cors.sh",
-    "ops:verify:rate-limit": "scripts/ops/verify-rate-limit.sh"
+    "ops:verify:rate-limit": "scripts/ops/verify-rate-limit.sh",
+    "ops:live-smoke": "tsx scripts/ops/liveSmoke.ts",
+    "ops:smoke:live": "npm run ops:live-smoke"
   },
   "dependencies": {
     "@codesandbox/sandpack-react": "^2.20.0",
