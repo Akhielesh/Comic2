@@ -140,6 +140,7 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
   const scheduled = events.filter((e) => e.status === 'idle' && e.scheduledAt != null && e.scheduledAt > Date.now());
   const past = events.filter((e) => e.status === 'ended');
   const filtered = tab === 'all' ? events : tab === 'live' ? live : tab === 'scheduled' ? scheduled : past;
+  const backendBlocked = backendProbe != null && !backendProbe.ok;
 
   // Honest lifetime stats from what this browser knows (hydrated from the cloud).
   const totalSec = past.reduce((s, e) => s + (e.startedAt && e.endedAt ? (e.endedAt - e.startedAt) / 1000 : 0), 0);
@@ -202,7 +203,15 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
         </div>
         <span className="spacer" />
         <Btn variant="ghost" icon="link" onClick={() => void importByLink()}>Import event</Btn>
-        <Btn variant="solid" icon="plus" onClick={() => nav.create()}>New event</Btn>
+        <Btn
+          variant="solid"
+          icon={backendBlocked ? 'alert' : 'plus'}
+          disabled={backendBlocked}
+          title={backendBlocked ? 'Streaming backend route is not reachable on this deployment' : undefined}
+          onClick={() => nav.create()}
+        >
+          {backendBlocked ? 'Backend blocked' : 'New event'}
+        </Btn>
       </div>
 
       {backendProbe && !backendProbe.ok && (
@@ -284,7 +293,15 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
                       <div className="serif">No streams yet</div>
                       Create your first event — viewers join with just a name, no account needed.
                       <div style={{ marginTop: 14 }}>
-                        <Btn variant="solid" icon="plus" onClick={() => nav.create()}>Create an event</Btn>
+                        <Btn
+                          variant="solid"
+                          icon={backendBlocked ? 'alert' : 'plus'}
+                          disabled={backendBlocked}
+                          title={backendBlocked ? 'Streaming backend route is not reachable on this deployment' : undefined}
+                          onClick={() => nav.create()}
+                        >
+                          {backendBlocked ? 'Backend blocked' : 'Create an event'}
+                        </Btn>
                       </div>
                     </>
                   ) : (
