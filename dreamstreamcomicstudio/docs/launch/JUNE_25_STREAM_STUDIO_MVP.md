@@ -123,6 +123,7 @@ Any proposal in those categories must include:
 | Priority | Blocker | Evidence / reason | Owner |
 |---:|---|---|---|
 | P0 | Custom domain Cloudflare challenge | `dreamstreamstudio.ai` showed security verification in browser automation/curl; temporary launch uses `comic2.pages.dev` until scoped WAF/ruleset access is available | SRE / CTO |
+| P0 | Fallback Stream Studio API route misroutes to static HTML | `npm run ops:live-smoke` now checks `https://comic2.pages.dev/live-api/api/events/smokeprobe`; it returned HTTP 200 website HTML instead of live-worker JSON, so create/join would fail on the temporary launch domain unless `VITE_LIVE_WORKER_URL` or a Pages/Worker route is fixed | SRE / Full-stack |
 | P0 | Stream Studio E2E not launch-proven | Need create → studio → viewer → chat → live → record → replay smoke | QA / Full-stack |
 | P0 | Product positioning too broad | Existing docs/page favored suite/platform framing; user explicitly asked for honest product vision | CEO / Product / UX |
 | P1 | Supabase advisor warnings | Live advisors showed many WARN items; prioritize launch-relevant RLS/security items | CISO / Backend |
@@ -140,6 +141,7 @@ Run this before letting real users in:
 - [ ] `npx vitest run` or targeted launch suite if time-constrained
 - [ ] Temporary launch domain `https://comic2.pages.dev/` returns the app shell
 - [ ] Temporary Stream Studio URL `https://comic2.pages.dev/live.html` returns the app shell
+- [ ] Temporary Stream Studio API route `https://comic2.pages.dev/live-api/api/events/smokeprobe` returns live-worker JSON (404 `not found` is acceptable for the no-write probe; website HTML is a blocker)
 - [ ] `https://dreamstreamstudio.ai/` custom-domain challenge is either fixed or explicitly documented as post-beta blocker
 - [ ] Railway `/api/health` works through intended production route
 - [ ] Host creates an event

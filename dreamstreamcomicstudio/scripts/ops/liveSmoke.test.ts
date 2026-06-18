@@ -79,6 +79,32 @@ describe('live smoke classification', () => {
     expect(bad.detail).toContain('unexpected health payload');
   });
 
+  it('accepts the live-worker route when a no-write missing-event probe returns JSON 404', () => {
+    const body = JSON.stringify({ error: 'not found' });
+    const result = classifySmokeResponse(
+      { name: 'stream worker route', url: 'https://comic2.pages.dev/live-api/api/events/smokeprobe', kind: 'live-api' },
+      jsonResponse({ error: 'not found' }, { status: 404 }),
+      body,
+      70
+    );
+
+    expect(result.status).toBe('pass');
+    expect(result.detail).toContain('live worker route reachable');
+  });
+
+  it('rejects live-worker probes that are routed to the static website shell', () => {
+    const body = '<!doctype html><div id="root"></div><script type="module" src="/assets/index.js"></script>';
+    const result = classifySmokeResponse(
+      { name: 'stream worker route', url: 'https://comic2.pages.dev/live-api/api/events/smokeprobe', kind: 'live-api' },
+      htmlResponse(body),
+      body,
+      70
+    );
+
+    expect(result.status).toBe('fail');
+    expect(result.detail).toContain('website HTML');
+  });
+
   it('runs all targets through an injected fetcher and reports failures clearly', async () => {
     const targets: SmokeTarget[] = [
       { name: 'fallback app', url: 'https://comic2.pages.dev/', kind: 'frontend' },

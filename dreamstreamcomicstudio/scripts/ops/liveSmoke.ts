@@ -1,4 +1,4 @@
-export type SmokeTargetKind = 'frontend' | 'api';
+export type SmokeTargetKind = 'frontend' | 'api' | 'live-api';
 
 export type SmokeTarget = {
   name: string;
@@ -28,6 +28,7 @@ export const DEFAULT_SMOKE_TARGETS: SmokeTarget[] = [
   { name: 'primary app', url: 'https://dreamstreamstudio.ai/', kind: 'frontend' },
   { name: 'fallback app', url: 'https://comic2.pages.dev/', kind: 'frontend' },
   { name: 'stream studio', url: 'https://comic2.pages.dev/live.html', kind: 'frontend' },
+  { name: 'stream worker route', url: 'https://comic2.pages.dev/live-api/api/events/smokeprobe', kind: 'live-api' },
   { name: 'railway api', url: 'https://comic2-production.up.railway.app/api/health', kind: 'api' }
 ];
 
@@ -101,13 +102,44 @@ const classifyApi = (response: Response, body: string): Pick<SmokeResult, 'statu
   return { status: 'pass', detail: 'health ok' };
 };
 
+const classifyLiveApi = (response: Response, body: string): Pick<SmokeResult, 'status' | 'detail'> => {
+  if (detectCloudflareChallenge(response, body)) {
+    return { status: 'fail', detail: 'Cloudflare challenge/interstitial returned instead of live-worker JSON' };
+  }
+
+  const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+  if (contentType.includes('text/html') || looksLikeAppShell(body)) {
+    return { status: 'fail', detail: 'live-worker probe returned website HTML instead of worker JSON' };
+  }
+
+  const json = parseJsonBody(body);
+  if (!json || typeof json !== 'object') {
+    return { status: 'fail', detail: 'live-worker probe did not return JSON' };
+  }
+
+  const error = String((json as { error?: unknown }).error ?? '').toLowerCase();
+  if (response.status === 404 && error.includes('not found')) {
+    return { status: 'pass', detail: 'live worker route reachable (missing-event probe returned JSON 404)' };
+  }
+
+  if (response.ok) {
+    return { status: 'pass', detail: 'live worker route reachable' };
+  }
+
+  return { status: 'fail', detail: `unexpected live-worker HTTP ${response.status}` };
+};
+
 export function classifySmokeResponse(
   target: SmokeTarget,
   response: Response,
   body: string,
   elapsedMs: number
 ): SmokeResult {
-  const classified = target.kind === 'api' ? classifyApi(response, body) : classifyFrontend(response, body);
+  const classified = target.kind === 'api'
+    ? classifyApi(response, body)
+    : target.kind === 'live-api'
+      ? classifyLiveApi(response, body)
+      : classifyFrontend(response, body);
   return {
     target,
     status: classified.status,
