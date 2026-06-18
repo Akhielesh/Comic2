@@ -25,6 +25,21 @@ describe('friendlyChatError', () => {
     expect(friendlyChatError(new Error(msg))).toBe(msg);
   });
 
+  it('maps a shared-key spend cap / out-of-credits to a capacity message', () => {
+    expect(friendlyChatError(new Error('Key limit exceeded (total limit)'))).toMatch(/capacity|free model/i);
+    expect(friendlyChatError(new Error('402 Payment Required: requires more credits'))).toMatch(/credits|free model/i);
+  });
+
+  it('maps rate limiting to a wait-and-retry message', () => {
+    expect(friendlyChatError(new Error('429 Too Many Requests'))).toMatch(/too many|wait/i);
+  });
+
+  it('hides raw DB errors (uuid / FK / schema cache) behind a generic message', () => {
+    expect(friendlyChatError(new Error('invalid input syntax for type uuid: "demo-connection"'))).toMatch(
+      /something went wrong|try again/i
+    );
+  });
+
   it('falls back gracefully on an empty/unknown error', () => {
     expect(friendlyChatError(undefined)).toMatch(/failed/i);
     expect(friendlyChatError({})).toMatch(/failed/i);
