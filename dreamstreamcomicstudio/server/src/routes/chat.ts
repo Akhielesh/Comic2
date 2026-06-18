@@ -12,6 +12,7 @@ import { sanitizeCustomAgents } from '../ai/agents/registry.js';
 import type { AgentDefinition } from '../ai/agents/registry.js';
 import { loadCustomAgentDefinitions } from '../services/customAgents.js';
 import { pickTextModel, pickTextModelChain, pickSmartChatModel, markModelDown, TEXT_FALLBACK } from '../ai/autoRouter.js';
+import { isSharedKeyCapped } from '../ai/providerCircuit.js';
 import { defaultModelForProvider } from '../ai/gateway.js';
 import { NVIDIA_TEXT_MODEL, OPENROUTER_TEXT_MODEL, OPENROUTER_SMART_TEXT_MODEL, TEXT_REQUEST_TIMEOUT_MS, JSON_TOOL_PROTOCOL_ENABLED } from '../config.js';
 import { listConnections } from '../connectors/store.js';
@@ -246,6 +247,14 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
   // than a free one — free models are 10-30x slower (9-22s vs ~1s) and frequently 429/404,
   // which is why chats felt slow and "stuck on gpt-4o-mini". gemini-2.5-flash answers in ~0.7s.
   const freeOnly = (req.header('X-Free-Only') || '').toLowerCase() === 'true';
+  // When the SHARED platform key is in a spend-cap cooldown (a recent 403/402 opened the
+  // circuit breaker), every paid model draws that key and would fail — so the auto paths
+  // below route to FREE models instead of a total outage. Scoped to the platform key: a
+  // BYOK request (the user's own key) is never downgraded by a platform cap.
+  const usingByok = !!(req.apiKeys?.providerKeys as
+    | Partial<Record<string, { byok?: boolean }>>
+    | undefined)?.[resolved.provider]?.byok;
+  const sharedKeyCapped = resolved.provider === 'openrouter' && !usingByok && isSharedKeyCapped();
   // Direct providers (openai/anthropic/gemini/deepseek/zai/minimax/tencent/xai) need their
   // OWN default model when nothing is pinned — handing them an OpenRouter slug would 404.
   const directDefault = resolved.provider !== 'openrouter' && resolved.provider !== 'nvidia'
@@ -355,6 +364,18 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
         freeOnly: true,
         max: 2
       }).catch(() => [model]);
+      fallbackModels = chain.length ? chain : [model];
+      model = fallbackModels[0] || model;
+    } else if (sharedKeyCapped) {
+      // Platform key is in a spend-cap cooldown: the paid default chains would all 403/402.
+      // Route to a cooldown-aware FREE chain (free models cost $0 and keep working) so chat
+      // degrades gracefully instead of a hard outage. Self-heals when the breaker closes.
+      const chain = await pickTextModelChain({
+        preferFree: true,
+        prefer: (m) => (m.supportedParameters || []).includes('tools'),
+        freeOnly: true,
+        max: 3
+      }).catch(() => [] as string[]);
       fallbackModels = chain.length ? chain : [model];
       model = fallbackModels[0] || model;
     } else if (!isTrivialChat(lastUserText) && !fastLane) {

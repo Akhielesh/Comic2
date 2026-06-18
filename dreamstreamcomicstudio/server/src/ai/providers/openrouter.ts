@@ -19,6 +19,7 @@ import {
 } from '../../config.js';
 import { withRetry } from '../utils.js';
 import { modelTimeoutError, makeProviderError } from './errors.js';
+import { markSharedKeyCapped } from '../providerCircuit.js';
 import { coerceJson, coerceJsonOrNull } from '../jsonCoerce.js';
 import { classifyModel, hasFreeSuffix } from '../../../../shared/pricing.js';
 import type {
@@ -70,10 +71,17 @@ const openRouterFetch = async <T = any>(
       // 402 credits / 5xx isn't mislabeled as a generic 500 "Unexpected server error" and the
       // raw provider JSON never leaks to the user. The original text stays as the log message
       // (and keeps the existing message-based retriable detection working).
-      throw makeProviderError(
+      const err = makeProviderError(
         res.status,
         `OpenRouter ${path} failed: ${res.status} ${res.statusText} ${errBody.slice(0, 500)}`
       );
+      // Open the shared-key circuit breaker on a capacity error so subsequent chat routes to
+      // free models instead of hammering the capped platform key. Scoped to the PLATFORM key —
+      // a BYOK user's own key cap must never downgrade everyone else.
+      if (err.publicCode === 'PROVIDER_CAPACITY' && ctx && !ctx.byok) {
+        markSharedKeyCapped();
+      }
+      throw err;
     }
     return (await res.json()) as T;
   } catch (err) {
