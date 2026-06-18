@@ -8,6 +8,8 @@
 
 DreamStream should not try to launch as “four products, one studio” by June 25. That framing is too broad for the current proof level and makes the product feel unfocused.
 
+For the technical route/API/data-flow source of truth, see [`STREAM_STUDIO_SYSTEM_MAP.md`](STREAM_STUDIO_SYSTEM_MAP.md).
+
 **Temporary launch domain:** use `https://comic2.pages.dev/` and `https://comic2.pages.dev/live.html` while `https://dreamstreamstudio.ai/` remains challenged by Cloudflare security verification. The custom domain is still a P0 polish/trust blocker, but it should not stop Stream Studio product work.
 
 The June 25 MVP wedge is:
