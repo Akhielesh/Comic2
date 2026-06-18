@@ -8,6 +8,8 @@
 
 DreamStream should not try to launch as “four products, one studio” by June 25. That framing is too broad for the current proof level and makes the product feel unfocused.
 
+**Temporary launch domain:** use `https://comic2.pages.dev/` and `https://comic2.pages.dev/live.html` while `https://dreamstreamstudio.ai/` remains challenged by Cloudflare security verification. The custom domain is still a P0 polish/trust blocker, but it should not stop Stream Studio product work.
+
 The June 25 MVP wedge is:
 
 > **Create, host, and preserve polished private live experiences from your browser — no OBS, no webinar bloat, no surprise streaming bill.**
@@ -120,7 +122,7 @@ Any proposal in those categories must include:
 
 | Priority | Blocker | Evidence / reason | Owner |
 |---:|---|---|---|
-| P0 | Custom domain Cloudflare challenge | `dreamstreamstudio.ai` showed security verification in browser automation/curl; must verify real-user path | SRE / CTO |
+| P0 | Custom domain Cloudflare challenge | `dreamstreamstudio.ai` showed security verification in browser automation/curl; temporary launch uses `comic2.pages.dev` until scoped WAF/ruleset access is available | SRE / CTO |
 | P0 | Stream Studio E2E not launch-proven | Need create → studio → viewer → chat → live → record → replay smoke | QA / Full-stack |
 | P0 | Product positioning too broad | Existing docs/page favored suite/platform framing; user explicitly asked for honest product vision | CEO / Product / UX |
 | P1 | Supabase advisor warnings | Live advisors showed many WARN items; prioritize launch-relevant RLS/security items | CISO / Backend |
@@ -136,8 +138,9 @@ Run this before letting real users in:
 - [ ] `npm run build:server`
 - [ ] `npm run build`
 - [ ] `npx vitest run` or targeted launch suite if time-constrained
-- [ ] `curl -I https://dreamstreamstudio.ai/` does not unexpectedly challenge real users
-- [ ] `curl -I https://comic2.pages.dev/live.html` returns a valid page
+- [ ] Temporary launch domain `https://comic2.pages.dev/` returns the app shell
+- [ ] Temporary Stream Studio URL `https://comic2.pages.dev/live.html` returns the app shell
+- [ ] `https://dreamstreamstudio.ai/` custom-domain challenge is either fixed or explicitly documented as post-beta blocker
 - [ ] Railway `/api/health` works through intended production route
 - [ ] Host creates an event
 - [ ] Viewer joins with only a name
