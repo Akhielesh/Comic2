@@ -1,4 +1,6 @@
 export type SmokeTargetKind = 'frontend' | 'api' | 'live-api' | 'live-bundle';
+export type SmokeScope = 'all' | 'temporary-launch';
+export type SmokeTargetScope = Exclude<SmokeScope, 'all'>;
 
 /**
  * The workers.dev base that the deployed Stream Studio bundle MUST reference as its
@@ -12,6 +14,12 @@ export type SmokeTarget = {
   name: string;
   url: string;
   kind: SmokeTargetKind;
+  /**
+   * Optional focused launch gates this target belongs to. The default `all` smoke
+   * still runs every target; scoped gates let us prove the temporary Pages path
+   * without treating the known custom-domain Cloudflare challenge as a failure.
+   */
+  scopes?: SmokeTargetScope[];
 };
 
 export type SmokeStatus = 'pass' | 'fail';
@@ -34,13 +42,33 @@ export type RunLiveSmokeOptions = {
 
 export const DEFAULT_SMOKE_TARGETS: SmokeTarget[] = [
   { name: 'primary app', url: 'https://dreamstreamstudio.ai/', kind: 'frontend' },
-  { name: 'fallback app', url: 'https://comic2.pages.dev/', kind: 'frontend' },
-  { name: 'stream studio', url: 'https://comic2.pages.dev/live.html', kind: 'frontend' },
-  { name: 'stream studio bundle', url: 'https://comic2.pages.dev/live.html', kind: 'live-bundle' },
-  { name: 'fallback live worker', url: 'https://dreamstream-live.akhieleshsrirangam.workers.dev/api/events/smokeprobe', kind: 'live-api' },
+  { name: 'fallback app', url: 'https://comic2.pages.dev/', kind: 'frontend', scopes: ['temporary-launch'] },
+  { name: 'stream studio', url: 'https://comic2.pages.dev/live.html', kind: 'frontend', scopes: ['temporary-launch'] },
+  { name: 'stream studio bundle', url: 'https://comic2.pages.dev/live.html', kind: 'live-bundle', scopes: ['temporary-launch'] },
+  { name: 'fallback live worker', url: 'https://dreamstream-live.akhieleshsrirangam.workers.dev/api/events/smokeprobe', kind: 'live-api', scopes: ['temporary-launch'] },
   { name: 'custom-domain live worker', url: 'https://dreamstreamstudio.ai/live-api/api/events/smokeprobe', kind: 'live-api' },
-  { name: 'railway api', url: 'https://comic2-production.up.railway.app/api/health', kind: 'api' }
+  { name: 'railway api', url: 'https://comic2-production.up.railway.app/api/health', kind: 'api', scopes: ['temporary-launch'] }
 ];
+
+export const smokeTargetsForScope = (
+  scope: SmokeScope = 'all',
+  targets: SmokeTarget[] = DEFAULT_SMOKE_TARGETS
+): SmokeTarget[] => {
+  if (scope === 'all') return targets;
+  return targets.filter((target) => target.scopes?.includes(scope));
+};
+
+export function parseSmokeScope(args: string[]): SmokeScope {
+  if (args.includes('--temporary-launch') || args.includes('--temporary') || args.includes('--scope=temporary')) {
+    return 'temporary-launch';
+  }
+  return 'all';
+}
+
+export function formatSmokeScopeBanner(scope: SmokeScope): string | null {
+  if (scope !== 'temporary-launch') return null;
+  return 'Scope: temporary launch — checking comic2.pages.dev + workers.dev; custom-domain targets intentionally omitted until the Cloudflare challenge is fixed.';
+}
 
 const CLOUDFLARE_CHALLENGE_MARKERS = [
   'just a moment...',
@@ -309,8 +337,11 @@ const isCliRun = (): boolean => {
 };
 
 if (isCliRun()) {
-  const results = await runLiveSmoke();
+  const scope = parseSmokeScope(process.argv.slice(2));
+  const banner = formatSmokeScopeBanner(scope);
+  const results = await runLiveSmoke({ targets: smokeTargetsForScope(scope) });
   const report = formatSmokeReport(results);
+  if (banner) console.log(banner);
   console.log(report);
   if (results.some((result) => result.status === 'fail')) {
     process.exitCode = 1;

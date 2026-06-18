@@ -15,7 +15,7 @@ The product can become a valuable subscription business, but today it is **not i
 The highest-leverage path is:
 
 1. keep the homepage and docs focused on Stream Studio;
-2. keep the temporary Pages-domain live-worker bundle/endpoint smoke green;
+2. keep the temporary Pages-domain live-worker bundle/endpoint smoke green with `npm run ops:live-smoke:temporary`;
 3. fix the custom-domain Cloudflare challenge;
 4. run a real browser E2E smoke: create → host studio → viewer join → chat/reaction → live stream → end → replay/recording;
 5. tighten trust/security/access copy;
@@ -30,7 +30,7 @@ The highest-leverage path is:
 | Stream Studio shell | Pass | `https://comic2.pages.dev/live.html` returns app shell. |
 | Main Railway backend | Pass | `https://comic2-production.up.railway.app/api/health` returns health ok; Railway `Comic2` online. |
 | Primary custom domain | Fail | `https://dreamstreamstudio.ai/` returns Cloudflare security verification HTTP 403. |
-| Temporary live-worker path | Pass | `comic2.pages.dev/live.html` bundle references `dreamstream-live.akhieleshsrirangam.workers.dev`; `npm run ops:live-smoke` passes the `stream studio bundle` and `fallback live worker` targets. |
+| Temporary live-worker path | Pass | `comic2.pages.dev/live.html` bundle references `dreamstream-live.akhieleshsrirangam.workers.dev`; `npm run ops:live-smoke:temporary` passes the temporary Pages shell, bundle, workers.dev no-write probe, and Railway health targets. |
 | Supabase project | Healthy with warnings | Project `Comic` ref `bdjfmxfmhqhzvgrhbbzm` is `ACTIVE_HEALTHY`; advisors show 425 rows, 291 WARN. |
 | Product scope | Improved | Homepage/docs now focus Stream Studio as the launch wedge. |
 | Subscription activation | Not approved | Must not happen without explicit approval and benefit/cost memo. |
@@ -43,6 +43,14 @@ git status --short --branch
 
 npm run ops:live-smoke
 # FAIL primary app — Cloudflare challenge/interstitial
+# PASS fallback app — app shell returned
+# PASS stream studio — app shell returned
+# PASS stream studio bundle — live bundle references dreamstream-live.akhieleshsrirangam.workers.dev
+# PASS fallback live worker — missing-event probe returned JSON 404
+# FAIL custom-domain live worker — Cloudflare challenge/interstitial
+# PASS railway api — health ok
+
+npm run ops:live-smoke:temporary
 # PASS fallback app — app shell returned
 # PASS stream studio — app shell returned
 # PASS stream studio bundle — live bundle references dreamstream-live.akhieleshsrirangam.workers.dev
@@ -244,9 +252,9 @@ Near-term moat is **not AI alone**. It is:
 
 ### Next 24 hours
 
-1. Fix or choose the live-worker route/base strategy.
-2. Make `npm run ops:live-smoke` pass for the temporary launch path or canonical custom domain.
-3. Run browser E2E once route is fixed.
+1. Keep `npm run ops:live-smoke:temporary` green for the current Pages-domain beta path.
+2. Run browser E2E now that the temporary route/base is smokeable.
+3. Fix the custom-domain Cloudflare challenge for canonical/public launch.
 4. Add/verify UX warning when live backend is not reachable before event create.
 5. Keep Code Studio out of homepage/launch funnel.
 
@@ -278,8 +286,7 @@ Near-term moat is **not AI alone**. It is:
 
 | Needed | Why | Benefit | Risk | Approval wording |
 |---|---|---|---|---|
-| Cloudflare WAF/ruleset scoped fix | Remove challenge from app/API path | Enables canonical domain and live-worker API | Misconfiguration could weaken security if broad | “Approve scoped Cloudflare WAF/ruleset fix for app/API paths only.” |
-| Cloudflare live-worker route/env change | Make `comic2.pages.dev` Stream Studio API work | Enables temporary launch domain to create events | Account config change; route/env mistake could break live | “Approve scoped Cloudflare route/env fix for live-worker temporary launch path.” |
+| Cloudflare WAF/ruleset scoped fix | Remove challenge from app/API path | Enables canonical domain and custom-domain live-worker API | Misconfiguration could weaken security if broad | “Approve scoped Cloudflare WAF/ruleset fix for app/API paths only.” |
 | Browser/media E2E access | Test camera/mic/viewer flow | Proves core value path | Needs camera/mic permission / test account | “Approve browser E2E smoke with camera/mic/test account.” |
 | Supabase migration/security hardening | Fix advisor issues | Reduces security exposure | Live DB changes require care | “Approve applying specific migration X after review.” |
 | Pricing/subscription activation | Charge users | Revenue path | Business/financial decision | Not approved; requires separate memo. |

@@ -38,6 +38,7 @@
     "ops:verify:cors": "scripts/ops/verify-cors.sh",
     "ops:verify:rate-limit": "scripts/ops/verify-rate-limit.sh",
     "ops:live-smoke": "tsx scripts/ops/liveSmoke.ts",
+    "ops:live-smoke:temporary": "tsx scripts/ops/liveSmoke.ts --temporary-launch",
     "ops:smoke:live": "npm run ops:live-smoke"
   },
   "dependencies": {

@@ -93,7 +93,8 @@ Do **not** optimize or market for these yet:
 7. **Ops and QA**
    - `npm run typecheck` passes.
    - `npm run build` passes.
-   - Critical live endpoints smoke-test cleanly.
+   - [ ] `npm run ops:live-smoke:temporary` passes for the current Pages-domain beta path
+   - [ ] `npm run ops:live-smoke` passes before canonical/public launch (expected to fail while `dreamstreamstudio.ai` is Cloudflare-challenged)
    - Manual Stream Studio smoke test passes on at least Chrome and Safari before inviting users.
 
 ## Hard cuts until after launch proof
@@ -146,9 +147,10 @@ Run this before letting real users in:
 - [ ] `npm run build:server`
 - [ ] `npm run build`
 - [ ] `npx vitest run` or targeted launch suite if time-constrained
+- [ ] `npm run ops:live-smoke:temporary` passes for the temporary Pages-domain beta path
 - [ ] Temporary launch domain `https://comic2.pages.dev/` returns the app shell
 - [ ] Temporary Stream Studio URL `https://comic2.pages.dev/live.html` returns the app shell
-- [ ] Deployed Stream Studio bundle is current: the `stream studio bundle` smoke target (run `npm run ops:live-smoke`) discovers `/assets/live-*.js` from `live.html` and confirms it references `dreamstream-live.akhieleshsrirangam.workers.dev` — guards against a stale/misbuilt Pages deploy that still passes endpoint probes while the studio falls back to dead same-origin `/live-api`
+- [ ] Deployed Stream Studio bundle is current: the `stream studio bundle` smoke target (run `npm run ops:live-smoke:temporary`) discovers `/assets/live-*.js` from `live.html` and confirms it references `dreamstream-live.akhieleshsrirangam.workers.dev` — guards against a stale/misbuilt Pages deploy that still passes endpoint probes while the studio falls back to dead same-origin `/live-api`
 - [ ] Temporary Stream Studio worker URL `https://dreamstream-live.akhieleshsrirangam.workers.dev/api/events/smokeprobe` returns live-worker JSON (404 `not found` is acceptable for the no-write probe; Cloudflare error 1042 or website HTML is a blocker)
 - [ ] `https://dreamstreamstudio.ai/` custom-domain challenge is either fixed or explicitly documented as post-beta blocker
 - [ ] Railway `/api/health` works through intended production route

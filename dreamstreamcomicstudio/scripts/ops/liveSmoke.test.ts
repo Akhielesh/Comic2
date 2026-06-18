@@ -5,14 +5,17 @@ import {
   discoverLiveBundlePaths,
   EXPECTED_LIVE_WORKER_BASE,
   formatSmokeReport,
+  parseSmokeScope,
   runLiveSmoke,
+  smokeTargetsForScope,
   type SmokeTarget
 } from './liveSmoke';
 
 const LIVE_BUNDLE_TARGET: SmokeTarget = {
   name: 'stream studio bundle',
   url: 'https://comic2.pages.dev/live.html',
-  kind: 'live-bundle'
+  kind: 'live-bundle',
+  scopes: ['temporary-launch']
 };
 
 const htmlResponse = (body: string, init: ResponseInit = {}) =>
@@ -35,6 +38,26 @@ const jsResponse = (body: string, init: ResponseInit = {}) =>
     headers: { 'content-type': 'application/javascript', ...(init.headers ?? {}) },
     ...init
   });
+
+describe('live smoke target scopes', () => {
+  it('keeps the temporary launch gate focused on Pages + workers.dev instead of the challenged custom domain', () => {
+    const targets = smokeTargetsForScope('temporary-launch');
+    expect(targets.map((target) => target.name)).toEqual([
+      'fallback app',
+      'stream studio',
+      'stream studio bundle',
+      'fallback live worker',
+      'railway api'
+    ]);
+    expect(targets.some((target) => target.url.includes('dreamstreamstudio.ai'))).toBe(false);
+  });
+
+  it('maps CLI flags to the temporary launch smoke scope', () => {
+    expect(parseSmokeScope(['--temporary-launch'])).toBe('temporary-launch');
+    expect(parseSmokeScope(['--scope=temporary'])).toBe('temporary-launch');
+    expect(parseSmokeScope([])).toBe('all');
+  });
+});
 
 describe('live smoke classification', () => {
   it('flags Cloudflare challenge interstitials even when they are HTML', () => {

@@ -20,8 +20,8 @@ Chat and Comic Studio are support surfaces. Code Studio / container-heavy workfl
 | Primary marketing/app domain | `https://dreamstreamstudio.ai/` | Cloudflare Pages (`comic2`) | Blocked by Cloudflare security verification for automation; must be manually verified/fixed before canonical launch. |
 | Temporary launch app domain | `https://comic2.pages.dev/` | Cloudflare Pages (`comic2`) | Returns app shell. Current temporary marketing/app URL. |
 | Temporary Stream Studio app | `https://comic2.pages.dev/live.html` | Cloudflare Pages (`comic2`) | Returns app shell. |
-| Temporary Stream Studio API | `https://comic2.pages.dev/live-api/api/events/...` | Should reach `dreamstream-live` | **Blocked:** currently returns the static website/app shell, not live-worker JSON. |
-| Configured live-worker route | `https://dreamstreamstudio.ai/live-api/api/events/...` | `dreamstream-live` Worker | **Blocked:** currently returns Cloudflare challenge HTML, not live-worker JSON. |
+| Temporary Stream Studio API | `https://dreamstream-live.akhieleshsrirangam.workers.dev/api/events/...` from the deployed `comic2.pages.dev/live.html` bundle | `dreamstream-live` Worker on workers.dev | Reachable; `npm run ops:live-smoke:temporary` verifies the Pages shell, deployed bundle worker base, no-write worker probe, and Railway health. |
+| Configured custom-domain live-worker route | `https://dreamstreamstudio.ai/live-api/api/events/...` | `dreamstream-live` Worker | **Blocked:** currently returns Cloudflare challenge HTML, not live-worker JSON. |
 | Railway backend health | `https://comic2-production.up.railway.app/api/health` | Railway service `Comic2` | Returns health JSON. |
 
 ## 3. High-level topology
@@ -56,7 +56,7 @@ flowchart LR
 |---|---|---|
 | `live.html` | Entry HTML with `#live-root`; loads `/live/main.tsx`. | App shell smoke target. |
 | `live/LiveApp.tsx` | URL/router shell. `?e=ID&k=KEY` = host studio, `?e=ID` = invite/watch, hash routes for dashboard/create/settings/summary. | Defines first-session flow. |
-| `live/config.ts` | Quality limits, platform limits, and `WORKER_BASE`. Default production base is same-origin `${location.origin}/live-api`; localhost uses `127.0.0.1:8788`; optional `VITE_LIVE_WORKER_URL` override. | Current temporary-domain API blocker lives here + deployment config. |
+| `live/config.ts` | Quality limits, platform limits, and `WORKER_BASE`. Default production base is same-origin `${location.origin}/live-api`; localhost uses `127.0.0.1:8788`; `comic2.pages.dev` temporarily resolves to `dreamstream-live.akhieleshsrirangam.workers.dev`; optional `VITE_LIVE_WORKER_URL` override. | Defines the current temporary-domain API contract and the custom-domain route once Cloudflare challenge is fixed. |
 | `live/api.ts` | REST/WebSocket client for live-worker; includes `probeLiveWorker`, Cloudflare/app-shell detection, event create/get/stats/rsvp/recordings/segments. | Prevents users from entering dead flows when backend route is miswired. |
 | `live/events.ts` | Local event registry in `localStorage`; hostKey is a capability credential stored with local event history. | Host-key handling / shared-device risk. |
 | `live/sync.ts` | Supabase account sync for events/settings and `product_access`/legacy access gate. Signed-out users degrade to local-only mode. | Cross-device dashboard + access-gated onboarding. |
@@ -161,32 +161,31 @@ Launch-critical constants from `eventRoom.ts`:
 | Component | Repo config | Live dependency | Current issue |
 |---|---|---|---|
 | Frontend Pages | Cloudflare Pages project `comic2` from `Dreamstrream-v1` | `comic2.pages.dev`, `dreamstreamstudio.ai` | Fallback domain works; custom domain challenged. |
-| Live worker | `live-worker/wrangler.jsonc` | Route `dreamstreamstudio.ai/live-api/*`, DO `EVENT_ROOM`, R2 `dreamstream-live`, `ALLOWED_ORIGINS` includes both domains | No route for `comic2.pages.dev/live-api/*`; configured custom route is challenged. |
+| Live worker | `live-worker/wrangler.jsonc` + `live/config.ts` fallback | Workers.dev fallback for `comic2.pages.dev`; custom route `dreamstreamstudio.ai/live-api/*`, DO `EVENT_ROOM`, R2 `dreamstream-live`, `ALLOWED_ORIGINS` includes both domains | Temporary Pages-domain worker path is reachable through workers.dev; custom route is still challenged. |
 | Main backend | Railway project `hospitable-enthusiasm`, service `Comic2` | `https://comic2-production.up.railway.app` | Health works; app-sleeping cost control should stay on. |
 | Supabase | `server/sql/stream_studio.sql` + related access tables | Project `Comic` ref `bdjfmxfmhqhzvgrhbbzm` | Advisors still have warnings; launch-relevant RLS/security needs triage. |
 
-## 9. Current P0: live API cannot be used from temporary launch domain
+## 9. Current P0: canonical domain remains challenged; temporary path is smokeable
 
 Evidence:
 
-- `live/config.ts` defaults production `WORKER_BASE` to `${location.origin}/live-api`.
-- `live-worker/wrangler.jsonc` only routes `dreamstreamstudio.ai/live-api/*`.
-- `npm run ops:live-smoke` checks `https://comic2.pages.dev/live-api/api/events/smokeprobe`.
-- Current result recorded in the launch plan: fallback route returns website HTML instead of worker JSON.
-- Direct probe of `https://dreamstreamstudio.ai/live-api/api/events/smokeprobe` returns Cloudflare challenge HTML.
+- `live/config.ts` keeps custom domains on same-origin `/live-api`, but routes `comic2.pages.dev` to `https://dreamstream-live.akhieleshsrirangam.workers.dev` for the temporary launch.
+- `npm run ops:live-smoke:temporary` now filters to the temporary launch contract: fallback app shell, `/live.html`, deployed live bundle worker base, workers.dev no-write probe, and Railway health.
+- `npm run ops:live-smoke` remains the full canonical gate and still fails while `dreamstreamstudio.ai` returns Cloudflare challenge HTML.
 
 Impact:
 
-- `https://comic2.pages.dev/live.html` can load the Stream Studio shell, but event creation/watch flows cannot reach the live-worker unless the backend base is changed or Cloudflare routing/security is fixed.
-- This blocks the actual June 25 core workflow: create → share → join → stream → replay.
+- The temporary `https://comic2.pages.dev/live.html` path can be proved independently before a human spends time on browser E2E.
+- Public/canonical launch is still blocked until the Cloudflare challenge/ruleset is fixed for `dreamstreamstudio.ai` and `dreamstreamstudio.ai/live-api/*`.
 
 Safe solution options, in approval order:
 
 1. **Best production fix:** scoped Cloudflare WAF/ruleset fix for `dreamstreamstudio.ai` and `dreamstreamstudio.ai/live-api/*`; keep security, skip/relax challenge only for app/API paths. Requires Cloudflare WAF/ruleset edit access.
-2. **Temporary Pages-domain API fix:** add a Cloudflare-accessible route/base for live-worker that `comic2.pages.dev` can call, then set `VITE_LIVE_WORKER_URL` for Pages. Requires Cloudflare Pages env/deploy or Worker route/subdomain config.
-3. **Manual beta workaround:** use local/dev worker for controlled demos only. Not acceptable for inviting real users.
+2. **Temporary Pages beta:** use `comic2.pages.dev` and require `npm run ops:live-smoke:temporary` plus a browser create/view/watch/record/replay smoke before inviting testers.
+3. **Manual local workaround:** use local/dev worker for controlled demos only. Not acceptable for inviting real users.
 
-Do **not** claim Stream Studio launch readiness until one of these is verified by `npm run ops:live-smoke` and a browser create-event test.
+Do **not** claim canonical Stream Studio launch readiness until the full `npm run ops:live-smoke` passes and a browser create-event test passes.
+Do **not** claim temporary-domain beta readiness until `npm run ops:live-smoke:temporary` passes and the browser E2E flow is proven.
 
 ## 10. Minimum launch smoke path
 
@@ -195,7 +194,7 @@ The next launch-proof gate should be:
 1. `npm run typecheck`
 2. `npm run build:server`
 3. `npm run build`
-4. `npm run ops:live-smoke`
+4. `npm run ops:live-smoke:temporary` for the current Pages-domain beta path (`npm run ops:live-smoke` for canonical readiness once the custom-domain challenge is fixed)
 5. Browser: open `https://comic2.pages.dev/live.html`
 6. Create event
 7. Open host studio link
@@ -211,7 +210,7 @@ The smoke script currently catches routing blockers before a human wastes time o
 
 ## 11. Council role implications
 
-- **CEO/Product:** do not market/invite until live API routing is fixed; landing page can continue focusing Stream Studio.
+- **CEO/Product:** do not invite beyond controlled internal testers until temporary smoke + browser E2E pass; do not market canonical launch until the custom-domain challenge is fixed.
 - **CTO/Architect:** make the live-worker route/base a single explicit launch contract, not tribal knowledge.
 - **SRE:** live smoke should remain a hard gate; add route coverage for every API path the browser uses.
 - **CISO:** hostKey-as-capability is acceptable for beta only with honest copy and tight route logging/referrer awareness.
