@@ -2,10 +2,18 @@ import { describe, expect, it } from 'vitest';
 import {
   classifySmokeResponse,
   detectCloudflareChallenge,
+  discoverLiveBundlePaths,
+  EXPECTED_LIVE_WORKER_BASE,
   formatSmokeReport,
   runLiveSmoke,
   type SmokeTarget
 } from './liveSmoke';
+
+const LIVE_BUNDLE_TARGET: SmokeTarget = {
+  name: 'stream studio bundle',
+  url: 'https://comic2.pages.dev/live.html',
+  kind: 'live-bundle'
+};
 
 const htmlResponse = (body: string, init: ResponseInit = {}) =>
   new Response(body, {
@@ -18,6 +26,13 @@ const jsonResponse = (body: unknown, init: ResponseInit = {}) =>
   new Response(JSON.stringify(body), {
     status: 200,
     headers: { 'content-type': 'application/json', ...(init.headers ?? {}) },
+    ...init
+  });
+
+const jsResponse = (body: string, init: ResponseInit = {}) =>
+  new Response(body, {
+    status: 200,
+    headers: { 'content-type': 'application/javascript', ...(init.headers ?? {}) },
     ...init
   });
 
@@ -120,6 +135,71 @@ describe('live smoke classification', () => {
 
     expect(result.status).toBe('fail');
     expect(result.detail).toContain('workers.dev host is not deployed');
+  });
+
+  it('passes the live-bundle target when a discovered bundle references the worker base', async () => {
+    const shell = '<!doctype html><div id="live-root"></div><script type="module" src="/assets/live-DhX3k2.js"></script>';
+
+    const results = await runLiveSmoke({
+      targets: [LIVE_BUNDLE_TARGET],
+      timeoutMs: 100,
+      fetcher: async (url) => {
+        const u = String(url);
+        if (u.endsWith('/live.html')) return htmlResponse(shell);
+        if (u.includes('/assets/live-')) {
+          return jsResponse(`const base="https://${EXPECTED_LIVE_WORKER_BASE}";export default base;`);
+        }
+        throw new Error(`unexpected fetch ${u}`);
+      }
+    });
+
+    expect(results[0].status).toBe('pass');
+    expect(results[0].detail).toContain(EXPECTED_LIVE_WORKER_BASE);
+  });
+
+  it('fails the live-bundle target when no bundle references the worker base', async () => {
+    const shell = '<!doctype html><div id="live-root"></div><script type="module" src="/assets/live-stale99.js"></script>';
+
+    const results = await runLiveSmoke({
+      targets: [LIVE_BUNDLE_TARGET],
+      timeoutMs: 100,
+      fetcher: async (url) => {
+        const u = String(url);
+        if (u.endsWith('/live.html')) return htmlResponse(shell);
+        if (u.includes('/assets/live-')) return jsResponse('const base="/live-api";export default base;');
+        throw new Error(`unexpected fetch ${u}`);
+      }
+    });
+
+    expect(results[0].status).toBe('fail');
+    expect(results[0].detail).toContain('expected worker base');
+    expect(results[0].detail).toContain(EXPECTED_LIVE_WORKER_BASE);
+  });
+
+  it('fails the live-bundle target when live.html exposes no live asset', async () => {
+    const shell = '<!doctype html><div id="live-root"></div><script type="module" src="/assets/index-abc123.js"></script>';
+
+    const results = await runLiveSmoke({
+      targets: [LIVE_BUNDLE_TARGET],
+      timeoutMs: 100,
+      fetcher: async (url) => {
+        const u = String(url);
+        if (u.endsWith('/live.html')) return htmlResponse(shell);
+        throw new Error(`should not fetch assets when none discovered: ${u}`);
+      }
+    });
+
+    expect(results[0].status).toBe('fail');
+    expect(results[0].detail).toContain('no /assets/live-');
+  });
+
+  it('discovers and dedupes live bundle paths from the shell markup', () => {
+    const html =
+      '<link rel="modulepreload" href="/assets/live-DhX3k2.js">' +
+      '<script type="module" src="/assets/live-DhX3k2.js"></script>' +
+      '<script type="module" src="/assets/live-vendor-9f8.js"></script>' +
+      '<script type="module" src="/assets/index-abc.js"></script>';
+    expect(discoverLiveBundlePaths(html)).toEqual(['/assets/live-DhX3k2.js', '/assets/live-vendor-9f8.js']);
   });
 
   it('runs all targets through an injected fetcher and reports failures clearly', async () => {

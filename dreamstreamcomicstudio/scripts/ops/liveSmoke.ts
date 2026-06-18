@@ -1,4 +1,12 @@
-export type SmokeTargetKind = 'frontend' | 'api' | 'live-api';
+export type SmokeTargetKind = 'frontend' | 'api' | 'live-api' | 'live-bundle';
+
+/**
+ * The workers.dev base that the deployed Stream Studio bundle MUST reference as its
+ * live fallback (see live/config.ts). If a stale/misbuilt Pages deploy ships without
+ * it, the studio falls back to dead same-origin /live-api even though endpoint probes
+ * still pass — so the 'live-bundle' target asserts the string is actually in the bundle.
+ */
+export const EXPECTED_LIVE_WORKER_BASE = 'dreamstream-live.akhieleshsrirangam.workers.dev';
 
 export type SmokeTarget = {
   name: string;
@@ -28,6 +36,7 @@ export const DEFAULT_SMOKE_TARGETS: SmokeTarget[] = [
   { name: 'primary app', url: 'https://dreamstreamstudio.ai/', kind: 'frontend' },
   { name: 'fallback app', url: 'https://comic2.pages.dev/', kind: 'frontend' },
   { name: 'stream studio', url: 'https://comic2.pages.dev/live.html', kind: 'frontend' },
+  { name: 'stream studio bundle', url: 'https://comic2.pages.dev/live.html', kind: 'live-bundle' },
   { name: 'fallback live worker', url: 'https://dreamstream-live.akhieleshsrirangam.workers.dev/api/events/smokeprobe', kind: 'live-api' },
   { name: 'custom-domain live worker', url: 'https://dreamstreamstudio.ai/live-api/api/events/smokeprobe', kind: 'live-api' },
   { name: 'railway api', url: 'https://comic2-production.up.railway.app/api/health', kind: 'api' }
@@ -163,19 +172,96 @@ export function classifySmokeResponse(
   };
 }
 
-const fetchWithTimeout = async (fetcher: SmokeFetcher, target: SmokeTarget, timeoutMs: number): Promise<Response> => {
+const fetchUrlWithTimeout = async (
+  fetcher: SmokeFetcher,
+  url: string,
+  timeoutMs: number,
+  headers?: Record<string, string>
+): Promise<Response> => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetcher(target.url, {
-      signal: controller.signal,
-      redirect: 'follow',
-      headers: target.kind === 'frontend' ? undefined : { accept: 'application/json' },
-    });
+    return await fetcher(url, { signal: controller.signal, redirect: 'follow', headers });
   } finally {
     clearTimeout(timeout);
   }
 };
+
+const fetchWithTimeout = (fetcher: SmokeFetcher, target: SmokeTarget, timeoutMs: number): Promise<Response> =>
+  fetchUrlWithTimeout(
+    fetcher,
+    target.url,
+    timeoutMs,
+    target.kind === 'frontend' ? undefined : { accept: 'application/json' }
+  );
+
+/**
+ * Find every `/assets/live-*.js` bundle path referenced by the Stream Studio shell
+ * (script src or modulepreload href). Deduped + deterministic so it's unit-testable.
+ */
+export function discoverLiveBundlePaths(html: string): string[] {
+  const matches = html.match(/\/assets\/live-[A-Za-z0-9_.-]+\.js/g) ?? [];
+  return Array.from(new Set(matches));
+}
+
+/**
+ * 'live-bundle' target: fetch the deployed live.html, discover its `/assets/live-*.js`
+ * bundle(s), fetch them, and pass only if at least one bundle literally contains
+ * EXPECTED_LIVE_WORKER_BASE. Guards against a stale/misbuilt Pages deploy that still
+ * passes endpoint probes while the studio uses dead same-origin /live-api.
+ */
+export async function verifyLiveBundle(
+  target: SmokeTarget,
+  fetcher: SmokeFetcher,
+  timeoutMs: number
+): Promise<SmokeResult> {
+  const started = Date.now();
+  const fail = (httpStatus: number, detail: string): SmokeResult => ({
+    target,
+    status: 'fail',
+    httpStatus,
+    elapsedMs: Date.now() - started,
+    detail
+  });
+
+  const shell = await fetchUrlWithTimeout(fetcher, target.url, timeoutMs, { accept: 'text/html' });
+  const shellBody = await shell.text();
+
+  if (detectCloudflareChallenge(shell, shellBody)) {
+    return fail(shell.status, 'Cloudflare challenge/interstitial returned instead of live.html shell');
+  }
+  if (!shell.ok) {
+    return fail(shell.status, `live.html shell returned unexpected HTTP ${shell.status}`);
+  }
+
+  const bundlePaths = discoverLiveBundlePaths(shellBody);
+  if (bundlePaths.length === 0) {
+    return fail(shell.status, 'no /assets/live-*.js bundle found in live.html (stale or misbuilt Pages deploy?)');
+  }
+
+  let lastStatus = shell.status;
+  for (const path of bundlePaths) {
+    const bundleUrl = new URL(path, target.url).toString();
+    const res = await fetchUrlWithTimeout(fetcher, bundleUrl, timeoutMs, { accept: 'application/javascript' });
+    lastStatus = res.status;
+    if (!res.ok) continue;
+    const body = await res.text();
+    if (body.includes(EXPECTED_LIVE_WORKER_BASE)) {
+      return {
+        target,
+        status: 'pass',
+        httpStatus: res.status,
+        elapsedMs: Date.now() - started,
+        detail: `live bundle ${path} references ${EXPECTED_LIVE_WORKER_BASE}`
+      };
+    }
+  }
+
+  return fail(
+    lastStatus,
+    `none of ${bundlePaths.length} live bundle(s) reference expected worker base ${EXPECTED_LIVE_WORKER_BASE} (stale or misbuilt Pages deploy?)`
+  );
+}
 
 export async function runLiveSmoke(options: RunLiveSmokeOptions = {}): Promise<SmokeResult[]> {
   const targets = options.targets ?? DEFAULT_SMOKE_TARGETS;
@@ -186,6 +272,10 @@ export async function runLiveSmoke(options: RunLiveSmokeOptions = {}): Promise<S
   for (const target of targets) {
     const started = Date.now();
     try {
+      if (target.kind === 'live-bundle') {
+        results.push(await verifyLiveBundle(target, fetcher, timeoutMs));
+        continue;
+      }
       const response = await fetchWithTimeout(fetcher, target, timeoutMs);
       const body = await response.text();
       results.push(classifySmokeResponse(target, response, body, Date.now() - started));

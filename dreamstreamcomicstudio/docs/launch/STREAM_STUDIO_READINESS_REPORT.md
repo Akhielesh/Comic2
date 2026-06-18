@@ -2,21 +2,24 @@
 
 > Generated: 2026-06-18 from repo state, live smoke output, Cloudflare/Railway/Supabase CLI evidence, and council findings.
 >
+> Updated: 2026-06-18 after the Pages fallback live-worker fix. `comic2.pages.dev` now ships a Stream Studio bundle that references `dreamstream-live.akhieleshsrirangam.workers.dev`, and the fallback live-worker smoke passes. The remaining P0 launch blockers are the custom-domain Cloudflare challenge and real browser E2E proof.
+>
 > Launch source of truth: [`JUNE_25_STREAM_STUDIO_MVP.md`](JUNE_25_STREAM_STUDIO_MVP.md). Technical map: [`STREAM_STUDIO_SYSTEM_MAP.md`](STREAM_STUDIO_SYSTEM_MAP.md).
 
 ## Executive verdict
 
 DreamStream is moving in the right direction only if June 25 is treated as a **focused Stream Studio beta**, not a full-suite launch.
 
-The product can become a valuable subscription business, but today it is **not invite-ready** because the core live-worker route is not reachable from the temporary launch domain and the canonical custom domain is behind a Cloudflare security challenge.
+The product can become a valuable subscription business, but today it is **not invite-ready** because the canonical custom domain is behind a Cloudflare security challenge and the real browser/media end-to-end Stream Studio flow is not yet proven.
 
 The highest-leverage path is:
 
 1. keep the homepage and docs focused on Stream Studio;
-2. fix the live API routing/security path;
-3. run a real browser E2E smoke: create → host studio → viewer join → chat/reaction → live stream → end → replay/recording;
-4. tighten trust/security/access copy;
-5. only then discuss pricing/subscription activation with owner approval.
+2. keep the temporary Pages-domain live-worker bundle/endpoint smoke green;
+3. fix the custom-domain Cloudflare challenge;
+4. run a real browser E2E smoke: create → host studio → viewer join → chat/reaction → live stream → end → replay/recording;
+5. tighten trust/security/access copy;
+6. only then discuss pricing/subscription activation with owner approval.
 
 ## Current launch status
 
@@ -27,7 +30,7 @@ The highest-leverage path is:
 | Stream Studio shell | Pass | `https://comic2.pages.dev/live.html` returns app shell. |
 | Main Railway backend | Pass | `https://comic2-production.up.railway.app/api/health` returns health ok; Railway `Comic2` online. |
 | Primary custom domain | Fail | `https://dreamstreamstudio.ai/` returns Cloudflare security verification HTTP 403. |
-| Temporary live-worker API route | Fail | `https://comic2.pages.dev/live-api/api/events/smokeprobe` returns website HTML, not worker JSON. |
+| Temporary live-worker path | Pass | `comic2.pages.dev/live.html` bundle references `dreamstream-live.akhieleshsrirangam.workers.dev`; `npm run ops:live-smoke` passes the `stream studio bundle` and `fallback live worker` targets. |
 | Supabase project | Healthy with warnings | Project `Comic` ref `bdjfmxfmhqhzvgrhbbzm` is `ACTIVE_HEALTHY`; advisors show 425 rows, 291 WARN. |
 | Product scope | Improved | Homepage/docs now focus Stream Studio as the launch wedge. |
 | Subscription activation | Not approved | Must not happen without explicit approval and benefit/cost memo. |
@@ -42,7 +45,8 @@ npm run ops:live-smoke
 # FAIL primary app — Cloudflare challenge/interstitial
 # PASS fallback app — app shell returned
 # PASS stream studio — app shell returned
-# FAIL stream worker route — website HTML instead of worker JSON
+# PASS stream studio bundle — live bundle references dreamstream-live.akhieleshsrirangam.workers.dev
+# PASS fallback live worker — missing-event probe returned JSON 404
 # PASS railway api — health ok
 
 railway status
@@ -60,42 +64,30 @@ supabase db advisors --linked --type all --level info --fail-on none -o json
 
 ## P0 launch blockers
 
-### P0-1 — Live API route is not reachable from temporary launch domain
+### Resolved — Temporary Pages live-worker path
 
-**Severity:** critical  
-**Owner:** SRE / Full-stack / CTO  
-**User impact:** creator can load Stream Studio but cannot reliably create or run a live event on `comic2.pages.dev`.
+**Previous severity:** critical
+**Owner:** SRE / Full-stack / CTO
+**Current status:** resolved for the temporary Pages fallback; keep smoke checks to prevent regression.
 
-Evidence:
-
-- `live/config.ts` defaults production `WORKER_BASE` to same-origin `${location.origin}/live-api`.
-- `live-worker/wrangler.jsonc` routes only `dreamstreamstudio.ai/live-api/*`.
-- `npm run ops:live-smoke` reports:
+Evidence now passing:
 
 ```txt
-FAIL stream worker route (https://comic2.pages.dev/live-api/api/events/smokeprobe)
-HTTP 200 — live-worker probe returned website HTML instead of worker JSON
+PASS stream studio bundle — live bundle references dreamstream-live.akhieleshsrirangam.workers.dev
+PASS fallback live worker — missing-event probe returned JSON 404
 ```
 
-Required outcome:
+Implemented fix path:
 
-```txt
-https://comic2.pages.dev/live-api/api/events/smokeprobe
-```
+1. `live/config.ts` routes `comic2.pages.dev` to `https://dreamstream-live.akhieleshsrirangam.workers.dev`.
+2. `live-worker/wrangler.jsonc` enables `workers_dev`.
+3. `scripts/ops/liveSmoke.ts` verifies both the reachable worker endpoint and the deployed `live.html` bundle string so stale/misbuilt Pages deploys are caught.
 
-must return live-worker JSON. A JSON 404 `{ "error": "not found" }` is acceptable for the no-write probe; website HTML is not.
+Remaining approval needed:
 
-Likely fix paths:
+- Cloudflare WAF/ruleset edit access, or dashboard-guided change, if fixing the canonical custom-domain challenge.
 
-1. **Preferred:** fix `dreamstreamstudio.ai` Cloudflare challenge and use canonical custom domain for both app and `/live-api/*`.
-2. **Temporary:** expose a reachable live-worker base for `comic2.pages.dev` and set Pages `VITE_LIVE_WORKER_URL` to that base.
-3. **Not acceptable for beta:** local/dev worker only.
-
-Approval needed:
-
-- Cloudflare WAF/ruleset edit access, or dashboard-guided change, if changing security/routing/env config.
-
-### P0-2 — Primary custom domain is blocked by Cloudflare security verification
+### P0-1 — Primary custom domain is blocked by Cloudflare security verification
 
 **Severity:** critical for public launch; high for controlled beta if using Pages fallback  
 **Owner:** SRE / CTO  
@@ -117,7 +109,7 @@ Required next approval if fixing:
 - Scoped Cloudflare API token or dashboard access for `dreamstreamstudio.ai` WAF/rulesets.
 - Do not disable security globally; fix only app/API challenge behavior.
 
-### P0-3 — End-to-end Stream Studio workflow is not proven
+### P0-2 — End-to-end Stream Studio workflow is not proven
 
 **Severity:** critical  
 **Owner:** Full-stack QA / UX / SRE  
@@ -136,7 +128,7 @@ Required smoke:
 9. end stream;
 10. verify replay/recording/summary.
 
-Blocked by P0-1 until live API route works.
+No longer blocked by the temporary fallback live-worker route; next blocker is real browser/media execution and, for public launch, the custom-domain challenge.
 
 ## P1 high-priority risks
 
