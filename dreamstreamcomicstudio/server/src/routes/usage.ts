@@ -4,6 +4,7 @@
 
 import { Router } from 'express';
 import { getProviderUsageSnapshot } from '../lib/providerUsage.js';
+import { isSharedKeyCapped, sharedKeyCappedForMs } from '../ai/providerCircuit.js';
 import { requireAuth } from '../middleware/auth.js';
 import { accountKeyProviders } from '../middleware/accountKeys.js';
 import { getAllowanceStatus, getBillingPrefs, PLATFORM_FUNDED_PROVIDERS } from '../services/platformAllowance.js';
@@ -11,7 +12,18 @@ import { getAllowanceStatus, getBillingPrefs, PLATFORM_FUNDED_PROVIDERS } from '
 export const usageRouter = Router();
 
 usageRouter.get('/providers', (_req, res) => {
-  res.json({ generatedAt: new Date().toISOString(), providers: getProviderUsageSnapshot() });
+  res.json({
+    generatedAt: new Date().toISOString(),
+    providers: getProviderUsageSnapshot(),
+    // Reactive resilience signal: when the shared platform LLM key hits its spend cap, the
+    // chat router fails auto turns over to free models for a cooldown window. Surface it so
+    // ops can see "platform key capped" directly instead of inferring it from a free-model
+    // usage spike. Counts/booleans only — no keys, spend, or user data.
+    llmCircuit: {
+      sharedKeyCapped: isSharedKeyCapped(),
+      cooldownMsRemaining: sharedKeyCappedForMs()
+    }
+  });
 });
 
 // Per-user platform allowance status — PERCENT ONLY. capUsd/usedUsd are server-only
