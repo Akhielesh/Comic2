@@ -20,7 +20,18 @@ repo config). **Companion:** `INFRA_MAP.md`. Re-run `get_advisors` after any DDL
 
 ## ⏳ Deferred by decision / risk (not applied)
 
-- **Admin SECURITY DEFINER functions** (`admin_reset_user` etc.) — left **as-is per owner**.
+- **Admin SECURITY DEFINER functions** (`admin_reset_user` etc.) — a scoped lockdown
+  migration is now **written but NOT yet applied** to prod:
+  `server/sql/security_hardening_definer_lockdown_2026_06.sql`. It revokes EXECUTE from
+  `anon`/`authenticated`/`public` and grants `service_role` on the 4 functions verified to
+  be **never called client-side** (`admin_reset_user`, `billing_try_reserve_tokens`,
+  `billing_release_reserved_tokens`, `billing_settle_tokens`) — this preserves admin access
+  (service_role + SQL editor) while closing the anon privilege-escalation surface. The
+  client-called definer fns (`resolve_email_from_username` [anon login],
+  `increment_project_view/like`, `register_image_asset`, `redeem_coupon`) are intentionally
+  left callable. **Applying it is a high-severity prod permission change requiring explicit
+  authorization** (originally deferred per owner) — apply via Supabase MCP `apply_migration`
+  / SQL editor, then re-run `get_advisors(security)`.
 - **GraphQL anon/authenticated table exposure (140)** — RLS gates rows; a blanket `anon`
   SELECT revoke would break the frontend's direct reads of owner-scoped tables, so it needs
   per-table review + app testing, not a blind fix.
