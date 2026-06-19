@@ -70,7 +70,12 @@
 .limit-value { font-size: 12.5px; color: var(--text); line-height: 1.45; }
 
 .linkbox { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 13px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel-2); }
-.lb-url { flex: 1; font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.linkbox.is-sensitive { display: grid; align-items: stretch; padding: 10px 12px; border-color: color-mix(in srgb, var(--amber) 32%, var(--line)); background: color-mix(in srgb, var(--amber-wash) 42%, var(--panel-2)); }
+.linkbox.is-armed { border-color: color-mix(in srgb, var(--live) 45%, var(--line)); background: color-mix(in srgb, var(--live-wash) 28%, var(--panel-2)); }
+.lb-main { display: flex; align-items: center; gap: 10px; min-width: 0; width: 100%; }
+.lb-url { flex: 1; min-width: 0; font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lb-warning { display: flex; align-items: flex-start; gap: 7px; margin-top: 8px; color: var(--amber); font-size: 11.5px; line-height: 1.45; }
+.linkbox.is-armed .lb-warning { color: var(--live); }
 
 .created-hero { text-align: center; margin-bottom: 26px; }
 .ch-check { width: 56px; height: 56px; border-radius: 50%; background: var(--green-wash); color: var(--green); display: grid; place-items: center; margin: 0 auto 16px; }

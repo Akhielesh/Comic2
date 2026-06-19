@@ -11,7 +11,7 @@ import { loadPrefs, savePrefs } from '../prefs';
 import { downloadIcs } from '../schedule';
 import { COVER_THEMES } from '../theme';
 import { Icon } from '../ui/icons';
-import { Btn, Field, LinkBox, Segmented, Toggle, cx, type PushToast } from '../ui/primitives';
+import { Btn, Field, LinkBox, Segmented, Toggle, cx, redactUrlSearchParams, type PushToast } from '../ui/primitives';
 
 export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
   const prefs = useMemo(loadPrefs, []);
@@ -109,7 +109,13 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
             <LinkBox url={share} onCopy={() => push(scheduled ? 'Invite link copied' : 'Viewer link copied', { icon: 'check' })} />
           </Field>
           <Field label="Your private studio link" hint="keep secret — it IS the key">
-            <LinkBox url={studioUrl(created.id, created.hostKey)} onCopy={() => push('Studio link copied', { icon: 'check' })} />
+            <LinkBox
+              url={studioUrl(created.id, created.hostKey)}
+              displayUrl={redactUrlSearchParams(studioUrl(created.id, created.hostKey))}
+              copyLabel="Copy private link"
+              copyWarning="This link contains the host key and can start, end, record, and moderate the event. Share the viewer link instead."
+              onCopy={() => push('Private studio link copied — only send it to trusted hosts', { icon: 'alert' })}
+            />
           </Field>
           <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>
             <Icon name="users" size={13} /> Want co-hosts? Grab the <b>guest invite link</b> inside the studio

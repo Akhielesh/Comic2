@@ -274,25 +274,71 @@ export function Field({ label, hint, children, className }: { label?: string; hi
 }
 
 /* ---------------------------------------------------------------- LinkBox */
-export function LinkBox({ url, onCopy }: { url: string; onCopy?: () => void }) {
+export function redactUrlSearchParams(url: string, paramNames: string[] = ['k']): string {
+  if (!paramNames.length) return url;
+  const escaped = paramNames.map((param) => param.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const sensitiveParam = new RegExp(`([?&](?:${escaped.join('|')})=)[^&#]*`, 'gi');
+  return url.replace(sensitiveParam, '$1••••••');
+}
+
+export function LinkBox({
+  url,
+  onCopy,
+  displayUrl,
+  copyLabel = 'Copy',
+  copiedLabel = 'Copied',
+  copyWarning,
+}: {
+  url: string;
+  onCopy?: () => void;
+  displayUrl?: string;
+  copyLabel?: string;
+  copiedLabel?: string;
+  /**
+   * When present, copy becomes a two-step action. Used for Stream Studio host
+   * links because the query-string host key is a capability secret.
+   */
+  copyWarning?: string;
+}) {
   const [copied, setCopied] = useState(false);
+  const [armed, setArmed] = useState(false);
+  const shownUrl = displayUrl ?? (copyWarning ? redactUrlSearchParams(url) : url);
+
+  const copy = () => {
+    navigator.clipboard?.writeText(url).catch(() => undefined);
+    setCopied(true);
+    setArmed(false);
+    onCopy && onCopy();
+    setTimeout(() => setCopied(false), 1500);
+  };
+
   return (
-    <div className="linkbox">
-      <Icon name="link" size={14} className="faint" />
-      <span className="lb-url mono">{url}</span>
-      <Btn
-        variant="soft"
-        size="sm"
-        icon={copied ? 'check' : 'copy'}
-        onClick={() => {
-          navigator.clipboard?.writeText(url).catch(() => undefined);
-          setCopied(true);
-          onCopy && onCopy();
-          setTimeout(() => setCopied(false), 1500);
-        }}
-      >
-        {copied ? 'Copied' : 'Copy'}
-      </Btn>
+    <div className={cx('linkbox', copyWarning && 'is-sensitive', armed && 'is-armed')}>
+      <div className="lb-main">
+        <Icon name={copyWarning ? 'lock' : 'link'} size={14} className="faint" />
+        <span className="lb-url mono">{shownUrl}</span>
+        <Btn
+          variant={copyWarning && armed ? 'danger' : 'soft'}
+          size="sm"
+          icon={copied ? 'check' : copyWarning && armed ? 'alert' : 'copy'}
+          onClick={() => {
+            if (copyWarning && !armed) {
+              setArmed(true);
+              setTimeout(() => setArmed(false), 5000);
+              return;
+            }
+            copy();
+          }}
+        >
+          {copied ? copiedLabel : copyWarning && armed ? 'Click again' : copyLabel}
+        </Btn>
+      </div>
+      {copyWarning && (
+        <div className="lb-warning" role="status">
+          <Icon name="alert" size={13} />
+          <span>{armed ? 'This copies the private control link.' : copyWarning}</span>
+        </div>
+      )}
     </div>
   );
 }
