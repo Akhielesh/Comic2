@@ -27,6 +27,7 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
   const [cap, setCap] = useState(100);
   const [rec, setRec] = useState(prefs.autoRecord);
   const [busy, setBusy] = useState(false);
+  const [checkingBackend, setCheckingBackend] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [backendProbe, setBackendProbe] = useState<LiveWorkerProbeResult | null>(null);
   const [created, setCreated] = useState<{ id: string; hostKey: string } | null>(null);
@@ -34,16 +35,36 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
   const preset = presetById(quality);
   const scheduled = when === 'later';
   const scheduledMs = scheduled && date ? new Date(`${date}T${time || '18:00'}`).getTime() : null;
+  const backendBlocked = backendProbe != null && !backendProbe.ok;
+
+  const refreshBackendProbe = async (): Promise<LiveWorkerProbeResult> => {
+    setCheckingBackend(true);
+    const result = await probeLiveWorker();
+    setBackendProbe(result);
+    if (result.ok) setError(null);
+    setCheckingBackend(false);
+    return result;
+  };
 
   useEffect(() => {
     let cancelled = false;
+    setCheckingBackend(true);
     void probeLiveWorker().then((result) => {
-      if (!cancelled) setBackendProbe(result);
+      if (!cancelled) {
+        setBackendProbe(result);
+        if (result.ok) setError(null);
+      }
+    }).finally(() => {
+      if (!cancelled) setCheckingBackend(false);
     });
     return () => { cancelled = true; };
   }, []);
 
   const submit = async () => {
+    if (backendBlocked) {
+      setError(`Streaming backend is not reachable: ${backendProbe?.detail ?? 'live-worker route unavailable'}`);
+      return;
+    }
     setBusy(true);
     setError(null);
     const cleanTitle = title.trim() || 'Untitled stream';
@@ -147,11 +168,14 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
       </div>
 
       {backendProbe && !backendProbe.ok && (
-        <div className="banner warn" role="status" style={{ marginBottom: 18 }}>
+        <div className="banner warn" role="status" style={{ marginBottom: 18, alignItems: 'center' }}>
           <Icon name="alert" size={15} />
-          <span>
+          <span style={{ flex: 1 }}>
             <b>Streaming backend check failed.</b> {backendProbe.detail}. Event creation is blocked on this deployment until the live-worker route or <code>VITE_LIVE_WORKER_URL</code> points at reachable JSON.
           </span>
+          <Btn variant="soft" size="sm" icon="refresh" onClick={() => void refreshBackendProbe()} disabled={checkingBackend}>
+            {checkingBackend ? 'Checking…' : 'Retry check'}
+          </Btn>
         </div>
       )}
 
@@ -253,8 +277,16 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
 
           <hr className="divider" />
           <div className="row">
-            <Btn variant="solid" size="lg" icon={scheduled ? 'calendar' : 'check'} onClick={() => void submit()} disabled={busy}>
-              {busy ? 'Creating…' : scheduled ? 'Schedule event' : 'Create event'}
+            <Btn variant="solid" size="lg" icon={backendBlocked ? 'alert' : scheduled ? 'calendar' : 'check'} onClick={() => void submit()} disabled={busy || checkingBackend || backendBlocked}>
+              {busy
+                ? 'Creating…'
+                : checkingBackend
+                  ? 'Checking backend…'
+                  : backendBlocked
+                    ? 'Streaming backend unavailable'
+                    : scheduled
+                      ? 'Schedule event'
+                      : 'Create event'}
             </Btn>
             <Btn variant="subtle" onClick={() => nav.dashboard()}>Cancel</Btn>
           </div>
