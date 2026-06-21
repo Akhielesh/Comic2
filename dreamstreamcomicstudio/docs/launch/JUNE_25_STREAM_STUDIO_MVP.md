@@ -128,7 +128,6 @@ Any proposal in those categories must include:
 | P0 | Custom domain Cloudflare challenge | `dreamstreamstudio.ai` still returns Cloudflare security verification to automation/curl; temporary launch uses `comic2.pages.dev` until scoped WAF/ruleset access is available | SRE / CTO |
 | P0 | Stream Studio E2E not launch-proven | Need create → studio → viewer → chat → live → record → replay smoke in real browsers | QA / Full-stack |
 | P1 | Supabase advisor warnings | Live advisors showed many WARN items; prioritize launch-relevant RLS/security items | CISO / Backend |
-| P1 | Host/studio link capability-secret risk | Host keys and private studio links require clear UX and leak hardening | CISO / Backend |
 | P1 | Billing not owner-approved | Stripe foundation exists, but price/tier activation needs explicit approval | CEO / CFO |
 | P1 | Container cost risk | Code Studio / containers should remain out of launch funnel | CTO / SRE |
 
@@ -136,6 +135,7 @@ Any proposal in those categories must include:
 
 | Resolved | Evidence | Follow-up |
 |---|---|---|
+| Private host/guest capability-link leak hardening | New Stream Studio links keep capability keys in URL fragments (`?e=...#/studio?k=...`, `#/guest?g=...`) so keys are not sent in initial HTTP requests, CDN logs, or Referer headers; legacy query links still parse; LinkBox still redacts raw keys and requires a second click before copying private links | Keep manual smoke coverage for copied studio/guest links and continue treating `k`/`g` URLs as bearer secrets |
 | Temporary Pages-domain live-worker reachability | `comic2.pages.dev` Stream Studio bundle now references `dreamstream-live.akhieleshsrirangam.workers.dev`; `npm run ops:live-smoke` passes `stream studio bundle` and `fallback live worker` | Keep bundle smoke in the pre-invite checklist so stale/misbuilt Pages deploys cannot silently regress to dead same-origin `/live-api` |
 | Product positioning too broad | Homepage/docs now focus Stream Studio as the June 25 launch wedge | Keep Chat/Comic as support tools and Code Studio parked until Stream Studio is proven |
 

@@ -232,6 +232,7 @@ describe('schedule helpers', async () => {
 describe('meeting scenes & guest links (v5)', async () => {
   const { SCENES, MULTI_SCENES, fitCanvasToSource } = await import('./studio/compositor');
   const { guestUrl, studioUrl, viewerUrl } = await import('./nav');
+  const { parseRoute } = await import('./LiveApp');
   const { MAX_GUESTS } = await import('./protocol');
 
   it('exposes six scenes with unique sequential hotkeys 1–6', () => {
@@ -251,14 +252,44 @@ describe('meeting scenes & guest links (v5)', async () => {
   });
 
   it('mints distinct viewer / studio / guest links from one event', () => {
-    const v = viewerUrl('abc123');
-    const s = studioUrl('abc123', 'host-key');
-    const g = guestUrl('abc123', 'guest-key');
-    expect(v).toContain('?e=abc123');
-    expect(v).not.toContain('k=');
-    expect(s).toContain('k=host-key');
-    expect(g).toContain('g=guest-key');
-    expect(g).not.toContain('k=');
+    const v = new URL(viewerUrl('abc123'));
+    const s = new URL(studioUrl('abc123', 'host-key'));
+    const g = new URL(guestUrl('abc123', 'guest-key'));
+    const sHashParams = new URLSearchParams(s.hash.split('?')[1]);
+    const gHashParams = new URLSearchParams(g.hash.split('?')[1]);
+
+    expect(v.searchParams.get('e')).toBe('abc123');
+    expect(v.searchParams.has('k')).toBe(false);
+    expect(v.searchParams.has('g')).toBe(false);
+    expect(v.hash).toBe('');
+
+    expect(s.searchParams.get('e')).toBe('abc123');
+    expect(s.searchParams.has('k')).toBe(false);
+    expect(s.hash.startsWith('#/studio?')).toBe(true);
+    expect(sHashParams.get('k')).toBe('host-key');
+
+    expect(g.searchParams.get('e')).toBe('abc123');
+    expect(g.searchParams.has('g')).toBe(false);
+    expect(g.searchParams.has('k')).toBe(false);
+    expect(g.hash.startsWith('#/guest?')).toBe(true);
+    expect(gHashParams.get('g')).toBe('guest-key');
+  });
+
+  it('parses fragment-held capability keys while keeping legacy query links valid', () => {
+    history.replaceState(null, '', '/live.html?e=abc123#/studio?k=host-key');
+    expect(parseRoute()).toEqual({ view: 'studio', id: 'abc123', k: 'host-key' });
+
+    history.replaceState(null, '', '/live.html?e=abc123#/summary?k=host-key');
+    expect(parseRoute()).toEqual({ view: 'summary', id: 'abc123', k: 'host-key' });
+
+    history.replaceState(null, '', '/live.html?e=abc123#/guest?g=guest-key');
+    expect(parseRoute()).toEqual({ view: 'guest', id: 'abc123', g: 'guest-key' });
+
+    history.replaceState(null, '', '/live.html?e=abc123&k=legacy-host-key#/summary');
+    expect(parseRoute()).toEqual({ view: 'summary', id: 'abc123', k: 'legacy-host-key' });
+
+    history.replaceState(null, '', '/live.html?e=abc123&g=legacy-guest-key');
+    expect(parseRoute()).toEqual({ view: 'guest', id: 'abc123', g: 'legacy-guest-key' });
   });
 
   it('keeps canvas dimensions even and orientation-faithful (regression)', () => {

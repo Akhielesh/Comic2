@@ -1,7 +1,8 @@
 // Stream Studio — app shell. Owns the URL (query = event identity, hash =
 // screen), the appearance (theme / accent), the collapsible side rail and
 // toasts. Screen contract:
-//   ?e=ID&k=KEY            → Host Studio        (#/summary → recap)
+//   ?e=ID#/studio?k=KEY    → Host Studio        (legacy ?e=ID&k=KEY accepted)
+//   ?e=ID#/summary?k=KEY   → private recap
 //   ?e=ID                  → invite page or watch page (meta decides)
 //   (no params)            → dashboard, #/create, #/settings, #/summary/ID
 import React, { useEffect, useMemo, useState } from 'react';
@@ -23,19 +24,26 @@ import { Icon } from './ui/icons';
 import { StreamStudioLogo } from './ui/logo';
 import { Avatar, cx, useToasts, type PushToast } from './ui/primitives';
 
-type Route =
+export type Route =
   | { view: 'dashboard' | 'create' | 'settings' }
   | { view: 'studio' | 'summary'; id: string; k: string }
   | { view: 'guest'; id: string; g: string }
   | { view: 'summary-lookup'; id: string }
   | { view: 'viewer' | 'event' | 'event-auto'; id: string };
 
-function parseRoute(): Route {
+export function parseHashRoute(rawHash: string): { screen: string; params: URLSearchParams } {
+  const clean = rawHash.replace(/^#\/?/, '');
+  const q = clean.indexOf('?');
+  if (q === -1) return { screen: clean, params: new URLSearchParams() };
+  return { screen: clean.slice(0, q), params: new URLSearchParams(clean.slice(q + 1)) };
+}
+
+export function parseRoute(): Route {
   const params = new URLSearchParams(location.search);
+  const { screen: hash, params: hashParams } = parseHashRoute(location.hash);
   const e = params.get('e');
-  const k = params.get('k');
-  const g = params.get('g');
-  const hash = location.hash.replace(/^#\/?/, '');
+  const k = params.get('k') ?? hashParams.get('k');
+  const g = params.get('g') ?? hashParams.get('g');
   if (e && k) {
     if (hash === 'summary') return { view: 'summary', id: e, k };
     return { view: 'studio', id: e, k };
@@ -138,10 +146,12 @@ export function LiveApp() {
       dashboard: () => navigate('', ''),
       create: () => navigate('', '#/create'),
       settings: () => navigate('', '#/settings'),
-      studio: (id, k) => navigate(`?e=${id}&k=${encodeURIComponent(k)}`, ''),
-      viewer: (id) => navigate(`?e=${id}`, '#/watch'),
-      event: (id) => navigate(`?e=${id}`, '#/event'),
-      summary: (id, key) => (key ? navigate(`?e=${id}&k=${encodeURIComponent(key)}`, '#/summary') : navigate('', `#/summary/${id}`)),
+      studio: (id, k) => navigate(`?e=${encodeURIComponent(id)}`, `#/studio?k=${encodeURIComponent(k)}`),
+      viewer: (id) => navigate(`?e=${encodeURIComponent(id)}`, '#/watch'),
+      event: (id) => navigate(`?e=${encodeURIComponent(id)}`, '#/event'),
+      summary: (id, key) => (key
+        ? navigate(`?e=${encodeURIComponent(id)}`, `#/summary?k=${encodeURIComponent(key)}`)
+        : navigate('', `#/summary/${id}`)),
     };
   }, []);
 

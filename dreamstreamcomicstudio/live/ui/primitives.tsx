@@ -274,7 +274,10 @@ export function Field({ label, hint, children, className }: { label?: string; hi
 }
 
 /* ---------------------------------------------------------------- LinkBox */
-export function redactUrlSearchParams(url: string, paramNames: string[] = ['k']): string {
+// Redacts capability params in both legacy query links (`?k=` / `?g=`) and
+// the safer fragment-held links (`#/studio?k=` / `#/guest?g=`). The fragment is
+// never sent to servers, but the visible UI still must not reveal raw bearer keys.
+export function redactUrlSearchParams(url: string, paramNames: string[] = ['k', 'g']): string {
   if (!paramNames.length) return url;
   const escaped = paramNames.map((param) => param.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   const sensitiveParam = new RegExp(`([?&](?:${escaped.join('|')})=)[^&#]*`, 'gi');
