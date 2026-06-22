@@ -6,7 +6,7 @@ import { addMyEvent, hydrateMyEvents, listMyRecordings, type MyEvent } from '../
 import { fetchStudioAccess, pushEventToCloud, syncMyEvents, type StudioAccess } from '../sync';
 import { fmtBytes, fmtDuration } from '../metrics';
 import type { Nav } from '../nav';
-import { viewerUrl } from '../nav';
+import { parsePrivateStudioLink, viewerUrl } from '../nav';
 import { loadPrefs } from '../prefs';
 import { coverGradient } from '../theme';
 import { Icon } from '../ui/icons';
@@ -157,22 +157,20 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
   /** Hosted from another device without signing in? Paste the private studio
    *  link and the event (with its logs, recap and recordings) appears here. */
   const importByLink = async () => {
-    const raw = window.prompt('Paste your private studio link (the one with ?e=…&k=…):');
+    const raw = window.prompt('Paste your private studio link (new format ?e=…#/studio?k=… or legacy ?e=…&k=…):');
     if (!raw) return;
-    try {
-      const url = new URL(raw.trim());
-      const id = url.searchParams.get('e');
-      const key = url.searchParams.get('k');
-      if (!id || !key) throw new Error('missing params');
-      const mine: MyEvent = { id, hostKey: key, title: 'Imported stream', createdAt: Date.now(), scheduledAt: null };
-      addMyEvent(mine);
-      void pushEventToCloud(mine);
-      const evs = await hydrateMyEvents();
-      setEvents(evs);
-      push('Event imported — recap and logs are available now', { icon: 'check' });
-    } catch {
-      push('That does not look like a studio link', { icon: 'alert' });
+    const parsed = parsePrivateStudioLink(raw);
+    if (!parsed) {
+      push('That does not look like a private studio link', { icon: 'alert' });
+      return;
     }
+
+    const mine: MyEvent = { id: parsed.id, hostKey: parsed.hostKey, title: 'Imported stream', createdAt: Date.now(), scheduledAt: null };
+    addMyEvent(mine);
+    void pushEventToCloud(mine);
+    const evs = await hydrateMyEvents();
+    setEvents(evs);
+    push('Event imported — recap and logs are available now', { icon: 'check' });
   };
 
   const tabs = [

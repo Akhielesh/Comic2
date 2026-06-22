@@ -231,7 +231,7 @@ describe('schedule helpers', async () => {
 
 describe('meeting scenes & guest links (v5)', async () => {
   const { SCENES, MULTI_SCENES, fitCanvasToSource } = await import('./studio/compositor');
-  const { guestUrl, studioUrl, viewerUrl } = await import('./nav');
+  const { guestUrl, parsePrivateStudioLink, studioUrl, viewerUrl } = await import('./nav');
   const { parseRoute } = await import('./LiveApp');
   const { MAX_GUESTS } = await import('./protocol');
 
@@ -273,6 +273,26 @@ describe('meeting scenes & guest links (v5)', async () => {
     expect(g.searchParams.has('k')).toBe(false);
     expect(g.hash.startsWith('#/guest?')).toBe(true);
     expect(gHashParams.get('g')).toBe('guest-key');
+  });
+
+  it('imports copied private studio links when host keys live in the fragment', () => {
+    expect(parsePrivateStudioLink('https://comic2.pages.dev/live.html?e=abc123#/studio?k=host-key')).toEqual({
+      id: 'abc123',
+      hostKey: 'host-key',
+    });
+    expect(parsePrivateStudioLink('https://comic2.pages.dev/live.html?e=abc123#/summary?k=host-key')).toEqual({
+      id: 'abc123',
+      hostKey: 'host-key',
+    });
+    expect(parsePrivateStudioLink('https://comic2.pages.dev/live.html?e=abc123&k=legacy-host-key#/studio')).toEqual({
+      id: 'abc123',
+      hostKey: 'legacy-host-key',
+    });
+    expect(parsePrivateStudioLink('/live.html?e=abc123#/studio?k=host-key', 'https://comic2.pages.dev/live.html')).toEqual({
+      id: 'abc123',
+      hostKey: 'host-key',
+    });
+    expect(parsePrivateStudioLink('https://comic2.pages.dev/live.html?e=abc123')).toBeNull();
   });
 
   it('parses fragment-held capability keys while keeping legacy query links valid', () => {
