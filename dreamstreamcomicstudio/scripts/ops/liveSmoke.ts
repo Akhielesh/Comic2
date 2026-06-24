@@ -1,4 +1,4 @@
-export type SmokeTargetKind = 'frontend' | 'api' | 'live-api' | 'live-bundle';
+export type SmokeTargetKind = 'frontend' | 'api' | 'live-api' | 'live-bundle' | 'cors-preflight';
 export type SmokeScope = 'all' | 'temporary-launch';
 export type SmokeTargetScope = Exclude<SmokeScope, 'all'>;
 
@@ -9,6 +9,9 @@ export type SmokeTargetScope = Exclude<SmokeScope, 'all'>;
  * still pass — so the 'live-bundle' target asserts the string is actually in the bundle.
  */
 export const EXPECTED_LIVE_WORKER_BASE = 'dreamstream-live.akhieleshsrirangam.workers.dev';
+const TEMPORARY_LAUNCH_ORIGIN = 'https://comic2.pages.dev';
+const LIVE_WORKER_PREFLIGHT_METHOD = 'POST';
+const LIVE_WORKER_PREFLIGHT_HEADERS = 'content-type,x-host-key';
 
 export type SmokeTarget = {
   name: string;
@@ -46,6 +49,7 @@ export const DEFAULT_SMOKE_TARGETS: SmokeTarget[] = [
   { name: 'stream studio', url: 'https://comic2.pages.dev/live.html', kind: 'frontend', scopes: ['temporary-launch'] },
   { name: 'stream studio bundle', url: 'https://comic2.pages.dev/live.html', kind: 'live-bundle', scopes: ['temporary-launch'] },
   { name: 'fallback live worker', url: 'https://dreamstream-live.akhieleshsrirangam.workers.dev/api/events/smokeprobe', kind: 'live-api', scopes: ['temporary-launch'] },
+  { name: 'fallback live worker CORS preflight', url: 'https://dreamstream-live.akhieleshsrirangam.workers.dev/api/events', kind: 'cors-preflight', scopes: ['temporary-launch'] },
   { name: 'custom-domain live worker', url: 'https://dreamstreamstudio.ai/live-api/api/events/smokeprobe', kind: 'live-api' },
   { name: 'railway api', url: 'https://comic2-production.up.railway.app/api/health', kind: 'api', scopes: ['temporary-launch'] }
 ];
@@ -180,6 +184,39 @@ const classifyLiveApi = (response: Response, body: string): Pick<SmokeResult, 's
   return { status: 'fail', detail: `unexpected live-worker HTTP ${response.status}` };
 };
 
+const headerIncludesToken = (response: Response, headerName: string, token: string): boolean => {
+  const value = response.headers.get(headerName)?.toLowerCase() ?? '';
+  const normalizedToken = token.toLowerCase();
+  return value.split(',').map((part) => part.trim()).some((part) => part === '*' || part === normalizedToken);
+};
+
+const classifyCorsPreflight = (response: Response, body: string): Pick<SmokeResult, 'status' | 'detail'> => {
+  if (detectCloudflareChallenge(response, body)) {
+    return { status: 'fail', detail: 'Cloudflare challenge/interstitial returned instead of live-worker CORS preflight' };
+  }
+
+  if (!response.ok) {
+    return { status: 'fail', detail: `CORS preflight returned unexpected HTTP ${response.status}` };
+  }
+
+  const allowOrigin = response.headers.get('access-control-allow-origin') ?? '';
+  if (allowOrigin !== '*' && allowOrigin !== TEMPORARY_LAUNCH_ORIGIN) {
+    return { status: 'fail', detail: `missing Access-Control-Allow-Origin for ${TEMPORARY_LAUNCH_ORIGIN}` };
+  }
+
+  if (!headerIncludesToken(response, 'access-control-allow-methods', LIVE_WORKER_PREFLIGHT_METHOD)) {
+    return { status: 'fail', detail: `missing Access-Control-Allow-Methods ${LIVE_WORKER_PREFLIGHT_METHOD}` };
+  }
+
+  for (const header of LIVE_WORKER_PREFLIGHT_HEADERS.split(',')) {
+    if (!headerIncludesToken(response, 'access-control-allow-headers', header)) {
+      return { status: 'fail', detail: `missing Access-Control-Allow-Headers ${header}` };
+    }
+  }
+
+  return { status: 'pass', detail: `CORS preflight ok for ${TEMPORARY_LAUNCH_ORIGIN}` };
+};
+
 export function classifySmokeResponse(
   target: SmokeTarget,
   response: Response,
@@ -190,7 +227,9 @@ export function classifySmokeResponse(
     ? classifyApi(response, body)
     : target.kind === 'live-api'
       ? classifyLiveApi(response, body)
-      : classifyFrontend(response, body);
+      : target.kind === 'cors-preflight'
+        ? classifyCorsPreflight(response, body)
+        : classifyFrontend(response, body);
   return {
     target,
     status: classified.status,
@@ -204,24 +243,31 @@ const fetchUrlWithTimeout = async (
   fetcher: SmokeFetcher,
   url: string,
   timeoutMs: number,
-  headers?: Record<string, string>
+  headers?: Record<string, string>,
+  method = 'GET'
 ): Promise<Response> => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetcher(url, { signal: controller.signal, redirect: 'follow', headers });
+    return await fetcher(url, { method, signal: controller.signal, redirect: 'follow', headers });
   } finally {
     clearTimeout(timeout);
   }
 };
 
 const fetchWithTimeout = (fetcher: SmokeFetcher, target: SmokeTarget, timeoutMs: number): Promise<Response> =>
-  fetchUrlWithTimeout(
-    fetcher,
-    target.url,
-    timeoutMs,
-    target.kind === 'frontend' ? undefined : { accept: 'application/json' }
-  );
+  target.kind === 'cors-preflight'
+    ? fetchUrlWithTimeout(fetcher, target.url, timeoutMs, {
+      origin: TEMPORARY_LAUNCH_ORIGIN,
+      'access-control-request-method': LIVE_WORKER_PREFLIGHT_METHOD,
+      'access-control-request-headers': LIVE_WORKER_PREFLIGHT_HEADERS
+    }, 'OPTIONS')
+    : fetchUrlWithTimeout(
+      fetcher,
+      target.url,
+      timeoutMs,
+      target.kind === 'frontend' ? undefined : { accept: 'application/json' }
+    );
 
 /**
  * Find every `/assets/live-*.js` bundle path referenced by the Stream Studio shell

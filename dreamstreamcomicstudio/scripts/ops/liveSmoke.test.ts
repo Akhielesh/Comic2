@@ -18,6 +18,13 @@ const LIVE_BUNDLE_TARGET: SmokeTarget = {
   scopes: ['temporary-launch']
 };
 
+const CORS_PREFLIGHT_TARGET: SmokeTarget = {
+  name: 'fallback live worker CORS preflight',
+  url: 'https://dreamstream-live.akhieleshsrirangam.workers.dev/api/events',
+  kind: 'cors-preflight',
+  scopes: ['temporary-launch']
+};
+
 const htmlResponse = (body: string, init: ResponseInit = {}) =>
   new Response(body, {
     status: 200,
@@ -47,6 +54,7 @@ describe('live smoke target scopes', () => {
       'stream studio',
       'stream studio bundle',
       'fallback live worker',
+      'fallback live worker CORS preflight',
       'railway api'
     ]);
     expect(targets.some((target) => target.url.includes('dreamstreamstudio.ai'))).toBe(false);
@@ -158,6 +166,49 @@ describe('live smoke classification', () => {
 
     expect(result.status).toBe('fail');
     expect(result.detail).toContain('workers.dev host is not deployed');
+  });
+
+  it('passes the CORS preflight target only when the live worker allows browser event creation from Pages', async () => {
+    const results = await runLiveSmoke({
+      targets: [CORS_PREFLIGHT_TARGET],
+      timeoutMs: 100,
+      fetcher: async (url, init) => {
+        expect(String(url)).toBe(CORS_PREFLIGHT_TARGET.url);
+        expect(init?.method).toBe('OPTIONS');
+        const headers = new Headers(init?.headers);
+        expect(headers.get('origin')).toBe('https://comic2.pages.dev');
+        expect(headers.get('access-control-request-method')).toBe('POST');
+        expect(headers.get('access-control-request-headers')).toBe('content-type,x-host-key');
+        return new Response(null, {
+          status: 204,
+          headers: {
+            'access-control-allow-origin': 'https://comic2.pages.dev',
+            'access-control-allow-methods': 'GET,POST,PUT,OPTIONS',
+            'access-control-allow-headers': 'content-type,x-host-key'
+          }
+        });
+      }
+    });
+
+    expect(results[0].status).toBe('pass');
+    expect(results[0].detail).toContain('CORS preflight ok');
+  });
+
+  it('fails the CORS preflight target when the live worker omits the Pages origin', async () => {
+    const results = await runLiveSmoke({
+      targets: [CORS_PREFLIGHT_TARGET],
+      timeoutMs: 100,
+      fetcher: async () => new Response(null, {
+        status: 204,
+        headers: {
+          'access-control-allow-methods': 'GET,POST,PUT,OPTIONS',
+          'access-control-allow-headers': 'content-type,x-host-key'
+        }
+      })
+    });
+
+    expect(results[0].status).toBe('fail');
+    expect(results[0].detail).toContain('missing Access-Control-Allow-Origin');
   });
 
   it('passes the live-bundle target when a discovered bundle references the worker base', async () => {
