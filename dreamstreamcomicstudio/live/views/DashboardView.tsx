@@ -92,14 +92,26 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
   const [loaded, setLoaded] = useState(false);
   const [access, setAccess] = useState<StudioAccess | null>(null);
   const [backendProbe, setBackendProbe] = useState<LiveWorkerProbeResult | null>(null);
+  const [checkingBackend, setCheckingBackend] = useState(false);
   const prefs = useMemo(loadPrefs, []);
   const recordings = useMemo(listMyRecordings, []);
+
+  const refreshBackendProbe = async (): Promise<LiveWorkerProbeResult> => {
+    setCheckingBackend(true);
+    const result = await probeLiveWorker();
+    setBackendProbe(result);
+    setCheckingBackend(false);
+    return result;
+  };
 
   useEffect(() => {
     let cancelled = false;
 
+    setCheckingBackend(true);
     void probeLiveWorker().then((result) => {
       if (!cancelled) setBackendProbe(result);
+    }).finally(() => {
+      if (!cancelled) setCheckingBackend(false);
     });
 
     (async () => {
@@ -213,11 +225,14 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
       </div>
 
       {backendProbe && !backendProbe.ok && (
-        <div className="banner warn" role="status" style={{ marginBottom: 18 }}>
+        <div className="banner warn" role="status" style={{ marginBottom: 18, alignItems: 'center' }}>
           <Icon name="alert" size={15} />
-          <span>
+          <span style={{ flex: 1 }}>
             <b>Streaming backend check failed.</b> {backendProbe.detail}. Creating a new event is blocked on this deployment until the live-worker route or <code>VITE_LIVE_WORKER_URL</code> returns worker JSON.
           </span>
+          <Btn variant="soft" size="sm" icon="refresh" onClick={() => void refreshBackendProbe()} disabled={checkingBackend}>
+            {checkingBackend ? 'Checking…' : 'Retry check'}
+          </Btn>
         </div>
       )}
 
