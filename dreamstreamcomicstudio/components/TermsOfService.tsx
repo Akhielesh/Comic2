@@ -8,9 +8,9 @@ export const TermsOfService: React.FC<{ onBack: () => void }> = ({ onBack }) => 
                     <h1 className="font-display text-3xl text-black">Terms of Service</h1>
                     <button onClick={onBack} className="text-xs font-bold hover:underline">Back</button>
                 </div>
-                <p className="font-bold text-sm text-slate-500 uppercase">Effective Date: February 11, 2026</p>
+                <p className="font-bold text-sm text-slate-500 uppercase">Effective Date: June 24, 2026</p>
                 <div className="bg-white p-8 border-2 border-slate-200 rounded-xl shadow-sm">
-                    <p>These Terms of Service ("Terms") govern your use of DreamStream Studio. By accessing or using the service, you agree to these Terms.</p>
+                    <p>These Terms of Service ("Terms") govern your use of DreamStream Studio, including Stream Studio live events and AI-assisted creative workflows. By accessing or using the service, you agree to these Terms.</p>
 
                     <h3>1. Eligibility and Acceptance</h3>
                     <ul className="list-disc pl-5 space-y-2">
@@ -44,56 +44,58 @@ export const TermsOfService: React.FC<{ onBack: () => void }> = ({ onBack }) => 
                         <li>Provider availability, pricing, latency, and behavior may change outside our control.</li>
                     </ul>
 
-                    <h3>6. Plans, Usage Limits, and Payments</h3>
+                    <h3>6. Stream Studio Live Events</h3>
                     <ul className="list-disc pl-5 space-y-2">
-                        <li>Usage is governed by Comic Tokens (CT) with plan-based monthly allocations and daily guardrails.</li>
-                        <li>DreamStream displays estimated CT before generation and settled CT after generation where supported.</li>
-                        <li>You are responsible for charges from third-party providers tied to keys you supply.</li>
-                        <li>Direct credit purchases and subscriptions are processed through Stripe checkout/payment flows.</li>
-                        <li>Subscription cancellations are end-of-period by default: when you cancel, your paid plan remains active until the current billing period ends.</li>
-                        <li>No prorated automatic refund is issued by default when cancellation is scheduled at period end, unless required by law or an explicit published policy.</li>
-                        <li>Purchased credit packs remain in your account after plan cancellation unless an expiry policy is explicitly published.</li>
-                        <li>Usage beyond available credits may require a payment method on file and may be subject to overage caps.</li>
-                        <li>By enabling overage usage, you authorize off-session charges for usage that exceeds included and purchased credits, subject to your configured overage cap.</li>
-                        <li>Refund handling follows applicable law and any posted billing policy.</li>
+                        <li>Stream Studio is intended for private creator sessions, workshops, classes, and small-to-medium live events; it is not a high-scale webinar, gaming, or emergency broadcast service.</li>
+                        <li>Private studio, guest, admin, or recap links are bearer capability links: anyone with one may gain control or private access. Keep private control links off public pages and share viewer links instead.</li>
+                        <li>During the controlled beta, browser support, viewer caps, guest seats, recording, and replay may change as reliability work continues.</li>
+                        <li>Recording and replay availability are not guaranteed; local browser permissions, network quality, codecs, retention windows, or storage errors can affect capture and playback.</li>
                     </ul>
 
-                    <h3>7. Acceptable Use Restrictions</h3>
+                    <h3>7. Plans, Usage Limits, and Payments</h3>
+                    <ul className="list-disc pl-5 space-y-2">
+                        <li>Free, beta, invite-only, or account-gated access may be used while DreamStream validates Stream Studio reliability and launch readiness.</li>
+                        <li>Subscriptions, paid plans, credit packs, or overage billing are not active unless DreamStream presents an explicit checkout/payment flow and published pricing terms for your account.</li>
+                        <li>If paid billing is enabled later, direct credit purchases and subscriptions are processed through Stripe checkout/payment flows, and any cancellation, refund, credit, or overage rules shown at checkout or in a billing policy will apply.</li>
+                        <li>You are responsible for charges from third-party providers tied to keys you supply.</li>
+                    </ul>
+
+                    <h3>8. Acceptable Use Restrictions</h3>
                     <p>You may not use DreamStream for unlawful, abusive, deceptive, infringing, or harmful activity, including attempts to bypass safeguards, attack infrastructure, scrape or exfiltrate data improperly, or generate/distribute prohibited content.</p>
 
-                    <h3>8. Enforcement and Suspension</h3>
+                    <h3>9. Enforcement and Suspension</h3>
                     <p>We may monitor for abuse and may remove content, restrict features, suspend, or terminate access for Terms violations, legal risk, security concerns, or platform integrity needs.</p>
 
-                    <h3>9. Service Availability and Changes</h3>
+                    <h3>10. Service Availability and Changes</h3>
                     <p>Features, models, integrations, and limits may be added, removed, or changed at any time. We do not guarantee uninterrupted availability.</p>
 
-                    <h3>10. Disclaimers</h3>
+                    <h3>11. Disclaimers</h3>
                     <ul className="list-disc pl-5 space-y-2">
                         <li>The service is provided "as is" and "as available".</li>
                         <li>AI outputs may be inaccurate, incomplete, offensive, or infringing; you are responsible for review before use or publication.</li>
                         <li>We do not guarantee uninterrupted service, error-free output, or legal suitability for your specific use case.</li>
                     </ul>
 
-                    <h3>11. Liability Limits</h3>
+                    <h3>12. Liability Limits</h3>
                     <p>To the maximum extent permitted by law, DreamStream is not liable for indirect, incidental, special, consequential, or punitive damages, or for loss of profits, revenue, data, or goodwill arising from service use.</p>
 
-                    <h3>12. Indemnity</h3>
+                    <h3>13. Indemnity</h3>
                     <p>You agree to defend and indemnify DreamStream from claims arising out of your content, misuse, or violation of these Terms.</p>
 
-                    <h3>13. Termination</h3>
+                    <h3>14. Termination</h3>
                     <p>You may stop using the service at any time. We may terminate or suspend access in accordance with these Terms.</p>
 
-                    <h3>14. Changes to Terms</h3>
+                    <h3>15. Changes to Terms</h3>
                     <p>We may update these Terms. Continued use after updates means you accept the revised Terms.</p>
 
-                    <h3>15. Contact</h3>
+                    <h3>16. Contact</h3>
                     <p>For legal or terms-related questions, use the in-app support/contact flow in Account Settings.</p>
 
                     <h3>Terms FAQs</h3>
                     <ul className="list-disc pl-5 space-y-2">
                         <li><strong>Can I use generated comics commercially?</strong> Often yes, but you must confirm provider terms, rights clearance, and local law for each use case.</li>
                         <li><strong>Who pays provider API charges for BYOK?</strong> You do. Keys you provide are your responsibility, including provider-side charges.</li>
-                        <li><strong>What happens when limits are reached?</strong> You may be prompted to upgrade, add credits, or wait for reset windows.</li>
+                        <li><strong>What happens when limits are reached?</strong> You may be asked to wait, request access, reduce usage, or use a paid option only if DreamStream has presented published pricing and checkout for your account.</li>
                         <li><strong>Can DreamStream remove content or suspend accounts?</strong> Yes, for policy/legal/security reasons or Terms violations.</li>
                         <li><strong>Are AI outputs guaranteed to be original or accurate?</strong> No. You must review output for quality, rights, and compliance before publishing.</li>
                         <li><strong>Will features always stay the same?</strong> No. Integrations, models, and limits may change over time.</li>

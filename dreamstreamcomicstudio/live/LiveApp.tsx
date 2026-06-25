@@ -21,6 +21,7 @@ import { StudioView } from './views/StudioView';
 import { SummaryView } from './views/SummaryView';
 import { ViewerView } from './views/ViewerView';
 import { Icon } from './ui/icons';
+import { LiveLegalLinks } from './ui/legalLinks';
 import { StreamStudioLogo } from './ui/logo';
 import { Avatar, cx, useToasts, type PushToast } from './ui/primitives';
 
@@ -234,6 +235,7 @@ export function LiveApp() {
               </div>
             )}
             <hr className="divider" />
+            {railOpen && <LiveLegalLinks />}
             <button className="rail-user" onClick={() => nav.settings()} aria-label="Account & sync settings">
               <Avatar name={prefs.hostName || 'You'} size={32} />
               <div className="ru-txt">

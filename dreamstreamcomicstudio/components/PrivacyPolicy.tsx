@@ -8,19 +8,20 @@ export const PrivacyPolicy: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                     <h1 className="font-display text-3xl text-black">Privacy Policy</h1>
                     <button onClick={onBack} className="text-xs font-bold hover:underline">Back</button>
                 </div>
-                <p className="font-bold text-sm text-slate-500 uppercase">Last Updated: February 11, 2026</p>
+                <p className="font-bold text-sm text-slate-500 uppercase">Last Updated: June 24, 2026</p>
                 <div className="bg-white p-8 border-2 border-slate-200 rounded-xl shadow-sm">
-                    <p>DreamStream Studio ("DreamStream", "we", "our", or "us") provides tools for creating and sharing AI-assisted comics. This Privacy Policy explains what data we process, why we process it, how it moves through our APIs and providers, and what controls you have.</p>
+                    <p>DreamStream Studio ("DreamStream", "we", "our", or "us") provides tools for private Stream Studio live events and AI-assisted creative workflows. This Privacy Policy explains what data we process, why we process it, how it moves through our APIs and providers, and what controls you have.</p>
 
                     <h3>1. Information We Collect</h3>
                     <ul className="list-disc pl-5 space-y-2">
                         <li><strong>Account and Profile Data:</strong> Email/login data from Supabase Auth, plus profile fields such as username, avatar, bio, and website.</li>
                         <li><strong>Consent Data:</strong> Terms acceptance and optional marketing consent values provided during signup.</li>
                         <li><strong>Creative and Project Data:</strong> Scripts, prompts, scene breakdowns, continuity data, generated images, project state, reviews, and comments.</li>
+                        <li><strong>Stream Studio Live-Event Data:</strong> Event titles, schedules, host and viewer display names, RSVP/lobby status, chat messages, reactions, moderation actions, stream status, recording metadata, replay segment references, and private host/guest capability-link state needed to run the event.</li>
                         <li><strong>Community Data:</strong> Public profile data, follows, likes, views, notifications, and other social interactions tied to your account.</li>
                         <li><strong>Support Data:</strong> Contact/support messages you submit (for example, email and message body).</li>
                         <li><strong>Operational and Debug Data:</strong> Token ledger events, pricing snapshot metadata, provider/model timing metrics, error logs, and stored generation artifacts (which can include prompts and model responses).</li>
-                        <li><strong>Billing Lifecycle Data:</strong> Subscription status, cancel-at-period-end flags, billing-period timestamps, webhook processing records, and overage capture metadata.</li>
+                        <li><strong>Billing Lifecycle Data:</strong> If paid billing is enabled for your account, subscription status, cancel-at-period-end flags, billing-period timestamps, webhook processing records, and overage capture metadata.</li>
                         <li><strong>Device-Stored Data:</strong> Browser local storage and IndexedDB records used for saved keys, guest projects, test runs/images, reader state, and learning progress.</li>
                     </ul>
 
@@ -28,6 +29,7 @@ export const PrivacyPolicy: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                     <ul className="list-disc pl-5 space-y-2">
                         <li>To authenticate users, manage accounts, and provide profile/community features.</li>
                         <li>To run text/image/vision generation workflows you request and return results.</li>
+                        <li>To operate Stream Studio live sessions, including event setup, viewer admission, chat/reactions, guest access, stream state, recordings, and replay windows.</li>
                         <li>To store projects, images, artifacts, and support interactions.</li>
                         <li>To enforce plan/usage limits, fraud-abuse controls, and operational safeguards.</li>
                         <li>To monitor reliability, troubleshoot issues, and improve core product behavior.</li>
@@ -38,6 +40,7 @@ export const PrivacyPolicy: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                     <p>When you use generation features, relevant request data (for example prompts, selected model, and any reference images you submit) may be sent to model providers to produce output.</p>
                     <ul className="list-disc pl-5 space-y-2">
                         <li><strong>Supabase:</strong> Authentication, database tables, and cloud storage.</li>
+                        <li><strong>Cloudflare Workers, Durable Objects, and R2:</strong> Stream Studio live-event routing, room state, chat/lobby state, replay segment storage, and optional recording storage/retention.</li>
                         <li><strong>Google Gemini APIs:</strong> Text, image, and vision processing.</li>
                         <li><strong>Pixazo Flux endpoint:</strong> Flux image generation requests.</li>
                         <li><strong>Stripe:</strong> Payment processing and tokenized payment-method storage for subscriptions, credit packs, and overage flows.</li>
@@ -56,12 +59,13 @@ export const PrivacyPolicy: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 
                     <h3>5. Public vs Private Content</h3>
                     <p>Projects are private unless you mark them public. Public projects, profile identifiers, comments, and engagement data (likes/views/follows) can be visible to other users.</p>
+                    <p>Stream Studio viewer links are intended for people with the link. Private studio, guest, and recap links may grant control or private access; treat them like passwords and share them only with trusted collaborators.</p>
 
                     <h3>6. Cookies, Local Storage, and Device Data</h3>
                     <p>The current app code relies on browser storage (localStorage/IndexedDB) for key settings, local caches, guest-mode data, and session-related client state. The codebase does not include third-party advertising trackers.</p>
 
                     <h3>7. Retention and Deletion</h3>
-                    <p>We keep account and project data while needed to operate the service and satisfy legal/security obligations. You can delete projects and some user content from the app; account deletion/support requests may be required for full removal workflows. Certain logs may be retained where required for abuse prevention, accounting, or legal compliance.</p>
+                    <p>We keep account and project data while needed to operate the service and satisfy legal/security obligations. You can delete projects and some user content from the app; account deletion/support requests may be required for full removal workflows. Stream Studio replay segments are designed to expire after about 24 hours, and server-side recordings are designed to expire after about 7 days unless a newer product flow explicitly states otherwise. Certain logs may be retained where required for abuse prevention, accounting, or legal compliance.</p>
 
                     <h3>8. Children</h3>
                     <p>The service is not intended for children under applicable legal age requirements. If you believe a child submitted personal data, contact support for review/removal.</p>
@@ -81,7 +85,7 @@ export const PrivacyPolicy: React.FC<{ onBack: () => void }> = ({ onBack }) => {
                         <li><strong>Do you train your own model on my private projects?</strong> Not by default in this product flow. Third-party model providers may process requests under their own terms.</li>
                         <li><strong>What is sent to AI providers?</strong> The request data needed to fulfill your action, such as prompts, selected model context, and any reference images you submit.</li>
                         <li><strong>Where are my API keys stored?</strong> Keys can be stored in browser local storage; Flux keys may also be encrypted and synced to your account record for convenience.</li>
-                        <li><strong>What billing data is stored?</strong> DreamStream stores wallet balances, token usage events, subscription lifecycle state (including cancellation scheduling), and Stripe payment-method references required for billing operations.</li>
+                        <li><strong>What billing data is stored?</strong> If paid billing is enabled for your account, DreamStream may store wallet balances, token usage events, subscription lifecycle state, and Stripe payment-method references required for billing operations.</li>
                         <li><strong>Can other users see my drafts?</strong> No, unless you intentionally make a project public.</li>
                         <li><strong>What data stays on my device?</strong> Local caches including key settings, guest projects, test runs/images, and reader/learning state can be stored in localStorage/IndexedDB.</li>
                         <li><strong>How do I delete my data?</strong> Delete content in-app where available and use support contact for account-level/privacy deletion requests.</li>

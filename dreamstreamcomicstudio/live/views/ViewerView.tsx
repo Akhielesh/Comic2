@@ -15,6 +15,7 @@ import { coverGradient } from '../theme';
 import { BrbSlate } from '../components/scenes';
 import { ChatRail, ReactBar } from '../components/rails';
 import { Icon } from '../ui/icons';
+import { LiveLegalLinks } from '../ui/legalLinks';
 import { StreamStudioLogo } from '../ui/logo';
 import {
   Avatar, Btn, FloatLayer, Pill, cx, useFloatingEmoji, useMediaQuery, type PushToast,
@@ -393,6 +394,7 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
                 No account, no sign-up — just a name. Leave anytime.
                 {meta?.access === 'approval' ? ' The host approves who gets in.' : ''}
               </div>
+              <LiveLegalLinks compact className="vj-legal" />
             </div>
           </div>
         </div>
@@ -636,6 +638,7 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
       <div className="viewer-topbar">
         <span className="rail-logo" style={{ cursor: 'default' }}><StreamStudioLogo /></span>
         <span className="spacer" />
+        <LiveLegalLinks compact />
         {status === 'live' && <Pill tone="live" dot pulse>LIVE</Pill>}
       </div>
       <div className={cx('viewer-desktop', immersive && 'immersive')}>
