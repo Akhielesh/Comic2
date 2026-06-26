@@ -21,7 +21,7 @@ import { EventRoom } from './eventRoom';
 
 export { EventRoom };
 
-interface Env {
+export interface Env {
   EVENT_ROOM: DurableObjectNamespace;
   LIVE_BUCKET: R2Bucket;
   ALLOWED_ORIGINS: string;
@@ -236,6 +236,14 @@ export default {
         const hostKey = req.headers.get('x-host-key') ?? '';
         if (!Number.isFinite(seq) || seq <= 0) return withCors(json({ error: 'bad seq' }, 400), cors);
 
+        // Cost/security guardrail: reject forged segment uploads before reading
+        // their body or writing bytes to R2. The ingest call below still records
+        // the segment after storage succeeds, but this cheap DO auth gate keeps a
+        // bad host key from turning public event IDs into R2 write amplification.
+        if (!(await authHost(env, id, hostKey))) {
+          return withCors(json({ error: 'forbidden' }, 403), cors);
+        }
+
         const bytes = await req.arrayBuffer();
         if (bytes.byteLength === 0 || bytes.byteLength > MAX_SEGMENT_BYTES) {
           return withCors(json({ error: 'segment size out of bounds' }, 413), cors);
@@ -250,7 +258,7 @@ export default {
           headers: { 'content-type': 'application/json', 'x-host-key': hostKey },
         });
         if (!res.ok) {
-          ctx.waitUntil(env.LIVE_BUCKET.delete(key)); // unauthorized upload — don't keep the bytes
+          ctx.waitUntil(env.LIVE_BUCKET.delete(key)); // defensive cleanup if the room rejects after storage
           return withCors(res, cors);
         }
         return withCors(json({ ok: true, seq }), cors);
