@@ -49,12 +49,24 @@ function parseJsonBody(body: string): unknown {
   }
 }
 
+function bodyLooksLikeWorkersDevMissingScript(body: string, json: unknown): boolean {
+  if (json && typeof json === 'object') {
+    const code = String((json as { error_code?: unknown }).error_code ?? '');
+    const name = String((json as { error_name?: unknown }).error_name ?? '').toLowerCase();
+    if (code === '1042' || name.includes('workers_dev_script_not_found')) return true;
+  }
+
+  const lower = body.toLowerCase();
+  return lower.includes('error 1042') || lower.includes('workers_dev_script_not_found');
+}
+
 export function classifyLiveWorkerProbeResponse(
   res: Response,
   body: string,
   baseUrl = WORKER_BASE,
 ): LiveWorkerProbeResult {
   const contentType = lowerHeader(res, 'content-type');
+  const json = parseJsonBody(body);
 
   if (bodyLooksLikeCloudflareChallenge(res, body)) {
     return {
@@ -62,6 +74,15 @@ export function classifyLiveWorkerProbeResponse(
       baseUrl,
       httpStatus: res.status,
       detail: 'Cloudflare security verification returned instead of live-worker JSON',
+    };
+  }
+
+  if (bodyLooksLikeWorkersDevMissingScript(body, json)) {
+    return {
+      ok: false,
+      baseUrl,
+      httpStatus: res.status,
+      detail: 'workers.dev host is not deployed/enabled for the live worker',
     };
   }
 
@@ -74,7 +95,6 @@ export function classifyLiveWorkerProbeResponse(
     };
   }
 
-  const json = parseJsonBody(body);
   if (res.status === 404 && json && typeof json === 'object' && String((json as { error?: unknown }).error ?? '').toLowerCase().includes('not found')) {
     return {
       ok: true,

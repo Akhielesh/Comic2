@@ -64,6 +64,22 @@ describe('live worker readiness probe', () => {
     expect(result.ok).toBe(false);
     expect(result.detail).toContain('Cloudflare security verification');
   });
+
+  it('calls out Cloudflare workers.dev 1042 host errors as deployment blockers', () => {
+    const body = JSON.stringify({
+      error_code: 1042,
+      error_name: 'workers_dev_script_not_found',
+      detail: 'No Workers script was found for this host on workers.dev.',
+    });
+    const result = classifyLiveWorkerProbeResponse(
+      new Response(body, { status: 404, headers: { 'content-type': 'application/json' } }),
+      body,
+      'https://dreamstream-live.akhieleshsrirangam.workers.dev',
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.detail).toContain('workers.dev host is not deployed');
+  });
 });
 
 describe('quality presets', () => {
