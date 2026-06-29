@@ -211,6 +211,40 @@ describe('live smoke classification', () => {
     expect(results[0].detail).toContain('missing Access-Control-Allow-Origin');
   });
 
+  it('fails the CORS preflight target when event creation method or host-key headers are not allowed', async () => {
+    const missingPost = await runLiveSmoke({
+      targets: [CORS_PREFLIGHT_TARGET],
+      timeoutMs: 100,
+      fetcher: async () => new Response(null, {
+        status: 204,
+        headers: {
+          'access-control-allow-origin': 'https://comic2.pages.dev',
+          'access-control-allow-methods': 'GET,OPTIONS',
+          'access-control-allow-headers': 'content-type,x-host-key'
+        }
+      })
+    });
+
+    expect(missingPost[0].status).toBe('fail');
+    expect(missingPost[0].detail).toContain('missing Access-Control-Allow-Methods POST');
+
+    const missingHostKey = await runLiveSmoke({
+      targets: [CORS_PREFLIGHT_TARGET],
+      timeoutMs: 100,
+      fetcher: async () => new Response(null, {
+        status: 204,
+        headers: {
+          'access-control-allow-origin': 'https://comic2.pages.dev',
+          'access-control-allow-methods': 'GET,POST,OPTIONS',
+          'access-control-allow-headers': 'content-type'
+        }
+      })
+    });
+
+    expect(missingHostKey[0].status).toBe('fail');
+    expect(missingHostKey[0].detail).toContain('missing Access-Control-Allow-Headers x-host-key');
+  });
+
   it('passes the live-bundle target when a discovered bundle references the worker base', async () => {
     const shell = '<!doctype html><div id="live-root"></div><script type="module" src="/assets/live-DhX3k2.js"></script>';
 
