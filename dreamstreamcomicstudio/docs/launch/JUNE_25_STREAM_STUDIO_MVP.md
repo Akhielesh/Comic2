@@ -136,7 +136,7 @@ Any proposal in those categories must include:
 | Resolved | Evidence | Follow-up |
 |---|---|---|
 | Private host/guest capability-link leak hardening | New Stream Studio links keep capability keys in URL fragments (`?e=...#/studio?k=...`, `#/guest?g=...`) so keys are not sent in initial HTTP requests, CDN logs, or Referer headers; legacy query links still parse; LinkBox still redacts raw keys and requires a second click before copying private links | Keep manual smoke coverage for copied studio/guest links and continue treating `k`/`g` URLs as bearer secrets |
-| Temporary Pages-domain live-worker reachability | `comic2.pages.dev` Stream Studio bundle now references `dreamstream-live.akhieleshsrirangam.workers.dev`; `npm run ops:live-smoke:temporary` passes `stream studio bundle`, `fallback live worker`, and the `fallback live worker CORS preflight` browser-origin check | Keep bundle + CORS preflight smoke in the pre-invite checklist so stale/misbuilt Pages deploys or CORS regressions cannot silently break browser event creation |
+| Temporary Pages-domain live-worker reachability | `comic2.pages.dev` Stream Studio bundle now references `dreamstream-live.akhieleshsrirangam.workers.dev`; `npm run ops:live-smoke:temporary` passes `stream studio bundle`, `fallback live worker`, and browser-origin CORS preflights for event creation (`POST`) plus recording upload parts (`PUT`) | Keep bundle + CORS preflight smoke in the pre-invite checklist so stale/misbuilt Pages deploys or CORS regressions cannot silently break browser event creation or replay capture |
 | Product positioning too broad | Homepage/docs now focus Stream Studio as the June 25 launch wedge | Keep Chat/Comic as support tools and Code Studio parked until Stream Studio is proven |
 
 ## Pre-invite smoke checklist
@@ -153,6 +153,7 @@ Run this before letting real users in:
 - [ ] Deployed Stream Studio bundle is current: the `stream studio bundle` smoke target (run `npm run ops:live-smoke:temporary`) discovers `/assets/live-*.js` from `live.html` and confirms it references `dreamstream-live.akhieleshsrirangam.workers.dev` — guards against a stale/misbuilt Pages deploy that still passes endpoint probes while the studio falls back to dead same-origin `/live-api`
 - [ ] Temporary Stream Studio worker URL `https://dreamstream-live.akhieleshsrirangam.workers.dev/api/events/smokeprobe` returns live-worker JSON (404 `not found` is acceptable for the no-write probe; Cloudflare error 1042 or website HTML is a blocker)
 - [ ] Temporary Stream Studio worker CORS preflight permits browser event creation from `https://comic2.pages.dev` (`npm run ops:live-smoke:temporary` checks `OPTIONS /api/events` for `Access-Control-Allow-Origin`, `POST`, `content-type`, and `x-host-key`)
+- [ ] Temporary Stream Studio recording upload CORS preflight permits browser replay capture from `https://comic2.pages.dev` (`npm run ops:live-smoke:temporary` checks `OPTIONS /api/events/smokeprobe/recordings?...` for `PUT`, `content-type`, and `x-host-key`)
 - [ ] `https://dreamstreamstudio.ai/` custom-domain challenge is either fixed or explicitly documented as post-beta blocker
 - [ ] Railway `/api/health` works through intended production route
 - [ ] Host creates an event
