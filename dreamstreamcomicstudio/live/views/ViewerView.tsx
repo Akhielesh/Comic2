@@ -343,6 +343,15 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
   }, [downBps, viewers, meta, status]);
 
   const sendChat = (text: string) => socketRef.current?.send({ t: 'chat', text });
+  const sendChatFromInput = (input: HTMLInputElement | null) => {
+    const text = input?.value.trim();
+    if (!text) return;
+    sendChat(text);
+    input.value = '';
+  };
+  const sendChatFromButton = (button: HTMLButtonElement) => {
+    sendChatFromInput(button.closest('.vm-input-row')?.querySelector<HTMLInputElement>('input[aria-label="Chat message"]') ?? null);
+  };
   const sendEmoji = (e: string) => {
     socketRef.current?.send({ t: 'emoji', e });
     spawnFloat(e);
@@ -558,14 +567,17 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
               placeholder="Say something…"
               aria-label="Chat message"
               onKeyDown={(e) => {
-                const t = e.target as HTMLInputElement;
-                if (e.key === 'Enter' && t.value.trim()) {
-                  sendChat(t.value.trim());
-                  t.value = '';
-                }
+                if (e.key === 'Enter') sendChatFromInput(e.currentTarget);
               }}
             />
-            <button className="vm-send" aria-label="Send"><Icon name="send" size={16} /></button>
+            <button
+              type="button"
+              className="vm-send"
+              aria-label="Send"
+              onClick={(e) => sendChatFromButton(e.currentTarget)}
+            >
+              <Icon name="send" size={16} />
+            </button>
           </div>
         </div>
       )}
@@ -617,14 +629,17 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
                 placeholder="Say something…"
                 aria-label="Chat message"
                 onKeyDown={(e) => {
-                  const t = e.target as HTMLInputElement;
-                  if (e.key === 'Enter' && t.value.trim()) {
-                    sendChat(t.value.trim());
-                    t.value = '';
-                  }
+                  if (e.key === 'Enter') sendChatFromInput(e.currentTarget);
                 }}
               />
-              <button className="vm-send" aria-label="Send"><Icon name="send" size={16} /></button>
+              <button
+                type="button"
+                className="vm-send"
+                aria-label="Send"
+                onClick={(e) => sendChatFromButton(e.currentTarget)}
+              >
+                <Icon name="send" size={16} />
+              </button>
             </div>
             {slowSec > 0 && <div className="slow-note" style={{ marginTop: 6 }}>Slow mode — one message every {slowSec}s</div>}
           </div>
