@@ -25,6 +25,17 @@ const CORS_PREFLIGHT_TARGET: SmokeTarget = {
   scopes: ['temporary-launch']
 };
 
+const RECORDING_PREFLIGHT_TARGET: SmokeTarget = {
+  name: 'fallback live worker recording upload CORS preflight',
+  url: 'https://dreamstream-live.akhieleshsrirangam.workers.dev/api/events/smokeprobe/recordings?op=part&key=events%2Fsmokeprobe%2Frec%2Fprobe.webm&uploadId=smoke&n=1',
+  kind: 'cors-preflight',
+  scopes: ['temporary-launch'],
+  preflight: {
+    method: 'PUT',
+    headers: 'content-type,x-host-key'
+  }
+};
+
 const htmlResponse = (body: string, init: ResponseInit = {}) =>
   new Response(body, {
     status: 200,
@@ -55,6 +66,7 @@ describe('live smoke target scopes', () => {
       'stream studio bundle',
       'fallback live worker',
       'fallback live worker CORS preflight',
+      'fallback live worker recording upload CORS preflight',
       'railway api'
     ]);
     expect(targets.some((target) => target.url.includes('dreamstreamstudio.ai'))).toBe(false);
@@ -243,6 +255,32 @@ describe('live smoke classification', () => {
 
     expect(missingHostKey[0].status).toBe('fail');
     expect(missingHostKey[0].detail).toContain('missing Access-Control-Allow-Headers x-host-key');
+  });
+
+  it('uses per-target CORS preflight methods so recording PUT uploads are covered before beta invites', async () => {
+    const results = await runLiveSmoke({
+      targets: [RECORDING_PREFLIGHT_TARGET],
+      timeoutMs: 100,
+      fetcher: async (url, init) => {
+        expect(String(url)).toBe(RECORDING_PREFLIGHT_TARGET.url);
+        expect(init?.method).toBe('OPTIONS');
+        const headers = new Headers(init?.headers);
+        expect(headers.get('origin')).toBe('https://comic2.pages.dev');
+        expect(headers.get('access-control-request-method')).toBe('PUT');
+        expect(headers.get('access-control-request-headers')).toBe('content-type,x-host-key');
+        return new Response(null, {
+          status: 204,
+          headers: {
+            'access-control-allow-origin': 'https://comic2.pages.dev',
+            'access-control-allow-methods': 'GET,POST,PUT,OPTIONS',
+            'access-control-allow-headers': 'content-type,x-host-key'
+          }
+        });
+      }
+    });
+
+    expect(results[0].status).toBe('pass');
+    expect(results[0].detail).toContain('PUT');
   });
 
   it('passes the live-bundle target when a discovered bundle references the worker base', async () => {
