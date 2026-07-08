@@ -94,6 +94,7 @@ Do **not** optimize or market for these yet:
    - `npm run typecheck` passes.
    - `npm run build` passes.
    - [ ] `npm run ops:live-smoke:temporary` passes for the current Pages-domain beta path
+   - [ ] `npm run ops:stream-e2e:checklist` has been walked in a real browser for the temporary beta path (create → studio → viewer → chat/reaction → live playback → ended replay)
    - [ ] `npm run ops:live-smoke` passes before canonical/public launch (expected to fail while `dreamstreamstudio.ai` is Cloudflare-challenged)
    - Manual Stream Studio smoke test passes on at least Chrome and Safari before inviting users.
 
@@ -148,6 +149,8 @@ Run this before letting real users in:
 - [ ] `npm run build`
 - [ ] `npx vitest run` or targeted launch suite if time-constrained
 - [ ] `npm run ops:live-smoke:temporary` passes for the temporary Pages-domain beta path
+- [ ] `npm run ops:stream-e2e:checklist` printed checklist is completed in Chrome for the temporary beta path; save event ID plus pass/fail notes
+- [ ] `npm run ops:stream-e2e:checklist` printed checklist is completed in Safari for the temporary beta path; save event ID plus pass/fail notes
 - [ ] Temporary launch domain `https://comic2.pages.dev/` returns the app shell
 - [ ] Temporary Stream Studio URL `https://comic2.pages.dev/live.html` returns the app shell
 - [ ] Deployed Stream Studio bundle is current: the `stream studio bundle` smoke target (run `npm run ops:live-smoke:temporary`) discovers `/assets/live-*.js` from `live.html` and confirms it references `dreamstream-live.akhieleshsrirangam.workers.dev` — guards against a stale/misbuilt Pages deploy that still passes endpoint probes while the studio falls back to dead same-origin `/live-api`

@@ -39,7 +39,9 @@
     "ops:verify:rate-limit": "scripts/ops/verify-rate-limit.sh",
     "ops:live-smoke": "tsx scripts/ops/liveSmoke.ts",
     "ops:live-smoke:temporary": "tsx scripts/ops/liveSmoke.ts --temporary-launch",
-    "ops:smoke:live": "npm run ops:live-smoke"
+    "ops:smoke:live": "npm run ops:live-smoke",
+    "ops:stream-e2e:checklist": "tsx scripts/ops/streamE2eChecklist.ts",
+    "ops:stream-e2e:checklist:canonical": "tsx scripts/ops/streamE2eChecklist.ts --canonical"
   },
   "dependencies": {
     "@codesandbox/sandpack-react": "^2.20.0",
