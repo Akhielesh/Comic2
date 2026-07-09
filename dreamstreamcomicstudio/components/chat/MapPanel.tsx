@@ -8,11 +8,13 @@
 // pins (numbered for ordered trips), the route uses the terracotta accent, and the
 // popups/zoom controls are restyled via the .ds-map-* rules in index.css.
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import type { MapArtifact } from '../../apiTypes';
 import { placeKind, PLACE_KIND_GLYPHS } from './artifacts/placeKinds';
+import { MapControls } from './MapControls';
+import { locateOnMap } from './mapLocate';
 
 const escapeHtml = (s: string): string =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -151,13 +153,24 @@ const latestRadarPath = (): Promise<string | null> => {
   return radarPathPromise;
 };
 
-const MapPanel: React.FC<{ data: MapArtifact; radar?: boolean }> = ({ data, radar }) => {
+const MapPanel: React.FC<{ data: MapArtifact; radar?: boolean; onExpand?: () => void }> = ({ data, radar, onExpand }) => {
   const elRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
+  // The map lives in a ref (built imperatively), but the control overlay is React, so we
+  // mirror "the map is ready" into state to mount the controls once.
+  const [ready, setReady] = useState(false);
+  // Re-frame-to-everything closure, rebuilt each time the data (and thus the fit) changes.
+  const recenterRef = useRef<(() => void) | null>(null);
+  // The user-location dot + accuracy ring, so repeated "locate me" clicks replace them.
+  const locateLayersRef = useRef<L.Layer[]>([]);
+
+  const handleLocate = (): Promise<void> =>
+    locateOnMap(L, mapRef.current, locateLayersRef, prefersReducedMotion());
 
   useEffect(() => {
     if (!elRef.current) return;
-    const map = L.map(elRef.current, { scrollWheelZoom: true, zoomControl: true, attributionControl: true });
+    // Our own glass MapControls replaces Leaflet's default +/- control.
+    const map = L.map(elRef.current, { scrollWheelZoom: true, zoomControl: false, attributionControl: true });
     mapRef.current = map;
 
     const tiles = L.tileLayer(isDark() ? TILES.dark : TILES.light, {
@@ -288,16 +301,26 @@ const MapPanel: React.FC<{ data: MapArtifact; radar?: boolean }> = ({ data, rada
     }
 
     // Frame everything that's drawn — markers AND every segment point (so a flight
-    // arc bowing out of the marker cluster isn't clipped).
+    // arc bowing out of the marker cluster isn't clipped). The same closure backs the
+    // "recenter" control; user-triggered re-frames glide (flyTo), the initial one snaps
+    // (no fly-in jank while the first tiles are still painting).
     const segPts: [number, number][] = (data.segments ?? []).flatMap((s) => s.points.map((p) => [p.lat, p.lng] as [number, number]));
     const fitPts = [...latlngs, ...segPts];
-    if (fitPts.length === 1) {
-      map.setView(fitPts[0], 13);
-    } else if (fitPts.length > 1) {
-      map.fitBounds(L.latLngBounds(fitPts).pad(0.2));
-    } else {
-      map.setView([20, 0], 2);
-    }
+    const reduceMotion = prefersReducedMotion();
+    const frame = (animate: boolean): void => {
+      if (fitPts.length === 1) {
+        map.setView(fitPts[0], 13, { animate: animate && !reduceMotion });
+      } else if (fitPts.length > 1) {
+        const bounds = L.latLngBounds(fitPts).pad(0.2);
+        if (animate && !reduceMotion) map.flyToBounds(bounds, { duration: 0.8 });
+        else map.fitBounds(bounds);
+      } else {
+        map.setView([20, 0], 2, { animate: false });
+      }
+    };
+    frame(false);
+    recenterRef.current = () => frame(true);
+    setReady(true);
 
     // Keep the map sized to its (resizable) container.
     const ro = new ResizeObserver(() => map.invalidateSize());
@@ -310,6 +333,9 @@ const MapPanel: React.FC<{ data: MapArtifact; radar?: boolean }> = ({ data, rada
       window.clearTimeout(t);
       map.remove();
       mapRef.current = null;
+      recenterRef.current = null;
+      locateLayersRef.current = [];
+      setReady(false);
     };
   }, [data]);
 
@@ -332,7 +358,20 @@ const MapPanel: React.FC<{ data: MapArtifact; radar?: boolean }> = ({ data, rada
     };
   }, [radar, data]);
 
-  return <div ref={elRef} className="ds-map w-full h-full" />;
+  return (
+    <div className="relative h-full w-full">
+      <div ref={elRef} className="ds-map h-full w-full" />
+      {ready && (
+        <MapControls
+          onZoomIn={() => mapRef.current?.zoomIn()}
+          onZoomOut={() => mapRef.current?.zoomOut()}
+          onRecenter={() => recenterRef.current?.()}
+          onLocate={handleLocate}
+          onFullscreen={onExpand}
+        />
+      )}
+    </div>
+  );
 };
 
 export default MapPanel;

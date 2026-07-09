@@ -3,6 +3,8 @@ import { ArrowRight, Bike, Car, ExternalLink, Footprints, Loader2, TramFront } f
 import type * as Leaflet from 'leaflet';
 import type { DirectionsArtifact, DirectionsModeResult, DirectionsRoute } from '../../../apiTypes';
 import { Surface, SurfaceTitle, SurfaceSubtitle, useCompact } from './kit';
+import { MapControls } from '../MapControls';
+import { locateOnMap } from '../mapLocate';
 
 // Google-Maps-feeling directions card in the calm-studio glass language.
 //  • compact — a glance card: origin → destination, mode pills with per-mode ETAs,
@@ -107,11 +109,19 @@ const createDirectionsMap = (L: typeof Leaflet): React.FC<DirectionsMapProps> =>
     const rafRef = useRef(0);
     const onSelectRef = useRef(onSelect);
     onSelectRef.current = onSelect;
+    // Glass MapControls overlay — mirror "map ready" into state, re-frame via fitRef,
+    // and keep the user-location layers so repeated "locate me" replaces them.
+    const [ready, setReady] = useState(false);
+    const fitRef = useRef<(() => void) | null>(null);
+    const locateLayersRef = useRef<Leaflet.Layer[]>([]);
+    const handleLocate = (): Promise<void> =>
+      locateOnMap(L, mapRef.current, locateLayersRef, !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
 
     // Map + endpoint pins (rebuilt only when the endpoints change).
     useEffect(() => {
       if (!elRef.current) return;
-      const map = L.map(elRef.current, { scrollWheelZoom: true, zoomControl: true, attributionControl: true });
+      // Our own glass MapControls replaces Leaflet's default +/- control.
+      const map = L.map(elRef.current, { scrollWheelZoom: true, zoomControl: false, attributionControl: true });
       mapRef.current = map;
       L.tileLayer(isDark() ? TILES.dark : TILES.light, {
         attribution: TILE_ATTRIBUTION,
@@ -130,25 +140,37 @@ const createDirectionsMap = (L: typeof Leaflet): React.FC<DirectionsMapProps> =>
       const ro = new ResizeObserver(() => map.invalidateSize());
       ro.observe(elRef.current);
       const t = window.setTimeout(() => map.invalidateSize(), 200);
+      setReady(true);
       return () => {
         ro.disconnect();
         window.clearTimeout(t);
         map.remove();
         mapRef.current = null;
+        fitRef.current = null;
+        locateLayersRef.current = [];
+        setReady(false);
       };
     }, [origin.lat, origin.lng, origin.label, destination.lat, destination.lng, destination.label]);
 
     // Fit to the whole mode's route family (not on alternative clicks, so promoting
-    // a route doesn't yank the camera around).
+    // a route doesn't yank the camera around). The same closure backs the "recenter"
+    // control; the button glides (flyTo) while mount/route-changes snap (no yank).
     useEffect(() => {
       const map = mapRef.current;
       if (!map) return;
-      const pts: Array<[number, number]> = [
-        [origin.lat, origin.lng],
-        [destination.lat, destination.lng]
-      ];
-      for (const r of routes) pts.push(...r.path);
-      map.fitBounds(L.latLngBounds(pts), { padding: [28, 28] });
+      const fit = (animate: boolean): void => {
+        const pts: Array<[number, number]> = [
+          [origin.lat, origin.lng],
+          [destination.lat, destination.lng]
+        ];
+        for (const r of routes) pts.push(...r.path);
+        const bounds = L.latLngBounds(pts);
+        const reduce = !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+        if (animate && !reduce) map.flyToBounds(bounds, { padding: [28, 28], duration: 0.8 });
+        else map.fitBounds(bounds, { padding: [28, 28] });
+      };
+      fit(false);
+      fitRef.current = () => fit(true);
     }, [routes, origin.lat, origin.lng, destination.lat, destination.lng]);
 
     // Route layers: muted clickable alternatives under an animated accent primary
@@ -199,7 +221,19 @@ const createDirectionsMap = (L: typeof Leaflet): React.FC<DirectionsMapProps> =>
       return () => cancelAnimationFrame(rafRef.current);
     }, [routes, selected]);
 
-    return <div ref={elRef} className="ds-map h-full w-full" />;
+    return (
+      <div className="relative h-full w-full">
+        <div ref={elRef} className="ds-map h-full w-full" />
+        {ready && (
+          <MapControls
+            onZoomIn={() => mapRef.current?.zoomIn()}
+            onZoomOut={() => mapRef.current?.zoomOut()}
+            onRecenter={() => fitRef.current?.()}
+            onLocate={handleLocate}
+          />
+        )}
+      </div>
+    );
   };
   return DirectionsMap;
 };
