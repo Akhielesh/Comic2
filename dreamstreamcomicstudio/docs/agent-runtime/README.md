@@ -48,6 +48,7 @@ recommendations are grounded in what we already run.
 | 04 | [`04-toolbelt-and-verification.md`](./04-toolbelt-and-verification.md) | The deterministic (non-AI) conversion/chart/data libraries the sandbox preloads, and the write→run→**verify**→render→feedback loop. |
 | 05 | [`05-security-and-cost.md`](./05-security-and-cost.md) | Enterprise security (OWASP LLM/Agentic, sandbox isolation, SSRF, safe UI rendering) and cost/context optimization (caching, Code Mode, compaction, routing, observability). |
 | 06 | [`06-sources.md`](./06-sources.md) | Every external citation behind these claims, grouped by topic. |
+| 07 | [`07-agentic-quality-overhaul-and-evals.md`](./07-agentic-quality-overhaul-and-evals.md) | The staged, measured plan to make the chat **swarm** and **Code Studio** reliable: a golden-task eval scoreboard, closing the loop against reality, difficulty-aware model routing, real agent collaboration, and enterprise hardening — grounded in a six-part codebase review. |
 
 ## Status
 
