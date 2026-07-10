@@ -63,9 +63,10 @@ import { EmailCompose } from './artifacts/EmailCompose';
 import { CalendarAgenda } from './artifacts/CalendarAgenda';
 import { CalendarEventDraft } from './artifacts/CalendarEventDraft';
 import { GameCard } from './artifacts/GameCard';
+import { IconSetCard } from './artifacts/IconSetCard';
 import { ModelPopularityCard } from '../models/ModelPopularityPanel';
 import type { ModelPopularity } from '../../services/modelPopularity';
-import type { ClarifyArtifact } from '../../apiTypes';
+import type { ClarifyArtifact, IconSetArtifact } from '../../apiTypes';
 import { renderArtifactNode } from './artifacts/ChatArtifacts';
 import type {
   DashboardArtifact, LearningPathArtifact, ItineraryArtifact,
@@ -1363,6 +1364,19 @@ const calendarBatchDraftDemo: CalendarEventDraftArtifact = {
   ]
 };
 
+const iconSetDemo: IconSetArtifact = {
+  query: 'rocket',
+  total: 142,
+  icons: [
+    { id: 'lucide:rocket', name: 'rocket', prefix: 'lucide', width: 24, height: 24, body: '<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' },
+    { id: 'lucide:star', name: 'star', prefix: 'lucide', width: 24, height: 24, body: '<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' },
+    { id: 'lucide:heart', name: 'heart', prefix: 'lucide', width: 24, height: 24, body: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.29 1.51 4.04 3 5.5l7 7z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' },
+    { id: 'lucide:zap', name: 'zap', prefix: 'lucide', width: 24, height: 24, body: '<path d="M13 2L3 14h9l-1 8 10-12h-9z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' },
+    { id: 'lucide:sparkles', name: 'sparkles', prefix: 'lucide', width: 24, height: 24, body: '<path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' },
+    { id: 'lucide:globe', name: 'globe', prefix: 'lucide', width: 24, height: 24, body: '<circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" fill="none" stroke="currentColor" stroke-width="2"/>' }
+  ]
+};
+
 export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Model popularity ranking (What DreamStream users run · share bars · req/user counts)', category: 'Data & charts', node: <ModelPopularityCard data={modelPopularityDemo} /> },
   { title: 'Guided learning path (modules · tracked progress · practice prompts)', type: 'learning_path', category: 'Learning', node: <LearningPathCard data={learningPathDemo} /> },
@@ -1434,7 +1448,8 @@ export const GALLERY_DEMOS: GalleryDemo[] = [
   { title: 'Snake (canvas engine · rising speed · keyboard + swipe · S/M/L + fullscreen)', type: 'game', category: 'Games', node: <GameCard data={{ game: 'snake' }} /> },
   { title: 'Brick breaker (paddle physics · brick collisions · lives · levels)', type: 'game', category: 'Games', node: <GameCard data={{ game: 'breakout' }} /> },
   { title: '2048 (slide & merge · win + game over · animated tiles)', type: 'game', category: 'Games', node: <GameCard data={{ game: '2048' }} /> },
-  { title: 'Memory match (flip-card concentration · move counter · best score)', type: 'game', category: 'Games', node: <GameCard data={{ game: 'memory' }} /> }
+  { title: 'Memory match (flip-card concentration · move counter · best score)', type: 'game', category: 'Games', node: <GameCard data={{ game: 'memory' }} /> },
+  { title: 'Icon search (Iconify · 200k+ open-source glyphs · click to copy id)', type: 'icon_set', category: 'World & media', node: <IconSetCard data={iconSetDemo} /> }
 ];
 
 /** Artifact types that have a live demo in the gallery (used by the coverage test). */

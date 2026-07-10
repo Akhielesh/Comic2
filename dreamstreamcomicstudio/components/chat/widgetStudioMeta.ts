@@ -72,7 +72,9 @@ export const ARTIFACT_TOOLS: Record<string, string[]> = {
   // Calendar — read agenda + the confirmed write tools that emit a draft card.
   calendar_agenda: ['calendar_agenda'],
   calendar_event_draft: ['calendar_create_event', 'calendar_create_events', 'calendar_update_event', 'calendar_delete_event', 'calendar_rsvp'],
-  game: ['play_game']
+  game: ['play_game'],
+  // Design assets — open-source SVG icons via the free Iconify API.
+  icon_set: ['icon_search']
 };
 
 /** Artifact types the MODEL composes directly (no single producing data tool).
@@ -115,7 +117,8 @@ export const EXAMPLE_PROMPT: Record<string, string> = {
   email_compose: 'Draft an email to alex@example.com about rescheduling Friday',
   calendar_agenda: "What's on my calendar this week?",
   calendar_event_draft: 'Add lunch with Priya tomorrow at 12:30 to my calendar',
-  game: "Let's play Snake"
+  game: "Let's play Snake",
+  icon_set: 'Find me some rocket icons'
 };
 
 /** A widget's source kind — drives the badge + a tag. */

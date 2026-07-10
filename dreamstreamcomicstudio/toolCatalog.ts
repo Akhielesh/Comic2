@@ -655,9 +655,9 @@ export const TOOL_CATALOG: ToolMeta[] = [
     keywords: ['call api', 'proxy', 'fetch from', 'api request', 'get data from', 'post to', 'nango']
   },
   {
-    name: 'generate_image', label: 'Image generation', category: 'dev', kind: 'builtin', provider: 'Gemini · Ideogram · Flux (BYOK — your account)',
-    description: 'Generate a real image from a text prompt using your own image-generation account key (Gemini/Ideogram/Flux). For illustrations, hero/cover images, icons, OG/share images.',
-    auth: 'required', authEnv: 'GEMINI_API_KEY', rateLimit: "Your provider account's limits",
+    name: 'generate_image', label: 'Image generation', category: 'dev', kind: 'builtin', provider: 'Pollinations (free) · Gemini · Ideogram · Flux · OpenAI · xAI (BYOK)',
+    description: 'Generate a real image from a text prompt. Free out of the box (Pollinations, no key); uses your connected image key (Gemini/Ideogram/Flux/OpenAI/xAI) automatically for higher fidelity. For illustrations, hero/cover images, icons, OG/share images.',
+    auth: 'optional', authEnv: 'GEMINI_API_KEY', rateLimit: 'Free via Pollinations; your account limits with a key',
     dataShape: 'An image (shown to the user) + a short confirmation.', docsUrl: 'https://ai.google.dev/gemini-api/docs/imagen',
     keywords: ['image', 'generate image', 'illustration', 'picture', 'art', 'hero image', 'icon', 'og image', 'cover', 'render image', 'imagen', 'ideogram', 'flux']
   },
@@ -724,6 +724,14 @@ export const TOOL_CATALOG: ToolMeta[] = [
     auth: 'none', rateLimit: 'Unlimited (local libvips, no API)',
     dataShape: 'The converted image, shown inline.', docsUrl: 'https://dreamstream.app',
     keywords: ['convert image', 'jpg', 'jpeg', 'png', 'webp', 'avif', 'resize', 'thumbnail', 'image format', 'compress image', 'shrink image', 'to png', 'to jpg']
+  },
+  {
+    name: 'icon_search', label: 'Icon search', category: 'media', kind: 'api', provider: 'Iconify',
+    description: 'Search 200,000+ open-source SVG icons (Lucide, Material Symbols, Heroicons, Tabler, Phosphor, Simple Icons brand logos, and 150+ more sets) and show a pickable grid — each result has an id like "lucide:rocket" to reference in a component or app, or to drop into a UI.',
+    auth: 'none', rateLimit: 'Unlimited (free public API, no key)',
+    dataShape: 'A grid of SVG icons with copyable set:name ids.', docsUrl: 'https://iconify.design',
+    keywords: ['icon', 'icons', 'svg icon', 'glyph', 'symbol', 'pictogram', 'logo', 'lucide', 'iconify', 'material icon', 'heroicons', 'tabler', 'phosphor', 'ui icon'],
+    license: 'attribution', licenseNote: 'Icons are open-source but per-set licenses vary (mostly MIT/Apache/CC-BY) — check the set before commercial use.'
   },
   {
     name: 'create_dashboard', label: 'Glass dashboard', category: 'dataviz', kind: 'builtin', provider: 'DreamStream (in-app SVG)',

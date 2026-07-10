@@ -7,7 +7,7 @@ import { makeSwarmTool, SWARM_TOOL_NAME } from '../ai/agents/swarmTool.js';
 import { makeDelegateTool } from '../ai/agents/delegateTool.js';
 import { makeDeepResearchTool } from '../ai/research/deepResearchTool.js';
 import { resolveClientGeo, clientIpFromReq } from '../ai/clientGeo.js';
-import { makeImageTool, imageGenAvailable, type ImageKeys } from '../ai/tools/imageGen.js';
+import { makeImageTool, type ImageKeys } from '../ai/tools/imageGen.js';
 import { sanitizeCustomAgents } from '../ai/agents/registry.js';
 import type { AgentDefinition } from '../ai/agents/registry.js';
 import { loadCustomAgentDefinitions } from '../services/customAgents.js';
@@ -579,7 +579,9 @@ export const prepareChat = async (req: any): Promise<PrepResult> => {
     xaiKey: ak.providerKeys?.xai?.byok ? ak.providerKeys.xai.key : undefined
   };
   const imageRequested = Array.isArray(body.tools) && body.tools.some((t) => t === 'generate_image');
-  if (imageRequested && imageGenAvailable(imageKeys)) metaTools.push(makeImageTool(imageKeys));
+  // Always attach when requested — the tool now has a free, no-key fallback (Pollinations),
+  // and uses the user's BYOK image key automatically when one is configured.
+  if (imageRequested) metaTools.push(makeImageTool(imageKeys));
 
   // Deep research is a HEAVY tool (multi-search + page reads + 2 model calls), so it is
   // offered only when the user's message actually signals a research intent — not on every

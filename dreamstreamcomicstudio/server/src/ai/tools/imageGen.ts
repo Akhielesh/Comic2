@@ -30,11 +30,26 @@ const XAI_IMAGE_MODEL = process.env.XAI_IMAGE_MODEL || 'grok-2-image';
 
 const ASPECTS = new Set(['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3']);
 
+// Pixel size per aspect ratio for the free fallback (Pollinations renders to a size).
+const ASPECT_SIZE: Record<string, [number, number]> = {
+  '1:1': [1024, 1024], '16:9': [1280, 720], '9:16': [720, 1280],
+  '4:3': [1152, 864], '3:4': [864, 1152], '3:2': [1200, 800], '2:3': [800, 1200]
+};
+
+// Free, no-key image generation fallback (https://pollinations.ai — open source).
+// We hand the client a direct image URL (Pollinations renders it on first load); nothing
+// is fetched server-side, so there is no SSRF surface. `nologo` strips the watermark.
+export const pollinationsUrl = (prompt: string, aspectRatio: string): string => {
+  const [w, h] = ASPECT_SIZE[aspectRatio] || ASPECT_SIZE['1:1'];
+  const seed = Math.floor(Math.random() * 1_000_000_000);
+  return `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=${w}&height=${h}&nologo=true&seed=${seed}`;
+};
+
 /** Build the per-request generate_image tool bound to the user's image keys. */
 export const makeImageTool = (keys: ImageKeys): ChatTool => ({
   name: 'generate_image',
   description:
-    "Generate a real image from a text prompt using the user's own image-generation account (BYOK: Gemini / Ideogram / Flux / OpenAI / xAI). Use for illustrations, hero/cover images, icons, OG/share images, or to replace placeholder art with real visuals. Be descriptive (subject, style, palette, mood). The image is shown to the user.",
+    "Generate a real image from a text prompt. Works for free out of the box (Pollinations, no key); when the user has connected an image key (Gemini / Ideogram / Flux / OpenAI / xAI) it generates through their own account at higher fidelity. Use for illustrations, hero/cover images, icons, OG/share images, or to replace placeholder art with real visuals. Be descriptive (subject, style, palette, mood). The image is shown to the user.",
   parameters: {
     type: 'object',
     properties: {
@@ -72,9 +87,10 @@ export const makeImageTool = (keys: ImageKeys): ChatTool => ({
           resolveProviderContext(keys.xaiKey, 'xai')
         )).imageDataUrl;
       } else {
+        // No BYOK key → free, no-key fallback so image generation works out of the box.
         return {
-          content: 'No image-generation key is configured for your account. Add a Gemini, Ideogram, Flux/Pixazo, OpenAI or xAI key in Settings to generate images.',
-          notice: { level: 'warn', message: 'No image-generation key', fix: 'Add an image key in Settings → API Configuration.' },
+          content: `Generated a ${aspectRatio} image (free, via Pollinations) for: "${prompt.slice(0, 120)}". It is shown to the user. Tip: connect a Gemini / Ideogram / Flux / OpenAI / xAI key in Settings for higher-fidelity images through your own account.`,
+          images: [{ url: pollinationsUrl(prompt, aspectRatio), title: prompt.slice(0, 80), source: 'Pollinations (free)' }],
         };
       }
       if (!dataUrl) return { content: 'Image generation returned no image — try a more specific prompt.' };

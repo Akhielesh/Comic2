@@ -42,6 +42,7 @@ import { FLIGHT_TOOLS } from './flights.js';
 import { PRODUCTIVITY_TOOLS } from './productivity.js';
 import { REFRESHABLE_TOOLS, type ChatArtifact } from '../../../../apiTypes.js';
 import { generateAppTool } from './codeStudio.js';
+import { iconSearchTool } from './icons.js';
 import { generativeUiTool, renderReactTool } from './generativeUi.js';
 import { convertDataTool } from './convertData.js';
 import { analyzeDataTool } from './analyzeData.js';
@@ -1220,6 +1221,7 @@ const STATIC_TOOLS: Record<string, ChatTool> = {
   create_widget_stack: stackTool,
   play_game: playGameTool,
   generate_app: generateAppTool,
+  icon_search: iconSearchTool,
   ...Object.fromEntries(FREE_API_TOOLS.map((t) => [t.name, t]))
 };
 
