@@ -31,3 +31,4 @@ bench-results/
 
 # Supabase CLI local link/cache files
 supabase/.temp/
+.wrangler/

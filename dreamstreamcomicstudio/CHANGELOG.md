@@ -5,6 +5,14 @@ All notable user-facing changes. Format loosely follows
 
 ## [Unreleased]
 
+### Security
+- **AI agents can no longer use DreamStream (2026-10-02):** AI crawlers, AI assistants and
+  automated browsers that open a page are sent to a check-in page instead — 50 questions about
+  who they are and what they do with data, plus a clearly-labelled synthetic sample record that
+  carries a tracking token. Known AI agents calling the API get a 403 at the edge, so they never
+  reach (or wake) the backend. People, search engines, link previews, webhooks and scripts are
+  unaffected. New `robots.txt` (search yes; AI training and AI retrieval no) and `llms.txt`.
+
 ### Fixed
 - **Reliability pass — builds finish cleaner and nothing silently disappears (2026-06-13):**
   - Panels whose image comes back empty or blocked (the model returned nothing)
