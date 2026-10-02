@@ -16,6 +16,13 @@
     "BACKEND_ORIGIN": "https://comic2-production.up.railway.app"
   },
 
+  // Agent gate log: AI-agent visits and check-in answers (see src/agent-log.ts). This is the
+  // owner's shared D1 (also used by akhielesh.com, rows tagged with site) so AI visitors to
+  // every site show up in one panel. Optional — the gate still works without it.
+  "d1_databases": [
+    { "binding": "AGENT_DB", "database_name": "akhielesh-portfolio-analytics", "database_id": "30c9f8e8-2ac9-4815-93af-e3d432e2f758" }
+  ],
+
   "routes": [
     { "pattern": "dreamstreamstudio.ai/api/*", "zone_name": "dreamstreamstudio.ai" }
   ]

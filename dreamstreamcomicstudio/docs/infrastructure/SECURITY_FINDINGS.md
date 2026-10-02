@@ -100,3 +100,4 @@ repo config). **Companion:** `INFRA_MAP.md`. Re-run `get_advisors` after any DDL
 | Date | Change |
 |---|---|
 | 2026-06-16 | Initial snapshot: 216 Supabase advisories triaged; worker CORS + HMAC notes. |
+| 2026-10-02 | AI-agent gate at the edge: AI crawlers/agents get a 50-question check-in + synthetic canary record instead of pages; known AI agents get 403 on `/api/*` before the request reaches Railway (`api-proxy/src/agent-gate.ts`, `functions/_middleware.ts`). Plain HTTP clients, webhooks and search engines are unaffected. |

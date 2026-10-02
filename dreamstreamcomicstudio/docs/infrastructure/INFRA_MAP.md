@@ -75,10 +75,10 @@ the historically "insane" bills traced to Railway compute** (memory held 24/7 �
 | Workers (DreamStream) | **5**: `dreamstream-api`, `dreamstream-data-egress`, `dreamstream-live`, `dreamstream-email`, `dreamstream-studio` |
 | Workers (other, NOT in this repo) | `akhieleshpersonalwebsite`, `atlasd` — separate projects on the same account |
 | R2 buckets | **1**: `dreamstream-live` (ENAM, Standard) — live-stream segments only |
-| D1 | **1**: `akhielesh-portfolio-analytics` (12 tables, ~2 MB) — **unrelated to DreamStream** |
+| D1 | **1**: `akhielesh-portfolio-analytics` (owner's portfolio analytics). DreamStream uses only its `agent_visits` / `agent_checkins` tables (AI-agent gate log, shared across the owner's sites via a `site` column) through the `dreamstream-api` binding `AGENT_DB`. |
 | KV namespaces | **0** |
 | Durable Objects | `EventRoom` (live-worker), `Sandbox` (studio-worker) — both SQLite |
-| Pages | `comic2.pages.dev` + `dreamstreamstudio.ai` (frontend) |
+| Pages | `comic2.pages.dev` + `dreamstreamstudio.ai` (frontend). **Pages Functions:** one middleware (`functions/_middleware.ts`) — the page half of the AI-agent gate; `public/_routes.json` keeps it off static assets so it only runs on page loads. |
 
 ---
 
@@ -90,7 +90,7 @@ All 5 are `compatibility_date: 2026-01-01`. Routes are carved out of the
 
 | Worker | Repo dir | Route | Bindings | Purpose |
 |---|---|---|---|---|
-| **dreamstream-api** | `api-proxy/` | `dreamstreamstudio.ai/api/*` | var `BACKEND_ORIGIN` → Railway | Same-origin reverse proxy to the Railway backend; sets `X-Forwarded-For` from `CF-Connecting-IP`; pass-through (no auth); 502 if backend down. **This is what makes the Pages frontend talk to Railway same-origin.** |
+| **dreamstream-api** | `api-proxy/` | `dreamstreamstudio.ai/api/*` | var `BACKEND_ORIGIN` → Railway; D1 `AGENT_DB` → `akhielesh-portfolio-analytics` (agent log only) | Same-origin reverse proxy to the Railway backend; sets `X-Forwarded-For` from `CF-Connecting-IP`; pass-through (no auth); 502 if backend down. **This is what makes the Pages frontend talk to Railway same-origin.** Also the **AI-agent gate** (2026-10): answers `/api/agent-gate` (check-in page) and `/api/agent-gate/checkin` (50 questions / answers) itself, and returns 403 to known AI agents on every other `/api/*` — so agents never reach or wake Railway. Visits + answers are logged to `agent_visits` / `agent_checkins` with `site = dreamstreamstudio.ai`. |
 | **dreamstream-live** | `live-worker/` | `dreamstreamstudio.ai/live-api/*` | DO `EVENT_ROOM` (`EventRoom`), R2 `LIVE_BUCKET` (`dreamstream-live`), var `ALLOWED_ORIGINS` | Live-stream API. R2 segment rail (zero egress). EventRoom DO = chat/presence/lobby/moderation/WebRTC signaling. DO **alarm** janitor purges segments @24h, recordings @7d (keeps R2 bounded). |
 | **dreamstream-studio** | `studio-worker/` | `*.dreamstreamstudio.ai/*` (wildcard previews) | DO `Sandbox` (`@cloudflare/sandbox`), **Container `standard-3` = 2 vCPU / 8 GiB, max 3** (capped from 50 on 2026-06-16), secret `STUDIO_HMAC_SECRET`, var `STUDIO_PREVIEW_DOMAIN`, optional `CLOUDFLARE_API_TOKEN`/`VERCEL_TOKEN` | Per-user code sandbox/container. HMAC-signed control POSTs from the backend (`STUDIO_WORKER_URL`): `launch`/`deploy`/`logs`/`stop`. ⚠️ **Containers are the one Cloudflare cost that is NOT free** — see `COST_RUNBOOK.md` §3. |
 | **dreamstream-email** | `email-worker/` | none (`*.workers.dev`) | `send_email` binding `EMAIL`, secrets `EMAIL_HMAC_SECRET` + `SUPABASE_AUTH_HOOK_SECRET`, vars `EMAIL_FROM`/`SUPABASE_VERIFY_URL`/brand | Transactional email. `POST /send` (HMAC `x-email-signature`); `POST /auth-hook` = Supabase Send Email Hook (Standard Webhooks sig). Caps live in backend config (200/day, 2500/mo). |
@@ -255,7 +255,7 @@ Production branch **`Dreamstrream-v1`** (note the triple-r — it is the real br
 The `docs/studio/autopilot/**` specs describe a rich Workers + Workflows + KV + D1 +
 Hyperdrive + Queues platform and a migration off Railway. **None of that is live.** As of
 2026-06-16 DreamStream uses: **5 Workers, 1 R2 bucket, 2 Durable Objects, Supabase Postgres,
-1 Railway backend.** There is **no KV, no DreamStream D1, no Hyperdrive, no Queues, no
+1 Railway backend** (plus the shared agent-log D1 tables above). There is **no KV, no DreamStream-owned D1, no Hyperdrive, no Queues, no
 Workflows, no Supabase Edge Functions.** Treat the autopilot specs as target design only.
 
 ---
@@ -265,3 +265,4 @@ Workflows, no Supabase Edge Functions.** Treat the autopilot specs as target des
 | Date | Change |
 |---|---|
 | 2026-06-16 | Initial authoritative map created from live-infra audit. App-Sleeping enabled on Comic2 + SearXNG. |
+| 2026-10-02 | AI-agent gate: Pages middleware (`functions/_middleware.ts`, `public/_routes.json`) + `dreamstream-api` handles `/api/agent-gate*` and 403s AI agents at the edge; D1 binding `AGENT_DB` (shared agent log). `robots.txt` (Content-Signal: search=yes, ai-train=no, ai-input=no) + `llms.txt`. |
