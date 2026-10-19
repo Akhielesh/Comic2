@@ -257,6 +257,8 @@ export class EventRoom {
     await this.state.storage.put({
       meta,
       hostKey,
+      // Stream Studio account that created the event (never exposed in meta).
+      ownerId: String((body as { ownerId?: unknown }).ownerId ?? '').slice(0, 64),
       admitted: [] as string[],
       chat: [] as ChatMsg[],
       stats: emptyStats(),

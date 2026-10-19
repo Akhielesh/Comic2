@@ -1,0 +1,216 @@
+// Sign in / create account / unlock — right inside Stream Studio.
+// New accounts need the welcome code; it's verified on the server only.
+import React, { useEffect, useState } from 'react';
+import {
+  createAccount,
+  openAuth,
+  redeemWelcomeCode,
+  registerAuthOpener,
+  sendPasswordReset,
+  signIn,
+  useAccount,
+  type AuthMode,
+} from '../account';
+import { Icon } from '../ui/icons';
+import { Btn, type PushToast } from '../ui/primitives';
+
+const maxDob = (() => {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() - 8);
+  return d.toISOString().slice(0, 10);
+})();
+
+export function AuthSheetHost({ push }: { push: PushToast }) {
+  const [open, setOpen] = useState<{ mode: AuthMode; reason?: string } | null>(null);
+  const account = useAccount();
+
+  useEffect(() => {
+    registerAuthOpener((mode, reason) => setOpen({ mode, reason }));
+    return () => registerAuthOpener(null);
+  }, []);
+
+  // Signed in but locked: offer the code step automatically once.
+  useEffect(() => {
+    if (open && account.status === 'member') setOpen(null);
+    if (open?.mode !== 'code' && open && account.status === 'needs_code') setOpen({ mode: 'code', reason: open.reason });
+  }, [account.status, open]);
+
+  if (!open) return null;
+  return <AuthSheet mode={open.mode} reason={open.reason} onMode={(m) => setOpen({ ...open, mode: m })} onClose={() => setOpen(null)} push={push} suggestedName={account.suggestedName} />;
+}
+
+function AuthSheet({
+  mode,
+  reason,
+  onMode,
+  onClose,
+  push,
+  suggestedName,
+}: {
+  mode: AuthMode;
+  reason?: string;
+  onMode: (m: AuthMode) => void;
+  onClose: () => void;
+  push: PushToast;
+  suggestedName?: string;
+}) {
+  const [name, setName] = useState(suggestedName || '');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [dob, setDob] = useState('');
+  const [code, setCode] = useState('');
+  const [showCode, setShowCode] = useState(false);
+  const [agree, setAgree] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    setErr(null);
+    setNotice(null);
+  }, [mode]);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErr(null);
+    setBusy(true);
+    try {
+      if (mode === 'signin') {
+        const r = await signIn(email, password);
+        if (!r.ok) setErr(r.error || 'Could not sign in.');
+        else push('Signed in', { icon: 'check' });
+      } else if (mode === 'create') {
+        if (!agree) {
+          setErr('Please accept the Terms and Privacy Policy.');
+          return;
+        }
+        if (!dob) {
+          setErr('Add your date of birth (you must be 8 or older).');
+          return;
+        }
+        const r = await createAccount({ name, email, password, dob, code });
+        if (!r.ok) setErr(r.error || 'Could not create the account.');
+        else if (r.confirmEmail) {
+          setNotice(`Almost there — we sent a confirmation link to ${email.trim()}. Open it, then sign in here. Your welcome code is already applied.`);
+          onMode('signin');
+        } else push('Welcome to Stream Studio!', { icon: 'sparkles' });
+      } else if (mode === 'code') {
+        const r = await redeemWelcomeCode(code, name);
+        if (!r.ok) setErr(r.error || 'That code did not work.');
+        else push('Unlocked — welcome to Stream Studio!', { icon: 'sparkles' });
+      } else if (mode === 'reset') {
+        const r = await sendPasswordReset(email);
+        if (!r.ok) setErr(r.error || 'Could not send the email.');
+        else setNotice('If that email has an account, a reset link is on its way.');
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const title = { signin: 'Sign in', create: 'Create your account', code: 'Enter your welcome code', reset: 'Reset your password' }[mode];
+  const sub = {
+    signin: 'Pick up where you left off — events, recordings and your baby monitor follow your account.',
+    create: 'New accounts need a welcome code. Viewers never need an account — just a name.',
+    code: 'Your account is signed in. Enter the welcome code you were given to unlock hosting and the baby monitor.',
+    reset: 'We’ll email you a secure link.',
+  }[mode];
+
+  return (
+    <div className="sheet-scrim" role="dialog" aria-modal="true" aria-labelledby="auth-title" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <form className="sheet auth-sheet fade-in" onSubmit={submit} noValidate>
+        <div className="sheet-head">
+          <div className="sheet-icon"><Icon name={mode === 'code' ? 'lock' : 'user'} size={18} /></div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <h2 id="auth-title" className="sheet-title serif">{title}</h2>
+            <div className="sheet-sub">{reason && mode !== 'code' ? reason : sub}</div>
+          </div>
+          <button type="button" className="iconbtn" onClick={onClose} aria-label="Close"><Icon name="x" size={17} /></button>
+        </div>
+
+        {notice && <div className="banner info" style={{ marginBottom: 12 }}><Icon name="info" size={15} />{notice}</div>}
+        {err && <div className="banner err" role="alert" style={{ marginBottom: 12 }}><Icon name="alert" size={15} />{err}</div>}
+
+        <div className="auth-fields">
+          {(mode === 'create' || mode === 'code') && (
+            <label className="field">
+              <span className="field-label">Your name <span className="field-hint">how family &amp; viewers find you</span></span>
+              <input className="input" autoComplete="name" value={name} maxLength={40} onChange={(e) => setName(e.target.value)} placeholder="e.g. Priya Sharma" required />
+            </label>
+          )}
+          {mode !== 'code' && (
+            <label className="field">
+              <span className="field-label">Email</span>
+              <input className="input" type="email" inputMode="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" required />
+            </label>
+          )}
+          {(mode === 'signin' || mode === 'create') && (
+            <label className="field">
+              <span className="field-label">Password {mode === 'create' && <span className="field-hint">8+ characters</span>}</span>
+              <input className="input" type="password" autoComplete={mode === 'create' ? 'new-password' : 'current-password'} value={password} minLength={mode === 'create' ? 8 : undefined} onChange={(e) => setPassword(e.target.value)} required />
+            </label>
+          )}
+          {mode === 'create' && (
+            <label className="field">
+              <span className="field-label">Date of birth <span className="field-hint">8+ to join</span></span>
+              <input className="input" type="date" max={maxDob} value={dob} onChange={(e) => setDob(e.target.value)} required />
+            </label>
+          )}
+          {(mode === 'create' || mode === 'code') && (
+            <label className="field">
+              <span className="field-label">Welcome code <span className="field-hint">case-sensitive</span></span>
+              <div className="code-row">
+                <input
+                  className="input mono"
+                  type={showCode ? 'text' : 'password'}
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  value={code}
+                  maxLength={64}
+                  onChange={(e) => setCode(e.target.value)}
+                  placeholder="Enter exactly as given"
+                  required
+                />
+                <button type="button" className="iconbtn" onClick={() => setShowCode((v) => !v)} aria-label={showCode ? 'Hide code' : 'Show code'}>
+                  <Icon name="eye" size={16} />
+                </button>
+              </div>
+            </label>
+          )}
+          {mode === 'create' && (
+            <label className="auth-agree">
+              <input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} />
+              <span>I agree to the <a href="/?view=terms" target="_blank" rel="noopener">Terms</a> and <a href="/?view=privacy" target="_blank" rel="noopener">Privacy Policy</a>.</span>
+            </label>
+          )}
+        </div>
+
+        <Btn variant="solid" size="lg" type="submit" disabled={busy} className="auth-submit">
+          {busy ? 'One moment…' : mode === 'signin' ? 'Sign in' : mode === 'create' ? 'Create account' : mode === 'code' ? 'Unlock Stream Studio' : 'Send reset link'}
+        </Btn>
+
+        <div className="auth-switch">
+          {mode === 'signin' && (
+            <>
+              <button type="button" className="linkish" onClick={() => onMode('reset')}>Forgot password?</button>
+              <span>New here? <button type="button" className="linkish" onClick={() => onMode('create')}>Create an account</button></span>
+            </>
+          )}
+          {mode === 'create' && <span>Already have an account? <button type="button" className="linkish" onClick={() => onMode('signin')}>Sign in</button></span>}
+          {mode === 'reset' && <button type="button" className="linkish" onClick={() => onMode('signin')}>Back to sign in</button>}
+          {mode === 'code' && <span className="faint">Don’t have a code? Ask the person who invited you.</span>}
+        </div>
+
+        <div className="auth-secure">
+          <Icon name="shield" size={13} />
+          Codes are checked on our server only, never stored on your device, and repeated wrong guesses are locked out.
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/** Convenience for "sign in to continue" call sites. */
+export const requireSignIn = (reason: string) => openAuth('signin', reason);

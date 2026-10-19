@@ -1,5 +1,6 @@
 /** REST + WebSocket client for the dreamstream-live worker. */
 
+import { accessToken } from './account';
 import { WORKER_BASE } from './config';
 import type { EventMeta, ServerMsg, StatsResponse } from './protocol';
 
@@ -162,14 +163,25 @@ export async function createEvent(opts: {
   scheduledAt?: number | null;
   maxViewers?: number;
 }): Promise<CreatedEvent> {
+  // Hosting is for signed-in members; the worker verifies this token with Supabase.
+  const token = await accessToken();
   const res = await fetch(`${WORKER_BASE}/api/events`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify(opts),
   });
   assertWorkerResponse(res);
+  if (res.status === 401) throw new SignInRequiredError();
   if (!res.ok) throw new Error(`create failed (${res.status})`);
   return res.json();
+}
+
+/** Thrown when hosting needs a signed-in Stream Studio member. */
+export class SignInRequiredError extends Error {
+  constructor() {
+    super('Sign in to your Stream Studio account to host. Viewers never need one.');
+    this.name = 'SignInRequiredError';
+  }
 }
 
 export async function getEvent(id: string): Promise<EventMeta> {
@@ -315,12 +327,21 @@ export async function uploadSegment(
 export async function fetchSegment(
   id: string,
   seq: number,
+  timeoutMs = 15_000,
 ): Promise<{ buf: ArrayBuffer; elapsedMs: number }> {
   const t0 = performance.now();
-  const res = await fetch(segmentUrl(id, seq));
-  if (!res.ok) throw new Error(`segment ${seq} fetch failed (${res.status})`);
-  const buf = await res.arrayBuffer();
-  return { buf, elapsedMs: performance.now() - t0 };
+  // A hung request used to pin one of the 3 fetch slots forever; abort it so
+  // the fetcher can retry instead of the player starving.
+  const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => ctl.abort(), timeoutMs) : null;
+  try {
+    const res = await fetch(segmentUrl(id, seq), ctl ? { signal: ctl.signal } : undefined);
+    if (!res.ok) throw new Error(`segment ${seq} fetch failed (${res.status})`);
+    const buf = await res.arrayBuffer();
+    return { buf, elapsedMs: performance.now() - t0 };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /** Close codes the room uses for "you were removed on purpose — don't reconnect". */

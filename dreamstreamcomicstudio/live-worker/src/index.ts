@@ -15,16 +15,31 @@
  *   GET  /api/events/:id/segments/:seq     viewers fetch a segment (CDN-cached)
  *   GET  /api/events/:id/stats?k=hostKey   host-gated analytics + activity log
  *   POST /api/events/:id/rsvp              name-only "save my spot" from invites
+ *
+ * Baby Monitor (never records — media is peer-to-peer):
+ *   GET  /api/monitor/vapid                Web Push public key
+ *   GET  /api/monitor/:nurseryId/ws        WebSocket → MonitorRoom (auth = first frame)
+ *
+ * Creating an event requires a signed-in Stream Studio member (welcome-code
+ * gated; verified against Supabase with the caller's own token). Watching
+ * never needs an account.
  */
 
 import { EventRoom } from './eventRoom';
+import { KEY_HOLDER, MonitorRoom, UUID_RE } from './monitorRoom';
+import { bearerFrom, verifyMember } from './supabaseAuth';
 
-export { EventRoom };
+export { EventRoom, MonitorRoom };
 
 export interface Env {
   EVENT_ROOM: DurableObjectNamespace;
+  MONITOR_ROOM: DurableObjectNamespace;
   LIVE_BUCKET: R2Bucket;
   ALLOWED_ORIGINS: string;
+  SUPABASE_URL?: string;
+  SUPABASE_PUBLISHABLE_KEY?: string;
+  TURN_KEY_ID?: string;
+  TURN_KEY_API_TOKEN?: string;
 }
 
 const MAX_SEGMENT_BYTES = 32 * 1024 * 1024; // hard cap; ~6.8 Mbps * 10 s is well under this
@@ -53,7 +68,7 @@ function corsHeaders(req: Request, env: Env): Record<string, string> {
   return {
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Methods': 'GET,POST,PUT,OPTIONS',
-    'Access-Control-Allow-Headers': 'content-type,x-host-key',
+    'Access-Control-Allow-Headers': 'content-type,x-host-key,authorization',
     'Access-Control-Max-Age': '86400',
     Vary: 'Origin',
   };
@@ -81,18 +96,50 @@ export default {
     const url = new URL(req.url);
     // Behind the site route the worker is mounted at /live-api/* — strip the prefix.
     const pathname = url.pathname.replace(/^\/live-api(?=\/)/, '');
+
+    // ---------------------------------------------------------- baby monitor
+    const mon = pathname.match(/^\/api\/monitor\/(vapid|[0-9a-f-]{36})(?:\/(ws))?$/);
+    if (mon) {
+      try {
+        if (mon[1] === 'vapid' && req.method === 'GET') {
+          if (!env.MONITOR_ROOM) return withCors(json({ error: 'monitor unavailable' }, 503), cors);
+          const res = await env.MONITOR_ROOM.get(env.MONITOR_ROOM.idFromName(KEY_HOLDER)).fetch(new Request('https://monitor.internal/vapid'));
+          const keys = (await res.json()) as { publicKey?: string };
+          return withCors(json({ publicKey: keys.publicKey ?? null }, res.ok ? 200 : 503, { 'cache-control': 'public, max-age=3600' }), cors);
+        }
+        if (mon[2] === 'ws' && UUID_RE.test(mon[1])) {
+          // Auth happens on the first frame inside the room (no tokens in URLs/logs).
+          return env.MONITOR_ROOM.get(env.MONITOR_ROOM.idFromName(mon[1])).fetch(
+            new Request(`https://monitor.internal/ws?nid=${mon[1]}`, req),
+          );
+        }
+      } catch (err) {
+        console.error('monitor route error', err);
+        return withCors(json({ error: 'internal error' }, 500), cors);
+      }
+      return withCors(json({ error: 'not found' }, 404), cors);
+    }
+
     const m = pathname.match(/^\/api\/events(?:\/([a-z0-9]+))?(?:\/(ws|segments|stats|rsvp|recordings|exit))?(?:\/(\d+))?$/);
     if (!m) return withCors(json({ error: 'not found' }, 404), cors);
     const [, id, sub, seqStr] = m;
 
     try {
-      // POST /api/events — create
+      // POST /api/events — create (signed-in Stream Studio members only)
       if (!id && req.method === 'POST') {
+        const token = bearerFrom(req);
+        const who = token ? await verifyMember(env, token) : null;
+        if (!who) {
+          return withCors(
+            json({ error: 'sign_in_required', message: 'Sign in to your Stream Studio account to host. Viewers never need one.' }, 401),
+            cors,
+          );
+        }
         const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
         const eventId = newEventId();
         const res = await roomCall(env, eventId, '/init', {
           method: 'POST',
-          body: JSON.stringify({ ...body, id: eventId }),
+          body: JSON.stringify({ ...body, host: body.host || who.displayName, ownerId: who.userId, id: eventId }),
           headers: { 'content-type': 'application/json' },
         });
         if (!res.ok) return withCors(res, cors);

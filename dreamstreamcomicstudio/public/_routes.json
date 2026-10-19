@@ -9,6 +9,8 @@
     "/stream-studio.svg",
     "/robots.txt",
     "/llms.txt",
-    "/favicon.ico"
+    "/favicon.ico",
+    "/live-sw.js",
+    "/live.webmanifest"
   ]
 }

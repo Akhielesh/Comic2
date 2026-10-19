@@ -3,15 +3,18 @@
 // (chat / people / activity / health) and a phone broadcaster mode.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { getEvent, openRoomSocket, sendHostExitBeacon, uploadSegment, type RoomSocket, type SocketStatus } from '../api';
+import { SaveSheet, autoSave } from '../components/SaveSheet';
+import { checkLimit, fmtRemaining, markAlerted } from '../limits';
+import { DiskRecorder, freeSpaceBytes, listUnsavedRecordings, openUnsavedRecording, type FinishedRecording, type UnsavedRecording } from '../recorder';
+import { AbrController, SegmentUploader } from '../uploader';
+import { ScreenWakeLock } from '../wakeLock';
 import { IS_LOCAL_DEV, SEGMENT_MS, presetById, type QualityPreset } from '../config';
-import { addMyEvent, addMyRecording, findMyEvent, updateMyEvent } from '../events';
+import { addMyEvent, findMyEvent, updateMyEvent } from '../events';
 import { pushEventToCloud } from '../sync';
 import { ProgramAudioMixer } from '../studio/audioMixer';
 import { HostPeers, type GuestLink } from '../studio/rtc';
 import {
-  LocalRecorder,
   SegmentedRecorder,
-  downloadBlob,
   lensLabel,
   listVideoInputs,
   openCamera,
@@ -28,9 +31,9 @@ import { guestUrl, viewerUrl } from '../nav';
 import { loadPrefs, playChime, savePrefs } from '../prefs';
 import type { ChatMsg, LobbyEntry, LogEntry, PersonEntry, StreamStatus } from '../protocol';
 import { MULTI_SCENES, ProgramCompositor, SCENES, fitCanvasToSource, type ProgramTile, type SceneId } from '../studio/compositor';
-import { uploadRecording } from '../api';
 import { ActivityRail, ChatRail, HealthRail, PeopleRail } from '../components/rails';
 import { SceneSketch } from '../components/scenes';
+import { HelpButton } from '../components/Guide';
 import { Icon } from '../ui/icons';
 import { StreamStudioMark } from '../ui/logo';
 import {
@@ -94,7 +97,14 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   const tileVideosRef = useRef(new Map<string, HTMLVideoElement>());
   const socketRef = useRef<RoomSocket | null>(null);
   const segRecRef = useRef<SegmentedRecorder | null>(null);
-  const localRecRef = useRef<LocalRecorder | null>(null);
+  const localRecRef = useRef<DiskRecorder | null>(null);
+  const uploaderRef = useRef<SegmentUploader | null>(null);
+  const abrRef = useRef<AbrController | null>(null);
+  const wakeRef = useRef(new ScreenWakeLock());
+  const streamAlertsRef = useRef(new Set<number>());
+  const recAlertsRef = useRef(new Set<number>());
+  const afterSaveRef = useRef<(() => void) | null>(null);
+  const hiddenAtRef = useRef<number | null>(null);
   const nextSeqRef = useRef(1);
   const recPartRef = useRef(1);
   const upEma = useRef(new Ema());
@@ -133,7 +143,12 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   const [chatOpen, setChatOpen] = useState(prefs.chatOpen);
   const [device, setDevice] = useState<'desktop' | 'mobile'>('desktop');
   const [sockStatus, setSockStatus] = useState<SocketStatus>('connected');
-  const [stats, setStats] = useState({ lastSeq: 0, failures: 0, upBps: null as number | null, encBps: null as number | null });
+  const [stats, setStats] = useState({ lastSeq: 0, failures: 0, dropped: 0, backlog: 0, abrBps: null as number | null, upBps: null as number | null, encBps: null as number | null });
+  const [pendingSave, setPendingSave] = useState<FinishedRecording | null>(null);
+  const [unsaved, setUnsaved] = useState<UnsavedRecording[]>([]);
+  const [limitBanner, setLimitBanner] = useState<{ kind: 'stream' | 'rec'; text: string } | null>(null);
+  const [streamExtraMin, setStreamExtraMin] = useState(0);
+  const [recElapsed, setRecElapsed] = useState(0);
   const [viewerCurve, setViewerCurve] = useState<number[]>([]);
   const [segMs, setSegMs] = useState(SEGMENT_MS);
   const [maxViewers, setMaxViewers] = useState(100);
@@ -377,8 +392,13 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
 
     const clock = window.setInterval(() => {
       setClock((c) => c + 1);
-      if (localRecRef.current) setRecBytes(localRecRef.current.bytes);
+      if (localRecRef.current) {
+        setRecBytes(localRecRef.current.bytes);
+        setRecElapsed(localRecRef.current.elapsedMs);
+      }
     }, 1000);
+    // Recordings that reached disk but were never saved (crash / closed tab).
+    void listUnsavedRecordings().then((list) => !cancelled && setUnsaved(list.filter((r) => r.eventId === eventId)));
     // Who's talking: light the speaking ring on cam tiles and, in Spotlight/
     // Sidebar with focus on Auto and no screen on stage, follow the active
     // speaker (2.5 s hysteresis so the stage never ping-pongs mid-sentence).
@@ -435,7 +455,11 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
       window.clearInterval(curveTimer);
       window.clearInterval(healthTimer);
       segRecRef.current?.stop();
+      uploaderRef.current?.close();
+      // Leaving mid-recording: the disk copy survives and shows up as
+      // "unsaved" for recovery instead of being silently lost.
       void localRecRef.current?.stop();
+      void wakeRef.current.disable();
       hostPeersRef.current?.closeAll();
       mixerRef.current?.close();
       for (const v of tileVideosRef.current.values()) v.srcObject = null;
@@ -476,7 +500,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   // grace still backstops those.
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (statusRef.current === 'live') {
+      if (statusRef.current === 'live' || localRecRef.current || pendingSaveRef.current) {
         e.preventDefault();
         e.returnValue = '';
       }
@@ -500,23 +524,45 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   // ------------------------------------------------------------- streaming
   const startSegments = () => {
     if (!mixed || !mime) return;
-    const videoBps = prefs.videoBpsOverride > 0 ? prefs.videoBpsOverride : preset.videoBps;
+    const targetBps = prefs.videoBpsOverride > 0 ? prefs.videoBpsOverride : preset.videoBps;
+    // Adaptive bitrate survives pause/resume within a session (the uplink
+    // didn't change just because we cut to BRB).
+    const abr = abrRef.current ?? new AbrController(targetBps);
+    abrRef.current = abr;
+    uploaderRef.current?.close();
+    const uploader = new SegmentUploader(
+      (seq, durMs, blob) => uploadSegment(eventId, hostKey, seq, durMs, blob),
+      {
+        onUploaded: (seq, durMs, { elapsedMs, bytes }) => {
+          upElapsedEma.current.push(elapsedMs);
+          const next = abr.observe(elapsedMs, durMs, uploader.pending);
+          segRecRef.current?.setVideoBps(next);
+          setStats((s) => ({
+            ...s,
+            lastSeq: Math.max(s.lastSeq, seq),
+            abrBps: next,
+            encBps: encEma.current.push((bytes * 8) / (durMs / 1000)),
+            upBps: upEma.current.push((bytes * 8) / (elapsedMs / 1000)),
+          }));
+        },
+        onFailed: () => {
+          segRecRef.current?.setVideoBps(abr.failed());
+          setStats((s) => ({ ...s, failures: s.failures + 1, abrBps: abr.current }));
+        },
+        onDropped: () => {
+          segRecRef.current?.setVideoBps(abr.failed());
+          setStats((s) => ({ ...s, dropped: s.dropped + 1, abrBps: abr.current }));
+        },
+        onBacklog: (n) => setStats((s) => (s.backlog === n ? s : { ...s, backlog: n })),
+      },
+    );
+    uploaderRef.current = uploader;
     const rec = new SegmentedRecorder(
       mixed,
-      { mimeType: mime, videoBps, audioBps: preset.audioBps, segMs, startSeq: nextSeqRef.current },
+      { mimeType: mime, videoBps: abr.current, audioBps: preset.audioBps, segMs, startSeq: nextSeqRef.current },
       (blob, seq, durMs) => {
         nextSeqRef.current = seq + 1;
-        uploadSegment(eventId, hostKey, seq, durMs, blob)
-          .then(({ elapsedMs, bytes }) => {
-            upElapsedEma.current.push(elapsedMs);
-            setStats((s) => ({
-              ...s,
-              lastSeq: Math.max(s.lastSeq, seq),
-              encBps: encEma.current.push((bytes * 8) / (durMs / 1000)),
-              upBps: upEma.current.push((bytes * 8) / (elapsedMs / 1000)),
-            }));
-          })
-          .catch(() => setStats((s) => ({ ...s, failures: s.failures + 1 })));
+        uploader.enqueue(seq, durMs, blob);
       },
     );
     rec.start();
@@ -532,6 +578,10 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     setStartedAt(freshStart);
     setStatus('live');
     startSegments();
+    streamAlertsRef.current.clear();
+    setStreamExtraMin(0);
+    // Phones stop the camera when the screen sleeps — keep it awake on air.
+    void wakeRef.current.enable();
     updateMyEvent(eventId, { status: 'live', startedAt: freshStart, endedAt: null });
     const mine = findMyEvent(eventId);
     if (mine) void pushEventToCloud(mine);
@@ -542,7 +592,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   const pause = () => {
     socketRef.current?.send({ t: 'state', status: 'paused' });
     setStatus('paused');
-    segRecRef.current?.stop(); // final partial segment still flushes
+    segRecRef.current?.stop(); // final partial segment still flushes (the uploader keeps running)
     segRecRef.current = null;
   };
 
@@ -552,56 +602,161 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     startSegments();
   };
 
-  const endStream = async () => {
-    if (!window.confirm('End the stream for everyone?')) return;
+  const endStream = async (opts: { auto?: boolean } = {}) => {
+    if (!opts.auto && !window.confirm('End the stream for everyone?')) return;
     socketRef.current?.send({ t: 'state', status: 'ended' });
     setStatus('ended');
     segRecRef.current?.stop();
     segRecRef.current = null;
-    if (localRecRef.current) await stopRecording();
+    void wakeRef.current.disable();
+    setLimitBanner(null);
     updateMyEvent(eventId, { status: 'ended', peakViewers: Math.max(...viewerCurve, viewers), endedAt: Date.now() });
     const mine = findMyEvent(eventId);
     if (mine) void pushEventToCloud(mine);
-    push('Stream ended', { icon: 'stop' });
-    nav.summary(eventId, hostKey);
+    push(opts.auto ? 'Stream ended — your time limit was reached' : 'Stream ended', { icon: 'stop', duration: 3600 });
+    // With a recording to save, the recap waits until the save sheet closes.
+    if (localRecRef.current) {
+      afterSaveRef.current = () => nav.summary(eventId, hostKey);
+      await stopRecording();
+    } else {
+      nav.summary(eventId, hostKey);
+    }
   };
 
   // ------------------------------------------------------------- recording
-  const startRecording = () => {
-    if (!mixed || !mime) return;
-    const videoBps = prefs.videoBpsOverride > 0 ? prefs.videoBpsOverride : preset.videoBps;
-    localRecRef.current = new LocalRecorder(mixed.clone(), mime, videoBps, prefs.recordHighBitrate ? 2.5 : 1);
-    recStartRef.current = Date.now();
-    setRecOn(true);
-    hostLog('rec', 'REC', `Local recording started · part ${recPartRef.current}`);
+  const startingRecRef = useRef(false);
+  const startRecording = async () => {
+    if (!mixed || !mime || localRecRef.current || startingRecRef.current) return;
+    startingRecRef.current = true;
+    try {
+      const streamBps = prefs.videoBpsOverride > 0 ? prefs.videoBpsOverride : preset.videoBps;
+      // Phones get a 1× master: a second high-bitrate encoder is what makes
+      // phone streams stutter. Desktops keep the sharper 2.5× master.
+      const factor = prefs.recordHighBitrate && !isPhone ? 2.5 : 1;
+      const free = await freeSpaceBytes();
+      const needPerHour = ((streamBps * factor + 192_000) / 8) * 3600;
+      if (free != null && free < needPerHour / 2) {
+        push(`Low storage: about ${Math.max(1, Math.round((free / needPerHour) * 60))} min of recording space left on this device`, { icon: 'alert', duration: 5000 });
+      }
+      const file = recordingFilename(eventId, recPartRef.current, mime);
+      localRecRef.current = await DiskRecorder.start(mixed.clone(), mime, Math.round(streamBps * factor), file, {
+        eventId,
+        title: title || 'Untitled stream',
+      });
+      recStartRef.current = Date.now();
+      recAlertsRef.current.clear();
+      setRecElapsed(0);
+      setRecOn(true);
+      hostLog('rec', 'REC', `Local recording started · part ${recPartRef.current}${localRecRef.current.onDisk ? ' · writing to disk' : ''}`);
+      if (prefs.recLimitMin > 0) push(`Recording · auto-stops after ${prefs.recLimitMin} min (you'll get a heads-up first)`, { icon: 'clock', duration: 3200 });
+    } catch {
+      push('Could not start recording on this browser', { icon: 'alert' });
+    } finally {
+      startingRecRef.current = false;
+    }
   };
 
   const stopRecording = async () => {
     const rec = localRecRef.current;
     localRecRef.current = null;
     setRecOn(false);
-    if (rec) {
-      const blob = await rec.stop();
-      const durMs = Date.now() - recStartRef.current;
-      if (blob.size > 0 && mime) {
-        const file = recordingFilename(eventId, recPartRef.current, mime);
-        downloadBlob(blob, file); // device copy first — never lose the master
-        addMyRecording({ eventId, title: title || 'Untitled stream', file, bytes: blob.size, at: Date.now() });
-        hostLog('rec', 'REC', `Recording saved to device · ${fmtBytes(blob.size)}`);
-        if (prefs.cloudRecordings) {
-          // Background upload to the 7-day server store; survives leaving the studio.
-          push(`Uploading ${fmtBytes(blob.size)} to your 7-day cloud store…`, { icon: 'refresh' });
-          uploadRecording(eventId, hostKey, blob, { file, durMs })
-            .then(() => push('Recording stored in the cloud (kept 7 days)', { icon: 'check' }))
-            .catch(() => push('Cloud upload failed — the device copy is safe', { icon: 'alert' }));
-        }
-      }
-      recPartRef.current += 1;
-      setRecBytes(0);
+    setLimitBanner((b) => (b?.kind === 'rec' ? null : b));
+    if (!rec) return;
+    const done = await rec.stop();
+    recPartRef.current += 1;
+    setRecBytes(0);
+    setRecElapsed(0);
+    if (done.bytes === 0) {
+      afterSaveRef.current?.();
+      afterSaveRef.current = null;
+      return;
+    }
+    hostLog('rec', 'REC', `Recording finished · ${fmtBytes(done.bytes)} — waiting for a save location`);
+    // A remembered destination saves silently; otherwise ask where it goes.
+    const where = prefs.saveTarget !== 'ask' && prefs.saveTarget !== 'picker' ? await autoSave(done, prefs.saveTarget) : null;
+    if (where) {
+      push(`Recording saved · ${where}`, { icon: 'check', duration: 3600 });
+      hostLog('rec', 'REC', `Recording saved · ${where}`);
+      afterSaveRef.current?.();
+      afterSaveRef.current = null;
+    } else {
+      setPendingSave(done);
     }
   };
 
-  const toggleRec = () => (recOn ? void stopRecording() : startRecording());
+  const closeSaveSheet = () => {
+    setPendingSave(null);
+    void listUnsavedRecordings().then((list) => setUnsaved(list.filter((r) => r.eventId === eventId)));
+    afterSaveRef.current?.();
+    afterSaveRef.current = null;
+  };
+
+  const recoverUnsaved = async (r: UnsavedRecording) => {
+    try {
+      setPendingSave(await openUnsavedRecording(r));
+    } catch {
+      push('That recording is no longer on this device', { icon: 'alert' });
+      setUnsaved((u) => u.filter((x) => x.name !== r.name));
+    }
+  };
+
+  const toggleRec = () => (recOn ? void stopRecording() : void startRecording());
+  const pendingSaveRef = useRef(pendingSave);
+  pendingSaveRef.current = pendingSave;
+
+  // ------------------------------------------------- time limits + alerts
+  // Stream and recording limits from Customize: heads-up at 5 min, 1 min and
+  // 10 s (toast + chime + banner with a one-tap extend), then the stream ends
+  // or the recording stops and asks where to save.
+  const liveSec = startedAt && status === 'live' ? (Date.now() - startedAt) / 1000 : 0;
+  useEffect(() => {
+    if (status === 'live' && prefs.streamLimitMin > 0) {
+      const res = checkLimit(liveSec, prefs.streamLimitMin + streamExtraMin, streamAlertsRef.current);
+      if (res.reached) {
+        void endStream({ auto: true });
+      } else if (res.alertAt != null && res.remainingSec != null) {
+        markAlerted(streamAlertsRef.current, res.alertAt);
+        const text = `Your stream ends in ${fmtRemaining(res.remainingSec)} (time limit)`;
+        setLimitBanner({ kind: 'stream', text });
+        push(text, { icon: 'clock', duration: 5000 });
+        playChime();
+        hostLog('warn', 'LIMIT', text);
+      }
+    }
+    if (localRecRef.current && prefs.recLimitMin > 0) {
+      const res = checkLimit(recElapsed / 1000, prefs.recLimitMin, recAlertsRef.current);
+      if (res.reached) {
+        push('Recording limit reached — stopping and saving', { icon: 'record', duration: 4000 });
+        playChime();
+        void stopRecording();
+      } else if (res.alertAt != null && res.remainingSec != null) {
+        markAlerted(recAlertsRef.current, res.alertAt);
+        const text = `Recording stops in ${fmtRemaining(res.remainingSec)} (length limit)`;
+        setLimitBanner((b) => (b?.kind === 'stream' ? b : { kind: 'rec', text }));
+        push(text, { icon: 'record', duration: 5000 });
+        playChime();
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [Math.floor(liveSec), recElapsed, status]);
+
+  // Phones pause the camera when the browser goes to the background. Say so
+  // plainly when the host comes back, instead of letting viewers guess.
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenAtRef.current = Date.now();
+      } else if (hiddenAtRef.current) {
+        const away = (Date.now() - hiddenAtRef.current) / 1000;
+        hiddenAtRef.current = null;
+        if (statusRef.current === 'live' && away > 3 && isPhone) {
+          push(`You were away ${Math.round(away)}s — phones pause the camera in the background, so viewers saw a freeze. Keep Stream Studio open while live.`, { icon: 'alert', duration: 6000 });
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [isPhone, push]);
 
   // ---------------------------------------------------------------- scenes
   const cutScene = async (id: SceneId) => {
@@ -769,7 +924,8 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
   const liveFor = startedAt && (status === 'live' || status === 'paused') ? fmtDuration((Date.now() - startedAt) / 1000) : null;
   const sceneObj = SCENES.find((s) => s.id === scene) || SCENES[0];
   const latencyEst = upElapsedEma.current.value != null ? segMs / 1000 + upElapsedEma.current.value / 1000 + 1 : null;
-  const healthy = stats.failures === 0 && sockStatus === 'connected';
+  const healthy = stats.failures === 0 && stats.dropped === 0 && sockStatus === 'connected';
+  const strained = recOn && status === 'live' && (stats.backlog > 2 || !!abrRef.current?.degraded);
   // Self-view mirroring: explicit preference wins; auto = front cam in Solo
   // (matching camera apps). The outgoing program is NEVER mirrored.
   const mirrorSelf =
@@ -791,13 +947,15 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
       ['Target bitrate', fmtBps((prefs.videoBpsOverride || preset.videoBps) + preset.audioBps)],
       ['Encoded (actual)', fmtBps(stats.encBps)],
       ['Upload speed', fmtBps(stats.upBps)],
+      ['Auto quality', stats.abrBps ? `${fmtBps(stats.abrBps)}${abrRef.current?.degraded ? ' (eased for your uplink)' : ''}` : '—'],
       ['Segment', stats.lastSeq ? `#${stats.lastSeq} · ${segMs / 1000}s` : '—'],
-      ['Upload failures', String(stats.failures)],
+      ['Upload queue', String(stats.backlog)],
+      ['Upload failures', `${stats.failures}${stats.dropped ? ` · ${stats.dropped} skipped to stay live` : ''}`],
       ['Viewers', String(viewers)],
       ['Codec', mime ? mime.split(';')[0].replace('video/', '') : '—'],
-      ['REC', recOn ? fmtBytes(recBytes) : 'off'],
+      ['REC', recOn ? `${fmtBytes(recBytes)} · ${fmtDuration(recElapsed / 1000)}${localRecRef.current?.onDisk ? ' · on disk' : ''}` : 'off'],
     ],
-    [preset, prefs, stats, viewers, mime, recOn, recBytes, segMs],
+    [preset, prefs, stats, viewers, mime, recOn, recBytes, recElapsed, segMs],
   );
 
   const railTabs = [
@@ -821,6 +979,47 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     );
   }
 
+  const extendStream = () => {
+    setStreamExtraMin((m) => m + 15);
+    streamAlertsRef.current.clear();
+    setLimitBanner(null);
+    push('Added 15 minutes to your stream', { icon: 'clock' });
+  };
+
+  const studioBanners = (
+    <>
+      {limitBanner && (
+        <div className="banner warn studio-banner" role="alert">
+          <Icon name="clock" size={15} />
+          <span style={{ flex: 1 }}>{limitBanner.text}</span>
+          {limitBanner.kind === 'stream' && <Btn variant="soft" size="sm" onClick={extendStream}>+15 min</Btn>}
+          {limitBanner.kind === 'rec' && <Btn variant="soft" size="sm" onClick={() => void stopRecording()}>Stop &amp; save now</Btn>}
+          <button className="iconbtn" aria-label="Dismiss" onClick={() => setLimitBanner(null)}><Icon name="x" size={14} /></button>
+        </div>
+      )}
+      {strained && (
+        <div className="banner warn studio-banner">
+          <Icon name="alert" size={15} />
+          <span style={{ flex: 1 }}>Your connection or device is struggling with streaming <b>and</b> recording at once. Stop the local recording to keep the stream smooth — viewers come first.</span>
+          <Btn variant="soft" size="sm" onClick={() => void stopRecording()}>Stop recording</Btn>
+        </div>
+      )}
+      {unsaved.length > 0 && !pendingSave && (
+        <div className="banner info studio-banner">
+          <Icon name="record" size={15} />
+          <span style={{ flex: 1 }}>
+            {unsaved.length === 1 ? 'A recording from this event was never saved' : `${unsaved.length} recordings from this event were never saved`} — it&apos;s safe on this device.
+          </span>
+          <Btn variant="soft" size="sm" onClick={() => void recoverUnsaved(unsaved[0])}>Save it now</Btn>
+        </div>
+      )}
+    </>
+  );
+
+  const saveSheet = pendingSave ? (
+    <SaveSheet rec={pendingSave} hostKey={hostKey} push={push} onClose={closeSaveSheet} />
+  ) : null;
+
   const mobileCtl: MobileCtl = {
     status, viewers, liveFor, chat, floats, mixed, micOn, camOn, scene,
     zoom: { min: zoomMin, max: zoomMax, step: zoomStep, value: zoomVal },
@@ -831,6 +1030,8 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
     toggleMic, toggleCam, flip: () => void flipCamera(), lens: () => void cycleLens(), applyZoom: (v) => void applyZoom(v),
     cutScene: (s) => void cutScene(s), sendChat, sendEmoji,
     goLive, end: () => void endStream(),
+    recOn, toggleRec, recLabel: recOn ? fmtDuration(recElapsed / 1000) : null,
+    banners: studioBanners,
     exit: () => (isPhone ? nav.dashboard() : setDevice('desktop')),
     hostName,
   };
@@ -840,6 +1041,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
       <div className="mstudio-fill">
         <MobileStudio ctl={mobileCtl} />
         {guestMonitors}
+        {saveSheet}
       </div>
     );
   }
@@ -889,7 +1091,8 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
         />
         <IconBtn name="users" label="Copy guest invite link" onClick={copyGuestInvite} />
         <IconBtn name="sliders" label="Customize" onClick={() => nav.settings()} />
-        {status === 'idle' && <Btn variant="solid" icon="broadcast" onClick={goLive} disabled={!mime}>Go live</Btn>}
+        <HelpButton />
+        {status === 'idle' && <Btn variant="solid" icon="broadcast" onClick={goLive} disabled={!mime} data-tour="studio-golive">Go live</Btn>}
         {(isLive || status === 'paused') && <Btn variant="danger" icon="stop" onClick={() => void endStream()}>End stream</Btn>}
         {status === 'ended' && <Btn variant="solid" icon="broadcast" onClick={goLive} disabled={!mime}>Go live again</Btn>}
         {status === 'ended' && <Btn variant="subtle" icon="chart" onClick={() => nav.summary(eventId, hostKey)}>View recap</Btn>}
@@ -913,7 +1116,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
         <div className="studio-main">
           <div className="studio-stage">
             {/* program preview */}
-            <div className="preview-wrap">
+            <div className="preview-wrap" data-tour="studio-preview">
               <div className="preview">
                 <VideoSink stream={mixed} className="program-video" mirror={mirrorSelf} />
                 {status === 'paused' && (
@@ -932,7 +1135,10 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
                 <div className="overlay-tl">
                   {status === 'live' && <span className="ov-pill live"><span className="ov-dot pulse" />LIVE{liveFor ? ` · ${liveFor}` : ''}</span>}
                   {status === 'paused' && <span className="ov-pill">PAUSED</span>}
-                  {recOn && <span className="ov-pill rec"><span className="ov-dot" />REC {fmtBytes(recBytes)}</span>}
+                  {recOn && <span className="ov-pill rec"><span className="ov-dot" />REC {fmtDuration(recElapsed / 1000)}{prefs.recLimitMin > 0 ? ` / ${prefs.recLimitMin}m` : ''} · {fmtBytes(recBytes)}</span>}
+                  {status === 'live' && prefs.streamLimitMin > 0 && startedAt && (
+                    <span className="ov-pill"><Icon name="clock" size={12} />{fmtDuration(Math.max(0, (prefs.streamLimitMin + streamExtraMin) * 60 - liveSec))} left</span>
+                  )}
                 </div>
                 <div className="overlay-tr">
                   <span className="ov-pill"><Icon name="eye" size={13} />{viewers}</span>
@@ -1053,6 +1259,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
                 <span className="spacer" />
               </div>
             </div>
+            {studioBanners}
             {IS_LOCAL_DEV && (
               <div className="localdev-note">
                 <Icon name="alert" size={14} />
@@ -1069,7 +1276,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
               </div>
               <div className="t-sep" />
               <div className="t-group">
-                <button className={cx('tbtn', 'rec', recOn && 'on')} onClick={toggleRec} aria-label="Record" title="Record (R)"><Icon name={recOn ? 'stop' : 'record'} size={16} /></button>
+                <button className={cx('tbtn', 'rec', recOn && 'on')} onClick={toggleRec} aria-label="Record" title="Record (R)" data-tour="studio-record"><Icon name={recOn ? 'stop' : 'record'} size={16} /></button>
                 <button className={cx('tbtn', status === 'paused' && 'on')} onClick={() => void cutScene(scene === 'brb' ? 'solo' : 'brb')} aria-label="Be right back" title="Be right back (B)"><Icon name="flag" size={17} /></button>
               </div>
               <div className="t-sep" />
@@ -1088,7 +1295,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
             </div>
 
             {/* scenes */}
-            <div className="scene-strip">
+            <div className="scene-strip" data-tour="studio-scenes">
               <div className="ss-head">
                 <h4>Scenes</h4>
                 <span className="faint" style={{ fontSize: 11 }}>press 1–3 to cut</span>
@@ -1117,7 +1324,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
           {/* right rail */}
           {chatOpen && (
             <aside className="studio-rail" aria-label="Studio panels">
-              <div className="rail-tabs">
+              <div className="rail-tabs" data-tour="studio-health">
                 <Tabs tabs={railTabs} value={railTab} onChange={(t) => setRailTab(t as RailTab)} />
                 <button className="rail-collapse-btn" onClick={() => setChatOpen(false)} aria-label="Collapse panel">
                   <Icon name="chevronRight" size={16} />
@@ -1182,6 +1389,7 @@ export function StudioView({ eventId, hostKey, nav, push }: { eventId: string; h
         </div>
       )}
       {guestMonitors}
+      {saveSheet}
     </div>
   );
 }
@@ -1215,6 +1423,10 @@ interface MobileCtl {
   end(): void;
   exit(): void;
   hostName: string;
+  recOn: boolean;
+  toggleRec(): void;
+  recLabel: string | null;
+  banners: React.ReactNode;
 }
 
 function MobileStudio({ ctl }: { ctl: MobileCtl }) {
@@ -1281,7 +1493,11 @@ function MobileStudio({ ctl }: { ctl: MobileCtl }) {
         <button className={cx('ms-round', showScenes && 'active')} onClick={() => setShowScenes((s) => !s)} aria-label="Scenes">
           <Icon name="layers" size={20} /><span>Scene</span>
         </button>
+        <button className={cx('ms-round', ctl.recOn && 'rec-on')} onClick={ctl.toggleRec} aria-label={ctl.recOn ? 'Stop recording' : 'Record'}>
+          <Icon name={ctl.recOn ? 'stop' : 'record'} size={18} /><span>{ctl.recLabel ?? 'Rec'}</span>
+        </button>
       </div>
+      <div className="ms-banners">{ctl.banners}</div>
 
       {/* chat peek */}
       <div className="ms-chatpeek" aria-hidden>

@@ -2,6 +2,7 @@
 
 import type { QualityPreset } from './config';
 import { LOCAL_REC_BITRATE_FACTOR } from './config';
+import { startTicker, type Ticker } from './studio/ticker';
 
 /**
  * Codec preference: MP4/H.264 first — if the host can produce it, every viewer
@@ -111,8 +112,9 @@ export interface SegmentHandler {
  */
 export class SegmentedRecorder {
   private active: MediaRecorder | null = null;
-  private timer: number | null = null;
+  private timer: Ticker | null = null;
   private seqCounter: number;
+  private videoBps: number;
 
   constructor(
     private stream: MediaStream,
@@ -120,20 +122,28 @@ export class SegmentedRecorder {
     private onSegment: SegmentHandler,
   ) {
     this.seqCounter = (opts.startSeq ?? 1) - 1;
+    this.videoBps = opts.videoBps;
   }
 
   get nextSeq(): number {
     return this.seqCounter + 1;
   }
 
+  /** Adaptive bitrate: applies from the NEXT segment (each is its own encoder). */
+  setVideoBps(bps: number): void {
+    this.videoBps = Math.max(150_000, Math.round(bps));
+  }
+
   start(): void {
     this.spin();
-    this.timer = window.setInterval(() => this.spin(), this.opts.segMs);
+    // Worker-driven: a main-thread interval in a hidden tab stretches 6 s
+    // segments to a minute, which looked to viewers like a frozen stream.
+    this.timer = startTicker(this.opts.segMs, () => this.spin());
   }
 
   /** Stops recording; the in-flight segment still flushes through onSegment. */
   stop(): void {
-    if (this.timer != null) window.clearInterval(this.timer);
+    this.timer?.stop();
     this.timer = null;
     if (this.active && this.active.state !== 'inactive') this.active.stop();
     this.active = null;
@@ -146,7 +156,7 @@ export class SegmentedRecorder {
     const chunks: Blob[] = [];
     const rec = new MediaRecorder(this.stream, {
       mimeType: this.opts.mimeType,
-      videoBitsPerSecond: this.opts.videoBps,
+      videoBitsPerSecond: this.videoBps,
       audioBitsPerSecond: this.opts.audioBps,
     });
     rec.ondataavailable = (e) => {

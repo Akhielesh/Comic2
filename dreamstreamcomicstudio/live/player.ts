@@ -23,11 +23,62 @@ export interface LivePlayer {
   readonly mode: PlaybackMode;
   readonly wantedSeq: number;
   readonly pendingCount: number;
+  /** Stall recoveries so far (gap jumps + live-edge chases) — for the metrics overlay. */
+  readonly recoveries: number;
+  /** Fired when the decoder/MSE pipeline died; the caller rebuilds the player. */
+  onFatal: ((reason: string) => void) | null;
   start(fromSeq: number): void;
   push(seq: number, buf: ArrayBuffer): void;
   tick(isLive: boolean): void;
   bufferedAheadSec(): number;
   destroy(): void;
+}
+
+/**
+ * Where to jump when playback is parked at a hole in the buffer. Each segment
+ * is its own recording, so audio and video rarely end on the exact same
+ * timestamp and MSE leaves tiny gaps between appends — browsers simply STOP at
+ * a gap and wait forever (the "plays a few seconds then freezes" bug). If the
+ * playhead is at/inside a gap and buffered media resumes within `maxGapSec`,
+ * return the time to seek to; otherwise null.
+ */
+export function findGapJump(ranges: [number, number][], t: number, maxGapSec = 3.5): number | null {
+  for (let i = 0; i < ranges.length; i++) {
+    const [start, end] = ranges[i];
+    if (t >= start && t < end - 0.25) return null; // comfortably inside data — not a gap
+    const next = ranges[i + 1];
+    if (!next) continue;
+    const atEdge = t >= end - 0.25 && t < next[0];
+    if (atEdge && next[0] - t <= maxGapSec) return next[0] + 0.05;
+  }
+  // Playhead before the first range (fresh join): snap to its start.
+  if (ranges.length && t < ranges[0][0] && ranges[0][0] - t <= maxGapSec) return ranges[0][0] + 0.05;
+  return null;
+}
+
+/**
+ * Gentle latency control instead of hard jumps: drift slightly faster when
+ * we've accumulated too much buffer (we're far behind live), slightly slower
+ * when the buffer is thin (avoid a stall while the next segment downloads).
+ * Pitch is preserved by browsers, so ±6% is inaudible.
+ */
+export function catchUpRate(aheadSec: number, targetSec: number): number {
+  if (aheadSec < 1) return 0.94;
+  if (aheadSec < 2) return 0.97;
+  if (aheadSec > targetSec * 2) return 1.08;
+  if (aheadSec > targetSec + 3) return 1.04;
+  return 1;
+}
+
+function bufferedRanges(video: HTMLVideoElement): [number, number][] {
+  const out: [number, number][] = [];
+  try {
+    const b = video.buffered;
+    for (let i = 0; i < b.length; i++) out.push([b.start(i), b.end(i)]);
+  } catch {
+    /* not readable yet */
+  }
+  return out;
 }
 
 /** Safari's ManagedMediaSource isn't in TS's DOM lib yet. */
@@ -83,6 +134,15 @@ export class SegmentPlayer implements LivePlayer {
   private lastAppendAt = 0;
   private objectUrl: string | null = null;
   private destroyed = false;
+  private lastT = -1;
+  private lastProgressAt = 0;
+  private appendErrors = 0;
+  recoveries = 0;
+  onFatal: ((reason: string) => void) | null = null;
+  private onVideoError = () => {
+    const code = this.video.error?.code;
+    if (!this.destroyed && code != null && code !== 1) this.onFatal?.(`media error ${code}`);
+  };
 
   constructor(
     private video: HTMLVideoElement,
@@ -100,13 +160,21 @@ export class SegmentPlayer implements LivePlayer {
 
   start(fromSeq: number): void {
     this.nextSeq = Math.max(1, fromSeq);
+    this.lastProgressAt = performance.now();
     this.objectUrl = URL.createObjectURL(this.mediaSource);
     this.video.src = this.objectUrl;
+    this.video.addEventListener('error', this.onVideoError);
     this.mediaSource.addEventListener('sourceopen', () => {
       if (this.destroyed || this.sb) return;
-      this.sb = this.mediaSource.addSourceBuffer(this.mime);
+      try {
+        this.sb = this.mediaSource.addSourceBuffer(this.mime);
+      } catch {
+        this.onFatal?.('codec rejected');
+        return;
+      }
       this.sb.mode = 'sequence';
       this.sb.addEventListener('updateend', () => this.pump());
+      this.sb.addEventListener('error', () => this.onFatal?.('source buffer error'));
       this.pump();
     });
   }
@@ -139,13 +207,41 @@ export class SegmentPlayer implements LivePlayer {
   /** Call periodically: un-stalls after gaps and keeps us near the live edge. */
   tick(isLive: boolean): void {
     if (this.destroyed) return;
-    // A segment never arrived (upload hiccup) — skip to the next one we have.
-    const stalledMs = performance.now() - this.lastAppendAt;
-    if (this.pending.size > 0 && !this.pending.has(this.nextSeq) && stalledMs > this.segMs * 2.5) {
+    const now = performance.now();
+    // A segment never arrived (upload dropped it) — skip to the next one we
+    // have. The fetcher retries first, so this only fires for real holes.
+    const stalledMs = now - this.lastAppendAt;
+    if (this.pending.size > 0 && !this.pending.has(this.nextSeq) && stalledMs > this.segMs * 1.6) {
       this.nextSeq = Math.min(...this.pending.keys());
     }
     this.pump();
-    if (isLive) this.chaseLiveEdge();
+
+    // Stall watchdog: playhead stuck while media exists past a gap → hop it.
+    const t = this.video.currentTime;
+    if (Math.abs(t - this.lastT) > 0.01) {
+      this.lastT = t;
+      this.lastProgressAt = now;
+    } else if (!this.video.paused && now - this.lastProgressAt > 700) {
+      const jump = findGapJump(bufferedRanges(this.video), t);
+      if (jump != null) {
+        try {
+          this.video.currentTime = jump;
+          this.recoveries += 1;
+          this.lastProgressAt = now;
+        } catch {
+          /* not seekable yet */
+        }
+      }
+    }
+    if (this.video.paused && this.video.readyState >= 3) this.video.play().catch(() => undefined);
+
+    if (isLive) {
+      this.chaseLiveEdge();
+      const rate = catchUpRate(this.bufferedAheadSec(), (this.segMs / 1000) * 1.5);
+      if (Math.abs(this.video.playbackRate - rate) > 0.001) this.video.playbackRate = rate;
+    } else if (this.video.playbackRate !== 1) {
+      this.video.playbackRate = 1;
+    }
   }
 
   private pump(): void {
@@ -158,19 +254,26 @@ export class SegmentPlayer implements LivePlayer {
     this.lastAppendAt = performance.now();
     try {
       this.sb.appendBuffer(buf);
-    } catch {
-      // QuotaExceeded and friends — drop buffer history and retry on next tick.
+      this.appendErrors = 0;
+    } catch (e) {
       this.pending.set(this.nextSeq - 1, buf);
       this.nextSeq -= 1;
+      if ((e as DOMException)?.name === 'QuotaExceededError') {
+        // Phones have small MSE quotas: free everything already played.
+        this.evictIfNeeded(true);
+      } else if (++this.appendErrors >= 3) {
+        this.onFatal?.('append failed');
+      }
     }
   }
 
-  private evictIfNeeded(): boolean {
-    if (!this.sb) return false;
+  private evictIfNeeded(force = false): boolean {
+    if (!this.sb || this.sb.updating) return false;
     try {
       const b = this.video.buffered;
-      if (b.length > 0 && this.video.currentTime - b.start(0) > 90) {
-        this.sb.remove(b.start(0), this.video.currentTime - 30);
+      const keepBehind = force ? 3 : 30;
+      if (b.length > 0 && this.video.currentTime - b.start(0) > (force ? keepBehind + 1 : 90)) {
+        this.sb.remove(b.start(0), this.video.currentTime - keepBehind);
         return true;
       }
     } catch {
@@ -184,9 +287,11 @@ export class SegmentPlayer implements LivePlayer {
       const b = this.video.buffered;
       if (b.length === 0) return;
       const end = b.end(b.length - 1);
-      // Fell too far behind (tab slept, slow network burst) — jump near the edge.
+      // Fell far behind (tab slept, slow network burst) — jump near the edge.
+      // Smaller drifts are absorbed by catchUpRate() without a visible jump.
       if (end - this.video.currentTime > (this.segMs / 1000) * 3 + 2) {
-        this.video.currentTime = end - 1;
+        this.video.currentTime = Math.max(this.video.currentTime, end - (this.segMs / 1000) * 1.2);
+        this.recoveries += 1;
       }
     } catch {
       /* seeking not possible yet */
@@ -196,6 +301,7 @@ export class SegmentPlayer implements LivePlayer {
   destroy(): void {
     this.destroyed = true;
     this.pending.clear();
+    this.video.removeEventListener('error', this.onVideoError);
     try {
       if (this.mediaSource.readyState === 'open') this.mediaSource.endOfStream();
     } catch {
@@ -212,6 +318,8 @@ export class SegmentPlayer implements LivePlayer {
  */
 export class BlobQueuePlayer implements LivePlayer {
   readonly mode: PlaybackMode = 'blob';
+  recoveries = 0;
+  onFatal: ((reason: string) => void) | null = null;
   private pending = new Map<number, ArrayBuffer>();
   private nextSeq = 1;
   private currentUrl: string | null = null;

@@ -4,3 +4,7 @@
 /studio.html
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
+
+# Baby-monitor alert service worker: always revalidate so fixes reach phones.
+/live-sw.js
+  Cache-Control: no-cache

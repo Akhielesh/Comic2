@@ -2,6 +2,9 @@
 // alerts and hotkeys. Every control writes StudioPrefs; the Studio reads them
 // when it opens (and pushes slow-mode to the room at go-live).
 import React, { useEffect, useState } from 'react';
+import { openAuth, signOutEverywhereLocal, updateDisplayName, useAccount } from '../account';
+import { LIMIT_CHOICES_MIN, limitLabel } from '../limits';
+import { canPickFolder, forgetDriveFolder, getDriveFolder, pickDriveFolder } from '../saveTargets';
 import { QUALITY_PRESETS, presetById } from '../config';
 import type { Nav } from '../nav';
 import { DEFAULT_PREFS, LOOK_LABELS, loadPrefs, playChime, savePrefs, type StudioPrefs } from '../prefs';
@@ -10,13 +13,14 @@ import { SCENES } from '../studio/compositor';
 import { SceneSketch } from '../components/scenes';
 import { Icon } from '../ui/icons';
 import { Btn, Field, Segmented, Slider, Toggle, cx, type PushToast } from '../ui/primitives';
-import { fetchStudioAccess, pullPrefsFromCloud, pushPrefsToCloud, signOut, syncMyEvents, type StudioAccess } from '../sync';
+import { fetchStudioAccess, pullPrefsFromCloud, pushPrefsToCloud, syncMyEvents, type StudioAccess } from '../sync';
 
 const SET_CATS = [
   { id: 'account', label: 'Account & sync', icon: 'user' },
   { id: 'scenes', label: 'Scenes', icon: 'layers' },
   { id: 'camera', label: 'Camera & looks', icon: 'video' },
   { id: 'chat', label: 'Chat & reactions', icon: 'chat' },
+  { id: 'recording', label: 'Recording & saving', icon: 'record' },
   { id: 'encoding', label: 'Quality & encoding', icon: 'sliders' },
   { id: 'alerts', label: 'Alerts', icon: 'bell' },
   { id: 'hotkeys', label: 'Hotkeys', icon: 'keyboard' },
@@ -49,6 +53,17 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
   const [cat, setCat] = useState('account');
   const [prefs, setPrefsState] = useState<StudioPrefs>(loadPrefs);
   const [account, setAccount] = useState<StudioAccess | null>(null);
+  const live = useAccount();
+  const [displayName, setDisplayName] = useState('');
+  const [driveFolder, setDriveFolder] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (live.name) setDisplayName(live.name);
+  }, [live.name]);
+
+  useEffect(() => {
+    void getDriveFolder().then((d) => setDriveFolder(d?.name ?? null));
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -118,20 +133,20 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
             <>
               <div className="set-head"><h2 className="serif">Account &amp; sync</h2></div>
               <p className="set-intro">
-                Stream Studio works without an account — events and settings live in this browser. Sign in to your
-                DreamStream Studio account and everything syncs: past sessions, recaps and these settings follow you
-                across devices.
+                Watching never needs an account. Hosting and the baby monitor do — sign in (or create an account with
+                your welcome code) right here, and your events, recaps and settings follow you to every device.
               </p>
-              {account == null ? (
+              {live.status === 'loading' ? (
                 <div className="skeleton" style={{ height: 56 }} aria-label="Loading account" />
-              ) : account.signedIn ? (
+              ) : live.status === 'member' || live.status === 'needs_code' ? (
                 <>
-                  <Row title="Signed in" desc={account.email || 'Your DreamStream Studio account'}>
+                  <Row title="Signed in" desc={live.email || 'Your Stream Studio account'}>
                     <Btn
                       variant="ghost"
                       size="sm"
+                      icon="logout"
                       onClick={() => {
-                        void signOut().then(() => {
+                        void signOutEverywhereLocal().then(() => {
                           setAccount({ signedIn: false, allowed: true, scope: 'full' });
                           push('Signed out on this device', { icon: 'check' });
                         });
@@ -140,6 +155,20 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
                       Sign out
                     </Btn>
                   </Row>
+                  {live.status === 'needs_code' ? (
+                    <Row title="Unlock Stream Studio" desc="Enter the welcome code you were given to host streams and use the baby monitor.">
+                      <Btn variant="solid" size="sm" icon="lock" onClick={() => openAuth('code')}>Enter code</Btn>
+                    </Row>
+                  ) : (
+                    <Row title="Your name" desc="How family finds you in the baby monitor and what viewers see by default.">
+                      <div className="row" style={{ gap: 8 }}>
+                        <input className="input" style={{ width: 200 }} value={displayName} maxLength={40} aria-label="Display name" onChange={(e) => setDisplayName(e.target.value)} />
+                        <Btn variant="soft" size="sm" disabled={!displayName.trim() || displayName === live.name} onClick={() => {
+                          void updateDisplayName(displayName).then((r) => push(r.ok ? 'Name updated' : r.error || 'Could not update', { icon: r.ok ? 'check' : 'alert' }));
+                        }}>Save</Btn>
+                      </div>
+                    </Row>
+                  )}
                   <Row title="Cloud sync" desc="Events, recaps and settings sync to your account automatically.">
                     <Btn
                       variant="soft"
@@ -152,28 +181,83 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
                       Sync now
                     </Btn>
                   </Row>
-                  {account.scope === 'studio_only' && (
+                  {account?.scope === 'studio_only' && (
                     <Row title="Access" desc="This account is onboarded for Stream Studio standalone.">
                       <span className="pill pill-info">Stream Studio</span>
                     </Row>
                   )}
                 </>
               ) : (
-                <Row title="Not signed in" desc="Settings, events and recaps stay on this device only. Attach your DreamStream Studio account and they follow you everywhere — you'll come straight back here.">
-                  <Btn
-                    variant="solid"
-                    size="sm"
-                    icon="arrowRight"
-                    onClick={() => {
-                      window.location.href = `/?next=${encodeURIComponent('/live.html#/settings')}`;
-                    }}
-                  >
-                    Sign in
-                  </Btn>
+                <Row title="Not signed in" desc="Settings and events stay on this device only until you sign in. New accounts need a welcome code.">
+                  <div className="row" style={{ gap: 8 }}>
+                    <Btn variant="ghost" size="sm" onClick={() => openAuth('signin')}>Sign in</Btn>
+                    <Btn variant="solid" size="sm" onClick={() => openAuth('create')}>Create account</Btn>
+                  </div>
                 </Row>
               )}
-              <Row title="Security" desc="Your private studio links carry the host key — treat them like passwords. Viewer links are safe to share anywhere.">
+              <Row title="Security" desc="Your private studio links carry the host key — treat them like passwords. Viewer links are safe to share anywhere. Welcome codes are verified on our server only and repeated wrong guesses are locked out.">
                 <span />
+              </Row>
+            </>
+          )}
+          {cat === 'recording' && (
+            <>
+              <div className="set-head"><h2 className="serif">Recording &amp; saving</h2></div>
+              <p className="set-intro">
+                Recordings are written to this device’s disk while you record — even long sessions don’t slow the stream down —
+                and when they stop you choose where they go.
+              </p>
+              <Row title="Stream time limit" desc="Heads-up at 5 min, 1 min and 10 s (with a one-tap +15 min), then the stream ends.">
+                <select className="input" style={{ width: 150 }} value={prefs.streamLimitMin} aria-label="Stream time limit" onChange={(e) => set('streamLimitMin', Number(e.target.value))}>
+                  {LIMIT_CHOICES_MIN.map((m) => <option key={m} value={m}>{limitLabel(m)}</option>)}
+                </select>
+              </Row>
+              <Row title="Recording length limit" desc="Heads-up at 5 min, 1 min and 10 s, then the recording stops and asks where to save.">
+                <select className="input" style={{ width: 150 }} value={prefs.recLimitMin} aria-label="Recording length limit" onChange={(e) => set('recLimitMin', Number(e.target.value))}>
+                  {LIMIT_CHOICES_MIN.map((m) => <option key={m} value={m}>{limitLabel(m)}</option>)}
+                </select>
+              </Row>
+              <Row title="When a recording finishes" desc="Ask lets you pick each time — a folder, Google Drive, Share, or Downloads.">
+                <Segmented
+                  label="Save destination"
+                  options={[
+                    { value: 'ask', label: 'Ask me' },
+                    { value: 'drive', label: 'Google Drive' },
+                    { value: 'download', label: 'Downloads' },
+                  ]}
+                  value={prefs.saveTarget === 'picker' ? 'ask' : prefs.saveTarget}
+                  onChange={(v) => set('saveTarget', v as StudioPrefs['saveTarget'])}
+                />
+              </Row>
+              <Row
+                title="Google Drive folder"
+                desc={canPickFolder()
+                  ? 'With Google Drive for desktop installed, pick your “My Drive” folder once — recordings save straight into it and Drive syncs them. No Google sign-in needed here.'
+                  : 'On phones, choose Drive from the share menu when saving. (Picking a Drive folder needs Chrome or Edge on a computer.)'}
+              >
+                {canPickFolder() ? (
+                  <div className="row" style={{ gap: 8 }}>
+                    {driveFolder && <span className="pill pill-ok">{driveFolder}</span>}
+                    <Btn variant="soft" size="sm" icon="cloud" onClick={() => {
+                      void pickDriveFolder().then((d) => {
+                        if (d) {
+                          setDriveFolder(d.name);
+                          push(`Recordings will save to “${d.name}/DreamStream Recordings”`, { icon: 'check' });
+                        }
+                      }).catch(() => push('Could not use that folder', { icon: 'alert' }));
+                    }}>{driveFolder ? 'Change' : 'Choose folder'}</Btn>
+                    {driveFolder && <Btn variant="subtle" size="sm" onClick={() => void forgetDriveFolder().then(() => setDriveFolder(null))}>Forget</Btn>}
+                  </div>
+                ) : <span />}
+              </Row>
+              <Row title="Auto-record on go-live" desc="Start recording the moment you go live. Uses extra CPU — leave off on weaker laptops and phones.">
+                <Toggle on={prefs.autoRecord} onChange={(v) => set('autoRecord', v)} label="Auto-record" />
+              </Row>
+              <Row title="Record at higher bitrate" desc="Master copy at ~2.5× the stream on computers (phones always record at stream quality to stay smooth).">
+                <Toggle on={prefs.recordHighBitrate} onChange={(v) => set('recordHighBitrate', v)} label="Record at higher bitrate" />
+              </Row>
+              <Row title="Also keep a 7-day cloud copy" desc="Uploads in the background after each recording so you can grab it later from any device. Auto-deleted after 7 days.">
+                <Toggle on={prefs.cloudRecordings} onChange={(v) => set('cloudRecordings', v)} label="Cloud recordings" />
               </Row>
             </>
           )}
@@ -301,15 +385,6 @@ export function SettingsView({ nav, push }: { nav: Nav; push: PushToast }) {
               </div>
               <Row title="Container" desc="MP4/H.264 plays everywhere (iPhones included). WebM/VP9 packs more quality per bit but Safari viewers may not decode it.">
                 <Segmented label="Container" options={[{ value: 'mp4', label: 'MP4 first' }, { value: 'webm', label: 'WebM first' }]} value={prefs.preferMp4 ? 'mp4' : 'webm'} onChange={(v) => set('preferMp4', v === 'mp4')} />
-              </Row>
-              <Row title="Record at higher bitrate" desc="Master copy at ~2.5× the stream — always sharper than viewers saw.">
-                <Toggle on={prefs.recordHighBitrate} onChange={(v) => set('recordHighBitrate', v)} label="Record at higher bitrate" />
-              </Row>
-              <Row title="Keep a cloud copy for 7 days" desc="Recordings always download to your device; this also uploads them to the server so you can grab them later from any device. Auto-deleted after 7 days.">
-                <Toggle on={prefs.cloudRecordings} onChange={(v) => set('cloudRecordings', v)} label="Cloud recordings" />
-              </Row>
-              <Row title="Auto-record on go-live" desc="Start the local master recording the moment you go live.">
-                <Toggle on={prefs.autoRecord} onChange={(v) => set('autoRecord', v)} label="Auto-record" />
               </Row>
             </>
           )}

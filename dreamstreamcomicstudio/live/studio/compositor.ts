@@ -20,6 +20,7 @@
 
 import type { CameraLook } from '../prefs';
 import { LOOK_FILTERS } from '../prefs';
+import { startTicker, type Ticker } from './ticker';
 
 export type SceneId = 'solo' | 'screen' | 'brb' | 'grid' | 'spotlight' | 'sidebar';
 
@@ -91,7 +92,7 @@ export class ProgramCompositor {
   private camEnabled = true;
   private hostInitial = '·';
   private hostLabel = 'You';
-  private timer: number | null = null;
+  private timer: Ticker | null = null;
   private filterSupported = true;
   private lastCamTime = -1;
   private lastScreenTime = -1;
@@ -259,13 +260,14 @@ export class ProgramCompositor {
 
   start(): void {
     if (this.timer != null) return;
-    // setInterval (not rAF) so the program keeps rendering ~1 fps even when
-    // the tab is backgrounded — the stream stays alive, just low-motion.
-    this.timer = window.setInterval(() => this.draw(), Math.round(1000 / this.fps));
+    // Worker-driven clock (not rAF / main-thread setInterval): hidden tabs
+    // clamp main-thread timers to 1 Hz or slower, which used to freeze the
+    // program — and so the stream — whenever the host switched tabs.
+    this.timer = startTicker(1000 / this.fps, () => this.draw());
   }
 
   stop(): void {
-    if (this.timer != null) window.clearInterval(this.timer);
+    this.timer?.stop();
     this.timer = null;
     this.stopScreenShare();
     this.camVideo.srcObject = null;

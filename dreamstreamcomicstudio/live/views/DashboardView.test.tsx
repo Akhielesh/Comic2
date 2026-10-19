@@ -45,6 +45,10 @@ const createNav = (): Nav => ({
   viewer: vi.fn(),
   event: vi.fn(),
   summary: vi.fn(),
+  monitor: vi.fn(),
+  nursery: vi.fn(),
+  monitorCamera: vi.fn(),
+  monitorWatch: vi.fn(),
 });
 
 describe('DashboardView live-worker readiness gate', () => {

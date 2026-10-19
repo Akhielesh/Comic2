@@ -8,6 +8,7 @@ import { CreateView } from './CreateView';
 vi.mock('../api', () => ({
   createEvent: vi.fn(),
   probeLiveWorker: vi.fn(),
+  SignInRequiredError: class SignInRequiredError extends Error {},
 }));
 
 vi.mock('../events', () => ({
@@ -18,6 +19,11 @@ vi.mock('../sync', () => ({
   pushEventToCloud: vi.fn(),
 }));
 
+vi.mock('../account', () => ({
+  useAccount: () => ({ status: 'member', name: 'Host' }),
+  openAuth: vi.fn(),
+}));
+
 const nav: Nav = {
   dashboard: vi.fn(),
   create: vi.fn(),
@@ -26,6 +32,10 @@ const nav: Nav = {
   viewer: vi.fn(),
   event: vi.fn(),
   summary: vi.fn(),
+  monitor: vi.fn(),
+  nursery: vi.fn(),
+  monitorCamera: vi.fn(),
+  monitorWatch: vi.fn(),
 };
 
 const blockedProbe = {

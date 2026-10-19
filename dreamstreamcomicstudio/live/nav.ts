@@ -8,6 +8,11 @@ export interface Nav {
   viewer(id: string): void;
   event(id: string): void;
   summary(id: string, key?: string): void;
+  /** Baby monitor: nurseries list, one nursery's hub, camera mode, watch mode. */
+  monitor(): void;
+  nursery(id: string): void;
+  monitorCamera(id: string): void;
+  monitorWatch(id: string): void;
 }
 
 const enc = encodeURIComponent;

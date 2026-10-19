@@ -70,6 +70,16 @@ const ICONS: Record<string, React.ReactElement[]> = {
   send: [P('M22 2L11 13M22 2l-7 20-4-9-9-4z')],
   pin: [P('M12 2a6 6 0 0 0-6 6c0 4 6 12 6 12s6-8 6-12a6 6 0 0 0-6-6z'), h('circle', { cx: 12, cy: 8, r: 2 })],
   shield: [P('M12 2l8 4v5c0 5-3.5 9-8 11-4.5-2-8-6-8-11V6z'), P('M9 12l2 2 4-4')],
+  // baby monitor + accounts + help
+  baby: [h('circle', { cx: 12, cy: 12, r: 9 }), P('M9 10h.01M15 10h.01'), P('M9.5 15a3.5 3.5 0 0 0 5 0'), P('M12 3c1.5 0 2 1.2 1.2 2')],
+  battery: [h('rect', { x: 2, y: 7, width: 18, height: 10, rx: 2 }), P('M22 11v2'), P('M6 10v4M10 10v4')],
+  bottle: [P('M10 2h4M10 2v3l-2 3v12a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V8l-2-3V2'), P('M8 12h8M8 16h8')],
+  music: [P('M9 18V5l12-2v13'), h('circle', { cx: 6, cy: 18, r: 3 }), h('circle', { cx: 18, cy: 16, r: 3 })],
+  cloud: [P('M17.5 19H8a6 6 0 1 1 1.3-11.9A5 5 0 0 1 19 9.5a4.5 4.5 0 0 1-1.5 9.5z')],
+  help: [h('circle', { cx: 12, cy: 12, r: 9 }), P('M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3'), P('M12 17h.01')],
+  compass: [h('circle', { cx: 12, cy: 12, r: 9 }), P('M16.2 7.8l-2.1 6.3-6.3 2.1 2.1-6.3z')],
+  logout: [P('M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4'), P('M16 17l5-5-5-5M21 12H9')],
+  monitor: [h('rect', { x: 2, y: 3, width: 20, height: 14, rx: 2 }), P('M8 21h8M12 17v4')],
 };
 
 export interface IconProps {

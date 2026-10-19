@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import liveWorker, { type Env } from './index';
+import { clearMemberCache } from './supabaseAuth';
 
 function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -101,5 +102,104 @@ describe('live worker segment upload auth', () => {
     expect(calls.roomPaths).toEqual(['/auth', '/ingest']);
     expect(calls.bucketPuts).toBe(1);
     expect(calls.bucketDeletes).toBe(0);
+  });
+});
+
+describe('event creation requires a Stream Studio member', () => {
+  const makeEnv = (initCalls: Record<string, unknown>[]) => {
+    const roomStub = {
+      fetch: async (req: Request): Promise<Response> => {
+        const url = new URL(req.url);
+        if (url.pathname === '/init') {
+          initCalls.push((await req.json()) as Record<string, unknown>);
+          return jsonResponse({ hostKey: 'hk-123' });
+        }
+        return jsonResponse({ error: 'unexpected' }, 500);
+      },
+    };
+    return {
+      ALLOWED_ORIGINS: '*',
+      SUPABASE_URL: 'https://proj.supabase.co',
+      SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
+      EVENT_ROOM: { idFromName: (id: string) => id, get: () => roomStub },
+      MONITOR_ROOM: { idFromName: (id: string) => id, get: () => roomStub },
+      LIVE_BUCKET: {},
+    } as unknown as Env;
+  };
+  const ctx = { waitUntil: () => undefined, passThroughOnException: () => undefined, props: {} } as unknown as ExecutionContext;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    clearMemberCache();
+  });
+
+  it('rejects anonymous creates without touching a room', async () => {
+    const init: Record<string, unknown>[] = [];
+    const res = await liveWorker.fetch(
+      new Request('https://worker.example/api/events', { method: 'POST', body: JSON.stringify({ title: 'x' }) }),
+      makeEnv(init),
+      ctx,
+    );
+    expect(res.status).toBe(401);
+    expect(((await res.json()) as { error: string }).error).toBe('sign_in_required');
+    expect(init).toHaveLength(0);
+  });
+
+  it('rejects a signed-in account that never redeemed the welcome code', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ signed_in: true, member: false, needs_code: true }));
+    vi.stubGlobal('fetch', fetchMock);
+    const init: Record<string, unknown>[] = [];
+    const res = await liveWorker.fetch(
+      new Request('https://worker.example/api/events', {
+        method: 'POST',
+        headers: { authorization: 'Bearer eyJhbGciOiJIUzI1NiJ9.not-a-member-token.sig' },
+        body: JSON.stringify({ title: 'x' }),
+      }),
+      makeEnv(init),
+      ctx,
+    );
+    expect(res.status).toBe(401);
+    expect(init).toHaveLength(0);
+    const [url, opts] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://proj.supabase.co/rest/v1/rpc/live_me');
+    expect((opts.headers as Record<string, string>).authorization).toBe('Bearer eyJhbGciOiJIUzI1NiJ9.not-a-member-token.sig');
+  });
+
+  it('creates the event for a verified member and records the owner', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ signed_in: true, member: true, user_id: 'u-1', profile: { display_name: 'Akhil' } })));
+    const init: Record<string, unknown>[] = [];
+    const res = await liveWorker.fetch(
+      new Request('https://worker.example/api/events', {
+        method: 'POST',
+        headers: { authorization: 'Bearer eyJhbGciOiJIUzI1NiJ9.member-token-abc.sig' },
+        body: JSON.stringify({ title: 'Launch day' }),
+      }),
+      makeEnv(init),
+      ctx,
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { id: string; hostKey: string };
+    expect(body.hostKey).toBe('hk-123');
+    expect(init[0]).toMatchObject({ title: 'Launch day', host: 'Akhil', ownerId: 'u-1' });
+  });
+});
+
+describe('monitor routes', () => {
+  it('refuses malformed nursery ids', async () => {
+    const env = { ALLOWED_ORIGINS: '*', MONITOR_ROOM: { idFromName: () => 'x', get: () => ({ fetch: async () => new Response('should not be called', { status: 500 }) }) } } as unknown as Env;
+    const ctx = { waitUntil: () => undefined } as unknown as ExecutionContext;
+    const res = await liveWorker.fetch(new Request('https://worker.example/api/monitor/not-a-uuid-at-all-but-36-chars-long!/ws'), env, ctx);
+    expect(res.status).toBe(404);
+  });
+
+  it('only ever returns the VAPID public key', async () => {
+    const keyHolder = { fetch: async () => jsonResponse({ publicKey: 'BPUB', privateJwk: { d: 'SECRET' } }) };
+    const env = { ALLOWED_ORIGINS: '*', MONITOR_ROOM: { idFromName: () => 'k', get: () => keyHolder } } as unknown as Env;
+    const ctx = { waitUntil: () => undefined } as unknown as ExecutionContext;
+    const res = await liveWorker.fetch(new Request('https://worker.example/live-api/api/monitor/vapid'), env, ctx);
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({ publicKey: 'BPUB' });
+    expect(text).not.toContain('SECRET');
   });
 });

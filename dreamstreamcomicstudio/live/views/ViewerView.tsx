@@ -30,6 +30,9 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
   const fetchCursorRef = useRef(1);
   const latestKnownRef = useRef(0);
   const inflightRef = useRef(0);
+  const retryQueueRef = useRef<number[]>([]);
+  const attemptsRef = useRef(new Map<number, number>());
+  const rebuildsRef = useRef<number[]>([]);
   const downEma = useRef(new Ema());
   const behindEma = useRef(new Ema());
   const joinedRef = useRef(false);
@@ -113,9 +116,26 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
       return;
     }
     const startSeq = fromStart ? Math.max(1, m.firstSeq || 1) : Math.max(m.firstSeq || 1, m.latestSeq - 1, 1);
+    // Self-healing: a corrupt segment or decoder hiccup used to freeze the
+    // stream for good. Rebuild the pipeline at the next segment instead
+    // (bounded, so a truly undecodable stream still surfaces an error).
+    player.onFatal = (reason) => {
+      const now = Date.now();
+      rebuildsRef.current = rebuildsRef.current.filter((t) => now - t < 60_000);
+      rebuildsRef.current.push(now);
+      if (rebuildsRef.current.length > 4) {
+        setErr(`Playback keeps failing on this device (${reason}). Try reloading, or another browser.`);
+        setPhase('error');
+        return;
+      }
+      const resumeAt = Math.max(player.wantedSeq, latestKnownRef.current - 1);
+      startPlayer({ ...m, latestSeq: resumeAt + 1, firstSeq: m.firstSeq }, false);
+    };
     player.start(startSeq);
     playerRef.current = player;
     fetchCursorRef.current = startSeq;
+    retryQueueRef.current = [];
+    attemptsRef.current.clear();
     latestKnownRef.current = Math.max(latestKnownRef.current, m.latestSeq);
     video.play().catch(() => {
       /* will start on user gesture */
@@ -291,21 +311,30 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
       setClock((c) => c + 1);
       const player = playerRef.current;
       if (!player) return;
+      // Drop retries the player has already moved past.
+      retryQueueRef.current = retryQueueRef.current.filter((s) => s >= player.wantedSeq);
       while (
         inflightRef.current < 3 &&
         player.pendingCount < 6 &&
-        fetchCursorRef.current <= latestKnownRef.current
+        (retryQueueRef.current.length > 0 || fetchCursorRef.current <= latestKnownRef.current)
       ) {
-        const seq = fetchCursorRef.current++;
+        const seq = retryQueueRef.current.length > 0 ? retryQueueRef.current.shift()! : fetchCursorRef.current++;
+        if (seq < player.wantedSeq) continue;
         inflightRef.current += 1;
         fetchSegment(eventId, seq)
           .then(({ buf, elapsedMs }) => {
             inflightRef.current -= 1;
+            attemptsRef.current.delete(seq);
             setDownBps(downEma.current.push((buf.byteLength * 8) / (elapsedMs / 1000)));
-            player.push(seq, buf);
+            if (playerRef.current === player) player.push(seq, buf);
           })
           .catch(() => {
-            inflightRef.current -= 1; // tick()'s stall-skip handles the hole
+            inflightRef.current -= 1;
+            // Retry a few times before letting tick()'s stall-skip give up on it —
+            // a single dropped request used to cost viewers a 15-second freeze.
+            const n = (attemptsRef.current.get(seq) ?? 0) + 1;
+            attemptsRef.current.set(seq, n);
+            if (n < 4) window.setTimeout(() => retryQueueRef.current.push(seq), 500 * n);
           });
       }
       player.tick(latestKnownRef.current > 0 && statusRef.current === 'live');
@@ -313,6 +342,22 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventId]);
+
+  // React to stalls immediately (not on the next 400 ms tick), and catch up
+  // to live the moment a backgrounded tab becomes visible again.
+  useEffect(() => {
+    const kick = () => playerRef.current?.tick(latestKnownRef.current > 0 && statusRef.current === 'live');
+    const v = videoRef.current;
+    v?.addEventListener('waiting', kick);
+    v?.addEventListener('stalled', kick);
+    const onVis = () => document.visibilityState === 'visible' && kick();
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      v?.removeEventListener('waiting', kick);
+      v?.removeEventListener('stalled', kick);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [phase, immersive]);
 
   useEffect(
     () => () => {
@@ -336,6 +381,7 @@ export function ViewerView({ eventId, nav, push }: { eventId: string; nav: Nav; 
       ['Buffer ahead', player ? `${player.bufferedAheadSec().toFixed(1)} s` : '—'],
       ['Behind live', behindEma.current.value != null ? `≈ ${behindEma.current.value.toFixed(1)} s + buffer` : '—'],
       ['Next segment', player ? `#${player.wantedSeq}` : '—'],
+      ['Auto-recoveries', player ? String(player.recoveries) : '—'],
       ['Viewers', String(viewers)],
       ['Codec', meta?.mime ? meta.mime.split(';')[0].replace('video/', '') : '—'],
       ['Status', status],

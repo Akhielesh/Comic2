@@ -8,9 +8,16 @@
   "workers_dev": true,
 
   "durable_objects": {
-    "bindings": [{ "class_name": "EventRoom", "name": "EVENT_ROOM" }]
+    "bindings": [
+      { "class_name": "EventRoom", "name": "EVENT_ROOM" },
+      // Baby Monitor signaling + alerts. Never stores media (P2P video).
+      { "class_name": "MonitorRoom", "name": "MONITOR_ROOM" }
+    ]
   },
-  "migrations": [{ "new_sqlite_classes": ["EventRoom"], "tag": "v1" }],
+  "migrations": [
+    { "new_sqlite_classes": ["EventRoom"], "tag": "v1" },
+    { "new_sqlite_classes": ["MonitorRoom"], "tag": "v2" }
+  ],
 
   "r2_buckets": [
     // `wrangler dev` simulates this locally; create the real bucket before deploying:
@@ -22,7 +29,13 @@
     // Comma-separated list of origins allowed to call the API (was "*" while testing).
     // Tightened to the known production frontends (security finding H4). If you add a
     // custom domain or preview host that needs the live API, append it here before deploy.
-    "ALLOWED_ORIGINS": "https://dreamstreamstudio.ai,https://comic2.pages.dev"
+    "ALLOWED_ORIGINS": "https://dreamstreamstudio.ai,https://comic2.pages.dev",
+    // Public values (already in the frontend bundle). The worker forwards the
+    // caller's own bearer token to SECURITY DEFINER RPCs — it holds no secrets.
+    "SUPABASE_URL": "https://bdjfmxfmhqhzvgrhbbzm.supabase.co",
+    "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_xoFR3-YPdAOrtpTYdEHO8A_wEOhoZUF"
+    // Optional TURN for networks that block peer-to-peer (Cloudflare Realtime):
+    //   npx wrangler secret put TURN_KEY_ID && npx wrangler secret put TURN_KEY_API_TOKEN
   },
 
   // Public URLs:

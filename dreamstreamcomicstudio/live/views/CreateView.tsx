@@ -1,7 +1,8 @@
 // Create / schedule an event — title, host name, when (now / scheduled),
 // description + cover for the invite page, quality, access, auto-record.
 import React, { useEffect, useMemo, useState } from 'react';
-import { createEvent, probeLiveWorker, type LiveWorkerProbeResult } from '../api';
+import { openAuth, useAccount } from '../account';
+import { SignInRequiredError, createEvent, probeLiveWorker, type LiveWorkerProbeResult } from '../api';
 import { LIMITS, QUALITY_PRESETS, SEGMENT_MS, presetById } from '../config';
 import { addMyEvent } from '../events';
 import { pushEventToCloud } from '../sync';
@@ -31,6 +32,8 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
   const [error, setError] = useState<string | null>(null);
   const [backendProbe, setBackendProbe] = useState<LiveWorkerProbeResult | null>(null);
   const [created, setCreated] = useState<{ id: string; hostKey: string } | null>(null);
+  const account = useAccount();
+  const isMember = account.status === 'member';
 
   const preset = presetById(quality);
   const scheduled = when === 'later';
@@ -61,6 +64,10 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
   }, []);
 
   const submit = async () => {
+    if (!isMember && account.status !== 'loading') {
+      openAuth(account.status === 'needs_code' ? 'code' : 'signin', 'Sign in to host your stream — viewers never need an account.');
+      return;
+    }
     if (backendBlocked) {
       setError(`Streaming backend is not reachable: ${backendProbe?.detail ?? 'live-worker route unavailable'}`);
       return;
@@ -105,7 +112,12 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
       savePrefs({ ...prefs, hostName: cleanHost, qualityId: quality, autoRecord: rec });
       setCreated(res);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not reach the live worker — is it running?');
+      if (e instanceof SignInRequiredError) {
+        openAuth('signin', e.message);
+        setError(e.message);
+      } else {
+        setError(e instanceof Error ? e.message : 'Could not reach the live worker — is it running?');
+      }
     } finally {
       setBusy(false);
     }
@@ -167,6 +179,23 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
         </div>
       </div>
 
+      {(account.status === 'signed_out' || account.status === 'needs_code') && (
+        <div className="banner info" role="status" style={{ marginBottom: 18, alignItems: 'center' }} data-tour="host-signin">
+          <Icon name="user" size={15} />
+          <span style={{ flex: 1 }}>
+            {account.status === 'needs_code'
+              ? <><b>Unlock hosting.</b> Enter your welcome code once and you’re set.</>
+              : <><b>Hosting needs a free account.</b> Viewers never do — they join with just a name.</>}
+          </span>
+          {account.status === 'needs_code'
+            ? <Btn variant="solid" size="sm" icon="lock" onClick={() => openAuth('code')}>Enter code</Btn>
+            : <>
+                <Btn variant="soft" size="sm" onClick={() => openAuth('signin')}>Sign in</Btn>
+                <Btn variant="solid" size="sm" onClick={() => openAuth('create')}>Create account</Btn>
+              </>}
+        </div>
+      )}
+
       {backendProbe && !backendProbe.ok && (
         <div className="banner warn" role="status" style={{ marginBottom: 18, alignItems: 'center' }}>
           <Icon name="alert" size={15} />
@@ -181,8 +210,8 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
 
       <div className="create-grid">
         <div className="card card-pad" style={{ display: 'grid', gap: 20 }}>
-          <Field label="Title">
-            <input className="input" value={title} maxLength={120} placeholder="Inking the final issue — live draw-along" onChange={(e) => setTitle(e.target.value)} />
+          <Field label="Title" className="tour-anchor">
+            <input data-tour="create-title" className="input" value={title} maxLength={120} placeholder="Inking the final issue — live draw-along" onChange={(e) => setTitle(e.target.value)} />
           </Field>
 
           <Field label="Your name" hint="shown to viewers and on the invite">
@@ -229,7 +258,9 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
           <hr className="divider" />
 
           <Field label="Quality" hint="what each needs">
+            <div data-tour="create-quality">
             <Segmented full label="Quality" options={QUALITY_PRESETS.map((p) => ({ value: p.id, label: p.id }))} value={quality} onChange={setQuality} />
+            </div>
             <div className="quality-note">
               <span><b>{preset.label}</b></span>
               <span className="dotsep">·</span>
@@ -268,7 +299,7 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <div>
               <div style={{ fontWeight: 600, fontSize: 13.5 }}>Auto-record the program feed</div>
-              <div className="muted" style={{ fontSize: 12.5 }}>A high-bitrate master copy, saved to your device. Chat never burned in.</div>
+              <div className="muted" style={{ fontSize: 12.5 }}>A master copy written to this device as you stream; you choose where it’s saved when it stops. Uses extra CPU — leave off on weaker devices.</div>
             </div>
             <Toggle on={rec} onChange={setRec} label="Auto-record" />
           </div>
@@ -277,7 +308,7 @@ export function CreateView({ nav, push }: { nav: Nav; push: PushToast }) {
 
           <hr className="divider" />
           <div className="row">
-            <Btn variant="solid" size="lg" icon={backendBlocked ? 'alert' : scheduled ? 'calendar' : 'check'} onClick={() => void submit()} disabled={busy || checkingBackend || backendBlocked}>
+            <Btn variant="solid" size="lg" icon={backendBlocked ? 'alert' : scheduled ? 'calendar' : 'check'} onClick={() => void submit()} disabled={busy || checkingBackend || backendBlocked} data-tour="create-submit">
               {busy
                 ? 'Creating…'
                 : checkingBackend

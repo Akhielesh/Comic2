@@ -39,6 +39,12 @@ export interface StudioPrefs {
   /** Self-view mirroring: auto = front camera in Solo only (the program out
    *  is never mirrored — this is purely how YOU see yourself). */
   mirrorPreview: 'auto' | 'on' | 'off';
+  /** Where finished recordings go: ask every time, or a remembered default. */
+  saveTarget: 'ask' | 'picker' | 'drive' | 'download';
+  /** Recording length limit in minutes (0 = none). Alerts at 5 min / 1 min, then auto-stop + save. */
+  recLimitMin: number;
+  /** Stream length limit in minutes (0 = none). Alerts at 5 min / 1 min, then the stream ends. */
+  streamLimitMin: number;
 }
 
 export const DEFAULT_PREFS: StudioPrefs = {
@@ -56,10 +62,15 @@ export const DEFAULT_PREFS: StudioPrefs = {
   alertJoins: true,
   alertMilestones: true,
   alertSound: 'soft',
-  autoRecord: true,
+  // Off by default: a second full-resolution encoder doubles the device's
+  // work while streaming — the #1 cause of laggy streams on laptops/phones.
+  autoRecord: false,
   cloudRecordings: true,
   hostName: '',
   mirrorPreview: 'auto',
+  saveTarget: 'ask',
+  recLimitMin: 0,
+  streamLimitMin: 0,
 };
 
 const KEY = 'ds-live-prefs';

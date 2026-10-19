@@ -20,6 +20,10 @@ const nav: Nav = {
   viewer: vi.fn(),
   event: vi.fn(),
   summary: vi.fn(),
+  monitor: vi.fn(),
+  nursery: vi.fn(),
+  monitorCamera: vi.fn(),
+  monitorWatch: vi.fn(),
 };
 
 const meta: EventMeta = {

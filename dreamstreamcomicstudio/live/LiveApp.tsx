@@ -1,12 +1,18 @@
 // Stream Studio — app shell. Owns the URL (query = event identity, hash =
-// screen), the appearance (theme / accent), the collapsible side rail and
+// screen), the appearance (theme / accent), the collapsible side rail (a
+// bottom tab bar on phones), the account + sign-in sheet, help & tours and
 // toasts. Screen contract:
 //   ?e=ID#/studio?k=KEY    → Host Studio        (legacy ?e=ID&k=KEY accepted)
 //   ?e=ID#/summary?k=KEY   → private recap
 //   ?e=ID                  → invite page or watch page (meta decides)
-//   (no params)            → dashboard, #/create, #/settings, #/summary/ID
-import React, { useEffect, useMemo, useState } from 'react';
+//   (no params)            → dashboard, #/create, #/settings, #/summary/ID,
+//                            #/account, #/monitor[/NURSERY[/camera|/watch]]
+import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
+import { openAuth, signOutEverywhereLocal, useAccount } from './account';
 import { getEvent } from './api';
+import { AuthSheetHost } from './components/AuthSheet';
+import { GuideHost, openHelp, useFirstVisitTour, type TourId } from './components/Guide';
+import { sweepDiscardedRecordings } from './components/SaveSheet';
 import { findMyEvent } from './events';
 import type { Nav } from './nav';
 import { loadPrefs } from './prefs';
@@ -16,6 +22,11 @@ import { CreateView } from './views/CreateView';
 import { DashboardView } from './views/DashboardView';
 import { EventPage } from './views/EventPage';
 import { GuestView } from './views/GuestView';
+// Baby monitor screens load on demand — stream viewers never download them.
+const MonitorHome = lazy(() => import('./views/MonitorHome').then((m) => ({ default: m.MonitorHome })));
+const NurseryHub = lazy(() => import('./views/MonitorHome').then((m) => ({ default: m.NurseryHub })));
+const MonitorCamera = lazy(() => import('./views/MonitorCamera').then((m) => ({ default: m.MonitorCamera })));
+const MonitorViewer = lazy(() => import('./views/MonitorViewer').then((m) => ({ default: m.MonitorViewer })));
 import { SettingsView } from './views/SettingsView';
 import { StudioView } from './views/StudioView';
 import { SummaryView } from './views/SummaryView';
@@ -23,10 +34,11 @@ import { ViewerView } from './views/ViewerView';
 import { Icon } from './ui/icons';
 import { LiveLegalLinks } from './ui/legalLinks';
 import { StreamStudioLogo } from './ui/logo';
-import { Avatar, cx, useToasts, type PushToast } from './ui/primitives';
+import { Avatar, Btn, cx, useToasts, type PushToast } from './ui/primitives';
 
 export type Route =
-  | { view: 'dashboard' | 'create' | 'settings' }
+  | { view: 'dashboard' | 'create' | 'settings' | 'monitor' }
+  | { view: 'nursery' | 'monitor-camera' | 'monitor-watch'; nid: string }
   | { view: 'studio' | 'summary'; id: string; k: string }
   | { view: 'guest'; id: string; g: string }
   | { view: 'summary-lookup'; id: string }
@@ -56,7 +68,14 @@ export function parseRoute(): Route {
     return { view: 'event-auto', id: e };
   }
   if (hash === 'create') return { view: 'create' };
-  if (hash === 'settings') return { view: 'settings' };
+  if (hash === 'settings' || hash === 'account') return { view: 'settings' };
+  if (hash === 'monitor') return { view: 'monitor' };
+  const mon = hash.match(/^monitor\/([0-9a-f-]{36})(?:\/(camera|watch))?$/);
+  if (mon) {
+    if (mon[2] === 'camera') return { view: 'monitor-camera', nid: mon[1] };
+    if (mon[2] === 'watch') return { view: 'monitor-watch', nid: mon[1] };
+    return { view: 'nursery', nid: mon[1] };
+  }
   const sum = hash.match(/^summary\/([a-z0-9]+)$/);
   if (sum) return { view: 'summary-lookup', id: sum[1] };
   return { view: 'dashboard' };
@@ -106,16 +125,83 @@ function SummaryLookup({ id, nav, push }: { id: string; nav: Nav; push: PushToas
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: 'grid' },
   { id: 'create', label: 'New event', icon: 'plus' },
+  { id: 'monitor', label: 'Baby monitor', icon: 'baby' },
   { id: 'settings', label: 'Customize', icon: 'sliders' },
 ] as const;
+
+const TOUR_FOR: Partial<Record<Route['view'], TourId>> = {
+  dashboard: 'welcome',
+  create: 'create',
+  studio: 'studio',
+  monitor: 'monitor',
+  nursery: 'nursery',
+  'monitor-watch': 'watch',
+  'monitor-camera': 'camera',
+  settings: 'welcome',
+};
+
+/** Avatar button + menu: sign in / create, or who you are + sign out. */
+function AccountButton({ onSettings, push, compact }: { onSettings: () => void; push: PushToast; compact?: boolean }) {
+  const account = useAccount();
+  const [menu, setMenu] = useState(false);
+  const prefsName = loadPrefs().hostName;
+  if (account.status !== 'member' && account.status !== 'needs_code') {
+    if (compact) {
+      return (
+        <Btn variant="soft" size="sm" icon="user" onClick={() => openAuth('signin')} data-tour="account">Sign in</Btn>
+      );
+    }
+    return (
+      <button className="rail-user" data-tour="account" onClick={() => openAuth('signin')} aria-label="Sign in or create an account">
+        <span className="avatar avatar-ghost" style={{ width: 32, height: 32 }}><Icon name="user" size={16} /></span>
+        <div className="ru-txt">
+          <div className="ru-name">{account.status === 'loading' ? 'Account' : 'Sign in'}</div>
+          <div className="ru-meta">or create an account</div>
+        </div>
+      </button>
+    );
+  }
+  const name = account.name || prefsName || account.email || 'You';
+  return (
+    <div className={cx('acct-wrap', compact && 'compact')}>
+      <button className="rail-user" data-tour="account" onClick={() => setMenu((m) => !m)} aria-expanded={menu} aria-label="Account menu">
+        <Avatar name={name} size={32} />
+        <div className="ru-txt">
+          <div className="ru-name">{name}</div>
+          <div className="ru-meta">{account.status === 'needs_code' ? 'Enter welcome code' : 'Signed in'}</div>
+        </div>
+      </button>
+      {menu && (
+        <div className="acct-menu" role="menu" onMouseLeave={() => setMenu(false)}>
+          <div className="acct-id">
+            <b>{name}</b>
+            <span className="faint">{account.email}</span>
+          </div>
+          {account.status === 'needs_code' && (
+            <button role="menuitem" onClick={() => { setMenu(false); openAuth('code'); }}><Icon name="lock" size={15} />Enter welcome code</button>
+          )}
+          <button role="menuitem" onClick={() => { setMenu(false); onSettings(); }}><Icon name="user" size={15} />Account &amp; sync</button>
+          <button role="menuitem" onClick={() => { setMenu(false); openHelp(); }}><Icon name="help" size={15} />Help &amp; tours</button>
+          <button role="menuitem" onClick={() => {
+            setMenu(false);
+            void signOutEverywhereLocal().then(() => push('Signed out on this device', { icon: 'check' }));
+          }}><Icon name="logout" size={15} />Sign out</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WelcomeTour({ ready }: { ready: boolean }) {
+  useFirstVisitTour('welcome', ready);
+  return null;
+}
 
 export function LiveApp() {
   const [route, setRoute] = useState<Route>(parseRoute);
   const [appearance, setAppearance] = useState<Appearance>(loadAppearance);
   const [railOpen, setRailOpen] = useState(true);
   const [push, toastNode] = useToasts();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const prefs = useMemo(loadPrefs, [route]); // re-read when screens change (settings edits hostName)
 
   useEffect(() => {
     applyAppearance(appearance);
@@ -123,8 +209,10 @@ export function LiveApp() {
   }, [appearance]);
 
   // Account settings follow the user: adopt cloud prefs when they're newer.
+  // Also purge disk copies of recordings that were downloaded a while ago.
   useEffect(() => {
     void pullPrefsFromCloud();
+    void sweepDiscardedRecordings();
   }, []);
 
   useEffect(() => {
@@ -153,6 +241,10 @@ export function LiveApp() {
       summary: (id, key) => (key
         ? navigate(`?e=${encodeURIComponent(id)}`, `#/summary?k=${encodeURIComponent(key)}`)
         : navigate('', `#/summary/${id}`)),
+      monitor: () => navigate('', '#/monitor'),
+      nursery: (id) => navigate('', `#/monitor/${id}`),
+      monitorCamera: (id) => navigate('', `#/monitor/${id}/camera`),
+      monitorWatch: (id) => navigate('', `#/monitor/${id}/watch`),
     };
   }, []);
 
@@ -176,6 +268,14 @@ export function LiveApp() {
         return <CreateView nav={nav} push={push} />;
       case 'settings':
         return <SettingsView nav={nav} push={push} />;
+      case 'monitor':
+        return <MonitorHome nav={nav} push={push} />;
+      case 'nursery':
+        return <NurseryHub id={route.nid} nav={nav} push={push} />;
+      case 'monitor-camera':
+        return <MonitorCamera id={route.nid} nav={nav} push={push} />;
+      case 'monitor-watch':
+        return <MonitorViewer id={route.nid} nav={nav} push={push} />;
       case 'dashboard':
       default:
         return <DashboardView nav={nav} push={push} />;
@@ -183,8 +283,13 @@ export function LiveApp() {
   };
 
   // Full-bleed surfaces own the whole viewport — no side rail.
-  const fullBleed = ['studio', 'viewer', 'event', 'event-auto', 'guest'].includes(route.view);
-  const activeNav = route.view === 'create' ? 'create' : route.view === 'settings' ? 'settings' : 'dashboard';
+  const fullBleed = ['studio', 'viewer', 'event', 'event-auto', 'guest', 'monitor-camera', 'monitor-watch'].includes(route.view);
+  const activeNav =
+    route.view === 'create' ? 'create'
+    : route.view === 'settings' ? 'settings'
+    : route.view === 'monitor' || route.view === 'nursery' ? 'monitor'
+    : 'dashboard';
+  const screenTour = TOUR_FOR[route.view] ?? null;
 
   return (
     <div className="app">
@@ -205,11 +310,16 @@ export function LiveApp() {
                 className={cx('nav-item', activeNav === n.id && 'active')}
                 aria-current={activeNav === n.id ? 'page' : undefined}
                 onClick={() => nav[n.id]()}
+                data-tour={`nav-${n.id}`}
               >
                 <Icon name={n.icon} size={18} />
                 <span className="nav-label">{n.label}</span>
               </button>
             ))}
+            <button className="nav-item" onClick={openHelp} data-tour="help">
+              <Icon name="help" size={18} />
+              <span className="nav-label">Help &amp; tours</span>
+            </button>
           </div>
           <div className="rail-foot">
             <button
@@ -236,19 +346,38 @@ export function LiveApp() {
             )}
             <hr className="divider" />
             {railOpen && <LiveLegalLinks />}
-            <button className="rail-user" onClick={() => nav.settings()} aria-label="Account & sync settings">
-              <Avatar name={prefs.hostName || 'You'} size={32} />
-              <div className="ru-txt">
-                <div className="ru-name">{prefs.hostName || 'You'}</div>
-                <div className="ru-meta">Account &amp; sync</div>
-              </div>
-            </button>
+            <AccountButton onSettings={() => nav.settings()} push={push} />
           </div>
         </nav>
       )}
 
-      <div className="content" style={fullBleed ? { minHeight: '100vh' } : undefined}>{screen()}</div>
+      <div className={cx('content', !fullBleed && 'has-tabbar')} style={fullBleed ? { minHeight: '100vh' } : undefined}>
+        <Suspense fallback={<div className="page"><div className="skeleton" style={{ height: 140 }} aria-label="Loading" /></div>}>{screen()}</Suspense>
+      </div>
 
+      {/* Phones: compact top bar (brand + account) and a thumb-reach bottom tab bar. */}
+      {!fullBleed && (
+        <header className="mtop">
+          <button className="rail-logo" onClick={() => nav.dashboard()}><StreamStudioLogo /></button>
+          <span className="spacer" />
+          <AccountButton onSettings={() => nav.settings()} push={push} compact />
+        </header>
+      )}
+      {!fullBleed && (
+        <nav className="tabbar" aria-label="Main">
+          {NAV_ITEMS.map((n) => (
+            <button key={n.id} className={cx('tab-item', activeNav === n.id && 'active')} aria-current={activeNav === n.id ? 'page' : undefined} onClick={() => nav[n.id]()}>
+              <Icon name={n.icon} size={20} />
+              <span>{n.id === 'create' ? 'Go live' : n.id === 'monitor' ? 'Monitor' : n.label === 'Customize' ? 'Settings' : n.label}</span>
+            </button>
+          ))}
+          <button className="tab-item" onClick={openHelp} data-tour="help"><Icon name="help" size={20} /><span>Help</span></button>
+        </nav>
+      )}
+
+      {route.view === 'dashboard' && <WelcomeTour ready />}
+      <AuthSheetHost push={push} />
+      <GuideHost screenTour={screenTour} />
       {toastNode}
     </div>
   );

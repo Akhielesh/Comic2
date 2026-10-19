@@ -2,7 +2,9 @@
 // worker — cloud truth) and your recording downloads.
 import React, { useEffect, useMemo, useState } from 'react';
 import { probeLiveWorker, type LiveWorkerProbeResult } from '../api';
-import { addMyEvent, hydrateMyEvents, listMyRecordings, type MyEvent } from '../events';
+import { addMyEvent, findMyEvent, hydrateMyEvents, listMyRecordings, type MyEvent } from '../events';
+import { SaveSheet } from '../components/SaveSheet';
+import { listUnsavedRecordings, openUnsavedRecording, type FinishedRecording, type UnsavedRecording } from '../recorder';
 import { fetchStudioAccess, pushEventToCloud, syncMyEvents, type StudioAccess } from '../sync';
 import { fmtBytes, fmtDuration } from '../metrics';
 import type { Nav } from '../nav';
@@ -95,6 +97,12 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
   const [checkingBackend, setCheckingBackend] = useState(false);
   const prefs = useMemo(loadPrefs, []);
   const recordings = useMemo(listMyRecordings, []);
+  const [unsaved, setUnsaved] = useState<UnsavedRecording[]>([]);
+  const [saving, setSaving] = useState<FinishedRecording | null>(null);
+
+  useEffect(() => {
+    void listUnsavedRecordings().then(setUnsaved).catch(() => undefined);
+  }, [saving]);
 
   const refreshBackendProbe = async (): Promise<LiveWorkerProbeResult> => {
     setCheckingBackend(true);
@@ -326,12 +334,39 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
           </div>
         </div>
         <div className="dash-side">
+          {unsaved.length > 0 && (
+            <div className="card unsaved-card">
+              <div className="card-head"><Icon name="record" size={15} /><h3>Unsaved recordings</h3></div>
+              <div className="rec-list">
+                {unsaved.map((r) => (
+                  <div className="rec-item" key={r.name}>
+                    <div className="rec-icon"><Icon name="alert" size={15} /></div>
+                    <div className="rec-meta">
+                      <div className="rec-title">{r.title}</div>
+                      <div className="rec-sub mono">{fmtBytes(r.bytes)} · {fmtDuration(r.durMs / 1000)} · {new Date(r.at).toLocaleDateString([], { month: 'short', day: 'numeric' })}</div>
+                    </div>
+                    <Btn variant="solid" size="sm" onClick={() => {
+                      void openUnsavedRecording(r).then(setSaving).catch(() => push('That recording is no longer on this device', { icon: 'alert' }));
+                    }}>Save</Btn>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <button className="card card-pad monitor-promo" onClick={() => nav.monitor()}>
+            <span className="mp-icon"><Icon name="baby" size={22} /></span>
+            <span style={{ flex: 1, textAlign: 'left' }}>
+              <b>Baby monitor</b>
+              <small>Use a spare phone as a private, never-recording baby camera — cry alerts included.</small>
+            </span>
+            <Icon name="chevronRight" size={16} className="faint" />
+          </button>
           <div className="card">
             <div className="card-head"><h3>Recordings</h3><span className="spacer" /><Icon name="download" size={15} className="faint" /></div>
             <div className="rec-list">
               {recordings.length === 0 && (
                 <div className="card-pad muted" style={{ fontSize: 13 }}>
-                  Recordings save straight to this device when you stop them — the master copy is yours, never burned with chat.
+                  When a recording stops you choose where it goes — a folder, Google Drive, or Downloads. Chat is never burned in.
                 </div>
               )}
               {recordings.slice(0, 6).map((r) => (
@@ -348,11 +383,12 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
           <div className="card card-pad" style={{ fontSize: 13, lineHeight: 1.6 }}>
             <h3 style={{ margin: '0 0 6px', fontSize: 14.5 }}>How it works</h3>
             <span className="muted">
-              Your camera becomes 6-second segments uploaded to the edge; viewers pull them through the CDN, so 100 viewers cost about the same as one. Chat, reactions and the lobby ride a websocket beside the video — and if your tab ever closes mid-stream, the room pauses for viewers and ends itself safely.
+              Your camera becomes 6-second segments uploaded to the edge; viewers pull them through the CDN, so 100 viewers cost about the same as one. If your connection wobbles, quality adapts automatically and viewers’ players recover on their own. Chat, reactions and the lobby ride a websocket beside the video — and if your tab ever closes mid-stream, the room pauses for viewers and ends itself safely.
             </span>
           </div>
         </div>
       </div>
+      {saving && <SaveSheet rec={saving} hostKey={findMyEvent(saving.eventId)?.hostKey} push={push} onClose={() => setSaving(null)} />}
     </div>
   );
 }
