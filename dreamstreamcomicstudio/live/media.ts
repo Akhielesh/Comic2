@@ -11,6 +11,8 @@ import { startTicker, type Ticker } from './studio/ticker';
  */
 const MIME_CANDIDATES = [
   'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+  'video/mp4;codecs=avc1.4D401F,mp4a.40.2',
+  'video/mp4;codecs=avc1,mp4a.40.2',
   'video/mp4',
   'video/webm;codecs=vp9,opus',
   'video/webm;codecs=vp8,opus',
@@ -164,7 +166,10 @@ export class SegmentedRecorder {
     };
     rec.onstop = () => {
       if (chunks.length === 0) return;
-      this.onSegment(new Blob(chunks, { type: this.opts.mimeType }), seq, Math.round(performance.now() - startedAt));
+      // The recorder's ACTUAL type carries the real codecs (e.g. avc1.64001F +
+      // opus vs aac) — viewers need that to pick a decoder, not the request.
+      const type = rec.mimeType || this.opts.mimeType;
+      this.onSegment(new Blob(chunks, { type }), seq, Math.round(performance.now() - startedAt));
     };
     rec.start(250);
     this.active = rec;

@@ -1,0 +1,45 @@
+# DreamStream backend image for Cloudflare Containers (built by `wrangler deploy`
+# from api-proxy/wrangler.jsonc — build context is this directory).
+#
+# Lean on purpose: the repo-wide `npm ci` pulls 1.2 GB (the whole frontend +
+# onnxruntime-node). The Express server is bundled into ONE file with esbuild,
+# and only the three packages that can't be bundled ship in the image:
+#   sharp   — native libvips binaries
+#   pyodide — loads its WASM + stdlib files from its package dir
+#   sql.js  — loads sql-wasm.wasm from its package dir
+# ≈50 MB of dependencies instead of 1.2 GB → fast image pulls = fast cold starts.
+#
+# The original `Dockerfile` (+ railway.json) is untouched so the Railway path
+# still works for a future return.
+
+FROM node:20-slim AS build
+WORKDIR /src
+COPY package.json package-lock.json ./
+# --ignore-scripts: skip postinstall downloads of frontend-only native deps.
+# The esbuild check makes a truncated install fail here instead of later.
+RUN npm ci --ignore-scripts --no-audit --no-fund && node_modules/.bin/esbuild --version
+COPY . .
+RUN node_modules/.bin/esbuild server/src/index.ts \
+      --bundle --platform=node --format=esm --target=node20 \
+      --external:sharp --external:pyodide --external:sql.js \
+      --outfile=/out/server.mjs --log-level=warning \
+      "--banner:js=import { createRequire as __cr } from 'node:module'; import { fileURLToPath as __fu } from 'node:url'; import { dirname as __dn } from 'node:path'; const require = __cr(import.meta.url); const __filename = __fu(import.meta.url); const __dirname = __dn(__filename);" \
+ && node -e "const l=require('./package-lock.json');const v=(p)=>l.packages['node_modules/'+p].version;const r=require('./package.json');require('fs').writeFileSync('/out/package.json',JSON.stringify({name:'dreamstream-backend',version:r.version||'0.0.0',private:true,type:'module',dependencies:{sharp:v('sharp'),pyodide:v('pyodide'),'sql.js':v('sql.js')}},null,2))"
+
+FROM node:20-slim
+WORKDIR /app
+ENV NODE_ENV=production \
+    PORT=8080 \
+    NODE_OPTIONS=--max-old-space-size=512
+COPY --from=build /out/package.json ./package.json
+RUN npm install --omit=dev --no-audit --no-fund --loglevel=error && npm cache clean --force
+COPY --from=build /out/server.mjs ./server.mjs
+# Pyodide caches packages it downloads next to itself — the app user must own /app.
+RUN chown -R node:node /app
+# GIT_SHA / BUILD_TIMESTAMP surface in /api/system (set by the deploy workflow).
+ARG GIT_SHA=unknown
+ARG BUILD_TIMESTAMP=unknown
+ENV GIT_SHA=$GIT_SHA BUILD_TIMESTAMP=$BUILD_TIMESTAMP
+EXPOSE 8080
+USER node
+CMD ["node", "server.mjs"]

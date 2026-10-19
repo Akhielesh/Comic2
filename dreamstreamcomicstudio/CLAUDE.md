@@ -112,8 +112,8 @@ direct access is deployed and old tabs have had time to reload.
 
 ## Deploy
 
-Production is the **`Dreamstrream-v1`** branch (Cloudflare Pages builds frontend from it;
-Railway builds the backend). Publishing = fast-forward/merge the feature branch into
+Production is the **`Dreamstrream-v1`** branch (Cloudflare Pages builds the frontend from
+it; GitHub Actions deploy the Workers and the backend container). Publishing = fast-forward/merge the feature branch into
 `Dreamstrream-v1` and push. It often diverges between sessions, so fetch and merge first.
 
 **STANDING RULE — always ship to production.** The user wants every completed change
@@ -127,39 +127,44 @@ Do this without waiting to be asked. Never force-push production; if the merge i
 genuinely ambiguous or risky, pause and ask. (The auto-mode classifier may still prompt
 for the production push — that's fine, proceed once allowed.)
 
-## Railway cost control (backend)
+## Backend hosting & cost control
 
 > **Authoritative infra docs live in [`docs/infrastructure/`](docs/infrastructure/README.md):**
 > `INFRA_MAP.md` (dependency map), `COST_RUNBOOK.md` (full optimization playbook +
 > monthly checklist), `ENV_MATRIX.md`, `SECURITY_FINDINGS.md`. This section is the
 > quick reference; the runbook is the source of truth.
 
-The Railway-hosted Express backend (built from `Dreamstrream-v1`, `railway.json` +
-root `Dockerfile`) is the only paid always-on service; the frontend (Cloudflare Pages)
-and the **5 DreamStream Workers** (`dreamstream-api`, `-data-egress`, `-live`, `-email`,
-`-studio`) are effectively free. The bill is dominated by **memory held 24/7**.
-(The `atlasd` / `akhieleshpersonalwebsite` workers on the same Cloudflare account are
-*not* part of DreamStream.) Standing setup to keep it cheap (single-user scale):
+**Since 2026-10-19 the Express backend runs on Cloudflare, not Railway.** It is the
+`Backend` Container class inside the `dreamstream-api` Worker (`api-proxy/`): image
+`Dockerfile.cloudflare` (esbuild bundle + only `sharp`/`pyodide`/`sql.js` installed),
+`basic` instance, one instance, sleeps 15 min after the last request (billed only while
+awake, on the Workers Paid plan the account already has for the studio container). Deployed
+by `.github/workflows/deploy-api-proxy.yml` on pushes touching `server/**`, `shared/**`,
+`api-proxy/**`, root `package*.json`, etc. The frontend (Pages) and the other Workers
+(`-data-egress`, `-live`, `-email`, `-studio`) are unchanged. (The `atlasd` /
+`akhieleshpersonalwebsite` workers on the same Cloudflare account are *not* DreamStream.)
 
-- **Serverless / App-Sleeping must be ON** for the backend service (Railway → service →
-  Settings → Serverless). It scales to zero when idle. This is a dashboard/MCP toggle —
-  it is **not** a `railway.json` field. Set via Railway MCP `update_service
-  sleep_application=true`. **Gotcha:** the backend's Railway **project is named
-  `hospitable-enthusiasm`** and the **service** is `Comic2` (there is no project literally
-  called "comic2"); the MCP call works against it (verified 2026-06-16). Domain
-  `comic2-production.up.railway.app`, custom `dreamstreamstudio.ai`.
-- **No Redis *on the always-on backend*.** `REDIS_URL` unset is intentional: rate-limiting
-  falls back to in-memory and connector sync runs in-process. A live Redis connection both
-  adds an always-on charge AND emits constant outbound traffic that blocks Serverless from
-  ever sleeping. (Redis *is* the BullMQ broker for the **separate** `ventures:worker` /
-  `connectors:worker` processes — but those are not run by default and must never be folded
-  into the always-on backend.)
-- **Memory baseline:** Pyodide (`server/src/services/pyodideRunner.ts`) loads packages
-  on demand via `loadPackagesFromImports` — never re-add eager preloading (WASM memory
-  never shrinks, so it permanently pins ~500MB). Node heap is capped in the Dockerfile
-  (`NODE_OPTIONS=--max-old-space-size=512`).
-- Background timers (`providerUsage` flusher, `modelCatalog` refresh) are `.unref()`'d and
-  send no network when idle — keep them that way so Serverless can sleep.
+- **Backend env:** non-secret config = `vars` in `api-proxy/wrangler.jsonc`; secrets = rows in
+  D1 `dreamstream-backend-env` (`backend_env(name, value)`) or Worker secrets (which override
+  D1). Every string var/secret except `BACKEND_TARGET`/`BACKEND_ORIGIN` reaches the container.
+  **Never put a secret in `wrangler.jsonc` — the repo is public.**
+- **Railway is a dormant fallback** (trial expired 2026-10-16; `railway.json` + root
+  `Dockerfile` + the `hospitable-enthusiasm`/`Comic2` service and its variables are kept).
+  Switch back with `"BACKEND_TARGET": "origin"` — see `INFRA_MAP.md` §3a. Don't delete them.
+- **No Redis on the backend.** `REDIS_URL` unset is intentional: rate-limiting falls back
+  to in-memory and connector sync runs in-process. (Redis *is* the BullMQ broker for the
+  **separate** `ventures:worker` / `connectors:worker` processes — not run by default and
+  never folded into the backend.)
+- **Memory baseline (1 GiB instance):** Pyodide (`server/src/services/pyodideRunner.ts`)
+  loads packages on demand via `loadPackagesFromImports` — never re-add eager preloading
+  (WASM memory never shrinks, so it permanently pins ~500MB). Node heap is capped in both
+  Dockerfiles (`NODE_OPTIONS=--max-old-space-size=512`).
+- **Keep it sleepable:** nothing may call `/api/*` on a timer (an uptime ping every few
+  minutes keeps the container awake 24/7). Background timers (`providerUsage` flusher,
+  `modelCatalog` refresh) are `.unref()`'d and send no network when idle — keep them that way.
+- **New server dependency?** If it ships native binaries or loads files from its package
+  directory at runtime, add it to the `--external:` list *and* the generated
+  `package.json` in `Dockerfile.cloudflare`; otherwise esbuild bundles it automatically.
 
 The Railway MCP (`.mcp.json`) needs an **Account/Team** token (railway.com/account/tokens)
 in `RAILWAY_API_TOKEN` — a Project token (36-char UUID) fails account-level calls.

@@ -1,17 +1,18 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import worker from './index';
+import worker, { type BackendNamespace } from './proxy';
+import { buildBackendEnv, loadBackendEnv, type EnvDb } from './backendEnv';
 import { detectAgent } from './agent-gate';
 import { onRequest } from '../../functions/_middleware';
 
 const HUMAN = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
-const env = { BACKEND_ORIGIN: 'https://backend.example' };
+const env: Record<string, unknown> = { BACKEND_TARGET: 'origin', BACKEND_ORIGIN: 'https://backend.example' };
 
-function call(path: string, init: RequestInit & { ua?: string } = {}) {
+function call(path: string, init: RequestInit & { ua?: string } = {}, workerEnv: Record<string, unknown> = env) {
   const headers = new Headers(init.headers);
   if (init.ua !== undefined) headers.set('user-agent', init.ua);
   const waits: Promise<unknown>[] = [];
-  const res = worker.fetch(new Request(`https://dreamstreamstudio.ai${path}`, { ...init, headers }), env, { waitUntil: (p) => waits.push(p) });
+  const res = worker.fetch(new Request(`https://dreamstreamstudio.ai${path}`, { ...init, headers }), workerEnv, { waitUntil: (p) => waits.push(p) });
   return { res, waits };
 }
 
@@ -83,5 +84,101 @@ describe('Pages middleware', () => {
     expect(await (await run('/share/abc', 'Twitterbot/1.0')).text()).toBe('app');
     expect(await (await run('/robots.txt', 'GPTBot/1.2')).text()).toBe('app');
     expect((await run('/agents', HUMAN)).headers.get('location')).toBe('https://dreamstreamstudio.ai/api/agent-gate');
+  });
+});
+
+function fakeContainer(handler: (req: Request) => Promise<Response>) {
+  const seen: { name: unknown; req: Request }[] = [];
+  const ns: BackendNamespace = {
+    idFromName: (name) => ({ name }),
+    get: (id) => ({
+      fetch: async (req) => {
+        seen.push({ name: (id as { name: unknown }).name, req });
+        return handler(req);
+      },
+    }),
+  };
+  return { ns, seen };
+}
+
+describe('backend routing', () => {
+  it('sends API traffic to the single Backend container with the real client IP', async () => {
+    const railway = vi.fn();
+    vi.stubGlobal('fetch', railway);
+    const { ns, seen } = fakeContainer(async (req) => new Response(await req.text(), { status: 201 }));
+    const res = await call(
+      '/api/projects?x=1',
+      { method: 'POST', ua: HUMAN, body: '{"a":1}', headers: { 'cf-connecting-ip': '203.0.113.9', 'content-type': 'application/json' } },
+      { BACKEND: ns, BACKEND_ORIGIN: 'https://railway.example' },
+    ).res;
+    expect(res.status).toBe(201);
+    expect(await res.text()).toBe('{"a":1}');
+    expect(railway).not.toHaveBeenCalled();
+    expect(seen).toHaveLength(1);
+    expect(seen[0].name).toBe('primary');
+    expect(seen[0].req.url).toBe('https://dreamstreamstudio.ai/api/projects?x=1');
+    expect(seen[0].req.headers.get('x-forwarded-for')).toBe('203.0.113.9');
+    expect(seen[0].req.headers.get('x-forwarded-proto')).toBe('https');
+  });
+
+  it('falls back to the external origin only when told to (or when no container is bound)', async () => {
+    const railway = vi.fn(async () => new Response('{"status":"ok"}'));
+    vi.stubGlobal('fetch', railway);
+    const { ns, seen } = fakeContainer(async () => new Response('container'));
+    await call('/api/health', { ua: HUMAN }, { BACKEND: ns, BACKEND_TARGET: ' Origin ', BACKEND_ORIGIN: 'https://railway.example/' }).res;
+    await call('/api/health', { ua: HUMAN }, { BACKEND_ORIGIN: 'https://railway.example' }).res;
+    expect(seen).toHaveLength(0);
+    expect(railway.mock.calls.map((c) => String((c as unknown[])[0]))).toEqual(['https://railway.example/api/health', 'https://railway.example/api/health']);
+  });
+
+  it('answers with retryable JSON when no backend is reachable', async () => {
+    const { ns } = fakeContainer(async () => {
+      throw new Error('boom');
+    });
+    const broken = await call('/api/health', { ua: HUMAN }, { BACKEND: ns }).res;
+    expect(broken.status).toBe(502);
+    expect(broken.headers.get('retry-after')).toBe('5');
+    const none = await call('/api/health', { ua: HUMAN }, {}).res;
+    expect(none.status).toBe(503);
+    expect((await none.json()).error.message).toMatch(/No backend/);
+  });
+
+  it('still keeps AI agents away from the container', async () => {
+    const { ns, seen } = fakeContainer(async () => new Response('x'));
+    expect((await call('/api/projects', { ua: 'GPTBot/1.2' }, { BACKEND: ns }).res).status).toBe(403);
+    expect(seen).toHaveLength(0);
+  });
+});
+
+describe('backend env', () => {
+  it('merges D1 secrets under Worker vars/secrets and drops proxy-only settings and bindings', () => {
+    const merged = buildBackendEnv(
+      { BACKEND_TARGET: 'container', BACKEND_ORIGIN: 'https://x', CORS_ORIGIN: 'https://a', OPENROUTER_API_KEY: 'worker-secret', BACKEND: {}, AGENT_DB: {} },
+      [
+        { name: 'OPENROUTER_API_KEY', value: 'd1-value' },
+        { name: 'SUPABASE_SERVICE_ROLE_KEY', value: 'svc' },
+        { name: 'bad name', value: 'x' },
+        { name: 'BACKEND_TARGET', value: 'origin' },
+        { name: 'NUMERIC', value: 5 },
+      ],
+    );
+    expect(merged).toEqual({ CORS_ORIGIN: 'https://a', OPENROUTER_API_KEY: 'worker-secret', SUPABASE_SERVICE_ROLE_KEY: 'svc' });
+  });
+
+  it('retries a failed D1 read once, then refuses to start half-configured', async () => {
+    let calls = 0;
+    const flaky: EnvDb = {
+      prepare: () => ({
+        all: async <T>() => {
+          calls++;
+          if (calls === 1) throw new Error('transient');
+          return { results: [{ name: 'A_KEY', value: '1' }] as T[] };
+        },
+      }),
+    };
+    expect(await loadBackendEnv({ PORT: '8080' }, flaky)).toEqual({ A_KEY: '1', PORT: '8080' });
+    const down: EnvDb = { prepare: () => ({ all: async () => { throw new Error('down'); } }) };
+    await expect(loadBackendEnv({}, down)).rejects.toThrow(/unreadable/);
+    expect(await loadBackendEnv({ X: 'y' }, undefined)).toEqual({ X: 'y' });
   });
 });

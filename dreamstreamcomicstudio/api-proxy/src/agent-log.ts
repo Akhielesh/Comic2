@@ -4,7 +4,7 @@
  * Rows go to the owner's shared D1 (`akhielesh-portfolio-analytics`, tables
  * `agent_visits` / `agent_checkins`, `site` = dreamstreamstudio.ai) so AI visitors
  * to every site show up in one place (akhielesh.com/adminak → AI visitors).
- * Everything here runs at the edge — agents never wake the Railway backend.
+ * Everything here runs at the edge — agents never wake the backend container.
  */
 import { AGENT_QUESTIONS, type AgentMatch } from './agent-gate';
 

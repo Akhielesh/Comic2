@@ -1,26 +1,42 @@
-name: Deploy API Proxy
+name: Deploy API (Worker + backend container)
 
-# Mounts the Railway backend at dreamstreamstudio.ai/api/* via a Workers route
-# (same pattern as deploy-live-worker.yml). This is what makes the deployed
-# Pages frontend's same-origin /api calls reach the real backend — before this
-# worker existed, the Pages SPA fallback answered every /api request with
-# index.html + HTTP 200, so all backend features silently failed in production.
-# Requires repo secrets: CLOUDFLARE_API_TOKEN (Workers Scripts:Edit + zone
-# Workers Routes:Edit), CLOUDFLARE_ACCOUNT_ID.
+# dreamstream-api does two jobs at dreamstreamstudio.ai/api/*:
+#   1. the edge front door (agent gate, client-IP forwarding), and
+#   2. since October 2026 it RUNS the Express backend as a Cloudflare Container
+#      (class Backend, image dreamstreamcomicstudio/Dockerfile.cloudflare),
+#      replacing the Railway service. wrangler builds and pushes the image.
+# Railway stays dormant for a possible return: set BACKEND_TARGET=origin in
+# api-proxy/wrangler.jsonc (see docs/infrastructure/INFRA_MAP.md).
 #
-# The worker is dependency-free, so there is no npm install step — wrangler
-# bundles src/index.ts directly.
+# Requires repo secrets: CLOUDFLARE_API_TOKEN (Workers Scripts:Edit, zone Workers
+# Routes:Edit, Containers:Edit, D1:Edit), CLOUDFLARE_ACCOUNT_ID — the same token
+# deploy-studio-worker.yml already uses for its container.
 
 on:
   push:
     branches: [Dreamstrream-v1]
     paths:
       - 'dreamstreamcomicstudio/api-proxy/**'
+      # Everything bundled into the backend image:
+      - 'dreamstreamcomicstudio/server/**'
+      - 'dreamstreamcomicstudio/shared/**'
+      - 'dreamstreamcomicstudio/apiTypes.ts'
+      - 'dreamstreamcomicstudio/toolCatalog.ts'
+      - 'dreamstreamcomicstudio/types.ts'
+      - 'dreamstreamcomicstudio/package.json'
+      - 'dreamstreamcomicstudio/package-lock.json'
+      - 'dreamstreamcomicstudio/Dockerfile.cloudflare'
+      - 'dreamstreamcomicstudio/.dockerignore'
       - '.github/workflows/deploy-api-proxy.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# Never run two container rollouts at once; a newer push supersedes a queued one.
+concurrency:
+  group: deploy-api
+  cancel-in-progress: false
 
 jobs:
   deploy-worker:
@@ -35,25 +51,47 @@ jobs:
         with:
           node-version: 22
 
-      - name: Deploy with wrangler
+      - name: Install worker dependencies
+        working-directory: dreamstreamcomicstudio/api-proxy
+        run: npm ci
+
+      - name: Typecheck worker
+        working-directory: dreamstreamcomicstudio/api-proxy
+        run: npx tsc -p tsconfig.json
+
+      - name: Deploy with wrangler (builds + pushes the backend image)
         working-directory: dreamstreamcomicstudio/api-proxy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx --yes wrangler@latest deploy
+        run: npx wrangler deploy
 
-      - name: Verify the mounted route answers with backend JSON
+      # The first request after a deploy cold-starts the container (image pull + boot;
+      # a brand-new container application can also take a few minutes to provision),
+      # so poll for up to ~5 minutes. The workers.dev URL is the definitive check — the
+      # custom domain's bot protection challenges GitHub's datacenter IPs.
+      - name: Verify the backend container answers /api/health
         run: |
-          sleep 10
-          body=$(curl -s --max-time 20 https://dreamstreamstudio.ai/api/health)
-          echo "GET /api/health -> ${body:0:200}"
+          for attempt in $(seq 1 30); do
+            body=$(curl -s --max-time 30 https://dreamstream-api.akhieleshsrirangam.workers.dev/api/health || true)
+            if echo "$body" | grep -q '"status"'; then
+              echo "GET workers.dev /api/health -> ${body:0:200}"
+              break
+            fi
+            echo "attempt $attempt: ${body:0:160}"
+            if [ "$attempt" = 30 ]; then
+              echo '::error::the backend container did not answer /api/health within ~5 minutes'
+              exit 1
+            fi
+            sleep 10
+          done
+          body=$(curl -s --max-time 30 https://dreamstreamstudio.ai/api/health || true)
+          echo "GET dreamstreamstudio.ai/api/health -> ${body:0:200}"
           if echo "$body" | grep -q '"status"'; then
-            echo "Route active — backend JSON received."
-          # Cloudflare bot protection challenges GitHub's datacenter IPs; a challenge page
-          # means the zone IS fronting the route, we just can't see through it from CI.
+            echo "Custom-domain route active."
           elif echo "$body" | grep -qi 'challenge-platform\|Just a moment'; then
-            echo '::warning::Cloudflare served a bot challenge to the CI runner — route health could not be verified from CI (deploy itself succeeded). Add a WAF skip rule for /api/health to make this check meaningful.'
+            echo '::warning::Cloudflare served a bot challenge to the CI runner on the custom domain (the route itself could not be verified from CI). Add a WAF skip rule for /api/health to make this check meaningful.'
           else
-            echo '::error::/api/health did not return backend JSON — route not active'
+            echo '::error::dreamstreamstudio.ai/api/health did not return backend JSON — route not active'
             exit 1
           fi

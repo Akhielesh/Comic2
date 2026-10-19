@@ -2,8 +2,8 @@
 
 **Status:** Authoritative. This is the single source of truth for what cloud
 infrastructure exists, what depends on what, and where money is spent.
-**Last verified:** 2026-06-16 (against live Railway / Supabase / Cloudflare APIs +
-repo config). **Maintain this:** whenever you add/remove a service, worker, binding,
+**Last verified:** 2026-10-19 (against live Railway / Supabase / Cloudflare APIs +
+repo config; backend moved Railway → Cloudflare Containers that day). **Maintain this:** whenever you add/remove a service, worker, binding,
 external API, or MCP server, update this file and `ENV_MATRIX.md` in the same PR.
 See `COST_RUNBOOK.md` for the optimization playbook.
 
@@ -18,32 +18,38 @@ See `COST_RUNBOOK.md` for the optimization playbook.
 ```
 Browser
   → Cloudflare Pages (comic2.pages.dev / dreamstreamstudio.ai)            [frontend, ~free]
-  → /api/*  →  dreamstream-api Worker  →  Railway Express backend          [the only paid always-on box]
+  → /api/*  →  dreamstream-api Worker  →  Backend Container (Express)     [billed only while awake]
+                  (BACKEND_TARGET=origin → Railway instead: dormant fallback)
                   backend → Supabase  (Postgres + Auth + Storage)          [free tier]
                   backend → LLM providers (OpenRouter / NVIDIA / Gemini / BYOK)
                   backend → data-connector APIs (budget-metered)
                        ↳ Yahoo / Stooq / FiscalData → dreamstream-data-egress Worker
                   backend → dreamstream-studio Worker (HMAC) → container sandboxes
                   backend → dreamstream-email Worker (HMAC) → Cloudflare Email
-  /live-api/* → dreamstream-live Worker → EventRoom Durable Object + R2 (dreamstream-live)
+  /live-api/* → dreamstream-live Worker → EventRoom DO + R2 (dreamstream-live)
+                                       → MonitorRoom DO (baby monitor: signaling, alerts, Web Push)
+                                       → Supabase RPCs (member check, nursery roles)
   Supabase Auth "Send Email Hook" → dreamstream-email /auth-hook
 ```
 
-**The Railway Express backend is the only paid always-on service.** Cloudflare
-Pages + the 5 Workers + Supabase are effectively free at single-user scale. **100% of
-the historically "insane" bills traced to Railway compute** (memory held 24/7 — see
-`COST_RUNBOOK.md` §1).
+**There is no paid always-on service any more.** Since 2026-10-19 the Express backend
+runs as a Cloudflare Container that boots on the first request and sleeps 15 min after
+the last one (billed only while awake, against the Workers Paid plan's included usage).
+**100% of the historically "insane" bills traced to Railway compute** (memory held 24/7 —
+see `COST_RUNBOOK.md` §1); Railway's trial expired on 2026-10-16 and its deployment was
+removed, which is what prompted the move. Railway stays configured as a dormant fallback
+(§3a).
 
 ---
 
-## 1. Live cloud inventory (verified 2026-06-16)
+## 1. Live cloud inventory (verified 2026-06-16; Railway + Cloudflare rows 2026-10-19)
 
 ### Railway (account: Akhielesh, personal workspace — 7 projects)
 
 | Project | Service(s) | State | Notes |
 |---|---|---|---|
-| **hospitable-enthusiasm** | **Comic2** (backend) | ✅ running, App-Sleeping **ON** | The DreamStream backend. Domain `comic2-production.up.railway.app` (port 8080), custom `dreamstreamstudio.ai`. |
-| hospitable-enthusiasm | **SearXNG** | ✅ running, App-Sleeping **ON** | Optional private search backend; Comic2 degrades to public instances without it. |
+| **hospitable-enthusiasm** | **Comic2** (backend) | ⛔ **dormant** — trial expired, deployment removed 2026-10-16 | Former DreamStream backend, replaced by the Cloudflare `Backend` container. Config, variables, `railway.json` + root `Dockerfile` kept for a possible return (§3a). Domain `comic2-production.up.railway.app`. |
+| hospitable-enthusiasm | **SearXNG** | ⛔ dormant (trial expired) | Optional private search backend; was never wired (`SEARXNG_URL` unset). |
 | autojobapply | Postgres, applypilot | ⛔ stopped / failed | Dead since May. 0.81 GB Postgres volume remains. |
 | mineral-atlas | web | ❌ failed | Dead since Apr. |
 | oil-intelligence-platform | web | ❌ failed | Dead since Mar. |
@@ -72,12 +78,14 @@ the historically "insane" bills traced to Railway compute** (memory held 24/7 �
 
 | Item | Value |
 |---|---|
-| Workers (DreamStream) | **5**: `dreamstream-api`, `dreamstream-data-egress`, `dreamstream-live`, `dreamstream-email`, `dreamstream-studio` |
+| Plan | **Workers Paid** ($5/mo) — required for Containers; already in use by `dreamstream-studio`. |
+| Workers (DreamStream) | **5**: `dreamstream-api` (+ the backend container), `dreamstream-data-egress`, `dreamstream-live`, `dreamstream-email`, `dreamstream-studio` |
+| Containers | `Backend` (dreamstream-api, `basic` 1/4 vCPU · 1 GiB · 4 GB, max 2, WNAM) — the Express backend; `Sandbox` (dreamstream-studio, `standard-3`, max 3) |
 | Workers (other, NOT in this repo) | `akhieleshpersonalwebsite`, `atlasd` — separate projects on the same account |
 | R2 buckets | **1**: `dreamstream-live` (ENAM, Standard) — live-stream segments only |
-| D1 | **1**: `akhielesh-portfolio-analytics` (owner's portfolio analytics). DreamStream uses only its `agent_visits` / `agent_checkins` tables (AI-agent gate log, shared across the owner's sites via a `site` column) through the `dreamstream-api` binding `AGENT_DB`. |
+| D1 | **2**: `dreamstream-backend-env` (id `16181ceb-…`, WNAM) — the backend's secrets, table `backend_env(name, value, source, updated_at)`, read by the `Backend` container at start (binding `BACKEND_ENV`); and `akhielesh-portfolio-analytics` (owner's portfolio analytics), of which DreamStream uses only the `agent_visits` / `agent_checkins` tables (AI-agent gate log, shared across the owner's sites via a `site` column) through the `dreamstream-api` binding `AGENT_DB`. |
 | KV namespaces | **0** |
-| Durable Objects | `EventRoom` (live-worker), `Sandbox` (studio-worker) — both SQLite |
+| Durable Objects | `EventRoom` + `MonitorRoom` (live-worker), `Sandbox` (studio-worker), `Backend` (api-proxy, container-backed) — all SQLite |
 | Pages | `comic2.pages.dev` + `dreamstreamstudio.ai` (frontend). **Pages Functions:** one middleware (`functions/_middleware.ts`) — the page half of the AI-agent gate; `public/_routes.json` keeps it off static assets so it only runs on page loads. |
 
 ---
@@ -90,8 +98,8 @@ All 5 are `compatibility_date: 2026-01-01`. Routes are carved out of the
 
 | Worker | Repo dir | Route | Bindings | Purpose |
 |---|---|---|---|---|
-| **dreamstream-api** | `api-proxy/` | `dreamstreamstudio.ai/api/*` | var `BACKEND_ORIGIN` → Railway; D1 `AGENT_DB` → `akhielesh-portfolio-analytics` (agent log only) | Same-origin reverse proxy to the Railway backend; sets `X-Forwarded-For` from `CF-Connecting-IP`; pass-through (no auth); 502 if backend down. **This is what makes the Pages frontend talk to Railway same-origin.** Also the **AI-agent gate** (2026-10): answers `/api/agent-gate` (check-in page) and `/api/agent-gate/checkin` (50 questions / answers) itself, and returns 403 to known AI agents on every other `/api/*` — so agents never reach or wake Railway. Visits + answers are logged to `agent_visits` / `agent_checkins` with `site = dreamstreamstudio.ai`. |
-| **dreamstream-live** | `live-worker/` | `dreamstreamstudio.ai/live-api/*` | DO `EVENT_ROOM` (`EventRoom`), R2 `LIVE_BUCKET` (`dreamstream-live`), var `ALLOWED_ORIGINS` | Live-stream API. R2 segment rail (zero egress). EventRoom DO = chat/presence/lobby/moderation/WebRTC signaling. DO **alarm** janitor purges segments @24h, recordings @7d (keeps R2 bounded). |
+| **dreamstream-api** | `api-proxy/` | `dreamstreamstudio.ai/api/*` (+ `dreamstream-api.akhieleshsrirangam.workers.dev`) | **Container** `Backend` via DO `BACKEND`; D1 `BACKEND_ENV` → `dreamstream-backend-env` (secrets); D1 `AGENT_DB` → `akhielesh-portfolio-analytics` (agent log only); vars `BACKEND_TARGET` (`container`\|`origin`), `BACKEND_ORIGIN` (Railway, dormant) + the backend's non-secret config | Same-origin front door **and host** of the Express backend: forwards `/api/*` to the single `Backend` container instance (`src/backend.ts`; boots on demand, sleeps after 15 min idle); sets `X-Forwarded-For` from `CF-Connecting-IP`; pass-through (no auth); retryable 503 JSON while the container starts or if it can't. Every string var/secret on the Worker (except `BACKEND_*`) becomes container env, merged over the D1 rows (`src/backendEnv.ts`). Also the **AI-agent gate** (2026-10): answers `/api/agent-gate` (check-in page) and `/api/agent-gate/checkin` (50 questions / answers) itself, and returns 403 to known AI agents on every other `/api/*` — so agents never reach or wake the backend. Visits + answers are logged to `agent_visits` / `agent_checkins` with `site = dreamstreamstudio.ai`. |
+| **dreamstream-live** | `live-worker/` | `dreamstreamstudio.ai/live-api/*` | DO `EVENT_ROOM` (`EventRoom`), DO `MONITOR_ROOM` (`MonitorRoom`), R2 `LIVE_BUCKET` (`dreamstream-live`), vars `ALLOWED_ORIGINS`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`; optional secrets `TURN_KEY_ID` / `TURN_KEY_API_TOKEN` | Live-stream API. R2 segment rail (zero egress). EventRoom DO = chat/presence/lobby/moderation/WebRTC signaling; creating an event requires a signed-in Live member (Supabase RPC check). MonitorRoom DO = the **baby monitor** (2026-10): P2P WebRTC signaling between a camera device and viewers (video never touches the server and is never recorded), cry/motion/offline alerts, Web Push (VAPID keys generated and kept in the DO), 7-day activity timeline; every socket is authorised against `monitor_my_role` in Supabase. DO **alarm** janitor purges segments @24h, recordings @7d (keeps R2 bounded). |
 | **dreamstream-studio** | `studio-worker/` | `*.dreamstreamstudio.ai/*` (wildcard previews) | DO `Sandbox` (`@cloudflare/sandbox`), **Container `standard-3` = 2 vCPU / 8 GiB, max 3** (capped from 50 on 2026-06-16), secret `STUDIO_HMAC_SECRET`, var `STUDIO_PREVIEW_DOMAIN`, optional `CLOUDFLARE_API_TOKEN`/`VERCEL_TOKEN` | Per-user code sandbox/container. HMAC-signed control POSTs from the backend (`STUDIO_WORKER_URL`): `launch`/`deploy`/`logs`/`stop`. ⚠️ **Containers are the one Cloudflare cost that is NOT free** — see `COST_RUNBOOK.md` §3. |
 | **dreamstream-email** | `email-worker/` | none (`*.workers.dev`) | `send_email` binding `EMAIL`, secrets `EMAIL_HMAC_SECRET` + `SUPABASE_AUTH_HOOK_SECRET`, vars `EMAIL_FROM`/`SUPABASE_VERIFY_URL`/brand | Transactional email. `POST /send` (HMAC `x-email-signature`); `POST /auth-hook` = Supabase Send Email Hook (Standard Webhooks sig). Caps live in backend config (200/day, 2500/mo). |
 | **dreamstream-data-egress** | `data-egress/` | `dreamstreamstudio.ai/egress/*` | optional secret `EGRESS_SHARED_SECRET` | HTTPS GET relay for **exactly 3 allowlisted hosts** (Yahoo Finance, Stooq, Treasury FiscalData) when the backend's datacenter IP is blocked. `x-egress-key` equality gate. Load-bearing for finance widgets. |
@@ -102,22 +110,48 @@ All 5 are `compatibility_date: 2026-01-01`. Routes are carved out of the
 
 ---
 
-## 3. Railway backend — what it is and why it costs
+## 3. The backend — Cloudflare Container (since 2026-10-19)
 
-- **Build/deploy** (`railway.json` + root `Dockerfile`): `DOCKERFILE` builder; `node:20-slim`;
-  `npm ci` + `npm run build:server`; start `npm run start:server`; **EXPOSE 7071** (served
-  on 8080 via Railway), healthcheck `/api/health`, restart on-failure max 5.
-- **Memory cap:** `NODE_OPTIONS=--max-old-space-size=512` (Dockerfile) bounds the V8 heap.
+- **Image** (`Dockerfile.cloudflare`, built and pushed by `wrangler deploy` in
+  `.github/workflows/deploy-api-proxy.yml`): the Express server is **bundled with esbuild into
+  one `server.mjs`**; only `sharp`, `pyodide` and `sql.js` (native / WASM assets) are installed
+  in the runtime stage. ≈450 MB image, ~50 MB of dependencies (vs 1.2 GB for the repo-wide
+  `npm ci`), boots in ~1 s at ~90 MB RSS. Runs as the `node` user on port 8080.
+- **Instance:** `basic` (1/4 vCPU, 1 GiB, 4 GB disk), region `WNAM`, one instance (the proxy
+  always addresses `primary`), `max_instances: 2` for rollouts. `sleepAfter: 15m`.
+- **Env:** non-secret config = `vars` in `api-proxy/wrangler.jsonc`; secrets = rows in D1
+  `dreamstream-backend-env` (copied from Railway on 2026-10-19) or Worker secrets (which
+  override D1). Read once per container start — a secret change applies at the next cold start
+  (or redeploy). Promote a D1 secret to a real Worker secret any time: set it in the dashboard
+  (Workers → dreamstream-api → Settings → Variables and Secrets), then delete its D1 row.
+- **Deploy:** push to `Dreamstrream-v1` touching `api-proxy/**`, `server/**`, `shared/**`,
+  `apiTypes.ts`, `toolCatalog.ts`, `types.ts`, root `package*.json`, `Dockerfile.cloudflare` or
+  `.dockerignore`. The workflow polls `/api/health` on workers.dev for up to ~5 min.
+- **Memory cap:** `NODE_OPTIONS=--max-old-space-size=512` bounds the V8 heap (both Dockerfiles).
+
+### 3a. Returning to Railway (kept dormant on purpose)
+
+Nothing Railway-specific was deleted: `railway.json`, the root `Dockerfile`, the Comic2 service
+and all its variables still exist. To switch back: (1) get the Railway plan active and redeploy
+the Comic2 service (it auto-deploys from `Dreamstrream-v1`); (2) set `"BACKEND_TARGET": "origin"`
+in `api-proxy/wrangler.jsonc` (`BACKEND_ORIGIN` already points at
+`comic2-production.up.railway.app`) and push. Also restore `EMAIL_PUBLIC_BASE_URL` /
+`GOOGLE_OAUTH_REDIRECT_URL` on Railway if you want them on the Railway domain (both work
+through `dreamstreamstudio.ai` either way). Switching back to Cloudflare is the reverse var.
+
+### What holds memory while awake (unchanged from the Railway era)
 - **What holds memory 24/7 (= the dominant cost):**
   - **Pyodide** (`server/src/services/pyodideRunner.ts`) — CPython-in-WASM, one reused
     instance, packages loaded **on demand** (`loadPackagesFromImports`). WASM linear memory
     never shrinks → eager preloading pandas/numpy would permanently pin ~500 MB. **Never
     re-add eager preload.**
   - `sharp` (image processing), in-process model catalog (~440 KB JSON), Express + routers.
-- **Cost posture:** App-Sleeping **ON** (scales to zero when idle); **no Redis** on the
-  backend (`REDIS_URL` unset — a live Redis adds an always-on charge *and* keeps the box
-  awake); background timers (`providerUsage` flush, `modelCatalog` refresh) are `.unref()`'d
-  and idle-silent so the box can actually sleep.
+- **Cost posture:** the container sleeps 15 min after the last *request* (outbound traffic
+  doesn't keep it awake, unlike Railway App-Sleeping); **no Redis** on the backend
+  (`REDIS_URL` unset — a live Redis is an extra always-on bill); background timers
+  (`providerUsage` flush, `modelCatalog` refresh) are `.unref()`'d and idle-silent.
+- **Ephemeral disk:** like Railway (no volume), nothing on local disk survives a sleep — all
+  durable state is in Supabase.
 - **Optional separate processes** (`ventures:worker`, `connectors:worker`) — these *do*
   need Redis (BullMQ). **They are not run by default** and must never be folded into the
   always-on backend (that would defeat App-Sleeping). This reconciles the apparent
@@ -210,11 +244,12 @@ Frankfurter/CoinGecko do **not** route through it.
 ## 7. Internal data flows
 
 See the diagram in §0. Notable cross-service calls:
-- Pages → `dreamstream-api` proxy → Railway (same-origin `/api/*`).
+- Pages → `dreamstream-api` Worker → `Backend` container (same-origin `/api/*`).
 - Backend → Supabase (service-role) for tables/auth/storage.
 - Backend → finance APIs, with Yahoo/Stooq/FiscalData failover via `data-egress`.
 - Backend → `studio-worker` (HMAC) for container previews; → `email-worker` (HMAC) for mail.
-- `live-worker` → EventRoom DO + R2 for live segments.
+- `live-worker` → EventRoom DO + R2 for live segments; → MonitorRoom DO for the baby monitor;
+  → Supabase RPCs (`live_me`, `monitor_my_role`) with the caller's JWT.
 - Supabase Auth "Send Email Hook" → `email-worker` `/auth-hook`.
 
 ---
@@ -224,7 +259,9 @@ See the diagram in §0. Notable cross-service calls:
 Production branch **`Dreamstrream-v1`** (note the triple-r — it is the real branch name).
 - **Frontend** → Cloudflare Pages builds from `Dreamstrream-v1` (`vite build`).
   `vercel.json` SPA rewrite present (legacy/alt host).
-- **Backend** → Railway builds from `Dreamstrream-v1` via root Dockerfile.
+- **Backend** → `deploy-api-proxy.yml` builds `Dockerfile.cloudflare` and deploys it with the
+  `dreamstream-api` Worker. (Railway's auto-deploy from `Dreamstrream-v1` is dormant — trial
+  expired; see §3a.)
 - **5 Workers** → GitHub Actions in **root** `.github/workflows/deploy-*.yml`, triggered on
   push to `Dreamstrream-v1` (path-filtered) + `workflow_dispatch`; secrets
   `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`.
@@ -244,8 +281,10 @@ Production branch **`Dreamstrream-v1`** (note the triple-r — it is the real br
 - **Ventures/Autopilot** — OFF by default (`VENTURES_ENABLED=false`). Large inert code
   surface (`server/src/ventures/`, 8 SQL files).
 - **Email worker, Turnstile, every data-connector key, Nango, MCP outbound** — dormant
-  until their env is set. Check Railway env to see what's actually configured.
-- **SearXNG** — optional; Comic2 works without it.
+  until their env is set. Check `api-proxy/wrangler.jsonc` vars + the D1 `backend_env` rows to
+  see what's actually configured.
+- **SearXNG** — optional; the backend works without it (`SEARXNG_URL` unset).
+- **Railway** — dormant fallback host (§3a); not serving traffic.
 - `atlasd` / `akhieleshpersonalwebsite` Cloudflare workers — **not in this repo.**
 
 ---
@@ -253,10 +292,12 @@ Production branch **`Dreamstrream-v1`** (note the triple-r — it is the real br
 ## 10. What does NOT exist (counter the aspirational docs)
 
 The `docs/studio/autopilot/**` specs describe a rich Workers + Workflows + KV + D1 +
-Hyperdrive + Queues platform and a migration off Railway. **None of that is live.** As of
-2026-06-16 DreamStream uses: **5 Workers, 1 R2 bucket, 2 Durable Objects, Supabase Postgres,
-1 Railway backend** (plus the shared agent-log D1 tables above). There is **no KV, no DreamStream-owned D1, no Hyperdrive, no Queues, no
-Workflows, no Supabase Edge Functions.** Treat the autopilot specs as target design only.
+Hyperdrive + Queues platform. **None of that is live** (the move off Railway happened, but
+as a straight container lift, not that redesign). As of 2026-10-19 DreamStream uses: **5
+Workers, 2 Containers (`Backend`, `Sandbox`), 1 R2 bucket, 4 Durable Object classes, 1
+DreamStream-owned D1 (`dreamstream-backend-env`, secrets only), Supabase Postgres** (plus the
+shared agent-log D1 tables above). There is **no KV, no Hyperdrive, no Queues, no Workflows,
+no Supabase Edge Functions.** Treat the autopilot specs as target design only.
 
 ---
 
@@ -266,3 +307,4 @@ Workflows, no Supabase Edge Functions.** Treat the autopilot specs as target des
 |---|---|
 | 2026-06-16 | Initial authoritative map created from live-infra audit. App-Sleeping enabled on Comic2 + SearXNG. |
 | 2026-10-02 | AI-agent gate: Pages middleware (`functions/_middleware.ts`, `public/_routes.json`) + `dreamstream-api` handles `/api/agent-gate*` and 403s AI agents at the edge; D1 binding `AGENT_DB` (shared agent log). `robots.txt` (Content-Signal: search=yes, ai-train=no, ai-input=no) + `llms.txt`. |
+| 2026-10-19 | **Backend moved Railway → Cloudflare Containers** (`Backend` class in `dreamstream-api`, `Dockerfile.cloudflare`, D1 `dreamstream-backend-env` for secrets, `BACKEND_TARGET` switch; Railway kept dormant). Live worker gained `MonitorRoom` (baby monitor) + Supabase member checks. |

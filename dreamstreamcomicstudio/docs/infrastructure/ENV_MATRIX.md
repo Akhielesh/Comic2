@@ -1,6 +1,6 @@
 # Environment Variable Matrix
 
-**Status:** Authoritative env-var → consumer map. **Last verified:** 2026-06-16.
+**Status:** Authoritative env-var → consumer map. **Last verified:** 2026-06-16 (hosting section 2026-10-19).
 **Companion:** `INFRA_MAP.md`, `COST_RUNBOOK.md`. Central definition: `server/src/config.ts`.
 **Maintain this:** add a row when code starts reading a new env var; mark cost impact.
 
@@ -11,6 +11,24 @@ off) · 🔐 secret. **Cost**: 💸 can drive spend · — negligible.
 > canonical example file as of the audit. They are added to `.env.example` in the same PR
 > as this doc.
 
+## Where the backend's env lives (since 2026-10-19)
+
+The backend runs as the `Backend` Cloudflare Container inside the `dreamstream-api` Worker
+(`api-proxy/`). At each container start the Worker builds the process env from:
+
+| Source | Holds | How to change |
+|---|---|---|
+| `api-proxy/wrangler.jsonc` → `vars` | Non-secret config (URLs, flags, rate limits, public keys) | Edit + push to `Dreamstrream-v1` |
+| D1 `dreamstream-backend-env`, table `backend_env(name, value)` | Secrets copied from Railway (20 rows on 2026-10-19: provider keys, `SUPABASE_SERVICE_ROLE_KEY`, HMAC secrets, OAuth client, `TURNSTILE_SECRET_KEY`, …) | Cloudflare dashboard → D1 → console (`INSERT … ON CONFLICT(name) DO UPDATE`); applies at the next cold start |
+| Worker secrets on `dreamstream-api` | Optional; **override** D1 and vars of the same name | Dashboard → Workers → dreamstream-api → Settings → Variables and Secrets, or `wrangler secret put` |
+
+Everything string-valued on the Worker is forwarded except the proxy's own `BACKEND_TARGET` /
+`BACKEND_ORIGIN` (`api-proxy/src/backendEnv.ts`). `PORT=8080` and `NODE_ENV=production` come
+from `Dockerfile.cloudflare`. Railway-injected `RAILWAY_*` vars were deliberately **not** copied
+(except `RAILWAY_API_TOKEN`, which the system dashboard uses). `EMAIL_PUBLIC_BASE_URL` and
+`GOOGLE_OAUTH_REDIRECT_URL` moved from the Railway domain to `https://dreamstreamstudio.ai`
+(the OAuth redirect must also be allow-listed on the Google Cloud OAuth client).
+
 ---
 
 ## Core platform / hosting
@@ -20,7 +38,7 @@ off) · 🔐 secret. **Cost**: 💸 can drive spend · — negligible.
 | `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` | frontend + backend JWT validation | ✅ | — | Anon client; JWT-only on backend |
 | `SUPABASE_URL` / `SUPABASE_ANON_KEY` | backend | ✅ | — | |
 | `SUPABASE_SERVICE_ROLE_KEY` | `services/supabase.ts` (admin client) | ✅ 🔐 | — | The workhorse client (~43 sites) |
-| `VITE_API_BASE_URL` | frontend | ✅ | — | Points at `/api` (proxied to Railway) |
+| `VITE_API_BASE_URL` | frontend | ✅ | — | Unset in production → same-origin `/api` (the `dreamstream-api` Worker → backend container) |
 | `VITE_AUTH_REDIRECT_URL` | frontend auth | ✅ | — | |
 | `STORAGE_BUCKET` | `imageStorage.ts` | ⭕ | — | Defaults `comic-assets` |
 | `DATA_EGRESS_URL` / `DATA_EGRESS_SECRET` | `lib/egressProxy.ts` | ⭕ 🔐 | — | Finance host failover via data-egress worker |
@@ -55,7 +73,7 @@ off) · 🔐 secret. **Cost**: 💸 can drive spend · — negligible.
 | Var | Provider | Req? | Cost | Notes |
 |---|---|---|---|---|
 | `TAVILY_API_KEY` / `BRAVE_API_KEY` / `SERPER_API_KEY` / `GOOGLE_CSE_KEY` + `GOOGLE_CSE_CX` | web search chain | ⭕ 🔐 | 💸 free tiers | First key present wins; works with none |
-| `SEARXNG_URL` | self-hosted search | ⭕ | 💸 (Railway) | The Railway SearXNG service; public fallback exists |
+| `SEARXNG_URL` | self-hosted search | ⭕ | — | Unset (the Railway SearXNG service is dormant); public fallback exists |
 | `ALPACA_API_KEY_ID` / `ALPACA_API_SECRET_KEY` | equities (IEX) | ⭕ 🔐 | — | Must not preempt Yahoo |
 | `COINGECKO_API_KEY` / `COINGECKO_API_PLAN` | crypto | ⭕ 🔐 | 💸 **$35/mo if Basic** | Keep free/demo unless commercial |
 | `FRED_API_KEY` / `FINNHUB_API_KEY` | macro/finance | ⭕ 🔐 | — | **missing from .env.example** |
@@ -89,6 +107,16 @@ off) · 🔐 secret. **Cost**: 💸 can drive spend · — negligible.
 | `EMAIL_WORKER_URL` / `EMAIL_HMAC_SECRET` / `EMAIL_PUBLIC_BASE_URL` | backend → email-worker | ⭕ 🔐 | — | |
 | `VITE_LIVE_WORKER_URL` / `VITE_STUDIO_LIVE_ENABLED` / `VITE_LEGACY_STUDIO_ENABLED` | frontend feature flags | ⭕ | — | |
 | `VENTURES_ENABLED` / `VENTURES_KILL` / `VENTURES_*` | autopilot | ⭕ | 💸 (Redis) | OFF by default; **missing from .env.example** |
+
+## Proxy / live-worker settings (Worker-only, never reach the backend)
+
+| Var | Worker | Req? | Cost | Notes |
+|---|---|---|---|---|
+| `BACKEND_TARGET` | dreamstream-api | ⭕ | — | `container` (default) or `origin` (proxy to `BACKEND_ORIGIN`) |
+| `BACKEND_ORIGIN` | dreamstream-api | ⭕ | — | Dormant Railway origin, used only when `BACKEND_TARGET=origin` |
+| `SUPABASE_URL` / `SUPABASE_PUBLISHABLE_KEY` | dreamstream-live | ✅ | — | Member checks for creating events + every baby-monitor socket (RPCs run as the caller's JWT) |
+| `TURN_KEY_ID` / `TURN_KEY_API_TOKEN` | dreamstream-live | ⭕ 🔐 | 💸 (Cloudflare TURN, 1 TB/mo free) | Optional relay for baby-monitor video on strict networks; STUN-only without them |
+| `ALLOWED_ORIGINS` | dreamstream-live | ✅ | — | CORS allow-list |
 
 ---
 

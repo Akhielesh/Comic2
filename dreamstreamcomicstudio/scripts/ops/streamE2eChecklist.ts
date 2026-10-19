@@ -2,7 +2,7 @@
  * Deterministic first-session E2E readiness checklist for Stream Studio.
  *
  * `ops:live-smoke:temporary` proves the *plumbing* (Pages shell, live bundle worker
- * base, workers.dev route, CORS, Railway health) without any live writes. It
+ * base, workers.dev route, CORS, API backend health) without any live writes. It
  * deliberately does NOT create an event or open a browser. This helper picks up
  * where that leaves off: it prints the exact, ordered browser steps a human (or a
  * future Playwright run) walks to prove the full host → viewer → replay loop on
@@ -207,7 +207,7 @@ export function formatChecklist(host: ReadinessHost, steps: E2eStep[]): string {
   lines.push('');
   lines.push(`PREREQUISITE (run first, must be all PASS): ${host.smokeCommand}`);
   if (host.track === 'temporary-beta') {
-    lines.push(`  └─ proves the plumbing (Pages shell + live bundle worker base ${EXPECTED_LIVE_WORKER_BASE} + workers.dev route + CORS + Railway health) with no live writes.`);
+    lines.push(`  └─ proves the plumbing (Pages shell + live bundle worker base ${EXPECTED_LIVE_WORKER_BASE} + workers.dev route + CORS + API backend health) with no live writes.`);
   }
   lines.push('');
   lines.push('Then walk the browser loop (the ONLY writes are the live event you create in the browser):');

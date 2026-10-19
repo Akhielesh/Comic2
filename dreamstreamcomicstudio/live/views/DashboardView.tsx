@@ -215,7 +215,7 @@ export function DashboardView({ nav, push }: { nav: Nav; push: PushToast }) {
             <span className="faint" style={{ fontSize: 13 }}>
               {access?.signedIn
                 ? `Synced to your account${access.email ? ` (${access.email})` : ''}.`
-                : 'Events live in this browser — sign in to the app to sync across devices.'}
+                : 'Events live in this browser — sign in to sync them across your devices.'}
             </span>
           </p>
         </div>

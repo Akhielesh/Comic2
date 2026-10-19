@@ -67,7 +67,7 @@ describe('live smoke target scopes', () => {
       'fallback live worker',
       'fallback live worker CORS preflight',
       'fallback live worker recording upload CORS preflight',
-      'railway api'
+      'api backend (workers.dev)'
     ]);
     expect(targets.some((target) => target.url.includes('dreamstreamstudio.ai'))).toBe(false);
   });
@@ -116,7 +116,7 @@ describe('live smoke classification', () => {
   it('requires the backend health endpoint to return status ok JSON', () => {
     const okBody = { status: 'ok', email: 'dormant' };
     const ok = classifySmokeResponse(
-      { name: 'railway api', url: 'https://comic2-production.up.railway.app/api/health', kind: 'api' },
+      { name: 'api backend (workers.dev)', url: 'https://dreamstream-api.akhieleshsrirangam.workers.dev/api/health', kind: 'api' },
       jsonResponse(okBody),
       JSON.stringify(okBody),
       55
@@ -127,7 +127,7 @@ describe('live smoke classification', () => {
 
     const badBody = { status: 'degraded' };
     const bad = classifySmokeResponse(
-      { name: 'railway api', url: 'https://comic2-production.up.railway.app/api/health', kind: 'api' },
+      { name: 'api backend (workers.dev)', url: 'https://dreamstream-api.akhieleshsrirangam.workers.dev/api/health', kind: 'api' },
       jsonResponse(badBody),
       JSON.stringify(badBody),
       55

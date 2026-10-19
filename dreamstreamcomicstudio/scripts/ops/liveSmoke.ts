@@ -68,7 +68,9 @@ export const DEFAULT_SMOKE_TARGETS: SmokeTarget[] = [
     preflight: { method: 'PUT', headers: DEFAULT_LIVE_WORKER_PREFLIGHT_HEADERS }
   },
   { name: 'custom-domain live worker', url: 'https://dreamstreamstudio.ai/live-api/api/events/smokeprobe', kind: 'live-api' },
-  { name: 'railway api', url: 'https://comic2-production.up.railway.app/api/health', kind: 'api', scopes: ['temporary-launch'] }
+  { name: 'api backend', url: 'https://dreamstreamstudio.ai/api/health', kind: 'api' },
+  // The backend container behind the dreamstream-api Worker, minus the custom domain's bot challenge.
+  { name: 'api backend (workers.dev)', url: 'https://dreamstream-api.akhieleshsrirangam.workers.dev/api/health', kind: 'api', scopes: ['temporary-launch'] }
 ];
 
 export const smokeTargetsForScope = (

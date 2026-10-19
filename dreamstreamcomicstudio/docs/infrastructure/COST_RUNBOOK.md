@@ -1,6 +1,6 @@
 # Cloud Cost Optimization — Runbook & Playbook
 
-**Status:** Authoritative cost runbook. **Last verified:** 2026-06-16.
+**Status:** Authoritative cost runbook. **Last verified:** 2026-10-19 (backend moved to Cloudflare Containers).
 **Companion:** `INFRA_MAP.md` (what exists) · `ENV_MATRIX.md` (env vars).
 **Maintain this:** update the per-service cost model whenever a service, plan tier, or
 paid provider changes.
@@ -10,6 +10,10 @@ paid provider changes.
 > App-Sleeping, multiplied across the Feb–May era when AtlasD ×3, applypilot, and 3 web
 > apps all ran at once. Supabase is on the **free** plan ($0) and Cloudflare is within
 > free tier. Fix Railway and the problem is structurally solved.*
+>
+> **2026-10-19:** structurally solved — the backend left Railway (trial expired 2026-10-16)
+> and now runs as a Cloudflare Container that is billed only while awake, inside the
+> Workers Paid plan the account already pays for. See §2.
 
 ---
 
@@ -17,11 +21,12 @@ paid provider changes.
 
 | Service | What you pay for | Est. monthly | Lever |
 |---|---|---|---|
-| **Railway backend (Comic2)** | Memory + CPU held while awake; volume | **~$2–5** with App-Sleeping ON (was $10–30+ when awake 24/7 at 0.5–2.8 GB) | App-Sleeping, Node heap cap, no Redis, lazy Pyodide |
-| **Railway plan/seat fee** | Fixed subscription | **$5 (Hobby) or $20 (Pro)** | ⚠️ **Verify your tier** — single-user should be Hobby. This is now likely your *biggest* Railway line item. |
-| **Railway dead projects** | Idle volumes only (~1.4 GB total) | **~$0.20** | Delete dead services/volumes (§4) |
+| **Backend container** (`Backend`, `basic` 1/4 vCPU · 1 GiB · 4 GB) | Memory + disk per awake second, CPU per *active* second | **~$0–1** at a few hours/day awake; **~$7 worst case** if kept awake 24/7 | Sleeps 15 min after the last request; one instance; Node heap cap, no Redis, lazy Pyodide |
+| **Cloudflare Workers Paid** | Flat plan fee (already required by the studio container) | **$5** | Includes 25 GiB-h memory, 375 vCPU-min, 200 GB-h disk of Containers per month |
+| **Railway** | Nothing — trial expired, deployments removed | **$0** | Dormant fallback; don't upgrade the plan unless returning (`INFRA_MAP.md` §3a) |
+| **Railway dead projects** | Idle volumes only (~1.4 GB total) | **~$0** while the account is on an expired trial | Delete dead services/volumes (§4) |
 | **Cloudflare Pages** | — | **$0** | Free |
-| **Cloudflare Workers** | Requests (100k/day free) | **$0–5** | Free tier covers single-user; Workers Paid is $5 if exceeded |
+| **Cloudflare Workers** | Requests (10M/mo included on Paid) | **$0** beyond the plan | — |
 | **Cloudflare Containers (studio-worker)** | vCPU + memory **per running instance** (`standard-3` = 2 vCPU/8 GiB, max 50) | **$0 idle → can spike** | ⚠️ Real cost landmine — see §3 |
 | **Cloudflare R2 (dreamstream-live)** | Storage + ops (10 GB free) | **~$0** | Janitor purges segments @24h, recordings @7d |
 | **Supabase** | Free plan | **$0** | Stay under 500 MB DB / 1 GB storage / 2 active projects |
@@ -29,13 +34,31 @@ paid provider changes.
 | **CoinGecko Basic** | Only if `COINGECKO_API_PLAN` = paid | **$35** if enabled | Keep on free/demo unless commercial crypto display is needed |
 | **Magic MCP (21st.dev)** | Dev tool subscription | n/a (dev only) | — |
 
-**Net:** with the fixes below, the live monthly cloud bill should be roughly
-**Railway plan fee + ~$2–5 usage + $0 Supabase + ~$0 Cloudflare** ≈ **under $25/mo**, and
-under ~$10/mo if on Railway Hobby and Cloudflare free tier.
+**Net (since 2026-10-19):** **$5 Workers Paid + ~$0–1 container usage + $0 Supabase + $0
+Railway** ≈ **$5–6/mo**, with a hard worst case around $12/mo even if something kept the
+backend awake all month.
 
 ---
 
-## 2. Railway — the only thing that ever cost real money
+## 2. The backend — now a Cloudflare Container
+
+### 2.0 How it bills (Workers Paid, verified pricing 2026-10)
+- **Memory** $0.0000025 per GiB-second (= $0.009 per GiB-hour) and **disk** $0.00000007 per
+  GB-second while the container is **running**; **CPU** $0.00002 per vCPU-second, only while
+  actually busy. Monthly included: 25 GiB-h memory, 375 vCPU-min, 200 GB-h disk.
+- `basic` = 1 GiB / 4 GB, so the first ~25 awake hours a month are free, then ≈ $0.01 per
+  awake hour. **Billing stops when it sleeps** (`sleepAfter: '15m'` in
+  `api-proxy/src/backend.ts`).
+- Levers: keep `sleepAfter` short; keep `max_instances` at 2 (the proxy only ever uses one);
+  don't add anything that pings `/api/*` on a schedule (an uptime monitor every 10 min would
+  keep it awake 24/7 ≈ $7/mo). `basic` → `standard-1` (4 GiB) only if Pyodide-heavy work hits
+  the 1 GiB ceiling (watch for exit code 137 in Workers → dreamstream-api → logs).
+- **Verify:** Cloudflare dashboard → Workers & Pages → Containers → `dreamstream-api-backend`
+  → instances should read 0 running when nobody is using the app.
+
+### 2.0b Railway (dormant)
+The Railway trial expired on 2026-10-16 and the Comic2 deployment was removed; nothing bills.
+§2.1–2.4 below are kept as the playbook **if you ever return to Railway**.
 
 ### 2.1 App-Sleeping (the #1 control) ✅ done 2026-06-16
 Scales the service to **zero** memory when idle; wakes on the next request (cold-start
@@ -67,7 +90,7 @@ in the dashboard. **This fixed fee is probably your largest remaining Railway co
 
 ---
 
-## 3. Cloudflare — watch the Containers, the rest is free
+## 3. Cloudflare — watch the Containers, the rest is free (studio sandboxes)
 
 - **studio-worker Containers** (`standard-3` = 2 vCPU / 8 GiB, max 50 instances) are the
   **only Cloudflare resource that is not free.** They cost per running instance.
@@ -78,8 +101,7 @@ in the dashboard. **This fixed fee is probably your largest remaining Railway co
   - If the Studio feature isn't in active use, consider not deploying studio-worker.
 - **R2** (`dreamstream-live`): confirm the DO alarm janitor is actually purging (segments
   @24h, recordings @7d) so storage stays near zero. 10 GB free.
-- **Workers/DO**: free tier (100k req/day) covers single-user. Workers Paid is a flat $5 if
-  you exceed it or need higher DO limits.
+- **Workers/DO**: covered by Workers Paid at single-user scale.
 
 ---
 
@@ -129,11 +151,10 @@ The codebase is genuinely well-architected here; **do not weaken these guardrail
 
 Run this once a month (or when a bill looks off):
 
-- [ ] Railway: App-Sleeping still **ON** for Comic2 (and SearXNG). `service_metrics` shows
-      memory hitting 0 during idle hours.
-- [ ] Railway: `REDIS_URL` **unset** on Comic2; no extra always-on services running.
-- [ ] Railway: plan tier is the intended one (Hobby for single-user).
-- [ ] Railway: no unexpected services in `RUNNING` state (`environment_status` per project).
+- [ ] Cloudflare: backend container (`dreamstream-api-backend`) shows 0 running instances
+      when idle; Containers usage in Billing stays near the included amounts.
+- [ ] Backend: `REDIS_URL` **unset** (no D1 row / var for it); nothing pings `/api/*` on a timer.
+- [ ] Railway: still dormant (no surprise plan upgrade); no services in `RUNNING` state.
 - [ ] Cloudflare: studio-worker Containers idle/stopped; `max_instances` sane.
 - [ ] Cloudflare: R2 `dreamstream-live` size near zero (janitor working).
 - [ ] Supabase: still on free plan; DB < 500 MB; storage < 1 GB.
@@ -148,9 +169,8 @@ Run this once a month (or when a bill looks off):
 - **Billing dollars aren't readable via MCP.** Railway/Supabase/Cloudflare MCP expose
   metrics, not invoices. The actual $ figures live in each dashboard's Usage/Billing page.
   When diagnosing a bill, start there and map line items back to §1.
-- The Railway backend lives in project **`hospitable-enthusiasm`** (service `Comic2`), not a
-  project named "comic2" — don't conclude "the backend is missing" just because the project
-  name differs (see `INFRA_MAP.md` §1 gotcha).
+- The (dormant) Railway backend lives in project **`hospitable-enthusiasm`** (service
+  `Comic2`), not a project named "comic2" (see `INFRA_MAP.md` §1 gotcha).
 
 ---
 
@@ -159,3 +179,4 @@ Run this once a month (or when a bill looks off):
 | Date | Change |
 |---|---|
 | 2026-06-16 | Runbook created. App-Sleeping enabled on Comic2 + SearXNG; dead projects identified; Container cost landmine flagged. |
+| 2026-10-19 | Backend moved to a Cloudflare Container (`basic`, sleeps after 15 min). Railway dormant (trial expired). Cost model rewritten. |

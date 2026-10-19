@@ -46,8 +46,14 @@ const env = (name: string): boolean => Boolean(process.env[name]);
 /** Documented dependency limits + which have live metrics connected. */
 export const dependencyInfo = (): DependencyInfo[] => [
   {
-    id: 'railway', label: 'Railway (backend host)',
-    freeTier: 'Trial/Hobby: limited execution hours + $5 usage credit/mo; sleeps when idle on free.',
+    id: 'cloudflare-containers', label: 'Cloudflare Containers (backend host)',
+    freeTier: 'Workers Paid ($5/mo) includes 25 GiB-h memory, 375 vCPU-min, 200 GB-h disk monthly; billed only while awake (sleeps 15 min after the last request).',
+    connected: env('CLOUDFLARE_API_TOKEN'), envVar: 'CLOUDFLARE_API_TOKEN',
+    docsUrl: 'https://developers.cloudflare.com/containers/pricing/'
+  },
+  {
+    id: 'railway', label: 'Railway (dormant fallback host)',
+    freeTier: 'Not serving traffic since Oct 2026 (trial expired). Kept configured for a possible return.',
     connected: env('RAILWAY_API_TOKEN'), envVar: 'RAILWAY_API_TOKEN',
     docsUrl: 'https://docs.railway.com/reference/pricing'
   },

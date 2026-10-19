@@ -30,6 +30,10 @@
     "server",
     "studio-worker",
     "live-worker",
+    // Workers-runtime modules (DurableObject/Container base classes); typechecked by
+    // api-proxy/tsconfig.json with @cloudflare/workers-types in deploy-api-proxy.yml.
+    "api-proxy/src/index.ts",
+    "api-proxy/src/backend.ts",
     "node_modules",
     "dist"
   ]

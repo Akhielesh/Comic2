@@ -1,25 +1,86 @@
 {
-  // DreamStream API proxy — mounts the Railway backend at the SITE's own
-  // /api/* path. Why this exists: the Pages frontend calls same-origin
-  // `/api/...` (VITE_API_BASE_URL unset), but Pages' SPA fallback answered
-  // those with index.html + HTTP 200 — every backend feature (admin grants,
-  // invites, billing, moderation) silently swallowed HTML instead of JSON.
-  // A Workers route takes precedence over Pages on matching paths (exactly
-  // how /live-api is mounted), so this makes the deployed frontend work
-  // without a rebuild, with no CORS (same origin).
+  // DreamStream API — mounts the backend at the SITE's own /api/* path and, since
+  // October 2026, also RUNS that backend: the Express server is a Cloudflare
+  // Container (class Backend in src/backend.ts, image ../Dockerfile.cloudflare)
+  // instead of a Railway service.
+  //
+  // Why the route exists: the Pages frontend calls same-origin `/api/...`
+  // (VITE_API_BASE_URL unset), but Pages' SPA fallback answered those with
+  // index.html + HTTP 200. A Workers route takes precedence over Pages on
+  // matching paths (exactly how /live-api is mounted), so the deployed frontend
+  // works without a rebuild, with no CORS (same origin).
   "name": "dreamstream-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-01-01",
+  "observability": { "enabled": true },
+  // Also served at dreamstream-api.akhieleshsrirangam.workers.dev — CI and the smoke
+  // checks probe that URL because the custom domain challenges datacenter IPs.
+  "workers_dev": true,
+
+  // COST (docs/infrastructure/COST_RUNBOOK.md §2): billed only while awake. `basic` =
+  // 1/4 vCPU, 1 GiB, 4 GB disk; the image caps the Node heap at 512 MB like Railway
+  // did. The container sleeps 15 min after the last request (src/backend.ts). The
+  // proxy always uses ONE instance; max_instances 2 only leaves room for a rollout.
+  "containers": [
+    {
+      "class_name": "Backend",
+      "image": "../Dockerfile.cloudflare",
+      "image_build_context": "..",
+      "instance_type": "basic",
+      "max_instances": 2,
+      "constraints": { "regions": ["WNAM"] }
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "class_name": "Backend", "name": "BACKEND" }]
+  },
+  "migrations": [{ "new_sqlite_classes": ["Backend"], "tag": "v1" }],
 
   "vars": {
-    // The Railway backend's public origin (no trailing slash).
-    "BACKEND_ORIGIN": "https://comic2-production.up.railway.app"
+    // ── Proxy settings (never forwarded to the backend) ──────────────────────
+    // "container" = the Cloudflare Container above; "origin" = proxy to BACKEND_ORIGIN
+    // instead (the dormant Railway service — see INFRA_MAP "Returning to Railway").
+    "BACKEND_TARGET": "container",
+    "BACKEND_ORIGIN": "https://comic2-production.up.railway.app",
+
+    // ── Backend env (every other string var/secret is passed to the container) ──
+    // Non-secret config only. Secrets live in D1 `dreamstream-backend-env` (BACKEND_ENV
+    // below) or as Worker secrets, which override D1. See src/backendEnv.ts.
+    "APP_PUBLIC_URL": "https://dreamstreamstudio.ai",
+    "EMAIL_PUBLIC_BASE_URL": "https://dreamstreamstudio.ai",
+    "GOOGLE_OAUTH_REDIRECT_URL": "https://dreamstreamstudio.ai/api/connectors/oauth/callback",
+    "CONNECTORS_APP_RETURN_URL": "https://dreamstreamstudio.ai/?view=chat",
+    "CORS_ORIGIN": "https://comic2.pages.dev,https://dreamstreamstudio.ai,https://www.dreamstreamstudio.ai",
+    "TRUST_PROXY": "true",
+    "STRICT_ENV_VALIDATION": "true",
+    "VITE_SUPABASE_URL": "https://bdjfmxfmhqhzvgrhbbzm.supabase.co",
+    // Public anon key (it already ships in the frontend bundle).
+    "VITE_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJkamZteGZtaHFoenZncmhiYnptIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA0MTMzNjgsImV4cCI6MjA4NTk4OTM2OH0.Pvv2PXaWtRt6_o5JIyis7ZZycRRDnxOce-3gciBP5Pk",
+    "VITE_TURNSTILE_SITE_KEY": "0x4AAAAAADhE8Hiuake2V8ix",
+    "STORAGE_BUCKET": "comic-assets",
+    "EMAIL_WORKER_URL": "https://dreamstream-email.akhieleshsrirangam.workers.dev",
+    "STUDIO_WORKER_URL": "https://dreamstream-studio.akhieleshsrirangam.workers.dev",
+    "BILLING_ENABLED": "false",
+    "COMICFORGE_ENABLED": "false",
+    "VENTURES_ENABLED": "true",
+    "VENTURES_PILOT_INLINE": "true",
+    "IMAGE_INCLUDE_DATA_URL_LEGACY": "false",
+    "IDEMPOTENCY_TTL_MS": "900000",
+    "MAX_BODY_SIZE": "10mb",
+    "RATE_LIMIT_WINDOW_MS": "60000",
+    "RATE_LIMIT_MAX_REQUESTS": "120",
+    "RATE_LIMIT_TEXT_MAX_REQUESTS": "120",
+    "RATE_LIMIT_IMAGE_MAX_REQUESTS": "40",
+    "RATE_LIMIT_VISION_MAX_REQUESTS": "120",
+    "RATE_LIMIT_SYSTEM_MAX_REQUESTS": "240"
   },
 
-  // Agent gate log: AI-agent visits and check-in answers (see src/agent-log.ts). This is the
-  // owner's shared D1 (also used by akhielesh.com, rows tagged with site) so AI visitors to
-  // every site show up in one panel. Optional — the gate still works without it.
   "d1_databases": [
+    // Backend secrets (table backend_env: name, value). Read once per container start.
+    { "binding": "BACKEND_ENV", "database_name": "dreamstream-backend-env", "database_id": "16181ceb-f5cf-4eab-b031-b719d6adbb58" },
+    // Agent gate log: AI-agent visits and check-in answers (see src/agent-log.ts). This is the
+    // owner's shared D1 (also used by akhielesh.com, rows tagged with site) so AI visitors to
+    // every site show up in one panel. Optional — the gate still works without it.
     { "binding": "AGENT_DB", "database_name": "akhielesh-portfolio-analytics", "database_id": "30c9f8e8-2ac9-4815-93af-e3d432e2f758" }
   ],
 

@@ -192,7 +192,7 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         }
         break;
       case 'ack':
-        setAlert((a) => (a ? { ...a, acked: m.label || m.by } : a));
+        setAlert((a) => (a ? { ...a, acked: m.by === me?.name ? 'You' : m.label || m.by } : a));
         if (m.by !== me?.name) push(`${m.label || m.by} is checking on it`, { icon: 'heart', duration: 4000 });
         break;
       case 'settings':
@@ -577,7 +577,7 @@ function ViewerInner({ id, nav, push }: { id: string; nav: Nav; push: PushToast 
         {log.slice().reverse().slice(0, 80).map((e) => (
           <div key={e.id} className={cx('mv-log', `k-${e.kind}`)}>
             <Icon name={LOG_ICON[e.kind] ?? 'info'} size={14} />
-            <span className="mv-log-msg">{e.msg}{e.by && !['ack', 'people'].includes(e.kind) ? <span className="faint"> · {e.by}</span> : null}</span>
+            <span className="mv-log-msg">{e.msg}{e.by && ['feed', 'diaper', 'sleep', 'wake', 'note'].includes(e.kind) ? <span className="faint"> · {e.by}</span> : null}</span>
             <span className="mono faint">{fmtTime(e.at)}</span>
           </div>
         ))}

@@ -5,6 +5,46 @@ All notable user-facing changes. Format loosely follows
 
 ## [Unreleased]
 
+### Added
+- **Baby monitor in Stream Studio (2026-10-19):** turn any phone or laptop you're signed in on
+  into a nursery camera and watch from your other devices. Video goes straight between your
+  devices (peer-to-peer) and is never recorded or stored. On-device cry detection (pitch +
+  rhythm, adapts to room noise) and motion detection raise alerts with a sound, a vibration and
+  a push notification — even when the viewer’s tab is in the background — plus a "camera
+  offline" alert if the camera phone dies or loses signal. Two-way talk, soothing sounds
+  (white noise, rain, lullaby, heartbeat) played on the camera, a quick log (feeds, diapers,
+  sleep, notes), a 7-day activity timeline, and "I'm on it" acknowledgements so caregivers
+  don't double up. Invite people by searching their name and give each a role — parent
+  (full control), caregiver (watch, talk, log) or viewer (watch only) — with a label like
+  "Grandma".
+- **Accounts inside Stream Studio:** sign in or create an account without leaving `/live`.
+  New accounts need the invitation code; it is checked on the server only (never shipped to
+  the browser), compared against a salted hash, rate-limited per network and globally, and a
+  passed check yields a short-lived one-time ticket. Find people by name. Going live now
+  requires an account; watching doesn't.
+- **Guided tours and a help center:** a first-visit tour for each Stream Studio screen, a
+  "?" help button everywhere with FAQs, and a replay-the-tour option.
+- **Recording & saving:** set a recording or stream time limit and get alerts at 5 min, 1 min
+  and 10 s left (with "+15 min"). When a recording ends you choose where it goes — this
+  device, any folder (including a Google Drive for desktop folder, no Google sign-in needed),
+  the share sheet on phones (straight into the Drive app), or DreamStream cloud. Recordings are
+  written to disk as they happen, so long sessions don't eat memory, and an interrupted
+  recording is offered back on your next visit.
+
+### Fixed
+- **Live streams no longer freeze after a few seconds:** the broadcaster keeps its frame clock
+  running when the tab is in the background, uploads retry with backoff and adapt the
+  bitrate on slow connections, the screen stays awake while live, and viewers skip small
+  gaps, catch up when they fall behind and rebuild the player automatically instead of
+  stalling.
+
+### Changed
+- **The backend moved from Railway to Cloudflare (2026-10-19):** after Railway's trial ended
+  (which had taken the API offline), the server now runs as a Cloudflare Container that starts
+  on demand and sleeps when idle — same features, about $5–6/month all-in. The first request
+  after a quiet spell can take a few seconds while it wakes. Railway is kept configured as a
+  dormant fallback.
+
 ### Security
 - **AI agents can no longer use DreamStream (2026-10-02):** AI crawlers, AI assistants and
   automated browsers that open a page are sent to a check-in page instead — 50 questions about
