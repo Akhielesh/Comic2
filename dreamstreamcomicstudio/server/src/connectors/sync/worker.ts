@@ -4,7 +4,7 @@
 //
 // Requires REDIS_URL. Processes one sync page per job and re-enqueues a follow-up
 // while there's more to fetch (so a large mailbox drains across many small, retryable
-// jobs). Deploy as its own Railway service so background sync never competes with the
+// jobs). Deploy as its own long-running service (not run by default; it needs Redis) so background sync never competes with the
 // API. Importing ../index.js registers the connectors in THIS process's registry.
 // ============================================================================
 

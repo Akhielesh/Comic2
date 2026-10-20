@@ -2,7 +2,7 @@
 //
 // Spins up a per-user Cloudflare Container (via the Sandbox SDK), writes the AI-built
 // project into it, installs deps, starts the dev server, and returns a public preview
-// URL the user opens in a new tab. Controlled ONLY by our Railway backend via HMAC-signed
+// URL the user opens in a new tab. Controlled ONLY by our backend via HMAC-signed
 // requests, so the container control plane is never exposed to browsers.
 //
 // Validated against @cloudflare/sandbox 0.4.x (typechecks against the real SDK types).
@@ -16,7 +16,7 @@ export { Sandbox } from '@cloudflare/sandbox';
 
 export interface Env {
   Sandbox: DurableObjectNamespace<Sandbox>;
-  /** Shared secret with the Railway backend; rejects any unsigned request. */
+  /** Shared secret with the backend; rejects any unsigned request. */
   STUDIO_HMAC_SECRET: string;
   /**
    * Domain whose FIRST-LEVEL wildcard serves preview URLs, e.g. `dreamstreamstudio.ai`
@@ -44,7 +44,7 @@ const WORKER_VERSION = 2;
 
 interface RequestBody {
   action: 'launch' | 'stop' | 'logs' | 'deploy' | 'capabilities';
-  /** `u_<userId>_<projectId>` — ALWAYS scope per authenticated user (set by Railway). */
+  /** `u_<userId>_<projectId>` — ALWAYS scope per authenticated user (set by the backend). */
   sandboxId: string;
   files?: StudioFile[];
   install?: string;
@@ -64,7 +64,7 @@ const DEV_PROCESS_ID = 'dev';
 const json = (data: unknown, status = 200): Response =>
   new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
 
-// Railway signs the raw request body with the shared secret and sends it as
+// The backend signs the raw request body with the shared secret and sends it as
 // `x-studio-signature: sha256=<hex>`. We recompute and compare in length-safe fashion.
 async function verifyHmac(req: Request, rawBody: string, secret: string): Promise<boolean> {
   if (!secret) return false;
@@ -91,7 +91,7 @@ export default {
     const proxied = await proxyToSandbox(req, env);
     if (proxied) return proxied;
 
-    // 2) Control-plane requests (from Railway only, HMAC-signed): launch / stop / logs.
+    // 2) Control-plane requests (from the backend only, HMAC-signed): launch / stop / logs.
     //    A non-preview GET here is a stray subdomain caught by the `*.<domain>/*` route
     //    (e.g. someone visits www.<domain>) — send them to the real site instead of a 405.
     if (req.method !== 'POST') {

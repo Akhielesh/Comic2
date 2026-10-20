@@ -1,4 +1,4 @@
-// Studio control plane (Railway/Express).
+// Studio control plane (Express backend).
 //
 // Brokers the browser → Cloudflare Studio Worker hop: authenticates the user (global
 // requireAuth on /api), enforces per-user caps, HMAC-signs the request to the Worker,

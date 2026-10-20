@@ -17,7 +17,7 @@
 //
 // Color is auto (on when stdout is a TTY — e.g. local `npm run dev` / the connectors
 // worker) unless forced via CONNECTORS_SYNC_COLOR. When color is OFF (production /
-// Railway / Cloudflare, where stdout isn't a TTY) it falls back to the shared
+// Cloudflare / Railway, where stdout isn't a TTY) it falls back to the shared
 // structured JSON logger, so the same events stay timestamped + greppable in
 // aggregated logs. Logging NEVER throws — diagnostics must not break a sync.
 // ============================================================================

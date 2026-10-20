@@ -139,6 +139,17 @@ in `api-proxy/wrangler.jsonc` (`BACKEND_ORIGIN` already points at
 `GOOGLE_OAUTH_REDIRECT_URL` on Railway if you want them on the Railway domain (both work
 through `dreamstreamstudio.ai` either way). Switching back to Cloudflare is the reverse var.
 
+**Before you lift Railway's usage limit for any reason** (for example to download the old Adminak
+database from its volume), know that Railway then restarts everything it was running, and the old
+Comic2 service is still wired to build from `Dreamstrream-v1`: it would rebuild on every push and
+bill next to the Cloudflare container even though no traffic reaches it. To keep Railway parked,
+first, in the Railway dashboard (menu names may differ slightly), for each of `Comic2` and
+`SearXNG` (project `hospitable-enthusiasm`) and `adminak` (project `adminak`): open the service and
+either **Settings → Source → Disconnect** (stops building from GitHub) or **Deployments → ⋯ → Remove**
+on the latest deployment (stops running it). Then lift the limit. Adminak itself moved to a Cloudflare
+Container in 2026-10 (`adminak/` in `Akhielesh/Akhielesh`); the site Worker falls back to
+`ADMINAK_ORIGIN` if its service binding is removed, which is how it would point back at Railway.
+
 ### What holds memory while awake (unchanged from the Railway era)
 - **What holds memory 24/7 (= the dominant cost):**
   - **Pyodide** (`server/src/services/pyodideRunner.ts`) — CPython-in-WASM, one reused

@@ -180,6 +180,53 @@ describe('live smoke classification', () => {
     expect(result.detail).toContain('workers.dev host is not deployed');
   });
 
+  describe('backend api cold start', () => {
+    const API_TARGET: SmokeTarget = { name: 'api backend', url: 'https://dreamstreamstudio.ai/api/health', kind: 'api' };
+    const healthy = () => new Response(JSON.stringify({ status: 'ok' }), { status: 200, headers: { 'content-type': 'application/json' } });
+    const starting = () => new Response('starting', { status: 503, headers: { 'retry-after': '5' } });
+
+    it('waits out the container starting up and then passes', async () => {
+      const answers = [starting, starting, healthy];
+      let calls = 0;
+      const results = await runLiveSmoke({
+        targets: [API_TARGET],
+        coldStartRetryDelayMs: 0,
+        fetcher: async () => answers[calls++]()
+      });
+      expect(calls).toBe(3);
+      expect(results[0].status).toBe('pass');
+    });
+
+    it('fails, after a bounded number of tries, when the backend never comes up', async () => {
+      let calls = 0;
+      const results = await runLiveSmoke({
+        targets: [API_TARGET],
+        coldStartRetryDelayMs: 0,
+        fetcher: async () => {
+          calls++;
+          return starting();
+        }
+      });
+      expect(calls).toBe(5);
+      expect(results[0].status).toBe('fail');
+      expect(results[0].httpStatus).toBe(503);
+    });
+
+    it('does not retry targets that are not the API', async () => {
+      let calls = 0;
+      const results = await runLiveSmoke({
+        targets: [{ name: 'primary app', url: 'https://dreamstreamstudio.ai/', kind: 'frontend' }],
+        coldStartRetryDelayMs: 0,
+        fetcher: async () => {
+          calls++;
+          return new Response('bad gateway', { status: 502 });
+        }
+      });
+      expect(calls).toBe(1);
+      expect(results[0].status).toBe('fail');
+    });
+  });
+
   it('passes the CORS preflight target only when the live worker allows browser event creation from Pages', async () => {
     const results = await runLiveSmoke({
       targets: [CORS_PREFLIGHT_TARGET],
